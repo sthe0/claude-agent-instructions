@@ -292,7 +292,7 @@ def drive_cursor(plan_file, views, monkeypatch, tmp_path, **_):
     cases = []
     for label, extra, shown, marker in (
         ("stage", ("--stage-index", "2"), {2}, _m(2)),
-        ("no stage", (), {"meta"}, GOAL),
+        ("no stage", (), {"meta", *fx.STAGES}, GOAL),
     ):
         _, prompt = fx.launch_cursor(monkeypatch, tmp_path, fx.cursor_argv(plan_file, *extra))
         assert prompt, label

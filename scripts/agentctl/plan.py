@@ -2837,7 +2837,10 @@ def pair_binding(doc: PlanDoc, pair_id: str) -> dict:
     `doc`, recomputed fresh on every call. Together they cover what the
     reviewer was shown: the order context (`context_digest`, the base file's
     sha256), both nodes' identity keys, both nodes' file bytes, the exact
-    service-interface and edge sections of the bundle. For a `base-<s>` pair
+    service-interface and edge sections of the bundle. The node file bytes are
+    the nodes' as authored: above the inline limit the reviewer sees the pointer
+    copy of a long field, and the digest covers the field itself.
+    For a `base-<s>` pair
     the context, base key and base file digests are the same value by
     construction. Raises ValueError for an unknown pair, PlanError for a
     dangling or cyclic reliance graph."""

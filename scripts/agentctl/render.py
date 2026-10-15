@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 import tempfile
 import tomllib
 from dataclasses import dataclass
@@ -1148,6 +1149,7 @@ SITE_KINDS = (
     "dispatch-stage-brief", "dispatch-no-stage", "topo-pair", "topo-unit",
     "whole-plan-review", "enumerate-node",
 )
+_NO_VIEW_KINDS = ("dispatch-stage-brief", "dispatch-no-stage")
 
 # The plan keys another node's summary may print, per node kind: what a consumer relies on
 # (a stage's declared product) and what orients any reader (the meta's goal and checks by
@@ -1309,6 +1311,15 @@ def _view_header(view_dir: Path) -> list[str]:
     ]
 
 
+def plan_full_text(doc: PlanDoc) -> str:
+    """Every field of the meta and of every stage, references resolved — the reading of a
+    site that has no directory to read the stages from."""
+    parts = [unit_base_text(doc).rstrip("\n")]
+    parts.extend(render_stage_fields(doc, stage.index).rstrip("\n")
+                 for stage in sorted(doc.stages, key=lambda s: s.index))
+    return "\n\n".join(parts) + "\n"
+
+
 def plan_summary_text(doc: PlanDoc) -> str:
     """The whole-plan reading a site without a stage gets: the meta in full, then every
     stage by its declared product only."""
@@ -1363,13 +1374,19 @@ def build_site_prompt(
     root): the node files, `objects/<sha256>` for every file the shown nodes were
     resolved from and for every field printed as a pointer, and `MANIFEST.json`.
     `materialize=False` computes the same prompt and view path without writing.
-    `with_view=False` is for a caller that grants the model no directory: the text carries
-    no view header and no file listing, nothing is written, and `add_dirs` is empty.
+    `with_view=False` is for a caller that grants the model no directory and has no prompt
+    ceiling (the two dispatch kinds only): the text carries no view header, no file listing
+    and no `see objects/` pointer, nothing is written, and `add_dirs` is empty. A
+    `dispatch-no-stage` site then inlines the whole rendered plan, references resolved —
+    the named exception to "never the inlined plan" (ADR-0011) — since there is no view
+    for its model to read the stages from.
 
     Raises PlanError for a plan that does not load and ValueError for a stage, pair or
-    unit the plan does not have."""
+    unit the plan does not have, or for `with_view=False` on any other kind."""
     if kind not in SITE_KINDS:
         raise ValueError(f"unknown site kind {kind!r}; known kinds: {', '.join(SITE_KINDS)}")
+    if not with_view and kind not in _NO_VIEW_KINDS:
+        raise ValueError(f"with_view=False is for {', '.join(_NO_VIEW_KINDS)} only, not {kind!r}")
     source = _load_site_source(plan_path)
     doc = source.doc
 
@@ -1383,6 +1400,8 @@ def build_site_prompt(
         return SitePrompt(render_stage_fields(doc, stage), (), frozenset({int(stage)}))
 
     limit = PLAN_FIELD_INLINE_MAX_CHARS_DEFAULT if inline_max_chars is None else inline_max_chars
+    if not with_view:
+        limit = sys.maxsize
     shown_doc, pointer_objects = _pointerize(doc, limit)
     index_object = kind in ("whole-plan-review", "dispatch-no-stage")
     label = kind
@@ -1421,8 +1440,13 @@ def build_site_prompt(
     else:
         shown = frozenset({"meta"})
         view_nodes = shown | {stage_node.index for stage_node in doc.stages}
+        whole_plan_inline = not with_view and kind == "dispatch-no-stage"
+        if whole_plan_inline:
+            shown = view_nodes
 
         def render(view_dir: Path) -> tuple[str, dict[str, str]]:
+            if whole_plan_inline:
+                return plan_full_text(shown_doc), {}
             summary = plan_summary_text(shown_doc)
             parts = [*header(view_dir), summary]
             if with_view:

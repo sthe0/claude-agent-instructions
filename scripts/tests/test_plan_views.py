@@ -266,6 +266,47 @@ def test_a_site_for_a_caller_that_grants_no_directory_has_no_view_and_no_header(
     assert not (tmp_path / "views").exists()
 
 
+@pytest.mark.parametrize("kind,selector", [
+    ("dispatch-stage-brief", {"stage": 2}), ("dispatch-no-stage", {})])
+def test_a_site_without_a_view_prints_a_field_over_the_default_limit_in_full(
+        kind, selector, tmp_path):
+    from agentctl.render import build_site_prompt
+
+    index = fx.write_hypertext_plan(tmp_path / "author", long_method=True)
+
+    site = build_site_prompt(kind, index, view_root=tmp_path / "views", with_view=False,
+                             **selector)
+
+    assert fx.LONG_FIELD in site.text
+    assert "objects/" not in site.text
+    assert not (tmp_path / "views").exists()
+
+
+@pytest.mark.parametrize("kind,selector", [
+    ("topo-pair", {"pair": "2-1"}), ("topo-unit", {"unit": "unit:2"}),
+    ("whole-plan-review", {}), ("enumerate-node", {"stage": 2})])
+def test_a_view_less_site_is_refused_for_any_kind_but_the_two_dispatch_kinds(
+        kind, selector, plan, tmp_path):
+    from agentctl.render import build_site_prompt
+
+    with pytest.raises(ValueError, match="with_view=False"):
+        build_site_prompt(kind, plan, view_root=tmp_path / "views", with_view=False, **selector)
+
+
+def test_a_view_less_site_without_a_stage_inlines_the_plan_with_every_reference_resolved(
+        tmp_path):
+    from agentctl.render import build_site_prompt
+
+    index = fx.write_hypertext_plan(tmp_path / "author")
+
+    site = build_site_prompt("dispatch-no-stage", index, with_view=False)
+
+    assert [t for t in fx.shown_tokens(set(fx.NODES)) if t not in site.text] == []
+    assert "{ ref" not in site.text and "sha256 =" not in site.text
+    assert site.shown_nodes == frozenset(fx.NODES)
+    assert site.add_dirs == ()
+
+
 def test_a_plan_without_references_has_no_referenced_files_section(plan, tmp_path):
     site = _site("dispatch-no-stage", plan, tmp_path / "views")
 
@@ -446,7 +487,7 @@ def test_view_root_decides_where_views_land_and_the_default_root_stays_empty(
 
 @pytest.mark.parametrize("extra,shown,kind", [
     (["--stage-index", "2"], {2}, "dispatch-stage-brief"),
-    ([], {"meta"}, "dispatch-no-stage"),
+    ([], {"meta", 1, 2, 3, 4}, "dispatch-no-stage"),
 ], ids=["with-stage-index", "without-stage-index"])
 def test_the_cursor_prompt_is_the_site_text_and_none_of_the_unshown_stages(
         extra, shown, kind, plan, tmp_path, monkeypatch):
@@ -472,6 +513,25 @@ def test_the_cursor_prompt_prints_a_field_over_the_inline_limit_in_full(tmp_path
     assert prompt is not None
     assert fx.LONG_FIELD in prompt
     assert re.search(r"see objects/[0-9a-f]{64}", prompt) is None
+
+
+def test_the_stage_brief_label_does_not_promise_the_other_stages(plan, tmp_path):
+    prompt = _spawner().assembled_prompt(
+        fx.specialist_argv(plan, "--stage-index", "2", "--view-root", str(tmp_path / "views")))
+
+    assert "a field too long to print here is read from the view directory" in prompt
+    assert "the rest of the plan" not in prompt
+
+
+def test_a_cursor_spawn_without_a_stage_index_sees_a_referenced_stage_in_full(
+        tmp_path, monkeypatch):
+    index = fx.write_hypertext_plan(tmp_path / "author")
+
+    _, prompt = fx.launch_cursor(monkeypatch, tmp_path, fx.cursor_argv(index))
+
+    assert prompt is not None
+    assert [t for t in fx.shown_tokens({2}) if t not in prompt] == []
+    assert "{ ref" not in prompt and "ref = " not in prompt
 
 
 def test_a_plain_brief_given_as_plan_reaches_both_spawners_as_its_own_text(tmp_path, monkeypatch):

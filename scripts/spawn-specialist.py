@@ -344,7 +344,8 @@ def assemble_prompt(
         if brief_eligible(args):
             plan_label = (
                 f"## Working plan — stage {args.stage_index} brief "
-                "(projected; the rest of the plan is read from the view directory named below)"
+                "(projected; a field too long to print here is read from the view directory "
+                "named below)"
             )
         else:
             plan_label = (
