@@ -92,6 +92,19 @@ Premise questions of the order, with the disposition and the answer (or, for an 
 - A child resumed before its engine adopted any handoff has no `parent_link` to compare, so the digest check admits it; it then adopts the handoff it is given at this spawn, which carries the current norm.
 - Concurrent dispatch of the same stage is not guarded. Dispatch is assumed serial per stage: two spawns racing on one record could both resume the same child session, and the later record write wins.
 
+## Amendment (resume-after-norm-fix)
+
+- Plan: `pretrial-fixes.toml`, stage 4 (R4+R9; issue #423)
+- Narrows: § Amendment (child-session-reuse), reuse rule item 4 and the **Consequence** paragraph.
+
+**Problem.** A child that escalated the parent's norm (`critique --norm-target parent`, then `REPLAN`) stays at the difficulty it opened. The parent fixes the norm by a replan, which moves the stage's `norm_digest`. The child-session-reuse rule treated every changed digest as "start clean", so the very child that held the open difficulty, the escalation record and the explanation of what was wrong with the old norm was dropped at the moment the parent had answered it.
+
+**The exception.** A changed digest no longer mints a fresh session when the child's open difficulty carries `escalated_to` naming this parent session and this stage at the digest the child's `parent_link` adopted: that child is **resumed after the parent fixes the norm** it escalated. Any other changed norm (no escalation, an escalation addressed to another stage or parent, an escalation of a different digest) still starts clean, as before. The other four reuse conditions are unchanged.
+
+**What the resume renews.** Before the child runs, `spawn-specialist.py` (`refresh_resumed_child_link`) writes the fresh handoff record, replaces the child's `parent_link` and `recursion_depth` with it, clears the child's plan approval, and moves an approved-or-later node (`APPROVED`, `PARTITIONED`, `EXECUTING`, `VERIFYING`, `RESOLUTION`, or a `BLOCKED` parked from one) to `PLAN_READY`, so the child plans against the new norm and has it approved again. It exports the fresh handoff, not the previously adopted one. The wrapper edits the child's state only here, while no child process is running, and logs a `norm_handoff_refreshed` event. If the record or the refresh cannot be written the spawn proceeds unlinked, as for any failed handoff.
+
+**Remaining gap, accepted.** A refresh moves the node but leaves the child's stage outcomes as they were; the child's own replan reconciles them.
+
 ## Amendment (child-plan-review)
 
 - Plan: `child-plan-review.toml`, stage 2 (R1, R2, R4–R7)

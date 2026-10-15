@@ -13005,7 +13005,23 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "d4664ade68a756b3"
+domain = "code"
+file = "scripts/tests/test_pretrial_child_lifecycle.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "0ed417e695d8058b"
+domain = "code"
+file = "scripts/tests/test_pretrial_child_lifecycle.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "176e2dc97dae01ba"
 domain = "code"
 file = "scripts/tests/test_pretrial_child_lifecycle.py"
 class = "not-a-gate"
@@ -13022,6 +13038,22 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "aa8cef31c6c26349"
+domain = "code"
+file = "scripts/tests/test_pretrial_child_lifecycle.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "40d4af401024bd2d"
+domain = "code"
+file = "scripts/tests/test_pretrial_child_lifecycle.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "f845de385c9f605e"
 domain = "code"
 file = "scripts/tests/test_pretrial_child_lifecycle.py"
 class = "not-a-gate"

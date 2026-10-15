@@ -55,7 +55,7 @@ from agentctl.plan import (  # parse the TOML plan for a single-stage brief proj
     parse_unit,
 )
 from agentctl.stage_norm import StageNorm
-from agentctl.state import PARENT_DIFFICULTY_ENV, Node, format_parent_difficulty
+from agentctl.state import PARENT_DIFFICULTY_ENV, GateRecord, Node, format_parent_difficulty
 from agentctl.render import (  # pure PlanDoc(+index) -> markdown; TopoUnitsCorrupt/materialize_topo_units do the one bit of I/O
     TopoUnitsCorrupt,
     materialize_topo_units,
@@ -139,6 +139,14 @@ def budget_value(tier: str, constants: dict[str, str]) -> str:
 # Multiple of a spawn's tier LABEL above which realized cost triggers one stderr
 # soft-warn line (no kill, no non-zero exit) — a cheap calibration signal.
 SOFT_WARN_MULT = 2.0
+
+# Seconds the wrapper waits for the child to exit once the child's final result line is read,
+# before it reaps the child's process group and returns that result. Overridable through
+# FINAL_RESULT_GRACE_ENV, read once per wrapper run.
+FINAL_RESULT_GRACE_S = 30.0
+FINAL_RESULT_GRACE_ENV = "SPAWN_FINAL_RESULT_GRACE_S"
+# Time the readers get to drain a pipe after the child exited or was reaped.
+_PIPE_DRAIN_S = 2.0
 
 
 def runaway_ceiling(constants: dict[str, str]) -> str:
@@ -2123,12 +2131,15 @@ def resumable_child_session(
     started.
 
     Resumable only when this spawn runs in the workdir it ran in, its engine session is
-    not RESOLVED, the norm it adopted is the stage's current norm (`norm_digest`), and
-    its transcript is under that workdir's project directory. The engine never replaces
-    an adopted `parent_link`, so a child resumed after the stage's norm changed would
-    keep working to the old one. The harness stores and resumes a conversation through
-    the project directory named after the cwd, so a resume anywhere else, or without
-    the transcript, has nothing to continue."""
+    not RESOLVED, its transcript is under that workdir's project directory, and either
+    the norm it adopted is the stage's current norm (`norm_digest`) or it escalated
+    exactly that adopted norm to this parent stage (`Difficulty.escalated_to`) and the
+    parent has since fixed it. Any other changed norm mints a fresh session: the engine
+    never replaces an adopted `parent_link`, so a child resumed after an unrelated norm
+    change would keep working to the old one. A resume after a fix has its link renewed
+    by `refresh_resumed_child_link` before the child runs. The harness stores and
+    resumes a conversation through the project directory named after the cwd, so a
+    resume anywhere else, or without the transcript, has nothing to continue."""
     record = norm_handoff.read_child_session(store.root, parent_session, stage_index)
     if record is None or record["workdir"] != workdir:
         return None
@@ -2141,13 +2152,50 @@ def resumable_child_session(
         return None
     link = state.parent_link if state is not None else None
     if link is not None and link.get("norm_digest") != norm_digest:
-        return None
+        escalated = state.difficulty.escalated_to if state.difficulty is not None else {}
+        escalated_this_norm = (
+            escalated.get("parent_session") == parent_session
+            and escalated.get("stage_index") == stage_index
+            and escalated.get("norm_digest") == link.get("norm_digest")
+        )
+        if not escalated_this_norm:
+            return None
     name = _project_dir_name(workdir)
     for root in projects_roots():
         transcript = root / name / f"{session}.jsonl"
         if transcript.is_file():
             return session, transcript, state
     return None
+
+
+#: Nodes a session has reached only through its approval; a refreshed norm needs a new one.
+_APPROVED_NODES = frozenset({
+    Node.APPROVED.value, Node.PARTITIONED.value, Node.EXECUTING.value,
+    Node.VERIFYING.value, Node.RESOLUTION.value,
+})
+
+
+def refresh_resumed_child_link(store, state, env_value: str) -> None:
+    """Replace the `parent_link` of a child resumed after the parent fixed the norm it
+    escalated with the handoff `env_value` now names, and require the child's plan to be
+    approved again: its approval covered the old norm. The node an approved session had
+    reached (or was parked from) returns to PLAN_READY. Runs before the child starts, so
+    the engine's own adoption (which keeps a link it holds) sees the renewed one."""
+    adopted, reason = norm_handoff.verify_env_value(env_value)
+    if adopted is None:
+        raise ValueError(f"fresh handoff does not verify: {reason}")
+    old = state.parent_link or {}
+    state.parent_link = adopted
+    state.recursion_depth = adopted["depth"]
+    state.approval = GateRecord(state.approval.name)
+    if state.node in _APPROVED_NODES:
+        state.node = Node.PLAN_READY.value
+    elif state.node == Node.BLOCKED.value and state.blocked_from in _APPROVED_NODES:
+        state.blocked_from = Node.PLAN_READY.value
+    state.log("norm_handoff_refreshed", parent_session=adopted["parent_session"],
+              stage_index=adopted["stage_index"], old_norm_digest=old.get("norm_digest"),
+              norm_digest=adopted["norm_digest"])
+    store.save(state)
 
 
 def adopted_handoff_env_value(state) -> "str | None":
@@ -2203,6 +2251,83 @@ def _load_json_payload(text: str) -> "dict | None":
         return json.loads(text)
     except (json.JSONDecodeError, TypeError):
         return None
+
+
+def final_result_grace_s(environ=None) -> float:
+    """`FINAL_RESULT_GRACE_S`, or the non-negative number of seconds in the environment
+    variable `FINAL_RESULT_GRACE_ENV` when it holds one."""
+    raw = (environ if environ is not None else os.environ).get(FINAL_RESULT_GRACE_ENV, "").strip()
+    try:
+        grace = float(raw)
+    except ValueError:
+        return FINAL_RESULT_GRACE_S
+    return grace if grace >= 0 else FINAL_RESULT_GRACE_S
+
+
+def _is_final_result(text: str) -> bool:
+    payload = _load_json_payload(text)
+    return isinstance(payload, dict) and payload.get("type") == "result"
+
+
+def communicate_until_final_result(
+    proc: subprocess.Popen, prompt: str, grace_s: float,
+) -> "tuple[str, str, bool]":
+    """`(stdout, stderr, reaped)` of a child fed `prompt` on stdin. Unlike
+    `Popen.communicate`, which returns only when every pipe reaches EOF -- a pipe any
+    process the child started can hold open -- this returns once the child's final
+    result line has been read and the child has exited or `grace_s` has passed; a child
+    still alive then is reaped with its whole process group (`reaped`). A child that
+    prints no final result is waited for as `communicate` does."""
+    out_chunks: list[str] = []
+    err_chunks: list[str] = []
+    final_seen = threading.Event()
+
+    def feed() -> None:
+        try:
+            proc.stdin.write(prompt)
+            proc.stdin.flush()
+        except OSError:
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+
+    def read_stdout() -> None:
+        for line in proc.stdout:
+            out_chunks.append(line)
+            if (not final_seen.is_set() and line.rstrip().endswith("}")
+                    and _is_final_result("".join(out_chunks))):
+                final_seen.set()
+
+    def read_stderr() -> None:
+        for line in proc.stderr:
+            err_chunks.append(line)
+
+    feeder = threading.Thread(target=feed, daemon=True)
+    out_reader = threading.Thread(target=read_stdout, daemon=True)
+    err_reader = threading.Thread(target=read_stderr, daemon=True)
+    for thread in (feeder, out_reader, err_reader):
+        thread.start()
+    while out_reader.is_alive() and not final_seen.is_set():
+        out_reader.join(timeout=0.05)
+    reaped = False
+    if final_seen.is_set():
+        try:
+            proc.wait(timeout=grace_s)
+        except subprocess.TimeoutExpired:
+            proc_tree.kill_tree(proc)
+            reaped = True
+        out_reader.join(timeout=_PIPE_DRAIN_S)
+        if out_reader.is_alive():
+            proc_tree.kill_tree(proc)
+            out_reader.join(timeout=_PIPE_DRAIN_S)
+        err_reader.join(timeout=_PIPE_DRAIN_S)
+    else:
+        err_reader.join()
+        proc.wait()
+    return "".join(out_chunks), "".join(err_chunks), reaped
 
 
 def resolve_child_session_id(stdout_text: str, transcript_path: "Path | None") -> "str | None":
@@ -2793,7 +2918,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     handoff_env_value: "str | None" = None
-    if resumed is not None and not args.dry_run:
+    norm_fixed = (
+        resumed is not None and resumed_state is not None and resumed_state.parent_link is not None
+        and resumed_state.parent_link.get("norm_digest") != handoff_record["norm_digest"]
+    )
+    if resumed is not None and not norm_fixed and not args.dry_run:
         handoff_env_value = adopted_handoff_env_value(resumed_state)
     if handoff_record is not None and handoff_env_value is None and not args.dry_run:
         # Written only now: a brief that cannot be assembled leaves no record behind. A
@@ -2801,6 +2930,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             path, sha = norm_handoff.write_record(handoff_store.root, handoff_record)
             handoff_env_value = norm_handoff.format_env_value(path, sha)
+            if norm_fixed:
+                refresh_resumed_child_link(handoff_store, resumed_state, handoff_env_value)
         except Exception as exc:
             print(f"warning: norm handoff not written, spawning unlinked: {exc}", file=sys.stderr)
             handoff_record, child_linked, own_session, resumed_transcript = None, False, None, None
@@ -2985,6 +3116,7 @@ def main(argv: list[str] | None = None) -> int:
     # child's new jsonl (the parent manager's own live transcript would
     # otherwise win on mtime).
     transcripts_before = _snapshot_transcripts(workdir)
+    final_result_grace = final_result_grace_s()
     started = time.monotonic()
 
     # Use Popen so we can print the child's transcript path to stderr early —
@@ -3004,11 +3136,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # Transcript discovery must run OFF the main thread: the child does not create
     # its transcript until it has read the prompt, and the prompt is only written
-    # when communicate() runs below — so a discover-then-communicate ordering (the
-    # old argv path could afford, because the prompt was already on the command
-    # line) would always miss. The daemon thread polls for the transcript while
-    # communicate() feeds stdin and drains stdout/stderr concurrently; communicate
-    # is what avoids the pipe-buffer deadlock a manual write()+read() would risk.
+    # when communicate_until_final_result() runs below — so a discover-then-communicate
+    # ordering (the old argv path could afford, because the prompt was already on the
+    # command line) would always miss. The daemon thread polls for the transcript while
+    # that call feeds stdin and drains stdout/stderr concurrently, which avoids the
+    # pipe-buffer deadlock a manual write()+read() would risk.
     def _announce_transcript() -> None:
         nonlocal transcript_path
         transcript_path = resumed_transcript or _discover_transcript_path(
@@ -3021,9 +3153,12 @@ def main(argv: list[str] | None = None) -> int:
 
     announcer = threading.Thread(target=_announce_transcript, daemon=True)
     child_session_id: "str | None" = None
+    reaped_after_result = False
     try:
         announcer.start()
-        stdout_str, stderr_str = proc.communicate(input=prompt)
+        stdout_str, stderr_str, reaped_after_result = communicate_until_final_result(
+            proc, prompt, final_result_grace
+        )
         announcer.join(timeout=11.0)
     finally:
         # Normal completion already reaped the child (no-op here); any abnormal
@@ -3043,12 +3178,17 @@ def main(argv: list[str] | None = None) -> int:
                     transcript_path = candidate
                     break
         deregister_child_scope(child_session_id)
-    completed = subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout_str, stderr=stderr_str)
+    payload = _load_json_payload(stdout_str)
+    returncode = proc.returncode
+    if reaped_after_result:
+        # The child was reaped after delivering its result, so its signal status says
+        # nothing about the work; the exit code follows the result's own verdict.
+        returncode = 1 if isinstance(payload, dict) and payload.get("is_error") else 0
+    completed = subprocess.CompletedProcess(args=cmd, returncode=returncode, stdout=stdout_str, stderr=stderr_str)
     duration_ms = int((time.monotonic() - started) * 1000)
 
     cost_usd: float | None = None
     result_text = completed.stdout
-    payload = _load_json_payload(completed.stdout)
     if payload:
         # Tolerant field lookup — schema may differ across versions.
         result_text = payload.get("result") or payload.get("output") or completed.stdout

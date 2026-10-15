@@ -2345,11 +2345,19 @@ def _count_replan(state: SessionState) -> None:
     )
 
 
+def _park_node(state: SessionState) -> None:
+    """Move the session to BLOCKED, remembering the node `unblock` returns to. A session
+    already BLOCKED keeps the node it was first parked from: recording BLOCKED as its own
+    way back would leave `unblock` nothing to restore."""
+    if state.node != Node.BLOCKED.value:
+        state.blocked_from = state.node
+    state.node = Node.BLOCKED.value
+
+
 def _park_blocked(state: SessionState, store: StateStore, stage, marker, base: dict) -> Directive:
     """Park the session at BLOCKED and escalate — for a spawn whose output is
     malformed/unroutable (no marker, or a marker the engine cannot resolve)."""
-    state.blocked_from = state.node
-    state.node = Node.BLOCKED.value
+    _park_node(state)
     reason = "malformed spawn output" if marker in (None, "MALFORMED") else f"marker {marker}"
     state.log("dispatch_escalate", stage=stage.index, marker=marker)
     store.save(state)
@@ -6977,8 +6985,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         # success. This must win before marker routing (a refusal carries no valid
         # marker).
         loop_line = _loop_detected_line(result)
-        state.blocked_from = state.node
-        state.node = Node.BLOCKED.value
+        _park_node(state)
         state.log(
             "dispatch_refused", stage=stage.index,
             reason="norm-loop" if loop_line else "recursion-cap",
@@ -10795,8 +10802,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
             # mirrors cmd_block's own bypass-transition idiom (and fire-acknowledge's
             # "abandon" decision) — parks reversibly via unblock, never RESOLVED, and
             # never touches args.plan.
-            state.blocked_from = state.node
-            state.node = Node.BLOCKED.value
+            _park_node(state)
             state.log("block", reason=f"renegotiation abandoned: {renegotiation_note}")
             store.save(state)
             return Directive(
@@ -11473,8 +11479,7 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
     _clear_since_user_decision(state, args.by)
     _clear_open_fires_if_customer(state, args.by)
     if decision == "abandon":
-        state.blocked_from = state.node
-        state.node = Node.BLOCKED.value
+        _park_node(state)
         state.log("block", reason="user-abandoned-after-fire")
         store.save(state)
         return Directive(True, state.node, "unblock",
@@ -11493,8 +11498,7 @@ def cmd_block(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     state = _require(store, args.session)
     if state.node in (Node.RESOLVED.value, Node.BLOCKED.value):
         return Directive(False, state.node, "noop", f"cannot block from node={state.node}")
-    state.blocked_from = state.node
-    state.node = Node.BLOCKED.value
+    _park_node(state)
     state.log("block", reason=getattr(args, "reason", None))
     store.save(state)
     return Directive(True, state.node, "unblock", "blocked; resolve the blocker then unblock", marker="ESCALATE")

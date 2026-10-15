@@ -253,3 +253,164 @@ def test_single_park_unblock_keeps_base_behaviour(store, venued_fixtures_dir):
 
     after = store.load("p3")
     assert after.node == Node.EXECUTING.value and after.blocked_from is None
+
+
+# --- #423: what the resume renews, and where it stays a fresh session -------------------
+
+from agentctl import norm_handoff  # noqa: E402
+from test_child_contour_gate import HANDOFF_ENV  # noqa: E402
+from test_child_session_reuse import _assert_fresh  # noqa: E402
+
+
+def _escalated_child(monkeypatch, tmp_path, *, node: str, approved: bool):
+    """The first child's engine session after it escalated the parent's norm: its adopted
+    link and its `escalated_to` both name a norm digest the parent has since changed, and
+    it stands at `node` with its plan approved or not."""
+    home, workdir, first = _first_child(monkeypatch, tmp_path)
+    child = first.option("--session-id")
+    store = _start_child_engine(monkeypatch, home, first)
+    state = store.load(child).to_dict()
+    old_digest = "0" * 64
+    state["parent_link"]["norm_digest"] = old_digest
+    state["difficulty"] = {
+        "uid": "escalation1", "level": 0, "origin": "stage",
+        "escalated_to": {"parent_session": state["parent_link"]["parent_session"],
+                         "stage_index": STAGE, "norm_digest": old_digest},
+    }
+    state["node"] = node
+    state["approval"]["passed"] = approved
+    store.path(child).write_text(json.dumps(state), encoding="utf-8")
+    _write_transcript(workdir, child)
+    return home, workdir, first, child, store, old_digest
+
+
+def test_resume_refreshes_link_and_requires_reapproval(monkeypatch, tmp_path):
+    home, workdir, first, child, store, old_digest = _escalated_child(
+        monkeypatch, tmp_path, node=Node.APPROVED.value, approved=True)
+
+    second = _spawn(monkeypatch, home, workdir)
+
+    _assert_resumed(second, child)
+    resumed = store.load(child)
+    assert resumed.parent_link["norm_digest"] != old_digest, (
+        "BEHAVIOUR: the resumed child's parent_link still names the norm the parent fixed"
+    )
+    handed = norm_handoff.verify_env_value(second.env[HANDOFF_ENV])[0]
+    assert handed["norm_digest"] != old_digest, (
+        "BEHAVIOUR: the resumed child was handed the handoff of the old norm"
+    )
+    assert handed["norm_digest"] == resumed.parent_link["norm_digest"], (
+        "BEHAVIOUR: the handoff the resumed child reads differs from its own parent_link"
+    )
+    assert not resumed.approval.passed and resumed.node == Node.PLAN_READY.value, (
+        f"BEHAVIOUR: the resumed child kept its approval of the old norm "
+        f"(node={resumed.node}, approval.passed={resumed.approval.passed})"
+    )
+
+
+def test_unescalated_norm_change_mints_fresh_session(monkeypatch, tmp_path):
+    home, workdir, first = _first_child(monkeypatch, tmp_path)
+    child = first.option("--session-id")
+    store = _start_child_engine(monkeypatch, home, first)
+    stale = store.load(child).to_dict()
+    stale["parent_link"]["norm_digest"] = "0" * 64
+    store.path(child).write_text(json.dumps(stale), encoding="utf-8")
+    _write_transcript(workdir, child)
+
+    second = _spawn(monkeypatch, home, workdir)
+
+    _assert_fresh(second, child)
+
+
+def test_escalation_of_another_norm_mints_fresh_session(monkeypatch, tmp_path):
+    home, workdir, first, child, store, old_digest = _escalated_child(
+        monkeypatch, tmp_path, node=Node.DIAGNOSING.value, approved=False)
+    state = store.load(child).to_dict()
+    state["difficulty"]["escalated_to"]["norm_digest"] = "f" * 64
+    store.path(child).write_text(json.dumps(state), encoding="utf-8")
+
+    second = _spawn(monkeypatch, home, workdir)
+
+    _assert_fresh(second, child)
+
+
+# --- #424: pins of what the wrapper keeps doing ------------------------------------------
+
+
+def _run_wrapper(tmp_path: Path, build_stub) -> tuple[bool, str, "int | None"]:
+    """(returned within RETURN_BOUND_S, the wrapper's stdout, its exit code) for a wrapper
+    run against the stub `build_stub(transcript)` returns."""
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    config = tmp_path / "config"
+    (config / "projects").mkdir(parents=True)
+    skill = config / "skills" / "developer"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("# stub developer skill for tests\n", encoding="utf-8")
+    project = _load_spawn()._project_dir_name(str(workdir))
+    transcript = config / "projects" / project / "stub-child-session.jsonl"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "claude"
+    stub.write_text(build_stub(transcript))
+    stub.chmod(0o755)
+    plan = tmp_path / "plan.md"
+    plan.write_text("# Plan\n\n**<<this step>>** do the thing.\n")
+    out = tmp_path / "wrapper.out"
+    argv = [
+        sys.executable, str(WRAPPER), "--kind", "developer", "--plan", str(plan),
+        "--done-criterion", "stub does nothing", "--criterion-type", "measurable",
+        "--complexity", "medium", "--effort", "medium", "--workdir", str(workdir),
+    ]
+    with out.open("w") as sink, (tmp_path / "wrapper.err").open("w") as err_sink:
+        wrapper = subprocess.Popen(
+            argv, env=_wrapper_env(tmp_path, bin_dir, config), stdout=sink,
+            stderr=err_sink, stdin=subprocess.DEVNULL, start_new_session=True,
+        )
+        try:
+            try:
+                wrapper.wait(timeout=RETURN_BOUND_S)
+            except subprocess.TimeoutExpired:
+                pass
+        finally:
+            returned = wrapper.poll() is not None
+            if not returned:
+                try:
+                    os.killpg(wrapper.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                wrapper.wait(timeout=10)
+    return returned, out.read_text(), wrapper.returncode
+
+
+def test_wrapper_does_not_kill_child_before_final_result(tmp_path):
+    finished = tmp_path / "child-finished"
+    delay = GRACE_S + 2.0
+
+    def stub(transcript: Path) -> str:
+        return (
+            "#!/bin/bash\n"
+            "cat > /dev/null\n"
+            f"mkdir -p {transcript.parent}\n"
+            f"echo '{{}}' > {transcript}\n"
+            f"sleep {delay}\n"
+            f"echo '{json.dumps(FINAL_RESULT)}'\n"
+            f"touch {finished}\n"
+        )
+
+    returned, stdout, _ = _run_wrapper(tmp_path, stub)
+
+    assert returned, "the wrapper did not return for a child that finished after a pause"
+    assert finished.exists(), "the wrapper reaped a child that had not yet printed its result"
+    assert "COMPLETED" in stdout, f"the wrapper forwarded no final result: {stdout[:200]!r}"
+
+
+def test_wrapper_normal_exit_result_as_base(tmp_path):
+    def stub(transcript: Path) -> str:
+        return _stub_claude(_marker("normal"), hold="none", transcript=transcript)
+
+    returned, stdout, returncode = _run_wrapper(tmp_path, stub)
+
+    assert returned, "the wrapper did not return for a child that exited at once"
+    assert returncode == 0, f"the wrapper exited {returncode} for a child that succeeded"
+    assert "COMPLETED: stub child finished" in stdout, f"result text not forwarded: {stdout[:200]!r}"
