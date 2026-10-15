@@ -40,7 +40,7 @@ from .dispatch import (
     CHILD_INFRA_FAILURE,
     Runner,
     dispatch_stage,
-    embedded_permission_request,
+    permission_request_action,
     parse_marker,
     subprocess_runner,
 )
@@ -7178,7 +7178,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             marker="PLAN-READY", data=base,
         )
 
-    def _route_permission_request(action: str, raw: str, extra: dict | None = None) -> Directive:
+    def _route_permission_request(action: str, extra: dict | None = None) -> Directive:
         data_base = {**base, **(extra or {})}
         # The permissions-cli check still runs for its own audit-row side effect, but
         # its answer no longer skips the ask: a global grant recorded there never
@@ -7242,6 +7242,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             return _diagnose_materialization_defect(
                 state, store, stage, action=action,
                 evidence="transcript" if transcript_covered else "self-reported",
+                data=extra,
             )
         # REQ5 (dispatch half): a Rule:-line request may resolve to a resource
         # already approved for this order, or already covered by the stage's
@@ -7285,7 +7286,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             # parked here exactly as the ask_user_permission path below does,
             # or the directive's own instructions would fail when followed.
             state.permission_request = PermissionRequest(
-                action=action, stage_index=stage.index, raw=raw
+                action=action, stage_index=stage.index, raw=action
             )
             state.log(
                 "permission_self_grant", stage=stage.index, action=action, rule=rule_line,
@@ -7305,7 +7306,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                 },
             )
         state.permission_request = PermissionRequest(
-            action=action, stage_index=stage.index, raw=raw
+            action=action, stage_index=stage.index, raw=action
         )
         # `_classify_transcript_denials` above may already have appended a
         # planning_misses row for this SAME denial (source="transcript",
@@ -7366,11 +7367,11 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             data=_ask_data,
         )
     if marker == "PERMISSION-REQUEST":
-        return _route_permission_request(body, body)
+        return _route_permission_request(permission_request_action(result.stdout) or body)
     if marker == "INCOMPLETE":
-        embedded = embedded_permission_request(result.stdout)
+        embedded = permission_request_action(result.stdout)
         if embedded is not None:
-            return _route_permission_request(embedded, embedded, {"incomplete_summary": body})
+            return _route_permission_request(embedded, {"incomplete_summary": body})
         store.save(state)
         return Directive(
             False, state.node, "decide_incomplete",
@@ -8050,6 +8051,7 @@ def _fail_stage_into_diagnosing(
 
 def _diagnose_materialization_defect(
     state: SessionState, store: StateStore, stage: Stage, *, action: str, evidence: str,
+    data: dict | None = None,
 ) -> Directive:
     """Route a PERMISSION-REQUEST whose denied call WAS covered by the stage's
     effective grant set into FAILED/DIAGNOSING -- the grant existed, materialization
@@ -8079,7 +8081,7 @@ def _diagnose_materialization_defect(
         f"materialized grants ({evidence}) -- this is a materialization defect, not "
         "a planning miss; run overcome-difficulty (investigate why materialization "
         "failed to carry the grant, then critique); no re-dispatch, no user ask",
-        marker="OVERCOME-DIFFICULTY",
+        marker="OVERCOME-DIFFICULTY", data=dict(data or {}),
     )
 
 

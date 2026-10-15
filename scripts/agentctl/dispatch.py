@@ -118,24 +118,40 @@ def parse_marker(stdout: str) -> tuple[str | None, str]:
     return None, ""
 
 
-def embedded_permission_request(stdout: str) -> str | None:
-    """The request text of a ``PERMISSION-REQUEST:`` block that is not the first
-    marker of ``stdout`` (an INCOMPLETE that stops for a permission), else None.
+_DECORATION = r"^[-*]?\s*\*{0,2}"
+_REQUEST_LABEL_RE = re.compile(_DECORATION + r"PERMISSION-REQUEST:\*{0,2}\s*(.*)$")
+_ACTION_LABEL_RE = re.compile(_DECORATION + r"Action:\*{0,2}\s*(.*)$")
+
+
+def _unwrap_code(text: str) -> str:
+    text = text.strip()
+    if len(text) >= 2 and text.startswith("`") and text.endswith("`"):
+        return text[1:-1].strip()
+    return text
+
+
+def permission_request_action(stdout: str) -> str | None:
+    """The request text of the first ``PERMISSION-REQUEST:`` block in ``stdout``,
+    whether or not it is the first marker (an INCOMPLETE can stop for a permission),
+    else None. Tolerates the list bullet / ``**bold**`` / code-span decoration that
+    ``cli._parse_rule_line`` tolerates.
 
     The text is whatever follows the label on its line, or, when that is empty, the
     block's ``Action:`` line."""
     lines = [ln.strip() for ln in (stdout or "").splitlines()]
     for i, line in enumerate(lines):
-        if not line.startswith("PERMISSION-REQUEST:"):
+        m = _REQUEST_LABEL_RE.match(line)
+        if not m:
             continue
-        tail = line[len("PERMISSION-REQUEST:"):].strip()
+        tail = _unwrap_code(m.group(1))
         if tail:
             return tail
         for follow in lines[i + 1:]:
             if MARKER_RE.match(follow):
                 break
-            if follow.startswith("Action:"):
-                return follow[len("Action:"):].strip() or None
+            am = _ACTION_LABEL_RE.match(follow)
+            if am:
+                return _unwrap_code(am.group(1)) or None
         return None
     return None
 

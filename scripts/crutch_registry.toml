@@ -501,7 +501,7 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
-id = "8367948396e34d01"
+id = "7283fe9be39f2326"
 domain = "code"
 file = "scripts/agentctl/dispatch.py"
 class = "structural"
@@ -509,7 +509,7 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
-id = "7283fe9be39f2326"
+id = "8d2ec9bc8278f62f"
 domain = "code"
 file = "scripts/agentctl/dispatch.py"
 class = "structural"
@@ -13181,6 +13181,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "9f70c732ca3207db"
+domain = "code"
+file = "scripts/tests/test_pretrial_routing.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "6bb74cbe2dd82096"
 domain = "code"
 file = "scripts/tests/test_pretrial_routing.py"
@@ -13206,6 +13214,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "b6b920c58fd3d3e7"
+domain = "code"
+file = "scripts/tests/test_pretrial_routing.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "318bb7481f38acc9"
 domain = "code"
 file = "scripts/tests/test_pretrial_routing.py"
 class = "not-a-gate"
