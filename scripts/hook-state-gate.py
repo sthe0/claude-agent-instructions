@@ -41,7 +41,7 @@ from agentctl.exempt_paths import (  # noqa: E402
 from agentctl.norm_handoff import NORM_HANDOFF_ENV  # noqa: E402
 from agentctl.own_contour import OWN_SESSION_ENV  # noqa: E402
 from agentctl.state import SessionState as _SessionState  # noqa: E402
-from lib import config_root  # noqa: E402
+from lib import config_root, engine_session_binding  # noqa: E402
 
 # Current-vs-legacy-root fallback lookup lives in lib/config_root.py (shared
 # with the other state-reading hooks); resolve_state_path is a thin alias kept
@@ -231,6 +231,16 @@ def deny_with(node: str, reason: str) -> None:
     }))
 
 
+def driven_engine_session(harness_session: str) -> str:
+    """The engine session whose node decides an edit from `harness_session`: the one the
+    cli last bound to it (lib/engine_session_binding.py), else the harness id itself.
+    A lookup failure falls back to the harness id, as for an unbound session."""
+    try:
+        return engine_session_binding.resolve(harness_session) or harness_session
+    except Exception:
+        return harness_session
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -260,7 +270,7 @@ def main() -> int:
             ))
             return 0
 
-    sp = resolve_state_path(session_id)
+    sp = resolve_state_path(driven_engine_session(session_id))
     if sp is None:
         # No engine state: allow, unless the env says this is a linked child — then the
         # missing state is a contour that never started, not a session nobody drives.

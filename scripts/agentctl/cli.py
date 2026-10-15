@@ -25,7 +25,7 @@ import time
 from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
-from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
+from lib import argv_text, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
 from . import advisor, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
@@ -13370,14 +13370,12 @@ def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
     )
     args = build_parser(allow_abbrev).parse_args(raw)
     resolve_arg_text(args)
-    if harness and getattr(args, "session", None) and args.session != harness:
-        print(
-            f"agentctl: warning: --session {args.session!r} differs from "
-            f"CLAUDE_CODE_SESSION_ID {harness!r}; the production-edit gate "
-            f"authorizes by the harness id, so gated edits may be denied.",
-            file=sys.stderr,
-        )
-    store = FileStateStore(Path(args.state_root) if args.state_root else None)
+    session = getattr(args, "session", None)
+    binds = bool(harness and session and not args.state_root)
+    store = (
+        _BindingStore(harness, session) if binds
+        else FileStateStore(Path(args.state_root) if args.state_root else None)
+    )
     fn = COMMANDS[args.command]
     try:
         directive = fn(args, store=store)
@@ -13385,8 +13383,46 @@ def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
         directive = Directive(False, "(error)", "error", str(exc))
     else:
         _fire_plugins(args, store, directive)
+    if harness and session and session != harness and not _is_driven_by(harness, session):
+        print(
+            f"agentctl: warning: --session {session!r} differs from "
+            f"CLAUDE_CODE_SESSION_ID {harness!r} and this command saved no state of it, "
+            f"so the production-edit gate does not follow it: an Edit from the harness "
+            f"session is decided by the harness id until a state-changing command "
+            f"drives {session!r}.",
+            file=sys.stderr,
+        )
     print(json.dumps(directive.to_dict(), ensure_ascii=False, indent=2))
     return 0 if directive.ok else 1
+
+
+class _BindingStore(FileStateStore):
+    """The default store of a verb run by a harness session: saving the state of the
+    session the verb was run on binds that session to the harness id, so the
+    production-edit gate (which sees only the harness id) follows the session the
+    coordinator drives. Query verbs save nothing and so never bind."""
+
+    def __init__(self, harness: str, session: str):
+        super().__init__(None)
+        self._harness = harness
+        self._session = _safe_session_id(session)
+
+    def save(self, state) -> None:
+        super().save(state)
+        if _safe_session_id(state.session_id) != self._session:
+            return
+        try:
+            engine_session_binding.record_drive(
+                self._harness, state.session_id, dt.datetime.now(dt.timezone.utc))
+        except Exception:
+            pass  # a binding that cannot be written leaves the gate at the harness id
+
+
+def _is_driven_by(harness: str, session: str) -> bool:
+    try:
+        return _safe_session_id(session) in engine_session_binding.driven_sessions(harness)
+    except Exception:
+        return False
 
 
 def _fire_plugins(args, store: StateStore, directive: Directive) -> None:

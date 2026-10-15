@@ -126,3 +126,82 @@ def test_unbound_harness_session_keeps_base_decision(tmp_path):
     _write_harness_state(tmp_path, "EXECUTING")
     proc = _edit_from_harness(tmp_path)
     assert proc.returncode == 0 and not _is_deny(proc), "an unbound harness session at EXECUTING is allowed"
+
+
+def _drive_to_executing(home: Path, session: str | None, harness: str | None = HARNESS) -> None:
+    """Drive `session` (the harness session itself when None) to EXECUTING."""
+    target = ("--session", session) if session else ()
+    for argv in (
+        ("start", *target, "--task", "driven", "--goal", "goal"),
+        ("classify", *target, "--files", "1", "--changed-lines", "5"),
+        ("next-stage", *target),
+    ):
+        proc = _agentctl(home, *argv, harness=harness)
+        assert proc.returncode == 0, f"setup: {argv[0]} failed: {proc.stdout[-300:]}"
+    state_session = session or harness
+    node = json.loads(_state_file(home, state_session).read_text())["node"]
+    assert node == "EXECUTING", f"setup: session {state_session} is at {node}"
+
+
+def _use_home(monkeypatch, home: Path) -> None:
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_AGENT_HOME", raising=False)
+
+
+def test_binding_follows_most_recent_driven_session(tmp_path):
+    _drive_to_executing(tmp_path, "engine-first")
+    assert not _is_deny(_edit_from_harness(tmp_path)), "setup: the first driven session is at EXECUTING"
+
+    started = _agentctl(tmp_path, "start", "--session", "engine-second", "--task", "t", "--goal", "g")
+    assert started.returncode == 0, f"setup: start failed: {started.stdout[-300:]}"
+
+    assert _is_deny(_edit_from_harness(tmp_path)), (
+        "BEHAVIOUR: the gate did not move to the engine session driven last, which is not at EXECUTING"
+    )
+
+
+def test_driving_own_session_after_other_rebinds_to_own(tmp_path):
+    _drive_to_executing(tmp_path, ENGINE)
+    state_file = _state_file(tmp_path, ENGINE)
+    state = json.loads(state_file.read_text())
+    state["node"] = "RESOLVED"
+    state_file.write_text(json.dumps(state))
+    assert _is_deny(_edit_from_harness(tmp_path)), "setup: the driven session is resolved"
+
+    _drive_to_executing(tmp_path, None)
+
+    proc = _edit_from_harness(tmp_path)
+    assert proc.returncode == 0, "setup: the hook must never exit non-zero"
+    assert not _is_deny(proc), (
+        "BEHAVIOUR: after the harness session drove itself to EXECUTING, the gate still follows "
+        f"the resolved engine session: {proc.stdout[:300]}"
+    )
+
+
+def test_driven_sessions_lists_every_bound_session_most_recent_first(tmp_path, monkeypatch):
+    from lib import engine_session_binding
+
+    for session in ("engine-a", "engine-b", "engine-c"):
+        started = _agentctl(tmp_path, "start", "--session", session, "--task", "t", "--goal", "g")
+        assert started.returncode == 0, f"setup: start failed: {started.stdout[-300:]}"
+    classified = _agentctl(tmp_path, "classify", "--session", "engine-a", "--files", "1", "--changed-lines", "5")
+    assert classified.returncode == 0, f"setup: classify failed: {classified.stdout[-300:]}"
+    _state_file(tmp_path, "engine-b").unlink()
+    _use_home(monkeypatch, tmp_path)
+
+    assert engine_session_binding.driven_sessions(HARNESS) == ["engine-a", "engine-c"]
+    assert engine_session_binding.resolve(HARNESS) == "engine-a"
+    assert engine_session_binding.resolve("never-bound") is None
+
+
+def test_readonly_query_of_other_session_keeps_base_decision(tmp_path):
+    _drive_to_executing(tmp_path, ENGINE, harness="harness-other")
+    _write_harness_state(tmp_path, "PLAN_READY")
+
+    query = _agentctl(tmp_path, "status", "--session", ENGINE)
+
+    assert query.returncode == 0, f"setup: status failed: {query.stdout[-300:]}"
+    assert _is_deny(_edit_from_harness(tmp_path)), (
+        "a read-only query of another session must not move the gate off the harness session"
+    )

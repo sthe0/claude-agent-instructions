@@ -24,6 +24,7 @@ def _load_cli():
             sys.path.insert(0, p)
     spec = importlib.util.spec_from_file_location("agentctl.cli", MODULE)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
 
