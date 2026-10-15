@@ -11409,7 +11409,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
 def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advice: list[str],
                           **log_fields) -> Directive:
     """Re-arm the plan-approval gate and park the session at PLAN_READY after a replan
-    that needs the plan approved again, logging `log_fields` as the `replan` event."""
+    that needs the plan approved again, logging `log_fields` as the `replan` event. The
+    approved plan picks the next stage afresh, so no stage stays current."""
+    state.current_stage = None
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
     state.log("replan", **log_fields)

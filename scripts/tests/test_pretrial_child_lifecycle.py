@@ -442,7 +442,8 @@ def test_escalation_to_another_stage_mints_fresh_session(monkeypatch, tmp_path):
 # --- #423: a resumed child that stands at DIAGNOSING re-approves instead of crashing ----
 
 
-def _diagnosing_child_with_closed_cycle(store, venued_fixtures_dir, sid: str) -> None:
+def _diagnosing_child_with_closed_cycle(
+        store, venued_fixtures_dir, sid: str, *, norm_fault: bool = True) -> None:
     from test_difficulty import (
         _critique, _declare, _investigate, _normalize, _to_failed_stage1,
     )
@@ -450,7 +451,7 @@ def _diagnosing_child_with_closed_cycle(store, venued_fixtures_dir, sid: str) ->
     _to_failed_stage1(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
     _declare(store, sid)
     _investigate(store, sid)
-    _critique(store, sid)
+    _critique(store, sid, norm_fault=norm_fault)
     _normalize(store, sid)
 
 
@@ -488,14 +489,48 @@ def test_resumed_diagnosing_child_reapproves_after_refinement_replan(
     )
 
 
+def test_resumed_diagnosing_child_reapproves_after_no_change_replan(
+        store, venued_fixtures_dir, tmp_path):
+    from agentctl.stage_norm import StageNorm
+
+    sid = "resumed-diagnosing-no-change"
+    _diagnosing_child_with_closed_cycle(store, venued_fixtures_dir, sid, norm_fault=False)
+    state = store.load(sid)
+    record = norm_handoff.build_record(
+        parent_session="parent", stage_index=1, kind="developer",
+        norm=StageNorm.from_stage(state.stage(1)), grants=[], depth=1, parent_lineage=None)
+    path, sha = norm_handoff.write_record(tmp_path / "handoffs", record)
+    _load_spawn().refresh_resumed_child_link(
+        store, state, norm_handoff.format_env_value(path, sha))
+    state = store.load(sid)
+    assert state.node == Node.DIAGNOSING.value and not state.approval.passed, "setup"
+
+    directive = cli.cmd_replan(ns(session=sid, plan=state.plan_path), store=store)
+
+    state = store.load(sid)
+    assert directive.ok, f"setup: the replan was refused: {directive.detail}"
+    last = [h for h in state.history if h.get("event") == "replan"][-1]
+    assert last["kind"] == "no_change", f"setup: the replan was a {last['kind']!r}"
+    assert state.node == Node.PLAN_READY.value and not state.approval.passed, (
+        f"BEHAVIOUR: a no_change replan of the resumed child left node={state.node} "
+        f"approval.passed={state.approval.passed} instead of asking for a new approval"
+    )
+
+
 # --- #424: the exit code after the wrapper reaped a child that outlived its result -------
 
 
-def _reaped_child_run(tmp_path: Path, *, is_error: bool) -> "tuple[bool, int | None, bool]":
-    """(wrapper returned, its exit code, a process of the child's group still alive) for a
-    stub that prints a final result with `is_error` and then stays alive past the grace."""
+def _reaped_child_run(
+    tmp_path: Path, *, is_error: bool, line_before: str = "", line_after: str = "",
+) -> "tuple[bool, int | None, bool, str]":
+    """(wrapper returned, its exit code, a process of the child's group still alive, the
+    wrapper's stdout) for a stub that prints a final result with `is_error` -- after
+    `line_before` and before `line_after` when given -- and then stays alive past the
+    grace."""
     marker = _marker("reaped")
     result = {**FINAL_RESULT, "is_error": is_error}
+    echo_before = f"echo '{line_before}'\n" if line_before else ""
+    echo_after = f"echo '{line_after}'\n" if line_after else ""
 
     def stub(transcript: Path) -> str:
         return (
@@ -503,20 +538,22 @@ def _reaped_child_run(tmp_path: Path, *, is_error: bool) -> "tuple[bool, int | N
             "cat > /dev/null\n"
             f"mkdir -p {transcript.parent}\n"
             f"echo '{{}}' > {transcript}\n"
+            f"{echo_before}"
             f"echo '{json.dumps(result)}'\n"
+            f"{echo_after}"
             f"exec -a {marker} sleep 600\n"
         )
 
     try:
-        returned, _, returncode = _run_wrapper(tmp_path, stub)
+        returned, stdout, returncode = _run_wrapper(tmp_path, stub)
         alive = subprocess.run(["pgrep", "-f", marker], capture_output=True).returncode == 0
     finally:
         subprocess.run(["pkill", "-9", "-f", marker], capture_output=True)
-    return returned, returncode, alive
+    return returned, returncode, alive, stdout
 
 
 def test_reaped_child_exit_code_follows_its_successful_result(tmp_path):
-    returned, returncode, alive = _reaped_child_run(tmp_path, is_error=False)
+    returned, returncode, alive, _ = _reaped_child_run(tmp_path, is_error=False)
 
     assert returned, "BEHAVIOUR: the wrapper did not return for a child that outlived its result"
     assert returncode == 0, (
@@ -526,11 +563,39 @@ def test_reaped_child_exit_code_follows_its_successful_result(tmp_path):
 
 
 def test_reaped_child_exit_code_follows_its_error_result(tmp_path):
-    returned, returncode, alive = _reaped_child_run(tmp_path, is_error=True)
+    returned, returncode, alive, _ = _reaped_child_run(tmp_path, is_error=True)
 
     assert returned, "BEHAVIOUR: the wrapper did not return for a child that outlived its result"
     assert returncode == 1, (
         f"BEHAVIOUR: the wrapper exited {returncode} for an error result of a reaped child"
+    )
+    assert not alive, "BEHAVIOUR: the reaped child's process is still alive"
+
+
+def test_wrapper_returns_when_a_non_json_line_precedes_the_final_result(tmp_path):
+    returned, returncode, alive, stdout = _reaped_child_run(
+        tmp_path, is_error=False, line_before="progress: not json")
+
+    assert returned, (
+        "BEHAVIOUR: the wrapper did not return for a child that printed a non-JSON line "
+        "before its final result and then outlived it"
+    )
+    assert returncode == 0 and "COMPLETED: stub child finished" in stdout, (
+        f"BEHAVIOUR: exit {returncode}, output {stdout[:200]!r}"
+    )
+    assert not alive, "BEHAVIOUR: the reaped child's process is still alive"
+
+
+def test_reaped_error_result_followed_by_another_line_keeps_its_verdict(tmp_path):
+    returned, returncode, alive, stdout = _reaped_child_run(
+        tmp_path, is_error=True, line_after="trailing: not json")
+
+    assert returned, "BEHAVIOUR: the wrapper did not return for a child that outlived its result"
+    assert returncode == 1, (
+        f"BEHAVIOUR: the wrapper exited {returncode} for an error result followed by another line"
+    )
+    assert "COMPLETED: stub child finished" in stdout, (
+        f"BEHAVIOUR: the result text was lost: {stdout[:200]!r}"
     )
     assert not alive, "BEHAVIOUR: the reaped child's process is still alive"
 

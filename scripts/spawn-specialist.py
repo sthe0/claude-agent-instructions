@@ -2265,23 +2265,25 @@ def final_result_grace_s(environ=None) -> float:
     return grace if math.isfinite(grace) and grace >= 0 else FINAL_RESULT_GRACE_S
 
 
-def _is_final_result(text: str) -> bool:
+def _final_result_payload(text: str) -> "dict | None":
     payload = _load_json_payload(text)
-    return isinstance(payload, dict) and payload.get("type") == "result"
+    return payload if isinstance(payload, dict) and payload.get("type") == "result" else None
 
 
 def communicate_until_final_result(
     proc: subprocess.Popen, prompt: str, grace_s: float,
-) -> "tuple[str, str, bool]":
-    """`(stdout, stderr, reaped)` of a child fed `prompt` on stdin. Unlike
+) -> "tuple[str, str, bool, dict | None]":
+    """`(stdout, stderr, reaped, final_result)` of a child fed `prompt` on stdin. Unlike
     `Popen.communicate`, which returns only when every pipe reaches EOF -- a pipe any
     process the child started can hold open -- this returns once the child's final
     result line has been read and the child has exited or `grace_s` has passed; a child
-    still alive then is reaped with its whole process group (`reaped`). A child that
-    prints no final result is waited for as `communicate` does."""
+    still alive then is reaped with its whole process group (`reaped`). `final_result`
+    is that line parsed, None when the child printed none; a child that prints no final
+    result is waited for as `communicate` does."""
     out_chunks: list[str] = []
     err_chunks: list[str] = []
     final_seen = threading.Event()
+    final_result: "list[dict]" = []
 
     def feed() -> None:
         try:
@@ -2298,9 +2300,11 @@ def communicate_until_final_result(
     def read_stdout() -> None:
         for line in proc.stdout:
             out_chunks.append(line)
-            if (not final_seen.is_set() and line.rstrip().endswith("}")
-                    and _is_final_result(line)):
-                final_seen.set()
+            if not final_seen.is_set() and line.rstrip().endswith("}"):
+                payload = _final_result_payload(line)
+                if payload is not None:
+                    final_result.append(payload)
+                    final_seen.set()
 
     def read_stderr() -> None:
         for line in proc.stderr:
@@ -2328,7 +2332,7 @@ def communicate_until_final_result(
     else:
         err_reader.join()
         proc.wait()
-    return "".join(out_chunks), "".join(err_chunks), reaped
+    return "".join(out_chunks), "".join(err_chunks), reaped, (final_result[0] if final_result else None)
 
 
 def resolve_child_session_id(stdout_text: str, transcript_path: "Path | None") -> "str | None":
@@ -3155,9 +3159,10 @@ def main(argv: list[str] | None = None) -> int:
     announcer = threading.Thread(target=_announce_transcript, daemon=True)
     child_session_id: "str | None" = None
     reaped_after_result = False
+    final_result: "dict | None" = None
     try:
         announcer.start()
-        stdout_str, stderr_str, reaped_after_result = communicate_until_final_result(
+        stdout_str, stderr_str, reaped_after_result, final_result = communicate_until_final_result(
             proc, prompt, final_result_grace
         )
         announcer.join(timeout=11.0)
@@ -3179,7 +3184,7 @@ def main(argv: list[str] | None = None) -> int:
                     transcript_path = candidate
                     break
         deregister_child_scope(child_session_id)
-    payload = _load_json_payload(stdout_str)
+    payload = final_result if final_result is not None else _load_json_payload(stdout_str)
     returncode = proc.returncode
     if reaped_after_result:
         # The child was reaped after delivering its result, so its signal status says
