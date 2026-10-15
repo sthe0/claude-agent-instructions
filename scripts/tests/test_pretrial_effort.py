@@ -288,3 +288,164 @@ def test_sessionstate_fields_classified(store, venued_fixtures_dir, tmp_path):
     drifted = sorted(name for name in declared_plan_bound - POP_REWRITTEN_FIELDS
                      if after[name] != before[name])
     assert not drifted, f"BEHAVIOUR: push/pop did not round-trip the plan-bound fields {drifted}"
+
+
+# --- sub-plan custody: runtime grants, the wall-clock axis, nesting, another order ---------------
+
+def _classify_args(sid: str) -> Namespace:
+    return ns(session=sid, chat=False, changed_lines=200, files=5, wall_clock_min=60,
+              tracker_key=None, architectural=True, external_effect=False,
+              new_dependency=False, public_api_change=False)
+
+
+def _copy_plan(src: str, dest: Path, retitle: dict[str, str] | None = None) -> str:
+    text = Path(src).read_text(encoding="utf-8")
+    for old, new in (retitle or {}).items():
+        assert f'title = "{old}"' in text, f"setup: the fixture has no stage titled {old!r}"
+        text = text.replace(f'title = "{old}"', f'title = "{new}"')
+    dest.write_text(text, encoding="utf-8")
+    return str(dest)
+
+
+def _push_and_approve(store, sid: str, plan: str, *, originating: int = 1, execute: bool = False,
+                      after_push=None) -> None:
+    pushed = cli.cmd_push_subplan(
+        ns(session=sid, plan=plan, task=f"sub-{Path(plan).stem}", originating_stage=originating), store=store)
+    assert pushed.ok is True, f"setup: push-subplan failed: {pushed.detail}"
+    if after_push is not None:
+        after_push(store.load(sid))
+    cli.cmd_classify(_classify_args(sid), store=store)
+    cli.cmd_plan(ns(session=sid), store=store)
+    submitted = cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
+    assert submitted.ok is True, f"setup: the sub-plan was not submitted: {submitted.detail}"
+    approved = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert approved.ok is True, f"setup: the sub-plan was not approved: {approved.detail}"
+    if execute:
+        cli.cmd_partition(ns(session=sid, m1=False, m2=False, m3=False, m4=False,
+                             m3_severe=False, m4_severe=False), store=store)
+        cli.cmd_next_stage(ns(session=sid), store=store)
+        assert store.load(sid).node == Node.EXECUTING.value, "setup: the sub-plan is not executing"
+
+
+def _pop(store, sid: str) -> None:
+    _resolve_child_in_place(store, sid)
+    popped = cli.cmd_pop_subplan(ns(session=sid), store=store)
+    assert popped.ok is True, f"setup: pop-subplan failed: {popped.detail}"
+
+
+def _book(store, sid: str, *, spend: float = 0.0, minutes: float = 0.0) -> None:
+    from agentctl import effort
+
+    state = store.load(sid)
+    state.effort_actuals[effort.ACTUAL_SPEND_KEY] = (
+        float(state.effort_actuals.get(effort.ACTUAL_SPEND_KEY) or 0.0) + spend)
+    state.effort_actuals[effort.ACTUAL_MINUTES_KEY] = (
+        float(state.effort_actuals.get(effort.ACTUAL_MINUTES_KEY) or 0.0) + minutes)
+    store.save(state)
+
+
+def _order_window(key: str) -> tuple[float, float]:
+    window = cli.order_approvals.get(key)["effort_since_user_approval"]
+    return window["spend"], window["wall_clock"]
+
+
+def test_pop_restores_parent_runtime_grants_not_the_childs(store, venued_fixtures_dir, tmp_path):
+    parent_plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    child_plan = _copy_plan(parent_plan, tmp_path / "child.toml",
+                            {"Scaffold module": "Child alpha", "Add tests": "Child beta"})
+    _to_executing_stage1(store, "P", parent_plan)
+    cli.cmd_next_stage(ns(session="P"), store=store)
+    parent_grants = {"1": [{"rule": "Bash(git push:*)", "provenance": "runtime",
+                            "stage_title": "Scaffold module"}]}
+    state = store.load("P")
+    state.runtime_grants = {k: [dict(e) for e in v] for k, v in parent_grants.items()}
+    store.save(state)
+
+    def child_starts_without_grants(pushed):
+        assert pushed.runtime_grants == {}, (
+            f"BEHAVIOUR: the sub-plan started with the parent's runtime grants {pushed.runtime_grants}"
+        )
+
+    _push_and_approve(store, "P", child_plan, after_push=child_starts_without_grants)
+    state = store.load("P")
+    state.runtime_grants = {"1": [{"rule": "Bash(git status:*)", "provenance": "runtime",
+                                   "stage_title": "Child alpha"}]}
+    store.save(state)
+    _pop(store, "P")
+
+    assert store.load("P").runtime_grants == parent_grants, (
+        f"BEHAVIOUR: pop-subplan left {store.load('P').runtime_grants} instead of the parent's "
+        f"runtime grants {parent_grants}"
+    )
+
+
+def test_subplan_wall_clock_reaches_order_window_once(store, venued_fixtures_dir, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_ledgered_order_key", lambda state: "shared-order")
+    parent_plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    child_plan = _copy_plan(parent_plan, tmp_path / "child.toml")
+    _to_executing_stage1(store, "P", parent_plan)
+    _book(store, "P", minutes=10.0)
+    _flush(store, "P")
+    assert _order_window("shared-order") == (0.0, 10.0), "setup: the parent's minutes are not booked"
+
+    _push_and_approve(store, "P", child_plan)
+    _book(store, "P", minutes=4.0)
+    _flush(store, "P")
+    _pop(store, "P")
+    _flush(store, "P")
+
+    assert _order_window("shared-order") == (0.0, 14.0), (
+        f"BEHAVIOUR: the sub-plan's 4.0 minutes reached the order window as "
+        f"{_order_window('shared-order')[1] - 10.0} (window 10.0 -> {_order_window('shared-order')[1]})"
+    )
+
+
+def test_nested_subplan_spend_reaches_order_window_once(store, venued_fixtures_dir, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_ledgered_order_key", lambda state: "shared-order")
+    parent_plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    child_plan = _copy_plan(parent_plan, tmp_path / "child.toml")
+    grandchild_plan = _copy_plan(parent_plan, tmp_path / "grandchild.toml")
+    _to_executing_stage1(store, "P", parent_plan)
+    _book(store, "P", spend=3.0, minutes=6.0)
+    _flush(store, "P")
+    assert _order_window("shared-order") == (3.0, 6.0), "setup: the parent's units are not booked"
+
+    _push_and_approve(store, "P", child_plan, execute=True)
+    _book(store, "P", spend=2.0, minutes=4.0)
+    _flush(store, "P")
+    _push_and_approve(store, "P", grandchild_plan)
+    assert len(store.load("P").plan_stack) == 2, "setup: the sub-plans are not nested"
+    _book(store, "P", spend=1.0, minutes=2.0)
+    _flush(store, "P")
+    _pop(store, "P")
+    _flush(store, "P")
+    _pop(store, "P")
+    _flush(store, "P")
+
+    assert _order_window("shared-order") == (6.0, 12.0), (
+        f"BEHAVIOUR: the child's 2.0/4.0 and the grandchild's 1.0/2.0 (spend/minutes) reached the "
+        f"order window as {_order_window('shared-order')[0] - 3.0}/{_order_window('shared-order')[1] - 6.0} "
+        "instead of 3.0/6.0 in total"
+    )
+
+
+def test_subplan_naming_another_order_books_each_side_to_its_own_window(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    parent_plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    child_plan = _copy_plan(parent_plan, tmp_path / "child.toml")
+    monkeypatch.setattr(
+        cli, "_ledgered_order_key",
+        lambda state: "order-child" if state.plan_path == child_plan else "order-parent")
+    _to_executing_stage1(store, "P", parent_plan)
+    _book(store, "P", spend=3.0, minutes=7.0)
+
+    _push_and_approve(store, "P", child_plan)
+    _book(store, "P", spend=2.0, minutes=4.0)
+    _flush(store, "P")
+    _pop(store, "P")
+    _flush(store, "P")
+
+    assert (_order_window("order-parent"), _order_window("order-child")) == ((3.0, 7.0), (2.0, 4.0)), (
+        f"BEHAVIOUR: parent window {_order_window('order-parent')}, child window "
+        f"{_order_window('order-child')}; expected (3.0, 7.0) and (2.0, 4.0) as (spend, minutes)"
+    )

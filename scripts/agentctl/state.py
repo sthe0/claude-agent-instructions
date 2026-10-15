@@ -98,8 +98,9 @@ SCHEMA_VERSION = 56  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # acceptance of a grant that covers a protected action, bound to the
                      # grants sha256)
                      # 56: PlanFrame gains the plan-bound approval binding (plan_snapshot_*,
-                     # approved_grants_*, accepted_plan_digest) and plan_binding_captured, so
-                     # pop-subplan restores the parent's binding instead of the child's
+                     # approved_grants_*, accepted_plan_digest), runtime_grants and
+                     # plan_binding_captured, so pop-subplan restores the parent's binding
+                     # and stage grants instead of the child's
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1785,6 +1786,10 @@ class PlanFrame:
     approved_grant_entries: dict[str, dict] | None = None
     accepted_plan_digest: str | None = None
     plan_binding_captured: bool = False
+    # Runtime grants are keyed by stage index of the live plan, so they belong to it: the child
+    # starts with none and pop puts the parent's back. None = a frame written before this field
+    # existed, which pop leaves the live grants alone for.
+    runtime_grants: dict[str, list[dict]] | None = None
 
 
 @dataclass
@@ -2792,6 +2797,7 @@ class SessionState:
                 approved_grant_entries=f.get("approved_grant_entries"),
                 accepted_plan_digest=f.get("accepted_plan_digest"),
                 plan_binding_captured=bool(f.get("plan_binding_captured", False)),
+                runtime_grants=f.get("runtime_grants"),
             )
             for f in data.get("plan_stack", [])
         ]
@@ -2815,7 +2821,7 @@ PLAN_BOUND_FIELDS = frozenset({
     "code_review_rounds", "approval", "resolution", "stages", "current_stage", "plugins",
     "plugins_archive", "plan_snapshot_path", "plan_snapshot_hash", "accepted_plan_digest",
     "effort_estimate", "effort_baseline", "effort_actuals", "effort_fires", "effort_spend_seen",
-    "approved_grants_sha256", "approved_grant_entries",
+    "approved_grants_sha256", "approved_grant_entries", "runtime_grants",
 })
 # SESSION_SCOPED_FIELDS belong to the session (or to the engine's bookkeeping of it): push and
 # pop leave them as they are, or reset them to the child's start state, and never restore them.
@@ -2831,7 +2837,7 @@ SESSION_SCOPED_FIELDS = frozenset({
     "order_descendant_credited", "order_effort_base", "order_effort_frozen",
     "agent_ack_difficulty_ids", "renegotiation_ceiling_difficulty_id",
     "review_release_difficulty_id", "renegotiations", "runtime_host", "reattest_stash",
-    "declined_issues", "runtime_grants", "planning_misses", "materialization_defects",
+    "declined_issues", "planning_misses", "materialization_defects",
     "settings_drift", "cwd_drift", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version",
 })

@@ -11896,6 +11896,11 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     # re-derive as always".
     parent_pair = _plan_venue_pair(state.plan_path)
 
+    # The child's plan may name another order: book what the parent has spent so far to the
+    # parent's order window before the live plan changes, so only the child's own spend and
+    # minutes reach the child's.
+    _flush_order_effort(state, store=store)
+
     frame = PlanFrame(
         plan_path=state.plan_path,
         node=state.node,
@@ -11934,8 +11939,12 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
         approved_grant_entries=copy.deepcopy(state.approved_grant_entries),
         accepted_plan_digest=state.accepted_plan_digest,
         plan_binding_captured=True,
+        runtime_grants=copy.deepcopy(state.runtime_grants),
     )
     state.plan_stack.append(frame)
+    # The approval-binding fields copied into the frame stay live on purpose: the order key
+    # (`_replan_baseline_path`) and the pre-approval gates read the parent's snapshot until the
+    # child's own approve rebinds them.
     # Reset to a fresh child cycle — the child re-classifies and plans normally.
     state.node = transition(Node.EXECUTING.value, "push_subplan")  # EXECUTING -> CLASSIFIED
     state.task_id = child_task
@@ -11985,6 +11994,9 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     # parent-left archive-suppression entry.
     state.plugins = {}
     state.plugins_archive = {}
+    # Runtime grants are keyed by the live plan's stage index: the child starts with none and
+    # pop puts the parent's back.
+    state.runtime_grants = {}
     state.log("push_subplan", child_plan=child_plan, originating_stage=originating, depth=len(state.plan_stack))
     store.save(state)
     return Directive(
@@ -12055,6 +12067,8 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
         state.approved_grants_sha256 = frame.approved_grants_sha256
         state.approved_grant_entries = frame.approved_grant_entries
         state.accepted_plan_digest = frame.accepted_plan_digest
+        if frame.runtime_grants is not None:
+            state.runtime_grants = frame.runtime_grants
     state.node = new_node
     # The parent PLAN FILE is authoritative for the venue, so re-derive it here
     # rather than trust the frame: a frame captured after the value was already
