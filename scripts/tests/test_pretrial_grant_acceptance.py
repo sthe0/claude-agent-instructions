@@ -335,3 +335,21 @@ def test_child_non_protected_wildcard_still_covers_matching_parent_check():
     )
 
     assert boundary["unresolved_changed_commands"] == []
+
+
+def test_protected_broad_wildcard_covers_no_ordinary_check():
+    parent_link = {
+        "norm": {"criterion_type": "measurable", "verify_command": PARENT_VERIFY, "expected_exit": 0},
+        "norm_digest": "d" * 64,
+        "depth": 1,
+    }
+    status = "git status"
+    check = {"identity": ("final_check", status), "origin": "final_check", "source": status}
+
+    boundary = gates.parent_norm_boundary(
+        parent_link, "d" * 64, [(PARENT_VERIFY, 0), (status, 0)], [], [],
+        unresolved=[check], held_unresolved=[("wildcard-tail", "Bash(git:*)")], max_depth=3,
+    )
+
+    uncovered = [item["source"] for item in boundary["unresolved_changed_commands"]]
+    assert uncovered == [status], "BEHAVIOUR: a held Bash(git:*), which covers a trunk push, still covers an ordinary check"
