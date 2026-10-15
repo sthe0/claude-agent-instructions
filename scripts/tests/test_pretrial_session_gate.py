@@ -279,7 +279,8 @@ def test_pending_session_guard_does_not_apply_to_a_plan_file(tmp_path):
     payload = {
         "tool_name": "Edit",
         "session_id": HARNESS,
-        "tool_input": {"file_path": str(tmp_path / ".claude" / "plans" / "task.toml")},
+        # Outside /tmp/: a tmp_path plan file is engine-exempt and never reaches the guard.
+        "tool_input": {"file_path": "/work/project/.claude/plans/task.toml"},
     }
     proc = subprocess.run(
         [sys.executable, str(HOOK)],
