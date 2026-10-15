@@ -18,8 +18,8 @@ last_verified: 2026-10-15
 > *concatenating* files into one `--plan` argument; that path reproduced the E2BIG dispatch failure
 > (Linux `MAX_ARG_STRLEN` = 131072 B per argv string), because before ADR-0011 `agentctl dispatch`
 > inlined the whole plan into the spawn prompt. Commit `5d96cd6` moved that prompt to **stdin**,
-> which removed the argv limit. Splitting was therefore never needed to make a plan dispatchable,
-> only to save re-read tokens. For current behaviour (dispatch passes a stage brief plus a view,
+> which removed the argv limit. Splitting was never the fix for the dispatch failure — the stdin
+> change was — and its remaining value is saving re-read tokens. For current behaviour (dispatch passes a stage brief plus a view,
 > per ADR-0011) see § "How this interacts with `spawn-specialist.py`" below.
 
 The planner skill (`skills/specializations/planner/SKILL.md`) writes plans to `~/.claude-agent/plans/<slug>.md`. For a typical 4–6-stage plan this is fine. For larger plans, observed cost in past sessions reached **25 KB per plan file, re-read 3–10 times** as the work moved through stages. See [token-economy-plan.md](token-economy-plan.md) item 6.
