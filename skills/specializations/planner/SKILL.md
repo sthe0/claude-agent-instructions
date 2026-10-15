@@ -153,7 +153,7 @@ For each stage that calls for a specialist (developer, thinker, yandex-cloud-exp
 
 ### Large plans — hypertext references
 
-A plan too big to review or to hand to a model in one piece is written as a hypertext plan ([ADR-0011](../../../docs/adr/0011-hypertext-plans.md)): any string field of a stage, a whole `[[stage]]`, or a `[meta]` / `[meta.order]` prose field may be a reference `{ ref = "<path>", sha256 = "<hex>" }` to a file whose bytes it pins. The plan digest stays `sha256` of the index file, and it covers every referenced file. A plan of ≤ 3 stages or under 10 KB stays one file. Limits, remedy order and authoring rules: [policy.md](policy.md) § Large plans.
+A plan too big to review or to hand to a model in one piece is written as a hypertext plan ([ADR-0011](../../../docs/adr/0011-hypertext-plans.md)): any string field of a stage, a whole `[[stage]]`, or a `[meta]` / `[meta.order]` prose field may be a reference `{ ref = "<path>", sha256 = "<hex>" }` to a file whose bytes it pins. The plan digest stays `sha256` of the index file, and it covers every referenced file. A plan whose fields are all within `plan-field-inline-max-chars` stays one file. Limits, remedy order and authoring rules: [policy.md](policy.md) § Large plans.
 
 - A field above `plan-field-inline-max-chars` is moved into its file with `agentctl plan-externalize`; after editing a referenced file reseal with `agentctl plan-seal`, check with `agentctl plan-digest`.
 - A node above `plan-stage-max-chars` is not helped by externalizing: reformulate or split the stage (`submit-plan` blocks it).

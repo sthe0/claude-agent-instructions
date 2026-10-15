@@ -127,6 +127,8 @@ Updated:
 - `memory-global/leaves/plan-file-split.md` — updated: marked Superseded by ADR-0011.
 - `memory-global/leaves/token-economy-plan.md` — updated: row 6 names ADR-0011, no manual split.
 - `memory-global/MEMORY.md` — updated: the pointer no longer advises a manual split.
+- `skills/specializations/code-reviewer/SKILL.md` — updated: a typed-plan prompt names a view directory, not a plans-directory path, and the plan digest is the index's sha256 listed by `plan-digest`.
+- `skills/tracker-management/SKILL.md` — updated: the attached plan must be one a ticket reader can open, never a bare index of references.
 
 Unaffected:
 
@@ -136,8 +138,6 @@ Unaffected:
 - `docs/adr/README.md` — unaffected: the ADR index; stage 1 added the 0011 row.
 - `skills/overcome-difficulty/SKILL.md` — unaffected: names `check-coverage --new <plan>` on a plan path, unchanged.
 - `skills/overcome-difficulty/policy.md` — unaffected: shows a spawn call with `--plan <brief file>`, a brief, not a plan.
-- `skills/specializations/code-reviewer/SKILL.md` — unaffected: the Read grant on the plans directory it describes is unchanged, and referenced files lie below that directory.
-- `skills/tracker-management/SKILL.md` — unaffected: attaches the plan TOML to a ticket; the index stays the plan file.
 - `memory-global/leaves/acting-without-asking.md` — unaffected: approval of a plan file; the digest bound is the index digest.
 - `memory-global/leaves/ask-user-question-split-turn.md` — unaffected: receipt binding to `plan_sha256`, which keeps its meaning.
 - `memory-global/leaves/behavioral-conformance-control.md` — unaffected: the attested digest is the index digest.

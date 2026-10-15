@@ -95,22 +95,15 @@ No frontmatter required — these are plan working files, not memory leaves.
 
 ## How this interacts with `spawn-specialist.py`
 
-**TOML-engine reality (current).** You do not spawn specialists by hand for a plan the engine drives —
-`agentctl dispatch` reads `meta` + the active stage from the single `.toml`, inlines the plan into the
-spawn prompt, and pipes the whole prompt to `spawn-specialist.py` via **stdin** (commit `5d96cd6`).
-Prompt size is therefore bounded only by memory, not by `MAX_ARG_STRLEN` — the 172 KB
-question-provenance plan dispatches cleanly. **Do not** concatenate plan files into one `--plan`
-argument or otherwise push a large payload onto argv: that path raises `OSError: [Errno 7] Argument
-list too long` before the child starts. This is the corrected form of the old advice, which suggested
-exactly that concatenation and predated the stdin channel.
+**Current behaviour.** `agentctl dispatch` passes a stage brief plus a view directory, not the whole plan ([ADR-0011](../../docs/adr/0011-hypertext-plans.md)). Never push a large payload onto argv: that raises `OSError: [Errno 7] Argument list too long` before the child starts.
 
 **Legacy `.md` split (only if you still hand-split a markdown plan).** Pass the index and just the
 active stage file — but merge them into the prompt *content* (or let the caller assemble one prompt),
 never as two argv strings, and never via a concatenated-into-argv scratch file.
 
-## What the planner skill should do
+## What the planner skill used to do (historical, markdown-era plans only)
 
-The planner does **not** auto-split. It writes a single file by default. If during planning the planner sees the plan growing beyond the trigger thresholds above, it should:
+A planner now writes TOML and follows [planner policy](../../skills/specializations/planner/policy.md) § Large plans instead. For a markdown plan the planner did **not** auto-split. It wrote a single file by default. If during planning the planner saw the plan growing beyond the trigger thresholds above, it would:
 
 1. Stop, decide to split.
 2. Write the index + stage files.
