@@ -195,6 +195,39 @@ def test_driven_sessions_lists_every_bound_session_most_recent_first(tmp_path, m
     assert engine_session_binding.resolve("never-bound") is None
 
 
+def test_pending_substantive_session_blocks_release_via_side_session(tmp_path):
+    started = _agentctl(tmp_path, "start", "--session", "engine-plan", "--task", "t", "--goal", "g")
+    assert started.returncode == 0, f"setup: start failed: {started.stdout[-300:]}"
+    classified = _agentctl(tmp_path, "classify", "--session", "engine-plan", "--files", "9",
+                           "--changed-lines", "900")
+    assert classified.returncode == 0, f"setup: classify failed: {classified.stdout[-300:]}"
+    plan_file = _state_file(tmp_path, "engine-plan")
+    plan_state = json.loads(plan_file.read_text())
+    assert plan_state["weight_class"] == "SUBSTANTIVE", "setup: the plan session is substantive"
+    plan_state["node"] = "PLAN_READY"
+    plan_file.write_text(json.dumps(plan_state))
+
+    _drive_to_executing(tmp_path, "engine-side")
+
+    proc = _edit_from_harness(tmp_path)
+    assert proc.returncode == 0, "setup: the hook must never exit non-zero"
+    assert _is_deny(proc), (
+        "BEHAVIOUR: driving a small side session to EXECUTING released production edits while "
+        "the substantive session driven earlier still awaits plan approval"
+    )
+    assert "engine-plan" in json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"], (
+        "the denial must name the session awaiting approval"
+    )
+
+    plan_state["node"] = "RESOLVED"
+    plan_file.write_text(json.dumps(plan_state))
+
+    proc = _edit_from_harness(tmp_path)
+    assert proc.returncode == 0 and not _is_deny(proc), (
+        f"a resolved substantive session must not block the side session: {proc.stdout[:300]}"
+    )
+
+
 def test_readonly_query_of_other_session_keeps_base_decision(tmp_path):
     _drive_to_executing(tmp_path, ENGINE, harness="harness-other")
     _write_harness_state(tmp_path, "PLAN_READY")
