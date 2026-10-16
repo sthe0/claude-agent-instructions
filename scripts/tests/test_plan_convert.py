@@ -683,9 +683,13 @@ def _bindings(state) -> dict:
     }
 
 
-def _print_rebinding(bindings_before, after):
+def _print_rebinding(bindings_before, after, plan_file):
+    from agentctl import plan as P
+
+    content = P.plan_content_digest(
+        P.load_plan(str(plan_file), base_dir=plan_file.parent, root=plan_file.parent))
     print(f"live_rebinding before={bindings_before['review']} "
-          f"after={_bindings(after)['review']} root={after.accepted_plan_digest}")
+          f"after={content} root={after.accepted_plan_digest}")
 
 
 @pytest.mark.parametrize("shape", ["bound", "counted"])
@@ -710,7 +714,7 @@ def test_live_rebinding_keeps_every_recorded_binding_and_moves_only_the_accepted
     assert gates._plan_review_content_stale(after.plan_review, str(plan_file), after) is None
     assert gates._receipt_binding_blocker(
         after.plan_presentations[0], str(plan_file), "plan presentation", after) is None
-    _print_rebinding(bindings_before, after)
+    _print_rebinding(bindings_before, after, plan_file)
 
 
 def test_live_rebinding_writes_no_new_snapshot_and_stores_the_old_and_new_bytes(
@@ -725,7 +729,7 @@ def test_live_rebinding_writes_no_new_snapshot_and_stores_the_old_and_new_bytes(
 
     assert _live(store, sid).ok
 
-    _print_rebinding(_bindings(before), store.load(sid))
+    _print_rebinding(_bindings(before), store.load(sid), plan_file)
     assert not snapshot.exists()
     assert plan_store.get(root) == old_bytes
     new_root = _sha(plan_file.read_bytes())
@@ -1235,6 +1239,10 @@ def test_the_rebinding_tests_run_green_against_a_plan_given_through_the_environm
     given = stem_dir / "given.toml"
     given.write_bytes(_plan_text(goal="a goal long enough to move to its own file",
                                  method=LONG_METHOD * 3).encode())
+    from agentctl import plan as P
+
+    expected_content = P.plan_content_digest(
+        P.load_plan(str(given), base_dir=stem_dir, root=stem_dir))
     stage_max, field_max = plan_convert._limits()
     expected_index = plan_convert.convert(
         given.read_bytes(), "given", field_max_chars=field_max, stage_max_chars=stage_max)[
@@ -1256,7 +1264,7 @@ def test_the_rebinding_tests_run_green_against_a_plan_given_through_the_environm
     assert len(lines) == passed
     for before, after, root in lines:
         assert before == _sha(given.read_bytes())
-        assert after == before
+        assert after == expected_content
         assert root == _sha(expected_index)
 
 
