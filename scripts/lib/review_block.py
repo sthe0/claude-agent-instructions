@@ -41,9 +41,10 @@ def starts_list_item(raw: str) -> bool:
 def _tagged_condition_re(markers: tuple[str, ...]) -> re.Pattern:
     severities = "|".join(plan.CONCERN_SEVERITIES)
     conditions = "|".join(re.escape(m) for m in markers)
+    restates = rf"{re.escape(plan.RESTATES_PREFIX)}[^\s*`\[\]]+"
     return re.compile(
         rf"^({severities}):[\s*`_]*"
-        rf"(\[?{re.escape(plan.RESTATES_PREFIX)}[^\s*`]+[\s*`_]+)?"
+        rf"((?:\[{restates}\]|{restates})[\s*`_]+)?"
         rf"({conditions})(.*)$",
         re.DOTALL,
     )
@@ -192,9 +193,7 @@ def classify_line(raw: str) -> tuple[str, str]:
     leading = lead_clean(raw)
     tagged = _tagged_condition_re(tuple(plan.CONDITION_MARKERS)).match(leading)
     if tagged is not None:
-        restates = re.sub(r"[*`]", "", tagged.group(2) or "").strip()
-        if restates.startswith("["):
-            restates = restates[1:].removesuffix("]")
+        restates = re.sub(r"[*`]", "", tagged.group(2) or "").strip().strip("[]")
         body = f"{tagged.group(3)} {clean_value(tagged.group(4))}".rstrip()
         return "condition", plan.format_concern(
             tagged.group(1), restates[len(plan.RESTATES_PREFIX):], body)

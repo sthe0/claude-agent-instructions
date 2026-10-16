@@ -89,6 +89,18 @@ def test_bracketed_restates_form_classifies_like_the_bare_form(drv):
     assert bracketed == bare
 
 
+@pytest.mark.parametrize("line", [
+    "blocking: [re:R1 C4: the stage omits a grant",
+    "blocking: re:R1] C4: the stage omits a grant",
+    "blocking: [re:R1]: C4: the stage omits a grant",
+    "blocking: [[re:R1]] C4: the stage omits a grant",
+    "blocking: [re:] C4: the stage omits a grant",
+])
+def test_unbalanced_or_empty_bracketed_restates_is_not_a_concern(drv, line):
+    from lib import review_block
+    assert review_block.classify_line(line) == ("other", "")
+
+
 def test_reply_with_only_bracketed_concerns_is_accepted(drv):
     stdout = (
         f"REVIEW:\nVerdict: revise\nPlan digest: {SHA}\n"
