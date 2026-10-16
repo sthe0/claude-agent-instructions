@@ -2870,5 +2870,5 @@ SESSION_SCOPED_FIELDS = frozenset({
     "review_release_difficulty_id", "renegotiations", "runtime_host", "reattest_stash",
     "declined_issues", "planning_misses", "materialization_defects",
     "settings_drift", "cwd_drift", "pending_renorms", "difficulty_stack", "parent_difficulty",
-    "closed_difficulties", "parent_link", "schema_version",
+    "closed_difficulties", "parent_link", "schema_version", "plan_conversions",
 })

@@ -218,13 +218,33 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/dispatch.py::<module>::re.compile"]
 class = "structural"
-ground = "MARKER_RE compiles the '^MARKER:' return-marker prefix syntax."
-hits = 1
+ground = "Compiles: MARKER_RE (the '^MARKER:' return-marker prefix syntax), _REQUEST_LABEL_RE (the 'PERMISSION-REQUEST:' label line) and _ACTION_LABEL_RE (the 'Action:' label line); fixed label syntax."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/dispatch.py::parse_marker::pattern.match"]
 class = "structural"
 ground = "MARKER_RE.match reads the fixed specialist return-marker prefix on a line."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/dispatch.py::permission_request_action::pattern.match"]
+class = "structural"
+ground = "MARKER_RE, _REQUEST_LABEL_RE and _ACTION_LABEL_RE match the fixed marker and label prefixes of a line; the text after a label is returned as it stands, not classified."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/protected_actions.py::<module>::re.compile"]
+class = "structural"
+ground = "ANCHOR_RE compiles the '<!-- protected-action: <id> -->' anchor comment syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/protected_actions.py::norm_anchor_problems::pattern.findall"]
+class = "structural"
+ground = "ANCHOR_RE.findall reads the ids of the fixed anchor comments in a norm file; each id is looked up in the catalogue, not interpreted."
 hits = 1
 reviewed_by = "developer"
 
