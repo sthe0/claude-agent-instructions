@@ -43,7 +43,7 @@ def _tagged_condition_re(markers: tuple[str, ...]) -> re.Pattern:
     conditions = "|".join(re.escape(m) for m in markers)
     return re.compile(
         rf"^({severities}):[\s*`_]*"
-        rf"({re.escape(plan.RESTATES_PREFIX)}[^\s*`]+[\s*`_]+)?"
+        rf"(\[?{re.escape(plan.RESTATES_PREFIX)}[^\s*`]+[\s*`_]+)?"
         rf"({conditions})(.*)$",
         re.DOTALL,
     )
@@ -193,6 +193,8 @@ def classify_line(raw: str) -> tuple[str, str]:
     tagged = _tagged_condition_re(tuple(plan.CONDITION_MARKERS)).match(leading)
     if tagged is not None:
         restates = re.sub(r"[*`]", "", tagged.group(2) or "").strip()
+        if restates.startswith("["):
+            restates = restates[1:].removesuffix("]")
         body = f"{tagged.group(3)} {clean_value(tagged.group(4))}".rstrip()
         return "condition", plan.format_concern(
             tagged.group(1), restates[len(plan.RESTATES_PREFIX):], body)

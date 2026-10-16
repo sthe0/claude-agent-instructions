@@ -79,3 +79,24 @@ def test_column_zero_bullet_before_any_concern_still_refused(drv):
     )
     with pytest.raises(drv.TopoRefused, match="unprefixed concern"):
         drv.parse_review_output(stdout)
+
+
+def test_bracketed_restates_form_classifies_like_the_bare_form(drv):
+    from lib import review_block
+    bare = review_block.classify_line("blocking: re:R1 C4: the stage omits a grant")
+    bracketed = review_block.classify_line("blocking: [re:R1] C4: the stage omits a grant")
+    assert bare[0] == "condition"
+    assert bracketed == bare
+
+
+def test_reply_with_only_bracketed_concerns_is_accepted(drv):
+    stdout = (
+        f"REVIEW:\nVerdict: revise\nPlan digest: {SHA}\n"
+        "blocking: [re:R1] C4: the stage omits a grant\n"
+        "note: [re:R2] C1: a smaller point"
+    )
+    parsed = drv.parse_review_output(stdout)
+    assert parsed.concerns == [
+        "blocking: re:R1 C4: the stage omits a grant",
+        "note: re:R2 C1: a smaller point",
+    ]
