@@ -48,6 +48,7 @@ def _stage(n: int, *, relies_on: "int | None", blank_done: bool = False) -> str:
     lines = [
         "[[stage]]",
         f"index = {n}",
+        f"depends_on = [{n - 1 if n > 1 else ''}]",
         f'title = "Stage {n} title"',
         'executor = "spawn:developer"',
         f'expected_result_image = "result image of stage {n}"',
