@@ -91,8 +91,7 @@ def _isolated_env(tmp_path, monkeypatch):
 
 
 def spawn_handoff(state_root, record, child_session):
-    """conftest.spawn_handoff, kept local so this file's negative control can run it
-    against the tree before the stage that added the conftest helper."""
+    """Mirror of conftest.spawn_handoff, which this file does not import."""
     path, sha = norm_handoff.write_record(state_root, record)
     norm_handoff.write_child_session(
         state_root, record["parent_session"], record["stage_index"],
