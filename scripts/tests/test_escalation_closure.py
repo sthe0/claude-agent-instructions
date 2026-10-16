@@ -431,3 +431,61 @@ def test_base_shaped_difficulty_state_loads(store, fixtures_dir, tmp_path, monke
     state.node = Node.VERIFYING.value
     store.save(state)
     assert _verify_final(store).action != "adopt_escalation"
+
+
+B_EXPECTED = "the nested check can be reached from the stage's material"
+B_ACTUAL = "the nested check names an output no stage declares"
+B_MISMATCH = "the stage's declared outputs, not the nested attempt, make B's check unreachable"
+
+
+def _nested_escalation_with_own_declaration(store):
+    """`_nested_escalation` with B's declaration distinct from A's, closed into A."""
+    cli.cmd_difficulty_open(ns(session=CHILD, origin="replan"), store=store)
+    cli.cmd_declare(ns(session=CHILD, expected=B_EXPECTED, actual=B_ACTUAL,
+                       mismatch=B_MISMATCH), store=store)
+    cli.cmd_investigate(ns(session=CHILD, localized_expectation="le", localized_actual="la",
+                           hypotheses=["the criterion is unreachable", "the child erred"]),
+                        store=store)
+    _critique(store)
+    cli.cmd_normalize(ns(session=CHILD, factor="reproducible cause", level="note"), store=store)
+    d = cli.cmd_difficulty_close(ns(session=CHILD), store=store)
+    assert d.ok, d.detail
+
+
+def test_nested_escalation_opens_parent_difficulty_with_the_escalating_declaration(
+        store, fixtures_dir, tmp_path, monkeypatch):
+    """B states the mismatch and is closed into A; the parent's difficulty carries B's
+    declaration, not A's, while still pointing at the record that carries the link."""
+    _executing(store, PARENT, fixtures_dir)
+    _child(store, fixtures_dir, tmp_path, monkeypatch)
+    _critique(store, failure_address="ресурсное", targets=())
+    _nested_escalation_with_own_declaration(store)
+    child = store.load(CHILD)
+
+    d = _dispatch(store)
+    opened = store.load(PARENT).difficulty
+    assert opened is not None and d.marker == "OVERCOME-DIFFICULTY"
+    declared = (opened.declaration.expected, opened.declaration.actual,
+                opened.declaration.mismatch)
+    assert declared == (B_EXPECTED, B_ACTUAL, B_MISMATCH), (
+        f"BEHAVIOUR: the parent's difficulty carries {declared!r}, not the declaration of "
+        "the nested record that stated the mismatch")
+    assert opened.escalated_from["child_uid"] == child.difficulty.uid
+    assert d.data["norm_mismatch"]["declaration"]["mismatch"] == B_MISMATCH
+
+
+def test_nested_escalation_adopt_carries_the_escalating_declaration(
+        store, fixtures_dir, tmp_path, monkeypatch):
+    """`adopt-escalation` of the record B was closed into opens the parent difficulty with
+    B's declaration."""
+    _executing(store, PARENT, fixtures_dir)
+    _child(store, fixtures_dir, tmp_path, monkeypatch)
+    _critique(store, failure_address="ресурсное", targets=())
+    _nested_escalation_with_own_declaration(store)
+    _verifying_parent(store)
+
+    _adopt(store)
+    opened = store.load(PARENT).difficulty
+    assert opened is not None and opened.declaration.mismatch == B_MISMATCH, (
+        "BEHAVIOUR: adopt-escalation opened a parent difficulty with the receiving record's "
+        "declaration instead of the nested record's")

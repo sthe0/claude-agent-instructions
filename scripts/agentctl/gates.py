@@ -939,9 +939,21 @@ def verify_escalation_record(stage, rec) -> tuple[dict | None, str]:
     if decl is None or not all((getattr(decl, f) or "").strip()
                                for f in ("expected", "actual", "mismatch")):
         return None, "declaration lacks expected, actual or mismatch"
+    decl = _stating_declaration(rec) or decl
     return {"child_uid": rec.uid, "stage_index": stage.index, "norm_digest": current,
-            "declaration": {"expected": decl.expected, "actual": decl.actual,
-                            "mismatch": decl.mismatch}}, ""
+            "declaration": {f: rec_field(decl, f) for f in ("expected", "actual", "mismatch")}}, ""
+
+
+def _stating_declaration(rec):
+    """The declaration of the latest closed descendant of `rec` that itself escalated to the
+    parent (it keeps its own `escalated_to`) and states a complete one: a nested record closed
+    into `rec` hands `rec` its norm targets and link, but the mismatch it stated stays its own."""
+    for desc in reversed(list(with_descendants(rec_field(rec, "children") or []))):
+        decl = rec_field(desc, "declaration")
+        if rec_field(desc, "escalated_to") and decl is not None and all(
+                (rec_field(decl, f) or "").strip() for f in ("expected", "actual", "mismatch")):
+            return decl
+    return None
 
 
 def child_escalations(stage, child: SessionState) -> tuple[list[dict], str]:
