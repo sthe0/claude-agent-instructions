@@ -87,7 +87,8 @@ def _contains_reference(raw: dict) -> bool:
 def has_additions(report: dict) -> bool:
     """The one predicate for "the conversion changes what the plan says": the converter
     added a `depends_on` to some stage, an empty one included. Live conversion refuses on
-    it, and a conversion that adds nothing is exactly its negation."""
+    it, and a conversion that adds nothing is exactly its negation. It reads only
+    `added_depends_on`; added indices are not counted."""
     return bool(report["added_depends_on"])
 
 

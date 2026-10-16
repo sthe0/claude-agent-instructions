@@ -392,6 +392,24 @@ def test_stage_list_the_converter_writes_the_list_sorted_by_index(tmp_path):
     assert [e["ref"] for e in index["stage"]] == [f"plan.parts/stage-{n}.toml" for n in (1, 2, 3)]
     assert report["run_order_source"] == [3, 1, 2]
     assert report["run_order_converted"] == [1, 2, 3]
+    assert report["raw_equivalence"] == "ok"
+    assert report["parsed_equivalence"] == "ok"
+
+
+def test_stage_list_a_stage_depended_on_ahead_of_its_list_position_gets_the_edge_it_relied_on(
+        tmp_path):
+    from agentctl import plan
+
+    source = _flat(_body(1, []), _body(2, [3]), _body(3, None))
+
+    files, report = _convert(source)
+
+    assert report["added_depends_on"] == [{"stage": 3, "depends_on": [1]}]
+    assert report["run_order_source"] == [1, 3, 2]
+    assert report["run_order_converted"] == [1, 3, 2]
+    index = _materialize(files, tmp_path)
+    tree = plan.load_plan(index, root=tmp_path)
+    assert [s.index for s in tree.stages] == [1, 2, 3]
 
 
 def test_stage_list_sealing_a_fresh_converted_tree_changes_no_byte(tmp_path):
@@ -685,8 +703,10 @@ def test_stage_list_live_conversion_refuses_a_plan_that_would_run_differently(
     assert _live_world(store, plan_file) == before
 
 
-def test_stage_list_the_two_live_refusals_do_not_name_what_they_refuse_to_add(store, tmp_path):
-    plan_file = _live_session(store, tmp_path, _flat(_body(1, None), _body(2, [1])))
+@pytest.mark.parametrize("case", ["a-dependency-would-be-added", "the-run-order-would-change"])
+def test_stage_list_the_two_live_refusals_do_not_name_what_they_refuse_to_add(
+        case, store, tmp_path):
+    _live_session(store, tmp_path, LIVE_REFUSED[case])
 
     result = _live(store)
 
@@ -695,12 +715,19 @@ def test_stage_list_the_two_live_refusals_do_not_name_what_they_refuse_to_add(st
     assert "replan" not in result.detail
 
 
+LIVE_PROCEEDS = {
+    "in-list-order": _flat(_body(1, []), _body(2, [1])),
+    "out-of-list-order-with-the-same-run-order": _flat(_body(2, [1]), _body(1, [])),
+}
+
+
+@pytest.mark.parametrize("case", LIVE_PROCEEDS)
 def test_stage_list_live_conversion_proceeds_for_a_plan_that_adds_nothing(
-        store, tmp_path, monkeypatch):
+        case, store, tmp_path, monkeypatch):
     from agentctl import plan_store
 
     monkeypatch.setenv(plan_store.OBJECTS_DIR_ENV, str(tmp_path / "objects"))
-    plan_file = _live_session(store, tmp_path, _flat(_body(1, []), _body(2, [1])))
+    plan_file = _live_session(store, tmp_path, LIVE_PROCEEDS[case])
 
     result = _live(store)
 
