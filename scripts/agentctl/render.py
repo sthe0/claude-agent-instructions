@@ -1577,7 +1577,7 @@ def build_site_prompt(
     ceiling (the two dispatch kinds only): the text carries no view header, no file listing
     and no `see objects/` pointer, nothing is written, and `add_dirs` is empty. A
     `dispatch-no-stage` site then inlines the whole rendered plan, references resolved —
-    the named exception to "never the inlined plan" (ADR-0011) — since there is no view
+    the named exception to "never the inlined plan" (ADR-0012) — since there is no view
     for its model to read the stages from.
 
     Raises PlanError for a plan that does not load and ValueError for a stage, pair or

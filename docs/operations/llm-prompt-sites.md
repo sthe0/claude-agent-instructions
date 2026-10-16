@@ -38,7 +38,7 @@ asserts that no token of a node the row does not show reaches the captured argv 
 | Site | Plan content passed | Mechanism | Size bound |
 |---|---|---|---|
 | `scripts/spawn-specialist.py`:`_main` | projected fields of the meta node and the stage the spawn runs; the brief of that stage, a pair or a unit; a reviewer's plan digest | view | each field `plan-field-inline-max-chars`; prompt `dispatch_prompt_ceiling_chars` (refused at launch) |
-| `scripts/spawn-cursor-specialist.py`:`main` | the stage brief of `--stage-index` with every field in full; without a stage index the full rendered plan, every reference resolved (a named exception to "never the inlined plan", ADR-0011: the Cursor agent CLI takes no `--add-dir`, so a view could not be read); no field reads as a pointer | inline field | none; this spawner has no prompt ceiling |
+| `scripts/spawn-cursor-specialist.py`:`main` | the stage brief of `--stage-index` with every field in full; without a stage index the full rendered plan, every reference resolved (a named exception to "never the inlined plan", ADR-0012: the Cursor agent CLI takes no `--add-dir`, so a view could not be read); no field reads as a pointer | inline field | none; this spawner has no prompt ceiling |
 | `scripts/agentctl/dispatch.py`:`build_argv` | the plan path and `--stage-index` handed to the spawner | view | none beyond the spawner's |
 | `scripts/plan-review-topological.py`:`spawn_pair` | the plan path and a pair or unit id handed to the spawner | view | none beyond the spawner's |
 | `scripts/plan-review-topological.py`:`Driver.dry_run` | the plan path and a pair id handed to the spawner (not launched) | view | none beyond the spawner's |
@@ -123,9 +123,9 @@ Updated:
 - `skills/specializations/_shared/marker-protocol.md` — updated: a plan may arrive as a stage brief plus a view directory; closure digest.
 - `scripts/agentctl/README.md` — updated: `## Hypertext plans`.
 - `docs/adr/0010-child-contour.md` — updated: note that a child plan may be a referenced sub-document.
-- `README.md` — updated: the decisions row names ADR-0011.
-- `memory-global/leaves/plan-file-split.md` — updated: marked Superseded by ADR-0011.
-- `memory-global/leaves/token-economy-plan.md` — updated: row 6 names ADR-0011, no manual split.
+- `README.md` — updated: the decisions row names ADR-0012.
+- `memory-global/leaves/plan-file-split.md` — updated: marked Superseded by ADR-0012.
+- `memory-global/leaves/token-economy-plan.md` — updated: row 6 names ADR-0012, no manual split.
 - `memory-global/MEMORY.md` — updated: the pointer no longer advises a manual split.
 - `skills/specializations/code-reviewer/SKILL.md` — updated: a typed-plan prompt names a view directory, not a plans-directory path, and the plan digest is the index's sha256 listed by `plan-digest`.
 - `skills/tracker-management/SKILL.md` — updated: the attached plan must be one a ticket reader can open, never a bare index of references.
@@ -134,8 +134,8 @@ Unaffected:
 
 - `CLAUDE.md` — unaffected: `plan_sha256` stays the presentation receipt's binding, and the plan digest keeps its meaning.
 - `docs/adr/0005-activity-act-functional-places.md` — unaffected: a historical decision record that names `plan-render`.
-- `docs/adr/0011-hypertext-plans.md` — unaffected: the design the texts above describe.
-- `docs/adr/README.md` — unaffected: the ADR index; stage 1 added the 0011 row.
+- `docs/adr/0012-hypertext-plans.md` — unaffected: the design the texts above describe.
+- `docs/adr/README.md` — unaffected: the ADR index; stage 1 added the 0012 row.
 - `skills/overcome-difficulty/SKILL.md` — unaffected: names `check-coverage --new <plan>` on a plan path, unchanged.
 - `skills/overcome-difficulty/policy.md` — unaffected: shows a spawn call with `--plan <brief file>`, a brief, not a plan.
 - `memory-global/leaves/acting-without-asking.md` — unaffected: approval of a plan file; the digest bound is the index digest.
@@ -168,7 +168,7 @@ Unaffected:
 - `memory-global/leaves/experience/2026-10-12-stage-control-authoring-interface-mismatch.md` — unaffected: dated record of a past task.
 - `memory-global/leaves/experience/2026-10-12-stage-control-phase-of-evaluation.md` — unaffected: dated record of a past task.
 
-Frozen fixtures, not edited (assumed premise Q7 of ADR-0011) — `benchmark-profile/` and
+Frozen fixtures, not edited (assumed premise Q7 of ADR-0012) — `benchmark-profile/` and
 `benchmark-profile-spawn/` hold copies of the planner skill: unaffected, they stay as the
 benchmarks recorded them.
 

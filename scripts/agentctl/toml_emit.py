@@ -1,4 +1,4 @@
-"""A deterministic TOML writer for the plan converter (ADR-0011).
+"""A deterministic TOML writer for the plan converter (ADR-0012).
 
 The stdlib reads TOML but cannot write it. `dumps` writes the dicts `tomllib` returns: plain
 keys first, then sub-tables (`[a.b]`) and arrays of tables (`[[a]]`), keys in dict order,

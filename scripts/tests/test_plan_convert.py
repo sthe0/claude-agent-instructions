@@ -1,5 +1,5 @@
 """The old-to-new plan converter, `plan-convert`, `plan-convert-live` and the inventory of
-root-digest comparisons (ADR-0011).
+root-digest comparisons (ADR-0012).
 
 Plans here are synthetic and written by this module. Imports sit inside test bodies so a
 failing import is one failing test, not a module that collects nothing.

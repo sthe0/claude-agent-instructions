@@ -1,6 +1,6 @@
 # Raw plan readers
 
-A hypertext plan ([ADR-0011](../adr/0011-hypertext-plans.md)) is an index file whose fields and
+A hypertext plan ([ADR-0012](../adr/0012-hypertext-plans.md)) is an index file whose fields and
 stages may be hash-pinned references (`{ ref, sha256 }`) to other files. Code that parses the
 index with `tomllib` and reads the result sees the reference table where the text should be.
 This inventory lists every place in `scripts/` that reads a plan file's bytes or TOML directly

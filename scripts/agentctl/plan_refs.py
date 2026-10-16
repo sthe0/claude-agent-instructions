@@ -1,4 +1,4 @@
-"""Hash-pinned references in a plan (ADR-0011).
+"""Hash-pinned references in a plan (ADR-0012).
 
 A reference is an inline TOML table with exactly the keys `ref` (a path relative to the
 file holding the reference) and `sha256` (the digest of the referenced file's bytes). It

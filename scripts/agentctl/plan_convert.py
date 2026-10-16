@@ -1,4 +1,4 @@
-"""Old-to-new plan converter (ADR-0011).
+"""Old-to-new plan converter (ADR-0012).
 
 `convert` turns a single-file plan into a hypertext tree: an index, one file per stage and
 one file per string field over the inline limit. It is a pure function of its arguments and

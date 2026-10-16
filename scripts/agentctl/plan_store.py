@@ -1,4 +1,4 @@
-"""Content-addressed store of plan files (ADR-0011).
+"""Content-addressed store of plan files (ADR-0012).
 
 A hypertext plan names the files it is made of by relative path, so an older version of it
 (an approved snapshot, a submitted version) read later from another directory, or after a

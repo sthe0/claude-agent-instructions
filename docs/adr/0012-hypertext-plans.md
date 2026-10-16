@@ -1,4 +1,4 @@
-# ADR-0011: Hypertext plans — hash-pinned references, a Merkle root digest and a deterministic converter
+# ADR-0012: Hypertext plans — hash-pinned references, a Merkle root digest and a deterministic converter
 
 - Status: Proposed 2026-10-14
 - Plan: `plan-hypertext.toml` (the implementing plan, kept in the agent's plans directory)

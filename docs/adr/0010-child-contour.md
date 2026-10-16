@@ -169,4 +169,4 @@ To turn linking on, change the value of the `child-contour-linking` row in `conf
 
 ## Note (hypertext plans)
 
-A child plan may be a referenced sub-document of its parent's plan, in the `{ ref, sha256 }` form of [ADR-0011](0011-hypertext-plans.md), whose resolver and depth bound already allow an index → child plan → stage → field file chain. The child's norm handoff carries the stage closure digest, which names the parent stage's norm together with what it relies on. Nothing decided here changes: the child's plan lives at its own plan path, and the digest the approval binds to is that plan's index digest.
+A child plan may be a referenced sub-document of its parent's plan, in the `{ ref, sha256 }` form of [ADR-0012](0012-hypertext-plans.md), whose resolver and depth bound already allow an index → child plan → stage → field file chain. The child's norm handoff carries the stage closure digest, which names the parent stage's norm together with what it relies on. Nothing decided here changes: the child's plan lives at its own plan path, and the digest the approval binds to is that plan's index digest.

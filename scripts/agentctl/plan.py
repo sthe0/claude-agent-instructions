@@ -1749,7 +1749,7 @@ def parse_plan(
 
 
 def _resolve_plan_refs(raw: dict, path: Path, base_dir, root, read) -> dict:
-    """Substitute the plan's hash-pinned references (ADR-0011) before `parse_plan` sees
+    """Substitute the plan's hash-pinned references (ADR-0012) before `parse_plan` sees
     the dict. A plan without any reference comes back equal to `raw`."""
     from . import plan_refs
 

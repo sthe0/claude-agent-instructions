@@ -1,4 +1,4 @@
-"""Hash-pinned references in a plan (ADR-0011): the resolver, the Merkle root digest,
+"""Hash-pinned references in a plan (ADR-0012): the resolver, the Merkle root digest,
 the stage closure digest and the verbs `plan-digest` / `plan-externalize` / `plan-seal`.
 
 Every plan here is synthetic. Expected values come from the ADR's rules and from plain

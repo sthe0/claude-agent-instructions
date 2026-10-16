@@ -1,4 +1,4 @@
-"""Consumers of plan digests and of old plan versions, for hypertext plans (ADR-0011).
+"""Consumers of plan digests and of old plan versions, for hypertext plans (ADR-0012).
 
 (a) part digests come from the resolved plan, (b) the plan-review `--plan-digest` check goes
 through the resolver, (c) the plan object store keeps older versions readable, (d) plan-render
