@@ -1011,9 +1011,9 @@ def _node_field_texts(doc_or_raw):
     """`(node, kind, [(field, text)], position)` for the plan-level node and every stage,
     from a `PlanDoc` or from a raw plan (references already resolved). `node` is "meta" or
     the stage index; `position` is the key `plan_refs.resolve_refs` reports the node's
-    references under ("meta", "meta.order", or the stage's 1-based array position) — the
-    one place a stage index and its array position are told apart."""
-    from .plan_refs import EXTERNALIZABLE_FIELDS
+    references under ("meta", "meta.order", or the stage identity as `resolve_refs`
+    reports it: the declared `index`, else the 1-based position)."""
+    from .plan_refs import EXTERNALIZABLE_FIELDS, stage_identity
 
     if isinstance(doc_or_raw, dict):
         meta = doc_or_raw.get("meta") if isinstance(doc_or_raw.get("meta"), dict) else {}
@@ -1028,8 +1028,7 @@ def _node_field_texts(doc_or_raw):
                  ("meta", "order", raw_fields(order, "order"), "meta.order")]
         for position, table in enumerate(stages, start=1):
             if isinstance(table, dict):
-                index = table.get("index")
-                identity = index if type(index) is int else position
+                identity = stage_identity(table, position)
                 nodes.append((identity, "stage", raw_fields(table, "stage"), identity))
         return nodes
     meta_fields = [(f, _typed_text(doc_or_raw.meta, f)) for f in sorted(EXTERNALIZABLE_FIELDS["meta"])]
@@ -1096,7 +1095,8 @@ def plan_size_blocks(doc_or_raw, stage_max: int | None = None) -> list[dict]:
     if isinstance(doc_or_raw, dict):
         venue = raw_plan_venue(doc_or_raw)
         stages = doc_or_raw.get("stage") if isinstance(doc_or_raw.get("stage"), list) else []
-        stage_nodes = [(table.get("index") if isinstance(table.get("index"), int) else position, table)
+        from .plan_refs import stage_identity
+        stage_nodes = [(stage_identity(table, position), table)
                        for position, table in enumerate(stages, start=1) if isinstance(table, dict)]
     else:
         venue = _venue_for(doc_or_raw)

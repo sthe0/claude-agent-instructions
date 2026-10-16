@@ -94,11 +94,11 @@ def _stage_tables(raw: dict) -> list[tuple[int, dict]]:
     for position, table in enumerate(stages, start=1):
         if not isinstance(table, dict):
             raise PlanError(f"stage {position} is not a table")
-        declared = table.get("index", position)
-        if type(declared) is not int:
+        if "index" in table and type(table["index"]) is not int:
             raise PlanError(
                 f"stage index must be an integer: the stage at position {position} "
-                f"declares {declared!r}")
+                f"declares {table['index']!r}")
+        declared = plan_refs.stage_identity(table, position)
         if declared in seen:
             raise PlanError(f"stage index {declared} is declared twice")
         seen.add(declared)

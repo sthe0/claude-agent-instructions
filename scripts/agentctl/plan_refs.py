@@ -131,9 +131,10 @@ def _where(position: Position) -> str:
     return ".".join(str(part) for part in position)
 
 
-def _identity(table: dict, position: int) -> int:
-    """A stage's identity: its declared integer `index`, else its 1-based array position
-    (`parse_plan`'s rule, with a non-integer index left to its own refusal)."""
+def stage_identity(table: dict, position: int) -> int:
+    """A stage's identity: its declared integer `index` (a bool is not one), else its
+    1-based array position (`parse_plan`'s rule, with a non-integer index left to its own
+    refusal)."""
     declared = table.get("index")
     return declared if type(declared) is int else position
 
@@ -166,7 +167,7 @@ def _map_plan(raw: dict, stage: Callable, text: Callable) -> dict:
                 if not isinstance(element, dict):
                     elements.append(element)
                 elif _classify(element) is None:
-                    elements.append(_map_node(element, (_identity(element, i),), "stage", text))
+                    elements.append(_map_node(element, (stage_identity(element, i),), "stage", text))
                 elif _classify(element) == "malformed":
                     raise _malformed(element)
                 else:
@@ -277,10 +278,9 @@ class _Resolver(_Walker):
                 table, base = parsed, path.parent
             declared = parsed.get("index")
             if type(declared) is not int:
-                raise _refuse("index", table["ref"],
-                              "a stage file must declare an integer `index`, "
-                              f"got {declared!r}" if "index" in parsed
-                              else "a stage file must declare an integer `index`")
+                detail = (f"a stage file must declare an integer `index`, got {declared!r}"
+                          if "index" in parsed else "a stage file must declare an integer `index`")
+                raise _refuse("index", table["ref"], detail)
             for k in range(first_visit, len(self.visited)):
                 self.visited[k] = ((declared,), *self.visited[k][1:])
             return _map_node(parsed, (declared,), "stage",
@@ -309,7 +309,7 @@ def resolve_refs(
     visited)`: `visited` lists `(position, confined resolved path, declared sha256)` per
     reference in document order, nested ones included. A position is `("meta", field)`,
     `("meta.order", field)`, `(n,)` for a whole stage (every link of a chain too) or
-    `(n, field)`.
+    `(n, field)`, where n is the stage's identity (declared `index`, else 1-based position).
 
     `read(path, sha256) -> bytes` supplies a file's bytes; the default reads the file
     system and raises `missing`. The declared hash is checked against whatever `read`

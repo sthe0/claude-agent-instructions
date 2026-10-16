@@ -196,17 +196,18 @@ def test_a_referenced_stage_file_without_an_index_is_refused_as_index(tmp_path):
 
 
 def test_a_converted_1_based_plan_keeps_the_bytes_the_position_keyed_converter_made():
-    files, report = _convert(_plan_source([1, 2]), field=20)
+    files, report = _convert(_plan_source([1, 2], long_stage=2), field=20)
 
     assert {rel: hashlib.sha256(data).hexdigest() for rel, data in files.items()} == EXPECTED_ONE_BASED
     assert report["added_indices"] == []
 
 
 EXPECTED_ONE_BASED: dict[str, str] = {
-    "idp.toml": "d0176f1c91e7f5b60d549dc072e83a8602ff27a50f6f4fdaf3d7989dc56b1ba1",
+    "idp.toml": "ed1014b71a80f27771ec4ddc55a7f79ac148a501acbadf59329deb5b0e2f6f5e",
     "idp.parts/meta-goal.md": "43175de88991f99ca65cfd3d1208fd5cda553fb40a272e25da086cb4e43c0e22",
     "idp.parts/stage-1.toml": "7adf7d0a4672890827457460f414952bb92b23b57d4d92ac6a398055f9392ab0",
-    "idp.parts/stage-2.toml": "b8adcb0660f16e3c56bc565fa6aa0f708654821f97d46d8f92093ab08d4739df",
+    "idp.parts/stage-2-method.md": "7998582a7aaac4b6169c14ed7531c837f8522abe5bb845d2279475298239f796",
+    "idp.parts/stage-2.toml": "2a4e71a02431f887d1789905623800f4c1d1c00db53ccdef138e0cce91f85056",
 }
 
 
@@ -262,3 +263,91 @@ def test_hand_built_every_pair_view_resolves_the_pointers_it_prints(name, tmp_pa
             assert f"see objects/{_sha(_long(n))}" in printed, (later, earlier, n)
         for sha in SHA_IN_OBJECTS.findall(printed):
             assert (site.view_dir / "objects" / sha).is_file(), (later, earlier, sha)
+
+
+def _converted_tree(root: Path, order: list[int], **kw) -> Path:
+    files, _ = _convert(_plan_source(order, **kw))
+    return _materialize(files, root)
+
+
+def _stage_file_shas(index: Path) -> dict[int, str]:
+    from agentctl import plan_store
+
+    return {position[0]: sha for position, _path, sha in plan_store.visited_refs(index)
+            if len(position) == 1}
+
+
+@pytest.mark.parametrize("name", ORDERS)
+def test_converted_visited_heads_are_the_declared_indices(name, tmp_path):
+    from agentctl import plan_store
+
+    order = ORDERS[name]
+    index = _converted_tree(tmp_path, order, long_stage=order[-1])
+
+    visited = plan_store.visited_refs(index)
+
+    assert [p[0] for p, _path, _sha in visited if len(p) == 1] == order
+    assert [p for p, _path, _sha in visited if len(p) == 2] == [(order[-1], "method")]
+
+
+@pytest.mark.parametrize("name", ORDERS)
+def test_converted_every_dispatch_view_holds_its_stage_file_object(name, tmp_path):
+    order = ORDERS[name]
+    index = _converted_tree(tmp_path / "tree", order)
+    shas = _stage_file_shas(index)
+
+    for n in order:
+        site = _site("dispatch-stage-brief", index, tmp_path / "views", stage=n)
+        printed = _printed(site)
+        assert (site.view_dir / "objects" / shas[n]).is_file(), n
+        for sha in SHA_IN_OBJECTS.findall(printed):
+            assert (site.view_dir / "objects" / sha).is_file(), (n, sha)
+
+
+@pytest.mark.parametrize("name", ORDERS)
+def test_converted_every_pair_view_holds_its_stage_file_objects(name, tmp_path):
+    order = ORDERS[name]
+    index = _converted_tree(tmp_path / "tree", order)
+    shas = _stage_file_shas(index)
+
+    for later, earlier in zip(order[1:], order):
+        site = _site("topo-pair", index, tmp_path / "views", pair=f"{later}-{earlier}")
+        printed = _printed(site)
+        for n in (later, earlier):
+            assert (site.view_dir / "objects" / shas[n]).is_file(), (later, earlier, n)
+        for sha in SHA_IN_OBJECTS.findall(printed):
+            assert (site.view_dir / "objects" / sha).is_file(), (later, earlier, sha)
+
+
+def test_converted_size_warning_lands_under_the_declared_stage_only(tmp_path):
+    import plan_site_fixture as fx
+    from agentctl import plan_store, submission
+    from agentctl.config import plan_field_inline_limit
+    from agentctl.plan import load_plan
+
+    limit = plan_field_inline_limit()
+    text = _meta()
+    for n, deps in _chain([1, 2, 14, 3]):
+        body = {14: "e" * (limit + 500), 3: "i" * (limit + 10)}.get(n, f"method of {n}")
+        text += _stage(n, deps, method=f'"""\n{body}\n"""')
+    files, _ = _convert(text.encode(), field=limit + 100)
+    index = _materialize(files, tmp_path)
+    assert "idp.parts/stage-14-method.md" in files
+    doc = load_plan(index, root=tmp_path)
+
+    positions = plan_store.visited_positions(index)
+    warned = [(w["node"], w["field"]) for w in submission.plan_size_warnings(doc, positions)]
+    verdicts = fx.load_script("plan-fit-report.py", "plan_fit_report_for_identity").lint_by_node(
+        doc, positions)
+
+    assert warned == [(3, "method")]
+    assert {node: v for node, v in verdicts.items() if v != "ok"} == {"3": "warn"}
+
+
+def test_a_duplicate_stage_index_is_refused_by_the_converter():
+    from agentctl.plan import PlanError
+
+    source = (_meta() + _stage(1, [], method='"a"') + _stage(1, [], method='"b"')).encode()
+
+    with pytest.raises(PlanError, match="stage index 1 is declared twice"):
+        _convert(source)
