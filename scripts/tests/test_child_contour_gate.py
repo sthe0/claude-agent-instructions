@@ -38,7 +38,6 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli, norm_handoff
-from conftest import spawn_handoff
 from agentctl.dispatch import RunResult
 from agentctl.state import SessionState
 from agentctl.stage_norm import StageNorm
@@ -89,6 +88,16 @@ def _isolated_env(tmp_path, monkeypatch):
     norms.mkdir()
     monkeypatch.setenv("AGENTCTL_NORM_ROOTS", str(norms))
     monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+
+
+def spawn_handoff(state_root, record, child_session):
+    """conftest.spawn_handoff, kept local so this file's negative control can run it
+    against the tree before the stage that added the conftest helper."""
+    path, sha = norm_handoff.write_record(state_root, record)
+    norm_handoff.write_child_session(
+        state_root, record["parent_session"], record["stage_index"],
+        session=child_session, workdir="/tmp/spawn-workdir")
+    return norm_handoff.format_env_value(path, sha)
 
 
 def _state_dir(home: Path) -> Path:
