@@ -270,11 +270,10 @@ def _converted_tree(root: Path, order: list[int], **kw) -> Path:
     return _materialize(files, root)
 
 
-def _stage_file_shas(index: Path) -> dict[int, str]:
-    from agentctl import plan_store
-
-    return {position[0]: sha for position, _path, sha in plan_store.visited_refs(index)
-            if len(position) == 1}
+def _stage_file_shas(order: list[int]) -> dict[int, str]:
+    files, _ = _convert(_plan_source(order))
+    return {n: hashlib.sha256(files[f"idp.parts/stage-{n}.toml"]).hexdigest()
+            for n in order}
 
 
 @pytest.mark.parametrize("name", ORDERS)
@@ -294,7 +293,7 @@ def test_converted_visited_heads_are_the_declared_indices(name, tmp_path):
 def test_converted_every_dispatch_view_holds_its_stage_file_object(name, tmp_path):
     order = ORDERS[name]
     index = _converted_tree(tmp_path / "tree", order)
-    shas = _stage_file_shas(index)
+    shas = _stage_file_shas(order)
 
     for n in order:
         site = _site("dispatch-stage-brief", index, tmp_path / "views", stage=n)
@@ -308,7 +307,7 @@ def test_converted_every_dispatch_view_holds_its_stage_file_object(name, tmp_pat
 def test_converted_every_pair_view_holds_its_stage_file_objects(name, tmp_path):
     order = ORDERS[name]
     index = _converted_tree(tmp_path / "tree", order)
-    shas = _stage_file_shas(index)
+    shas = _stage_file_shas(order)
 
     for later, earlier in zip(order[1:], order):
         site = _site("topo-pair", index, tmp_path / "views", pair=f"{later}-{earlier}")

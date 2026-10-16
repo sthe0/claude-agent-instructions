@@ -340,6 +340,24 @@ hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "coordinator"
 
+[sites."scripts/agentctl/toml_emit.py::<module>::re.compile"]
+class = "structural"
+ground = "_BARE_KEY compiles the TOML bare-key syntax (letters, digits, `_`, `-`); a fixed syntax."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/toml_emit.py::_key::pattern.fullmatch"]
+class = "structural"
+ground = "_BARE_KEY.fullmatch decides whether a key can be written bare or must be quoted; TOML syntax, not free-text meaning."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/toml_emit.py::_multiline::re.sub"]
+class = "structural"
+ground = "re.sub escapes every run of three or more double quotes inside a multiline basic string so it cannot close the string early; TOML syntax."
+hits = 1
+reviewed_by = "coordinator"
+
 [sites."scripts/agentctl/landed_providers.py::<module>::re.compile"]
 class = "structural"
 ground = "PROVIDER_NAME_RE compiles the plain-identifier syntax of a landed provider name (it becomes a plugin file name)."

@@ -133,8 +133,9 @@ def _where(position: Position) -> str:
 
 def stage_identity(table: dict, position: int) -> int:
     """A stage's identity: its declared integer `index` (a bool is not one), else its
-    1-based array position (`parse_plan`'s rule, with a non-integer index left to its own
-    refusal)."""
+    1-based array position. This agrees with `parse_plan` for an integer or absent
+    `index`; `parse_plan` coerces any other value with `int()`, which `plan-convert`
+    refuses."""
     declared = table.get("index")
     return declared if type(declared) is int else position
 
