@@ -683,13 +683,16 @@ def _bindings(state) -> dict:
     }
 
 
-def _print_rebinding(bindings_before, after, plan_file):
+def _content_digest(plan_file):
+    # Loaded with the defaults the engine uses for a registered plan (plan_store.load_baseline).
     from agentctl import plan as P
 
-    content = P.plan_content_digest(
-        P.load_plan(str(plan_file), base_dir=plan_file.parent, root=plan_file.parent))
+    return P.plan_content_digest(P.load_plan(str(plan_file)))
+
+
+def _print_rebinding(bindings_before, after, plan_file):
     print(f"live_rebinding before={bindings_before['review']} "
-          f"after={content} root={after.accepted_plan_digest}")
+          f"after={_content_digest(plan_file)} root={after.accepted_plan_digest}")
 
 
 @pytest.mark.parametrize("shape", ["bound", "counted"])
@@ -1239,10 +1242,7 @@ def test_the_rebinding_tests_run_green_against_a_plan_given_through_the_environm
     given = stem_dir / "given.toml"
     given.write_bytes(_plan_text(goal="a goal long enough to move to its own file",
                                  method=LONG_METHOD * 3).encode())
-    from agentctl import plan as P
-
-    expected_content = P.plan_content_digest(
-        P.load_plan(str(given), base_dir=stem_dir, root=stem_dir))
+    expected_content = _content_digest(given)
     stage_max, field_max = plan_convert._limits()
     expected_index = plan_convert.convert(
         given.read_bytes(), "given", field_max_chars=field_max, stage_max_chars=stage_max)[
@@ -1258,8 +1258,12 @@ def test_the_rebinding_tests_run_green_against_a_plan_given_through_the_environm
     assert "skipped" not in done.stdout
     import re
 
-    lines = re.findall(r"live_rebinding before=(\w+) after=(\w+) root=(\w+)", done.stdout)
-    passed = int(re.search(r"(\d+) passed", done.stdout).group(1))
+    lines = re.findall(
+        r"live_rebinding before=([0-9a-f]{64}) after=([0-9a-f]{64}) root=([0-9a-f]{64})",
+        done.stdout)
+    summary = re.search(r"(\d+) passed", done.stdout)
+    assert summary is not None, done.stdout[-800:]
+    passed = int(summary.group(1))
     assert passed >= 3
     assert len(lines) == passed
     for before, after, root in lines:
