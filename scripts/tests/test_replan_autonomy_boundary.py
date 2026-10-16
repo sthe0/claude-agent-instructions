@@ -828,7 +828,8 @@ def test_agent_replan_after_agent_ack_refuses_coverage_waiver(eng):
     eng.diagnose("a1")
     assert ack(eng)["ok"] is True
     untouched = eng.write(plan_text().replace('title = "', 'title = "Edited ', 1))
-    refused = eng.run("replan", session="a1", plan=untouched, coverage_waiver="one-off")
+    refused = eng.run("replan", session="a1", plan=untouched, coverage_waiver="one-off",
+                      reopen=[1])
     assert refused["ok"] is False
     assert "coverage-waiver is not accepted" in refused["detail"]
 

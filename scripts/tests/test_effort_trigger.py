@@ -592,8 +592,8 @@ def test_fire_diagnose_replan_cycle_then_refires_on_renewed_overrun(store, venue
         ns(session=sid, by="user", decision="revise", note=None), store=store,
     )
 
-    d_replan = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
-    assert d_replan.action == "next_stage"
+    d_replan = cli.cmd_replan(ns(session=sid, plan=refined, reopen=[1]), store=store)
+    assert d_replan.action == "next_stage", d_replan.detail
     state = store.load(sid)
     assert state.node == Node.VERIFYING.value
     assert state.difficulty is None

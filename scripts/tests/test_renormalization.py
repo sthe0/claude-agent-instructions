@@ -681,6 +681,10 @@ _STAGE_RESIDUAL_COVERAGE = {
                 "to declinable changes what the stage IS to the customer",
     "backlog_issue": "the residual's own splice, same reason as its sibling `optional`",
     "control": "outside: the control attestation record-result stamps, same reason",
+    "amendments.date": "outside: retrospective bookkeeping no change decision reads "
+                       "(plan.STAGE_LEAF_CLASS class B)",
+    "amendments.text": "outside: retrospective bookkeeping, same reason as amendments.date",
+    "amendments.reason": "outside: retrospective bookkeeping, same reason as amendments.date",
     "subject.material": "stage_question_key",
     "subject.result": "stage_question_key",
     "subject.invariants": "stage_question_key",

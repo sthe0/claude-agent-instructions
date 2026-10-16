@@ -43,7 +43,7 @@ from agentctl.plan import (
 )
 from agentctl.script_effects import StageEffectDeclaration
 from agentctl.state import (
-    Actor, Criterion, LandedSpec, Means, Outcome, Principle, Stage, Subject, Supply,
+    Actor, Amendment, Criterion, LandedSpec, Means, Outcome, Principle, Stage, Subject, Supply,
 )
 from agentctl.submission import (
     _ORDER_PARTS, _SUBSTANTIVE_META_FIELDS, _SUBSTANTIVE_SUBMISSION_FIELDS,
@@ -601,6 +601,7 @@ def _stage(index=2, **over):
                              confidence="high", refutation="r"),
         conditions="cond", preconditions="pre", knowledge="know",
         supplies=[Supply(on=1, element="result", artifact="x")],
+        amendments=[Amendment(date="2026-10-17", text="t", reason="why")],
         output_artifacts=["out/path.py"], outcome=Outcome(), control=None,
         grants=StageGrants(
             allow=[RuleGrant(rule="Bash(pytest -q:*)", provenance="declared")],
@@ -682,16 +683,14 @@ _CD = ("carry_key", "apply_refined", "diff_plans", "question_key")
 #: The cells below that lack a detector are gaps rather than intentional
 #: asymmetries — cross-checked against the source, not left to the mutation run's
 #: silence alone:
-#:  - `actor.capability_required`: invisible to carry_key AND diff_plans. A replan
-#:    correcting ONLY the required capability diffs as 'no_change' and the
-#:    correction is silently dropped — the exact failure class this key family
-#:    exists to close (diff_plans' own cost_tier/verify_venue precedent comments
-#:    name this pattern explicitly). It is copied by `_apply_refined_stage_fields`,
-#:    because `StageNorm` reads it.
-#:  - `supplies.element` / `supplies.artifact` / `supplies.delivery`: visible to
-#:    carry_key since StageNorm (its edges are typed deliveries), but invisible to
-#:    diff_plans, which is not a stated design — `_structural_signature` reads only
+#:  - `actor.capability_required`, `supplies.element` and `supplies.artifact` were once
+#:    invisible to diff_plans (a correction to only one of them diffed as 'no_change'
+#:    and was silently dropped); `diff_plans._prose` now reads them.
+#:  - `supplies.delivery`: visible to carry_key since StageNorm (its edges are typed
+#:    deliveries), but invisible to diff_plans — `_structural_signature` reads only
 #:    `depends_on`, i.e. `.on`.
+#:  - `amendments.*`: retrospective bookkeeping no change decision reads; only
+#:    `_apply_refined_stage_fields` copies them, so the live stage carries the log.
 #:  - `output_artifacts`: invisible to carry_key, diff_plans and question_key, so
 #:    an edit to a stage's declared output_artifacts diffs as 'no_change'
 #:    outright; `_apply_refined_stage_fields` copies it (`StageNorm` reads it), so
@@ -709,7 +708,7 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "means.method": frozenset(_CD),
     "means.procedure": frozenset(_CD),
     "actor.executor": frozenset(_CD),
-    "actor.capability_required": frozenset({"apply_refined", "question_key"}),
+    "actor.capability_required": frozenset({"apply_refined", "diff_plans", "question_key"}),
     "actor.cost_tier": frozenset({"apply_refined", "diff_plans"}),
     "actor.guard_exempt_paths": frozenset({"apply_refined", "diff_plans"}),
     "criterion.criterion_type": frozenset(_CD),
@@ -735,13 +734,16 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "preconditions": frozenset(_CD),
     "knowledge": frozenset(_CD),
     "supplies.on": frozenset(_CD),
-    "supplies.element": frozenset({"carry_key", "apply_refined", "question_key"}),
-    "supplies.artifact": frozenset({"carry_key", "apply_refined", "question_key"}),
+    "supplies.element": frozenset({"carry_key", "apply_refined", "diff_plans", "question_key"}),
+    "supplies.artifact": frozenset({"carry_key", "apply_refined", "diff_plans", "question_key"}),
     "supplies.delivery": frozenset({"carry_key", "apply_refined", "question_key"}),
     "output_artifacts": frozenset({"apply_refined"}),
     "ephemeral_artifacts_waiver": frozenset({"apply_refined", "diff_plans"}),
     "optional": frozenset({"apply_refined", "diff_plans"}),
     "backlog_issue": frozenset({"apply_refined"}),
+    "amendments.date": frozenset({"apply_refined"}),
+    "amendments.text": frozenset({"apply_refined"}),
+    "amendments.reason": frozenset({"apply_refined"}),
     "renorms": frozenset(_CD),
     "outcome.status": frozenset(),
     "outcome.declined": frozenset(),

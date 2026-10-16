@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
@@ -386,6 +387,21 @@ def _write_plan_version_snapshot(store: StateStore, state: SessionState, data: b
     snap.parent.mkdir(parents=True, exist_ok=True)
     snap.write_bytes(data)
     return str(snap)
+
+
+def _read_plan_version_snapshot(store: StateStore, state: SessionState, digest: str) -> bytes | None:
+    """The bytes `_write_plan_version_snapshot` stored for plan version `digest` (the full
+    sha256), or None when the store exposes no on-disk path, no such version was written,
+    or the file is unreadable or does not hash to `digest`. None means the old side of a
+    plan diff is unknown, and a caller keeps its behaviour from before the tier existed."""
+    path_fn = getattr(store, "path", None)
+    if path_fn is None or not digest:
+        return None
+    try:
+        data = (path_fn(state.session_id).parent / f"plan-version-{digest[:16]}.toml").read_bytes()
+    except OSError:
+        return None
+    return data if hashlib.sha256(data).hexdigest() == digest else None
 
 
 def _snapshot_plan_version(store: StateStore, state: SessionState, plan_path: str) -> str | None:
@@ -1375,11 +1391,95 @@ def _replan_kind(state: SessionState, old, new) -> str:
     return _kind_within_boundary(state, kind, new, ledgered=ledgered or parent_norm_plan)
 
 
-def _replan_pending_indices(state: SessionState, new, kind: str) -> list[int]:
+def _baseline_plan_for_tier(store: StateStore, state: SessionState):
+    """The plan version the session is running, parsed from its stored snapshot, or None
+    when that version is unknown (no approved-plan snapshot, or no stored copy of its
+    bytes). None means the tier of an edit cannot be computed, and the replan routes as it
+    did before the tier existed."""
+    from .plan import PlanError, parse_plan
+
+    if not state.plan_snapshot_path:
+        return None
+    data = _read_plan_version_snapshot(store, state, state.plan_snapshot_hash or "")
+    if data is None:
+        return None
+    try:
+        return parse_plan(tomllib.loads(data.decode("utf-8")), strict=False)
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError, PlanError):
+        return None
+
+
+_VERDICT_PRESERVING_CLASSES = frozenset({"B", "F", "C"})
+
+
+def _frozen_stage_survives(prev_stages, new_stages, index: int, tier) -> bool:
+    """Whether a PASSED stage keeps its verdict although its carry digest moved: the edit
+    touched only bookkeeping, final-venue or check-only leaves (nothing the delivered work
+    was built from or promised to a consumer) and every supplier's interface is unchanged.
+    False without a tier (the old side is unknown)."""
+    from .stage_norm import interface_token
+
+    change = tier.stages.get(index) if tier is not None else None
+    if change is None or any(cls not in _VERDICT_PRESERVING_CLASSES for _, cls in change.moved):
+        return False
+    prev = {s.index: s for s in prev_stages}
+    new = {s.index: s for s in new_stages}
+    if index not in prev or prev[index].outcome.status != StageStatus.PASSED.value:
+        return False
+    return all(
+        sup in prev and sup in new and interface_token(prev[sup]) == interface_token(new[sup])
+        for sup in {e.on for e in new[index].supplies}
+    )
+
+
+def _passed_dependents_closure(live_stages, new_stages, roots) -> set[int]:
+    """`roots` plus every PASSED stage that transitively depends on one of them, along the
+    dependency edges of either plan version."""
+    edges: dict[int, set[int]] = {}
+    for stage in (*live_stages, *new_stages):
+        edges.setdefault(stage.index, set()).update(stage.depends_on)
+    passed = {s.index for s in live_stages if s.outcome.status == StageStatus.PASSED.value}
+    closure = set(roots)
+    grew = True
+    while grew:
+        grew = False
+        for index in passed - closure:
+            if edges.get(index, set()) & closure:
+                closure.add(index)
+                grew = True
+    return closure
+
+
+def _frozen_stage_refusal(state: SessionState, tier, reopening: set[int]):
+    """Refusal text and data for a non-substantive replan that edits an operative or
+    interface leaf of a PASSED stage the replan does not reopen; None when none does."""
+    frozen = {}
+    for stage in state.stages:
+        if stage.outcome.status != StageStatus.PASSED.value or stage.index in reopening:
+            continue
+        change = tier.stages.get(stage.index)
+        paths = [p for p, cls in change.moved if cls in ("O", "I")] if change else []
+        if paths:
+            frozen[stage.index] = paths
+    if not frozen:
+        return None
+    named = "; ".join(f"stage {i} ({', '.join(p)})" for i, p in sorted(frozen.items()))
+    flags = " ".join(f"--reopen {i}" for i in sorted(frozen))
+    return (f"replan refused: it edits what an already PASSED stage was built from or "
+            f"promises — {named}; nothing was applied. Re-run with {flags} to re-arm the "
+            f"stage and every PASSED stage depending on it, or revert the edit",
+            {"blockers": [f"stage {i} (PASSED): {', '.join(p)}" for i, p in sorted(frozen.items())],
+             "frozen_stages": sorted(frozen)})
+
+
+def _replan_pending_indices(state: SessionState, new, kind: str, tier=None,
+                            reopened: frozenset[int] | set[int] = frozenset()) -> list[int]:
     """Indices of `new`'s stages this replan leaves to run: every stage but one whose
     PASSED verdict survives it. A refinement or no-op never re-arms a PASSED stage; a
     substantive replan keeps a PASSED stage's verdict only when `stage_carried` says its
-    definition and its suppliers' interfaces are unchanged."""
+    definition and its suppliers' interfaces are unchanged, or when only
+    verdict-preserving leaves moved (`_frozen_stage_survives`). A stage in `reopened` is
+    always left to run."""
     from .stage_norm import stage_carried
 
     live = {s.index: s for s in state.stages}
@@ -1387,7 +1487,11 @@ def _replan_pending_indices(state: SessionState, new, kind: str) -> list[int]:
     for ns in new.stages:
         prev = live.get(ns.index)
         passed = prev is not None and prev.outcome.status == StageStatus.PASSED.value
-        if passed and (kind != "substantive" or stage_carried(state.stages, new.stages, ns.index)):
+        if passed and ns.index not in reopened and (
+            kind != "substantive"
+            or stage_carried(state.stages, new.stages, ns.index)
+            or _frozen_stage_survives(state.stages, new.stages, ns.index, tier)
+        ):
             continue
         pending.append(ns.index)
     return pending
@@ -1462,6 +1566,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.supplies = list(refined.supplies)
     cur.optional = refined.optional
     cur.backlog_issue = refined.backlog_issue
+    cur.amendments = list(refined.amendments)
     if is_skipped(cur) and not cur.optional:
         cur.outcome.status = StageStatus.PENDING.value
 
@@ -10675,8 +10780,12 @@ def _replan_cause(state: SessionState, explicit_reason: str | None) -> dict:
 
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     crossed: list[dict] = []
-    d = _cmd_replan(args, store=store, runner=runner, crossed=crossed)
+    reopened: list[int] = []
+    d = _cmd_replan(args, store=store, runner=runner, crossed=crossed, reopened=reopened)
     d.data.update(_crossing_data(crossed[0] if crossed else None))
+    if reopened and d.ok:
+        d.data["reopened_stages"] = reopened
+        d.detail += f"; re-armed PASSED stage(s) {reopened} (--reopen)"
     # Only on something to say: an unconditional setdefault would add an empty
     # `advisories` key to every replan Directive, which test_history_capture's
     # exact-equality pin reads as a changed contract.
@@ -10721,8 +10830,10 @@ def _replan_spelling_advisories(plan_path: str) -> list[str]:
 
 
 def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
-                crossed: list[dict] | None = None) -> Directive:
-    """`crossed`, when given, receives the backstop crossing a renegotiation applied."""
+                crossed: list[dict] | None = None,
+                reopened: list[int] | None = None) -> Directive:
+    """`crossed`, when given, receives the backstop crossing a renegotiation applied;
+    `reopened`, the indices of the PASSED stages an applied `--reopen` re-armed."""
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load
     from .stage_norm import stage_carried
@@ -11052,6 +11163,33 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # not worth authorizing) and strictly before the plan_approval PLUGIN
     # block below; this command has still written nothing to disk at this point.
     auth_kind = _replan_kind(state, _load(_replan_baseline_path(state), strict=False), new)
+
+    # A finished stage is frozen against the edits that change what it was built from or
+    # promises (operative and interface leaves): a non-substantive replan touching one is
+    # refused unless it names the stage with --reopen, which re-arms it and the PASSED
+    # stages depending on it. Substantive replans keep re-arming through the carry key.
+    # Refused before anything is written. Without a known old side there is no tier, and
+    # the replan routes as it did before the tier existed.
+    tier = None
+    baseline = _baseline_plan_for_tier(store, state)
+    if baseline is not None:
+        from .plan import change_tier
+
+        tier = change_tier(baseline, new)
+    reopen_roots = set(getattr(args, "reopen", None) or [])
+    unknown_reopen = sorted(reopen_roots - {s.index for s in state.stages})
+    if unknown_reopen:
+        return Directive(False, state.node, "replan",
+                         f"replan refused: --reopen names no such stage: {unknown_reopen}")
+    reopening = {
+        i for i in _passed_dependents_closure(state.stages, new.stages, reopen_roots)
+        if state.stage(i).outcome.status == StageStatus.PASSED.value
+    } if reopen_roots else set()
+    if tier is not None and auth_kind != "substantive":
+        frozen = _frozen_stage_refusal(state, tier, reopening)
+        if frozen is not None:
+            return Directive(False, state.node, "replan", frozen[0], data=frozen[1])
+
     arblock = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
     _log_gate(state, "replan_authorization", arblock, passed=not arblock)
     if arblock:
@@ -11064,7 +11202,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # must be the re-norming it named, and an obligation an earlier replan admitted must
     # survive this one. Before the plan_approval plugin block below, whose dispositions
     # save can persist state, so a refusal here leaves the state file as it was.
-    renorm_pending = _replan_pending_indices(state, new, auth_kind)
+    renorm_pending = _replan_pending_indices(state, new, auth_kind, tier, reopening)
     neblock = gates.normative_edit_blockers(state, new, renorm_pending,
                                             installing_plan_path=args.plan)
     _log_gate(state, "normative_edit", neblock, passed=not neblock)
@@ -11195,6 +11333,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                              destination=None, in_diagnosis=(state.node == Node.DIAGNOSING.value))
 
     kind = auth_kind
+    if reopened is not None:
+        reopened.extend(sorted(reopening))
     state.pending_renorms = gates.bound_renorms(state, new, renorm_pending)
     # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
     # applied a corrected plan, so the rounds spent arguing about the previous one are
@@ -11311,6 +11451,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 continue
             _apply_refined_stage_fields(cur, ns)
             _refresh_runtime_grant_titles(state, ns.index, ns.title)
+            if ns.index in reopening:
+                cur.outcome.status = StageStatus.PENDING.value
         # final_check is meta-level (not per-stage), so it needs its own refresh
         # next to the stage loop above — a self-diffed no_change still means the
         # FILE changed relative to what was cached at submit-plan/last replan.
@@ -11370,7 +11512,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
             # (not just prose).
             _apply_refined_stage_fields(cur, ns)
             _refresh_runtime_grant_titles(state, ns.index, ns.title)
-            if cur.outcome.status == StageStatus.FAILED.value:
+            if cur.outcome.status == StageStatus.FAILED.value or ns.index in reopening:
                 cur.outcome.status = StageStatus.PENDING.value
         state.plan_path = args.plan
         # Same unconditional refresh as the no_change branch above: a refinement
@@ -11445,7 +11587,10 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     declined_titles = gates.declined_title_set(state)
     for ns in new.stages:
         prev = live_by_index.get(ns.index)
-        if prev is not None and stage_carried(state.stages, new.stages, ns.index):
+        if prev is not None and ns.index not in reopening and (
+            stage_carried(state.stages, new.stages, ns.index)
+            or _frozen_stage_survives(state.stages, new.stages, ns.index, tier)
+        ):
             # A declined optional stage whose definition did not move stays declined; a
             # changed one goes back to PENDING for a fresh choice at the customer's
             # re-approval.
@@ -13320,6 +13465,11 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                          "SEQUENCE of operations, which is the executor's to replace; skips "
                          "the plan-review and plan_approval gates and is REFUSED the moment "
                          "the edit reaches a method, a criterion, a result image or the goal")
+    sp.add_argument("--reopen", dest="reopen", action="append", type=int, default=None,
+                    metavar="N",
+                    help="re-arm PASSED stage N (repeatable) together with every PASSED stage "
+                         "that depends on it, so the replan may edit what N was built from or "
+                         "promises; without it such an edit to a PASSED stage is refused")
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")
     sp.add_argument("--renegotiation-decision", dest="renegotiation_decision", default=None,

@@ -127,6 +127,17 @@ and every stage must also carry the 8-element activity-structure fields:
 the same reason [meta.order] is: they were added after the corpus was frozen, so the
 loader parses them and can never refuse their absence.
 
+A stage may also carry a retrospective log of changes made after the fact:
+
+    [[stage.amendments]]
+    date = "2026-10-17"                  # YYYY-MM-DD
+    text = "what was changed"
+    reason = "why"
+
+It is bookkeeping (class B in `STAGE_LEAF_CLASS`): rendered by plan-render, read by no
+change decision, so an amendments-only edit is tier 1, diffs as `no_change` and keeps
+every carry digest.
+
 diff_plans classifies a replan as no_change / refinement / substantive, mirroring
 CLAUDE.md § Acting without asking: structural edits (stage set, dependencies,
 executors, done criteria, weight_class) are substantive and re-arm the plan-approval
@@ -135,6 +146,7 @@ gate; wording-only edits (titles, expected-result prose) are refinements.
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import hashlib
 import os
 import re
@@ -149,6 +161,7 @@ from .landed_providers import PROVIDER_NAME_RE
 from .script_effects import StageEffectDeclaration
 from .state import (
     Actor,
+    Amendment,
     CheckKind,
     CheckVenue,
     Confidence,
@@ -572,6 +585,32 @@ def _parse_renorms(raw: object, context: str) -> list[str]:
                 f"to `critique --norm-target`"
             )
         out.append(os.path.normpath(entry))
+    return out
+
+
+def _parse_amendments(raw: object, context: str) -> list[Amendment]:
+    """The stage's `[[stage.amendments]]`: each entry a table of non-empty `date`, `text`
+    and `reason` strings. An unquoted TOML date is read as the ISO date it is."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise PlanError(f"{context}: amendments must be an array of tables ([[stage.amendments]])")
+    out: list[Amendment] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise PlanError(f"{context}: amendments entry {entry!r} must be a table")
+        unknown = sorted(set(entry) - {"date", "text", "reason"})
+        if unknown:
+            raise PlanError(f"{context}: amendments entry has unknown key(s) {unknown}")
+        values = {}
+        for key in ("date", "text", "reason"):
+            value = entry.get(key)
+            if isinstance(value, datetime.date):
+                value = value.isoformat()
+            if not isinstance(value, str) or not value.strip():
+                raise PlanError(f"{context}: amendments entry needs a non-empty string {key!r}")
+            values[key] = value.strip()
+        out.append(Amendment(**values))
     return out
 
 
@@ -1729,6 +1768,7 @@ def parse_plan(
                 effects=_parse_stage_effects(s.get("effects"), stage_ctx),
                 optional=raw_optional,
                 backlog_issue=raw_backlog_issue,
+                amendments=_parse_amendments(s.get("amendments"), stage_ctx),
             )
         )
 
@@ -3631,6 +3671,17 @@ def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fals
              # Same footing again: a stage's `renorms` is the consequence a нормативное
              # critique is bound to, so an edit of it must not diff as 'no_change'.
              *((("renorms", tuple(s.renorms)),) if s.renorms else ()),
+             # The two cells the change-tier table found outside every change-decision
+             # key (Core #74): `capability_required` is in neither `_structural_signature`
+             # nor `stage_carry_key`, and a supply's `element`/`artifact` is read by no key
+             # that diff_plans compares (only the supplier index is, as an edge). Tagged
+             # and conditional like the splices above, so a plan declaring neither hashes as
+             # before and the only kind that moves is no_change -> refinement.
+             *((("capability_required", s.actor.capability_required),)
+               if s.actor.capability_required else ()),
+             *((("supplied", tuple((u.on, u.element, u.artifact) for u in s.supplies
+                                   if u.element or u.artifact)),)
+               if any(u.element or u.artifact for u in s.supplies) else ()),
              # Without this a knowledge-only correction — the exact edit an
              # overcome-difficulty replan makes when the fault addressed знание —
              # diffs to 'no_change' and is silently dropped.
@@ -3684,3 +3735,179 @@ def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fals
             or order_place(old.meta) != order_place(new.meta)):
         return "refinement"
     return "no_change"
+
+
+# --- The change-tier field classification ---------------------------------------------
+#
+# One table over every leaf of a Stage, by what moving the leaf can do to work that has
+# already been done:
+#   B bookkeeping — describes neither what the stage builds nor how it is checked;
+#   F final-venue — only the venue verify-final re-runs the stage's check in;
+#   C check-only  — how the stage's result is checked, not what it is;
+#   O operative   — changes what the stage builds or how (including a renorms edit, which
+#                   gates.normative_edit_blockers and the pending_renorms dispatch
+#                   obligation read as part of the stage's work);
+#   I interface   — what other stages, the grants or the delivery see of the stage.
+# A leaf in no class is I, never lower (`leaf_class`): a field added to Stage and not yet
+# classed can only make a change look bigger. `test_change_tier.py` pins the table total
+# over `leaf_paths(Stage)`, so adding a field fails there until it is classed.
+#
+# B entries: `actor.cost_tier` names an expected size that dispatch labels a spawn with
+# and the effort estimate prices a stage by; the stage's work and its check are the same
+# under any tier, so a finished stage's verdict does not rest on it. `amendments.*` is a retrospective note (state.Amendment) that no
+# control, gate, dispatch decision or reviewer-visible rendering decides anything from.
+# Adding a B entry beyond these two needs that statement, in a comment, for the new leaf.
+STAGE_LEAF_CLASS: dict[str, str] = {
+    "index": "I",
+    "title": "O",
+    "subject.material": "O",
+    "subject.result": "O",
+    "subject.invariants": "O",
+    "subject.material_refs": "O",
+    "subject.knowledge_refs": "O",
+    "means.means": "O",
+    "means.method": "O",
+    "means.procedure": "O",
+    "actor.executor": "I",
+    "actor.capability_required": "O",
+    "actor.cost_tier": "B",
+    "actor.guard_exempt_paths": "I",
+    "criterion.criterion_type": "I",
+    "criterion.done_criterion": "I",
+    "criterion.verify_command": "C",
+    "criterion.expected_exit": "C",
+    "criterion.observation": "I",
+    "criterion.verify_venue": "C",
+    "criterion.verify_kind": "C",
+    "criterion.landed.target": "C",
+    "criterion.landed.delivered_stage": "C",
+    "criterion.landed.remote": "C",
+    "criterion.landed.provider": "C",
+    "criterion.verify_venue_at_final": "F",
+    "criterion.negative_control": "C",
+    "criterion.negative_control_waiver": "C",
+    "principle.statement": "O",
+    "principle.source": "O",
+    "principle.derivation": "O",
+    "principle.confidence": "O",
+    "principle.refutation": "O",
+    "conditions": "O",
+    "preconditions": "O",
+    "knowledge": "O",
+    "supplies.on": "I",
+    "supplies.element": "I",
+    "supplies.artifact": "I",
+    "supplies.delivery": "I",
+    "output_artifacts": "I",
+    "ephemeral_artifacts_waiver": "I",
+    "renorms": "O",
+    "outcome.status": "I",
+    "outcome.declined": "I",
+    "outcome.actual": "I",
+    "outcome.fail_digests": "I",
+    "outcome.cost_usd": "I",
+    "outcome.duration_ms": "I",
+    "outcome.spawn_count": "I",
+    "outcome.delivered_head": "I",
+    "outcome.delivered_base": "I",
+    "outcome.checked_tree_identity": "I",
+    "outcome.checked_tree_ok": "I",
+    "outcome.record_attempts": "I",
+    "control": "I",
+    "grants.allow.rule": "I",
+    "grants.allow.provenance": "I",
+    "grants.add_dirs.path": "I",
+    "grants.add_dirs.mode": "I",
+    "grants.add_dirs.provenance": "I",
+    "effects.path": "I",
+    "effects.sha256": "I",
+    "effects.resolver": "I",
+    "optional": "I",
+    "backlog_issue": "I",
+    "amendments.date": "B",
+    "amendments.text": "B",
+    "amendments.reason": "B",
+}
+
+TIER_OF_CLASS = {"B": 1, "F": 1, "C": 2, "O": 2, "I": 3, "M": 4}
+
+
+def leaf_class(path: str) -> str:
+    """The class of a Stage leaf path. An exact table entry wins; a path naming a whole
+    group (`principle`, `grants`, a None-valued dataclass field) takes the class its
+    members share; anything else — an unclassified leaf — is `I`."""
+    exact = STAGE_LEAF_CLASS.get(path)
+    if exact is not None:
+        return exact
+    members = {c for p, c in STAGE_LEAF_CLASS.items() if p.startswith(path + ".")}
+    return members.pop() if len(members) == 1 else "I"
+
+
+@dataclass(frozen=True)
+class StageChange:
+    """What moved on one stage between two plan versions: `moved` is the (leaf path,
+    class) pairs, sorted by path; `tier` the highest tier among them (0 when none)."""
+    tier: int
+    moved: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class PlanChange:
+    """`change_tier`'s result. `stages` maps a stage index present in BOTH versions to its
+    StageChange; `meta` names the plan-level leaves that moved (`stages` among them when
+    the stage set did); `tier` is the plan tier, the maximum of all of them."""
+    tier: int
+    stages: dict[int, StageChange]
+    meta: tuple[str, ...] = ()
+
+
+def _flatten_leaves(value: object, path: str, sink: dict[str, object]) -> None:
+    """Flatten asdict() output into {leaf path: value}. A list of tables contributes one
+    tuple per member key (`supplies.on` -> (1, 2)); an empty list contributes nothing,
+    which a reader takes as `()` — so an empty list and an absent one never differ."""
+    def join(prefix: str, key: str) -> str:
+        return f"{prefix}.{key}" if prefix else key
+
+    if isinstance(value, dict):
+        for key, member in value.items():
+            _flatten_leaves(member, join(path, key), sink)
+    elif isinstance(value, list):
+        columns: dict[str, list] = {}
+        for member in value:
+            if isinstance(member, dict):
+                member_leaves: dict[str, object] = {}
+                _flatten_leaves(member, "", member_leaves)
+                for key, leaf in member_leaves.items():
+                    columns.setdefault(join(path, key), []).append(leaf)
+            else:
+                columns.setdefault(path, []).append(member)
+        for column_path, column in columns.items():
+            sink[column_path] = tuple(column)
+    else:
+        sink[path] = value
+
+
+def change_tier(old: PlanDoc, new: PlanDoc) -> PlanChange:
+    """Tier of the edit that turns plan version `old` into `new`: 0 nothing moved; 1 only
+    bookkeeping/final-venue leaves; 2 a check-only or operative leaf, interface untouched;
+    3 an interface leaf; 4 a plan-level leaf or the stage set. Per-stage results name each
+    moved leaf with its class. Pure: reads two parsed plans, nothing else."""
+    old_meta, new_meta = dataclasses.asdict(old.meta), dataclasses.asdict(new.meta)
+    meta_moved = [name for name in old_meta if old_meta[name] != new_meta[name]]
+    old_by, new_by = {s.index: s for s in old.stages}, {s.index: s for s in new.stages}
+    if set(old_by) != set(new_by):
+        meta_moved.append("stages")
+    stages: dict[int, StageChange] = {}
+    for index in sorted(set(old_by) & set(new_by)):
+        before: dict[str, object] = {}
+        after: dict[str, object] = {}
+        _flatten_leaves(dataclasses.asdict(old_by[index]), "", before)
+        _flatten_leaves(dataclasses.asdict(new_by[index]), "", after)
+        moved = sorted(
+            (path, leaf_class(path)) for path in set(before) | set(after)
+            if before.get(path, ()) != after.get(path, ())
+        )
+        stages[index] = StageChange(
+            tier=max((TIER_OF_CLASS[c] for _, c in moved), default=0), moved=tuple(moved))
+    tier = max([TIER_OF_CLASS["M"] if meta_moved else 0, *(c.tier for c in stages.values())])
+    return PlanChange(tier=tier, stages=stages, meta=tuple(meta_moved))

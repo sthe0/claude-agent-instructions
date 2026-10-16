@@ -179,10 +179,11 @@ def test_fire_acknowledge_revise_leaves_diagnosing_for_the_ordinary_cycle(store,
                         failure_address="нормативное", norm_targets=["stage:1"]), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
     d_replan = cli.cmd_replan(
-        ns(session=sid, plan=str(venued_fixtures_dir / "plan_two_stage_refined.toml")), store=store,
+        ns(session=sid, plan=str(venued_fixtures_dir / "plan_two_stage_refined.toml"), reopen=[1]),
+        store=store,
     )
     assert d_replan.marker != "ESCALATE_TO_USER"
-    assert d_replan.action == "next_stage"
+    assert d_replan.action == "next_stage", d_replan.detail
 
 
 def test_fire_acknowledge_rejects_invalid_decision(store, venued_fixtures_dir, tmp_path):

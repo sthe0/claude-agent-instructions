@@ -288,11 +288,19 @@ def render_plan_md(doc: PlanDoc) -> str:
                 f"confidence: {p.confidence}; refutation: {p.refutation})"
             )
         lines.extend(_grants_lines(s, _venue_for(doc)))
+        lines.extend(_amendment_lines(s))
         lines.append("")
 
     lines.extend(render_final_checks_md(doc))
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _amendment_lines(s) -> list[str]:
+    """The stage's retrospective log, only in the whole-plan view: no per-stage
+    projection a review or a child reads carries it, so an amendment cannot reach a
+    decision. Empty for a stage without amendments, so such a plan renders byte-identical."""
+    return [f"- **Amendment ({a.date}):** {a.text} — {a.reason}" for a in s.amendments]
 
 
 def render_stages_md(doc: PlanDoc, stage_indices) -> str:

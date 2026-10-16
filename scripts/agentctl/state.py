@@ -1854,6 +1854,17 @@ class CostRollup:
 
 
 @dataclass
+class Amendment:
+    """One retrospective note on a stage: `text` says what was corrected after the stage
+    ran, `reason` why, `date` when (ISO date as written). A record about the stage, not a
+    part of it — no control, gate, dispatch decision or rendering that decides anything
+    reads it, which is why plan.py classes it as bookkeeping."""
+    date: str
+    text: str
+    reason: str
+
+
+@dataclass
 class Stage:
     index: int
     title: str
@@ -1925,6 +1936,9 @@ class Stage:
     # "not optional".
     optional: bool = False
     backlog_issue: str | None = None
+    # `[[stage.amendments]]`: retrospective notes (see Amendment). Empty on every plan
+    # authored before this field.
+    amendments: list[Amendment] = field(default_factory=list)
 
     @property
     def depends_on(self) -> list[int]:
@@ -1979,6 +1993,7 @@ class Stage:
                 effects=[StageEffectDeclaration.from_dict(e) for e in d.get("effects", [])],
                 optional=bool(d.get("optional", False)),
                 backlog_issue=d.get("backlog_issue"),
+                amendments=[Amendment(**a) for a in d.get("amendments", [])],
             )
         # legacy FLAT shape -> nested groups (migration shim)
         return cls(
