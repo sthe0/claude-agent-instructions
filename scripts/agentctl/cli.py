@@ -1488,10 +1488,9 @@ def _replan_pending_indices(state: SessionState, new, kind: str, tier=None,
                             reopened: frozenset[int] | set[int] = frozenset()) -> list[int]:
     """Indices of `new`'s stages this replan leaves to run: every stage but one whose
     PASSED verdict survives it. A refinement or no-op never re-arms a PASSED stage; a
-    substantive replan keeps a PASSED stage's verdict only when its definition and its
-    suppliers' interfaces are unchanged (`stage_norm.stage_carried`), or when only
-    verdict-preserving leaves moved (`_verdict_survives`). A stage in `reopened` is
-    always left to run."""
+    substantive replan keeps a PASSED stage's verdict only when `_verdict_survives` holds:
+    its definition and its suppliers' interfaces are unchanged (`stage_norm.stage_carried`),
+    or only verdict-preserving leaves moved. A stage in `reopened` is always left to run."""
     live = {s.index: s for s in state.stages}
     pending = []
     for ns in new.stages:

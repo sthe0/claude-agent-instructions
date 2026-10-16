@@ -193,12 +193,12 @@ def test_substantive_verify_command_change_carries_into_state(store, venued_fixt
 
 
 def test_substantive_verify_command_change_resets_passed_stage(store, venued_fixtures_dir):
-    """`verify_command` is itself part of `stage_carry_key` (#12), so a substantive
-    replan that changes stage 1's OWN verify_command must NOT carry its PASSED
-    status forward -- the prior PASS was attested against the old check and is no
-    longer trustworthy against the new one, so the stage resets to PENDING for
-    re-verification (contrast test_substantive_replan_carries_forward_passed_unchanged_stage,
-    where the PASSED stage's own definition is untouched)."""
+    """`verify_command` is itself part of `stage_carry_key` (#12). The fixture edit
+    also changes the stage's done criterion, an operative leaf, so a PASSED stage is
+    reset to PENDING for re-verification only because the replan carries `--reopen`;
+    a verify_command-only edit keeps the stage PASSED (class C). Contrast
+    test_substantive_replan_carries_forward_passed_unchanged_stage, where the PASSED
+    stage's own definition is untouched."""
     sid = "pp"
     base = str(venued_fixtures_dir / "plan_two_stage_verifyfix_grantgrowth.toml")
     changed = str(venued_fixtures_dir / "plan_two_stage_verifyfix_grantgrowth_changed.toml")
@@ -458,8 +458,9 @@ def test_substantive_replan_carries_forward_passed_unchanged_stage(store, venued
 
 
 def test_substantive_replan_resets_passed_stage_whose_definition_changed(store, venued_fixtures_dir):
-    """A stage's title changed -> its carry key no longer matches -> PASSED does
-    NOT carry forward, even though the stage survives at the same index."""
+    """A stage's title changed (an operative leaf) -> the replan is refused unless it
+    carries `--reopen`; with it, PASSED is reset to PENDING even though the stage
+    survives at the same index."""
     sid = "carry2"
     plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     retitled = str(venued_fixtures_dir / "plan_two_stage_substantive_stage1_retitled.toml")
