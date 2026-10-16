@@ -535,3 +535,4 @@ def test_child_keeps_parent_targeted_difficulty_open_until_handoff_refreshed(
     directive = _child_closes(store, fixtures_dir)
 
     assert not directive.ok and store.load(CHILD).difficulty is not None
+    assert "handed back to the parent stage" in str(directive.data), directive.data

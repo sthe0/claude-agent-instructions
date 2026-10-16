@@ -703,7 +703,9 @@ def normative_edit_blockers(state: SessionState, new_plan, pending_indices,
     per file target whose bytes are still the baseline and whose `renorms` references all
     sit on stages the replan does not leave pending (a reference on a carried-forward
     PASSED stage is no consequence, that stage never runs again). A parent norm target
-    always blocks: no replan of this session edits the parent stage's norm.
+    blocks until the session's `parent_link.norm_digest` differs from its baseline: no
+    replan of this session edits the parent stage's norm, but once the parent fixed it
+    and the resumed child's handoff was refreshed, the replan may close the difficulty.
 
     `pending_indices` is the set of `new_plan` stage indices this replan does NOT carry
     forward as PASSED -- supplied by the caller, which owns the carry decision.
@@ -734,8 +736,8 @@ def normative_edit_blockers(state: SessionState, new_plan, pending_indices,
             out.append(
                 f"norm target {target}: the fault was handed back to the parent stage, "
                 f"whose norm this session cannot edit -- end the session with `REPLAN:` "
-                f"and let the parent's dispatch verify the record; a replan here cannot "
-                f"close it"
+                f"and let the parent's dispatch verify the record; a replan here closes "
+                f"it only after the parent fixes the norm and re-dispatches this child"
             )
             continue
         if _is_installing(target, installing_plan_path):

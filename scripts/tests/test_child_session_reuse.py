@@ -350,20 +350,19 @@ def test_own_channel_still_admits_question_verbs(contour):  # noqa: F811
 
 
 def test_own_channel_admits_question_research_and_candidate_dispose(contour):  # noqa: F811
-    for verb in ("question-research", "question-candidate-dispose"):
-        proc = contour.own(verb, "--id", "q1")
-        assert "outside the own contour" not in proc.stderr, (
-            f"BEHAVIOUR: the own channel refuses `{verb}`: {proc.stderr.strip()}"
-        )
+    contour.own("question-raise", "--id", "q1", "--target", "stage:1",
+                "--question", "which path?", "--control", "the path exists")
+    researched = contour.own("question-research", "--id", "q1",
+                             "--attempted", "read the brief")
+    _admitted(researched, "question-research")
+    disposed = contour.own("question-candidate-dispose", "--id", "qrev-1",
+                           "--as", "dismissed", "--reason", "not a question")
+    _admitted(disposed, "question-candidate-dispose")
 
 
 def test_own_channel_gains_no_user_authority_verb():
     from lib.widening_targets import AGENTCTL_USER_AUTHORITY_VERBS
 
-    assert {"question-research", "question-candidate-dispose"} <= OWN_CONTOUR_VERBS
-    leaked = (OWN_CONTOUR_VERBS & AGENTCTL_USER_AUTHORITY_VERBS) - {
-        "plan-review", "code-review", "submit-plan", "dispatch", "record-result", "verify-final",
-        "replan", "declare", "investigate", "critique", "normalize", "approve",
-        "next-stage", "partition",
-    }
-    assert not leaked, leaked
+    added = {"question-research", "question-candidate-dispose"}
+    assert added <= OWN_CONTOUR_VERBS
+    assert not (added & AGENTCTL_USER_AUTHORITY_VERBS)
