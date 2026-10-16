@@ -4941,6 +4941,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "1f58ac19d4015b75"
+domain = "code"
+file = "scripts/tests/test_child_contour_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "6de39420e8f7b0d1"
 domain = "code"
 file = "scripts/tests/test_child_contour_switch.py"

@@ -330,7 +330,9 @@ def _acceptance_review_check(state: SessionState) -> _AcceptanceCheck:
     not the accepted version). Each early-out mirrors a distinct guard
     _acceptance_review_resolution_blockers already documents in full; this helper exists
     so the two callers never drift on WHICH guard fired."""
-    if not acceptance_active(state):
+    if not acceptance_active(state) or state.parent_link:
+        # A linked child's acceptance is its parent's record-result on the stage it serves;
+        # `accept` is a user-authority verb outside its own channel.
         return _AcceptanceCheck("inactive", [], {}, [])
     review = state.acceptance_review
     if review is None:

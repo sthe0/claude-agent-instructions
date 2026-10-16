@@ -725,3 +725,106 @@ def test_linked_child_final_turn_not_blocked(tmp_path, monkeypatch):
     assert blocked is not None and blocked["decision"] == "block", (
         "setup: the same turn is not blocked for a root, so the depth-1 pass above proves nothing"
     )
+
+
+# --- a linked child closes its own contour by verify-final alone --------------------------
+# The acceptance a root records with `accept` is, for a linked child, the parent's
+# record-result on the stage the child serves; `accept` and `resolve` stay root-only.
+
+def _linked_verifying(store, sid: str, tmp_path: Path, *, linked: bool, monkeypatch):
+    from test_acceptance_verdict import _approved_state, _write_plan
+
+    monkeypatch.delenv("AGENTCTL_ACCEPTANCE", raising=False)
+    state = _approved_state(sid, _write_plan(tmp_path / f"{sid}.toml"))
+    if linked:
+        state.parent_link = {
+            "parent_session": PARENT, "stage_index": 1, "norm_digest": "0" * 64,
+            "grants": [], "depth": 1,
+        }
+    store.save(state)
+    return state
+
+
+def _verify_final(store, sid: str):
+    return cli.cmd_verify_final(Namespace(session=sid), store=store)
+
+
+def test_linked_reaches_resolution_by_verify_final(store, tmp_path, monkeypatch):
+    _linked_verifying(store, "lnk", tmp_path, linked=True, monkeypatch=monkeypatch)
+    d = _verify_final(store, "lnk")
+    assert d.ok is True, f"a linked child with every stage PASSED is held at verify-final: {d}"
+    assert store.load("lnk").node == "RESOLUTION"
+
+
+def test_unlinked_still_blocked_without_accept(store, tmp_path, monkeypatch):
+    _linked_verifying(store, "unl", tmp_path, linked=False, monkeypatch=monkeypatch)
+    d = _verify_final(store, "unl")
+    assert d.ok is False and d.action == "fix_stages"
+    assert any("AcceptanceReview" in b for b in d.data["blockers"])
+    assert store.load("unl").node == "VERIFYING"
+
+
+def test_own_channel_refuses_accept_resolve(contour):
+    before = {s: contour.state_bytes(s) for s in (CHILD, PARENT)}
+    for verb in ("accept", "resolve"):
+        assert verb not in OWN_CONTOUR_VERBS
+        proc = contour.own(verb)
+        assert proc.returncode == 2, (verb, proc.returncode, proc.stdout, proc.stderr)
+        assert REFUSED in proc.stderr and "outside the own contour" in proc.stderr, (verb, proc.stderr)
+        assert proc.stdout == "", f"`{verb}` reached the engine: {proc.stdout!r}"
+    assert {s: contour.state_bytes(s) for s in before} == before
+
+
+def test_linked_failed_stage_blocks(store, tmp_path, monkeypatch):
+    state = _linked_verifying(store, "lnk", tmp_path, linked=True, monkeypatch=monkeypatch)
+    state.stages[0].outcome.status = "FAILED"
+    store.save(state)
+    d = _verify_final(store, "lnk")
+    assert d.ok is False and d.action == "fix_stages"
+    assert any("stages not PASSED" in b for b in d.data["blockers"])
+    assert store.load("lnk").node == "VERIFYING"
+
+
+def test_linked_pending_renorm_blocks(store, tmp_path, monkeypatch):
+    from agentctl import gates
+
+    state = _linked_verifying(store, "lnk", tmp_path, linked=True, monkeypatch=monkeypatch)
+    norm_file = tmp_path / "norm.md"
+    norm_file.write_text("norm", encoding="utf-8")
+    state.pending_renorms = [{"target": str(norm_file), "kind": "stage", "stage": 1, "depth": 0,
+                              "baseline": gates.file_norm_digest(str(norm_file))}]
+    store.save(state)
+    d = _verify_final(store, "lnk")
+    assert d.ok is False and d.action == "renorm"
+    assert store.load("lnk").node == "VERIFYING"
+
+
+def test_linked_escalation_orphan_blocks(store, tmp_path, monkeypatch, venued_fixtures_dir):
+    from test_escalation_closure import CHILD as GRANDCHILD
+    from test_escalation_closure import PARENT as MIDDLE
+    from test_escalation_closure import _routed_child
+
+    _routed_child(store, venued_fixtures_dir, tmp_path, monkeypatch)
+    state = store.load(MIDDLE)
+    state.node = "VERIFYING"
+    state.parent_link = {
+        "parent_session": PARENT, "stage_index": 1, "norm_digest": "0" * 64,
+        "grants": [], "depth": 1,
+    }
+    store.save(state)
+    d = _verify_final(store, MIDDLE)
+    assert d.ok is False and d.action == "adopt_escalation", d
+    assert any(f"adopt-escalation --child {GRANDCHILD}" in b for b in d.data["blockers"])
+    assert store.load(MIDDLE).node == "VERIFYING"
+
+
+def test_linked_failing_final_check_blocks(store, tmp_path, monkeypatch):
+    from agentctl.state import FinalCheck
+
+    state = _linked_verifying(store, "lnk", tmp_path, linked=True, monkeypatch=monkeypatch)
+    state.final_check = [FinalCheck(command="false", expected_exit=0, label="fails")]
+    store.save(state)
+    d = _verify_final(store, "lnk")
+    assert d.ok is False
+    assert store.load("lnk").node != "RESOLUTION"
+    assert "fails" in json.dumps(d.data), d
