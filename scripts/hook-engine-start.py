@@ -100,6 +100,41 @@ def _active_minutes_cap() -> float:
         return float(_IDLE_CAP_MIN_FALLBACK)
 
 
+def _covered_gap_seconds(data: dict, state_dir: Path, session_id: str, lo: float, hi: float) -> float:
+    """Seconds of the gap `[lo, hi]` during which a linked child ran for this session's
+    dispatches — time `effort.actual` already counts through `effort_child_runs`, so the
+    prompt-gap clock must not book it again. An open run counts while its dispatcher is
+    alive; one whose dispatcher died is first closed in `data` (so the write-back keeps it)
+    at its child's last state write, found by the same `child_runs` code the CLI uses.
+    0.0 when the helpers cannot be imported or fail: the hook then books the whole gap."""
+    try:
+        from agentctl import child_runs, effort  # noqa: PLC0415 — hook survives their absence
+
+        runs = data.get("effort_child_runs")
+        child_runs.close_dead_runs(runs, state_dir, session_id)
+        return effort.covered_seconds(effort.child_run_intervals(runs, hi), lo, hi)
+    except Exception:
+        return 0.0
+
+
+def _note_gap_loss(data: dict, lo: float, hi: float, cap: float, booked: float) -> None:
+    """Note on the live open run what that run alone cost the booking of the gap `[lo, hi]`
+    (`child_runs.note_gap_loss`): what the hook would have booked had the other runs stayed
+    and this one not, less `booked`. The dispatcher books it back if the run is dropped for
+    having no linked child; the part closed runs cover stays uncounted by the hook.
+    Best-effort, like the rest of the stamp."""
+    try:
+        from agentctl import child_runs, effort  # noqa: PLC0415 — hook survives their absence
+
+        def lost(others) -> float:
+            covered = effort.covered_seconds(effort.child_run_intervals(others, hi), lo, hi)
+            return min(max(0.0, (hi - lo) - covered) / 60.0, cap) - booked
+
+        child_runs.note_gap_loss(data.get("effort_child_runs"), lo, hi, lost)
+    except Exception:
+        pass
+
+
 def _stamp_prompt_ts(session_id: str, now: float) -> None:
     """Best-effort: stamp this turn's boundary and accumulate the two prompt-derived
     effort actuals in the session's state file.
@@ -115,7 +150,8 @@ def _stamp_prompt_ts(session_id: str, now: float) -> None:
       * `effort_actuals['active_minutes']` accumulates the CAPPED gap since the previous
         prompt. The previous value of last_user_prompt_ts, read here before it is
         overwritten, IS that boundary — no second timestamp field is needed. A first
-        prompt (no prior stamp) contributes 0 rather than a guess.
+        prompt (no prior stamp) contributes 0 rather than a guess, and so does a gap that ends
+        while the session is BLOCKED.
     All three accumulate on RAW dict values with defensive coercion: effort.py's typed
     view is not importable from a hook that must survive a broken checkout."""
     if not session_id:
@@ -135,8 +171,15 @@ def _stamp_prompt_ts(session_id: str, now: float) -> None:
             int(count) if isinstance(count, (int, float)) else 0
         ) + 1
 
-        if isinstance(previous, (int, float)) and now > previous:
-            elapsed = min((now - previous) / 60.0, _active_minutes_cap())
+        # A BLOCKED session waits for a decision, so the gap is not work on the norm; the raw
+        # state read is why the node is compared as the literal Node.BLOCKED value.
+        if isinstance(previous, (int, float)) and now > previous and data.get("node") != "BLOCKED":
+            covered = _covered_gap_seconds(data, p.parent, session_id, previous, now)
+            uncovered = (now - previous) - covered
+            cap = _active_minutes_cap()
+            elapsed = min(max(0.0, uncovered) / 60.0, cap)
+            if covered > 0:
+                _note_gap_loss(data, previous, now, cap, elapsed)
             actuals = data.get("effort_actuals")
             if not isinstance(actuals, dict):
                 actuals = {}

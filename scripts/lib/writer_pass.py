@@ -78,6 +78,12 @@ exclude. A spawned specialist that publishes directly needs its own inline
 (or self-spawned) tech-writer pass; there is no other way to satisfy this
 gate from inside a child transcript.
 
+That one transcript is the engine session's OWN run. In-process callers that hold an
+engine session rather than a payload (`agentctl present-plan`) obtain it from
+`engine_session_binding.transcript_for_session`, which finds the conversation that drove
+the session, so a linked child's own witness is read; the parent pointer in the child's
+state is never followed.
+
 COST BOUND. The largest transcript observed on this machine is 27,241,348
 bytes (~27 MB), so an unbounded scan is not an option inside a hook's
 timeout. `bind` and `witnesses` read only the TAIL of the transcript

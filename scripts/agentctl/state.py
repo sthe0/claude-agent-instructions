@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 51  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 57  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -85,7 +85,23 @@ SCHEMA_VERSION = 51  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # 50: SessionState gains parent_link (the spawning stage's norm
                      # handoff, read from AGENTCTL_NORM_HANDOFF); recursion_depth is
                      # taken from it when present
-                     # 51: SessionState gains plan_conversions (the plan-convert-live links
+                     # 51: SessionState gains effort_subtree_seen (per-descendant spend
+                     # watermarks of the subtree roll-up)
+                     # 52: SessionState gains order_descendant_credited (per-descendant
+                     # spend already marked flushed in the order window)
+                     # 53: SessionState gains effort_child_runs (the intervals a linked
+                     # child ran for this session's dispatches, summed into wall-clock)
+                     # 54: Difficulty gains escalated_to / escalated_from (the typed link a
+                     # child's parent-norm escalation and the parent difficulty it opens
+                     # each carry to the other side)
+                     # 55: SessionState gains protected_grant_acceptances (the user's
+                     # acceptance of a grant that covers a protected action, bound to the
+                     # grants sha256)
+                     # 56: PlanFrame gains the plan-bound approval binding (plan_snapshot_*,
+                     # approved_grants_*, accepted_plan_digest), runtime_grants and
+                     # plan_binding_captured, so pop-subplan restores the parent's binding
+                     # and stage grants instead of the child's
+                     # 57: SessionState gains plan_conversions (the plan-convert-live links
                      # between root digests of one plan's equivalent forms)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
@@ -566,6 +582,13 @@ class Difficulty:
     # the record (not inside `Normalization`, which an older engine builds with `**`) so an
     # archived nested record shows how it was closed without a normalization.
     normalization_waiver: str | None = None
+    # The typed link of a parent-norm escalation (schema 54), one entry per side so the
+    # session that owns a side is the only one that writes it. A child's record carries
+    # `escalated_to` {parent_session, stage_index, norm_digest}; the difficulty its parent
+    # opens for it carries `escalated_from` {child_session, child_uid, norm_digest}. Empty
+    # on a record that is no escalation and on every record written before schema 54.
+    escalated_to: dict = field(default_factory=dict)
+    escalated_from: dict = field(default_factory=dict)
 
     def complete(self) -> bool:
         return (
@@ -591,6 +614,8 @@ class Difficulty:
             normalization=Normalization(**norm) if norm else None,
             norm_targets=[dict(t) for t in (d.get("norm_targets") or [])],
             normalization_waiver=d.get("normalization_waiver"),
+            escalated_to=dict(d.get("escalated_to") or {}),
+            escalated_from=dict(d.get("escalated_from") or {}),
             # A record written before schema 48 carries no identity: it becomes a level-0
             # stage-origin root. Its uid is derived from its content, not drawn at random,
             # so every load of the same unsaved legacy file names the record the same way
@@ -975,6 +1000,31 @@ class RiskAcceptance:
             meta_digest=d.get("meta_digest", ""),
             stage_keys=dict(raw) if isinstance(raw := d.get("stage_keys"), dict) else {},
             concern_text=d.get("concern_text", ""),
+        )
+
+
+# The user's acceptance of ONE protected action a plan's grants cover (schema 55) — see
+# protected_actions.py. Bound to the exact effective grant set by `grants_sha256`: a plan
+# whose grants change gets a different digest and the acceptance stops counting
+# (gates.protected_grant_blockers), so a later widening asks again.
+@dataclass
+class ProtectedGrantAcceptance:
+    """One acceptance; `plan_path` and acceptances for superseded grant sets are kept
+    as an audit trail, not pruned."""
+    entry_id: str
+    grants_sha256: str
+    plan_path: str
+    note: str
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "ProtectedGrantAcceptance | None":
+        if not d:
+            return None
+        return cls(
+            entry_id=d["entry_id"],
+            grants_sha256=d["grants_sha256"],
+            plan_path=d.get("plan_path", ""),
+            note=d.get("note", ""),
         )
 
 
@@ -1752,6 +1802,21 @@ class PlanFrame:
     # terminal-retired plugin silently suppress that same plugin for a later sub-plan.
     plugins: dict[str, dict] = field(default_factory=dict)
     plugins_archive: dict[str, dict] = field(default_factory=dict)
+    # Approval-binding custody (schema 56): the snapshot of the plan as approved, the grant
+    # set approved with it and the digest of the bytes accepted all describe THIS plan, so a
+    # sub-plan's own approval must not leave its values behind for the parent. A frame written
+    # before schema 56 carries none of them: `plan_binding_captured` False tells pop to leave
+    # the live values alone, exactly as it did then.
+    plan_snapshot_path: str | None = None
+    plan_snapshot_hash: str | None = None
+    approved_grants_sha256: str | None = None
+    approved_grant_entries: dict[str, dict] | None = None
+    accepted_plan_digest: str | None = None
+    plan_binding_captured: bool = False
+    # Runtime grants are keyed by stage index of the live plan, so they belong to it: the child
+    # starts with none and pop puts the parent's back. None = a frame written before this field
+    # existed, which pop leaves the live grants alone for.
+    runtime_grants: dict[str, list[dict]] | None = None
 
 
 @dataclass
@@ -2070,6 +2135,8 @@ class SessionState:
     # gates._plan_review_verdict_blockers fall back to today's unconditional block
     # on a `revise` verdict, unchanged.
     risk_acceptances: list["RiskAcceptance"] = field(default_factory=list)
+    # Schema 55: see ProtectedGrantAcceptance. Empty on legacy states.
+    protected_grant_acceptances: list["ProtectedGrantAcceptance"] = field(default_factory=list)
     # Review-round counter (schema 30), advanced on BOTH review paths:
     #   * pre-approval — cmd_submit_plan increments it on every resubmission at
     #     PLAN_READY (the revise_plan self-loop) made while a review record stands;
@@ -2229,6 +2296,16 @@ class SessionState:
     #   effort_actuals     the monotone accumulators ('spend_usd', 'active_minutes').
     #   effort_fires       one record per firing (scale, multiple, history_len).
     #   effort_spend_seen  plan_path -> ledger total already booked, keyed BY PATH.
+    #   effort_subtree_seen  descendant session -> ledger total already booked for the
+    #                      rows that session spawned (`spawner_session`). SESSION-scoped,
+    #                      deliberately NOT a PlanFrame field: a linked descendant's
+    #                      spend belongs to the session, so sub-plan push/pop leave the
+    #                      watermarks untouched and pop's actuals merge counts it once.
+    #   effort_child_runs  one {child_session, stage_index, started, ended | None,
+    #                      dispatcher_pid} per linked dispatch (cmd_dispatch); the union
+    #                      of the intervals is added to the wall-clock actual
+    #                      (effort.child_run_minutes). SESSION-scoped like
+    #                      effort_subtree_seen, so push/pop leave it alone.
     #   user_prompt_count  interactions actual, stamped by hook-engine-start.py.
     #   effort_crossings   RECORD_ONLY_SCALES observations (effort.record_crossing) —
     #                      SESSION-scoped like user_prompt_count itself, deliberately NOT
@@ -2241,6 +2318,8 @@ class SessionState:
     effort_actuals: dict = field(default_factory=dict)
     effort_fires: list[dict] = field(default_factory=list)
     effort_spend_seen: dict = field(default_factory=dict)
+    effort_subtree_seen: dict = field(default_factory=dict)
+    effort_child_runs: list[dict] = field(default_factory=list)
     user_prompt_count: int = 0
     effort_crossings: list[dict] = field(default_factory=list)
     # Order-keyed effort custody (autonomy boundary). Only meaningful for a session
@@ -2252,7 +2331,11 @@ class SessionState:
     #   order_effort_frozen   the user-approved spend/wall_clock estimate rederive keeps.
     #   agent_ack_difficulty_ids  ids of difficulty records an agent-authored
     #                         fire-acknowledge / renegotiation already consumed.
+    #   order_descendant_credited  descendant session -> the spend of it this session
+    #                         already marked flushed because the order window held it
+    #                         (cli._credit_descendant_order_flush); SESSION-scoped.
     order_effort_flushed: dict | None = None
+    order_descendant_credited: dict = field(default_factory=dict)
     order_effort_base: dict = field(default_factory=dict)
     order_effort_frozen: dict | None = None
     agent_ack_difficulty_ids: list[str] = field(default_factory=list)
@@ -2682,6 +2765,10 @@ class SessionState:
         data["risk_acceptances"] = [
             r for r in (RiskAcceptance.from_dict(x) for x in data.get("risk_acceptances", [])) if r is not None
         ]
+        data["protected_grant_acceptances"] = [
+            r for r in (ProtectedGrantAcceptance.from_dict(x)
+                        for x in data.get("protected_grant_acceptances", [])) if r is not None
+        ]
         data["stage_reviews"] = [
             r for r in (StageReview.from_dict(x) for x in data.get("stage_reviews", [])) if r is not None
         ]
@@ -2735,6 +2822,13 @@ class SessionState:
                 parent_venue_captured=bool(f.get("parent_venue_captured", False)),
                 plugins=f.get("plugins") or {},
                 plugins_archive=f.get("plugins_archive") or {},
+                plan_snapshot_path=f.get("plan_snapshot_path"),
+                plan_snapshot_hash=f.get("plan_snapshot_hash"),
+                approved_grants_sha256=f.get("approved_grants_sha256"),
+                approved_grant_entries=f.get("approved_grant_entries"),
+                accepted_plan_digest=f.get("accepted_plan_digest"),
+                plan_binding_captured=bool(f.get("plan_binding_captured", False)),
+                runtime_grants=f.get("runtime_grants"),
             )
             for f in data.get("plan_stack", [])
         ]
@@ -2743,3 +2837,38 @@ class SessionState:
     @classmethod
     def from_json(cls, text: str) -> "SessionState":
         return cls.from_dict(json.loads(text))
+
+
+# Every SessionState field is in exactly one of the two sets below (pinned by
+# test_sessionstate_fields_classified), so a new field cannot be added without deciding
+# whether a sub-plan push/pop must carry it.
+#
+# PLAN_BOUND_FIELDS describe the plan the session is executing: push-subplan saves them in the
+# PlanFrame (same field name) and pop-subplan restores them, so the parent resumes with its own.
+PLAN_BOUND_FIELDS = frozenset({
+    "task_id", "goal", "overall_done_criterion", "overall_criterion_type", "weight_class",
+    "repo_root", "delivery_worktree", "landing_waiver", "final_check", "route", "node",
+    "plan_path", "partition", "plan_review_rounds", "plan_review_counted_digest",
+    "code_review_rounds", "approval", "resolution", "stages", "current_stage", "plugins",
+    "plugins_archive", "plan_snapshot_path", "plan_snapshot_hash", "accepted_plan_digest",
+    "effort_estimate", "effort_baseline", "effort_actuals", "effort_fires", "effort_spend_seen",
+    "approved_grants_sha256", "approved_grant_entries", "runtime_grants",
+})
+# SESSION_SCOPED_FIELDS belong to the session (or to the engine's bookkeeping of it): push and
+# pop leave them as they are, or reset them to the child's start state, and never restore them.
+SESSION_SCOPED_FIELDS = frozenset({
+    "session_id", "plan_task_id", "blocked_from", "plan_verified", "permission_request",
+    "difficulty", "plan_review", "plan_stage_reviews", "plan_review_passes",
+    "plan_pair_reviews", "next_record_seq", "concern_ledger", "risk_acceptances",
+    "protected_grant_acceptances", "review_rounds", "stage_reviews", "judge_bypassed",
+    "code_reviews", "acceptance_review", "acceptance_bypass", "plan_presentations",
+    "recursion_depth", "artifacts", "history", "plan_stack", "cost", "last_user_prompt_ts",
+    "plan_submitted_ts", "tracker_key", "deliverable_kind", "effort_subtree_seen",
+    "effort_child_runs", "user_prompt_count", "effort_crossings", "order_effort_flushed",
+    "order_descendant_credited", "order_effort_base", "order_effort_frozen",
+    "agent_ack_difficulty_ids", "renegotiation_ceiling_difficulty_id",
+    "review_release_difficulty_id", "renegotiations", "runtime_host", "reattest_stash",
+    "declined_issues", "planning_misses", "materialization_defects",
+    "settings_drift", "cwd_drift", "pending_renorms", "difficulty_stack", "parent_difficulty",
+    "closed_difficulties", "parent_link", "schema_version",
+})

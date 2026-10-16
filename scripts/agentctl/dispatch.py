@@ -117,6 +117,49 @@ def parse_marker(stdout: str) -> tuple[str | None, str]:
                 return child_marker, line[len(prefix):].strip()
     return None, ""
 
+
+LABEL_DECORATION = r"^[-*]?\s*\*{0,2}"
+_REQUEST_LABEL_RE = re.compile(LABEL_DECORATION + r"PERMISSION-REQUEST:\*{0,2}\s*(.*)$")
+_ACTION_LABEL_RE = re.compile(LABEL_DECORATION + r"Action:\*{0,2}\s*(.*)$")
+
+
+def _unwrap_code(text: str) -> str:
+    text = text.strip()
+    if len(text) >= 2 and text.startswith("`") and text.endswith("`"):
+        return text[1:-1].strip()
+    return text
+
+
+def permission_request_action(stdout: str) -> str | None:
+    """The request text of the first ``PERMISSION-REQUEST:`` block in ``stdout`` that
+    carries one, whether or not it is the first marker (an INCOMPLETE can stop for a
+    permission), else None. Tolerates the list bullet / ``**bold**`` / code-span
+    decoration that ``cli._parse_rule_line`` tolerates.
+
+    Each label's text is whatever follows it on its line, or, when that is empty, the
+    block's ``Action:`` line (blank lines allowed between; the scan stops at the next
+    marker line or label). A label that yields nothing is skipped, so the bare label of
+    the canonical envelope around a specialist's output does not shadow the block in
+    the output itself."""
+    lines = [ln.strip() for ln in (stdout or "").splitlines()]
+    for i, line in enumerate(lines):
+        m = _REQUEST_LABEL_RE.match(line)
+        if not m:
+            continue
+        tail = _unwrap_code(m.group(1))
+        if tail:
+            return tail
+        for follow in lines[i + 1:]:
+            if MARKER_RE.match(follow) or _REQUEST_LABEL_RE.match(follow):
+                break
+            am = _ACTION_LABEL_RE.match(follow)
+            if am:
+                action = _unwrap_code(am.group(1))
+                if action:
+                    return action
+                break
+    return None
+
 # A runner takes an argv list and returns (returncode, stdout, stderr).
 Runner = Callable[[list[str]], "RunResult"]
 

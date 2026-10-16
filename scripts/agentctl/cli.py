@@ -11,6 +11,7 @@ Every command function has the signature cmd_x(args, *, store, runner) -> Direct
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as dt
 import hashlib
 import json
@@ -25,11 +26,12 @@ import time
 from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
-from lib import argv_text, config_root, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
+from lib import argv_text, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
+from . import config as agentctl_config
 from .config import Thresholds
 from .partition import render_section, render_units, verdict
 from .directive import Directive, DIRECTIVE_ESCALATE_TO_USER
@@ -38,6 +40,8 @@ from .dispatch import (
     CHILD_INFRA_FAILURE,
     Runner,
     dispatch_stage,
+    LABEL_DECORATION,
+    permission_request_action,
     parse_marker,
     subprocess_runner,
 )
@@ -152,6 +156,7 @@ from .state import (
     plan_review_scope_for_pair,
     plan_review_scope_for_stage,
     plan_review_scope_stage_index,
+    ProtectedGrantAcceptance,
     ReattestStash,
     RequirementVerdict,
     RESOLUTION_ASK_MARKER,
@@ -582,7 +587,8 @@ def _ledgered_order_key(state: SessionState) -> str | None:
     return key if order_approvals.latest_user_approved_record(key) is not None else None
 
 
-def _effort_cross_totals(state: SessionState) -> dict:
+def _effort_cross_totals(state: SessionState, now: float | None = None, *,
+                         store: StateStore | None = None) -> dict:
     """`task_accumulator`'s per_axis_totals, plus — for a ledgered order — the order's
     spend/wall-clock total since the last user approval (ledger window + this
     session's unflushed delta, minus the total at this session's last fire), under the
@@ -592,8 +598,11 @@ def _effort_cross_totals(state: SessionState) -> dict:
     if key is None:
         return totals
     window = order_approvals.get(key)["effort_since_user_approval"]
-    flushed = state.order_effort_flushed or {}
-    actual = effort.actual(state)
+    flushed = state.order_effort_flushed
+    if flushed is None and _is_linked(state):
+        flushed = {effort.SCALE_SPEND: 0.0}
+    flushed = flushed or {}
+    actual = _order_actual(state, now, store=store)
     base = state.order_effort_base or {}
     for scale, total_key in _ORDER_EFFORT_SCALES:
         unflushed = max(0.0, actual[scale] - float(flushed.get(scale, actual[scale])))
@@ -604,12 +613,71 @@ def _effort_cross_totals(state: SessionState) -> dict:
     return totals
 
 
-def _flush_order_effort(state: SessionState, key: str | None = None) -> None:
+def _is_linked(state: SessionState) -> bool:
+    link = state.parent_link
+    return isinstance(link, dict) and bool(link.get("parent_session"))
+
+
+def _order_actual(state: SessionState, now: float | None = None, *,
+                  store: StateStore | None = None) -> dict:
+    """`effort.actual` as the order window counts it. A linked session leaves out of its
+    wall-clock the part of its own child runs that its parent's run of it covers: that run
+    spans them and the parent flushes it, so counting them here would book the grandchild's
+    minutes once per level. What no parent run covers — the session has no parent run
+    (spawned straight through spawn-specialist), or the parent's run ended earlier than the
+    child's run — stays here, so it is booked by someone. Without a store the parent cannot be
+    read and nothing is left out.
+
+    A pushed sub-plan zeroes the live `effort_actuals` and parks the parent's in its frame, so
+    the live vector alone would fall below the watermark the parent's flush set: the sub-plan's
+    spend would never reach the order window, and the parent's would be booked again after the
+    pop. The order's actual is therefore the live vector plus every frame's."""
+    actual = effort.actual(state, now=now)
+    for frame in state.plan_stack:
+        actual[effort.SCALE_SPEND] += float(frame.effort_actuals.get(effort.ACTUAL_SPEND_KEY) or 0.0)
+        actual[effort.SCALE_WALL_CLOCK] += float(frame.effort_actuals.get(effort.ACTUAL_MINUTES_KEY) or 0.0)
+    state_dir = _state_dir(store) if store is not None else None
+    if _is_linked(state) and state_dir is not None and state.effort_child_runs:
+        cover = child_runs.parent_cover(
+            state_dir, state.parent_link["parent_session"], state.session_id)
+        if cover is None:
+            # The parent's file is mid-save: what its run covers is unknown, so the
+            # wall-clock stays where the last flush left it and is settled by a later one.
+            watermark = (state.order_effort_flushed or {}).get(effort.SCALE_WALL_CLOCK)
+            if watermark is not None:
+                actual[effort.SCALE_WALL_CLOCK] = float(watermark)
+            else:
+                # Nothing flushed yet to hold it at: leave out every child-run minute, the most
+                # the parent can cover, so the first watermark is never above what a later read
+                # settles at and the later flush cannot under-count.
+                actual[effort.SCALE_WALL_CLOCK] -= effort.child_run_minutes(state, now)
+            return actual
+        own = effort.child_run_intervals(state.effort_child_runs, now)
+        actual[effort.SCALE_WALL_CLOCK] -= effort.overlap_seconds(own, cover) / 60.0
+    return actual
+
+
+def _seed_linked_flush_baseline(state: SessionState, *, store: StateStore | None = None) -> None:
+    """A linked session's order window counts from the user's approval, which reached it
+    through its parent: whatever it spent before its first ledgered flush was spent after
+    that approval (except across a later user re-approval while the session has never
+    flushed), so that flush moves it instead of only seeding the watermark. Only the
+    spend baseline starts at 0; wall-clock keeps the seeding behaviour."""
+    if state.order_effort_flushed is None and _is_linked(state):
+        state.order_effort_flushed = {
+            effort.SCALE_SPEND: 0.0,
+            effort.SCALE_WALL_CLOCK: _order_actual(state, store=store)[effort.SCALE_WALL_CLOCK],
+        }
+
+
+def _flush_order_effort(state: SessionState, key: str | None = None, *,
+                        store: StateStore | None = None) -> None:
     """Move this session's unflushed spend/wall-clock into its order's ledger window."""
     key = key or _ledgered_order_key(state)
     if key is None:
         return
-    actual = effort.actual(state)
+    _seed_linked_flush_baseline(state, store=store)
+    actual = _order_actual(state, store=store)
     flushed = state.order_effort_flushed
     if flushed is not None:
         spend = max(0.0, actual[effort.SCALE_SPEND] - float(flushed.get(effort.SCALE_SPEND) or 0.0))
@@ -648,7 +716,8 @@ def _open_effort_fire(state: SessionState) -> list[dict]:
     return list(order_approvals.get(key)["open_effort_fires"]) if key else []
 
 
-def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: float) -> dict:
+def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: float,
+                        store: StateStore | None = None) -> dict:
     """`effort.record_fire` plus, on a spend/wall-clock fire of a ledgered order, the
     open user-owed marker and the order-level baseline rebase."""
     fire = effort.record_fire(state, div, now=now)
@@ -656,7 +725,7 @@ def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: f
     if div.scale in effort.RATIO_SCALES:
         key = _ledgered_order_key(state)
         if key is not None:
-            _flush_order_effort(state, key)
+            _flush_order_effort(state, key, store=store)
             order_approvals.record_effort_fire(
                 key, scale=div.scale, detail={"actual": div.actual, "estimate": div.estimate,
                                                "multiple": div.multiple},
@@ -2032,7 +2101,7 @@ def _diagnose_venue_refusal(
     data = {}
     if div is not None and gates.effort_active(state):
         now = _utcnow()
-        data["effort_divergence"] = _record_effort_fire(state, div, now=now)
+        data["effort_divergence"] = _record_effort_fire(state, div, now=now, store=store)
     store.save(state)
     if opened is None:
         return _difficulty_cap_directive(state, message, data)
@@ -2359,11 +2428,19 @@ def _count_replan(state: SessionState) -> None:
     )
 
 
+def _park_node(state: SessionState) -> None:
+    """Move the session to BLOCKED, remembering the node `unblock` returns to. A session
+    already BLOCKED keeps the node it was first parked from: recording BLOCKED as its own
+    way back would leave `unblock` nothing to restore."""
+    if state.node != Node.BLOCKED.value:
+        state.blocked_from = state.node
+    state.node = Node.BLOCKED.value
+
+
 def _park_blocked(state: SessionState, store: StateStore, stage, marker, base: dict) -> Directive:
     """Park the session at BLOCKED and escalate — for a spawn whose output is
     malformed/unroutable (no marker, or a marker the engine cannot resolve)."""
-    state.blocked_from = state.node
-    state.node = Node.BLOCKED.value
+    _park_node(state)
     reason = "malformed spawn output" if marker in (None, "MALFORMED") else f"marker {marker}"
     state.log("dispatch_escalate", stage=stage.index, marker=marker)
     store.save(state)
@@ -2446,8 +2523,8 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
             data={"blockers": reentry_blockers, "resolved_reentry_count": reentry_count},
         )
     if prior is not None:
-        effort.refresh_spend(prior, _cost_rows(args), prior.plan_path)
-        _flush_order_effort(prior)
+        _refresh_spend(prior, store, _cost_rows(args), prior.plan_path)
+        _flush_order_effort(prior, store=store)
     new = SessionState(
         session_id=args.session,
         task_id=args.task,
@@ -3957,8 +4034,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     _log_gate(state, "effort_fire", efblock, passed=not efblock)
     if efblock:
         return _effort_fire_refusal(state, "submit_plan", efblock)
-    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
-    _flush_order_effort(state)
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
+    _flush_order_effort(state, store=store)
     plan_path = args.plan
     # #15: a resubmission — the coordinator revised the plan at PLAN_READY (after a
     # thinker `revise` verdict, or the user's own pre-approval edit) and re-runs
@@ -4198,13 +4275,10 @@ def _plan_presentation_skeleton(stages: list[Stage]) -> str:
 
 
 def _present_plan_transcript(session_id: str) -> Path | None:
-    """The newest transcript the harness wrote for `session_id` under any
-    projects root, or None. Derived, never supplied: the gated actor must not
-    choose which transcript is checked."""
-    found = config_root.iter_transcripts(f"*/{session_id}.jsonl")
-    if not found:
-        return None
-    return max(found, key=lambda p: p.stat().st_mtime)
+    """The newest transcript of the conversation that ran engine session
+    `session_id` under any projects root, or None (see
+    `engine_session_binding.transcript_for_session`)."""
+    return engine_session_binding.transcript_for_session(session_id)
 
 
 def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -5470,6 +5544,52 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     )
 
 
+def cmd_accept_protected_grant(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record the user's acceptance of ONE protected action the current plan's grants
+    cover (`protected_actions`) — a user-authority verb, so no spawned child or reviewer
+    is ever granted it. Purely a recorder: `gates.protected_grant_blockers` re-derives
+    the hits and the grants digest at `approve`, so an acceptance bound to a different
+    grant set simply fails to clear the gate."""
+    state = _require(store, args.session)
+    target = state.plan_path
+    if not target:
+        return Directive(False, state.node, "noop",
+                         "no plan to accept a protected grant against: submit a plan first")
+    entry_id = (getattr(args, "id", "") or "").strip()
+    note = (getattr(args, "note", "") or "").strip()
+    if not entry_id or not note:
+        return Directive(False, state.node, "noop",
+                         "accept-protected-grant requires a non-empty --id and --note")
+    if gates._normalize_string(note) in gates._PLACEHOLDER_SET:
+        return Directive(False, state.node, "noop",
+                         f"--note {note!r} reads as a placeholder, not a reason — say what concretely")
+    try:
+        doc = load_plan(target)
+    except (OSError, PlanError) as e:
+        return Directive(False, state.node, "noop",
+                         f"cannot record a protected-grant acceptance: {target} failed to load: {e}")
+    covered = sorted({hit_id for _stage, _rule, hit_id in protected_actions.protected_grant_hits(doc)})
+    if entry_id not in covered:
+        return Directive(
+            False, state.node, "noop",
+            f"the grants of {target} cover no protected action {entry_id!r} "
+            f"(covered: {covered or 'none'}) — nothing there to accept",
+        )
+    digest = grants_sha256(doc)
+    if not any(a.entry_id == entry_id and a.grants_sha256 == digest
+               for a in state.protected_grant_acceptances):
+        state.protected_grant_acceptances.append(ProtectedGrantAcceptance(
+            entry_id=entry_id, grants_sha256=digest, plan_path=target, note=note))
+    state.log("protected_grant_accept", target=target, entry_id=entry_id, grants_sha256=digest, note=note)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"protected action {entry_id!r} accepted for the current grant set of {target}; "
+        "a change to the plan's grants asks again",
+        data={"entry_id": entry_id, "grants_sha256": digest},
+    )
+
+
 def cmd_risk_accept(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Record a customer-facing acceptance of ONE named PlanReview concern's risk —
     the alternative to editing the plan to make a `revise` concern go away. Purely a
@@ -6267,6 +6387,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
         + review_blockers
+        + gates.protected_grant_blockers(state, state.plan_path)
     )
     if not by_agent:
         blockers = (
@@ -6369,7 +6490,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             - offered)
     if skip_optional:
         state.log("skip_optional", by=args.by, stages=skip_optional)
-    effort.arm(state)  # opens the effort-divergence window — see effort.py's ARMED-ONLY
+    effort.arm(state, now=_effort_now(store, state))  # opens the effort-divergence window — see effort.py's ARMED-ONLY
     # Fold this session's review-round counts into the cross-session task accumulator
     # (item B) BEFORE the reset-to-0 below — approval is the reset point, so this is
     # the last moment these session-local counts are readable.
@@ -6477,13 +6598,13 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                     state, order_approvals.declined_stages_of(previous)),
             )
             state.order_effort_frozen = armed_estimate
-            actual_now = effort.actual(state)
+            actual_now = _order_actual(state, store=store)
             state.order_effort_flushed = {
                 scale: actual_now[scale] for scale, _ in _ORDER_EFFORT_SCALES
             }
             state.order_effort_base = {}
         else:
-            _flush_order_effort(state)
+            _flush_order_effort(state, store=store)
     store.save(state)
     return _with_advisories(Directive(
         True, state.node, "partition",
@@ -6964,25 +7085,35 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         if stage.spawn_kind() == "developer":
             return Directive(False, state.node, "noop", f"dispatch refused: {exc}")
         evidence_dir = None
-    result = dispatch_stage(
-        stage, state.plan_path or "",
-        runner=runner,
-        budget=tier,
-        complexity=getattr(args, "complexity", "medium"),
-        effort=effort_tier,
-        continue_worktree=_continuation_worktree(state, stage),
-        constraints=getattr(args, "constraints", "") or "",
-        dry_run=dry_run,
-        # A hard-sandboxed spawned child can only write the tree it is
-        # launched in, so pin its cwd to the plan's delivery venue rather
-        # than relying on the dispatching process's ambient cwd. Always
-        # "delivery" — dispatch has no verify_venue/venue of its own to read,
-        # and delivery is where a spawned developer must write.
-        cwd=child_cwd,
-        runtime_host=host,
-        project_settings=_dispatch_project_settings_path(state),
-        session_id=state.session_id,
-    )
+    child_run = None if dry_run else _begin_child_run(store, state, stage)
+    result = None
+    try:
+        result = dispatch_stage(
+            stage, state.plan_path or "",
+            runner=runner,
+            budget=tier,
+            complexity=getattr(args, "complexity", "medium"),
+            effort=effort_tier,
+            continue_worktree=_continuation_worktree(state, stage),
+            constraints=getattr(args, "constraints", "") or "",
+            dry_run=dry_run,
+            # A hard-sandboxed spawned child can only write the tree it is
+            # launched in, so pin its cwd to the plan's delivery venue rather
+            # than relying on the dispatching process's ambient cwd. Always
+            # "delivery" — dispatch has no verify_venue/venue of its own to read,
+            # and delivery is where a spawned developer must write.
+            cwd=child_cwd,
+            runtime_host=host,
+            project_settings=_dispatch_project_settings_path(state),
+            session_id=state.session_id,
+        )
+    finally:
+        if child_run is None:
+            if not dry_run:
+                _carry_hook_stamps(store, state)
+        else:
+            transcript = _parse_transcript_path(getattr(result, "stderr", "") or "")
+            _end_child_run(store, state, child_run, Path(transcript).stem if transcript else None)
     if dry_run:
         # #10: a dry-run is a pure preview — no event log, no state save, no
         # marker routing. The echoed command is the whole result.
@@ -7002,8 +7133,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         # success. This must win before marker routing (a refusal carries no valid
         # marker).
         loop_line = _loop_detected_line(result)
-        state.blocked_from = state.node
-        state.node = Node.BLOCKED.value
+        _park_node(state)
         state.log(
             "dispatch_refused", stage=stage.index,
             reason="norm-loop" if loop_line else "recursion-cap",
@@ -7117,6 +7247,10 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     if marker == "REPLAN":
         mismatch, unverified = _child_norm_mismatch(state, store, stage, result.stderr)
         if mismatch is not None:
+            standing = gates.escalation_counterpart(
+                state, mismatch["child_uid"], mismatch["child_session"])
+            if standing is not None:
+                return _repeat_norm_mismatch(state, store, stage, mismatch, base, standing, body)
             return _open_norm_mismatch(state, store, stage, mismatch, base)
         if unverified:
             state.log("norm_mismatch_unverified", stage=stage.index, reason=unverified)
@@ -7126,13 +7260,6 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             f"stage {stage.index} proposes a plan-level revision",
             marker="REPLAN", data={**base, "reason": body},
         )
-    if marker == "INCOMPLETE":
-        store.save(state)
-        return Directive(
-            False, state.node, "decide_incomplete",
-            f"stage {stage.index} returned INCOMPLETE — re-spawn / ask / accept",
-            marker="INCOMPLETE", data={**base, "reason": body},
-        )
     if marker == "PLAN-READY":
         store.save(state)
         return Directive(
@@ -7140,8 +7267,9 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             f"stage {stage.index} returned a fresh plan — HARD GATE, get explicit user approval",
             marker="PLAN-READY", data=base,
         )
-    if marker == "PERMISSION-REQUEST":
-        action = body
+
+    def _route_permission_request(action: str, extra: dict | None = None) -> Directive:
+        data_base = {**base, **(extra or {})}
         # The permissions-cli check still runs for its own audit-row side effect, but
         # its answer no longer skips the ask: a global grant recorded there never
         # reaches the child's own --settings/--add-dir, so the old auto-continue just
@@ -7204,6 +7332,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             return _diagnose_materialization_defect(
                 state, store, stage, action=action,
                 evidence="transcript" if transcript_covered else "self-reported",
+                data=extra,
             )
         # REQ5 (dispatch half): a Rule:-line request may resolve to a resource
         # already approved for this order, or already covered by the stage's
@@ -7247,7 +7376,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             # parked here exactly as the ask_user_permission path below does,
             # or the directive's own instructions would fail when followed.
             state.permission_request = PermissionRequest(
-                action=action, stage_index=stage.index, raw=body
+                action=action, stage_index=stage.index, raw=action
             )
             state.log(
                 "permission_self_grant", stage=stage.index, action=action, rule=rule_line,
@@ -7262,12 +7391,12 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                 f"agent --scope stage --rule {rule_line!r}`) and re-dispatch, no user ask needed",
                 marker="PERMISSION-REQUEST",
                 data={
-                    **base, "action": action, "rule": rule_line,
+                    **data_base, "action": action, "rule": rule_line,
                     "resources": [plan_resources._resource_to_dict(r) for r in self_grant_resources],
                 },
             )
         state.permission_request = PermissionRequest(
-            action=action, stage_index=stage.index, raw=body
+            action=action, stage_index=stage.index, raw=action
         )
         # `_classify_transcript_denials` above may already have appended a
         # planning_misses row for this SAME denial (source="transcript",
@@ -7313,7 +7442,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             })
         state.log("permission_request", stage=stage.index, action=action)
         store.save(state)
-        _ask_data = {**base, "action": action, "options": ["once", "stage", "project", "global", "deny"]}
+        _ask_data = {**data_base, "action": action, "options": ["once", "stage", "project", "global", "deny"]}
         if rule_line is not None:
             _ask_data["reason_class"] = self_grant_reason
         if resource_disagreement is not None:
@@ -7326,6 +7455,18 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             # missing from this options list, so the root never saw it as an
             # offered choice.
             data=_ask_data,
+        )
+    if marker == "PERMISSION-REQUEST":
+        return _route_permission_request(permission_request_action(result.stdout) or "")
+    if marker == "INCOMPLETE":
+        embedded = permission_request_action(result.stdout)
+        if embedded is not None:
+            return _route_permission_request(embedded, {"incomplete_summary": body})
+        store.save(state)
+        return Directive(
+            False, state.node, "decide_incomplete",
+            f"stage {stage.index} returned INCOMPLETE — re-spawn / ask / accept",
+            marker="INCOMPLETE", data={**base, "reason": body},
         )
     if marker == CHILD_INFRA_FAILURE:
         # A transient condition about the RUN, never a judgement about the
@@ -7399,7 +7540,7 @@ def _parse_transcript_path(stderr: str) -> str | None:
     return None
 
 
-_RULE_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Rule:\*{0,2}\s*(.*)$")
+_RULE_LINE_RE = re.compile(LABEL_DECORATION + r"Rule:\*{0,2}\s*(.*)$")
 
 
 def _parse_rule_line(body: str) -> str | None:
@@ -7443,7 +7584,7 @@ def _rule_line_to_call(rule: str) -> tuple[str, dict] | None:
     return None
 
 
-_RESOURCE_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Resource:\*{0,2}\s*(.*)$")
+_RESOURCE_LINE_RE = re.compile(LABEL_DECORATION + r"Resource:\*{0,2}\s*(.*)$")
 _RESOURCE_SPEC_RE = re.compile(r"^(file|vcs_ref|specialist|service|dataset)\((.*)\)$")
 
 
@@ -7975,26 +8116,32 @@ def _classify_transcript_denials(
 
 def _fail_stage_into_diagnosing(
     state: SessionState, store: StateStore, stage: Stage, *, note: str, event: str,
-    declaration: Declaration, **event_fields,
+    declaration: Declaration, escalated_from: dict | None = None, **event_fields,
 ):
     """FAILED / DIAGNOSING on `stage` for a fault no re-dispatch of the stage unchanged
     would remove: mirrors `cmd_record_result`'s failed-stage branch, including its two-step
     EXECUTING -> VERIFYING -> DIAGNOSING transition (`machine.TRANSITIONS` permits
-    `diagnose` only from VERIFYING), with the Declaration pre-framed by the caller. Returns
-    the opened difficulty, or None when the difficulty cap refused it; the state is saved
+    `diagnose` only from VERIFYING; a session already there takes the second step alone),
+    with the Declaration pre-framed by the caller. `escalated_from` is the typed link back
+    to a child's difficulty, stamped on the opened record before it is saved. Returns the
+    opened difficulty, or None when the difficulty cap refused it; the state is saved
     either way and each caller builds its own Directive."""
     stage.outcome.status = StageStatus.FAILED.value
     stage.outcome.actual = (stage.outcome.actual + "\n" + note) if stage.outcome.actual else note
     state.log(event, stage=stage.index, **event_fields)
-    state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
+    if state.node == Node.EXECUTING.value:
+        state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
     opened = _open_difficulty(state, declaration=declaration)
+    if opened is not None and escalated_from:
+        opened.escalated_from = dict(escalated_from)
     store.save(state)
     return opened
 
 
 def _diagnose_materialization_defect(
     state: SessionState, store: StateStore, stage: Stage, *, action: str, evidence: str,
+    data: dict | None = None,
 ) -> Directive:
     """Route a PERMISSION-REQUEST whose denied call WAS covered by the stage's
     effective grant set into FAILED/DIAGNOSING -- the grant existed, materialization
@@ -8024,23 +8171,40 @@ def _diagnose_materialization_defect(
         f"materialized grants ({evidence}) -- this is a materialization defect, not "
         "a planning miss; run overcome-difficulty (investigate why materialization "
         "failed to carry the grant, then critique); no re-dispatch, no user ask",
-        marker="OVERCOME-DIFFICULTY",
+        marker="OVERCOME-DIFFICULTY", data=dict(data or {}),
     )
+
+
+def _escalation_link(difficulty, parent_link: dict | None) -> dict:
+    """The typed `escalated_to` link of `difficulty` to its session's parent: the parent
+    session, its stage and the norm digest the `parent` norm target was taken against;
+    empty when the record names no such target or the session has no parent. Shared by
+    `critique`, which routes the fault, and `difficulty-close`, which moves a nested
+    record's routing onto the record that resumes."""
+    parent_norm = next((t for t in difficulty.norm_targets
+                        if t.get("kind") == gates.NORM_TARGET_KIND_PARENT), None)
+    if parent_norm is None or not parent_link:
+        return {}
+    return {"parent_session": parent_link["parent_session"],
+            "stage_index": parent_link["stage_index"],
+            "norm_digest": parent_norm["baseline"]}
 
 
 def _child_norm_mismatch(
     state: SessionState, store: StateStore, stage: Stage, stderr: str,
 ) -> tuple[dict | None, str]:
     """`(record, "")` when the child this dispatch just ran holds, in its own state, a
-    current difficulty routed to this stage's norm; else `(None, reason)`.
+    live difficulty routed to this stage's norm; else `(None, reason)`.
 
     The decision rests on the child's state record -- never on the REPLAN text -- and holds
     only when all of these do: the transcript path the launch reported names the child's
     session id (its stem) and that state loads; the child's handoff names this session and
-    this stage; its open difficulty carries a `parent` norm target whose baseline is the
-    stage's current norm digest (a replan of the stage since the spawn moves it, and the
-    child's baseline is then stale); and its declaration states all three of expected,
-    actual and mismatch. The child's state is only read, never written.
+    this stage; one of its live difficulties -- the open one, or a suspended ancestor the
+    child opened a new difficulty over after routing it -- carries an `escalated_to` link
+    and a `parent` norm target whose baseline is the stage's current norm digest (a replan
+    of the stage since the spawn moves it, and the child's baseline is then stale); and its
+    declaration states all three of expected, actual and mismatch. The child's state is
+    only read, never written.
 
     A rejection is `(None, reason)`, and the caller logs the reason. `(None, "")` is a
     spawn with nothing to report -- no transcript, no readable state record, or a record
@@ -8059,43 +8223,49 @@ def _child_norm_mismatch(
         return None, f"child state {child_id} is unreadable: {exc}"
     if child is None or not child.parent_link:
         return None, ""
-    link = child.parent_link
+    return _verify_child_escalation(state, stage, child_id, child)
+
+
+def _verify_child_escalation(
+    state: SessionState, stage: Stage, child_id: str, child: SessionState,
+) -> tuple[dict | None, str]:
+    """`(record, "")` when one of `child`'s live difficulty records (open, or suspended under
+    a nested one) carries an `escalated_to` link and a current `parent` norm target on
+    `stage`'s norm of this session; else `(None, reason)`. When several records qualify, one
+    this session has not adopted is preferred, so `adopt-escalation` reaches each in turn
+    instead of stopping at an already adopted one. The checks `_child_norm_mismatch`
+    documents, minus the transcript lookup: `adopt-escalation` names the child directly."""
+    link = child.parent_link or {}
     if link.get("parent_session") != state.session_id or link.get("stage_index") != stage.index:
         return None, (f"child {child_id} is not linked to stage {stage.index} of this session "
                       f"(parent_session={link.get('parent_session')!r}, "
                       f"stage_index={link.get('stage_index')!r})")
-    opened = child.difficulty
-    if opened is None:
-        return None, f"child {child_id} holds no open difficulty"
-    current = gates.stage_norm_digest(stage)
-    targets = [t for t in opened.norm_targets
-               if t.get("target") == gates.NORM_TARGET_PARENT
-               and t.get("kind") == gates.NORM_TARGET_KIND_PARENT]
-    if not targets:
-        return None, f"child {child_id}'s open difficulty names no parent norm target"
-    if not any(t.get("baseline") == current for t in targets):
-        return None, (f"child {child_id}'s parent norm target is stale: its baseline is not "
-                      f"stage {stage.index}'s current norm digest")
-    decl = opened.declaration
-    if decl is None or not all((getattr(decl, f) or "").strip()
-                               for f in ("expected", "actual", "mismatch")):
-        return None, f"child {child_id}'s declaration lacks expected, actual or mismatch"
-    return {"child_session": child_id, "stage_index": stage.index, "norm_digest": current,
-            "declaration": {"expected": decl.expected, "actual": decl.actual,
-                            "mismatch": decl.mismatch}}, ""
+    found, reason = gates.child_escalations(stage, child)
+    if not found:
+        return None, f"child {child_id} {reason}"
+    unadopted = [e for e in found
+                 if gates.escalation_counterpart(state, e["child_uid"], child_id) is None]
+    return (unadopted or found)[0], ""
 
 
 def _open_norm_mismatch(
     state: SessionState, store: StateStore, stage: Stage, mismatch: dict, base: dict,
+    via: str | None = None,
 ) -> Directive:
     """Route a REPLAN whose child record `_child_norm_mismatch` verified into FAILED /
     DIAGNOSING on this stage, with the child's own declaration as the opened difficulty:
     the fault is in the stage's norm, so re-dispatching it unchanged would only repeat it.
-    Same transition as `_diagnose_materialization_defect`."""
+    Same transition as `_diagnose_materialization_defect`. The opened record carries
+    `escalated_from`, the typed link to the child's difficulty. `via` names the verb when
+    it is not dispatch's own REPLAN route."""
     decl = mismatch["declaration"]
     opened = _fail_stage_into_diagnosing(
         state, store, stage, event="norm_mismatch", child_session=mismatch["child_session"],
         norm_digest=mismatch["norm_digest"], declaration=Declaration(**decl),
+        escalated_from={"child_session": mismatch["child_session"],
+                        "child_uid": mismatch["child_uid"],
+                        "norm_digest": mismatch["norm_digest"]},
+        **({"via": via} if via else {}),
         note=(f"the child (session {mismatch['child_session']}) reported a mismatch in this "
               f"stage's norm: {decl['mismatch']}"))
     if opened is None:
@@ -8110,6 +8280,39 @@ def _open_norm_mismatch(
         "norm); no re-dispatch of the stage unchanged",
         marker="OVERCOME-DIFFICULTY",
         data={**base, "norm_mismatch": mismatch},
+    )
+
+
+def _repeat_norm_mismatch(
+    state: SessionState, store: StateStore, stage: Stage, mismatch: dict, base: dict,
+    standing: str, reason: str,
+) -> Directive:
+    """What a REPLAN gets when this session already holds a difficulty for the very child
+    difficulty it reports (`standing` is that difficulty's `open` or `closed` state): no
+    second record is opened, since the child cannot close its side and would otherwise
+    mint a new parent difficulty at every dispatch. The open one's directive is the one
+    `_open_norm_mismatch` gave; a closed one leaves the REPLAN's plain directive and says
+    why re-dispatching without a new fault would repeat it."""
+    ref = {"child_session": mismatch["child_session"], "child_uid": mismatch["child_uid"],
+           "stage_index": stage.index, "status": standing}
+    state.log("norm_mismatch_repeat", stage=stage.index, **ref)
+    store.save(state)
+    if standing == gates.ESCALATION_OPEN:
+        return Directive(
+            False, state.node, "investigate",
+            f"stage {stage.index}'s child reported the difficulty this session already "
+            "holds open for it -- continue overcome-difficulty on that record; no second "
+            "difficulty is opened",
+            marker="OVERCOME-DIFFICULTY",
+            data={**base, "norm_mismatch": mismatch, "escalation": ref},
+        )
+    return Directive(
+        False, state.node, "replan",
+        f"stage {stage.index}'s child repeats an escalation this session already adopted "
+        "and closed; the child's escalated difficulty is the one the closed record already "
+        "addressed, so no new difficulty is opened -- the stage's norm is what that record "
+        "changed",
+        marker="REPLAN", data={**base, "reason": reason, "escalation": ref},
     )
 
 
@@ -8506,10 +8709,256 @@ def _cost_rows(args) -> list[dict]:
     return cost.read_rows(Path(log) if log else cost.COST_LOG)
 
 
+def _parent_session_of(store: StateStore, session: str, loaded: dict) -> str | None:
+    """The `parent_link` parent of `session`, or None when it has no link or its state
+    cannot be loaded. The state is kept in `loaded` (session -> state or None), so a scan
+    loads each stored session once."""
+    if session not in loaded:
+        try:
+            loaded[session] = store.load(session)
+        except Exception:
+            loaded[session] = None
+    state = loaded[session]
+    link = state.parent_link if state is not None else None
+    return (link.get("parent_session") or None) if isinstance(link, dict) else None
+
+
+def _link_chain(
+    store: StateStore, session: str, parent: str, loaded: dict, max_hops: int,
+) -> list[SessionState] | None:
+    """The sessions from `session` up to, but excluding, `parent`, following `parent_link`
+    one hop at a time; None when no chain of at most `max_hops` hops reaches `parent`.
+    A visited set stops a cyclic link; a state that cannot be loaded ends the walk."""
+    chain: list[SessionState] = []
+    visited = {session}
+    cursor = session
+    for _ in range(max_hops):
+        up = _parent_session_of(store, cursor, loaded)
+        if up is None:
+            return None
+        chain.append(loaded[cursor])
+        if up == parent:
+            return chain
+        if up in visited:
+            return None
+        visited.add(up)
+        cursor = up
+    return None
+
+
+def _descendant_sessions(store: StateStore, parent: str, candidates) -> dict[str, list[SessionState]]:
+    """D(`parent`) among `candidates`: session -> its link chain (the session first, up to but
+    excluding `parent`) for every candidate whose `parent_link` chain reaches `parent`,
+    directly or through other descendants, in sorted session order. Never contains `parent`.
+    Read-only."""
+    loaded: dict = {}
+    chains = {}
+    max_hops = Thresholds().max_recursion_depth
+    for session in sorted(set(candidates)):
+        chain = _link_chain(store, session, parent, loaded, max_hops) if session != parent else None
+        if chain is not None:
+            chains[session] = chain
+    return chains
+
+
+def _refresh_spend(state: SessionState, store: StateStore, rows: list[dict], path: str | None) -> float:
+    """`effort.refresh_spend` over the ledger rows of this session AND of its linked
+    descendants (effort.refresh_subtree_spend). The descendant scan runs only when a row
+    names a spawner session other than this one, so a session whose ledger rows carry no
+    foreign `spawner_session` returns exactly the base value.
+
+    The part of what is booked here for a descendant that the order window already holds
+    is marked flushed in this session too (`_credit_descendant_order_flush`)."""
+    foreign = {
+        spawner for row in rows
+        if isinstance(spawner := row.get("spawner_session"), str) and spawner != state.session_id
+    }
+    chains = _descendant_sessions(store, state.session_id, foreign)
+    delta, booked = effort.refresh_subtree_spend(state, rows, chains.keys(), path)
+    if booked:
+        key = _ledgered_order_key(state)
+        if key is not None:
+            _seed_linked_flush_baseline(state, store=store)
+            if state.order_effort_flushed is not None:
+                _credit_descendant_order_flush(state, key, chains, booked)
+    return delta
+
+
+def _flushed_spend_of_order(member: SessionState, key: str, order_keys: dict) -> float | None:
+    """What `member` has flushed (or been credited) into the window of order `key`; None
+    when it is not a flushing session of that order. `order_keys` caches
+    `_ledgered_order_key` per session (it reads the plan file)."""
+    if member.order_effort_flushed is None:
+        return None
+    if member.session_id not in order_keys:
+        order_keys[member.session_id] = _ledgered_order_key(member)
+    if order_keys[member.session_id] != key:
+        return None
+    return float(member.order_effort_flushed.get(effort.SCALE_SPEND) or 0.0)
+
+
+def _credit_descendant_order_flush(
+    state: SessionState, key: str, chains: dict[str, list[SessionState]],
+    booked: dict[str, tuple[float, float]],
+) -> None:
+    """Mark as flushed in `state` the part of each newly booked descendant spend that the
+    window of the shared order `key` already holds, so `state`'s flush does not add it again.
+
+    A session's `order_effort_flushed` covers its own ledger rows PLUS the rows its own
+    refresh booked for its descendants, so the share a descendant covers of its OWN rows
+    is its flushed total less those subtree rows (attributed first; floor 0) — assuming
+    every row it books by plan path was spawned by it. A linked session's first flush
+    moves what it spent so far (`_seed_linked_flush_baseline`), so its flushed total is
+    what the window holds, never merely a watermark. The window
+    also holds a grand-descendant's rows that an intermediate session of the same order
+    carried: the intermediate's flushed total, up to its subtree rows, split over its
+    descendants in proportion to what it booked for each. The window holds the larger
+    of the two once, whichever session put it there. What neither covers — a descendant
+    that never flushed, rows on a path its own refresh never books — is left to
+    `state`'s flush. `booked` carries `(earlier, gain)` per descendant; the credit is
+    what the window holds of that descendant beyond what `state` already credited for
+    it (`order_descendant_credited`), capped by the newly booked `gain` — the order in
+    which `state` booked the descendant's rows does not matter."""
+    order_keys: dict = {}
+    for session, (_, gain) in booked.items():
+        chain = chains[session]
+        covered = 0.0
+        flushed = _flushed_spend_of_order(chain[0], key, order_keys)
+        if flushed is not None:
+            covered = max(0.0, flushed - sum(chain[0].effort_subtree_seen.values()))
+        for member in chain[1:]:
+            flushed = _flushed_spend_of_order(member, key, order_keys)
+            booked_by_member = sum(member.effort_subtree_seen.values())
+            if flushed is None or booked_by_member <= 0:
+                continue
+            carried = member.effort_subtree_seen.get(session, 0.0)
+            covered = max(covered, carried * min(flushed, booked_by_member) / booked_by_member)
+        credited = float(state.order_descendant_credited.get(session) or 0.0)
+        credit = min(gain, max(0.0, covered - credited))
+        if not credit:
+            continue
+        state.order_descendant_credited[session] = credited + credit
+        state.order_effort_flushed[effort.SCALE_SPEND] = (
+            float(state.order_effort_flushed.get(effort.SCALE_SPEND) or 0.0) + credit
+        )
+
+
 def _utcnow() -> float:
     """The one clock read behind every `effort.record_fire(..., now=...)` call site —
     collapses five copy-pasted `dt.datetime.now(dt.timezone.utc).timestamp()` calls."""
     return dt.datetime.now(dt.timezone.utc).timestamp()
+
+
+def _state_dir(store: StateStore) -> Path | None:
+    root = getattr(store, "root", None)
+    return Path(root) if root is not None else None
+
+
+def _effort_now(store: StateStore, state: SessionState) -> float:
+    """The `now` for an effort read: runs of a dead dispatcher closed first (in memory; the
+    next save keeps it, and the prompt hook closes the same run the same way), then the
+    clock. A store with no state directory cannot attribute a child, so its runs stay as
+    recorded."""
+    state_dir = _state_dir(store)
+    if state_dir is not None:
+        child_runs.close_dead_runs(state.effort_child_runs, state_dir, state.session_id)
+    return _utcnow()
+
+
+def _spawn_would_link() -> bool:
+    """Whether the spawn `cmd_dispatch` is about to make can be linked at all — the kill
+    switch spawn-specialist consults. A dispatch that cannot link records no run: during the
+    blocking spawn the prompt hook would otherwise leave the gap to a run that is later
+    dropped."""
+    return agentctl_config.child_contour_linking_enabled()
+
+
+def _begin_child_run(store: StateStore, state: SessionState, stage) -> dict | None:
+    """Record the dispatch as an open child run and persist it BEFORE the blocking spawn,
+    so a hook or a second reader sees the interval while the child is still running. Runs a
+    dead dispatcher left open are closed first: the new run's child would otherwise be
+    attributed to the oldest of them. None when the spawn cannot be linked: nothing is
+    recorded."""
+    if not _spawn_would_link():
+        return None
+    state_dir = _state_dir(store)
+    if state_dir is not None:
+        child_runs.close_dead_runs(state.effort_child_runs, state_dir, state.session_id)
+    run = {
+        "child_session": None, "stage_index": stage.index, "started": _utcnow(),
+        "ended": None, "dispatcher_pid": os.getpid(),
+    }
+    state.effort_child_runs.append(run)
+    store.save(state)
+    return run
+
+
+def _carry_closed_runs(state: SessionState, fresh: SessionState, own: dict) -> None:
+    """Take over, for each run other than `own`, the close the hook or a reader saved into
+    the state file while the spawn ran. This process's copy predates it, and saving that
+    copy would reopen the run — letting a flush in between lower its watermark and the
+    re-close book the interval twice."""
+    saved = {(r.get("started"), r.get("dispatcher_pid"), r.get("stage_index")): r
+             for r in fresh.effort_child_runs if isinstance(r, dict)}
+    for run in state.effort_child_runs:
+        if run is own or run.get("ended") is not None:
+            continue
+        closed = saved.get((run.get("started"), run.get("dispatcher_pid"), run.get("stage_index")))
+        if closed is not None and closed.get("ended") is not None:
+            run["ended"] = closed["ended"]
+            run["child_session"] = closed.get("child_session")
+
+
+def _carry_hook_stamps(store: StateStore, state: SessionState) -> SessionState | None:
+    """Take over the keys the prompt hook owns (active minutes, last prompt, prompt count)
+    from the state file, which a prompt may have stamped while the blocking spawn ran — the
+    spawn's `state` predates them and saving it as is would overwrite them. Returns the
+    state read, None when it cannot be (nothing is carried; never an error)."""
+    try:
+        fresh = store.load(state.session_id)
+    except Exception:
+        return None
+    if effort.ACTUAL_MINUTES_KEY in fresh.effort_actuals:
+        state.effort_actuals[effort.ACTUAL_MINUTES_KEY] = fresh.effort_actuals[effort.ACTUAL_MINUTES_KEY]
+    state.last_user_prompt_ts = fresh.last_user_prompt_ts
+    state.user_prompt_count = fresh.user_prompt_count
+    return fresh
+
+
+def _end_child_run(store: StateStore, state: SessionState, run: dict,
+                   reported_session: str | None = None) -> None:
+    """Close `run` after the spawn returned or raised, and persist. The prompt stamps the
+    hook wrote into the state file during the run (active minutes, last prompt, prompt
+    count) are carried over first, because this process's `state` predates them; when that
+    state file cannot be read they are skipped, never allowed to fail the close — this runs
+    from a `finally`, and must neither mask the spawn's own exception nor lose the marker of
+    a child that finished. The run's child is the session the spawn reported if it is a
+    child of this stage, else the earliest unclaimed one found in the state directory. A
+    spawn that made no linked child was unlinked: its run is dropped."""
+    fresh = _carry_hook_stamps(store, state)
+    if fresh is not None:
+        _carry_closed_runs(state, fresh, run)
+    state_dir = _state_dir(store)
+    if state_dir is not None and not run.get("child_session"):
+        taken = {r.get("child_session") for r in state.effort_child_runs if r is not run}
+        if (reported_session and reported_session not in taken and child_runs.is_child_of(
+                state_dir, state.session_id, reported_session, run.get("stage_index"))):
+            run["child_session"] = reported_session
+        else:
+            run["child_session"] = child_runs.discover_child(
+                state_dir, state.session_id, run, state.effort_child_runs)
+    if run.get("child_session"):
+        run["ended"] = max(run["started"], _utcnow())
+    else:
+        state.effort_child_runs[:] = [r for r in state.effort_child_runs if r is not run]
+        # The hook left the part of each prompt gap inside this run to it (and noted it on
+        # the run in the file); the run is gone, so book it as the hook would have.
+        lost = child_runs.gap_loss_min(fresh.effort_child_runs if fresh is not None else (), run)
+        if lost:
+            actuals = state.effort_actuals
+            actuals[effort.ACTUAL_MINUTES_KEY] = float(
+                actuals.get(effort.ACTUAL_MINUTES_KEY) or 0.0) + lost
+    store.save(state)
 
 
 def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -8871,12 +9320,13 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     # Effort-divergence spend refresh (call site 1) + fire check. Accounting runs
     # unconditionally — only ACTING on a fire is gated by gates.effort_active — see
     # effort.py's module docstring and gates.effort_active's docstring.
-    effort.refresh_spend(state, _rows, state.plan_path)
-    _flush_order_effort(state)
-    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state))
+    _refresh_spend(state, store, _rows, state.plan_path)
+    _flush_order_effort(state, store=store)
+    _now = _effort_now(store, state)
+    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state, _now, store=store), now=_now)
     if effort.armed(state):
-        _cross = _effort_cross_totals(state)
-        _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross)
+        _cross = _effort_cross_totals(state, _now, store=store)
+        _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross, now=_now)
         _ro_comparand = effort.comparands(state, Thresholds())
         for _ro_scale in effort.RECORD_ONLY_SCALES:
             if _ro_comparand[_ro_scale] > 0 and _ro_delta[_ro_scale] >= _ro_comparand[_ro_scale]:
@@ -8896,7 +9346,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         state.log("record_result", stage=stage.index, status="passed")
         if div is not None and gates.effort_active(state):
             now = _utcnow()
-            fire = _record_effort_fire(state, div, now=now)
+            fire = _record_effort_fire(state, div, now=now, store=store)
             return _diagnose_effort_divergence(state, store, div, fire)
         store.save(state)
         if state.all_stages_settled():
@@ -8939,7 +9389,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         # instead of re-transitioning or opening a second Difficulty, but still honor
         # divergence()'s CALLER OBLIGATION (record the fire so it doesn't re-trip).
         now = _utcnow()
-        data["effort_divergence"] = _record_effort_fire(state, div, now=now)
+        data["effort_divergence"] = _record_effort_fire(state, div, now=now, store=store)
     store.save(state)
     if opened is None:
         return _difficulty_cap_directive(state, f"stage {stage.index} failed", data)
@@ -8988,6 +9438,13 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
         return Directive(False, state.node, "renorm",
                          "not ready for resolution: a нормативное difficulty's norm edit is "
                          "still owed", data={"blockers": renorm_block})
+    orphan_block = gates.escalation_orphan_blockers(
+        gates.escalation_orphans(state, _linked_children(store, state.session_id)))
+    if orphan_block:
+        _log_gate(state, "escalation_orphans", orphan_block, passed=False)
+        return Directive(False, state.node, "adopt_escalation",
+                         "not ready for resolution: a linked child's escalation of a stage "
+                         "norm is not adopted", data={"blockers": orphan_block})
     state.pending_renorms = gates.open_renorms(state)
     blockers = gates.blockers(state, "resolution")
     _log_gate(state, "resolution", blockers, passed=not blockers)
@@ -9005,12 +9462,13 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # separate cost-log read from the rollup below: refresh_spend needs every row by
     # plan_path (including engine-mandated review spawns no stage attributes), the
     # rollup needs only what record-result already stamped onto each Outcome.
-    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
-    _flush_order_effort(state)
-    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state))
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
+    _flush_order_effort(state, store=store)
+    _now = _effort_now(store, state)
+    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state, _now, store=store), now=_now)
     if effort.armed(state):
-        _cross = _effort_cross_totals(state)
-        _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross)
+        _cross = _effort_cross_totals(state, _now, store=store)
+        _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross, now=_now)
         _ro_comparand = effort.comparands(state, Thresholds())
         for _ro_scale in effort.RECORD_ONLY_SCALES:
             if _ro_comparand[_ro_scale] > 0 and _ro_delta[_ro_scale] >= _ro_comparand[_ro_scale]:
@@ -9096,7 +9554,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             # record_result's failed branch (still honoring divergence()'s CALLER
             # OBLIGATION: record the fire so it doesn't re-trip).
             now = _utcnow()
-            data["effort_divergence"] = _record_effort_fire(state, div, now=now)
+            data["effort_divergence"] = _record_effort_fire(state, div, now=now, store=store)
         store.save(state)
         if opened is None:
             return _difficulty_cap_directive(
@@ -9113,7 +9571,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # record-result to fire from).
     if div is not None and gates.effort_active(state):
         now = _utcnow()
-        fire = _record_effort_fire(state, div, now=now)
+        fire = _record_effort_fire(state, div, now=now, store=store)
         return _diagnose_effort_divergence(state, store, div, fire)
 
     # Compute whole-plan cost rollup from already-attributed stage outcomes.
@@ -9399,7 +9857,8 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # weakness): carries both vectors into the quality ledger so the thresholds — and
     # the estimate() formula itself — can be recalibrated against what they actually
     # caught, not just whether this one session happened to fire.
-    _effort_ratios = [v for v in effort.ratios(state).values() if v is not None]
+    _now = _effort_now(store, state)
+    _effort_ratios = [v for v in effort.ratios(state, now=_now).values() if v is not None]
     quality_row = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "task_id": state.task_id,
@@ -9434,7 +9893,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         "route": state.route,
         "budget_tiers": budget_tiers,
         "effort_estimate": state.effort_estimate,
-        "effort_actual": effort.deltas(state),
+        "effort_actual": effort.deltas(state, now=_now),
         "effort_ratio_max": max(_effort_ratios) if _effort_ratios else None,
         "effort_fires": state.effort_fires,
         "effort_interactions": state.user_prompt_count,
@@ -9852,6 +10311,7 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
             t["baseline"] = first_baselines[t["target"]]
     state.difficulty.norm_targets = (
         [t for t in snapshots if t["target"] not in held] + inherited)
+    state.difficulty.escalated_to = _escalation_link(state.difficulty, state.parent_link)
     state.difficulty.critique = Critique(
         functional_ground=args.functional_ground,
         replanning_task=args.replanning_task,
@@ -10139,6 +10599,9 @@ def cmd_difficulty_close(args, *, store: StateStore, runner: Runner | None = Non
         else:
             parent.norm_targets.append(entry)
         moved.append(entry.get("target", ""))
+    # A parent-kind target moved onto `parent` is the child's escalation, now carried by
+    # the record the child session will return REPLAN from: it needs the typed link too.
+    parent.escalated_to = _escalation_link(parent, state.parent_link)
     parent.children.append(closed)
     state.difficulty = parent
     state.log("difficulty_close", uid=closed.uid, parent_uid=parent.uid, level=closed.level,
@@ -10497,8 +10960,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
             # mirrors cmd_block's own bypass-transition idiom (and fire-acknowledge's
             # "abandon" decision) — parks reversibly via unblock, never RESOLVED, and
             # never touches args.plan.
-            state.blocked_from = state.node
-            state.node = Node.BLOCKED.value
+            _park_node(state)
             state.log("block", reason=f"renegotiation abandoned: {renegotiation_note}")
             store.save(state)
             return Directive(
@@ -10923,8 +11385,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # update. A cost row a just-spawned plan review wrote against the NEW path (args.plan)
     # is not lost by refreshing against the old path here — it is simply picked up by
     # the NEXT refresh against the new path, once a branch below rewrites plan_path.
-    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
-    _flush_order_effort(state)
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
+    _flush_order_effort(state, store=store)
 
     if kind == "no_change":
         # A legacy session with no approved-plan snapshot (plan_snapshot_path=None)
@@ -10964,6 +11426,11 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 if s.outcome.status == StageStatus.FAILED.value:
                     s.outcome.status = StageStatus.PENDING.value
             _archive_difficulty(state, closing_waiver)
+            if not state.approval.passed:
+                return _replan_to_plan_ready(
+                    state, store, new, echo_advice, kind="no_change", exited_diagnosing=True,
+                    plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
+                    plan_sha256=_new_plan_sha256, **replan_cause)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
             state.log("replan", kind="no_change", exited_diagnosing=True, plan=args.plan,
                       prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
@@ -11008,6 +11475,11 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
         state.final_check = new.meta.final_check
         if diagnosing:
             _archive_difficulty(state, closing_waiver)
+            if not state.approval.passed:
+                return _replan_to_plan_ready(
+                    state, store, new, echo_advice, kind="refinement", exited_diagnosing=True,
+                    plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
+                    plan_sha256=_new_plan_sha256, **replan_cause)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
         state.log("replan", kind="refinement", exited_diagnosing=diagnosing, plan=args.plan,
                   prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
@@ -11087,11 +11559,20 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     state.overall_done_criterion = new.meta.done_criterion or state.overall_done_criterion
     state.current_stage = None
     _archive_difficulty(state, closing_waiver)
+    return _replan_to_plan_ready(
+        state, store, new, echo_advice, kind="substantive", plan=args.plan,
+        prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256, **replan_cause)
+
+
+def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advice: list[str],
+                          **log_fields) -> Directive:
+    """Re-arm the plan-approval gate and park the session at PLAN_READY after a replan
+    that needs the plan approved again, logging `log_fields` as the `replan` event. The
+    approved plan picks the next stage afresh, so no stage stays current."""
+    state.current_stage = None
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
-    state.log("replan", kind="substantive", plan=args.plan,
-              prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
-              **replan_cause)
+    state.log("replan", **log_fields)
     _count_replan(state)
     effort.rederive(state)  # re-derive AFTER logging so this replan is counted
     store.save(state)
@@ -11106,7 +11587,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
         ), echo_advice)
     return _with_advisories(Directive(
         True, state.node, "await_user_approval",
-        "substantive replan; HARD GATE — re-approval required",
+        f"{log_fields['kind']} replan; HARD GATE — re-approval required",
         marker="PLAN-READY", data=directive_data,
     ), echo_advice)
 
@@ -11175,8 +11656,7 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
     _clear_since_user_decision(state, args.by)
     _clear_open_fires_if_customer(state, args.by)
     if decision == "abandon":
-        state.blocked_from = state.node
-        state.node = Node.BLOCKED.value
+        _park_node(state)
         state.log("block", reason="user-abandoned-after-fire")
         store.save(state)
         return Directive(True, state.node, "unblock",
@@ -11195,8 +11675,7 @@ def cmd_block(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     state = _require(store, args.session)
     if state.node in (Node.RESOLVED.value, Node.BLOCKED.value):
         return Directive(False, state.node, "noop", f"cannot block from node={state.node}")
-    state.blocked_from = state.node
-    state.node = Node.BLOCKED.value
+    _park_node(state)
     state.log("block", reason=getattr(args, "reason", None))
     store.save(state)
     return Directive(True, state.node, "unblock", "blocked; resolve the blocker then unblock", marker="ESCALATE")
@@ -11274,7 +11753,7 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
             "effort trigger not armed (no approved-plan baseline); no scale can diverge",
             data={"armed": False, "active": gates.effort_active(state), "scales": []},
         )
-    effort.refresh_spend(state, _cost_rows(args), state.plan_path)
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
     thr = Thresholds()
     multiple = thr.effort_divergence_multiple()
     # The SAME cross-session totals the fire sites pass, read once and used for both
@@ -11282,11 +11761,12 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
     # decided on the cross-session one is how a watch goes silent on exactly the case it
     # exists for: a resolved re-entry hands the fresh SessionState a replan count of 0
     # while the accumulator still holds the prior laps. See effort.effective_deltas.
-    cross_totals = _effort_cross_totals(state)
-    local = effort.deltas(state)
-    delta = effort.effective_deltas(state, cross_session_totals=cross_totals)
+    now = _effort_now(store, state)
+    cross_totals = _effort_cross_totals(state, now, store=store)
+    local = effort.deltas(state, now=now)
+    delta = effort.effective_deltas(state, cross_session_totals=cross_totals, now=now)
     comparand = effort.comparands(state, thr)
-    ratio = effort.effective_ratios(state, thr, cross_session_totals=cross_totals)
+    ratio = effort.effective_ratios(state, thr, cross_session_totals=cross_totals, now=now)
     scales = []
     for scale in effort.SCALE_ORDER:
         label, unit = effort.describe(scale)
@@ -11311,7 +11791,7 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
             "cross_session": delta[scale] > local[scale],
             "record_only": record_only,
         })
-    div = effort.divergence(state, thr, cross_session_totals=cross_totals)
+    div = effort.divergence(state, thr, cross_session_totals=cross_totals, now=now)
     over = [s["scale"] for s in scales if s["at_or_past_threshold"]]
     # Separate from `over_threshold`: the true crossing state of a record-only scale,
     # reported for visibility but never folded into `over`/`would_fire` — those two
@@ -11347,10 +11827,14 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     state = store.load(args.session) if getattr(args, "session", None) else None
     if state is None:
         return Directive(True, "(none)", "start", "no session state; run start")
+    parent = (state.parent_link or {}).get("parent_session")
+    escalations = _escalation_rows(state, parent, _load_or_none(store, parent)) if parent else []
     return Directive(
         True, state.node, "inspect",
-        f"{state.task_id}: {state.weight_class}/{state.route}",
+        f"{state.task_id}: {state.weight_class}/{state.route}"
+        + "".join(f"; escalation {e['child_uid']}={e['status']}" for e in escalations),
         data={
+            "escalations": escalations,
             "weight_class": state.weight_class,
             "route": state.route,
             "current_stage": state.current_stage,
@@ -11373,28 +11857,95 @@ def _parent_link_summary(link: dict | None) -> dict | None:
     return {key: link.get(key) for key in ("parent_session", "stage_index", "depth", "norm_digest")}
 
 
+def _load_or_none(store: StateStore, session: str) -> SessionState | None:
+    try:
+        return store.load(session)
+    except Exception:
+        return None
+
+
+def _linked_children(store: StateStore, parent: str) -> list[SessionState]:
+    """The loadable sessions whose `parent_link` names `parent`. Read-only: a state file
+    that cannot be loaded is skipped, never repaired or rewritten."""
+    list_ids = getattr(store, "session_ids", None)
+    loaded: dict = {}
+    return [loaded[session_id] for session_id in (list_ids() if list_ids is not None else [])
+            if _parent_session_of(store, session_id, loaded) == parent]
+
+
+def _escalation_rows(owner: SessionState, parent: str, parent_state: SessionState | None) -> list[dict]:
+    """One row per difficulty of `owner` (open, suspended or closed) escalated to the norm
+    of `parent`: its uid, the stage, and `gates.escalation_status` read from the parent's
+    own state."""
+    rows: list[dict] = []
+    for rec in gates.escalation_records(owner):
+        target = gates.rec_field(rec, "escalated_to") or {}
+        if target.get("parent_session") != parent:
+            continue
+        rows.append({
+            "child_uid": gates.rec_field(rec, "uid"), "stage_index": target.get("stage_index"),
+            "status": gates.escalation_status(rec, parent_state, owner.session_id),
+        })
+    return rows
+
+
+def cmd_adopt_escalation(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Open this session's counterpart of a linked child's parent-norm escalation that its
+    dispatch never saw (the child's REPLAN reached no dispatch, or reached one that could
+    not verify it). The decision rests on the child's state record, read and never written,
+    by the same checks as the dispatch route (`_verify_child_escalation`); a record that
+    does not verify is refused with the reason. An escalation this session already holds a
+    difficulty for is not opened a second time."""
+    state = _require(store, args.session)
+    if state.node not in (Node.EXECUTING.value, Node.VERIFYING.value):
+        return Directive(False, state.node, "noop",
+                         f"adopt-escalation runs from EXECUTING or VERIFYING; node is {state.node}")
+    child_id = args.child
+    child = _load_or_none(store, child_id) if child_id != state.session_id else None
+    if child is None or not child.parent_link:
+        return Directive(False, state.node, "noop",
+                         f"adopt-escalation refused: {child_id} is not a readable session "
+                         "linked to a parent stage")
+    stage_index = child.parent_link.get("stage_index")
+    try:
+        stage = state.stage(stage_index)
+    except KeyError:
+        return Directive(False, state.node, "noop",
+                         f"adopt-escalation refused: child {child_id} is linked to stage "
+                         f"{stage_index!r}, which this session's plan does not hold")
+    if state.node == Node.EXECUTING.value and stage.index != state.current_stage:
+        return Directive(False, state.node, "noop",
+                         f"adopt-escalation refused: child {child_id} is linked to stage "
+                         f"{stage.index}, but the active stage is {state.current_stage}; failing "
+                         "the earlier stage from EXECUTING would strand the active one -- "
+                         "adopt it from VERIFYING")
+    mismatch, reason = _verify_child_escalation(state, stage, child_id, child)
+    if mismatch is None:
+        return Directive(False, state.node, "noop", f"adopt-escalation refused: {reason}")
+    standing = gates.escalation_counterpart(state, mismatch["child_uid"], child_id)
+    if standing is not None:
+        return Directive(True, state.node, "noop",
+                         f"child {child_id}'s difficulty {mismatch['child_uid']} is already "
+                         f"adopted by a {standing} difficulty of this session")
+    return _open_norm_mismatch(state, store, stage, mismatch, {}, via="adopt-escalation")
+
+
 def cmd_children(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """The sessions the engine linked as children of `--session`: every stored session
     whose `parent_link.parent_session` names it. Read-only -- a state file that cannot be
     loaded is skipped, never repaired or rewritten."""
     parent = args.session
-    list_ids = getattr(store, "session_ids", None)
+    parent_state = _load_or_none(store, parent)
     children: list[dict] = []
-    for session_id in (list_ids() if list_ids is not None else []):
-        try:
-            child = store.load(session_id)
-        except Exception:
-            continue
-        link = child.parent_link if child is not None else None
-        if link is None or link.get("parent_session") != parent:
-            continue
+    for child in _linked_children(store, parent):
         children.append({
             "session": child.session_id,
-            "stage_index": link.get("stage_index"),
+            "stage_index": child.parent_link.get("stage_index"),
             "node": child.node,
             "recursion_depth": child.recursion_depth,
             "difficulty_level": child.difficulty.level if child.difficulty is not None else None,
             "resolved": child.node == Node.RESOLVED.value,
+            "escalations": _escalation_rows(child, parent, parent_state),
         })
     data = {"parent_session": parent, "children": children}
     if getattr(args, "json", False):
@@ -11404,6 +11955,7 @@ def cmd_children(args, *, store: StateStore, runner: Runner | None = None) -> Di
             f"{c['session']} stage={c['stage_index']} node={c['node']} depth={c['recursion_depth']} "
             f"difficulty={c['difficulty_level'] if c['difficulty_level'] is not None else 'none'}"
             f"{' resolved' if c['resolved'] else ''}"
+            + "".join(f" escalation {e['child_uid']}={e['status']}" for e in c["escalations"])
             for c in children
         ]
         text = "\n".join(lines) if lines else f"no children linked to {parent}"
@@ -11445,6 +11997,11 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     # re-derive as always".
     parent_pair = _plan_venue_pair(state.plan_path)
 
+    # The child's plan may name another order: book what the parent has spent so far to the
+    # parent's order window before the live plan changes, so only the child's own spend and
+    # minutes reach the child's.
+    _flush_order_effort(state, store=store)
+
     frame = PlanFrame(
         plan_path=state.plan_path,
         node=state.node,
@@ -11477,8 +12034,18 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
         parent_venue_captured=parent_pair is not None,
         plugins=dict(state.plugins),
         plugins_archive=dict(state.plugins_archive),
+        plan_snapshot_path=state.plan_snapshot_path,
+        plan_snapshot_hash=state.plan_snapshot_hash,
+        approved_grants_sha256=state.approved_grants_sha256,
+        approved_grant_entries=copy.deepcopy(state.approved_grant_entries),
+        accepted_plan_digest=state.accepted_plan_digest,
+        plan_binding_captured=True,
+        runtime_grants=copy.deepcopy(state.runtime_grants),
     )
     state.plan_stack.append(frame)
+    # The approval-binding fields copied into the frame stay live on purpose: the order key
+    # (`_replan_baseline_path`) and the pre-approval gates read the parent's snapshot until the
+    # child's own approve rebinds them.
     # Reset to a fresh child cycle — the child re-classifies and plans normally.
     state.node = transition(Node.EXECUTING.value, "push_subplan")  # EXECUTING -> CLASSIFIED
     state.task_id = child_task
@@ -11528,6 +12095,9 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     # parent-left archive-suppression entry.
     state.plugins = {}
     state.plugins_archive = {}
+    # Runtime grants are keyed by the live plan's stage index: the child starts with none and
+    # pop puts the parent's back.
+    state.runtime_grants = {}
     state.log("push_subplan", child_plan=child_plan, originating_stage=originating, depth=len(state.plan_stack))
     store.save(state)
     return Directive(
@@ -11551,6 +12121,9 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
             f"pop-subplan requires node=RESOLVED (child must fully resolve first); current node={state.node}",
         )
     child_task_id = state.task_id
+    # The mirror of push's flush: the child's plan may name another order, so what it spent
+    # since its last flush is booked to its own window before the parent's plan is restored.
+    _flush_order_effort(state, store=store)
     new_node = transition(state.node, "pop_subplan")  # RESOLVED -> EXECUTING
     frame = state.plan_stack.pop()
     # Restore all parent plan-level fields from the frame.
@@ -11590,6 +12163,16 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     # which no longer exists once the parent resumes.
     state.plugins = frame.plugins
     state.plugins_archive = frame.plugins_archive
+    if frame.plan_binding_captured:
+        # Approval-binding custody (schema 56): the child's own approval rebound these to the
+        # child's plan; the parent resumes with the binding it was approved under.
+        state.plan_snapshot_path = frame.plan_snapshot_path
+        state.plan_snapshot_hash = frame.plan_snapshot_hash
+        state.approved_grants_sha256 = frame.approved_grants_sha256
+        state.approved_grant_entries = frame.approved_grant_entries
+        state.accepted_plan_digest = frame.accepted_plan_digest
+        if frame.runtime_grants is not None:
+            state.runtime_grants = frame.runtime_grants
     state.node = new_node
     # The parent PLAN FILE is authoritative for the venue, so re-derive it here
     # rather than trust the frame: a frame captured after the value was already
@@ -11917,6 +12500,7 @@ COMMANDS = {
     "plan-review-compose": cmd_plan_review_compose,
     "plan-review-pair-history": cmd_plan_review_pair_history,
     "risk-accept": cmd_risk_accept,
+    "accept-protected-grant": cmd_accept_protected_grant,
     "stage-review": cmd_stage_review,
     "code-review": cmd_code_review,
     "accept": cmd_accept,
@@ -11948,6 +12532,7 @@ COMMANDS = {
     "unblock": cmd_unblock,
     "status": cmd_status,
     "children": cmd_children,
+    "adopt-escalation": cmd_adopt_escalation,
     "drive": cmd_drive,
     "close": cmd_close,
     "push-subplan": cmd_push_subplan,
@@ -11997,15 +12582,15 @@ _SESSION_COMMANDS = (
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
     "plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
-    "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan",
-    "confirm-delivery", "plan-review", "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
-    "risk-accept", "stage-review", "code-review", "accept", "approve", "partition", "partition-units",
-    "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
+    "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
+    "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
+    "risk-accept", "accept-protected-grant", "stage-review", "code-review", "accept", "approve",
+    "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
     "record-result", "declare",
     "investigate", "critique", "normalize", "difficulty-open", "difficulty-close",
     "verify-final", "resolve", "reject",
     "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status", "children",
-    "drive", "close", "push-subplan", "pop-subplan", "task-reset",
+    "adopt-escalation", "drive", "close", "push-subplan", "pop-subplan", "task-reset",
     "mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop", "mandate-status",
     "workspace-register",
 )
@@ -12015,7 +12600,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("goal", ("start", "reset")),
     ("done_criterion", ("start", "reset")),
     ("note", ("plugin-record", "confirm-delivery", "plan-review", "stage-review", "code-review",
-              "accept", "question-enumerate-escape", "fire-acknowledge")),
+              "accept", "question-enumerate-escape", "fire-acknowledge", "accept-protected-grant")),
     ("statement", ("ledger-add", "ledger-candidate")),
     ("source", ("ledger-add", "question-dispose")),
     ("premises", ("ledger-add",)),
@@ -12062,6 +12647,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("state_root", (_ROOT,), "directory path the state store is rooted at"),
     ("session", _SESSION_COMMANDS, "session id — the slug state is keyed by"),
     ("task", ("start", "reset", "push-subplan", "task-reset"), "task slug, not a description"),
+    ("child", ("adopt-escalation",), "session id of the linked child"),
     ("criterion_type", ("start", "reset"), "one of two fixed verification kinds"),
     ("plugin", ("plugin-activate", "plugin-deactivate", "plugin-record"), "plugin registry name"),
     ("phase", ("plugin-record",), "plugin phase name from a fixed vocabulary"),
@@ -12069,8 +12655,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("tracker_key", ("plugin-activate", "classify", "drive"), "tracker issue key (ABC-123)"),
     ("id", ("ledger-add", "ledger-candidate", "ledger-dispose", "question-raise",
             "question-research", "question-dispose", "question-rebind", "question-retire",
-            "question-candidate-dispose", "order-raise", "order-dispose"),
-     "claim / question / order-element id"),
+            "question-candidate-dispose", "order-raise", "order-dispose", "accept-protected-grant"),
+     "claim / question / order-element / protected-action id"),
     ("claim", ("ledger-dispose",), "id of the grounding claim, not its text"),
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
     ("target", ("question-raise", "plan-review", "plan-review-walk", "plan-review-compose",
@@ -12613,6 +13199,12 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                          "question-dispose --disposition assumed's --risk")
     sp.add_argument("--author", default="",
                     help="who is accepting the risk — an identity token, not narrative")
+    sp = add("accept-protected-grant"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True,
+                    help="the protected-action id the plan's grants cover (shown in the grants "
+                         "block of present-plan, e.g. push-trunk)")
+    sp.add_argument("--note", required=True,
+                    help="why the user accepts that the grants cover this action")
     sp = add("stage-review"); sp.add_argument("--session", required=True)
     sp.add_argument("--verdict", choices=list(gates.STAGE_REVIEW_VERDICTS), required=True,
                     help="pass = clears the acceptance gate; revise = blocks; override = "
@@ -12906,6 +13498,9 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp = add("unblock"); sp.add_argument("--session", required=True)
     sp = add("children"); sp.add_argument("--session", required=True)
     sp.add_argument("--json", action="store_true")
+    sp = add("adopt-escalation"); sp.add_argument("--session", required=True)
+    sp.add_argument("--child", required=True,
+                    help="session id of the linked child whose parent-norm escalation to adopt")
     sp = add("status"); sp.add_argument("--session", required=False)
 
     # drive: opening-spine orchestrator — union of classify signals + --plan +
@@ -13011,10 +13606,11 @@ def _inject_default_session(argv: list[str], harness: str | None) -> list[str]:
     """Return a copy of ``argv`` with ``--session <harness>`` appended when the
     harness session id is known and the caller passed no --session of its own.
 
-    hook-state-gate.py authorizes production edits by the HARNESS conversation
-    session_id (payload["session_id"] == $CLAUDE_CODE_SESSION_ID). A self-chosen
-    --session silently drives a different engine state file than the gate reads,
-    so an omitted --session must default to the harness id — not stay unset and
+    hook-state-gate.py receives only the HARNESS conversation session_id
+    (payload["session_id"] == $CLAUDE_CODE_SESSION_ID) and reads the state of the
+    engine session bound to it (lib/engine_session_binding.py, written by a verb
+    that saves state under an explicit --session), else of the harness id itself.
+    An omitted --session must default to the harness id — not stay unset and
     fail the 30 required=True subcommands. Appending places the flag inside the
     subparser's argument region (--session is a subcommand option); it is a
     no-op when --session (either '--session X' or '--session=X') is already
@@ -13034,14 +13630,12 @@ def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
     )
     args = build_parser(allow_abbrev).parse_args(raw)
     resolve_arg_text(args)
-    if harness and getattr(args, "session", None) and args.session != harness:
-        print(
-            f"agentctl: warning: --session {args.session!r} differs from "
-            f"CLAUDE_CODE_SESSION_ID {harness!r}; the production-edit gate "
-            f"authorizes by the harness id, so gated edits may be denied.",
-            file=sys.stderr,
-        )
-    store = FileStateStore(Path(args.state_root) if args.state_root else None)
+    session = getattr(args, "session", None)
+    binds = bool(harness and session and not args.state_root)
+    store = (
+        _BindingStore(harness, session) if binds
+        else FileStateStore(Path(args.state_root) if args.state_root else None)
+    )
     fn = COMMANDS[args.command]
     try:
         directive = fn(args, store=store)
@@ -13049,8 +13643,48 @@ def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
         directive = Directive(False, "(error)", "error", str(exc))
     else:
         _fire_plugins(args, store, directive)
+    if harness and session and session != harness and not _is_followed_by_gate(harness, session):
+        print(
+            f"agentctl: warning: --session {session!r} differs from "
+            f"CLAUDE_CODE_SESSION_ID {harness!r} and is not the session this harness "
+            f"session last drove with a state-changing command, so the production-edit "
+            f"gate does not follow it: an Edit from the harness session is decided by "
+            f"another session until a state-changing command drives {session!r}.",
+            file=sys.stderr,
+        )
     print(json.dumps(directive.to_dict(), ensure_ascii=False, indent=2))
     return 0 if directive.ok else 1
+
+
+class _BindingStore(FileStateStore):
+    """The default store of a verb run by a harness session: saving the state of the
+    session the verb was run on binds that session to the harness id, so the
+    production-edit gate (which sees only the harness id) follows the session the
+    coordinator drives. Query verbs save nothing and so never bind."""
+
+    def __init__(self, harness: str, session: str):
+        super().__init__(None)
+        self._harness = harness
+        self._session = _safe_session_id(session)
+
+    def save(self, state) -> None:
+        super().save(state)
+        if _safe_session_id(state.session_id) != self._session:
+            return
+        try:
+            engine_session_binding.record_drive(
+                self._harness, state.session_id, dt.datetime.now(dt.timezone.utc))
+        except Exception:
+            pass  # an unwritten binding leaves the gate on the previously most recent one (the harness id if none)
+
+
+def _is_followed_by_gate(harness: str, session: str) -> bool:
+    # The binding store always lives under the agent home; with --state-root the verb's
+    # state is not the gate's state either, so that case reports "not followed" as base did.
+    try:
+        return engine_session_binding.resolve(harness) == _safe_session_id(session)
+    except Exception:
+        return False
 
 
 def _fire_plugins(args, store: StateStore, directive: Directive) -> None:

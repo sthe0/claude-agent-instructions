@@ -664,9 +664,14 @@ printf '%s\\0' "$@" > "$STUB_LOG.argv"
 printf 'HOME=%s\\nSESSION=%s\\nAGENTCTL=%s\\n' "$HOME" "${CLAUDE_CODE_SESSION_ID:-}" "${AGENTCTL_SAMPLE_VAR:-}" > "$STUB_LOG.env"
 cat > /dev/null
 case "$STUB_MODE" in
-  echo) grep -h '^SANDBOX-MARKER: ' "$HOME/.claude-agent/config.md" "$PWD/CLAUDE.md" 2>/dev/null | sed 's/^SANDBOX-MARKER: //'
+  echo) if [[ " $* " == *" stream-json "* ]]; then
+          printf '%s\\n' '{"type":"user","message":{"content":[{"type":"tool_result","content":"agentctl session is in node=CLASSIFIED"}]}}'
+          exit 0
+        fi
+        grep -h '^SANDBOX-MARKER: ' "$HOME/.claude-agent/config.md" "$PWD/CLAUDE.md" 2>/dev/null | sed 's/^SANDBOX-MARKER: //'
         printf 'TOKEN=%s\\n' "$CLAUDE_CODE_OAUTH_TOKEN" > "$STUB_LOG.token" ;;
   miss) echo "I cannot see any marker" ;;
+  applied) printf '%s\\n' '{"type":"user","message":{"content":[{"type":"tool_result","content":"The file has been updated successfully."}]}}' ;;
   sleep) sleep 30 ;;
   exit7) exit 7 ;;
 esac
@@ -812,6 +817,7 @@ def test_verify_passes_every_check_on_the_unmodified_candidate(verify_root, veri
         "static:verify-instructions-sync": "PASS",
         "static:lint-hooks-executable": "PASS",
         "live:core-marker": "PASS",
+        "live:hook-gate-deny": "PASS",
         "canon:unchanged": "PASS",
     }
 
@@ -830,6 +836,19 @@ def test_verify_maps_timeout_and_launch_exit_to_unavailable(verify_root, verify_
         res, checks = _verify(verify_root, env, *args, mode=mode)
         assert checks["live:core-marker"] == ("UNAVAILABLE", reason)
         assert res.returncode in (1, 3)
+
+
+def test_verify_maps_the_live_hook_check_exits(verify_root, verify_world):
+    _, env = verify_world
+    _, applied = _verify(verify_root, env, mode="applied")
+    status, detail = applied["live:hook-gate-deny"]
+    assert status == "FAIL" and "no-gate-deny" in detail and "updated successfully" in detail
+
+    _, launch_exit = _verify(verify_root, env, mode="exit7")
+    assert launch_exit["live:hook-gate-deny"] == ("UNAVAILABLE", "launch-exit=7")
+
+    _, bad_timeout = _verify(verify_root, env, "--timeout", "abc", mode="echo")
+    assert bad_timeout["live:hook-gate-deny"] == ("UNAVAILABLE", "live-script-exit=2")
 
 
 def test_verify_no_live_skips_the_launch_and_writes_no_marker(verify_world):

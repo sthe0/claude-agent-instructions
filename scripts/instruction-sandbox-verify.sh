@@ -11,6 +11,8 @@
 #   project:structure         only when the sandbox composed a project
 #   live:core-marker          a tool-less launch must echo a marker that is reachable
 #                             only through CLAUDE.md's @~/.claude-agent/config.md import
+#   live:hook-gate-deny       a launch with the Edit tool must be refused by the state
+#                             gate's PreToolUse hook, leaving the probe file unchanged
 #   live:project-marker       only with a project; cwd inside the composed project
 #   canon:unchanged           canon snapshot before vs after the whole run
 # and a final `RESULT: PASS|FAIL|UNAVAILABLE`. A live launch that did not complete
@@ -141,10 +143,24 @@ live_check() {
   esac
 }
 
+live_hook_check() {
+  local out rc=0 reason
+  out="$(python3 "$here/instruction-sandbox-live.py" --root "$root" --cwd "$root" \
+           --probe hook-gate-deny --stream-out "$root/hook-probe/stream.jsonl" ${timeout_args[@]+"${timeout_args[@]}"} 2>/dev/null)" || rc=$?
+  case "$rc" in
+    0) report PASS live:hook-gate-deny ;;
+    1) report FAIL live:hook-gate-deny "$(tr '\n' ' ' <<< "${out:0:450}")" ;;
+    3) reason="$(sed -n 's/^UNAVAILABLE //p' <<< "$out" | head -n 1)"
+       report UNAVAILABLE live:hook-gate-deny "${reason:-unknown}" ;;
+    *) report UNAVAILABLE live:hook-gate-deny "live-script-exit=$rc" ;;
+  esac
+}
+
 if [[ -z "$no_live" ]]; then
   core_token="$(new_token isb-core)"
   write_marker "$root/core/config.md" "$core_token"
   live_check core-marker "$root" "$core_token"
+  live_hook_check
   if [[ -n "$project_mount" ]]; then
     project_token="$(new_token isb-proj)"
     write_marker "$root/project/CLAUDE.md" "$project_token"

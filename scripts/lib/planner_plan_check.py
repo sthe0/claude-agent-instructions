@@ -241,7 +241,10 @@ def canonicalize(
     consumer parses it and a human or a later grep can still read it. It is
     sanitised even there: whitespace collapsed, newlines dropped (a multi-line
     digest would otherwise forge envelope structure) and truncated, so it cannot
-    displace the original output that follows. ``plan_path`` is model-authored
+    displace the original output that follows. (``agentctl.dispatch.permission_request_action`` reads a PERMISSION-REQUEST
+    block's action text from the whole output, skipping this envelope's bare label. That
+    text is safe to take from model output: the checker's answer on it is discarded and
+    never changes routing.) ``plan_path`` is model-authored
     too and gets the same newline treatment — a value that still spans lines is
     dropped from the envelope rather than allowed to forge one. (A fabricated
     path stays caught downstream by ``validate_planner_plan``'s .toml + load_plan

@@ -13,9 +13,12 @@ The two run in parallel — if there is no agentctl state file for the session t
 hook exits 0 (allow) and the prose-fallback nudge still applies.
 
 State file: <agent-home>/agentctl/state/<session_id>.json (see scripts/agentctl/store.py;
-the session_id is sanitized to alnum/-/_ exactly as FileStateStore does). <agent-home>
-resolves via lib/config_root.py (isolated ~/.claude-agent when present, else legacy
-~/.claude). A session file left behind by a not-yet-migrated root is still found —
+the session_id is sanitized to alnum/-/_ exactly as FileStateStore does), where session_id
+is the payload's, or the engine session lib/engine_session_binding.py records that harness
+session as driving. A production edit is also denied while another engine session that harness
+session drove is SUBSTANTIVE and still before plan approval (pending_substantive_session).
+<agent-home> resolves via lib/config_root.py (isolated ~/.claude-agent when present, else
+legacy ~/.claude). A session file left behind by a not-yet-migrated root is still found —
 resolve_state_path() checks the legacy root too — so the gate fails CLOSED (keeps
 blocking) rather than open during a half-migrated transition.
 
@@ -41,7 +44,7 @@ from agentctl.exempt_paths import (  # noqa: E402
 from agentctl.norm_handoff import NORM_HANDOFF_ENV  # noqa: E402
 from agentctl.own_contour import OWN_SESSION_ENV  # noqa: E402
 from agentctl.state import SessionState as _SessionState  # noqa: E402
-from lib import config_root  # noqa: E402
+from lib import config_root, engine_session_binding  # noqa: E402
 
 # Current-vs-legacy-root fallback lookup lives in lib/config_root.py (shared
 # with the other state-reading hooks); resolve_state_path is a thin alias kept
@@ -231,6 +234,54 @@ def deny_with(node: str, reason: str) -> None:
     }))
 
 
+def has_own_contour_signal() -> bool:
+    return bool(os.environ.get(OWN_SESSION_ENV, "").strip() or os.environ.get(NORM_HANDOFF_ENV, "").strip())
+
+
+def driven_engine_session(harness_session: str) -> str:
+    """The engine session whose node decides an edit from `harness_session`: the one the
+    cli last bound to it (lib/engine_session_binding.py), else the harness id itself.
+    A lookup failure falls back to the harness id, as for an unbound session. A linked
+    child (an own-contour signal in the env) is never redirected: its contour is pinned to
+    its own session, which is the harness id, exactly as before the binding existed."""
+    if has_own_contour_signal():
+        return harness_session
+    try:
+        return engine_session_binding.resolve(harness_session) or harness_session
+    except Exception:
+        return harness_session
+
+
+# Nodes where a substantive session still awaits (or re-authors) its plan approval.
+PENDING_PLAN_NODES = PLAN_WRITE_POSITION_NODES
+
+
+def pending_substantive_session(harness_session: str, read_state: Path) -> tuple[str, str] | None:
+    """(session, node) of a substantive engine session `harness_session` drove that still
+    awaits plan approval, other than the one the gate reads (`read_state`), else None. Without it a
+    coordinator whose plan awaits approval could release production edits by driving a
+    side session onto an execution node. Only sessions bound by a state-changing verb
+    count (the harness id itself when it drove its own session). An unreadable binding or
+    state file is skipped: the lookup fails open, never the edit."""
+    if has_own_contour_signal():
+        return None
+    try:
+        driven = engine_session_binding.driven_sessions(harness_session)
+    except Exception:
+        return None
+    for session in driven:
+        if session == read_state.stem:
+            continue
+        path = resolve_state_path(session)
+        fields = load_gate_fields(path) if path is not None else None
+        if fields is None:
+            continue
+        weight, node, _plan_path, _linked = fields
+        if weight == "SUBSTANTIVE" and node in PENDING_PLAN_NODES:
+            return session, node
+    return None
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -260,7 +311,7 @@ def main() -> int:
             ))
             return 0
 
-    sp = resolve_state_path(session_id)
+    sp = resolve_state_path(driven_engine_session(session_id))
     if sp is None:
         # No engine state: allow, unless the env says this is a linked child — then the
         # missing state is a contour that never started, not a session nobody drives.
@@ -346,6 +397,17 @@ def main() -> int:
                                      diagnosing_plan_ok=diagnosing_plan_ok)
     if decision == "deny":
         deny_with(node, reason)
+        return 0
+
+    if not in_plans_dir:
+        pending = pending_substantive_session(session_id, sp)
+        if pending is not None:
+            pending_session, pending_node = pending
+            deny_with(pending_node, (
+                f"engine session {pending_session} (substantive) is driven by this session "
+                "and has not passed plan approval; approve it, or resolve/reset it, before "
+                "editing production code through another session"
+            ))
     return 0
 
 

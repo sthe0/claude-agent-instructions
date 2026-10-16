@@ -38,6 +38,7 @@ import json
 import os
 import re
 import shlex
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -850,6 +851,148 @@ def pending_renorm_final_blockers(state: SessionState) -> list[str]:
         f"the re-norming act that closes the difficulty"
         for e in open_renorms(state)
         if e.get("depth", 0) == depth
+    ]
+
+
+ESCALATION_OPEN = "open"
+ESCALATION_CLOSED = "closed"
+ESCALATION_UNADOPTED = "unadopted"
+
+
+def rec_field(rec, name: str):
+    """A difficulty record's field, whether it is a live `Difficulty` or the dict a closed
+    record was filed as."""
+    return rec.get(name) if isinstance(rec, dict) else getattr(rec, name, None)
+
+
+def with_descendants(records):
+    for rec in records:
+        yield rec
+        yield from with_descendants(rec_field(rec, "children") or [])
+
+
+def live_difficulty_records(state: SessionState) -> list:
+    """The records a session has not closed: the stack's suspended ancestors and the open one."""
+    return [r for r in (*state.difficulty_stack, state.difficulty) if r is not None]
+
+
+def escalation_records(state: SessionState) -> Iterator:
+    """The top-level difficulty records of `state`, live or closed -- the ones that can be
+    escalations in their own right. A nested record closed into its parent by
+    `difficulty-close` has all its norm targets moved onto the parent, which carries the
+    link from then on; the closed record keeps its own `escalated_to`, but it is the same
+    escalation, so descendants are not walked (however many were closed into one parent)."""
+    yield from live_difficulty_records(state)
+    yield from state.closed_difficulties
+
+
+def escalation_counterpart(parent_state: SessionState, child_uid: str,
+                           child_session: str | None = None) -> str | None:
+    """`open` / `closed` when `parent_state` holds the difficulty opened for the child's
+    difficulty `child_uid` (its `escalated_from` names it), else None. Only the parent's
+    live records are open; everything filed under them or in `closed_difficulties` is closed."""
+    def holds(rec) -> bool:
+        link = rec_field(rec, "escalated_from") or {}
+        return link.get("child_uid") == child_uid and (
+            child_session is None or link.get("child_session") == child_session)
+
+    live = live_difficulty_records(parent_state)
+    if any(holds(r) for r in live):
+        return ESCALATION_OPEN
+    below = [c for r in live for c in (rec_field(r, "children") or [])]
+    if any(holds(r) for r in with_descendants([*below, *parent_state.closed_difficulties])):
+        return ESCALATION_CLOSED
+    return None
+
+
+def escalation_status(child_difficulty, parent_state: SessionState | None,
+                      child_session: str | None = None) -> str | None:
+    """Where a child's parent-norm escalation stands on the parent's side, derived on read
+    from the parent's own state (the parent never writes the child's, so the child's record
+    cannot be closed by it): `open` -- the parent holds a difficulty for it and is working
+    it; `closed` -- that difficulty is closed; `unadopted` -- the parent holds none. None for
+    a record that is no escalation. `parent_state` None (no readable parent record) holds
+    no counterpart, hence `unadopted`."""
+    if not rec_field(child_difficulty, "escalated_to"):
+        return None
+    if parent_state is None:
+        return ESCALATION_UNADOPTED
+    return escalation_counterpart(
+        parent_state, rec_field(child_difficulty, "uid"), child_session) or ESCALATION_UNADOPTED
+
+
+def verify_escalation_record(stage, rec) -> tuple[dict | None, str]:
+    """`(escalation, "")` when the child difficulty `rec` is routed to `stage`'s current norm
+    of the parent -- a `parent` norm target whose baseline is the stage's current norm digest
+    and a declaration stating expected, actual and mismatch -- else `(None, reason)`. The one
+    predicate behind the dispatch route, `adopt-escalation` and the `escalation_orphans` gate,
+    so what the gate lists is exactly what the command adopts."""
+    current = stage_norm_digest(stage)
+    targets = [t for t in rec.norm_targets
+               if t.get("target") == NORM_TARGET_PARENT and t.get("kind") == NORM_TARGET_KIND_PARENT]
+    if not targets:
+        return None, "names no parent norm target"
+    if not rec.escalated_to:
+        return None, "carries no escalated_to link"
+    if not any(t.get("baseline") == current for t in targets):
+        return None, (f"parent norm target is stale: its baseline is not stage "
+                      f"{stage.index}'s current norm digest")
+    decl = rec.declaration
+    if decl is None or not all((getattr(decl, f) or "").strip()
+                               for f in ("expected", "actual", "mismatch")):
+        return None, "declaration lacks expected, actual or mismatch"
+    return {"child_uid": rec.uid, "stage_index": stage.index, "norm_digest": current,
+            "declaration": {"expected": decl.expected, "actual": decl.actual,
+                            "mismatch": decl.mismatch}}, ""
+
+
+def child_escalations(stage, child: SessionState) -> tuple[list[dict], str]:
+    """The verified escalations among `child`'s live difficulty records (the open one first,
+    then the suspended ancestors, innermost first), each as `verify_escalation_record`
+    returns it plus `child_session`; with none, `([], reason)` naming the first record's
+    refusal. A suspended record is a legitimate escalation: the child opened a new
+    difficulty over it after routing it to the parent's norm."""
+    live = [r for r in (child.difficulty, *reversed(child.difficulty_stack)) if r is not None]
+    if not live:
+        return [], "holds no open difficulty"
+    found: list[dict] = []
+    first_reason = ""
+    for rec in live:
+        verified, reason = verify_escalation_record(stage, rec)
+        if verified is None:
+            first_reason = first_reason or reason
+            continue
+        found.append({"child_session": child.session_id, **verified})
+    return found, ("" if found else first_reason)
+
+
+def escalation_orphans(state: SessionState, children) -> list[dict]:
+    """The linked children's escalations addressed to this session that it has not adopted.
+    `children` are the states of the sessions linked to it. Only a record `adopt-escalation`
+    would adopt is listed (`child_escalations`): an escalation whose norm digest no longer
+    matches its stage's current norm is left out, the stage was replanned since, and a
+    blocker nobody can discharge would only strand the session."""
+    orphans: list[dict] = []
+    for child in children:
+        link = child.parent_link or {}
+        if link.get("parent_session") != state.session_id:
+            continue
+        try:
+            stage = state.stage(link.get("stage_index"))
+        except KeyError:
+            continue
+        found, _ = child_escalations(stage, child)
+        orphans.extend({k: v for k, v in e.items() if k != "declaration"} for e in found
+                       if escalation_counterpart(state, e["child_uid"], child.session_id) is None)
+    return orphans
+
+
+def escalation_orphan_blockers(orphans: list[dict]) -> list[str]:
+    return [
+        f"child session {o['child_session']} escalated its difficulty {o['child_uid']} to "
+        f"the norm of stage {o['stage_index']} and this session never adopted it -- run "
+        f"`adopt-escalation --child {o['child_session']}` to open its counterpart"
+        for o in orphans
     ]
 
 
@@ -2406,6 +2549,33 @@ def grants_approval_blockers(state: SessionState, target_plan: str | None) -> li
     return []
 
 
+def protected_grant_blockers(state: SessionState, target_plan: str | None) -> list[str]:
+    """Precondition guardian for `approve`, for the user and the agent path alike: a
+    plan whose effective grants cover a protected action (`protected_actions`) is
+    approved only once the user accepted that action (`accept-protected-grant`) for
+    THIS grant set — the acceptance is bound to the plan's `grants_sha256` and the
+    entry id, so a later change to the grants asks again. Fails OPEN on a plan that
+    does not load and on one with no protected hit. [] == may pass."""
+    if not target_plan:
+        return []
+    try:
+        doc = load_plan(target_plan)
+    except (OSError, PlanError):
+        return []
+    from .protected_actions import protected_grant_hits
+    entry_ids = sorted({entry_id for _stage, _rule, entry_id in protected_grant_hits(doc)})
+    if not entry_ids:
+        return []
+    current = grants_sha256(doc)
+    accepted = {a.entry_id for a in state.protected_grant_acceptances if a.grants_sha256 == current}
+    return [
+        f"the plan's grants cover the protected action {entry_id!r} and the user has not accepted "
+        f"it for this grant set — accept-protected-grant --session <id> --id {entry_id} --note "
+        "<why> (a user decision), or narrow the grant"
+        for entry_id in entry_ids if entry_id not in accepted
+    ]
+
+
 def replan_authorization_active(state: SessionState) -> bool:
     """Whether the replan-authorization gate applies to this session.
 
@@ -3592,8 +3762,11 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
     exact Bash rule) is covered, segment by segment, by a `Bash(<prefix>:*)` rule the
     handoff holds (`grants.bash_command_covered_by_rules`, the matcher the harness-side
     cover uses): the parent's wildcard already authorizes that command, whichever rule
-    of the handoff it is. Every other engine-executed fixed text the engine cannot
-    resolve is refused unless the handoff carries it. `resource_origins` is the plan's `(resource, origin, source)` tags
+    of the handoff it is, unless that rule itself covers a protected action
+    (`protected_actions.wildcard_hits`, the probe `approve` holds the grants to): such a
+    wildcard stands in for no check, which the handoff must carry as the identical
+    text. Every other engine-executed fixed text the engine cannot resolve is refused
+    unless the handoff carries it. `resource_origins` is the plan's `(resource, origin, source)` tags
     (`BoundaryView.resource_origins`): a resource that every one of its origins produces
     from a covered engine-executed text is not charged either, unless no approval could
     cover it (it is, contains or lies under a protected root or surface); without the tags
@@ -3624,7 +3797,9 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
             reasons.append(PARENT_NORM_CHECK_DROPPED)
         from . import grants as _grants
         from . import order_approvals as _oa
-        held_wildcards = _held_wildcard_rules(held_unresolved)
+        from . import protected_actions as _protected_actions
+        held_wildcards = [rule for rule in _held_wildcard_rules(held_unresolved)
+                          if not _protected_actions.wildcard_hits([rule])]
 
         def text_covered(origin: str, source: str) -> bool:
             text = _check_text(origin, source)

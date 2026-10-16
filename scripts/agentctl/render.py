@@ -31,8 +31,7 @@ from pathlib import Path
 from lib import kind_baselines
 from lib.spawn_ceiling import dispatch_prompt_ceiling_chars
 
-from . import grants as _grants
-from . import plan_refs, plan_store
+from . import plan_refs, plan_store, protected_actions
 from .config import PlanLimitError, plan_field_inline_limit, plan_size_limits
 from .directive import Directive
 from .plan import (
@@ -50,7 +49,7 @@ from .plan import (
     PlanDoc,
     PlanError,
     _build_supplies,
-    _derive_stage_grants,
+    _stage_declared_and_derived_grants,
     _venue_for,
     consumers,
     grants_sha256,
@@ -65,17 +64,10 @@ from .plan import (
 )
 
 
-def _stage_declared_and_derived_grants(s, venue: str | None):
-    """A stage's declared grants (an empty `StageGrants` when the stage
-    authors none) plus its derived grants and dropped-entry list — the one
-    place that pairs a stage with the venue-scoped derivation (`plan.
-    _derive_stage_grants`, which takes a None venue), shared by
-    `render_stage_brief`, `render_plan_md`, `render_plan_grants`, and
-    `cmd_plan_grants` so no projection can drift from another on how a
-    stage's effective grant set is computed."""
-    declared = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
-    derived, dropped = _derive_stage_grants(s, venue)
-    return declared, derived, dropped
+def _protected_hit_text(rule: str, entry_id: str) -> str:
+    entry = protected_actions.entry_by_id(entry_id)
+    return (f"PROTECTED ACTION {entry_id}: {rule} covers a protected action — "
+            f"\"{entry.quote}\" (the user accepts it with accept-protected-grant --id {entry_id})")
 
 
 NO_VENUE_GRANTS_NOTE = (
@@ -1743,6 +1735,8 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
         dr_e = [r.rule for r in derived.allow if r.provenance == "derived:DR-E"]
         dr_r = [f"{a.path}:{a.mode}" for a in derived.add_dirs if a.provenance == "derived:DR-R"]
         note = _no_venue_note(s, venue)
+        protected = [_protected_hit_text(rule, entry_id)
+                     for rule, entry_id in protected_actions.stage_protected_hits(declared, derived)]
         if fmt == "full":
             lines.append(f"Stage {s.index} ({s.title}):")
             if declared_rules:
@@ -1759,6 +1753,8 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
                 lines.append(f"  DR-R (outside-venue read): {', '.join(dr_r)}")
             for d in dropped:
                 lines.append(f"  dropped: {d['entry']} ({d['reason']})")
+            for text in protected:
+                lines.append(f"  {text}")
             if note:
                 lines.append(f"  {note}")
             if not (declared_rules or declared_dirs or dr_v or dr_o or dr_e or dr_r):
@@ -1779,6 +1775,7 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
                 parts.append(f"DR-E={len(dr_e)} derived")
             if dropped:
                 parts.append(f"dropped={len(dropped)}")
+            parts.extend(f"[{text}]" for text in protected)
             if note:
                 parts.append(f"[{note}]")
             if s.is_spawn():
