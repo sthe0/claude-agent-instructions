@@ -32,7 +32,12 @@ from .directive import Directive
 from .plan import PlanError
 
 _REMEDY = "reformulate or split the node: a reference does not shorten what a reader is shown"
-_ADDITIONS_REFUSAL = "{verb}: this plan cannot be converted in place yet"
+_ADDITIONS_REFUSAL = (
+    "{verb}: converting this plan would add dependencies, which would change what the plan "
+    "says, so nothing is converted or linked. It would add: {added}. To move the session to "
+    "the converted form: run `agentctl plan-convert` on the plan file into a separate "
+    "directory, then move the session to the converted plan with an ordinary replan "
+    "(`agentctl replan --plan <converted index>`), which goes through the ordinary plan review")
 _ORDER_REFUSAL = "{verb}: the converted plan would not run as the source does; nothing is linked"
 
 
@@ -402,7 +407,12 @@ def cmd_plan_convert_live(args, *, store, runner=None) -> Directive:
             "so the session's content digest cannot be rebound; use `agentctl plan-convert` for "
             "a read-only copy")
     if has_additions(report):
-        return Directive(False, state.node, "noop", _ADDITIONS_REFUSAL.format(verb=verb))
+        would_add = [{"stage": a["stage"], "depends_on": a["depends_on"]}
+                     for a in report["added_depends_on"]]
+        added = "; ".join(f"stage {a['stage']} depends_on {a['depends_on']}" for a in would_add)
+        return Directive(False, state.node, "noop",
+                         _ADDITIONS_REFUSAL.format(verb=verb, added=added),
+                         data={"would_add": would_add})
     if (report["run_order_source"] != report["run_order_converted"]
             or report["content_digest"] != report["source_content_digest"]):
         return Directive(False, state.node, "noop", _ORDER_REFUSAL.format(verb=verb))

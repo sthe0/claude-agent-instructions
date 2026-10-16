@@ -11461,6 +11461,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "3f157405934b77d9"
+domain = "code"
+file = "scripts/tests/test_plan_live_additions.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "8304b10f26ebd382"
+domain = "code"
+file = "scripts/tests/test_plan_live_additions.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "9e31389324007cea"
 domain = "code"
 file = "scripts/tests/test_plan_presentation.py"
@@ -12648,6 +12664,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "6798d8bd0487e1f3"
 domain = "code"
 file = "scripts/tests/test_plan_stage_identity.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "d673c256bb824b01"
+domain = "code"
+file = "scripts/tests/test_plan_stage_list.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -18453,6 +18477,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "cc99ecf20c9ad23d"
+domain = "code_file_rollup"
+file = "scripts/tests/test_plan_live_additions.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "136aa12dfbef1521"
 domain = "code_file_rollup"
 file = "scripts/tests/test_plan_presentation.py"
@@ -18536,6 +18568,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "10d1f53a2d9b3d9e"
 domain = "code_file_rollup"
 file = "scripts/tests/test_plan_stage_identity.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "3040f253d4fcaf36"
+domain = "code_file_rollup"
+file = "scripts/tests/test_plan_stage_list.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -34690,6 +34730,14 @@ ground = "The statement's own text names a concrete enforcing artifact (a script
 
 [[entry]]
 id = "fe625699209aa32e"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "c7669545a65ee2a4"
 domain = "prose"
 file = "skills/specializations/planner/policy.md"
 class = "perception"

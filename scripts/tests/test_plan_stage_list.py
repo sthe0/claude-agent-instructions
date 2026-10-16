@@ -699,18 +699,16 @@ def test_stage_list_live_conversion_refuses_a_plan_that_would_run_differently(
     result = _live(store)
 
     assert not result.ok
-    assert result.data is None or result.data == {}
     assert _live_world(store, plan_file) == before
 
 
-@pytest.mark.parametrize("case", ["a-dependency-would-be-added", "the-run-order-would-change"])
-def test_stage_list_the_two_live_refusals_do_not_name_what_they_refuse_to_add(
-        case, store, tmp_path):
-    _live_session(store, tmp_path, LIVE_REFUSED[case])
+def test_stage_list_the_run_order_refusal_names_no_additions_and_no_route(store, tmp_path):
+    _live_session(store, tmp_path, LIVE_REFUSED["the-run-order-would-change"])
 
     result = _live(store)
 
     assert not result.ok
+    assert not result.data
     assert "depends_on" not in result.detail
     assert "replan" not in result.detail
 
