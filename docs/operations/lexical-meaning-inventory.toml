@@ -761,6 +761,18 @@ ground = "[a-z0-9]+ findall over the prompt only normalizes its first words into
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/hook-guard-agent-specialist-stand-in.py::<module>::re.compile"]
+class = "structural"
+ground = "_SKILL_PATH matches the path shape `skills/.../SKILL.md` of a specialist's instruction file (file-path syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-guard-agent-specialist-stand-in.py::decide::pattern.search"]
+class = "structural"
+ground = "_SKILL_PATH.search finds a `skills/.../SKILL.md` path in an Agent call's prompt or description; it reads a file path, not the meaning of the text."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/hook-guard-bash-source-edit.py::<module>::re.compile"]
 class = "structural"
 ground = "_ASSIGNMENT matches the shell `NAME=value` assignment-prefix token shape so the command verb behind it can be read (command syntax)."

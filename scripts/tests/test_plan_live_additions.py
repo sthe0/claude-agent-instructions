@@ -161,9 +161,9 @@ def test_live_additions_the_named_route_moves_the_session_to_the_converted_plan(
         store, tmp_path, venued_fixtures_dir, monkeypatch):
     from agentctl import cli, plan_convert
 
-    # Only the delivered-to-the-user presentation receipt is switched off, as the suite's other
-    # replan tests do (it needs a delivered turn); the diff classification and the review
-    # checks of the replan run for real.
+    # The replan's diff classification runs for real. Two gates are off: the presentation
+    # receipt, switched off here as the suite's other replan tests do (it needs a delivered
+    # turn), and the plan-review gate, which conftest.py switches off for every test.
     monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
 
     source = venued_fixtures_dir / "route.toml"
