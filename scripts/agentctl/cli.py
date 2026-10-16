@@ -1432,6 +1432,18 @@ def _frozen_stage_survives(prev_stages, new_stages, index: int, tier) -> bool:
     )
 
 
+def _verdict_survives(prev_stages, new_stages, index: int, tier=None) -> bool:
+    """The one carry decision for a stage's settled verdict across a plan edit: its
+    definition and its suppliers' interfaces are unchanged (`stage_carried`), or only
+    verdict-preserving leaves moved (`_frozen_stage_survives`). Without a `tier` (the
+    approve-time refresh of an in-place plan edit, which has no previous version to read)
+    only the first holds."""
+    from .stage_norm import stage_carried
+
+    return (stage_carried(prev_stages, new_stages, index)
+            or _frozen_stage_survives(prev_stages, new_stages, index, tier))
+
+
 def _passed_dependents_closure(live_stages, new_stages, roots) -> set[int]:
     """`roots` plus every PASSED stage that transitively depends on one of them, along the
     dependency edges of either plan version."""
@@ -1451,8 +1463,8 @@ def _passed_dependents_closure(live_stages, new_stages, roots) -> set[int]:
 
 
 def _frozen_stage_refusal(state: SessionState, tier, reopening: set[int]):
-    """Refusal text and data for a non-substantive replan that edits an operative or
-    interface leaf of a PASSED stage the replan does not reopen; None when none does."""
+    """Refusal text and data for a replan that edits an operative or interface leaf of a
+    PASSED stage the replan does not reopen; None when none does."""
     frozen = {}
     for stage in state.stages:
         if stage.outcome.status != StageStatus.PASSED.value or stage.index in reopening:
@@ -1476,21 +1488,17 @@ def _replan_pending_indices(state: SessionState, new, kind: str, tier=None,
                             reopened: frozenset[int] | set[int] = frozenset()) -> list[int]:
     """Indices of `new`'s stages this replan leaves to run: every stage but one whose
     PASSED verdict survives it. A refinement or no-op never re-arms a PASSED stage; a
-    substantive replan keeps a PASSED stage's verdict only when `stage_carried` says its
-    definition and its suppliers' interfaces are unchanged, or when only
-    verdict-preserving leaves moved (`_frozen_stage_survives`). A stage in `reopened` is
+    substantive replan keeps a PASSED stage's verdict only when its definition and its
+    suppliers' interfaces are unchanged (`stage_norm.stage_carried`), or when only
+    verdict-preserving leaves moved (`_verdict_survives`). A stage in `reopened` is
     always left to run."""
-    from .stage_norm import stage_carried
-
     live = {s.index: s for s in state.stages}
     pending = []
     for ns in new.stages:
         prev = live.get(ns.index)
         passed = prev is not None and prev.outcome.status == StageStatus.PASSED.value
         if passed and ns.index not in reopened and (
-            kind != "substantive"
-            or stage_carried(state.stages, new.stages, ns.index)
-            or _frozen_stage_survives(state.stages, new.stages, ns.index, tier)
+            kind != "substantive" or _verdict_survives(state.stages, new.stages, ns.index, tier)
         ):
             continue
         pending.append(ns.index)
@@ -1705,7 +1713,6 @@ def _refresh_caches_from_plan_path(
     if not state.plan_path:
         return []
     from .plan import PlanError, load_plan as _load
-    from .stage_norm import stage_carried
     try:
         refreshed = _load(state.plan_path)
     except (OSError, PlanError) as exc:
@@ -1717,7 +1724,7 @@ def _refresh_caches_from_plan_path(
         advice.extend(_submission_advice(refreshed, runner, state.weight_class))
     # Decided for every stage BEFORE any is mutated: a consumer's verdict depends on its
     # suppliers' pre-edit interfaces.
-    carried = {rs.index: stage_carried(state.stages, refreshed.stages, rs.index)
+    carried = {rs.index: _verdict_survives(state.stages, refreshed.stages, rs.index)
                for rs in refreshed.stages}
     declined_issues = gates.declined_issue_set(state)
     declined_titles = gates.declined_title_set(state)
@@ -10781,11 +10788,17 @@ def _replan_cause(state: SessionState, explicit_reason: str | None) -> dict:
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     crossed: list[dict] = []
     reopened: list[int] = []
-    d = _cmd_replan(args, store=store, runner=runner, crossed=crossed, reopened=reopened)
+    reopen_ignored: list[int] = []
+    d = _cmd_replan(args, store=store, runner=runner, crossed=crossed, reopened=reopened,
+                    reopen_ignored=reopen_ignored)
     d.data.update(_crossing_data(crossed[0] if crossed else None))
     if reopened and d.ok:
         d.data["reopened_stages"] = reopened
         d.detail += f"; re-armed PASSED stage(s) {reopened} (--reopen)"
+    if reopen_ignored and d.ok:
+        d.data["reopen_ignored"] = reopen_ignored
+        d.detail += (f"; --reopen {reopen_ignored} ignored: not PASSED, so there is no "
+                     "verdict to re-arm")
     # Only on something to say: an unconditional setdefault would add an empty
     # `advisories` key to every replan Directive, which test_history_capture's
     # exact-equality pin reads as a changed contract.
@@ -10831,12 +10844,13 @@ def _replan_spelling_advisories(plan_path: str) -> list[str]:
 
 def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 crossed: list[dict] | None = None,
-                reopened: list[int] | None = None) -> Directive:
+                reopened: list[int] | None = None,
+                reopen_ignored: list[int] | None = None) -> Directive:
     """`crossed`, when given, receives the backstop crossing a renegotiation applied;
-    `reopened`, the indices of the PASSED stages an applied `--reopen` re-armed."""
+    `reopened`, the indices of the PASSED stages an applied `--reopen` re-armed;
+    `reopen_ignored`, the `--reopen` indices that named a stage that is not PASSED."""
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load
-    from .stage_norm import stage_carried
 
     # --normalize-factor lets a replan record a normalize event in the SAME call,
     # instead of requiring a separate `normalize` invocation first. Validated here
@@ -11165,11 +11179,10 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     auth_kind = _replan_kind(state, _load(_replan_baseline_path(state), strict=False), new)
 
     # A finished stage is frozen against the edits that change what it was built from or
-    # promises (operative and interface leaves): a non-substantive replan touching one is
+    # promises (operative and interface leaves): a replan of ANY kind touching one is
     # refused unless it names the stage with --reopen, which re-arms it and the PASSED
-    # stages depending on it. Substantive replans keep re-arming through the carry key.
-    # Refused before anything is written. Without a known old side there is no tier, and
-    # the replan routes as it did before the tier existed.
+    # stages depending on it. Refused before anything is written. Without a known old
+    # side there is no tier, and the replan routes as it did before the tier existed.
     tier = None
     baseline = _baseline_plan_for_tier(store, state)
     if baseline is not None:
@@ -11185,9 +11198,12 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
         i for i in _passed_dependents_closure(state.stages, new.stages, reopen_roots)
         if state.stage(i).outcome.status == StageStatus.PASSED.value
     } if reopen_roots else set()
-    if tier is not None and auth_kind != "substantive":
+    if reopen_ignored is not None:
+        reopen_ignored.extend(sorted(i for i in reopen_roots if i not in reopening))
+    if tier is not None:
         frozen = _frozen_stage_refusal(state, tier, reopening)
         if frozen is not None:
+            _log_gate(state, "frozen_stage", frozen[1]["blockers"], passed=False)
             return Directive(False, state.node, "replan", frozen[0], data=frozen[1])
 
     arblock = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
@@ -11587,9 +11603,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     declined_titles = gates.declined_title_set(state)
     for ns in new.stages:
         prev = live_by_index.get(ns.index)
-        if prev is not None and ns.index not in reopening and (
-            stage_carried(state.stages, new.stages, ns.index)
-            or _frozen_stage_survives(state.stages, new.stages, ns.index, tier)
+        if prev is not None and ns.index not in reopening and _verdict_survives(
+            state.stages, new.stages, ns.index, tier
         ):
             # A declined optional stage whose definition did not move stays declined; a
             # changed one goes back to PENDING for a fresh choice at the customer's

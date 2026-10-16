@@ -210,9 +210,13 @@ def test_change_tier_assigns_each_class_its_tier(fixtures_dir, tmp_path):
     assert renorms.stages[1].moved == (("renorms", "O"),)
     assert renorms.tier == 2, "a renorms-only edit changes what the stage builds"
 
-    interface = tier_of(text=base_text.replace(
+    criterion = tier_of(text=base_text.replace(
         "python -c 'import mod' exits 0", "python -c 'import mod' exits 0 cleanly"))
-    assert (interface.tier, interface.stages[1].moved) == (3, (("criterion.done_criterion", "I"),))
+    assert (criterion.tier, criterion.stages[1].moved) == (2, (("criterion.done_criterion", "O"),))
+
+    interface = tier_of(text=base_text.replace(
+        _STAGE1_LAST_LINE, 'output_artifacts = ["mod.py", "extra.py"]'))
+    assert (interface.tier, interface.stages[1].moved) == (3, (("output_artifacts", "I"),))
 
     meta = tier_of(text=base_text.replace("Demonstrate the full", "Demonstrate the whole"))
     assert meta.tier == 4 and meta.meta == ("goal",)
@@ -241,6 +245,37 @@ def test_change_tier_matches_diff_plans_kind_outside_the_74_cells(fixtures_dir, 
             where = f"{old_name} -> {new_name}"
             assert (tier == 0) <= (kind == "no_change"), where
             assert (kind == "substantive") <= (tier >= 2), where
+
+    # The kinds as the base returns them (none of these pairs touches a #74 cell), from
+    # the plain plan to every fixture and back for the neighbours of the new cells.
+    base = docs["plan_two_stage.toml"]
+    kinds_from_base = {
+        "plan_two_stage.toml": "no_change",
+        "plan_two_stage_donecriterion_changed.toml": "substantive",
+        "plan_two_stage_finalcheck.toml": "refinement",
+        "plan_two_stage_finalcheck_changed.toml": "refinement",
+        "plan_two_stage_means.toml": "refinement",
+        "plan_two_stage_means_changed.toml": "refinement",
+        "plan_two_stage_refined.toml": "refinement",
+        "plan_two_stage_substantive.toml": "substantive",
+        "plan_two_stage_substantive_stage1_method_changed.toml": "substantive",
+        "plan_two_stage_substantive_stage1_retitled.toml": "substantive",
+        "plan_two_stage_substantive_stage1and2_method_changed.toml": "substantive",
+        "plan_two_stage_substantive_stage1and2_retitled.toml": "substantive",
+        "plan_two_stage_verifyfix.toml": "refinement",
+        "plan_two_stage_verifyfix_changed.toml": "refinement",
+        "plan_two_stage_verifyfix_grantgrowth.toml": "substantive",
+        "plan_two_stage_verifyfix_grantgrowth_changed.toml": "substantive",
+        "plan_two_stage_verifyfix_reporoot.toml": "refinement",
+    }
+    assert set(kinds_from_base) == set(names), "a new fixture needs an expected kind here"
+    assert {n: diff_plans(base, docs[n]) for n in names} == kinds_from_base
+    assert diff_plans(docs["plan_two_stage_substantive.toml"],
+                      docs["plan_two_stage_substantive_stage1_method_changed.toml"]) == "refinement"
+    assert diff_plans(docs["plan_two_stage_verifyfix.toml"],
+                      docs["plan_two_stage_verifyfix_changed.toml"]) == "refinement"
+    assert diff_plans(docs["plan_two_stage_verifyfix_grantgrowth.toml"],
+                      docs["plan_two_stage_verifyfix_grantgrowth_changed.toml"]) == "substantive"
 
 
 # --- the snapshot the tier's old side is read from ------------------------------------
@@ -325,6 +360,76 @@ def test_verify_venue_at_final_edit_keeps_a_passed_stage_passed(
     state = store.load(sid)
     assert state.stage(1).outcome.status == StageStatus.PASSED.value
     assert state.stage(1).criterion.verify_venue_at_final == "delivery"
+
+
+_FROZEN_STAGE_EDITS = {
+    "operative": lambda text: _stage1(text, 'method = "build it in two passes"'),
+    "interface": lambda text: text.replace(_STAGE1_LAST_LINE,
+                                           'output_artifacts = ["mod.py", "extra.py"]'),
+}
+
+
+@pytest.mark.parametrize("leaf_class", sorted(_FROZEN_STAGE_EDITS))
+def test_frozen_stage_is_refused_without_reopen_on_a_substantive_replan_too(
+        leaf_class, store, venued_fixtures_dir, tmp_path):
+    """The freeze does not depend on the replan's kind: a replan that is substantive for
+    another reason (the overall done criterion moved) still names --reopen for a PASSED
+    stage whose operative or interface leaf it edits, and applies it once reopened."""
+    sid = f"frozen-substantive-{leaf_class}"
+    plan = venued_fixtures_dir / "plan_two_stage.toml"
+    _passed_session(store, sid, str(plan))
+    changed = (venued_fixtures_dir / "plan_two_stage_donecriterion_changed.toml").read_text()
+    edited = _plan_file(tmp_path, _FROZEN_STAGE_EDITS[leaf_class](changed), "edited.toml")
+
+    refused = cli.cmd_replan(ns(session=sid, plan=edited), store=store)
+
+    assert not refused.ok and "--reopen" in _says(refused) and "stage 1" in _says(refused)
+    state = store.load(sid)
+    assert state.stage(1).outcome.status == StageStatus.PASSED.value
+    assert state.plan_path == str(plan), "nothing was applied"
+
+    reopened = cli.cmd_replan(ns(session=sid, plan=edited, reopen=[1]), store=store)
+
+    assert reopened.ok, _says(reopened)
+    assert reopened.data["reopened_stages"] == [1]
+    assert store.load(sid).stage(1).outcome.status == StageStatus.PENDING.value
+
+
+def test_frozen_stage_refusal_is_logged_as_a_gate(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    log = tmp_path / "gate-log.jsonl"
+    monkeypatch.setattr(cli, "GATE_LOG", log)
+    sid = "frozen-log"
+    plan = venued_fixtures_dir / "plan_two_stage.toml"
+    _passed_session(store, sid, str(plan))
+    edited = _plan_file(tmp_path, _stage1(plan.read_text(), 'method = "build it in two passes"'),
+                        "edited.toml")
+
+    assert not cli.cmd_replan(ns(session=sid, plan=edited), store=store).ok
+
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    frozen = [r for r in rows if r["gate"] == "frozen_stage"]
+    assert len(frozen) == 1 and frozen[0]["passed"] is False
+    assert "stage 1" in " ".join(frozen[0]["blockers"])
+
+
+def test_reopen_naming_a_stage_that_is_not_passed_is_disclosed(
+        store, venued_fixtures_dir, tmp_path):
+    sid = "reopen-ignored"
+    plan = venued_fixtures_dir / "plan_two_stage.toml"
+    _passed_session(store, sid, str(plan))
+    edited = _plan_file(tmp_path, _stage1(plan.read_text(), "expected_exit = 1"), "edited.toml")
+
+    d = cli.cmd_replan(ns(session=sid, plan=edited, reopen=[2]), store=store)
+
+    assert d.ok, _says(d)
+    assert d.data["reopen_ignored"] == [2] and "reopened_stages" not in d.data
+    assert "ignored" in d.detail
+    assert store.load(sid).stage(1).outcome.status == StageStatus.PASSED.value
+
+    unknown = cli.cmd_replan(ns(session=sid, plan=edited, reopen=[9]), store=store)
+
+    assert not unknown.ok and "no such stage" in _says(unknown)
 
 
 def test_check_only_edit_on_passed_stage_keeps_it_passed(store, venued_fixtures_dir, tmp_path):

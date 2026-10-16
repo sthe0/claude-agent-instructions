@@ -209,7 +209,7 @@ def test_substantive_verify_command_change_resets_passed_stage(store, venued_fix
     state.current_stage = 2
     store.save(state)
 
-    d = cli.cmd_replan(ns(session=sid, plan=changed), store=store)
+    d = cli.cmd_replan(ns(session=sid, plan=changed, reopen=[1]), store=store)
     assert d.marker == "PLAN-READY"
     state = store.load(sid)
     assert state.stage(1).outcome.status == StageStatus.PENDING.value
@@ -469,7 +469,7 @@ def test_substantive_replan_resets_passed_stage_whose_definition_changed(store, 
     state.stage(1).outcome.status = StageStatus.PASSED.value
     store.save(state)
 
-    d = cli.cmd_replan(ns(session=sid, plan=retitled), store=store)
+    d = cli.cmd_replan(ns(session=sid, plan=retitled, reopen=[1]), store=store)
     assert d.marker == "PLAN-READY"
     state = store.load(sid)
     assert state.stage(1).outcome.status == StageStatus.PENDING.value

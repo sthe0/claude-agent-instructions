@@ -849,7 +849,8 @@ def test_replans_fire_with_complete_planning_record_proceeds_without_user(eng):
     eng.diagnose("a1")
     assert ack(eng)["ok"] is True
     assert eng.state("a1").effort_fires[-1]["ack"]["by"] == "agent"
-    d = eng.run("replan", session="a1", plan=eng.write(plan_text(stage3=True, revised=True)))
+    d = eng.run("replan", session="a1", plan=eng.write(plan_text(stage3=True, revised=True)),
+                reopen=[1])
     assert action(d) == "self_approve", d
     assert eng.run("approve", session="a1", by="agent")["ok"] is True
     approvers = [e.get("by") for e in eng.state("a1").history if e.get("event") == "approve"]
@@ -1043,7 +1044,7 @@ def test_e2e_agent_replan_cycle_without_user(eng):
         sub(eng, step, session="e1", **flags)
     assert sub(eng, "fire_acknowledge", session="e1", decision="revise", by="agent")["ok"] is True
     replanned = eng.write(plan_text(stage3=True, revised=True))
-    d = sub(eng, "replan", session="e1", plan=replanned)
+    d = sub(eng, "replan", session="e1", plan=replanned, reopen=[1])
     assert action(d) == "self_approve", d
     assert sub(eng, "approve", session="e1", by="agent")["ok"] is True
     assert [e.get("by") for e in eng.state("e1").history if e.get("event") == "approve"] == ["agent", "agent"]
