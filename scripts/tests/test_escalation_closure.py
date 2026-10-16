@@ -489,3 +489,49 @@ def test_nested_escalation_adopt_carries_the_escalating_declaration(
     assert opened is not None and opened.declaration.mismatch == B_MISMATCH, (
         "BEHAVIOUR: adopt-escalation opened a parent difficulty with the receiving record's "
         "declaration instead of the nested record's")
+
+
+def _refresh_child_after_parent_fix(store, tmp_path):
+    """The parent fixes stage 1's norm and the re-dispatch renews the child's handoff."""
+    from test_child_contour_gate import _load_spawn
+
+    parent = store.load(PARENT)
+    parent.stage(1).title += " (the artifact its criterion names is produced here)"
+    store.save(parent)
+    record = norm_handoff.build_record(
+        parent_session=PARENT, stage_index=1, kind="developer",
+        norm=StageNorm.from_stage(parent.stage(1)), grants=[], depth=1, parent_lineage=None)
+    path, sha = norm_handoff.write_record(tmp_path / "handoffs", record)
+    _load_spawn().refresh_resumed_child_link(
+        store, store.load(CHILD), norm_handoff.format_env_value(path, sha))
+
+
+def _child_closes(store, fixtures_dir):
+    cli.cmd_normalize(ns(session=CHILD, factor="a stage whose done criterion names no producer",
+                         level="note"), store=store)
+    return cli.cmd_replan(
+        ns(session=CHILD, plan=str(fixtures_dir / "plan_two_stage_refined.toml")), store=store)
+
+
+def test_resumed_child_closes_parent_targeted_difficulty_after_parent_fix(
+        store, fixtures_dir, tmp_path, monkeypatch):
+    _routed_child(store, fixtures_dir, tmp_path, monkeypatch)
+    _refresh_child_after_parent_fix(store, tmp_path)
+
+    directive = _child_closes(store, fixtures_dir)
+
+    state = store.load(CHILD)
+    assert directive.ok and state.difficulty is None, (
+        f"BEHAVIOUR: the resumed child could not close its parent-targeted difficulty after "
+        f"the parent fixed the norm: {directive.detail}"
+    )
+    assert state.node == Node.PLAN_READY.value
+
+
+def test_child_keeps_parent_targeted_difficulty_open_until_handoff_refreshed(
+        store, fixtures_dir, tmp_path, monkeypatch):
+    _routed_child(store, fixtures_dir, tmp_path, monkeypatch)
+
+    directive = _child_closes(store, fixtures_dir)
+
+    assert not directive.ok and store.load(CHILD).difficulty is not None

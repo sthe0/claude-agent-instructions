@@ -729,6 +729,8 @@ def normative_edit_blockers(state: SessionState, new_plan, pending_indices,
                 )
             continue
         if t.get("kind") == NORM_TARGET_KIND_PARENT:
+            if (state.parent_link or {}).get("norm_digest") not in (None, baseline):
+                continue
             out.append(
                 f"norm target {target}: the fault was handed back to the parent stage, "
                 f"whose norm this session cannot edit -- end the session with `REPLAN:` "

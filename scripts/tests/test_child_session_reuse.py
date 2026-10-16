@@ -347,3 +347,23 @@ def test_own_channel_still_admits_question_verbs(contour):  # noqa: F811
     disposed = contour.own("question-dispose", "--id", "q1", "--to", "assumed",
                            "--basis", "the brief names it", "--risk", "a wrong path")
     _admitted(disposed, "question-dispose")
+
+
+def test_own_channel_admits_question_research_and_candidate_dispose(contour):  # noqa: F811
+    for verb in ("question-research", "question-candidate-dispose"):
+        proc = contour.own(verb, "--id", "q1")
+        assert "outside the own contour" not in proc.stderr, (
+            f"BEHAVIOUR: the own channel refuses `{verb}`: {proc.stderr.strip()}"
+        )
+
+
+def test_own_channel_gains_no_user_authority_verb():
+    from lib.widening_targets import AGENTCTL_USER_AUTHORITY_VERBS
+
+    assert {"question-research", "question-candidate-dispose"} <= OWN_CONTOUR_VERBS
+    leaked = (OWN_CONTOUR_VERBS & AGENTCTL_USER_AUTHORITY_VERBS) - {
+        "plan-review", "code-review", "submit-plan", "dispatch", "record-result", "verify-final",
+        "replan", "declare", "investigate", "critique", "normalize", "approve",
+        "next-stage", "partition",
+    }
+    assert not leaked, leaked
