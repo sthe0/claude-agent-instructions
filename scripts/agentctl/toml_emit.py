@@ -94,6 +94,12 @@ def _value(value: object) -> str:
     return _inline(value)
 
 
+def assignment(key: str, value: object) -> str:
+    """`key = value` as `dumps` writes a plain key, for a caller that rewrites one key of an
+    existing file in place."""
+    return f"{_key(key)} = {_value(value)}"
+
+
 def _is_table(value: object) -> bool:
     return isinstance(value, dict) and not _is_ref(value)
 
@@ -106,7 +112,7 @@ def _is_table_array(value: object) -> bool:
 def _emit(table: dict, path: list[str], out: list[str]) -> None:
     for key, value in table.items():
         if not _is_table(value) and not _is_table_array(value):
-            out.append(f"{_key(key)} = {_value(value)}")
+            out.append(assignment(key, value))
     for key, value in table.items():
         here = [*path, key]
         header = ".".join(_key(part) for part in here)

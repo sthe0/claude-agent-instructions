@@ -126,9 +126,9 @@ def test_a_plan_converts_resolves_and_loads_like_its_source(name, tmp_path):
 
     tree = plan.load_plan(index, root=tmp_path)
     original = plan.parse_plan(tomllib.loads(source.decode()))
-    assert [s.index for s in tree.stages] == order
-    assert [(s.index, s.depends_on) for s in tree.stages] == [
-        (s.index, s.depends_on) for s in original.stages]
+    assert [s.index for s in tree.stages] == sorted(order)
+    assert [(s.index, s.depends_on) for s in tree.stages] == sorted(
+        (s.index, s.depends_on) for s in original.stages)
     assert {n: plan.stage_closure_digest(tree, n) for n in order} == {
         n: plan.stage_closure_digest(original, n) for n in order}
     assert plan.plan_content_digest(tree) == plan.plan_content_digest(original)
@@ -285,7 +285,7 @@ def test_converted_visited_heads_are_the_declared_indices(name, tmp_path):
 
     visited = plan_store.visited_refs(index)
 
-    assert [p[0] for p, _path, _sha in visited if len(p) == 1] == order
+    assert [p[0] for p, _path, _sha in visited if len(p) == 1] == sorted(order)
     assert [p for p, _path, _sha in visited if len(p) == 2] == [(order[-1], "method")]
 
 

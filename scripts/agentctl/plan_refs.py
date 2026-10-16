@@ -15,6 +15,7 @@ stdlib reads TOML but cannot write it.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -23,6 +24,7 @@ import tomllib
 from pathlib import Path
 from typing import Callable
 
+from . import toml_emit
 from .directive import Directive
 from .plan import PlanError, load_plan, parse_plan, stage_closure_digest
 
@@ -140,6 +142,112 @@ def stage_identity(table: dict, position: int) -> int:
     return declared if type(declared) is int else position
 
 
+def stage_tables(raw: dict) -> list[tuple[int, dict]]:
+    """`(identity, table)` per stage of a plan with no reference in its stage list: the
+    declared integer `index`, else the 1-based array position, which is the identity
+    `parse_plan` gives it. Zero-based numbering and stages out of order are legitimate;
+    two stages with one identity are not."""
+    stages = raw.get("stage")
+    if not isinstance(stages, list):
+        return []
+    found: list[tuple[int, dict]] = []
+    seen: set[int] = set()
+    for position, table in enumerate(stages, start=1):
+        if not isinstance(table, dict):
+            raise PlanError(f"stage {position} is not a table")
+        if "index" in table and type(table["index"]) is not int:
+            raise PlanError(
+                f"stage index must be an integer: the stage at position {position} "
+                f"declares {table['index']!r}")
+        declared = stage_identity(table, position)
+        if declared in seen:
+            raise PlanError(f"stage index {declared} is declared twice")
+        seen.add(declared)
+        found.append((declared, table))
+    return found
+
+
+def run_dependencies(table: dict) -> frozenset[int]:
+    """The stages `table` waits for, as `parse_plan` derives `Stage.depends_on`: its
+    `depends_on` plus every `[[stage.supplies]]` `on`. An entry that is not an integer is
+    skipped, so a plan the loader refuses can still be simulated."""
+    found: set[int] = set()
+    for value in table.get("depends_on") or []:
+        if type(value) is int:
+            found.add(value)
+    for edge in table.get("supplies") or []:
+        if isinstance(edge, dict) and type(edge.get("on")) is int:
+            found.add(edge["on"])
+    return frozenset(found)
+
+
+def simulate_run_order(rows: list[tuple[int, frozenset[int]]]) -> list[int]:
+    """The order the engine runs `rows` (`(identity, dependencies)` in list order) when every
+    stage passes: repeatedly the first not-yet-run stage whose dependencies have all run,
+    which is `SessionState.ready_stages` followed by `cmd_next_stage`'s `ready[0]`. A plan
+    the loader accepts is acyclic, so a stuck state arises only for one it refuses; the
+    first remaining stage is then taken, to keep the simulation total."""
+    done: set[int] = set()
+    order: list[int] = []
+    pending = list(rows)
+    while pending:
+        pick = next((row for row in pending if row[1] <= done), pending[0])
+        pending.remove(pick)
+        order.append(pick[0])
+        done.add(pick[0])
+    return order
+
+
+def _with_stage_keys(table: dict, identity: int, depends_on: list[int] | None) -> dict:
+    """`table` with its identity written as `index` when absent and `depends_on` written
+    right after `index` when `depends_on` is given; every other key keeps its place."""
+    out: dict = {}
+    if "index" not in table:
+        out["index"] = identity
+        if depends_on is not None:
+            out["depends_on"] = depends_on
+    for key, value in table.items():
+        out[key] = value
+        if key == "index" and depends_on is not None:
+            out["depends_on"] = depends_on
+    return out
+
+
+def plan_stage_keys(raw: dict) -> dict:
+    """What a hypertext form of the single-file plan `raw` needs written into its stages,
+    and the run order it must keep.
+
+    Every stage names itself by an integer `index` and declares `depends_on`. A stage that
+    lacks `depends_on` is given `[p]`, p being the latest non-optional stage the engine runs
+    before it (found by simulating the current engine on `raw`), or `[]` when there is none;
+    a key present in the source is never touched. Every added edge points at a stage that
+    runs earlier, so none closes a cycle, and none points at an optional stage, so the
+    optional-stage rule O3 holds and a declined stage strands nothing.
+
+    Returns `stages` (`(identity, table)` sorted by identity, with the keys written),
+    `added_indices` and `added_depends_on` (`[{"stage", "depends_on"}]`, in identity order)
+    and the simulated `run_order_source` / `run_order_converted` (the converted list is in
+    index order)."""
+    source = stage_tables(raw)
+    order = simulate_run_order([(n, run_dependencies(t)) for n, t in source])
+    rank = {n: k for k, n in enumerate(order)}
+    required = {n for n, t in source if t.get("optional") is not True}
+    added: dict[int, list[int]] = {}
+    for identity, table in source:
+        if "depends_on" not in table:
+            added[identity] = [n for n in order[:rank[identity]] if n in required][-1:]
+    stages = sorted(
+        ((n, _with_stage_keys(t, n, added.get(n))) for n, t in source), key=lambda row: row[0])
+    return {
+        "stages": stages,
+        "added_indices": sorted(n for n, t in source if "index" not in t),
+        "added_depends_on": [{"stage": n, "depends_on": added[n]} for n, _ in stages if n in added],
+        "run_order_source": order,
+        "run_order_converted": simulate_run_order(
+            [(n, run_dependencies(t)) for n, t in stages]),
+    }
+
+
 def _map_node(table: dict, position: Position, kind: str, text: Callable) -> dict:
     out = {}
     for key, value in table.items():
@@ -177,6 +285,26 @@ def _map_plan(raw: dict, stage: Callable, text: Callable) -> dict:
         else:
             out[key] = _guard(value, (key,))
     return out
+
+
+def _require_depends_on(table: dict, ref: object, what: str) -> None:
+    """A stage of a hypertext plan lists what it waits for, `[]` included: the file or the
+    position it sits at is no source of run order."""
+    if "depends_on" not in table:
+        raise _refuse("depends_on", ref, f"{what} of a plan with references must declare "
+                      "`depends_on` (an empty list when it waits for nothing)")
+
+
+def _require_inline_stage_keys(raw: dict) -> None:
+    """The `index` and `depends_on` rules for the stages the index holds itself."""
+    for position, element in enumerate(raw.get("stage") or [], start=1):
+        if not isinstance(element, dict) or _classify(element) is not None:
+            continue
+        what = f"the inline stage at position {position}"
+        if type(element.get("index")) is not int:
+            raise _refuse("index", what,
+                          f"{what} of a plan with references must declare an integer `index`")
+        _require_depends_on(element, what, what)
 
 
 class _Walker:
@@ -282,6 +410,7 @@ class _Resolver(_Walker):
                 detail = (f"a stage file must declare an integer `index`, got {declared!r}"
                           if "index" in parsed else "a stage file must declare an integer `index`")
                 raise _refuse("index", table["ref"], detail)
+            _require_depends_on(parsed, table["ref"], "a stage file")
             for k in range(first_visit, len(self.visited)):
                 self.visited[k] = ((declared,), *self.visited[k][1:])
             return _map_node(parsed, (declared,), "stage",
@@ -291,11 +420,14 @@ class _Resolver(_Walker):
                 del self.stack[-pushed:]
 
     def resolve(self, raw: dict, base: Path) -> dict:
-        return _map_plan(
+        resolved = _map_plan(
             raw,
             stage=lambda t, i: self.stage(t, i, base),
             text=lambda t, p: self.text(t, p, base),
         )
+        if self.visited:
+            _require_inline_stage_keys(raw)
+        return resolved
 
 
 def resolve_refs(
@@ -398,7 +530,114 @@ def _rewrite_hash(text: str, ref: str, old: str, new: str, expected: int) -> str
     return text
 
 
+def _stage_file_number(name: str) -> int | None:
+    """The `<n>` of a stage file name `stage-<n>.toml`, else None."""
+    if not (name.startswith("stage-") and name.endswith(".toml")):
+        return None
+    digits = name[len("stage-"):-len(".toml")]
+    return int(digits) if digits.isascii() and digits.isdecimal() else None
+
+
 class _Sealer(_Walker):
+    def _stage_files(self, index: Path, inner: list[Path]) -> list[Path]:
+        """The stage files in the index's parts folder, confined, in name order."""
+        parts = index.parent / f"{index.stem}.parts"
+        if not parts.is_dir():
+            return []
+        found = []
+        for entry in sorted(parts.iterdir()):
+            if entry.is_file() and entry.name.startswith("stage-") and entry.suffix == ".toml":
+                if _stage_file_number(entry.name) is None:
+                    raise _refuse("path", str(entry), "a stage file is named stage-<n>.toml with "
+                                  "n the integer `index` it declares")
+                found.append(self.enter({"ref": f"{parts.name}/{entry.name}"}, index.parent, inner))
+        return found
+
+    def _declared_index(self, file: Path, inner: list[Path]) -> int:
+        """The `index` a stage file declares, through a chain of references, checked
+        against the number in its name."""
+        current, chain = file, [*inner]
+        while True:
+            parsed = _parse(current)
+            shape = _classify(parsed)
+            if shape is None:
+                break
+            if shape == "malformed":
+                raise _malformed(parsed)
+            chain.append(current)
+            current = self.enter(parsed, current.parent, chain)
+        declared = parsed.get("index")
+        if type(declared) is not int:
+            raise _refuse("index", str(file), "a stage file must declare an integer `index`")
+        named = _stage_file_number(file.name)
+        if declared != named:
+            raise _refuse("index", str(file),
+                          f"the file name says stage {named} but it declares `index` {declared}")
+        return declared
+
+    def _assemble(self, index: Path, text: str, raw: dict, inner: list[Path]) -> str:
+        """The index text with its `stage` list built from the stage files in its parts
+        folder, sorted by the index each declares, every reference carrying a fresh hash.
+
+        An index that holds a stage inline is left alone, and a stage file it does not
+        reference is refused: the plan would have two sources for one stage list. A
+        reference already in the list must point at `<stem>.parts/stage-<n>.toml`. The list
+        is rewritten only when the set of files differs from it, so a hand-formatted list
+        and its comments survive a reseal."""
+        files = self._stage_files(index, inner)
+        stages = raw.get("stage")
+        elements = stages if isinstance(stages, list) else []
+        listed: list[Path] = []
+        for element in elements:
+            if isinstance(element, dict) and _classify(element) == "malformed":
+                raise _malformed(element)
+            if isinstance(element, dict) and _classify(element) == "ref":
+                listed.append(self.enter(element, index.parent, inner))
+        if len(listed) != len(elements):
+            stray = [f for f in files if f not in listed]
+            if stray:
+                raise _refuse("path", str(stray[0]), "the index holds a stage inline but does "
+                              "not reference this stage file; move every stage into a file or "
+                              "remove the file")
+            return text
+        parts = (index.parent / f"{index.stem}.parts").resolve()
+        for target in listed:
+            if target.parent != parts or _stage_file_number(target.name) is None:
+                raise _refuse("path", str(target), f"a stage reference of {index.name} must "
+                              f"point at {index.stem}.parts/stage-<n>.toml")
+        by_index: dict[int, Path] = {}
+        for file in files:
+            declared = self._declared_index(file, inner)
+            if declared in by_index:
+                raise _refuse("index", str(file),
+                              f"stage {declared} is declared by {by_index[declared]} as well")
+            by_index[declared] = file
+        ordered = [by_index[n] for n in sorted(by_index)]
+        if "stage" in raw and ordered == listed:
+            return text
+        if "stage" not in raw and not ordered:
+            return text
+        entries = [{"ref": f"{index.stem}.parts/{file.name}",
+                    "sha256": self.seal_file(file, "stage", inner)} for file in ordered]
+        line = toml_emit.assignment("stage", entries) + "\n"
+        lines = text.splitlines(keepends=True)
+        blocks = _scan(lines)
+        if "stage" in blocks[0].keys:
+            start, end, _indent = blocks[0].keys["stage"]
+            lines[start:end + 1] = [line]
+        else:
+            at = blocks[1].header_line if len(blocks) > 1 else len(lines)
+            if at and not lines[at - 1].endswith("\n"):
+                lines[at - 1] += "\n"
+            lines[at:at] = [line, "\n"] if at < len(lines) else [line]
+        rewritten = "".join(lines)
+        old, new = _parse_text(text, index), _parse_text(rewritten, index)
+        if ({k: v for k, v in old.items() if k != "stage"} != {k: v for k, v in new.items()
+                                                                if k != "stage"}
+                or new.get("stage") != entries):
+            raise PlanError(f"assembling the stage list of {index} would change more than the list")
+        return rewritten
+
     def seal_file(self, path: Path, kind: str, stack: list[Path]) -> str:
         """Reseal every reference in `path`, children first; return the file's new
         sha256. `kind` is 'plan' for an index and 'stage' for a stage file."""
@@ -410,6 +649,9 @@ class _Sealer(_Walker):
         raw = _parse_text(text, path)
         edits: list[tuple[str, str, str]] = []
         inner = [*stack, path]
+        if kind == "plan":
+            text = self._assemble(path, text, raw, inner)
+            raw = _parse_text(text, path)
 
         def child(table: dict, subkind: str | None) -> None:
             target = self.enter(table, path.parent, inner)
@@ -436,7 +678,12 @@ class _Sealer(_Walker):
             raise _malformed(raw)
         elif kind == "plan":
             _map_plan(raw, stage=seal_stage, text=seal_leaf)
+            if edits:
+                _require_inline_stage_keys(raw)
         else:
+            if type(raw.get("index")) is not int:
+                raise _refuse("index", str(path), "a stage file must declare an integer `index`")
+            _require_depends_on(raw, str(path), "a stage file")
             _map_node(raw, (0,), "stage", seal_leaf)
 
         counts: dict[tuple[str, str, str], int] = {}
@@ -513,9 +760,10 @@ def _value_end(lines: list[str], start: int) -> int:
 
 
 class _Block:
-    def __init__(self, name: str, is_array: bool):
+    def __init__(self, name: str, is_array: bool, header_line: int = -1):
         self.name = name
         self.is_array = is_array
+        self.header_line = header_line
         self.keys: dict[str, tuple[int, int, str]] = {}
 
 
@@ -527,7 +775,7 @@ def _scan(lines: list[str]) -> list[_Block]:
         header = _HEADER_RE.match(line)
         key = _KEY_RE.match(line)
         if header:
-            blocks.append(_Block(header.group(2), header.group(1) == "[["))
+            blocks.append(_Block(header.group(2), header.group(1) == "[[", i))
             i += 1
         elif key:
             end = _value_end(lines, i)
@@ -553,6 +801,67 @@ def _replace_field(text: str, block_name: str, array_position: int | None,
     eol = lines[end][len(lines[end].rstrip("\r\n")):]
     lines[start:end + 1] = [f'{indent}{field} = {{ ref = "{rel}", sha256 = "{sha}" }}{eol}']
     return "".join(lines)
+
+
+def _insert_stage_keys(text: str, block_name: str, array_position: int | None,
+                       add_index: int | None, add_depends_on: list[int] | None) -> str:
+    """`text` with `index` and `depends_on` written as the first keys of a stage table
+    (`depends_on` right after an `index` already there). `block_name` is "" for a stage
+    file, which is one table, else the `[[stage]]` block at `array_position`."""
+    lines = text.splitlines(keepends=True)
+    blocks = _scan(lines)
+    if block_name == "":
+        block = blocks[0]
+    else:
+        candidates = [b for b in blocks if b.name == block_name and b.is_array]
+        if (array_position or 0) > len(candidates):
+            raise PlanError("cannot locate the stage to write its index and depends_on into")
+        block = candidates[(array_position or 1) - 1]
+    at = block.header_line + 1
+    new = []
+    if add_index is not None:
+        new.append(f"index = {add_index}\n")
+    if add_depends_on is not None:
+        if add_index is None and "index" in block.keys:
+            at = block.keys["index"][1] + 1
+        new.append(toml_emit.assignment("depends_on", add_depends_on) + "\n")
+    if at and not lines[at - 1].endswith("\n"):
+        lines[at - 1] += "\n"
+    lines[at:at] = new
+    return "".join(lines)
+
+
+def _with_added_keys(resolved: dict, keys: dict) -> dict:
+    """`resolved` with the stage keys of `plan_stage_keys` written, the stage list keeping
+    the order it has."""
+    by_identity = dict(keys["stages"])
+    return {**resolved, "stage": [by_identity[stage_identity(table, position)]
+                                  for position, table in enumerate(resolved.get("stage", []),
+                                                                   start=1)]}
+
+
+def _stage_key_edits(raw: dict, resolved: dict, keys: dict, walker: _Walker,
+                     index: Path) -> list[tuple]:
+    """Where each key `plan_stage_keys` adds is written: `(holder file, the chain of files
+    below the index it sits behind, block name, array position, index to add, depends_on
+    to add)` per stage the keys touch."""
+    new_index = set(keys["added_indices"])
+    new_deps = {a["stage"]: a["depends_on"] for a in keys["added_depends_on"]}
+    found = []
+    for position, table in enumerate(resolved.get("stage", []), start=1):
+        identity = stage_identity(table, position)
+        if identity not in new_index and identity not in new_deps:
+            continue
+        element, holder, chain = raw["stage"][position - 1], index, []
+        block_name, array_position = "stage", position
+        while _classify(element) == "ref":
+            holder = walker.enter(element, holder.parent, chain)
+            chain.append(holder)
+            element = _parse(holder)
+            block_name, array_position = "", None
+        found.append((holder, tuple(chain), block_name, array_position,
+                      identity if identity in new_index else None, new_deps.get(identity)))
+    return found
 
 
 def plan_externalize(
@@ -586,11 +895,15 @@ def plan_externalize(
     before = load_plan(index, root=walker_root)
     raw = _parse(index)
     walker = _Walker(walker_root, index)
+    resolved, _ = resolve_refs(raw, index.parent, walker_root, index_path=index)
+    keys = plan_stage_keys(resolved)
+    key_edits = _stage_key_edits(raw, resolved, keys, walker, index)
+    if key_edits:
+        before = parse_plan(copy.deepcopy(_with_added_keys(resolved, keys)))
     chain: list[Path] = []
     holder = index
     block_name, array_position = "", None
     if kind == "stage":
-        resolved, _ = resolve_refs(raw, index.parent, walker_root, index_path=index)
         position = next(
             (i for i, s in enumerate(resolved.get("stage", []), start=1)
              if int(s.get("index", i)) == stage), None)
@@ -618,14 +931,19 @@ def plan_externalize(
     field_path = index.parent / field_file_relpath(index.stem, node, name)
     if field_path.exists() and field_path.read_bytes() != value.encode("utf-8"):
         raise PlanError(f"{field_path} already exists with different content")
-    touched = {p: p.read_bytes() for p in (index, holder, *chain)}
+    touched = {p: p.read_bytes() for p in (
+        index, holder, *chain, *(q for edit in key_edits for q in (edit[0], *edit[1])))}
     created = not field_path.exists()
     parts_dir_created = not field_path.parent.exists()
     try:
+        for holder_path, _chain, edit_block, edit_position, add_index, add_deps in key_edits:
+            holder_path.write_bytes(_insert_stage_keys(
+                _decode(holder_path.read_bytes(), str(holder_path)), edit_block, edit_position,
+                add_index, add_deps).encode("utf-8"))
         sha = write_field_file(field_path, value)
         rel = Path(os.path.relpath(field_path, holder.parent)).as_posix()
         holder.write_bytes(_replace_field(
-            _decode(touched[holder], str(holder)), block_name, array_position,
+            _decode(holder.read_bytes(), str(holder)), block_name, array_position,
             name, rel, sha).encode("utf-8"))
         seal(index, root=walker_root)
         after = load_plan(index, root=walker_root)
@@ -641,7 +959,9 @@ def plan_externalize(
             field_path.parent.rmdir()
         raise
     return {"field_file": str(field_path), "sha256": sha, "holder": str(holder),
-            "root_digest": _sha256(index.read_bytes())}
+            "root_digest": _sha256(index.read_bytes()),
+            "added_indices": keys["added_indices"],
+            "added_depends_on": keys["added_depends_on"]}
 
 
 # --- verbs -----------------------------------------------------------------------
@@ -696,9 +1016,12 @@ def cmd_plan_externalize(args, *, store=None) -> Directive:
             order_field=getattr(args, "order_field", None))
     except PlanError as exc:
         return Directive(False, "(plan-refs)", "error", str(exc))
-    return Directive(True, "(plan-refs)", "inspect",
-                     f"externalized into {done['field_file']}; root digest {done['root_digest']}",
-                     data=done)
+    lines = [f"externalized into {done['field_file']}; root digest {done['root_digest']}"]
+    if done["added_indices"]:
+        lines.append(f"added index to stage(s): {done['added_indices']}")
+    lines += [f"added depends_on {a['depends_on']} to stage {a['stage']}"
+              for a in done["added_depends_on"]]
+    return Directive(True, "(plan-refs)", "inspect", "\n".join(lines), data=done)
 
 
 def cmd_plan_seal(args, *, store=None) -> Directive:

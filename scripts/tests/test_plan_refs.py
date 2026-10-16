@@ -199,17 +199,20 @@ def test_a_stage_reference_resolving_to_a_reference_is_followed_in_the_same_posi
     assert [(p, h) for p, _, h in visited] == [((1,), _sha(c1)), ((1,), _sha(real))]
 
 
-def _chain(d: Path, links: int) -> Path:
-    """An index whose single stage sits at the end of `links` nested references."""
+def _chain(d: Path, links: int, head: str = "c1.toml") -> Path:
+    """An index whose single stage sits at the end of `links` nested references; `head` is
+    the file the index itself points at, standing in for `c1.toml`."""
     text = _stage_fields(1)
     _write(d / f"c{links}.toml", text)
     for k in range(links - 1, 0, -1):
-        nxt = f'ref = "c{k + 1}.toml"\nsha256 = "{_sha(text)}"\n'
-        _write(d / f"c{k}.toml", nxt)
+        holder = head if k == 1 else f"c{k}.toml"
+        target = os.path.relpath(f"c{k + 1}.toml", os.path.dirname(holder) or ".")
+        nxt = f'ref = "{target}"\nsha256 = "{_sha(text)}"\n'
+        _write(d / holder, nxt)
         text = nxt
     return _write(
         d / "plan.toml",
-        _meta() + "\n" + _stage_array(f'{{ ref = "c1.toml", sha256 = "{_sha(text)}" }}'),
+        _meta() + "\n" + _stage_array(f'{{ ref = "{head}", sha256 = "{_sha(text)}" }}'),
     )
 
 
@@ -1029,7 +1032,7 @@ def test_sealing_reseals_every_link_of_a_stage_chain_after_the_leaf_changes(tmp_
     from agentctl import plan_refs
     from agentctl.plan import load_plan
 
-    index = _chain(tmp_path, 3)
+    index = _chain(tmp_path, 3, head="plan.parts/stage-1.toml")
     leaf_text = (tmp_path / "c3.toml").read_text(encoding="utf-8")
     _write(tmp_path / "c3.toml", leaf_text.replace("Stage 1", "Stage one"))
 
@@ -1037,9 +1040,10 @@ def test_sealing_reseals_every_link_of_a_stage_chain_after_the_leaf_changes(tmp_
 
     assert load_plan(index).stages[0].title == "Stage one"
     assert root == _sha(index.read_text(encoding="utf-8"))
-    for link, target in (("c2.toml", "c3.toml"), ("c1.toml", "c2.toml")):
+    for link, target in (("c2.toml", "c3.toml"), ("plan.parts/stage-1.toml", "c2.toml")):
         body = tomllib.loads((tmp_path / link).read_text(encoding="utf-8"))
-        assert body == {"ref": target, "sha256": _sha((tmp_path / target).read_text("utf-8"))}
+        spelled = os.path.relpath(target, os.path.dirname(link) or ".")
+        assert body == {"ref": spelled, "sha256": _sha((tmp_path / target).read_text("utf-8"))}
 
 
 def test_plan_seal_through_the_cli_reseals_after_an_edit(tmp_path, capsys):
@@ -1060,16 +1064,15 @@ def test_the_sealer_refuses_a_missing_stage_file_as_missing(tmp_path, capsys):
     from agentctl import plan_refs
     from agentctl.plan import PlanError
 
-    link = _ref(tmp_path, "s.toml", 'index = 1\n')
+    link = _ref(tmp_path, "plan.parts/stage-1.toml", f'ref = "gone.toml"\nsha256 = "{"0" * 64}"\n')
     index = _write(tmp_path / "plan.toml", _meta() + "\n" + _stage_array(link))
-    (tmp_path / "s.toml").unlink()
 
     with pytest.raises(PlanError) as exc:
         plan_refs.seal(index)
     rc, out = _run(tmp_path, capsys, "plan-seal", "--plan", str(index))
 
-    assert exc.value.ref_kind == "missing" and "s.toml" in str(exc.value)
-    assert rc == 1 and not out["ok"] and "s.toml" in out["detail"]
+    assert exc.value.ref_kind == "missing" and "gone.toml" in str(exc.value)
+    assert rc == 1 and not out["ok"] and "gone.toml" in out["detail"]
 
 
 def test_the_sealer_refuses_a_stage_file_that_is_a_malformed_reference(tmp_path):
@@ -1077,7 +1080,7 @@ def test_the_sealer_refuses_a_stage_file_that_is_a_malformed_reference(tmp_path)
     from agentctl.plan import PlanError
 
     _write(tmp_path / "m.md", "a file that exists\n")
-    link = _ref(tmp_path, "s.toml", 'ref = "m.md"\n')
+    link = _ref(tmp_path, "plan.parts/stage-1.toml", 'ref = "m.md"\n')
     index = _write(tmp_path / "plan.toml", _meta() + "\n" + _stage_array(link))
 
     with pytest.raises(PlanError) as exc:

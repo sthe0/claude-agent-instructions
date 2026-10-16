@@ -32,6 +32,8 @@ from .directive import Directive
 from .plan import PlanError
 
 _REMEDY = "reformulate or split the node: a reference does not shorten what a reader is shown"
+_ADDITIONS_REFUSAL = "{verb}: this plan cannot be converted in place yet"
+_ORDER_REFUSAL = "{verb}: the converted plan would not run as the source does; nothing is linked"
 
 
 def _sha256(data: bytes) -> str:
@@ -82,28 +84,11 @@ def _contains_reference(raw: dict) -> bool:
     return bool(found)
 
 
-def _stage_tables(raw: dict) -> list[tuple[int, dict]]:
-    """`(identity, table)` per stage: the declared integer `index`, else the 1-based array
-    position, which is the identity `plan.parse_plan` gives it. Zero-based numbering and
-    stages out of order are legitimate; two stages with one identity are not."""
-    stages = raw.get("stage")
-    if not isinstance(stages, list):
-        return []
-    found: list[tuple[int, dict]] = []
-    seen: set[int] = set()
-    for position, table in enumerate(stages, start=1):
-        if not isinstance(table, dict):
-            raise PlanError(f"stage {position} is not a table")
-        if "index" in table and type(table["index"]) is not int:
-            raise PlanError(
-                f"stage index must be an integer: the stage at position {position} "
-                f"declares {table['index']!r}")
-        declared = plan_refs.stage_identity(table, position)
-        if declared in seen:
-            raise PlanError(f"stage index {declared} is declared twice")
-        seen.add(declared)
-        found.append((declared, table))
-    return found
+def has_additions(report: dict) -> bool:
+    """The one predicate for "the conversion changes what the plan says": the converter
+    added a `depends_on` to some stage, an empty one included. Live conversion refuses on
+    it, and a conversion that adds nothing is exactly its negation."""
+    return bool(report["added_depends_on"])
 
 
 def _oversize(raw: dict, stage_max_chars: int) -> list[dict]:
@@ -138,26 +123,38 @@ def _parsed_view(doc) -> dict:
     }
 
 
-def _parsed_equivalence(raw: dict, index_path: Path, root: Path) -> tuple[str, str, str]:
-    """`(verdict, detail, content_digest)`: "ok" with the plan content digest both forms
-    share, or "not-applicable" with the loader's message (and no digest) when the current
-    loader refuses the source. A source the loader accepts must load from the tree to a plan
-    with the same derived values."""
+def _parsed_equivalence(
+    raw: dict, expected: dict, index_path: Path, root: Path,
+) -> tuple[str, str, str, str]:
+    """`(verdict, detail, content_digest, source_content_digest)`: "ok", or "not-applicable"
+    with the loader's message (and no digests) when the current loader refuses the source.
+    A source the loader accepts must, once the converter's additions are made (`expected`:
+    the source with its stage indices and dependencies, in index order), load to a plan the
+    tree loads to as well, with the same derived values. `content_digest` is that plan's;
+    `source_content_digest` is the unmodified source's, so a caller can tell whether the
+    additions changed it."""
     try:
         source_doc = plan.parse_plan(copy.deepcopy(raw))
     except PlanError as exc:
-        return "not-applicable", str(exc), ""
+        return "not-applicable", str(exc), "", ""
+    try:
+        expected_doc = plan.parse_plan(copy.deepcopy(expected))
+    except PlanError as exc:
+        raise PlanError(
+            f"parsed equivalence: the source loads but not with the converter's additions: "
+            f"{exc}") from exc
     try:
         tree_doc = plan.load_plan(index_path, root=root)
     except PlanError as exc:
         raise PlanError(
             f"parsed equivalence: the source loads but the converted tree does not: {exc}") from exc
-    source_view, tree_view = _parsed_view(source_doc), _parsed_view(tree_doc)
-    for part, value in source_view.items():
+    expected_view, tree_view = _parsed_view(expected_doc), _parsed_view(tree_doc)
+    for part, value in expected_view.items():
         if value != tree_view[part]:
             raise PlanError(
                 f"parsed equivalence: {part} differs between the source and the converted tree")
-    return "ok", "", source_view["plan_content_digest"]
+    return ("ok", "", expected_view["plan_content_digest"],
+            plan.plan_content_digest(source_doc))
 
 
 def convert_with_report(
@@ -173,7 +170,8 @@ def convert_with_report(
         raise PlanError(f"malformed TOML in the source plan: {exc}") from exc
     if _contains_reference(raw):
         raise PlanError("already hypertext; use plan-seal")
-    stages = _stage_tables(raw)
+    keys = plan_refs.plan_stage_keys(raw)
+    stages = keys["stages"]
     oversize = _oversize(raw, stage_max_chars)
     index_rel = f"{stem}.toml"
 
@@ -181,8 +179,6 @@ def convert_with_report(
         tmp = Path(scratch)
         order: list[str] = []
         externalized: list[dict] = []
-        added_indices: list[int] = []
-        expected_stages: list[dict] = []
 
         def externalize(table: dict, node: int | str, kind: str, holder_dir: Path) -> dict:
             out: dict = {}
@@ -214,10 +210,6 @@ def convert_with_report(
             elif key == "stage" and isinstance(value, list):
                 refs = []
                 for identity, table in stages:
-                    if "index" not in table:
-                        table = {"index": identity, **table}
-                        added_indices.append(identity)
-                    expected_stages.append(table)
                     stage_rel = plan_refs.stage_file_relpath(stem, identity)
                     holder_dir = (tmp / stage_rel).parent
                     stage_table = externalize(table, identity, "stage", holder_dir)
@@ -243,12 +235,13 @@ def convert_with_report(
                 tree_raw, tmp, tmp, index_path=index_path)
         except PlanError as exc:
             raise PlanError(f"raw equivalence: the converted tree does not resolve: {exc}") from exc
-        expected = {**raw, "stage": expected_stages} if expected_stages else raw
+        expected = {**raw, "stage": [table for _n, table in stages]} if stages else raw
         if resolved != expected:
             raise PlanError(
-                "raw equivalence: the resolved tree differs from the source at "
-                f"{_first_difference(expected, resolved)}")
-        parsed, parsed_detail, content_digest = _parsed_equivalence(raw, index_path, tmp)
+                "raw equivalence: the resolved tree differs from the source with the "
+                f"converter's additions at {_first_difference(expected, resolved)}")
+        parsed, parsed_detail, content_digest, source_content_digest = _parsed_equivalence(
+            raw, expected, index_path, tmp)
 
     report = {
         "source_sha256": _sha256(source_bytes),
@@ -257,12 +250,16 @@ def convert_with_report(
         "root_digest": _sha256(index_bytes),
         "files": [{"path": rel, "sha256": _sha256(data)} for rel, data in files.items()],
         "externalized": externalized,
-        "added_indices": added_indices,
+        "added_indices": keys["added_indices"],
+        "added_depends_on": keys["added_depends_on"],
+        "run_order_source": keys["run_order_source"],
+        "run_order_converted": keys["run_order_converted"],
         "oversize_stages": oversize,
         "round_trip": "ok",
         "raw_equivalence": "ok",
         "parsed_equivalence": parsed,
         "content_digest": content_digest,
+        "source_content_digest": source_content_digest,
     }
     if parsed_detail:
         report["parsed_equivalence_detail"] = parsed_detail
@@ -307,6 +304,10 @@ def _report_lines(report: dict) -> list[str]:
               for e in report["externalized"]]
     if report.get("added_indices"):
         lines.append(f"added index to stage(s): {report['added_indices']}")
+    lines += [f"added depends_on {a['depends_on']} to stage {a['stage']}"
+              for a in report.get("added_depends_on", [])]
+    lines.append(f"run order, source: {report['run_order_source']}")
+    lines.append(f"run order, converted: {report['run_order_converted']}")
     lines += [f"OVERSIZE {o['message']}" for o in report["oversize_stages"]]
     return lines
 
@@ -399,6 +400,11 @@ def cmd_plan_convert_live(args, *, store, runner=None) -> Directive:
             f"{verb}: the current loader refuses this plan ({report['parsed_equivalence_detail']}), "
             "so the session's content digest cannot be rebound; use `agentctl plan-convert` for "
             "a read-only copy")
+    if has_additions(report):
+        return Directive(False, state.node, "noop", _ADDITIONS_REFUSAL.format(verb=verb))
+    if (report["run_order_source"] != report["run_order_converted"]
+            or report["content_digest"] != report["source_content_digest"]):
+        return Directive(False, state.node, "noop", _ORDER_REFUSAL.format(verb=verb))
     index_rel = f"{stem}.toml"
     parts = {rel: data for rel, data in files.items() if rel != index_rel}
     for rel, data in parts.items():
