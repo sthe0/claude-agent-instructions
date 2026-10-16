@@ -221,10 +221,44 @@ def test_live_hook_probe_unavailable_when_the_gate_exempts_the_probe_dir(monkeyp
 
     kind, detail = live.run_hook_probe("haiku", {"TMPDIR": str(tmp_path)}, root, 5)
 
-    assert kind == "unavailable" and detail == "probe-dir-exempt", (
+    assert kind == "unavailable" and detail.startswith("probe-dir-exempt"), (
         f"BEHAVIOUR: a probe dir the gate exempts was reported {kind} {detail}"
     )
     assert not launched, "BEHAVIOUR: the probe launched against a path the gate does not guard"
+
+
+def _exempt_probe_report(live, monkeypatch, tmp_path, env):
+    root = tmp_path / "root"
+    (root / "home").mkdir(parents=True)
+    monkeypatch.setattr(live, "PROBE_DIR_PARENT", str(tmp_path))
+    monkeypatch.setattr(live, "run_launch", lambda *a, **k: ("ok", APPLIED_EVENT))
+    return live.run_hook_probe("haiku", env, root, 5)
+
+
+def test_probe_dir_exempt_report_names_the_probe_dir_the_scratch_root_and_tmpdir(monkeypatch, tmp_path):
+    live = _load_live_script()
+
+    kind, detail = _exempt_probe_report(live, monkeypatch, tmp_path, {"TMPDIR": str(tmp_path)})
+
+    assert kind == "unavailable" and detail.startswith("probe-dir-exempt"), f"setup: {kind} {detail}"
+    assert f"{tmp_path}/isb-hook-probe." in detail, f"BEHAVIOUR: the report does not name the probe dir: {detail}"
+    probe_dir_mentions_removed = detail.replace(f"{tmp_path}/isb-hook-probe.", "")
+    assert str(tmp_path) in probe_dir_mentions_removed, (
+        f"BEHAVIOUR: the report does not name the scratch root the probe dir fell into: {detail}"
+    )
+    assert "TMPDIR" in detail, f"BEHAVIOUR: the report does not name TMPDIR as the cause: {detail}"
+
+
+def test_containing_scratch_root_is_the_most_specific_root_or_none(monkeypatch, tmp_path):
+    live = _load_live_script()
+    target = tmp_path / "probe-target.py"
+    monkeypatch.delenv("AGENTCTL_SCRATCH_ROOTS", raising=False)
+
+    nested = live.containing_scratch_root(target, {"TMPDIR": str(tmp_path)})
+    unrelated = live.containing_scratch_root(target, {"AGENTCTL_SCRATCH_ROOTS": str(tmp_path.parent / "elsewhere")})
+
+    assert nested == str(tmp_path), f"BEHAVIOUR: the most specific containing root was not chosen: {nested}"
+    assert unrelated is None, f"BEHAVIOUR: a root that does not contain the target was reported: {unrelated}"
 
 
 def test_probe_target_gating_projects_the_childs_tmpdir_and_home_and_restores_the_parents(monkeypatch):

@@ -29,6 +29,7 @@ Exit:  0  launch completed and every token was found
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -181,8 +182,9 @@ def hook_probe_verdict(stream: str, before: str, after: str) -> bool:
     return hook_probe_diagnosis(stream, before, after)[0] == "pass"
 
 
-def probe_target_is_gated(target: Path, env: dict) -> bool:
-    """The state gate's own verdict on the target, under the child's scratch-root settings."""
+@contextlib.contextmanager
+def _child_scratch_environment(env: dict):
+    """Apply the child's scratch-root settings to this process, restoring the parent's after."""
     saved = {k: os.environ.get(k) for k in ("TMPDIR", "HOME", exempt_paths.SCRATCH_ROOTS_ENV)}
     for key in saved:
         if key in env:
@@ -190,13 +192,40 @@ def probe_target_is_gated(target: Path, env: dict) -> bool:
         else:
             os.environ.pop(key, None)
     try:
-        return exempt_paths.is_gated_path(str(target))
+        yield
     finally:
         for key, value in saved.items():
             if value is None:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+def probe_target_is_gated(target: Path, env: dict) -> bool:
+    """The state gate's own verdict on the target, under the child's scratch-root settings."""
+    with _child_scratch_environment(env):
+        return exempt_paths.is_gated_path(str(target))
+
+
+def containing_scratch_root(target: Path, env: dict) -> str | None:
+    """The most specific scratch root, under the child's settings, that contains the target."""
+    with _child_scratch_environment(env):
+        resolved = os.path.realpath(str(target))
+        containing = [root for root in exempt_paths.scratch_roots()
+                      if resolved.startswith(os.path.realpath(root) + os.sep)]
+    return max(containing, key=lambda root: len(os.path.realpath(root)), default=None)
+
+
+def probe_dir_exempt_detail(probe_dir: Path, env: dict) -> str:
+    """The UNAVAILABLE reason when the gate exempts the probe dir: which scratch root holds it
+    and, when the child's TMPDIR is what makes that root a scratch root, why."""
+    root = containing_scratch_root(probe_dir / "probe-target.py", env)
+    if root is None:
+        return f"probe-dir-exempt: the state gate exempts the probe dir {probe_dir}, though no scratch root contains it"
+    detail = f"probe-dir-exempt: the probe dir {probe_dir} is inside the scratch root {root}, which the state gate exempts"
+    if env.get("TMPDIR"):
+        detail += f"; TMPDIR={env['TMPDIR']} (the temp dir choice) puts it there, so point TMPDIR outside every scratch root"
+    return detail
 
 
 def run_hook_probe(model: str, env: dict, cwd: Path, timeout: float,
@@ -213,7 +242,7 @@ def run_hook_probe(model: str, env: dict, cwd: Path, timeout: float,
         target = probe_dir / "probe-target.py"
         target.write_text(PROBE_ORIGINAL)
         if not probe_target_is_gated(target, env):
-            return "unavailable", "probe-dir-exempt"
+            return "unavailable", probe_dir_exempt_detail(probe_dir, env)
         kind, payload = run_launch(build_hook_probe_argv(model), env, cwd, timeout,
                                    HOOK_PROBE_PROMPT.format(path=target))
         if kind == "unavailable":
