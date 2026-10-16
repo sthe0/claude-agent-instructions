@@ -241,11 +241,10 @@ def canonicalize(
     consumer parses it and a human or a later grep can still read it. It is
     sanitised even there: whitespace collapsed, newlines dropped (a multi-line
     digest would otherwise forge envelope structure) and truncated, so it cannot
-    displace the original output that follows. (``original_output`` inverts this
-    envelope; ``agentctl.dispatch.permission_request_action`` reads a PERMISSION-REQUEST
-    block's action text from the original output through it. That text is safe to take
-    from model output: the checker's answer on it only writes an audit row and never
-    changes routing.) ``plan_path`` is model-authored
+    displace the original output that follows. (``agentctl.dispatch.permission_request_action`` reads a PERMISSION-REQUEST
+    block's action text from the whole output, skipping this envelope's bare label. That
+    text is safe to take from model output: the checker's answer on it is discarded and
+    never changes routing.) ``plan_path`` is model-authored
     too and gets the same newline treatment — a value that still spans lines is
     dropped from the envelope rather than allowed to forge one. (A fabricated
     path stays caught downstream by ``validate_planner_plan``'s .toml + load_plan
@@ -258,28 +257,6 @@ def canonicalize(
     if path and not any(ch in path for ch in "\r\n"):
         lines.append(f"Plan: {path}")
     return "\n".join(lines) + f"\n\n{original}"
-
-
-_ENVELOPE_MARKER_LINE_RE = re.compile(r"^[A-Z][A-Z_-]*:$")
-
-
-def original_output(text: str) -> str:
-    """The inverse of ``canonicalize``: the specialist's original output.
-
-    A strict structural parse of what ``canonicalize`` emits — a bare marker line,
-    then at most one ``Digest:`` line and one ``Plan:`` line in that order, then one
-    blank line — returning everything after that blank line. Any other text (legacy
-    or kill-switch output that was never wrapped) is returned unchanged."""
-    lines = text.split("\n")
-    if not _ENVELOPE_MARKER_LINE_RE.match(lines[0]):
-        return text
-    i = 1
-    for prefix in ("Digest: ", "Plan: "):
-        if i < len(lines) and lines[i].startswith(prefix):
-            i += 1
-    if i < len(lines) and lines[i] == "":
-        return "\n".join(lines[i + 1:])
-    return text
 
 
 def check_planner_return(

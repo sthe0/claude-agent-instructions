@@ -79,6 +79,7 @@ _BLOCK_TAIL = (
 _BLOCK_FORMATS = {
     "label-with-inline-text": f"PERMISSION-REQUEST: {REQUEST_ACTION}\n" + _BLOCK_TAIL,
     "label-alone-with-action-line": f"PERMISSION-REQUEST:\nAction: {REQUEST_ACTION}\n" + _BLOCK_TAIL,
+    "label-alone-blank-then-action": f"PERMISSION-REQUEST:\n\nAction: {REQUEST_ACTION}\n" + _BLOCK_TAIL,
     "decorated": f"**PERMISSION-REQUEST:**\n- **Action:** `{REQUEST_ACTION}`\n" + _BLOCK_TAIL,
 }
 _INCOMPLETE_LINE = "INCOMPLETE: committed, not pushed\n"
@@ -146,22 +147,6 @@ def test_incomplete_permission_request_parity_with_bare_request(store, venued_fi
         assert "incomplete_summary" not in bare.data
 
 
-def test_original_output_inverts_canonicalize():
-    from lib.planner_plan_check import RETURN_MARKERS, canonicalize, original_output
-
-    original = "INCOMPLETE: x\nPERMISSION-REQUEST:\nAction: y\n\nlast line after a blank\n"
-    for marker in RETURN_MARKERS:
-        for digest in ("", "a one-line digest"):
-            for plan in (None, "/tmp/p.toml"):
-                assert original_output(canonicalize(marker, digest, plan, original)) == original, (
-                    f"{marker!r} digest={digest!r} plan={plan!r}"
-                )
-    assert original_output(canonicalize("COMPLETED", "", None, "")) == ""
-    for unwrapped in ("", "INCOMPLETE: x\nPERMISSION-REQUEST: y\n", "PERMISSION-REQUEST:\nAction: y\n",
-                      "no marker here\n\nbody"):
-        assert original_output(unwrapped) == unwrapped
-
-
 def test_covered_request_inside_incomplete_diagnoses_with_summary(store, venued_fixtures_dir):
     def covered_dispatch(sid, stdout):
         _to_executing(store, sid, venued_fixtures_dir)
@@ -185,6 +170,11 @@ def test_covered_request_inside_incomplete_diagnoses_with_summary(store, venued_
         "BEHAVIOUR: the INCOMPLETE summary is missing from the diagnosis directive"
     )
     assert "incomplete_summary" not in bare.data
+    for sid in ("r7a", "r7b"):
+        rows = store.load(sid).materialization_defects
+        assert len(rows) == 1 and rows[0].get("evidence") == "self-reported", (
+            f"BEHAVIOUR: {sid} recorded materialization_defects {rows!r}, not one self-reported row"
+        )
 
 
 def test_decorated_permission_request_after_incomplete_parks_request(store, venued_fixtures_dir):

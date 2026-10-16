@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Callable
 
 from lib import argv_text
-from lib.planner_plan_check import original_output
 from lib.runtime_models import HOST_CLAUDE, HOST_CURSOR, HOSTS
 
 from .state import CriterionType, Stage
@@ -132,18 +131,17 @@ def _unwrap_code(text: str) -> str:
 
 
 def permission_request_action(stdout: str) -> str | None:
-    """The request text of the first ``PERMISSION-REQUEST:`` block in ``stdout``,
-    whether or not it is the first marker (an INCOMPLETE can stop for a permission),
-    else None. Tolerates the list bullet / ``**bold**`` / code-span decoration that
-    ``cli._parse_rule_line`` tolerates.
+    """The request text of the first ``PERMISSION-REQUEST:`` block in ``stdout`` that
+    carries one, whether or not it is the first marker (an INCOMPLETE can stop for a
+    permission), else None. Tolerates the list bullet / ``**bold**`` / code-span
+    decoration that ``cli._parse_rule_line`` tolerates.
 
-    The text is whatever follows the label on its line, or, when that is empty, the
-    block's ``Action:`` line.
-
-    The block is read from the specialist's original output
-    (``planner_plan_check.original_output``), not from the canonical envelope around
-    it: the envelope's own bare label would otherwise shadow the original's block."""
-    lines = [ln.strip() for ln in original_output(stdout or "").splitlines()]
+    Each label's text is whatever follows it on its line, or, when that is empty, the
+    block's ``Action:`` line (blank lines allowed between; the scan stops at the next
+    marker line or label). A label that yields nothing is skipped, so the bare label of
+    the canonical envelope around a specialist's output does not shadow the block in
+    the output itself."""
+    lines = [ln.strip() for ln in (stdout or "").splitlines()]
     for i, line in enumerate(lines):
         m = _REQUEST_LABEL_RE.match(line)
         if not m:
@@ -152,12 +150,14 @@ def permission_request_action(stdout: str) -> str | None:
         if tail:
             return tail
         for follow in lines[i + 1:]:
-            if MARKER_RE.match(follow):
+            if MARKER_RE.match(follow) or _REQUEST_LABEL_RE.match(follow):
                 break
             am = _ACTION_LABEL_RE.match(follow)
             if am:
-                return _unwrap_code(am.group(1)) or None
-        return None
+                action = _unwrap_code(am.group(1))
+                if action:
+                    return action
+                break
     return None
 
 # A runner takes an argv list and returns (returncode, stdout, stderr).
