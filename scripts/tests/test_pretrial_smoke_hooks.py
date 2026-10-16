@@ -232,17 +232,16 @@ def test_probe_target_gating_projects_the_childs_tmpdir_and_home_and_restores_th
     import shutil
     import tempfile
 
-    import pytest
-
-    if not os.path.isdir("/dev/shm"):
-        pytest.skip("no /dev/shm to host a target outside any /tmp path")
     live = _load_live_script()
     for name in ("TMPDIR", "HOME", "AGENTCTL_SCRATCH_ROOTS"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", "/nonexistent-parent-home")
     before = dict(os.environ)
-    shm = os.path.realpath("/dev/shm")
-    probe_dir = tempfile.mkdtemp(dir="/dev/shm")
+    # A host outside any /tmp path and every scratch root: /dev/shm where it exists,
+    # else a directory inside the checkout itself (removed in the finally below).
+    host = "/dev/shm" if os.path.isdir("/dev/shm") else str(Path(__file__).resolve().parents[2])
+    shm = os.path.realpath(host)
+    probe_dir = tempfile.mkdtemp(dir=host, prefix=".probe-target-")
     target = Path(probe_dir) / "probe-target.py"
     target.write_text("x\n")
     try:
