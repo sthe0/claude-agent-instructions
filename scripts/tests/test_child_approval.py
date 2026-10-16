@@ -32,7 +32,7 @@ from agentctl.config import Thresholds
 from agentctl.plan import _order_place_digest, _venue_for, load_plan, order_digest, plan_meta_digest
 from agentctl.stage_norm import StageNorm
 from agentctl.store import FileStateStore
-from conftest import SUBSTANTIVE_ORDER, declare_venue
+from conftest import SUBSTANTIVE_ORDER, declare_venue, spawn_handoff
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "plan_two_stage.toml"
 PARENT_CHECK = "python3 -m pytest -q tests/test_mod.py"
@@ -117,13 +117,13 @@ class Child:
         self.norm = _parent_norm(tmp_path)
         self.digest = self.norm.norm_digest()
 
-    def link(self, *, norm: StageNorm | None = None, grants=(), depth: int = 1) -> None:
+    def link(self, *, norm: StageNorm | None = None, grants=(), depth: int = 1,
+             sid: str = "child-1") -> None:
         record = norm_handoff.build_record(
             parent_session="parent-s", stage_index=1, kind="developer",
             norm=norm or self.norm, grants=list(grants), depth=depth, parent_lineage=None,
         )
-        path, sha = norm_handoff.write_record(self.tmp / "handoffs", record)
-        self.monkeypatch.setenv(norm_handoff.NORM_HANDOFF_ENV, norm_handoff.format_env_value(path, sha))
+        self.monkeypatch.setenv(norm_handoff.NORM_HANDOFF_ENV, spawn_handoff(self.root, record, sid))
 
     def run(self, cmd: str, **flags) -> dict:
         argv = ["--state-root", str(self.root), cmd.replace("_", "-")]
@@ -306,7 +306,7 @@ def test_unresolved_stage_verify_command_is_covered_only_by_the_identical_handof
     assert command in sources, sources
     _refusal(child, "unresolved-not-in-handoff")
 
-    child.link(grants=[*_covering_grants(plan), {"rule": f"Bash({command})"}])
+    child.link(grants=[*_covering_grants(plan), {"rule": f"Bash({command})"}], sid="child-2")
     d = child.submit(plan, sid="child-2")
     assert _autonomy(d).get("eligible") is True, _autonomy(d)
     assert child.run("approve", session="child-2", by="agent")["ok"] is True

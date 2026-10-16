@@ -38,6 +38,7 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli, norm_handoff
+from conftest import spawn_handoff
 from agentctl.dispatch import RunResult
 from agentctl.state import SessionState
 from agentctl.stage_norm import StageNorm
@@ -305,8 +306,7 @@ class Contour:
             parent_session=PARENT, stage_index=1, kind="developer", norm=self.norm,
             grants=_covering_grants(self.plan), depth=1, parent_lineage=None,
         )
-        path, sha = norm_handoff.write_record(tmp_path / "handoffs", record)
-        self.handoff = norm_handoff.format_env_value(path, sha)
+        self.handoff = spawn_handoff(self.root, record, CHILD)
         monkeypatch.setenv(HANDOFF_ENV, self.handoff)
         _cli(self.root, "start", session=CHILD, task="child", goal="g", done_criterion="dc")
         monkeypatch.delenv(HANDOFF_ENV)
@@ -775,6 +775,29 @@ def test_own_channel_refuses_accept_resolve(contour):
     assert {s: contour.state_bytes(s) for s in before} == before
 
 
+@pytest.mark.parametrize("forgery", ["outside-handoffs-dir", "no-child-session-record"])
+def test_forged_handoff_is_not_adopted_and_acceptance_still_blocks(contour, tmp_path, monkeypatch, forgery):
+    record = norm_handoff.build_record(
+        parent_session=PARENT, stage_index=1, kind="developer", norm=contour.norm,
+        grants=[], depth=1, parent_lineage=None)
+    if forgery == "outside-handoffs-dir":
+        path, sha = norm_handoff.write_record(tmp_path / "forged", record)
+        norm_handoff.write_child_session(contour.root, PARENT, 1, session="forged", workdir="/tmp")
+    else:
+        path, sha = norm_handoff.write_record(contour.root, record)
+        norm_handoff.write_child_session(contour.root, PARENT, 1, session=CHILD, workdir="/tmp")
+    state = _linked_verifying(contour.store, "forged", tmp_path, linked=False, monkeypatch=monkeypatch)
+    monkeypatch.setenv(HANDOFF_ENV, norm_handoff.format_env_value(path, sha))
+
+    cli._adopt_norm_handoff(state, contour.store)
+    contour.store.save(state)
+
+    assert contour.store.load("forged").parent_link is None, "a forged handoff was adopted"
+    d = _verify_final(contour.store, "forged")
+    assert d.ok is False and d.action == "fix_stages", d
+    assert any("AcceptanceReview" in b for b in d.data["blockers"]), d
+
+
 def test_linked_failed_stage_blocks(store, tmp_path, monkeypatch):
     state = _linked_verifying(store, "lnk", tmp_path, linked=True, monkeypatch=monkeypatch)
     state.stages[0].outcome.status = "FAILED"
@@ -825,6 +848,6 @@ def test_linked_failing_final_check_blocks(store, tmp_path, monkeypatch):
     state.final_check = [FinalCheck(command="false", expected_exit=0, label="fails")]
     store.save(state)
     d = _verify_final(store, "lnk")
-    assert d.ok is False
-    assert store.load("lnk").node != "RESOLUTION"
-    assert "fails" in json.dumps(d.data), d
+    assert d.ok is False and d.action == "declare", d
+    assert d.data["failures"] == ["final_check 'fails': exit 1 != 0"], d
+    assert store.load("lnk").node == "DIAGNOSING"

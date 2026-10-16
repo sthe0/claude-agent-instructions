@@ -819,7 +819,24 @@ def _adopt_parent_difficulty(state: SessionState) -> None:
     state.log("parent_difficulty", **parsed)
 
 
-def _adopt_norm_handoff(state: SessionState) -> None:
+def _handoff_spawn_refusal(state: SessionState, adopted: dict, store: StateStore) -> str | None:
+    """Why `adopted` was not written by a real spawn for this session, else None: the
+    file must lie under `<state_root>/handoffs/` and the spawner's child-session record
+    for the stage it names must name this session. A self-consistent file anyone can
+    write is not a link."""
+    root = getattr(store, "root", None)
+    if root is None:
+        return "the store has no state root to check the spawn against"
+    directory = (Path(root) / norm_handoff.HANDOFF_DIRNAME).absolute()
+    if Path(adopted["handoff"]).absolute().parent != directory:
+        return f"handoff file is not under {directory}"
+    record = norm_handoff.read_child_session(root, adopted["parent_session"], adopted["stage_index"])
+    if record is None or record["session"] != state.session_id:
+        return "no spawner-written child-session record names this session"
+    return None
+
+
+def _adopt_norm_handoff(state: SessionState, store: StateStore) -> None:
     """Adopt the spawning stage's norm handoff from `AGENTCTL_NORM_HANDOFF`
     (`<path>:<sha256>`) as `state.parent_link`, and with it the child's depth.
     Idempotent: a session that is already linked keeps its link, and a different value
@@ -835,6 +852,10 @@ def _adopt_norm_handoff(state: SessionState) -> None:
     if not raw:
         return
     adopted, reason = norm_handoff.verify_env_value(raw)
+    if adopted is not None:
+        reason = _handoff_spawn_refusal(state, adopted, store)
+        if reason is not None:
+            adopted = None
     if adopted is None:
         state.log("norm_handoff_ignored", reason=reason, value=raw[:200])
         print(f"agentctl: ignoring {norm_handoff.NORM_HANDOFF_ENV}: {reason}", file=sys.stderr)
@@ -2400,7 +2421,7 @@ def cmd_start(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     )
     runtime_host.bind_runtime_host(state, getattr(args, "host", None), require=False)
     _adopt_parent_difficulty(state)
-    _adopt_norm_handoff(state)
+    _adopt_norm_handoff(state, store)
     state.log("start", task=state.task_id)
     store.save(state)
     return Directive(True, state.node, "classify", "session registered; run classify next")
@@ -2478,7 +2499,7 @@ def cmd_reset(args, *, store: StateStore, runner: Runner | None = None) -> Direc
         # child process stays linked to the stage that spawned it.
         new.parent_link = dict(prior.parent_link)
         new.recursion_depth = new.parent_link["depth"]
-    _adopt_norm_handoff(new)
+    _adopt_norm_handoff(new, store)
     new.log("reset", task=new.task_id, prior_task=(prior.task_id if prior else None))
     if reopening:
         # Counted in the accumulator, which survives this command; logged on the new
@@ -3870,7 +3891,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     except (runtime_host.HostAmbiguousError, runtime_host.HostConflictError) as exc:
         return Directive(False, state.node, "noop", str(exc))
     _adopt_parent_difficulty(state)
-    _adopt_norm_handoff(state)
+    _adopt_norm_handoff(state, store)
     thr = Thresholds()
     sig = Signals(
         is_chat=bool(getattr(args, "chat", False)),

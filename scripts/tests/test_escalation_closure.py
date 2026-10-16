@@ -21,6 +21,7 @@ from argparse import Namespace
 import pytest
 
 from agentctl import cli, norm_handoff
+from conftest import spawn_handoff
 from agentctl.dispatch import RunResult
 from agentctl.state import Node, SessionState, StageStatus
 from agentctl.stage_norm import StageNorm
@@ -74,8 +75,7 @@ def _child(store, fixtures_dir, tmp_path, monkeypatch, *, sid=CHILD):
     record = norm_handoff.build_record(
         parent_session=PARENT, stage_index=1, kind="developer", norm=norm, grants=[],
         depth=1, parent_lineage=None)
-    path, sha = norm_handoff.write_record(tmp_path / f"handoffs-{sid}", record)
-    monkeypatch.setenv(norm_handoff.NORM_HANDOFF_ENV, norm_handoff.format_env_value(path, sha))
+    monkeypatch.setenv(norm_handoff.NORM_HANDOFF_ENV, spawn_handoff(store.root, record, sid))
     _executing(store, sid, fixtures_dir)
     monkeypatch.delenv(norm_handoff.NORM_HANDOFF_ENV)
     cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)

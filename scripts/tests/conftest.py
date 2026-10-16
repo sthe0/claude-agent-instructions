@@ -402,6 +402,19 @@ def _no_ambient_recursion_depth(monkeypatch):
     monkeypatch.delenv("AGENT_RECURSION_DEPTH", raising=False)
 
 
+def spawn_handoff(state_root, record, child_session):
+    """The `AGENTCTL_NORM_HANDOFF` value a real spawn exports for `child_session`: the
+    record under `<state_root>/handoffs/` plus the child-session record the spawner
+    writes, which is what makes the engine adopt it."""
+    from agentctl import norm_handoff
+
+    path, sha = norm_handoff.write_record(state_root, record)
+    norm_handoff.write_child_session(
+        state_root, record["parent_session"], record["stage_index"],
+        session=child_session, workdir="/tmp/spawn-workdir")
+    return norm_handoff.format_env_value(path, sha)
+
+
 @pytest.fixture(autouse=True)
 def _no_ambient_norm_handoff(monkeypatch):
     """Drop the ambient AGENTCTL_NORM_HANDOFF: a suite run from inside a spawned

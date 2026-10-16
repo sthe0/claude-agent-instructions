@@ -323,14 +323,16 @@ class _AcceptanceCheck(NamedTuple):
 def _acceptance_review_check(state: SessionState) -> _AcceptanceCheck:
     """Shared guard chain behind both acceptance-review checks
     (_acceptance_review_resolution_blockers and failing_acceptance_requirements):
-    resolves a status in {"inactive", "no_review", "stale", "unreadable", "ok"} plus,
+    resolves a status in {"inactive" (acceptance not active, or a linked child --
+    `parent_link` -- whose acceptance is its parent's record-result), "no_review",
+    "stale", "unreadable", "ok"} plus,
     only when "ok", the current plan's declared requirement ids and the review's
     recorded verdicts, and, only when "stale", the requirement ids that went stale
     (empty for a stale review of a plan that declares none, or of a plan file that is
     not the accepted version). Each early-out mirrors a distinct guard
     _acceptance_review_resolution_blockers already documents in full; this helper exists
     so the two callers never drift on WHICH guard fired."""
-    if not acceptance_active(state) or state.parent_link:
+    if not acceptance_active(state) or state.parent_link is not None:
         # A linked child's acceptance is its parent's record-result on the stage it serves;
         # `accept` is a user-authority verb outside its own channel.
         return _AcceptanceCheck("inactive", [], {}, [])
@@ -390,7 +392,8 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
     plan.load_plan, itself pure — see plan.py's own import list), never a
     subprocess/socket/network reach.
 
-    Inactive (chat / small-change / AGENTCTL_ACCEPTANCE=0) => [] always. Active
+    Inactive (chat / small-change / AGENTCTL_ACCEPTANCE=0 / a linked child, `parent_link`,
+    whose acceptance is its parent's record-result) => [] always. Active
     checks, in order:
       - a review must exist — else blocked (fail-CLOSED: an all-PASSED session with
         no acceptance is not resolved, only controlled);

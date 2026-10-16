@@ -27,6 +27,7 @@ from types import SimpleNamespace
 import pytest
 
 from agentctl import cli
+from conftest import spawn_handoff
 from agentctl.dispatch import RunResult
 from agentctl.plan import load_plan
 from agentctl.stage_norm import StageNorm
@@ -120,18 +121,15 @@ def _record(plan_path, *, parent_session="par-s", stage_index=1, depth=1,
     }
 
 
-def _handoff_value(tmp_path, record, name):
-    path = tmp_path / name
-    payload = json.dumps(record, sort_keys=True).encode("utf-8")
-    path.write_bytes(payload)
-    return f"{path}:{hashlib.sha256(payload).hexdigest()}"
+def _handoff_value(store, record, sid):
+    return spawn_handoff(store.root, record, sid)
 
 
 def _executing(store, sid, plan_path, *, record=None, tmp_path=None, monkeypatch=None):
     """A substantive session at EXECUTING stage 1 on `plan_path`; when `record` is
     given, started under that handoff so it is a linked child."""
     if record is not None:
-        monkeypatch.setenv(HANDOFF_ENV, _handoff_value(tmp_path, record, f"{sid}.json"))
+        monkeypatch.setenv(HANDOFF_ENV, _handoff_value(store, record, sid))
     cli.cmd_start(ns(session=sid, task="norm-loop", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     if record is not None:
@@ -217,7 +215,8 @@ def test_spawn_refuses_unchanged_norm_redelegation(store, venued_fixtures_dir, t
         f"BEHAVIOUR: the refusal's first stdout line is not LOOP_DETECTED: {first!r}"
     assert "par-s" in first and "stage 1" in first
     assert [r for r, _ in refusals] == ["norm-loop"]
-    assert not (tmp_path / "state" / "handoffs").exists(), "a refused spawn wrote a handoff"
+    assert len(list((tmp_path / "state" / "handoffs").glob("*.json"))) == 1, \
+        "a refused spawn wrote a handoff beyond the session's own"
 
 
 def test_spawn_refuses_a_norm_of_a_non_parent_ancestor(store, venued_fixtures_dir, tmp_path, monkeypatch,
@@ -335,7 +334,7 @@ def _classify(store, sid):
 
 
 def _linked_start(store, sid, tmp_path, monkeypatch, plan, **record_kw):
-    monkeypatch.setenv(HANDOFF_ENV, _handoff_value(tmp_path, _record(plan, **record_kw), f"{sid}.json"))
+    monkeypatch.setenv(HANDOFF_ENV, _handoff_value(store, _record(plan, **record_kw), sid))
     cli.cmd_start(ns(session=sid, task="t", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     monkeypatch.delenv(HANDOFF_ENV)
@@ -455,7 +454,8 @@ def test_spawn_refuses_grant_widening(store, venued_fixtures_dir, tmp_path, monk
     assert sorted(ln.removeprefix("Rule: ") for ln in lines if ln.startswith("Rule: ")) == sorted(
         ["Bash(git diff:*)", "Bash(python3 mod.py:*)", _venue_edit(tmp_path, "/mod.py")])
     assert [r for r, _ in refusals] == ["grant-widening"]
-    assert not (tmp_path / "state" / "handoffs").exists(), "a refused spawn wrote a handoff"
+    assert len(list((tmp_path / "state" / "handoffs").glob("*.json"))) == 1, \
+        "a refused spawn wrote a handoff beyond the session's own"
 
 
 def test_wildcard_tail_bash_rule_does_not_cover_a_narrower_one_conservatively(

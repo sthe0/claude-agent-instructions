@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli
+from conftest import spawn_handoff
 from agentctl import state as state_module
 from agentctl.plan import load_plan
 from agentctl.stage_norm import StageNorm
@@ -106,12 +107,9 @@ def _record(venued_fixtures_dir, *, parent_session="parent-s", stage_index=1, de
     }
 
 
-def _write_handoff(tmp_path, record, name="handoff.json"):
-    """Write `record` and return the `AGENTCTL_NORM_HANDOFF` value naming it."""
-    path = tmp_path / name
-    payload = json.dumps(record, sort_keys=True).encode("utf-8")
-    path.write_bytes(payload)
-    return f"{path}:{hashlib.sha256(payload).hexdigest()}"
+def _write_handoff(store, record, sid):
+    """The `AGENTCTL_NORM_HANDOFF` value a real spawn exports for `sid`."""
+    return spawn_handoff(store.root, record, sid)
 
 
 class _Launched(Exception):
@@ -153,7 +151,7 @@ def _read_exported(value):
 
 def _link(monkeypatch, store, tmp_path, venued_fixtures_dir, sid, **record_kw):
     """Start `sid` under a handoff naming `parent_session` stage `stage_index`."""
-    value = _write_handoff(tmp_path, _record(venued_fixtures_dir, **record_kw), name=f"{sid}.json")
+    value = _write_handoff(store, _record(venued_fixtures_dir, **record_kw), sid)
     monkeypatch.setenv(HANDOFF_ENV, value)
     _start(store, sid)
     monkeypatch.delenv(HANDOFF_ENV)
@@ -260,7 +258,7 @@ def test_spawn_never_writes_the_parent_session_state(store, venued_fixtures_dir,
 def test_child_start_adopts_handoff_depth(store, venued_fixtures_dir, tmp_path, monkeypatch):
     """negative control: a session started under a verified handoff is linked to the
     parent stage and takes the depth the handoff names."""
-    value = _write_handoff(tmp_path, _record(venued_fixtures_dir, parent_session="par", stage_index=1, depth=3))
+    value = _write_handoff(store, _record(venued_fixtures_dir, parent_session="par", stage_index=1, depth=3), "r1")
     monkeypatch.setenv(HANDOFF_ENV, value)
     d = _start(store, "r1", recursion_depth=0)
     assert d.ok is True, d.detail
@@ -285,7 +283,7 @@ def test_an_untrusted_handoff_is_logged_and_ignored(store, venued_fixtures_dir, 
         record["norm_lineage"][-1]["session"] = "somebody-else"
     elif case == "depth-zero":
         record["depth"] = 0
-    value = _write_handoff(tmp_path, record)
+    value = _write_handoff(store, record, f"r-{case}")
     path_text, _, digest = value.rpartition(":")
     if case == "tampered-bytes":
         Path(path_text).write_bytes(Path(path_text).read_bytes() + b" ")
@@ -313,7 +311,7 @@ def test_unlinked_start_records_the_requested_depth_not_the_ambient_one(store, m
 
 
 def test_the_handoff_depth_wins_over_the_requested_one(store, venued_fixtures_dir, tmp_path, monkeypatch):
-    monkeypatch.setenv(HANDOFF_ENV, _write_handoff(tmp_path, _record(venued_fixtures_dir, depth=4)))
+    monkeypatch.setenv(HANDOFF_ENV, _write_handoff(store, _record(venued_fixtures_dir, depth=4), "d3"))
     _start(store, "d3", recursion_depth=1)
     assert store.load("d3").recursion_depth == 4
 
@@ -321,14 +319,14 @@ def test_the_handoff_depth_wins_over_the_requested_one(store, venued_fixtures_di
 def test_adoption_is_idempotent_and_a_different_value_is_logged(store, venued_fixtures_dir, tmp_path, monkeypatch):
     first = _link(monkeypatch, store, tmp_path, venued_fixtures_dir, "i1", parent_session="p1", depth=2)
     state = store.load("i1")
-    other = _write_handoff(tmp_path, _record(venued_fixtures_dir, parent_session="p2", depth=5), name="other.json")
+    other = _write_handoff(store, _record(venued_fixtures_dir, parent_session="p2", depth=5), "i1")
     monkeypatch.setenv(HANDOFF_ENV, other)
-    cli._adopt_norm_handoff(state)
+    cli._adopt_norm_handoff(state, store)
     assert state.parent_link["parent_session"] == "p1" and state.recursion_depth == 2
     assert [e["reason"] for e in state.history if e.get("event") == "norm_handoff_ignored"] \
         == ["session already linked"]
     monkeypatch.setenv(HANDOFF_ENV, first)
-    cli._adopt_norm_handoff(state)
+    cli._adopt_norm_handoff(state, store)
     assert len([e for e in state.history if e.get("event") == "norm_handoff_ignored"]) == 1
 
 
@@ -396,7 +394,7 @@ def test_children_lists_linked_sessions_only_and_writes_nothing(store, venued_fi
 
 def test_children_reports_the_open_difficulty_level_and_resolution(store, venued_fixtures_dir, tmp_path, monkeypatch):
     _start(store, "par2")
-    value = _write_handoff(tmp_path, _record(venued_fixtures_dir, parent_session="par2"))
+    value = _write_handoff(store, _record(venued_fixtures_dir, parent_session="par2"), "kid-d")
     monkeypatch.setenv(HANDOFF_ENV, value)
     _executing(store, "kid-d", venued_fixtures_dir)
     monkeypatch.delenv(HANDOFF_ENV)
