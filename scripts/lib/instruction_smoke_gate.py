@@ -47,6 +47,7 @@ REQUIRED_CHECKS = (
     "static:verify-instructions-sync",
     "static:lint-hooks-executable",
     "live:core-marker",
+    "live:hook-gate-deny",
     "canon:unchanged",
 )
 

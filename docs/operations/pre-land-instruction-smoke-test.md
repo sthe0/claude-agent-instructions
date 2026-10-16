@@ -43,6 +43,7 @@ The candidate must be committed: the sandbox clones a ref, never the working tre
 | `static:lint-hooks-executable` | every hook script is executable in git |
 | `project:structure` | the composed project tree has the expected shape (project only) |
 | `live:core-marker` | a real session loads `CLAUDE.md` and follows its `@~/.claude-agent/config.md` import |
+| `live:hook-gate-deny` | a session with the Edit tool enabled, asked to edit a production file before any engine plan is approved, is refused by the state gate's PreToolUse hook and the file stays unchanged |
 | `live:project-marker` | a session started inside the composed project also sees the project layer (project only) |
 | `canon:unchanged` | the canonical checkout and the real config root are byte-identical before and after the run |
 
@@ -68,7 +69,7 @@ UNAVAILABLE is not FAIL, because a check that could not run says nothing about t
 ## What this does NOT catch
 
 - **The concurrency class.** A scope-conflict hook once worked for about 22 hours after landing, then false-blocked parallel sessions through a multi-session interaction, and was reverted. One sandboxed session cannot reproduce an interaction between several live ones, so the smoke test does not catch it, and a change to anything that coordinates parallel sessions needs its own multi-session exercise.
-- **Any PreToolUse- or PostToolUse-class defect.** The smoke prompt runs with tools disabled, so those hooks never fire.
+- **A PreToolUse- or PostToolUse-class defect outside the state gate's deny.** The marker prompt runs with tools disabled, so those hooks never fire there; only the `live:hook-gate-deny` launch enables a tool, and it observes one hook decision (the state gate refusing an edit), not every tool-call hook.
 - **Real-HOME-dependent behaviour.** The session runs in a fake HOME; anything that reads state from the real home behaves differently there.
 - **Caller-environment path overrides that are not on the scrub list.** A variable the list does not name passes through to the launch.
 - **Semantic correctness of rule content.** The recipe shows the rules load, not that they are right.
@@ -86,13 +87,13 @@ The recipe above is wired into landing so that an instruction change cannot reac
 
 **The hook.** `githooks/pre-push` refuses any push that moves `main` to a commit without an admitted record, so a raw `git push` cannot bypass the gate. Its output is defused so that `sync-instructions-repo.sh` does not read a refusal as "no push rights".
 
-**Cost.** A landing that needs a smoke spends the minutes of one live launch (the default bound is 480 s per launch) inside the `land-branch.py` call. Callers that wrap it with a short timeout — notably `lib/worktree_route.py`, which lands a routed write with no timeout of its own — must expect that, or run the gate first and land the recorded commit.
+**Cost.** A landing that needs a smoke spends the minutes of two live launches (the default bound is 480 s per launch) inside the `land-branch.py` call. Callers that wrap it with a short timeout — notably `lib/worktree_route.py`, which lands a routed write with no timeout of its own — must expect that, or run the gate first and land the recorded commit.
 
 **`land-on-main.sh` cannot land surface diffs.** It commits the staged patch as a new commit on every attempt, so no record can ever name that commit and the hook refuses the push. The refusal is permanent for a surface diff, not a cost: the script stops at the first `pre-push: refused` rejection (no rebase-and-retry loop), prints the refusal once and points at `land-branch.py`. Commit the change on a branch and land that branch; exempt-only diffs are unaffected.
 
 ## Cost
 
-A run makes one live `claude -p` call, or two with a project, on a small model. A landing of an instruction-surface change pays this once (see Landing gate); the standalone recipe stays a manual check and is not meant for CI.
+A run makes two live `claude -p` calls (the marker launch and the hook-gate launch), or three with a project, on a small model. The hook-gate launch edits a real file in a private directory outside `/tmp` (the state gate exempts `/tmp` paths), by default under `/dev/shm` and removed afterwards, and saves the raw stream to `<root>/hook-probe/stream.jsonl`; without a creatable probe directory (`no-probe-dir`), or when the gate would not guard it (`probe-dir-exempt`), the check is UNAVAILABLE, which a landing admits only with a waiver. A landing of an instruction-surface change pays this once (see Landing gate); the standalone recipe stays a manual check and is not meant for CI.
 
 ## Relation to the other gates
 

@@ -4,6 +4,13 @@ that the instructions it loaded carry the expected marker tokens.
 
 Usage: instruction-sandbox-live.py --root <root> --cwd <dir> --expect <token> [--expect <token> ...]
                                    [--timeout <seconds>] [--model <alias>]
+       instruction-sandbox-live.py --root <root> --cwd <dir> --probe hook-gate-deny
+                                   [--timeout <seconds>] [--model <alias>] [--stream-out <file>]
+
+`--probe hook-gate-deny` runs one turn with the Edit tool enabled, asked to edit a
+file in a private /dev/shm directory while the session sits before an execution node; it passes
+when the stream carries the state gate's deny text and the file is unchanged (output
+`pass denied`, or `fail <no-tool-call|no-gate-deny|file-changed|deny-and-changed> result=<excerpt>`; exit 0 / 1 / 3 as below).
 
 The child runs under the sandbox HOME / agent root, with every built-in tool
 disabled, so it can only answer from the instructions the client loaded through
@@ -14,21 +21,26 @@ Output: `found <token>` / `missing <token>` per token; on exit 3 one line
 `UNAVAILABLE <reason>`.
 Exit:  0  launch completed and every token was found
        1  launch completed (exit 0, no timeout) and a token was absent
-       3  UNAVAILABLE: `auth`, `timeout`, `launch-exit=<n>` or `launch-error`;
+       3  UNAVAILABLE: `auth`, `timeout`, `launch-exit=<n>`, `launch-error`,
+          `no-probe-dir` or `probe-dir-exempt`;
           a launch that did not complete says nothing about the instructions
        2  usage
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from agentctl import exempt_paths  # noqa: E402
 from lib import host_llm  # noqa: E402
 from lib.runtime_models import HOST_CLAUDE  # noqa: E402
 
@@ -59,6 +71,15 @@ PROMPT = (
     "Reply with exactly the value that follows 'SANDBOX-MARKER: ' in your "
     "instructions, one value per line, and nothing else."
 )
+
+HOOK_PROBE_PROMPT = (
+    "Read the file {path} with the Read tool, then use the Edit tool once to replace the text "
+    "'original' with 'changed' in it. Do not retry the edit, and report the Edit result in one line."
+)
+PROBE_ORIGINAL = "original\n"
+# The state gate's deny prefix (scripts/hook-state-gate.py deny_with).
+HOOK_DENY_TEXT = "agentctl session is in node="
+PROBE_DIR_PARENT = "/dev/shm"
 
 
 def build_child_env(caller_env: dict, root: Path) -> tuple[dict, str]:
@@ -93,7 +114,123 @@ def build_argv(model: str) -> list[str]:
     return argv + ["--tools", ""]
 
 
-def run_launch(argv: list[str], env: dict, cwd: Path, timeout: float) -> tuple[str, str]:
+def build_hook_probe_argv(model: str) -> list[str]:
+    """One turn with Read and Edit enabled (Edit refuses an unread file before any hook runs),
+    so the PreToolUse state gate can fire. The
+    stream carries the tool result, where the gate's deny text is observable; every
+    permission is pre-granted, so only a hook can refuse the edit."""
+    argv = host_llm.build_launch_argv(HOST_CLAUDE, model, lean=True)
+    return argv + ["--output-format", "stream-json", "--verbose",
+                   "--permission-mode", "bypassPermissions", "--tools", "Read,Edit"]
+
+
+def _tool_result_texts(stream: str) -> list[str]:
+    texts = []
+    for line in stream.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        message = event.get("message") if isinstance(event, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if event.get("type") != "user" or not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                body = block.get("content")
+                if isinstance(body, list):
+                    body = " ".join(str(b.get("text", "")) for b in body if isinstance(b, dict))
+                texts.append(str(body))
+    return texts
+
+
+def _tool_use_count(stream: str) -> int:
+    count = 0
+    for line in stream.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        message = event.get("message") if isinstance(event, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, list):
+            count += sum(1 for b in content if isinstance(b, dict) and b.get("type") == "tool_use")
+    return count
+
+
+def hook_probe_diagnosis(stream: str, before: str, after: str) -> tuple[str, str]:
+    """Return (reason, excerpt of the tool results): `pass`, `no-tool-call`, `no-gate-deny`,
+    `file-changed` or `deny-and-changed`. PASS iff a tool result carries the state gate's
+    deny text and the file is unchanged."""
+    results = _tool_result_texts(stream)
+    excerpt = " | ".join(" ".join(text.split()) for text in results)[:400]
+    denied = any(HOOK_DENY_TEXT in text for text in results)
+    changed = before != after
+    if denied and changed:
+        return "deny-and-changed", excerpt
+    if denied:
+        return "pass", excerpt
+    if changed:
+        return "file-changed", excerpt
+    if not results and not _tool_use_count(stream):
+        return "no-tool-call", excerpt
+    return "no-gate-deny", excerpt
+
+
+def hook_probe_verdict(stream: str, before: str, after: str) -> bool:
+    return hook_probe_diagnosis(stream, before, after)[0] == "pass"
+
+
+def probe_target_is_gated(target: Path, env: dict) -> bool:
+    """The state gate's own verdict on the target, under the child's scratch-root settings."""
+    saved = {k: os.environ.get(k) for k in ("TMPDIR", "HOME", exempt_paths.SCRATCH_ROOTS_ENV)}
+    for key in saved:
+        if key in env:
+            os.environ[key] = env[key]
+        else:
+            os.environ.pop(key, None)
+    try:
+        return exempt_paths.is_gated_path(str(target))
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def run_hook_probe(model: str, env: dict, cwd: Path, timeout: float,
+                   stream_out: Path | None = None) -> tuple[str, str]:
+    """Return ('pass'|'fail', detail) or ('unavailable', reason).
+
+    The sandbox lives under /tmp, which the state gate exempts by path, so the target is a
+    real file in a private directory outside /tmp, removed afterwards."""
+    try:
+        probe_dir = Path(tempfile.mkdtemp(prefix="isb-hook-probe.", dir=PROBE_DIR_PARENT))
+    except OSError:
+        return "unavailable", "no-probe-dir"
+    try:
+        target = probe_dir / "probe-target.py"
+        target.write_text(PROBE_ORIGINAL)
+        if not probe_target_is_gated(target, env):
+            return "unavailable", "probe-dir-exempt"
+        kind, payload = run_launch(build_hook_probe_argv(model), env, cwd, timeout,
+                                   HOOK_PROBE_PROMPT.format(path=target))
+        if kind == "unavailable":
+            return kind, payload
+        if stream_out is not None:
+            stream_out.parent.mkdir(parents=True, exist_ok=True)
+            stream_out.write_text(payload)
+        reason, excerpt = hook_probe_diagnosis(payload, PROBE_ORIGINAL, target.read_text())
+        if reason == "pass":
+            return "pass", "denied"
+        return "fail", f"{reason} result={excerpt!r}"
+    finally:
+        shutil.rmtree(probe_dir, ignore_errors=True)
+
+
+def run_launch(argv: list[str], env: dict, cwd: Path, timeout: float,
+               prompt: str = PROMPT) -> tuple[str, str]:
     """Return ('ok', stdout) or ('unavailable', reason)."""
     try:
         proc = subprocess.Popen(
@@ -103,7 +240,7 @@ def run_launch(argv: list[str], env: dict, cwd: Path, timeout: float) -> tuple[s
     except OSError:
         return "unavailable", "launch-error"
     try:
-        out, _err = proc.communicate(PROMPT, timeout=timeout)
+        out, _err = proc.communicate(prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.communicate()
@@ -117,14 +254,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--cwd", type=Path, required=True)
-    parser.add_argument("--expect", action="append", required=True, metavar="TOKEN")
+    parser.add_argument("--expect", action="append", default=[], metavar="TOKEN")
+    parser.add_argument("--probe", choices=("marker", "hook-gate-deny"), default="marker")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--stream-out", type=Path, default=None,
+                        help="save the hook probe's raw stream-json here")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         return EXIT_USAGE if exc.code else EXIT_PASS
     root = args.root.resolve()
+    if args.probe == "marker" and not args.expect:
+        print("--expect is required for the marker probe", file=sys.stderr)
+        return EXIT_USAGE
     if not (root / "home").is_dir() or not args.cwd.is_dir():
         print(f"no sandbox home under {root} or no such cwd {args.cwd}", file=sys.stderr)
         return EXIT_USAGE
@@ -134,6 +277,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"credential status: {status}", file=sys.stderr)
         print("UNAVAILABLE auth")
         return EXIT_UNAVAILABLE
+
+    if args.probe == "hook-gate-deny":
+        # A recursion depth >= 1 is the gate's executor bypass, which would hide the deny.
+        env.pop("AGENT_RECURSION_DEPTH", None)
+        kind, detail = run_hook_probe(args.model, env, args.cwd, args.timeout,
+                                     args.stream_out)
+        if kind == "unavailable":
+            print(f"UNAVAILABLE {detail}")
+            return EXIT_UNAVAILABLE
+        print(f"{kind} {detail}")
+        return EXIT_PASS if kind == "pass" else EXIT_MISSING
 
     kind, payload = run_launch(build_argv(args.model), env, args.cwd, args.timeout)
     if kind == "unavailable":
