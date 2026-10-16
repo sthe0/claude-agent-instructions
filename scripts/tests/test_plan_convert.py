@@ -683,6 +683,11 @@ def _bindings(state) -> dict:
     }
 
 
+def _print_rebinding(bindings_before, after):
+    print(f"live_rebinding before={bindings_before['review']} "
+          f"after={_bindings(after)['review']} root={after.accepted_plan_digest}")
+
+
 @pytest.mark.parametrize("shape", ["bound", "counted"])
 def test_live_rebinding_keeps_every_recorded_binding_and_moves_only_the_accepted_digest(
         store, tmp_path, shape):
@@ -705,8 +710,7 @@ def test_live_rebinding_keeps_every_recorded_binding_and_moves_only_the_accepted
     assert gates._plan_review_content_stale(after.plan_review, str(plan_file), after) is None
     assert gates._receipt_binding_blocker(
         after.plan_presentations[0], str(plan_file), "plan presentation", after) is None
-    print(f"live_rebinding before={bindings_before['review']} "
-          f"after={_bindings(after)['review']} root={after.accepted_plan_digest}")
+    _print_rebinding(bindings_before, after)
 
 
 def test_live_rebinding_writes_no_new_snapshot_and_stores_the_old_and_new_bytes(
@@ -716,10 +720,12 @@ def test_live_rebinding_writes_no_new_snapshot_and_stores_the_old_and_new_bytes(
     monkeypatch.setenv(plan_store.OBJECTS_DIR_ENV, str(tmp_path / "objects"))
     sid, plan_file, root = _live_session(store, tmp_path, shape="bound")
     old_bytes = plan_file.read_bytes()
-    snapshot = Path(store.load(sid).plan_snapshot_path)
+    before = store.load(sid)
+    snapshot = Path(before.plan_snapshot_path)
 
     assert _live(store, sid).ok
 
+    _print_rebinding(_bindings(before), store.load(sid))
     assert not snapshot.exists()
     assert plan_store.get(root) == old_bytes
     new_root = _sha(plan_file.read_bytes())
@@ -1245,7 +1251,9 @@ def test_the_rebinding_tests_run_green_against_a_plan_given_through_the_environm
     import re
 
     lines = re.findall(r"live_rebinding before=(\w+) after=(\w+) root=(\w+)", done.stdout)
-    assert len(lines) == 2
+    passed = int(re.search(r"(\d+) passed", done.stdout).group(1))
+    assert passed >= 3
+    assert len(lines) == passed
     for before, after, root in lines:
         assert before == _sha(given.read_bytes())
         assert after == before
