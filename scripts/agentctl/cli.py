@@ -56,6 +56,7 @@ from .plan import (
     SEVERITY_BLOCKING,
     SEVERITY_NOTE,
     acceptance_requirement_bindings,
+    change_tier,
     changed_parts,
     check_venue_warnings,
     customer_question_defect,
@@ -80,6 +81,7 @@ from .plan import (
     plan_meta_element_keys,
     plan_stage_digests,
     refined_grant_entries,
+    replan_class,
     review_ids,
     stage_norm_keys,
     stage_part,
@@ -113,7 +115,6 @@ from .state import (
     CheckVenue,
     CodeReview,
     CONCERN_FIXED,
-    EFFORT_FIRE_FINISHED_WORK,
     CONCERN_OPEN,
     CONCERN_RECORDED,
     CONCERN_SUPERSEDED,
@@ -123,6 +124,7 @@ from .state import (
     CriterionType,
     Declaration,
     Difficulty,
+    EFFORT_FIRE_FINISHED_WORK,
     FAILURE_ADDRESS_VALUES,
     FinalCheck,
     Investigation,
@@ -5994,7 +5996,6 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
             "consumer_of": {str(c): consumer_of[c] for c in sorted(consumer_of)}}
     baseline, _ = _review_baseline(store, state)
     if baseline is not None:
-        from .plan import change_tier
         change = change_tier(baseline, doc)
         data["tier"] = change.tier
         data["stage_tiers"] = {str(i): c.tier for i, c in sorted(change.stages.items())}
@@ -11425,11 +11426,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     tier = None
     baseline = _baseline_plan_for_tier(store, state)
     if baseline is not None:
-        from .plan import change_tier
-
         tier = change_tier(baseline, new)
-    from .plan import replan_class
-
     change_class = replan_class(tier)
     reopen_roots = set(getattr(args, "reopen", None) or [])
     unknown_reopen = sorted(reopen_roots - {s.index for s in state.stages})
@@ -11974,6 +11971,10 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
     last = state.effort_fires[-1]
     if last.get("ack") is not None:
         return Directive(True, state.node, "noop", "fire already acknowledged", data={"fire": last})
+    if last.get("disposition") == EFFORT_FIRE_FINISHED_WORK:
+        return Directive(True, state.node, "noop",
+                         "the last fire is a finished-work retier record: it opened no difficulty "
+                         "and owes no acknowledgement", data={"fire": last})
     decision = args.decision
     if decision not in ("continue", "abandon", "revise"):
         return Directive(False, state.node, "noop", f"invalid --decision {decision!r}: "
@@ -12060,7 +12061,6 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
     old_path = _replan_baseline_path(state)
     old = load_plan(old_path, strict=False)
     new = load_plan(args.new)
-    from .plan import change_tier
     blockers = gates.replan_coverage_blockers(
         old, new, state.difficulty.critique, tier=change_tier(old, new).tier,
         cost_tier_window=_effort_fire_window(state))

@@ -20,6 +20,7 @@ from argparse import Namespace
 import pytest
 
 from agentctl import cli, effort, gates, task_accumulator
+from agentctl.config import Thresholds
 from agentctl.plan import load_plan
 from agentctl.state import Node, StageStatus
 from conftest import STAGE_OBSERVATIONS
@@ -327,20 +328,105 @@ def test_finished_work_fire_records_observed_tier(store, venued_fixtures_dir, tm
 
     d, _ = _finished_with_overrun(store, sid, plan, tmp_path)
 
+    thr = Thresholds()
+    assert 0.5 <= thr.budget_usd_float("small") and 200.0 > thr.budget_usd_float("large")
     state = store.load(sid)
     fire_ts = state.effort_fires[0]["ts"]
+    medium = thr.budget_usd_float("medium")
     assert state.effort_retiers == [
         {"plan_path": plan, "fire_ts": fire_ts, "scale": effort.SCALE_SPEND, "stage_index": 1,
-         "declared_tier": "medium", "observed_tier": "small", "actual": 0.5, "estimate": 3.0,
+         "declared_tier": "medium", "observed_tier": "small", "actual": 0.5, "estimate": medium,
          "attribution": "cost_rows"},
         {"plan_path": plan, "fire_ts": fire_ts, "scale": effort.SCALE_SPEND, "stage_index": 2,
-         "declared_tier": "medium", "observed_tier": "above_large", "actual": 200.0, "estimate": 3.0,
-         "attribution": "cost_rows"},
+         "declared_tier": "medium", "observed_tier": effort.TIER_ABOVE_LARGE, "actual": 200.0,
+         "estimate": medium, "attribution": "cost_rows"},
     ]
     status = cli.cmd_status(ns(session=sid), store=store)
     assert status.data["effort_retiers"] == state.effort_retiers
     assert status.data["effort_finished_work"] == state.effort_fires
     assert d.data["effort_retiers"] == state.effort_retiers
+
+
+def test_wall_clock_finished_work_fire_retiers_from_spawn_duration(store, venued_fixtures_dir, tmp_path):
+    sid = "wall-clock-retier"
+    plan = _plan(venued_fixtures_dir)
+    thr = Thresholds()
+    short_ms = thr.effort_stage_minutes("small") * 60000
+    long_ms = (thr.effort_stage_minutes("large") + 1) * 60000
+    _to_executing_stage1(store, sid, plan)
+    cost_log = tmp_path / "costs.jsonl"
+    _write_cost_log(cost_log, [{"plan_path": plan, "stage_index": 1, "cost_usd": 0.1,
+                                "duration_ms": short_ms}])
+    _pass(store, sid, 1, cost_log)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    state = store.load(sid)
+    state.effort_actuals[effort.ACTUAL_MINUTES_KEY] = 1000.0
+    store.save(state)
+    _write_cost_log(cost_log, [{"plan_path": plan, "stage_index": 1, "cost_usd": 0.1,
+                                "duration_ms": short_ms},
+                               {"plan_path": plan, "stage_index": 2, "cost_usd": 0.1,
+                                "duration_ms": long_ms}])
+
+    d = _pass(store, sid, 2, cost_log)
+
+    state = store.load(sid)
+    assert d.node != Node.DIAGNOSING.value
+    assert [f["scale"] for f in state.effort_fires] == [effort.SCALE_WALL_CLOCK]
+    assert [(r["stage_index"], r["observed_tier"], r["attribution"]) for r in state.effort_retiers] == [
+        (1, "small", "cost_rows"), (2, effort.TIER_ABOVE_LARGE, "cost_rows")]
+    assert [r["actual"] for r in state.effort_retiers] == [
+        float(thr.effort_stage_minutes("small")), float(thr.effort_stage_minutes("large") + 1)]
+
+
+def test_non_operative_replans_still_owe_a_review_in_the_spend_estimate(
+    store, venued_fixtures_dir, tmp_path
+):
+    sid = "mandated-reviews"
+    plan = _plan(venued_fixtures_dir)
+    _to_executing_stage1(store, sid, plan)
+    state = store.load(sid)
+    before = effort._mandated_reviews(state)
+    state.log("replan", kind="refinement", change_class="bookkeeping")
+    state.log("replan", kind="refinement", change_class="check_only")
+    store.save(state)
+
+    state = store.load(sid)
+
+    assert effort.replan_count(state) == 0
+    assert effort._mandated_reviews(state) == before + 2
+
+
+def test_replans_scale_fire_at_a_clean_verify_final_enters_diagnosing(store, venued_fixtures_dir):
+    sid = "verify-final-replans"
+    plan = _plan(venued_fixtures_dir)
+    _to_executing_stage1(store, sid, plan)
+    _pass(store, sid, 1)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    assert _pass(store, sid, 2).action == "verify_final"
+    state = store.load(sid)
+    for _ in range(5):
+        state.log("replan", kind="substantive", change_class="operative")
+    store.save(state)
+
+    d = cli.cmd_verify_final(ns(session=sid, cost_log=None), store=store)
+
+    state = store.load(sid)
+    assert d.node == Node.DIAGNOSING.value
+    assert state.node == Node.DIAGNOSING.value
+    assert state.effort_fires[-1]["scale"] == effort.SCALE_REPLANS
+    assert "disposition" not in state.effort_fires[-1]
+
+
+def test_fire_acknowledge_on_a_finished_work_fire_is_a_noop(store, venued_fixtures_dir, tmp_path):
+    sid = "ack-noop"
+    _finished_with_overrun(store, sid, _plan(venued_fixtures_dir), tmp_path)
+
+    d = cli.cmd_fire_acknowledge(ns(session=sid, by="user", decision="abandon", note=None), store=store)
+
+    assert d.ok and d.action == "noop"
+    state = store.load(sid)
+    assert "ack" not in state.effort_fires[-1]
+    assert state.node != Node.BLOCKED.value
 
 
 def test_finished_work_record_does_not_block_replan(store, venued_fixtures_dir, tmp_path):

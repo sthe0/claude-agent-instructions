@@ -259,6 +259,27 @@ def _replans_since_baseline(state: SessionState) -> int:
     return max(0, replan_count(state) - int(base))
 
 
+def _replan_events_since_baseline(state: SessionState) -> int:
+    """Replan events of ANY class logged since the window opened. A bookkeeping or
+    check-only replan changes the plan's bytes, so `gates.plan_review_blockers` still
+    owes it a thinker review; the mandated-review estimate must count it even though the
+    replans SCALE (`replan_count`) does not. The baseline snapshot records the all-class
+    total under `REPLAN_EVENTS_KEY`; a baseline written before that key existed falls
+    back to the operative-only count."""
+    if state.effort_baseline is None:
+        return 0
+    base = state.effort_baseline.get(REPLAN_EVENTS_KEY)
+    if base is None:
+        return _replans_since_baseline(state)
+    return max(0, sum(replan_class_counts(state).values()) - int(base))
+
+
+def _snapshot_baseline(state: SessionState, now: float | None) -> dict:
+    snap = actual(state, now=now)
+    snap[REPLAN_EVENTS_KEY] = float(sum(replan_class_counts(state).values()))
+    return snap
+
+
 def _mandated_reviews(state: SessionState) -> int:
     """Count of engine-mandated review spawns derivable from the plan and its history.
 
@@ -282,7 +303,7 @@ def _mandated_reviews(state: SessionState) -> int:
     into the delta. So estimate and actual both carry that review. If a future edit
     adds a `refresh_spend` call to `cmd_approve` — or moves one before `arm()` — the
     review's cost lands in the baseline instead, the flat `1` becomes a pure
-    over-charge, and this term must drop to `developers + _replans_since_baseline`."""
+    over-charge, and this term must drop to `developers + _replan_events_since_baseline`."""
     if state.weight_class != WeightClass.SUBSTANTIVE.value:
         return 0
     developers = sum(
@@ -290,7 +311,7 @@ def _mandated_reviews(state: SessionState) -> int:
         if s.is_spawn() and s.spawn_kind() == _DEVELOPER_KIND
         and not is_skipped(s)
     )
-    return 1 + developers + _replans_since_baseline(state)
+    return 1 + developers + _replan_events_since_baseline(state)
 
 
 def estimate(state: SessionState, thr: Thresholds | None = None) -> dict:
@@ -298,7 +319,7 @@ def estimate(state: SessionState, thr: Thresholds | None = None) -> dict:
 
     Derived over `state.stages`, plus — for the mandated-review count alone —
     `state.effort_baseline` and the replan events in `state.history` (see
-    `_replans_since_baseline`); never `state.effort_estimate` itself, so `rederive()`
+    `_replan_events_since_baseline`); never `state.effort_estimate` itself, so `rederive()`
     calling this to overwrite that very field is not circular. `rederive()` is the
     only writer that stores the result; `divergence()` never calls this, so a session
     that has not been armed has nothing to be compared against. The absolute scales
@@ -326,6 +347,10 @@ def estimate(state: SessionState, thr: Thresholds | None = None) -> dict:
 
 
 # --- the actual: what the session has consumed --------------------------------
+
+#: Key of the all-class replan-event total inside `state.effort_baseline`; not a scale, so
+#: `deltas()` (which reads `SCALE_ORDER`) never sees it.
+REPLAN_EVENTS_KEY = "replan_events"
 
 #: The class a `replan` event carries when none is recorded (a history written before the
 #: classes existed, or a replan with no known old side): counted, never silently dropped.
@@ -696,7 +721,7 @@ def arm(state: SessionState, thr: Thresholds | None = None, *, now: float | None
     every later delta includes."""
     rederive(state, thr)
     if state.effort_baseline is None:
-        state.effort_baseline = actual(state, now=now)
+        state.effort_baseline = _snapshot_baseline(state, now)
     return state.effort_estimate
 
 
@@ -835,7 +860,9 @@ def _tier_estimate(scale: str, tier: str, thr: Thresholds) -> float:
 def _stage_attribution(stage, scale: str) -> tuple[float | None, str]:
     """The stage's own actual on `scale` and where it came from. Only a stage with
     cost-ledger rows has one; an in-thread stage consumes wall-clock the engine does not
-    attribute to it, so it reports the plan as its only source."""
+    attribute to it, so it reports the plan as its only source. The wall-clock figure is
+    a proxy: the stage's summed spawn duration from its cost rows, not the active minutes
+    `actual()` accumulates for the scale, so the observed tier it yields is approximate."""
     outcome = stage.outcome
     if scale == SCALE_SPEND and outcome.cost_usd is not None:
         return float(outcome.cost_usd), ATTRIBUTION_COST_ROWS
@@ -901,7 +928,7 @@ def record_fire(
     window stage is appended to `state.effort_retiers`."""
     replaced_baseline = dict(state.effort_baseline or {})
     window = fire_window_stages(state)
-    state.effort_baseline = actual(state, now=now)
+    state.effort_baseline = _snapshot_baseline(state, now)
     record = {
         "replaced_baseline": replaced_baseline,
         "scale": div.scale,
