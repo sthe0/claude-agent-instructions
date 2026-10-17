@@ -2,8 +2,8 @@
 the pair helpers in `agentctl.plan` (`plan_reliance_set`/`review_pairs`/
 `parse_pair`/`pair_binding`, and the reliance helpers they read) and the
 rendering/materialization surface in `agentctl.render`
-(`render_pair_review_bundle`/`topo_pair_view`/`topo_node_files`/
-`materialize_topo_units`/`verify_topo_units`).
+(`render_pair_review_bundle` and the view directory `build_site_prompt` builds for a pair:
+`_materialize_site_view`/`verify_site_view`).
 
 Every `PlanDoc` here is built via `agentctl.plan.parse_plan` on a plain dict, except
 where the single-read digest contract needs a real plan file on disk. Spawn-level
@@ -33,6 +33,7 @@ from agentctl.plan import (
     first_hop,
     interface_empty,
     is_unit_id,
+    load_plan,
     load_plan_with_digest,
     pair_binding,
     parse_pair,
@@ -47,7 +48,7 @@ from agentctl.plan import (
 )
 from agentctl.render import (
     TopoUnitsCorrupt,
-    materialize_topo_units,
+    build_site_prompt,
     node_file_text,
     pair_service_text,
     render_order_md,
@@ -57,12 +58,9 @@ from agentctl.render import (
     render_stage_fields,
     render_stage_interface,
     render_unit_review_bundle,
-    topo_node_files,
-    topo_pair_view,
-    topo_pair_view_dirname,
     unit_base_text,
-    verify_topo_units,
 )
+from plan_site_fixture import token, write_hypertext_plan, write_plan
 
 _DECLARED_ONLY = "declared-only (supplies-wins collapse; not dispatch-ordered)"
 _SECTION_HEADINGS = (
@@ -183,23 +181,24 @@ def _assert_manifest_matches_files(version_root: Path) -> None:
     assert manifest == {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
 
 
-def _assert_views_are_copies(version_root: Path) -> None:
-    node_inodes = {p.stat().st_ino for p in version_root.iterdir() if p.is_file()}
-    view_files = [p for p in version_root.glob("view-*/*") if p.is_file()]
-    assert view_files
-    for p in view_files:
-        assert p.stat().st_ino not in node_inodes, p
-
-
 def _remedy(version_root: Path) -> str:
     return f"delete {version_root} and re-run to re-materialize it"
 
 
-def _plan_toml(stage1_title: str = "Stage 1", stage1_method: str = "method-1") -> str:
+_ORDER_TOML = """
+[meta.order]
+requirements = [{ id = "R1", text = "R1" }]
+coverage = { R1 = ["stage 2 verify_command"] }
+"""
+
+
+def _plan_toml(
+    stage1_title: str = "Stage 1", stage1_method: str = "method-1", *, with_order: bool = False,
+) -> str:
     return f"""
 [meta]
 task_id = "t"
-
+{_ORDER_TOML if with_order else ""}
 [[stage]]
 index = 1
 title = "{stage1_title}"
@@ -315,8 +314,32 @@ def test_tb3_non_source_service_shows_interface_only_no_full_brief():
     assert _method_sentinel(3) in bundle
 
 
-def test_tb3_pair_binding_digests_are_the_sha256_of_the_bytes_the_reviewer_sees(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTCTL_TOPO_UNITS_DIR", str(tmp_path))
+def _view_file_sha(site, name: str) -> str:
+    return hashlib.sha256((site.view_dir / name).read_bytes()).hexdigest()
+
+
+def test_tb3_service_file_digest_is_the_sha256_of_the_view_file_for_a_plan_under_the_limit(tmp_path):
+    plan = write_plan(tmp_path / "author")
+    doc = load_plan(plan)
+    for pair, service_file in (("2-1", "stage-1.md"), ("3-2", "stage-2.md"), ("4-3", "stage-3.md")):
+        site = _topo_pair_site(plan, tmp_path / "views", pair)
+        assert pair_binding(doc, pair)["service_file_digest"] == _view_file_sha(site, service_file)
+
+
+def test_tb3_a_service_field_over_the_limit_is_bound_as_authored_not_as_the_view_bytes(tmp_path):
+    plan = write_hypertext_plan(tmp_path / "author", long_method=True)
+    doc = load_plan(plan)
+    site = _topo_pair_site(plan, tmp_path / "views", "3-2")
+
+    bound = pair_binding(doc, "3-2")["service_file_digest"]
+
+    # The binding digests the plan as authored; the reviewer reads the pointer copy.
+    assert bound == hashlib.sha256(node_file_text(doc, 2).encode("utf-8")).hexdigest()
+    assert bound != _view_file_sha(site, "stage-2.md")
+    assert "see objects/" in (site.view_dir / "stage-2.md").read_text(encoding="utf-8")
+
+
+def test_tb3_pair_binding_digests_are_the_sha256_of_the_texts_the_bundle_is_built_from():
     doc = _doc(
         [
             _stage(1),
@@ -326,20 +349,16 @@ def test_tb3_pair_binding_digests_are_the_sha256_of_the_bytes_the_reviewer_sees(
         order=_order(["R1"], {"R1": ["stage 3 verify_command"]}),
     )
     sha = lambda text: hashlib.sha256(text.encode("utf-8")).hexdigest()
-    version_root = materialize_topo_units(doc, "plansha", tmp_path)
-    for pair, base_file, service_file, service_text in (
-        ("3-2", "stage-3.md", "stage-2.md", render_stage_interface(doc, 2, contract=True)),
+    for pair, service_text in (
+        ("3-2", render_stage_interface(doc, 2, contract=True)),
         # Stage 1 relies on nothing, so it is shown by its full brief.
-        ("2-1", "stage-2.md", "stage-1.md", render_stage_brief(doc, 1)),
-        # The coverage edge of stage 3: base side is the order file, the service text is
-        # the stage's contract interface plus the control the entry names.
-        ("base-3", "base.md", "stage-3.md", pair_service_text(doc, 3, "base")),
+        ("2-1", render_stage_brief(doc, 1)),
+        # The coverage edge of stage 3: the service text is the stage's contract
+        # interface plus the control the entry names.
+        ("base-3", pair_service_text(doc, 3, "base")),
     ):
         sections = _sections(_bundle(doc, pair))
         binding = pair_binding(doc, pair)
-        assert binding["context_digest"] == sha((version_root / "base.md").read_text(encoding="utf-8"))
-        assert binding["base_file_digest"] == sha((version_root / base_file).read_text(encoding="utf-8"))
-        assert binding["service_file_digest"] == sha((version_root / service_file).read_text(encoding="utf-8"))
         assert service_text.rstrip("\n") in sections["## Service declared product: "]
         assert binding["service_interface_digest"] == sha(service_text)
         assert binding["edge_digest"] == sha(sections["## Edge"] + "\n")
@@ -359,7 +378,6 @@ def test_tb4_transitive_only_member_is_absent_from_bundle_and_view():
         _stage(3, depends_on=[2], supplies=[{"on": 2, "element": "e2"}]),
     ])
     bundle = _bundle(doc, "3-2")
-    assert topo_pair_view(doc, "3-2") == ["stage-2.md"]
     assert "stage-2.md" in _sections(bundle)["## Service file"]
     assert "stage-1.md" not in bundle
     assert "## Stage 1:" not in bundle
@@ -585,7 +603,6 @@ def test_tb8_plan_without_an_order_has_no_base_pair_and_no_base_file_but_still_a
     doc = _doc([_stage(1), _stage(2, depends_on=[1])])
     assert review_pairs(doc) == ("2-1",)
     assert review_units(doc) == ("unit:base", "unit:1", "unit:2")
-    assert "base.md" not in topo_node_files(doc)
     assert node_file_text(doc, "base") == ""
     for retired in ("base-plan", "plan-2", "base-2"):
         with pytest.raises(ValueError):
@@ -752,82 +769,62 @@ def test_tb12_render_stage_interface_default_never_falls_back():
     assert "**Expected result image:**" in text
 
 
+def _topo_pair_site(plan_path: Path, view_root: Path, pair: str):
+    return build_site_prompt("topo-pair", plan_path, pair=pair, view_root=view_root)
+
+
 def test_tb13_one_pair_view_holds_only_the_service_file_copy(tmp_path):
-    doc = _doc([
-        _stage(1),
-        _stage(2, depends_on=[1]),
-        _stage(3, depends_on=[2]),
-    ])
-    assert topo_pair_view(doc, "3-2") == ["stage-2.md"]
-    files = topo_node_files(doc)
-    assert _method_sentinel(1) not in files["stage-2.md"]
-
-    version_root = materialize_topo_units(doc, "shaV", tmp_path)
-    view_dir = version_root / topo_pair_view_dirname("3-2")
-    assert sorted(p.name for p in view_dir.iterdir()) == ["stage-2.md"]
-    assert (view_dir / "stage-2.md").read_bytes() == node_file_text(doc, 2).encode("utf-8")
-    assert _method_sentinel(1) not in (view_dir / "stage-2.md").read_text(encoding="utf-8")
+    plan = write_plan(tmp_path)
+    doc = load_plan(plan)
+    site = _topo_pair_site(plan, tmp_path / "views", "3-2")
+    assert site.view_files == ("stage-2.md",)
+    assert sorted(p.name for p in site.view_dir.iterdir()) == ["MANIFEST.json", "stage-2.md"]
+    copy = (site.view_dir / "stage-2.md").read_bytes()
+    assert copy == node_file_text(doc, 2).encode("utf-8")
+    assert token(1, "method", "A").encode() not in copy
 
 
-def test_tb13_node_files_are_stage_and_base_when_an_order_is_declared():
-    doc = _order_doc()
-    assert sorted(topo_node_files(doc)) == ["base.md", "stage-1.md", "stage-2.md"]
-    assert topo_node_files(doc)["base.md"] == node_file_text(doc, "base")
-    assert topo_node_files(doc)["stage-1.md"] == node_file_text(doc, 1)
-    assert topo_pair_view(doc, "base-1") == ["stage-1.md"]
-    assert topo_pair_view(doc, "base-2") == ["stage-2.md"]
+def test_tb13_a_coverage_pair_view_holds_the_stage_file_of_its_service(tmp_path):
+    plan = tmp_path / "plan.toml"
+    plan.write_text(_plan_toml(with_order=True), encoding="utf-8")
+    site = _topo_pair_site(plan, tmp_path / "views", "base-2")
+    assert site.view_files == ("stage-2.md",)
     for retired in ("plan-1", "base-plan", "unit:base", "unit:1"):
         with pytest.raises(ValueError):
-            topo_pair_view(doc, retired)
+            _topo_pair_site(plan, tmp_path / "views", retired)
 
 
-def test_tb14_materialize_manifest_sha256s_match_the_files(tmp_path):
-    doc = _doc(
-        [_stage(1), _stage(2, depends_on=[1]), _stage(3, depends_on=[2])],
-        order=_order(["R1"], {"R1": ["stage 3 verify_command"]}),
-    )
-    version_root = materialize_topo_units(doc, "shaA", tmp_path)
-    assert version_root == tmp_path / "shaA"
-    _assert_manifest_matches_files(version_root)
-    # One view directory per PAIR (the coverage edge `base-3` included); a unit is
-    # self-contained and has no view directory.
-    assert sorted(p.name for p in version_root.iterdir() if p.is_dir()) == [
-        "view-2-1", "view-3-2", "view-base-3",
-    ]
-    assert sorted(p.name for p in version_root.iterdir() if p.is_file()) == [
-        "MANIFEST.json", "base.md", "stage-1.md", "stage-2.md", "stage-3.md",
-    ]
-    assert [p.name for p in (version_root / "view-base-3").iterdir()] == ["stage-3.md"]
-    verify_topo_units(version_root, doc)
+def test_tb14_view_manifest_sha256s_match_the_files(tmp_path):
+    files = {"stage-1.md": b"one", f"objects/{hashlib.sha256(b'two').hexdigest()}": b"two"}
+    view = render._materialize_site_view(tmp_path, "view-a", files)
+    assert view == tmp_path / "view-a"
+    _assert_manifest_matches_files(view)
+    assert sorted(_tree_files(view)) == sorted([*files, "MANIFEST.json"])
+    render.verify_site_view(view, files)
 
 
-def test_tb14_materialize_second_call_is_a_no_op_reverify(tmp_path):
-    doc = _doc([_stage(1), _stage(2, depends_on=[1])])
-    first = materialize_topo_units(doc, "shaA", tmp_path)
+def test_tb14_second_materialization_is_a_no_op_reverify(tmp_path):
+    files = {"stage-1.md": b"one"}
+    first = render._materialize_site_view(tmp_path, "view-a", files)
     before = {p: p.stat().st_mtime_ns for p in first.rglob("*")}
-    second = materialize_topo_units(doc, "shaA", tmp_path)
+    second = render._materialize_site_view(tmp_path, "view-a", files)
     assert second == first
     assert {p: p.stat().st_mtime_ns for p in first.rglob("*")} == before
 
 
-def test_tb14_edited_plan_materializes_into_a_new_sha_dir(tmp_path):
+def test_tb14_edited_plan_builds_its_view_in_a_new_directory(tmp_path):
     plan_path = tmp_path / "plan.toml"
-    units = tmp_path / "units"
+    views = tmp_path / "views"
     plan_path.write_text(_plan_toml(), encoding="utf-8")
-    doc1, _, sha1 = load_plan_with_digest(plan_path)
-    root1 = materialize_topo_units(doc1, sha1, units)
+    site1 = _topo_pair_site(plan_path, views, "2-1")
 
     plan_path.write_text(_plan_toml(stage1_method="edited-method"), encoding="utf-8")
-    doc2, _, sha2 = load_plan_with_digest(plan_path)
-    root2 = materialize_topo_units(doc2, sha2, units)
+    site2 = _topo_pair_site(plan_path, views, "2-1")
 
-    assert sha1 != sha2
-    assert root1 == units / sha1 and root2 == units / sha2
-    assert root1.is_dir() and root2.is_dir()
-    assert (root1 / "stage-1.md").read_bytes() != (root2 / "stage-1.md").read_bytes()
-    verify_topo_units(root1, doc1)
-    with pytest.raises(TopoUnitsCorrupt):
-        verify_topo_units(root1, doc2)
+    assert site1.view_dir != site2.view_dir
+    assert site1.view_dir.is_dir() and site2.view_dir.is_dir()
+    assert (site1.view_dir / "stage-1.md").read_bytes() != (site2.view_dir / "stage-1.md").read_bytes()
+    assert b"edited-method" in (site2.view_dir / "stage-1.md").read_bytes()
 
 
 def test_tb15_bundle_carries_procedure_and_view_path_no_valve_token():
@@ -858,7 +855,6 @@ def test_tb16_raw_only_edge_reliance_set_first_hop_consumers_pairs_view():
     assert 2 in first_hop(doc, 3)
     assert 3 in consumers(doc, 2)
     assert "3-2" in review_pairs(doc)
-    assert topo_pair_view(doc, "3-2") == ["stage-2.md"]
 
 
 def test_tb17_derived_depends_on_projection_misses_the_raw_only_edge():
@@ -890,41 +886,39 @@ def test_tb19_raw_depends_on_has_an_entry_for_every_stage_including_empty():
     assert doc.raw_depends_on[2] == (1,)
 
 
-def _race_doc():
-    return _doc(
-        [_stage(1), _stage(2, depends_on=[1]), _stage(3, depends_on=[1, 2])],
-        order=_order(["R1"], {"R1": ["stage 3 verify_command"]}),
-    )
+_VIEW_FILES = {
+    "stage-2.md": b"service file",
+    f"objects/{hashlib.sha256(b'a long field').hexdigest()}": b"a long field",
+}
 
 
 def test_tb20_forced_race_loser_reverifies_winner_and_removes_its_temp(tmp_path, monkeypatch):
-    doc = _race_doc()
-    version_root = tmp_path / "shaR"
+    version_root = tmp_path / "view-r"
     real_replace = os.replace
-    real_verify = render.verify_topo_units
+    real_verify = render.verify_site_view
     verify_calls: list[Path] = []
     raised: list[OSError] = []
     loser_tmp: list[Path] = []
 
-    def spy_verify(unit_dir, d):
-        verify_calls.append(Path(unit_dir))
-        return real_verify(unit_dir, d)
+    def spy_verify(view_dir, files):
+        verify_calls.append(Path(view_dir))
+        return real_verify(view_dir, files)
 
     def replace_after_a_real_winner(src, dst):
         if loser_tmp:
             return real_replace(src, dst)
         loser_tmp.append(Path(src))
-        assert materialize_topo_units(doc, "shaR", tmp_path) == version_root
+        assert render._materialize_site_view(tmp_path, "view-r", _VIEW_FILES) == version_root
         try:
             return real_replace(src, dst)
         except OSError as exc:
             raised.append(exc)
             raise
 
-    monkeypatch.setattr(render, "verify_topo_units", spy_verify)
+    monkeypatch.setattr(render, "verify_site_view", spy_verify)
     monkeypatch.setattr(render.os, "replace", replace_after_a_real_winner)
 
-    result = materialize_topo_units(doc, "shaR", tmp_path)
+    result = render._materialize_site_view(tmp_path, "view-r", _VIEW_FILES)
 
     assert result == version_root
     assert len(raised) == 1
@@ -933,26 +927,22 @@ def test_tb20_forced_race_loser_reverifies_winner_and_removes_its_temp(tmp_path,
     assert list(tmp_path.iterdir()) == [version_root]
     assert verify_calls == [version_root]
     _assert_manifest_matches_files(version_root)
-    _assert_views_are_copies(version_root)
 
 
 def test_tb20_non_race_oserror_propagates_and_removes_temp(tmp_path, monkeypatch):
-    doc = _race_doc()
-
     def replace_with_unrelated_error(src, dst):
         raise OSError(errno.EXDEV, "cross-device link")
 
     monkeypatch.setattr(render.os, "replace", replace_with_unrelated_error)
 
     with pytest.raises(OSError) as exc_info:
-        materialize_topo_units(doc, "shaX", tmp_path)
+        render._materialize_site_view(tmp_path, "view-x", _VIEW_FILES)
 
     assert exc_info.value.errno == errno.EXDEV
     assert list(tmp_path.iterdir()) == []
 
 
 def test_tb20_concurrent_threads_all_return_one_verified_tree(tmp_path):
-    doc = _race_doc()
     workers = 6
     barrier = threading.Barrier(workers)
     results: list[Path] = []
@@ -961,7 +951,7 @@ def test_tb20_concurrent_threads_all_return_one_verified_tree(tmp_path):
     def run():
         barrier.wait()
         try:
-            results.append(materialize_topo_units(doc, "shaT", tmp_path))
+            results.append(render._materialize_site_view(tmp_path, "view-t", _VIEW_FILES))
         except BaseException as exc:
             errors.append(exc)
 
@@ -972,43 +962,30 @@ def test_tb20_concurrent_threads_all_return_one_verified_tree(tmp_path):
         t.join()
 
     assert errors == []
-    assert results == [tmp_path / "shaT"] * workers
-    assert list(tmp_path.iterdir()) == [tmp_path / "shaT"]
-    _assert_manifest_matches_files(tmp_path / "shaT")
-    _assert_views_are_copies(tmp_path / "shaT")
+    assert results == [tmp_path / "view-t"] * workers
+    assert list(tmp_path.iterdir()) == [tmp_path / "view-t"]
+    _assert_manifest_matches_files(tmp_path / "view-t")
 
 
-def test_tb20_modified_view_file_fails_rematerialize_with_remedy(tmp_path):
-    doc = _race_doc()
-    version_root = materialize_topo_units(doc, "shaC", tmp_path)
-    victim = version_root / topo_pair_view_dirname("2-1") / "stage-1.md"
-    victim.write_text("tampered", encoding="utf-8")
+@pytest.mark.parametrize("damage", ("modify", "extra-file", "extra-object", "delete"))
+def test_tb20_damaged_view_fails_rematerialize_with_remedy(tmp_path, damage):
+    view = render._materialize_site_view(tmp_path, "view-c", _VIEW_FILES)
+    object_name = next(name for name in _VIEW_FILES if name.startswith("objects/"))
+    victim = {
+        "modify": view / "stage-2.md",
+        "extra-file": view / "extra.md",
+        "extra-object": view / "objects" / "extra",
+        "delete": view / object_name,
+    }[damage]
+    if damage == "delete":
+        victim.unlink()
+    else:
+        victim.parent.mkdir(exist_ok=True)
+        victim.write_text("tampered", encoding="utf-8")
     with pytest.raises(TopoUnitsCorrupt) as exc_info:
-        materialize_topo_units(doc, "shaC", tmp_path)
-    assert str(victim) in str(exc_info.value)
-    assert _remedy(version_root) in str(exc_info.value)
-
-
-def test_tb20_extra_file_in_view_dir_fails_rematerialize_with_remedy(tmp_path):
-    doc = _race_doc()
-    version_root = materialize_topo_units(doc, "shaF", tmp_path)
-    extra = version_root / topo_pair_view_dirname("2-1") / "extra.md"
-    extra.write_text("x", encoding="utf-8")
-    with pytest.raises(TopoUnitsCorrupt) as exc_info:
-        materialize_topo_units(doc, "shaF", tmp_path)
-    assert str(extra) in str(exc_info.value)
-    assert _remedy(version_root) in str(exc_info.value)
-
-
-def test_tb20_extra_file_in_version_root_fails_rematerialize_with_remedy(tmp_path):
-    doc = _race_doc()
-    version_root = materialize_topo_units(doc, "shaE", tmp_path)
-    extra = version_root / "extra.md"
-    extra.write_text("x", encoding="utf-8")
-    with pytest.raises(TopoUnitsCorrupt) as exc_info:
-        materialize_topo_units(doc, "shaE", tmp_path)
-    assert str(extra) in str(exc_info.value)
-    assert _remedy(version_root) in str(exc_info.value)
+        render._materialize_site_view(tmp_path, "view-c", _VIEW_FILES)
+    assert victim.relative_to(view).as_posix() in str(exc_info.value)
+    assert _remedy(view) in str(exc_info.value)
 
 
 def test_tb21_ordering_tag_lines_per_pair():

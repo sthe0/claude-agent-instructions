@@ -23,7 +23,6 @@ from lib.runtime_models import HOST_CLAUDE, model_for
 from . import premise
 from .config import Thresholds
 from .dispatch import RunResult
-from .text_shape import ELEMENT_NAMES
 
 # Cheap model + hard cap: the advisor auto-activates for every substantive session's
 # cognition points, so each call must stay bounded in cost and can never hang a
@@ -44,13 +43,13 @@ _TIMEOUT_STDERR_PREFIX = "advisor timed out after"
 # because the CLI's not-logged-in phrasing is not a stable contract.
 _CREDENTIAL_STDERR_PREFIX = "advisor had no credential to lend the isolated child"
 
-# Written into the sidecar's `stderr` field by enumerate_questions_health when the
-# OS raises E2BIG before the judge subprocess can start — the plan's prompt text
-# exceeded ARG_MAX in the judge's argv. Read back by classify_runner_failure so a
+# Written into the sidecar's `stderr` field when the OS raises E2BIG before the
+# judge subprocess can start — the prompt text exceeded ARG_MAX in the judge's
+# argv. Read back by classify_runner_failure so a
 # caller that only has the stored stderr string can still detect the oversize class.
 _E2BIG_STDERR_MARKER = "Argument list too long"
 
-# Whole-plan enumeration (enumerate_claims / enumerate_questions_health) is a
+# Whole-plan enumeration (enumerate_claims) is a
 # DIFFERENT cost class from a judge/advisor call: it re-reads an entire plan in one
 # shot, and calibration (docs/operations/advisor-timeout-calibration.md, 15 rows =
 # 5 sizes x 3 repeats) measured 15-170s of real latency under a 600s measurement
@@ -181,24 +180,23 @@ def enumerate_subprocess_runner(
     argv: list[str], *, timeout: int = ENUMERATE_TIMEOUT_S, stdin: str = ""
 ) -> RunResult:
     """subprocess_runner bound to ENUMERATE_TIMEOUT_S -- the default runner for the
-    two whole-plan enumeration entry points (enumerate_claims,
-    enumerate_questions_health), whose calls run far longer than a judge/advisor
-    call and would be truncated by subprocess_runner's own _ADVISOR_TIMEOUT_S=20
-    default. subprocess_runner itself stays untouched: every judge_* caller keeps
-    the original 20s bound.
+    whole-plan enumeration entry point (enumerate_claims), whose calls run far
+    longer than a judge/advisor call and would be truncated by subprocess_runner's
+    own _ADVISOR_TIMEOUT_S=20 default. subprocess_runner itself stays untouched:
+    every judge_* caller keeps the original 20s bound.
 
-    The keyword-only `timeout` mirrors subprocess_runner's own signature so both
-    enumeration entry points can name their ceiling AT THE CALL SITE, which is the
-    norm trunk settled on. Baking the ceiling into the runner instead would make
-    the two call sites read as if they carried the 20s advisory bound, and a
-    call-site keyword would then raise TypeError into the bare `except Exception`
-    below -- reported as an unhealthy runner rather than as the signature mismatch
-    it is. `test_enumerate_runner_signature` pins this.
+    The keyword-only `timeout` mirrors subprocess_runner's own signature so the
+    entry point can name its ceiling AT THE CALL SITE, which is the norm trunk
+    settled on. Baking the ceiling into the runner instead would make the call
+    site read as if it carried the 20s advisory bound, and a call-site keyword
+    would then raise TypeError into the bare `except Exception` below -- reported
+    as an unhealthy runner rather than as the signature mismatch it is.
+    `test_enumerate_runner_signature` pins this.
 
-    Defined here, ahead of enumerate_claims/enumerate_questions_health, only
-    because Python evaluates a default-argument value at `def` time -- this name
-    must already exist when their `runner=enumerate_subprocess_runner` defaults
-    are bound. The `subprocess_runner` call inside the body resolves at CALL time,
+    Defined here, ahead of enumerate_claims, only because Python evaluates a
+    default-argument value at `def` time -- this name must already exist when
+    its `runner=enumerate_subprocess_runner` default is bound. The
+    `subprocess_runner` call inside the body resolves at CALL time,
     so it is free to reference the module-level function defined later below."""
     return subprocess_runner(argv, timeout=timeout, stdin=stdin)
 
@@ -235,105 +233,6 @@ def enumerate_claims(artifact_text: str, runner=enumerate_subprocess_runner, *, 
         return []
     finally:
         judge_ledger.set_current_judge(None)
-
-
-_ENUMERATE_QUESTIONS_PROMPT = (
-    "You are given a plan's goal, done-criterion, and full stage text. Independently "
-    "re-read it and list the QUESTIONS the plan's construction SHOULD have raised but "
-    "may have left implicit — an unstated assumption, an ambiguous term, a choice made "
-    "without justification, a premise smuggled in as fact. Do NOT answer them; only "
-    "raise them.\n\n"
-    "Emit one question per line as `<target>\\t<question>` (a literal TAB between the "
-    "two). `<target>` names the plan element the question is raised against and MUST be "
-    "one of:\n"
-    "  plan.goal\n"
-    "  plan.done_criterion\n"
-    # Derived, never restated. This prompt is what BOUNDS the independent enumerator's
-    # reach: a name absent here is a place it is told it may not raise a question
-    # against, so a restated copy does not merely rot — it silently narrows the premise
-    # gate to the vocabulary of whenever the copy was last edited. It had, and was six
-    # names short (knowledge, preconditions, control, order, requirements, procedure) —
-    # exactly the places the surrounding work had just introduced.
-    "  stage:<n>.<element>   where <n> is a stage index and <element> is one of: "
-    + ", ".join(sorted(ELEMENT_NAMES))
-    + "\n"
-    "No numbering, no bullets, no prose, no preamble. Return nothing if the plan raises "
-    "no implicit questions.\n\n{payload}"
-)
-
-
-def enumerate_questions_health(
-    goal: str, done_criterion: str, plan_text: str, runner=enumerate_subprocess_runner,
-    *, runtime_host: str = HOST_CLAUDE,
-) -> tuple[bool | None, list[tuple[str, str]], str]:
-    """Independent re-reading of a WHOLE plan that RAISES the questions its
-    construction should have provoked, as (target, question) pairs, together with a
-    runner-health flag and the runner's captured stderr.
-
-    ONE bounded `claude -p --model sonnet` call over the goal + done-criterion + full
-    plan text — deliberately whole-plan, not one call per element: the questions worth
-    raising are overwhelmingly cross-element (a stage's method contradicting the goal, a
-    done-criterion an invariant can't hold) and per-element calls would both miss those
-    and multiply the cost/latency by the element count for no recall gain.
-
-    RETIRED for new plans (amendments-2.md E3): no engine path calls this any more —
-    a review act (unit, pair, stage, whole-plan) returns the customer questions this
-    cross-check used to produce, and the engine records them as `qrev-` candidates.
-    The function stays, with `ENUMERATE_TIMEOUT_S` and `enumerate_claims`, because the
-    advisor-latency measurement script and the advisor suites still exercise it.
-
-    Fail-open, exactly like enumerate_claims: the returned flag reports whether the
-    runner produced a usable answer, and the function RETURNS on a failed run instead
-    of raising.
-
-      * runner is None        -> (None, [], "")        advisor absent (disabled/stubbed)
-      * non-zero exit          -> (False, [], stderr)   runner reachable but failed
-      * exception              -> (False, [], "")       timeout/crash swallowed
-      * success (0 exit)       -> (True, pairs, stderr) pairs may still be empty"""
-    if runner is None:
-        return None, [], ""
-    judge_ledger.begin_attributed_call("enumerate_questions_health")
-    try:
-        payload = f"GOAL:\n{goal}\n\nDONE CRITERION:\n{done_criterion}\n\nPLAN:\n{plan_text}"
-        prompt = _ENUMERATE_QUESTIONS_PROMPT.format(payload=payload)
-        result = runner(
-            _prompt_argv(runtime_host, _ADVISOR_COMPLEXITY),
-            timeout=ENUMERATE_TIMEOUT_S,
-            stdin=prompt,
-        )
-        if result.returncode != 0:
-            return False, [], result.stderr or ""
-        pairs: list[tuple[str, str]] = []
-        for ln in (result.stdout or "").splitlines():
-            if not ln.strip():
-                continue
-            target, sep, question = ln.partition("\t")
-            target, question = target.strip(), question.strip()
-            if not sep or not target or not question:
-                continue
-            pairs.append((target, question))
-        return True, pairs, result.stderr or ""
-    except OSError as exc:
-        # E2BIG: the judge subprocess argv (which carries the prompt text) exceeded
-        # ARG_MAX. Preserve the error in stderr so the sidecar's classify_runner_failure
-        # can surface ESCAPE_ADVISOR_OVERSIZE instead of the generic ESCAPE_ADVISOR_ERROR.
-        if exc.errno == errno.E2BIG:
-            return False, [], f"{_E2BIG_STDERR_MARKER}: {exc}"
-        return False, [], ""
-    except Exception:
-        return False, [], ""
-    finally:
-        judge_ledger.set_current_judge(None)
-
-
-def enumerate_questions(
-    goal: str, done_criterion: str, plan_text: str, runner,
-    *, runtime_host: str = HOST_CLAUDE,
-) -> list[tuple[str, str]]:
-    """Thin wrapper over enumerate_questions_health returning only the (target,
-    question) pairs — the recall-widener surface, symmetric with enumerate_claims. A
-    caller that also needs to record runner health calls the _health variant directly."""
-    return enumerate_questions_health(goal, done_criterion, plan_text, runner, runtime_host=runtime_host)[1]
 
 
 def judge(kind: str, payload: dict, runner, *, enabled: bool | None = None, runtime_host: str = HOST_CLAUDE) -> list[str]:
@@ -1873,7 +1772,7 @@ def subprocess_runner(
     if judge_name is None:
         # Every caller in this module now self-identifies before invoking the
         # injected runner (the four hook judges, and enumerate_claims/
-        # enumerate_questions_health/judge/acceptance_judge on the engine
+        # judge/acceptance_judge on the engine
         # path), so reaching here means a caller OUTSIDE this module invoked
         # the runner directly without going through any of them — a genuinely
         # unattributed call. It gets its own invocation id so that N such

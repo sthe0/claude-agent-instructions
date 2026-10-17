@@ -96,6 +96,18 @@ ground = "_HANDOFF_SHA_LINE_RE.search reads the 'Handoff-sha256:' label line spa
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/instruction-sandbox-live.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles TOKEN_SHAPED, the key-prefix and long-opaque-string shape that the launch-failure excerpt redacts; the shape is a secret scanner's, matching token syntax, never meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/instruction-sandbox-live.py::_clean_line::pattern.sub"]
+class = "structural"
+ground = "TOKEN_SHAPED.sub masks token-shaped strings in the text of a failed launch before it enters the smoke record; output redaction, no verdict depends on the match."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/lib/instruction_smoke_gate.py::<module>::re.compile"]
 class = "structural"
 ground = "Compiles: the push-rights wording used only to defuse a log line, the all-zero SHA and the 40/64-hex object-id shape; none decides meaning."
@@ -218,13 +230,33 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/dispatch.py::<module>::re.compile"]
 class = "structural"
-ground = "MARKER_RE compiles the '^MARKER:' return-marker prefix syntax."
-hits = 1
+ground = "Compiles: MARKER_RE (the '^MARKER:' return-marker prefix syntax), _REQUEST_LABEL_RE (the 'PERMISSION-REQUEST:' label line) and _ACTION_LABEL_RE (the 'Action:' label line); fixed label syntax."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/dispatch.py::parse_marker::pattern.match"]
 class = "structural"
 ground = "MARKER_RE.match reads the fixed specialist return-marker prefix on a line."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/dispatch.py::permission_request_action::pattern.match"]
+class = "structural"
+ground = "MARKER_RE, _REQUEST_LABEL_RE and _ACTION_LABEL_RE match the fixed marker and label prefixes of a line; the text after a label is returned as it stands, not classified."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/protected_actions.py::<module>::re.compile"]
+class = "structural"
+ground = "ANCHOR_RE compiles the '<!-- protected-action: <id> -->' anchor comment syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/protected_actions.py::norm_anchor_problems::pattern.findall"]
+class = "structural"
+ground = "ANCHOR_RE.findall reads the ids of the fixed anchor comments in a norm file; each id is looked up in the catalogue, not interpreted."
 hits = 1
 reviewed_by = "developer"
 
@@ -319,6 +351,50 @@ class = "structural"
 ground = "PROVIDER_NAME_RE.fullmatch validates a landed provider name as a plain identifier, a fixed syntax."
 hits = 1
 reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan_refs.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: _SHA_RE (64 lowercase hex digits, a sha256 digest), _KEY_RE (a TOML `key =` line), _HEADER_RE (a TOML `[table]` / `[[array]]` header line)."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/plan_refs.py::_classify::pattern.fullmatch"]
+class = "structural"
+ground = "_SHA_RE.fullmatch checks that a reference table's sha256 value has the digest shape; a fixed syntax."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/plan_refs.py::_rewrite_hash::re.subn"]
+class = "structural"
+ground = "re.subn replaces the old hash inside a `{ ref = ..., sha256 = ... }` reference table naming one escaped path, in either key order; the count must equal the expected number of references."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/plan_refs.py::_scan::pattern.match"]
+class = "structural"
+ground = "_HEADER_RE.match and _KEY_RE.match locate TOML table headers and key lines so a field value can be rewritten in place; TOML syntax, not free-text meaning."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/toml_emit.py::<module>::re.compile"]
+class = "structural"
+ground = "_BARE_KEY compiles the TOML bare-key syntax (letters, digits, `_`, `-`); a fixed syntax."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/toml_emit.py::_key::pattern.fullmatch"]
+class = "structural"
+ground = "_BARE_KEY.fullmatch decides whether a key can be written bare or must be quoted; TOML syntax, not free-text meaning."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/toml_emit.py::_multiline::re.sub"]
+class = "structural"
+ground = "re.sub escapes every run of three or more double quotes inside a multiline basic string so it cannot close the string early; TOML syntax."
+hits = 1
+reviewed_by = "coordinator"
 
 [sites."scripts/agentctl/landed_providers.py::<module>::re.compile"]
 class = "structural"
@@ -726,6 +802,18 @@ reviewed_by = "developer"
 [sites."scripts/hook-engine-start.py::_task_slug::re.findall"]
 class = "structural"
 ground = "[a-z0-9]+ findall over the prompt only normalizes its first words into a slug identifier for the session name; it decides nothing about meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-guard-agent-specialist-stand-in.py::<module>::re.compile"]
+class = "structural"
+ground = "_SKILL_PATH matches the path shape `skills/.../SKILL.md` of a specialist's instruction file (file-path syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-guard-agent-specialist-stand-in.py::decide::pattern.search"]
+class = "structural"
+ground = "_SKILL_PATH.search finds a `skills/.../SKILL.md` path in an Agent call's prompt or description; it reads a file path, not the meaning of the text."
 hits = 1
 reviewed_by = "developer"
 

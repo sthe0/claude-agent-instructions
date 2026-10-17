@@ -1,11 +1,6 @@
-"""question-enumerate: the advisor's pure parse pass survives; the CLI verbs that
-drove it are retired (amendments-2.md E3).
+"""question-enumerate: the CLI verbs are retired (amendments-2.md E3); the advisor's
+whole-plan question pass is gone too.
 
-  * advisor.enumerate_questions(goal, done_criterion, plan_text, runner) — the
-    fail-open pure pass: parses `<target>\\t<question>` lines, DROPS malformed ones,
-    and returns [] on a None runner / non-zero exit / any exception. Kept (its
-    callers include the latency measurement script), tested with a STUB runner
-    (never a live `claude -p`).
   * `question-enumerate`, `question-enumerate-worker`, `question-enumerate-escape` —
     the verbs the enumeration used to run through. Their names stay in the parser so
     a hand-typed or scripted call meets a message pointing at the review route; each
@@ -19,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agentctl import advisor, cli, plugins
+from agentctl import cli, plugins
 from agentctl.state import SessionState
 
 
@@ -43,37 +38,6 @@ def _state(store, sid="s"):
     plugins.activate(state, "premise")
     store.save(state)
     return state
-
-
-# --- advisor.enumerate_questions: the pure fail-open pass -----------------------
-
-def test_enumerate_parses_target_question_pairs():
-    out = "plan.goal\tis the goal actually agreed?\nstage:1.means\twhy this tool?"
-    pairs = advisor.enumerate_questions("g", "d", "p", _runner(out))
-    assert pairs == [
-        ("plan.goal", "is the goal actually agreed?"),
-        ("stage:1.means", "why this tool?"),
-    ]
-
-
-def test_enumerate_drops_malformed_lines():
-    # a well-formed pair, then three malformed lines (no tab, empty question,
-    # empty target) — the malformed ones are DROPPED, never raised.
-    out = "plan.goal\tgood question?\nno-tab-here\nstage:2.result\t\n\twhat about this?"
-    pairs = advisor.enumerate_questions("g", "d", "p", _runner(out))
-    assert pairs == [("plan.goal", "good question?")]
-
-
-def test_enumerate_fails_open_on_nonzero_exit():
-    run = _runner("plan.goal\tshould never be read", returncode=1)
-    assert advisor.enumerate_questions("g", "d", "p", run) == []
-    # None runner and a throwing runner also fail open (mirrors the stage probe).
-    assert advisor.enumerate_questions("g", "d", "p", None) == []
-
-    def boom(argv, **kw):
-        raise OSError("no binary")
-
-    assert advisor.enumerate_questions("g", "d", "p", boom) == []
 
 
 # --- the retired verbs ----------------------------------------------------------

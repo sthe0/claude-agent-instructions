@@ -872,16 +872,16 @@ def test_brief_eligible_true_when_all_conditions_met(tmp_path, monkeypatch):
     assert MOD.brief_eligible(_args(plan_path)) is True
 
 
-def test_brief_eligible_false_for_kind_outside_plans_read_kinds(tmp_path, monkeypatch):
+def test_brief_eligible_for_kind_outside_plans_read_kinds(tmp_path, monkeypatch):
     monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
     plan_path, _ = _two_stage_doc(tmp_path)
-    assert MOD.brief_eligible(_args(plan_path, kind="planner")) is False
+    assert MOD.brief_eligible(_args(plan_path, kind="planner")) is True
 
 
-def test_brief_eligible_false_when_flag_not_set(tmp_path, monkeypatch):
+def test_brief_eligible_when_flag_not_set(tmp_path, monkeypatch):
     monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
     plan_path, _ = _two_stage_doc(tmp_path)
-    assert MOD.brief_eligible(_args(plan_path, plan_brief=False)) is False
+    assert MOD.brief_eligible(_args(plan_path, plan_brief=False)) is True
 
 
 def test_brief_eligible_false_when_stage_index_missing(tmp_path, monkeypatch):
@@ -890,13 +890,13 @@ def test_brief_eligible_false_when_stage_index_missing(tmp_path, monkeypatch):
     assert MOD.brief_eligible(_args(plan_path, stage_index=None)) is False
 
 
-def test_brief_eligible_false_when_plan_outside_plans_dir(tmp_path, monkeypatch):
+def test_brief_eligible_when_plan_outside_plans_dir(tmp_path, monkeypatch):
     other_dir = tmp_path / "not-plans-dir"
     other_dir.mkdir()
     monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path / "the-real-plans-dir")
     plan_path = other_dir / "plan.toml"
     plan_path.write_text(TWO_STAGE_TOML, encoding="utf-8")
-    assert MOD.brief_eligible(_args(plan_path)) is False
+    assert MOD.brief_eligible(_args(plan_path)) is True
 
 
 # --- the symlink pair (assertion 9) ------------------------------------------
@@ -919,10 +919,9 @@ def test_brief_eligible_false_when_plan_outside_plans_dir(tmp_path, monkeypatch)
 @pytest.mark.skipif(
     not hasattr(Path, "symlink_to"), reason="platform without symlink support"
 )
-def test_symlink_inside_plans_dir_pointing_out_gets_the_whole_plan(tmp_path, monkeypatch):
-    """Half (i): the path LOOKS contained and its target is not. A literal
-    string-prefix containment check admits this and hands a plans_dir()-only
-    child a projection sourced from a file it may not open."""
+def test_symlink_inside_plans_dir_pointing_out_gets_the_brief_only(tmp_path, monkeypatch):
+    """Half (i): the path LOOKS contained and its target is not. The brief is
+    built from the dereferenced file and the prompt names neither spelling."""
     plans = (tmp_path / "plans").resolve()
     plans.mkdir()
     outside = (tmp_path / "elsewhere").resolve()
@@ -934,10 +933,10 @@ def test_symlink_inside_plans_dir_pointing_out_gets_the_whole_plan(tmp_path, mon
     link.symlink_to(real_plan)
     monkeypatch.setattr(MOD, "plans_dir", lambda: plans)
 
-    assert MOD.brief_plan_path(_args(link)) is None
     prompt = MOD.assemble_prompt(_args(link), depth=1, permissions="")
-    assert "Review the feature" in prompt  # whole plan text, unprojected
-    assert "projected" not in prompt  # and no pointer line
+    assert "Implement the feature" in prompt
+    assert "Review the feature" not in prompt  # the stage brief, never the whole plan
+    assert str(link) not in prompt and str(real_plan) not in prompt
 
 
 @pytest.mark.skipif(
@@ -959,12 +958,10 @@ def test_symlink_outside_plans_dir_pointing_in_gets_the_brief(tmp_path, monkeypa
     link.symlink_to(real_plan)
     monkeypatch.setattr(MOD, "plans_dir", lambda: plans)
 
-    assert MOD.brief_plan_path(_args(link)) == real_plan
     prompt = MOD.assemble_prompt(_args(link), depth=1, permissions="")
     assert "Implement the feature" in prompt
     assert "Review the feature" not in prompt  # projected, not the whole plan
-    assert f"`{real_plan}`" in prompt  # pointer names the target...
-    assert str(link) not in prompt  # ...never the outside spelling
+    assert str(real_plan) not in prompt and str(link) not in prompt  # no author path
 
 
 # --- spawn-specialist.py assemble_prompt ------------------------------------
@@ -998,15 +995,13 @@ def test_assemble_prompt_pointer_names_the_resolved_plan_path(tmp_path, monkeypa
     (real_dir / "sub").mkdir()
 
     prompt = MOD.assemble_prompt(_args(argv_spelling), depth=1, permissions="")
-    expected = (
-        f"## Working plan — stage 1 brief (projected; the full plan lives at "
-        f"`{plan_path.resolve()}`, not inlined here)"
-    )
-    assert expected in prompt
+    assert "## Working plan — stage 1 brief" in prompt
+    assert "Plan view: `" in prompt
     assert str(argv_spelling) not in prompt
+    assert str(plan_path.resolve()) not in prompt
 
 
-def test_assemble_prompt_byte_identical_fallback_when_not_eligible(tmp_path, monkeypatch):
+def test_assemble_prompt_projects_the_brief_whatever_the_flag(tmp_path, monkeypatch):
     monkeypatch.setattr(MOD, "plans_dir", lambda: tmp_path)
     plan_path, _ = _two_stage_doc(tmp_path)
     with_flag_off = MOD.assemble_prompt(_args(plan_path, plan_brief=False), depth=1, permissions="")
@@ -1014,7 +1009,8 @@ def test_assemble_prompt_byte_identical_fallback_when_not_eligible(tmp_path, mon
     del args_missing_attr.plan_brief
     without_attr = MOD.assemble_prompt(args_missing_attr, depth=1, permissions="")
     assert with_flag_off == without_attr
-    assert "Review the feature" in with_flag_off  # whole plan text present, unprojected
+    assert "Implement the feature" in with_flag_off
+    assert "Review the feature" not in with_flag_off  # the former whole-plan fallback is gone
 
 
 # --- prompt-size ceiling -----------------------------------------------------

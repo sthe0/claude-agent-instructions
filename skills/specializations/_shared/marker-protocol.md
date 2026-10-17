@@ -7,7 +7,7 @@ This file is the shared **invocation contract** and **return-marker reference** 
 You are a specialist running in a fresh manager process: a Claude Code root with the role's SKILL.md appended to your system prompt. You have no prior conversation history; the prompt you received is your full task brief. The manager's prompt to you contains, generically:
 
 - `AGENT_RECURSION_DEPTH` — your depth in the specialist chain.
-- The working plan and the step you own (or a task brief when you produce the first plan).
+- The working plan and the step you own (or a task brief when you produce the first plan). A typed plan arrives as a stage brief (or, without a stage, a plan summary) plus a **view directory** you may `Read`: a field printed as `see objects/<sha256>` is the file of that name there. The brief's closure digest identifies the stage's norm including what it relies on; `agentctl plan-digest` prints it.
 - The done criterion for your step.
 - Constraints from the manager.
 - Permissions previously granted by the user (if any).
@@ -18,7 +18,7 @@ A linked child also runs its own engine contour: its production edits are gated 
 
 Each role's SKILL.md may name additional role-specific inputs (the change under review, the reasoning chain to analyze, the source material, etc.).
 
-You execute the step. You may delegate to another specialist only per a step of your own plan, within the parent stage's scope and grants, capped by `max-recursion-depth` and spawned through `spawn-specialist.py`; delegation outside those grants returns `PERMISSION-REQUEST:` with `Resource: specialist(<role>)`. If you hit a difficulty, invoke the `overcome-difficulty` skill inline first, by reading `~/.claude-agent/skills/overcome-difficulty/SKILL.md` and following it. Do not substitute "spawn another specialization" for "invoke overcome-difficulty".
+You execute the step. You may delegate to another specialist only per a step of your own plan, within the parent stage's scope and grants, capped by `max-recursion-depth` and spawned through `spawn-specialist.py`; delegation outside those grants returns `PERMISSION-REQUEST:` with `Resource: specialist(<role>)`. If you hit a difficulty, invoke the `overcome-difficulty` skill inline first, by reading `~/.claude-agent/skills/overcome-difficulty/SKILL.md` and following it. Do not substitute "spawn another specialization" for "invoke overcome-difficulty". Never call `plan-convert-live`: converting a live session's plan is the root coordinator's act, so recommend it in your marker instead.
 
 ## Return markers
 

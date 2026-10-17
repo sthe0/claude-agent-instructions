@@ -2,9 +2,9 @@
 enumerator's retirement for new plans (amendments-2.md E3).
 
 The detached worker, its sidecar fold and the launch from `cmd_submit_plan` /
-`cmd_replan` are gone; `advisor.enumerate_claims` (ledger path) and
-`advisor.enumerate_questions_health` (kept for `measure-advisor-latency.py`)
-still run at the widened `ENUMERATE_TIMEOUT_S` bound. Covers:
+`cmd_replan` are gone; `advisor.enumerate_claims` (ledger path, measured by
+`measure-advisor-latency.py`) still runs at the widened `ENUMERATE_TIMEOUT_S`
+bound. Covers:
   - `cmd_ledger_enumerate` resolves `runner=None` to
     `advisor.enumerate_subprocess_runner`, which delegates to
     `advisor.subprocess_runner` at `ENUMERATE_TIMEOUT_S` -- a genuinely different
@@ -359,12 +359,8 @@ class TestSidecarDigestMismatchDiscard:
 
 # --- the runner signature is pinned, not inferred from a stub ------------------
 
-@pytest.mark.parametrize(
-    "entry",
-    ["enumerate_claims", "enumerate_questions_health"],
-)
-def test_enumerate_runner_signature_matches_what_the_entry_points_pass(entry, monkeypatch):
-    """The two enumeration entry points call their DEFAULT runner, and the ceiling
+def test_enumerate_runner_signature_matches_what_the_entry_point_passes(monkeypatch):
+    """The enumeration entry point calls its DEFAULT runner, and the ceiling
     that reaches `subprocess_runner` is ENUMERATE_TIMEOUT_S. A stub runner accepts
     any signature, so only patching `advisor.subprocess_runner` (keeping the real
     `enumerate_subprocess_runner` in the path) can see a mismatch between what the
@@ -380,15 +376,37 @@ def test_enumerate_runner_signature_matches_what_the_entry_points_pass(entry, mo
 
     monkeypatch.setattr(advisor, "subprocess_runner", fake_subprocess_runner)
 
-    if entry == "enumerate_claims":
-        advisor.enumerate_claims("artifact text")
-    else:
-        advisor.enumerate_questions_health("goal", "done criterion", "plan text")
+    advisor.enumerate_claims("artifact text")
 
     assert seen, (
-        f"{entry} never reached subprocess_runner — its call site and "
+        "enumerate_claims never reached subprocess_runner — its call site and "
         "enumerate_subprocess_runner disagree, and the TypeError was swallowed "
         "into an unhealthy-runner verdict"
     )
     assert seen["timeout"] == advisor.ENUMERATE_TIMEOUT_S
     assert seen["timeout"] != advisor._ADVISOR_TIMEOUT_S
+
+
+@pytest.mark.parametrize("returncode,expected", [(0, True), (1, False)])
+def test_latency_rows_record_the_health_of_the_runner_call(
+        returncode, expected, tmp_path, monkeypatch):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "measure_advisor_latency", SCRIPTS_DIR / "measure-advisor-latency.py")
+    measure = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(measure)
+    monkeypatch.setattr(measure, "select",
+                        lambda: ([(5, "p.toml", "goal", "crit", "plan text")], 1))
+    monkeypatch.setattr(measure, "SNAP", tmp_path / "snap")
+    monkeypatch.setattr(measure, "OUT", tmp_path / "out.jsonl")
+    monkeypatch.setattr(measure, "LOG", tmp_path / "log")
+    monkeypatch.setattr(measure, "REPEATS", 1)
+    monkeypatch.setattr(
+        advisor, "subprocess_runner",
+        lambda argv, *, timeout=None, stdin="": RunResult(returncode, "a claim\n", ""))
+
+    measure.main()
+
+    rows = [json.loads(line) for line in (tmp_path / "out.jsonl").read_text().splitlines()]
+    assert [r["runner_ok"] for r in rows] == [expected]

@@ -27,7 +27,7 @@ import pytest
 from test_plan_review_topo import SID, Env, _data, _sha, _write, make_env  # noqa: F401
 
 from agentctl import cli, plan
-from agentctl.render import render_pair_review_bundle, topo_pair_view_dirname
+from agentctl.render import render_pair_review_bundle
 from lib import planner_plan_check
 
 SCRIPTS = Path(__file__).resolve().parent.parent
@@ -231,6 +231,15 @@ def make_rig(drv, tmp_path, monkeypatch, capsys):
 def real(make_env, make_rig, tmp_path, monkeypatch):
     env = make_env()
     return env, make_rig(RealEngine(tmp_path / "state", monkeypatch), env.plan)
+
+
+def _fixed_views(rig, tmp_path, pairs, monkeypatch):
+    """Stand in for the site builder: the fake pair ids are not pairs of the rig's one-line
+    plan, so each gets a fixed view directory the transcripts can name."""
+    view = {p: tmp_path / "views" / f"view-{p}" for p in pairs}
+    monkeypatch.setattr(rig.drv, "view_dir_for",
+                        lambda plan_path, pair, view_root=None: str(view[pair]) if pair in view else None)
+    return view
 
 
 def single(make_rig, pair="3-1"):
@@ -507,9 +516,9 @@ def test_td7_ledger_flag_reaches_every_agentctl_call_and_receives_the_condition4
     assert env.ledger_lines() == []
 
 
-def test_td8_every_pair_line_carries_all_seven_fields_and_unknowns_print_na(make_rig, tmp_path, drv):
+def test_td8_every_pair_line_carries_all_seven_fields_and_unknowns_print_na(make_rig, tmp_path, drv, monkeypatch):
     rig = make_rig(FakeEngine([["a", "b", "c"]]))
-    view = {p: Path(rig.drv.view_dir_for(p, rig.sha)) for p in "abc"}
+    view = _fixed_views(rig, tmp_path, "abc", monkeypatch)
     ta = write_transcript(tmp_path / "ta.jsonl", [("t1", "Read", {"file_path": str(view["a"] / "node-1.md")})])
     tb = write_transcript(tmp_path / "tb.jsonl", [("t1", "Read", {"file_path": str(view["b"] / "node-1.md")})])
     rig.specs = {
@@ -528,6 +537,26 @@ def test_td8_every_pair_line_carries_all_seven_fields_and_unknowns_print_na(make
     assert (rows["c"]["pulls"], rows["c"]["transcript"]) == ("NA", "NA")
     summary = next(ln for ln in out if ln.startswith("TOPO-SUMMARY: "))
     assert "cost_unknown=1" in summary and "pulls_unknown=1" in summary
+
+
+def test_td8_pulls_are_counted_against_the_view_directory_known_at_launch(make_rig, tmp_path, monkeypatch):
+    rig = make_rig(FakeEngine([["a"]]))
+    launch_view, after_edit_view = tmp_path / "views" / "launch", tmp_path / "views" / "after-edit"
+    current = {"a": launch_view}
+    calls: list[str] = []
+
+    def view_dir_for(plan_path, pair, view_root=None):
+        calls.append(pair)
+        return str(current[pair])
+
+    monkeypatch.setattr(rig.drv, "view_dir_for", view_dir_for)
+    transcript = write_transcript(tmp_path / "ta.jsonl", [("t1", "Read", {"file_path": str(launch_view / "n.md")})])
+    rig.specs = {"a": {"transcript": str(transcript),
+                       "on_spawn": lambda pair: current.update({pair: after_edit_view})}}
+    rc, out = rig.run()
+    row = next(m for m in map(PAIR_LINE.match, out) if m)
+    assert row["pulls"] == "1"
+    assert calls == ["a"]
 
 
 def test_td9_pull_counting_is_separator_safe_and_deduplicated(drv, tmp_path):
@@ -551,9 +580,9 @@ def test_td9_pull_counting_is_separator_safe_and_deduplicated(drv, tmp_path):
     assert drv.count_pulls(None, view) is None
 
 
-def test_td10_summary_totals_equal_the_sums_over_the_pair_lines(make_rig, tmp_path):
+def test_td10_summary_totals_equal_the_sums_over_the_pair_lines(make_rig, tmp_path, monkeypatch):
     rig = make_rig(FakeEngine([["a", "b", "c"]]))
-    view = {p: Path(rig.drv.view_dir_for(p, rig.sha)) for p in "ab"}
+    view = _fixed_views(rig, tmp_path, "ab", monkeypatch)
     ta = write_transcript(tmp_path / "ta.jsonl", [
         ("1", "Read", {"file_path": str(view["a"] / "n.md")}), ("2", "Bash", {"command": f"ls {view['a']}"})])
     tb = write_transcript(tmp_path / "tb.jsonl", [("1", "Read", {"file_path": "/x"})])
@@ -587,7 +616,7 @@ def test_td11_model_selector(make_rig, extra, expected):
         assert ("--complexity" in argv) == (expected[0] == "--complexity")
         assert flag(argv, "--done-criterion").strip() and "3-1" in flag(argv, "--done-criterion")
         assert flag(argv, "--criterion-type") == "acceptance-review"
-        assert flag(argv, "--review-topo") == "3-1" and "--plan-brief" in argv
+        assert flag(argv, "--review-topo") == "3-1" and "--plan-brief" not in argv
         assert ("--dry-run" in argv) == dry
 
 

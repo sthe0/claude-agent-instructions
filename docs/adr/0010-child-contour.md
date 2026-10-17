@@ -166,3 +166,7 @@ To turn linking on, change the value of the `child-contour-linking` row in `conf
 - GG (escalated): user: yes — the brief's own-contour section names the child's plan path (re-confirmed by user 2026-10-14 against the rebased plan)
 - GH (assumed): same practice as 4b stage 6: merge fixes amended into the merge commit so the suite report names the final head
 - GI (escalated): user (2026-10-14): leave child-contour-linking off in this task; decide turning it on separately after landing
+
+## Note (hypertext plans)
+
+A child plan may be a referenced sub-document of its parent's plan, in the `{ ref, sha256 }` form of [ADR-0012](0012-hypertext-plans.md), whose resolver and depth bound already allow an index → child plan → stage → field file chain. The child's norm handoff carries the stage closure digest, which names the parent stage's norm together with what it relies on. Nothing decided here changes: the child's plan lives at its own plan path, and the digest the approval binds to is that plan's index digest.

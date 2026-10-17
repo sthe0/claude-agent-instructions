@@ -4,6 +4,7 @@
 # Usage: instruction-sandbox-verify.sh [--no-live] [--timeout <seconds>] <root>
 #   --no-live   skip the live `claude -p` launches (no marker is written)
 #   --timeout   bound for each live launch (default: the live script's own)
+#   --model     model alias for each live launch (default: the live script's own, haiku)
 #
 # Prints one `CHECK <name> PASS|FAIL|UNAVAILABLE <detail>` line per check:
 #   static:lint-prose-length  static:verify-layout-contract
@@ -32,10 +33,12 @@ die() { echo "instruction-sandbox-verify: $*" >&2; exit 2; }
 
 no_live=""
 timeout_args=()
+model_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-live) no_live=1; shift ;;
     --timeout) [[ $# -ge 2 ]] || die "--timeout needs a value"; timeout_args=(--timeout "$2"); shift 2 ;;
+    --model) [[ $# -ge 2 ]] || die "--model needs a value"; model_args=(--model "$2"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown argument: $1" ;;
     *) break ;;
@@ -132,7 +135,7 @@ live_check() {
   local expect=()
   for t in "$@"; do expect+=(--expect "$t"); done
   out="$(python3 "$here/instruction-sandbox-live.py" --root "$root" --cwd "$cwd" \
-           ${timeout_args[@]+"${timeout_args[@]}"} "${expect[@]}" 2>/dev/null)" || rc=$?
+           ${timeout_args[@]+"${timeout_args[@]}"} ${model_args[@]+"${model_args[@]}"} "${expect[@]}" 2>/dev/null)" || rc=$?
   case "$rc" in
     0) report PASS "live:$name" ;;
     1) missing="$(sed -n 's/^missing //p' <<< "$out" | tr '\n' ' ')"
@@ -146,7 +149,7 @@ live_check() {
 live_hook_check() {
   local out rc=0 reason
   out="$(python3 "$here/instruction-sandbox-live.py" --root "$root" --cwd "$root" \
-           --probe hook-gate-deny --stream-out "$root/hook-probe/stream.jsonl" ${timeout_args[@]+"${timeout_args[@]}"} 2>/dev/null)" || rc=$?
+           --probe hook-gate-deny --stream-out "$root/hook-probe/stream.jsonl" ${timeout_args[@]+"${timeout_args[@]}"} ${model_args[@]+"${model_args[@]}"} 2>/dev/null)" || rc=$?
   case "$rc" in
     0) report PASS live:hook-gate-deny ;;
     1) report FAIL live:hook-gate-deny "$(tr '\n' ' ' <<< "${out:0:450}")" ;;

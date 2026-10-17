@@ -14,6 +14,7 @@ a tree that lacks them instead of failing the whole module at collection.
 import hashlib
 import json
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
@@ -515,3 +516,40 @@ def test_dispatch_never_moves_a_carry_key_field(store, venued_fixtures_dir):
                         dry_run=False, constraints=""), store=store,
                      runner=lambda argv, **kw: RunResult(0, stdout="COMPLETED: done\n"))
     assert [stage_carry_key(s) for s in store.load(sid).stages] == before
+
+
+def test_change_tier_of_a_split_plan_is_decided_on_the_resolved_plan(
+        store, venued_fixtures_dir, tmp_path):
+    """The tier and the frozen-stage check read the plan with its linked files resolved:
+    a field held in a file moves the tier exactly as the same edit inline does, an
+    untouched split plan is tier 0, and the PASSED stage's operative edit is refused."""
+    from agentctl import plan_refs
+    from agentctl.plan import change_tier
+
+    inline_text = (venued_fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+    index = tmp_path / "split" / "plan.toml"
+    index.parent.mkdir()
+    index.write_text(inline_text, encoding="utf-8")
+    field_file = Path(plan_refs.plan_externalize(index, stage=1, field="done_criterion")["field_file"])
+
+    sid = "split1"
+    _passed_session(store, sid, str(index))
+    baseline = cli._baseline_plan_for_tier(store, store.load(sid))
+    assert baseline is not None, "the snapshot of a split plan resolves its linked files"
+    assert change_tier(baseline, load_plan(str(index))).tier == 0
+
+    field_file.write_text(field_file.read_text(encoding="utf-8") + " cleanly", encoding="utf-8")
+    plan_refs.seal(index)
+    split_tier = change_tier(baseline, load_plan(str(index)))
+    inline_tier = change_tier(
+        _doc(tmp_path, inline_text, "inline-base.toml"),
+        _doc(tmp_path, inline_text.replace(
+            "python -c 'import mod' exits 0", "python -c 'import mod' exits 0 cleanly"),
+            "inline-edit.toml"))
+    assert (split_tier.tier, split_tier.stages[1].moved) == (
+        inline_tier.tier, inline_tier.stages[1].moved) == (2, (("criterion.done_criterion", "O"),))
+
+    d = cli.cmd_replan(ns(session=sid, plan=str(index)), store=store)
+
+    assert not d.ok and "--reopen" in _says(d) and "stage 1" in _says(d), _says(d)
+    assert store.load(sid).stage(1).outcome.status == StageStatus.PASSED.value

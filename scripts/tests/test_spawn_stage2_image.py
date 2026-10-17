@@ -389,7 +389,10 @@ def test_p08_unknown_kind_gets_default_mode_and_default_baseline(plans, two_stag
     run = _dry_run(capsys, _base_argv(UNKNOWN_KIND, two_stage_plan))
     assert run.rc == 0
     assert run.permission_mode == "default"
-    assert run.allow == list(MOD.KIND_BASELINES["default"])
+    baseline = list(MOD.KIND_BASELINES["default"])
+    view_reads = [rule for rule in run.allow if rule.startswith("Read(") and "/site-" in rule]
+    assert len(view_reads) == 1, "the plan's view directory is the one added read grant"
+    assert [rule for rule in run.allow if rule not in view_reads] == baseline
 
     for kind in ("thinker", "planner", "code-reviewer"):
         other = _dry_run(capsys, _base_argv(kind, two_stage_plan))
