@@ -179,6 +179,28 @@ def test_amendments_edit_moves_no_change_decision_key(fixtures_dir, tmp_path, st
                                       ("amendments.text", "B"))
 
 
+def test_amendments_edit_keeps_review_and_premise_keys(fixtures_dir, tmp_path):
+    from agentctl.plan import (_reviewed_stage_keys, pair_content, review_pairs,
+                               stage_question_key, unit_currency_hash)
+
+    base = _base(fixtures_dir)
+    amended = _stage1(base, "[[stage.amendments]]", 'date = "2026-10-17"',
+                      'text = "the check also runs the linter"',
+                      'reason = "the first run missed a style defect"')
+    old = _doc(tmp_path, base, "old.toml")
+    new = _doc(tmp_path, amended, "new.toml")
+
+    assert not old.stages[0].amendments
+    assert [a.text for a in new.stages[0].amendments] == ["the check also runs the linter"]
+    assert [stage_question_key(s) for s in old.stages] == [stage_question_key(s) for s in new.stages]
+    assert [_reviewed_stage_keys(s) for s in old.stages] == [_reviewed_stage_keys(s) for s in new.stages]
+    units = ["unit:base"] + [f"unit:{s.index}" for s in old.stages]
+    assert [unit_currency_hash(old, u) for u in units] == [unit_currency_hash(new, u) for u in units]
+    pairs = review_pairs(old)
+    assert pairs and review_pairs(new) == pairs
+    assert [pair_content(old, p) for p in pairs] == [pair_content(new, p) for p in pairs]
+
+
 # --- the tier ------------------------------------------------------------------------
 
 def test_change_tier_assigns_each_class_its_tier(fixtures_dir, tmp_path):

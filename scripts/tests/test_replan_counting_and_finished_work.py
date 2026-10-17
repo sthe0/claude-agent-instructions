@@ -378,6 +378,28 @@ def test_wall_clock_finished_work_fire_retiers_from_spawn_duration(store, venued
         float(thr.effort_stage_minutes("small")), float(thr.effort_stage_minutes("large") + 1)]
 
 
+@pytest.mark.parametrize("sibling", [StageStatus.PENDING.value, StageStatus.ACTIVE.value,
+                                     StageStatus.FAILED.value])
+def test_fire_at_a_passed_result_with_an_unfinished_sibling_stays_the_users(
+        store, venued_fixtures_dir, tmp_path, sibling):
+    sid = f"sibling-{sibling}"
+    plan = _plan(venued_fixtures_dir)
+    _to_executing_stage1(store, sid, plan)
+    state = store.load(sid)
+    state.stages[1].outcome.status = sibling
+    store.save(state)
+    cost_log = tmp_path / "costs.jsonl"
+    _write_cost_log(cost_log, [{"plan_path": plan, "stage_index": 1, "cost_usd": 100.0}])
+
+    d = _pass(store, sid, 1, cost_log)
+
+    assert d.node == Node.DIAGNOSING.value
+    state = store.load(sid)
+    assert "disposition" not in state.effort_fires[-1]
+    assert state.effort_retiers == []
+    assert gates.effort_fire_blockers(state)
+
+
 def test_non_operative_replans_still_owe_a_review_in_the_spend_estimate(
     store, venued_fixtures_dir, tmp_path
 ):
