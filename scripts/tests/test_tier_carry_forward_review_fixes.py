@@ -208,6 +208,9 @@ def test_refused_replan_marks_only_the_dispositions_the_edit_made_stale(
         bag = state.plugins["premise"]
         bag["questions"][0]["target"] = "stage:1.result"
         bag["questions"][0]["disposed_at_key"] = keys[WHOLE_STAGE_ELEMENT]
+        moved = dict(bag["questions"][0], id="Q3", target="stage:1.criterion",
+                     disposed_at_key=keys["criterion"])
+        bag["questions"].append(moved)
 
     state = store.load(sid)
     legacy_stamp(state)
@@ -229,5 +232,6 @@ def test_refused_replan_marks_only_the_dispositions_the_edit_made_stale(
                           coverage_waiver=None), store=store)
 
     assert not d.ok and d.action == "close_questions", _says(d)
-    question = next(q for q in store.load(sid).plugins["premise"]["questions"] if q["id"] == "Q1")
-    assert not question.get("stale_note"), question
+    notes = {q["id"]: q.get("stale_note") for q in store.load(sid).plugins["premise"]["questions"]}
+    assert notes["Q3"], "the criterion question was answered against bytes the edit moved"
+    assert not notes["Q1"], "the whole-stage stamp on an unmoved element is carried, not stale"
