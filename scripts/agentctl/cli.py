@@ -29,7 +29,7 @@ from pathlib import Path
 
 from lib import argv_text, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, carry_forward, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from . import config as agentctl_config
@@ -86,6 +86,7 @@ from .plan import (
     stage_question_key,
     stage_reattest_digest,
     unit_currency_hash,
+    unit_node,
     verify_command_reachability_blockers,
     verify_command_scope_warnings,
     _derive_stage_grants,
@@ -1334,11 +1335,23 @@ def _plan_review_override_refusal(
     return None, crossing
 
 
-def _record_first_thinker_verdict(state: SessionState, doc, review, scope: str) -> None:
-    """Write the thinker's first whole-plan verdict on the changed unresolved commands
-    into the order's ledger, once per (approved version, changed identities) key. An
-    override, an unattested review or a stage-scoped one is never that verdict."""
-    if doc is None or scope or not review.plan_sha256:
+def _sufficient_review_scope(state: SessionState, doc, scope: str) -> bool:
+    """Whether a pass at `scope` is the whole review `plan-review-delta` reports as owed
+    for `doc`: the one stage-scoped pass that leaves nothing else to review. Read before
+    the pass is stored, while the delta still lists the stage."""
+    if doc is None or not scope:
+        return False
+    whole_plan, stages = gates.plan_review_delta(state, doc)
+    return not whole_plan and scope in {gates._plan_review_scope_for_stage(i) for i in stages}
+
+
+def _record_first_thinker_verdict(state: SessionState, doc, review, scope: str,
+                                  *, sufficient_scope: bool = False) -> None:
+    """Write the thinker's first verdict on the changed unresolved commands into the
+    order's ledger, once per (approved version, changed identities) key. A whole-plan pass,
+    or a stage-scoped one at the scope the review delta reports as sufficient, is that
+    verdict; an override or an unattested review never is."""
+    if doc is None or (scope and not sufficient_scope) or not review.plan_sha256:
         return
     if review.verdict not in (gates._PLAN_REVIEW_PASS, gates._PLAN_REVIEW_REVISE):
         return
@@ -1350,6 +1363,7 @@ def _record_first_thinker_verdict(state: SessionState, doc, review, scope: str) 
         return
     order_approvals.record_first_thinker_verdict(key, verdict_key, {
         "verdict": review.verdict, "plan_sha256": review.plan_sha256, "reviewer": review.reviewer,
+        **({"scope": scope} if scope else {}),
     })
 
 
@@ -1367,9 +1381,23 @@ def _kind_within_boundary(state: SessionState, kind: str, doc, *, ledgered: bool
     if verdict.get("basis") == gates.PARENT_NORM_BASIS:
         return kind if verdict["eligible"] else "substantive"
     if (verdict["order_changed"] or verdict["extra_resources"]
-            or verdict["unresolved_changed_commands"]):
+            or (verdict["unresolved_changed_commands"] and not _vouched_by_scoped_pass(state, verdict))):
         return "substantive"
     return kind
+
+
+def _vouched_by_scoped_pass(state: SessionState, verdict: dict) -> bool:
+    """Whether the changed unresolved commands of `verdict` are all engine-executed and the
+    first thinker verdict on them is a pass recorded at the scope the review delta reports
+    as sufficient (`_record_first_thinker_verdict` marks it with its scope)."""
+    if verdict.get("thinker_pass") is not True or verdict.get("first_verdict_key") is None:
+        return False
+    if any(c["needs_user"] for c in verdict["unresolved_changed_commands"]):
+        return False
+    key = _ledgered_order_key(state)
+    recorded = (order_approvals.get(key).get("first_thinker_verdicts") or {}).get(
+        verdict["first_verdict_key"]) if key else None
+    return isinstance(recorded, dict) and bool(recorded.get("scope"))
 
 
 def _replan_kind(state: SessionState, old, new) -> str:
@@ -1407,6 +1435,50 @@ def _baseline_plan_for_tier(store: StateStore, state: SessionState):
         return parse_plan(tomllib.loads(data.decode("utf-8")), strict=False)
     except (UnicodeDecodeError, tomllib.TOMLDecodeError, PlanError):
         return None
+
+
+def _review_baseline(store: StateStore, state: SessionState):
+    """(plan, sha256) of the plan version the session's review records describe: the
+    approved snapshot when there is one, else the file at `plan_path`; (None, None) when
+    neither can be read."""
+    from .plan import PlanError, load_plan as _load
+
+    baseline = _baseline_plan_for_tier(store, state)
+    if baseline is not None:
+        return baseline, state.plan_snapshot_hash
+    if not state.plan_path:
+        return None, None
+    try:
+        return _load(state.plan_path, strict=False), _plan_file_sha256(state.plan_path)
+    except (OSError, PlanError):
+        return None, None
+
+
+def _carry_records(store: StateStore, state: SessionState, plan_path: str, *, in_place: bool,
+                   baseline: "tuple | None" = None):
+    """Carry the review, premise and order-coverage records onto the plan at `plan_path`
+    as far as the edit's change tier allows (`carry_forward`). Returns `(state, report,
+    change)`: with `in_place` False the records are carried on a copy and `state` stays as
+    it was, so a gate can read the carried view of a command that may still be refused.
+    `baseline` is `(plan, sha256, path)` of the version the records describe, for a caller
+    that has already moved `state.plan_path` off it."""
+    from .plan import PlanError, change_tier, load_plan as _load
+
+    report = {"tier": None, "carried": False, "owed": [], "records": [], "held": []}
+    old, old_sha = _review_baseline(store, state) if baseline is None else baseline[:2]
+    old_path = state.plan_path if baseline is None else baseline[2]
+    if old is None:
+        return state, report, None
+    try:
+        new = _load(plan_path, strict=False)
+    except (OSError, PlanError):
+        return state, report, None
+    change = change_tier(old, new)
+    target = state if in_place else copy.deepcopy(state)
+    report = carry_forward.apply(
+        target, old, new, new_path=plan_path, new_sha=_plan_file_sha256(plan_path),
+        change=change, old_path=old_path, old_sha=old_sha)
+    return (target if report["carried"] else state), report, change
 
 
 _VERDICT_PRESERVING_CLASSES = frozenset({"B", "F", "C"})
@@ -4088,6 +4160,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # between separate reads can't desynchronize accepted_plan_digest from the bytes
     # that were actually parsed and verified.
     doc, _submitted_plan_bytes, _submitted_plan_digest = load_plan_with_digest(plan_path)
+    _prior_baseline = (*_review_baseline(store, state), state.plan_path) if resubmitting else None
     state.stages = doc.stages
     _sync_venue_from_plan(state, doc)
     state.final_check = doc.meta.final_check
@@ -4152,12 +4225,21 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     _submitted_plan_sha256 = _submitted_plan_digest
     state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
+    _carry_note = ""
     if resubmitting:
         # The counter (read by gates.plan_review_round_release_active, reset by
         # cmd_approve) advances per resubmission made while a review record STANDS —
         # redrafts of a plan nobody reviewed are not rounds. Read before the staleness
-        # clear below, which ends the round.
-        if state.plan_review is not None or state.plan_stage_reviews:
+        # clear below, which ends the round. An edit whose records carry onto the new
+        # version (`carry_forward`) is not a round: no review is owed again for it.
+        _, _submit_carry, _ = _carry_records(
+            store, state, plan_path, in_place=True, baseline=_prior_baseline)
+        if _submit_carry["carried"]:
+            _carry_note = carry_forward.describe(_submit_carry)
+            state.log("review_carried", plan=plan_path, tier=_submit_carry["tier"],
+                      records=list(_submit_carry["records"]), owed=list(_submit_carry["owed"]),
+                      held=list(_submit_carry["held"]))
+        elif state.plan_review is not None or state.plan_stage_reviews:
             state.plan_review_rounds += 1
         # The plan changed, so any recorded thinker review that no longer covers
         # the resubmitted bytes must clear so the plan-review gate re-arms for
@@ -4199,6 +4281,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
             "plan ready; HARD GATE — get explicit user approval before approve",
             marker="PLAN-READY", data=directive_data,
         )
+    if _carry_note:
+        d.data.setdefault("advisories", []).append(_carry_note)
     _attach_advisories(d, "plan_completeness",
                        {"plan": plan_path, "stage_count": len(state.stages),
                         "titles": [s.title for s in state.stages]},
@@ -5156,6 +5240,11 @@ def _cmd_plan_review_pair(
     elif verdict == gates._PLAN_REVIEW_OVERRIDE and prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE:
         ledger = _condition4_ledger_rows(state, doc, target, prev, prev.concerns, "false-alarm")
     state.plan_pair_reviews[pair] = review
+    released: list[str] = []
+    if getattr(args, "escalate_pairs", False):
+        if not is_unit_id(pair):
+            return refuse(f"--escalate-pairs belongs to a unit review, not to pair {pair!r}")
+        released = carry_forward.release_holds(state, unit_node(pair))
     _settle_override_decision(state, review, plan_review_scope_for_pair(pair), crossing)
     question_ids = _record_review_questions(state, pair, question_texts)
     if _is_counted_review(review.verdict, reviewer):
@@ -5166,15 +5255,17 @@ def _cmd_plan_review_pair(
               concern_ids=review.concern_ids,
               plan_sha256=attested, concerns=concerns, note=note,
               regression_command=regression_command, regression_exit=regression_exit,
-              ledger_lines=len(ledger))
+              ledger_lines=len(ledger), escalated_pairs=released)
     store.save(state)
     _append_escalation_ledger(ledger)
     status = gates.pair_status(state, doc, target, pair)
     return Directive(
         True, state.node, "continue",
         f"pair review recorded for {pair!r} against {target} (verdict={verdict}); "
-        f"pair status: {status}",
+        f"pair status: {status}"
+        + (f"; escalated to the pairs: {', '.join(released)}" if released else ""),
         data={"pair": pair, "pair_status": status, "ledger_lines": len(ledger),
+              "escalated_pairs": released,
               "concern_ids": review.concern_ids, **_question_data(state, args, question_ids),
               **_crossing_data(crossing)},
     )
@@ -5485,6 +5576,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             data=data,
         )
     _log_concerns_downgraded(state, concern_plan, scope, args.verdict)
+    sufficient_scope = _sufficient_review_scope(state, doc, scope)
     if scope:
         state.plan_stage_reviews[scope] = review
     else:
@@ -5495,7 +5587,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         # so it must not become a terminal pass either.
         state.plan_review_passes[scope] = review
     _settle_override_decision(state, review, scope, crossing)
-    _record_first_thinker_verdict(state, doc, review, scope)
+    _record_first_thinker_verdict(state, doc, review, scope, sufficient_scope=sufficient_scope)
     # POST-APPROVAL round counting. cmd_submit_plan's increment covers only the
     # pre-approval resubmission loop; review cycles overwhelmingly recur AFTER
     # approval, on the `replan` path, where the same thinker review is demanded and
@@ -5782,11 +5874,16 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
         detail = f"no review gap: every part of {target} is covered by its current review"
     if pairs:
         detail += f"; walk-stale pairs — run: plan-review-topological.py --pairs {','.join(pairs)}"
-    return Directive(
-        True, state.node, "inspect", detail,
-        data={"markdown": md, "whole_plan": whole_plan_needed, "stages": stages, "pairs": pairs,
-              "consumer_of": {str(c): consumer_of[c] for c in sorted(consumer_of)}},
-    )
+    data = {"markdown": md, "whole_plan": whole_plan_needed, "stages": stages, "pairs": pairs,
+            "consumer_of": {str(c): consumer_of[c] for c in sorted(consumer_of)}}
+    baseline, _ = _review_baseline(store, state)
+    if baseline is not None:
+        from .plan import change_tier
+        change = change_tier(baseline, doc)
+        data["tier"] = change.tier
+        data["stage_tiers"] = {str(i): c.tier for i, c in sorted(change.stages.items())}
+        detail += f"; change tier {change.tier} against the version the session runs"
+    return Directive(True, state.node, "inspect", detail, data=data)
 
 
 def _pair_ledger_groups(state: SessionState, pair: str, target: str) -> "dict[int, list[ConcernRecord]]":
@@ -11105,7 +11202,11 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # EVERY replan kind (refinement and substantive alike, per the user decision),
     # inactive for non-substantive sessions. A genuine no-op replan (args.plan ==
     # the already-reviewed plan_path) passes on the existing review.
-    prblock = gates.plan_review_blockers(state, args.plan)
+    # The records are judged as carried onto the corrected plan: a tier 0-1 edit owes no
+    # review, a tier 2 edit owes the edited stages' own. Nothing is written until the
+    # replan is applied.
+    gate_state, carry_preview, carry_change = _carry_records(store, state, args.plan, in_place=False)
+    prblock = gates.plan_review_blockers(gate_state, args.plan)
     _log_gate(state, "plan_review", prblock, passed=not prblock)
     if prblock:
         # With the round-release valve active the blockers ARE the release message,
@@ -11125,7 +11226,10 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 review_doc = _load(args.plan)
             except (OSError, PlanError):
                 review_doc = None
-            delta = gates.review_delta(state, review_doc, args.plan)
+            delta = gates.review_delta(gate_state, review_doc, args.plan)
+            if carry_change is not None:
+                delta["tier"] = carry_change.tier
+                delta["stage_tiers"] = {i: c.tier for i, c in sorted(carry_change.stages.items())}
             if delta["record_scope_args"]:
                 review_commands = [
                     "plan-review --target " + args.plan + " " + scope_arg
@@ -11239,18 +11343,18 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # state.plan_path, so swap it for the call and restore in finally. [] when no
     # plugin extends plan_approval, so the row still logs (passed, empty) and the
     # replan is byte-identical to before.
-    _saved_plan_path = state.plan_path
+    _saved_plan_path = gate_state.plan_path
     try:
-        state.plan_path = args.plan
-        pblock = plugins.plugin_gate_blockers(state, "plan_approval")
+        gate_state.plan_path = args.plan
+        pblock = plugins.plugin_gate_blockers(gate_state, "plan_approval")
     finally:
-        state.plan_path = _saved_plan_path
+        gate_state.plan_path = _saved_plan_path
     # Invalidate dispositions whose cited stage fields moved in the proposed plan so
     # the mismatch is visible in question-list output even when this replan is blocked
     # by the gate (#123). Runs here — after the try-finally restored plan_path and
     # before the pblock return — so a blocked replan still surfaces stale notes on disk.
     _inv_bag = state.plugins.get("premise")
-    if _inv_bag is not None:
+    if _inv_bag is not None and gate_state is state:
         _inv_stage_keys = {s.index: stage_norm_keys(s) for s in new.stages}
         _inv_meta_keys = plan_meta_element_keys(new)
         _inv_changed = premise.invalidate_stale_dispositions(
@@ -11365,22 +11469,32 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     #
     # Fold into the cross-session task accumulator (item B) before the reset, same
     # reasoning as cmd_approve's fold above.
-    task_accumulator.add(
-        state.task_id, "plan_review_rounds", state.plan_review_rounds,
-        session_id=state.session_id, now=_utcnow(),
-    )
+    # A tier 0-2 edit does not start a new review loop: its records are carried onto the
+    # new version (`carry_forward`), so the rounds, the counted digest and the passes
+    # stay with them; every other edit settles the old loop and starts from zero.
+    _, carry_report, _ = _carry_records(store, state, args.plan, in_place=True)
+    carry_note = carry_forward.describe(carry_report)
+    if carry_note:
+        state.log("review_carried", plan=args.plan, tier=carry_report["tier"],
+                  records=list(carry_report["records"]), owed=list(carry_report["owed"]),
+                  held=list(carry_report["held"]))
+    else:
+        task_accumulator.add(
+            state.task_id, "plan_review_rounds", state.plan_review_rounds,
+            session_id=state.session_id, now=_utcnow(),
+        )
+        state.plan_review_rounds = 0
+        state.plan_review_counted_digest = ""
+        # Terminal-pass custody — same "current approval cycle" boundary as the
+        # pair above: a replanned plan starts with no pass on record for any scope.
+        state.plan_review_passes = {}
     task_accumulator.add(
         state.task_id, "code_review_rounds", state.code_review_rounds,
         session_id=state.session_id, now=_utcnow(),
     )
-    state.plan_review_rounds = 0
-    state.plan_review_counted_digest = ""
     # Reset alongside the pair above (item A) — same reasoning: rounds spent
     # code-reviewing the previous plan version are settled once a corrected plan lands.
     state.code_review_rounds = 0
-    # Terminal-pass custody — same "current approval cycle" boundary as the
-    # pair above: a replanned plan starts with no pass on record for any scope.
-    state.plan_review_passes = {}
     # Stamped HERE and not up at the seam: every refusal path of this command is now behind
     # us — the last of them being the critique-coverage gate just above — so like seam (a)
     # the digest only ever names bytes the session ACCEPTED. (Not an enumeration: this
@@ -11409,6 +11523,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # warn-only and cannot influence any decision above it either way. (`run` is bound at
     # the seam above; only this CALL is deferred, which is where the cost is.)
     echo_advice = _submission_advice(new, run, state.weight_class)
+    if carry_note:
+        echo_advice = echo_advice + [carry_note]
     # Non-blocking hint naming --normalize-factor -- advisory only, never a gate (a
     # replan with nothing reproducible to re-norm is a completely ordinary replan).
     # Suppressed when this call itself recorded one (the `not normalize_factor`
@@ -13176,6 +13292,10 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                          "topo:base-2; a unit, e.g. topo:unit:base or topo:unit:3) to "
                          "record one pair or unit review; omitted "
                          "(or '') means whole-plan, the only kind that existed before stage 5")
+    sp.add_argument("--escalate-pairs", dest="escalate_pairs", action="store_true",
+                    help="with a unit scope: re-open the pairs touching that unit that a "
+                         "tier-2 edit carried without a review (held), so each is owed a "
+                         "review of the edited content like a tier-3 edit")
     sp.add_argument("--findings-blocking", dest="findings_blocking", type=int, default=None,
                     help="count of blocking findings this round produced (audit trail)")
     sp.add_argument("--findings-nonblocking", dest="findings_nonblocking", type=int,

@@ -1002,8 +1002,8 @@ def test_refinement_replan_rebinds_only_changed_stage_questions(store, tmp_path)
 
     def _assumed(qid, stage_index):
         return {
-            "id": qid, "target": f"stage:{stage_index}.means",
-            "question": f"is stage {stage_index}'s means sound?",
+            "id": qid, "target": f"stage:{stage_index}.criterion",
+            "question": f"is stage {stage_index}'s criterion sound?",
             "disposition": "assumed", "own_research": "read the surrounding code",
             "basis": "matches the existing working caller", "risk": "the caller may change",
             "disposed_at_key": key_by_index[stage_index],

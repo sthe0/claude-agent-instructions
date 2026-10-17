@@ -720,6 +720,11 @@ class PlanReview:
     raw_verdict: str = ""
     part_digests: dict[str, str] = field(default_factory=dict)
     stable_ids: list[str] = field(default_factory=list)
+    # Set when a plan edit of a tier that leaves the record's verdict standing re-stamped
+    # it onto the new version (`agentctl.carry_forward`): the tier of that edit and the
+    # sha256 of the version it was recorded against. None / "" on a record a reviewer wrote.
+    carried_tier: "int | None" = None
+    carried_from_sha: str = ""
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "PlanReview | None":
@@ -759,6 +764,8 @@ class PlanReview:
             raw_verdict=d.get("raw_verdict", ""),
             part_digests=dict(pd) if isinstance(pd := d.get("part_digests"), dict) else {},
             stable_ids=list(d.get("stable_ids", [])),
+            carried_tier=d.get("carried_tier"),
+            carried_from_sha=d.get("carried_from_sha", ""),
         )
 
 
@@ -867,6 +874,12 @@ class PlanPairReview:
     service_iface_norm: str = ""
     edge_norm: str = ""
     unit_norm: str = ""
+    # As on PlanReview. `held`: a pair a tier-2 edit of one of its stages carried without
+    # a review of its own: the pair's content hash at that moment. It counts as satisfied
+    # while the pair's content is still that, until a unit reviewer escalates it.
+    held: str = ""
+    carried_tier: "int | None" = None
+    carried_from_sha: str = ""
 
     @property
     def is_unit(self) -> bool:
@@ -906,6 +919,9 @@ class PlanPairReview:
             raw_verdict=d.get("raw_verdict", ""),
             part_digests=dict(pd) if isinstance(pd := d.get("part_digests"), dict) else {},
             unit_norm=d.get("unit_norm", ""),
+            held=d.get("held") or "",
+            carried_tier=d.get("carried_tier"),
+            carried_from_sha=d.get("carried_from_sha", ""),
             **{key: d.get(key, "") for key in PAIR_BINDING_KEYS},
             **{key: d.get(key, "") for key in PAIR_CONTENT_KEYS},
         )

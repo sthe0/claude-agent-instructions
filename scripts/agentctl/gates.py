@@ -65,6 +65,7 @@ from .plan import (
     is_unit_id,
     pair_binding,
     pair_content,
+    review_currency_hash,
     pair_currency_hash,
     pair_currency_keys,
     plan_has_any_grants,
@@ -1410,25 +1411,39 @@ def pair_status(state: SessionState, doc, plan_path: str, pair: str) -> str:
         return "missing"
     if is_legacy_review_id(pair):
         return "stale:legacy"
+    stale = _pair_staleness(record, doc, plan_path, pair)
+    if stale:
+        if record.held and not is_unit_id(pair) and record.held == review_currency_hash(doc, pair):
+            return "held"
+        return stale
+    return "current" if record.verdict == _PLAN_REVIEW_PASS else record.verdict
+
+
+def _pair_staleness(record, doc, plan_path: str, pair: str) -> str:
+    """The `stale:<part>` reason `record` no longer matches `doc`, or "" when it does.
+    A legacy pair record (no content digests) whose stored file digest still equals the
+    bytes at `plan_path` is current whatever its render-derived binding says: the plan
+    it reviewed is the plan on disk, only the renderer moved."""
     if is_unit_id(pair):
-        if record.unit_norm != unit_currency_hash(doc, pair):
-            return "stale:unit"
-    elif record.is_content_keyed:
+        return "stale:unit" if record.unit_norm != unit_currency_hash(doc, pair) else ""
+    if record.is_content_keyed:
         fresh_content = pair_content(doc, pair)
         stored_content = record.content()
         for key in PAIR_CONTENT_KEYS:
             if stored_content[key] != fresh_content[key]:
                 return "stale:" + key.removesuffix("_norm")
-    else:
-        fresh = pair_binding(doc, pair)
-        stored = record.binding()
-        for key in pair_currency_keys(doc, pair):
-            if stored[key] != fresh[key]:
-                return "stale:" + key.removesuffix("_digest").removesuffix("_key")
-    return "current" if record.verdict == _PLAN_REVIEW_PASS else record.verdict
+        return ""
+    if record.plan_sha256 and _file_sha256(plan_path) == record.plan_sha256:
+        return ""
+    fresh = pair_binding(doc, pair)
+    stored = record.binding()
+    for key in pair_currency_keys(doc, pair):
+        if stored[key] != fresh[key]:
+            return "stale:" + key.removesuffix("_digest").removesuffix("_key")
+    return ""
 
 
-PAIR_SATISFIED = ("current", "override")
+PAIR_SATISFIED = ("current", "override", "held")
 
 
 def pair_binding_hash(doc, pair: str) -> str:
@@ -1538,7 +1553,7 @@ def pair_walk(state: SessionState, doc, plan_path: str) -> "list[dict]":
         rows.append({
             "pair": uid, "kind": "unit", "base": str(node), "service": "",
             "level": depths[node], "status": status[uid], "ready": not waiting,
-            "waiting": waiting,
+            "waiting": waiting, **_carry_marks(state, uid, status[uid]),
         })
     for pid in pairs:
         b, s = split_pair_id(pid)
@@ -1547,9 +1562,21 @@ def pair_walk(state: SessionState, doc, plan_path: str) -> "list[dict]":
         rows.append({
             "pair": pid, "kind": "pair", "base": str(b), "service": str(s),
             "level": pair_level(pid), "status": status[pid], "ready": not waiting,
-            "waiting": waiting,
+            "waiting": waiting, **_carry_marks(state, pid, status[pid]),
         })
     return rows
+
+
+def _carry_marks(state: SessionState, rid: str, status: str) -> dict:
+    """The `held` / `carried` flags of a walk row, present only on a row that has one — a
+    row of a plan nothing was carried onto keeps its keys as they were."""
+    record = state.plan_pair_reviews.get(rid)
+    marks = {}
+    if status == "held":
+        marks["held"] = True
+    if record is not None and record.carried_from_sha:
+        marks["carried"] = True
+    return marks
 
 
 def has_pair_records_for(state: SessionState, target_plan: "str | None") -> bool:
@@ -2131,6 +2158,7 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
             doc = None
     coverage_route = doc is not None and (
         bool(state.plan_stage_reviews) or has_pair_records_for(state, target_plan)
+        or (state.plan_review is not None and (state.plan_review.carried_tier or 0) >= 2)
     )
     if not coverage_route:
         blockers = _plan_review_blockers_whole(state.plan_review, target_plan, state=state, doc=doc)
