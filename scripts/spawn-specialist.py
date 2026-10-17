@@ -2509,6 +2509,8 @@ def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction
 # is not a signature match; it is what a genuine terminal marker forces
 # regardless of any match (see _resolve_child_outcome's precedence rule).
 CHILD_ANSWERED = "CHILD_ANSWERED"
+CHILD_INFRA_FAILURE = "CHILD_INFRA_FAILURE"
+CHILD_EXHAUSTED = "CHILD_EXHAUSTED"
 
 # Who authored the marker the spawn-cost ledger records (`return_marker_source`): the child's own
 # return marker, one this script synthesized (MALFORMED / a CHILD_* envelope), or none routed.
@@ -2521,8 +2523,6 @@ MARKER_SOURCE_NONE = "none"
 # (--disallowedTools, CLI reference); CLAUDE_CODE_DISABLE_CRON=1 turns the scheduler off
 # (https://code.claude.com/docs/en/scheduled-tasks § Disable scheduled tasks).
 LOOP_TOOLS_DENIED = ("ScheduleWakeup", "CronCreate", "CronDelete", "CronList")
-CHILD_INFRA_FAILURE = "CHILD_INFRA_FAILURE"
-CHILD_EXHAUSTED = "CHILD_EXHAUSTED"
 
 # Signatures the `claude` CLI itself emits on its own stdout/stderr when a run
 # never reaches (or loses) the API, or is refused outright for size before it

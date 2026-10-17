@@ -27,6 +27,9 @@ def _load():
     return mod
 
 
+SS = _load()
+
+
 class _FakeProc:
     def __init__(self, result: str) -> None:
         self.returncode = 0
@@ -92,14 +95,14 @@ def test_ledger_source_child(monkeypatch, tmp_path, capsys):
     captured = _run(monkeypatch, tmp_path, capsys, "COMPLETED: done.\n")
 
     assert captured["row"]["return_marker"] == "COMPLETED"
-    assert captured["row"]["return_marker_source"] == "child"
+    assert captured["row"]["return_marker_source"] == SS.MARKER_SOURCE_CHILD
 
 
 def test_ledger_source_envelope(monkeypatch, tmp_path, capsys):
     captured = _run(monkeypatch, tmp_path, capsys, "API Error: Unable to connect to API (ENOTFOUND)")
 
-    assert captured["row"]["return_marker"] == "CHILD_INFRA_FAILURE"
-    assert captured["row"]["return_marker_source"] == "envelope"
+    assert captured["row"]["return_marker"] == SS.CHILD_INFRA_FAILURE
+    assert captured["row"]["return_marker_source"] == SS.MARKER_SOURCE_ENVELOPE
 
 
 def test_launch_withholds_autonomous_loop(monkeypatch, tmp_path, capsys):
@@ -107,16 +110,15 @@ def test_launch_withholds_autonomous_loop(monkeypatch, tmp_path, capsys):
 
     cmd = captured["cmd"]
     denied = cmd[cmd.index("--disallowedTools") + 1].split(",")
-    assert "ScheduleWakeup" in denied
+    assert denied == list(SS.LOOP_TOOLS_DENIED)
     assert captured["env"]["CLAUDE_CODE_DISABLE_CRON"] == "1"
 
 
 def test_markerless_final_stays_malformed(monkeypatch, tmp_path, capsys):
-    # A marker an earlier message held is not recoverable: only the final result text counts.
     captured = _run(monkeypatch, tmp_path, capsys, "I have looked into it and finished the work.")
 
     routed, _ = parse_marker(captured["stdout"])
     assert routed == "MALFORMED"
     assert captured["row"]["malformed"] is True
     assert captured["row"]["return_marker"] == "MALFORMED"
-    assert captured["row"]["return_marker_source"] == "envelope"
+    assert captured["row"]["return_marker_source"] == SS.MARKER_SOURCE_ENVELOPE
