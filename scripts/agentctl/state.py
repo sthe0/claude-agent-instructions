@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 56  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 57  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -101,6 +101,8 @@ SCHEMA_VERSION = 56  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # approved_grants_*, accepted_plan_digest), runtime_grants and
                      # plan_binding_captured, so pop-subplan restores the parent's binding
                      # and stage grants instead of the child's
+                     # 57: SessionState gains plan_conversions (the plan-convert-live links
+                     # between root digests of one plan's equivalent forms)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1253,6 +1255,31 @@ class PlanPresentation:
         )
 
 
+# One conversion of the session's registered plan between its single-file and hypertext
+# forms (schema 51). Both forms have one plan content digest but different root digests,
+# so a record bound to the old root stays valid through the link: `gates.
+# plan_digest_equivalent` walks these records. `direction` is "convert" or "revert".
+@dataclass
+class PlanConversion:
+    old_digest: str
+    new_digest: str
+    content_digest: str
+    plan_path: str
+    by: str
+    direction: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PlanConversion":
+        return cls(
+            old_digest=d["old_digest"],
+            new_digest=d["new_digest"],
+            content_digest=d["content_digest"],
+            plan_path=d["plan_path"],
+            by=d["by"],
+            direction=d["direction"],
+        )
+
+
 # Bypass-visibility record (schema 14): every time an acceptance_review stage is
 # recorded PASSED WITHOUT a genuine passing judge verdict — because the kill switch
 # disabled the gate, or a human override cleared it — one JudgeBypass is appended and
@@ -2188,6 +2215,7 @@ class SessionState:
     # default via from_dict's cls(**data)), so the gate has no observable and —
     # for a substantive session — blocks approval until a receipt is recorded.
     plan_presentations: list[PlanPresentation] = field(default_factory=list)
+    plan_conversions: list[PlanConversion] = field(default_factory=list)
     approval: GateRecord = field(default_factory=lambda: GateRecord("plan_approval"))
     resolution: GateRecord = field(default_factory=lambda: GateRecord("resolution"))
     stages: list[Stage] = field(default_factory=list)
@@ -2756,6 +2784,9 @@ class SessionState:
         data["plan_presentations"] = [
             PlanPresentation.from_dict(x) for x in data.get("plan_presentations", [])
         ]
+        data["plan_conversions"] = [
+            PlanConversion.from_dict(x) for x in data.get("plan_conversions", [])
+        ]
         cost_raw = data.get("cost")
         data["cost"] = CostRollup(**cost_raw) if cost_raw else None
         data["plan_stack"] = [
@@ -2839,5 +2870,5 @@ SESSION_SCOPED_FIELDS = frozenset({
     "review_release_difficulty_id", "renegotiations", "runtime_host", "reattest_stash",
     "declined_issues", "planning_misses", "materialization_defects",
     "settings_drift", "cwd_drift", "pending_renorms", "difficulty_stack", "parent_difficulty",
-    "closed_difficulties", "parent_link", "schema_version",
+    "closed_difficulties", "parent_link", "schema_version", "plan_conversions",
 })

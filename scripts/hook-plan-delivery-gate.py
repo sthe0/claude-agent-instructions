@@ -638,7 +638,8 @@ def _decide_session(
             replan_receipt = _gates._plan_presentation_for(replan_state, _KIND_REPLAN_DIFF)
             if replan_receipt is not None:
                 replan_stale = _gates._receipt_binding_blocker(
-                    replan_receipt, replan_receipt.plan_path, "replan-diff presentation"
+                    replan_receipt, replan_receipt.plan_path, "replan-diff presentation",
+                    replan_state,
                 )
                 if replan_stale is None:
                     if delivered_texts is None and isinstance(transcript_path, str) and transcript_path:

@@ -1104,6 +1104,7 @@ SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
     "lib/host_llm.py": "reader",
     "lib/instruction-sandbox-canon-snapshot.sh": "reader",
     "lib/instruction-sandbox-project-check.sh": "reader",
+    "lib/spawn_ceiling.py": "mention",
     "lib/widening_targets.py": "reader",
     "lint-settings-base.py": "mention",
     "mandate_cycle/driver.py": "mention",

@@ -41,11 +41,11 @@ class Counting:
         self.inner = inner
         self.calls = 0
 
-    def __call__(self, *args):
+    def __call__(self, *args, **kwargs):
         self.calls += 1
         if self.inner is None:
             raise AssertionError("the smoke must not have been launched")
-        return self.inner(*args)
+        return self.inner(*args, **kwargs)
 
 
 def feature(world, files, name="feature"):
@@ -184,6 +184,66 @@ def test_a_stored_admitted_record_is_reused_without_a_launch(world, capsys):
     assert remote_main(world) == sha
 
 
+def test_smoke_model_reaches_the_runner_and_the_record(world, capsys):
+    sha = feature(world, {"CLAUDE.md": "new rules\n"})
+    inner = stub_runner()
+    code, _, _ = land(world, capsys, "--smoke-model", "sonnet", runner=Counting(inner))
+    assert code == 0 and inner.kwargs == [{"model": "sonnet"}]
+    assert gate.load_record(gate.git_common_dir(world.work), sha)["model"] == "sonnet"
+
+
+def test_without_smoke_model_the_runner_gets_the_default_model(world, capsys):
+    feature(world, {"CLAUDE.md": "new rules\n"})
+    inner = stub_runner()
+    code, _, _ = land(world, capsys, runner=Counting(inner))
+    assert code == 0 and inner.kwargs == [{"model": gate.DEFAULT_MODEL}]
+
+
+def test_without_smoke_model_a_stored_unavailable_record_of_another_model_is_not_waived_in_place(world, capsys):
+    sha = feature(world, {"CLAUDE.md": "new rules\n"})
+    world.store({**make_record(sha, world.base, statuses={LIVE: gate.UNAVAILABLE}), "model": "sonnet"})
+    inner = stub_runner()
+    code, _, _ = land(world, capsys, "--smoke-waiver", "sonnet not served", runner=Counting(inner))
+    assert code == 0 and inner.kwargs == [{"model": gate.DEFAULT_MODEL}]
+    stored = gate.load_record(gate.git_common_dir(world.work), sha)
+    assert stored["model"] == gate.DEFAULT_MODEL and stored["waiver"] is None and stored["result"] == gate.PASS
+
+
+def test_without_smoke_model_an_already_waived_record_of_another_model_is_not_admitted(world, capsys):
+    sha = feature(world, {"CLAUDE.md": "new rules\n"})
+    record = {**make_record(sha, world.base, statuses={LIVE: gate.UNAVAILABLE}), "model": "sonnet"}
+    record["waiver"] = {"reason": "sonnet not served", "at": "2026-10-17T00:00:00Z", "detail": ""}
+    world.store(record)
+    inner = stub_runner()
+    code, _, _ = land(world, capsys, runner=Counting(inner))
+    assert code == 0 and inner.kwargs == [{"model": gate.DEFAULT_MODEL}]
+
+
+def test_a_stored_pass_of_another_model_is_reused(world, capsys):
+    sha = feature(world, {"CLAUDE.md": "new rules\n"})
+    world.store({**make_record(sha, world.base), "model": "haiku"})
+    code, _, _ = land(world, capsys, "--smoke-model", "sonnet", runner=Counting())
+    assert code == 0 and remote_main(world) == sha
+
+
+def test_a_stored_unavailable_record_of_another_model_is_not_waived_in_place(world, capsys):
+    sha = feature(world, {"CLAUDE.md": "new rules\n"})
+    world.store({**make_record(sha, world.base, statuses={LIVE: gate.UNAVAILABLE}), "model": "haiku"})
+    inner = stub_runner()
+    code, out, _ = land(world, capsys, "--smoke-model", "sonnet", "--smoke-waiver", "haiku not served",
+                        runner=Counting(inner))
+    assert code == 0 and inner.kwargs == [{"model": "sonnet"}]
+    stored = gate.load_record(gate.git_common_dir(world.work), sha)
+    assert stored["model"] == "sonnet" and stored["waiver"] is None and stored["result"] == gate.PASS
+
+
+def test_a_stored_unavailable_record_of_the_same_model_is_still_waived_in_place(world, capsys):
+    sha = feature(world, {"CLAUDE.md": "new rules\n"})
+    world.store({**make_record(sha, world.base, statuses={LIVE: gate.UNAVAILABLE}), "model": "sonnet"})
+    code, _, _ = land(world, capsys, "--smoke-model", "sonnet", "--smoke-waiver", "offline", runner=Counting())
+    assert code == 0 and remote_main(world) == sha
+
+
 def test_a_stored_record_bound_to_another_base_is_not_trusted(world, capsys):
     sha = feature(world, {"CLAUDE.md": "new rules\n"})
     world.store(make_record(sha, "1" * 40))
@@ -218,7 +278,7 @@ def test_a_repository_without_the_sandbox_is_not_gated(world, capsys):
 def test_an_environment_failure_in_the_runner_refuses_in_defused_words(world, capsys):
     feature(world, {"CLAUDE.md": "new rules\n"})
 
-    def broken(*_args):
+    def broken(*_args, **_kwargs):
         raise gate.GateError("sandbox build failed: permission denied")
 
     code, _, err = land(world, capsys, runner=broken)

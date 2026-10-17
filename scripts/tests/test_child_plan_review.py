@@ -163,6 +163,9 @@ def test_linked_spawn_grants_exactly_the_review_driver(tmp_path, monkeypatch):
     )
     unlinked_cmd, _ = _launch(_load_spawn(), monkeypatch, _spawn_argv(tmp_path / "home", tmp_path, None))
     extra = sorted(set(allow) - set(_settings_allow(unlinked_cmd)))
+    view_reads = [rule for rule in extra if rule.startswith("Read(") and "/site-" in rule]
+    assert len(view_reads) == 1, f"the stage brief's view directory is the one added read grant: {extra}"
+    extra = [rule for rule in extra if rule not in view_reads]
     own_plan = own_plan_path(cmd[cmd.index("--session-id") + 1])
     assert extra == sorted([f"Bash(python3 {OWN_SCRIPT}:*)", REVIEW_RULE, f"Edit(/{own_plan})"]), (
         f"a linked child is granted more than the channel, the review driver and its own plan: {extra}"

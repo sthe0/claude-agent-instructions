@@ -19,6 +19,8 @@ lent through the environment (never copied into the sandbox).
 
 Output: `found <token>` / `missing <token>` per token; on exit 3 one line
 `UNAVAILABLE <reason>`.
+A failed launch's reason is `launch-exit=<n>` followed by an excerpt of its output
+(the stream's final result text, else the last non-empty line), token-shaped strings redacted.
 Exit:  0  launch completed and every token was found
        1  launch completed (exit 0, no timeout) and a token was absent
        3  UNAVAILABLE: `auth`, `timeout`, `launch-exit=<n>`, `launch-error`,
@@ -32,6 +34,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -52,6 +55,10 @@ DEFAULT_TIMEOUT_S = 480
 DEFAULT_MODEL = "haiku"
 
 EXIT_PASS, EXIT_MISSING, EXIT_USAGE, EXIT_UNAVAILABLE = 0, 1, 2, 3
+
+LAUNCH_EXCERPT_LIMIT = 200
+# Defence in depth: a long unbroken run of token characters is never a diagnosis worth keeping.
+TOKEN_SHAPED = re.compile(r"sk-[\w-]{8,}|[A-Za-z0-9_.\-]{32,}")
 
 # Caller-session variables that would redirect the child's state, identity or
 # plugin lookups out of the sandbox, where the canon snapshot cannot see them.
@@ -258,6 +265,42 @@ def run_hook_probe(model: str, env: dict, cwd: Path, timeout: float,
         shutil.rmtree(probe_dir, ignore_errors=True)
 
 
+def _clean_line(text: str) -> str:
+    text = "".join(ch if ch.isprintable() else " " for ch in text)
+    text = TOKEN_SHAPED.sub("[redacted]", " ".join(text.split()))
+    return text[:LAUNCH_EXCERPT_LIMIT]
+
+
+def _last_line(text: str) -> str:
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    return lines[-1] if lines else ""
+
+
+def _stream_cause(out: str) -> str:
+    """The final result event's text, else the last stdout line that is not a stream event."""
+    result = ""
+    last = ""
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            last = line
+            continue
+        if isinstance(event, dict) and event.get("type") == "result" and isinstance(event.get("result"), str):
+            result = event["result"]
+    return _last_line(result) or last
+
+
+def launch_failure_excerpt(argv: list[str], out: str, err: str) -> str:
+    if "stream-json" in argv:
+        cause = _stream_cause(out) or _last_line(err)
+    else:
+        cause = _last_line(out) or _last_line(err)
+    return _clean_line(cause)
+
+
 def run_launch(argv: list[str], env: dict, cwd: Path, timeout: float,
                prompt: str = PROMPT) -> tuple[str, str]:
     """Return ('ok', stdout) or ('unavailable', reason)."""
@@ -269,13 +312,14 @@ def run_launch(argv: list[str], env: dict, cwd: Path, timeout: float,
     except OSError:
         return "unavailable", "launch-error"
     try:
-        out, _err = proc.communicate(prompt, timeout=timeout)
+        out, err = proc.communicate(prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.communicate()
         return "unavailable", "timeout"
     if proc.returncode != 0:
-        return "unavailable", f"launch-exit={proc.returncode}"
+        excerpt = launch_failure_excerpt(argv, out or "", err or "")
+        return "unavailable", f"launch-exit={proc.returncode}" + (f" {excerpt}" if excerpt else "")
     return "ok", out
 
 

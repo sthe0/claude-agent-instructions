@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Re-fit advisor.ENUMERATE_TIMEOUT_S against this machine's plan-size distribution.
 
-Drives the REAL advisor.enumerate_questions_health under MEASURE_CAP, set far above
-the shipped ceiling so no datapoint is truncated by the bound being measured."""
+Drives the REAL advisor.enumerate_claims under MEASURE_CAP, set far above
+the shipped ceiling so no datapoint is truncated by the bound being measured.
+
+Each call enumerates the WHOLE plan text. `agentctl ledger-enumerate` instead makes one
+call per node of a typed plan (the render "enumerate-node" site), so these rows bound the
+latency of the largest single call from above and are not the per-call distribution the
+shipped ceiling governs; recorded datasets predate that split."""
 import functools
 import hashlib
 import json
@@ -71,14 +76,23 @@ def main():
         samples.append(dict(chars=size, path=path, sha=digest, goal=goal, crit=crit, text=text))
         log(f"  sample {size:>7} chars  sha {digest[:12]}  {path}")
 
-    runner = functools.partial(advisor.subprocess_runner, timeout=MEASURE_CAP)
+    base_runner = functools.partial(advisor.subprocess_runner, timeout=MEASURE_CAP)
+    last = {}
+
+    def runner(*args, **kwargs):
+        last["result"] = base_runner(*args, **kwargs)
+        return last["result"]
+
     rows = []
     for rep in range(1, REPEATS + 1):
         for s in samples:
             load1 = os.getloadavg()[0]
+            last.clear()
             t0 = time.monotonic()
-            ok, pairs, _stderr = advisor.enumerate_questions_health(s["goal"], s["crit"], s["text"], runner)
+            pairs = advisor.enumerate_claims(s["text"], runner)
             elapsed = time.monotonic() - t0
+            result = last.get("result")
+            ok = result is not None and result.returncode == 0
             # No plan path: the dataset ships in a public repo, and plan_sha256 already
             # identifies a row without naming anything.
             row = {

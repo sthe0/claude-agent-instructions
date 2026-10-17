@@ -1,12 +1,14 @@
 ---
 name: plan-file-split
-description: For substantive multi-stage plans that grow above ~20 KB, split the single plan markdown into an index file (`<slug>.md`) plus per-stage files (`<slug>-stage-<N>.md`). The index carries the structural sections (Problem, Stages-overview pointers, Final verification, Risks); each stage file carries that stage's Output / Expected result image / Actual effort. This lets later Read calls pull only the active stage instead of re-loading the entire plan.
+description: Superseded by ADR-0012 (hypertext plans). Historical record of the manual split of a markdown plan into an index plus per-stage files; a large TOML plan now uses hash-pinned references (plan-externalize) and the converter (plan-convert), not a hand split.
 type: reference
 created: 2026-05-27
-last_verified: 2026-07-22
+last_verified: 2026-10-15
 ---
 
 # Plan-file split
+
+> **Superseded by [ADR-0012](../../docs/adr/0012-hypertext-plans.md).** A plan too big for one prompt is no longer split by hand: a long field is moved into a hash-pinned file with `agentctl plan-externalize`, an edited file is resealed with `agentctl plan-seal`, an old single-file plan is converted with `agentctl plan-convert` (a live session's plan by the root coordinator with `plan-convert-live`), the stage list is assembled by `plan-seal` from the stage files with run order given only by each stage's `depends_on`, and the plan digest stays the digest of the index file. A single-file plan without references keeps the old rules: list order still decides run order between independent stages, and `depends_on` stays optional. The size limits are the `config.md` keys `plan-stage-max-chars` and `plan-field-inline-max-chars`. Do not follow the layout below for a TOML plan; it is kept for the markdown-era plans it describes. See [planner policy](../../skills/specializations/planner/policy.md) § Large plans.
 
 > **Legacy (`.md`-era) + one corrected hazard — read this first.** This leaf predates the
 > `agentctl` engine, which now writes a **single TOML** plan (`~/.claude-agent/plans/<slug>.toml`)
@@ -14,10 +16,11 @@ last_verified: 2026-07-22
 > old markdown plans, not a requirement. **Its functional ground is token economy — never
 > dispatchability.** The old § "How this interacts with `spawn-specialist.py`" advised
 > *concatenating* files into one `--plan` argument; that path reproduced the E2BIG dispatch failure
-> (Linux `MAX_ARG_STRLEN` = 131072 B per argv string), because `agentctl dispatch` inlines the whole
-> plan into the spawn prompt. Since commit `5d96cd6` `spawn-specialist.py` delivers that prompt via
-> **stdin**, so a plan of any size dispatches cleanly — splitting is **no longer needed to make a
-> large plan dispatchable**, only to save re-read tokens. See the corrected § below.
+> (Linux `MAX_ARG_STRLEN` = 131072 B per argv string), because before ADR-0012 `agentctl dispatch`
+> inlined the whole plan into the spawn prompt. Commit `5d96cd6` moved that prompt to **stdin**,
+> which removed the argv limit. Splitting was never the fix for the dispatch failure — the stdin
+> change was — and its remaining value is saving re-read tokens. For current behaviour (dispatch passes a stage brief plus a view,
+> per ADR-0012) see § "How this interacts with `spawn-specialist.py`" below.
 
 The planner skill (`skills/specializations/planner/SKILL.md`) writes plans to `~/.claude-agent/plans/<slug>.md`. For a typical 4–6-stage plan this is fine. For larger plans, observed cost in past sessions reached **25 KB per plan file, re-read 3–10 times** as the work moved through stages. See [token-economy-plan.md](token-economy-plan.md) item 6.
 
@@ -93,22 +96,15 @@ No frontmatter required — these are plan working files, not memory leaves.
 
 ## How this interacts with `spawn-specialist.py`
 
-**TOML-engine reality (current).** You do not spawn specialists by hand for a plan the engine drives —
-`agentctl dispatch` reads `meta` + the active stage from the single `.toml`, inlines the plan into the
-spawn prompt, and pipes the whole prompt to `spawn-specialist.py` via **stdin** (commit `5d96cd6`).
-Prompt size is therefore bounded only by memory, not by `MAX_ARG_STRLEN` — the 172 KB
-question-provenance plan dispatches cleanly. **Do not** concatenate plan files into one `--plan`
-argument or otherwise push a large payload onto argv: that path raises `OSError: [Errno 7] Argument
-list too long` before the child starts. This is the corrected form of the old advice, which suggested
-exactly that concatenation and predated the stdin channel.
+**Current behaviour.** `agentctl dispatch` passes a stage brief plus a view directory, not the whole plan ([ADR-0012](../../docs/adr/0012-hypertext-plans.md)). Never push a large payload onto argv: that raises `OSError: [Errno 7] Argument list too long` before the child starts.
 
 **Legacy `.md` split (only if you still hand-split a markdown plan).** Pass the index and just the
 active stage file — but merge them into the prompt *content* (or let the caller assemble one prompt),
 never as two argv strings, and never via a concatenated-into-argv scratch file.
 
-## What the planner skill should do
+## What the planner skill used to do (historical, markdown-era plans only)
 
-The planner does **not** auto-split. It writes a single file by default. If during planning the planner sees the plan growing beyond the trigger thresholds above, it should:
+A planner now writes TOML and follows [planner policy](../../skills/specializations/planner/policy.md) § Large plans instead. For a markdown plan the planner did **not** auto-split. It wrote a single file by default. If during planning the planner saw the plan growing beyond the trigger thresholds above, it would:
 
 1. Stop, decide to split.
 2. Write the index + stage files.

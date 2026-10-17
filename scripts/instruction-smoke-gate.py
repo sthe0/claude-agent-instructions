@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Pre-land instruction smoke gate: run the isolated-root smoke test, record it, check a landing.
 
-  instruction-smoke-gate.py run [--ref HEAD] [--waiver REASON] [-C DIR]
+  instruction-smoke-gate.py run [--ref HEAD] [--model ALIAS] [--waiver REASON] [-C DIR]
       Fetch the remote tip, build the sandbox of the candidate commit, run the verify recipe
       (one live `claude -p` launch) and write the record
       <git common dir>/instruction-smoke/<sha>.json. Exit 0 admitted (PASS, or UNAVAILABLE under
       a waiver), 1 refused (FAIL, or UNAVAILABLE without a waiver), 2 usage or environment.
       The candidate must contain the remote tip: the record is bound to it. The last stdout
-      line is `RECORD: <path>` whenever a record was written.
+      line is `RECORD: <path>` whenever a record was written. --model picks the model of the
+      live launches (default haiku); the record names it.
 
   instruction-smoke-gate.py check [--sha HEAD] [--remote-sha SHA] [--record PATH] [-C DIR]
       Report whether landing --sha onto a remote tip of --remote-sha would be admitted, reading
@@ -52,7 +53,7 @@ def _print_record(outcome: gate.RunOutcome) -> None:
 def cmd_run(args: argparse.Namespace) -> int:
     outcome = gate.run_smoke(
         _repo(args), ref=args.ref, remote=args.remote, trunk=args.trunk,
-        timeout_s=args.timeout, waiver=args.waiver,
+        timeout_s=args.timeout, waiver=args.waiver, model=args.model,
     )
     _print_record(outcome)
     if outcome.admitted:
@@ -113,6 +114,8 @@ def build_parser() -> argparse.ArgumentParser:
     common(run)
     run.add_argument("--ref", default="HEAD", help="candidate commit (default: HEAD)")
     run.add_argument("--timeout", type=int, default=gate.DEFAULT_TIMEOUT_S, help="seconds per live launch")
+    run.add_argument("--model", metavar="ALIAS", default=None,
+                     help=f"model for the live launches (default: {gate.DEFAULT_MODEL})")
     run.add_argument("--waiver", metavar="REASON", default=None,
                      help="admit an UNAVAILABLE live launch, recording REASON")
     run.set_defaults(func=cmd_run)

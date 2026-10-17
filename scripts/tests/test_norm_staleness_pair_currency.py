@@ -92,8 +92,8 @@ def _fan_in() -> dict:
         "meta": _meta(),
         "final_check": [{"command": "true", "expected_exit": 0, "label": "fc1"}],
         "stage": [
-            _stage(1),
-            _stage(2),
+            _stage(1, depends_on=[]),
+            _stage(2, depends_on=[]),
             _stage(3, depends_on=[1, 2], supplies=[{"on": 1, "element": "method"}]),
         ],
     }

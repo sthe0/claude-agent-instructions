@@ -305,6 +305,27 @@ class TestSubmitPlanWiring:
         assert "advisories" in d.data
         assert "stage 3 is missing" in d.data["advisories"]
 
+    def test_completeness_judge_reads_the_plan_summary_not_a_path_it_cannot_open(
+            self, store, venued_fixtures_dir, monkeypatch):
+        from agentctl import plan as plan_module
+
+        monkeypatch.setenv("AGENTCTL_ADVISOR", "1")
+        plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+        prompts = []
+
+        def runner(argv, **kwargs):
+            prompts.append(kwargs.get("stdin", ""))
+            return RunResult(0, stdout="", stderr="")
+
+        self._to_plan_ready(store, "adv-sp6", plan, runner)
+
+        asked = [p for p in prompts if p.startswith("Review this plan for completeness")]
+        assert len(asked) == 1
+        doc = plan_module.load_plan(plan)
+        assert doc.meta.goal in asked[0]
+        assert "Stages (declared product only)" in asked[0]
+        assert plan not in asked[0]
+
     def test_ok_node_unchanged_with_loud_verdict(self, store, venued_fixtures_dir, monkeypatch):
         monkeypatch.setenv("AGENTCTL_ADVISOR", "1")
         plan = str(venued_fixtures_dir / "plan_two_stage.toml")

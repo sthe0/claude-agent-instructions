@@ -28,7 +28,7 @@ from pathlib import Path
 
 from lib import argv_text, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_resources, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from . import config as agentctl_config
@@ -91,14 +91,16 @@ from .plan import (
     _venue_for,
 )
 from .render import (
+    build_site_prompt,
     cmd_plan_grants,
     cmd_plan_render,
     plan_render_stage_arg_type,
+    plan_summary_text,
     render_plan_grants,
     render_plan_md,
     render_stages_md,
 )
-from .submission import submission_advice, submission_violations
+from .submission import plan_size_blocks, plan_size_warnings, submission_advice, submission_violations
 from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
@@ -232,13 +234,27 @@ def _plan_file_sha256(target: str | None) -> str:
     empty result into a refusal when the caller did supply a --plan-digest, since a
     digest it cannot compare is not evidence the reviewer read anything.
     cmd_plan_review records this over the reviewed bytes; gates.plan_review_blockers
-    inlines the same sha256-of-bytes recompute (it cannot import cli — circular)."""
+    inlines the same sha256-of-bytes recompute (it cannot import cli — circular).
+
+    Index-only on purpose: for a hypertext plan the digest of the index bytes already
+    commits to every referenced file (each reference carries its file's sha256), so the
+    whole-plan review binding goes stale on any edit, referenced files included."""
     if not target:
         return ""
     try:
         return hashlib.sha256(Path(target).read_bytes()).hexdigest()
     except OSError:
         return ""
+
+
+def _plan_refs_problem(target: str) -> str | None:
+    """Why the references of the plan at `target` do not all resolve (the reference named),
+    or None when they do. A plan without references always resolves."""
+    try:
+        plan_store.visited_refs(target)
+    except PlanError as exc:
+        return str(exc)
+    return None
 
 
 def _plan_file_bytes(target: str | None) -> int | None:
@@ -350,7 +366,30 @@ def _record_bypass(state: SessionState, bypass: JudgeBypass) -> None:
     state.judge_bypassed.append(bypass)
 
 
-def _write_plan_snapshot(store: StateStore, state: SessionState, data: bytes, digest: str) -> tuple[str, str] | None:
+def _store_plan_objects(state: SessionState, data: bytes, plan_path: str | None) -> None:
+    """Put a plan version's index bytes and every file it references into the plan object
+    store (`plan_store`), so the version resolves to the same text however its files are
+    edited, moved or deleted later. `plan_path` is the file `data` was read from and defaults
+    to the session's registered path. Best-effort like the snapshot writers around it: an
+    unresolvable version is stored nowhere and refused by name when a consumer loads it."""
+    registered = plan_path or state.plan_path
+    if not registered:
+        return
+    try:
+        plan_store.store_plan(data, registered)
+    except (OSError, PlanError):
+        pass
+
+
+def _load_prior_plan(state: SessionState, path: str, *, strict: bool = True) -> PlanDoc:
+    """Load an older version of the session's plan (the approved snapshot, a version
+    snapshot): references resolve against the registered plan path and come from the
+    object store, not from files that may have changed since."""
+    return plan_store.load_baseline(path, state.plan_path, strict=strict)
+
+
+def _write_plan_snapshot(store: StateStore, state: SessionState, data: bytes, digest: str,
+                         plan_path: str | None = None) -> tuple[str, str] | None:
     """Write an ALREADY-READ plan buffer to the session's snapshot dir and return
     (snapshot_path, hash) -- the write-only half of `_snapshot_approved_plan`,
     factored out so a caller that already holds `(data, digest)` from a single
@@ -364,10 +403,12 @@ def _write_plan_snapshot(store: StateStore, state: SessionState, data: bytes, di
     snap = path_fn(state.session_id).parent / f"plan-approved-{digest[:16]}.toml"
     snap.parent.mkdir(parents=True, exist_ok=True)
     snap.write_bytes(data)
+    _store_plan_objects(state, data, plan_path)
     return str(snap), digest
 
 
-def _write_plan_version_snapshot(store: StateStore, state: SessionState, data: bytes, digest: str) -> str | None:
+def _write_plan_version_snapshot(store: StateStore, state: SessionState, data: bytes, digest: str,
+                                 plan_path: str | None = None) -> str | None:
     """Content-address EVERY submitted plan version (submit_plan and every replan
     kind), not just the approved ones `_write_plan_snapshot` covers — every
     `plan_sha256`/`prev_plan_sha256` logged on a history event must resolve to an
@@ -385,6 +426,7 @@ def _write_plan_version_snapshot(store: StateStore, state: SessionState, data: b
     snap = path_fn(state.session_id).parent / f"plan-version-{digest[:16]}.toml"
     snap.parent.mkdir(parents=True, exist_ok=True)
     snap.write_bytes(data)
+    _store_plan_objects(state, data, plan_path)
     return str(snap)
 
 
@@ -400,7 +442,7 @@ def _snapshot_plan_version(store: StateStore, state: SessionState, plan_path: st
     except OSError:
         return None
     digest = hashlib.sha256(data).hexdigest()
-    _write_plan_version_snapshot(store, state, data, digest)
+    _write_plan_version_snapshot(store, state, data, digest, plan_path=state.plan_path or plan_path)
     return digest
 
 
@@ -490,7 +532,7 @@ def _approved_snapshot_doc(state: SessionState):
     if not snap_path or not Path(snap_path).exists():
         return None
     try:
-        return load_plan(snap_path, strict=False)
+        return _load_prior_plan(state, snap_path, strict=False)
     except (OSError, PlanError):
         return None
 
@@ -538,7 +580,7 @@ def _ledgered_order_key(state: SessionState) -> str | None:
     if not path:
         return None
     try:
-        doc = load_plan(path, strict=False)
+        doc = _load_prior_plan(state, path, strict=False)
     except (OSError, PlanError):
         return None
     key = order_digest(doc)
@@ -653,7 +695,7 @@ def _order_customer_id(state: SessionState) -> str:
     if not path:
         return ""
     try:
-        order = load_plan(path, strict=False).meta.order
+        order = _load_prior_plan(state, path, strict=False).meta.order
     except (OSError, PlanError):
         return ""
     return order.customer_id if order is not None else ""
@@ -1050,6 +1092,20 @@ def _disclose_backstop_crossings(state: SessionState, data: dict, detail: str) -
         for c in crossings)
     return (f"{detail}; WARNING: {len(crossings)} agent decision(s) crossed a since-user backstop "
             f"inside the autonomy boundary: {named} (see agent_backstop_crossings)")
+
+
+def _disclose_agent_plan_conversions(state: SessionState, data: dict, detail: str) -> str:
+    """Put the conversions the agent ran itself (`plan-convert-live --by agent`) on `data`
+    and, when there are any, name them in `detail`, so a plan changed in place under the
+    user's approval is never invisible at the close."""
+    agent_run = [dict(vars(c)) for c in state.plan_conversions if c.by == "agent"]
+    if not agent_run:
+        return detail
+    data["agent_plan_conversions"] = agent_run
+    named = ", ".join(
+        f"{c['direction']} {c['old_digest'][:12]} -> {c['new_digest'][:12]}" for c in agent_run)
+    return (f"{detail}; NOTE: {len(agent_run)} plan conversion(s) run by the agent, the content "
+            f"proved equal by the engine: {named} (see agent_plan_conversions)")
 
 
 # Stands for "no difficulty record was open" at the release event: no real record id can
@@ -1630,7 +1686,7 @@ def _refresh_caches_from_plan_path(
     if violations:
         return violations
     if advice is not None:
-        advice.extend(_submission_advice(refreshed, runner, state.weight_class))
+        advice.extend(_submission_advice(refreshed, runner, state.weight_class, state.plan_path))
     # Decided for every stage BEFORE any is mutated: a consumer's verdict depends on its
     # suppliers' pre-edit interfaces.
     carried = {rs.index: stage_carried(state.stages, refreshed.stages, rs.index)
@@ -1741,7 +1797,9 @@ def _with_advisories(d: Directive, advisories: list[str]) -> Directive:
     return d
 
 
-def _submission_advice(doc, runner: Runner | None, weight_class: str | None) -> list[str]:
+def _submission_advice(
+    doc, runner: Runner | None, weight_class: str | None, plan_path: str | None = None,
+) -> list[str]:
     """The submission seam's non-refusing channel, resolved the same way advisories are.
 
     Warn-only by construction — `submission_advice` never refuses — so every seam attaches
@@ -1765,13 +1823,19 @@ def _submission_advice(doc, runner: Runner | None, weight_class: str | None) -> 
     and strand the session at PLAN_READY with no edge back. A warn-only channel must never
     be able to refuse a command by exception."""
     try:
-        return submission_advice(
+        advice = submission_advice(
             doc,
             judge_runner=runner,
             judge_enabled=advisor.resolve_enabled(weight_class),
         )
     except Exception:
-        return []
+        advice = []
+    try:
+        positions = plan_store.visited_positions(plan_path) if plan_path else frozenset()
+        advice.extend(f["message"] for f in plan_size_warnings(doc, positions))
+    except Exception:
+        pass
+    return advice
 
 
 def _submission_problems(doc, runner: Runner | None, weight_class: str | None) -> list[str]:
@@ -1790,12 +1854,16 @@ def _submission_problems(doc, runner: Runner | None, weight_class: str | None) -
         enabled = advisor.resolve_enabled(weight_class)
     except Exception:
         enabled = False
-    return submission_violations(
+    violations = submission_violations(
         doc,
         session_weight_class=weight_class,
         judge_runner=runner,
         judge_enabled=enabled,
     )
+    # A node over plan-stage-max-chars cannot be reviewed in one pair prompt, so every seam
+    # that admits plan bytes to a session (submit-plan, approve after an in-place edit,
+    # replan, renormalize) refuses it; a missing size limit refuses too (fails closed).
+    return violations + [f["message"] for f in plan_size_blocks(doc)]
 
 
 def _run_check(command: str, expected_exit: int, runner: Runner | None, cwd: str | None = None):
@@ -2351,6 +2419,9 @@ def _count_review_round(state: SessionState, plan_sha256: str, *, thinker_record
     `_count_plan_review_round`."""
     if not plan_sha256:
         return
+    # The accumulator compares digests by equality: give it one digest per plan lineage
+    # (`plan-convert-live` links the forms of one plan), so a conversion is not a new version.
+    plan_sha256 = gates.plan_lineage_root(state, plan_sha256)
     digest = {"force_digest" if thinker_record else "count_if_digest_differs": plan_sha256}
     totals = task_accumulator.add(
         state.task_id, "review_rounds", 1, session_id=state.session_id, now=_utcnow(),
@@ -2954,9 +3025,16 @@ def cmd_ledger_enumerate(args, *, store: StateStore, runner: Runner | None = Non
         return Directive(False, state.node, "noop",
                          f"cannot read artifact {args.artifact!r}: {exc}")
     run = runner if runner is not None else advisor.enumerate_subprocess_runner
-    statements = advisor.enumerate_claims(
-        text, run, runtime_host=state.runtime_host or runtime_host.HOST_CLAUDE
-    )
+    host = state.runtime_host or runtime_host.HOST_CLAUDE
+    try:
+        plan_stages = [s.index for s in load_plan(args.artifact).stages]
+    except PlanError:
+        statements = advisor.enumerate_claims(text, run, runtime_host=host)
+    else:
+        statements = []
+        for stage in (None, *plan_stages):
+            node = build_site_prompt("enumerate-node", args.artifact, stage=stage)
+            statements.extend(advisor.enumerate_claims(node.text, run, runtime_host=host))
     candidates = bag.setdefault("candidates", [])
     raised: list[str] = []
     for i, statement in enumerate(statements):
@@ -4058,7 +4136,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # approved-plan snapshot below (that one is taken only at `approve`) -- so the
     # `submit_plan` history event's plan_sha256 always resolves to a stored file, even
     # for a submission never subsequently approved.
-    _write_plan_version_snapshot(store, state, _submitted_plan_bytes, _submitted_plan_digest)
+    _write_plan_version_snapshot(store, state, _submitted_plan_bytes, _submitted_plan_digest,
+                                 plan_path=plan_path)
     _submitted_plan_sha256 = _submitted_plan_digest
     state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
@@ -4110,7 +4189,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
             marker="PLAN-READY", data=directive_data,
         )
     _attach_advisories(d, "plan_completeness",
-                       {"plan": plan_path, "stage_count": len(state.stages),
+                       {"plan_summary": plan_summary_text(doc), "stage_count": len(state.stages),
                         "titles": [s.title for s in state.stages]},
                        runner, weight_class=state.weight_class,
                        runtime_host_=state.runtime_host or runtime_host.HOST_CLAUDE)
@@ -4137,7 +4216,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # live `claude -p` to every submit, which no stage has sized or measured. Read "is the
     # advisor reachable?" per call site, not by generalizing from either one.
     d.data.setdefault("advisories", []).extend(
-        _submission_advice(doc, run, state.weight_class)
+        _submission_advice(doc, run, state.weight_class, plan_path)
     )
     # Predsubmit check-run observation (C.2) — actually RUNS each stage's
     # verify_command in its declared venue, warn-only, same advisories channel.
@@ -5131,7 +5210,8 @@ def _count_plan_review_round(state: SessionState, target: str) -> None:
     cmd_plan_review): once per plan VERSION, never for an unreadable plan."""
     if state.approval is not None and state.approval.passed:
         counted = _plan_file_sha256(target)
-        if counted and counted != state.plan_review_counted_digest:
+        if counted and not gates.plan_digest_equivalent(
+                state, counted, state.plan_review_counted_digest):
             state.plan_review_rounds += 1
             state.plan_review_counted_digest = counted
             _sync_release_anchor(state)
@@ -5252,6 +5332,14 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 f"--plan-digest {attested!r} does not match the live plan bytes "
                 f"({live!r}) at {target!r}: the reviewer read a different or stale "
                 "plan; re-read the current plan and re-run plan-review",
+            )
+        refs_problem = _plan_refs_problem(target)
+        if refs_problem:
+            return Directive(
+                False, state.node, "noop",
+                f"--plan-digest {attested!r} cannot be cross-checked: the plan at {target!r} has a "
+                f"reference that does not resolve ({refs_problem}), so the engine cannot confirm "
+                "the reviewer read the text the plan stands for; fix the reference and re-run plan-review",
             )
     # Terminal-pass check: a `revise` arriving after a PASS already recorded
     # for this scope this approval cycle only overturns it with run-demonstrated
@@ -6099,7 +6187,8 @@ def cmd_accept(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             "delivered product with the order that plan declares",
         )
     accepted_digest = state.accepted_plan_digest or ""
-    if plan_digest != accepted_digest and (accepted_digest or gates.acceptance_active(state)):
+    if (not gates.plan_digest_equivalent(state, plan_digest, accepted_digest)
+            and (accepted_digest or gates.acceptance_active(state))):
         # The per-requirement binding below is computed from `doc`; a file that is not
         # the accepted version would bind the review to bytes the engine never approved
         # while stamping it with the accepted digest. An acceptance-active session with
@@ -7657,7 +7746,7 @@ def _stage_grant_entries(
             "disk no longer matches the bytes this session approved"
         ), None
     try:
-        snap_doc = load_plan(snap_path)
+        snap_doc = _load_prior_plan(state, snap_path)
     except (OSError, PlanError) as exc:
         return declared_entries, derived_entries, dropped, (
             f"cannot load approved-plan snapshot {snap_path!r}: {exc}"
@@ -7722,7 +7811,7 @@ def _stage_would_derive_grants(state: SessionState, stage_index: int) -> bool:
     if not snap_path or not Path(snap_path).exists():
         return False
     try:
-        snap_doc = load_plan(snap_path)
+        snap_doc = _load_prior_plan(state, snap_path)
     except (OSError, PlanError):
         return False
     snap_stage = next((s for s in snap_doc.stages if s.index == stage_index), None)
@@ -9547,6 +9636,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
         data["acceptance_bypass"] = acceptance_bypass
         detail += "; WARNING: acceptance recorded via bypass, not judge corroboration (see acceptance_bypass)"
     detail = _disclose_backstop_crossings(state, data, detail)
+    detail = _disclose_agent_plan_conversions(state, data, detail)
     return Directive(True, state.node, "await_user_confirmation", detail, data=data)
 
 
@@ -9878,6 +9968,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         data["acceptance_bypass"] = acceptance_bypass
         detail += " (acceptance recorded via bypass; see acceptance_bypass)"
     detail = _disclose_backstop_crossings(state, data, detail)
+    detail = _disclose_agent_plan_conversions(state, data, detail)
     if landing["override"] is not None:
         data["landing_gate_override"] = landing["override"]
         detail += (f" (landing gate overridden by AGENTCTL_LANDING_GATE={landing['override']}; "
@@ -10602,7 +10693,7 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
     # against the SNAPSHOT (not plan_path) is also what makes successive renormalizations
     # honest: each is measured against the bytes that were approved, so a norm edit
     # cannot be walked to in small steps.
-    old = _load(old_path, strict=False)
+    old = _load_prior_plan(state, old_path, strict=False)
     # Read args.plan's bytes ONCE and derive `new`, the digest stamped below and the
     # snapshot written below from that same buffer -- three separate re-reads of a
     # file the coordinator can edit concurrently used to leave `accepted_plan_digest`
@@ -10660,7 +10751,7 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
     # content-addressed for, despite logging a distinct event name (see the class
     # docstring above on why it's `renormalize`, not `replan`).
     _prev_plan_sha256 = _snapshot_plan_version(store, state, old_path)
-    _write_plan_version_snapshot(store, state, _new_plan_bytes, _new_plan_digest)
+    _write_plan_version_snapshot(store, state, _new_plan_bytes, _new_plan_digest, plan_path=args.plan)
     _new_plan_sha256 = _new_plan_digest
     state.log("renormalize", stages=changed, plan=args.plan,
               prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256)
@@ -11072,7 +11163,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # submission refusal above (a plan that does not meet submission grade is
     # not worth authorizing) and strictly before the plan_approval PLUGIN
     # block below; this command has still written nothing to disk at this point.
-    auth_kind = _replan_kind(state, _load(_replan_baseline_path(state), strict=False), new)
+    auth_kind = _replan_kind(state, _load_prior_plan(state, _replan_baseline_path(state), strict=False), new)
     arblock = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
     _log_gate(state, "replan_authorization", arblock, passed=not arblock)
     if arblock:
@@ -11152,14 +11243,14 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # lenient load keeps the structural parse but skips every submission-grade
     # check. Only the NEW side — loaded strictly at seam (b) above — and submit-plan
     # are strict.
-    old = _load(old_path, strict=False)
+    old = _load_prior_plan(state, old_path, strict=False)
     # Content-address both sides of this replan -- the OLD baseline (read fresh;
     # `old_path` may be a legacy plan_path fallback never snapshotted before) and the
     # NEW plan, reusing the (data, digest) seam already read via `load_plan_with_digest`
     # rather than re-reading args.plan a second time. Computed once here, past every
     # refusal above, and used by whichever of the three kind branches below applies.
     _prev_plan_sha256 = _snapshot_plan_version(store, state, old_path)
-    _write_plan_version_snapshot(store, state, _new_plan_bytes, _new_plan_digest)
+    _write_plan_version_snapshot(store, state, _new_plan_bytes, _new_plan_digest, plan_path=args.plan)
     _new_plan_sha256 = _new_plan_digest
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
     # critique's similarities into conditions/invariants and CHANGE a means/method
@@ -11274,7 +11365,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # for advice that is then discarded. Placement is about cost only — the advice is
     # warn-only and cannot influence any decision above it either way. (`run` is bound at
     # the seam above; only this CALL is deferred, which is where the cost is.)
-    echo_advice = _submission_advice(new, run, state.weight_class)
+    echo_advice = _submission_advice(new, run, state.weight_class, args.plan)
     # Non-blocking hint naming --normalize-factor -- advisory only, never a gate (a
     # replan with nothing reproducible to re-norm is a completely ordinary replan).
     # Suppressed when this call itself recorded one (the `not normalize_factor`
@@ -11635,7 +11726,7 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
     if not (state.difficulty and state.difficulty.critique):
         return Directive(True, state.node, "inspect", "no active critique; nothing to cover")
     old_path = _replan_baseline_path(state)
-    old = load_plan(old_path, strict=False)
+    old = _load_prior_plan(state, old_path, strict=False)
     new = load_plan(args.new)
     blockers = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
     if blockers:
@@ -12416,6 +12507,11 @@ COMMANDS = {
     "plan-render": cmd_plan_render,
     "plan-grants": cmd_plan_grants,
     "plan-resources": plan_resources.cmd_plan_resources,
+    "plan-digest": plan_refs.cmd_plan_digest,
+    "plan-externalize": plan_refs.cmd_plan_externalize,
+    "plan-seal": plan_refs.cmd_plan_seal,
+    "plan-convert": plan_convert.cmd_plan_convert,
+    "plan-convert-live": plan_convert.cmd_plan_convert_live,
     "submit-plan": cmd_submit_plan,
     "present-plan": cmd_present_plan,
     "confirm-delivery": cmd_confirm_delivery,
@@ -12506,7 +12602,8 @@ _SESSION_COMMANDS = (
     "question-enumerate", "question-enumerate-worker", "question-enumerate-escape",
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
-    "plan-render", "plan-grants", "plan-resources", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
+    "plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
+    "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
     "risk-accept", "accept-protected-grant", "stage-review", "code-review", "accept", "approve",
     "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
@@ -12590,11 +12687,17 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("control", ("question-raise",),
      "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
      "grammar-bound name, never the prose --control of record-result/close"),
-    ("plan", ("plan-render", "plan-grants", "plan-resources", "plan-review-delta", "submit-plan", "replan", "drive",
+    ("plan", ("plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
+              "plan-seal", "plan-convert", "plan-review-delta", "submit-plan", "replan", "drive",
               "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
               "question-rebind", "question-raise", "present-plan", "order-dispose"),
      "plan file path"),
+    ("out", ("plan-convert",), "output directory path for the converted tree"),
+    ("field", ("plan-externalize",), "name of a plan field — an identifier, not narrative"),
+    ("meta_field", ("plan-externalize",), "name of a [meta] field — an identifier, not narrative"),
+    ("order_field", ("plan-externalize",),
+     "name of a [meta.order] field — an identifier, not narrative"),
     ("corpus", ("plan-resources",), "directory/ies to scan for *.toml plans — file paths, not narrative"),
     ("commands_file", ("plan-resources",), "path to a file of literal command lines — a file path"),
     ("dump_commands", ("plan-resources",), "output file path for the collected command list"),
@@ -12963,6 +13066,37 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
              "reason_class=unknown-program")
     # Session-free read, same reason as plan-render's suppressed --session above.
     sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-digest"); sp.add_argument("--plan", required=True,
+        help="TOML plan whose root digest, verified references and per-stage closure "
+             "digests to report (read-only)")
+    sp.add_argument("--stage", type=int, default=None,
+        help="report the closure digest of this stage only")
+    sp.add_argument("--format", choices=["text", "json"], default="text")
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-externalize"); sp.add_argument("--plan", required=True,
+        help="TOML plan holding the field to move into its own hash-pinned file")
+    sp.add_argument("--stage", type=int, default=None,
+        help="stage index of the field named by --field")
+    sp.add_argument("--field", default=None, help="string field of the stage to externalize")
+    sp.add_argument("--meta-field", dest="meta_field", default=None,
+        help="string field of [meta] to externalize")
+    sp.add_argument("--order-field", dest="order_field", default=None,
+        help="string field of [meta.order] to externalize")
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-seal"); sp.add_argument("--plan", required=True,
+        help="TOML plan whose reference hashes to recompute bottom-up after an edit")
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-convert"); sp.add_argument("--plan", required=True,
+        help="single-file TOML plan to convert into a hypertext tree (read-only)")
+    sp.add_argument("--out", required=True,
+        help="directory that receives the tree; must not exist or must be empty")
+    sp.add_argument("--format", choices=["text", "json"], default="text")
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-convert-live"); sp.add_argument("--session", required=True)
+    sp.add_argument("--by", required=True, choices=["agent", "user"],
+        help="who converts; recorded in the conversion link and disclosed")
+    sp.add_argument("--revert", action="store_true",
+        help="restore the plan bytes recorded before the last conversion (the parts stay on disk)")
     sp = add("submit-plan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")

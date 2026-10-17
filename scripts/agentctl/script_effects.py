@@ -309,7 +309,7 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
     parsed = _parse_flags(
         argv,
         {"--check", "--remote-only", "--keep-branch"},
-        {"-C", "--branch", "--trunk", "--remote", "--smoke-waiver", "--smoke-timeout"},
+        {"-C", "--branch", "--trunk", "--remote", "--smoke-waiver", "--smoke-timeout", "--smoke-model"},
         "land-branch.py",
     )
     if isinstance(parsed, Resolution):
@@ -383,7 +383,7 @@ def _resolve_instruction_smoke_gate(argv: list[str], venue_real: str):
         )
     command, rest = argv[0], argv[1:]
     value_flags, max_positionals = {
-        "run": ({"-C", "--remote", "--trunk", "--ref", "--timeout", "--waiver"}, 0),
+        "run": ({"-C", "--remote", "--trunk", "--ref", "--timeout", "--waiver", "--model"}, 0),
         "check": ({"-C", "--remote", "--trunk", "--sha", "--remote-sha", "--record"}, 0),
         "waive": ({"-C", "--remote", "--trunk", "--sha", "--reason"}, 0),
         "pre-push": ({"--trunk"}, 2),

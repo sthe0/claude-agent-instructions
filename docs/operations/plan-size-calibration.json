@@ -1,0 +1,12 @@
+{
+  "C": 216000,
+  "F": 3000,
+  "O": 5633,
+  "P": 46,
+  "S": 70000,
+  "command": "python3 scripts/plan-size-calibrate.py",
+  "formula": "S = floor((C - O) / 3) rounded down to a multiple of 1000; F = floor(S / k) rounded down to a multiple of 500; O = len(normalized pair-review prompt on the fixture) + n_p * P; P = (longest real path a placeholder stands for, the view root taken at config_root.topo_units_root()) - (shortest placeholder length)",
+  "k": 23,
+  "n_p": 5,
+  "normalized_prompt_chars": 5403
+}

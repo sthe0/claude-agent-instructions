@@ -358,9 +358,9 @@ def own_plans_dir() -> Path:
 
 
 def agentctl_topo_units_dir() -> Path:
-    """Materialized ``--review-topo`` unit tree root (``<root>/agentctl/
-    topo-units`` — see agentctl/render.py's ``materialize_topo_units``). One
-    subdirectory per plan content sha256. The default root only: a caller
+    """Root of the materialized plan views (``<root>/agentctl/topo-units`` — see
+    agentctl/render.py's ``build_site_prompt``). One subdirectory per site view. The
+    default root only: a caller
     that must honor ``$AGENTCTL_TOPO_UNITS_DIR`` (every test sets it to a
     temp directory so materialization never writes under this root) calls
     ``topo_units_root()``."""
