@@ -1255,7 +1255,8 @@ _PLAN_REVIEW_PART_TOKEN_RE = re.compile(
 )
 
 #: The same token, additionally accepted right after the reviewer's `C<n>:` marker
-#: (`blocking: C1: stage:3 ...`). Only the topological pair/unit path asks for it.
+#: (`blocking: C1: stage:3 ...`). Only the topological pair/unit path asks for it, and only
+#: while the delta rule applies (a pass on a row with changed parts).
 _PLAN_REVIEW_MARKED_PART_TOKEN_RE = re.compile(
     r"^\s*(?:[Cc][1-4]:\s*)?(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
 )

@@ -5062,7 +5062,7 @@ def _plan_concern_severity(
     for pc in parsed:
         parts = _concern_parts(
             pc.body, own_parts or tuple(digests), default_to_own=not delta_changed,
-            after_marker=judge_delta,
+            after_marker=bool(delta_changed),
         )
         changed = set(_changed_parts(
             [p for p in parts if p in own_parts] if delta_changed else parts, digests, prev_digests))

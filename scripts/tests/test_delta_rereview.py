@@ -225,6 +225,17 @@ def test_concern_tagged_to_an_unchanged_part_is_downgraded_after_a_pass(env):
     assert env.status(PAIR) in gates.PAIR_SATISFIED
 
 
+def test_marker_tagged_concern_after_a_prior_revise_keeps_the_base_severity(env):
+    assert _record(env, PAIR, "revise", ["blocking: C1: stage:3 is under-specified"]).ok
+    _snapshot_current(env)
+    env.edit(STAGE3_EDIT)
+    d = _record(env, PAIR, "revise", ["blocking: C1: stage:1 a worry tagged to an unchanged part"])
+    assert d.ok, d.detail
+    record = env.state().plan_pair_reviews[PAIR]
+    assert record.effective_severities == [gates.EFFECTIVE_BLOCKING]
+    assert env.status(PAIR) not in gates.PAIR_SATISFIED
+
+
 def test_mixed_revise_with_a_changed_tagged_and_an_untagged_concern_stays_revise(env):
     assert _record(env, PAIR, "pass").ok
     _snapshot_current(env)

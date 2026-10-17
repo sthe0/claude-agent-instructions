@@ -254,9 +254,9 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/gates.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: leading 'meta:/order:/stage:N' part-token prefix and leading 'cut:/add:' remedy-tag prefix, both engine-defined protocol syntax."
-hits = 2
-hit_classes = ["structural", "structural"]
+ground = "Compiles: leading 'meta:/order:/stage:N' part-token prefix (plain and after the reviewer's C<n>: marker) and leading 'cut:/add:' remedy-tag prefix, all engine-defined protocol syntax."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/gates.py::_remedy_tag_for_concern::pattern.match"]
@@ -424,6 +424,12 @@ reviewed_by = "developer"
 [sites."scripts/agentctl/plan.py::customer_question_defect::pattern.match"]
 class = "structural"
 ground = "CUSTOMER_QUESTIONS_HEADER_RE.match tests whether a passed --customer-question is the reply's own `Customer questions:` field line, the engine's protocol header; it never reads what the question asks."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/render.py::row_diff::difflib.unified_diff"]
+class = "structural"
+ground = "Renders a textual diff of a review row's parts between two plan versions for the reviewer to read; display only, it decides no meaning."
 hits = 1
 reviewed_by = "developer"
 
