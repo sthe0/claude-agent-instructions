@@ -661,6 +661,7 @@ def test_child_env_keeps_caller_env_auth(tmp_path, monkeypatch):
 
 STUB_CLAUDE = """#!/usr/bin/env bash
 printf '%s\\0' "$@" > "$STUB_LOG.argv"
+{ printf '@@LAUNCH@@\\0'; printf '%s\\0' "$@"; } >> "$STUB_LOG.launches"
 printf 'HOME=%s\\nSESSION=%s\\nAGENTCTL=%s\\n' "$HOME" "${CLAUDE_CODE_SESSION_ID:-}" "${AGENTCTL_SAMPLE_VAR:-}" > "$STUB_LOG.env"
 cat > /dev/null
 case "$STUB_MODE" in
@@ -778,9 +779,11 @@ def test_live_failed_stream_launch_with_only_init_on_stdout_prefers_stderr(live_
 
 
 def test_live_model_flag_reaches_the_launch_argv_and_defaults_to_haiku(live_root, stub_claude):
+    live = _load_live()
+    assert live.DEFAULT_MODEL == "haiku"
     _live(live_root, stub_claude("echo"))
     argv = Path(f"{stub_claude.log}.argv").read_bytes().split(b"\0")
-    assert argv[argv.index(b"--model") + 1] == b"haiku"
+    assert argv[argv.index(b"--model") + 1] == live.DEFAULT_MODEL.encode()
     _live(live_root, stub_claude("echo"), "--model", "sonnet")
     argv = Path(f"{stub_claude.log}.argv").read_bytes().split(b"\0")
     assert argv[argv.index(b"--model") + 1] == b"sonnet"
@@ -872,12 +875,15 @@ def test_verify_maps_timeout_and_launch_exit_to_unavailable(verify_root, verify_
 
 def test_verify_model_reaches_both_live_launches_and_a_failed_launch_names_its_cause(verify_root, verify_world):
     _, env = verify_world
+    default = _load_live().DEFAULT_MODEL.encode()
+    assert default == b"haiku"
     seen = []
     for model_args in ((), ("--model", "sonnet")):
+        Path(f"{env['STUB_LOG']}.launches").unlink(missing_ok=True)
         _verify(verify_root, env, *model_args)
-        argv = Path(f"{env['STUB_LOG']}.argv").read_bytes().split(b"\0")
-        seen.append(argv[argv.index(b"--model") + 1])
-    assert seen == [b"haiku", b"sonnet"]
+        launches = Path(f"{env['STUB_LOG']}.launches").read_bytes().split(b"@@LAUNCH@@\0")[1:]
+        seen.append([a.split(b"\0")[a.split(b"\0").index(b"--model") + 1] for a in launches])
+    assert seen == [[default] * 2, [b"sonnet"] * 2]
     _, checks = _verify(verify_root, env, "--model", "sonnet", mode="modelerr")
     assert checks["live:core-marker"][1].startswith("launch-exit=1 There's an issue with the selected model")
 

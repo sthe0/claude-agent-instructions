@@ -518,12 +518,21 @@ def test_run_smoke_writes_a_record_bound_to_the_candidate_and_the_live_tip(world
     assert outcome.sandbox_root is None
 
 
-def test_run_smoke_names_the_default_model_and_passes_none_to_the_runner(world, tmp_path):
+def test_run_smoke_runs_and_records_the_default_model_when_none_is_chosen(world, tmp_path):
     tip = world.surface_commit()
     runner = stub_runner()
     gate.run_smoke(world.work, runner=runner, sandbox_parent=tmp_path)
-    assert runner.kwargs == [{}]
-    assert gate.load_record(world.work / ".git", tip)["model"] == "haiku"
+    assert runner.kwargs == [{"model": gate.DEFAULT_MODEL}]
+    assert gate.load_record(world.work / ".git", tip)["model"] == gate.DEFAULT_MODEL
+
+
+def test_the_gate_default_model_is_the_live_scripts_default_and_haiku():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "isb_live", Path(__file__).resolve().parents[1] / "instruction-sandbox-live.py")
+    live = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(live)
+    assert gate.DEFAULT_MODEL == live.DEFAULT_MODEL == "haiku"
 
 
 def test_run_smoke_passes_the_chosen_model_to_the_runner_and_records_it(world, tmp_path):
@@ -536,16 +545,19 @@ def test_run_smoke_passes_the_chosen_model_to_the_runner_and_records_it(world, t
 
 def test_a_record_without_a_model_counts_as_the_default_model():
     record = make_record("a" * 40, "b" * 40)
-    assert gate.record_model(record) == gate.DEFAULT_MODEL == "haiku"
-    assert gate.record_for_model(record, "haiku") is record
+    assert gate.record_model(record) == gate.DEFAULT_MODEL
+    assert gate.record_for_model(record, gate.DEFAULT_MODEL) is record
     assert gate.record_for_model(record, None) is record
 
 
 def test_a_record_of_another_model_is_reused_only_when_it_passed():
+    default = gate.DEFAULT_MODEL
     passed = {**make_record("a" * 40, "b" * 40), "model": "sonnet"}
-    assert gate.record_for_model(passed, "haiku") is passed
+    assert gate.record_for_model(passed, default) is passed
+    assert gate.record_for_model(passed, None) is passed
     unavailable = {**make_record("a" * 40, "b" * 40, statuses={LIVE: gate.UNAVAILABLE}), "model": "sonnet"}
-    assert gate.record_for_model(unavailable, "haiku") is None
+    assert gate.record_for_model(unavailable, default) is None
+    assert gate.record_for_model(unavailable, None) is None
     assert gate.record_for_model(unavailable, "sonnet") is unavailable
 
 
@@ -565,10 +577,8 @@ def test_default_runner_passes_the_model_to_the_verify_script(tmp_path, monkeypa
 
     monkeypatch.setattr(gate, "_run_process", fake_process)
     gate.default_runner(tmp_path, "c" * 40, tmp_path, 7, model="sonnet")
-    gate.default_runner(tmp_path, "c" * 40, tmp_path, 7)
     verify = [c for c in calls if c[0].endswith("instruction-sandbox-verify.sh")]
     assert verify[0][1:] == ["--timeout", "7", "--model", "sonnet", str(tmp_path)]
-    assert verify[1][1:] == ["--timeout", "7", str(tmp_path)]
 
 
 def test_run_smoke_unavailable_is_refused_until_waived(world, tmp_path):
@@ -603,7 +613,7 @@ def test_run_smoke_refuses_a_candidate_that_lacks_the_remote_tip(world, tmp_path
 def test_run_smoke_writes_no_record_when_the_sandbox_fails(world, tmp_path):
     world.surface_commit()
 
-    def broken(repo, candidate, root, timeout_s):
+    def broken(repo, candidate, root, timeout_s, *, model):
         raise gate.GateError("sandbox build failed")
 
     with pytest.raises(gate.GateError, match="sandbox kept at"):

@@ -315,7 +315,8 @@ def record_model(record: object) -> str:
 def record_for_model(record: object, model: str | None) -> object:
     """The stored record a run asking for ``model`` may reuse: another model's record only when
     it PASSed (a waived or unavailable one says nothing about the requested model)."""
-    if model is None or not isinstance(record, dict) or record_model(record) == model:
+    model = model or DEFAULT_MODEL
+    if not isinstance(record, dict) or record_model(record) == model:
         return record
     return record if record.get("result") == PASS else None
 
@@ -512,7 +513,7 @@ class SandboxRun:
     sandbox_core_sha: str
 
 
-Runner = Callable[..., SandboxRun]  # (repo, sha, root, timeout_s[, model=...]); model is passed only when chosen
+Runner = Callable[..., SandboxRun]  # (repo, sha, root, timeout_s, *, model)
 
 
 @dataclass
@@ -544,7 +545,7 @@ def _run_process(argv: list[str], timeout_s: int) -> subprocess.CompletedProcess
 
 
 def default_runner(repo: Path, candidate_sha: str, root: Path, timeout_s: int,
-                   *, model: str | None = None) -> SandboxRun:
+                   *, model: str) -> SandboxRun:
     """Build the sandbox of the candidate, then run the verify recipe (one live ``claude -p``)."""
     scripts = Path(__file__).resolve().parents[1]
     build = _run_process(
@@ -563,7 +564,7 @@ def default_runner(repo: Path, candidate_sha: str, root: Path, timeout_s: int,
         raise GateError(f"sandbox.env unreadable: {exc}") from exc
     verify = _run_process(
         [str(scripts / "instruction-sandbox-verify.sh"), "--timeout", str(timeout_s),
-         *(["--model", model] if model else []), str(root)],
+         "--model", model, str(root)],
         timeout_s + STATIC_TIMEOUT_S,
     )
     if verify.returncode not in VERIFY_EXIT.values():
@@ -583,6 +584,7 @@ def run_smoke(repo: str | Path, ref: str = "HEAD", remote: str = DEFAULT_REMOTE,
     """
     repo = Path(repo)
     run = runner or default_runner
+    model = model or DEFAULT_MODEL
     clock = now or _utc_now
     candidate = resolve_commit(repo, ref)
     fetched_at = clock()
@@ -595,7 +597,7 @@ def run_smoke(repo: str | Path, ref: str = "HEAD", remote: str = DEFAULT_REMOTE,
         )
     root = Path(tempfile.mkdtemp(prefix="instruction-smoke-sbx.", dir=sandbox_parent))
     try:
-        sandbox = run(repo, candidate, root, timeout_s, **({"model": model} if model else {}))
+        sandbox = run(repo, candidate, root, timeout_s, model=model)
         result, checks = parse_verify_output(sandbox.verify_output, sandbox.verify_exit)
     except GateError as exc:
         raise GateError(f"{exc}; sandbox kept at {root}") from exc
@@ -610,7 +612,7 @@ def run_smoke(repo: str | Path, ref: str = "HEAD", remote: str = DEFAULT_REMOTE,
         "result": result,
         "verify_exit": sandbox.verify_exit,
         "sandbox_core_sha": sandbox.sandbox_core_sha,
-        "model": model or DEFAULT_MODEL,
+        "model": model,
         "checks": checks,
         "waiver": None,
     }
