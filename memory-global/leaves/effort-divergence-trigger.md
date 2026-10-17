@@ -55,6 +55,7 @@ The second: **re-entering a task that already RESOLVED was free and uncounted.**
 
 ## See also
 
+- [Effort fires on finished work](../../scripts/agentctl/README.md#effort-fires-on-finished-work) — a spend or wall-clock fire raised when every stage is already settled records a retier datum instead of entering DIAGNOSING.
 - [[function-place-difficulty]] — why an overrun is a symptom of a broken functional place rather than a number to force back into range.
 - [[policy-effectiveness-tracking]] — the quality-ledger loop the fires and both effort vectors feed, and the only calibration path for a self-set estimate.
 - [[recording-experience]] — the resolution-time record where a firing's lesson is supposed to land.

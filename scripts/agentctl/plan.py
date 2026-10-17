@@ -1231,7 +1231,7 @@ def _strip_heredoc_bodies_for_reachability(cmd: str) -> str:
 _REVISION_RANGE_RE = re.compile(r"\.{2,3}")
 _REVISION_SUFFIX_RE = re.compile(r"[~^]\d*$")
 # With no repo to ask, only these conventional remote names make `<remote>/<branch>`
-# a revision; any other slash operand stays a path.
+# a revision; any other slash operand stays a path. Not consulted when a repo root is given.
 _CONVENTIONAL_REMOTES = frozenset({"origin", "upstream"})
 
 
@@ -1339,9 +1339,13 @@ def _reachability_path_tokens(cmd: str, repo_root: str | None = None) -> list[st
         operand before `--` that `_is_git_revision` accepts (`git merge-base HEAD
         origin/main`) is not a path; a file-extension operand, a slash operand
         whose first segment is a top-level entry of `repo_root` (or, with no repo,
-        not a conventional remote), and every operand after `--` stay checked. The
-        `-C` value is judged as a path; `-c k=v` is skipped. A glued redirect
-        operator (`2>/dev/null`) is stripped before its target is judged.
+        not a conventional remote), and every operand after `--` stay checked. With
+        a repo root, a slash operand whose first segment is NOT an existing
+        top-level entry is read as `<remote>/<branch>`, so a mistyped top-level
+        directory is not flagged. The `-C` value is judged as a path only when it
+        is path-shaped (`git -C ghostdir` is not flagged, as before); `-c k=v` is
+        skipped. A glued redirect operator (`2>/dev/null`) is stripped before its
+        target is judged.
     """
     cmd = _strip_heredoc_bodies_for_reachability(cmd)
     try:
