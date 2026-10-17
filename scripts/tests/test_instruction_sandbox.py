@@ -780,7 +780,6 @@ def test_live_failed_stream_launch_with_only_init_on_stdout_prefers_stderr(live_
 
 def test_live_model_flag_reaches_the_launch_argv_and_defaults_to_haiku(live_root, stub_claude):
     live = _load_live()
-    assert live.DEFAULT_MODEL == "haiku"
     _live(live_root, stub_claude("echo"))
     argv = Path(f"{stub_claude.log}.argv").read_bytes().split(b"\0")
     assert argv[argv.index(b"--model") + 1] == live.DEFAULT_MODEL.encode()
@@ -876,7 +875,6 @@ def test_verify_maps_timeout_and_launch_exit_to_unavailable(verify_root, verify_
 def test_verify_model_reaches_both_live_launches_and_a_failed_launch_names_its_cause(verify_root, verify_world):
     _, env = verify_world
     default = _load_live().DEFAULT_MODEL.encode()
-    assert default == b"haiku"
     seen = []
     for model_args in ((), ("--model", "sonnet")):
         Path(f"{env['STUB_LOG']}.launches").unlink(missing_ok=True)

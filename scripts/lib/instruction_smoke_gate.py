@@ -26,7 +26,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Iterable, Protocol, Sequence
 
 SCHEMA = "instruction-smoke/v1"
 RECORD_DIR = "instruction-smoke"
@@ -513,7 +513,9 @@ class SandboxRun:
     sandbox_core_sha: str
 
 
-Runner = Callable[..., SandboxRun]  # (repo, sha, root, timeout_s, *, model)
+class Runner(Protocol):
+    def __call__(self, repo: Path, candidate_sha: str, root: Path, timeout_s: int,
+                 *, model: str) -> SandboxRun: ...
 
 
 @dataclass

@@ -184,7 +184,7 @@ def test_a_stored_admitted_record_is_reused_without_a_launch(world, capsys):
     assert remote_main(world) == sha
 
 
-def test_smoke_model_reaches_the_runner_and_the_record_only_when_given(world, capsys):
+def test_smoke_model_reaches_the_runner_and_the_record(world, capsys):
     sha = feature(world, {"CLAUDE.md": "new rules\n"})
     inner = stub_runner()
     code, _, _ = land(world, capsys, "--smoke-model", "sonnet", runner=Counting(inner))
