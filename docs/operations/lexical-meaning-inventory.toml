@@ -303,9 +303,15 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/plan.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: _LANDED_REF_RE (git ref name shape), _EXECUTOR_RE (in_thread|spawn:<kind> vocabulary), _BACKLOG_ISSUE_RE (an `[owner/]repo#N` issue reference), _HEREDOC_START (shell here-document introducer), CUSTOMER_QUESTIONS_HEADER_RE (the engine's own `Customer questions:` field header, tolerant of case and emphasis), _CONCERN_RE (the engine's own `blocking:`/`note:` severity tag and `re:<id>` restatement reference)."
-hits = 6
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Compiles: _LANDED_REF_RE (git ref name shape), _EXECUTOR_RE (in_thread|spawn:<kind> vocabulary), _BACKLOG_ISSUE_RE (an `[owner/]repo#N` issue reference), _HEREDOC_START (shell here-document introducer), CUSTOMER_QUESTIONS_HEADER_RE (the engine's own `Customer questions:` field header, tolerant of case and emphasis), _CONCERN_RE (the engine's own `blocking:`/`note:` severity tag and `re:<id>` restatement reference), _GLUED_REDIRECT_RE (the shell redirect operator `>`, `2>`, `>>`, `&>` glued to its target word)."
+hits = 7
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/plan.py::_reachability_path_tokens::pattern.match"]
+class = "structural"
+ground = "_GLUED_REDIRECT_RE.match strips a shell redirect operator glued to its target word, so the target is judged as a path; shell syntax, it reads no meaning from the command's words."
+hits = 1
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/plan.py::_parse_landed_spec::pattern.fullmatch"]

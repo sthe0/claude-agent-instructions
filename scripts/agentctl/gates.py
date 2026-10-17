@@ -3583,6 +3583,7 @@ def _meta_place(meta) -> tuple:
         meta.landing_waiver,
         _final_check_surface(meta),
         order_place(meta),
+        tuple((a.id, a.text, a.basis, a.risk, a.stage) for a in meta.assumptions),
     )
 
 

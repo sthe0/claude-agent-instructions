@@ -90,6 +90,7 @@ from .plan import (
     unit_currency_hash,
     unit_node,
     verify_command_reachability_blockers,
+    cost_tier_floor_advisories,
     verify_command_scope_warnings,
     _derive_stage_grants,
     _venue_for,
@@ -3642,9 +3643,17 @@ def cmd_question_list(args, *, store: StateStore, runner: Runner | None = None) 
             f"{q.id}={q.disposition}" + (" [stale]" if q.stale_note else "")
             for q in questions
         ) or "no questions"
+    unresolved = [
+        c for c in premise.question_candidates_from_dicts(bag.get("candidates", []))
+        if c.disposition == "raised"
+    ]
+    if unresolved:
+        detail += "\ncandidates (undispositioned):\n" + "\n".join(
+            f"{c.id}: {c.question or c.statement}" for c in unresolved)
     return Directive(
         True, state.node, "inspect", detail,
-        data={"questions": premise.questions_to_dicts(questions)},
+        data={"questions": premise.questions_to_dicts(questions),
+              "candidates": premise.question_candidates_to_dicts(unresolved)},
     )
 
 
@@ -4224,6 +4233,27 @@ def cmd_plan(args, *, store: StateStore, runner: Runner | None = None) -> Direct
     return Directive(True, state.node, "await_plan", "planner working; submit-plan when ready")
 
 
+def _register_plan_assumptions(state, doc: "PlanDoc", plan_path: str) -> None:
+    """Record each typed `[[meta.assumption]]` as an `assumed` premise
+    (`assume-<id>`), stamped against the submitted plan. Upsert by id, so a
+    re-submission rewrites the same row instead of adding one; a session without the
+    premise bag has nothing to register into. Prose is never parsed."""
+    bag = state.plugins.get("premise")
+    if bag is None or not doc.meta.assumptions:
+        return
+    questions = premise.questions_from_dicts(bag.get("questions", []))
+    for a in doc.meta.assumptions:
+        qid = f"assume-{a.id}"
+        q = premise.Question(
+            id=qid, question=a.text, disposition="assumed", basis=a.basis, risk=a.risk,
+            target=f"stage:{a.stage}.method" if a.stage else "plan.goal",
+            own_research="declared as a typed [[meta.assumption]] in the submitted plan",
+        )
+        q.disposed_at_key = _bound_stage_key(state, q, plan_path)
+        questions = [x for x in questions if x.id != qid] + [q]
+    bag["questions"] = premise.questions_to_dicts(questions)
+
+
 def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     efblock = gates.effort_fire_blockers(state)
@@ -4353,6 +4383,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         state.plan_stage_reviews = {
             scope: pr for scope, pr in state.plan_stage_reviews.items() if _still_covers(pr)
         }
+    _register_plan_assumptions(state, doc, plan_path)
     state.plan_submitted_ts = time.time()
     state.log("submit_plan", plan=plan_path, verified=True, revised=resubmitting,
               plan_sha256=_submitted_plan_sha256)
@@ -4393,6 +4424,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         check_venue_warnings(doc.stages, doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
     )
     d.data.setdefault("advisories", []).extend(grant_shadow.mixed_spelling_advisories(doc))
+    d.data.setdefault("advisories", []).extend(cost_tier_floor_advisories(doc.stages))
     # Submission seam (a)'s advice channel: a stage whose expected_result_image merely
     # restates its own check. Warn-only at all three seams — see submission.submission_advice.
     # Rides the same `run` resolved at the seam above (see its comment for why the fallback

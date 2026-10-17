@@ -226,6 +226,19 @@ class PlanMeta:
     # parse can never refuse: requiredness is a submission-seam grade
     # (submission._order_violations), so the loader stays exactly as permissive.
     order: "Order | None" = None
+    # Typed assumptions the plan carries, parsed from `[[meta.assumption]]` tables and
+    # registered at submit-plan as `assumed` premises. Not part of any digest: an
+    # assumption is a record of a premise, never an input of the work.
+    assumptions: "list[PlanAssumption]" = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PlanAssumption:
+    id: str
+    text: str
+    basis: str
+    risk: str
+    stage: int | None = None
 
 
 @dataclass
@@ -560,6 +573,21 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
         )
 
 
+def _parse_assumptions(raw: object) -> list[PlanAssumption]:
+    """Lenient, like `Order.from_dict`: a malformed entry is skipped here, never
+    refused — the premise gate is what blocks an incomplete assumed premise."""
+    if not isinstance(raw, list):
+        return []
+    return [
+        PlanAssumption(
+            id=str(a.get("id", "")).strip(), text=str(a.get("text", "")).strip(),
+            basis=str(a.get("basis", "")).strip(), risk=str(a.get("risk", "")).strip(),
+            stage=a["stage"] if isinstance(a.get("stage"), int) else None,
+        )
+        for a in raw if isinstance(a, dict) and str(a.get("id", "")).strip()
+    ]
+
+
 def _parse_renorms(raw: object, context: str) -> list[str]:
     """The stage's `renorms`: absolute file paths, normalized (`os.path.normpath`) as the
     `critique --norm-target` side is, so the two compare equal. A `stage:<n>` target is carried by editing the stage
@@ -885,6 +913,62 @@ def verify_command_scope_warnings(stages, final_check=None) -> list[str]:
     return warnings
 
 
+# --- cost-tier floor advisory (WARN only) -------------------------------------
+# Decidability, stated where the rule lives: every input below is a typed field of
+# the stage (criterion_type, negative_control, the program a verify_command runs), so
+# the floor is computed, never judged. Whether those inputs REALLY make a stage cost
+# more is a calibration claim, measured only by the retier records an effort fire on
+# finished work appends to `state.effort_retiers` (declared_tier against observed_tier).
+# A refusal now would enforce a guess, so this stays an advisory that costs one line on
+# a false positive; promoting it to a blocker is a decision for when those records
+# justify one. It must never gain a `*_blockers` twin.
+_TIER_RANK = {"small": 0, "medium": 1, "large": 2}
+
+
+def _runs_test_runner(cmd: str) -> bool:
+    try:
+        toks = shlex.split(cmd)
+    except ValueError:
+        toks = cmd.split()
+    for k, tok in enumerate(toks):
+        if tok.rsplit("/", 1)[-1] in ("pytest", "py.test") or (
+                tok == "-m" and toks[k + 1:k + 2] == ["pytest"]):
+            return True
+    return False
+
+
+def cost_tier_floor_advisories(stages) -> list[str]:
+    """One advisory per stage whose DECLARED cost_tier is below the floor its typed
+    fields set: an acceptance-review criterion -> large, a declared negative_control
+    or a test-runner verify_command -> medium. Never blocks; a stage with no declared
+    tier is not judged."""
+    advisories: list[str] = []
+    for s in stages:
+        declared = s.actor.cost_tier
+        if declared not in _TIER_RANK:
+            continue
+        inputs: list[tuple[str, str]] = []
+        if s.criterion.criterion_type == CriterionType.ACCEPTANCE_REVIEW.value:
+            inputs.append(("large", "criterion_type is acceptance_review (judge-gated)"))
+        if s.criterion.negative_control:
+            inputs.append(("medium", "a negative_control is declared"))
+        if s.criterion.verify_command and _runs_test_runner(s.criterion.verify_command):
+            inputs.append(("medium", "verify_command runs a test runner"))
+        if not inputs:
+            continue
+        floor = max((t for t, _ in inputs), key=_TIER_RANK.__getitem__)
+        if _TIER_RANK[declared] >= _TIER_RANK[floor]:
+            continue
+        named = "; ".join(why for t, why in inputs if t == floor)
+        advisories.append(
+            f"stage {s.index} ({s.title!r}): cost_tier {declared!r} is below the "
+            f"{floor!r} floor its typed fields set ({named}). Advisory only — whether "
+            f"such stages overrun their tier is measured by state.effort_retiers "
+            f"(declared_tier vs observed_tier); raise the tier or keep it knowingly."
+        )
+    return advisories
+
+
 # --- verify_command green-reachability lint (BLOCKING for substantive) -------
 # Difficulty removed: the scope lint above stops a control from being false-RED;
 # it says nothing about the other direction. A verify_command / final_check can
@@ -1005,6 +1089,19 @@ _CLOSING_BRACKET = frozenset({"]"})
 
 # grep-family commands whose pattern operand is not a path — see (D) below.
 _GREP_FAMILY = frozenset({"grep", "egrep", "fgrep", "rg"})
+
+# A redirect operator glued onto its target by shlex (`>/dev/null`, `2>/dev/null`,
+# `>>log`, `&>x`): the operator is shell syntax, not part of the path.
+_GLUED_REDIRECT_RE = re.compile(r"^(?:\d*|&)>{1,2}")
+
+# git subcommands whose operands before `--` are revisions (`origin/main`,
+# `HEAD~3`), not files. Subcommands that take only paths (`add`, `rm`, `mv`,
+# `restore`, `checkout --`) are absent, so their operands stay checked.
+_GIT_REF_SUBCOMMANDS = frozenset({
+    "merge-base", "merge", "rebase", "rev-parse", "rev-list", "log", "show", "diff",
+    "fetch", "push", "pull", "cherry-pick", "branch", "switch", "reset", "describe",
+    "name-rev", "ls-remote", "show-ref", "for-each-ref",
+})
 
 # Conventional build/test OUTPUT directory names — see (E) below. A relative
 # path token with one of these as a path SEGMENT (any component, not just the
@@ -1182,6 +1279,14 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
         command's own execution, not a precondition. See that constant's
         module comment for the accepted width and why (E) is the WEAKEST of
         the five exemptions.
+    (F) After a revision-taking git subcommand (`_GIT_REF_SUBCOMMANDS`), an
+        operand before `--` that carries no file extension is a revision
+        (`git merge-base HEAD origin/main`), not a path; one with a path
+        extension (`git diff scripts/ghost.py`) and every operand after `--`
+        stay checked. ACCEPTED LIMIT: an extensionless directory operand of such
+        a subcommand (`git diff scripts/ghost`) goes unchecked — it fails in the
+        non-blocking direction like every exemption here. A glued redirect
+        operator (`2>/dev/null`) is stripped before its target is judged.
     """
     cmd = _strip_heredoc_bodies_for_reachability(cmd)
     try:
@@ -1196,6 +1301,8 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
     prev_bang = False       # (B): previous token was exactly `!` (command-position)
     awaiting_test_operand = False  # (B): previous token was `test`/`[` as a command
                                     # word, waiting to see if its FIRST operand is `!`
+    git_sub: str | None = None      # (F): a revision-taking git subcommand is running
+    git_past_dashdash = False       # (F): operands after `--` are paths again
     while i < n:
         raw = toks[i]
         i += 1
@@ -1263,12 +1370,32 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
                 command_start = False
                 awaiting_test_operand = True
                 continue
+            if base == "git":  # (F) git revision operands
+                command_start = False
+                git_sub = None
+                while i < n:
+                    nxt = toks[i].rstrip(_GLUE_CHARS)
+                    i += 1
+                    if nxt in ("-C", "-c"):
+                        i += 1  # the flag's value is not the subcommand
+                    elif not nxt.startswith("-"):
+                        git_sub = nxt if nxt in _GIT_REF_SUBCOMMANDS else None
+                        break
+                git_past_dashdash = False
+                continue
 
         command_start = False
+        if git_sub is not None and stripped == "--":
+            git_past_dashdash = True
         if not negated_clause:
+            m_redirect = _GLUED_REDIRECT_RE.match(stripped)
+            if m_redirect:
+                stripped = stripped[m_redirect.end():]
             if not stripped.startswith("-") and not any(ch.isspace() for ch in stripped):
                 head = stripped.split("::", 1)[0]  # drop a pytest node-id suffix
-                if head and not head.startswith("/"):
+                is_git_ref = (git_sub is not None and not git_past_dashdash
+                              and not head.endswith(_PATH_EXTS))
+                if head and not head.startswith("/") and not is_git_ref:
                     if not any(ch in head for ch in _REJECT_CHARS) and "://" not in head:
                         if "/" in head or head.endswith(_PATH_EXTS):
                             if not any(part in _BUILD_OUTPUT_SEGMENTS
@@ -1277,6 +1404,7 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
         if glued:
             negated_clause = False
             command_start = True
+            git_sub = None
     return tokens
 
 
@@ -1565,6 +1693,7 @@ def parse_plan(
         landing_waiver=str(m["landing_waiver"]) if m.get("landing_waiver") else None,
         final_check=final_checks,
         order=order,
+        assumptions=_parse_assumptions(m.get("assumption")),
     )
 
     is_substantive = meta.weight_class is not None and meta.weight_class.lower() == "substantive"

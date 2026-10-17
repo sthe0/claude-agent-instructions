@@ -338,6 +338,9 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         # meta.goal/done_criterion. Carrying it would restore the size coupling this
         # projection exists to break.
         (PlanMeta, "order"),
+        # excluded: plan-level assumptions are registered as premises at submit-plan,
+        # a root-side gate input; a stage executor works from its own stage fields.
+        (PlanMeta, "assumptions"),
         (FinalCheck, "label"),
         (FinalCheck, "command"),  # excluded: labels-only method
         (FinalCheck, "expected_exit"),  # excluded: labels-only method
