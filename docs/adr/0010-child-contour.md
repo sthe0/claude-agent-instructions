@@ -183,3 +183,11 @@ To turn linking on, change the value of the `child-contour-linking` row in `conf
 **Consequence.** A linked child that went from its brief to `EXECUTING` can now also reach RESOLUTION by its own `verify-final`, research and close its planning questions on its own contour, and close a parent-targeted difficulty after the parent's fix. The parent's `record-result`, `accept` and `resolve` remain the parent's. Unlinked behaviour is unchanged.
 
 **Remaining gap, accepted.** The release in item 4 compares digests only: it does not check that the parent's new norm answers the escalated difficulty. Whether it does is judged by the child in its own `critique` and `replan`, and by the thinker's review of the replanned contour.
+
+## Amendment (linking on by default)
+
+**Decision (2026-10-17).** The `child-contour-linking` row of `config.md` ships `on`: a spawn naming a parent `--session` and `--stage-index` is linked unless `AGENTCTL_CHILD_LINKING=0` is set for it. This supersedes "Linking ships off by default" in the kill-switch amendment above; the resolver's semantics are unchanged (the variable wins both ways; any other row value or a missing row resolves off), and the test suite still pins the variable to `1` in `scripts/tests/conftest.py`.
+
+**Evidence.** The linking-trial ran linked children on real work: two Core fixes and a deliberate norm-escalation round trip (trials A-C). The breaks they exposed were fixed inside the trial (own-contour resolution, the topological review driver's concern form, planning-question disposal and parent-targeted difficulty closure, the spawn ledger marker and the child launch kept out of the autonomous loop), and the post-fix re-runs A2 and C3 had no blocking failure. The pinned verdict is `verdict-re.json`, sha256 `ce09c273e5053e9bd51836c9737eaf84bb7c68e93d44c2e4fc6c3cac04e07a0c`, computed by the trial's `observe.py judge` over the pinned records. The issue list for the breaks is finalized later, after this switch, and is not cited here.
+
+**Off per spawn.** `AGENTCTL_CHILD_LINKING=0` still turns linking off for one spawn (and `1` still forces it on); the kill-switch row can be set back to `off` in one line.

@@ -169,13 +169,13 @@ def test_resolver_missing_or_unparsable_row_is_off():
             f"BEHAVIOUR: the row {constants!r} turns linking on; only exactly `on` may"
 
 
-def test_shipped_config_row_is_off(monkeypatch):
+def test_shipped_config_row_is_on(monkeypatch):
     monkeypatch.delenv(VAR, raising=False)
     shipped = agentctl_config.parse_config_md(agentctl_config.CONFIG_MD)
-    assert shipped.get(KEY) == "off", \
-        f"BEHAVIOUR: config.md does not ship the `{KEY}` row with value `off` (got {shipped.get(KEY)!r})"
-    assert _resolver()() is False, \
-        "BEHAVIOUR: the resolver with default env and constants does not resolve the shipped config to off"
+    assert shipped.get(KEY) == "on", \
+        f"BEHAVIOUR: config.md does not ship the `{KEY}` row with value `on` (got {shipped.get(KEY)!r})"
+    assert _resolver()() is True, \
+        "BEHAVIOUR: the resolver with default env and constants does not resolve the shipped config to on"
 
 
 def test_resolver_never_raises_on_unreadable_config(tmp_path, monkeypatch):
@@ -198,7 +198,7 @@ def test_resolver_never_raises_on_unreadable_config(tmp_path, monkeypatch):
 # --- the spawn seam -----------------------------------------------------------
 
 def test_spawn_is_unlinked_by_default(store, venued_fixtures_dir, tmp_path, monkeypatch):
-    monkeypatch.delenv(VAR, raising=False)
+    monkeypatch.setenv(VAR, "0")
     _executing(store, "off1", venued_fixtures_dir)
     cmd, env = _spawn(monkeypatch, tmp_path, venued_fixtures_dir, "off1", stage_index=1)
     _assert_unlinked(cmd, env, tmp_path)
@@ -206,7 +206,7 @@ def test_spawn_is_unlinked_by_default(store, venued_fixtures_dir, tmp_path, monk
 
 def test_unlinked_spawn_prints_one_notice_naming_key_and_variable(
         store, venued_fixtures_dir, tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv(VAR, raising=False)
+    monkeypatch.setenv(VAR, "0")
     _executing(store, "off2", venued_fixtures_dir)
     capsys.readouterr()
     _spawn(monkeypatch, tmp_path, venued_fixtures_dir, "off2", stage_index=1)
