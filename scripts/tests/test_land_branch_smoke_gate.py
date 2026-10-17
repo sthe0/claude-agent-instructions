@@ -41,11 +41,11 @@ class Counting:
         self.inner = inner
         self.calls = 0
 
-    def __call__(self, *args):
+    def __call__(self, *args, **kwargs):
         self.calls += 1
         if self.inner is None:
             raise AssertionError("the smoke must not have been launched")
-        return self.inner(*args)
+        return self.inner(*args, **kwargs)
 
 
 def feature(world, files, name="feature"):
@@ -182,6 +182,46 @@ def test_a_stored_admitted_record_is_reused_without_a_launch(world, capsys):
     assert code == 0 and runner.calls == 0
     assert smoke_lines(out) == [f"SMOKE: admitted {gate.short(sha)} (PASS; stored record)"]
     assert remote_main(world) == sha
+
+
+def test_smoke_model_reaches_the_runner_and_the_record_only_when_given(world, capsys):
+    sha = feature(world, {"CLAUDE.md": "new rules\n"})
+    inner = stub_runner()
+    code, _, _ = land(world, capsys, "--smoke-model", "sonnet", runner=Counting(inner))
+    assert code == 0 and inner.kwargs == [{"model": "sonnet"}]
+    assert gate.load_record(gate.git_common_dir(world.work), sha)["model"] == "sonnet"
+
+
+def test_without_smoke_model_the_runner_gets_no_model(world, capsys):
+    feature(world, {"CLAUDE.md": "new rules\n"})
+    inner = stub_runner()
+    code, _, _ = land(world, capsys, runner=Counting(inner))
+    assert code == 0 and inner.kwargs == [{}]
+
+
+def test_a_stored_pass_of_another_model_is_reused(world, capsys):
+    sha = feature(world, {"CLAUDE.md": "new rules\n"})
+    world.store({**make_record(sha, world.base), "model": "haiku"})
+    code, _, _ = land(world, capsys, "--smoke-model", "sonnet", runner=Counting())
+    assert code == 0 and remote_main(world) == sha
+
+
+def test_a_stored_unavailable_record_of_another_model_is_not_waived_in_place(world, capsys):
+    sha = feature(world, {"CLAUDE.md": "new rules\n"})
+    world.store({**make_record(sha, world.base, statuses={LIVE: gate.UNAVAILABLE}), "model": "haiku"})
+    inner = stub_runner()
+    code, out, _ = land(world, capsys, "--smoke-model", "sonnet", "--smoke-waiver", "haiku not served",
+                        runner=Counting(inner))
+    assert code == 0 and inner.kwargs == [{"model": "sonnet"}]
+    stored = gate.load_record(gate.git_common_dir(world.work), sha)
+    assert stored["model"] == "sonnet" and stored["waiver"] is None and stored["result"] == gate.PASS
+
+
+def test_a_stored_unavailable_record_of_the_same_model_is_still_waived_in_place(world, capsys):
+    sha = feature(world, {"CLAUDE.md": "new rules\n"})
+    world.store({**make_record(sha, world.base, statuses={LIVE: gate.UNAVAILABLE}), "model": "sonnet"})
+    code, _, _ = land(world, capsys, "--smoke-model", "sonnet", "--smoke-waiver", "offline", runner=Counting())
+    assert code == 0 and remote_main(world) == sha
 
 
 def test_a_stored_record_bound_to_another_base_is_not_trusted(world, capsys):

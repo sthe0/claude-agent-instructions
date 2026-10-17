@@ -142,9 +142,11 @@ def stub_runner(statuses=None, exit_code=None, core_sha=None, output=None):
     text = output if output is not None else verify_text(statuses)
     derived = gate.derive_result([{"status": (statuses or {}).get(n, gate.PASS)} for n in gate.REQUIRED_CHECKS])
 
-    def runner(repo, candidate, root, timeout_s):
+    def runner(repo, candidate, root, timeout_s, **kwargs):
+        runner.kwargs.append(kwargs)
         return gate.SandboxRun(gate.VERIFY_EXIT[derived] if exit_code is None else exit_code, text, core_sha or candidate)
 
+    runner.kwargs = []
     return runner
 
 
@@ -514,6 +516,59 @@ def test_run_smoke_writes_a_record_bound_to_the_candidate_and_the_live_tip(world
     assert record["candidate_sha"] == tip and record["base_sha"] == world.base
     assert record["sandbox_core_sha"] == tip and record["waiver"] is None
     assert outcome.sandbox_root is None
+
+
+def test_run_smoke_names_the_default_model_and_passes_none_to_the_runner(world, tmp_path):
+    tip = world.surface_commit()
+    runner = stub_runner()
+    gate.run_smoke(world.work, runner=runner, sandbox_parent=tmp_path)
+    assert runner.kwargs == [{}]
+    assert gate.load_record(world.work / ".git", tip)["model"] == "haiku"
+
+
+def test_run_smoke_passes_the_chosen_model_to_the_runner_and_records_it(world, tmp_path):
+    tip = world.surface_commit()
+    runner = stub_runner()
+    gate.run_smoke(world.work, runner=runner, sandbox_parent=tmp_path, model="sonnet")
+    assert runner.kwargs == [{"model": "sonnet"}]
+    assert gate.load_record(world.work / ".git", tip)["model"] == "sonnet"
+
+
+def test_a_record_without_a_model_counts_as_the_default_model():
+    record = make_record("a" * 40, "b" * 40)
+    assert gate.record_model(record) == gate.DEFAULT_MODEL == "haiku"
+    assert gate.record_for_model(record, "haiku") is record
+    assert gate.record_for_model(record, None) is record
+
+
+def test_a_record_of_another_model_is_reused_only_when_it_passed():
+    passed = {**make_record("a" * 40, "b" * 40), "model": "sonnet"}
+    assert gate.record_for_model(passed, "haiku") is passed
+    unavailable = {**make_record("a" * 40, "b" * 40, statuses={LIVE: gate.UNAVAILABLE}), "model": "sonnet"}
+    assert gate.record_for_model(unavailable, "haiku") is None
+    assert gate.record_for_model(unavailable, "sonnet") is unavailable
+
+
+def test_default_runner_passes_the_model_to_the_verify_script(tmp_path, monkeypatch):
+    calls = []
+
+    class Done:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_process(argv, timeout_s):
+        calls.append(argv)
+        if argv[0].endswith("instruction-sandbox.sh"):
+            (tmp_path / "sandbox.env").write_text("ISB_CORE_SHA=abc\n")
+        return Done()
+
+    monkeypatch.setattr(gate, "_run_process", fake_process)
+    gate.default_runner(tmp_path, "c" * 40, tmp_path, 7, model="sonnet")
+    gate.default_runner(tmp_path, "c" * 40, tmp_path, 7)
+    verify = [c for c in calls if c[0].endswith("instruction-sandbox-verify.sh")]
+    assert verify[0][1:] == ["--timeout", "7", "--model", "sonnet", str(tmp_path)]
+    assert verify[1][1:] == ["--timeout", "7", str(tmp_path)]
 
 
 def test_run_smoke_unavailable_is_refused_until_waived(world, tmp_path):

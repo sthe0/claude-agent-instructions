@@ -34,6 +34,7 @@ SANDBOX_SCRIPT = "scripts/instruction-sandbox.sh"
 DEFAULT_REMOTE = "origin"
 DEFAULT_TRUNK = "main"
 DEFAULT_TIMEOUT_S = 480  # instruction-sandbox-live.py's DEFAULT_TIMEOUT_S: one live launch
+DEFAULT_MODEL = "haiku"  # instruction-sandbox-live.py's DEFAULT_MODEL: what a record without a model used
 BUILD_TIMEOUT_S = 600
 STATIC_TIMEOUT_S = 900
 
@@ -305,6 +306,20 @@ def admission_summary(record: dict) -> str:
     return str(record.get("result"))
 
 
+def record_model(record: object) -> str:
+    """The model a record's live launches ran on; a record without the field used the default."""
+    model = record.get("model") if isinstance(record, dict) else None
+    return model if isinstance(model, str) and model else DEFAULT_MODEL
+
+
+def record_for_model(record: object, model: str | None) -> object:
+    """The stored record a run asking for ``model`` may reuse: another model's record only when
+    it PASSed (a waived or unavailable one says nothing about the requested model)."""
+    if model is None or not isinstance(record, dict) or record_model(record) == model:
+        return record
+    return record if record.get("result") == PASS else None
+
+
 def record_admits(record: object, candidate_sha: str, live_remote_sha: str) -> tuple[bool, str]:
     """(admitted, reason). Binds the record to the candidate and to the live remote tip."""
     if not isinstance(record, dict):
@@ -497,7 +512,7 @@ class SandboxRun:
     sandbox_core_sha: str
 
 
-Runner = Callable[[Path, str, Path, int], SandboxRun]
+Runner = Callable[..., SandboxRun]  # (repo, sha, root, timeout_s[, model=...]); model is passed only when chosen
 
 
 @dataclass
@@ -528,7 +543,8 @@ def _run_process(argv: list[str], timeout_s: int) -> subprocess.CompletedProcess
         raise GateError(f"cannot run {Path(argv[0]).name}: {exc}") from exc
 
 
-def default_runner(repo: Path, candidate_sha: str, root: Path, timeout_s: int) -> SandboxRun:
+def default_runner(repo: Path, candidate_sha: str, root: Path, timeout_s: int,
+                   *, model: str | None = None) -> SandboxRun:
     """Build the sandbox of the candidate, then run the verify recipe (one live ``claude -p``)."""
     scripts = Path(__file__).resolve().parents[1]
     build = _run_process(
@@ -546,7 +562,8 @@ def default_runner(repo: Path, candidate_sha: str, root: Path, timeout_s: int) -
     except OSError as exc:
         raise GateError(f"sandbox.env unreadable: {exc}") from exc
     verify = _run_process(
-        [str(scripts / "instruction-sandbox-verify.sh"), "--timeout", str(timeout_s), str(root)],
+        [str(scripts / "instruction-sandbox-verify.sh"), "--timeout", str(timeout_s),
+         *(["--model", model] if model else []), str(root)],
         timeout_s + STATIC_TIMEOUT_S,
     )
     if verify.returncode not in VERIFY_EXIT.values():
@@ -558,7 +575,7 @@ def run_smoke(repo: str | Path, ref: str = "HEAD", remote: str = DEFAULT_REMOTE,
               trunk: str = DEFAULT_TRUNK, timeout_s: int = DEFAULT_TIMEOUT_S,
               waiver: str | None = None, runner: Runner | None = None,
               now: Callable[[], str] | None = None,
-              sandbox_parent: str | Path | None = None) -> RunOutcome:
+              sandbox_parent: str | Path | None = None, model: str | None = None) -> RunOutcome:
     """Fetch the remote tip, sandbox the candidate, verify, and write the record.
 
     Raises ``GateError`` before any record exists (not a descendant of the remote tip, git or
@@ -578,7 +595,7 @@ def run_smoke(repo: str | Path, ref: str = "HEAD", remote: str = DEFAULT_REMOTE,
         )
     root = Path(tempfile.mkdtemp(prefix="instruction-smoke-sbx.", dir=sandbox_parent))
     try:
-        sandbox = run(repo, candidate, root, timeout_s)
+        sandbox = run(repo, candidate, root, timeout_s, **({"model": model} if model else {}))
         result, checks = parse_verify_output(sandbox.verify_output, sandbox.verify_exit)
     except GateError as exc:
         raise GateError(f"{exc}; sandbox kept at {root}") from exc
@@ -593,6 +610,7 @@ def run_smoke(repo: str | Path, ref: str = "HEAD", remote: str = DEFAULT_REMOTE,
         "result": result,
         "verify_exit": sandbox.verify_exit,
         "sandbox_core_sha": sandbox.sandbox_core_sha,
+        "model": model or DEFAULT_MODEL,
         "checks": checks,
         "waiver": None,
     }

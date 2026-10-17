@@ -96,6 +96,18 @@ ground = "_HANDOFF_SHA_LINE_RE.search reads the 'Handoff-sha256:' label line spa
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/instruction-sandbox-live.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles TOKEN_SHAPED, the key-prefix and long-opaque-string shape that the launch-failure excerpt redacts; the shape is a secret scanner's, matching token syntax, never meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/instruction-sandbox-live.py::_clean_line::pattern.sub"]
+class = "structural"
+ground = "TOKEN_SHAPED.sub masks token-shaped strings in the text of a failed launch before it enters the smoke record; output redaction, no verdict depends on the match."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/lib/instruction_smoke_gate.py::<module>::re.compile"]
 class = "structural"
 ground = "Compiles: the push-rights wording used only to defuse a log line, the all-zero SHA and the 40/64-hex object-id shape; none decides meaning."

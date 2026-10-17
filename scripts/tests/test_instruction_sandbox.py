@@ -674,6 +674,9 @@ case "$STUB_MODE" in
   applied) printf '%s\\n' '{"type":"user","message":{"content":[{"type":"tool_result","content":"The file has been updated successfully."}]}}' ;;
   sleep) sleep 30 ;;
   exit7) exit 7 ;;
+  modelerr) printf '%s\\n' "warming up" "There's an issue with the selected model (m-x). Token sk-ant-oat01-abcdefghijklmnop0123456789 leaked." ; exit 1 ;;
+  modelerr-stream) printf '%s\\n' '{"type":"system","subtype":"init"}' '{"type":"result","is_error":true,"result":"There is an issue with the selected model (m-x)"}' ; exit 1 ;;
+  modelerr-stderr) printf '%s\\n' '{"type":"system","subtype":"init"}' ; echo "model not served" >&2 ; exit 1 ;;
 esac
 """
 
@@ -752,6 +755,35 @@ def test_live_launch_exit_is_unavailable_not_missing(live_root, stub_claude):
     res = _live(live_root, stub_claude("exit7"))
     assert res.returncode == 3
     assert res.stdout.splitlines() == ["UNAVAILABLE launch-exit=7"]
+
+
+def test_live_failed_launch_reason_carries_an_excerpt_of_the_text_output_with_tokens_redacted(live_root, stub_claude):
+    res = _live(live_root, stub_claude("modelerr"))
+    assert res.returncode == 3
+    (line,) = res.stdout.splitlines()
+    assert line.startswith("UNAVAILABLE launch-exit=1 There's an issue with the selected model")
+    assert "sk-ant" not in line and "[redacted]" in line
+
+
+def test_live_failed_stream_launch_reason_carries_the_result_event_text(live_root, stub_claude):
+    res = _live(live_root, stub_claude("modelerr-stream"), "--probe", "hook-gate-deny", expect=())
+    assert res.returncode == 3
+    assert res.stdout.splitlines() == [
+        "UNAVAILABLE launch-exit=1 There is an issue with the selected model (m-x)"]
+
+
+def test_live_failed_stream_launch_with_only_init_on_stdout_prefers_stderr(live_root, stub_claude):
+    res = _live(live_root, stub_claude("modelerr-stderr"), "--probe", "hook-gate-deny", expect=())
+    assert res.stdout.splitlines() == ["UNAVAILABLE launch-exit=1 model not served"]
+
+
+def test_live_model_flag_reaches_the_launch_argv_and_defaults_to_haiku(live_root, stub_claude):
+    _live(live_root, stub_claude("echo"))
+    argv = Path(f"{stub_claude.log}.argv").read_bytes().split(b"\0")
+    assert argv[argv.index(b"--model") + 1] == b"haiku"
+    _live(live_root, stub_claude("echo"), "--model", "sonnet")
+    argv = Path(f"{stub_claude.log}.argv").read_bytes().split(b"\0")
+    assert argv[argv.index(b"--model") + 1] == b"sonnet"
 
 
 def test_live_without_a_lendable_credential_is_unavailable_auth(live_root, stub_claude, tmp_path):
@@ -836,6 +868,18 @@ def test_verify_maps_timeout_and_launch_exit_to_unavailable(verify_root, verify_
         res, checks = _verify(verify_root, env, *args, mode=mode)
         assert checks["live:core-marker"] == ("UNAVAILABLE", reason)
         assert res.returncode in (1, 3)
+
+
+def test_verify_model_reaches_both_live_launches_and_a_failed_launch_names_its_cause(verify_root, verify_world):
+    _, env = verify_world
+    seen = []
+    for model_args in ((), ("--model", "sonnet")):
+        _verify(verify_root, env, *model_args)
+        argv = Path(f"{env['STUB_LOG']}.argv").read_bytes().split(b"\0")
+        seen.append(argv[argv.index(b"--model") + 1])
+    assert seen == [b"haiku", b"sonnet"]
+    _, checks = _verify(verify_root, env, "--model", "sonnet", mode="modelerr")
+    assert checks["live:core-marker"][1].startswith("launch-exit=1 There's an issue with the selected model")
 
 
 def test_verify_maps_the_live_hook_check_exits(verify_root, verify_world):

@@ -146,7 +146,7 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "land-gate-wired": Mutant(
         LAND,
-        "    refusal, smoke_line = _smoke_gate(repo_root, assessment, smoke_timeout, smoke_waiver, runner)",
+        "    refusal, smoke_line = _smoke_gate(repo_root, assessment, smoke_timeout, smoke_waiver, runner, smoke_model)",
         '    refusal, smoke_line = None, "SMOKE: not required (diff touches only exempt paths)"',
         _ids(
             "test_a_surface_diff_runs_the_smoke_and_lands_on_pass",
