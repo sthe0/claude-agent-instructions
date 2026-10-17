@@ -3282,8 +3282,9 @@ def _bound_stage_key(state, question: "premise.Question", plan_path: str | None 
     (#123) — the plan-level twin of the per-stage key. Returns "" for an
     unparseable target and when no plan has been submitted yet (`state.plan_path`
     empty) — exactly the cases premise.validate_questions exempts from the
-    key-mismatch check. Reads only; the WRITE lives in the two disposing verbs so
-    the package-wide single-writer scan stays exact.
+    key-mismatch check. Reads only; the WRITE lives in the two disposing verbs and in
+    `_register_plan_assumptions` (the third writer) so the package-wide single-writer
+    scan stays exact.
 
     `plan_path`, when given, is read INSTEAD of `state.plan_path` — for the
     CORRECTED plan of a replan, which is not `state.plan_path` until that replan
@@ -4237,7 +4238,10 @@ def _register_plan_assumptions(state, doc: "PlanDoc", plan_path: str) -> None:
     """Record each typed `[[meta.assumption]]` as an `assumed` premise
     (`assume-<id>`), stamped against the submitted plan. Upsert by id, so a
     re-submission rewrites the same row instead of adding one; a session without the
-    premise bag has nothing to register into. Prose is never parsed."""
+    premise bag has nothing to register into (the assumptions are then dropped
+    silently). Prose is never parsed. The key is re-stamped on every submission on
+    purpose: the plan itself re-declares the assumption each time, so a stage edit
+    never stales it the way it stales a premise the user or agent disposed."""
     bag = state.plugins.get("premise")
     if bag is None or not doc.meta.assumptions:
         return

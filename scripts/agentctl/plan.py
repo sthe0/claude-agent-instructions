@@ -155,6 +155,10 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lib import bash_write_targets as _bash_write_targets
+from lib import shell_tokens as _shell_tokens
+from lib import widening_targets as _widening_targets
+
 from . import grants as _grants
 from .grants import AddDirGrant, RuleGrant, StageGrants
 from .landed_providers import PROVIDER_NAME_RE
@@ -922,17 +926,39 @@ def verify_command_scope_warnings(stages, final_check=None) -> list[str]:
 # A refusal now would enforce a guess, so this stays an advisory that costs one line on
 # a false positive; promoting it to a blocker is a decision for when those records
 # justify one. It must never gain a `*_blockers` twin.
+#
+# Two inputs of the brief are not read, deliberately. (1) `tool_contracts.resolve_command`
+# resolves a command to the RESOURCES it can change and is closed-world: it refuses the
+# `bash scripts/cap-run.sh --` wrapper and pytest's `-n`/`-p`/`--co` flags, so it cannot
+# say "this runs a test runner" for the plan's own verify_command shape. The runner test
+# below reuses the same segment/wrapper parsing (`lib.widening_targets.strip_wrappers`,
+# `bash_write_targets.split_segments`) and judges the real program of each segment, not
+# a token anywhere in the text. (2) An ARMED acceptance judge is a session/config property
+# (`advisor-mode`, the advisor kill switch), not a stage field; reading it would make the
+# advisory depend on the environment instead of the plan. `criterion_type:
+# acceptance_review` is the typed stand-in, since the judge gates exactly those stages.
 _TIER_RANK = {"small": 0, "medium": 1, "large": 2}
+_CAP_RUN_WRAPPER = "cap-run.sh"
 
 
 def _runs_test_runner(cmd: str) -> bool:
     try:
-        toks = shlex.split(cmd)
-    except ValueError:
-        toks = cmd.split()
-    for k, tok in enumerate(toks):
-        if tok.rsplit("/", 1)[-1] in ("pytest", "py.test") or (
-                tok == "-m" and toks[k + 1:k + 2] == ["pytest"]):
+        tokens = _shell_tokens.separator_exact_split(cmd)
+    except Exception:
+        return False
+    for seg in _bash_write_targets.split_segments(tokens):
+        seg = _widening_targets.strip_wrappers(seg)
+        if (len(seg) > 1 and _widening_targets.program_name(seg[0]) in ("bash", "sh")
+                and _widening_targets.program_name(seg[1]) == _CAP_RUN_WRAPPER):
+            rest = seg[2:]
+            if "--" not in rest:
+                continue
+            seg = _widening_targets.strip_wrappers(rest[rest.index("--") + 1:])
+        if not seg:
+            continue
+        prog = _widening_targets.program_name(seg[0]).casefold()
+        if prog in ("pytest", "py.test") or (
+                prog.startswith("python") and seg[1:3] == ["-m", "pytest"]):
             return True
     return False
 
@@ -1202,7 +1228,37 @@ def _strip_heredoc_bodies_for_reachability(cmd: str) -> str:
     return cmd
 
 
-def _reachability_path_tokens(cmd: str) -> list[str]:
+_REVISION_RANGE_RE = re.compile(r"\.{2,3}")
+_REVISION_SUFFIX_RE = re.compile(r"[~^]\d*$")
+# With no repo to ask, only these conventional remote names make `<remote>/<branch>`
+# a revision; any other slash operand stays a path.
+_CONVENTIONAL_REMOTES = frozenset({"origin", "upstream"})
+
+
+def _is_git_revision(operand: str, repo_root: str | None) -> bool:
+    """Whether a revision-taking git subcommand's operand is a revision (a ref, a sha,
+    `HEAD~1`, `A..B`, `origin/main`) rather than a file. An operand with a file extension
+    is a path. A slash operand is a `<remote>/<branch>` revision only when its first
+    segment is not a top-level entry of `repo_root` (or, with no repo, is a conventional
+    remote name), so `scripts/ghost_dir` is still judged as the path it is."""
+    for part in _REVISION_RANGE_RE.split(operand):
+        part = _REVISION_SUFFIX_RE.sub("", part)
+        if not part:
+            continue
+        if part.endswith(_PATH_EXTS):
+            return False
+        if "/" not in part:
+            continue
+        first = part.split("/", 1)[0]
+        if repo_root:
+            if os.path.lexists(os.path.join(repo_root, first)):
+                return False
+        elif first not in _CONVENTIONAL_REMOTES:
+            return False
+    return True
+
+
+def _reachability_path_tokens(cmd: str, repo_root: str | None = None) -> list[str]:
     """The relative, literal, path-shaped tokens of a shell command — the tokens
     whose green-reachability is decidable. shlex parses the WHOLE command in one
     pass so a quoted `python3 -c "..."` body — which itself contains `;` `|` `<`
@@ -1280,12 +1336,11 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
         module comment for the accepted width and why (E) is the WEAKEST of
         the five exemptions.
     (F) After a revision-taking git subcommand (`_GIT_REF_SUBCOMMANDS`), an
-        operand before `--` that carries no file extension is a revision
-        (`git merge-base HEAD origin/main`), not a path; one with a path
-        extension (`git diff scripts/ghost.py`) and every operand after `--`
-        stay checked. ACCEPTED LIMIT: an extensionless directory operand of such
-        a subcommand (`git diff scripts/ghost`) goes unchecked — it fails in the
-        non-blocking direction like every exemption here. A glued redirect
+        operand before `--` that `_is_git_revision` accepts (`git merge-base HEAD
+        origin/main`) is not a path; a file-extension operand, a slash operand
+        whose first segment is a top-level entry of `repo_root` (or, with no repo,
+        not a conventional remote), and every operand after `--` stay checked. The
+        `-C` value is judged as a path; `-c k=v` is skipped. A glued redirect
         operator (`2>/dev/null`) is stripped before its target is judged.
     """
     cmd = _strip_heredoc_bodies_for_reachability(cmd)
@@ -1294,6 +1349,24 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
     except ValueError:
         toks = cmd.split()
     tokens: list[str] = []
+
+    def _admit(stripped: str, in_git_revisions: bool) -> None:
+        m_redirect = _GLUED_REDIRECT_RE.match(stripped)
+        if m_redirect:
+            stripped = stripped[m_redirect.end():]
+        if stripped.startswith("-") or any(ch.isspace() for ch in stripped):
+            return
+        head = stripped.split("::", 1)[0]  # drop a pytest node-id suffix
+        if not head or head.startswith("/"):
+            return
+        if in_git_revisions and _is_git_revision(head, repo_root):
+            return
+        if any(ch in head for ch in _REJECT_CHARS) or "://" in head:
+            return
+        if "/" in head or head.endswith(_PATH_EXTS):
+            if not any(part in _BUILD_OUTPUT_SEGMENTS for part in Path(head).parts):  # (E)
+                tokens.append(head)
+
     i = 0
     n = len(toks)
     negated_clause = False  # (B): currently inside an exempt `! test`/`! [` clause
@@ -1376,8 +1449,12 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
                 while i < n:
                     nxt = toks[i].rstrip(_GLUE_CHARS)
                     i += 1
-                    if nxt in ("-C", "-c"):
-                        i += 1  # the flag's value is not the subcommand
+                    if nxt == "-C":
+                        if i < n:  # a missing -C directory is a real unreachable path
+                            _admit(toks[i].rstrip(_GLUE_CHARS), False)
+                        i += 1
+                    elif nxt == "-c":
+                        i += 1  # `k=v`: `=` already rejects it, and it is not the subcommand
                     elif not nxt.startswith("-"):
                         git_sub = nxt if nxt in _GIT_REF_SUBCOMMANDS else None
                         break
@@ -1388,19 +1465,7 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
         if git_sub is not None and stripped == "--":
             git_past_dashdash = True
         if not negated_clause:
-            m_redirect = _GLUED_REDIRECT_RE.match(stripped)
-            if m_redirect:
-                stripped = stripped[m_redirect.end():]
-            if not stripped.startswith("-") and not any(ch.isspace() for ch in stripped):
-                head = stripped.split("::", 1)[0]  # drop a pytest node-id suffix
-                is_git_ref = (git_sub is not None and not git_past_dashdash
-                              and not head.endswith(_PATH_EXTS))
-                if head and not head.startswith("/") and not is_git_ref:
-                    if not any(ch in head for ch in _REJECT_CHARS) and "://" not in head:
-                        if "/" in head or head.endswith(_PATH_EXTS):
-                            if not any(part in _BUILD_OUTPUT_SEGMENTS
-                                       for part in Path(head).parts):  # (E)
-                                tokens.append(head)
+            _admit(stripped, git_sub is not None and not git_past_dashdash)
         if glued:
             negated_clause = False
             command_start = True
@@ -1442,7 +1507,7 @@ def verify_command_reachability_blockers(stages, final_check, repo_root) -> list
         if not cmd:
             return
         seen: set[str] = set()
-        for tok in _reachability_path_tokens(cmd):
+        for tok in _reachability_path_tokens(cmd, repo_root):
             if tok in seen:
                 continue
             seen.add(tok)
