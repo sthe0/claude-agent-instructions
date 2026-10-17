@@ -285,8 +285,9 @@ def _mandated_reviews(state: SessionState) -> int:
 
     One thinker plan review for the plan as currently approved, plus one code review
     per spawn:developer stage, plus one FURTHER thinker review per replan logged
-    since arming — `gates.plan_review_blockers` requires a review bound to the exact
-    plan bytes at EVERY replan, not only at the first approval, and the actual side
+    since arming — `gates.plan_review_blockers` may require a review bound to the exact
+    plan bytes at a replan (the change tier decides: tier 0 owes none), so the estimate
+    prices one per replan as a conservative upper bound, and the actual side
     (`refresh_spend`) sums every one of those spawns by `plan_path` with no
     stage_index filter. Counting only the flat initial review would silently inflate
     the spend ratio on every replan, biasing exactly the sessions already closest to
