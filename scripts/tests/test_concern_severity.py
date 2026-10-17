@@ -222,7 +222,7 @@ def test_blocking_on_a_changed_part_revises_and_stales_the_pair(store, fixtures_
     baseline = store.load("s2").plan_review
 
     _retitle(plan, "Scaffold module")
-    assert _pair(store, "s2", plan, "revise", ["blocking: C1: stage 2 misreads stage 1"]).ok
+    assert _pair(store, "s2", plan, "revise", ["blocking: C1: stage:1 stage 2 misreads stage 1"]).ok
     record = _record(store, "s2")
     assert (record.verdict, record.raw_verdict, record.effective_severities) == (
         "revise", "revise", ["blocking"])

@@ -15,6 +15,7 @@ carries every stage's index and title.
 from __future__ import annotations
 
 import argparse
+import difflib
 import errno
 import json
 import os
@@ -46,12 +47,15 @@ from .plan import (
     consumers,
     grants_sha256,
     interface_empty,
+    is_unit_id,
     load_plan,
     parse_pair,
     parse_unit,
     plan_coverage_entries,
     reliance_set,
     review_pairs,
+    split_pair_id,
+    unit_node,
 )
 
 
@@ -547,6 +551,27 @@ def unit_base_text(doc: PlanDoc) -> str:
     )
 
 
+def row_part_text(doc: PlanDoc, review_id: str) -> str:
+    """The text of every node a unit or pair review judges — the base unit's own
+    fields, the full stage fields of a stage node — for diffing two plan versions; a
+    node the plan lacks contributes nothing."""
+    nodes = (unit_node(review_id),) if is_unit_id(review_id) else split_pair_id(review_id)
+    chunks = []
+    for node in nodes:
+        if node == PAIR_BASE_NODE:
+            chunks.append(unit_base_text(doc))
+        elif any(s.index == node for s in doc.stages):
+            chunks.append(render_stage_fields(doc, int(node)))
+    return "\n".join(chunks)
+
+
+def row_diff(old: PlanDoc, new: PlanDoc, review_id: str) -> str:
+    """A unified diff of the row's parts between two plan versions; empty when they read alike."""
+    return "\n".join(difflib.unified_diff(
+        row_part_text(old, review_id).splitlines(), row_part_text(new, review_id).splitlines(),
+        "prior version", "live plan", n=2, lineterm=""))
+
+
 def _node_label(doc: PlanDoc, node: "int | str") -> str:
     if node == PAIR_BASE_NODE:
         return "the base activity (the order)"
@@ -966,6 +991,19 @@ def _prior_review_section(history: dict, noun: str = "pair") -> list[str]:
         if changed else "Nothing changed since the prior verdict."
     )
     lines.append("")
+    diff = history.get("prior_diff")
+    if diff is not None:
+        lines.append(f"## What changed in this {noun} since the prior verdict")
+        lines.append("")
+        if not diff["available"]:
+            lines.append(
+                f"The prior version is unavailable, so there is no diff: judge the {noun} whole."
+            )
+        elif not diff["text"]:
+            lines.append(f"The text of this {noun}'s parts reads the same as in the prior version.")
+        else:
+            lines.extend(["```diff", diff["text"], "```"])
+        lines.append("")
     return lines
 
 
@@ -1006,7 +1044,14 @@ def _protocol_lines(history: "dict | None", noun: str) -> list[str]:
             f"prior verdict`, or on a part that still carries an unresolved blocker listed "
             f"under `## Prior review of this {noun}` — raise such a blocker again, if it is still "
             f"unfixed, as `{RESTATES_PREFIX}<concern-id>`. Raise any other prior concern again "
-            f"only as `{RESTATES_PREFIX}<concern-id>`; do not restate a settled concern as new."
+            f"only as `{RESTATES_PREFIX}<concern-id>`; do not restate a settled concern as new. "
+            f"After a prior `pass`, a blocking concern that names no changed part by its part "
+            f"token and re-raises no open blocker is recorded as advisory."
+        )
+        lines.append(
+            "  - Name the part a concern is about with a part token (`stage:<n>`, `meta:`, "
+            f"`order:`) leading the concern or right after its marker: `{SEVERITY_BLOCKING}: "
+            f"{CONDITION_MARKERS[0]} stage:3 <concern>`."
         )
     lines.append(
         f"- after the concerns, a line `{CUSTOMER_QUESTIONS_MARKER}` followed by one "

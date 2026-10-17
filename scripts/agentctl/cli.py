@@ -24,7 +24,7 @@ import sys
 import tempfile
 import time
 import tomllib
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
 from lib import argv_text, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
@@ -1447,11 +1447,17 @@ def _baseline_plan_for_tier(store: StateStore, state: SessionState):
     when that version is unknown (no approved-plan snapshot, or no stored copy of its
     bytes). None means the tier of an edit cannot be computed, and the replan routes as it
     did before the tier existed."""
-    from .plan import PlanError, parse_plan
-
     if not state.plan_snapshot_path:
         return None
-    data = _read_plan_version_snapshot(store, state, state.plan_snapshot_hash or "")
+    return _plan_from_snapshot(store, state, state.plan_snapshot_hash or "")
+
+
+def _plan_from_snapshot(store: StateStore, state: SessionState, digest: str):
+    """The plan version `digest` parsed from its stored snapshot, or None when no readable
+    snapshot of it exists or it does not parse."""
+    from .plan import PlanError, parse_plan
+
+    data = _read_plan_version_snapshot(store, state, digest)
     if data is None:
         return None
     try:
@@ -4947,6 +4953,7 @@ class _ConcernPlan:
     verdict: str
     part_digests: dict
     regression_command: str
+    delta_changed_parts: list = field(default_factory=list)
 
     @property
     def bodies(self) -> list[str]:
@@ -5018,10 +5025,10 @@ def _question_data(state: SessionState, args, question_ids: list[str]) -> dict:
     return data
 
 
-def _concern_parts(body: str, own_parts) -> list[str]:
+def _concern_parts(body: str, own_parts, *, default_to_own: bool = True) -> list[str]:
     token = gates._concern_part_token(body)
     if token is None:
-        return list(own_parts)
+        return list(own_parts) if default_to_own else []
     index = plan_review_scope_stage_index(token)
     return [plan_review_scope_for_stage(index) if index is not None else token]
 
@@ -5034,9 +5041,16 @@ def _changed_parts(parts, digests: dict, prev_digests: dict) -> list[str]:
 def _plan_concern_severity(
     state: SessionState, doc, ledger_scope: str, own_parts, prev, parsed, verdict: str, *,
     attested: bool, regression_command: str, evidence: bool, may_promote: bool,
+    judge_delta: bool = False,
 ) -> _ConcernPlan:
+    """`judge_delta`: a topo row re-reviewed after a pass — when some of its own parts changed
+    since that pass, a blocking concern naming no changed part is recorded as advisory."""
     digests = part_digest_map(doc) if doc is not None else {}
     prev_digests = prev.part_digests if prev is not None else {}
+    delta_changed = (
+        _changed_parts(own_parts or (), digests, prev_digests)
+        if judge_delta and prev is not None and prev.verdict == gates._PLAN_REVIEW_PASS else []
+    )
     open_parts = {
         p for e in state.concern_ledger.values()
         if e.scope == ledger_scope and gates.concern_unresolved(e, state, doc)
@@ -5044,7 +5058,7 @@ def _plan_concern_severity(
     }
     parts_by_concern, effective = [], []
     for pc in parsed:
-        parts = _concern_parts(pc.body, own_parts or tuple(digests))
+        parts = _concern_parts(pc.body, own_parts or tuple(digests), default_to_own=not delta_changed)
         changed = set(_changed_parts(parts, digests, prev_digests))
         target = state.concern_ledger.get(pc.restates) if pc.restates else None
         dispositioned = target is not None and (
@@ -5059,6 +5073,8 @@ def _plan_concern_severity(
             pc.severity, parts, has_prev=prev is not None, changed=changed,
             open_parts=open_parts, restates_dispositioned=dispositioned,
             new_evidence=evidence or differs,
+            after_pass_on_changed=bool(delta_changed),
+            restates_open=target is not None and gates.concern_unresolved(target, state, doc),
         ))
     effective_verdict = verdict
     if (verdict == gates._PLAN_REVIEW_REVISE and parsed and attested and may_promote
@@ -5072,7 +5088,7 @@ def _plan_concern_severity(
         if not still_open:
             effective_verdict = gates._PLAN_REVIEW_PASS
     return _ConcernPlan(parsed, parts_by_concern, effective, effective_verdict, digests,
-                        regression_command)
+                        regression_command, delta_changed)
 
 
 def _blocking_parts(parsed, parts_by_concern) -> set[str]:
@@ -5144,7 +5160,8 @@ def _commit_concern_ledger(state: SessionState, review, cp: _ConcernPlan, ledger
 def _log_concerns_downgraded(state: SessionState, cp: _ConcernPlan, scope: str, raw_verdict: str) -> None:
     if cp.downgraded or cp.verdict != raw_verdict:
         state.log("plan_review_concerns_downgraded", scope=scope, raw_verdict=raw_verdict,
-                  verdict=cp.verdict, severities=cp.severities, effective=cp.effective)
+                  verdict=cp.verdict, severities=cp.severities, effective=cp.effective,
+                  **({"changed_parts": cp.delta_changed_parts} if cp.delta_changed_parts else {}))
 
 
 def _cmd_plan_review_pair(
@@ -5238,7 +5255,7 @@ def _cmd_plan_review_pair(
     cp = _plan_concern_severity(
         state, doc, ledger_scope, pair_part_tokens(pair), state.plan_pair_reviews.get(pair),
         parsed, verdict, attested=bool(attested), regression_command=regression_command,
-        evidence=bool(regression_exit), may_promote=True,
+        evidence=bool(regression_exit), may_promote=True, judge_delta=True,
     )
     concerns = cp.bodies
     if is_unit_id(pair):
@@ -6004,11 +6021,27 @@ def cmd_plan_review_pair_history(args, *, store: StateStore, runner: Runner | No
         digests = part_digest_map(doc)
         stored = latest.part_digests if latest.plan_path == target else {}
         changed = _changed_parts(pair_part_tokens(pair), digests, stored)
+    data = {"pair": pair, "records": records, "changed_parts_since_last": changed}
+    if latest is not None and latest.plan_path == target:
+        data["prior_diff"] = _prior_row_diff(store, state, doc, latest, pair)
     return Directive(
         True, state.node, "inspect",
-        f"{len(records)} recorded review(s) of pair {pair!r} against {target}",
-        data={"pair": pair, "records": records, "changed_parts_since_last": changed},
+        f"{len(records)} recorded review(s) of pair {pair!r} against {target}", data=data,
     )
+
+
+def _prior_row_diff(store: StateStore, state: SessionState, doc, latest, pair: str) -> dict:
+    """The diff of the row's parts between the plan version a reviewer judged and `doc`.
+    The judged version of a carried record is the one its first carry started from
+    (`carried_from_sha`), not the version it was carried onto; with no readable snapshot of
+    it the row is `available: False` and the reviewer judges it whole."""
+    from .render import row_diff
+
+    judged = latest.carried_from_sha or latest.plan_sha256
+    old = _plan_from_snapshot(store, state, judged)
+    if old is None:
+        return {"available": False, "from_sha": judged, "text": ""}
+    return {"available": True, "from_sha": judged, "text": row_diff(old, doc, pair)}
 
 
 def _walk_target(args, state: SessionState) -> "str | None":

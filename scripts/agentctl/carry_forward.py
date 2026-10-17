@@ -165,7 +165,7 @@ class _Ctx:
 
     def _mark(self, record, from_sha: str) -> None:
         record.carried_tier = max(record.carried_tier or 0, self.tier)
-        record.carried_from_sha = from_sha or record.carried_from_sha
+        record.carried_from_sha = record.carried_from_sha or from_sha
 
     # --- whole-plan, stage-scoped and pass records -------------------------------------
 

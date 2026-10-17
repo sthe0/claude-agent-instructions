@@ -1251,7 +1251,7 @@ def _plan_review_baseline(pr) -> dict:
 #: free-text meaning — the permitted case under
 #: regex-not-for-semantic-classification.md, not the forbidden one.
 _PLAN_REVIEW_PART_TOKEN_RE = re.compile(
-    r"^\s*(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
+    r"^\s*(?:[Cc][1-4]:\s*)?(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
 )
 
 
@@ -1338,6 +1338,7 @@ EFFECTIVE_ADVISORY = "advisory"
 def effective_concern_severity(
     severity: str, parts, *, has_prev: bool, changed, open_parts,
     restates_dispositioned: bool, new_evidence: bool,
+    after_pass_on_changed: bool = False, restates_open: bool = False,
 ) -> str:
     """The severity a reviewer-written concern is recorded with: `blocking`, or
     `advisory` when the freeze rules apply, or `note` as written.
@@ -1351,9 +1352,20 @@ def effective_concern_severity(
     previous record), a concern naming no part, and `new_evidence` (a regression command
     the scope has not seen, or run-demonstrated evidence) downgrade nothing. `parts` are
     the part tokens the concern names; `changed` the ones whose digest moved since the
-    scope's previous record; `open_parts` the ones carrying an undischarged blocker."""
+    scope's previous record; `open_parts` the ones carrying an undischarged blocker.
+
+    `after_pass_on_changed` — the scope's previous record is a pass and some of its parts
+    changed since: the review judges the delta, so a blocking concern stays blocking only
+    when it names a changed part, sits on a part with an open blocker, or `restates_open`
+    — it re-raises an open blocker. One naming no part at all is downgraded here, where
+    the rule above would keep it blocking."""
     if severity != SEVERITY_BLOCKING:
         return severity
+    if after_pass_on_changed and has_prev and not new_evidence:
+        if restates_open or any(p in open_parts for p in parts):
+            return EFFECTIVE_BLOCKING
+        if not any(p in changed for p in parts):
+            return EFFECTIVE_ADVISORY
     if not has_prev or not parts or new_evidence:
         return EFFECTIVE_BLOCKING
     if any(p in open_parts for p in parts):
