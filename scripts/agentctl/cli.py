@@ -1518,7 +1518,7 @@ def _baseline_plan_for_tier(store: StateStore, state: SessionState):
 def _plan_from_snapshot(store: StateStore, state: SessionState, digest: str):
     """The plan version `digest` parsed from its stored snapshot, or None when no readable
     snapshot of it exists or it does not parse."""
-    from .plan import PlanError, _resolve_plan_refs, parse_plan
+    from .plan import PlanError, parse_plan
 
     data = _read_plan_version_snapshot(store, state, digest)
     if data is None:
@@ -1527,8 +1527,9 @@ def _plan_from_snapshot(store: StateStore, state: SessionState, digest: str):
         raw = tomllib.loads(data.decode("utf-8"))
         if state.plan_path:
             registered = Path(state.plan_path)
-            raw = _resolve_plan_refs(raw, registered, registered.parent,
-                                     plan_refs.default_root(registered), plan_store.reader())
+            raw, _visited = plan_refs.resolve_refs(
+                raw, registered.parent, plan_refs.default_root(registered),
+                read=plan_store.reader(), index_path=registered)
         return parse_plan(raw, strict=False)
     except (UnicodeDecodeError, tomllib.TOMLDecodeError, PlanError):
         return None
