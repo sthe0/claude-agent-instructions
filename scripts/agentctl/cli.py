@@ -113,6 +113,7 @@ from .state import (
     CheckVenue,
     CodeReview,
     CONCERN_FIXED,
+    EFFORT_FIRE_FINISHED_WORK,
     CONCERN_OPEN,
     CONCERN_RECORDED,
     CONCERN_SUPERSEDED,
@@ -692,20 +693,23 @@ def _open_effort_fire(state: SessionState) -> list[dict]:
 
 
 def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: float,
-                        store: StateStore | None = None) -> dict:
+                        store: StateStore | None = None, finished_work: bool = False) -> dict:
     """`effort.record_fire` plus, on a spend/wall-clock fire of a ledgered order, the
-    open user-owed marker and the order-level baseline rebase."""
-    fire = effort.record_fire(state, div, now=now)
+    open user-owed marker and the order-level baseline rebase. A fire on finished work
+    (`finished_work`) is recorded and rebases the baselines but owes the user nothing:
+    there is no remaining plan for the user to renegotiate."""
+    fire = effort.record_fire(state, div, now=now, finished_work=finished_work)
     fire["difficulty_id_at_fire"] = _difficulty_id(state.difficulty)
     if div.scale in effort.RATIO_SCALES:
         key = _ledgered_order_key(state)
         if key is not None:
             _flush_order_effort(state, key, store=store)
-            order_approvals.record_effort_fire(
-                key, scale=div.scale, detail={"actual": div.actual, "estimate": div.estimate,
-                                               "multiple": div.multiple},
-                at=dt.datetime.now(dt.timezone.utc).isoformat(),
-            )
+            if not finished_work:
+                order_approvals.record_effort_fire(
+                    key, scale=div.scale, detail={"actual": div.actual, "estimate": div.estimate,
+                                                   "multiple": div.multiple},
+                    at=dt.datetime.now(dt.timezone.utc).isoformat(),
+                )
             window = order_approvals.get(key)["effort_since_user_approval"]
             state.order_effort_base = {
                 scale: float(window.get(scale) or 0.0) for scale, _ in _ORDER_EFFORT_SCALES
@@ -2308,6 +2312,8 @@ def _diagnose_effort_divergence(
     declaration carries the numbers that triggered it, not just the scale name."""
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
     opened = _open_difficulty(state)
+    if opened is not None:
+        fire["difficulty_uid"] = opened.uid
     store.save(state)
     data = {"effort_divergence": fire}
     route = _agent_replans_fire_route(state)
@@ -2560,13 +2566,67 @@ def _clear_since_user_decision(state: SessionState, by: str) -> None:
         state.task_id, session_id=state.session_id, now=_utcnow())
 
 
-def _count_replan(state: SessionState) -> None:
+def _count_replan(state: SessionState, change_class: str) -> None:
     """Count one replan of the task, on the cross-session total and on the since-user
-    total the agent self-decision backstop reads."""
+    total the agent self-decision backstop reads — when it is operative. A no_change,
+    bookkeeping or check-only replan changes nothing the work runs under, so it spends
+    none of the budget those totals bound (the same split `effort.replan_count` makes)."""
+    if change_class != effort.OPERATIVE_CLASS:
+        return
     task_accumulator.add(
         state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
         mirror_axis="replans_since_user_decision",
     )
+
+
+def _replan_class_data(state: SessionState) -> dict:
+    """The replan counts by change class — what the effort replans scale counts
+    (`operative`) next to what it does not — for a Directive or the status JSON."""
+    return {"replan_classes": effort.replan_class_counts(state)}
+
+
+def _effort_fire_window(state: SessionState) -> list[int] | None:
+    """The window stages of the spend/wall-clock fire whose difficulty is the open one,
+    or None when the open difficulty was not opened by such a fire."""
+    difficulty = state.difficulty
+    if difficulty is None:
+        return None
+    for fire in reversed(state.effort_fires):
+        if (fire.get("difficulty_uid") == difficulty.uid
+                and fire.get("scale") in effort.RATIO_SCALES):
+            return list(fire.get("window_stages") or [])
+    return None
+
+
+def _finished_work_fire(state: SessionState, div: "effort.Divergence | None", *,
+                        store: StateStore) -> dict | None:
+    """Record a spend/wall-clock fire raised while every stage is settled and return its
+    record, or None when it does not apply (the caller then routes the fire as usual).
+    Work that has finished has no remaining plan to correct, so the fire is recorded
+    with its retier records and the session proceeds instead of opening a difficulty."""
+    if (div is None or div.scale not in effort.RATIO_SCALES or not state.all_stages_settled()
+            or not gates.effort_active(state)):
+        return None
+    return _record_effort_fire(state, div, now=_utcnow(), store=store, finished_work=True)
+
+
+def _finished_work_data(state: SessionState) -> dict:
+    """The finished-work fires and their retier records, for a Directive's data."""
+    fires = [f for f in state.effort_fires if f.get("disposition") == EFFORT_FIRE_FINISHED_WORK]
+    return {"effort_finished_work": fires, "effort_retiers": list(state.effort_retiers)} if fires else {}
+
+
+def _disclose_finished_work(state: SessionState, data: dict, detail: str) -> str:
+    """Put the finished-work fires and their retier records on `data` and, when there
+    are any, name them in `detail` (verify-final and resolve both surface them)."""
+    extra = _finished_work_data(state)
+    if not extra:
+        return detail
+    data.update(extra)
+    fires = extra["effort_finished_work"]
+    named = ", ".join(f"{f.get('scale')} {f.get('actual')}/{f.get('estimate')}" for f in fires)
+    return (f"{detail}; NOTE: {len(fires)} effort fire(s) were raised on finished work and recorded "
+            f"without a difficulty: {named} (see effort_finished_work, effort_retiers)")
 
 
 def _park_node(state: SessionState) -> None:
@@ -9535,13 +9595,15 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         state.current_stage = None
         state.pending_renorms = gates.open_renorms(state)
         state.log("record_result", stage=stage.index, status="passed")
-        if div is not None and gates.effort_active(state):
+        finished_fire = _finished_work_fire(state, div, store=store)
+        if finished_fire is None and div is not None and gates.effort_active(state):
             now = _utcnow()
             fire = _record_effort_fire(state, div, now=now, store=store)
             return _diagnose_effort_divergence(state, store, div, fire)
         store.save(state)
         if state.all_stages_settled():
-            d = Directive(True, state.node, "verify_final", f"stage {stage.index} passed; all stages passed")
+            d = Directive(True, state.node, "verify_final", f"stage {stage.index} passed; all stages passed",
+                          data=_finished_work_data(state))
         else:
             d = Directive(True, state.node, "next_stage", f"stage {stage.index} passed; more stages ready")
         # Warn-only advisory: kept ONLY for the non-gated acceptance path. When the
@@ -9608,8 +9670,8 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             False, state.node, "declare",
             "a prior final-verification refusal/failure already routed this session "
             "into the difficulty cycle; complete overcome-difficulty (declare -> "
-            "investigate -> critique -> replan — replan re-arms verification) before "
-            "re-running verify-final",
+            "investigate -> critique -> replan — a replan, including a no_change one that "
+            "counts toward no budget, re-arms verification) before re-running verify-final",
             marker="OVERCOME-DIFFICULTY",
         )
     if state.node == Node.RESOLUTION.value:
@@ -9760,7 +9822,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # Fire check on a clean pass (fire site 2) — the last point at which `diagnose`
     # is still a legal transition (a contracted plan can reach here with no further
     # record-result to fire from).
-    if div is not None and gates.effort_active(state):
+    if _finished_work_fire(state, div, store=store) is None and div is not None and gates.effort_active(state):
         now = _utcnow()
         fire = _record_effort_fire(state, div, now=now, store=store)
         return _diagnose_effort_divergence(state, store, div, fire)
@@ -9806,6 +9868,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
         data["acceptance_bypass"] = acceptance_bypass
         detail += "; WARNING: acceptance recorded via bypass, not judge corroboration (see acceptance_bypass)"
     detail = _disclose_backstop_crossings(state, data, detail)
+    detail = _disclose_finished_work(state, data, detail)
     return Directive(True, state.node, "await_user_confirmation", detail, data=data)
 
 
@@ -10137,6 +10200,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         data["acceptance_bypass"] = acceptance_bypass
         detail += " (acceptance recorded via bypass; see acceptance_bypass)"
     detail = _disclose_backstop_crossings(state, data, detail)
+    detail = _disclose_finished_work(state, data, detail)
     if landing["override"] is not None:
         data["landing_gate_override"] = landing["override"]
         detail += (f" (landing gate overridden by AGENTCTL_LANDING_GATE={landing['override']}; "
@@ -11364,6 +11428,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
         from .plan import change_tier
 
         tier = change_tier(baseline, new)
+    from .plan import replan_class
+
+    change_class = replan_class(tier)
     reopen_roots = set(getattr(args, "reopen", None) or [])
     unknown_reopen = sorted(reopen_roots - {s.index for s in state.stages})
     if unknown_reopen:
@@ -11486,7 +11553,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # critique's similarities into conditions/invariants and CHANGE a means/method
     # for the declared differences. Empty split -> [] -> behaves exactly as before.
     if state.difficulty and state.difficulty.critique:
-        cov = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
+        cov = gates.replan_coverage_blockers(
+            old, new, state.difficulty.critique, tier=tier_number,
+            cost_tier_window=_effort_fire_window(state))
         _log_gate(state, "replan_coverage", cov, passed=not cov)
         if cov:
             waiver = getattr(args, "coverage_waiver", None)
@@ -11500,7 +11569,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                     data={"coverage_blockers": cov, "blockers": ["coverage waiver on an agent-acknowledged fire"]},
                 )
             if waiver is None:
-                return Directive(False, state.node, "declare", "replan blocked: critique coverage",
+                return Directive(False, state.node, "declare",
+                                 "replan blocked: critique coverage (carry the critique into the plan, "
+                                 "or pass --coverage-waiver '<reason>' with a reason it does not apply)",
                                  data={"coverage_blockers": cov})
             if not waiver.strip():
                 return Directive(False, state.node, "declare",
@@ -11702,20 +11773,22 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 return _replan_to_plan_ready(
                     state, store, new, echo_advice, kind="no_change", exited_diagnosing=True,
                     plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
-                    plan_sha256=_new_plan_sha256, **replan_cause)
+                    plan_sha256=_new_plan_sha256, change_class=change_class, **replan_cause)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
             state.log("replan", kind="no_change", exited_diagnosing=True, plan=args.plan,
                       prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
-                      **replan_cause)
-            _count_replan(state)
+                      change_class=change_class, **replan_cause)
+            _count_replan(state, change_class)
             effort.rederive(state)  # re-derive AFTER logging so this in-flight replan is counted
             store.save(state)
             if state.ready_stages():
                 return _with_advisories(Directive(
                     True, state.node, "next_stage",
-                    "difficulty worked through; plan unchanged — retry the re-armed stage"), echo_advice)
+                    "difficulty worked through; plan unchanged — retry the re-armed stage",
+                    data=_replan_class_data(state)), echo_advice)
             return _with_advisories(Directive(
-                True, state.node, "continue", "difficulty worked through; resume execution"), echo_advice)
+                True, state.node, "continue", "difficulty worked through; resume execution",
+                data=_replan_class_data(state)), echo_advice)
         effort.rederive(state)  # re-derive the estimate from the (possibly refined) stages
         store.save(state)
         return _with_advisories(Directive(
@@ -11751,19 +11824,21 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 return _replan_to_plan_ready(
                     state, store, new, echo_advice, kind="refinement", exited_diagnosing=True,
                     plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
-                    plan_sha256=_new_plan_sha256, **replan_cause)
+                    plan_sha256=_new_plan_sha256, change_class=change_class, **replan_cause)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
         state.log("replan", kind="refinement", exited_diagnosing=diagnosing, plan=args.plan,
                   prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
-                  **replan_cause)
-        _count_replan(state)
+                  change_class=change_class, **replan_cause)
+        _count_replan(state, change_class)
         effort.rederive(state)  # re-derive AFTER logging so this replan is counted
         store.save(state)
         if state.node == Node.VERIFYING.value and state.ready_stages():
             return _with_advisories(Directive(
-                True, state.node, "next_stage", "refinement applied; retry the ready stage"), echo_advice)
+                True, state.node, "next_stage", "refinement applied; retry the ready stage",
+                data=_replan_class_data(state)), echo_advice)
         return _with_advisories(Directive(
-            True, state.node, "continue", "refinement applied; resume execution"), echo_advice)
+            True, state.node, "continue", "refinement applied; resume execution",
+            data=_replan_class_data(state)), echo_advice)
 
     # substantive: re-arm the plan-approval gate, reload stages, return to PLAN_READY.
     # #12: carry PASSED status forward for any stage whose FULL definition is
@@ -11835,7 +11910,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     _archive_difficulty(state, closing_waiver)
     return _replan_to_plan_ready(
         state, store, new, echo_advice, kind="substantive", plan=args.plan,
-        prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256, **replan_cause)
+        prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
+        change_class=change_class, **replan_cause)
 
 
 def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advice: list[str],
@@ -11847,12 +11923,15 @@ def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advi
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
     state.log("replan", **log_fields)
-    _count_replan(state)
+    _count_replan(state, log_fields["change_class"])
     effort.rederive(state)  # re-derive AFTER logging so this replan is counted
     store.save(state)
     autonomy = _autonomy_directive_data(state, new)
     override = _agent_review_override(state)
-    directive_data = {"autonomy": autonomy, **({"agent_review_override": override} if override else {})}
+    directive_data = {
+        "autonomy": autonomy, **_replan_class_data(state),
+        **({"agent_review_override": override} if override else {}),
+    }
     if autonomy["action"] == "self_approve":
         return _with_advisories(Directive(
             True, state.node, "self_approve",
@@ -11981,7 +12060,10 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
     old_path = _replan_baseline_path(state)
     old = load_plan(old_path, strict=False)
     new = load_plan(args.new)
-    blockers = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
+    from .plan import change_tier
+    blockers = gates.replan_coverage_blockers(
+        old, new, state.difficulty.critique, tier=change_tier(old, new).tier,
+        cost_tier_window=_effort_fire_window(state))
     if blockers:
         return Directive(False, state.node, "inspect",
                          "coverage blockers: " + "; ".join(blockers),
@@ -12121,6 +12203,9 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             # as a zero.
             "enumeration_escapes": _enumeration_escape_counts(state),
             "parent_link": _parent_link_summary(state.parent_link),
+            **_replan_class_data(state),
+            "effort_retiers": list(state.effort_retiers),
+            "effort_finished_work": _finished_work_data(state).get("effort_finished_work", []),
         },
     )
 

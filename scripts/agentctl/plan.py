@@ -3911,3 +3911,26 @@ def change_tier(old: PlanDoc, new: PlanDoc) -> PlanChange:
             tier=max((TIER_OF_CLASS[c] for _, c in moved), default=0), moved=tuple(moved))
     tier = max([TIER_OF_CLASS["M"] if meta_moved else 0, *(c.tier for c in stages.values())])
     return PlanChange(tier=tier, stages=stages, meta=tuple(meta_moved))
+
+
+REPLAN_CLASSES = ("no_change", "bookkeeping", "check_only", "operative")
+
+
+def replan_class(change: PlanChange | None) -> str:
+    """The class of a replan by what it moved: `no_change` (tier 0), `bookkeeping` (tier 1),
+    `check_only` (above tier 1, and every leaf moved above tier 1 is a check-only leaf) or
+    `operative` (any operative, interface or plan-level leaf moved). Without a known old
+    side there is no change to read, so the replan is `operative` — the class that counts."""
+    if change is None:
+        return "operative"
+    if change.tier == 0:
+        return "no_change"
+    if change.tier == 1:
+        return "bookkeeping"
+    if change.meta:
+        return "operative"
+    above_bookkeeping = {
+        cls for stage in change.stages.values() for _, cls in stage.moved
+        if TIER_OF_CLASS[cls] > 1
+    }
+    return "check_only" if above_bookkeeping == {"C"} else "operative"

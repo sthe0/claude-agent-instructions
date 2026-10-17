@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 56  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 57  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -101,6 +101,8 @@ SCHEMA_VERSION = 56  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # approved_grants_*, accepted_plan_digest), runtime_grants and
                      # plan_binding_captured, so pop-subplan restores the parent's binding
                      # and stage grants instead of the child's
+                     # 57: SessionState gains effort_retiers (one record per stage of the
+                     # window of a spend/wall-clock fire raised on finished work)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1203,6 +1205,11 @@ class ReattestStash:
 # (SessionState.plan_presentations: absent key -> empty list via from_dict's
 # data.get(..., [])), never at the individual-record level.
 PLAN_PRESENTATION_RENDERING_CAP_BYTES = 64 * 1024
+
+#: Disposition of an effort fire raised when every stage was already PASSED or SKIPPED
+#: (`effort.record_fire(finished_work=True)`): recorded with its retier data, never
+#: diagnosed, never held unacknowledged.
+EFFORT_FIRE_FINISHED_WORK = "finished_work"
 
 PLAN_PRESENTATION_KIND_ESSENCE = "essence"
 PLAN_PRESENTATION_KIND_FULL = "full"
@@ -2325,6 +2332,14 @@ class SessionState:
     effort_child_runs: list[dict] = field(default_factory=list)
     user_prompt_count: int = 0
     effort_crossings: list[dict] = field(default_factory=list)
+    #   effort_retiers     one record per stage of the window of a spend/wall-clock fire
+    #                      raised on finished work (effort.retier_records): {plan_path,
+    #                      fire_ts, scale, stage_index, declared_tier, observed_tier |
+    #                      None, actual | None, estimate, attribution}. SESSION-scoped like
+    #                      effort_crossings: it is evidence about what the stages cost, read
+    #                      after the plan that held them is gone, so sub-plan push/pop leave
+    #                      it alone.
+    effort_retiers: list[dict] = field(default_factory=list)
     # Order-keyed effort custody (autonomy boundary). Only meaningful for a session
     # whose order has a user-approved version in order_approvals' ledger.
     #   order_effort_flushed  the actual spend/wall_clock already moved into the ledger
@@ -2864,7 +2879,7 @@ SESSION_SCOPED_FIELDS = frozenset({
     "code_reviews", "acceptance_review", "acceptance_bypass", "plan_presentations",
     "recursion_depth", "artifacts", "history", "plan_stack", "cost", "last_user_prompt_ts",
     "plan_submitted_ts", "tracker_key", "deliverable_kind", "effort_subtree_seen",
-    "effort_child_runs", "user_prompt_count", "effort_crossings", "order_effort_flushed",
+    "effort_child_runs", "user_prompt_count", "effort_crossings", "effort_retiers", "order_effort_flushed",
     "order_descendant_credited", "order_effort_base", "order_effort_frozen",
     "agent_ack_difficulty_ids", "renegotiation_ceiling_difficulty_id",
     "review_release_difficulty_id", "renegotiations", "runtime_host", "reattest_stash",

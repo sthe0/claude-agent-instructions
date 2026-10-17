@@ -159,15 +159,30 @@ def _declare_investigate_critique_normalize(store, sid: str) -> None:
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 
+_plan_variant_counter = count(1)
+
+
+def _operative_plan(venued_fixtures_dir) -> str:
+    """A fresh copy of plan_two_stage.toml whose stage 1 carries a never-before-seen
+    `method`: an operative edit, so the replan that lands it is counted. A replan of
+    the unchanged plan is `no_change` and is not counted."""
+    src = (venued_fixtures_dir / "plan_two_stage.toml").read_text(encoding="utf-8")
+    marker = 'depends_on = []\n'
+    method = f'method = "attempt {next(_plan_variant_counter)}"\n'
+    variant = venued_fixtures_dir / f"plan_two_stage_operative_{next(_plan_variant_counter)}.toml"
+    variant.write_text(src.replace(marker, marker + method, 1), encoding="utf-8")
+    return str(variant)
+
+
 def _bare_replan(store, venued_fixtures_dir, sid: str):
-    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    plan = _operative_plan(venued_fixtures_dir)
     return cli.cmd_replan(ns(session=sid, plan=plan), store=store)
 
 
 def _cycle_replan(store, venued_fixtures_dir, sid: str):
     """Complete one DIAGNOSING difficulty record and issue one bare (non-
-    renegotiated) `replan`. Reuses the SAME plan file each time, so a successful
-    call is always the `no_change` kind: it re-arms the failed stage to PENDING and
+    renegotiated) `replan` that edits stage 1's method (an operative change, so the
+    accumulator counts it). A successful call re-arms the failed stage to PENDING and
     routes VERIFYING -> `next_stage`, which is exactly what lets the caller loop
     back into DIAGNOSING via `_reenter_diagnosing` for the next cycle."""
     _declare_investigate_critique_normalize(store, sid)
@@ -210,7 +225,7 @@ def test_scenario_a_replan_count_climbs_then_refuses_then_renegotiates(store, ve
     assert _replan_count(task) == thr                    # not consumed by the refusal
 
     # `continue` clears the block, zeroes the accumulator, and lets the replan land
-    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    plan = _operative_plan(venued_fixtures_dir)
     cont = cli.cmd_replan(ns(
         session=sid, plan=plan, renegotiation_decision="continue",
         renegotiated_by="user", renegotiation_note="customer wants to keep going",
@@ -435,7 +450,7 @@ def test_scenario_c_bare_replans_stay_refused_then_renegotiation_resets_and_a_se
     assert div_before is None
 
     # ONE `continue` call zeroes the shared accumulator field
-    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    plan = _operative_plan(venued_fixtures_dir)
     cont = cli.cmd_replan(ns(
         session=sid, plan=plan, renegotiation_decision="continue",
         renegotiated_by="user", renegotiation_note="keep going",

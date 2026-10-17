@@ -81,7 +81,7 @@ from .plan import (
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
 from .stage_norm import StageNorm
-from .state import CONCERN_OPEN, CriterionType, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
+from .state import CONCERN_OPEN, EFFORT_FIRE_FINISHED_WORK, CriterionType, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
@@ -2730,7 +2730,7 @@ def effort_fire_blockers(state: SessionState) -> list[str]:
     if not state.effort_fires:
         return []
     last = state.effort_fires[-1]
-    if last.get("ack") is not None:
+    if last.get("ack") is not None or last.get("disposition") == EFFORT_FIRE_FINISHED_WORK:
         return []
     return [
         f"unacknowledged effort-divergence fire (scale={last.get('scale')!r}, "
@@ -3275,7 +3275,9 @@ def _semantic_invariants_coverage(
         return True  # crash — fail open
 
 
-def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
+def replan_coverage_blockers(
+    old_doc, new_doc, critique, *, tier: int | None = None, cost_tier_window=None,
+) -> list[str]:
     """Verify the critique's similarities/differences split is COVERED by the
     corrected plan — the dataflow, NOT the cognitive item->field mapping (that
     stays prose: the gate never decides WHICH stage an item belongs to).
@@ -3294,6 +3296,14 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
         lives entirely in verify_command, a final_check, a re-selected material
         or [meta] also satisfies this half.
 
+    A tier-0 replan (`tier == 0`: no stage field moved, the bytes are no_change) has
+    nothing to carry into a stage and nothing to change, so it owes neither half; a
+    replan with no known tier (`tier=None`) is checked as before. For a difficulty
+    opened by a spend or wall-clock effort fire, `cost_tier_window` names the fire's
+    window stages and a `cost_tier` move on one of them meets the CHANGE half. Every
+    blocker text names `--coverage-waiver`, the way through when the plan is unchanged
+    by design.
+
     Declared-item-scoped: empty lists pass vacuously, so a critique that records no
     split (or, via the cmd_replan guard, a replan with no difficulty present)
     behaves exactly as before. Coverage is checked via `_semantic_invariants_coverage`:
@@ -3304,7 +3314,7 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
     Unlike the two hard gates this takes PlanDocs, not just state — it is therefore
     NOT registered in GUARDIANS and is called directly from cmd_replan."""
     out: list[str] = []
-    if critique is None:
+    if critique is None or tier == 0:
         return out
     haystack = " \n ".join(
         part
@@ -3317,10 +3327,11 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
             continue
         if not _semantic_invariants_coverage(item, norm_haystack):
             out.append(
-                f"similarity to preserve not carried into any stage conditions/invariants: {item!r}"
+                f"similarity to preserve not carried into any stage conditions/invariants: {item!r} "
+                "(or pass --coverage-waiver '<reason>')"
             )
     diffs = [d for d in critique.differences_to_remove if (d or "").strip()]
-    if diffs:
+    if diffs and not _cost_tier_moved(old_doc, new_doc, cost_tier_window):
         if _operative_surface(old_doc) == _operative_surface(new_doc):
             out.append(
                 "differences_to_remove is non-empty but the plan's operative surface "
@@ -3328,9 +3339,25 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
                 "material_refs/knowledge_refs, final_check, [meta] repo_root/"
                 "delivery_worktree) did not change — a difference cannot be "
                 "removed without changing what the engine executes or "
-                "dispatches on"
+                "dispatches on; if the plan is unchanged by design, pass "
+                "--coverage-waiver '<reason>'"
             )
     return out
+
+
+def _cost_tier_moved(old_doc, new_doc, window) -> bool:
+    """Whether a stage of the effort fire's window (`window`: its stage indices, None
+    when the difficulty is not an effort fire's) declares a different `cost_tier` in
+    the new plan. For a spend or wall-clock fire the difference to remove is a
+    mis-sized stage, and re-tiering it is the correction that stage's operative
+    surface does not hold."""
+    if not window:
+        return False
+    old_tiers = {s.index: s.actor.cost_tier for s in old_doc.stages}
+    return any(
+        s.index in window and s.index in old_tiers and s.actor.cost_tier != old_tiers[s.index]
+        for s in new_doc.stages
+    )
 
 
 #: The places a renormalization may not reach, as (dotted path on the stage, what the
