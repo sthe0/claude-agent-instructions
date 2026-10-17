@@ -98,14 +98,16 @@ def _scoped(eng, sid: str, plan: str, scope: str, verdict: str = "pass"):
                    scope=scope, plan_digest=digest)
 
 
-def _two_changed_commands(eng, venue):
+def _two_changed_commands(eng, venue, *, first_review: str = "pass"):
+    """`first_review` is the whole-plan verdict on the session's first version: a `revise`
+    leaves no pass behind, so a later scoped revise is recorded as a first verdict."""
     fast = approved_order(eng, _two_cmd_plan(venue, "frobnicate --fast", "grind --fast"))
     assert thinker_review(eng, "u1", fast)["ok"] is True
     eng.run("start", session="t1", task="task-t1", goal="g", done_criterion="dc")
     eng.run("classify", session="t1", architectural=True, files=5, changed_lines=200, wall_clock_min=60)
     eng.run("plan", session="t1")
     eng.run("submit_plan", session="t1", plan=fast)
-    assert thinker_review(eng, "t1", fast)["ok"] is True
+    assert thinker_review(eng, "t1", fast, first_review)["ok"] is True
     slow = eng.write(_two_cmd_plan(venue, "frobnicate --slow", "grind --slow"))
     d = eng.run("submit_plan", session="t1", plan=slow)
     assert len(autonomy(d)["unresolved_changed_commands"]) == 2, autonomy(d)
@@ -129,6 +131,40 @@ def test_one_stages_pass_does_not_vouch_the_other_stages_command(eng, venue, fir
     whole = eng.open("t3", slow)
     assert autonomy(whole)["thinker_pass"] is True, autonomy(whole)
     assert action(whole) == "self_approve"
+
+
+def test_a_stage_revise_is_not_outvoted_by_a_later_whole_plan_pass(eng, venue):
+    slow = _two_changed_commands(eng, venue, first_review="revise")
+
+    assert _scoped(eng, "t1", slow, "stage:1", "revise")["ok"] is True
+    assert thinker_review(eng, "t1", slow)["ok"] is True
+
+    later = eng.open("t2", slow)
+    assert autonomy(later)["thinker_pass"] is False, autonomy(later)
+    assert action(later) == "await_user_approval"
+
+
+def test_a_whole_plan_revise_is_not_outvoted_by_every_stage_passing(eng, venue):
+    """`plan-review` fills at most all-but-one stage key before the last pass lands at the
+    whole key, so a whole-plan revise beside every stage's pass is not producible through
+    it. The ledger is written directly — the way `_record_first_thinker_verdict` would — to
+    pin the engine's own cross-check on a record set it can only receive from a hand edit
+    or a later writer."""
+    from agentctl import order_approvals
+
+    slow = _two_changed_commands(eng, venue, first_review="revise")
+    keyed = autonomy(eng.open("t2", slow))
+    order_key = cli._ledgered_order_key(eng.state("t1"))
+    record = order_approvals.record_first_thinker_verdict
+    record(order_key, keyed["first_verdict_key"],
+           {"verdict": "revise", "plan_sha256": "x", "reviewer": "thinker"})
+    for index, stage_key in keyed["first_verdict_stage_keys"].items():
+        record(order_key, stage_key, {"verdict": "pass", "plan_sha256": "x", "reviewer": "thinker",
+                                      "scope": f"stage:{index}"})
+
+    later = eng.open("t3", slow)
+    assert autonomy(later)["thinker_pass"] is False, autonomy(later)
+    assert action(later) == "await_user_approval"
 
 
 def test_a_unit_pass_vouches_a_check_only_edit(eng, venue):
@@ -186,6 +222,53 @@ def test_tier_2_edit_still_owes_the_presentation(
     assert blockers and "replan-diff" in blockers[0], blockers
     assert gates.replan_authorization_blockers(
         state, edited, diff_kind="refinement", change_tier=1) == []
+
+
+def test_tier_2_refinement_is_refused_by_cmd_replan_for_want_of_a_presentation(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    monkeypatch.delenv("AGENTCTL_REPLAN_AUTHORIZATION", raising=False)
+    sid = "auth-tier2-replan"
+    plan = _two_stage(tmp_path, store, monkeypatch, venued_fixtures_dir, sid)
+    edited = _plan_file(tmp_path, _stage1(plan.read_text(), 'method = "a different construction"'),
+                        "edited.toml")
+    _review(store, sid, edited, scope="stage:1")
+
+    d = cli.cmd_replan(ns(session=sid, plan=edited), store=store)
+
+    assert not d.ok and d.action == "present_plan", _says(d)
+    assert "replan-diff" in d.data["blockers"][0], d.data["blockers"]
+    state = store.load(sid)
+    assert not any(h.get("event") == "replan_authorization_waived" for h in state.history)
+    assert state.plan_path == str(plan)
+
+
+def test_refused_tier_1_replan_persists_no_authorization_waiver(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    monkeypatch.delenv("AGENTCTL_PREMISE", raising=False)
+    monkeypatch.delenv("AGENTCTL_REPLAN_AUTHORIZATION", raising=False)
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
+    original = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
+    sid = "refused-tier-1"
+    _setup_session_with_disposed_question(store, sid, str(original))
+    assert _review(store, sid, original).ok
+    approved = cli.cmd_approve(ns(session=sid, by="user"), store=store)
+    assert approved.ok, _says(approved)
+    cli.cmd_question_raise(
+        ns(session=sid, id="Q2", target="stage:2.result", question="an open one?",
+           own_research="", control=None), store=store)
+    edited = tmp_path / "edited.toml"
+    edited.write_text(original.read_text().replace(
+        'output_artifacts = ["s1.py"]', 'output_artifacts = ["s1.py"]\ncost_tier = "large"', 1),
+        encoding="utf-8")
+    from agentctl.plan import load_plan
+    assert change_tier(load_plan(str(original)), load_plan(str(edited))).tier == 1
+    assert gates.replan_authorization_blockers(
+        store.load(sid), str(edited), diff_kind="refinement"), "the waiver is what is under test"
+
+    d = cli.cmd_replan(ns(session=sid, plan=str(edited)), store=store)
+
+    assert not d.ok and d.action == "close_questions", _says(d)
+    assert not any(h.get("event") == "replan_authorization_waived" for h in store.load(sid).history)
 
 
 # --- the premise carry reaches the real state on a refused replan ---------------------

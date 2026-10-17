@@ -2578,6 +2578,10 @@ def replan_authorization_active(state: SessionState) -> bool:
 REPLAN_AUTHORIZATION_WAIVED_MAX_TIER = 1
 
 
+def replan_authorization_waived_by_tier(change_tier: "int | None") -> bool:
+    return change_tier is not None and change_tier <= REPLAN_AUTHORIZATION_WAIVED_MAX_TIER
+
+
 def replan_authorization_blockers(
     state: SessionState,
     target_plan: str | None,
@@ -2627,7 +2631,7 @@ def replan_authorization_blockers(
         return []
     if state.node == Node.DIAGNOSING.value and not difficulty_blockers(state):
         return []
-    if change_tier is not None and change_tier <= REPLAN_AUTHORIZATION_WAIVED_MAX_TIER:
+    if replan_authorization_waived_by_tier(change_tier):
         return []
     if diff_kind == "substantive":
         return []
@@ -3596,14 +3600,16 @@ def stage_first_verdict_keys(approved_plan_sha256: str, changed: list[dict]) -> 
             for index, identities in by_stage.items()}
 
 
-def _every_stage_vouched(stage_keys: dict[int, str], changed: list[dict],
-                         first_verdicts: dict | None) -> bool:
-    """Whether every stage holding a changed command has its own passing first verdict,
-    recorded at that stage's scope, and no changed command sits outside every stage: a
-    reviewer of one stage never vouches for another stage's command."""
+def every_stage_vouched(stage_keys: dict[int, str], changed: list[dict],
+                        first_verdicts: dict | None, *, skip: "int | None" = None) -> bool:
+    """Whether every stage holding a changed command (but `skip`) has its own passing first
+    verdict, recorded at that stage's scope, and no changed command sits outside every
+    stage: a reviewer of one stage never vouches for another stage's command."""
     if not changed or any(item.get("stage") is None for item in changed):
         return False
     for index, key in stage_keys.items():
+        if index == skip:
+            continue
         verdict = (first_verdicts or {}).get(key)
         if not (isinstance(verdict, dict) and verdict.get("verdict") == "pass"
                 and verdict.get("scope") in (_plan_review_scope_for_stage(index),
@@ -3697,12 +3703,16 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
         )
         out["first_verdict_key"] = key
         verdict = (first_verdicts or {}).get(key)
-        out["thinker_pass"] = bool(isinstance(verdict, dict) and verdict.get("verdict") == "pass")
         out["first_verdict_stage_keys"] = stage_first_verdict_keys(
             last["plan_sha256"], out["unresolved_changed_commands"])
-        if not out["thinker_pass"]:
-            out["thinker_pass"] = _every_stage_vouched(
-                out["first_verdict_stage_keys"], out["unresolved_changed_commands"], first_verdicts)
+        # A first revise at the whole key or at any stage's key is never superseded by a
+        # later pass at the other: only an all-pass record vouches.
+        recorded = [(first_verdicts or {}).get(k) for k in (key, *out["first_verdict_stage_keys"].values())]
+        first_revised = any(isinstance(v, dict) and v.get("verdict") != "pass" for v in recorded)
+        out["thinker_pass"] = not first_revised and (
+            bool(isinstance(verdict, dict) and verdict.get("verdict") == "pass")
+            or every_stage_vouched(
+                out["first_verdict_stage_keys"], out["unresolved_changed_commands"], first_verdicts))
         if not out["thinker_pass"]:
             reasons.append(
                 "a changed unresolved engine-executed command has no first passing thinker review: "

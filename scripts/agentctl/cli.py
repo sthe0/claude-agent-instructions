@@ -1381,9 +1381,9 @@ def _record_first_thinker_verdict(state: SessionState, doc, review, scope: str,
     verdict_key = autonomy["first_verdict_key"]
     if vouch is not None:
         recorded = order_approvals.get(key).get("first_thinker_verdicts") or {}
-        others_passed = all(
-            isinstance(recorded.get(other), dict) and recorded[other].get("verdict") == "pass"
-            for index, other in autonomy["first_verdict_stage_keys"].items() if index != vouch[0])
+        others_passed = gates.every_stage_vouched(
+            autonomy["first_verdict_stage_keys"], autonomy["unresolved_changed_commands"],
+            recorded, skip=vouch[0])
         if not (vouch[1] and others_passed):
             verdict_key = autonomy["first_verdict_stage_keys"].get(vouch[0])
     if verdict_key is None:
@@ -11340,13 +11340,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
             return Directive(False, state.node, "replan", frozen[0], data=frozen[1])
 
     tier_number = tier.tier if tier is not None else None
-    arblock = gates.replan_authorization_blockers(
-        state, args.plan, diff_kind=auth_kind, change_tier=tier_number)
-    auth_waived = (
-        tier_number is not None and tier_number <= gates.REPLAN_AUTHORIZATION_WAIVED_MAX_TIER
-        and bool(gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)))
-    if auth_waived:
-        state.log("replan_authorization_waived", plan=args.plan, tier=tier_number)
+    unwaived_blockers = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
+    auth_waived = gates.replan_authorization_waived_by_tier(tier_number) and bool(unwaived_blockers)
+    arblock = [] if auth_waived else unwaived_blockers
     _log_gate(state, "replan_authorization", arblock, passed=not arblock)
     if arblock:
         return Directive(False, state.node, "present_plan",
@@ -11573,6 +11569,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     if carry_note:
         echo_advice = echo_advice + [carry_note]
     if auth_waived:
+        state.log("replan_authorization_waived", plan=args.plan, tier=tier_number)
         echo_advice = echo_advice + [
             f"replan authorization waived: a tier {tier_number} edit changes nothing the user "
             "approved or a reviewer judged, so no replan_diff presentation was required"]

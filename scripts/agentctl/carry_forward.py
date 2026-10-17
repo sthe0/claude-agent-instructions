@@ -78,7 +78,7 @@ def apply(
               "owed": [], "records": [], "held": []}
     if change is None or change.tier > MAX_CARRIED_TIER:
         return report
-    owed = {index for index, c in change.stages.items() if c.tier == 2}
+    owed = _owed(change)
     ctx = _Ctx(state, old_doc, new_doc, new_path, new_sha, old_path, old_sha,
                change.tier, owed, report)
     ctx.reviews()
@@ -98,9 +98,13 @@ def carry_premise(
     report = {"records": []}
     if change is None or change.tier > MAX_CARRIED_TIER:
         return []
-    owed = {index for index, c in change.stages.items() if c.tier == 2}
-    _Ctx(state, old_doc, new_doc, "", "", None, None, change.tier, owed, report).premise()
+    _Ctx(state, old_doc, new_doc, "", "", None, None, change.tier, _owed(change), report).premise()
     return report["records"]
+
+
+def _owed(change: PlanChange) -> set:
+    """The stages whose own review an edit of this change owes again (stage tier 2)."""
+    return {index for index, c in change.stages.items() if c.tier == 2}
 
 
 def release_holds(state: SessionState, node: "int | str | None" = None) -> list[str]:
