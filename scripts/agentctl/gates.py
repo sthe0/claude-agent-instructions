@@ -1251,6 +1251,12 @@ def _plan_review_baseline(pr) -> dict:
 #: free-text meaning — the permitted case under
 #: regex-not-for-semantic-classification.md, not the forbidden one.
 _PLAN_REVIEW_PART_TOKEN_RE = re.compile(
+    r"^\s*(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
+)
+
+#: The same token, additionally accepted right after the reviewer's `C<n>:` marker
+#: (`blocking: C1: stage:3 ...`). Only the topological pair/unit path asks for it.
+_PLAN_REVIEW_MARKED_PART_TOKEN_RE = re.compile(
     r"^\s*(?:[Cc][1-4]:\s*)?(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
 )
 
@@ -1279,14 +1285,15 @@ def _concern_names_part(text: str, part_name: str) -> bool:
 _PLAN_REVIEW_RECOGNIZED_NON_STAGE_PREFIXES = ("meta:", "order:")
 
 
-def _concern_part_token(text: str) -> "str | None":
+def _concern_part_token(text: str, *, after_marker: bool = False) -> "str | None":
     """The concern's leading structural part token, if it is one the engine
     actually defines (`meta:`, `order:`, or a valid `stage:<n>`) — None for an
     untagged concern or one with an unrecognized word-colon prefix (`Risk:`,
     `Note:`, ...), which _PLAN_REVIEW_PART_TOKEN_RE matches syntactically but
     which is not a structural part name, so classify_concerns must not treat it
     as naming (and thus being out-of-scope for) any particular part."""
-    m = _PLAN_REVIEW_PART_TOKEN_RE.match(_normalize_string(text))
+    regex = _PLAN_REVIEW_MARKED_PART_TOKEN_RE if after_marker else _PLAN_REVIEW_PART_TOKEN_RE
+    m = regex.match(_normalize_string(text))
     if m is None:
         return None
     token = m.group(1)

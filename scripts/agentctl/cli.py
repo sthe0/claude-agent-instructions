@@ -5025,8 +5025,10 @@ def _question_data(state: SessionState, args, question_ids: list[str]) -> dict:
     return data
 
 
-def _concern_parts(body: str, own_parts, *, default_to_own: bool = True) -> list[str]:
-    token = gates._concern_part_token(body)
+def _concern_parts(
+    body: str, own_parts, *, default_to_own: bool = True, after_marker: bool = False,
+) -> list[str]:
+    token = gates._concern_part_token(body, after_marker=after_marker)
     if token is None:
         return list(own_parts) if default_to_own else []
     index = plan_review_scope_stage_index(token)
@@ -5058,8 +5060,12 @@ def _plan_concern_severity(
     }
     parts_by_concern, effective = [], []
     for pc in parsed:
-        parts = _concern_parts(pc.body, own_parts or tuple(digests), default_to_own=not delta_changed)
-        changed = set(_changed_parts(parts, digests, prev_digests))
+        parts = _concern_parts(
+            pc.body, own_parts or tuple(digests), default_to_own=not delta_changed,
+            after_marker=judge_delta,
+        )
+        changed = set(_changed_parts(
+            [p for p in parts if p in own_parts] if delta_changed else parts, digests, prev_digests))
         target = state.concern_ledger.get(pc.restates) if pc.restates else None
         dispositioned = target is not None and (
             target.status == CONCERN_SUPERSEDED
@@ -5252,10 +5258,13 @@ def _cmd_plan_review_pair(
                 f"{regression_exit!r}): the current pass for pair {pair!r} stands"
             )
     ledger_scope = plan_review_scope_for_pair(pair)
+    # With no readable snapshot of the judged version the reviewer was told to judge the row
+    # whole, so no delta downgrade may apply.
+    delta_visible = prev is not None and _prior_row_diff(store, state, doc, prev, pair)["available"]
     cp = _plan_concern_severity(
-        state, doc, ledger_scope, pair_part_tokens(pair), state.plan_pair_reviews.get(pair),
+        state, doc, ledger_scope, pair_part_tokens(pair), prev,
         parsed, verdict, attested=bool(attested), regression_command=regression_command,
-        evidence=bool(regression_exit), may_promote=True, judge_delta=True,
+        evidence=bool(regression_exit), may_promote=True, judge_delta=delta_visible,
     )
     concerns = cp.bodies
     if is_unit_id(pair):

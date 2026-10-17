@@ -68,6 +68,7 @@ def _rounds(env) -> int:
 
 def _assert_composes_as_pass(env, scope, own_part):
     assert _record(env, scope, "pass").ok
+    _snapshot_current(env)
     before = _rounds(env)
     env.edit(STAGE3_EDIT)
     d = _record(env, scope, "revise", ["blocking: C1: the wording is vague in places"])
@@ -112,9 +113,8 @@ def test_part_token_after_the_marker_names_a_changed_part_and_blocks(env):
     record = env.state().plan_pair_reviews[PAIR]
     assert record.verdict == "revise"
     assert record.effective_severities == [gates.EFFECTIVE_BLOCKING]
-    assert gates._concern_part_token("C1: stage:3 text") == "stage:3"
-    assert gates._concern_part_token("stage:3 C1: text") == "stage:3"
-    assert gates._concern_names_part("C2: stage:3 text", "stage:3")
+    assert gates._concern_part_token("C1: stage:3 text", after_marker=True) == "stage:3"
+    assert gates._concern_part_token("stage:3 C1: text", after_marker=True) == "stage:3"
 
 
 def test_carried_pass_counts_as_the_rows_latest_pass(env):
@@ -190,3 +190,70 @@ def test_missing_snapshot_bundle_says_so(env):
     assert diff["available"] is False and diff["text"] == ""
     assert "prior version is unavailable" in bundle
     assert "judge the pair whole" in bundle
+
+    d = _record(env, PAIR, "revise", ["blocking: C1: an untagged worry"])
+    assert d.ok, d.detail
+    record = env.state().plan_pair_reviews[PAIR]
+    assert record.verdict == "revise"
+    assert record.effective_severities == [gates.EFFECTIVE_BLOCKING]
+    assert not _downgrade_events(env, PAIR)
+
+
+def test_pass_under_another_plan_path_gives_a_first_review(env, tmp_path):
+    assert _record(env, PAIR, "pass").ok
+    _snapshot_current(env)
+    env.edit(STAGE3_EDIT)
+    state = env.state()
+    state.plan_pair_reviews[PAIR].plan_path = str(tmp_path / "other-plan.toml")
+    env.store.save(state)
+
+    d = _record(env, PAIR, "revise", ["blocking: C1: an untagged worry"])
+    assert d.ok, d.detail
+    record = env.state().plan_pair_reviews[PAIR]
+    assert record.verdict == "revise"
+    assert record.effective_severities == [gates.EFFECTIVE_BLOCKING]
+
+
+def test_concern_tagged_to_an_unchanged_part_is_downgraded_after_a_pass(env):
+    assert _record(env, PAIR, "pass").ok
+    _snapshot_current(env)
+    env.edit(STAGE3_EDIT)
+    d = _record(env, PAIR, "revise", ["blocking: C1: stage:1 a worry about an unchanged part"])
+    assert d.ok, d.detail
+    record = env.state().plan_pair_reviews[PAIR]
+    assert record.effective_severities == [gates.EFFECTIVE_ADVISORY]
+    assert env.status(PAIR) in gates.PAIR_SATISFIED
+
+
+def test_mixed_revise_with_a_changed_tagged_and_an_untagged_concern_stays_revise(env):
+    assert _record(env, PAIR, "pass").ok
+    _snapshot_current(env)
+    env.edit(STAGE3_EDIT)
+    d = _record(env, PAIR, "revise", [
+        "blocking: C1: stage:3 the method contradicts its means",
+        "blocking: C2: an untagged worry",
+    ])
+    assert d.ok, d.detail
+    record = env.state().plan_pair_reviews[PAIR]
+    assert record.verdict == "revise"
+    assert record.effective_severities == [gates.EFFECTIVE_BLOCKING, gates.EFFECTIVE_ADVISORY]
+
+
+def test_legacy_record_without_part_digests_treats_every_part_as_changed(env):
+    assert _record(env, PAIR, "pass").ok
+    _snapshot_current(env)
+    env.edit(STAGE3_EDIT)
+    state = env.state()
+    state.plan_pair_reviews[PAIR].part_digests = {}
+    env.store.save(state)
+
+    d = _record(env, PAIR, "revise", ["blocking: C1: stage:1 a worry about a part"])
+    assert d.ok, d.detail
+    record = env.state().plan_pair_reviews[PAIR]
+    assert record.effective_severities == [gates.EFFECTIVE_BLOCKING]
+
+
+def test_marker_prefixed_token_is_not_read_outside_the_topological_path():
+    assert gates._concern_part_token("C1: stage:2 x") is None
+    in_scope, out_of_scope = gates.classify_concerns("stage:1", ["a"], ["C1: stage:2 x"])
+    assert in_scope == ["a"] and not out_of_scope
