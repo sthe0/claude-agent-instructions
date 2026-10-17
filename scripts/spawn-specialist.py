@@ -45,6 +45,7 @@ from agentctl.config import (  # the one definition of the child-contour kill sw
     CHILD_CONTOUR_LINKING_KEY,
     child_contour_linking_enabled,
 )
+from agentctl.dispatch import parse_marker  # the one function the parent routes a spawn's stdout with
 from agentctl import norm_handoff  # the one definition of the handoff record the child engine adopts
 from agentctl.own_contour import OWN_CONTOUR_VERBS, OWN_SESSION_ENV, own_plan_path  # the channel's env name, verb set and plan path
 from agentctl.plan import (  # parse the TOML plan for a single-stage brief projection
@@ -2508,6 +2509,18 @@ def _build_extraction(result_text: str, kind: str) -> "marker_extract.Extraction
 # is not a signature match; it is what a genuine terminal marker forces
 # regardless of any match (see _resolve_child_outcome's precedence rule).
 CHILD_ANSWERED = "CHILD_ANSWERED"
+
+# Who authored the marker the spawn-cost ledger records (`return_marker_source`): the child's own
+# return marker, one this script synthesized (MALFORMED / a CHILD_* envelope), or none routed.
+MARKER_SOURCE_CHILD = "child"
+MARKER_SOURCE_ENVELOPE = "envelope"
+MARKER_SOURCE_NONE = "none"
+
+# The harness can inject an autonomous-loop prompt into a `claude -p` child that has already
+# returned, re-entering it on ScheduleWakeup. The bare names are removed from the child's context
+# (--disallowedTools, CLI reference); CLAUDE_CODE_DISABLE_CRON=1 turns the scheduler off
+# (https://code.claude.com/docs/en/scheduled-tasks § Disable scheduled tasks).
+LOOP_TOOLS_DENIED = ("ScheduleWakeup", "CronCreate", "CronDelete", "CronList")
 CHILD_INFRA_FAILURE = "CHILD_INFRA_FAILURE"
 CHILD_EXHAUSTED = "CHILD_EXHAUSTED"
 
@@ -3056,6 +3069,8 @@ def main(argv: list[str] | None = None) -> int:
         # memory-global leaf claude-code-settings-env-precedence.md).
         "--settings",
         json.dumps(child_settings),
+        "--disallowedTools",
+        ",".join(LOOP_TOOLS_DENIED),
     ]
     cmd.extend(add_dir_argv)
     if resumed_transcript is not None:
@@ -3103,6 +3118,7 @@ def main(argv: list[str] | None = None) -> int:
     env = {
         **os.environ,
         "AGENT_RECURSION_DEPTH": str(depth_next),
+        "CLAUDE_CODE_DISABLE_CRON": "1",
         "AGENT_LINEAGE_IDS": build_child_lineage(
             os.environ.get("AGENT_LINEAGE_IDS", ""),
             os.environ.get("CLAUDE_CODE_SESSION_ID"),
@@ -3223,6 +3239,14 @@ def main(argv: list[str] | None = None) -> int:
     if child_outcome != CHILD_ANSWERED:
         forwarded = _child_outcome_envelope(child_outcome, child_matched, result_text, completed.stderr)
 
+    routed_marker, _ = parse_marker(forwarded)
+    if routed_marker is None:
+        marker_source = MARKER_SOURCE_NONE
+    elif not ok or child_outcome != CHILD_ANSWERED:
+        marker_source = MARKER_SOURCE_ENVELOPE
+    else:
+        marker_source = MARKER_SOURCE_CHILD
+
     sys.stdout.write(forwarded)
     if not forwarded.endswith("\n"):
         sys.stdout.write("\n")
@@ -3244,7 +3268,8 @@ def main(argv: list[str] | None = None) -> int:
         "depth": depth_next,
         "cost_usd": cost_usd,
         "duration_ms": duration_ms,
-        "return_marker": parsed_marker,
+        "return_marker": routed_marker,
+        "return_marker_source": marker_source,
         "exit_code": completed.returncode,
         "malformed": not ok,
         "stage_index": args.stage_index,
@@ -3287,8 +3312,8 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if cost_usd is not None:
         summary_bits.append(f"cost_usd={cost_usd}")
-    if parsed_marker:
-        summary_bits.append(f"marker={parsed_marker}")
+    if routed_marker:
+        summary_bits.append(f"marker={routed_marker}")
     if not ok:
         summary_bits.append(child_outcome if child_outcome != CHILD_ANSWERED else "MALFORMED")
     print(" ".join(summary_bits), file=sys.stderr)
