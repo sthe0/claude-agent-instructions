@@ -36,11 +36,6 @@ from test_replan_autonomy_boundary import (  # noqa: F401
 )
 
 
-@pytest.fixture(autouse=True)
-def _review_on_authorization_off(monkeypatch):
-    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
-
-
 def ns(**kw):
     return Namespace(**kw)
 
@@ -352,8 +347,9 @@ def test_check_only_edit_vouched_by_its_unit_pass_stays_within_boundary(eng, ven
 
 def test_interface_edit_still_fans_out_to_pairs(env):
     env.record_every_id()
-    env.edit(_set(0, output_artifacts=["a-new-product.py"]))
+    change, report = _revise(env, _set(0, output_artifacts=["a-new-product.py"]))
 
+    assert change.tier == 3 and report["carried"] is False and report["records"] == []
     assert env.status("unit:1") == "stale:unit"
     assert env.status("3-1").startswith("stale:")
     assert env.status("3-2") == "current"
@@ -365,8 +361,9 @@ def test_meta_edit_still_owes_a_whole_plan_review(env):
     assert d.ok, d.detail
     assert gates.plan_review_blockers(env.state(), str(env.plan)) == []
 
-    env.edit(lambda data: data["meta"].update(goal="a different goal"))
+    change, report = _revise(env, lambda data: data["meta"].update(goal="a different goal"))
 
+    assert change.tier == 4 and report["carried"] is False and report["records"] == []
     assert gates.plan_review_blockers(env.state(), str(env.plan))
     assert gates.plan_review_delta(env.state(), env.doc())[0] is True
 
@@ -381,6 +378,8 @@ def test_tier_3_edit_leaves_records_as_stale_as_on_the_base(
     d = cli.cmd_replan(ns(session=sid, plan=edited), store=store)
 
     assert not d.ok, "an interface edit still owes its review"
+    blockers = d.data["blockers"]
+    assert any("thinker review is stale" in b and "re-run plan-review" in b for b in blockers), blockers
     assert store.load(sid).plan_review.plan_path == str(plan)
 
 

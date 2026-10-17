@@ -15693,6 +15693,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "d2262239957566b0"
+domain = "code"
+file = "scripts/tests/test_tier_carry_forward_review_fixes.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "df1379d2e783cf9a"
+domain = "code"
+file = "scripts/tests/test_tier_carry_forward_review_fixes.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "c330df282edc1488"
 domain = "code"
 file = "scripts/tests/test_topo_review_check_visibility.py"
@@ -19320,6 +19336,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "6e7b85e77ffddf88"
 domain = "code_file_rollup"
 file = "scripts/tests/test_tier_carry_forward.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "c1cabdaa861beaed"
+domain = "code_file_rollup"
+file = "scripts/tests/test_tier_carry_forward_review_fixes.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

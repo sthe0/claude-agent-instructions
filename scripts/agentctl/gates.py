@@ -1574,7 +1574,7 @@ def _carry_marks(state: SessionState, rid: str, status: str) -> dict:
     marks = {}
     if status == "held":
         marks["held"] = True
-    if record is not None and record.carried_from_sha:
+    if record is not None and record.carried_tier is not None:
         marks["carried"] = True
     return marks
 
@@ -2574,12 +2574,17 @@ def replan_authorization_active(state: SessionState) -> bool:
     return state.weight_class == WeightClass.SUBSTANTIVE.value
 
 
+#: Highest change tier (`plan.change_tier`) whose replan needs no replan_diff presentation.
+REPLAN_AUTHORIZATION_WAIVED_MAX_TIER = 1
+
+
 def replan_authorization_blockers(
     state: SessionState,
     target_plan: str | None,
     *,
     diff_kind: str,
     probe=None,
+    change_tier: "int | None" = None,
 ) -> list[str]:
     """Precondition guardian for `replan` outside the DIAGNOSING difficulty
     cycle: a non-substantive edit (refinement or no_change) to an ALREADY
@@ -2595,12 +2600,15 @@ def replan_authorization_blockers(
     Deliberately absent from GUARDIANS for the same signature reason as
     plan_presentation_blockers and difficulty_blockers.
 
-    Four conditions return [] unconditionally, checked in this order:
+    Five conditions return [] unconditionally, checked in this order:
       - the gate is inactive (chat/small-change/AGENTCTL_REPLAN_AUTHORIZATION=0);
       - state.node is DIAGNOSING AND the difficulty cycle is complete (self-
         contained: this function calls difficulty_blockers itself rather than
         trusting the caller's ordering, so its correctness never depends on
         cmd_replan calling this after checking DIAGNOSING);
+      - `change_tier` is 0 or 1 (bookkeeping, final venue — an edit that changes nothing
+        the user approved or a reviewer judged, so there is no diff worth presenting;
+        the caller discloses the waiver in history and the next directive);
       - diff_kind == 'substantive' (a substantive edit is unaffected — it
         already carries its own, pre-existing scope-change approval discipline
         outside this gate's charter);
@@ -2618,6 +2626,8 @@ def replan_authorization_blockers(
     if not replan_authorization_active(state):
         return []
     if state.node == Node.DIAGNOSING.value and not difficulty_blockers(state):
+        return []
+    if change_tier is not None and change_tier <= REPLAN_AUTHORIZATION_WAIVED_MAX_TIER:
         return []
     if diff_kind == "substantive":
         return []
@@ -3572,6 +3582,36 @@ def _resource_name(data: dict) -> str:
     return f"{data['kind']}({fields})"
 
 
+def stage_first_verdict_keys(approved_plan_sha256: str, changed: list[dict]) -> dict[int, str]:
+    """The first-verdict key of each stage's own changed unresolved commands, for the
+    stage-scoped passes of a review that owes several stages. A command with no stage (a
+    final_check) has none."""
+    from . import order_approvals as _oa
+
+    by_stage: dict[int, list] = {}
+    for item in changed:
+        if item.get("stage") is not None:
+            by_stage.setdefault(item["stage"], []).append(item["identity"])
+    return {index: _oa.first_thinker_verdict_key(approved_plan_sha256, identities)
+            for index, identities in by_stage.items()}
+
+
+def _every_stage_vouched(stage_keys: dict[int, str], changed: list[dict],
+                         first_verdicts: dict | None) -> bool:
+    """Whether every stage holding a changed command has its own passing first verdict,
+    recorded at that stage's scope, and no changed command sits outside every stage: a
+    reviewer of one stage never vouches for another stage's command."""
+    if not changed or any(item.get("stage") is None for item in changed):
+        return False
+    for index, key in stage_keys.items():
+        verdict = (first_verdicts or {}).get(key)
+        if not (isinstance(verdict, dict) and verdict.get("verdict") == "pass"
+                and verdict.get("scope") in (_plan_review_scope_for_stage(index),
+                                             f"topo:unit:{index}")):
+            return False
+    return True
+
+
 def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict | None = None,
                       *, protected: list[str] | None = None,
                       live_optional=None) -> dict:
@@ -3595,7 +3635,7 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
         "reasons": [AUTONOMY_REASON_NO_VERSION],
         "order_changed": False, "extra_resources": [], "unresolved_changed_commands": [],
         "thinker_pass": None, "open_effort_fire": bool(ledger_snapshot.get("open_effort_fires")),
-        "first_verdict_key": None, "declined_live_optional": [],
+        "first_verdict_key": None, "first_verdict_stage_keys": {}, "declined_live_optional": [],
     }
     if last is None:
         return out
@@ -3658,6 +3698,11 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
         out["first_verdict_key"] = key
         verdict = (first_verdicts or {}).get(key)
         out["thinker_pass"] = bool(isinstance(verdict, dict) and verdict.get("verdict") == "pass")
+        out["first_verdict_stage_keys"] = stage_first_verdict_keys(
+            last["plan_sha256"], out["unresolved_changed_commands"])
+        if not out["thinker_pass"]:
+            out["thinker_pass"] = _every_stage_vouched(
+                out["first_verdict_stage_keys"], out["unresolved_changed_commands"], first_verdicts)
         if not out["thinker_pass"]:
             reasons.append(
                 "a changed unresolved engine-executed command has no first passing thinker review: "

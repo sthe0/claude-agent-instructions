@@ -60,6 +60,10 @@ MAX_CARRIED_TIER = 2
 
 _KEY_BOUND = frozenset({"researched", "escalated", "assumed"})
 
+#: A pair or unit record carries only if it is a pass or a decision; a `revise` stays as
+#: stale as it was, so the review it asked for is still owed.
+_HOLDABLE_VERDICTS = frozenset({"pass", "override"})
+
 
 def apply(
     state: SessionState, old_doc: PlanDoc, new_doc: PlanDoc, *,
@@ -83,6 +87,20 @@ def apply(
     report["owed"] = sorted(owed)
     report["carried"] = bool(report["records"])
     return report
+
+
+def carry_premise(
+    state: SessionState, old_doc: PlanDoc, new_doc: PlanDoc, change: "PlanChange | None",
+) -> list[str]:
+    """Carry only `state`'s premise-question and order-coverage stamps from `old_doc` onto
+    `new_doc`, for a caller that must read the premise gate of an edit that is refused
+    before `apply` runs. Returns a label per stamp moved; `[]` when the tier carries none."""
+    report = {"records": []}
+    if change is None or change.tier > MAX_CARRIED_TIER:
+        return []
+    owed = {index for index, c in change.stages.items() if c.tier == 2}
+    _Ctx(state, old_doc, new_doc, "", "", None, None, change.tier, owed, report).premise()
+    return report["records"]
 
 
 def release_holds(state: SessionState, node: "int | str | None" = None) -> list[str]:
@@ -136,9 +154,14 @@ class _Ctx:
             return False
         return self.old_sha is None or sha == self.old_sha
 
+    def _restamped_sha(self, recorded: str) -> str:
+        """The new version's digest for a record that attested the old one; an unattested
+        record stays unattested — no reviewer ever gave the new bytes' digest."""
+        return self.new_sha if recorded else ""
+
     def _mark(self, record, from_sha: str) -> None:
         record.carried_tier = max(record.carried_tier or 0, self.tier)
-        record.carried_from_sha = from_sha or record.carried_from_sha or "carried"
+        record.carried_from_sha = from_sha or record.carried_from_sha
 
     # --- whole-plan, stage-scoped and pass records -------------------------------------
 
@@ -161,7 +184,7 @@ class _Ctx:
             return record
         updated = copy.copy(record)
         updated.plan_path = self.new_path
-        updated.plan_sha256 = self.new_sha
+        updated.plan_sha256 = self._restamped_sha(record.plan_sha256)
         updated.reviewed_meta_digest = self.new_meta
         updated.reviewed_stage_keys = _rekey(
             record.reviewed_stage_keys, self.old_keys, self.new_keys, skip=self.owed)
@@ -206,6 +229,8 @@ class _Ctx:
         for rid, record in self.state.plan_pair_reviews.items():
             if is_legacy_review_id(rid) or rid not in old_ids or rid not in new_ids:
                 continue
+            if record.verdict not in _HOLDABLE_VERDICTS:
+                continue
             if not self._binds_old(record.plan_path, record.plan_sha256):
                 continue
             was_held = self._was_held(record, rid)
@@ -221,7 +246,7 @@ class _Ctx:
                 self._restamp_pair(record, rid)
             self._mark(record, self.old_sha or record.plan_sha256)
             record.plan_path = self.new_path
-            record.plan_sha256 = self.new_sha
+            record.plan_sha256 = self._restamped_sha(record.plan_sha256)
             self.report["records"].append(rid)
 
     def _was_held(self, record: PlanPairReview, rid: str) -> bool:
