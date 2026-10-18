@@ -65,6 +65,7 @@ from .plan import (
     is_unit_id,
     pair_binding,
     pair_content,
+    review_currency_hash,
     pair_currency_hash,
     pair_currency_keys,
     plan_has_any_grants,
@@ -80,7 +81,7 @@ from .plan import (
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
 from .stage_norm import StageNorm
-from .state import CONCERN_OPEN, CriterionType, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
+from .state import CONCERN_OPEN, EFFORT_FIRE_FINISHED_WORK, CriterionType, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
@@ -1319,6 +1320,13 @@ _PLAN_REVIEW_PART_TOKEN_RE = re.compile(
     r"^\s*(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
 )
 
+#: The same token, additionally accepted right after the reviewer's `C<n>:` marker
+#: (`blocking: C1: stage:3 ...`). Only the topological pair/unit path asks for it, and only
+#: while the delta rule applies (a pass on a row with changed parts).
+_PLAN_REVIEW_MARKED_PART_TOKEN_RE = re.compile(
+    r"^\s*(?:[Cc][1-4]:\s*)?(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
+)
+
 
 def _same_part(token: str, part_name: str) -> bool:
     """Two part tokens name the same part: stage tokens by parsed index
@@ -1344,14 +1352,15 @@ def _concern_names_part(text: str, part_name: str) -> bool:
 _PLAN_REVIEW_RECOGNIZED_NON_STAGE_PREFIXES = ("meta:", "order:")
 
 
-def _concern_part_token(text: str) -> "str | None":
+def _concern_part_token(text: str, *, after_marker: bool = False) -> "str | None":
     """The concern's leading structural part token, if it is one the engine
     actually defines (`meta:`, `order:`, or a valid `stage:<n>`) — None for an
     untagged concern or one with an unrecognized word-colon prefix (`Risk:`,
     `Note:`, ...), which _PLAN_REVIEW_PART_TOKEN_RE matches syntactically but
     which is not a structural part name, so classify_concerns must not treat it
     as naming (and thus being out-of-scope for) any particular part."""
-    m = _PLAN_REVIEW_PART_TOKEN_RE.match(_normalize_string(text))
+    regex = _PLAN_REVIEW_MARKED_PART_TOKEN_RE if after_marker else _PLAN_REVIEW_PART_TOKEN_RE
+    m = regex.match(_normalize_string(text))
     if m is None:
         return None
     token = m.group(1)
@@ -1403,6 +1412,7 @@ EFFECTIVE_ADVISORY = "advisory"
 def effective_concern_severity(
     severity: str, parts, *, has_prev: bool, changed, open_parts,
     restates_dispositioned: bool, new_evidence: bool,
+    after_pass_on_changed: bool = False, restates_open: bool = False,
 ) -> str:
     """The severity a reviewer-written concern is recorded with: `blocking`, or
     `advisory` when the freeze rules apply, or `note` as written.
@@ -1416,9 +1426,20 @@ def effective_concern_severity(
     previous record), a concern naming no part, and `new_evidence` (a regression command
     the scope has not seen, or run-demonstrated evidence) downgrade nothing. `parts` are
     the part tokens the concern names; `changed` the ones whose digest moved since the
-    scope's previous record; `open_parts` the ones carrying an undischarged blocker."""
+    scope's previous record; `open_parts` the ones carrying an undischarged blocker.
+
+    `after_pass_on_changed` — the scope's previous record is a pass and some of its parts
+    changed since: the review judges the delta, so a blocking concern stays blocking only
+    when it names a changed part, sits on a part with an open blocker, or `restates_open`
+    — it re-raises an open blocker. One naming no part at all is downgraded here, where
+    the rule above would keep it blocking."""
     if severity != SEVERITY_BLOCKING:
         return severity
+    if after_pass_on_changed and has_prev and not new_evidence:
+        if restates_open or any(p in open_parts for p in parts):
+            return EFFECTIVE_BLOCKING
+        if not any(p in changed for p in parts):
+            return EFFECTIVE_ADVISORY
     if not has_prev or not parts or new_evidence:
         return EFFECTIVE_BLOCKING
     if any(p in open_parts for p in parts):
@@ -1476,25 +1497,39 @@ def pair_status(state: SessionState, doc, plan_path: str, pair: str) -> str:
         return "missing"
     if is_legacy_review_id(pair):
         return "stale:legacy"
+    stale = _pair_staleness(record, doc, plan_path, pair)
+    if stale:
+        if record.held and not is_unit_id(pair) and record.held == review_currency_hash(doc, pair):
+            return "held"
+        return stale
+    return "current" if record.verdict == _PLAN_REVIEW_PASS else record.verdict
+
+
+def _pair_staleness(record, doc, plan_path: str, pair: str) -> str:
+    """The `stale:<part>` reason `record` no longer matches `doc`, or "" when it does.
+    A legacy pair record (no content digests) whose stored file digest still equals the
+    bytes at `plan_path` is current whatever its render-derived binding says: the plan
+    it reviewed is the plan on disk, only the renderer moved."""
     if is_unit_id(pair):
-        if record.unit_norm != unit_currency_hash(doc, pair):
-            return "stale:unit"
-    elif record.is_content_keyed:
+        return "stale:unit" if record.unit_norm != unit_currency_hash(doc, pair) else ""
+    if record.is_content_keyed:
         fresh_content = pair_content(doc, pair)
         stored_content = record.content()
         for key in PAIR_CONTENT_KEYS:
             if stored_content[key] != fresh_content[key]:
                 return "stale:" + key.removesuffix("_norm")
-    else:
-        fresh = pair_binding(doc, pair)
-        stored = record.binding()
-        for key in pair_currency_keys(doc, pair):
-            if stored[key] != fresh[key]:
-                return "stale:" + key.removesuffix("_digest").removesuffix("_key")
-    return "current" if record.verdict == _PLAN_REVIEW_PASS else record.verdict
+        return ""
+    if record.plan_sha256 and _file_sha256(plan_path) == record.plan_sha256:
+        return ""
+    fresh = pair_binding(doc, pair)
+    stored = record.binding()
+    for key in pair_currency_keys(doc, pair):
+        if stored[key] != fresh[key]:
+            return "stale:" + key.removesuffix("_digest").removesuffix("_key")
+    return ""
 
 
-PAIR_SATISFIED = ("current", "override")
+PAIR_SATISFIED = ("current", "override", "held")
 
 
 def pair_binding_hash(doc, pair: str) -> str:
@@ -1604,7 +1639,7 @@ def pair_walk(state: SessionState, doc, plan_path: str) -> "list[dict]":
         rows.append({
             "pair": uid, "kind": "unit", "base": str(node), "service": "",
             "level": depths[node], "status": status[uid], "ready": not waiting,
-            "waiting": waiting,
+            "waiting": waiting, **_carry_marks(state, uid, status[uid]),
         })
     for pid in pairs:
         b, s = split_pair_id(pid)
@@ -1613,9 +1648,21 @@ def pair_walk(state: SessionState, doc, plan_path: str) -> "list[dict]":
         rows.append({
             "pair": pid, "kind": "pair", "base": str(b), "service": str(s),
             "level": pair_level(pid), "status": status[pid], "ready": not waiting,
-            "waiting": waiting,
+            "waiting": waiting, **_carry_marks(state, pid, status[pid]),
         })
     return rows
+
+
+def _carry_marks(state: SessionState, rid: str, status: str) -> dict:
+    """The `held` / `carried` flags of a walk row, present only on a row that has one — a
+    row of a plan nothing was carried onto keeps its keys as they were."""
+    record = state.plan_pair_reviews.get(rid)
+    marks = {}
+    if status == "held":
+        marks["held"] = True
+    if record is not None and record.carried_tier is not None:
+        marks["carried"] = True
+    return marks
 
 
 def has_pair_records_for(state: SessionState, target_plan: "str | None") -> bool:
@@ -2197,6 +2244,7 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
             doc = None
     coverage_route = doc is not None and (
         bool(state.plan_stage_reviews) or has_pair_records_for(state, target_plan)
+        or (state.plan_review is not None and (state.plan_review.carried_tier or 0) >= 2)
     )
     if not coverage_route:
         blockers = _plan_review_blockers_whole(state.plan_review, target_plan, state=state, doc=doc)
@@ -2613,12 +2661,21 @@ def replan_authorization_active(state: SessionState) -> bool:
     return state.weight_class == WeightClass.SUBSTANTIVE.value
 
 
+#: Highest change tier (`plan.change_tier`) whose replan needs no replan_diff presentation.
+REPLAN_AUTHORIZATION_WAIVED_MAX_TIER = 1
+
+
+def replan_authorization_waived_by_tier(change_tier: "int | None") -> bool:
+    return change_tier is not None and change_tier <= REPLAN_AUTHORIZATION_WAIVED_MAX_TIER
+
+
 def replan_authorization_blockers(
     state: SessionState,
     target_plan: str | None,
     *,
     diff_kind: str,
     probe=None,
+    change_tier: "int | None" = None,
 ) -> list[str]:
     """Precondition guardian for `replan` outside the DIAGNOSING difficulty
     cycle: a non-substantive edit (refinement or no_change) to an ALREADY
@@ -2634,12 +2691,15 @@ def replan_authorization_blockers(
     Deliberately absent from GUARDIANS for the same signature reason as
     plan_presentation_blockers and difficulty_blockers.
 
-    Four conditions return [] unconditionally, checked in this order:
+    Five conditions return [] unconditionally, checked in this order:
       - the gate is inactive (chat/small-change/AGENTCTL_REPLAN_AUTHORIZATION=0);
       - state.node is DIAGNOSING AND the difficulty cycle is complete (self-
         contained: this function calls difficulty_blockers itself rather than
         trusting the caller's ordering, so its correctness never depends on
         cmd_replan calling this after checking DIAGNOSING);
+      - `change_tier` is 0 or 1 (bookkeeping, final venue — an edit that changes nothing
+        the user approved or a reviewer judged, so there is no diff worth presenting;
+        the caller discloses the waiver in history and the next directive);
       - diff_kind == 'substantive' (a substantive edit is unaffected — it
         already carries its own, pre-existing scope-change approval discipline
         outside this gate's charter);
@@ -2657,6 +2717,8 @@ def replan_authorization_blockers(
     if not replan_authorization_active(state):
         return []
     if state.node == Node.DIAGNOSING.value and not difficulty_blockers(state):
+        return []
+    if replan_authorization_waived_by_tier(change_tier):
         return []
     if diff_kind == "substantive":
         return []
@@ -2736,7 +2798,7 @@ def effort_fire_blockers(state: SessionState) -> list[str]:
     if not state.effort_fires:
         return []
     last = state.effort_fires[-1]
-    if last.get("ack") is not None:
+    if last.get("ack") is not None or last.get("disposition") == EFFORT_FIRE_FINISHED_WORK:
         return []
     return [
         f"unacknowledged effort-divergence fire (scale={last.get('scale')!r}, "
@@ -3281,7 +3343,9 @@ def _semantic_invariants_coverage(
         return True  # crash — fail open
 
 
-def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
+def replan_coverage_blockers(
+    old_doc, new_doc, critique, *, tier: int | None = None, cost_tier_window=None,
+) -> list[str]:
     """Verify the critique's similarities/differences split is COVERED by the
     corrected plan — the dataflow, NOT the cognitive item->field mapping (that
     stays prose: the gate never decides WHICH stage an item belongs to).
@@ -3300,6 +3364,14 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
         lives entirely in verify_command, a final_check, a re-selected material
         or [meta] also satisfies this half.
 
+    A tier-0 replan (`tier == 0`: no stage field moved, the bytes are no_change) has
+    nothing to carry into a stage and nothing to change, so it owes neither half; a
+    replan with no known tier (`tier=None`) is checked as before. For a difficulty
+    opened by a spend or wall-clock effort fire, `cost_tier_window` names the fire's
+    window stages and a `cost_tier` move on one of them meets the CHANGE half. Every
+    blocker text names `--coverage-waiver`, the way through when the plan is unchanged
+    by design.
+
     Declared-item-scoped: empty lists pass vacuously, so a critique that records no
     split (or, via the cmd_replan guard, a replan with no difficulty present)
     behaves exactly as before. Coverage is checked via `_semantic_invariants_coverage`:
@@ -3310,7 +3382,7 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
     Unlike the two hard gates this takes PlanDocs, not just state — it is therefore
     NOT registered in GUARDIANS and is called directly from cmd_replan."""
     out: list[str] = []
-    if critique is None:
+    if critique is None or tier == 0:
         return out
     haystack = " \n ".join(
         part
@@ -3323,10 +3395,11 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
             continue
         if not _semantic_invariants_coverage(item, norm_haystack):
             out.append(
-                f"similarity to preserve not carried into any stage conditions/invariants: {item!r}"
+                f"similarity to preserve not carried into any stage conditions/invariants: {item!r} "
+                "(or pass --coverage-waiver '<reason>')"
             )
     diffs = [d for d in critique.differences_to_remove if (d or "").strip()]
-    if diffs:
+    if diffs and not _cost_tier_moved(old_doc, new_doc, cost_tier_window):
         if _operative_surface(old_doc) == _operative_surface(new_doc):
             out.append(
                 "differences_to_remove is non-empty but the plan's operative surface "
@@ -3334,9 +3407,25 @@ def replan_coverage_blockers(old_doc, new_doc, critique) -> list[str]:
                 "material_refs/knowledge_refs, final_check, [meta] repo_root/"
                 "delivery_worktree) did not change — a difference cannot be "
                 "removed without changing what the engine executes or "
-                "dispatches on"
+                "dispatches on; if the plan is unchanged by design, pass "
+                "--coverage-waiver '<reason>'"
             )
     return out
+
+
+def _cost_tier_moved(old_doc, new_doc, window) -> bool:
+    """Whether a stage of the effort fire's window (`window`: its stage indices, None
+    when the difficulty is not an effort fire's) declares a different `cost_tier` in
+    the new plan. For a spend or wall-clock fire the difference to remove is a
+    mis-sized stage, and re-tiering it is the correction that stage's operative
+    surface does not hold."""
+    if not window:
+        return False
+    old_tiers = {s.index: s.actor.cost_tier for s in old_doc.stages}
+    return any(
+        s.index in window and s.index in old_tiers and s.actor.cost_tier != old_tiers[s.index]
+        for s in new_doc.stages
+    )
 
 
 #: The places a renormalization may not reach, as (dotted path on the stage, what the
@@ -3536,12 +3625,13 @@ def _meta_place(meta) -> tuple:
     approval spine keys on — passed as "a re-sequencing". So the totality claim is made
     here and the named rows keep only the job they are good at, naming the norm.
 
-    Hand-written, but for a narrower reason than `plan.order_place`'s: eight of these ten
+    Hand-written, but for a narrower reason than `plan.order_place`'s: eight of these eleven
     fields (`task_id` through `delivery_worktree`) are plain scalars or optional strings,
     already hashable and comparable as `meta.X` with no transformation at all — a
-    `dataclasses.fields` derivation could emit those as-is. Only two actually need custom
+    `dataclasses.fields` derivation could emit those as-is. Only three actually need custom
     handling: `final_check` and `order` are themselves compound structures, routed through
-    `_final_check_surface`/`order_place` for the same reason those helpers exist. The list
+    `_final_check_surface`/`order_place` for the same reason those helpers exist, and
+    `assumptions` is a list, flattened inline to a tuple of its fields. The list
     stays hand-written regardless, because a derived walk would still have to dispatch
     `final_check`/`order` away from the plain fields, and because the totality claim needs
     its own pin either way: `test_the_meta_residual_exhausts_plan_meta_s_field_set` goes
@@ -3562,6 +3652,7 @@ def _meta_place(meta) -> tuple:
         meta.landing_waiver,
         _final_check_surface(meta),
         order_place(meta),
+        tuple((a.id, a.text, a.basis, a.risk, a.stage) for a in meta.assumptions),
     )
 
 
@@ -3612,6 +3703,38 @@ def _resource_name(data: dict) -> str:
     return f"{data['kind']}({fields})"
 
 
+def stage_first_verdict_keys(approved_plan_sha256: str, changed: list[dict]) -> dict[int, str]:
+    """The first-verdict key of each stage's own changed unresolved commands, for the
+    stage-scoped passes of a review that owes several stages. A command with no stage (a
+    final_check) has none."""
+    from . import order_approvals as _oa
+
+    by_stage: dict[int, list] = {}
+    for item in changed:
+        if item.get("stage") is not None:
+            by_stage.setdefault(item["stage"], []).append(item["identity"])
+    return {index: _oa.first_thinker_verdict_key(approved_plan_sha256, identities)
+            for index, identities in by_stage.items()}
+
+
+def every_stage_vouched(stage_keys: dict[int, str], changed: list[dict],
+                        first_verdicts: dict | None, *, skip: "int | None" = None) -> bool:
+    """Whether every stage holding a changed command (but `skip`) has its own passing first
+    verdict, recorded at that stage's scope, and no changed command sits outside every
+    stage: a reviewer of one stage never vouches for another stage's command."""
+    if not changed or any(item.get("stage") is None for item in changed):
+        return False
+    for index, key in stage_keys.items():
+        if index == skip:
+            continue
+        verdict = (first_verdicts or {}).get(key)
+        if not (isinstance(verdict, dict) and verdict.get("verdict") == "pass"
+                and verdict.get("scope") in (_plan_review_scope_for_stage(index),
+                                             f"topo:unit:{index}")):
+            return False
+    return True
+
+
 def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict | None = None,
                       *, protected: list[str] | None = None,
                       live_optional=None) -> dict:
@@ -3635,7 +3758,7 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
         "reasons": [AUTONOMY_REASON_NO_VERSION],
         "order_changed": False, "extra_resources": [], "unresolved_changed_commands": [],
         "thinker_pass": None, "open_effort_fire": bool(ledger_snapshot.get("open_effort_fires")),
-        "first_verdict_key": None, "declined_live_optional": [],
+        "first_verdict_key": None, "first_verdict_stage_keys": {}, "declined_live_optional": [],
     }
     if last is None:
         return out
@@ -3697,7 +3820,16 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
         )
         out["first_verdict_key"] = key
         verdict = (first_verdicts or {}).get(key)
-        out["thinker_pass"] = bool(isinstance(verdict, dict) and verdict.get("verdict") == "pass")
+        out["first_verdict_stage_keys"] = stage_first_verdict_keys(
+            last["plan_sha256"], out["unresolved_changed_commands"])
+        # A first revise at the whole key or at any stage's key is never superseded by a
+        # later pass at the other: only an all-pass record vouches.
+        recorded = [(first_verdicts or {}).get(k) for k in (key, *out["first_verdict_stage_keys"].values())]
+        first_revised = any(isinstance(v, dict) and v.get("verdict") != "pass" for v in recorded)
+        out["thinker_pass"] = not first_revised and (
+            bool(isinstance(verdict, dict) and verdict.get("verdict") == "pass")
+            or every_stage_vouched(
+                out["first_verdict_stage_keys"], out["unresolved_changed_commands"], first_verdicts))
         if not out["thinker_pass"]:
             reasons.append(
                 "a changed unresolved engine-executed command has no first passing thinker review: "

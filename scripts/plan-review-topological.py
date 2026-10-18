@@ -66,7 +66,7 @@ AGENTCTL_CLI = SCRIPTS_DIR / "agentctl-cli.py"
 AGENTCTL_OWN = SCRIPTS_DIR / "agentctl-own.py"
 COST_LOG = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
 
-SATISFIED = ("current", "override")
+SATISFIED = ("current", "override", "held")
 DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 SUMMARY_MARKER_RE = re.compile(r"\bmarker=(\S+)")
 SUMMARY_COST_RE = re.compile(r"\bcost_usd=([0-9.]+)")

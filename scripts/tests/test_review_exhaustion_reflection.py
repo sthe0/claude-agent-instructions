@@ -420,7 +420,8 @@ def test_backstop_crossing_is_recorded_once_with_its_axis_count_and_backstop(eng
 def test_backstop_crossing_is_disclosed_at_verify_final_and_resolve(eng):
     d = cross_by_fire_acknowledge(eng)
     assert d["ok"] is True, f"BEHAVIOUR: the crossing was not admitted: {d['detail']}"
-    replanned = eng.run("replan", session="a1", plan=eng.write(plan_text(stage3=True, revised=True)))
+    replanned = eng.run("replan", session="a1", plan=eng.write(plan_text(stage3=True, revised=True)),
+                        reopen=[1])
     assert replanned["ok"] is True, replanned
     approved = eng.run("approve", session="a1", by="agent")
     assert approved["ok"] is True, approved

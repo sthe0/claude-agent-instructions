@@ -127,6 +127,17 @@ and every stage must also carry the 8-element activity-structure fields:
 the same reason [meta.order] is: they were added after the corpus was frozen, so the
 loader parses them and can never refuse their absence.
 
+A stage may also carry a retrospective log of changes made after the fact:
+
+    [[stage.amendments]]
+    date = "2026-10-17"                  # YYYY-MM-DD
+    text = "what was changed"
+    reason = "why"
+
+It is bookkeeping (class B in `STAGE_LEAF_CLASS`): rendered by plan-render, read by no
+change decision, so an amendments-only edit is tier 1, diffs as `no_change` and keeps
+every carry digest.
+
 diff_plans classifies a replan as no_change / refinement / substantive, mirroring
 CLAUDE.md § Acting without asking: structural edits (stage set, dependencies,
 executors, done criteria, weight_class) are substantive and re-arm the plan-approval
@@ -135,6 +146,7 @@ gate; wording-only edits (titles, expected-result prose) are refinements.
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import hashlib
 import os
 import re
@@ -143,12 +155,17 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lib import bash_write_targets as _bash_write_targets
+from lib import shell_tokens as _shell_tokens
+from lib import widening_targets as _widening_targets
+
 from . import grants as _grants
 from .grants import AddDirGrant, RuleGrant, StageGrants
 from .landed_providers import PROVIDER_NAME_RE
 from .script_effects import StageEffectDeclaration
 from .state import (
     Actor,
+    Amendment,
     CheckKind,
     CheckVenue,
     Confidence,
@@ -213,6 +230,19 @@ class PlanMeta:
     # parse can never refuse: requiredness is a submission-seam grade
     # (submission._order_violations), so the loader stays exactly as permissive.
     order: "Order | None" = None
+    # Typed assumptions the plan carries, parsed from `[[meta.assumption]]` tables and
+    # registered at submit-plan as `assumed` premises. Not part of any digest: an
+    # assumption is a record of a premise, never an input of the work.
+    assumptions: "list[PlanAssumption]" = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PlanAssumption:
+    id: str
+    text: str
+    basis: str
+    risk: str
+    stage: int | None = None
 
 
 @dataclass
@@ -552,6 +582,21 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
         )
 
 
+def _parse_assumptions(raw: object) -> list[PlanAssumption]:
+    """Lenient, like `Order.from_dict`: a malformed entry is skipped here, never
+    refused — the premise gate is what blocks an incomplete assumed premise."""
+    if not isinstance(raw, list):
+        return []
+    return [
+        PlanAssumption(
+            id=str(a.get("id", "")).strip(), text=str(a.get("text", "")).strip(),
+            basis=str(a.get("basis", "")).strip(), risk=str(a.get("risk", "")).strip(),
+            stage=a["stage"] if isinstance(a.get("stage"), int) else None,
+        )
+        for a in raw if isinstance(a, dict) and str(a.get("id", "")).strip()
+    ]
+
+
 def _parse_renorms(raw: object, context: str) -> list[str]:
     """The stage's `renorms`: absolute file paths, normalized (`os.path.normpath`) as the
     `critique --norm-target` side is, so the two compare equal. A `stage:<n>` target is carried by editing the stage
@@ -577,6 +622,32 @@ def _parse_renorms(raw: object, context: str) -> list[str]:
                 f"to `critique --norm-target`"
             )
         out.append(os.path.normpath(entry))
+    return out
+
+
+def _parse_amendments(raw: object, context: str) -> list[Amendment]:
+    """The stage's `[[stage.amendments]]`: each entry a table of non-empty `date`, `text`
+    and `reason` strings. An unquoted TOML date is read as the ISO date it is."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise PlanError(f"{context}: amendments must be an array of tables ([[stage.amendments]])")
+    out: list[Amendment] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise PlanError(f"{context}: amendments entry {entry!r} must be a table")
+        unknown = sorted(set(entry) - {"date", "text", "reason"})
+        if unknown:
+            raise PlanError(f"{context}: amendments entry has unknown key(s) {unknown}")
+        values = {}
+        for key in ("date", "text", "reason"):
+            value = entry.get(key)
+            if isinstance(value, datetime.date):
+                value = value.isoformat()
+            if not isinstance(value, str) or not value.strip():
+                raise PlanError(f"{context}: amendments entry needs a non-empty string {key!r}")
+            values[key] = value.strip()
+        out.append(Amendment(**values))
     return out
 
 
@@ -851,6 +922,84 @@ def verify_command_scope_warnings(stages, final_check=None) -> list[str]:
     return warnings
 
 
+# --- cost-tier floor advisory (WARN only) -------------------------------------
+# Decidability, stated where the rule lives: every input below is a typed field of
+# the stage (criterion_type, negative_control, the program a verify_command runs), so
+# the floor is computed, never judged. Whether those inputs REALLY make a stage cost
+# more is a calibration claim, measured only by the retier records an effort fire on
+# finished work appends to `state.effort_retiers` (declared_tier against observed_tier).
+# A refusal now would enforce a guess, so this stays an advisory that costs one line on
+# a false positive; promoting it to a blocker is a decision for when those records
+# justify one. It must never gain a `*_blockers` twin.
+#
+# Two inputs of the brief are not read, deliberately. (1) `tool_contracts.resolve_command`
+# resolves a command to the RESOURCES it can change and is closed-world: it refuses the
+# `bash scripts/cap-run.sh --` wrapper and pytest's `-n`/`-p`/`--co` flags, so it cannot
+# say "this runs a test runner" for the plan's own verify_command shape. The runner test
+# below reuses the same segment/wrapper parsing (`lib.widening_targets.strip_wrappers`,
+# `bash_write_targets.split_segments`) and judges the real program of each segment, not
+# a token anywhere in the text. (2) An ARMED acceptance judge is a session/config property
+# (`advisor-mode`, the advisor kill switch), not a stage field; reading it would make the
+# advisory depend on the environment instead of the plan. `criterion_type:
+# acceptance_review` is the typed stand-in, since the judge gates exactly those stages.
+_TIER_RANK = {"small": 0, "medium": 1, "large": 2}
+_CAP_RUN_WRAPPER = "cap-run.sh"
+
+
+def _runs_test_runner(cmd: str) -> bool:
+    try:
+        tokens = _shell_tokens.separator_exact_split(cmd)
+    except Exception:
+        return False
+    for seg in _bash_write_targets.split_segments(tokens):
+        seg = _widening_targets.strip_wrappers(seg)
+        if (len(seg) > 1 and _widening_targets.program_name(seg[0]) in ("bash", "sh")
+                and _widening_targets.program_name(seg[1]) == _CAP_RUN_WRAPPER):
+            rest = seg[2:]
+            if "--" not in rest:
+                continue
+            seg = _widening_targets.strip_wrappers(rest[rest.index("--") + 1:])
+        if not seg:
+            continue
+        prog = _widening_targets.program_name(seg[0]).casefold()
+        if prog in ("pytest", "py.test") or (
+                prog.startswith("python") and seg[1:3] == ["-m", "pytest"]):
+            return True
+    return False
+
+
+def cost_tier_floor_advisories(stages) -> list[str]:
+    """One advisory per stage whose DECLARED cost_tier is below the floor its typed
+    fields set: an acceptance-review criterion -> large, a declared negative_control
+    or a test-runner verify_command -> medium. Never blocks; a stage with no declared
+    tier is not judged."""
+    advisories: list[str] = []
+    for s in stages:
+        declared = s.actor.cost_tier
+        if declared not in _TIER_RANK:
+            continue
+        inputs: list[tuple[str, str]] = []
+        if s.criterion.criterion_type == CriterionType.ACCEPTANCE_REVIEW.value:
+            inputs.append(("large", "criterion_type is acceptance_review (judge-gated)"))
+        if s.criterion.negative_control:
+            inputs.append(("medium", "a negative_control is declared"))
+        if s.criterion.verify_command and _runs_test_runner(s.criterion.verify_command):
+            inputs.append(("medium", "verify_command runs a test runner"))
+        if not inputs:
+            continue
+        floor = max((t for t, _ in inputs), key=_TIER_RANK.__getitem__)
+        if _TIER_RANK[declared] >= _TIER_RANK[floor]:
+            continue
+        named = "; ".join(why for t, why in inputs if t == floor)
+        advisories.append(
+            f"stage {s.index} ({s.title!r}): cost_tier {declared!r} is below the "
+            f"{floor!r} floor its typed fields set ({named}). Advisory only — whether "
+            f"such stages overrun their tier is measured by state.effort_retiers "
+            f"(declared_tier vs observed_tier); raise the tier or keep it knowingly."
+        )
+    return advisories
+
+
 # --- verify_command green-reachability lint (BLOCKING for substantive) -------
 # Difficulty removed: the scope lint above stops a control from being false-RED;
 # it says nothing about the other direction. A verify_command / final_check can
@@ -972,6 +1121,19 @@ _CLOSING_BRACKET = frozenset({"]"})
 # grep-family commands whose pattern operand is not a path — see (D) below.
 _GREP_FAMILY = frozenset({"grep", "egrep", "fgrep", "rg"})
 
+# A redirect operator glued onto its target by shlex (`>/dev/null`, `2>/dev/null`,
+# `>>log`, `&>x`): the operator is shell syntax, not part of the path.
+_GLUED_REDIRECT_RE = re.compile(r"^(?:\d*|&)>{1,2}")
+
+# git subcommands whose operands before `--` are revisions (`origin/main`,
+# `HEAD~3`), not files. Subcommands that take only paths (`add`, `rm`, `mv`,
+# `restore`, `checkout --`) are absent, so their operands stay checked.
+_GIT_REF_SUBCOMMANDS = frozenset({
+    "merge-base", "merge", "rebase", "rev-parse", "rev-list", "log", "show", "diff",
+    "fetch", "push", "pull", "cherry-pick", "branch", "switch", "reset", "describe",
+    "name-rev", "ls-remote", "show-ref", "for-each-ref",
+})
+
 # Conventional build/test OUTPUT directory names — see (E) below. A relative
 # path token with one of these as a path SEGMENT (any component, not just the
 # last) is a byproduct the checked command's own build/test step produces as
@@ -1071,7 +1233,37 @@ def _strip_heredoc_bodies_for_reachability(cmd: str) -> str:
     return cmd
 
 
-def _reachability_path_tokens(cmd: str) -> list[str]:
+_REVISION_RANGE_RE = re.compile(r"\.{2,3}")
+_REVISION_SUFFIX_RE = re.compile(r"[~^]\d*$")
+# With no repo to ask, only these conventional remote names make `<remote>/<branch>`
+# a revision; any other slash operand stays a path. Not consulted when a repo root is given.
+_CONVENTIONAL_REMOTES = frozenset({"origin", "upstream"})
+
+
+def _is_git_revision(operand: str, repo_root: str | None) -> bool:
+    """Whether a revision-taking git subcommand's operand is a revision (a ref, a sha,
+    `HEAD~1`, `A..B`, `origin/main`) rather than a file. An operand with a file extension
+    is a path. A slash operand is a `<remote>/<branch>` revision only when its first
+    segment is not a top-level entry of `repo_root` (or, with no repo, is a conventional
+    remote name), so `scripts/ghost_dir` is still judged as the path it is."""
+    for part in _REVISION_RANGE_RE.split(operand):
+        part = _REVISION_SUFFIX_RE.sub("", part)
+        if not part:
+            continue
+        if part.endswith(_PATH_EXTS):
+            return False
+        if "/" not in part:
+            continue
+        first = part.split("/", 1)[0]
+        if repo_root:
+            if os.path.lexists(os.path.join(repo_root, first)):
+                return False
+        elif first not in _CONVENTIONAL_REMOTES:
+            return False
+    return True
+
+
+def _reachability_path_tokens(cmd: str, repo_root: str | None = None) -> list[str]:
     """The relative, literal, path-shaped tokens of a shell command — the tokens
     whose green-reachability is decidable. shlex parses the WHOLE command in one
     pass so a quoted `python3 -c "..."` body — which itself contains `;` `|` `<`
@@ -1148,6 +1340,17 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
         command's own execution, not a precondition. See that constant's
         module comment for the accepted width and why (E) is the WEAKEST of
         the five exemptions.
+    (F) After a revision-taking git subcommand (`_GIT_REF_SUBCOMMANDS`), an
+        operand before `--` that `_is_git_revision` accepts (`git merge-base HEAD
+        origin/main`) is not a path; a file-extension operand, a slash operand
+        whose first segment is a top-level entry of `repo_root` (or, with no repo,
+        not a conventional remote), and every operand after `--` stay checked. With
+        a repo root, a slash operand whose first segment is NOT an existing
+        top-level entry is read as `<remote>/<branch>`, so a mistyped top-level
+        directory is not flagged. The `-C` value is judged as a path only when it
+        is path-shaped (`git -C ghostdir` is not flagged, as before); `-c k=v` is
+        skipped. A glued redirect operator (`2>/dev/null`) is stripped before its
+        target is judged.
     """
     cmd = _strip_heredoc_bodies_for_reachability(cmd)
     try:
@@ -1155,6 +1358,24 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
     except ValueError:
         toks = cmd.split()
     tokens: list[str] = []
+
+    def _admit(stripped: str, in_git_revisions: bool) -> None:
+        m_redirect = _GLUED_REDIRECT_RE.match(stripped)
+        if m_redirect:
+            stripped = stripped[m_redirect.end():]
+        if stripped.startswith("-") or any(ch.isspace() for ch in stripped):
+            return
+        head = stripped.split("::", 1)[0]  # drop a pytest node-id suffix
+        if not head or head.startswith("/"):
+            return
+        if in_git_revisions and _is_git_revision(head, repo_root):
+            return
+        if any(ch in head for ch in _REJECT_CHARS) or "://" in head:
+            return
+        if "/" in head or head.endswith(_PATH_EXTS):
+            if not any(part in _BUILD_OUTPUT_SEGMENTS for part in Path(head).parts):  # (E)
+                tokens.append(head)
+
     i = 0
     n = len(toks)
     negated_clause = False  # (B): currently inside an exempt `! test`/`! [` clause
@@ -1162,6 +1383,8 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
     prev_bang = False       # (B): previous token was exactly `!` (command-position)
     awaiting_test_operand = False  # (B): previous token was `test`/`[` as a command
                                     # word, waiting to see if its FIRST operand is `!`
+    git_sub: str | None = None      # (F): a revision-taking git subcommand is running
+    git_past_dashdash = False       # (F): operands after `--` are paths again
     while i < n:
         raw = toks[i]
         i += 1
@@ -1229,20 +1452,33 @@ def _reachability_path_tokens(cmd: str) -> list[str]:
                 command_start = False
                 awaiting_test_operand = True
                 continue
+            if base == "git":  # (F) git revision operands
+                command_start = False
+                git_sub = None
+                while i < n:
+                    nxt = toks[i].rstrip(_GLUE_CHARS)
+                    i += 1
+                    if nxt == "-C":
+                        if i < n:  # a missing -C directory is a real unreachable path
+                            _admit(toks[i].rstrip(_GLUE_CHARS), False)
+                        i += 1
+                    elif nxt == "-c":
+                        i += 1  # `k=v`: `=` already rejects it, and it is not the subcommand
+                    elif not nxt.startswith("-"):
+                        git_sub = nxt if nxt in _GIT_REF_SUBCOMMANDS else None
+                        break
+                git_past_dashdash = False
+                continue
 
         command_start = False
+        if git_sub is not None and stripped == "--":
+            git_past_dashdash = True
         if not negated_clause:
-            if not stripped.startswith("-") and not any(ch.isspace() for ch in stripped):
-                head = stripped.split("::", 1)[0]  # drop a pytest node-id suffix
-                if head and not head.startswith("/"):
-                    if not any(ch in head for ch in _REJECT_CHARS) and "://" not in head:
-                        if "/" in head or head.endswith(_PATH_EXTS):
-                            if not any(part in _BUILD_OUTPUT_SEGMENTS
-                                       for part in Path(head).parts):  # (E)
-                                tokens.append(head)
+            _admit(stripped, git_sub is not None and not git_past_dashdash)
         if glued:
             negated_clause = False
             command_start = True
+            git_sub = None
     return tokens
 
 
@@ -1280,7 +1516,7 @@ def verify_command_reachability_blockers(stages, final_check, repo_root) -> list
         if not cmd:
             return
         seen: set[str] = set()
-        for tok in _reachability_path_tokens(cmd):
+        for tok in _reachability_path_tokens(cmd, repo_root):
             if tok in seen:
                 continue
             seen.add(tok)
@@ -1531,6 +1767,7 @@ def parse_plan(
         landing_waiver=str(m["landing_waiver"]) if m.get("landing_waiver") else None,
         final_check=final_checks,
         order=order,
+        assumptions=_parse_assumptions(m.get("assumption")),
     )
 
     is_substantive = meta.weight_class is not None and meta.weight_class.lower() == "substantive"
@@ -1734,6 +1971,7 @@ def parse_plan(
                 effects=_parse_stage_effects(s.get("effects"), stage_ctx),
                 optional=raw_optional,
                 backlog_issue=raw_backlog_issue,
+                amendments=_parse_amendments(s.get("amendments"), stage_ctx),
             )
         )
 
@@ -3721,6 +3959,17 @@ def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fals
              # Same footing again: a stage's `renorms` is the consequence a нормативное
              # critique is bound to, so an edit of it must not diff as 'no_change'.
              *((("renorms", tuple(s.renorms)),) if s.renorms else ()),
+             # The two cells the change-tier table found outside every change-decision
+             # key (Core #74): `capability_required` is in neither `_structural_signature`
+             # nor `stage_carry_key`, and a supply's `element`/`artifact` is read by no key
+             # that diff_plans compares (only the supplier index is, as an edge). Tagged
+             # and conditional like the splices above, so a plan declaring neither hashes as
+             # before and the only kind that moves is no_change -> refinement.
+             *((("capability_required", s.actor.capability_required),)
+               if s.actor.capability_required else ()),
+             *((("supplied", tuple((u.on, u.element, u.artifact) for u in s.supplies
+                                   if u.element or u.artifact)),)
+               if any(u.element or u.artifact for u in s.supplies) else ()),
              # Without this a knowledge-only correction — the exact edit an
              # overcome-difficulty replan makes when the fault addressed знание —
              # diffs to 'no_change' and is silently dropped.
@@ -3774,3 +4023,202 @@ def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fals
             or order_place(old.meta) != order_place(new.meta)):
         return "refinement"
     return "no_change"
+
+
+# --- The change-tier field classification ---------------------------------------------
+#
+# One table over every leaf of a Stage, by what moving the leaf can do to work that has
+# already been done:
+#   B bookkeeping — describes neither what the stage builds nor how it is checked;
+#   F final-venue — only the venue verify-final re-runs the stage's check in;
+#   C check-only  — how the stage's result is checked, not what it is;
+#   O operative   — changes what the stage builds or how (including a renorms edit, which
+#                   gates.normative_edit_blockers and the pending_renorms dispatch
+#                   obligation read as part of the stage's work);
+#   I interface   — what other stages, the grants or the delivery see of the stage.
+# A leaf in no class is I, never lower (`leaf_class`): a field added to Stage and not yet
+# classed can only make a change look bigger. `test_change_tier.py` pins the table total
+# over `leaf_paths(Stage)`, so adding a field fails there until it is classed.
+#
+# B entries: `actor.cost_tier` names an expected size that dispatch labels a spawn with
+# and the effort estimate prices a stage by; the stage's work and its check are the same
+# under any tier, so a finished stage's verdict does not rest on it. `amendments.*` is a retrospective note (state.Amendment) that no
+# control, gate, dispatch decision or reviewer-visible rendering decides anything from.
+# Adding a B entry beyond these two needs that statement, in a comment, for the new leaf.
+STAGE_LEAF_CLASS: dict[str, str] = {
+    "index": "I",
+    "title": "O",
+    "subject.material": "O",
+    "subject.result": "O",
+    "subject.invariants": "O",
+    "subject.material_refs": "O",
+    "subject.knowledge_refs": "O",
+    "means.means": "O",
+    "means.method": "O",
+    "means.procedure": "O",
+    "actor.executor": "I",
+    "actor.capability_required": "O",
+    "actor.cost_tier": "B",
+    "actor.guard_exempt_paths": "I",
+    "criterion.criterion_type": "O",
+    "criterion.done_criterion": "O",
+    "criterion.verify_command": "C",
+    "criterion.expected_exit": "C",
+    "criterion.observation": "I",
+    "criterion.verify_venue": "C",
+    "criterion.verify_kind": "C",
+    "criterion.landed.target": "C",
+    "criterion.landed.delivered_stage": "C",
+    "criterion.landed.remote": "C",
+    "criterion.landed.provider": "C",
+    "criterion.verify_venue_at_final": "F",
+    "criterion.negative_control": "C",
+    "criterion.negative_control_waiver": "C",
+    "principle.statement": "O",
+    "principle.source": "O",
+    "principle.derivation": "O",
+    "principle.confidence": "O",
+    "principle.refutation": "O",
+    "conditions": "O",
+    "preconditions": "O",
+    "knowledge": "O",
+    "supplies.on": "I",
+    "supplies.element": "I",
+    "supplies.artifact": "I",
+    "supplies.delivery": "I",
+    "output_artifacts": "I",
+    "ephemeral_artifacts_waiver": "I",
+    "renorms": "O",
+    "outcome.status": "I",
+    "outcome.declined": "I",
+    "outcome.actual": "I",
+    "outcome.fail_digests": "I",
+    "outcome.cost_usd": "I",
+    "outcome.duration_ms": "I",
+    "outcome.spawn_count": "I",
+    "outcome.delivered_head": "I",
+    "outcome.delivered_base": "I",
+    "outcome.checked_tree_identity": "I",
+    "outcome.checked_tree_ok": "I",
+    "outcome.record_attempts": "I",
+    "control": "I",
+    "grants.allow.rule": "I",
+    "grants.allow.provenance": "I",
+    "grants.add_dirs.path": "I",
+    "grants.add_dirs.mode": "I",
+    "grants.add_dirs.provenance": "I",
+    "effects.path": "I",
+    "effects.sha256": "I",
+    "effects.resolver": "I",
+    "optional": "I",
+    "backlog_issue": "I",
+    "amendments.date": "B",
+    "amendments.text": "B",
+    "amendments.reason": "B",
+}
+
+TIER_OF_CLASS = {"B": 1, "F": 1, "C": 2, "O": 2, "I": 3, "M": 4}
+
+
+def leaf_class(path: str) -> str:
+    """The class of a Stage leaf path. An exact table entry wins; a path naming a whole
+    group (`principle`, `grants`, a None-valued dataclass field) takes the class its
+    members share; anything else — an unclassified leaf — is `I`."""
+    exact = STAGE_LEAF_CLASS.get(path)
+    if exact is not None:
+        return exact
+    members = {c for p, c in STAGE_LEAF_CLASS.items() if p.startswith(path + ".")}
+    return members.pop() if len(members) == 1 else "I"
+
+
+@dataclass(frozen=True)
+class StageChange:
+    """What moved on one stage between two plan versions: `moved` is the (leaf path,
+    class) pairs, sorted by path; `tier` the highest tier among them (0 when none)."""
+    tier: int
+    moved: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class PlanChange:
+    """`change_tier`'s result. `stages` maps a stage index present in BOTH versions to its
+    StageChange; `meta` names the plan-level leaves that moved (`stages` among them when
+    the stage set did); `tier` is the plan tier, the maximum of all of them."""
+    tier: int
+    stages: dict[int, StageChange]
+    meta: tuple[str, ...] = ()
+
+
+def _flatten_leaves(value: object, path: str, sink: dict[str, object]) -> None:
+    """Flatten asdict() output into {leaf path: value}. A list of tables contributes one
+    tuple per member key (`supplies.on` -> (1, 2)); an empty list contributes nothing,
+    which a reader takes as `()` — so an empty list and an absent one never differ."""
+    def join(prefix: str, key: str) -> str:
+        return f"{prefix}.{key}" if prefix else key
+
+    if isinstance(value, dict):
+        for key, member in value.items():
+            _flatten_leaves(member, join(path, key), sink)
+    elif isinstance(value, list):
+        columns: dict[str, list] = {}
+        for member in value:
+            if isinstance(member, dict):
+                member_leaves: dict[str, object] = {}
+                _flatten_leaves(member, "", member_leaves)
+                for key, leaf in member_leaves.items():
+                    columns.setdefault(join(path, key), []).append(leaf)
+            else:
+                columns.setdefault(path, []).append(member)
+        for column_path, column in columns.items():
+            sink[column_path] = tuple(column)
+    else:
+        sink[path] = value
+
+
+def change_tier(old: PlanDoc, new: PlanDoc) -> PlanChange:
+    """Tier of the edit that turns plan version `old` into `new`: 0 nothing moved; 1 only
+    bookkeeping/final-venue leaves; 2 a check-only or operative leaf, interface untouched;
+    3 an interface leaf; 4 a plan-level leaf or the stage set. Per-stage results name each
+    moved leaf with its class. Pure: reads two parsed plans, nothing else."""
+    old_meta, new_meta = dataclasses.asdict(old.meta), dataclasses.asdict(new.meta)
+    meta_moved = [name for name in old_meta if old_meta[name] != new_meta[name]]
+    old_by, new_by = {s.index: s for s in old.stages}, {s.index: s for s in new.stages}
+    if set(old_by) != set(new_by):
+        meta_moved.append("stages")
+    stages: dict[int, StageChange] = {}
+    for index in sorted(set(old_by) & set(new_by)):
+        before: dict[str, object] = {}
+        after: dict[str, object] = {}
+        _flatten_leaves(dataclasses.asdict(old_by[index]), "", before)
+        _flatten_leaves(dataclasses.asdict(new_by[index]), "", after)
+        moved = sorted(
+            (path, leaf_class(path)) for path in set(before) | set(after)
+            if before.get(path, ()) != after.get(path, ())
+        )
+        stages[index] = StageChange(
+            tier=max((TIER_OF_CLASS[c] for _, c in moved), default=0), moved=tuple(moved))
+    tier = max([TIER_OF_CLASS["M"] if meta_moved else 0, *(c.tier for c in stages.values())])
+    return PlanChange(tier=tier, stages=stages, meta=tuple(meta_moved))
+
+
+REPLAN_CLASSES = ("no_change", "bookkeeping", "check_only", "operative")
+
+
+def replan_class(change: PlanChange | None) -> str:
+    """The class of a replan by what it moved: `no_change` (tier 0), `bookkeeping` (tier 1),
+    `check_only` (above tier 1, and every leaf moved above tier 1 is a check-only leaf) or
+    `operative` (any operative, interface or plan-level leaf moved). Without a known old
+    side there is no change to read, so the replan is `operative` — the class that counts."""
+    if change is None:
+        return "operative"
+    if change.tier == 0:
+        return "no_change"
+    if change.tier == 1:
+        return "bookkeeping"
+    if change.meta:
+        return "operative"
+    above_bookkeeping = {
+        cls for stage in change.stages.values() for _, cls in stage.moved
+        if TIER_OF_CLASS[cls] > 1
+    }
+    return "check_only" if above_bookkeeping == {"C"} else "operative"

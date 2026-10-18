@@ -140,7 +140,7 @@ from dataclasses import dataclass
 
 from .child_runs import pid_alive
 from .config import Thresholds
-from .state import SessionState, WeightClass, is_skipped
+from .state import EFFORT_FIRE_FINISHED_WORK, SessionState, WeightClass, is_skipped
 
 # --- the four scales ---------------------------------------------------------
 
@@ -259,13 +259,35 @@ def _replans_since_baseline(state: SessionState) -> int:
     return max(0, replan_count(state) - int(base))
 
 
+def _replan_events_since_baseline(state: SessionState) -> int:
+    """Replan events of ANY class logged since the window opened. A bookkeeping or
+    check-only replan changes the plan's bytes, so `gates.plan_review_blockers` still
+    owes it a thinker review; the mandated-review estimate must count it even though the
+    replans SCALE (`replan_count`) does not. The baseline snapshot records the all-class
+    total under `REPLAN_EVENTS_KEY`; a baseline written before that key existed falls
+    back to the operative-only count."""
+    if state.effort_baseline is None:
+        return 0
+    base = state.effort_baseline.get(REPLAN_EVENTS_KEY)
+    if base is None:
+        return _replans_since_baseline(state)
+    return max(0, sum(replan_class_counts(state).values()) - int(base))
+
+
+def _snapshot_baseline(state: SessionState, now: float | None) -> dict:
+    snap = actual(state, now=now)
+    snap[REPLAN_EVENTS_KEY] = float(sum(replan_class_counts(state).values()))
+    return snap
+
+
 def _mandated_reviews(state: SessionState) -> int:
     """Count of engine-mandated review spawns derivable from the plan and its history.
 
     One thinker plan review for the plan as currently approved, plus one code review
     per spawn:developer stage, plus one FURTHER thinker review per replan logged
-    since arming — `gates.plan_review_blockers` requires a review bound to the exact
-    plan bytes at EVERY replan, not only at the first approval, and the actual side
+    since arming — `gates.plan_review_blockers` may require a review bound to the exact
+    plan bytes at a replan (the change tier decides: tier 0 owes none), so the estimate
+    prices one per replan as a conservative upper bound, and the actual side
     (`refresh_spend`) sums every one of those spawns by `plan_path` with no
     stage_index filter. Counting only the flat initial review would silently inflate
     the spend ratio on every replan, biasing exactly the sessions already closest to
@@ -282,7 +304,7 @@ def _mandated_reviews(state: SessionState) -> int:
     into the delta. So estimate and actual both carry that review. If a future edit
     adds a `refresh_spend` call to `cmd_approve` — or moves one before `arm()` — the
     review's cost lands in the baseline instead, the flat `1` becomes a pure
-    over-charge, and this term must drop to `developers + _replans_since_baseline`."""
+    over-charge, and this term must drop to `developers + _replan_events_since_baseline`."""
     if state.weight_class != WeightClass.SUBSTANTIVE.value:
         return 0
     developers = sum(
@@ -290,7 +312,7 @@ def _mandated_reviews(state: SessionState) -> int:
         if s.is_spawn() and s.spawn_kind() == _DEVELOPER_KIND
         and not is_skipped(s)
     )
-    return 1 + developers + _replans_since_baseline(state)
+    return 1 + developers + _replan_events_since_baseline(state)
 
 
 def estimate(state: SessionState, thr: Thresholds | None = None) -> dict:
@@ -298,7 +320,7 @@ def estimate(state: SessionState, thr: Thresholds | None = None) -> dict:
 
     Derived over `state.stages`, plus — for the mandated-review count alone —
     `state.effort_baseline` and the replan events in `state.history` (see
-    `_replans_since_baseline`); never `state.effort_estimate` itself, so `rederive()`
+    `_replan_events_since_baseline`); never `state.effort_estimate` itself, so `rederive()`
     calling this to overwrite that very field is not circular. `rederive()` is the
     only writer that stores the result; `divergence()` never calls this, so a session
     that has not been armed has nothing to be compared against. The absolute scales
@@ -327,9 +349,33 @@ def estimate(state: SessionState, thr: Thresholds | None = None) -> dict:
 
 # --- the actual: what the session has consumed --------------------------------
 
+#: Key of the all-class replan-event total inside `state.effort_baseline`; not a scale, so
+#: `deltas()` (which reads `SCALE_ORDER`) never sees it.
+REPLAN_EVENTS_KEY = "replan_events"
+
+#: The class a `replan` event carries when none is recorded (a history written before the
+#: classes existed, or a replan with no known old side): counted, never silently dropped.
+OPERATIVE_CLASS = "operative"
+
+
+def replan_class_counts(state: SessionState) -> dict:
+    """Replans logged on this session, per class (`plan.REPLAN_CLASSES`). An event with no
+    recorded class is operative."""
+    counts = {"no_change": 0, "bookkeeping": 0, "check_only": 0, OPERATIVE_CLASS: 0}
+    for h in state.history:
+        if h.get("event") == "replan":
+            cls = h.get("change_class")
+            counts[cls if cls in counts else OPERATIVE_CLASS] += 1
+    return counts
+
+
 def replan_count(state: SessionState) -> int:
-    """Replans logged on this session — the same predicate cmd_resolve's quality row uses."""
-    return sum(1 for h in state.history if h.get("event") == "replan")
+    """Operative replans logged on this session — the figure the REPLANS scale compares.
+    A no_change, bookkeeping or check-only replan moves no operative surface, so it is
+    kept apart (`replan_class_counts`) instead of spending the budget a replan loop on a
+    plan that did not change would otherwise exhaust. Belt 2 of the re-arm rule
+    (`_replans_since_last_fire`) still counts every logged replan."""
+    return replan_class_counts(state)[OPERATIVE_CLASS]
 
 
 def child_run_intervals(runs, now: float | None = None) -> list[tuple[float, float]]:
@@ -553,7 +599,9 @@ def divergence(
     Returns None — no fire — when any of these hold, and each is deliberate:
       * the session is not ARMED (no stored estimate or no baseline): only cmd_approve
         arms, so a SMALL_CHANGE session routed straight to EXECUTING can never fire;
-      * a firing has already happened and no `replan` has been logged since (belt 2);
+      * a firing has already happened and no `replan` has been logged since (belt 2) —
+        except a firing on finished work, after which no difficulty and so no replan
+        follows: the rebased baseline alone re-arms it;
       * every scale is inapplicable (zero estimate / accounting-only threshold) or below
         the multiple.
 
@@ -589,7 +637,11 @@ def divergence(
     """
     if not armed(state):
         return None
-    if state.effort_fires and _replans_since_last_fire(state) < 1:
+    if (
+        state.effort_fires
+        and state.effort_fires[-1].get("disposition") != EFFORT_FIRE_FINISHED_WORK
+        and _replans_since_last_fire(state) < 1
+    ):
         return None
 
     thr = thr if thr is not None else Thresholds()
@@ -670,7 +722,7 @@ def arm(state: SessionState, thr: Thresholds | None = None, *, now: float | None
     every later delta includes."""
     rederive(state, thr)
     if state.effort_baseline is None:
-        state.effort_baseline = actual(state, now=now)
+        state.effort_baseline = _snapshot_baseline(state, now)
     return state.effort_estimate
 
 
@@ -776,7 +828,89 @@ def merge_actuals(parent: dict, child: dict) -> dict:
     }
 
 
-def record_fire(state: SessionState, div: Divergence, *, now: float) -> dict:
+#: Observed tier of a stage whose attributed actual exceeds even the large estimate.
+TIER_ABOVE_LARGE = "above_large"
+
+#: `retier` attribution sources: the stage's own cost-ledger rows (spawn stages), or the
+#: plan alone when the engine holds no stage-indexed actual — then `actual` and
+#: `observed_tier` are None rather than a guessed share of the session total.
+ATTRIBUTION_COST_ROWS = "cost_rows"
+ATTRIBUTION_PLAN = "plan"
+
+_RETIER_TIERS = ("small", "medium", "large")
+
+
+def fire_window_stages(state: SessionState) -> list[int]:
+    """Stage indices with a `record_result` logged since the previous fire (or since the
+    start of history for the first) — the work the fire being raised accounts for."""
+    start = int(state.effort_fires[-1].get("history_len") or 0) if state.effort_fires else 0
+    seen: list[int] = []
+    for h in state.history[start:]:
+        index = h.get("stage")
+        if h.get("event") == "record_result" and isinstance(index, int) and index not in seen:
+            seen.append(index)
+    return seen
+
+
+def _tier_estimate(scale: str, tier: str, thr: Thresholds) -> float:
+    if scale == SCALE_SPEND:
+        return float(thr.budget_usd_float(tier))
+    return float(thr.effort_stage_minutes(tier))
+
+
+def _stage_attribution(stage, scale: str) -> tuple[float | None, str]:
+    """The stage's own actual on `scale` and where it came from. Only a stage with
+    cost-ledger rows has one; an in-thread stage consumes wall-clock the engine does not
+    attribute to it, so it reports the plan as its only source. The wall-clock figure is
+    a proxy: the stage's summed spawn duration from its cost rows, not the active minutes
+    `actual()` accumulates for the scale, so the observed tier it yields is approximate."""
+    outcome = stage.outcome
+    if scale == SCALE_SPEND and outcome.cost_usd is not None:
+        return float(outcome.cost_usd), ATTRIBUTION_COST_ROWS
+    if scale == SCALE_WALL_CLOCK and outcome.duration_ms is not None:
+        return float(outcome.duration_ms) / 60000.0, ATTRIBUTION_COST_ROWS
+    return None, ATTRIBUTION_PLAN
+
+
+def retier_records(
+    state: SessionState, scale: str, stage_indices, *, fire_ts: float, thr: Thresholds | None = None,
+) -> list[dict]:
+    """One datum per stage of a finished-work fire's window: the tier the stage declared
+    against the smallest tier whose configured estimate on `scale` covers what the stage
+    actually consumed (`above_large` past the largest). The read side of the cost-tier
+    floor advisory: whether a stage's typed inputs make it expensive is a calibration
+    claim these records measure."""
+    thr = thr if thr is not None else Thresholds()
+    by_index = {s.index: s for s in state.stages}
+    records: list[dict] = []
+    for index in stage_indices:
+        stage = by_index.get(index)
+        if stage is None:
+            continue
+        declared = _stage_tier(stage)
+        act, source = _stage_attribution(stage, scale)
+        observed = None
+        if act is not None:
+            observed = next(
+                (t for t in _RETIER_TIERS if _tier_estimate(scale, t, thr) >= act), TIER_ABOVE_LARGE)
+        records.append({
+            "plan_path": state.plan_path,
+            "fire_ts": fire_ts,
+            "scale": scale,
+            "stage_index": index,
+            "declared_tier": declared,
+            "observed_tier": observed,
+            "actual": act,
+            "estimate": _tier_estimate(scale, declared, thr),
+            "attribution": source,
+        })
+    return records
+
+
+def record_fire(
+    state: SessionState, div: Divergence, *, now: float, finished_work: bool = False,
+    thr: Thresholds | None = None,
+) -> dict:
     """Record a firing and re-arm: REBASE the baseline onto the current actual vector
     (RE-ARM belt 1, module docstring; belt 2 is enforced by `divergence()` reading the
     appended record). MANDATORY after any caller acts on a `Divergence` — see
@@ -787,9 +921,15 @@ def record_fire(state: SessionState, div: Divergence, *, now: float) -> dict:
     The appended record starts with no "ack" key — gates.effort_fire_blockers reads
     exactly that absence to refuse dispatch/replan/submit_plan until
     `agentctl fire-acknowledge` appends one (never replaces the record; the audit
-    trail stays append-only)."""
+    trail stays append-only).
+
+    `finished_work` marks a fire raised when every stage was already PASSED or SKIPPED:
+    the record carries `disposition` finished_work (which `effort_fire_blockers` does not
+    hold unacknowledged and `divergence()` exempts from belt 2) and one retier record per
+    window stage is appended to `state.effort_retiers`."""
     replaced_baseline = dict(state.effort_baseline or {})
-    state.effort_baseline = actual(state, now=now)
+    window = fire_window_stages(state)
+    state.effort_baseline = _snapshot_baseline(state, now)
     record = {
         "replaced_baseline": replaced_baseline,
         "scale": div.scale,
@@ -798,8 +938,12 @@ def record_fire(state: SessionState, div: Divergence, *, now: float) -> dict:
         "estimate": div.estimate,
         "multiple": div.multiple,
         "history_len": len(state.history),
+        "window_stages": window,
         "ts": now,
     }
+    if finished_work:
+        record["disposition"] = EFFORT_FIRE_FINISHED_WORK
+        state.effort_retiers.extend(retier_records(state, div.scale, window, fire_ts=now, thr=thr))
     state.effort_fires.append(record)
     return record
 

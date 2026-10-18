@@ -358,7 +358,7 @@ def test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes
         action="next_stage",
         detail="difficulty worked through; plan unchanged — retry the re-armed stage",
         marker=None,
-        data={},
+        data={"replan_classes": {"no_change": 1, "bookkeeping": 0, "check_only": 0, "operative": 0}},
     ), f"replan mismatch: got {d}"
 
     # present_plan: legacy Namespace, no `rejection_text` attribute at all

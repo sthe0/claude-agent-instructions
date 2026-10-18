@@ -98,6 +98,7 @@ paper.
 
 ## See also
 
+- [Cost-tier floor advisory](../../scripts/agentctl/README.md#cost-tier-floor-advisory) — `submit-plan` now names a stage whose `cost_tier` is below the floor its typed fields set; advisory only.
 - [[effort-divergence-trigger]] — the mechanism this heuristic keeps from
   firing on a stage that was never mispriced; § "the estimate is declared by
   the same actor it constrains" names this exact blind spot.

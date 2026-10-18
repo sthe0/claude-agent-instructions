@@ -1,6 +1,6 @@
 ---
 name: agentctl-plan-review-coverage-checks-whole-record-first
-description: agentctl's plan_review_blockers_coverage gate checks the single whole-plan state.plan_review record FIRST, unconditionally — a stage-scoped override/pass recorded via --scope stage:N is structurally unreachable until the whole record's path+digest binds to the live plan, so re-recording at stage scope alone never clears the gate when the whole record is stale.
+description: agentctl's plan_review_blockers_coverage gate checks the single whole-plan state.plan_review record FIRST, unconditionally — a stage-scoped override/pass recorded via --scope stage:N is structurally unreachable until the whole record's path+digest binds to the live plan, so re-recording at stage scope alone never clears the gate when the whole record is stale — which a tier 0-2 edit no longer causes, since carry-forward re-binds the whole record to the new version; it stays stale after a tier 3-4 edit or with no snapshot of the old version.
 type: reference
 created: 2026-10-06
 last_verified: 2026-10-06
@@ -73,6 +73,7 @@ and a legacy `qenum-*` candidate still needs `question-candidate-dispose
 
 ## See also
 
+- [Change tier and proportional review](../../../scripts/agentctl/README.md#change-tier-and-proportional-review) — carry-forward re-binds the whole record on a tier 0-2 edit, so the stale-whole-record case above is now the tier 3-4 / absent-snapshot path.
 - [[2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]] — the sibling
   false-fail family for `verify_command`/`final_check`, not `plan_review`.
 - [[2026-08-27-self-attested-identity-field-needs-declared-principal-check]] — the

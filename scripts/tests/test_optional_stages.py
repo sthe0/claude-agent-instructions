@@ -856,6 +856,19 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "GAP in main's helper, filed as a Core issue rather than fixed in a merge; remove "
         "this entry with the `in (\"PASSED\", \"SKIPPED\")` fix"
     ),
+    ("agentctl/cli.py", "_frozen_stage_survives"): (
+        "asks whether a stage's PASSED verdict survives a replan whose carry key moved; a "
+        "SKIPPED stage has no delivered work whose verdict could survive, so it is "
+        "deliberately not settled-equivalent here"
+    ),
+    ("agentctl/cli.py", "_passed_dependents_closure"): (
+        "collects the stages holding a delivered verdict that a --reopen invalidates; "
+        "a declined (SKIPPED) stage holds none, so only PASSED belongs in the closure"
+    ),
+    ("agentctl/cli.py", "_frozen_stage_refusal"): (
+        "names the PASSED stages a non-substantive replan may not edit in an operative or "
+        "interface leaf; a SKIPPED stage delivered nothing to protect"
+    ),
     ("agentctl/cli.py", "_renormalize_replan"): (
         "same pending-set question as _replan_pending_indices, asked inline while carrying "
         "norm targets across a replan; a SKIPPED stage is likewise counted as pending. "

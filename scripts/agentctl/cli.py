@@ -23,12 +23,13 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import asdict, dataclass, fields, replace
+import tomllib
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
 from lib import argv_text, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, carry_forward, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from . import config as agentctl_config
@@ -55,6 +56,7 @@ from .plan import (
     SEVERITY_BLOCKING,
     SEVERITY_NOTE,
     acceptance_requirement_bindings,
+    change_tier,
     changed_parts,
     check_venue_warnings,
     customer_question_defect,
@@ -79,13 +81,16 @@ from .plan import (
     plan_meta_element_keys,
     plan_stage_digests,
     refined_grant_entries,
+    replan_class,
     review_ids,
     stage_norm_keys,
     stage_part,
     stage_question_key,
     stage_reattest_digest,
     unit_currency_hash,
+    unit_node,
     verify_command_reachability_blockers,
+    cost_tier_floor_advisories,
     verify_command_scope_warnings,
     _derive_stage_grants,
     _venue_for,
@@ -122,6 +127,7 @@ from .state import (
     CriterionType,
     Declaration,
     Difficulty,
+    EFFORT_FIRE_FINISHED_WORK,
     FAILURE_ADDRESS_VALUES,
     FinalCheck,
     Investigation,
@@ -430,6 +436,21 @@ def _write_plan_version_snapshot(store: StateStore, state: SessionState, data: b
     return str(snap)
 
 
+def _read_plan_version_snapshot(store: StateStore, state: SessionState, digest: str) -> bytes | None:
+    """The bytes `_write_plan_version_snapshot` stored for plan version `digest` (the full
+    sha256), or None when the store exposes no on-disk path, no such version was written,
+    or the file is unreadable or does not hash to `digest`. None means the old side of a
+    plan diff is unknown, and a caller keeps its behaviour from before the tier existed."""
+    path_fn = getattr(store, "path", None)
+    if path_fn is None or not digest:
+        return None
+    try:
+        data = (path_fn(state.session_id).parent / f"plan-version-{digest[:16]}.toml").read_bytes()
+    except OSError:
+        return None
+    return data if hashlib.sha256(data).hexdigest() == digest else None
+
+
 def _snapshot_plan_version(store: StateStore, state: SessionState, plan_path: str) -> str | None:
     """Read `plan_path`'s current bytes, content-address them via
     `_write_plan_version_snapshot`, and return the sha256 digest -- the read+write pair
@@ -717,20 +738,23 @@ def _open_effort_fire(state: SessionState) -> list[dict]:
 
 
 def _record_effort_fire(state: SessionState, div: "effort.Divergence", *, now: float,
-                        store: StateStore | None = None) -> dict:
+                        store: StateStore | None = None, finished_work: bool = False) -> dict:
     """`effort.record_fire` plus, on a spend/wall-clock fire of a ledgered order, the
-    open user-owed marker and the order-level baseline rebase."""
-    fire = effort.record_fire(state, div, now=now)
+    open user-owed marker and the order-level baseline rebase. A fire on finished work
+    (`finished_work`) is recorded and rebases the baselines but owes the user nothing:
+    there is no remaining plan for the user to renegotiate."""
+    fire = effort.record_fire(state, div, now=now, finished_work=finished_work)
     fire["difficulty_id_at_fire"] = _difficulty_id(state.difficulty)
     if div.scale in effort.RATIO_SCALES:
         key = _ledgered_order_key(state)
         if key is not None:
             _flush_order_effort(state, key, store=store)
-            order_approvals.record_effort_fire(
-                key, scale=div.scale, detail={"actual": div.actual, "estimate": div.estimate,
-                                               "multiple": div.multiple},
-                at=dt.datetime.now(dt.timezone.utc).isoformat(),
-            )
+            if not finished_work:
+                order_approvals.record_effort_fire(
+                    key, scale=div.scale, detail={"actual": div.actual, "estimate": div.estimate,
+                                                   "multiple": div.multiple},
+                    at=dt.datetime.now(dt.timezone.utc).isoformat(),
+                )
             window = order_approvals.get(key)["effort_since_user_approval"]
             state.order_effort_base = {
                 scale: float(window.get(scale) or 0.0) for scale, _ in _ORDER_EFFORT_SCALES
@@ -1395,22 +1419,62 @@ def _plan_review_override_refusal(
     return None, crossing
 
 
-def _record_first_thinker_verdict(state: SessionState, doc, review, scope: str) -> None:
-    """Write the thinker's first whole-plan verdict on the changed unresolved commands
-    into the order's ledger, once per (approved version, changed identities) key. An
-    override, an unattested review or a stage-scoped one is never that verdict."""
-    if doc is None or scope or not review.plan_sha256:
+def _scope_stage(scope: str) -> "int | None":
+    """The stage a `stage:<n>` or `topo:unit:<n>` scope is about, else None."""
+    index = plan_review_scope_stage_index(scope)
+    if index is not None:
+        return index
+    pair = plan_review_pair_scope(scope)
+    if pair is not None and is_unit_id(pair):
+        node = unit_node(pair)
+        return node if isinstance(node, int) else None
+    return None
+
+
+def _review_vouch(state: SessionState, doc, scope: str) -> "tuple[int, bool] | None":
+    """`(stage, sole)` when a pass at `scope` reviews a stage `plan-review-delta` reports as
+    owed for `doc`: `sole` is True when that stage is the only thing owed, so its pass is the
+    whole review of the edit. None for any other scope. Read before the pass is stored,
+    while the delta still lists the stage."""
+    index = _scope_stage(scope)
+    if doc is None or index is None:
+        return None
+    whole_plan, owed = gates.plan_review_delta(state, doc)
+    if whole_plan or index not in owed:
+        return None
+    return index, owed == {index}
+
+
+def _record_first_thinker_verdict(state: SessionState, doc, review, scope: str,
+                                  *, vouch: "tuple[int, bool] | None" = None) -> None:
+    """Write the thinker's first verdict on the changed unresolved commands into the
+    order's ledger, once per (approved version, changed identities) key. A whole-plan pass,
+    or a stage-scoped one that is the whole review owed (`vouch` sole), is that verdict
+    for the whole key once every other stage holding a changed command has its own passing
+    first verdict (an override there is no pass); a stage-scoped pass beside other owed
+    stages is the first verdict only on that stage's own commands, under that stage's key.
+    An override or an unattested review never is."""
+    if doc is None or (scope and vouch is None) or not review.plan_sha256:
         return
     if review.verdict not in (gates._PLAN_REVIEW_PASS, gates._PLAN_REVIEW_REVISE):
         return
     key = _ledgered_order_key(state)
     if key is None:
         return
-    verdict_key = _autonomy_for(state, doc)["first_verdict_key"]
+    autonomy = _autonomy_for(state, doc)
+    verdict_key = autonomy["first_verdict_key"]
+    if vouch is not None:
+        recorded = order_approvals.get(key).get("first_thinker_verdicts") or {}
+        others_passed = gates.every_stage_vouched(
+            autonomy["first_verdict_stage_keys"], autonomy["unresolved_changed_commands"],
+            recorded, skip=vouch[0])
+        if not (vouch[1] and others_passed):
+            verdict_key = autonomy["first_verdict_stage_keys"].get(vouch[0])
     if verdict_key is None:
         return
     order_approvals.record_first_thinker_verdict(key, verdict_key, {
         "verdict": review.verdict, "plan_sha256": review.plan_sha256, "reviewer": review.reviewer,
+        **({"scope": scope} if scope else {}),
     })
 
 
@@ -1428,9 +1492,19 @@ def _kind_within_boundary(state: SessionState, kind: str, doc, *, ledgered: bool
     if verdict.get("basis") == gates.PARENT_NORM_BASIS:
         return kind if verdict["eligible"] else "substantive"
     if (verdict["order_changed"] or verdict["extra_resources"]
-            or verdict["unresolved_changed_commands"]):
+            or (verdict["unresolved_changed_commands"] and not _vouched_by_thinker_pass(verdict))):
         return "substantive"
     return kind
+
+
+def _vouched_by_thinker_pass(verdict: dict) -> bool:
+    """Whether the changed unresolved commands of `verdict` are all engine-executed and a
+    thinker pass has vouched them: the whole-plan first verdict, or a stage-scoped pass at
+    the scope the review delta reports as sufficient (each stage's own, when several
+    stages carry a changed command)."""
+    if verdict.get("thinker_pass") is not True or verdict.get("first_verdict_key") is None:
+        return False
+    return not any(c["needs_user"] for c in verdict["unresolved_changed_commands"])
 
 
 def _replan_kind(state: SessionState, old, new) -> str:
@@ -1452,19 +1526,170 @@ def _replan_kind(state: SessionState, old, new) -> str:
     return _kind_within_boundary(state, kind, new, ledgered=ledgered or parent_norm_plan)
 
 
-def _replan_pending_indices(state: SessionState, new, kind: str) -> list[int]:
-    """Indices of `new`'s stages this replan leaves to run: every stage but one whose
-    PASSED verdict survives it. A refinement or no-op never re-arms a PASSED stage; a
-    substantive replan keeps a PASSED stage's verdict only when `stage_carried` says its
-    definition and its suppliers' interfaces are unchanged."""
+def _baseline_plan_for_tier(store: StateStore, state: SessionState):
+    """The plan version the session is running, parsed from its stored snapshot, or None
+    when that version is unknown (no approved-plan snapshot, or no stored copy of its
+    bytes). None means the tier of an edit cannot be computed, and the replan routes as it
+    did before the tier existed."""
+    if not state.plan_snapshot_path:
+        return None
+    return _plan_from_snapshot(store, state, state.plan_snapshot_hash or "")
+
+
+def _plan_from_snapshot(store: StateStore, state: SessionState, digest: str):
+    """The plan version `digest` parsed from its stored snapshot, or None when no readable
+    snapshot of it exists or it does not parse."""
+    from .plan import PlanError, parse_plan
+
+    data = _read_plan_version_snapshot(store, state, digest)
+    if data is None:
+        return None
+    try:
+        raw = tomllib.loads(data.decode("utf-8"))
+        if state.plan_path:
+            registered = Path(state.plan_path)
+            raw, _visited = plan_refs.resolve_refs(
+                raw, registered.parent, plan_refs.default_root(registered),
+                read=plan_store.reader(), index_path=registered)
+        return parse_plan(raw, strict=False)
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError, PlanError):
+        return None
+
+
+def _review_baseline(store: StateStore, state: SessionState):
+    """(plan, sha256) of the plan version the session's review records describe: the
+    approved snapshot when there is one, else the file at `plan_path`; (None, None) when
+    neither can be read."""
+    from .plan import PlanError, load_plan as _load
+
+    baseline = _baseline_plan_for_tier(store, state)
+    if baseline is not None:
+        return baseline, state.plan_snapshot_hash
+    if not state.plan_path:
+        return None, None
+    try:
+        return _load(state.plan_path, strict=False), _plan_file_sha256(state.plan_path)
+    except (OSError, PlanError):
+        return None, None
+
+
+def _carry_records(store: StateStore, state: SessionState, plan_path: str, *, in_place: bool,
+                   baseline: "tuple | None" = None):
+    """Carry the review, premise and order-coverage records onto the plan at `plan_path`
+    as far as the edit's change tier allows (`carry_forward`). Returns `(state, report,
+    change)`: with `in_place` False the records are carried on a copy and `state` stays as
+    it was, so a gate can read the carried view of a command that may still be refused.
+    `baseline` is `(plan, sha256, path)` of the version the records describe, for a caller
+    that has already moved `state.plan_path` off it."""
+    from .plan import PlanError, change_tier, load_plan as _load
+
+    report = {"tier": None, "carried": False, "owed": [], "records": [], "held": []}
+    old, old_sha = _review_baseline(store, state) if baseline is None else baseline[:2]
+    old_path = state.plan_path if baseline is None else baseline[2]
+    if old is None:
+        return state, report, None
+    try:
+        new = _load(plan_path, strict=False)
+    except (OSError, PlanError):
+        return state, report, None
+    change = change_tier(old, new)
+    target = state if in_place else copy.deepcopy(state)
+    report = carry_forward.apply(
+        target, old, new, new_path=plan_path, new_sha=_plan_file_sha256(plan_path),
+        change=change, old_path=old_path, old_sha=old_sha)
+    return (target if report["carried"] else state), report, change
+
+
+_VERDICT_PRESERVING_CLASSES = frozenset({"B", "F", "C"})
+
+
+def _frozen_stage_survives(prev_stages, new_stages, index: int, tier) -> bool:
+    """Whether a PASSED stage keeps its verdict although its carry digest moved: the edit
+    touched only bookkeeping, final-venue or check-only leaves (nothing the delivered work
+    was built from or promised to a consumer) and every supplier's interface is unchanged.
+    False without a tier (the old side is unknown)."""
+    from .stage_norm import interface_token
+
+    change = tier.stages.get(index) if tier is not None else None
+    if change is None or any(cls not in _VERDICT_PRESERVING_CLASSES for _, cls in change.moved):
+        return False
+    prev = {s.index: s for s in prev_stages}
+    new = {s.index: s for s in new_stages}
+    if index not in prev or prev[index].outcome.status != StageStatus.PASSED.value:
+        return False
+    return all(
+        sup in prev and sup in new and interface_token(prev[sup]) == interface_token(new[sup])
+        for sup in {e.on for e in new[index].supplies}
+    )
+
+
+def _verdict_survives(prev_stages, new_stages, index: int, tier=None) -> bool:
+    """The one carry decision for a stage's settled verdict across a plan edit: its
+    definition and its suppliers' interfaces are unchanged (`stage_carried`), or only
+    verdict-preserving leaves moved (`_frozen_stage_survives`). Without a `tier` (the
+    approve-time refresh of an in-place plan edit, which has no previous version to read)
+    only the first holds."""
     from .stage_norm import stage_carried
 
+    return (stage_carried(prev_stages, new_stages, index)
+            or _frozen_stage_survives(prev_stages, new_stages, index, tier))
+
+
+def _passed_dependents_closure(live_stages, new_stages, roots) -> set[int]:
+    """`roots` plus every PASSED stage that transitively depends on one of them, along the
+    dependency edges of either plan version."""
+    edges: dict[int, set[int]] = {}
+    for stage in (*live_stages, *new_stages):
+        edges.setdefault(stage.index, set()).update(stage.depends_on)
+    passed = {s.index for s in live_stages if s.outcome.status == StageStatus.PASSED.value}
+    closure = set(roots)
+    grew = True
+    while grew:
+        grew = False
+        for index in passed - closure:
+            if edges.get(index, set()) & closure:
+                closure.add(index)
+                grew = True
+    return closure
+
+
+def _frozen_stage_refusal(state: SessionState, tier, reopening: set[int]):
+    """Refusal text and data for a replan that edits an operative or interface leaf of a
+    PASSED stage the replan does not reopen; None when none does."""
+    frozen = {}
+    for stage in state.stages:
+        if stage.outcome.status != StageStatus.PASSED.value or stage.index in reopening:
+            continue
+        change = tier.stages.get(stage.index)
+        paths = [p for p, cls in change.moved if cls in ("O", "I")] if change else []
+        if paths:
+            frozen[stage.index] = paths
+    if not frozen:
+        return None
+    named = "; ".join(f"stage {i} ({', '.join(p)})" for i, p in sorted(frozen.items()))
+    flags = " ".join(f"--reopen {i}" for i in sorted(frozen))
+    return (f"replan refused: it edits what an already PASSED stage was built from or "
+            f"promises — {named}; nothing was applied. Re-run with {flags} to re-arm the "
+            f"stage and every PASSED stage depending on it, or revert the edit",
+            {"blockers": [f"stage {i} (PASSED): {', '.join(p)}" for i, p in sorted(frozen.items())],
+             "frozen_stages": sorted(frozen)})
+
+
+def _replan_pending_indices(state: SessionState, new, kind: str, tier=None,
+                            reopened: frozenset[int] | set[int] = frozenset()) -> list[int]:
+    """Indices of `new`'s stages this replan leaves to run: every stage but one whose
+    PASSED verdict survives it. A refinement or no-op never re-arms a PASSED stage; a
+    substantive replan keeps a PASSED stage's verdict only when `_verdict_survives` holds:
+    its definition and its suppliers' interfaces are unchanged (`stage_norm.stage_carried`),
+    or only verdict-preserving leaves moved. A stage in `reopened` is always left to run."""
     live = {s.index: s for s in state.stages}
     pending = []
     for ns in new.stages:
         prev = live.get(ns.index)
         passed = prev is not None and prev.outcome.status == StageStatus.PASSED.value
-        if passed and (kind != "substantive" or stage_carried(state.stages, new.stages, ns.index)):
+        if passed and ns.index not in reopened and (
+            kind != "substantive" or _verdict_survives(state.stages, new.stages, ns.index, tier)
+        ):
             continue
         pending.append(ns.index)
     return pending
@@ -1539,6 +1764,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.supplies = list(refined.supplies)
     cur.optional = refined.optional
     cur.backlog_issue = refined.backlog_issue
+    cur.amendments = list(refined.amendments)
     if is_skipped(cur) and not cur.optional:
         cur.outcome.status = StageStatus.PENDING.value
 
@@ -1677,7 +1903,6 @@ def _refresh_caches_from_plan_path(
     if not state.plan_path:
         return []
     from .plan import PlanError, load_plan as _load
-    from .stage_norm import stage_carried
     try:
         refreshed = _load(state.plan_path)
     except (OSError, PlanError) as exc:
@@ -1689,7 +1914,7 @@ def _refresh_caches_from_plan_path(
         advice.extend(_submission_advice(refreshed, runner, state.weight_class, state.plan_path))
     # Decided for every stage BEFORE any is mutated: a consumer's verdict depends on its
     # suppliers' pre-edit interfaces.
-    carried = {rs.index: stage_carried(state.stages, refreshed.stages, rs.index)
+    carried = {rs.index: _verdict_survives(state.stages, refreshed.stages, rs.index)
                for rs in refreshed.stages}
     declined_issues = gates.declined_issue_set(state)
     declined_titles = gates.declined_title_set(state)
@@ -2185,6 +2410,8 @@ def _diagnose_effort_divergence(
     declaration carries the numbers that triggered it, not just the scale name."""
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
     opened = _open_difficulty(state)
+    if opened is not None:
+        fire["difficulty_uid"] = opened.uid
     store.save(state)
     data = {"effort_divergence": fire}
     route = _agent_replans_fire_route(state)
@@ -2440,13 +2667,67 @@ def _clear_since_user_decision(state: SessionState, by: str) -> None:
         state.task_id, session_id=state.session_id, now=_utcnow())
 
 
-def _count_replan(state: SessionState) -> None:
+def _count_replan(state: SessionState, change_class: str) -> None:
     """Count one replan of the task, on the cross-session total and on the since-user
-    total the agent self-decision backstop reads."""
+    total the agent self-decision backstop reads — when it is operative. A no_change,
+    bookkeeping or check-only replan changes nothing the work runs under, so it spends
+    none of the budget those totals bound (the same split `effort.replan_count` makes)."""
+    if change_class != effort.OPERATIVE_CLASS:
+        return
     task_accumulator.add(
         state.task_id, "replan_count", 1, session_id=state.session_id, now=_utcnow(),
         mirror_axis="replans_since_user_decision",
     )
+
+
+def _replan_class_data(state: SessionState) -> dict:
+    """The replan counts by change class — what the effort replans scale counts
+    (`operative`) next to what it does not — for a Directive or the status JSON."""
+    return {"replan_classes": effort.replan_class_counts(state)}
+
+
+def _effort_fire_window(state: SessionState) -> list[int] | None:
+    """The window stages of the spend/wall-clock fire whose difficulty is the open one,
+    or None when the open difficulty was not opened by such a fire."""
+    difficulty = state.difficulty
+    if difficulty is None:
+        return None
+    for fire in reversed(state.effort_fires):
+        if (fire.get("difficulty_uid") == difficulty.uid
+                and fire.get("scale") in effort.RATIO_SCALES):
+            return list(fire.get("window_stages") or [])
+    return None
+
+
+def _finished_work_fire(state: SessionState, div: "effort.Divergence | None", *,
+                        store: StateStore) -> dict | None:
+    """Record a spend/wall-clock fire raised while every stage is settled and return its
+    record, or None when it does not apply (the caller then routes the fire as usual).
+    Work that has finished has no remaining plan to correct, so the fire is recorded
+    with its retier records and the session proceeds instead of opening a difficulty."""
+    if (div is None or div.scale not in effort.RATIO_SCALES or not state.all_stages_settled()
+            or not gates.effort_active(state)):
+        return None
+    return _record_effort_fire(state, div, now=_utcnow(), store=store, finished_work=True)
+
+
+def _finished_work_data(state: SessionState) -> dict:
+    """The finished-work fires and their retier records, for a Directive's data."""
+    fires = [f for f in state.effort_fires if f.get("disposition") == EFFORT_FIRE_FINISHED_WORK]
+    return {"effort_finished_work": fires, "effort_retiers": list(state.effort_retiers)} if fires else {}
+
+
+def _disclose_finished_work(state: SessionState, data: dict, detail: str) -> str:
+    """Put the finished-work fires and their retier records on `data` and, when there
+    are any, name them in `detail` (verify-final and resolve both surface them)."""
+    extra = _finished_work_data(state)
+    if not extra:
+        return detail
+    data.update(extra)
+    fires = extra["effort_finished_work"]
+    named = ", ".join(f"{f.get('scale')} {f.get('actual')}/{f.get('estimate')}" for f in fires)
+    return (f"{detail}; NOTE: {len(fires)} effort fire(s) were raised on finished work and recorded "
+            f"without a difficulty: {named} (see effort_finished_work, effort_retiers)")
 
 
 def _park_node(state: SessionState) -> None:
@@ -3106,8 +3387,9 @@ def _bound_stage_key(state, question: "premise.Question", plan_path: str | None 
     (#123) — the plan-level twin of the per-stage key. Returns "" for an
     unparseable target and when no plan has been submitted yet (`state.plan_path`
     empty) — exactly the cases premise.validate_questions exempts from the
-    key-mismatch check. Reads only; the WRITE lives in the two disposing verbs so
-    the package-wide single-writer scan stays exact.
+    key-mismatch check. Reads only; the WRITE lives in the two disposing verbs and in
+    `_register_plan_assumptions` (the third writer) so the package-wide single-writer
+    scan stays exact.
 
     `plan_path`, when given, is read INSTEAD of `state.plan_path` — for the
     CORRECTED plan of a replan, which is not `state.plan_path` until that replan
@@ -3467,9 +3749,17 @@ def cmd_question_list(args, *, store: StateStore, runner: Runner | None = None) 
             f"{q.id}={q.disposition}" + (" [stale]" if q.stale_note else "")
             for q in questions
         ) or "no questions"
+    unresolved = [
+        c for c in premise.question_candidates_from_dicts(bag.get("candidates", []))
+        if c.disposition == "raised"
+    ]
+    if unresolved:
+        detail += "\ncandidates (undispositioned):\n" + "\n".join(
+            f"{c.id}: {c.question or c.statement}" for c in unresolved)
     return Directive(
         True, state.node, "inspect", detail,
-        data={"questions": premise.questions_to_dicts(questions)},
+        data={"questions": premise.questions_to_dicts(questions),
+              "candidates": premise.question_candidates_to_dicts(unresolved)},
     )
 
 
@@ -4049,6 +4339,30 @@ def cmd_plan(args, *, store: StateStore, runner: Runner | None = None) -> Direct
     return Directive(True, state.node, "await_plan", "planner working; submit-plan when ready")
 
 
+def _register_plan_assumptions(state, doc: "PlanDoc", plan_path: str) -> None:
+    """Record each typed `[[meta.assumption]]` as an `assumed` premise
+    (`assume-<id>`), stamped against the submitted plan. Upsert by id, so a
+    re-submission rewrites the same row instead of adding one; a session without the
+    premise bag has nothing to register into (the assumptions are then dropped
+    silently). Prose is never parsed. The key is re-stamped on every submission on
+    purpose: the plan itself re-declares the assumption each time, so a stage edit
+    never stales it the way it stales a premise the user or agent disposed."""
+    bag = state.plugins.get("premise")
+    if bag is None or not doc.meta.assumptions:
+        return
+    questions = premise.questions_from_dicts(bag.get("questions", []))
+    for a in doc.meta.assumptions:
+        qid = f"assume-{a.id}"
+        q = premise.Question(
+            id=qid, question=a.text, disposition="assumed", basis=a.basis, risk=a.risk,
+            target=f"stage:{a.stage}.method" if a.stage else "plan.goal",
+            own_research="declared as a typed [[meta.assumption]] in the submitted plan",
+        )
+        q.disposed_at_key = _bound_stage_key(state, q, plan_path)
+        questions = [x for x in questions if x.id != qid] + [q]
+    bag["questions"] = premise.questions_to_dicts(questions)
+
+
 def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     efblock = gates.effort_fire_blockers(state)
@@ -4076,6 +4390,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # between separate reads can't desynchronize accepted_plan_digest from the bytes
     # that were actually parsed and verified.
     doc, _submitted_plan_bytes, _submitted_plan_digest = load_plan_with_digest(plan_path)
+    _prior_baseline = (*_review_baseline(store, state), state.plan_path) if resubmitting else None
     state.stages = doc.stages
     _sync_venue_from_plan(state, doc)
     state.final_check = doc.meta.final_check
@@ -4141,12 +4456,21 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     _submitted_plan_sha256 = _submitted_plan_digest
     state.node = transition(state.node, "revise_plan" if resubmitting else "submit_plan")
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
+    _carry_note = ""
     if resubmitting:
         # The counter (read by gates.plan_review_round_release_active, reset by
         # cmd_approve) advances per resubmission made while a review record STANDS —
         # redrafts of a plan nobody reviewed are not rounds. Read before the staleness
-        # clear below, which ends the round.
-        if state.plan_review is not None or state.plan_stage_reviews:
+        # clear below, which ends the round. An edit whose records carry onto the new
+        # version (`carry_forward`) is not a round: no review is owed again for it.
+        _, _submit_carry, _ = _carry_records(
+            store, state, plan_path, in_place=True, baseline=_prior_baseline)
+        if _submit_carry["carried"]:
+            _carry_note = carry_forward.describe(_submit_carry)
+            state.log("review_carried", plan=plan_path, tier=_submit_carry["tier"],
+                      records=list(_submit_carry["records"]), owed=list(_submit_carry["owed"]),
+                      held=list(_submit_carry["held"]))
+        elif state.plan_review is not None or state.plan_stage_reviews:
             state.plan_review_rounds += 1
         # The plan changed, so any recorded thinker review that no longer covers
         # the resubmitted bytes must clear so the plan-review gate re-arms for
@@ -4169,6 +4493,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         state.plan_stage_reviews = {
             scope: pr for scope, pr in state.plan_stage_reviews.items() if _still_covers(pr)
         }
+    _register_plan_assumptions(state, doc, plan_path)
     state.plan_submitted_ts = time.time()
     state.log("submit_plan", plan=plan_path, verified=True, revised=resubmitting,
               plan_sha256=_submitted_plan_sha256)
@@ -4188,6 +4513,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
             "plan ready; HARD GATE — get explicit user approval before approve",
             marker="PLAN-READY", data=directive_data,
         )
+    if _carry_note:
+        d.data.setdefault("advisories", []).append(_carry_note)
     _attach_advisories(d, "plan_completeness",
                        {"plan_summary": plan_summary_text(doc), "stage_count": len(state.stages),
                         "titles": [s.title for s in state.stages]},
@@ -4207,6 +4534,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         check_venue_warnings(doc.stages, doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
     )
     d.data.setdefault("advisories", []).extend(grant_shadow.mixed_spelling_advisories(doc))
+    d.data.setdefault("advisories", []).extend(cost_tier_floor_advisories(doc.stages))
     # Submission seam (a)'s advice channel: a stage whose expected_result_image merely
     # restates its own check. Warn-only at all three seams — see submission.submission_advice.
     # Rides the same `run` resolved at the seam above (see its comment for why the fallback
@@ -4829,6 +5157,7 @@ class _ConcernPlan:
     verdict: str
     part_digests: dict
     regression_command: str
+    delta_changed_parts: list = field(default_factory=list)
 
     @property
     def bodies(self) -> list[str]:
@@ -4900,10 +5229,12 @@ def _question_data(state: SessionState, args, question_ids: list[str]) -> dict:
     return data
 
 
-def _concern_parts(body: str, own_parts) -> list[str]:
-    token = gates._concern_part_token(body)
+def _concern_parts(
+    body: str, own_parts, *, default_to_own: bool = True, after_marker: bool = False,
+) -> list[str]:
+    token = gates._concern_part_token(body, after_marker=after_marker)
     if token is None:
-        return list(own_parts)
+        return list(own_parts) if default_to_own else []
     index = plan_review_scope_stage_index(token)
     return [plan_review_scope_for_stage(index) if index is not None else token]
 
@@ -4916,9 +5247,16 @@ def _changed_parts(parts, digests: dict, prev_digests: dict) -> list[str]:
 def _plan_concern_severity(
     state: SessionState, doc, ledger_scope: str, own_parts, prev, parsed, verdict: str, *,
     attested: bool, regression_command: str, evidence: bool, may_promote: bool,
+    judge_delta: bool = False,
 ) -> _ConcernPlan:
+    """`judge_delta`: a topo row re-reviewed after a pass — when some of its own parts changed
+    since that pass, a blocking concern naming no changed part is recorded as advisory."""
     digests = part_digest_map(doc) if doc is not None else {}
     prev_digests = prev.part_digests if prev is not None else {}
+    delta_changed = (
+        _changed_parts(own_parts or (), digests, prev_digests)
+        if judge_delta and prev is not None and prev.verdict == gates._PLAN_REVIEW_PASS else []
+    )
     open_parts = {
         p for e in state.concern_ledger.values()
         if e.scope == ledger_scope and gates.concern_unresolved(e, state, doc)
@@ -4926,8 +5264,12 @@ def _plan_concern_severity(
     }
     parts_by_concern, effective = [], []
     for pc in parsed:
-        parts = _concern_parts(pc.body, own_parts or tuple(digests))
-        changed = set(_changed_parts(parts, digests, prev_digests))
+        parts = _concern_parts(
+            pc.body, own_parts or tuple(digests), default_to_own=not delta_changed,
+            after_marker=bool(delta_changed),
+        )
+        changed = set(_changed_parts(
+            [p for p in parts if p in own_parts] if delta_changed else parts, digests, prev_digests))
         target = state.concern_ledger.get(pc.restates) if pc.restates else None
         dispositioned = target is not None and (
             target.status == CONCERN_SUPERSEDED
@@ -4941,6 +5283,8 @@ def _plan_concern_severity(
             pc.severity, parts, has_prev=prev is not None, changed=changed,
             open_parts=open_parts, restates_dispositioned=dispositioned,
             new_evidence=evidence or differs,
+            after_pass_on_changed=bool(delta_changed),
+            restates_open=target is not None and gates.concern_unresolved(target, state, doc),
         ))
     effective_verdict = verdict
     if (verdict == gates._PLAN_REVIEW_REVISE and parsed and attested and may_promote
@@ -4954,7 +5298,7 @@ def _plan_concern_severity(
         if not still_open:
             effective_verdict = gates._PLAN_REVIEW_PASS
     return _ConcernPlan(parsed, parts_by_concern, effective, effective_verdict, digests,
-                        regression_command)
+                        regression_command, delta_changed)
 
 
 def _blocking_parts(parsed, parts_by_concern) -> set[str]:
@@ -5026,7 +5370,8 @@ def _commit_concern_ledger(state: SessionState, review, cp: _ConcernPlan, ledger
 def _log_concerns_downgraded(state: SessionState, cp: _ConcernPlan, scope: str, raw_verdict: str) -> None:
     if cp.downgraded or cp.verdict != raw_verdict:
         state.log("plan_review_concerns_downgraded", scope=scope, raw_verdict=raw_verdict,
-                  verdict=cp.verdict, severities=cp.severities, effective=cp.effective)
+                  verdict=cp.verdict, severities=cp.severities, effective=cp.effective,
+                  **({"changed_parts": cp.delta_changed_parts} if cp.delta_changed_parts else {}))
 
 
 def _cmd_plan_review_pair(
@@ -5056,6 +5401,8 @@ def _cmd_plan_review_pair(
             "concern is identified by its condition marker, and risk-accept does not "
             "take a pair scope"
         )
+    if getattr(args, "escalate_pairs", False) and not is_unit_id(pair):
+        return refuse(f"--escalate-pairs belongs to a unit review, not to pair {pair!r}")
     try:
         doc, _, live = load_plan_with_digest(target)
         if is_unit_id(pair):
@@ -5115,10 +5462,13 @@ def _cmd_plan_review_pair(
                 f"{regression_exit!r}): the current pass for pair {pair!r} stands"
             )
     ledger_scope = plan_review_scope_for_pair(pair)
+    # With no readable snapshot of the judged version the reviewer was told to judge the row
+    # whole, so no delta downgrade may apply.
+    delta_visible = prev is not None and _prior_row_diff(store, state, doc, prev, pair)["available"]
     cp = _plan_concern_severity(
-        state, doc, ledger_scope, pair_part_tokens(pair), state.plan_pair_reviews.get(pair),
+        state, doc, ledger_scope, pair_part_tokens(pair), prev,
         parsed, verdict, attested=bool(attested), regression_command=regression_command,
-        evidence=bool(regression_exit), may_promote=True,
+        evidence=bool(regression_exit), may_promote=True, judge_delta=delta_visible,
     )
     concerns = cp.bodies
     if is_unit_id(pair):
@@ -5144,8 +5494,13 @@ def _cmd_plan_review_pair(
         ledger = _condition4_ledger_rows(state, doc, target, review, concerns, "confirmed-gap")
     elif verdict == gates._PLAN_REVIEW_OVERRIDE and prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE:
         ledger = _condition4_ledger_rows(state, doc, target, prev, prev.concerns, "false-alarm")
+    vouch = _review_vouch(state, doc, ledger_scope)
     state.plan_pair_reviews[pair] = review
+    released: list[str] = []
+    if getattr(args, "escalate_pairs", False):
+        released = carry_forward.release_holds(state, unit_node(pair))
     _settle_override_decision(state, review, plan_review_scope_for_pair(pair), crossing)
+    _record_first_thinker_verdict(state, doc, review, ledger_scope, vouch=vouch)
     question_ids = _record_review_questions(state, pair, question_texts)
     if _is_counted_review(review.verdict, reviewer):
         _count_review_round(state, live)
@@ -5155,15 +5510,17 @@ def _cmd_plan_review_pair(
               concern_ids=review.concern_ids,
               plan_sha256=attested, concerns=concerns, note=note,
               regression_command=regression_command, regression_exit=regression_exit,
-              ledger_lines=len(ledger))
+              ledger_lines=len(ledger), escalated_pairs=released)
     store.save(state)
     _append_escalation_ledger(ledger)
     status = gates.pair_status(state, doc, target, pair)
     return Directive(
         True, state.node, "continue",
         f"pair review recorded for {pair!r} against {target} (verdict={verdict}); "
-        f"pair status: {status}",
+        f"pair status: {status}"
+        + (f"; escalated to the pairs: {', '.join(released)}" if released else ""),
         data={"pair": pair, "pair_status": status, "ledger_lines": len(ledger),
+              "escalated_pairs": released,
               "concern_ids": review.concern_ids, **_question_data(state, args, question_ids),
               **_crossing_data(crossing)},
     )
@@ -5253,6 +5610,11 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     pair = plan_review_pair_scope(scope)
     if pair is not None:
         return _cmd_plan_review_pair(args, state, target, pair, store=store, runner=runner)
+    if getattr(args, "escalate_pairs", False):
+        return Directive(
+            False, state.node, "noop",
+            "--escalate-pairs belongs to a unit review (--scope topo:unit:<n>), "
+            f"not to scope {scope or 'whole-plan'!r}")
     doc = None
     parse_error = None
     try:
@@ -5483,6 +5845,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
             data=data,
         )
     _log_concerns_downgraded(state, concern_plan, scope, args.verdict)
+    vouch = _review_vouch(state, doc, scope)
     if scope:
         state.plan_stage_reviews[scope] = review
     else:
@@ -5493,7 +5856,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         # so it must not become a terminal pass either.
         state.plan_review_passes[scope] = review
     _settle_override_decision(state, review, scope, crossing)
-    _record_first_thinker_verdict(state, doc, review, scope)
+    _record_first_thinker_verdict(state, doc, review, scope, vouch=vouch)
     # POST-APPROVAL round counting. cmd_submit_plan's increment covers only the
     # pre-approval resubmission loop; review cycles overwhelmingly recur AFTER
     # approval, on the `replan` path, where the same thinker review is demanded and
@@ -5780,11 +6143,15 @@ def cmd_plan_review_delta(args, *, store: StateStore, runner: Runner | None = No
         detail = f"no review gap: every part of {target} is covered by its current review"
     if pairs:
         detail += f"; walk-stale pairs — run: plan-review-topological.py --pairs {','.join(pairs)}"
-    return Directive(
-        True, state.node, "inspect", detail,
-        data={"markdown": md, "whole_plan": whole_plan_needed, "stages": stages, "pairs": pairs,
-              "consumer_of": {str(c): consumer_of[c] for c in sorted(consumer_of)}},
-    )
+    data = {"markdown": md, "whole_plan": whole_plan_needed, "stages": stages, "pairs": pairs,
+            "consumer_of": {str(c): consumer_of[c] for c in sorted(consumer_of)}}
+    baseline, _ = _review_baseline(store, state)
+    if baseline is not None:
+        change = change_tier(baseline, doc)
+        data["tier"] = change.tier
+        data["stage_tiers"] = {str(i): c.tier for i, c in sorted(change.stages.items())}
+        detail += f"; change tier {change.tier} against the version the session runs"
+    return Directive(True, state.node, "inspect", detail, data=data)
 
 
 def _pair_ledger_groups(state: SessionState, pair: str, target: str) -> "dict[int, list[ConcernRecord]]":
@@ -5875,11 +6242,27 @@ def cmd_plan_review_pair_history(args, *, store: StateStore, runner: Runner | No
         digests = part_digest_map(doc)
         stored = latest.part_digests if latest.plan_path == target else {}
         changed = _changed_parts(pair_part_tokens(pair), digests, stored)
+    data = {"pair": pair, "records": records, "changed_parts_since_last": changed}
+    if latest is not None and latest.plan_path == target:
+        data["prior_diff"] = _prior_row_diff(store, state, doc, latest, pair)
     return Directive(
         True, state.node, "inspect",
-        f"{len(records)} recorded review(s) of pair {pair!r} against {target}",
-        data={"pair": pair, "records": records, "changed_parts_since_last": changed},
+        f"{len(records)} recorded review(s) of pair {pair!r} against {target}", data=data,
     )
+
+
+def _prior_row_diff(store: StateStore, state: SessionState, doc, latest, pair: str) -> dict:
+    """The diff of the row's parts between the plan version a reviewer judged and `doc`.
+    The judged version of a carried record is the one its first carry started from
+    (`carried_from_sha`), not the version it was carried onto; with no readable snapshot of
+    it the row is `available: False` and the reviewer judges it whole."""
+    from .render import row_diff
+
+    judged = latest.carried_from_sha or latest.plan_sha256
+    old = _plan_from_snapshot(store, state, judged)
+    if old is None:
+        return {"available": False, "from_sha": judged, "text": ""}
+    return {"available": True, "from_sha": judged, "text": row_diff(old, doc, pair)}
 
 
 def _walk_target(args, state: SessionState) -> "str | None":
@@ -9365,13 +9748,15 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         state.current_stage = None
         state.pending_renorms = gates.open_renorms(state)
         state.log("record_result", stage=stage.index, status="passed")
-        if div is not None and gates.effort_active(state):
+        finished_fire = _finished_work_fire(state, div, store=store)
+        if finished_fire is None and div is not None and gates.effort_active(state):
             now = _utcnow()
             fire = _record_effort_fire(state, div, now=now, store=store)
             return _diagnose_effort_divergence(state, store, div, fire)
         store.save(state)
         if state.all_stages_settled():
-            d = Directive(True, state.node, "verify_final", f"stage {stage.index} passed; all stages passed")
+            d = Directive(True, state.node, "verify_final", f"stage {stage.index} passed; all stages passed",
+                          data=_finished_work_data(state))
         else:
             d = Directive(True, state.node, "next_stage", f"stage {stage.index} passed; more stages ready")
         # Warn-only advisory: kept ONLY for the non-gated acceptance path. When the
@@ -9438,8 +9823,8 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             False, state.node, "declare",
             "a prior final-verification refusal/failure already routed this session "
             "into the difficulty cycle; complete overcome-difficulty (declare -> "
-            "investigate -> critique -> replan — replan re-arms verification) before "
-            "re-running verify-final",
+            "investigate -> critique -> replan — a replan, including a no_change one that "
+            "counts toward no budget, re-arms verification) before re-running verify-final",
             marker="OVERCOME-DIFFICULTY",
         )
     if state.node == Node.RESOLUTION.value:
@@ -9590,7 +9975,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # Fire check on a clean pass (fire site 2) — the last point at which `diagnose`
     # is still a legal transition (a contracted plan can reach here with no further
     # record-result to fire from).
-    if div is not None and gates.effort_active(state):
+    if _finished_work_fire(state, div, store=store) is None and div is not None and gates.effort_active(state):
         now = _utcnow()
         fire = _record_effort_fire(state, div, now=now, store=store)
         return _diagnose_effort_divergence(state, store, div, fire)
@@ -9636,6 +10021,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
         data["acceptance_bypass"] = acceptance_bypass
         detail += "; WARNING: acceptance recorded via bypass, not judge corroboration (see acceptance_bypass)"
     detail = _disclose_backstop_crossings(state, data, detail)
+    detail = _disclose_finished_work(state, data, detail)
     detail = _disclose_agent_plan_conversions(state, data, detail)
     return Directive(True, state.node, "await_user_confirmation", detail, data=data)
 
@@ -9968,6 +10354,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         data["acceptance_bypass"] = acceptance_bypass
         detail += " (acceptance recorded via bypass; see acceptance_bypass)"
     detail = _disclose_backstop_crossings(state, data, detail)
+    detail = _disclose_finished_work(state, data, detail)
     detail = _disclose_agent_plan_conversions(state, data, detail)
     if landing["override"] is not None:
         data["landing_gate_override"] = landing["override"]
@@ -10787,8 +11174,18 @@ def _replan_cause(state: SessionState, explicit_reason: str | None) -> dict:
 
 def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     crossed: list[dict] = []
-    d = _cmd_replan(args, store=store, runner=runner, crossed=crossed)
+    reopened: list[int] = []
+    reopen_ignored: list[int] = []
+    d = _cmd_replan(args, store=store, runner=runner, crossed=crossed, reopened=reopened,
+                    reopen_ignored=reopen_ignored)
     d.data.update(_crossing_data(crossed[0] if crossed else None))
+    if reopened and d.ok:
+        d.data["reopened_stages"] = reopened
+        d.detail += f"; re-armed PASSED stage(s) {reopened} (--reopen)"
+    if reopen_ignored and d.ok:
+        d.data["reopen_ignored"] = reopen_ignored
+        d.detail += (f"; --reopen {reopen_ignored} ignored: not PASSED, so there is no "
+                     "verdict to re-arm")
     # Only on something to say: an unconditional setdefault would add an empty
     # `advisories` key to every replan Directive, which test_history_capture's
     # exact-equality pin reads as a changed contract.
@@ -10833,11 +11230,14 @@ def _replan_spelling_advisories(plan_path: str) -> list[str]:
 
 
 def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
-                crossed: list[dict] | None = None) -> Directive:
-    """`crossed`, when given, receives the backstop crossing a renegotiation applied."""
+                crossed: list[dict] | None = None,
+                reopened: list[int] | None = None,
+                reopen_ignored: list[int] | None = None) -> Directive:
+    """`crossed`, when given, receives the backstop crossing a renegotiation applied;
+    `reopened`, the indices of the PASSED stages an applied `--reopen` re-armed;
+    `reopen_ignored`, the `--reopen` indices that named a stage that is not PASSED."""
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load
-    from .stage_norm import stage_carried
 
     # --normalize-factor lets a replan record a normalize event in the SAME call,
     # instead of requiring a separate `normalize` invocation first. Validated here
@@ -11093,7 +11493,11 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # EVERY replan kind (refinement and substantive alike, per the user decision),
     # inactive for non-substantive sessions. A genuine no-op replan (args.plan ==
     # the already-reviewed plan_path) passes on the existing review.
-    prblock = gates.plan_review_blockers(state, args.plan)
+    # The records are judged as carried onto the corrected plan: a tier 0-1 edit owes no
+    # review, a tier 2 edit owes the edited stages' own. Nothing is written until the
+    # replan is applied.
+    gate_state, carry_preview, carry_change = _carry_records(store, state, args.plan, in_place=False)
+    prblock = gates.plan_review_blockers(gate_state, args.plan)
     _log_gate(state, "plan_review", prblock, passed=not prblock)
     if prblock:
         # With the round-release valve active the blockers ARE the release message,
@@ -11113,7 +11517,10 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 review_doc = _load(args.plan)
             except (OSError, PlanError):
                 review_doc = None
-            delta = gates.review_delta(state, review_doc, args.plan)
+            delta = gates.review_delta(gate_state, review_doc, args.plan)
+            if carry_change is not None:
+                delta["tier"] = carry_change.tier
+                delta["stage_tiers"] = {i: c.tier for i, c in sorted(carry_change.stages.items())}
             if delta["record_scope_args"]:
                 review_commands = [
                     "plan-review --target " + args.plan + " " + scope_arg
@@ -11164,7 +11571,38 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # not worth authorizing) and strictly before the plan_approval PLUGIN
     # block below; this command has still written nothing to disk at this point.
     auth_kind = _replan_kind(state, _load_prior_plan(state, _replan_baseline_path(state), strict=False), new)
-    arblock = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
+
+    # A finished stage is frozen against the edits that change what it was built from or
+    # promises (operative and interface leaves): a replan of ANY kind touching one is
+    # refused unless it names the stage with --reopen, which re-arms it and the PASSED
+    # stages depending on it. Refused before anything is written. Without a known old
+    # side there is no tier, and the replan routes as it did before the tier existed.
+    tier = None
+    baseline = _baseline_plan_for_tier(store, state)
+    if baseline is not None:
+        tier = change_tier(baseline, new)
+    change_class = replan_class(tier)
+    reopen_roots = set(getattr(args, "reopen", None) or [])
+    unknown_reopen = sorted(reopen_roots - {s.index for s in state.stages})
+    if unknown_reopen:
+        return Directive(False, state.node, "replan",
+                         f"replan refused: --reopen names no such stage: {unknown_reopen}")
+    reopening = {
+        i for i in _passed_dependents_closure(state.stages, new.stages, reopen_roots)
+        if state.stage(i).outcome.status == StageStatus.PASSED.value
+    } if reopen_roots else set()
+    if reopen_ignored is not None:
+        reopen_ignored.extend(sorted(i for i in reopen_roots if i not in reopening))
+    if tier is not None:
+        frozen = _frozen_stage_refusal(state, tier, reopening)
+        if frozen is not None:
+            _log_gate(state, "frozen_stage", frozen[1]["blockers"], passed=False)
+            return Directive(False, state.node, "replan", frozen[0], data=frozen[1])
+
+    tier_number = tier.tier if tier is not None else None
+    unwaived_blockers = gates.replan_authorization_blockers(state, args.plan, diff_kind=auth_kind)
+    auth_waived = gates.replan_authorization_waived_by_tier(tier_number) and bool(unwaived_blockers)
+    arblock = [] if auth_waived else unwaived_blockers
     _log_gate(state, "replan_authorization", arblock, passed=not arblock)
     if arblock:
         return Directive(False, state.node, "present_plan",
@@ -11176,7 +11614,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # must be the re-norming it named, and an obligation an earlier replan admitted must
     # survive this one. Before the plan_approval plugin block below, whose dispositions
     # save can persist state, so a refusal here leaves the state file as it was.
-    renorm_pending = _replan_pending_indices(state, new, auth_kind)
+    renorm_pending = _replan_pending_indices(state, new, auth_kind, tier, reopening)
     neblock = gates.normative_edit_blockers(state, new, renorm_pending,
                                             installing_plan_path=args.plan)
     _log_gate(state, "normative_edit", neblock, passed=not neblock)
@@ -11198,23 +11636,33 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # state.plan_path, so swap it for the call and restore in finally. [] when no
     # plugin extends plan_approval, so the row still logs (passed, empty) and the
     # replan is byte-identical to before.
-    _saved_plan_path = state.plan_path
+    _saved_plan_path = gate_state.plan_path
     try:
-        state.plan_path = args.plan
-        pblock = plugins.plugin_gate_blockers(state, "plan_approval")
+        gate_state.plan_path = args.plan
+        pblock = plugins.plugin_gate_blockers(gate_state, "plan_approval")
     finally:
-        state.plan_path = _saved_plan_path
+        gate_state.plan_path = _saved_plan_path
     # Invalidate dispositions whose cited stage fields moved in the proposed plan so
     # the mismatch is visible in question-list output even when this replan is blocked
     # by the gate (#123). Runs here — after the try-finally restored plan_path and
     # before the pblock return — so a blocked replan still surfaces stale notes on disk.
+    # A carried view (`gate_state` is a copy) already holds the carried premise stamps; on
+    # the refused path the real state gets the same carry first, so the invalidation below
+    # marks only the dispositions the edit really made stale. On the applied path the
+    # carry is left to `_carry_records`, whose `carried` verdict it would otherwise change.
     _inv_bag = state.plugins.get("premise")
-    if _inv_bag is not None:
+    if _inv_bag is not None and (gate_state is state or pblock):
+        _inv_changed = False
+        if gate_state is not state:
+            _carry_baseline, _ = _review_baseline(store, state)
+            if _carry_baseline is not None:
+                _inv_changed = bool(
+                    carry_forward.carry_premise(state, _carry_baseline, new, carry_change))
         _inv_stage_keys = {s.index: stage_norm_keys(s) for s in new.stages}
         _inv_meta_keys = plan_meta_element_keys(new)
         _inv_changed = premise.invalidate_stale_dispositions(
             _inv_bag, _inv_stage_keys, meta_keys=_inv_meta_keys
-        )
+        ) or _inv_changed
         _inv_changed = (
             premise.invalidate_stale_order_dispositions(_inv_bag, _inv_stage_keys)
             or _inv_changed
@@ -11256,7 +11704,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # critique's similarities into conditions/invariants and CHANGE a means/method
     # for the declared differences. Empty split -> [] -> behaves exactly as before.
     if state.difficulty and state.difficulty.critique:
-        cov = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
+        cov = gates.replan_coverage_blockers(
+            old, new, state.difficulty.critique, tier=tier_number,
+            cost_tier_window=_effort_fire_window(state))
         _log_gate(state, "replan_coverage", cov, passed=not cov)
         if cov:
             waiver = getattr(args, "coverage_waiver", None)
@@ -11270,7 +11720,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                     data={"coverage_blockers": cov, "blockers": ["coverage waiver on an agent-acknowledged fire"]},
                 )
             if waiver is None:
-                return Directive(False, state.node, "declare", "replan blocked: critique coverage",
+                return Directive(False, state.node, "declare",
+                                 "replan blocked: critique coverage (carry the critique into the plan, "
+                                 "or pass --coverage-waiver '<reason>' with a reason it does not apply)",
                                  data={"coverage_blockers": cov})
             if not waiver.strip():
                 return Directive(False, state.node, "declare",
@@ -11307,6 +11759,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                              destination=None, in_diagnosis=(state.node == Node.DIAGNOSING.value))
 
     kind = auth_kind
+    if reopened is not None:
+        reopened.extend(sorted(reopening))
     state.pending_renorms = gates.bound_renorms(state, new, renorm_pending)
     # The replan-loop counterpart of cmd_approve's reset: a replan that gets this far has
     # applied a corrected plan, so the rounds spent arguing about the previous one are
@@ -11322,22 +11776,32 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     #
     # Fold into the cross-session task accumulator (item B) before the reset, same
     # reasoning as cmd_approve's fold above.
-    task_accumulator.add(
-        state.task_id, "plan_review_rounds", state.plan_review_rounds,
-        session_id=state.session_id, now=_utcnow(),
-    )
+    # A tier 0-2 edit does not start a new review loop: its records are carried onto the
+    # new version (`carry_forward`), so the rounds, the counted digest and the passes
+    # stay with them; every other edit settles the old loop and starts from zero.
+    _, carry_report, _ = _carry_records(store, state, args.plan, in_place=True)
+    carry_note = carry_forward.describe(carry_report)
+    if carry_note:
+        state.log("review_carried", plan=args.plan, tier=carry_report["tier"],
+                  records=list(carry_report["records"]), owed=list(carry_report["owed"]),
+                  held=list(carry_report["held"]))
+    else:
+        task_accumulator.add(
+            state.task_id, "plan_review_rounds", state.plan_review_rounds,
+            session_id=state.session_id, now=_utcnow(),
+        )
+        state.plan_review_rounds = 0
+        state.plan_review_counted_digest = ""
+        # Terminal-pass custody — same "current approval cycle" boundary as the
+        # pair above: a replanned plan starts with no pass on record for any scope.
+        state.plan_review_passes = {}
     task_accumulator.add(
         state.task_id, "code_review_rounds", state.code_review_rounds,
         session_id=state.session_id, now=_utcnow(),
     )
-    state.plan_review_rounds = 0
-    state.plan_review_counted_digest = ""
     # Reset alongside the pair above (item A) — same reasoning: rounds spent
     # code-reviewing the previous plan version are settled once a corrected plan lands.
     state.code_review_rounds = 0
-    # Terminal-pass custody — same "current approval cycle" boundary as the
-    # pair above: a replanned plan starts with no pass on record for any scope.
-    state.plan_review_passes = {}
     # Stamped HERE and not up at the seam: every refusal path of this command is now behind
     # us — the last of them being the critique-coverage gate just above — so like seam (a)
     # the digest only ever names bytes the session ACCEPTED. (Not an enumeration: this
@@ -11366,6 +11830,13 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # warn-only and cannot influence any decision above it either way. (`run` is bound at
     # the seam above; only this CALL is deferred, which is where the cost is.)
     echo_advice = _submission_advice(new, run, state.weight_class, args.plan)
+    if carry_note:
+        echo_advice = echo_advice + [carry_note]
+    if auth_waived:
+        state.log("replan_authorization_waived", plan=args.plan, tier=tier_number)
+        echo_advice = echo_advice + [
+            f"replan authorization waived: a tier {tier_number} edit changes nothing the user "
+            "approved or a reviewer judged, so no replan_diff presentation was required"]
     # Non-blocking hint naming --normalize-factor -- advisory only, never a gate (a
     # replan with nothing reproducible to re-norm is a completely ordinary replan).
     # Suppressed when this call itself recorded one (the `not normalize_factor`
@@ -11423,6 +11894,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 continue
             _apply_refined_stage_fields(cur, ns)
             _refresh_runtime_grant_titles(state, ns.index, ns.title)
+            if ns.index in reopening:
+                cur.outcome.status = StageStatus.PENDING.value
         # final_check is meta-level (not per-stage), so it needs its own refresh
         # next to the stage loop above — a self-diffed no_change still means the
         # FILE changed relative to what was cached at submit-plan/last replan.
@@ -11451,20 +11924,22 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 return _replan_to_plan_ready(
                     state, store, new, echo_advice, kind="no_change", exited_diagnosing=True,
                     plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
-                    plan_sha256=_new_plan_sha256, **replan_cause)
+                    plan_sha256=_new_plan_sha256, change_class=change_class, **replan_cause)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
             state.log("replan", kind="no_change", exited_diagnosing=True, plan=args.plan,
                       prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
-                      **replan_cause)
-            _count_replan(state)
+                      change_class=change_class, **replan_cause)
+            _count_replan(state, change_class)
             effort.rederive(state)  # re-derive AFTER logging so this in-flight replan is counted
             store.save(state)
             if state.ready_stages():
                 return _with_advisories(Directive(
                     True, state.node, "next_stage",
-                    "difficulty worked through; plan unchanged — retry the re-armed stage"), echo_advice)
+                    "difficulty worked through; plan unchanged — retry the re-armed stage",
+                    data=_replan_class_data(state)), echo_advice)
             return _with_advisories(Directive(
-                True, state.node, "continue", "difficulty worked through; resume execution"), echo_advice)
+                True, state.node, "continue", "difficulty worked through; resume execution",
+                data=_replan_class_data(state)), echo_advice)
         effort.rederive(state)  # re-derive the estimate from the (possibly refined) stages
         store.save(state)
         return _with_advisories(Directive(
@@ -11482,7 +11957,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
             # (not just prose).
             _apply_refined_stage_fields(cur, ns)
             _refresh_runtime_grant_titles(state, ns.index, ns.title)
-            if cur.outcome.status == StageStatus.FAILED.value:
+            if cur.outcome.status == StageStatus.FAILED.value or ns.index in reopening:
                 cur.outcome.status = StageStatus.PENDING.value
         state.plan_path = args.plan
         # Same unconditional refresh as the no_change branch above: a refinement
@@ -11500,19 +11975,21 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 return _replan_to_plan_ready(
                     state, store, new, echo_advice, kind="refinement", exited_diagnosing=True,
                     plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
-                    plan_sha256=_new_plan_sha256, **replan_cause)
+                    plan_sha256=_new_plan_sha256, change_class=change_class, **replan_cause)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
         state.log("replan", kind="refinement", exited_diagnosing=diagnosing, plan=args.plan,
                   prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
-                  **replan_cause)
-        _count_replan(state)
+                  change_class=change_class, **replan_cause)
+        _count_replan(state, change_class)
         effort.rederive(state)  # re-derive AFTER logging so this replan is counted
         store.save(state)
         if state.node == Node.VERIFYING.value and state.ready_stages():
             return _with_advisories(Directive(
-                True, state.node, "next_stage", "refinement applied; retry the ready stage"), echo_advice)
+                True, state.node, "next_stage", "refinement applied; retry the ready stage",
+                data=_replan_class_data(state)), echo_advice)
         return _with_advisories(Directive(
-            True, state.node, "continue", "refinement applied; resume execution"), echo_advice)
+            True, state.node, "continue", "refinement applied; resume execution",
+            data=_replan_class_data(state)), echo_advice)
 
     # substantive: re-arm the plan-approval gate, reload stages, return to PLAN_READY.
     # #12: carry PASSED status forward for any stage whose FULL definition is
@@ -11557,7 +12034,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     declined_titles = gates.declined_title_set(state)
     for ns in new.stages:
         prev = live_by_index.get(ns.index)
-        if prev is not None and stage_carried(state.stages, new.stages, ns.index):
+        if prev is not None and ns.index not in reopening and _verdict_survives(
+            state.stages, new.stages, ns.index, tier
+        ):
             # A declined optional stage whose definition did not move stays declined; a
             # changed one goes back to PENDING for a fresh choice at the customer's
             # re-approval.
@@ -11582,7 +12061,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     _archive_difficulty(state, closing_waiver)
     return _replan_to_plan_ready(
         state, store, new, echo_advice, kind="substantive", plan=args.plan,
-        prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256, **replan_cause)
+        prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
+        change_class=change_class, **replan_cause)
 
 
 def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advice: list[str],
@@ -11594,12 +12074,15 @@ def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advi
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
     state.log("replan", **log_fields)
-    _count_replan(state)
+    _count_replan(state, log_fields["change_class"])
     effort.rederive(state)  # re-derive AFTER logging so this replan is counted
     store.save(state)
     autonomy = _autonomy_directive_data(state, new)
     override = _agent_review_override(state)
-    directive_data = {"autonomy": autonomy, **({"agent_review_override": override} if override else {})}
+    directive_data = {
+        "autonomy": autonomy, **_replan_class_data(state),
+        **({"agent_review_override": override} if override else {}),
+    }
     if autonomy["action"] == "self_approve":
         return _with_advisories(Directive(
             True, state.node, "self_approve",
@@ -11642,6 +12125,10 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
     last = state.effort_fires[-1]
     if last.get("ack") is not None:
         return Directive(True, state.node, "noop", "fire already acknowledged", data={"fire": last})
+    if last.get("disposition") == EFFORT_FIRE_FINISHED_WORK:
+        return Directive(True, state.node, "noop",
+                         "the last fire is a finished-work retier record: it opened no difficulty "
+                         "and owes no acknowledgement", data={"fire": last})
     decision = args.decision
     if decision not in ("continue", "abandon", "revise"):
         return Directive(False, state.node, "noop", f"invalid --decision {decision!r}: "
@@ -11728,7 +12215,9 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
     old_path = _replan_baseline_path(state)
     old = _load_prior_plan(state, old_path, strict=False)
     new = load_plan(args.new)
-    blockers = gates.replan_coverage_blockers(old, new, state.difficulty.critique)
+    blockers = gates.replan_coverage_blockers(
+        old, new, state.difficulty.critique, tier=change_tier(old, new).tier,
+        cost_tier_window=_effort_fire_window(state))
     if blockers:
         return Directive(False, state.node, "inspect",
                          "coverage blockers: " + "; ".join(blockers),
@@ -11868,6 +12357,9 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             # as a zero.
             "enumeration_escapes": _enumeration_escape_counts(state),
             "parent_link": _parent_link_summary(state.parent_link),
+            **_replan_class_data(state),
+            "effort_retiers": list(state.effort_retiers),
+            "effort_finished_work": _finished_work_data(state).get("effort_finished_work", []),
         },
     )
 
@@ -13172,6 +13664,10 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                          "topo:base-2; a unit, e.g. topo:unit:base or topo:unit:3) to "
                          "record one pair or unit review; omitted "
                          "(or '') means whole-plan, the only kind that existed before stage 5")
+    sp.add_argument("--escalate-pairs", dest="escalate_pairs", action="store_true",
+                    help="with a unit scope: re-open the pairs touching that unit that a "
+                         "tier-2 edit carried without a review (held), so each is owed a "
+                         "review of the edited content like a tier-3 edit")
     sp.add_argument("--findings-blocking", dest="findings_blocking", type=int, default=None,
                     help="count of blocking findings this round produced (audit trail)")
     sp.add_argument("--findings-nonblocking", dest="findings_nonblocking", type=int,
@@ -13475,6 +13971,11 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                          "SEQUENCE of operations, which is the executor's to replace; skips "
                          "the plan-review and plan_approval gates and is REFUSED the moment "
                          "the edit reaches a method, a criterion, a result image or the goal")
+    sp.add_argument("--reopen", dest="reopen", action="append", type=int, default=None,
+                    metavar="N",
+                    help="re-arm PASSED stage N (repeatable) together with every PASSED stage "
+                         "that depends on it, so the replan may edit what N was built from or "
+                         "promises; without it such an edit to a PASSED stage is refused")
     sp.add_argument("--cost-log", dest="cost_log", default=None,
                     help="override cost log path for tests (defaults to cost.COST_LOG)")
     sp.add_argument("--renegotiation-decision", dest="renegotiation_decision", default=None,

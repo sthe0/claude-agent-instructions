@@ -309,6 +309,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Stage, "ephemeral_artifacts_waiver"),
         (Stage, "renorms"),  # excluded: an engine obligation, stated by the stage's own method
         (Stage, "outcome"),  # excluded: engine execution history
+        (Stage, "amendments"),  # excluded: a retrospective log, shown only by plan-render
         (Stage, "control"), (Stage, "knowledge"), (Stage, "preconditions"),
         (Stage, "grants"), (Stage, "effects"), (Stage, "optional"), (Stage, "backlog_issue"),
         (Subject, "material"), (Subject, "result"), (Subject, "invariants"),
@@ -337,6 +338,9 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         # meta.goal/done_criterion. Carrying it would restore the size coupling this
         # projection exists to break.
         (PlanMeta, "order"),
+        # excluded: plan-level assumptions are registered as premises at submit-plan,
+        # a root-side gate input; a stage executor works from its own stage fields.
+        (PlanMeta, "assumptions"),
         (FinalCheck, "label"),
         (FinalCheck, "command"),  # excluded: labels-only method
         (FinalCheck, "expected_exit"),  # excluded: labels-only method

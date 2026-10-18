@@ -73,6 +73,12 @@ _UNCLAIMED_STAGE_LEAVES = {
                                 "a place an answer can rest on. Same footing as "
                                 "actor.cost_tier above — covered instead by "
                                 "gates._renorm_stage_residual and diff_plans' prose",
+    "amendments.date": "retrospective bookkeeping, read by no change decision "
+                       "(plan.STAGE_LEAF_CLASS class B) — an answer cannot rest on it",
+    "amendments.text": "retrospective bookkeeping, read by no change decision "
+                       "(plan.STAGE_LEAF_CLASS class B) — an answer cannot rest on it",
+    "amendments.reason": "retrospective bookkeeping, read by no change decision "
+                         "(plan.STAGE_LEAF_CLASS class B) — an answer cannot rest on it",
     "renorms": "the norm files a re-norming stage edits: an obligation of the difficulty "
                "stack, not a place an answer can rest on. Declared-only in the whole-stage "
                "digest (`StageNorm._review_payload`), covered by "

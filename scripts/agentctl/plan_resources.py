@@ -184,8 +184,11 @@ class BoundaryView:
     resource_origins: list[tuple] = field(default_factory=list)
 
 
-def _unresolved_item(identity, origin: str, source: str) -> dict:
-    return {"identity": list(identity), "origin": origin, "source": source}
+def _unresolved_item(identity, origin: str, source: str, stage: "int | None" = None) -> dict:
+    item = {"identity": list(identity), "origin": origin, "source": source}
+    if stage is not None:
+        item["stage"] = stage
+    return item
 
 
 def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None = None) -> BoundaryView:
@@ -202,11 +205,13 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
         view.resources.extend(resources)
         view.resource_origins.extend((r, origin, source) for r in resources)
 
-    def take(res: Resolution, origin: str, source: str, fallback: tuple) -> None:
+    def take(res: Resolution, origin: str, source: str, fallback: tuple,
+             stage: "int | None" = None) -> None:
         if res.status == "resolved":
             add(res.resources, origin, source)
         else:
-            view.unresolved.append(_unresolved_item(res.identity or fallback, origin, source))
+            view.unresolved.append(
+                _unresolved_item(res.identity or fallback, origin, source, stage))
 
     for stage in doc.stages:
         effective = _effective_grants_for_stage(stage, v)
@@ -218,17 +223,19 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
                 "output_artifact" if provenance == "derived:DR-O" else provenance
             )
             take(resolve_rule_grant(rule_grant.rule, v), origin, rule_grant.rule,
-                 ("unresolved", rule_grant.rule))
+                 ("unresolved", rule_grant.rule), stage.index)
         for add_dir in effective.add_dirs:
             add(resolve_add_dir_grant(add_dir.path, add_dir.mode).resources, "add_dir", add_dir.path)
         add(_stage_spawn_resources(stage), "spawn", "")
         add(_stage_landed_resources(stage), "landed", "")
         if runs_verify_command(stage.criterion):
             verify = stage.criterion.verify_command
-            take(resolve_text(verify, v), "verify_command", verify, ("verify-command", verify))
+            take(resolve_text(verify, v), "verify_command", verify, ("verify-command", verify),
+                 stage.index)
         control = stage.criterion.negative_control
         if control:
-            take(resolve_text(control, v), "negative_control", control, ("negative-control", control))
+            take(resolve_text(control, v), "negative_control", control,
+                 ("negative-control", control), stage.index)
     for check in doc.meta.final_check:
         if check.command:
             take(resolve_text(check.command, v), "final_check", check.command,

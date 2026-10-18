@@ -52,19 +52,19 @@ def _ns(**kw):
     return Namespace(**kw)
 
 
-def _statuses_at_refresh(tmp_path, old_text, new_text):
+def _statuses_at_refresh(tmp_path, old_text, new_text, passed=(1, 2)):
     path = tmp_path / "refresh.toml"
     path.write_text(old_text)
     state = SessionState(session_id="s1", task_id="demo-two-stage", plan_path=str(path))
     state.stages = list(cli.load_plan(str(path)).stages)
     for s in state.stages:
-        s.outcome.status = PASSED
+        s.outcome.status = PASSED if s.index in passed else PENDING
     path.write_text(new_text)
     assert cli._refresh_caches_from_plan_path(state) == []
     return {s.index: s.outcome.status for s in state.stages if s.index in (1, 2)}
 
 
-def _statuses_at_replan(store, tmp_path, old_text, new_text):
+def _statuses_at_replan(store, tmp_path, old_text, new_text, passed=(1, 2), reopen=()):
     from test_replan import _to_executing_stage1
 
     old = tmp_path / "old.toml"
@@ -73,11 +73,12 @@ def _statuses_at_replan(store, tmp_path, old_text, new_text):
     _to_executing_stage1(store, sid, str(old))
     state = store.load(sid)
     for s in state.stages:
-        s.outcome.status = PASSED
+        s.outcome.status = PASSED if s.index in passed else PENDING
     store.save(state)
     new = tmp_path / "new.toml"
     new.write_text(new_text)
-    d = cli.cmd_replan(_ns(session=sid, plan=str(new)), store=store)
+    d = cli.cmd_replan(_ns(session=sid, plan=str(new), reopen=list(reopen) or None),
+                       store=store)
     assert d.marker == "PLAN-READY"
     return {s.index: s.outcome.status for s in store.load(sid).stages
             if s.index in (1, 2)}
@@ -92,13 +93,19 @@ def _no_replan_authorization_gate(monkeypatch):
 def statuses(request, store, tmp_path):
     """Run the plan pair through one carry site; a third stage keeps the replan
     substantive (a structural change). Both sites materialize it from the new plan,
-    so both report only the two stages the carry decision is about."""
-    def run(old_kwargs, new_kwargs):
+    so both report only the two stages the carry decision is about.
+
+    A replan refuses an operative edit to a PASSED stage unless it reopens the stage, so
+    `passed` names the stages that start PASSED (a supplier edit the test is about stays
+    unfinished, leaving the consumer's carry decision to `stage_carried`) and `reopen`
+    the stages the replan re-arms. The approve-time refresh has no such gate and ignores
+    `reopen`."""
+    def run(old_kwargs, new_kwargs, *, passed=(1, 2), reopen=()):
         old = declare_venue(_plan(**old_kwargs), tmp_path)
         new = declare_venue(_plan(extra_stage=True, **new_kwargs), tmp_path)
         if request.param == "approve-refresh":
-            return _statuses_at_refresh(tmp_path, old, new)
-        return _statuses_at_replan(store, tmp_path, old, new)
+            return _statuses_at_refresh(tmp_path, old, new, passed)
+        return _statuses_at_replan(store, tmp_path, old, new, passed, reopen)
     return run
 
 
@@ -107,29 +114,30 @@ def test_unchanged_stages_with_unchanged_suppliers_are_carried(statuses):
 
 
 def test_a_stage_whose_own_norm_changed_is_reset(statuses):
-    got = statuses({}, {"s2_method": "test it differently"})
+    got = statuses({}, {"s2_method": "test it differently"}, reopen=(2,))
     assert got == {1: PASSED, 2: PENDING}
 
 
 def test_a_suppliers_construction_only_change_carries_its_consumer(statuses):
-    got = statuses({}, {"s1_method": "build it another way"})
+    got = statuses({}, {"s1_method": "build it another way"}, passed=(2,))
     assert got == {1: PENDING, 2: PASSED}
 
 
 def test_a_suppliers_interface_change_resets_its_consumer(statuses):
-    got = statuses({}, {"s1_result": "a different supplier image"})
+    got = statuses({}, {"s1_result": "a different supplier image"}, passed=(2,))
     assert got == {1: PENDING, 2: PENDING}
 
 
 def test_an_edges_delivery_change_resets_the_consumer(statuses):
     got = statuses({"s2_edge": '{ on = 1, delivery = "report" }'},
-                   {"s2_edge": '{ on = 1, delivery = "continuation" }'})
+                   {"s2_edge": '{ on = 1, delivery = "continuation" }'}, reopen=(2,))
     assert got == {1: PASSED, 2: PENDING}
 
 
 def test_a_plan_without_typed_edges_carries_as_before(statuses):
     assert statuses({"with_edge": False}, {"with_edge": False}) == {1: PASSED, 2: PASSED}
-    got = statuses({"with_edge": False}, {"with_edge": False, "s2_method": "other"})
+    got = statuses({"with_edge": False}, {"with_edge": False, "s2_method": "other"},
+                   reopen=(2,))
     assert got == {1: PASSED, 2: PENDING}
 
 
@@ -150,5 +158,6 @@ def test_a_supplier_absent_from_the_previous_plan_counts_as_changed():
 def test_a_blank_interface_suppliers_construction_change_resets_its_consumer(statuses):
     """With no interface to compare, the supplier's whole carry digest stands in."""
     assert statuses({"s1_result": " "}, {"s1_result": " "}) == {1: PASSED, 2: PASSED}
-    got = statuses({"s1_result": " "}, {"s1_result": " ", "s1_method": "build it another way"})
+    got = statuses({"s1_result": " "}, {"s1_result": " ", "s1_method": "build it another way"},
+                   passed=(2,))
     assert got == {1: PENDING, 2: PENDING}

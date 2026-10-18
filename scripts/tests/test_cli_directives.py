@@ -1002,8 +1002,8 @@ def test_refinement_replan_rebinds_only_changed_stage_questions(store, tmp_path)
 
     def _assumed(qid, stage_index):
         return {
-            "id": qid, "target": f"stage:{stage_index}.means",
-            "question": f"is stage {stage_index}'s means sound?",
+            "id": qid, "target": f"stage:{stage_index}.criterion",
+            "question": f"is stage {stage_index}'s criterion sound?",
             "disposition": "assumed", "own_research": "read the surrounding code",
             "basis": "matches the existing working caller", "risk": "the caller may change",
             "disposed_at_key": key_by_index[stage_index],
@@ -1040,8 +1040,9 @@ def test_refinement_replan_leaves_untouched_elements_of_a_changed_stage(store, t
     key moves — but a question answered against stage 2's MEANS is answered against
     bytes that did not move, and demanding a rebind for it teaches the rebind verb as
     a formality. The test above covers the same replan for a stamp written before the
-    key was element-scoped, which has only the whole-stage key to match and so still
-    blocks."""
+    key was element-scoped: bound to the criterion element the edit moves it still
+    blocks, while one bound to an element the edit leaves alone is carried onto the new
+    key (`test_legacy_whole_stage_premise_stamp_survives_a_method_edit`)."""
     sid = "replan-rebind-element-scope"
     old_path = tmp_path / "plan.toml"
     old_path.write_text(_two_stage_plan_text(stage2_verify_cmd="true"))

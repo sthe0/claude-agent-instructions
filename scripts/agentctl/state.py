@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 57  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 58  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -101,8 +101,11 @@ SCHEMA_VERSION = 57  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # approved_grants_*, accepted_plan_digest), runtime_grants and
                      # plan_binding_captured, so pop-subplan restores the parent's binding
                      # and stage grants instead of the child's
+                     # 57: SessionState gains effort_retiers (one record per stage of the
+                     # window of a spend/wall-clock fire raised on finished work)
                      # 57: SessionState gains plan_conversions (the plan-convert-live links
                      # between root digests of one plan's equivalent forms)
+                     # 58: both 57 changes merged into one tree; no field change of its own
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -722,6 +725,11 @@ class PlanReview:
     raw_verdict: str = ""
     part_digests: dict[str, str] = field(default_factory=dict)
     stable_ids: list[str] = field(default_factory=list)
+    # Set when a plan edit of a tier that leaves the record's verdict standing re-stamped
+    # it onto the new version (`agentctl.carry_forward`): the tier of that edit and the
+    # sha256 of the version it was recorded against. None / "" on a record a reviewer wrote.
+    carried_tier: "int | None" = None
+    carried_from_sha: str = ""
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "PlanReview | None":
@@ -761,6 +769,8 @@ class PlanReview:
             raw_verdict=d.get("raw_verdict", ""),
             part_digests=dict(pd) if isinstance(pd := d.get("part_digests"), dict) else {},
             stable_ids=list(d.get("stable_ids", [])),
+            carried_tier=d.get("carried_tier"),
+            carried_from_sha=d.get("carried_from_sha", ""),
         )
 
 
@@ -869,6 +879,12 @@ class PlanPairReview:
     service_iface_norm: str = ""
     edge_norm: str = ""
     unit_norm: str = ""
+    # As on PlanReview. `held`: a pair a tier-2 edit of one of its stages carried without
+    # a review of its own: the pair's content hash at that moment. It counts as satisfied
+    # while the pair's content is still that, until a unit reviewer escalates it.
+    held: str = ""
+    carried_tier: "int | None" = None
+    carried_from_sha: str = ""
 
     @property
     def is_unit(self) -> bool:
@@ -908,6 +924,9 @@ class PlanPairReview:
             raw_verdict=d.get("raw_verdict", ""),
             part_digests=dict(pd) if isinstance(pd := d.get("part_digests"), dict) else {},
             unit_norm=d.get("unit_norm", ""),
+            held=d.get("held") or "",
+            carried_tier=d.get("carried_tier"),
+            carried_from_sha=d.get("carried_from_sha", ""),
             **{key: d.get(key, "") for key in PAIR_BINDING_KEYS},
             **{key: d.get(key, "") for key in PAIR_CONTENT_KEYS},
         )
@@ -1189,6 +1208,11 @@ class ReattestStash:
 # (SessionState.plan_presentations: absent key -> empty list via from_dict's
 # data.get(..., [])), never at the individual-record level.
 PLAN_PRESENTATION_RENDERING_CAP_BYTES = 64 * 1024
+
+#: Disposition of an effort fire raised when every stage was already PASSED or SKIPPED
+#: (`effort.record_fire(finished_work=True)`): recorded with its retier data, never
+#: diagnosed, never held unacknowledged.
+EFFORT_FIRE_FINISHED_WORK = "finished_work"
 
 PLAN_PRESENTATION_KIND_ESSENCE = "essence"
 PLAN_PRESENTATION_KIND_FULL = "full"
@@ -1881,6 +1905,17 @@ class CostRollup:
 
 
 @dataclass
+class Amendment:
+    """One retrospective note on a stage: `text` says what was corrected after the stage
+    ran, `reason` why, `date` when (ISO date as written). A record about the stage, not a
+    part of it — no control, gate, dispatch decision or rendering that decides anything
+    reads it, which is why plan.py classes it as bookkeeping."""
+    date: str
+    text: str
+    reason: str
+
+
+@dataclass
 class Stage:
     index: int
     title: str
@@ -1952,6 +1987,9 @@ class Stage:
     # "not optional".
     optional: bool = False
     backlog_issue: str | None = None
+    # `[[stage.amendments]]`: retrospective notes (see Amendment). Empty on every plan
+    # authored before this field.
+    amendments: list[Amendment] = field(default_factory=list)
 
     @property
     def depends_on(self) -> list[int]:
@@ -2006,6 +2044,7 @@ class Stage:
                 effects=[StageEffectDeclaration.from_dict(e) for e in d.get("effects", [])],
                 optional=bool(d.get("optional", False)),
                 backlog_issue=d.get("backlog_issue"),
+                amendments=[Amendment(**a) for a in d.get("amendments", [])],
             )
         # legacy FLAT shape -> nested groups (migration shim)
         return cls(
@@ -2322,6 +2361,14 @@ class SessionState:
     effort_child_runs: list[dict] = field(default_factory=list)
     user_prompt_count: int = 0
     effort_crossings: list[dict] = field(default_factory=list)
+    #   effort_retiers     one record per stage of the window of a spend/wall-clock fire
+    #                      raised on finished work (effort.retier_records): {plan_path,
+    #                      fire_ts, scale, stage_index, declared_tier, observed_tier |
+    #                      None, actual | None, estimate, attribution}. SESSION-scoped like
+    #                      effort_crossings: it is evidence about what the stages cost, read
+    #                      after the plan that held them is gone, so sub-plan push/pop leave
+    #                      it alone.
+    effort_retiers: list[dict] = field(default_factory=list)
     # Order-keyed effort custody (autonomy boundary). Only meaningful for a session
     # whose order has a user-approved version in order_approvals' ledger.
     #   order_effort_flushed  the actual spend/wall_clock already moved into the ledger
@@ -2864,7 +2911,7 @@ SESSION_SCOPED_FIELDS = frozenset({
     "code_reviews", "acceptance_review", "acceptance_bypass", "plan_presentations",
     "recursion_depth", "artifacts", "history", "plan_stack", "cost", "last_user_prompt_ts",
     "plan_submitted_ts", "tracker_key", "deliverable_kind", "effort_subtree_seen",
-    "effort_child_runs", "user_prompt_count", "effort_crossings", "order_effort_flushed",
+    "effort_child_runs", "user_prompt_count", "effort_crossings", "effort_retiers", "order_effort_flushed",
     "order_descendant_credited", "order_effort_base", "order_effort_frozen",
     "agent_ack_difficulty_ids", "renegotiation_ceiling_difficulty_id",
     "review_release_difficulty_id", "renegotiations", "runtime_host", "reattest_stash",

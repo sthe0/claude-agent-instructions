@@ -26,6 +26,8 @@ to be exactly that set.
 | Reader | Disposition | Why |
 |---|---|---|
 | `scripts/agentctl/cli.py`:`_plan_file_sha256` | index-only | The attested plan digest is the sha256 of the index bytes; callers that need the references checked call `_plan_refs_problem` next to it. |
+| `scripts/agentctl/cli.py`:`_plan_from_snapshot` | resolves | Parses a stored plan version for the change tier and the row diff: the index bytes come from `_read_plan_version_snapshot`, and its references are resolved against the registered plan path through the object store, so a split plan is read as the plan it stands for. |
+| `scripts/agentctl/cli.py`:`_read_plan_version_snapshot` | index-only | Returns the stored index bytes of a plan version by their digest, checking the hash; its one consumer, `_plan_from_snapshot`, resolves the references. |
 | `scripts/agentctl/cli.py`:`_snapshot_approved_plan` | index-only | Copies the index bytes to the approved snapshot and puts the index and every referenced file into the object store (`plan_store.store_plan`). |
 | `scripts/agentctl/cli.py`:`_snapshot_plan_version` | index-only | Same for every submitted plan version: the index bytes are the version, the referenced files go to the object store. |
 | `scripts/agentctl/cli.py`:`_stamp_accepted_plan_digest` | index-only | Stamps the sha256 of the index bytes as the accepted plan digest. |
@@ -134,6 +136,10 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/gates.py`:`_receipt_binding_blocker` | routed through plan_digest_equivalent | A presentation receipt is stale when the plan file's digest is not equivalent to the receipt's. |
 | `scripts/agentctl/gates.py`:`replan_authorization_blockers` | routed through plan_digest_equivalent | An edit that leaves the file's digest equivalent to the accepted one needs no replan-diff presentation. |
 | `scripts/agentctl/cli.py`:`_plan_file_sha256` | not a binding | Computes the digest a record is bound to; it compares nothing. |
+| `scripts/agentctl/cli.py`:`_carry_records` | not a binding | Hashes the plan file to restamp the records it carries onto it (`carry_forward.apply`); it compares no recorded digest. |
+| `scripts/agentctl/cli.py`:`_review_baseline` | not a binding | Returns the approved snapshot's recorded hash, or hashes the plan file when there is no snapshot, as the digest the review records describe; it compares nothing. |
+| `scripts/agentctl/carry_forward.py`:`_Ctx._was_current` | not a binding | A shortcut: a pair record whose stored digest equals the old version's digest is current. A miss (for example after `plan-convert-live`) falls through to the content-derived binding comparison, which does not depend on the root digest. |
+| `scripts/agentctl/gates.py`:`_pair_staleness` | not a binding | The same shortcut for a legacy pair record against the plan file's digest; a miss falls through to the content-derived binding comparison, which does not depend on the root digest. |
 | `scripts/agentctl/cli.py`:`_refresh_approved_grant_snapshot` | not a binding | Re-hashes the approved snapshot to refresh the recorded snapshot hash; the snapshot is a copy the engine wrote. |
 | `scripts/agentctl/cli.py`:`_stamp_accepted_plan_digest` | not a binding | Writes the accepted digest from the file's bytes; `plan-convert-live` writes the converted root the same way. |
 | `scripts/agentctl/cli.py`:`cmd_present_plan` | not a binding | Binds a new receipt to the digest of the plan as it is now; the receipt is created here, not compared. |

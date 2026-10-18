@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import copy
 import dataclasses
+import difflib
 import errno
 import hashlib
 import json
@@ -54,13 +55,17 @@ from .plan import (
     consumers,
     grants_sha256,
     interface_empty,
+    is_unit_id,
     load_plan,
     parse_pair,
     parse_plan,
     parse_unit,
     plan_coverage_entries,
     reliance_set,
+    review_pairs,
+    split_pair_id,
     stage_closure_digest,
+    unit_node,
 )
 
 
@@ -297,11 +302,19 @@ def render_plan_md(doc: PlanDoc) -> str:
                 f"confidence: {p.confidence}; refutation: {p.refutation})"
             )
         lines.extend(_grants_lines(s, _venue_for(doc)))
+        lines.extend(_amendment_lines(s))
         lines.append("")
 
     lines.extend(render_final_checks_md(doc))
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _amendment_lines(s) -> list[str]:
+    """The stage's retrospective log, only in the whole-plan view: no per-stage
+    projection a review or a child reads carries it, so an amendment cannot reach a
+    decision. Empty for a stage without amendments, so such a plan renders byte-identical."""
+    return [f"- **Amendment ({a.date}):** {a.text} — {a.reason}" for a in s.amendments]
 
 
 def render_stages_md(doc: PlanDoc, stage_indices) -> str:
@@ -565,6 +578,27 @@ def unit_base_text(doc: PlanDoc) -> str:
     (customer, functional place, requirements with derivations), its coverage map
     and the final checks."""
     return _lines_text(_meta_node_lines(doc) + render_final_checks_md(doc))
+
+
+def row_part_text(doc: PlanDoc, review_id: str) -> str:
+    """The text of every node a unit or pair review judges — the base unit's own
+    fields, the full stage fields of a stage node — for diffing two plan versions; a
+    node the plan lacks contributes nothing."""
+    nodes = (unit_node(review_id),) if is_unit_id(review_id) else split_pair_id(review_id)
+    chunks = []
+    for node in nodes:
+        if node == PAIR_BASE_NODE:
+            chunks.append(unit_base_text(doc))
+        elif any(s.index == node for s in doc.stages):
+            chunks.append(render_stage_fields(doc, int(node)))
+    return "\n".join(chunks)
+
+
+def row_diff(old: PlanDoc, new: PlanDoc, review_id: str) -> str:
+    """A unified diff of the row's parts between two plan versions; empty when they read alike."""
+    return "\n".join(difflib.unified_diff(
+        row_part_text(old, review_id).splitlines(), row_part_text(new, review_id).splitlines(),
+        "prior version", "live plan", n=2, lineterm=""))
 
 
 def _node_label(doc: PlanDoc, node: "int | str") -> str:
@@ -847,6 +881,19 @@ def _prior_review_section(history: dict, noun: str = "pair") -> list[str]:
         if changed else "Nothing changed since the prior verdict."
     )
     lines.append("")
+    diff = history.get("prior_diff")
+    if diff is not None:
+        lines.append(f"## What changed in this {noun} since the prior verdict")
+        lines.append("")
+        if not diff["available"]:
+            lines.append(
+                f"The prior version is unavailable, so there is no diff: judge the {noun} whole."
+            )
+        elif not diff["text"]:
+            lines.append(f"The text of this {noun}'s parts reads the same as in the prior version.")
+        else:
+            lines.extend(["```diff", diff["text"], "```"])
+        lines.append("")
     return lines
 
 
@@ -887,7 +934,14 @@ def _protocol_lines(history: "dict | None", noun: str) -> list[str]:
             f"prior verdict`, or on a part that still carries an unresolved blocker listed "
             f"under `## Prior review of this {noun}` — raise such a blocker again, if it is still "
             f"unfixed, as `{RESTATES_PREFIX}<concern-id>`. Raise any other prior concern again "
-            f"only as `{RESTATES_PREFIX}<concern-id>`; do not restate a settled concern as new."
+            f"only as `{RESTATES_PREFIX}<concern-id>`; do not restate a settled concern as new. "
+            f"After a prior `pass`, a blocking concern that names no changed part by its part "
+            f"token and re-raises no open blocker is recorded as advisory."
+        )
+        lines.append(
+            "  - Name the part a concern is about with a part token (`stage:<n>`, `meta:`, "
+            f"`order:`) leading the concern or right after its marker: `{SEVERITY_BLOCKING}: "
+            f"{CONDITION_MARKERS[0]} stage:3 <concern>`."
         )
     lines.append(
         f"- after the concerns, a line `{CUSTOMER_QUESTIONS_MARKER}` followed by one "

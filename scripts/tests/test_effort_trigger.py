@@ -146,14 +146,16 @@ def test_verify_final_fires_when_late_cost_tips_the_ratio(store, venued_fixtures
 
     d3 = cli.cmd_verify_final(ns(session=sid, cost_log=str(cost_log)), store=store)
 
-    assert d3.ok is False
-    assert d3.node == Node.DIAGNOSING.value
-    assert d3.marker == "OVERCOME-DIFFICULTY"
-    fire = d3.data["effort_divergence"]
+    # Every stage is PASSED, so the fire is on finished work: recorded, no difficulty.
+    assert d3.ok is True
+    assert d3.node == Node.RESOLUTION.value
+    fire = d3.data["effort_finished_work"][0]
     assert fire["scale"] == effort.SCALE_SPEND
+    assert fire["disposition"] == "finished_work"
 
     state = store.load(sid)
-    assert state.node == Node.DIAGNOSING.value
+    assert state.difficulty is None
+    assert len(state.effort_fires) == 1
     assert state.stage(2).outcome.status == StageStatus.PASSED.value
 
 
@@ -592,8 +594,8 @@ def test_fire_diagnose_replan_cycle_then_refires_on_renewed_overrun(store, venue
         ns(session=sid, by="user", decision="revise", note=None), store=store,
     )
 
-    d_replan = cli.cmd_replan(ns(session=sid, plan=refined), store=store)
-    assert d_replan.action == "next_stage"
+    d_replan = cli.cmd_replan(ns(session=sid, plan=refined, reopen=[1]), store=store)
+    assert d_replan.action == "next_stage", d_replan.detail
     state = store.load(sid)
     assert state.node == Node.VERIFYING.value
     assert state.difficulty is None

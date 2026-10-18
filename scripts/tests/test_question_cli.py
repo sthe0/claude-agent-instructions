@@ -302,7 +302,8 @@ def test_question_check_matches_gate_blockers(store, tmp_path):
 # and that only becomes state.plan_path once the replan succeeds). Without a way
 # to name the corrected plan, dispose/rebind could only ever re-stamp the OLD
 # plan's key — the enumeration channel's identical defect (752969e / 0fc6313),
-# mirrored here for the other two writers of disposed_at_key.
+# mirrored here for the other two verb writers of disposed_at_key (the third writer,
+# cli._register_plan_assumptions, stamps against the submitted plan itself).
 
 def test_dispose_plan_flag_stamps_against_the_named_plan(store, tmp_path):
     current = _write_plan(tmp_path / "plan.toml", [(1, "img-one"), (2, "img-two")])
