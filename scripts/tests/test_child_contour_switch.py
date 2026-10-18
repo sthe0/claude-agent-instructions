@@ -1,6 +1,6 @@
 """The child-contour kill switch: linking a spawned specialist into its own engine
 contour is decided by `agentctl.config.child_contour_linking_enabled`, whose default is
-config.md's `child-contour-linking` row (shipped `off`) and whose override is
+config.md's `child-contour-linking` row (shipped `on`) and whose override is
 AGENTCTL_CHILD_LINKING (`1` on, `0` off).
 
 Each test sets or deletes the variable itself, so none depends on conftest's suite-wide
@@ -198,6 +198,7 @@ def test_resolver_never_raises_on_unreadable_config(tmp_path, monkeypatch):
 # --- the spawn seam -----------------------------------------------------------
 
 def test_spawn_is_unlinked_by_default(store, venued_fixtures_dir, tmp_path, monkeypatch):
+    """A spawn naming a stage is unlinked when the variable is set to `0`, over the shipped `on` row."""
     monkeypatch.setenv(VAR, "0")
     _executing(store, "off1", venued_fixtures_dir)
     cmd, env = _spawn(monkeypatch, tmp_path, venued_fixtures_dir, "off1", stage_index=1)
