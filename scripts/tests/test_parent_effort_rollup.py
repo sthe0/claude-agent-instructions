@@ -553,8 +553,8 @@ def test_spawn_specialist_writes_spawner_session(monkeypatch, tmp_path):
     assert "spawner_session" not in bare
     base_fields = {
         "ts", "event", "kind", "budget_tier", "budget_usd_cap", "effort", "depth", "cost_usd",
-        "duration_ms", "return_marker", "return_marker_source", "exit_code", "malformed", "stage_index", "plan_path",
-        "extractor_invoked", "extractor_model", "extractor_degraded", "extraction_reason",
+        "duration_ms", "return_marker", "return_marker_source", "exit_code", "malformed",
+        "stage_index", "plan_path", "extractor_invoked", "extractor_model", "extractor_degraded", "extraction_reason",
         "outcome_class", "child_session_id", "transcript_path", "review_pair", "plan_sha256",
         "session_id", "ticket",
     }
