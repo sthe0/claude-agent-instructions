@@ -221,6 +221,44 @@ def test_marked_answered_ask_after_verify_final_resolves(store, tmp_path):
     assert store.load(SID).node == Node.RESOLVED.value
 
 
+def blob_entry(*entries: dict) -> dict:
+    """An api-request-blob replay of the given entries' content: no timestamp."""
+    content = [block for e in entries for block in e["message"]["content"]]
+    return {"type": "api-request-blob", "hash": "h", "sessionId": SID,
+            "message": {"role": "user", "content": content}}
+
+
+def test_replayed_ask_keeps_its_timestamp_and_position(tmp_path):
+    ask = ask_entry("a1", 1000.0)
+    answer = answer_entry("a1", 1001.0)
+    later = ask_entry("a2", 1002.0)
+    path = write_transcript(tmp_path, [ask, answer, later, blob_entry(ask, answer)])
+
+    calls = transcript_turns.ask_user_question_calls(path)
+    assert [(c[1], c[2]) for c in calls] == [(1000.0, True), (1002.0, False)]
+
+
+def test_untimestamped_first_occurrence_takes_a_later_timestamp(tmp_path):
+    first = ask_entry("a1", 0.0)
+    first.pop("timestamp")
+    path = write_transcript(tmp_path, [first, ask_entry("a1", 1000.0), answer_entry("a1", 1001.0)])
+
+    calls = transcript_turns.ask_user_question_calls(path)
+    assert [(c[1], c[2]) for c in calls] == [(1000.0, True)]
+
+
+def test_replay_after_the_answer_does_not_block_resolve(store, tmp_path):
+    to_resolution(store)
+    at = verified_at(store)
+    ask = ask_entry("a1", at + 5, label=f"Resolve {RESOLUTION_ASK_MARKER}")
+    answer = answer_entry("a1", at + 9)
+    write_transcript(tmp_path, [ask, answer, blob_entry(ask, answer)])
+
+    d = resolve(store)
+    assert d.ok is True, d.data
+    assert quality_rows()[-1]["resolution_ask_gate_override"] is None
+
+
 def test_unmarked_answered_ask_after_verify_final_is_refused(store, tmp_path):
     to_resolution(store)
     at = verified_at(store)

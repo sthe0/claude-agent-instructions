@@ -228,6 +228,11 @@ def ask_user_question_calls(
     errored ask is not an answer. The timestamp is None when the tool_use entry's
     own timestamp is missing/unparsable (the ask exists; only its time is unknown).
 
+    A tool_use id is reported once, at its first occurrence. A later occurrence of
+    the same id (an untimestamped `api-request-blob` replaying the conversation)
+    only fills a timestamp the earlier ones lacked — it never replaces a known
+    one, so a replay can neither erase an ask's time nor duplicate the ask.
+
     None iff the transcript could not be read at all — a MISSING OBSERVABLE; a
     readable transcript with no AskUserQuestion is [] — an OBSERVED NEGATIVE.
     Callers must keep the two apart (see delivered_final_texts)."""
@@ -261,8 +266,13 @@ def ask_user_question_calls(
                 if not isinstance(call_id, str) or not isinstance(tool_input, dict):
                     continue
                 ts = entry.get("timestamp")
-                asks[call_id] = [tool_input, iso_to_epoch(ts) if isinstance(ts, str) else None]
-                order.append(call_id)
+                epoch = iso_to_epoch(ts) if isinstance(ts, str) else None
+                seen = asks.get(call_id)
+                if seen is None:
+                    asks[call_id] = [tool_input, epoch]
+                    order.append(call_id)
+                elif seen[1] is None:
+                    seen[1] = epoch
             elif btype == "tool_result" and not block.get("is_error"):
                 call_id = block.get("tool_use_id")
                 if isinstance(call_id, str) and call_id in asks:
