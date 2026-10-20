@@ -1,11 +1,11 @@
 ---
 name: improvement-scan
-description: TRIGGER when the user asks you to proactively improve the agent system itself, review its own backlog, or look for recurring problems in its own recent work — WITHOUT a specific correction driving it (that's self-improvement's, reactive-only) — in any language, e.g. "scan yourself for improvements" / "what should we fix in the agent" / the Russian trigger «сделай себя лучше». Runs both standing producers (backlog reconciliation against the local board state, recent-session telemetry pattern detection) end to end, ranks findings cost-first in one report, and STOPS — never files a difficulty, dispatches a specialist, or auto-selects work. SKIP if the user names one specific item to act on (ordinary task routing, not a scan).
+description: TRIGGER when the user asks you to proactively improve the agent system itself, review its own backlog, or look for recurring problems in its own recent work — WITHOUT a specific correction driving it (that's self-improvement's, reactive-only) — in any language, e.g. "scan yourself for improvements" / "what should we fix in the agent" / the Russian trigger «сделай себя лучше». Runs the three standing producers (backlog reconciliation, session telemetry pattern detection, external ideas via `improvement-scan.py sources`) end to end, ranks findings cost-first in one report, and STOPS — never files a difficulty, dispatches a specialist, or auto-selects work. SKIP if the user names one specific item to act on (ordinary task routing, not a scan).
 ---
 
 # Improvement scan
 
-You run `scripts/improvement-scan.py`'s two producers to completion and hand the
+You run `scripts/improvement-scan.py`'s three producers to completion and hand the
 user one ranked, cost-first report — the standing, mechanized form of what
 `backlog-triage-practice.md` and `systemic-pattern-scan.md` otherwise ask you to
 redo from prose every time. The script deliberately does not do the perception
@@ -123,6 +123,28 @@ Procedure step 6).
    match is commented on (or refused with exit 3 under `--no-comment-on-match`), and
    `record-experience.py new` asks a judge before creating a leaf.
 
+7a. **Sources, phase A:** `python3 scripts/improvement-scan.py sources
+   --emit-items items.json` (each command here also takes `--state-dir <dir>`
+   and `--store <store>` when given). Read the per-source `ok`/`error` status
+   and surface any `REVIEW-DUE` line to the user — it asks whether the producer
+   earned its keep.
+
+7b. **Judge the entries** (perception). For each item write
+   `{"entry_id": ..., "skip": "<reason>"}` or a full claim: `title`,
+   `difficulty_removed`, `mechanism`, `evidence_level`
+   (`measured`/`anecdote`/`opinion`), `evidence_basis`, `addresses` (exact refs
+   copied from `open_difficulties`; `[]` when none fits, never a paraphrase),
+   `cited_sources` (http(s) URLs), `candidate_sources`. A `rejoin` entry takes
+   `{"entry_id": ..., "addresses": [...]}` or is left out. Then
+   `python3 scripts/improvement-scan.py sources --claims claims.json`; every
+   emitted entry needs one disposition, and a bad file exits 2 writing nothing.
+
+7c. **Dossiers** (optional): `sources --emit-candidates cands.json
+   [--subject <listed-id>]`, write 1-6 `statements` per candidate, each
+   `{"text", "url"}` with an http(s) URL (a statement without one is refused),
+   then `sources --describe descriptions.json`. Code adds the signals; there is
+   no composite score, and adding a source stays the user's act.
+
 8. **Render the unified report:**
    ```
    python3 scripts/improvement-scan.py report --store <store> --format md
@@ -136,7 +158,11 @@ Procedure step 6).
    inputs only. Present its output as-is, in the dialogue
    language, with the recommended next step already attached per finding. A
    backlog item ranked at an addressed cluster's cost carries a `via <key>`
-   note; keys matching no open telemetry row are listed as dangling.
+   note; keys matching no open telemetry row are listed as dangling. The
+   external-source lanes follow: ideas addressing our difficulties (ranked),
+   ideas with no matching difficulty (unranked), candidate sources with
+   dossiers. Each idea prints its store key; an issue or commit that acts on an
+   idea must cite that key.
 
 9. **Optionally republish the board as a human-readable view** rendered from
    the state file (`Artifact action:"publish"`, the current `url:` named in
@@ -159,7 +185,7 @@ Procedure step 6).
 
 ## See also
 
-- `memory-global/leaves/improvement-scan.md` — the two producers' resume
+- `memory-global/leaves/improvement-scan.md` — the three producers' resume
   schemes and why each differs, and the report-only boundary in leaf form.
 - `memory-global/leaves/backlog-triage-practice.md` — the priority rubric and
   classification vocabulary this skill's step 3 applies.

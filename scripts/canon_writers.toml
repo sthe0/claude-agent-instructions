@@ -110,6 +110,7 @@
 "scripts/hook-turn-end-gate.py" = { disposition = "not-canon", category = "not-canon", reason = "turn-gate markers under the hook state dir" }
 "scripts/improvement-scan.py" = { disposition = "not-canon", category = "not-canon", reason = "scan ledger and report under ~/.local/state" }
 "scripts/improvement_scan_loss.py" = { disposition = "not-canon", category = "not-canon", reason = "loss ledger under ~/.local/state" }
+"scripts/improvement_scan_sources.py" = { disposition = "not-canon", category = "not-canon", reason = "seen cursor, queue and claim cache under ~/.local/state/improvement-scan/sources" }
 "scripts/instruction-sandbox-live.py" = { disposition = "not-canon", category = "not-canon", reason = "the hook-gate probe writes one target file in a private directory under /dev/shm (removed afterwards) and the probe stream under the throwaway sandbox root; never the source checkout" }
 "scripts/instruction-sandbox-verify.sh" = { disposition = "not-canon", category = "not-canon", reason = "writes marker lines into files of the throwaway sandbox copy ($root/core), never the source checkout" }
 "scripts/instruction-sandbox.sh" = { disposition = "not-canon", category = "not-canon", reason = "builds a throwaway sandbox copy and its logs and env file under the sandbox root" }

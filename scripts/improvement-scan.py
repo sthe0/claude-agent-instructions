@@ -102,6 +102,8 @@ cluster_judge_line = _rec_for_scan.cluster_judge_line
 # test_module_never_shells_out_or_reaches_the_network for the invariant this preserves.
 import improvement_scan_shell as shell  # noqa: E402
 import improvement_scan_loss as loss  # noqa: E402
+import improvement_scan_sources as srcs  # noqa: E402
+import improvement_scan_fetch as fetcher  # noqa: E402
 from agentctl import advisor  # noqa: E402
 from agentctl.cost import COST_LOG as SPAWN_LEDGER_DEFAULT, read_rows as read_spawn_rows  # noqa: E402
 
@@ -1680,9 +1682,96 @@ def _render_tail_lanes_md(lanes: dict) -> "list[str]":
     return parts
 
 
+EMPTY_EXTERNAL = {"matched": [], "unmatched": [], "candidates": [], "listed": []}
+
+
+def _report_ideas(store_path: "str | Path | None") -> "list[dict]":
+    """Every OPEN external-idea row: the cached claim plus the store row's bookkeeping."""
+    out: "list[dict]" = []
+    for row in sds.advisory_open(sds.load_rows(store_path)):
+        if row.get("source") != sds.SOURCE_IMPROVEMENT_SCAN or row.get("kind") != sds.KIND_EXTERNAL_IDEA:
+            continue
+        out.append({
+            **_decode_finding_detail(row), "key": row.get("key", ""), "status": row.get("status", "open"),
+            "first_seen": row.get("first_seen", ""), "times_surfaced": row.get("times_surfaced", 0),
+        })
+    return out
+
+
+def _external_report(
+    ideas: "list[dict]", ranked: "list[dict]", state: "srcs.StateDir", listed: "list[dict]",
+) -> dict:
+    """The three external lanes. Each idea is joined to this report's open difficulties by
+    the refs it names; ideas are never merged into the difficulty cost bands."""
+    difficulty_rank: "dict[str, int]" = {}
+    for position, finding in enumerate(ranked):
+        ref = srcs.difficulty_ref(finding, sds.KIND_TELEMETRY_PATTERN)
+        if ref:
+            difficulty_rank.setdefault(ref, position)
+    matched, unmatched = srcs.split_by_join(ideas, set(difficulty_rank))
+    claims = state.load("claims.json", {})
+    dossiers = state.load("dossiers.json", {})
+    pool = srcs.candidate_pool(claims, {s["url"] for s in listed})
+    listed_ids = {s["id"] for s in listed}
+    return {
+        "matched": srcs.rank_ideas(matched, difficulty_rank),
+        "unmatched": unmatched,
+        "candidates": [
+            {"subject": url, "cited_by": titles, "dossier": dossiers.get(url)} for url, titles in pool.items()
+        ],
+        "listed": [d for subject, d in dossiers.items() if subject in listed_ids],
+    }
+
+
+def _render_idea_md(idea: dict, titles: "dict[str, str]") -> str:
+    lines = [
+        f"### {idea['title']}",
+        f"- **Difficulty removed:** {idea['difficulty_removed']}",
+        f"- **Mechanism:** {idea['mechanism']}",
+        f"- **Evidence:** {idea['evidence_level']} — {idea['evidence_basis']}",
+    ]
+    if idea.get("resolved"):
+        lines.append("- **Addresses:** " + "; ".join(f"`{r}` ({titles.get(r, r)})" for r in idea["resolved"]))
+    if idea.get("unresolved"):
+        lines.append("- **Addressed but not open:** " + ", ".join(f"`{r}`" for r in idea["unresolved"]))
+    sources = ", ".join([idea["url"], *idea.get("cited_sources", [])])
+    lines += [
+        f"- **Sources:** {sources}",
+        f"- **Store key:** `{idea['key']}` — {idea['status']}, surfaced {idea['times_surfaced']}x, "
+        f"first seen {idea['first_seen']}",
+    ]
+    return "\n".join(lines)
+
+
+def _render_external_md(external: dict, titles: "dict[str, str]") -> "list[str]":
+    def lane(heading: str, body: "list[str]") -> "list[str]":
+        return [heading, "", *(body or ["(none)"]), ""]
+
+    parts = lane(
+        "## External ideas addressing our difficulties",
+        [t for i in external["matched"] for t in (_render_idea_md(i, titles), "")][:-1],
+    )
+    parts += lane(
+        "## External ideas with no matching difficulty - is there one?",
+        [t for i in external["unmatched"] for t in (_render_idea_md(i, titles), "")][:-1],
+    )
+    rows = [
+        line for c in external["candidates"]
+        for line in (
+            srcs.render_dossier_row(c["dossier"]) if c["dossier"]
+            else [f"- {c['subject']} | dossier pending (cited by {'; '.join(c['cited_by'])})"]
+        )
+    ]
+    listed = [line for d in external["listed"] for line in srcs.render_dossier_row(d)]
+    parts += lane("## Candidate sources (not added)", rows)
+    parts += lane("### Listed sources with a dossier", listed)
+    return parts
+
+
 def _render_markdown(
     ranked: "list[dict]", lanes: "dict | None" = None,
     addresses: "dict[str, tuple[str, ...]] | None" = None,
+    external: "dict | None" = None,
 ) -> str:
     lanes = lanes or {"loss": [], "silent": [], "awaiting": []}
     shown = _lane_member_refs(lanes)
@@ -1709,10 +1798,13 @@ def _render_markdown(
             parts.append("")
     if not measured and not unmeasured and not (lanes["loss"] or lanes["silent"] or lanes["awaiting"]):
         parts.append("No open improvement-scan findings.")
+        parts.append("")
+    titles = {srcs.difficulty_ref(f, sds.KIND_TELEMETRY_PATTERN): f["title"] for f in ranked}
+    parts += _render_external_md(external or EMPTY_EXTERNAL, titles)
     return "\n".join(parts).rstrip() + "\n"
 
 
-def _render_json(ranked: "list[dict]", lanes: "dict | None" = None) -> str:
+def _render_json(ranked: "list[dict]", lanes: "dict | None" = None, external: "dict | None" = None) -> str:
     lanes = lanes or {"loss": [], "silent": [], "awaiting": []}
     return json.dumps(
         {
@@ -1720,6 +1812,7 @@ def _render_json(ranked: "list[dict]", lanes: "dict | None" = None) -> str:
             "loss": lanes["loss"],
             "silent": lanes["silent"],
             "awaiting": lanes["awaiting"],
+            "external_ideas": external or EMPTY_EXTERNAL,
         },
         ensure_ascii=False, indent=2,
     )
@@ -1734,11 +1827,16 @@ def _cmd_report(args: argparse.Namespace) -> int:
     ranked = _rank_findings(_report_findings(args.store))
     board = _board_for_report(getattr(args, "board", None))
     lanes = loss.build_lanes(board.items) if board is not None else None
+    try:
+        listed = _load_sources_file(getattr(args, "sources", None))[1]
+    except srcs.SourcesError:
+        listed = []
+    external = _external_report(_report_ideas(args.store), ranked, _sources_state(args), listed)
     if args.format == "json":
-        print(_render_json(ranked, lanes))
+        print(_render_json(ranked, lanes, external))
     else:
         addresses = {ref: item.addresses for ref, item in board.items.items()} if board else None
-        print(_render_markdown(ranked, lanes, addresses))
+        print(_render_markdown(ranked, lanes, addresses, external))
     return 0
 
 
@@ -2112,6 +2210,239 @@ def _cmd_telemetry(args: argparse.Namespace) -> int:
     return 2
 
 
+# --- sources: external reading, judged by the model, kept by the rules --------
+
+SOURCES_FILE_DEFAULT = SCRIPT_DIR / "external-sources.toml"
+SOURCES_STATE_ENV = "IMPROVEMENT_SCAN_SOURCES_STATE"
+SOURCES_STATE_DEFAULT = Path.home() / ".local" / "state" / "improvement-scan" / "sources"
+
+
+def _sources_state(args: argparse.Namespace) -> "srcs.StateDir":
+    root = getattr(args, "state_dir", None) or os.environ.get(SOURCES_STATE_ENV) or SOURCES_STATE_DEFAULT
+    return srcs.StateDir(Path(root))
+
+
+def _load_sources_file(path: "str | None") -> "tuple[dict, list[dict]]":
+    target = Path(path or SOURCES_FILE_DEFAULT)
+    try:
+        text = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise srcs.SourcesError(f"cannot read the sources file {target}: {exc}") from exc
+    return srcs.parse_sources(text, fetcher.is_http_url)
+
+
+def _sources_today(args: argparse.Namespace):
+    given = getattr(args, "today", None)
+    return datetime.strptime(given, "%Y-%m-%d").date() if given else datetime.now(timezone.utc).date()
+
+
+def _read_sources_json(path: str, what: str) -> dict:
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise srcs.SourcesError(f"cannot read {what}: {exc}") from exc
+
+
+def _source_status_lines(listed: "list[dict]", fetched: dict, errors: dict, new: dict) -> "list[dict]":
+    out = []
+    for source in listed:
+        sid = source["id"]
+        if sid in fetched:
+            out.append({"id": sid, "status": "ok", "new": new.get(sid, 0)})
+        elif sid in errors:
+            out.append({"id": sid, "status": "error", "error": errors[sid]})
+    return out
+
+
+def _sources_phase_a(args: argparse.Namespace, meta: dict, listed: "list[dict]", state: "srcs.StateDir") -> int:
+    if not meta["enabled"]:
+        print("improvement-scan sources: disabled in the sources file; nothing read")
+        return 0
+    cursor = srcs.SeenCursor.load(state)
+    fetched: "dict[str, list[dict]]" = {}
+    errors: "dict[str, str]" = {}
+    for source in listed:
+        if source["enabled"]:
+            entries, error = fetcher.read_source(source)
+            if error:
+                errors[source["id"]] = error
+            else:
+                fetched[source["id"]] = entries
+    queue, new, dropped = srcs.enqueue(state.load("queue.json", []), cursor, fetched, meta["queue_cap"])
+    for line in _source_status_lines(listed, fetched, errors, new):
+        print(f"source {line['id']}: {line['status']}, " + (
+            f"{line['new']} new" if line["status"] == "ok" else line["error"]))
+    if dropped:
+        print(f"queue over its cap of {meta['queue_cap']}: dropped the {dropped} oldest entries")
+    bound = meta["max_items_per_run"]
+    if args.max_items is not None:
+        bound = min(bound, args.max_items)
+    items = srcs.select_items(queue, list(fetched), bound)
+    claims = state.load("claims.json", {})
+    difficulties = srcs.open_difficulties(_report_findings(args.store), sds.KIND_TELEMETRY_PATTERN)
+    rejoin = srcs.rejoin_entries(claims, difficulties)
+    today = _sources_today(args)
+    due = srcs.review_due(meta, today)
+    runlog = state.load("runlog.json", {})
+    runs = [*runlog.get("runs", []), {"date": today.isoformat(), "new": sum(new.values()), "dropped": dropped}]
+    if due:
+        print(
+            f"REVIEW-DUE: external sources armed {meta['armed']}, {meta['review_after_weeks']} weeks passed; "
+            f"{len(runs)} runs, {sum(r['new'] for r in runs)} new entries, {len(claims)} cached claims"
+        )
+    out = {
+        "sources": _source_status_lines(listed, fetched, errors, new),
+        "items": items,
+        "rejoin": rejoin,
+        "open_difficulties": difficulties,
+        "queued": len(queue),
+        "review_due": due,
+    }
+    _atomic_write_json(out, args.emit_items)
+    if not args.dry_run:
+        cursor.save(state)
+        state.save("queue.json", queue)
+        state.save("emitted.json", {
+            "items": {e["entry_id"]: e for e in items},
+            "rejoin": {r["entry_id"]: [d["ref"] for d in r["open_difficulties"]] for r in rejoin},
+            "difficulties": difficulties,
+        })
+        state.save("runlog.json", {"runs": runs})
+    print(f"{len(items)} entries to judge, {len(rejoin)} cached claims to rejoin, {len(queue)} queued")
+    return 0
+
+
+def _store_ideas(cache: "dict[str, dict]", store_path: "str | None") -> None:
+    records = [
+        {
+            "kind": sds.KIND_EXTERNAL_IDEA,
+            "path": f"external-idea:{entry_id}",
+            "detail": json.dumps(srcs.idea_payload(claim), ensure_ascii=False),
+        }
+        for entry_id, claim in cache.items()
+    ]
+    sds.upsert_findings(
+        records, path=store_path, source=sds.SOURCE_IMPROVEMENT_SCAN,
+        kinds=frozenset({sds.KIND_EXTERNAL_IDEA}),
+    )
+
+
+def _sources_phase_b(args: argparse.Namespace, listed: "list[dict]", state: "srcs.StateDir") -> int:
+    raw = _read_sources_json(args.claims, "the claims file")
+    emitted = state.load("emitted.json", {})
+    if not emitted:
+        raise srcs.SourcesError("nothing was emitted: run --emit-items before --claims")
+    cache = state.load("claims.json", {})
+    plan = srcs.validate_claims(raw, emitted, cache, fetcher.is_http_url)
+    today = _sources_today(args).isoformat()
+    cache = srcs.apply_plan(cache, plan, emitted, today, {s["url"] for s in listed}, fetcher.is_http_url)
+    if args.dry_run:
+        print(f"dry run: {len(plan['claims'])} claims, {len(plan['skips'])} skips, {len(plan['amend'])} amendments")
+        return 0
+    cursor = srcs.SeenCursor.load(state)
+    for entry_id, item in emitted["items"].items():
+        cursor.mark(item["source_id"], entry_id)
+    cursor.save(state)
+    state.save("queue.json", [e for e in state.load("queue.json", []) if e["entry_id"] not in emitted["items"]])
+    state.save("claims.json", cache)
+    _store_ideas(cache, args.store)
+    state.remove("emitted.json")
+    print(f"{len(plan['claims'])} claims stored, {len(plan['skips'])} skipped, {len(plan['amend'])} amended")
+    return 0
+
+
+def _sources_emit_candidates(args: argparse.Namespace, listed: "list[dict]", state: "srcs.StateDir") -> int:
+    by_id = {s["id"]: s for s in listed}
+    unknown = [s for s in args.subjects if s not in by_id]
+    if unknown:
+        raise srcs.SourcesError("--subject names no listed source: " + ", ".join(unknown))
+    dossiers = state.load("dossiers.json", {})
+    pool = srcs.candidate_pool(state.load("claims.json", {}), {s["url"] for s in listed})
+    out = {
+        "candidates": [
+            {"subject": url, "cited_by": titles} for url, titles in pool.items() if url not in dossiers
+        ],
+        "listed": [{"subject": sid, "name": by_id[sid]["name"], "url": by_id[sid]["url"]} for sid in args.subjects],
+    }
+    _atomic_write_json(out, args.emit_candidates)
+    print(f"{len(out['candidates'])} candidate sources and {len(out['listed'])} listed sources to describe")
+    return 0
+
+
+def _safe_signal(compute) -> dict:
+    """A dossier signal never aborts the dossier: a failure is that signal's `error`."""
+    try:
+        return compute()
+    except Exception as exc:  # noqa: BLE001 - fail-open by contract
+        return {"status": "error", "note": f"{type(exc).__name__}: {exc}"}
+
+
+def _sources_describe(args: argparse.Namespace, meta: dict, listed: "list[dict]", state: "srcs.StateDir") -> int:
+    descriptions = srcs.validate_descriptions(_read_sources_json(args.describe, "the descriptions file"), fetcher.is_http_url)
+    by_id = {s["id"]: s for s in listed}
+    claims = state.load("claims.json", {})
+    pool = srcs.candidate_pool(claims, {s["url"] for s in listed})
+    unknown = [d["subject"] for d in descriptions if d["subject"] not in by_id and d["subject"] not in pool]
+    if unknown:
+        raise srcs.SourcesError("subjects that are neither a candidate nor a listed source: " + ", ".join(unknown))
+    budget = fetcher.ExternalBudget(meta["max_external_calls_per_run"])
+    now = datetime.now(timezone.utc)
+    today = _sources_today(args).isoformat()
+    dossiers = state.load("dossiers.json", {})
+    for desc in descriptions:
+        subject = desc["subject"]
+        source = by_id.get(subject)
+        url, kind = (source["url"], source["kind"]) if source else (subject, "rss")
+        domain = fetcher.domain_of(url)
+        others = set(by_id) - {subject}
+        signals = {
+            "feed": _safe_signal(lambda: fetcher.feed_signal(url, kind, now)),
+            "local_refs": _safe_signal(lambda: srcs.local_refs_signal(domain, claims, others, fetcher.domain_of)),
+            "hn": _safe_signal(lambda: fetcher.hn_signal(domain, budget)),
+            "github": _safe_signal(lambda: fetcher.github_signal(desc.get("github_login"), budget)),
+            "openalex": _safe_signal(lambda: fetcher.openalex_signal(desc.get("author"), budget)),
+            "evidence_profile": _safe_signal(lambda: srcs.evidence_profile_signal(subject, claims)),
+        }
+        dossiers[subject] = srcs.build_dossier(subject, desc, signals, today)
+    if not args.dry_run:
+        state.save("dossiers.json", dossiers)
+    print(f"{len(descriptions)} dossiers written ({budget.calls} external calls)")
+    return 0
+
+
+def _sources_dossiers(args: argparse.Namespace, state: "srcs.StateDir") -> int:
+    dossiers = state.load("dossiers.json", {})
+    _atomic_write_json({"dossiers": list(dossiers.values())}, args.dossiers)
+    print(f"{len(dossiers)} dossiers written to {args.dossiers}")
+    return 0
+
+
+def _cmd_sources(args: argparse.Namespace) -> int:
+    modes = [m for m in ("emit_items", "claims", "emit_candidates", "describe", "dossiers") if getattr(args, m)]
+    if len(modes) != 1:
+        print(
+            "improvement-scan sources: pass exactly one of --emit-items, --claims, "
+            "--emit-candidates, --describe, --dossiers",
+            file=sys.stderr,
+        )
+        return 2
+    state = _sources_state(args)
+    try:
+        meta, listed = _load_sources_file(args.sources)
+        if args.emit_items:
+            return _sources_phase_a(args, meta, listed, state)
+        if args.claims:
+            return _sources_phase_b(args, listed, state)
+        if args.emit_candidates:
+            return _sources_emit_candidates(args, listed, state)
+        if args.describe:
+            return _sources_describe(args, meta, listed, state)
+        return _sources_dossiers(args, state)
+    except srcs.SourcesError as exc:
+        print(f"improvement-scan sources: {exc}", file=sys.stderr)
+        return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true", help="never write, only print")
@@ -2197,8 +2528,47 @@ def build_parser() -> argparse.ArgumentParser:
     p_telemetry.add_argument("--store", default=None, help="store mode: findings store path")
     p_telemetry.set_defaults(func=_cmd_telemetry)
 
+    p_sources = sub.add_parser(
+        "sources", help="read the user-curated external sources and keep the model's claims about new entries"
+    )
+    p_sources.add_argument("--sources", default=None, help="the sources file (default: scripts/external-sources.toml)")
+    p_sources.add_argument(
+        "--state-dir", default=None,
+        help="the producer's state directory (default: $IMPROVEMENT_SCAN_SOURCES_STATE or "
+        "~/.local/state/improvement-scan/sources)",
+    )
+    p_sources.add_argument("--store", default=None, help="findings store path")
+    p_sources.add_argument("--max-items", type=int, default=None, help="phase A: entries to emit, at most")
+    p_sources.add_argument("--today", default=None, help=argparse.SUPPRESS)
+    p_sources.add_argument(
+        "--emit-items", default=None,
+        help="phase A: read the enabled sources and write the new entries to judge here",
+    )
+    p_sources.add_argument(
+        "--claims", default=None, help="phase B: the model's claims file for the entries phase A emitted"
+    )
+    p_sources.add_argument(
+        "--emit-candidates", default=None,
+        help="dossier step 1: write the candidate sources still lacking a dossier here",
+    )
+    p_sources.add_argument(
+        "--subject", action="append", default=[], dest="subjects",
+        help="with --emit-candidates: a listed source id to describe too (repeatable)",
+    )
+    p_sources.add_argument(
+        "--describe", default=None,
+        help="dossier step 2: the model's descriptions file; computes the code signals and stores the dossiers",
+    )
+    p_sources.add_argument("--dossiers", default=None, help="write the stored dossiers here")
+    p_sources.set_defaults(func=_cmd_sources)
+
     p_report = sub.add_parser("report", help="render the unified ranked report from stored findings")
     p_report.add_argument("--store", default=None, help="findings store path to render")
+    p_report.add_argument("--sources", default=None, help="the sources file (default: scripts/external-sources.toml)")
+    p_report.add_argument(
+        "--state-dir", default=None,
+        help="the external-sources state directory whose claims and dossiers the report shows",
+    )
     p_report.add_argument(
         "--board", default=str(board_state_path()),
         help="board state file; when readable, its measured-loss, silent and awaiting lanes are "

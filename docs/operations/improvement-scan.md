@@ -7,8 +7,8 @@
 
 ## Overview
 
-`scripts/improvement-scan.py` provides four subcommands (`backlog`, `loss`, `telemetry`,
-`report`). Each does only the mechanizable rule
+`scripts/improvement-scan.py` provides five subcommands (`backlog`, `loss`, `telemetry`,
+`sources`, `report`). Each does only the mechanizable rule
 part of its responsibility — collection, diffing, scoring, deduplication, rendering — and leaves
 every judgment call (classification, functional-ground statement, which candidate is worth acting
 on) to whichever live session drives it via the `improvement-scan` skill. The CLI never files a
@@ -200,6 +200,73 @@ larger; the item then follows its cluster's own row at equal cost, by proxy scor
 copied, never summed across items sharing a cluster. Keys matching no open row are listed as
 `dangling` (markdown and JSON) even when another key resolved; an item whose keys match only
 unmeasured rows, or none, stays in the unmeasured band.
+
+## `sources` — external ideas
+
+```
+python3 scripts/improvement-scan.py sources --emit-items items.json
+python3 scripts/improvement-scan.py sources --claims claims.json
+python3 scripts/improvement-scan.py sources --emit-candidates cands.json [--subject <id>]...
+python3 scripts/improvement-scan.py sources --describe descriptions.json
+python3 scripts/improvement-scan.py sources --dossiers dossiers.json
+```
+
+Common flags: `--sources <toml>` (default `scripts/external-sources.toml`), `--state-dir <dir>`
+(else `IMPROVEMENT_SCAN_SOURCES_STATE`, else `~/.local/state/improvement-scan/sources`), `--store`,
+`--max-items N` (lowers, never raises, the file's bound). Exactly one mode flag per call.
+
+The producer reads the user's curated list weekly and picks up only entries it has not judged.
+The file is the user's: adding or enabling a source is the user's act, and no mode ever writes it.
+`[meta]` carries `armed`, `review_after_weeks`, `enabled`, `max_items_per_run`, `queue_cap` and
+`max_external_calls_per_run`; each `[[source]]` has `id`, `name`, `url`, `kind`
+(`rss`/`atom`/`telegram`; `html` may be listed but not enabled), `enabled` and a `reason`.
+A Telegram source is read from its public `t.me/s/` preview only.
+
+**Phase A (`--emit-items`).** Fetch each enabled source (a failing source is reported as `error`
+with its reason and does not stop the others), enqueue unseen entries in a bounded FIFO queue
+(overflow drops the oldest and prints the count), take up to `max_items_per_run` round-robin
+across sources, and write the items, the open difficulties (`ref` = a telemetry store key or a
+backlog `source_ref`) and `rejoin` entries — cached claims facing difficulties that appeared
+after they were judged. Nothing is marked seen yet.
+
+**Phase B (`--claims`).** The model's file is validated whole before anything is written; a bad
+file exits 2 and leaves state untouched. Every emitted entry needs exactly one disposition:
+`{entry_id, skip}` or a full claim (`title`, `difficulty_removed`, `mechanism`, `evidence_level`
+in `measured`/`anecdote`/`opinion`, `evidence_basis`, `addresses`, `cited_sources`,
+`candidate_sources`). A rejoin entry accepts `{entry_id, addresses}`. Accepted entries are marked
+seen, dequeued, cached, and the whole claim cache is upserted into the store as advisory rows of
+kind `external-idea` (never part of the difficulty cost bands; the due-hook counts them like any
+open advisory row).
+
+**Report lanes.** `report` appends, always, three headings (each `(none)` when empty):
+`External ideas addressing our difficulties` — claims whose `addresses` exactly match an open
+difficulty ref, ranked measured > anecdote > opinion, then by the matched difficulty's rank, then
+first seen; `External ideas with no matching difficulty - is there one?` — the rest, unranked, by
+first seen; and `Candidate sources (not added)` with a `### Listed sources with a dossier`
+subsection. The join is exact-match only, never a text similarity. An issue or commit that acts on
+an idea cites its printed store key. JSON output carries the same lanes under `external_ideas`.
+
+**Dossier.** `--emit-candidates` lists candidate feeds cited by cached claims (dedupe, listed
+sources excluded, http(s) only) and, with `--subject`, listed sources; the model answers with
+1–6 `statements` per subject, each `{text, url}` — a statement without an http(s) URL exits 2 and
+writes nothing. The model's statements form the `descriptive` signal; code adds the others, each
+with status `ok`, `error` or `n/a`: `feed` (alive, entries in the last six months), `local_refs`
+(how many cached entries cite the domain), `hn`, `github` and `openalex` (external — bounded by
+`max_external_calls_per_run` and 20 OpenAlex calls per run; a call past the bound is an `error`
+with note `call bound`; shared hosts are `n/a`) and `evidence_profile` (measured share of the
+source's cached claims). A signal that fails is that signal's `error`; there is no composite
+score. A row reads `- <subject> | <signal>: <status> [value] | ...` followed by the
+statements as `  - text (url)`.
+
+### Refutation condition
+
+The producer is on trial for `review_after_weeks` (8) from `armed`. Once that date passes, phase
+A prints a `REVIEW-DUE` line with the runs and cached-claim counts; the reviewer asks whether any
+external idea in the matched lane was acted on through an issue or commit citing its store key.
+If none was, the producer is refuted: set `enabled = false` (or revise it) rather than letting it
+run on. A second refutation: if claim extraction needs more page context than the
+`max_items_per_run` bound lets the skill-running model read, an in-script extractor is warranted
+instead of more model passes.
 
 ## Flags common to all subcommands
 
