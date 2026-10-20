@@ -1829,7 +1829,8 @@ def _cmd_report(args: argparse.Namespace) -> int:
     lanes = loss.build_lanes(board.items) if board is not None else None
     try:
         listed = _load_sources_file(getattr(args, "sources", None))[1]
-    except srcs.SourcesError:
+    except srcs.SourcesError as exc:
+        print(f"improvement-scan report: external lanes have no listed sources: {exc}", file=sys.stderr)
         listed = []
     external = _external_report(_report_ideas(args.store), ranked, _sources_state(args), listed)
     if args.format == "json":
@@ -2255,9 +2256,6 @@ def _source_status_lines(listed: "list[dict]", fetched: dict, errors: dict, new:
 
 
 def _sources_phase_a(args: argparse.Namespace, meta: dict, listed: "list[dict]", state: "srcs.StateDir") -> int:
-    if not meta["enabled"]:
-        print("improvement-scan sources: disabled in the sources file; nothing read")
-        return 0
     cursor = srcs.SeenCursor.load(state)
     fetched: "dict[str, list[dict]]" = {}
     errors: "dict[str, str]" = {}
@@ -2429,6 +2427,9 @@ def _cmd_sources(args: argparse.Namespace) -> int:
     state = _sources_state(args)
     try:
         meta, listed = _load_sources_file(args.sources)
+        if not meta["enabled"]:
+            print("improvement-scan sources: disabled in the sources file; nothing read")
+            return 0
         if args.emit_items:
             return _sources_phase_a(args, meta, listed, state)
         if args.claims:

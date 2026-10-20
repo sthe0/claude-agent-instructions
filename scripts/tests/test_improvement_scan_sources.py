@@ -208,7 +208,7 @@ def test_socket_guard_blocks_socket_connect():
         socket.socket().connect(("example.com", 80))
 
 
-def test_socket_guard_real_fetch_fails_as_a_value_not_an_exception():
+def test_socket_guard_fetch_transport_error_is_returned_as_a_value():
     body, error = fetcher.fetch("https://alpha.example/feed.xml", opener=lambda req, timeout: (_ for _ in ()).throw(
         urllib.error.URLError("no route")))
     assert body is None and "URLError" in error
@@ -311,7 +311,7 @@ def test_status_vocab_each_source_is_ok_or_error(world, web):
 
 
 def test_status_vocab_dossier_rejects_a_status_outside_the_vocabulary():
-    desc = {"statements": [{"text": "t", "url": "https://x.example/a"}]}
+    desc = {"statements": [{"field": "topic_fit", "text": "t", "url": "https://x.example/a"}]}
     signals = {name: {"status": "ok"} for name in s.DOSSIER_SIGNALS if name != "descriptive"}
     signals["hn"] = {"status": "maybe"}
     with pytest.raises(s.SourcesError):
@@ -344,6 +344,23 @@ def test_multi_source_error_disabled_producer_reads_nothing(world, web):
     world.sources.write_text(sources_text(enabled="false"), encoding="utf-8")
     code, _, printed = world.phase_a()
     assert code == 0 and "disabled" in printed and web.calls == []
+
+
+def test_multi_source_error_disabled_producer_makes_no_call_in_any_mode(world, web):
+    world.sources.write_text(sources_text(enabled="false"), encoding="utf-8")
+    description = {"subject": CANDIDATE, "statements": [
+        {"field": "topic_fit", "text": "t", "url": "https://candidate.example/about"}]}
+    modes = {
+        "--emit-items": str(world.tmp / "items.json"),
+        "--claims": world.write("claims.json", {"claims": []}),
+        "--emit-candidates": str(world.tmp / "cands.json"),
+        "--describe": world.write("desc.json", {"descriptions": [description]}),
+        "--dossiers": str(world.tmp / "all.json"),
+    }
+    for flag, path in modes.items():
+        code, out, err = world.run("sources", *world.common(), flag, path)
+        assert code == 0 and "disabled" in out, (flag, err)
+    assert web.calls == [] and world.state_files() == []
 
 
 # --- the closed vocabulary ---------------------------------------------------------------
@@ -873,7 +890,8 @@ def test_review_due_is_silent_before_the_weeks_passed(world):
 # --- dossier -----------------------------------------------------------------------------------------------------------------------
 
 def _described(world, subject=CANDIDATE, **over):
-    desc = {"subject": subject, "statements": [{"text": "writes about agent evals", "url": "https://candidate.example/about"}], **over}
+    statement = {"field": "topic_fit", "text": "writes about agent evals", "url": "https://candidate.example/about"}
+    desc = {"subject": subject, "statements": [statement], **over}
     return world.run("sources", *world.common(), "--describe", world.write("desc.json", {"descriptions": [desc]}))
 
 
@@ -927,7 +945,42 @@ def test_dossier_url_required_a_statement_without_one_exits_2_and_writes_nothing
 
 def test_dossier_url_required_a_non_http_url_is_refused(world):
     _with_candidate(world)
-    assert _described(world, statements=[{"text": "t", "url": "ftp://x.example/a"}])[0] == 2
+    assert _described(world, statements=[{"field": "topic_fit", "text": "t", "url": "ftp://x.example/a"}])[0] == 2
+
+
+def test_dossier_descriptive_every_statement_names_a_format_field(world):
+    _with_candidate(world)
+    before = world.state_files()
+    code, _, err = _described(world, statements=[{"text": "t", "url": "https://c.example/a"}])
+    assert code == 2 and "field" in err and world.state_files() == before
+    code, _, err = _described(world, statements=[{"field": "mood", "text": "t", "url": "https://c.example/a"}])
+    assert code == 2 and "one of author_or_publisher" in err
+
+
+def test_dossier_descriptive_fields_are_exactly_the_format():
+    assert s.DESCRIPTIVE_FIELDS == ("author_or_publisher", "affiliation", "notable_works", "topic_fit")
+
+
+def test_dossier_descriptive_reports_covered_fields_and_names_the_missing_ones(world):
+    _with_candidate(world)
+    _described(world, statements=[
+        {"field": "author_or_publisher", "text": "Jane Doe", "url": "https://c.example/about"},
+        {"field": "notable_works", "text": "Paper A", "url": "https://c.example/a"},
+        {"field": "notable_works", "text": "Paper B", "url": "https://c.example/b"},
+    ])
+    dossier = json.loads((world.state / "dossiers.json").read_text())[CANDIDATE]
+    assert dossier["signals"]["descriptive"] == {
+        "status": "ok", "statements": 3, "missing": "affiliation, topic_fit"}
+    lane = section(world.report(), "## Candidate sources (not added)")
+    assert "descriptive: ok statements=3 missing=affiliation, topic_fit" in lane
+    assert "  - [notable_works] Paper B (https://c.example/b)" in lane
+
+
+def test_dossier_descriptive_all_four_fields_leave_nothing_missing():
+    statements = [{"field": f, "text": f"t {f}", "url": "https://c.example/x"} for f in s.DESCRIPTIVE_FIELDS]
+    signals = {name: {"status": "n/a"} for name in s.DOSSIER_SIGNALS}
+    dossier = s.build_dossier("subject", {"statements": statements}, signals, "2026-10-20")
+    assert dossier["signals"]["descriptive"] == {"status": "ok", "statements": 4}
 
 
 def test_dossier_url_required_a_statement_list_may_not_be_empty(world):
@@ -971,6 +1024,14 @@ def test_dossier_local_refs_counts_listed_sources_naming_the_domain(world):
     assert signal == {"status": "ok", "referencing_entries": 1}
 
 
+def test_dossier_local_refs_matches_a_www_host_and_the_bare_domain():
+    assert fetcher.domain_of("https://www.Candidate.example/post") == fetcher.domain_of("https://candidate.example/")
+    claims = {"e1": {"source_id": "alpha", "cited_sources": ["https://www.candidate.example/a"],
+                     "candidate_sources": ["https://candidate.example/b"]}}
+    signal = s.local_refs_signal(fetcher.domain_of("https://candidate.example/"), claims, {"alpha"}, fetcher.domain_of)
+    assert signal["referencing_entries"] == 1
+
+
 def test_dossier_local_refs_ignores_the_subjects_own_entries():
     claims = {"e1": {"source_id": "alpha", "cited_sources": ["https://alpha.example/x"], "candidate_sources": []}}
     assert s.local_refs_signal("alpha.example", claims, set(), fetcher.domain_of)["referencing_entries"] == 0
@@ -991,7 +1052,7 @@ def test_dossier_lane_row_format_and_cited_statements(world, web):
     lane = section(world.report(), "## Candidate sources (not added)")
     row = next(line for line in lane.splitlines() if line.startswith(f"- {CANDIDATE} |"))
     assert [cell.split(":")[0].strip() for cell in row.split(" | ")[1:]] == list(s.DOSSIER_SIGNALS)
-    assert "  - writes about agent evals (https://candidate.example/about)" in lane
+    assert "  - [topic_fit] writes about agent evals (https://candidate.example/about)" in lane
     assert "dossier pending" not in lane
 
 
@@ -1042,6 +1103,12 @@ def test_report_state_dir_flag_selects_the_directory(world, tmp_path):
     assert code == 0 and CANDIDATE not in out and key
 
 
+def test_report_state_dir_an_unreadable_sources_file_is_noted_on_stderr(world):
+    code, _, err = world.run("report", "--store", str(world.store), "--state-dir", str(world.state),
+                             "--sources", str(world.tmp / "missing.toml"), "--board", str(world.tmp / "no-board.json"))
+    assert code == 0 and "cannot read the sources file" in err
+
+
 def test_report_state_dir_falls_back_to_the_environment(world, monkeypatch):
     _with_candidate(world)
     monkeypatch.setenv(scan.SOURCES_STATE_ENV, str(world.state))
@@ -1070,6 +1137,10 @@ def test_telegram_source_feeds_the_queue_like_any_other(world, web):
     web.routes[TG_URL] = telegram_page("Agents need evals", "Second")
     _, out, _ = world.phase_a()
     assert [i["title"] for i in out["items"]] == ["Agents need evals", "Second"]
+
+
+def test_telegram_prefix_is_defined_once_in_the_rules_module():
+    assert fetcher.TELEGRAM_PREFIX is s.TELEGRAM_PREFIX
 
 
 def test_telegram_feed_signal_states_that_only_a_preview_was_read():

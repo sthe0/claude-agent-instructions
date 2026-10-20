@@ -25,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 
+from improvement_scan_sources import TELEGRAM_PREFIX
+
 FETCH_TIMEOUT_S = 20.0
 FETCH_MAX_BYTES = 2_000_000
 SUMMARY_CHARS = 2000
@@ -34,7 +36,6 @@ OPENALEX_CALLS_PER_RUN = 20
 HN_HITS_PER_PAGE = 20
 USER_AGENT = "claude-agent-improvement-scan/1 (report-only reader)"
 
-TELEGRAM_PREFIX = "https://t.me/s/"
 TELEGRAM_BASIS = "telegram preview, the last ~20 posts only"
 
 HN_ENDPOINT = "https://hn.algolia.com/api/v1/search"
@@ -57,7 +58,8 @@ def is_http_url(value) -> bool:
 
 
 def domain_of(url: str) -> str:
-    return (urllib.parse.urlparse(url).hostname or "").lower()
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    return host.removeprefix("www.")
 
 
 def is_shared_host(domain: str) -> bool:
@@ -174,8 +176,8 @@ def _atom_link(node: ET.Element) -> str:
 
 def parse_feed(data: bytes, source_id: str) -> "list[dict]":
     """RSS 2.0 `item` and Atom `entry` elements -> entries. Raises ValueError when the
-    bytes are not a feed. A document type declaration is refused outright: a feed needs
-    none, and entity definitions are how an untrusted XML bomb is built."""
+    bytes are not a feed. An entity declaration is refused outright: a feed needs none,
+    and entity definitions are how an untrusted XML bomb is built."""
     if re.search(rb"<!ENTITY", data, re.IGNORECASE):
         raise ValueError("feed declares entities")
     try:

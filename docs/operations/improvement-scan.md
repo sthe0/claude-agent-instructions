@@ -213,7 +213,11 @@ python3 scripts/improvement-scan.py sources --dossiers dossiers.json
 
 Common flags: `--sources <toml>` (default `scripts/external-sources.toml`), `--state-dir <dir>`
 (else `IMPROVEMENT_SCAN_SOURCES_STATE`, else `~/.local/state/improvement-scan/sources`), `--store`,
-`--max-items N` (lowers, never raises, the file's bound). Exactly one mode flag per call.
+`--max-items N` (lowers, never raises, the file's bound). Exactly one mode flag per call. With
+`enabled = false` every mode prints `disabled` and exits 0 without a network call. Isolate
+`--state-dir` and `--store` together: phase B upserts the whole claim cache as `external-idea`
+rows, so an isolated (smaller) cache against the default store drops the real rows it lacks. `report`
+takes the same flags and prints a stderr note when it cannot read the sources file.
 
 The producer reads the user's curated list weekly and picks up only entries it has not judged.
 The file is the user's: adding or enabling a source is the user's act, and no mode ever writes it.
@@ -248,15 +252,18 @@ an idea cites its printed store key. JSON output carries the same lanes under `e
 
 **Dossier.** `--emit-candidates` lists candidate feeds cited by cached claims (dedupe, listed
 sources excluded, http(s) only) and, with `--subject`, listed sources; the model answers with
-1–6 `statements` per subject, each `{text, url}` — a statement without an http(s) URL exits 2 and
-writes nothing. The model's statements form the `descriptive` signal; code adds the others, each
+1–6 `statements` per subject, each `{field, text, url}` where `field` is one of the approved
+format's descriptive fields (`author_or_publisher`, `affiliation`, `notable_works`, `topic_fit`;
+`notable_works` may repeat) — a statement without an http(s) URL or a valid field exits 2 and
+writes nothing. The model's statements form the `descriptive` signal, which names the fields no
+statement covers as `missing`; code adds the others, each
 with status `ok`, `error` or `n/a`: `feed` (alive, entries in the last six months), `local_refs`
 (how many cached entries cite the domain), `hn`, `github` and `openalex` (external — bounded by
 `max_external_calls_per_run` and 20 OpenAlex calls per run; a call past the bound is an `error`
 with note `call bound`; shared hosts are `n/a`) and `evidence_profile` (measured share of the
 source's cached claims). A signal that fails is that signal's `error`; there is no composite
 score. A row reads `- <subject> | <signal>: <status> [value] | ...` followed by the
-statements as `  - text (url)`.
+statements as `  - [field] text (url)`.
 
 ### Refutation condition
 

@@ -43,7 +43,10 @@ DOSSIER_SIGNALS = {
     "evidence_profile": "evidence",
 }
 
-_META_INTS = ("review_after_weeks", "max_items_per_run", "queue_cap", "max_external_calls_per_run")
+# The fields of the `descriptive` signal in the approved format; every statement names one.
+DESCRIPTIVE_FIELDS = ("author_or_publisher", "affiliation", "notable_works", "topic_fit")
+
+_META_INTS =("review_after_weeks", "max_items_per_run", "queue_cap", "max_external_calls_per_run")
 _SOURCE_KEYS = frozenset({"id", "name", "url", "kind", "enabled", "reason"})
 _ID_RE = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 _CLAIM_REQUIRED = ("title", "difficulty_removed", "mechanism", "evidence_level", "evidence_basis")
@@ -404,6 +407,8 @@ def validate_descriptions(raw, is_url: Callable[[object], bool]) -> "list[dict]"
                 and is_url(statement.get("url"))
             if not ok:
                 problems.append(f"{subject}: every statement needs text and an http(s) url")
+            elif statement.get("field") not in DESCRIPTIVE_FIELDS:
+                problems.append(f"{subject}: every statement needs a field, one of {', '.join(DESCRIPTIVE_FIELDS)}")
     _problems(problems)
     return raw["descriptions"]
 
@@ -431,8 +436,12 @@ def evidence_profile_signal(subject: str, claims: "dict[str, dict]") -> dict:
 def build_dossier(subject: str, description: dict, signals: "dict[str, dict]", described_at: str) -> dict:
     """One dossier: every format signal present with a status in the vocabulary, the model's
     statements beside them, and no combined score."""
-    statements = [{"text": s["text"], "url": s["url"]} for s in description["statements"]]
-    signals = {**signals, "descriptive": {"status": "ok", "statements": len(statements)}}
+    statements = [{"field": s["field"], "text": s["text"], "url": s["url"]} for s in description["statements"]]
+    uncovered = [f for f in DESCRIPTIVE_FIELDS if not any(s["field"] == f for s in statements)]
+    descriptive = {"status": "ok", "statements": len(statements)}
+    if uncovered:
+        descriptive["missing"] = ", ".join(uncovered)
+    signals = {**signals, "descriptive": descriptive}
     missing = set(DOSSIER_SIGNALS) - set(signals)
     if missing or any(s["status"] not in STATUS_VOCAB for s in signals.values()):
         raise SourcesError(f"{subject}: dossier signals incomplete or out of vocabulary: {sorted(missing)}")
@@ -450,11 +459,12 @@ def _signal_cell(name: str, signal: dict) -> str:
 
 
 def render_dossier_row(dossier: dict) -> "list[str]":
-    """`- <subject> | <name>: <status>[ <value>] | ...`, then the cited statements."""
+    """`- <subject> | <name>: <status>[ <value>] | ...`, then the cited statements, each
+    labelled with the descriptive field it supports."""
     row = f"- {dossier['subject']} | " + " | ".join(
         _signal_cell(name, dossier["signals"][name]) for name in DOSSIER_SIGNALS
     )
-    return [row, *(f"  - {s['text']} ({s['url']})" for s in dossier["statements"])]
+    return [row, *(f"  - [{s['field']}] {s['text']} ({s['url']})" for s in dossier["statements"])]
 
 
 def today_iso() -> str:
