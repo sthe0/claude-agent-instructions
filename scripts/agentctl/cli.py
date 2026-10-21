@@ -1395,7 +1395,7 @@ def _review_trigger_exit(state: SessionState, plan_path: str) -> str | None:
     fire = state.review_trigger_fire
     if fire is None or state.node != Node.DIAGNOSING.value:
         return None
-    if _plan_file_sha256(plan_path) == fire.get("plan_sha256"):
+    if gates.plan_digest_equivalent(state, fire.get("plan_sha256"), _plan_file_sha256(plan_path)):
         return _TRIGGER_EXIT_OVERRIDE
     return _TRIGGER_EXIT_CHANGED
 
@@ -5666,7 +5666,8 @@ def _review_cycle_arrive(state: SessionState, plan_sha256: str) -> bool:
     cycle's opens a fresh cycle -- acts and the minutes anchor restart, and what the last
     fire already spent on them is forgotten; the same sha leaves the cycle alone. The
     stage streaks span versions and are not touched. Returns True when a cycle opened."""
-    if state.review_cycle_open and state.review_cycle_sha == plan_sha256:
+    if state.review_cycle_open and gates.plan_digest_equivalent(
+            state, state.review_cycle_sha, plan_sha256):
         return False
     state.review_cycle_sha = plan_sha256
     state.review_cycle_open = True
