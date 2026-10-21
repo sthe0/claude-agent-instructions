@@ -19,6 +19,8 @@ from agentctl.render import dispatch_ceiling_chars, render_plan_md
 from agentctl.plan import load_plan
 from agentctl.state import Node, Route, SessionState, WeightClass
 
+from test_plan_review_topo import _blockers, _record_pairs, make_env  # noqa: F401
+
 ROW = "review-pairwise-min-edges"
 THRESHOLD = 3
 
@@ -179,19 +181,49 @@ def test_below_threshold_directive_names_whole_plan_review(tmp_path, monkeypatch
     assert directive["data"]["mode"] == "whole"
 
 
-def test_below_threshold_plan_with_pair_records_clears_with_one_whole_plan_pass(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
-    plan = _plan(tmp_path, CHAIN[:THRESHOLD])
-    state = _state(plan)
-    seen = {}
-    monkeypatch.setattr(gates, "has_pair_records_for", lambda s, p: True)
-    monkeypatch.setattr(
-        gates, "_plan_review_blockers_coverage",
-        lambda *a, **k: seen.setdefault("coverage", ["pairs"]),
-    )
-    monkeypatch.setattr(gates, "_plan_review_blockers_whole", lambda *a, **k: [])
-    assert gates.plan_review_blockers(state, str(plan)) == []
-    assert "coverage" not in seen
+def _coverage_calls(monkeypatch) -> list:
+    calls: list = []
+    real = gates._plan_review_blockers_coverage
+
+    def spy(*args, **kwargs):
+        calls.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(gates, "_plan_review_blockers_coverage", spy)
+    return calls
+
+
+def test_non_spawn_session_with_pair_records_takes_the_coverage_path(make_env, monkeypatch):
+    env = make_env()
+    _record_pairs(env)
+    assert gates.has_pair_records_for(env.state(), str(env.plan))
+    assert env.state().route != Route.SPAWN.value
+    calls = _coverage_calls(monkeypatch)
+    _blockers(env)
+    assert calls
+
+
+def test_below_threshold_plan_with_pair_records_clears_with_one_whole_plan_pass(make_env, monkeypatch):
+    env = make_env()
+    env.mutate_state(lambda s: setattr(s, "route", Route.SPAWN.value))
+    _record_pairs(env)
+    assert gates.has_pair_records_for(env.state(), str(env.plan))
+    assert gates.whole_plan_by_shape(env.doc())
+    assert env.record("", "pass").ok
+    calls = _coverage_calls(monkeypatch)
+    assert _blockers(env) == []
+    assert not calls
+
+
+def test_ceiling_counts_the_thinker_prompt_overhead(tmp_path, monkeypatch):
+    plan = _plan(tmp_path, [[]])
+    size = len(render_plan_md(load_plan(plan)))
+    overhead = gates._whole_plan_prompt_overhead_chars()
+    assert overhead > 0
+    monkeypatch.setattr("agentctl.render.dispatch_ceiling_chars", lambda model=None: size + overhead)
+    assert _route(plan) is False
+    monkeypatch.setattr("agentctl.render.dispatch_ceiling_chars", lambda model=None: size + overhead - 1)
+    assert _route(plan) is True
 
 
 def test_mutation_route_only_is_caught(tmp_path, monkeypatch):
