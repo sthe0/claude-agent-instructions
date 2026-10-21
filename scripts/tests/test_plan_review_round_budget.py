@@ -290,9 +290,15 @@ def test_a_stage_scoped_review_staled_by_its_own_answer_still_spends_a_round(
     surviving records instead of off the count reported none of them, leaving the release
     silent in exactly the workflow the stage-scoped verdict exists to support. The
     review-cost trigger, which would route the session out at the third revise of stage 2,
-    is disarmed: this test isolates the round-release valve."""
+    is disarmed through a config.md without its streak row: this test isolates the
+    round-release valve."""
     import shutil
-    monkeypatch.setattr(gates, "review_trigger", lambda state, thr=None: None)
+    from agentctl import config
+    rows = [line for line in config.CONFIG_MD.read_text(encoding="utf-8").splitlines()
+            if not line.startswith("| `review-stage-nonpass-streak` |")]
+    table = tmp_path / "config.md"
+    table.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    monkeypatch.setattr(config, "CONFIG_MD", table)
     sid = "rb-stage-scoped"
     plan = str(tmp_path / "p.toml")
     shutil.copy(venued_fixtures_dir / "plan_two_stage.toml", plan)

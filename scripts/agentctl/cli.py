@@ -1317,6 +1317,11 @@ def _record_customer_stage_grants(state: SessionState, by: str, scope: str, entr
             )
 
 
+def _is_agent_override(record) -> bool:
+    return (record.verdict == gates._PLAN_REVIEW_OVERRIDE
+            and (record.reviewer or "").strip().casefold() == AGENT_ACTOR)
+
+
 def _agent_review_override(state: SessionState) -> dict | None:
     """The coordinator's own plan-review override on record, which the user must see
     named when the plan reaches them: the review was waived, not passed."""
@@ -1326,8 +1331,7 @@ def _agent_review_override(state: SessionState) -> dict | None:
     reviews += [(review, plan_review_scope_for_pair(pair))
                 for pair, review in state.plan_pair_reviews.items()]
     for review, scope in reviews:
-        if (review.verdict == gates._PLAN_REVIEW_OVERRIDE
-                and (review.reviewer or "").strip().casefold() == AGENT_ACTOR):
+        if _is_agent_override(review):
             spent = [e.get("difficulty_id") for e in state.history
                      if e.get("event") == "agent_review_override_record" and e.get("scope") == scope]
             return {"reviewer": review.reviewer, "scope": scope, "note": review.note,
@@ -1378,7 +1382,10 @@ def _review_trigger_record_open(state: SessionState) -> bool:
 _TRIGGER_EXIT_OVERRIDE = "override"
 _TRIGGER_EXIT_CHANGED = "changed"
 _TRIGGER_EXIT_ADMITTED = "approve is admitted on the recorded override"
-_TRIGGER_EXIT_FRESH_PASS = "a fresh counted PASS reopens the gate"
+_TRIGGER_EXIT_CLEARED = "approve is admitted on the review record that clears the gate"
+_TRIGGER_EXIT_FRESH_PASS = (
+    "approve re-checks the plan-review gate on the records carried onto the changed plan; "
+    "a fresh counted PASS is owed for whatever they leave uncovered")
 
 
 def _review_trigger_exit(state: SessionState, plan_path: str) -> str | None:
@@ -1393,21 +1400,25 @@ def _review_trigger_exit(state: SessionState, plan_path: str) -> str | None:
     return _TRIGGER_EXIT_CHANGED
 
 
+def _trigger_exit_text(trigger_exit: str, override: dict | None) -> str:
+    """What `approve` rests on after the exit: the recorded agent override when one
+    stands, else the review record that cleared the gate; the changed plan owes a fresh pass."""
+    if trigger_exit == _TRIGGER_EXIT_CHANGED:
+        return _TRIGGER_EXIT_FRESH_PASS
+    return _TRIGGER_EXIT_ADMITTED if override else _TRIGGER_EXIT_CLEARED
+
+
 def _drop_agent_overrides(state: SessionState) -> None:
     """Remove every agent-authored plan-review override record: the changed plan a trigger
     exit offers is owed a fresh review, which an override of the old bytes must not stand in for."""
-    def agent_override(record) -> bool:
-        return (record.verdict == gates._PLAN_REVIEW_OVERRIDE
-                and (record.reviewer or "").strip().casefold() == AGENT_ACTOR)
-
-    if state.plan_review is not None and agent_override(state.plan_review):
+    if state.plan_review is not None and _is_agent_override(state.plan_review):
         state.plan_review = None
     state.plan_stage_reviews = {
         scope: record for scope, record in state.plan_stage_reviews.items()
-        if not agent_override(record)}
+        if not _is_agent_override(record)}
     state.plan_pair_reviews = {
         pair: record for pair, record in state.plan_pair_reviews.items()
-        if not agent_override(record)}
+        if not _is_agent_override(record)}
 
 
 def _plan_review_override_refusal(
@@ -1433,15 +1444,20 @@ def _plan_review_override_refusal(
     if reviewer.casefold() == AGENT_ACTOR:
         # The override never counts as a passing first verdict for the autonomy
         # boundary (it is not written to the ledger).
-        release_active = _plan_review_release_active(state)
-        trigger_cycle = not release_active and _review_trigger_record_open(state)
-        if not release_active and not trigger_cycle:
+        release_live = _plan_review_release_active(state)
+        trigger_cycle = _review_trigger_record_open(state)
+        if not release_live and not trigger_cycle:
             return (
                 "an agent-authored override is refused: it is available only once the "
                 "review-round or cross-axis friction release is active, or on the complete "
                 "difficulty record a review-cost trigger opened"
             ), None
-        if release_active:
+        # The trigger's record opened at the fire, so it is fresh by construction; the
+        # release anchor, set at the first observation, may name that very record and
+        # would refuse it as predating the release.
+        release_active = release_live and not trigger_cycle
+        cause = "release" if release_active else "trigger"
+        if release_live:
             _sync_release_anchor(state)
         backstopped, crossing = _since_user_backstop_gate(
             state, lambda: doc, decision="plan_review_override",
@@ -1453,13 +1469,12 @@ def _plan_review_override_refusal(
             return f"an agent-authored override is refused: {backstopped}", None
         refused = _agent_self_decision_refusal(
             state, state.review_release_difficulty_id if release_active else None,
-            event="the release" if release_active else "the trigger", decision="override")
+            event=f"the {cause}", decision="override")
         if refused is not None:
             return (
                 f"an agent-authored override is refused: {refused}. Run the reflection exit "
                 "first (declare, investigate, critique with differences_to_remove, normalize "
-                "with a real factor) after the "
-                + ("release" if release_active else "trigger") + ", then override"
+                f"with a real factor) after the {cause}, then override"
             ), None
     elif order is not None and order.customer_id and reviewer != order.customer_id:
         return (
@@ -5691,33 +5706,42 @@ def _count_review_act(state: SessionState, verdict: str, reviewer: str, *,
             state.review_stage_streaks[stage_scope] = state.review_stage_streaks.get(stage_scope, 0) + 1
 
 
+def _spend_review_trigger(state: SessionState, fire: dict) -> None:
+    """Record the evidence a crossed trigger fired on, so `gates.review_trigger` stays
+    quiet until fresh evidence arrives: the act count, the minutes anchor, the streak value."""
+    if fire["trigger"] == "cycle_acts":
+        state.review_trigger_spent["cycle_acts"] = state.review_cycle_acts
+    elif fire["trigger"] == "cycle_minutes":
+        state.review_trigger_spent["cycle_minutes"] = state.review_cycle_minutes_anchor
+    else:
+        state.review_trigger_spent[f"stage_streak:{fire['stage']}"] = fire["value"]
+
+
 def _evaluate_review_trigger(
     state: SessionState, store: StateStore, review_blockers: list[str],
 ) -> Directive | None:
-    """The review-cost trigger at an A5 point: a Directive routing PLAN_READY into the
-    overcome-difficulty cycle when `gates.review_trigger` (read through the module, so a
-    disarmed gate is honoured) names a crossed trigger while the plan-review gate still
-    has blockers; None otherwise. At the difficulty depth cap nothing is routed and the
-    user decides."""
+    """The review-cost trigger at the review-gate points (`plan-review-compose`, a
+    whole-plan or stage `plan-review` record, `approve`, a same-sha `submit-plan`): a
+    Directive routing PLAN_READY into the overcome-difficulty cycle when
+    `gates.review_trigger` names a crossed trigger while the plan-review gate still has
+    blockers; None otherwise. The evidence is spent whether or not a record opens, and the
+    state is saved here because the callers return this Directive instead of saving. At the
+    difficulty depth cap nothing is routed and the user decides."""
     if not review_blockers or state.node != Node.PLAN_READY.value or state.review_trigger_fire is not None:
         return None
     fire = gates.review_trigger(state)
     if fire is None:
         return None
+    _spend_review_trigger(state, fire)
     opened = _open_difficulty(state)
     if opened is None:
+        store.save(state)
         return _difficulty_cap_directive(
             state, f"review trigger {fire['trigger']} crossed ({fire['value']} >= {fire['threshold']})",
             {"review_trigger": dict(fire)})
     state.node = transition(state.node, "review_trigger")
     state.review_trigger_fire = {
         **fire, "difficulty_uid": opened.uid, "plan_sha256": state.review_cycle_sha}
-    if fire["trigger"] == "cycle_acts":
-        state.review_trigger_spent["cycle_acts"] = state.review_cycle_acts
-    elif fire["trigger"] == "cycle_minutes":
-        state.review_trigger_spent["cycle_minutes"] = 1
-    else:
-        state.review_trigger_spent[f"stage_streak:{fire['stage']}"] = fire["value"]
     state.log("review_trigger", **fire, plan_sha256=state.review_cycle_sha)
     store.save(state)
     where = f" of {fire['stage']}" if fire["stage"] else ""
@@ -5726,7 +5750,8 @@ def _evaluate_review_trigger(
         f"review trigger {fire['trigger']}{where} crossed ({fire['value']} >= {fire['threshold']}): "
         "run overcome-difficulty -- declare, investigate, critique, normalize -- then leave by a "
         "replan: an agent override of the review gate on the complete record followed by a "
-        "no_change replan, or a changed plan whose fresh counted PASS reopens the gate",
+        "no_change replan, or a changed plan that approve re-checks against its carried records "
+        "and a fresh counted PASS",
         marker="OVERCOME-DIFFICULTY",
         data={"review_trigger": dict(fire)},
     )
@@ -12096,7 +12121,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
             _archive_difficulty(state, closing_waiver)
             if not state.approval.passed:
                 return _replan_to_plan_ready(
-                    state, store, new, echo_advice, kind="no_change", exited_diagnosing=True,
+                    state, store, new, echo_advice, trigger_exit=trigger_exit,
+                    kind="no_change", exited_diagnosing=True,
                     plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
                     plan_sha256=_new_plan_sha256, change_class=change_class, **replan_cause)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
@@ -12147,7 +12173,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
             _archive_difficulty(state, closing_waiver)
             if not state.approval.passed:
                 return _replan_to_plan_ready(
-                    state, store, new, echo_advice, kind="refinement", exited_diagnosing=True,
+                    state, store, new, echo_advice, trigger_exit=trigger_exit,
+                    kind="refinement", exited_diagnosing=True,
                     plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
                     plan_sha256=_new_plan_sha256, change_class=change_class, **replan_cause)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
@@ -12234,17 +12261,17 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     state.current_stage = None
     _archive_difficulty(state, closing_waiver)
     return _replan_to_plan_ready(
-        state, store, new, echo_advice, kind="substantive", plan=args.plan,
+        state, store, new, echo_advice, trigger_exit=trigger_exit, kind="substantive", plan=args.plan,
         prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
         change_class=change_class, **replan_cause)
 
 
 def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advice: list[str],
-                          **log_fields) -> Directive:
+                          *, trigger_exit: str | None, **log_fields) -> Directive:
     """Re-arm the plan-approval gate and park the session at PLAN_READY after a replan
     that needs the plan approved again, logging `log_fields` as the `replan` event. The
-    approved plan picks the next stage afresh, so no stage stays current."""
-    trigger_exit = _review_trigger_exit(state, log_fields["plan"])
+    approved plan picks the next stage afresh, so no stage stays current. `trigger_exit`
+    is the review-cost trigger exit `_cmd_replan` already decided (None when no trigger is open)."""
     state.current_stage = None
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
@@ -12262,8 +12289,8 @@ def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advi
     directive_data = {
         "autonomy": autonomy, **_replan_class_data(state),
         **({"agent_review_override": override} if override else {}),
-        **({"review_trigger_exit": _TRIGGER_EXIT_ADMITTED if trigger_exit == _TRIGGER_EXIT_OVERRIDE
-            else _TRIGGER_EXIT_FRESH_PASS} if trigger_exit is not None else {}),
+        **({"review_trigger_exit": _trigger_exit_text(trigger_exit, override)}
+           if trigger_exit is not None else {}),
     }
     if autonomy["action"] == "self_approve":
         return _with_advisories(Directive(

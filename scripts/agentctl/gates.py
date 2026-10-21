@@ -2230,7 +2230,8 @@ def review_trigger(state: SessionState | None, thr: Thresholds | None = None) ->
     A row that is missing or not an integer disarms its trigger. A trigger that already
     fired on this evidence (`review_trigger_spent`) stays quiet: the acts trigger counts
     the acts since its last fire, the streak trigger fires again only on a larger value,
-    the minutes trigger once per anchor.
+    the minutes trigger once per anchor (`review_trigger_spent["cycle_minutes"]` holds the
+    anchor it fired on).
 
     The result is `{trigger, value, threshold, stage}` — `stage` is the stage key for a
     streak and None otherwise."""
@@ -2250,7 +2251,7 @@ def review_trigger(state: SessionState | None, thr: Thresholds | None = None) ->
                     "threshold": acts_row, "stage": None}
         minutes_row = thr.review_cycle_active_minutes()
         anchor = state.review_cycle_minutes_anchor
-        if minutes_row is not None and anchor is not None and "cycle_minutes" not in spent:
+        if minutes_row is not None and anchor is not None and spent.get("cycle_minutes") != anchor:
             elapsed = round(review_booked_minutes(state) - anchor, 3)
             if elapsed >= minutes_row:
                 return {"trigger": "cycle_minutes", "value": elapsed,

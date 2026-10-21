@@ -2410,15 +2410,15 @@ class SessionState:
     #                         stage's own pass and by approve
     #   review_trigger_fire   the open fire: trigger, difficulty record id, prior
     #                         release anchor; None while no fire is open
-    #   review_trigger_spent  trigger key -> the value that already fired, so the same
-    #                         evidence never fires twice
+    #   review_trigger_spent  trigger key -> the value that already fired (for the minutes
+    #                         trigger, the cycle anchor), so the same evidence never fires twice
     review_cycle_sha: str = ""
     review_cycle_open: bool = False
     review_cycle_acts: int = 0
     review_cycle_minutes_anchor: float | None = None
     review_stage_streaks: dict[str, int] = field(default_factory=dict)
     review_trigger_fire: dict | None = None
-    review_trigger_spent: dict[str, int] = field(default_factory=dict)
+    review_trigger_spent: dict[str, float] = field(default_factory=dict)
     # DIAGNOSING-renegotiation audit trail (GitHub #177) — one record per customer
     # decision at the diagnosing_replan round-release gate, keyed by string (decision,
     # note, by, ts, task_replan_count_at_decision). Same plain list[dict] shape as

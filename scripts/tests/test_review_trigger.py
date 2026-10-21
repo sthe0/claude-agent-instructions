@@ -145,9 +145,12 @@ def test_a_fired_acts_trigger_waits_for_a_full_row_of_new_acts():
 
 
 def test_a_fired_minutes_trigger_stays_quiet_for_the_cycle():
-    state = cycle(review_trigger_spent={"cycle_minutes": 1})
+    state = cycle(review_trigger_spent={"cycle_minutes": 0.0})
     book(state, 500)
     assert gates.review_trigger(state, thr()) is None
+    state.review_cycle_minutes_anchor = 500.0
+    book(state, 1000)
+    assert gates.review_trigger(state, thr())["trigger"] == "cycle_minutes"
 
 
 def test_a_fired_streak_fires_again_only_on_a_larger_value():
@@ -231,7 +234,7 @@ def test_a_streak_spanning_three_plan_versions_fires_at_the_third():
 
 
 def test_a_new_sha_opens_a_cycle_and_resets_acts_and_the_minutes_anchor():
-    state = cycle(review_cycle_acts=3, review_trigger_spent={"cycle_acts": 3, "cycle_minutes": 1})
+    state = cycle(review_cycle_acts=3, review_trigger_spent={"cycle_acts": 3, "cycle_minutes": 0.0})
     book(state, 12.0)
     assert cli._review_cycle_arrive(state, "sha-b") is True
     assert (state.review_cycle_sha, state.review_cycle_acts) == ("sha-b", 0)

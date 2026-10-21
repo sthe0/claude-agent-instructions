@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import config, task_accumulator
+from agentctl import cli, config, task_accumulator
 from agentctl.config import Thresholds
-from agentctl.state import Node
+from agentctl.state import Node, PlanReview, SessionState
 from test_replan_autonomy_boundary import Eng, plan_text, thinker_review
 
 ACTS_ROW = 2
@@ -140,7 +140,7 @@ def test_changed_plan_branch_owes_a_fresh_counted_pass(eng):
     changed = eng.write(plan_text(stage3=True, revised=True), "changed.toml")
     replanned = eng.run("replan", session="t1", plan=changed)
     assert replanned["ok"] is True, replanned
-    assert replanned["data"]["review_trigger_exit"] == "a fresh counted PASS reopens the gate"
+    assert replanned["data"]["review_trigger_exit"] == cli._TRIGGER_EXIT_FRESH_PASS
     state = eng.state("t1")
     assert state.node == Node.PLAN_READY.value
     assert state.review_trigger_fire is None
@@ -187,3 +187,70 @@ def test_no_refire_on_the_same_evidence_after_the_override_exit(eng):
     d = eng.run("approve", session="t1", by="user")
     assert d["ok"] is True
     assert eng.state("t1").node == Node.APPROVED.value
+
+
+def reflected_session(eng: Eng, sid: str = "t1") -> str:
+    plan, _ = fired_session(eng, sid)
+    eng.run("declare", session=sid, expected="e", actual="a", mismatch="m")
+    reflect(eng, sid)
+    return plan
+
+
+def test_a_fire_at_the_difficulty_depth_cap_keeps_the_review_and_spends_the_evidence(eng, monkeypatch):
+    monkeypatch.setattr(cli, "_difficulty_level_cap", lambda: 0)
+    plan = eng.write(plan_text(), "draft.toml")
+    eng.open("t1", plan)
+    thinker_review(eng, "t1", plan, "revise")
+    capped = thinker_review(eng, "t1", plan, "revise")
+    assert capped["ok"] is False and capped["action"] == "escalate"
+    assert capped["data"]["difficulty_level_cap"] == 0
+    state = eng.state("t1")
+    assert state.node == Node.PLAN_READY.value
+    assert state.review_trigger_fire is None and state.difficulty is None
+    assert state.review_cycle_acts == ACTS_ROW
+    assert state.review_trigger_spent == {"cycle_acts": ACTS_ROW}
+    again = thinker_review(eng, "t1", plan, "revise")
+    assert "review_trigger" not in (again.get("data") or {})
+    assert eng.state("t1").review_cycle_acts == ACTS_ROW + 1
+
+
+def test_the_changed_plan_exit_drops_the_agent_override(eng):
+    plan = reflected_session(eng)
+    assert agent_override(eng, "t1", plan)["ok"] is True
+    assert eng.state("t1").plan_review.verdict == "override"
+    changed = eng.write(plan_text(stage3=True, revised=True), "changed.toml")
+    replanned = eng.run("replan", session="t1", plan=changed)
+    assert replanned["ok"] is True, replanned
+    assert replanned["data"]["review_trigger_exit"] == cli._TRIGGER_EXIT_FRESH_PASS
+    assert "agent_review_override" not in replanned["data"]
+    state = eng.state("t1")
+    assert state.plan_review is None or state.plan_review.verdict != "override"
+    assert eng.run("approve", session="t1", by="user")["ok"] is False
+    assert thinker_review(eng, "t1", changed, "pass")["ok"] is True
+    assert eng.run("approve", session="t1", by="user")["ok"] is True
+
+
+def test_drop_agent_overrides_removes_every_agent_override_and_keeps_the_rest():
+    def record(verdict, reviewer):
+        return PlanReview(plan_path="p.toml", verdict=verdict, reviewer=reviewer, note="n")
+
+    state = SessionState(session_id="unit", task_id="task-unit")
+    state.plan_review = record("override", "agent")
+    state.plan_stage_reviews = {"stage:1": record("override", " Agent "), "stage:2": record("override", "user"),
+                                "stage:3": record("pass", "thinker")}
+    state.plan_pair_reviews = {"unit:a": record("override", "agent"), "unit:b": record("pass", "thinker")}
+    cli._drop_agent_overrides(state)
+    assert state.plan_review is None
+    assert sorted(state.plan_stage_reviews) == ["stage:2", "stage:3"]
+    assert sorted(state.plan_pair_reviews) == ["unit:b"]
+
+
+def test_the_trigger_record_admits_the_override_while_the_round_release_is_live(eng):
+    plan = reflected_session(eng)
+    state = eng.state("t1")
+    state.plan_review_rounds = 99
+    eng.store.save(state)
+    assert cli._plan_review_release_active(eng.state("t1")) is True
+    admitted = agent_override(eng, "t1", plan)
+    assert admitted["ok"] is True, admitted
+    assert eng.state("t1").plan_review.verdict == "override"
