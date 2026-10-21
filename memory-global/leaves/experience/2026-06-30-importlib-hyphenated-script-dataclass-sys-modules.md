@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "user (inherited from parent 2026-06-26-critique-p
 refs: [2026-06-26-critique-primitive-unifies-conflict-and-principle]
 created: 2026-06-30
 last_verified: 2026-06-30
+generalized_into: []
 ---
 
 # Loading a hyphenated-name script via importlib needs sys.modules pre-registration before exec_module, or a @dataclass in it fails

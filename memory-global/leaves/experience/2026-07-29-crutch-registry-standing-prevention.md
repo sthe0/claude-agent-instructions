@@ -9,6 +9,7 @@ refs: [memory-global/leaves/regex-not-for-semantic-classification.md, docs/opera
 plan_file: /home/the0/.claude-agent/plans/anti-crutch-audit-and-registry.toml
 created: 2026-07-29
 last_verified: 2026-07-29
+generalized_into: []
 ---
 
 # Standing prevention for regex-crutch and prose-crutch recurrence: mechanical enumeration + generated registry + re-check

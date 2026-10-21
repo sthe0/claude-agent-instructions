@@ -7,6 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "Принять — всё выполнено (Recommended)"
 created: 2026-08-26
 last_verified: 2026-08-28
+generalized_into: []
 ---
 
 # Plan-delivery gate needs byte-exact essence text -- markdown decoration breaks it

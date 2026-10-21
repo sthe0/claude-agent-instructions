@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev"
 refs: [/home/the0/bin/agent-hygiene-sweep.sh]
 created: 2026-09-03
 last_verified: 2026-09-03
+generalized_into: []
 ---
 
 # Acceptance-judge pushback on shallow verification surfaced a swapped-argument ownership-check bug

@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "Да — решено"
 refs: [scripts/hook-ask-defer-timer.py]
 created: 2026-07-09
 last_verified: 2026-07-11
+generalized_into: []
 ---
 
 # landed ≠ deployed: a hook fix on main is dead code while the deployed checkout is parked on a feature branch

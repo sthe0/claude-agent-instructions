@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev"
 refs: [doubt-own-snapshot, effort-divergence-trigger, question-provenance-gate]
 created: 2026-08-22
 last_verified: 2026-08-22
+generalized_into: []
 ---
 
 # A calendar-bound acceptance criterion is carved into a standing instrument, not fabricated or left blocking

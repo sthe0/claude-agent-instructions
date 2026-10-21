@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "user (fedor.solovyev@gmail.com, 2026-07-01)"
 refs: [2026-06-26-guard-coupled-doc-relocation, landing-changes-core-git-and-arc]
 created: 2026-07-01
 last_verified: 2026-07-01
+generalized_into: []
 ---
 
 # Imagined permission wall vs deterministic scoped-wrapper autonomy

@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev (Да, оценка 4 — resoluti
 refs: [memory-global/leaves/spawning-specialists.md, memory-global/leaves/experience/2026-07-02-spawn-sandbox-excludes-declared-stage-material.md]
 created: 2026-07-28
 last_verified: 2026-07-28
+generalized_into: []
 ---
 
 # A repro-the-defect spawn will run the script against its LIVE data path unless the brief names the fixture and hard-denies production

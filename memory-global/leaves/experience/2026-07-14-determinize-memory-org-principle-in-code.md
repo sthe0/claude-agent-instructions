@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev@gmail.com"
 refs: [memory-hierarchy.md reflexive-exit-is-base-activity-figure.md self-diagnose.py]
 created: 2026-07-14
 last_verified: 2026-07-14
+generalized_into: []
 ---
 
 # Determinize the full decidable set of a prose principle in code, and model resolution-gate scope-expansion as reject→replan

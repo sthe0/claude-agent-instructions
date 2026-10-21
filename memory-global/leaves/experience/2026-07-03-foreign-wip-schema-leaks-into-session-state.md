@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "the0"
 refs: [memory-global/leaves/experience/2026-07-03-engine-replan-artifact-discipline.md, memory-global/leaves/experience/2026-06-29-org-portable-core-internal-coupling-opt-in.md]
 created: 2026-07-03
 last_verified: 2026-08-10
+generalized_into: []
 ---
 
 # Foreign uncommitted WIP schema leaks into live session state

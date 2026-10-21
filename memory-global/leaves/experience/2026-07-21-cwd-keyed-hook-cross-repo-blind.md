@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "Да, решена"
 refs: [commit:3b352a1, commit:5b904f2, landing-discipline.md, 2026-07-09-landed-not-deployed-checkout-parked-on-feature-branch.md, 2026-07-18-plan-presentation-two-act-delivery-gate.md]
 created: 2026-07-21
 last_verified: 2026-07-21
+generalized_into: []
 ---
 
 # A resolution/enforcement hook keyed off session cwd is blind to cross-repo delivery — key off the session's declared delivery tree

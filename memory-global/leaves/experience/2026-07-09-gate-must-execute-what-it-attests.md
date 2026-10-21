@@ -10,6 +10,7 @@ refs: [2026-07-04-topological-gate-when-signal-unobservable.md, 2026-06-29-agent
 plan_file: /home/the0/.claude-agent/plans/hook-ask-defer-timer-block.v4.toml
 created: 2026-07-09
 last_verified: 2026-10-03
+generalized_into: [a-judging-artefact-is-executed-before-it-judges, verdict-covers-the-evidence-domain-it-claims]
 ---
 
 # A gate must execute the artifact it attests, and every refusal it can issue must reach a resolution cycle

@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev (live this session)"
 refs: [2026-06-30-shared-tree-suite-failure-wrong-ownership-attribution.md, 2026-06-30-validator-tightening-newly-enforces-latent-violations.md, 2026-06-29-org-portable-core-internal-coupling-opt-in.md]
 created: 2026-06-30
 last_verified: 2026-06-30
+generalized_into: []
 ---
 
 # Verify a spawned developer's committed file set against the plan's exactly-N-files invariant in a shared tree

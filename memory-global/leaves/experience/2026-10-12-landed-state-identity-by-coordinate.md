@@ -7,6 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-10-12
 last_verified: 2026-10-12
+generalized_into: [delivered-identity-is-established-by-content-or-ancestry]
 ---
 
 # A landed-ness or identity check binds to a coordinate that a moving trunk or a squash merge invalidates

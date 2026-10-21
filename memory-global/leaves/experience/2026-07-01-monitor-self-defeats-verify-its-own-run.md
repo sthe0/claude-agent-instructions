@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [2026-05-26-agent-system-plan-vs-reality-drift.md, macos-shell-portability-gotchas.md]
 created: 2026-07-01
 last_verified: 2026-07-06
+generalized_into: []
 ---
 
 # A watchdog that silently crashes defeats every check — verify the monitor's OWN run, not just its presence

@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev@gmail.com (ssh-add -l in real mess
 tier: 1
 created: 2026-07-01
 last_verified: 2026-07-02
+generalized_into: []
 ---
 
 # Persistent ssh-agent forward into long-lived mosh/tmux: orphan remote loops flap the stable symlink

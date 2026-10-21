@@ -10,6 +10,7 @@ refs: [memory-global/leaves/capability-before-offload.md, memory-global/leaves/r
 plan_file: /home/the0/.claude-agent/plans/gc-criterion-and-defer-gate.toml
 created: 2026-08-05
 last_verified: 2026-09-28
+generalized_into: []
 ---
 
 # A menu in which no option does the work, and the timeout layer that made its gate inert

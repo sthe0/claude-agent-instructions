@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [memory-global/leaves/system-knowledge/landing-changes-core-git-and-arc.md, https://<internal-review-host>/review/14261429]
 created: 2026-07-04
 last_verified: 2026-09-02
+generalized_into: []
 ---
 
 # Arc task-mount lifecycle must end with unmount --forget; GC mechanized

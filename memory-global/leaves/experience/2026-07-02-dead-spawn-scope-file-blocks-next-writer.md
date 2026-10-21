@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "Fedor (2026-07-02: 'да на все три во�
 refs: [scripts/hook-scope-conflict.py, docs/operations/cross-session-scope-isolation.md]
 created: 2026-07-02
 last_verified: 2026-07-04
+generalized_into: []
 ---
 
 # Ghost scope: a dead spawn session's scope file blocks the next writer for the full heartbeat TTL

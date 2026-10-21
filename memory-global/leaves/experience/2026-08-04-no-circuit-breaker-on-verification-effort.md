@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "user rated the outcome 2/5 on 2026-08-04 and aske
 tier: 1
 created: 2026-08-04
 last_verified: 2026-08-05
+generalized_into: []
 ---
 
 # Verification effort had no upper bound, so a collapsed task kept its heavyweight class

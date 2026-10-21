@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "the0"
 refs: [src: /Users/the0/projects/the0fun-public-bot/Dockerfile, commit: 6018376]
 created: 2026-09-27
 last_verified: 2026-09-27
+generalized_into: []
 ---
 
 # npm-installed claude-code CLI 2.1.197 spins at 100% CPU forever on any invocation, zero sockets opened

@@ -9,6 +9,7 @@ refs: [CLAUDE.md#acting-without-asking, memory-global/leaves/verify-right-axis-r
 plan_file: /home/the0/.claude-agent/plans/subagent-destructive-guard.toml
 created: 2026-09-15
 last_verified: 2026-09-16
+generalized_into: []
 ---
 
 # Subagent self-authorized destructive action

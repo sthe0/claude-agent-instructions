@@ -7,6 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-10-12
 last_verified: 2026-10-12
+generalized_into: []
 ---
 
 # The replan gates that must admit a correction stall it, or strand the session, instead

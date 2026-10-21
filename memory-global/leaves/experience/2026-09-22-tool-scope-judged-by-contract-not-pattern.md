@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "user"
 plan_file: /home/the0/.claude-agent/plans/planner-order-traceability.toml
 created: 2026-09-22
 last_verified: 2026-09-22
+generalized_into: []
 ---
 
 # Ground tool-scope/effect judgments in the tool's own contract, not surface pattern -- mechanized as structural plan-element traceability

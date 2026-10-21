@@ -8,6 +8,7 @@ domain: coordination
 induced_from: [regex-not-for-semantic-classification, partition-markers]
 created: 2026-09-01
 last_verified: 2026-09-01
+rule_derived: "Written from the rule leaves regex-not-for-semantic-classification and partition-markers; no experience leaf recorded."
 ---
 
 # Determinizing a specialist's behavior: a four-step recipe

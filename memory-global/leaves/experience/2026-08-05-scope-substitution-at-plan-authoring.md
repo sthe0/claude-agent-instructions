@@ -10,6 +10,7 @@ refs: [memory-global/leaves/question-provenance-gate.md, memory-global/leaves/pr
 plan_file: /Users/the0/.claude-agent/plans/scope-coverage-at-approval.toml
 created: 2026-08-05
 last_verified: 2026-08-05
+generalized_into: []
 ---
 
 # A plan narrower than its order: every gate green over a domain nobody ordered

@@ -7,6 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-10-12
 last_verified: 2026-10-12
+generalized_into: []
 ---
 
 # A stage control is wrong about the interface, literal or observable it reads, and nothing ran it to find out

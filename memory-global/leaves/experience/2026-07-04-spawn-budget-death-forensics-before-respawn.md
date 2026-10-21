@@ -9,6 +9,7 @@ refs: [memory-global/leaves/experience/2026-07-02-dead-spawn-scope-file-blocks-n
 plan_file: /home/the0/.claude-agent/plans/fix-scope-hook-lineage-and-replan-gaps-v1.toml
 created: 2026-07-04
 last_verified: 2026-08-11
+generalized_into: [verdict-covers-the-evidence-domain-it-claims]
 ---
 
 # Spawn budget death: forensics on artifacts before any respawn; finish via continuation brief

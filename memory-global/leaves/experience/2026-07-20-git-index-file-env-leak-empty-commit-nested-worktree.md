@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "user (2026-07-20)"
 refs: [2026-07-17-2026-07-17-core-pr-landing-with-fine-grained-pat, 2026-07-20-stage-verify-command-narrower-than-final-check]
 created: 2026-07-20
 last_verified: 2026-07-20
+generalized_into: []
 ---
 
 # A git-shelling library reachable from a pre-commit hook makes EMPTY commits via inherited GIT_INDEX_FILE

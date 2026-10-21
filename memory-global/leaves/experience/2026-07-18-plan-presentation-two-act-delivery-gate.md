@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev"
 refs: [2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-03-engine-replan-artifact-discipline, 2026-07-09-gate-must-execute-what-it-attests, 2026-07-04-topological-gate-when-signal-unobservable]
 created: 2026-07-18
 last_verified: 2026-09-13
+generalized_into: []
 ---
 
 # Plan presentation as a machine-verified two-act delivery gate (not agent perception)

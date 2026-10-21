@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "user (AskUserQuestion at the resolution gate: Â«Ð
 refs: [agentctl/cli.py, 2026-06-25-claude-md-reduction-floor.md]
 created: 2026-07-03
 last_verified: 2026-07-22
+generalized_into: []
 ---
 
 # agentctl replan/dispatch artifact discipline: never edit the plan in place, dispatch already spawns

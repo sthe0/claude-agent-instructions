@@ -8,6 +8,7 @@ domain: coordination
 induced_from: [coordinator-pitfalls]
 created: 2026-06-26
 last_verified: 2026-06-26
+rule_derived: "Seed principle lifted from a coordinator-pitfalls row (ADR-0001 S2.5); no experience leaf recorded."
 ---
 
 # The coordinator executes through specialists

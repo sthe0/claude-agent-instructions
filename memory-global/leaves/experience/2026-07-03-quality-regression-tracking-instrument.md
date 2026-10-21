@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "Fedor (AskUserQuestion: 'Решена, оценк
 refs: [policy-effectiveness-tracking, quality-regression-investigation, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]
 created: 2026-07-03
 last_verified: 2026-07-03
+generalized_into: []
 ---
 
 # Per-task quality tracking wired to instruction-commit history (resolve --quality + scorecard flags + investigate helper)

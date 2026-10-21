@@ -7,6 +7,7 @@ resolution_confirmed_by_user: "<retroactive: rule introduced 2026-05-26; origina
 refs: [2026-05-26-agent-system-plan-vs-reality-drift]
 created: 2026-06-11
 last_verified: 2026-06-11
+generalized_into: []
 ---
 
 # Silent architectural decision + "config" means a file

@@ -9,6 +9,7 @@ refs: [2026-07-21-agentctl-dispatch-no-worktree-continuity-dependent-stages]
 plan_file: /Users/the0/.claude-agent/plans/the0fun-public-bot.toml
 created: 2026-09-23
 last_verified: 2026-09-23
+generalized_into: []
 ---
 
 # agentctl dispatch never forwarded a target project's own settings.local.json permissions to a spawned developer

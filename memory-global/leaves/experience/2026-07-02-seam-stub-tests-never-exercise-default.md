@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "user (2026-07-02, resolution gate click)"
 refs: [memory-global/leaves/experience/2026-06-26-guard-coupled-doc-relocation.md]
 created: 2026-07-02
 last_verified: 2026-07-02
+generalized_into: []
 ---
 
 # A seam-stubbed test suite never exercises the seam's default — layout moves silently break relative-path defaults

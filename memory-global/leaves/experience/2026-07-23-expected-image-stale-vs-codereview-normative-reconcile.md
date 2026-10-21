@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev"
 refs: [arc-land-dispatch-determinize.toml, merge-commit 11ba9400, r20430905]
 created: 2026-07-23
 last_verified: 2026-07-23
+generalized_into: []
 ---
 
 # Stale expected-image vs a code-review decision: reconcile as an invariants-only normative replan

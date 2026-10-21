@@ -7,6 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user"
 created: 2026-07-11
 last_verified: 2026-07-11
+generalized_into: []
 ---
 
 # Detecting the compiled claude.exe process: use ps -o comm, not pgrep argv (hardened binary hides argv from non-root)

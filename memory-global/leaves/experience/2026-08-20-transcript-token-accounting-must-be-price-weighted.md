@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "user, 2026-08-20, rating 4/5"
 refs: [/home/the0/.claude-agent/state/telemetry-baseline-2026-08-20/, https://github.com/sthe0/claude-agent-instructions/issues/73, https://github.com/sthe0/claude-agent-instructions/issues/138]
 created: 2026-08-20
 last_verified: 2026-08-20
+generalized_into: []
 ---
 
 # Quota analysis over transcripts: dedup by message.id, then weight by cache price

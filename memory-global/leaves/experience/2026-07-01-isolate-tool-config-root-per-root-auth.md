@@ -8,6 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [scripts/lib/config-root.sh, scripts/migrate-to-isolated.sh, scripts/sync-instructions-repo.sh]
 created: 2026-07-01
 last_verified: 2026-07-02
+generalized_into: []
 ---
 
 # Isolate a tool's config root instead of clobbering a same-named personal one; auth is per-root
