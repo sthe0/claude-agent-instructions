@@ -107,7 +107,7 @@ def experience_dir(scope: str, project_dir: str | None) -> Path:
     if scope == "project":
         if not project_dir:
             sys.exit("--scope project requires --project-dir")
-        return Path(project_dir) / ".claude/agent-memory/experience"
+        return Path(project_dir) / PROJECT_MEMORY_REL / "experience"
     return REPO_ROOT / "memory-global/leaves/experience"
 
 
@@ -116,7 +116,8 @@ PROJECT_MEMORY_REL = Path(".claude/agent-memory")
 
 def project_memory(project_dir: str | None) -> Path | None:
     """The project memory dir for --project-dir: the repo dir (its `.claude/agent-memory`),
-    or the memory dir itself when `experience/` or `principles/` sits directly under it."""
+    or the memory dir itself when `experience/` or `principles/` sits directly under it
+    (a repo with no `.claude/agent-memory` but such a top-level folder is taken to be one)."""
     if not project_dir:
         return None
     base = Path(project_dir).resolve()
@@ -149,7 +150,7 @@ def search_root(scope: str, project_dir: str | None, tier: str) -> Path:
         if scope == "project":
             if not project_dir:
                 sys.exit("--scope project requires --project-dir")
-            return Path(project_dir) / ".claude/agent-memory/system-knowledge"
+            return Path(project_dir) / PROJECT_MEMORY_REL / "system-knowledge"
         return REPO_ROOT / "memory-global/leaves/system-knowledge"
     return experience_dir(scope, project_dir)
 
@@ -1368,7 +1369,10 @@ def cmd_case_add(a) -> int:
     if len(projects) > 1:
         refuse("case specs name leaves of more than one project: "
                + ", ".join(sorted(str(p) for p in projects)) + "; run case-add once per project")
-    corpus = pp.load_corpus(leaves, projects.pop() if projects else None)
+    project = projects.pop() if projects else None
+    if project is not None and (project == leaves.resolve() or leaves.resolve() in project.parents):
+        project = None  # a source under the global leaves is not a project leaf
+    corpus = pp.load_corpus(leaves, project)
     project_leaves = {l.path: l for l in corpus.of("experience", "project")}
     for spec in specs:
         slug, source = spec["slug"], Path(spec["source"]).resolve()
@@ -1728,8 +1732,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp = sub.add_parser(name, help=help_text)
         sp.add_argument("--root", help="memory root (default: <repo>/memory-global)")
         sp.add_argument("--project-dir", metavar="D",
-                        help="project repo dir, as for every verb (a memory dir holding "
-                             "experience/ or principles/ is also accepted)")
+                        help="project repo dir, as for every verb; these verbs also "
+                             "accept a memory dir")
         sp.add_argument("--session", default=None,
                         help="ledger session_id for the edit-ledger stamp of this write")
         sp.set_defaults(func=func)

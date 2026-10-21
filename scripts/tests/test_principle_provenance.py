@@ -67,8 +67,8 @@ def _fm(fields: dict) -> str:
 class World:
     """A memory root `<tmp>/mem` (leaves under `mem/leaves`) and a project memory dir."""
 
-    def __init__(self, tmp: Path) -> None:
-        self.mem = tmp / "mem"
+    def __init__(self, tmp: Path, root: Path | None = None) -> None:
+        self.mem = root / "memory-global" if root else tmp / "mem"
         self.leaves = self.mem / "leaves"
         self.repo = tmp / "acme-widgets"
         self.project = self.repo / ".claude" / "agent-memory"
@@ -396,10 +396,11 @@ def test_case_add_writes_body_digest(tmp_path):
     assert "sample-case" in induced_of(w.leaves / "principles" / "sample-principle.md")
 
 
-def test_case_add_refuses_non_project_source(tmp_path):
+def test_case_add_refuses_non_project_source(tmp_path, capsys):
     w, _ = _case_add_world(tmp_path)
     global_leaf = w.exp("2026-02-02-global-sample", status=[])
     assert w.cli("case-add", "--spec", _case_spec(w, global_leaf)) == 2
+    assert "is not an experience leaf of the project" in capsys.readouterr().err
     assert not (w.leaves / pp.CASES_DIR / "sample-case.md").exists()
 
 
@@ -425,11 +426,7 @@ def test_case_add_refuses_specs_of_two_projects(tmp_path):
 
 def test_case_add_output_passes_memory_index(tmp_path):
     root = tmp_path / "repo"
-    w = World(tmp_path)
-    w.mem = root / "memory-global"
-    w.leaves = w.mem / "leaves"
-    for d in ("experience", "principles"):
-        (w.leaves / d).mkdir(parents=True)
+    w = World(tmp_path, root=root)
     leaf = w.exp("2026-03-01-widget-drift", status=[], tier="project")
     w.exp("2026-01-01-sample", status=["sample-principle"])
     w.principle("sample-principle", induced=["2026-01-01-sample"])

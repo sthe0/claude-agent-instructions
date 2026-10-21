@@ -37,16 +37,23 @@ def _staged_paths(root: Path) -> list[str]:
 
 def _indexed_corpus(root: Path) -> pp.Corpus:
     """The corpus as the index holds it, so an unstaged edit or an untracked file is not read."""
-    listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--", pp.LEAVES_REL.as_posix()],
+    listed = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z", "--", pp.LEAVES_REL.as_posix()],
                             capture_output=True, check=False).stdout
-    files = {}
-    for rel in filter(None, listed.decode("utf-8").split("\0")):
-        if not rel.endswith(".md"):
-            continue
-        shown = subprocess.run(["git", "-C", str(root), "show", f":{rel}"],
-                               capture_output=True, check=False)
-        if shown.returncode == 0:
-            files[root / rel] = shown.stdout.decode("utf-8")
+    entries = []  # (blob sha, path) of each merged .md entry
+    for line in filter(None, listed.decode("utf-8").split("\0")):
+        meta, _, rel = line.partition("\t")
+        _mode, sha, stage = meta.split()
+        if stage == "0" and rel.endswith(".md"):
+            entries.append((sha, rel))
+    batch = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"],
+                           input="".join(f"{sha}\n" for sha, _ in entries).encode(),
+                           capture_output=True, check=False).stdout
+    files, pos = {}, 0
+    for _sha, rel in entries:
+        header_end = batch.index(b"\n", pos)
+        size = int(batch[pos:header_end].split()[2])
+        files[root / rel] = batch[header_end + 1:header_end + 1 + size].decode("utf-8")
+        pos = header_end + 1 + size + 1
     return pp.corpus_from_texts(root / pp.LEAVES_REL, files)
 
 
