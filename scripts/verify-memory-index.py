@@ -11,6 +11,8 @@ Two mechanical invariants that prose alone cannot keep true (see CLAUDE.md
      git-added — the index reflects the git index, so a staged leaf is
      already enforced at commit time. The reverse direction (index entry
      resolves to a file) is already covered by verify-cross-refs.py.
+     Cases under principles/cases/ are exempt: a case is reached through
+     the principles that list it (verify-principle-provenance.py).
 
   2. Every leaf carries a top-level `type:` frontmatter key (one of
      user / feedback / project / reference) — not buried inside a nested

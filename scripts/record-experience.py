@@ -36,7 +36,21 @@ Subcommands:
                       memory verifiers pass. Prints `missing:` / `duplicate:` /
                       `unexpected:` / `misplaced:` / `verifier:` lines.
   promote             Write a principle/v1 skeleton, its principles/MEMORY.md
-                      pointer, and record it in a --manifest.
+                      pointer, and record it in a --manifest; stamps the new
+                      principle into each source leaf's `generalized_into`.
+                      --rule-derived REASON for a principle with no experience
+                      source; --project-dir D writes D/principles/.
+  link / unlink       Write / remove every side of a leaf -> principle (or
+                      project leaf -> case) link: the leaf's
+                      `generalized_into`, the principle's `induced_from` and
+                      its index pointer, atomically (lib/principle_provenance.py).
+  case-add            Write sanitized case/v1 leaves of project leaves under
+                      principles/cases/ and link them to global principles;
+                      refuses a case carrying a project identifier.
+  backfill            Stamp `generalized_into` on every leaf from the
+                      principles' `induced_from`; idempotent.
+  provenance          Read-only: --check lists unaccounted links (exit 1 on
+                      any); --of SLUG lists every leaf a revision must consult.
 
 Scope: --scope global (default; this repo's memory-global/leaves/experience)
 or --scope project --project-dir <dir> (<dir>/.claude/agent-memory/experience).
@@ -51,7 +65,8 @@ search and promote-scan, and --scope project, are not routed.
 The split flow (split-apply, promote) is deliberately NOT routed: it produces a
 proposal the user accepts, so both commands refuse (exit 2) to write under a
 root that lies in the canonical checkout and, in a linked worktree, write in
-place and commit nothing.
+place and commit nothing. The link verbs (link, unlink, case-add, backfill)
+follow the same rule.
 
 verify-experience-leaf.py enforces the shape this tool produces.
 """
@@ -1214,6 +1229,10 @@ def memory_root(a) -> Path:
     return Path(a.root).resolve() if a.root else (REPO_ROOT / "memory-global").resolve()
 
 
+def provenance_tier(a) -> str:
+    return "project" if a.project_dir else "global"
+
+
 def provenance_corpus(a) -> pp.Corpus:
     project = Path(a.project_dir).resolve() if getattr(a, "project_dir", None) else None
     return pp.load_corpus(memory_root(a) / "leaves", project)
@@ -1260,7 +1279,7 @@ def resolve_pair(corpus: pp.Corpus, tier: str, source_slug: str, target_slug: st
 
 def cmd_link(a) -> int:
     corpus = provenance_corpus(a)
-    tier = "project" if a.project_dir else "global"
+    tier = provenance_tier(a)
     changes = []
     for source_slug, target_slug in link_pairs(a):
         source, target = resolve_pair(corpus, tier, source_slug, target_slug)
@@ -1276,7 +1295,7 @@ def cmd_link(a) -> int:
 
 def cmd_unlink(a) -> int:
     corpus = provenance_corpus(a)
-    tier = "project" if a.project_dir else "global"
+    tier = provenance_tier(a)
     changes = []
     for source_slug, target_slug in link_pairs(a):
         source, target = resolve_pair(corpus, tier, source_slug, target_slug)
@@ -1388,8 +1407,7 @@ def cmd_backfill(a) -> int:
 def cmd_provenance(a) -> int:
     corpus = provenance_corpus(a)
     if a.of:
-        tier = "project" if a.project_dir else "global"
-        principle = corpus.find(a.of, tier)
+        principle = corpus.find(a.of, provenance_tier(a))
         if principle is None or principle.area != "principle":
             refuse(f"{a.of!r} is not a principle")
         for leaf in pp.experiences_of(principle, corpus):
