@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 58  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 59  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -106,6 +106,9 @@ SCHEMA_VERSION = 58  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # 57: SessionState gains plan_conversions (the plan-convert-live links
                      # between root digests of one plan's equivalent forms)
                      # 58: both 57 changes merged into one tree; no field change of its own
+                     # 59: SessionState gains the review-cost trigger bookkeeping
+                     # (review_cycle_*, review_stage_streaks, review_trigger_fire,
+                     # review_trigger_spent)
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -2396,6 +2399,26 @@ class SessionState:
     #                         agent review override needs a complete record whose id
     #                         differs from it; None while no release is active.
     review_release_difficulty_id: str | None = None
+    # Review-cost trigger (gates.review_trigger) bookkeeping, schema 59.
+    #   review_cycle_sha      plan sha of the latest PLAN_READY arrival; a counter resets
+    #                         only when a new arrival carries a different sha
+    #   review_cycle_open     a cycle is open: counted reviews are acts only while it is
+    #   review_cycle_acts     counted review acts in the open cycle
+    #   review_cycle_minutes_anchor  booked active_minutes at the cycle's start
+    #   review_stage_streaks  stage key -> consecutive non-passing counted reviews of
+    #                         that stage's own record; survives a new sha, reset by the
+    #                         stage's own pass and by approve
+    #   review_trigger_fire   the open fire: trigger, difficulty record id, prior
+    #                         release anchor; None while no fire is open
+    #   review_trigger_spent  trigger key -> the value that already fired, so the same
+    #                         evidence never fires twice
+    review_cycle_sha: str = ""
+    review_cycle_open: bool = False
+    review_cycle_acts: int = 0
+    review_cycle_minutes_anchor: float | None = None
+    review_stage_streaks: dict[str, int] = field(default_factory=dict)
+    review_trigger_fire: dict | None = None
+    review_trigger_spent: dict[str, int] = field(default_factory=dict)
     # DIAGNOSING-renegotiation audit trail (GitHub #177) — one record per customer
     # decision at the diagnosing_replan round-release gate, keyed by string (decision,
     # note, by, ts, task_replan_count_at_decision). Same plain list[dict] shape as
@@ -2914,7 +2937,9 @@ SESSION_SCOPED_FIELDS = frozenset({
     "effort_child_runs", "user_prompt_count", "effort_crossings", "effort_retiers", "order_effort_flushed",
     "order_descendant_credited", "order_effort_base", "order_effort_frozen",
     "agent_ack_difficulty_ids", "renegotiation_ceiling_difficulty_id",
-    "review_release_difficulty_id", "renegotiations", "runtime_host", "reattest_stash",
+    "review_release_difficulty_id", "review_cycle_sha", "review_cycle_open", "review_cycle_acts",
+    "review_cycle_minutes_anchor", "review_stage_streaks", "review_trigger_fire",
+    "review_trigger_spent", "renegotiations", "runtime_host", "reattest_stash",
     "declined_issues", "planning_misses", "materialization_defects",
     "settings_drift", "cwd_drift", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions",

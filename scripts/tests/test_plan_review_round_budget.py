@@ -283,13 +283,16 @@ def _retitle_stage(plan, index, text):
 
 
 def test_a_stage_scoped_review_staled_by_its_own_answer_still_spends_a_round(
-        store, venued_fixtures_dir, tmp_path, gate_on):
+        store, venued_fixtures_dir, tmp_path, gate_on, monkeypatch):
     """The realistic stage-scoped negotiation: review stage 2, edit stage 2 to answer it,
     resubmit — which stales that very review, so no record survives the cycle. Three such
     cycles are three spent rounds and must release. Reading "did a review happen" off the
     surviving records instead of off the count reported none of them, leaving the release
-    silent in exactly the workflow the stage-scoped verdict exists to support."""
+    silent in exactly the workflow the stage-scoped verdict exists to support. The
+    review-cost trigger, which would route the session out at the third revise of stage 2,
+    is disarmed: this test isolates the round-release valve."""
     import shutil
+    monkeypatch.setattr(gates, "review_trigger", lambda state, thr=None: None)
     sid = "rb-stage-scoped"
     plan = str(tmp_path / "p.toml")
     shutil.copy(venued_fixtures_dir / "plan_two_stage.toml", plan)

@@ -48,6 +48,7 @@ from lib.spawn_prompt_files import composed_prompt_files, skill_path
 
 from . import advisor as _advisor
 from . import delivery
+from . import effort
 from .config import Thresholds
 from .plan import (
     PlanError,
@@ -2211,6 +2212,57 @@ def plan_review_round_release_active(state: SessionState | None, thr: Thresholds
     kept as a standalone function because it is part of this module's public surface
     (imported directly by cli.py and the test suite)."""
     return _PLAN_REVIEW_ROUND_COUNTER.release_active(state, thr)
+
+
+def review_booked_minutes(state: SessionState) -> float:
+    """Active minutes booked on the session so far — the quantity the minutes trigger
+    measures a cycle's elapsed time against."""
+    return float((state.effort_actuals or {}).get(effort.ACTUAL_MINUTES_KEY) or 0.0)
+
+
+def review_trigger(state: SessionState | None, thr: Thresholds | None = None) -> dict | None:
+    """The review-cost trigger the session has crossed, or None. Pure: reads the counters
+    `cli` keeps on the state and the three config.md rows, writes nothing.
+
+    Three triggers, checked in this order: `cycle_acts` (counted review acts in the open
+    pre-approval cycle), `cycle_minutes` (booked active minutes since the cycle's anchor),
+    `stage_streak` (consecutive non-passing counted reviews of one stage's own record).
+    A row that is missing or not an integer disarms its trigger. A trigger that already
+    fired on this evidence (`review_trigger_spent`) stays quiet: the acts trigger counts
+    the acts since its last fire, the streak trigger fires again only on a larger value,
+    the minutes trigger once per anchor.
+
+    The result is `{trigger, value, threshold, stage}` — `stage` is the stage key for a
+    streak and None otherwise."""
+    if state is None:
+        return None
+    if thr is None:
+        try:
+            thr = Thresholds()
+        except (OSError, UnicodeDecodeError):
+            return None
+    spent = state.review_trigger_spent or {}
+    if state.review_cycle_open:
+        acts_row = thr.review_cycle_acts()
+        acts_since_fire = state.review_cycle_acts - spent.get("cycle_acts", 0)
+        if acts_row is not None and acts_since_fire >= acts_row:
+            return {"trigger": "cycle_acts", "value": acts_since_fire,
+                    "threshold": acts_row, "stage": None}
+        minutes_row = thr.review_cycle_active_minutes()
+        anchor = state.review_cycle_minutes_anchor
+        if minutes_row is not None and anchor is not None and "cycle_minutes" not in spent:
+            elapsed = round(review_booked_minutes(state) - anchor, 3)
+            if elapsed >= minutes_row:
+                return {"trigger": "cycle_minutes", "value": elapsed,
+                        "threshold": minutes_row, "stage": None}
+    streak_row = thr.review_stage_nonpass_streak()
+    if streak_row is not None:
+        for stage_key in sorted(state.review_stage_streaks or {}):
+            value = state.review_stage_streaks[stage_key]
+            if value >= streak_row and value > spent.get(f"stage_streak:{stage_key}", -1):
+                return {"trigger": "stage_streak", "value": value,
+                        "threshold": streak_row, "stage": stage_key}
+    return None
 
 
 def cross_axis_friction_release_active(state: SessionState | None, thr: Thresholds | None = None) -> bool:

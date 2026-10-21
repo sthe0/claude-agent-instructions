@@ -80,3 +80,13 @@ def test_revise_plan_edge_is_a_self_loop_at_plan_ready():
 def test_revise_plan_illegal_outside_plan_ready():
     with pytest.raises(TransitionError):
         transition(Node.PLANNING.value, "revise_plan")
+
+
+def test_review_trigger_edge_goes_from_plan_ready_to_diagnosing():
+    assert transition(Node.PLAN_READY.value, "review_trigger") == Node.DIAGNOSING.value
+
+
+def test_review_trigger_illegal_outside_plan_ready():
+    for node in (Node.PLANNING, Node.APPROVED, Node.EXECUTING, Node.VERIFYING, Node.DIAGNOSING):
+        with pytest.raises(TransitionError):
+            transition(node.value, "review_trigger")
