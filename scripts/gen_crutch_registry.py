@@ -391,6 +391,33 @@ CODE_PARTITIONS = [
 # per the stage-2 method's step 3 ("every semantic-unguarded code site... must
 # be individually named, not hidden in a partition").
 CODE_ID_OVERRIDES = {
+    # writer_rules.py form pickers: the file-level partition ground describes the
+    # publish-rules.toml literal/pattern matching, not these markdown-shape and
+    # unit-word helpers.
+    ("scripts/lib/writer_rules.py", "_is_list_item"): (
+        "structural", "keep",
+        "Classifies a body line as a bullet or ordinal list item by its fixed "
+        "markdown prefix; the share of such lines in a long body's tail only "
+        "nominates how-3 and say-4 for the judge, which decides fail-open.",
+    ),
+    ("scripts/lib/writer_rules.py", "_is_numeric_cell"): (
+        "structural", "keep",
+        "Tells whether a markdown table cell is a bare number, a character-shape "
+        "test; a unit-less numeric column only nominates say-4 for the judge, "
+        "which decides fail-open.",
+    ),
+    ("scripts/lib/writer_rules.py", "_unit_number_re"): (
+        "semantic-guarded", "keep",
+        "Compiles the number-followed-by-a-unit-word pattern from UNIT_WORDS; a "
+        "count of such figures only nominates say-15 for the judge, which decides "
+        "fail-open.",
+    ),
+    ("scripts/lib/writer_rules.py", "_unit_word_re"): (
+        "semantic-guarded", "keep",
+        "Compiles the whole-word unit match from UNIT_WORDS used to see whether a "
+        "table header names a unit; a miss only nominates say-4 for the judge, "
+        "which decides fail-open.",
+    ),
     # long_job_detect.py: the file-level hooks/scripts default ground (markdown /
     # frontmatter parsing) does not describe this helper, so it is stated here.
     ("scripts/long_job_detect.py", "_strip_quoted"): (
@@ -801,10 +828,12 @@ def render_registry(entries: list[dict]) -> str:
         lines.append(f"# {name:58s} | prose  | {cls}")
     lines.append("#")
     lines.append("# Overrides on top of the partition table:")
-    lines.append("#  - CODE_ID_OVERRIDES (8 entries): 4 true regex+hard-sink same-scope pairings,")
+    lines.append(f"#  - CODE_ID_OVERRIDES ({len(CODE_ID_OVERRIDES)} entries): 4 true regex+hard-sink same-scope pairings,")
     lines.append("#    individually inspected and confirmed to be FALSE pairings (the regex reads")
     lines.append("#    structural syntax), plus 4 hook-turn-end-gate propagation overrides")
-    lines.append("#    (semantic-guarded — the judge_* calls run one scope up in build_context()).")
+    lines.append("#    (semantic-guarded — the judge_* calls run one scope up in build_context()),")
+    lines.append("#    plus 4 writer_rules.py form-picker helpers (markdown line shapes and unit words);")
+    lines.append("#    the remaining entries carry their own grounds in CODE_ID_OVERRIDES.")
     lines.append("#  - CLAUDE_MD_OVERRIDES: CLAUDE.md was read in full (37 statements); 5 of them")
     lines.append("#    diverge from the file's own perception default (3 decidable/defer — 2")
     lines.append("#    ordering-blocked on stage 4's verify-semantic-gates.py, 1 cost-judged —")

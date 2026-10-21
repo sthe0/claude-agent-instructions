@@ -2707,7 +2707,62 @@ reviewed_by = "coordinator"
 
 [sites."scripts/lib/writer_rules.py::<module>::re.compile"]
 class = "structural"
-ground = "_ITEM_RE compiles the '<n>. **title**' numbered-bold markdown item shape of tech-writer SKILL.md rules."
+ground = "_ITEM_RE, _LIST_ITEM_RE and _NUMERIC_CELL_RE compile markdown shapes: the '<n>. **title**' numbered-bold item of SKILL.md rules, a bullet or ordinal list-item prefix, and a numeric table cell."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/writer_rules.py::_is_list_item::pattern.match"]
+class = "structural"
+ground = "_LIST_ITEM_RE.match classifies a body line as a bullet or ordinal list item, a fixed markdown line shape; the share of such lines only nominates for judge_published_text_rules."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/writer_rules.py::_is_numeric_cell::pattern.fullmatch"]
+class = "structural"
+ground = "_NUMERIC_CELL_RE.fullmatch tells whether a markdown table cell is a bare number, a character-shape test; a unit-less numeric column only nominates say-4 for judge_published_text_rules."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/writer_rules.py::_unit_number_re::re.compile"]
+class = "candidate-generation"
+ground = "Compiles the number-followed-by-a-unit-word pattern from UNIT_WORDS; a count of such figures only nominates say-15 for judge_published_text_rules, which decides fail-open."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/writer_rules.py::_unit_word_re::re.compile"]
+class = "candidate-generation"
+ground = "Compiles the whole-word unit match from UNIT_WORDS used to see whether a table header names a unit; a miss only nominates say-4 for judge_published_text_rules, which decides fail-open."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/writer_rules.py::_header_has_marker::pattern.search"]
+class = "candidate-generation"
+ground = "The unit-word search over a table header cell nominates say-4 (header names no unit) for judge_published_text_rules; the verdict that the table lacks a quantity or unit is the model judge's."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/lib/writer_rules.py::_unit_numbers::pattern.findall"]
+class = "candidate-generation"
+ground = "Counts unit-bearing numbers in a body; the count only nominates say-15 for judge_published_text_rules, never decides that an estimate is buried."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/improvement_scan_fetch.py::parse_feed::re.search"]
+class = "structural"
+ground = "re.search(rb'<!ENTITY', ...) refuses a feed document that declares XML entities, a byte-syntax safety check before parsing, not a judgement of meaning."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/improvement_scan_sources.py::<module>::re.compile"]
+class = "structural"
+ground = "_ID_RE fixes the character set of a source id (lowercase alphanumerics and hyphens), identifier syntax."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/improvement_scan_sources.py::parse_sources::pattern.match"]
+class = "structural"
+ground = "_ID_RE.match refuses a source id outside the identifier character set when parsing the sources file."
 hits = 1
 reviewed_by = "coordinator"
 

@@ -12,6 +12,10 @@
 # status = "perception": needs whole-document structure, thread history, the
 #                        message being answered, or what was actually tested --
 #                        none of which the hook sees.
+# status = "judge-form": the defect is a property of a long body's shape, not of its
+#                        words; a structural picker in scripts/lib/writer_rules.py
+#                        (find_form_candidates) nominates the rule for the judge.
+#                        The entry carries no literals or patterns, only a reason.
 
 [[rule]]
 id = "say-1"
@@ -42,8 +46,8 @@ id = "say-4"
 section = "say"
 number = 4
 fingerprint = "Concision is not amputation — and it applies evenly"
-status = "perception"
-reason = "Over-compression and repetition are judged against the whole deliverable and the earlier thread."
+status = "judge-form"
+reason = "Over-compression is judged against the whole deliverable; a picker nominates a tail of mostly table rows and list items, or a numeric column whose header names no unit."
 
 [[rule]]
 id = "say-5"
@@ -139,8 +143,8 @@ id = "say-15"
 section = "say"
 number = 15
 fingerprint = "An estimate answers the quantity question first — as a range over named degrees of freedom — and covers every axis the question named"
-status = "perception"
-reason = "Needs to know that the document answers a quantity question and which axes the question named."
+status = "judge-form"
+reason = "Needs the quantity question and its named axes; a picker nominates a long body with many unit-bearing figures and no table in its lead."
 
 [[rule]]
 id = "how-1"
@@ -166,8 +170,8 @@ id = "how-3"
 section = "how"
 number = 3
 fingerprint = "Short sentences — but connected, not telegraphic"
-status = "perception"
-reason = "Rhythm and telegraphic density are judged over the whole text."
+status = "judge-form"
+reason = "Telegraphic density is judged over the whole text; a picker nominates a long body whose tail is mostly table rows and list items."
 
 [[rule]]
 id = "how-4"
