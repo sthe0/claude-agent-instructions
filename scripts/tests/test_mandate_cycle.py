@@ -396,6 +396,19 @@ def test_a_second_refusal_the_same_day_is_suppressed(env):
     assert sent.read_text(encoding="utf-8").count("=====") == 2
 
 
+def test_a_crashing_refusal_notice_does_not_crash_the_run(env, monkeypatch):
+    paused_with_a_chat_notifier(env)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("notifier exploded")
+
+    monkeypatch.setattr(notifiers, "deliver", explode)
+    assert env.cycle() == 0
+    [error] = events("refused-notice-error")
+    assert "notifier exploded" in error["detail"]["error"]
+    assert list(store.read_cycle_records(ID).values())[0]["notice"] == "failed"
+
+
 def test_a_refusal_notice_is_not_recorded_as_a_digest(env):
     paused_with_a_chat_notifier(env)
     env.cycle()

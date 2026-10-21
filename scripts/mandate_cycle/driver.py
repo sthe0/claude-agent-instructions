@@ -1079,7 +1079,11 @@ def _locked_cycle(cfg: Config, seams: Seams) -> int:
             "ended_at": rules.format_ts(cycle.now()), "status": "refused", "reasons": list(gate.reasons),
             "spend_24h": spend.day_usd, "spend_7d": spend.week_usd, "taken": [], "triaged": [],
         }, now=cycle.now())
-        _notify_refusal(cycle, gate, mandate)
+        try:
+            _notify_refusal(cycle, gate, mandate)
+        except Exception as exc:
+            cycle.event("refused-notice-error", {"error": f"{type(exc).__name__}: {exc}"})
+            store.append_cycle_row(mid, {"cycle_id": cycle.id, "notice": "failed"}, now=cycle.now())
         print(f"mandate-cycle: refused: {', '.join(gate.reasons)}")
         return EXIT_OK
     cycle.event("cycle-start", {"cycle_id": cycle.id})
@@ -1213,14 +1217,17 @@ def notify_test(cfg: Config, as_json: bool) -> int:
     )
     out = {
         "ok": delivery.ok, "notifier": delivery.notifier,
-        "counts_as_delivered": delivery.ok and delivery.notifier != notifiers.FILE_NOTIFIER,
+        "counts_as_delivered": rules.digest_counts_as_delivered({
+            "ok": delivery.ok, "notifier": delivery.notifier,
+            "delivered_at": rules.format_ts(datetime.now().astimezone()),
+        }),
     }
     print(json.dumps(out) if as_json else f"{delivery.notifier}: {'ok' if delivery.ok else 'FAILED ' + delivery.detail}")
     return EXIT_OK if delivery.ok else EXIT_ERROR
 
 
 REDELIVERED_PREFIX = (
-    "Re-sent: the original delivery of this digest failed, so the veto window counts from this message.\n\n"
+    "Re-sent: the original digest did not reach a notifier you read, so the veto window counts from this message.\n\n"
 )
 
 
