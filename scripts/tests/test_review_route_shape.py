@@ -232,6 +232,20 @@ def test_pair_revise_after_a_whole_plan_pass_blocks(make_env):
     assert any("3-1" in blocker for blocker in _spawn_env_with_later_pair_revise(make_env))
 
 
+def test_unit_revise_after_a_whole_plan_pass_blocks(make_env):
+    env = make_env()
+    env.mutate_state(lambda s: setattr(s, "route", Route.SPAWN.value))
+    assert gates.whole_plan_by_shape(env.doc())
+    _record_pairs(env)
+    assert env.record("", "pass").ok
+    assert _blockers(env) == []
+    assert env.record(
+        "topo:unit:3", "revise", concerns=["blocking: needs work"],
+        regression_command="check", runner=_exit(1),
+    ).ok
+    assert _blockers(env)
+
+
 def test_pair_revise_after_compose_blocks_when_ceiling_makes_the_predicate_say_pairs(make_env, monkeypatch):
     monkeypatch.setattr("agentctl.render.dispatch_ceiling_chars", lambda model=None: 10)
     blockers = _spawn_env_with_later_pair_revise(make_env, compose=True, monkeypatch=monkeypatch)
