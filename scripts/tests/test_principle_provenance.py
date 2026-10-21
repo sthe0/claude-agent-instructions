@@ -14,7 +14,6 @@ import importlib.util
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -507,25 +506,26 @@ def test_link_clears_rule_mark(tmp_path):
     assert pp.unaccounted(w.corpus()) == []
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="read-only modes do not bind root")
-def test_link_atomic(tmp_path):
+def test_link_atomic(tmp_path, monkeypatch):
     w = World(tmp_path)
     leaf = w.exp("2026-01-01-sample", status=[])
     principle = w.principle("sample-principle", induced=["sample-rule"],
                             rule_derived="written from rules")
     w.rule("sample-rule")
-    leaf_bytes = leaf.read_bytes()
-    principles = principle.parent
-    modes = {p: p.stat().st_mode for p in (principles, principle, principles / pp.INDEX)}
-    for p in modes:
-        p.chmod(0o555 if p.is_dir() else 0o444)
-    try:
-        with pytest.raises((SystemExit, OSError)):
-            RE.main(["link", "2026-01-01-sample", "sample-principle", "--root", str(w.mem)])
-    finally:
-        for p, mode in modes.items():
-            p.chmod(stat.S_IMODE(mode))
-    assert leaf.read_bytes() == leaf_bytes
+    before = {p: p.read_bytes() for p in (leaf, principle, principle.parent / pp.INDEX)}
+    real_replace, calls = os.replace, []
+
+    def replace_then_fail(src, dst):
+        calls.append(dst)
+        if len(calls) == 2:
+            raise OSError("disk full")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", replace_then_fail)
+    with pytest.raises(SystemExit):
+        RE.main(["link", "2026-01-01-sample", "sample-principle", "--root", str(w.mem)])
+    assert len(calls) >= 2
+    assert {p: p.read_bytes() for p in before} == before
 
 
 def test_unlink_symmetric(tmp_path):
