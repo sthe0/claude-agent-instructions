@@ -17,6 +17,15 @@ cli._is_counted_review holds; carried records, overrides and composition records
 not acts. Minutes are the booked `active_minutes` quantity, rebuilt from the user
 prompts of the session's transcript with hook-engine-start.py's booking rule.
 
+Population choices, disclosed rather than tuned: the acts population includes cycles with
+zero acts (a replan cycle that was never reviewed is a real cycle that cost nothing), and
+the minutes population is the cycles of sessions whose rebuilt total could be placed;
+rows of a session whose rebuilt total disagrees with its recorded active_minutes are
+rescaled and marked "scaled". Each population carries a sensitivity block (acts: p90
+without zero-act cycles and without the largest-contributing session; minutes: the
+rescale range and the p90 over exact rows alone) so a reader sees how much the derived
+value depends on those choices.
+
 Usage:
   review-cost-calibrate.py SNAPSHOT_DIR [--out PATH] [--decision KEY=N ...] [--report]
       SNAPSHOT_DIR holds state/ (copy of the agentctl state directory) and
@@ -50,6 +59,8 @@ DEVIATION_LIMIT = 0.10
 FORMULA = "p90 = sorted(v)[min(n-1, round(0.9*(n-1)))]; candidate = ceil(p90); n >= min_n else user_decision"
 ROW_COLUMNS = ["session", "cycle", "plan_sha12", "opened_by", "closed_by", "open", "acts", "minutes", "minutes_bound"]
 KEYS = {"review-cycle-acts": "review_cycle_acts", "review-cycle-active-minutes": "review_cycle_active_minutes"}
+# The two sessions whose runaway pair-review loops motivated this guardrail; their largest cycle is
+# reported against the derived p90 so a reader sees where the motivating cases sit. Not a gate.
 MOTIVATING_PREFIXES = ("2283939a", "7dd14604")
 REVIEW_EVENTS = ("plan_review", "plan_pair_review")
 REVIEW_RECORD_EVENTS = REVIEW_EVENTS + ("plan_review_compose", "review_carried")
@@ -264,6 +275,7 @@ def session_rows(session_id: str, state: dict, prompts: list[float] | None) -> t
         "recorded_active_minutes": round(recorded, 3),
         "reconstructed_active_minutes": None if rebuilt is None else round(rebuilt, 3),
         "deviation": None if deviation is None else round(deviation, 4),
+        "scale": None if scale is None else round(scale, 4),
         "unplaced_block": unplaced_block,
         "open_child_run": open_run,
     }
@@ -275,8 +287,26 @@ def p90(values: list[float]):
     return ordered[min(len(ordered) - 1, round(0.9 * (len(ordered) - 1)))]
 
 
-def population(rows: list[list], column: str) -> dict:
+def candidate_of(values: list[float]) -> tuple[float | None, int | None]:
+    if not values:
+        return None, None
+    value = p90(values)
+    return value, math.ceil(round(value, 6))
+
+
+def summary(values: list[float]) -> dict:
+    value, candidate = candidate_of(values)
+    return {"n": len(values), "p90": value, "candidate": candidate}
+
+
+def population(rows: list[list], column: str, inventory: list[dict]) -> dict:
+    """Size, session spread and sensitivity of one population.
+
+    The sensitivity blocks are disclosure only: the derivation rule and the population
+    definition stay the same, and `--check` re-derives every figure here from the embedded
+    rows (and, for the rescale factors, the embedded inventory)."""
     idx = ROW_COLUMNS.index(column)
+    bound_idx = ROW_COLUMNS.index("minutes_bound")
     taken = [r for r in rows if r[idx] is not None]
     per_session: dict[str, int] = {}
     for r in taken:
@@ -287,28 +317,44 @@ def population(rows: list[list], column: str) -> dict:
         "max_session_share": round(max(per_session.values()) / len(taken), 4) if taken else 0.0,
         "open_cycles": sum(1 for r in taken if r[ROW_COLUMNS.index("open")]),
     }
+    if column == "acts":
+        # A replan cycle that was never reviewed is a real cycle with zero acts; it stays in
+        # the population on purpose, as a cycle that cost the review gate nothing.
+        largest = max(per_session.items(), key=lambda kv: (kv[1], kv[0]))[0] if per_session else None
+        pop["zero_act_cycles"] = sum(1 for r in taken if r[idx] == 0)
+        pop["note"] = (f"{pop['zero_act_cycles']} of {len(taken)} cycles hold zero acts (replan cycles never "
+                       f"reviewed) and are included on purpose; sensitivity shows p90 without them and "
+                       f"without the session that contributes the most cycles")
+        pop["sensitivity"] = {
+            "without_zero_act_cycles": summary([r[idx] for r in taken if r[idx] != 0]),
+            "without_largest_session": {
+                "session": largest, **summary([r[idx] for r in taken if r[0] != largest])},
+        }
     if column == "minutes":
-        bounds = {r[ROW_COLUMNS.index("minutes_bound")] for r in taken}
-        pop["minutes_bound"] = BOUND_SCALED if BOUND_SCALED in bounds else BOUND_EXACT
-        pop["exact_rows"] = sum(1 for r in taken if r[ROW_COLUMNS.index("minutes_bound")] == BOUND_EXACT)
+        bounds = {r[bound_idx] for r in taken}
+        exact_rows = [r for r in taken if r[bound_idx] == BOUND_EXACT]
+        scaled_sessions = {r[0] for r in taken if r[bound_idx] == BOUND_SCALED}
+        scales = [i["scale"] for i in inventory
+                  if i.get("session") in scaled_sessions and isinstance(i.get("scale"), (int, float))]
+        pop["minutes_bound"] = (BOUND_SCALED if BOUND_SCALED in bounds else BOUND_EXACT) if taken else None
+        pop["exact_rows"] = len(exact_rows)
         pop["cycles_without_minutes"] = len(rows) - len(taken)
+        pop["scale_min"] = min(scales) if scales else None
+        pop["scale_max"] = max(scales) if scales else None
+        pop["exact_only"] = summary([r[idx] for r in exact_rows])
+        pop["note"] = (f"{len(exact_rows)} of {len(taken)} minute rows are exact; the other "
+                       f"{len(taken) - len(exact_rows)} are rescaled to their session's recorded active_minutes "
+                       f"by a factor in [scale_min, scale_max]; exact_only is the p90 over the exact rows alone")
     return pop
 
 
-def candidate_of(values: list[float]) -> tuple[float | None, int | None]:
-    if not values:
-        return None, None
-    value = p90(values)
-    return value, math.ceil(round(value, 6))
-
-
-def derive(rows: list[list], decisions: dict[str, int]) -> tuple[dict, dict]:
+def derive(rows: list[list], decisions: dict[str, int], inventory: list[dict]) -> tuple[dict, dict]:
     columns = {"review-cycle-acts": "acts", "review-cycle-active-minutes": "minutes"}
     pops, derived = {}, {}
     for key, column in columns.items():
         idx = ROW_COLUMNS.index(column)
         values = [r[idx] for r in rows if r[idx] is not None]
-        pops[KEYS[key]] = population(rows, column)
+        pops[KEYS[key]] = population(rows, column, inventory)
         value, candidate = candidate_of(values)
         entry = {"n": len(values), "p90": value, "candidate": candidate}
         if len(values) >= MIN_N:
@@ -355,7 +401,7 @@ def build(snapshot: Path, decisions: dict[str, int]) -> dict:
 
 
 def assemble(rows: list[list], inventory: list[dict], inputs_sha256: str, decisions: dict[str, int]) -> dict:
-    pops, derived = derive(rows, decisions)
+    pops, derived = derive(rows, decisions, inventory)
     return {
         "formula": FORMULA,
         "min_n": MIN_N,
@@ -382,9 +428,11 @@ def check(path: Path) -> list[str]:
         raise Malformed(f"unreadable: {exc}")
     if not isinstance(doc, dict):
         raise Malformed("not an object")
-    for key in ("min_n", "row_columns", "rows", "rows_sha256", "populations", "derived", "motivating"):
+    for key in ("min_n", "row_columns", "rows", "rows_sha256", "inventory", "populations", "derived", "motivating"):
         if key not in doc:
             raise Malformed(f"missing key {key!r}")
+    if not isinstance(doc["inventory"], list) or any(not isinstance(i, dict) for i in doc["inventory"]):
+        raise Malformed("inventory is not a list of objects")
     rows, derived_in = doc["rows"], doc["derived"]
     if doc["row_columns"] != ROW_COLUMNS or doc["min_n"] != MIN_N:
         raise Malformed("row_columns or min_n differ from the script's")
@@ -400,7 +448,7 @@ def check(path: Path) -> list[str]:
     decisions = {k: v.get("decision") for k, v in derived_in.items()
                  if v.get("rule") == "user_decision" and v.get("decision") is not None}
     try:
-        pops, derived = derive(rows, decisions)
+        pops, derived = derive(rows, decisions, doc["inventory"])
         want_motivating = motivating(rows, derived)
     except (TypeError, AttributeError, ValueError, IndexError) as exc:
         raise Malformed(f"rows do not hold the declared columns: {exc}")

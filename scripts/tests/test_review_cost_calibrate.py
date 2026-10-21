@@ -146,6 +146,109 @@ def test_counter_started_late_keeps_only_cycles_inside_the_counted_window(snapsh
         (None, "unavailable"), (40.0, "exact"), (10.0, "exact")]
 
 
+def inventory_of(snapshot: Path, session: str = SESSION_A) -> dict:
+    return next(i for i in cal.build(snapshot, {})["inventory"] if i["session"] == session)
+
+
+def bounds_of(snapshot: Path) -> set[str]:
+    return {r[COL["minutes_bound"]] for r in rows_of(snapshot)}
+
+
+RECORDED_OFF = 72.5  # the fixture rebuilds 65.0 minutes: deviation |65 - 72.5| / 72.5
+
+
+def test_deviation_limit_boundary_is_inclusive(snapshot, monkeypatch):
+    edit_state(snapshot, SESSION_A, lambda d: d["effort_actuals"].update(active_minutes=RECORDED_OFF))
+    rebuilt = inventory_of(snapshot)["reconstructed_active_minutes"]
+    deviation = abs(rebuilt - RECORDED_OFF) / RECORDED_OFF
+    monkeypatch.setattr(cal, "DEVIATION_LIMIT", deviation)
+    assert bounds_of(snapshot) == {"exact"}
+    monkeypatch.setattr(cal, "DEVIATION_LIMIT", deviation - 1e-9)
+    assert bounds_of(snapshot) == {"scaled"}
+
+
+def test_unplaced_parked_stretch_prevents_exact(snapshot):
+    edit_state(snapshot, SESSION_A, lambda d: d["history"].insert(0, {"event": "block", "ts": "2026-01-01T09:59:00Z"}))
+    info = inventory_of(snapshot)
+    assert info["unplaced_block"] is True and info["deviation"] == 0.0
+    assert bounds_of(snapshot) == {"scaled"}
+
+
+def test_open_child_run_prevents_exact(snapshot):
+    edit_state(snapshot, SESSION_A, lambda d: d.update(effort_child_runs=[{"started": epoch("2026-01-01T10:30:00Z")}]))
+    info = inventory_of(snapshot)
+    assert info["open_child_run"] is True and info["deviation"] == 0.0
+    assert bounds_of(snapshot) == {"scaled"}
+
+
+def test_rebuilt_zero_against_a_recorded_total_gives_no_minutes(snapshot):
+    def mutate(data):
+        data["history"].insert(0, {"event": "block", "ts": "2026-01-01T09:59:00Z"})
+        data["history"].insert(1, {"event": "unblock", "ts": "2026-01-01T11:55:00Z"})
+    edit_state(snapshot, SESSION_A, mutate)
+    info = inventory_of(snapshot)
+    assert info["reconstructed_active_minutes"] == 0.0 and info["recorded_active_minutes"] > 0
+    assert info["scale"] is None
+    assert bounds_of(snapshot) == {"unavailable"}
+
+
+def test_cycle_minutes_window_excludes_the_opening_prompt_and_includes_the_closing_one():
+    t_open, t_close = 100.0, 200.0
+    booked = [(t_open, 1.0), (150.0, 2.0), (t_close, 4.0), (t_close + 1, 8.0)]
+    closed = {"t_open": t_open, "t_close": t_close, "open": False}
+    assert cal.cycle_minutes(booked, closed) == 2.0 + 4.0
+    assert cal.cycle_minutes(booked, {**closed, "t_close": None, "open": True}) == 2.0 + 4.0 + 8.0
+    assert cal.cycle_minutes(booked, {**closed, "t_open": None}) is None
+    assert cal.cycle_minutes(booked, {**closed, "t_close": None}) is None
+
+
+HIGH_PREFIX, LOW_PREFIX = cal.MOTIVATING_PREFIXES
+FILLER_ACTS, HIGH_ACTS, LOW_ACTS = 3, 50, 1
+
+
+def motivating_rows() -> list[list]:
+    def row(session, acts):
+        return [session, 1, "0" * 12, "submit", "approve", False, acts, None, "unavailable"]
+    return ([row("filler", FILLER_ACTS) for _ in range(18)]
+            + [row(f"{HIGH_PREFIX}-session", HIGH_ACTS)] * 2
+            + [row(f"{LOW_PREFIX}-session", LOW_ACTS)] * 2)
+
+
+def test_motivating_reports_each_matching_session_against_the_p90():
+    rows = motivating_rows()
+    _, derived = cal.derive(rows, {}, [])
+    assert derived["review-cycle-acts"]["p90"] == FILLER_ACTS
+    got = cal.motivating(rows, derived)
+    assert got[HIGH_PREFIX] == {"session": f"{HIGH_PREFIX}-session", "cycles": 2,
+                                "max_acts": HIGH_ACTS, "at_or_above_p90": True}
+    assert got[LOW_PREFIX] == {"session": f"{LOW_PREFIX}-session", "cycles": 2,
+                               "max_acts": LOW_ACTS, "at_or_above_p90": False}
+
+
+def test_acts_sensitivity_drops_zero_act_cycles_and_the_largest_session():
+    rows = motivating_rows() + [["zeros", 1, "0" * 12, "replan", "approve", False, 0, None, "unavailable"]] * 4
+    pop = cal.derive(rows, {}, [])[0]["review_cycle_acts"]
+    assert pop["zero_act_cycles"] == 4
+    assert pop["sensitivity"]["without_zero_act_cycles"]["n"] == len(rows) - 4
+    largest = pop["sensitivity"]["without_largest_session"]
+    assert (largest["session"], largest["n"]) == ("filler", len(rows) - 18)
+    assert largest["p90"] == HIGH_ACTS
+
+
+def test_minutes_population_discloses_the_rescale_range_and_the_exact_only_p90(snapshot):
+    edit_state(snapshot, SESSION_A, lambda d: d["effort_actuals"].update(active_minutes=130.0))
+    pop = cal.build(snapshot, {})["populations"]["review_cycle_active_minutes"]
+    assert pop["minutes_bound"] == "scaled" and pop["exact_rows"] == 0
+    assert pop["scale_min"] == pop["scale_max"] == 2.0
+    assert pop["exact_only"] == {"n": 0, "p90": None, "candidate": None}
+    assert "0 of 3 minute rows are exact" in pop["note"]
+
+
+def test_empty_minutes_population_has_no_bound():
+    pop = cal.derive([], {}, [])[0]["review_cycle_active_minutes"]
+    assert pop["minutes_bound"] is None and pop["scale_min"] is None
+
+
 def test_p90_rule():
     assert cal.p90(list(range(1, 11))) == 9
     assert cal.p90(list(range(0, 11))) == 9
