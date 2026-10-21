@@ -51,7 +51,7 @@ def _plan_file(tmp_path: Path) -> Path:
     return plan
 
 
-def test_spawn_route_directive_names_pairwise_review_and_no_whole_plan_spawn(tmp_path, review_armed):
+def test_spawn_route_directive_names_pairwise_review_and_no_whole_plan_spawn(tmp_path, review_armed, pairwise_min_edges_1):
     plan = _plan_file(tmp_path)
     (directive,) = _fire(_plan_ready_state(plan, Route.SPAWN.value))
     detail = directive["detail"]
@@ -72,7 +72,7 @@ def test_non_spawn_route_keeps_the_whole_plan_directive(tmp_path, review_armed):
     assert "plan-review-topological.py" not in directive["detail"]
 
 
-def test_blocker_message_follows_the_same_route_predicate(tmp_path, review_armed):
+def test_blocker_message_follows_the_same_route_predicate(tmp_path, review_armed, pairwise_min_edges_1):
     plan = _plan_file(tmp_path)
     spawn = gates.plan_review_blockers(_plan_ready_state(plan, Route.SPAWN.value), str(plan))
     other = gates.plan_review_blockers(_plan_ready_state(plan, Route.IN_THREAD.value), str(plan))

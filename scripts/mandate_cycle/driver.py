@@ -29,7 +29,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -62,14 +62,15 @@ REAP_TIMEOUT_S = 30
 HEARTBEAT_S = 60.0
 SUMMARY_CHARS = 3000
 REASON_CHARS = 300
+DIGEST_EXCUSED_IDS = 10
 DEFAULT_SUITE = (sys.executable, "-m", "pytest", "-q", "scripts/tests")
 GATE_SCRIPTS = ("scripts/verify-all.py", "scripts/lint-prose-length.py")
 
 EXIT_OK, EXIT_ERROR, EXIT_BUSY = 0, 1, 3
 
 # Kinds beyond rules.FAILURE_KINDS the driver records: a spawn that returned nothing usable, and a
-# git/gh step that failed. Both open the breaker like any failed item -- a cycle that cannot
-# complete its own plumbing should stop and be looked at.
+# git/gh step that failed. Both open the breaker -- a cycle that cannot complete its own
+# plumbing should stop and be looked at.
 KIND_SPAWN_ERROR, KIND_INFRA = "spawn-error", "infra"
 VERDICT_LABEL = {"auto-ok": "ok", "auto-no": "no"}
 VERDICT_RE = re.compile(r"VERDICT:\s*(accept|reject)\b", re.IGNORECASE)
@@ -462,10 +463,22 @@ class Cycle:
         stored = store.append_item_row(self.mid, row, now=self.now())
         self.items.append(stored)
         outcome = row["outcome"]
-        if row.get("failure_kind") == "state-tampered":
+        kind = row.get("failure_kind", "")
+        if kind == "state-tampered":
             self.trip("state-tampered")
-        elif rules.opens_breaker(outcome):
-            self.trip(f"{outcome}:{row.get('failure_kind', 'unknown')} on #{row['issue']}")
+        elif rules.opens_breaker(outcome, kind):
+            self.trip(f"{outcome}:{kind or 'unknown'} on #{row['issue']}")
+        elif outcome == "failed":
+            run = rules.local_failure_run(store.read_item_rows(self.mid), self.streak_since())
+            if len(run) >= rules.LOCAL_FAILURE_STREAK:
+                self.trip(f"{len(run)} consecutive item failures: {', '.join(f'#{n}' for n in run)}")
+
+    def streak_since(self) -> str:
+        """The last user resume, else the grant: failures the user already looked at do not count."""
+        stamps = [e["ts"] for e in store.read_events(self.mid) if e.get("event") == "resumed" and e.get("ts")]
+        if stamps:
+            return max(stamps, key=rules.parse_ts)
+        return store.load_mandate(self.mid).granted_at
 
     # ---- github reads
 
@@ -488,10 +501,12 @@ class Cycle:
         label_rows = store.read_label_rows(self.mid)
         digests = store.read_digests(self.mid)
         now = self.now()
+        failed = rules.failed_issues(store.read_item_rows(self.mid), store.read_events(self.mid))
         return [
             rules.evaluate_candidate(
                 issue, owner=owner, labels_cfg=mandate.labels, label_rows=label_rows, digests=digests,
                 pr_refs=pr_refs, veto_window_hours=mandate.veto_window_hours, now=now,
+                failed_issues=failed,
             )
             for issue in issues
         ]
@@ -722,7 +737,7 @@ class Cycle:
         """An items.jsonl row with every R6 field present, defaulted to the not-run state."""
         return {
             "cycle_id": self.id, "issue": number, "branch": branch, "pr_url": None, "outcome": "failed",
-            "tests": NOT_RUN, "review": NOT_RUN,
+            "tests": NOT_RUN, "review": NOT_RUN, "excused_tests": [], "excused_count": 0,
             "gates": {"constitution": NOT_RUN, "org_neutral": NOT_RUN, "lint": NOT_RUN},
             "cost_usd": 0.0, "duration_s": 0.0,
         }
@@ -817,10 +832,14 @@ class Cycle:
             return
 
         item_suite = self.run_suite(worktree, item_dir / "item.xml")
-        failing = rules.failing_ids(baseline.passed, item_suite.passed)
+        failing, excused = rules.split_failures(
+            baseline.passed, baseline.seen, item_suite.passed, item_suite.seen, rules.diff_path_groups(lines),
+        )
+        row["excused_tests"] = excused[:DIGEST_EXCUSED_IDS]
+        row["excused_count"] = len(excused)
         if failing:
             rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))
-            green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed)
+            green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed, excused)
         else:
             green = True
         gates = self.run_gates(worktree)
@@ -943,6 +962,11 @@ class Cycle:
             link = f" -- {row['pr_url']}" if row.get("pr_url") else ""
             kind = f" ({row['failure_kind']})" if row.get("failure_kind") else ""
             items.append(f"- #{row['issue']}: {row['outcome']}{kind}{link} -- ${row.get('cost_usd') or 0:.2f}")
+            if row.get("excused_count"):
+                ids = ", ".join(row.get("excused_tests") or [])
+                more = row["excused_count"] - len(row.get("excused_tests") or [])
+                items[-1] += f" -- excused (removed or renamed by the item): {row['excused_count']}: {ids}"
+                items[-1] += f", ... and {more} more" if more > 0 else ""
         overruns = [
             f"- #{r['issue']}: {', '.join(r.get('overrun_reasons') or ['unknown'])}"
             for r in self.items if r["outcome"] == "overrun"
@@ -951,6 +975,10 @@ class Cycle:
             f"- {l['phase']}" + (f" (#{l['issue']})" if "issue" in l else "") + f": {', '.join(l['reasons'])}"
             for l in self.limits
         ]
+        not_retried = [
+            f"- #{n} ({row.get('failure_kind')}) - run `agentctl mandate-retry --issue {n} --by <you>`"
+            for n, row in sorted(rules.failed_attempts(store.read_item_rows(self.mid), store.read_events(self.mid)).items())
+        ]
         mandate_prs = {pr.get("url") or f"#{pr.get('number')}" for pr in self.open_prs}
         mandate_prs |= {r["pr_url"] for r in self.items if r.get("pr_url")}
         lines = [
@@ -958,6 +986,12 @@ class Cycle:
             f"mandate `{self.mid}` -- status **{status}** -- spend 24h ${spend.day_usd:.2f}, 7d ${spend.week_usd:.2f}",
             f"Mandate expires {mandate.expires_at}. Kill switch: `agentctl mandate-stop`.",
         ]
+        left = rules.parse_ts(mandate.expires_at, strict=True) - self.now()
+        if left <= timedelta(days=rules.EXPIRY_WARN_DAYS):
+            lines.append(
+                f"Mandate expires in {max(left.days, 0)} days ({mandate.expires_at}): "
+                "run `agentctl mandate-extend --days <n> --by <you>`"
+            )
         lines += section(f"Items ({len(self.items)})", items)
         lines += section(f"Labels applied this cycle ({len(applied)})", applied)
         lines += section(
@@ -976,6 +1010,7 @@ class Cycle:
         ])
         lines += section("Limits hit", limits)
         lines += section("Overruns", overruns)
+        lines += section("Not retried (failed before)", not_retried)
         lines += section(f"Open mandate pull requests ({len(mandate_prs)})", [f"- {url}" for url in sorted(mandate_prs)])
         lines += section("Remote `mandate/*` branches without a pull request", [f"- {b}" for b in self.orphans])
         if mandate.breaker_open:
@@ -1044,6 +1079,11 @@ def _locked_cycle(cfg: Config, seams: Seams) -> int:
             "ended_at": rules.format_ts(cycle.now()), "status": "refused", "reasons": list(gate.reasons),
             "spend_24h": spend.day_usd, "spend_7d": spend.week_usd, "taken": [], "triaged": [],
         }, now=cycle.now())
+        try:
+            _notify_refusal(cycle, gate, mandate)
+        except Exception as exc:
+            cycle.event("refused-notice-error", {"error": f"{type(exc).__name__}: {exc}"})
+            store.append_cycle_row(mid, {"cycle_id": cycle.id, "notice": "failed"}, now=cycle.now())
         print(f"mandate-cycle: refused: {', '.join(gate.reasons)}")
         return EXIT_OK
     cycle.event("cycle-start", {"cycle_id": cycle.id})
@@ -1064,6 +1104,55 @@ def _locked_cycle(cfg: Config, seams: Seams) -> int:
         raise
     _finish(cycle, status)
     return EXIT_OK if status in ("ok", "baseline-red", "breaker") else EXIT_ERROR
+
+
+def _budget_clears_at(cycle: Cycle, mandate, reasons) -> "dict[str, datetime]":
+    if mandate is None:
+        return {}
+    cost_rows = cost.read_rows(cost.COST_LOG)
+    events = store.read_events(cycle.mid)
+    mandate_dir = str(store.mandate_dir(cycle.mid))
+    windows = {
+        "daily-budget": (rules.DAY_HOURS, mandate.daily_usd),
+        "weekly-budget": (rules.WEEK_HOURS, mandate.weekly_usd),
+    }
+    clears = {}
+    for reason in reasons:
+        if reason in windows:
+            hours, cap = windows[reason]
+            moment = rules.spend_clears_at(cost_rows, events, mandate_dir, cycle.now(), hours, cap)
+            if moment is not None:
+                clears[reason] = moment
+    return clears
+
+
+def _notify_refusal(cycle: Cycle, gate, mandate) -> None:
+    """Tell the user a start was refused, once per UTC day per reason set; never a digest record."""
+    mid, now = cycle.mid, cycle.now()
+    reasons = list(gate.reasons)
+    events = store.read_events(mid)
+    if not rules.refusal_notice_due(reasons, events, now):
+        store.append_cycle_row(mid, {"cycle_id": cycle.id, "notice": "suppressed"}, now=now)
+        return
+    since = rules.blocked_since(list(store.read_cycle_records(mid).values()), events, reasons)
+    unblock = rules.unblock_commands(reasons, mandate, now, _budget_clears_at(cycle, mandate, reasons))
+    text = "\n".join([
+        f"# Background debt cycle {cycle.id}: start refused",
+        f"mandate `{mid}` -- reasons: {', '.join(reasons)}",
+        f"Blocked since {rules.format_ts(since) if since else 'unknown'}.",
+        *[f"- {line}" for line in unblock],
+    ]) + "\n"
+    delivery = notifiers.deliver(
+        text, digests_dir=store.mandate_dir(mid) / "notices", cycle_id=cycle.id, root=cycle.cfg.plugin_root,
+    )
+    detail = {
+        "reasons": reasons, "notifier": delivery.notifier, "ok": delivery.ok,
+        "delivered_at": rules.format_ts(cycle.now()),
+        "blocked_since": rules.format_ts(since) if since else None, "unblock": unblock,
+    }
+    cycle.event(rules.REFUSED_NOTICE_EVENT, detail)
+    sent = rules.digest_counts_as_delivered(detail)
+    store.append_cycle_row(mid, {"cycle_id": cycle.id, "notice": "sent" if sent else "failed"}, now=cycle.now())
 
 
 def _cycle_body(cycle: Cycle, mandate) -> str:
@@ -1128,10 +1217,63 @@ def notify_test(cfg: Config, as_json: bool) -> int:
     )
     out = {
         "ok": delivery.ok, "notifier": delivery.notifier,
-        "counts_as_delivered": delivery.ok and delivery.notifier != notifiers.FILE_NOTIFIER,
+        "counts_as_delivered": rules.digest_counts_as_delivered({
+            "ok": delivery.ok, "notifier": delivery.notifier,
+            "delivered_at": rules.format_ts(datetime.now().astimezone()),
+        }),
     }
     print(json.dumps(out) if as_json else f"{delivery.notifier}: {'ok' if delivery.ok else 'FAILED ' + delivery.detail}")
     return EXIT_OK if delivery.ok else EXIT_ERROR
+
+
+REDELIVERED_PREFIX = (
+    "Re-sent: the original digest did not reach a notifier you read, so the veto window counts from this message.\n\n"
+)
+
+
+def redeliver_digest(cfg: Config, seams: Seams, cycle_id: str, as_json: bool) -> int:
+    """Re-send the stored digest of a cycle whose delivery did not reach a real notifier."""
+    mid = cfg.mandate_id
+
+    def report(code: int, **out) -> int:
+        message = out.pop("message")
+        print(json.dumps({"cycle_id": cycle_id, **out, "message": message}) if as_json else message)
+        return code
+
+    try:
+        with store.cycle_lock(mid):
+            stored = store.mandate_dir(mid) / "digests" / f"{cycle_id}.md"
+            if cycle_id not in store.read_cycle_records(mid):
+                return report(EXIT_ERROR, sent=False, message=f"mandate-cycle: unknown cycle {cycle_id}")
+            if not stored.is_file():
+                return report(EXIT_ERROR, sent=False, message=f"mandate-cycle: no stored digest {stored}")
+            if rules.digest_counts_as_delivered(store.read_digests(mid).get(cycle_id)):
+                return report(EXIT_OK, sent=False, message=f"mandate-cycle: digest of {cycle_id} was already delivered")
+            delivery = notifiers.deliver(
+                REDELIVERED_PREFIX + stored.read_text(encoding="utf-8"),
+                digests_dir=store.mandate_dir(mid) / "redelivered", cycle_id=cycle_id, root=cfg.plugin_root,
+            )
+            record = store.record_digest(
+                mid, cycle_id,
+                ok=delivery.ok,
+                notifier=delivery.notifier,
+                delivered_at=seams.clock(),
+            )
+            store.append_event(
+                mid, "digest-redelivered",
+                {"cycle_id": cycle_id, "ok": delivery.ok, "notifier": delivery.notifier},
+                by="cycle", now=seams.clock(),
+            )
+    except store.CycleBusy as exc:
+        print(f"mandate-cycle: {exc}", file=sys.stderr)
+        return EXIT_BUSY
+    counts = rules.digest_counts_as_delivered(record)
+    return report(
+        EXIT_OK if counts else EXIT_ERROR, sent=True, ok=delivery.ok, notifier=delivery.notifier,
+        counts_as_delivered=counts,
+        message=f"{delivery.notifier}: {'ok' if delivery.ok else 'FAILED ' + delivery.detail}"
+                + ("" if counts else " (does not start a veto window)"),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1145,6 +1287,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--json", action="store_true")
     test = sub.add_parser("notify-test", help="deliver a test digest and report which notifier carried it")
     test.add_argument("--json", action="store_true")
+    redo = sub.add_parser("redeliver-digest", help="re-send the stored digest of a cycle whose delivery failed")
+    redo.add_argument("--cycle", required=True)
+    redo.add_argument("--json", action="store_true")
     return parser
 
 
@@ -1155,6 +1300,8 @@ def main(argv: "list[str] | None" = None, *, seams: "Seams | None" = None, cfg: 
     seams = seams or Seams()
     if args.command == "notify-test":
         return notify_test(cfg, args.json)
+    if args.command == "redeliver-digest":
+        return redeliver_digest(cfg, seams, args.cycle, args.json)
     if args.dry_run:
         try:
             report = dry_run(cfg, seams)

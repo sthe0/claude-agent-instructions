@@ -44,9 +44,11 @@ from typing import NamedTuple
 
 from lib import config_root
 from lib import hook_wiring
+from lib.spawn_prompt_files import composed_prompt_files, skill_path
 
 from . import advisor as _advisor
 from . import delivery
+from . import effort
 from .config import Thresholds
 from .plan import (
     PlanError,
@@ -70,6 +72,7 @@ from .plan import (
     pair_currency_keys,
     plan_has_any_grants,
     plan_interface_digests,
+    reliance_set,
     review_pairs,
     review_units,
     split_pair_id,
@@ -1271,20 +1274,90 @@ _NO_REVIEW_BLOCKER_PAIRWISE = (
 )
 
 
-def pairwise_review_route(state: SessionState | None) -> bool:
+class PlanShape(NamedTuple):
+    stages: int
+    edges: int
+    all_small: bool
+
+
+def plan_shape(doc) -> PlanShape:
+    """Stage count, reliance-edge count and whether every stage is `small` — read only
+    from fields every stage carries, so no stage kind or prose length moves it. Edges
+    are `reliance_set` edges, not review pairs (no `base-<s>` coverage pairs)."""
+    stages = list(doc.stages)
+    edges = sum(len(reliance_set(doc, s.index)) for s in stages)
+    return PlanShape(len(stages), edges, all(s.actor.cost_tier == "small" for s in stages))
+
+
+def whole_plan_by_shape(doc) -> bool:
+    """Whether the plan's shape alone gives it one whole-plan review: one stage, every
+    stage small, or fewer reliance edges than the `review-pairwise-min-edges` row. A
+    missing or non-integer row never says whole-plan. Route-independent."""
+    stages, edges, all_small = plan_shape(doc)
+    if stages <= 1 or all_small:
+        return True
+    try:
+        return edges < Thresholds().review_pairwise_min_edges
+    except (KeyError, ValueError, OSError):
+        return False
+
+
+def _whole_plan_reader_context_overhead_chars() -> int | None:
+    """The reader-context overhead of a whole-plan thinker review: the size of the files
+    the spawner composes into a thinker's system prompt (`lib.spawn_prompt_files`, the
+    same list `spawn-specialist.py` appends), in bytes, an upper bound on characters.
+    The brief scaffold and the question list are not counted, so the estimate can
+    under-estimate; that only moves which review the directive asks for, because the gate
+    never discards a pair record newer than the latest whole-plan pass
+    (`_honours_pair_records`). None when a file cannot be read — the caller then reads
+    pairs."""
+    try:
+        return sum(path.stat().st_size for path in composed_prompt_files(skill_path("thinker")))
+    except OSError:
+        return None
+
+
+def _uses_pair_review(state: SessionState | None, doc) -> bool:
+    """True on a SPAWN route whose review runs pairwise for this plan (a plan that did
+    not load, `doc=None`, reads as pairs); False on any other route."""
+    if state is None or state.route != Route.SPAWN.value:
+        return False
+    return doc is None or pairwise_review_route(state, doc)
+
+
+def pairwise_review_route(state: SessionState | None, doc=None) -> bool:
     """Whether plan review runs pairwise for this session — the one predicate the
     `submit_plan` directive and the blocker message both read, so trigger and gate
-    never name different routes."""
-    return state is not None and state.route == Route.SPAWN.value
+    never name different routes. On a spawn route, decided in this order: the plan
+    does not load -> pairs; its whole-plan rendering plus the reader-context overhead
+    (unreadable -> pairs) is over the dispatch prompt ceiling -> pairs;
+    `whole_plan_by_shape` -> whole-plan review; otherwise pairs. `doc=None` loads
+    `state.plan_path`."""
+    if state is None or state.route != Route.SPAWN.value:
+        return False
+    if doc is None:
+        try:
+            doc = load_plan(state.plan_path) if state.plan_path else None
+        except (OSError, PlanError):
+            doc = None
+    if doc is None:
+        return True
+    from .render import dispatch_ceiling_chars, render_plan_md
+    overhead = _whole_plan_reader_context_overhead_chars()
+    if overhead is None or len(render_plan_md(doc)) + overhead > dispatch_ceiling_chars():
+        return True
+    return not whole_plan_by_shape(doc)
 
 
-def _no_review_blocker(state: SessionState | None) -> str:
-    return _NO_REVIEW_BLOCKER_PAIRWISE if pairwise_review_route(state) else _NO_REVIEW_BLOCKER
+def _no_review_blocker(state: SessionState | None, doc=None) -> str:
+    """`doc` is the plan the caller already loaded; None means it did not load, which
+    the route predicate reads as pairs, so it is not loaded a second time here."""
+    return _NO_REVIEW_BLOCKER_PAIRWISE if _uses_pair_review(state, doc) else _NO_REVIEW_BLOCKER
 
 
 def _plan_review_blockers_whole(pr, target_plan: str | None, *, state: SessionState | None = None, doc=None) -> list[str]:
     if pr is None:
-        return [_no_review_blocker(state)]
+        return [_no_review_blocker(state, doc)]
     if not target_plan:
         return [_stale_path_blocker(pr.plan_path, target_plan)]
     if pr.plan_path != target_plan:
@@ -1915,7 +1988,7 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     recorded" test."""
     whole = state.plan_review
     if whole is None:
-        return [_no_review_blocker(state)]
+        return [_no_review_blocker(state, doc)]
     if whole.plan_path != target_plan and not _binds_across_path_change(whole, target_plan, state):
         return [_stale_path_blocker(whole.plan_path, target_plan)]
     scope = review_scope(doc, whole)
@@ -2141,6 +2214,58 @@ def plan_review_round_release_active(state: SessionState | None, thr: Thresholds
     return _PLAN_REVIEW_ROUND_COUNTER.release_active(state, thr)
 
 
+def review_booked_minutes(state: SessionState) -> float:
+    """Active minutes booked on the session so far — the quantity the minutes trigger
+    measures a cycle's elapsed time against."""
+    return float((state.effort_actuals or {}).get(effort.ACTUAL_MINUTES_KEY) or 0.0)
+
+
+def review_trigger(state: SessionState | None, thr: Thresholds | None = None) -> dict | None:
+    """The review-cost trigger the session has crossed, or None. Pure: reads the counters
+    `cli` keeps on the state and the three config.md rows, writes nothing.
+
+    Three triggers, checked in this order: `cycle_acts` (counted review acts in the open
+    pre-approval cycle), `cycle_minutes` (booked active minutes since the cycle's anchor),
+    `stage_streak` (consecutive non-passing counted reviews of one stage's own record).
+    A row that is missing or not an integer disarms its trigger. A trigger that already
+    fired on this evidence (`review_trigger_spent`) stays quiet: the acts trigger counts
+    the acts since its last fire, the streak trigger fires again only on a larger value,
+    the minutes trigger once per anchor (`review_trigger_spent["cycle_minutes"]` holds the
+    anchor it fired on).
+
+    The result is `{trigger, value, threshold, stage}` — `stage` is the stage key for a
+    streak and None otherwise."""
+    if state is None:
+        return None
+    if thr is None:
+        try:
+            thr = Thresholds()
+        except (OSError, UnicodeDecodeError):
+            return None
+    spent = state.review_trigger_spent or {}
+    if state.review_cycle_open:
+        acts_row = thr.review_cycle_acts()
+        acts_since_fire = state.review_cycle_acts - spent.get("cycle_acts", 0)
+        if acts_row is not None and acts_since_fire >= acts_row:
+            return {"trigger": "cycle_acts", "value": acts_since_fire,
+                    "threshold": acts_row, "stage": None}
+        minutes_row = thr.review_cycle_active_minutes()
+        anchor = state.review_cycle_minutes_anchor
+        if minutes_row is not None and anchor is not None and spent.get("cycle_minutes") != anchor:
+            elapsed = round(review_booked_minutes(state) - anchor, 3)
+            if elapsed >= minutes_row:
+                return {"trigger": "cycle_minutes", "value": elapsed,
+                        "threshold": minutes_row, "stage": None}
+    streak_row = thr.review_stage_nonpass_streak()
+    if streak_row is not None:
+        for stage_key in sorted(state.review_stage_streaks or {}):
+            value = state.review_stage_streaks[stage_key]
+            if value >= streak_row and value > spent.get(f"stage_streak:{stage_key}", -1):
+                return {"trigger": "stage_streak", "value": value,
+                        "threshold": streak_row, "stage": stage_key}
+    return None
+
+
 def cross_axis_friction_release_active(state: SessionState | None, thr: Thresholds | None = None) -> bool:
     """True once the SUM of plan-review + plan-enumerate + code-review round counts
     reaches the shared threshold (config.md's `effort-replan-absolute`)
@@ -2203,6 +2328,24 @@ def _round_release_wrap(
     return [message]
 
 
+def _honours_pair_records(state: SessionState, target_plan: "str | None", doc) -> bool:
+    """Whether the pair records for `target_plan` count at the gate. On a SPAWN plan
+    that is whole-plan by shape, the latest whole-plan record (a pass clears, a revise
+    blocks) supersedes the pair and unit records older than it, but a pair or unit
+    record newer than it still counts; with no whole-plan record, or on another route
+    or shape, every pair record counts. The ceiling clause of `pairwise_review_route`
+    steers the directive only and is not read here."""
+    if not has_pair_records_for(state, target_plan):
+        return False
+    whole = state.plan_review
+    if state.route != Route.SPAWN.value or whole is None or not whole_plan_by_shape(doc):
+        return True
+    return any(
+        record.plan_path == target_plan and record.record_seq > whole.record_seq
+        for record in state.plan_pair_reviews.values()
+    )
+
+
 def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[str]:
     """Precondition guardian for `approve` and every `replan`: a thinker review with
     a passing (or user-overridden) verdict, BOUND to the exact plan version being
@@ -2243,7 +2386,8 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
         except (OSError, PlanError):
             doc = None
     coverage_route = doc is not None and (
-        bool(state.plan_stage_reviews) or has_pair_records_for(state, target_plan)
+        bool(state.plan_stage_reviews)
+        or _honours_pair_records(state, target_plan, doc)
         or (state.plan_review is not None and (state.plan_review.carried_tier or 0) >= 2)
     )
     if not coverage_route:

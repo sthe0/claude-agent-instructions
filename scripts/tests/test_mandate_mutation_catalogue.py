@@ -24,13 +24,19 @@ EXPECTED_ENTRIES = (
     "head-pinned-before-review", "worktree-rechecked-before-push", "scope-heartbeat",
     "spawn-bound-by-cycle-cap", "item-limit-event", "item-row-defaults", "digest-kill-switch",
     "digest-limits", "digest-skipped-comments", "digest-delivery-eligibility", "notifier-precedence",
-    "overrun-not-breaker", "single-instance-lock", "triage-label-logged", "no-issue-create",
+    "overrun-not-breaker", "item-local-not-breaker", "unknown-kind-opens-breaker", "local-failure-streak",
+    "streak-since-granted", "failed-before", "failed-issues-passed", "retry-allowed-clears",
+    "single-instance-lock", "triage-label-logged", "no-issue-create",
     "no-user-authority-calls", "mandate-state-tamper", "triage-org-neutral",
     "skipped-is-settled", "optional-not-depended", "optional-max-two", "optional-coverage-rule",
     "reject-spares-skipped", "reject-names-skipped-refused", "push-refuses-skipped-origin",
     "agent-cannot-revive-declined", "declined-follows-identity", "declined-in-ledger",
     "declined-required-in-ledger", "declined-title-half", "declined-seeded-from-ledger",
-    "worktree-canonical-ids",
+    "worktree-canonical-ids", "vanished-test-excused", "vanished-test-dirty-module",
+    "vanished-test-rename-group", "rerun-verdict-ignores-excused",
+    "refusal-notice-sent", "refusal-notice-throttle", "refusal-notice-file-only-suppresses",
+    "refusal-notice-not-a-digest", "blocked-since-breaker-trip", "unblock-command-per-reason",
+    "expiry-warning", "redeliver-no-record", "redeliver-record-without-send", "redeliver-not-idempotent",
 )
 
 

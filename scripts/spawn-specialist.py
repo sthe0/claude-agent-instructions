@@ -70,6 +70,7 @@ from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from agentctl import tool_contracts  # the one parser of an interpreter call's script operand
 from lib import shell_tokens
+from lib import spawn_prompt_files as _prompt_files  # the files a composed system prompt is made of, shared with the engine's ceiling check
 from lib.config_root import agent_home, plans_dir, projects_roots, skills_dir, topo_units_root  # config-root resolver (isolated system root)
 from lib.kind_baselines import (  # re-exported below so `MOD.KIND_BASELINES` etc. keep working for importlib callers
     KIND_BASELINES,
@@ -512,13 +513,7 @@ def skill_path(kind: str) -> Path:
     fallback (CLAUDE.md dispatch table) so a project ships domain experts spawnable
     with the same claude -p isolation, without polluting the global catalog. Returns
     the global path when neither exists, so the caller's not-found error names it."""
-    global_path = SKILLS_DIR / kind / "SKILL.md"
-    if global_path.exists():
-        return global_path
-    project_path = Path.cwd() / ".claude" / "skills" / "specializations" / kind / "SKILL.md"
-    if project_path.exists():
-        return project_path
-    return global_path
+    return _prompt_files.skill_path(kind, SKILLS_DIR)
 
 
 def composed_system_prompt_file(skill: Path) -> Path:
@@ -533,10 +528,8 @@ def composed_system_prompt_file(skill: Path) -> Path:
     bare SKILL.md when no shared file exists (project-local skills that carry
     their own contract).
     """
-    shared = skill.resolve().parent.parent / "_shared" / "marker-protocol.md"
-    if not shared.exists():
-        shared = REPO_ROOT / "skills" / "specializations" / "_shared" / "marker-protocol.md"
-    if not shared.exists():
+    shared = _prompt_files.shared_protocol_path(skill)
+    if shared is None:
         return skill
     combined = (
         skill.read_text(encoding="utf-8")

@@ -111,7 +111,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_RULES, "test_a_cycle_set_auto_ok_on_severity_high_is_never_eligible"),
     ),
     "file-notifier-excluded": Mutant(
-        RULES, 'or delivery.get("notifier") in (None, "", "file")', 'or delivery.get("notifier") in (None, "")',
+        RULES, 'and delivery.get("notifier") not in (None, "", "file")', 'and delivery.get("notifier") not in (None, "")',
         _ids(T_RULES, "test_a_file_notifier_digest_does_not_count_as_delivered"),
     ),
     "expiry": Mutant(
@@ -145,8 +145,10 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_RULES, "test_triage_sees_only_unlabelled_owner_authored_domain_issues_oldest_first"),
     ),
     "user-authority-verbs": Mutant(
-        WIDENING, '"plugin-record", "mandate-grant", "mandate-extend", "mandate-resume",', '"plugin-record",',
-        _ids(T_CLI, "test_grant_extend_and_resume_are_user_authority_verbs"),
+        WIDENING,
+        '"plugin-record", "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry",',
+        '"plugin-record",',
+        _ids(T_CLI, "test_grant_extend_resume_and_retry_are_user_authority_verbs"),
     ),
     "cycle-minutes-cap": Mutant(
         RULES, "if cycle_elapsed_minutes >= mandate.cycle_minutes_cap:", "if False:",
@@ -170,14 +172,20 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "baseline-relative-tests": Mutant(
         DRIVER,
-        "        failing = rules.failing_ids(baseline.passed, item_suite.passed)\n"
+        "            baseline.passed, baseline.seen, item_suite.passed, item_suite.seen, rules.diff_path_groups(lines),\n"
+        "        )\n"
+        '        row["excused_tests"] = excused[:DIGEST_EXCUSED_IDS]\n'
+        '        row["excused_count"] = len(excused)\n'
         "        if failing:\n"
         '            rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))\n'
-        "            green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed)\n",
-        "        failing = rules.failing_ids(baseline.seen, item_suite.passed)\n"
+        "            green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed, excused)\n",
+        "            baseline.seen, baseline.seen, item_suite.passed, item_suite.seen, rules.diff_path_groups(lines),\n"
+        "        )\n"
+        '        row["excused_tests"] = excused[:DIGEST_EXCUSED_IDS]\n'
+        '        row["excused_count"] = len(excused)\n'
         "        if failing:\n"
         '            rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))\n'
-        "            green = rules.passes_after_rerun(baseline.seen, item_suite.passed, rerun.passed)\n",
+        "            green = rules.passes_after_rerun(baseline.seen, item_suite.passed, rerun.passed, excused)\n",
         _ids(T_CYCLE, "test_a_test_failing_on_the_baseline_does_not_count_against_the_item"),
     ),
     "no-trunk-push": Mutant(
@@ -286,13 +294,57 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "overrun-not-breaker": Mutant(
         DRIVER,
-        "elif rules.opens_breaker(outcome):",
+        "elif rules.opens_breaker(outcome, kind):",
         "elif True:",
         _ids(
             T_CYCLE,
             "test_an_overrun_does_not_open_the_breaker_and_the_cycle_continues",
             "test_a_killed_spawn_with_no_cost_row_is_charged_the_whole_item_cap",
         ),
+    ),
+    "item-local-not-breaker": Mutant(
+        RULES,
+        'return outcome != "failed" or failure_kind not in ITEM_FAILURE_KINDS',
+        "return True",
+        _ids(T_RULES, "test_an_item_local_failure_kind_does_not_open_the_breaker")
+        + _ids(T_CYCLE, "test_an_item_local_failure_is_recorded_and_the_cycle_continues"),
+    ),
+    "unknown-kind-opens-breaker": Mutant(
+        RULES,
+        'return outcome != "failed" or failure_kind not in ITEM_FAILURE_KINDS',
+        'return outcome == "failed" and failure_kind in CYCLE_FAILURE_KINDS',
+        _ids(T_RULES, "test_an_unknown_failure_kind_opens_the_breaker"),
+    ),
+    "local-failure-streak": Mutant(
+        DRIVER,
+        "if len(run) >= rules.LOCAL_FAILURE_STREAK:",
+        "if False:",
+        _ids(T_CYCLE, "test_three_consecutive_item_failures_open_the_breaker"),
+    ),
+    "streak-since-granted": Mutant(
+        DRIVER,
+        "        if stamps:\n",
+        "        if False:\n",
+        _ids(T_CYCLE, "test_failures_before_the_resume_do_not_count_toward_the_streak"),
+    ),
+    "failed-before": Mutant(
+        RULES,
+        "if number in failed_issues:",
+        "if False:",
+        _ids(T_RULES, "test_a_failed_issue_is_not_eligible_again")
+        + _ids(T_CYCLE, "test_the_cycle_does_not_retake_a_failed_issue"),
+    ),
+    "failed-issues-passed": Mutant(
+        DRIVER,
+        "failed_issues=failed,",
+        "failed_issues=frozenset(),",
+        _ids(T_CYCLE, "test_the_cycle_does_not_retake_a_failed_issue"),
+    ),
+    "retry-allowed-clears": Mutant(
+        RULES,
+        'and allowed.get(issue, floor) <= (parse_ts(row.get("ts")) or floor)',
+        "and True",
+        _ids(T_RULES, "test_a_retry_allowed_after_the_failure_makes_it_eligible"),
     ),
     "single-instance-lock": Mutant(
         DRIVER,
@@ -472,6 +524,109 @@ CATALOGUE: "dict[str, Mutant]" = {
         "::{case.get('name', '')}\", roots)",
         "::{case.get('name', '')}\", ())",
         _ids(T_CYCLE, "test_a_test_id_that_embeds_the_worktree_path_is_the_same_test_on_the_item"),
+    ),
+    "vanished-test-excused": Mutant(
+        RULES,
+        "        if ident in item_seen or index is None or index in dirty:\n",
+        "        if True:\n",
+        _ids(
+            T_RULES,
+            "test_vanished_id_in_a_touched_module_is_excused",
+            "test_a_renamed_module_old_path_excuses_its_ids",
+            "test_the_recorded_364_junit_excuses_exactly_the_removed_id",
+        ) + _ids(T_CYCLE, "test_a_test_removed_by_the_item_does_not_fail_the_gate_and_is_reported"),
+    ),
+    "vanished-test-dirty-module": Mutant(
+        RULES,
+        " or index in dirty:\n",
+        ":\n",
+        _ids(
+            T_RULES,
+            "test_a_new_failure_in_the_touched_module_voids_the_excuse",
+            "test_a_new_failure_in_the_renamed_to_module_voids_the_excuse",
+        ) + _ids(T_CYCLE, "test_a_collection_error_in_the_touched_module_fails_the_gate"),
+    ),
+    "vanished-test-rename-group": Mutant(
+        RULES,
+        "test_module_of(ident, groups) for ident in new_bad",
+        "test_module_of(ident, [g[:1] for g in groups]) for ident in new_bad",
+        _ids(T_RULES, "test_a_new_failure_in_the_renamed_to_module_voids_the_excuse"),
+    ),
+    "rerun-verdict-ignores-excused": Mutant(
+        DRIVER,
+        "rerun.passed, excused)\n",
+        "rerun.passed)\n",
+        _ids(T_CYCLE, "test_an_excused_id_is_not_held_against_the_item_after_the_rerun"),
+    ),
+    "refusal-notice-sent": Mutant(
+        DRIVER,
+        "_notify_refusal(cycle, gate, mandate)",
+        "None",
+        _ids(T_CYCLE, "test_a_refused_start_sends_a_notice_through_the_digest_notifier"),
+    ),
+    "refusal-notice-throttle": Mutant(
+        RULES,
+        "    wanted = sorted(reasons)\n",
+        "    return True\n    wanted = sorted(reasons)\n",
+        _ids(T_RULES, "test_refusal_notice_due_once_per_day_per_reason_set")
+        + _ids(T_CYCLE, "test_a_second_refusal_the_same_day_is_suppressed"),
+    ),
+    "refusal-notice-file-only-suppresses": Mutant(
+        RULES,
+        "            and digest_counts_as_delivered(detail)\n",
+        "",
+        _ids(T_RULES, "test_a_file_only_notice_does_not_suppress"),
+    ),
+    "refusal-notice-not-a-digest": Mutant(
+        DRIVER,
+        "    cycle.event(rules.REFUSED_NOTICE_EVENT, detail)\n",
+        "    cycle.event(rules.REFUSED_NOTICE_EVENT, detail)\n"
+        "    store.record_digest(mid, cycle.id, ok=delivery.ok, notifier=delivery.notifier, delivered_at=now)\n",
+        _ids(T_CYCLE, "test_a_refusal_notice_is_not_recorded_as_a_digest"),
+    ),
+    "blocked-since-breaker-trip": Mutant(
+        RULES,
+        '    if "breaker-open" in reasons:',
+        "    if False:",
+        _ids(T_RULES, "test_blocked_since_is_the_trailing_refused_run_or_the_breaker_trip"),
+    ),
+    "unblock-command-per-reason": Mutant(
+        RULES,
+        '        if reason in ("breaker-open", "paused"):',
+        '        if reason in ("paused",):',
+        _ids(T_RULES, "test_unblock_commands_per_reason"),
+    ),
+    "expiry-warning": Mutant(
+        DRIVER,
+        "        if left <= timedelta(days=rules.EXPIRY_WARN_DAYS):",
+        "        if False:",
+        _ids(T_CYCLE, "test_the_digest_warns_of_an_expiry_within_three_days"),
+    ),
+    "redeliver-no-record": Mutant(
+        DRIVER,
+        "            record = store.record_digest(\n"
+        "                mid, cycle_id,\n"
+        "                ok=delivery.ok,\n"
+        "                notifier=delivery.notifier,\n"
+        "                delivered_at=seams.clock(),\n"
+        "            )\n",
+        "            record = {}\n",
+        _ids(T_NOTIFIER, "test_redeliver_digest_records_the_delivery_so_the_veto_window_starts_from_it"),
+    ),
+    "redeliver-record-without-send": Mutant(
+        DRIVER,
+        "            delivery = notifiers.deliver(\n"
+        "                REDELIVERED_PREFIX + stored.read_text(encoding=\"utf-8\"),\n"
+        "                digests_dir=store.mandate_dir(mid) / \"redelivered\", cycle_id=cycle_id, root=cfg.plugin_root,\n"
+        "            )\n",
+        "            delivery = notifiers.Delivery(\"chat\", True, \"\")\n",
+        _ids(T_NOTIFIER, "test_redeliver_digest_sends_the_stored_digest_through_the_notifier"),
+    ),
+    "redeliver-not-idempotent": Mutant(
+        DRIVER,
+        "            if rules.digest_counts_as_delivered(store.read_digests(mid).get(cycle_id)):\n",
+        "            if False:\n",
+        _ids(T_NOTIFIER, "test_redeliver_digest_is_idempotent_for_a_delivered_digest"),
     ),
 }
 

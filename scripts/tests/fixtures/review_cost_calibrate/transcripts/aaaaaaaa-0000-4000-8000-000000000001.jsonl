@@ -1,0 +1,10 @@
+{"type":"user","timestamp":"2026-01-01T10:00:00.000Z","message":{"role":"user","content":"start"}}
+{"type":"assistant","timestamp":"2026-01-01T10:00:20.000Z","message":{"role":"assistant","content":"ok"}}
+{"type":"user","timestamp":"2026-01-01T10:00:30.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"x"}]}}
+{"type":"user","timestamp":"2026-01-01T10:05:00.000Z","message":{"role":"user","content":"again"}}
+{"type":"user","timestamp":"2026-01-01T10:07:00.000Z","isMeta":true,"message":{"role":"user","content":"meta"}}
+{"type":"user","timestamp":"2026-01-01T10:09:00.000Z","isSidechain":true,"message":{"role":"user","content":"sub"}}
+{"type":"user","timestamp":"2026-01-01T10:15:00.000Z","message":{"role":"user","content":"third"}}
+{"type":"user","timestamp":"2026-01-01T10:25:00.000Z","message":{"role":"user","content":"fourth"}}
+{"type":"user","timestamp":"2026-01-01T11:40:00.000Z","message":{"role":"user","content":"after a long gap"}}
+{"type":"user","timestamp":"2026-01-01T11:50:00.000Z","message":{"role":"user","content":"last"}}

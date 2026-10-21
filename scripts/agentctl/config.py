@@ -126,6 +126,10 @@ class Thresholds:
     def loop_sensitivity_depth(self) -> int:
         return self._int("loop-sensitivity-depth")
 
+    @property
+    def review_pairwise_min_edges(self) -> int:
+        return self._int("review-pairwise-min-edges")
+
     def budget_usd(self, tier: str) -> str:
         """Expected-size telemetry LABEL for a tier — NOT the applied kill-cap.
         The cap passed to `claude -p --max-budget-usd` is runaway_ceiling_usd()."""
@@ -171,6 +175,25 @@ class Thresholds:
         """Review rounds since the last USER decision at/above which an agent may
         no longer record a plan-review override itself."""
         return self._backstop("review-round-backstop")
+
+    def _optional_int(self, key: str) -> int | None:
+        """A missing or non-integer row reads as None, which disarms the trigger it feeds."""
+        try:
+            return self._int(key)
+        except (KeyError, ValueError):
+            return None
+
+    def review_cycle_acts(self) -> int | None:
+        """Counted review acts in one pre-approval cycle at/above which the review trigger fires."""
+        return self._optional_int("review-cycle-acts")
+
+    def review_cycle_active_minutes(self) -> int | None:
+        """Booked active minutes in one pre-approval cycle at/above which the review trigger fires."""
+        return self._optional_int("review-cycle-active-minutes")
+
+    def review_stage_nonpass_streak(self) -> int | None:
+        """Consecutive non-passing counted reviews of one stage at/above which the trigger fires."""
+        return self._optional_int("review-stage-nonpass-streak")
 
     def review_parallel_max(self) -> int:
         """Cap on concurrent pair-reviewer spawns within one topological level."""

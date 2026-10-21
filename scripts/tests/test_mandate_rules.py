@@ -8,7 +8,9 @@ from __future__ import annotations
 import ast
 import dataclasses
 import inspect
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -371,6 +373,91 @@ def test_the_veto_window_is_the_mandates_not_a_constant():
     assert evaluate(issue(), window=6.0, **row_set).eligible
 
 
+def test_a_digest_counts_as_delivered_only_when_a_real_notifier_reported_ok():
+    not_delivered = [
+        None,
+        "delivered",
+        {"ok": False, "notifier": "telegram", "delivered_at": hours(1)},
+        {"ok": True, "notifier": "file", "delivered_at": hours(1)},
+        {"ok": True, "notifier": "", "delivered_at": hours(1)},
+        {"ok": True, "notifier": None, "delivered_at": hours(1)},
+        {"ok": True, "notifier": "telegram"},
+        {"ok": True, "notifier": "telegram", "delivered_at": "never"},
+    ]
+    for record in not_delivered:
+        assert m.digest_counts_as_delivered(record) is False, record
+    assert m.digest_counts_as_delivered({"ok": True, "notifier": "telegram", "delivered_at": hours(1)}) is True
+
+
+# --- refused-start notice ---------------------------------------------------------------
+
+def notice_event(reasons, ago=1.0, notifier="telegram", ok=True, delivered=True):
+    detail = {"reasons": list(reasons), "notifier": notifier, "ok": ok}
+    if delivered:
+        detail["delivered_at"] = hours(ago)
+    return {"ts": hours(ago), "event": "refused-notice", "detail": detail}
+
+
+def test_refusal_notice_due_once_per_day_per_reason_set():
+    assert m.refusal_notice_due(["paused"], [], NOW)
+    sent = [notice_event(["paused"], ago=1)]
+    assert not m.refusal_notice_due(["paused"], sent, NOW)
+    assert not m.refusal_notice_due(["paused"], sent, NOW + timedelta(hours=5))
+    assert m.refusal_notice_due(["paused"], sent, NOW + timedelta(hours=12))
+    assert not m.refusal_notice_due(["expired", "paused"], [notice_event(["paused", "expired"])], NOW)
+
+
+def test_refusal_notice_due_again_when_reasons_change():
+    sent = [notice_event(["paused"])]
+    assert m.refusal_notice_due(["paused", "breaker-open"], sent, NOW)
+    assert m.refusal_notice_due(["breaker-open"], sent, NOW)
+
+
+def test_a_file_only_notice_does_not_suppress():
+    for kwargs in ({"notifier": "file"}, {"notifier": ""}, {"notifier": None}, {"ok": False}, {"delivered": False}):
+        assert m.refusal_notice_due(["paused"], [notice_event(["paused"], **kwargs)], NOW), kwargs
+    assert not m.refusal_notice_due(["paused"], [notice_event(["paused"], notifier="chat")], NOW)
+
+
+def test_blocked_since_is_the_trailing_refused_run_or_the_breaker_trip():
+    rows = [
+        {"cycle_id": "a", "status": "refused", "started_at": hours(70)},
+        {"cycle_id": "b", "status": "ok", "started_at": hours(60)},
+        {"cycle_id": "c", "status": "refused", "started_at": hours(48)},
+        {"cycle_id": "d", "status": "refused", "started_at": hours(24)},
+    ]
+    assert m.blocked_since(rows, [], ["paused"]) == NOW - timedelta(hours=48)
+    trip = [{"ts": hours(55), "event": "breaker-open"}, {"ts": hours(30), "event": "breaker-open"}]
+    assert m.blocked_since(rows, trip, ["paused"]) == NOW - timedelta(hours=48)
+    assert m.blocked_since(rows, trip, ["breaker-open"]) == NOW - timedelta(hours=48)
+    old_trip = [{"ts": hours(100), "event": "breaker-open"}, {"ts": hours(90), "event": "breaker-open"}]
+    assert m.blocked_since(rows, old_trip, ["breaker-open"]) == NOW - timedelta(hours=90)
+    assert m.blocked_since([{"cycle_id": "x", "status": "ok"}], [], ["paused"]) is None
+
+
+def test_unblock_commands_per_reason():
+    granted = mandate()
+    commands = m.unblock_commands(
+        ["expired", "paused", "breaker-open", "daily-budget", "weekly-budget", "no-mandate", "cycle-minutes-cap"],
+        granted, NOW, {"daily-budget": NOW + timedelta(hours=3)},
+    )
+    assert commands == [
+        "expired: agentctl mandate-extend --days <n> --by <you>",
+        "paused: agentctl mandate-resume --by <you>",
+        "breaker-open: agentctl mandate-resume --by <you>",
+        f"daily-budget: clears by itself at {m.format_ts(NOW + timedelta(hours=3))}",
+        "weekly-budget: clears by itself when the spend window rolls over",
+        "no-mandate: agentctl mandate-grant ... --by <you>",
+    ]
+
+
+def test_spend_clears_when_the_oldest_charges_leave_the_window():
+    rows = [row(8.0, 20), row(5.0, 10), row(5.0, 2)]
+    assert m.spend_clears_at(rows, [], MANDATE_DIR, NOW, 24, 10.0) == NOW + timedelta(hours=14)
+    assert m.spend_clears_at(rows, [], MANDATE_DIR, NOW, 24, 1.0) == NOW + timedelta(hours=22)
+    assert m.spend_clears_at([], [], MANDATE_DIR, NOW, 24, 10.0) is None
+
+
 def test_the_latest_cycle_label_row_picks_which_digest_applies():
     rows = [cycle_label_row(cycle_id="old", ts=hours(200)), cycle_label_row(cycle_id="new", ts=hours(50))]
     digests = {"old": delivered(190), "new": delivered(5)}
@@ -441,6 +528,82 @@ def test_one_rerun_can_clear_a_first_run_failure():
     assert not m.passes_after_rerun({"a", "b"}, {"a"}, set())
 
 
+OLD = "scripts.tests.test_a.TestA"
+NEW_SIDE = "scripts.tests.test_b.TestB"
+TOUCHED_A = [["scripts/tests/test_a.py"]]
+RENAMED_A_TO_B = [["scripts/tests/test_a.py", "scripts/tests/test_b.py"]]
+JUNIT_364 = Path(__file__).parent / "fixtures" / "mandate" / "junit-364"
+
+
+def test_module_of_maps_a_collection_error_and_only_whole_dotted_prefixes():
+    groups = [["docs/x.md"], ["scripts/tests/test_a.py"]]
+    assert m.test_module_of(f"{OLD}::t1", groups) == 1
+    assert m.test_module_of("::scripts.tests.test_a", groups) == 1
+    assert m.test_module_of("scripts.tests.test_ab.TestA::t1", groups) is None
+    assert m.test_module_of(f"{OLD}::t1", [["docs/x.md"]]) is None
+
+
+def test_vanished_id_in_a_touched_module_is_excused():
+    ids = {f"{OLD}::t1", f"{OLD}::t2"}
+    assert m.split_failures(ids, ids, {f"{OLD}::t1"}, {f"{OLD}::t1"}, TOUCHED_A) == ([], [f"{OLD}::t2"])
+
+
+def test_vanished_id_in_an_untouched_module_still_fails():
+    ids = {f"{OLD}::t1", f"{OLD}::t2"}
+    untouched = [["scripts/tests/test_c.py"]]
+    assert m.split_failures(ids, ids, {f"{OLD}::t1"}, {f"{OLD}::t1"}, untouched) == ([f"{OLD}::t2"], [])
+
+
+def test_a_new_failure_in_the_touched_module_voids_the_excuse():
+    ids = {f"{OLD}::t1", f"{OLD}::t2"}
+    item_seen = {f"{OLD}::t1", f"{OLD}::t3"}
+    assert m.split_failures(ids, ids, {f"{OLD}::t1"}, item_seen, TOUCHED_A) == ([f"{OLD}::t2"], [])
+    already_red = {f"{OLD}::t4"}
+    assert m.split_failures(ids, ids | already_red, {f"{OLD}::t1"}, item_seen | already_red, TOUCHED_A) == (
+        [f"{OLD}::t2"], [],
+    )
+    assert m.split_failures(ids, ids | already_red, {f"{OLD}::t1"}, {f"{OLD}::t1"} | already_red, TOUCHED_A) == (
+        [], [f"{OLD}::t2"],
+    )
+
+
+def test_a_renamed_module_old_path_excuses_its_ids():
+    ids = {f"{OLD}::t1", f"{OLD}::t2"}
+    assert m.split_failures(ids, ids, {f"{OLD}::t1"}, {f"{OLD}::t1"}, RENAMED_A_TO_B) == ([], [f"{OLD}::t2"])
+
+
+def test_a_new_failure_in_the_renamed_to_module_voids_the_excuse():
+    ids = {f"{OLD}::t1", f"{OLD}::t2"}
+    item_seen = {f"{OLD}::t1", f"{NEW_SIDE}::t2"}
+    assert m.split_failures(ids, ids, {f"{OLD}::t1"}, item_seen, RENAMED_A_TO_B) == ([f"{OLD}::t2"], [])
+
+
+def test_an_excused_id_is_not_held_against_the_item_after_the_rerun_rule():
+    assert m.passes_after_rerun({"a", "b"}, {"a"}, set(), excused={"b"})
+    assert m.passes_after_rerun({"a", "b", "c"}, {"a"}, {"c"}, excused={"b"})
+    assert not m.passes_after_rerun({"a", "b"}, {"a"}, set())
+
+
+def test_the_recorded_364_junit_excuses_exactly_the_removed_id():
+    roots = ("/srv/placeholder-root",)
+
+    def read(name):
+        passed, seen = set(), set()
+        for case in ET.parse(JUNIT_364 / name).getroot().iter("testcase"):
+            ident = m.canonical_test_id(f"{case.get('classname', '')}::{case.get('name', '')}", roots)
+            seen.add(ident)
+            if all(case.find(tag) is None for tag in ("failure", "error", "skipped")):
+                passed.add(ident)
+        return passed, seen
+
+    baseline_passed, baseline_seen = read("baseline.xml")
+    item_passed, item_seen = read("item.xml")
+    groups = m.diff_path_groups(["M\tscripts/tests/test_sync_pull_rewires_hooks.py"])
+    removed = "scripts.tests.test_sync_pull_rewires_hooks.TestPullRewiresHooks::test_up_to_date_pull_skips_the_installer"
+    assert m.failing_ids(baseline_passed, item_passed) == [removed]
+    assert m.split_failures(baseline_passed, baseline_seen, item_passed, item_seen, groups) == ([], [removed])
+
+
 def test_a_test_id_that_embeds_the_worktree_path_is_the_same_id_in_every_worktree():
     canonical = "scripts.tests.test_b::test_c[Bash(python3 <worktree>/scripts/agentctl-cli.py:*)]"
     item = "/var/tmp/agent-debt-cycle/c-339"
@@ -466,12 +629,126 @@ def test_a_killed_spawn_without_a_cost_row_is_charged_the_whole_cap():
     assert m.killed_spawn_charge(True, 15.0) == 0.0
 
 
-@pytest.mark.parametrize("outcome,opens", [
-    ("pr-opened", False), ("overrun", False), ("declined", False), ("limit", False),
-    ("failed", True), ("surprise", True), ("", True),
-])
-def test_only_a_failed_or_unknown_outcome_opens_the_breaker(outcome, opens):
-    assert m.opens_breaker(outcome) is opens
+@pytest.mark.parametrize("outcome", ["pr-opened", "overrun", "declined", "limit"])
+@pytest.mark.parametrize("kind", ["", "tests", "spawn-error", "whatever"])
+def test_a_non_failure_outcome_never_opens_the_breaker(outcome, kind):
+    assert m.opens_breaker(outcome, kind) is False
+
+
+@pytest.mark.parametrize("kind", m.CYCLE_FAILURE_KINDS)
+def test_opens_breaker_only_for_cycle_level_kinds(kind):
+    assert m.opens_breaker("failed", kind) is True
+
+
+def test_an_item_local_failure_kind_does_not_open_the_breaker():
+    for kind in m.ITEM_FAILURE_KINDS:
+        assert m.opens_breaker("failed", kind) is False, kind
+
+
+def test_an_unknown_failure_kind_opens_the_breaker():
+    for outcome, kind in [("failed", "surprise"), ("failed", ""), ("surprise", "tests"), ("", "")]:
+        assert m.opens_breaker(outcome, kind) is True, (outcome, kind)
+
+
+def test_every_recorded_failure_kind_is_classified_exactly_once():
+    classified = set(m.CYCLE_FAILURE_KINDS) | set(m.ITEM_FAILURE_KINDS)
+    assert set(m.FAILURE_KINDS) <= classified
+    assert not set(m.CYCLE_FAILURE_KINDS) & set(m.ITEM_FAILURE_KINDS)
+
+
+# --- the item-local failure streak and the failed-before exclusion -----------------------
+
+def attempt(issue_no, outcome="failed", kind="tests", ago=10.0):
+    return {"ts": hours(ago), "issue": issue_no, "outcome": outcome, "failure_kind": kind}
+
+
+def retry_event(issue_no, ago):
+    return {"ts": hours(ago), "event": m.RETRY_ALLOWED_EVENT, "detail": {"issue": issue_no}}
+
+
+def test_local_failure_streak_counts_since_the_last_resume():
+    rows = [attempt(1, ago=9), attempt(2, ago=8), attempt(3, ago=7), attempt(4, ago=3)]
+    assert m.local_failure_streak(rows, hours(10)) == 4
+    assert m.local_failure_streak(rows, hours(5)) == 1
+    assert m.local_failure_streak(rows, hours(2)) == 0
+    assert m.local_failure_run(rows, hours(5)) == [4]
+
+
+def test_a_pr_opened_row_resets_the_streak():
+    rows = [attempt(1, ago=9), attempt(2, ago=8), attempt(3, "pr-opened", "", ago=7), attempt(4, ago=6)]
+    assert m.local_failure_run(rows, hours(10)) == [4]
+
+
+def test_a_declined_overrun_or_limit_row_neither_extends_nor_resets_the_streak():
+    rows = [attempt(1, ago=9), attempt(2, "declined", "", ago=8), attempt(3, "overrun", "", ago=7),
+            attempt(4, "limit", "", ago=6), attempt(5, ago=5)]
+    assert m.local_failure_run(rows, hours(10)) == [1, 5]
+
+
+def test_a_cycle_level_failure_ends_the_streak():
+    rows = [attempt(1, ago=9), attempt(2, kind="infra", ago=8), attempt(3, ago=7)]
+    assert m.local_failure_run(rows, hours(10)) == [3]
+
+
+def test_the_streak_orders_rows_by_timestamp_not_file_order():
+    rows = [attempt(3, ago=7), attempt(1, ago=9), attempt(2, "pr-opened", "", ago=8)]
+    assert m.local_failure_run(rows, hours(10)) == [3]
+
+
+def test_a_failed_issue_is_not_eligible_again():
+    verdict = m.evaluate_candidate(
+        issue(7), owner=OWNER, labels_cfg=LABELS, label_rows=[], digests={}, pr_refs=set(),
+        veto_window_hours=24.0, now=NOW, failed_issues=frozenset({7}),
+    )
+    assert not verdict.eligible and verdict.reason == "failed-before"
+    other = m.evaluate_candidate(
+        issue(8), owner=OWNER, labels_cfg=LABELS, label_rows=[], digests={}, pr_refs=set(),
+        veto_window_hours=24.0, now=NOW, failed_issues=frozenset({7}),
+    )
+    assert other.eligible
+
+
+def test_an_open_pr_is_reported_before_the_failed_before_reason():
+    verdict = m.evaluate_candidate(
+        issue(7), owner=OWNER, labels_cfg=LABELS, label_rows=[], digests={}, pr_refs={7},
+        veto_window_hours=24.0, now=NOW, failed_issues=frozenset({7}),
+    )
+    assert verdict.reason == "open-pr"
+
+
+def test_failed_issues_holds_an_issue_whose_latest_attempt_failed_locally():
+    assert m.failed_issues([attempt(1)], []) == frozenset({1})
+    assert m.failed_issues([attempt(1, ago=9), attempt(1, "pr-opened", "", ago=5)], []) == frozenset()
+    assert m.failed_issues([attempt(1, "pr-opened", "", ago=9), attempt(1, ago=5)], []) == frozenset({1})
+
+
+@pytest.mark.parametrize("outcome", ["declined", "overrun", "limit"])
+def test_a_failed_issue_stays_excluded_after_a_later_declined_row(outcome):
+    rows = [attempt(1, ago=9), attempt(1, outcome, "", ago=5)]
+    assert m.failed_issues(rows, []) == frozenset({1})
+    assert m.failed_issues(rows, [retry_event(1, 2)]) == frozenset()
+
+
+def test_a_retry_allowed_after_the_failure_makes_it_eligible():
+    rows = [attempt(1, ago=9)]
+    assert m.failed_issues(rows, [retry_event(1, 8)]) == frozenset()
+    assert m.failed_issues(rows, [retry_event(1, 10)]) == frozenset({1})
+    assert m.failed_issues(rows, [retry_event(2, 8)]) == frozenset({1})
+
+
+def test_a_retry_allowed_is_spent_by_the_next_failure():
+    rows = [attempt(1, ago=9), attempt(1, ago=3)]
+    assert m.failed_issues(rows, [retry_event(1, 8)]) == frozenset({1})
+
+
+def test_a_cycle_level_failure_does_not_mark_the_issue():
+    assert m.failed_issues([attempt(1, kind="spawn-error"), attempt(2, kind="state-tampered")], []) == frozenset()
+
+
+def test_a_malformed_retry_event_is_ignored():
+    events = [{"ts": hours(1), "event": m.RETRY_ALLOWED_EVENT, "detail": {}},
+              {"ts": hours(1), "event": m.RETRY_ALLOWED_EVENT}]
+    assert m.failed_issues([attempt(1)], events) == frozenset({1})
 
 
 # --- the constitution classifier ------------------------------------------------------

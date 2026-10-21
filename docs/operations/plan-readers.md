@@ -135,6 +135,8 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/gates.py`:`_binds_across_path_change` | routed through plan_digest_equivalent | A review recorded at another path binds a renamed plan only when the digests are equivalent. |
 | `scripts/agentctl/gates.py`:`_receipt_binding_blocker` | routed through plan_digest_equivalent | A presentation receipt is stale when the plan file's digest is not equivalent to the receipt's. |
 | `scripts/agentctl/gates.py`:`replan_authorization_blockers` | routed through plan_digest_equivalent | An edit that leaves the file's digest equivalent to the accepted one needs no replan-diff presentation. |
+| `scripts/agentctl/cli.py`:`_review_trigger_exit` | routed through plan_digest_equivalent | Picks a review-cost trigger's exit: a plan whose digest is equivalent to the one the trigger fired on leaves by the recorded override; any edit owes a fresh pass. |
+| `scripts/agentctl/cli.py`:`_review_cycle_arrive` | routed through plan_digest_equivalent | Decides whether an arriving plan version opens a new review cycle: a converted resubmission keeps the open cycle and its act count. |
 | `scripts/agentctl/cli.py`:`_plan_file_sha256` | not a binding | Computes the digest a record is bound to; it compares nothing. |
 | `scripts/agentctl/cli.py`:`_carry_records` | not a binding | Hashes the plan file to restamp the records it carries onto it (`carry_forward.apply`); it compares no recorded digest. |
 | `scripts/agentctl/cli.py`:`_review_baseline` | not a binding | Returns the approved snapshot's recorded hash, or hashes the plan file when there is no snapshot, as the digest the review records describe; it compares nothing. |

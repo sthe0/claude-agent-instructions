@@ -28,6 +28,7 @@ The graph (happy path + carve-outs):
   DIAGNOSING --replan_refine--> VERIFYING  (difficulty worked through; retry the re-armed stage)
   DIAGNOSING --(replan substantive)        direct set to PLAN_READY (re-arm plan-approval gate)
   PLAN_READY --revise_plan--> PLAN_READY   (pre-approval revision: resubmit a corrected plan)
+  PLAN_READY --review_trigger--> DIAGNOSING (a review-cost trigger crossed: gates.review_trigger)
   RESOLUTION --resolve--> RESOLVED      (resolution gate passes)
   RESOLUTION --reject--> DIAGNOSING     (user rejects the delivery: re-open the difficulty cycle)
   any --block--> BLOCKED ; BLOCKED --unblock--> <prior>
@@ -74,6 +75,7 @@ TRANSITIONS: dict[str, tuple[str, str]] = {
     # PLAN_READY (the two-event idiom, cf. execute_approved/execute_small), NOT a
     # second tuple on submit_plan's key (the one-tuple-per-key table can't hold it).
     "revise_plan": (Node.PLAN_READY.value, Node.PLAN_READY.value),
+    "review_trigger": (Node.PLAN_READY.value, Node.DIAGNOSING.value),
     # Sub-plan stack edges: push starts a fresh child cycle; pop restores the parent.
     # "no auto-pop across an unresolved child" is structural — pop_subplan's frm is
     # RESOLVED, and check_invariants already requires resolution.passed at RESOLVED.

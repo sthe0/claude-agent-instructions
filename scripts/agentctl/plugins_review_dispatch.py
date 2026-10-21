@@ -138,7 +138,7 @@ def _obs_submit_plan(state, bag) -> list[PluginDirective]:
             ) + (" (a pass does NOT bind without a matching --plan-digest; pass each `Q:` "
                  "line of the reply's `Customer questions:` field as one --customer-question)")
         )
-    if gates.pairwise_review_route(state):
+    if gates.pairwise_review_route(state, doc):
         return [PluginDirective(
             plugin="review_dispatch",
             action="spawn_thinker_review",

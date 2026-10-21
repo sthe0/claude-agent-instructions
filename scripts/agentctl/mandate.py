@@ -59,6 +59,12 @@ OUTCOMES = ("pr-opened", "failed", "overrun", "declined", "limit")
 FAILURE_KINDS = (
     "tests", "review-reject", "constitution", "permission", "org-neutral", "state-tampered",
 )
+CYCLE_FAILURE_KINDS = ("spawn-error", "infra", "state-tampered")
+ITEM_FAILURE_KINDS = ("tests", "review-reject", "constitution", "permission", "org-neutral")
+LOCAL_FAILURE_STREAK = 3
+RETRY_ALLOWED_EVENT = "retry-allowed"
+REFUSED_NOTICE_EVENT = "refused-notice"
+EXPIRY_WARN_DAYS = 3
 
 
 class MandateError(ValueError):
@@ -324,6 +330,86 @@ def gate(
     return GateResult(not reasons, tuple(reasons))
 
 
+# --- refused-start notice ------------------------------------------------------------
+
+def refusal_notice_due(reasons: Iterable[str], events: Iterable[Mapping], now: datetime) -> bool:
+    """False once a delivered notice for this reason set went out on the same UTC date."""
+    wanted = sorted(reasons)
+    for event in events:
+        if event.get("event") != REFUSED_NOTICE_EVENT:
+            continue
+        sent = parse_ts(event.get("ts"))
+        detail = event.get("detail") or {}
+        if (
+            sent is not None
+            and sent.date() == now.date()
+            and sorted(detail.get("reasons") or ()) == wanted
+            and digest_counts_as_delivered(detail)
+        ):
+            return False
+    return True
+
+
+def blocked_since(
+    cycle_rows: Sequence[Mapping], events: Iterable[Mapping], reasons: Iterable[str],
+) -> "datetime | None":
+    """Earliest of the trailing refused run's start and, for breaker-open, the last trip."""
+    candidates = []
+    run_start = None
+    for row in reversed(cycle_rows):
+        if row.get("status") != "refused":
+            break
+        run_start = parse_ts(row.get("started_at")) or run_start
+    if run_start is not None:
+        candidates.append(run_start)
+    if "breaker-open" in reasons:
+        trips = [t for t in (parse_ts(e.get("ts")) for e in events if e.get("event") == "breaker-open") if t]
+        if trips:
+            candidates.append(max(trips))
+    return min(candidates) if candidates else None
+
+
+def spend_clears_at(
+    cost_rows: Iterable[Mapping], events: Iterable[Mapping], mandate_dir: str,
+    now: datetime, window_hours: float, cap_usd: float,
+) -> "datetime | None":
+    """When the rolling window's spend falls under `cap_usd` if nothing more is spent."""
+    amounts = _spend_amounts(cost_rows, events, mandate_dir)
+    start = now - timedelta(hours=window_hours)
+    inside = sorted(
+        (m, a) for m, a in ((parse_ts(ts), a) for ts, a in amounts) if m is not None and m > start
+    )
+    total = sum(a for _, a in inside) + sum(a for ts, a in amounts if parse_ts(ts) is None)
+    for moment, amount in inside:
+        total -= amount
+        if total < cap_usd:
+            return moment + timedelta(hours=window_hours)
+    return None
+
+
+def unblock_commands(
+    reasons: Iterable[str],
+    mandate: "Mandate | None",
+    now: datetime,
+    clears_at: "Mapping[str, datetime] | None" = None,
+) -> "list[str]":
+    """One line per reason that someone can act on; budget reasons only say when they lift."""
+    clears_at = clears_at or {}
+    lines = []
+    for reason in reasons:
+        if reason in ("breaker-open", "paused"):
+            lines.append(f"{reason}: agentctl mandate-resume --by <you>")
+        elif reason == "expired":
+            lines.append(f"{reason}: agentctl mandate-extend --days <n> --by <you>")
+        elif reason in ("daily-budget", "weekly-budget"):
+            moment = clears_at.get(reason)
+            when = f"at {format_ts(moment)}" if moment else "when the spend window rolls over"
+            lines.append(f"{reason}: clears by itself {when}")
+        elif reason == "no-mandate":
+            lines.append(f"{reason}: agentctl mandate-grant ... --by <you>")
+    return lines
+
+
 # --- issues: normalization, open-PR references, eligibility, triage, selection ---------
 
 def normalize_issue(raw: Mapping) -> dict:
@@ -382,6 +468,17 @@ def _latest_cycle_label_row(label_rows: Iterable[Mapping], issue: int, label: st
     return latest
 
 
+def digest_counts_as_delivered(delivery) -> bool:
+    """Did this delivery record reach a real notifier -- the file copy nobody reads does not count."""
+    if not isinstance(delivery, Mapping):
+        return False
+    return (
+        delivery.get("ok") is True
+        and delivery.get("notifier") not in (None, "", "file")
+        and parse_ts(delivery.get("delivered_at")) is not None
+    )
+
+
 def evaluate_candidate(
     issue: Mapping,
     *,
@@ -392,6 +489,7 @@ def evaluate_candidate(
     pr_refs: "set[int]",
     veto_window_hours: float,
     now: datetime,
+    failed_issues: "frozenset[int]" = frozenset(),
 ) -> Candidate:
     """May this issue be taken in this cycle, and if not, why not.
 
@@ -418,6 +516,8 @@ def evaluate_candidate(
         return result(False, "process-umbrella")
     if number in pr_refs:
         return result(False, "open-pr")
+    if number in failed_issues:
+        return result(False, "failed-before")
     if no in names:
         return result(False, "auto-no")
     if ok not in names:
@@ -428,14 +528,9 @@ def evaluate_candidate(
     if SEVERITY_HIGH_LABEL in names:
         return result(False, "severity-high-cycle-set", "cycle")
     delivery = digests.get(str(applied.get("cycle_id")))
-    delivered_at = parse_ts((delivery or {}).get("delivered_at"))
-    if (
-        delivery is None
-        or delivery.get("ok") is not True
-        or delivery.get("notifier") in (None, "", "file")
-        or delivered_at is None
-    ):
+    if not digest_counts_as_delivered(delivery):
         return result(False, "digest-not-delivered", "cycle")
+    delivered_at = parse_ts(delivery["delivered_at"])
     if now < delivered_at + timedelta(hours=veto_window_hours):
         return result(False, "veto-window", "cycle")
     return result(True, "cycle-set-veto-window-passed", "cycle")
@@ -489,11 +584,59 @@ def passes(baseline_passed: Iterable[str], item_passed: Iterable[str]) -> bool:
     return not failing_ids(baseline_passed, item_passed)
 
 
+def test_module_of(test_id: str, groups: "Sequence[Iterable[str]]") -> "int | None":
+    """Index of the group holding the `.py` path whose dotted form is, or is a dotted prefix of,
+    the module part of `test_id`; None when no group holds one. Pure: the filesystem is never read.
+
+    The module part is what precedes `::`; a collection error has an empty classname, so its
+    id is `::<dotted module>` and the module part is what follows.
+
+    Assumes junit classnames mirror repo paths (`scripts/tests/test_x.py` -> `scripts.tests.test_x`),
+    which holds for the suite run from the repo root."""
+    head, _, tail = test_id.partition("::")
+    module = head or tail
+    for index, group in enumerate(groups):
+        for path in group:
+            if not path.endswith(".py"):
+                continue
+            dotted = path[:-3].replace("/", ".")
+            if module == dotted or module.startswith(dotted + "."):
+                return index
+    return None
+
+
+def split_failures(
+    baseline_passed: Iterable[str], baseline_seen: Iterable[str],
+    item_passed: Iterable[str], item_seen: Iterable[str],
+    groups: "Sequence[Iterable[str]]",
+) -> "tuple[list[str], list[str]]":
+    """`failing_ids` split into (failing, excused), both sorted.
+
+    An id is excused when the item run never saw it (the item removed or renamed the test),
+    it maps to a module group of the item's diff (`groups`: the paths of one name-status line,
+    so a rename holds both sides), and nothing in that whole group is a new failure -- an id
+    not passing on the item that was not already not passing on the baseline."""
+    item_seen = set(item_seen)
+    new_bad = (item_seen - set(item_passed)) - (set(baseline_seen) - set(baseline_passed))
+    groups = [list(group) for group in groups]
+    dirty = {index for index in (test_module_of(ident, groups) for ident in new_bad) if index is not None}
+    failing, excused = [], []
+    for ident in failing_ids(baseline_passed, item_passed):
+        index = test_module_of(ident, groups)
+        if ident in item_seen or index is None or index in dirty:
+            failing.append(ident)
+        else:
+            excused.append(ident)
+    return failing, excused
+
+
 def passes_after_rerun(
     baseline_passed: Iterable[str], item_passed: Iterable[str], rerun_passed: Iterable[str],
+    excused: Iterable[str] = (),
 ) -> bool:
-    """The item verdict once the ids that failed the first run have been rerun once."""
-    return passes(baseline_passed, set(item_passed) | set(rerun_passed))
+    """The item verdict once the ids that failed the first run have been rerun once; an id
+    `split_failures` excused is not held against the item, as it was not on the first run."""
+    return passes(set(baseline_passed) - set(excused), set(item_passed) | set(rerun_passed))
 
 
 WORKTREE_TOKEN = "<worktree>"
@@ -533,9 +676,74 @@ def killed_spawn_charge(has_cost_row: bool, usd_cap: float) -> float:
     return 0.0 if has_cost_row else float(usd_cap)
 
 
-def opens_breaker(outcome: str) -> bool:
-    """Only a failed item opens the breaker; an unknown outcome is treated as one."""
-    return outcome not in ("pr-opened", "overrun", "declined", "limit")
+def opens_breaker(outcome: str, failure_kind: str = "") -> bool:
+    """A failed item opens the breaker unless its kind is item-local: one issue's own
+    failure says nothing about the cycle. An unknown outcome or kind opens it (fail-safe)."""
+    if outcome in ("pr-opened", "overrun", "declined", "limit"):
+        return False
+    return outcome != "failed" or failure_kind not in ITEM_FAILURE_KINDS
+
+
+def _ordered_rows(item_rows: Iterable[Mapping]) -> "list[Mapping]":
+    """Rows oldest first: by timestamp, file order breaking ties; unparsable timestamps first."""
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    keyed = [(parse_ts(row.get("ts")) or floor, index, row) for index, row in enumerate(item_rows)]
+    return [row for _, _, row in sorted(keyed, key=lambda entry: entry[:2])]
+
+
+def _is_item_local_failure(row: Mapping) -> bool:
+    return row.get("outcome") == "failed" and row.get("failure_kind") in ITEM_FAILURE_KINDS
+
+
+def local_failure_run(item_rows: Iterable[Mapping], since_ts) -> "list[int]":
+    """Issues of the trailing run of item-local failures among the rows stamped at or after
+    `since_ts`. A pr-opened row (or any failure that is not item-local) ends the run;
+    declined, overrun and limit rows are neither a success nor a failure and are skipped."""
+    since = parse_ts(since_ts, strict=True)
+    run: "list[int]" = []
+    for row in _ordered_rows(item_rows):
+        moment = parse_ts(row.get("ts"))
+        if moment is None or moment < since:
+            continue
+        if _is_item_local_failure(row):
+            run.append(int(row["issue"]))
+        elif row.get("outcome") not in ("declined", "overrun", "limit"):
+            run = []
+    return run
+
+
+def local_failure_streak(item_rows: Iterable[Mapping], since_ts) -> int:
+    return len(local_failure_run(item_rows, since_ts))
+
+
+def failed_issues(item_rows: Iterable[Mapping], events: Iterable[Mapping]) -> "frozenset[int]":
+    return frozenset(failed_attempts(item_rows, events))
+
+
+def failed_attempts(item_rows: Iterable[Mapping], events: Iterable[Mapping]) -> "dict[int, Mapping]":
+    """Per issue, the failing row of an issue whose latest attempt (a failed or pr-opened
+    row) failed item-locally and that the user has not allowed again since: declined,
+    overrun and limit rows are not attempts, so a later one never lifts a failure."""
+    latest: "dict[int, Mapping]" = {}
+    for row in _ordered_rows(item_rows):
+        if row.get("outcome") in ("failed", "pr-opened"):
+            latest[int(row["issue"])] = row
+    allowed: "dict[int, datetime]" = {}
+    for event in events:
+        if event.get("event") != RETRY_ALLOWED_EVENT:
+            continue
+        moment = parse_ts(event.get("ts"))
+        try:
+            issue = int((event.get("detail") or {}).get("issue"))
+        except (TypeError, ValueError):
+            continue
+        if moment is not None and (issue not in allowed or moment > allowed[issue]):
+            allowed[issue] = moment
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    return {
+        issue: row for issue, row in latest.items()
+        if _is_item_local_failure(row) and allowed.get(issue, floor) <= (parse_ts(row.get("ts")) or floor)
+    }
 
 
 # --- the constitution classifier ------------------------------------------------------
@@ -585,6 +793,11 @@ def _diff_paths(line: str) -> "list[str]":
     if not text:
         return []
     return [_unquote(text)] + [_unquote(token) for token in text.split() if token != text]
+
+
+def diff_path_groups(lines: Iterable[str]) -> "list[list[str]]":
+    """One group of paths per `git diff --name-status` line (a rename holds both sides)."""
+    return [_diff_paths(line) for line in lines]
 
 
 def _normal(path: str) -> str:

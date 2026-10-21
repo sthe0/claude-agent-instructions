@@ -1317,6 +1317,11 @@ def _record_customer_stage_grants(state: SessionState, by: str, scope: str, entr
             )
 
 
+def _is_agent_override(record) -> bool:
+    return (record.verdict == gates._PLAN_REVIEW_OVERRIDE
+            and (record.reviewer or "").strip().casefold() == AGENT_ACTOR)
+
+
 def _agent_review_override(state: SessionState) -> dict | None:
     """The coordinator's own plan-review override on record, which the user must see
     named when the plan reaches them: the review was waived, not passed."""
@@ -1326,8 +1331,7 @@ def _agent_review_override(state: SessionState) -> dict | None:
     reviews += [(review, plan_review_scope_for_pair(pair))
                 for pair, review in state.plan_pair_reviews.items()]
     for review, scope in reviews:
-        if (review.verdict == gates._PLAN_REVIEW_OVERRIDE
-                and (review.reviewer or "").strip().casefold() == AGENT_ACTOR):
+        if _is_agent_override(review):
             spent = [e.get("difficulty_id") for e in state.history
                      if e.get("event") == "agent_review_override_record" and e.get("scope") == scope]
             return {"reviewer": review.reviewer, "scope": scope, "note": review.note,
@@ -1365,6 +1369,58 @@ def _settle_override_decision(state: SessionState, review, scope: str,
         state.review_release_difficulty_id = None
 
 
+def _review_trigger_record_open(state: SessionState) -> bool:
+    """True while the open difficulty record is the one a review-cost trigger opened and
+    that record is complete -- the trigger-cycle path to an agent-authored plan-review
+    override, in place of the round release."""
+    fire = state.review_trigger_fire
+    diff = state.difficulty
+    return (fire is not None and diff is not None
+            and diff.uid == fire.get("difficulty_uid") and diff.complete())
+
+
+_TRIGGER_EXIT_OVERRIDE = "override"
+_TRIGGER_EXIT_CHANGED = "changed"
+_TRIGGER_EXIT_ADMITTED = "approve is admitted on the recorded override"
+_TRIGGER_EXIT_CLEARED = "approve is admitted on the review record that clears the gate"
+_TRIGGER_EXIT_FRESH_PASS = (
+    "approve re-checks the plan-review gate on the records carried onto the changed plan; "
+    "a fresh counted PASS is owed for whatever they leave uncovered")
+
+
+def _review_trigger_exit(state: SessionState, plan_path: str) -> str | None:
+    """Which exit of a review-cost trigger a replan to `plan_path` would take, or None when
+    no trigger is open: the same bytes the trigger fired on leave by the recorded override,
+    any other bytes by a fresh review."""
+    fire = state.review_trigger_fire
+    if fire is None or state.node != Node.DIAGNOSING.value:
+        return None
+    if gates.plan_digest_equivalent(state, fire.get("plan_sha256"), _plan_file_sha256(plan_path)):
+        return _TRIGGER_EXIT_OVERRIDE
+    return _TRIGGER_EXIT_CHANGED
+
+
+def _trigger_exit_text(trigger_exit: str, override: dict | None) -> str:
+    """What `approve` rests on after the exit: the recorded agent override when one
+    stands, else the review record that cleared the gate; the changed plan owes a fresh pass."""
+    if trigger_exit == _TRIGGER_EXIT_CHANGED:
+        return _TRIGGER_EXIT_FRESH_PASS
+    return _TRIGGER_EXIT_ADMITTED if override else _TRIGGER_EXIT_CLEARED
+
+
+def _drop_agent_overrides(state: SessionState) -> None:
+    """Remove every agent-authored plan-review override record: the changed plan a trigger
+    exit offers is owed a fresh review, which an override of the old bytes must not stand in for."""
+    if state.plan_review is not None and _is_agent_override(state.plan_review):
+        state.plan_review = None
+    state.plan_stage_reviews = {
+        scope: record for scope, record in state.plan_stage_reviews.items()
+        if not _is_agent_override(record)}
+    state.plan_pair_reviews = {
+        pair: record for pair, record in state.plan_pair_reviews.items()
+        if not _is_agent_override(record)}
+
+
 def _plan_review_override_refusal(
     state: SessionState, prev, reviewer: str, doc,
 ) -> tuple[str | None, dict | None]:
@@ -1388,12 +1444,21 @@ def _plan_review_override_refusal(
     if reviewer.casefold() == AGENT_ACTOR:
         # The override never counts as a passing first verdict for the autonomy
         # boundary (it is not written to the ledger).
-        if not _plan_review_release_active(state):
+        release_live = _plan_review_release_active(state)
+        trigger_cycle = _review_trigger_record_open(state)
+        if not release_live and not trigger_cycle:
             return (
                 "an agent-authored override is refused: it is available only once the "
-                "review-round or cross-axis friction release is active"
+                "review-round or cross-axis friction release is active, or on the complete "
+                "difficulty record a review-cost trigger opened"
             ), None
-        _sync_release_anchor(state)
+        # The trigger's record opened at the fire, so it is fresh by construction; the
+        # release anchor, set at the first observation, may name that very record and
+        # would refuse it as predating the release.
+        release_active = release_live and not trigger_cycle
+        cause = "release" if release_active else "trigger"
+        if release_live:
+            _sync_release_anchor(state)
         backstopped, crossing = _since_user_backstop_gate(
             state, lambda: doc, decision="plan_review_override",
             axis="review_rounds_since_user_decision",
@@ -1403,13 +1468,13 @@ def _plan_review_override_refusal(
         if backstopped is not None:
             return f"an agent-authored override is refused: {backstopped}", None
         refused = _agent_self_decision_refusal(
-            state, state.review_release_difficulty_id,
-            event="the release", decision="override")
+            state, state.review_release_difficulty_id if release_active else None,
+            event=f"the {cause}", decision="override")
         if refused is not None:
             return (
                 f"an agent-authored override is refused: {refused}. Run the reflection exit "
                 "first (declare, investigate, critique with differences_to_remove, normalize "
-                "with a real factor) after the release, then override"
+                f"with a real factor) after the {cause}, then override"
             ), None
     elif order is not None and order.customer_id and reviewer != order.customer_id:
         return (
@@ -3015,6 +3080,22 @@ def cmd_mandate_resume(args, *, store: StateStore, runner: Runner | None = None)
     )
 
 
+def cmd_mandate_retry(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Let the cycle take an issue again after an item-local failure -- a user decision,
+    since the cycle excludes a failed issue until the user says otherwise."""
+    refusal = _mandate_by_refusal(args)
+    if refusal:
+        return refusal
+    if mandate_store.load_mandate(args.mandate_id) is None:
+        return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
+    mandate_store.allow_retry(args.mandate_id, args.issue, by=args.by.strip())
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {args.mandate_id!r}: issue #{args.issue} may be taken again, allowed by {args.by.strip()}",
+        data={"mandate": args.mandate_id, "issue": args.issue},
+    )
+
+
 def cmd_mandate_stop(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Pause the mandate, disable its timer and kill a running cycle. Open to the agent:
     stopping only ever narrows authority."""
@@ -4497,6 +4578,11 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     state.plan_submitted_ts = time.time()
     state.log("submit_plan", plan=plan_path, verified=True, revised=resubmitting,
               plan_sha256=_submitted_plan_sha256)
+    if not _review_cycle_arrive(state, _submitted_plan_sha256) and resubmitting:
+        fired = _evaluate_review_trigger(
+            state, store, gates.plan_review_blockers(state, plan_path))
+        if fired is not None:
+            return fired
     store.save(state)
     autonomy = _autonomy_directive_data(state, doc)
     override = _agent_review_override(state)
@@ -5504,6 +5590,7 @@ def _cmd_plan_review_pair(
     question_ids = _record_review_questions(state, pair, question_texts)
     if _is_counted_review(review.verdict, reviewer):
         _count_review_round(state, live)
+    _count_review_act(state, review.verdict, reviewer)
     _log_concerns_downgraded(state, cp, ledger_scope, verdict)
     state.log("plan_pair_review", target=target, pair=pair, verdict=review.verdict,
               raw_verdict=verdict, reviewer=reviewer, record_seq=review.record_seq,
@@ -5572,6 +5659,103 @@ def _count_plan_review_round(state: SessionState, target: str) -> None:
             state.plan_review_rounds += 1
             state.plan_review_counted_digest = counted
             _sync_release_anchor(state)
+
+
+def _review_cycle_arrive(state: SessionState, plan_sha256: str) -> bool:
+    """A plan version arrives (a submission or a replan). A sha other than the open
+    cycle's opens a fresh cycle -- acts and the minutes anchor restart, and what the last
+    fire already spent on them is forgotten; the same sha leaves the cycle alone. The
+    stage streaks span versions and are not touched. Returns True when a cycle opened."""
+    if state.review_cycle_open and gates.plan_digest_equivalent(
+            state, state.review_cycle_sha, plan_sha256):
+        return False
+    state.review_cycle_sha = plan_sha256
+    state.review_cycle_open = True
+    state.review_cycle_acts = 0
+    state.review_cycle_minutes_anchor = gates.review_booked_minutes(state)
+    for key in ("cycle_acts", "cycle_minutes"):
+        state.review_trigger_spent.pop(key, None)
+    return True
+
+
+def _review_cycle_close(state: SessionState) -> None:
+    """Approval ends the pre-approval review cycle, its streaks and the fire's bookkeeping."""
+    state.review_cycle_open = False
+    state.review_cycle_sha = ""
+    state.review_cycle_acts = 0
+    state.review_cycle_minutes_anchor = None
+    state.review_stage_streaks = {}
+    state.review_trigger_spent = {}
+    state.review_trigger_fire = None
+
+
+def _count_review_act(state: SessionState, verdict: str, reviewer: str, *,
+                      stage_scope: str = "") -> None:
+    """One counted review record (a pass or revise by a real reviewer: not an override,
+    not a carried record, not the composition record) is one act of the open cycle. A
+    stage's own record also moves that stage's streak -- a pass ends it, a revise extends
+    it; whole-plan and pair records never do."""
+    if not _is_counted_review(verdict, reviewer):
+        return
+    if state.review_cycle_open:
+        state.review_cycle_acts += 1
+    if stage_scope:
+        if verdict == gates._PLAN_REVIEW_PASS:
+            state.review_stage_streaks.pop(stage_scope, None)
+            state.review_trigger_spent.pop(f"stage_streak:{stage_scope}", None)
+        else:
+            state.review_stage_streaks[stage_scope] = state.review_stage_streaks.get(stage_scope, 0) + 1
+
+
+def _spend_review_trigger(state: SessionState, fire: dict) -> None:
+    """Record the evidence a crossed trigger fired on, so `gates.review_trigger` stays
+    quiet until fresh evidence arrives: the act count, the minutes anchor, the streak value."""
+    if fire["trigger"] == "cycle_acts":
+        state.review_trigger_spent["cycle_acts"] = state.review_cycle_acts
+    elif fire["trigger"] == "cycle_minutes":
+        state.review_trigger_spent["cycle_minutes"] = state.review_cycle_minutes_anchor
+    else:
+        state.review_trigger_spent[f"stage_streak:{fire['stage']}"] = fire["value"]
+
+
+def _evaluate_review_trigger(
+    state: SessionState, store: StateStore, review_blockers: list[str],
+) -> Directive | None:
+    """The review-cost trigger at the review-gate points (`plan-review-compose`, a
+    whole-plan or stage `plan-review` record, `approve`, a same-sha `submit-plan`): a
+    Directive routing PLAN_READY into the overcome-difficulty cycle when
+    `gates.review_trigger` names a crossed trigger while the plan-review gate still has
+    blockers; None otherwise. The evidence is spent whether or not a record opens, and the
+    state is saved here because the callers return this Directive instead of saving. At the
+    difficulty depth cap nothing is routed and the user decides."""
+    if not review_blockers or state.node != Node.PLAN_READY.value or state.review_trigger_fire is not None:
+        return None
+    fire = gates.review_trigger(state)
+    if fire is None:
+        return None
+    _spend_review_trigger(state, fire)
+    opened = _open_difficulty(state)
+    if opened is None:
+        store.save(state)
+        return _difficulty_cap_directive(
+            state, f"review trigger {fire['trigger']} crossed ({fire['value']} >= {fire['threshold']})",
+            {"review_trigger": dict(fire)})
+    state.node = transition(state.node, "review_trigger")
+    state.review_trigger_fire = {
+        **fire, "difficulty_uid": opened.uid, "plan_sha256": state.review_cycle_sha}
+    state.log("review_trigger", **fire, plan_sha256=state.review_cycle_sha)
+    store.save(state)
+    where = f" of {fire['stage']}" if fire["stage"] else ""
+    return Directive(
+        False, state.node, "declare",
+        f"review trigger {fire['trigger']}{where} crossed ({fire['value']} >= {fire['threshold']}): "
+        "run overcome-difficulty -- declare, investigate, critique, normalize -- then leave by a "
+        "replan: an agent override of the review gate on the complete record followed by a "
+        "no_change replan, or a changed plan that approve re-checks against its carried records "
+        "and a fresh counted PASS",
+        marker="OVERCOME-DIFFICULTY",
+        data={"review_trigger": dict(fire)},
+    )
 
 
 def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -5880,6 +6064,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     _count_plan_review_round(state, target)
     if _is_counted_review(review.verdict, review.reviewer):
         _count_review_round(state, review.plan_sha256 or _plan_file_sha256(target), thinker_record=True)
+    _count_review_act(state, review.verdict, review.reviewer, stage_scope=scope)
     blockers =gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
     state.log("plan_review", target=target, verdict=review.verdict, raw_verdict=args.verdict,
@@ -5898,6 +6083,9 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
               regression_command=review.regression_command,
               regression_exit=review.regression_exit,
               regression_command_error=regression_command_error)
+    fired = _evaluate_review_trigger(state, store, blockers)
+    if fired is not None:
+        return fired
     store.save(state)
     if blockers:
         round_release = _note_round_release(state, blockers, store)
@@ -6363,6 +6551,9 @@ def cmd_plan_review_compose(args, *, store: StateStore, runner: Runner | None = 
     _log_gate(state, "plan_review", blockers, passed=not blockers)
     state.log("plan_review_compose", target=target, pairs=list(pairs), overridden=overridden,
               plan_sha256=live)
+    fired = _evaluate_review_trigger(state, store, blockers)
+    if fired is not None:
+        return fired
     store.save(state)
     if blockers:
         return Directive(
@@ -6841,6 +7032,9 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             ]
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
+        fired = _evaluate_review_trigger(state, store, review_blockers)
+        if fired is not None:
+            return fired
         # `enumeration_escapes` is LEGACY: the history of the retired enumeration gate,
         # reported only from a bag an earlier engine wrote.
         round_release = _note_round_release(state, review_blockers, store)
@@ -6907,6 +7101,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         session_id=state.session_id, now=_utcnow(),
     )
     state.approval = GateRecord("plan_approval", armed=True, passed=True, by=args.by)
+    _review_cycle_close(state)
     state.plan_review_rounds = 0
     state.review_release_difficulty_id = None
     # Cleared with the counter, not merely alongside it: the marker is what makes the
@@ -11497,7 +11692,12 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # review, a tier 2 edit owes the edited stages' own. Nothing is written until the
     # replan is applied.
     gate_state, carry_preview, carry_change = _carry_records(store, state, args.plan, in_place=False)
-    prblock = gates.plan_review_blockers(gate_state, args.plan)
+    trigger_exit = _review_trigger_exit(state, args.plan)
+    # A changed plan leaves a review-cost trigger by owing a fresh counted PASS at approve,
+    # so the replan itself does not wait on a review of bytes nobody has reviewed yet.
+    prblock = (
+        [] if trigger_exit == _TRIGGER_EXIT_CHANGED
+        else gates.plan_review_blockers(gate_state, args.plan))
     _log_gate(state, "plan_review", prblock, passed=not prblock)
     if prblock:
         # With the round-release valve active the blockers ARE the release message,
@@ -11703,7 +11903,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # coverage gate: inside the difficulty flow, the corrected plan must CARRY the
     # critique's similarities into conditions/invariants and CHANGE a means/method
     # for the declared differences. Empty split -> [] -> behaves exactly as before.
-    if state.difficulty and state.difficulty.critique:
+    if state.difficulty and state.difficulty.critique and trigger_exit != _TRIGGER_EXIT_OVERRIDE:
         cov = gates.replan_coverage_blockers(
             old, new, state.difficulty.critique, tier=tier_number,
             cost_tier_window=_effort_fire_window(state))
@@ -11740,7 +11940,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # the event together here, rather than staging the record earlier, is what keeps
     # a refused-then-retried call from either double-counting the event or
     # persisting an orphaned record with no event to match it.
-    if agent_acked_difficulty and (
+    if agent_acked_difficulty and trigger_exit is None and (
         diff_plans(old, new) == "no_change"
         or not any((d or "").strip() for d in state.difficulty.critique.differences_to_remove)
     ):
@@ -11922,7 +12122,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
             _archive_difficulty(state, closing_waiver)
             if not state.approval.passed:
                 return _replan_to_plan_ready(
-                    state, store, new, echo_advice, kind="no_change", exited_diagnosing=True,
+                    state, store, new, echo_advice, trigger_exit=trigger_exit,
+                    kind="no_change", exited_diagnosing=True,
                     plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
                     plan_sha256=_new_plan_sha256, change_class=change_class, **replan_cause)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
@@ -11973,7 +12174,8 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
             _archive_difficulty(state, closing_waiver)
             if not state.approval.passed:
                 return _replan_to_plan_ready(
-                    state, store, new, echo_advice, kind="refinement", exited_diagnosing=True,
+                    state, store, new, echo_advice, trigger_exit=trigger_exit,
+                    kind="refinement", exited_diagnosing=True,
                     plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
                     plan_sha256=_new_plan_sha256, change_class=change_class, **replan_cause)
             state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
@@ -12060,28 +12262,36 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     state.current_stage = None
     _archive_difficulty(state, closing_waiver)
     return _replan_to_plan_ready(
-        state, store, new, echo_advice, kind="substantive", plan=args.plan,
+        state, store, new, echo_advice, trigger_exit=trigger_exit, kind="substantive", plan=args.plan,
         prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
         change_class=change_class, **replan_cause)
 
 
 def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advice: list[str],
-                          **log_fields) -> Directive:
+                          *, trigger_exit: str | None, **log_fields) -> Directive:
     """Re-arm the plan-approval gate and park the session at PLAN_READY after a replan
     that needs the plan approved again, logging `log_fields` as the `replan` event. The
-    approved plan picks the next stage afresh, so no stage stays current."""
+    approved plan picks the next stage afresh, so no stage stays current. `trigger_exit`
+    is the review-cost trigger exit `_cmd_replan` already decided (None when no trigger is open)."""
     state.current_stage = None
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
     state.log("replan", **log_fields)
     _count_replan(state, log_fields["change_class"])
     effort.rederive(state)  # re-derive AFTER logging so this replan is counted
+    _review_cycle_arrive(state, log_fields["plan_sha256"])
+    if trigger_exit == _TRIGGER_EXIT_CHANGED:
+        _drop_agent_overrides(state)
+    if trigger_exit is not None:
+        state.review_trigger_fire = None
     store.save(state)
     autonomy = _autonomy_directive_data(state, new)
     override = _agent_review_override(state)
     directive_data = {
         "autonomy": autonomy, **_replan_class_data(state),
         **({"agent_review_override": override} if override else {}),
+        **({"review_trigger_exit": _trigger_exit_text(trigger_exit, override)}
+           if trigger_exit is not None else {}),
     }
     if autonomy["action"] == "self_approve":
         return _with_advisories(Directive(
@@ -13054,6 +13264,7 @@ COMMANDS = {
     "mandate-grant": cmd_mandate_grant,
     "mandate-extend": cmd_mandate_extend,
     "mandate-resume": cmd_mandate_resume,
+    "mandate-retry": cmd_mandate_retry,
     "mandate-stop": cmd_mandate_stop,
     "mandate-status": cmd_mandate_status,
 }
@@ -13104,7 +13315,7 @@ _SESSION_COMMANDS = (
     "verify-final", "resolve", "reject",
     "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status", "children",
     "adopt-escalation", "drive", "close", "push-subplan", "pop-subplan", "task-reset",
-    "mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop", "mandate-status",
+    "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry", "mandate-stop", "mandate-status",
     "workspace-register",
 )
 
@@ -13201,11 +13412,11 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "comma-separated stage indices the launcher narrowed the pass to"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
-    ("mandate_id", ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop",
-                    "mandate-status"),
+    ("mandate_id", ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry",
+                    "mandate-stop", "mandate-status"),
      "mandate slug the state directory is keyed by"),
     ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission",
-            "task-reset", "mandate-grant", "mandate-extend", "mandate-resume"),
+            "task-reset", "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry"),
      "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
      "identity token like any other --by, not free text)"),
     # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
@@ -14119,6 +14330,8 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp = add_mandate("mandate-extend", "push the mandate's expiry out", by=True)
     sp.add_argument("--days", type=float, required=True, help="days to add past the later of now and expiry")
     add_mandate("mandate-resume", "unpause the mandate and close its breaker", by=True)
+    sp = add_mandate("mandate-retry", "let the cycle take an issue again after an item-local failure", by=True)
+    sp.add_argument("--issue", type=int, required=True, help="the issue number to allow again")
     add_mandate("mandate-stop", "pause the mandate, disable its timer, kill a running cycle")
     add_mandate("mandate-status", "show the mandate, its spend windows and whether a cycle may start")
     return p

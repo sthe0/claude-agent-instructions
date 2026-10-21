@@ -8,6 +8,7 @@ systemd or real agent home. The mandate store and the cost log live in tmp dirs.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import json
 import os
 import re
@@ -52,10 +53,15 @@ def raw_issue(number, labels=("backlog",), author=OWNER, day=1, title=None, body
 
 def junit(passed, failed=()):
     suite = ET.Element("testsuite")
+    def split(name):
+        """`module|name` puts the case in another junit class than the default one."""
+        module, _, case = name.rpartition("|")
+        return module or "scripts.tests.test_a", case
+
     for name in passed:
-        ET.SubElement(suite, "testcase", classname="scripts.tests.test_a", name=name)
+        ET.SubElement(suite, "testcase", classname=split(name)[0], name=split(name)[1])
     for name in failed:
-        case = ET.SubElement(suite, "testcase", classname="scripts.tests.test_a", name=name)
+        case = ET.SubElement(suite, "testcase", classname=split(name)[0], name=split(name)[1])
         ET.SubElement(case, "failure", message="boom")
     return ET.tostring(ET.ElementTree(suite).getroot(), encoding="unicode")
 
@@ -350,6 +356,79 @@ def test_a_cycle_over_the_daily_budget_is_refused_and_says_why(env):
     env.add_cost(5.0, str(store.mandate_dir(ID) / "cycles" / "old" / "items" / "9" / "brief.md"))
     assert env.cycle() == 0
     assert events("limit")[0]["detail"]["reasons"] == ["daily-budget"]
+
+
+def paused_with_a_chat_notifier(env):
+    env.clock.t = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
+    env.grant()
+    store.save_mandate(rules.stopped(store.load_mandate(ID)))
+    sent = env.tmp / "sent.txt"
+    env.plugin(f"NAME = 'chat'\ndef send(text):\n    open({str(sent)!r}, 'a').write(text + '\\n=====\\n')\n    return True\n")
+    return sent
+
+
+def test_a_refused_start_sends_a_notice_through_the_digest_notifier(env):
+    sent = paused_with_a_chat_notifier(env)
+    assert env.cycle() == 0
+    text = sent.read_text(encoding="utf-8")
+    assert ID in text and "paused" in text
+    assert "agentctl mandate-resume --by <you>" in text
+    assert f"Blocked since {rules.format_ts(env.clock())}" in text
+    [notice] = events("refused-notice")
+    assert notice["detail"]["reasons"] == ["paused"]
+    assert notice["detail"]["notifier"] == "chat" and notice["detail"]["ok"] is True
+    assert notice["detail"]["blocked_since"] == rules.format_ts(env.clock())
+    assert notice["detail"]["unblock"] == ["paused: agentctl mandate-resume --by <you>"]
+    assert list(store.read_cycle_records(ID).values())[0]["notice"] == "sent"
+    assert list((store.mandate_dir(ID) / "notices").glob("*.md"))
+
+
+def test_a_second_refusal_the_same_day_is_suppressed(env):
+    sent = paused_with_a_chat_notifier(env)
+    env.cycle()
+    env.clock.advance(minutes=30)
+    assert env.cycle() == 0
+    assert sent.read_text(encoding="utf-8").count("=====") == 1
+    assert len(events("refused-notice")) == 1
+    assert [r["notice"] for r in store.read_cycle_records(ID).values()] == ["sent", "suppressed"]
+    env.clock.advance(days=1)
+    env.cycle()
+    assert sent.read_text(encoding="utf-8").count("=====") == 2
+
+
+def test_a_crashing_refusal_notice_does_not_crash_the_run(env, monkeypatch):
+    paused_with_a_chat_notifier(env)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("notifier exploded")
+
+    monkeypatch.setattr(notifiers, "deliver", explode)
+    assert env.cycle() == 0
+    [error] = events("refused-notice-error")
+    assert "notifier exploded" in error["detail"]["error"]
+    assert list(store.read_cycle_records(ID).values())[0]["notice"] == "failed"
+
+
+def test_a_refusal_notice_is_not_recorded_as_a_digest(env):
+    paused_with_a_chat_notifier(env)
+    env.cycle()
+    assert store.read_digests(ID) == {}
+    assert all("digest" not in row for row in store.read_cycle_rows(ID))
+    assert not (store.mandate_dir(ID) / "digests").exists()
+
+
+def test_the_digest_warns_of_an_expiry_within_three_days(env):
+    env.grant()
+    mandate = store.load_mandate(ID)
+    env.cycle()
+    assert "Mandate expires in" not in digest_text()
+    for stale in (store.mandate_dir(ID) / "digests").glob("*.md"):
+        stale.unlink()
+    soon = rules.format_ts(env.clock() + timedelta(days=2, hours=1))
+    store.save_mandate(dataclasses.replace(mandate, expires_at=soon))
+    env.clock.advance(seconds=1)
+    env.cycle()
+    assert f"Mandate expires in 2 days ({soon}): run `agentctl mandate-extend --days <n> --by <you>`" in digest_text()
 
 
 def test_a_second_cycle_while_one_holds_the_lock_exits_busy_and_records_nothing(env):
@@ -754,6 +833,85 @@ def test_a_test_failing_on_the_baseline_does_not_count_against_the_item(env):
     assert item_rows()[0]["tests"] == "pass"
 
 
+def remove_tests(env, baseline, item):
+    """The item edits `scripts/tests/test_a.py` and its suite lacks tests the baseline passed."""
+    env.world.name_status = "M\tscripts/tests/test_a.py\n"
+    env.world.suites["baseline.xml"] = (baseline, [])
+    env.world.suites["item.xml"] = (item, [])
+    env.world.suites["rerun.xml"] = (item, [])
+
+
+def test_a_test_removed_by_the_item_does_not_fail_the_gate_and_is_reported(env):
+    env.grant()
+    eligible(env, 1)
+    remove_tests(env, ["t1", "t2"], ["t1"])
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["tests"], row["outcome"]) == ("pass", "pr-opened")
+    assert row["excused_tests"] == ["scripts.tests.test_a::t2"] and row["excused_count"] == 1
+    assert not any(x.endswith("rerun.xml") for c in env.world.calls for x in c)
+
+
+def test_a_test_vanishing_from_an_untouched_module_still_fails_the_gate(env):
+    env.grant()
+    eligible(env, 1)
+    remove_tests(env, ["t1", "t2"], ["t1"])
+    env.world.name_status = "M\tscripts/foo.py\n"
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["tests"], row["failure_kind"]) == ("fail", "tests")
+    assert row["excused_tests"] == [] and row["excused_count"] == 0
+
+
+def test_an_excused_id_is_not_held_against_the_item_after_the_rerun(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.worktree_files = ["scripts/tests/test_a.py", "scripts/tests/test_z.py"]
+    flaky = "scripts.tests.test_z|t9"
+    env.world.name_status = "M\tscripts/tests/test_a.py\n"
+    env.world.suites["baseline.xml"] = (["t1", "t2", flaky], [])
+    env.world.suites["item.xml"] = (["t1"], [flaky])
+    env.world.suites["rerun.xml"] = (["t1", flaky], [])
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["tests"], row["outcome"]) == ("pass", "pr-opened")
+    assert row["excused_tests"] == ["scripts.tests.test_a::t2"]
+    assert any(x.endswith("rerun.xml") for c in env.world.calls for x in c)
+
+
+def test_a_collection_error_in_the_touched_module_fails_the_gate(tmp_path):
+    module = tmp_path / "scripts" / "tests" / "test_broken.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("import a_module_that_does_not_exist\n\n\ndef test_x():\n    pass\n", encoding="utf-8")
+    xml_path = tmp_path / "item.xml"
+    env_ = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
+    subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist", f"--rootdir={tmp_path}",
+         f"--junitxml={xml_path}", str(module)],
+        cwd=tmp_path, env=env_, capture_output=True, check=False,
+    )
+    item = driver.read_junit(xml_path)
+    assert item.ran and not item.passed
+    baseline_id = "scripts.tests.test_broken::test_x"
+    failing, excused = rules.split_failures(
+        {baseline_id}, {baseline_id}, item.passed, item.seen, rules.diff_path_groups(["M\tscripts/tests/test_broken.py"]),
+    )
+    assert (failing, excused) == ([baseline_id], [])
+
+
+def test_the_digest_lists_the_excused_ids_capped(env):
+    env.grant()
+    eligible(env, 1)
+    names = [f"u{n:02d}" for n in range(1, 13)]
+    remove_tests(env, ["t1", *names], ["t1"])
+    env.cycle()
+    row = item_rows()[0]
+    ids = [f"scripts.tests.test_a::{n}" for n in names]
+    assert row["excused_tests"] == ids[:10] and row["excused_count"] == 12
+    line = digest_section(digest_text(), "Items")[0]
+    assert f"excused (removed or renamed by the item): 12: {', '.join(ids[:10])}, ... and 2 more" in line
+
+
 PATH_ID = "test_c[Bash(python3 {worktree}/scripts/agentctl-cli.py:*)]"
 PATH_ID_REAL = "test_c[Bash(python3 {realpath}/scripts/agentctl-cli.py:*)]"
 
@@ -802,7 +960,7 @@ def test_a_baseline_passing_test_that_fails_on_the_item_fails_it_and_is_not_push
     assert (row["outcome"], row["failure_kind"], row["tests"]) == ("failed", "tests", "fail")
     assert env.world.calls_with("git", "push") == []
     assert env.world.calls_with("gh", "pr", "create") == []
-    assert store.load_mandate(ID).breaker_open
+    assert not store.load_mandate(ID).breaker_open
 
 
 def test_a_failure_that_passes_on_its_single_rerun_does_not_fail_the_item(env):
@@ -855,7 +1013,7 @@ def test_a_gate_script_the_item_breaks_fails_it(env):
 
 # --- what a diff may not touch, what may not be published -------------------------------
 
-def test_a_diff_that_touches_the_constitution_is_never_pushed_and_trips_the_breaker(env):
+def test_a_diff_that_touches_the_constitution_is_never_pushed_and_fails_only_that_item(env):
     env.grant()
     eligible(env, 1)
     env.world.name_status = "M\tscripts/foo.py\nM\tscripts/agentctl/mandate.py\n"
@@ -864,7 +1022,7 @@ def test_a_diff_that_touches_the_constitution_is_never_pushed_and_trips_the_brea
     assert (row["outcome"], row["failure_kind"]) == ("failed", "constitution")
     assert env.world.calls_with("git", "push") == []
     assert env.spawner.of("code-reviewer") == []
-    assert store.load_mandate(ID).breaker_open
+    assert not store.load_mandate(ID).breaker_open
 
 
 def test_published_text_that_fails_the_org_neutral_check_is_not_pushed(env):
@@ -929,7 +1087,7 @@ def test_a_permission_request_fails_the_item_with_the_permission_kind(env):
     env.cycle()
     row = item_rows()[0]
     assert (row["outcome"], row["failure_kind"]) == ("failed", "permission")
-    assert store.load_mandate(ID).breaker_open
+    assert not store.load_mandate(ID).breaker_open
 
 
 def test_a_specialist_that_returns_no_marker_fails_the_item(env):
@@ -939,6 +1097,18 @@ def test_a_specialist_that_returns_no_marker_fails_the_item(env):
     env.cycle()
     row = item_rows()[0]
     assert (row["outcome"], row["failure_kind"]) == ("failed", "spawn-error")
+
+
+def test_a_spawn_error_still_opens_the_breaker(env):
+    env.grant(max_items=2)
+    eligible(env, 1, day=1)
+    eligible(env, 2, day=2)
+    env.spawner.developer = lambda argv, cwd: driver.SpawnResult(1, "", "traceback")
+    env.cycle()
+    assert [r["issue"] for r in item_rows()] == [1]
+    mandate = store.load_mandate(ID)
+    assert mandate.breaker_open and mandate.breaker_reason == "failed:spawn-error on #1"
+    assert list(store.read_cycle_records(ID).values())[0]["status"] == "breaker"
 
 
 # --- overrun, breaker, limits -----------------------------------------------------------
@@ -991,17 +1161,105 @@ def test_a_killed_spawn_that_left_a_cost_row_is_not_charged_twice(env):
     assert (spend.day_usd, spend.week_usd) == (pytest.approx(1.5), pytest.approx(1.5))
 
 
-def test_a_failed_item_opens_the_breaker_and_no_further_item_is_taken(env):
+def test_an_item_local_failure_is_recorded_and_the_cycle_continues(env):
     env.grant(max_items=2)
     eligible(env, 1, day=1)
     eligible(env, 2, day=2)
+    n = {"count": 0}
+
+    def developer(argv, cwd):
+        n["count"] += 1
+        text = "PERMISSION-REQUEST:\nAction: x\n" if n["count"] == 1 else "COMPLETED:\nok\n"
+        return driver.SpawnResult(0, text)
+
+    env.spawner.developer = developer
+    env.cycle()
+    assert [(r["issue"], r["outcome"]) for r in item_rows()] == [(1, "failed"), (2, "pr-opened")]
+    assert not store.load_mandate(ID).breaker_open
+    assert events("breaker-open") == []
+    assert list(store.read_cycle_records(ID).values())[0]["status"] == "ok"
+
+
+def test_three_consecutive_item_failures_open_the_breaker(env):
+    env.grant(max_items=4)
+    for n in (1, 2, 3, 4):
+        eligible(env, n, day=n)
     env.spawner.developer = lambda argv, cwd: driver.SpawnResult(0, "PERMISSION-REQUEST:\nAction: x\n")
     env.cycle()
-    assert [r["issue"] for r in item_rows()] == [1]
+    assert [r["issue"] for r in item_rows()] == [1, 2, 3]
     mandate = store.load_mandate(ID)
-    assert mandate.breaker_open and "#1" in mandate.breaker_reason
+    assert mandate.breaker_open and mandate.breaker_reason == "3 consecutive item failures: #1, #2, #3"
     assert [e["detail"] for e in events("breaker-open")] == [{"reason": mandate.breaker_reason}]
     assert list(store.read_cycle_records(ID).values())[0]["status"] == "breaker"
+
+
+def test_a_pull_request_between_failures_resets_the_streak(env):
+    env.grant(max_items=4)
+    for n in (1, 2, 3, 4):
+        eligible(env, n, day=n)
+    n = {"count": 0}
+
+    def developer(argv, cwd):
+        n["count"] += 1
+        text = "COMPLETED:\nok\n" if n["count"] == 2 else "PERMISSION-REQUEST:\nAction: x\n"
+        return driver.SpawnResult(0, text)
+
+    env.spawner.developer = developer
+    env.cycle()
+    assert [(r["issue"], r["outcome"]) for r in item_rows()] == [
+        (1, "failed"), (2, "pr-opened"), (3, "failed"), (4, "failed"),
+    ]
+    assert not store.load_mandate(ID).breaker_open
+
+
+def test_failures_before_the_resume_do_not_count_toward_the_streak(env):
+    env.grant()
+    seams = driver.Seams(run=env.world.run, spawn=env.spawner, judge=env.judge, clock=env.clock)
+    cycle = driver.Cycle(env.cfg(), seams, "c1")
+
+    def fail(issue):
+        env.clock.advance(seconds=1)
+        cycle.record_item({"cycle_id": "c1", "issue": issue, "outcome": "failed", "failure_kind": "tests"})
+
+    for issue in (1, 2, 3):
+        fail(issue)
+    assert len(events("breaker-open")) == 1
+    env.clock.advance(seconds=1)
+    store.save_mandate(rules.resumed(store.load_mandate(ID)))
+    store.append_event(ID, "resumed", {}, by="alice", now=env.clock())
+    fail(4)
+    assert len(events("breaker-open")) == 1
+    assert not store.load_mandate(ID).breaker_open
+
+
+def test_the_cycle_does_not_retake_a_failed_issue(env):
+    env.grant()
+    eligible(env, 1)
+    store.append_item_row(
+        ID, {"cycle_id": "old", "issue": 1, "outcome": "failed", "failure_kind": "tests"}, now=env.clock(),
+    )
+    env.clock.advance(seconds=10)
+    rc, out = env.main("run", "--dry-run", "--json")
+    report = json.loads(out)
+    assert report["would_take"] == []
+    assert {c["issue"]: c["reason"] for c in report["candidates"]} == {1: "failed-before"}
+    env.cycle()
+    assert [r["cycle_id"] for r in item_rows()] == ["old"]
+    assert env.spawner.of("developer") == []
+    env.clock.advance(seconds=10)
+    store.allow_retry(ID, 1, by="alice", now=env.clock())
+    env.clock.advance(seconds=10)
+    env.cycle()
+    assert [r["outcome"] for r in item_rows()] == ["failed", "pr-opened"]
+
+
+def test_a_declined_item_is_not_a_failed_issue_and_is_not_blocked_by_the_rule(env):
+    env.grant()
+    eligible(env, 1)
+    store.append_item_row(ID, {"cycle_id": "old", "issue": 1, "outcome": "declined"}, now=env.clock())
+    env.clock.advance(seconds=10)
+    env.cycle()
+    assert [r["outcome"] for r in item_rows()] == ["declined", "pr-opened"]
 
 
 def test_a_spawn_that_touches_the_mandate_state_fails_the_item_and_opens_the_breaker(env):
@@ -1289,12 +1547,24 @@ def test_the_digest_lists_the_labels_applied_and_the_comments_the_neutral_check_
 def test_the_digest_states_the_open_breaker_and_how_to_close_it(env):
     env.grant()
     eligible(env, 1)
+    env.spawner.developer = lambda argv, cwd: driver.SpawnResult(1, "", "traceback")
+    env.cycle()
+    text = digest_text()
+    assert "**Breaker open**: failed:spawn-error on #1." in text
+    assert "`agentctl mandate-resume`" in text
+    assert "- #1: failed (spawn-error)" in text
+
+
+def test_the_digest_lists_failed_issues_with_the_retry_command(env):
+    env.grant()
+    eligible(env, 1)
     env.spawner.developer = lambda argv, cwd: driver.SpawnResult(0, "PERMISSION-REQUEST:\nAction: x\n")
     env.cycle()
     text = digest_text()
-    assert "**Breaker open**: failed:permission on #1." in text
-    assert "`agentctl mandate-resume`" in text
     assert "- #1: failed (permission)" in text
+    assert "Not retried (failed before)" in text
+    assert "- #1 (permission) - run `agentctl mandate-retry --issue 1 --by <you>`" in text
+    assert "Breaker open" not in text
 
 
 def test_a_user_set_label_is_eligible_without_any_digest(env):
@@ -1352,6 +1622,7 @@ def test_no_cycle_source_names_issue_create(name):
 FORBIDDEN_NAMES = {
     "new_mandate", "extended", "resumed", "resume_cycle", "save_mandate", "stop_cycle", "stopped",
     "cmd_mandate_grant", "cmd_mandate_extend", "cmd_mandate_resume", "cmd_mandate_stop",
+    "allow_retry", "cmd_mandate_retry",
 }
 
 
@@ -1363,7 +1634,7 @@ def test_no_cycle_source_references_a_user_authority_transition(name):
     names |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
     assert not (names & FORBIDDEN_NAMES), names & FORBIDDEN_NAMES
     for text in string_constants(source):
-        assert not re.fullmatch(r"mandate-(grant|extend|resume|stop)", text), text
+        assert not re.fullmatch(r"mandate-(grant|extend|resume|retry|stop)", text), text
 
 
 def test_push_refspec_pushes_the_given_commit_to_a_mandate_branch_only():
