@@ -135,6 +135,14 @@ status = "perception"
 reason = "Needs to know that the artifact asks for a decision and which figure is load-bearing."
 
 [[rule]]
+id = "say-15"
+section = "say"
+number = 15
+fingerprint = "An estimate answers the quantity question first — as a range over named degrees of freedom — and covers every axis the question named"
+status = "perception"
+reason = "Needs to know that the document answers a quantity question and which axes the question named."
+
+[[rule]]
 id = "how-1"
 section = "how"
 number = 1

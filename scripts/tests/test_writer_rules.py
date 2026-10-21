@@ -10,7 +10,7 @@ import importlib
 
 import pytest
 
-PINNED_IDS = {f"say-{n}" for n in range(1, 15)} | {f"how-{n}" for n in range(1, 14)}
+PINNED_IDS = {f"say-{n}" for n in range(1, 16)} | {f"how-{n}" for n in range(1, 14)}
 REGISTRY_KEYS = {"id", "section", "number", "fingerprint", "status", "literals", "patterns", "reason"}
 
 
