@@ -41,10 +41,12 @@
 # memory-global/leaves/*.md (ordinary leaves)                | prose  | perception
 #
 # Overrides on top of the partition table:
-#  - CODE_ID_OVERRIDES (8 entries): 4 true regex+hard-sink same-scope pairings,
+#  - CODE_ID_OVERRIDES (16 entries): 4 true regex+hard-sink same-scope pairings,
 #    individually inspected and confirmed to be FALSE pairings (the regex reads
 #    structural syntax), plus 4 hook-turn-end-gate propagation overrides
-#    (semantic-guarded — the judge_* calls run one scope up in build_context()).
+#    (semantic-guarded — the judge_* calls run one scope up in build_context()),
+#    plus 4 writer_rules.py form-picker helpers (markdown line shapes and unit words);
+#    the remaining entries carry their own grounds in CODE_ID_OVERRIDES.
 #  - CLAUDE_MD_OVERRIDES: CLAUDE.md was read in full (37 statements); 5 of them
 #    diverge from the file's own perception default (3 decidable/defer — 2
 #    ordering-blocked on stage 4's verify-semantic-gates.py, 1 cost-judged —
@@ -2574,6 +2576,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "bb3bf648dfa67f80"
+domain = "code"
+file = "scripts/improvement-scan.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "f33909091ef37127"
 domain = "code"
 file = "scripts/improvement-scan.py"
@@ -2614,6 +2624,22 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "e0233ca97b5f9c1e"
+domain = "code"
+file = "scripts/improvement-scan.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "0f44844063201871"
+domain = "code"
+file = "scripts/improvement-scan.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "7d0078542b32501e"
 domain = "code"
 file = "scripts/improvement-scan.py"
@@ -2638,6 +2664,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "c746db2d3ff8a447"
+domain = "code"
+file = "scripts/improvement_scan_fetch.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "b27a793894ec3934"
 domain = "code"
 file = "scripts/improvement_scan_loss.py"
@@ -2649,6 +2683,30 @@ ground = "Regexes found are markdown/frontmatter/command-syntax parsing (heading
 id = "14eff83ce13cd2f7"
 domain = "code"
 file = "scripts/improvement_scan_loss.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "554c47387a656ed9"
+domain = "code"
+file = "scripts/improvement_scan_sources.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "782312565090465f"
+domain = "code"
+file = "scripts/improvement_scan_sources.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "5a0793d5feb48596"
+domain = "code"
+file = "scripts/improvement_scan_sources.py"
 class = "structural"
 disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
@@ -3214,12 +3272,44 @@ disposition = "keep"
 ground = "Lexical candidate generation feeding a fail-open judge; never decides: the regexes compiled from publish-rules.toml only choose which published bodies are worth a model judge's time (a hit alone denies nothing), and the SKILL.md parsing is markdown structure (numbered items, headings)."
 
 [[entry]]
+id = "65aa6a1a4fb1813f"
+domain = "code"
+file = "scripts/lib/writer_rules.py"
+class = "structural"
+disposition = "keep"
+ground = "Classifies a body line as a bullet or ordinal list item by its fixed markdown prefix; the share of such lines in a long body's tail only nominates how-3 and say-4 for the judge, which decides fail-open."
+
+[[entry]]
+id = "5bb512106f694860"
+domain = "code"
+file = "scripts/lib/writer_rules.py"
+class = "structural"
+disposition = "keep"
+ground = "Tells whether a markdown table cell is a bare number, a character-shape test; a unit-less numeric column only nominates say-4 for the judge, which decides fail-open."
+
+[[entry]]
 id = "05dd996a6f80a66f"
 domain = "code"
 file = "scripts/lib/writer_rules.py"
 class = "semantic-guarded"
 disposition = "keep"
 ground = "Lexical candidate generation feeding a fail-open judge; never decides: the regexes compiled from publish-rules.toml only choose which published bodies are worth a model judge's time (a hit alone denies nothing), and the SKILL.md parsing is markdown structure (numbered items, headings)."
+
+[[entry]]
+id = "4caaa5143e4c3e1e"
+domain = "code"
+file = "scripts/lib/writer_rules.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Compiles the number-followed-by-a-unit-word pattern from UNIT_WORDS; a count of such figures only nominates say-15 for the judge, which decides fail-open."
+
+[[entry]]
+id = "ccf1313679943fd8"
+domain = "code"
+file = "scripts/lib/writer_rules.py"
+class = "semantic-guarded"
+disposition = "keep"
+ground = "Compiles the whole-word unit match from UNIT_WORDS used to see whether a table header names a unit; a miss only nominates say-4 for the judge, which decides fail-open."
 
 [[entry]]
 id = "c822fa800948753e"
@@ -9137,6 +9227,54 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "aefa6283da6fb761"
 domain = "code"
 file = "scripts/tests/test_improvement_scan_loss.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "0216eacd59251aae"
+domain = "code"
+file = "scripts/tests/test_improvement_scan_sources.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "5b081b64dbfdaae4"
+domain = "code"
+file = "scripts/tests/test_improvement_scan_sources.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "122d7acbac1bf641"
+domain = "code"
+file = "scripts/tests/test_improvement_scan_sources.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "db01fe45946b8894"
+domain = "code"
+file = "scripts/tests/test_improvement_scan_sources.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "844deae55fa6cff8"
+domain = "code"
+file = "scripts/tests/test_improvement_scan_sources.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "5659cd8b57b2a228"
+domain = "code"
+file = "scripts/tests/test_improvement_scan_sources.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -16910,6 +17048,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "e2a051011db6363e"
+domain = "code"
+file = "scripts/tests/test_writer_rules.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "6b11e022a9496e8a"
+domain = "code"
+file = "scripts/tests/test_writer_rules.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "6ca0c628bde10998"
 domain = "code"
 file = "scripts/timer_arm_detect.py"
@@ -17966,9 +18120,25 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "67f305ffcb4390ff"
+domain = "code_file_rollup"
+file = "scripts/improvement_scan_fetch.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "520fac734067971d"
 domain = "code_file_rollup"
 file = "scripts/improvement_scan_loss.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "6503b669f6a6d09f"
+domain = "code_file_rollup"
+file = "scripts/improvement_scan_sources.py"
 class = "structural"
 disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
@@ -19158,6 +19328,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "1c5b678455d05120"
+domain = "code_file_rollup"
+file = "scripts/tests/test_improvement_scan_sources.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "e352b1ea5c9c4398"
 domain = "code_file_rollup"
 file = "scripts/tests/test_improvement_scan_telemetry.py"
@@ -20289,6 +20467,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "5c481d70501143c5"
 domain = "code_file_rollup"
 file = "scripts/tests/test_wrapper_cross_host_refusal.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "c8729c7cb63be3d9"
+domain = "code_file_rollup"
+file = "scripts/tests/test_writer_rules.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -28354,7 +28540,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "ef12ef27e875c12d"
+id = "d607b2839cb7679e"
 domain = "prose"
 file = "memory-global/leaves/improvement-scan.md"
 class = "perception"
@@ -28362,7 +28548,23 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "4b6387015090a735"
+id = "cb9f58fb1c494ecd"
+domain = "prose"
+file = "memory-global/leaves/improvement-scan.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "fa275ac49da45975"
+domain = "prose"
+file = "memory-global/leaves/improvement-scan.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "65cd0d04f005c884"
 domain = "prose"
 file = "memory-global/leaves/improvement-scan.md"
 class = "perception"
@@ -31154,6 +31356,22 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "672a4100465f4c56"
+domain = "prose"
+file = "memory-global/leaves/published-text-writer-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "0611f045b04614b6"
+domain = "prose"
+file = "memory-global/leaves/published-text-writer-gate.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "283df16b1eddb9e6"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
@@ -33714,6 +33932,14 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
+id = "457deb060410c042"
+domain = "prose"
+file = "memory-global/leaves/verify-artifacts-before-presenting-to-user.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "81139358bdcc4214"
 domain = "prose"
 file = "memory-global/leaves/verify-command-scope-and-frozen-revision.md"
@@ -33866,7 +34092,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "1fdfa882f26c7edf"
+id = "aab818f2d17ade5d"
 domain = "prose"
 file = "skills/improvement-scan/SKILL.md"
 class = "perception"
@@ -33874,12 +34100,12 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
-id = "aab818f2d17ade5d"
+id = "e6c077bf2a410432"
 domain = "prose"
 file = "skills/improvement-scan/SKILL.md"
-class = "perception"
+class = "already-mechanized"
 disposition = "keep"
-ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
 id = "38259f1d5dada4d2"
@@ -33946,7 +34172,31 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
+id = "385f9b4cd89bc52a"
+domain = "prose"
+file = "skills/improvement-scan/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "a3ac01f163123f1a"
+domain = "prose"
+file = "skills/improvement-scan/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
 id = "ae96514a30d0be12"
+domain = "prose"
+file = "skills/improvement-scan/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "bbdc92b7710520a2"
 domain = "prose"
 file = "skills/improvement-scan/SKILL.md"
 class = "perception"
@@ -36026,6 +36276,14 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
+id = "b13e46fdeb2e1eb4"
+domain = "prose"
+file = "skills/specializations/tech-writer/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
 id = "531bbd56ba360050"
 domain = "prose"
 file = "skills/specializations/tech-writer/SKILL.md"
@@ -36170,7 +36428,7 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
-id = "9605a3094045f7ca"
+id = "85b0b487c7ccfc71"
 domain = "prose"
 file = "skills/specializations/tech-writer/SKILL.md"
 class = "perception"
@@ -36267,6 +36525,22 @@ ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the s
 
 [[entry]]
 id = "bc35c88d34b1aa90"
+domain = "prose"
+file = "skills/specializations/tech-writer/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "74a76d50a195eb2f"
+domain = "prose"
+file = "skills/specializations/tech-writer/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "c195d5c572fcf750"
 domain = "prose"
 file = "skills/specializations/tech-writer/SKILL.md"
 class = "perception"

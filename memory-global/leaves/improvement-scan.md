@@ -1,10 +1,10 @@
 ---
 name: improvement-scan
-description: The standing, mechanized producer/skill pair for proactive self-improvement scanning — two independent producers (backlog reconciliation, session telemetry pattern detection), their two distinct resume schemes, and the report-only boundary the CLI deliberately does not cross.
+description: The standing, mechanized producer/skill pair for proactive self-improvement scanning — three producers (backlog reconciliation, session telemetry pattern detection, external-source reading), their distinct resume schemes, and the report-only boundary the CLI deliberately does not cross.
 type: reference
 schema: leaf/v1
 created: 2026-08-28
-last_verified: 2026-08-28
+last_verified: 2026-10-20
 ---
 
 # Improvement scan
@@ -25,7 +25,7 @@ the script's own closed vocabularies gate.
 
 ## Guidance
 
-### The two producers
+### The three producers
 
 - **`backlog` subcommand** — reconciles the Core+Org backlog against the local
   board state file (see [[backlog-triage-practice]] § Reuse across runs).
@@ -57,11 +57,22 @@ the script's own closed vocabularies gate.
   `functional_ground` per candidate (the симптом-vs-функция distinction — see
   [[function-place-difficulty]]), dedups against the current board and against
   existing experience leaves, and stores survivors as `Finding` rows.
-- **`report` subcommand** — renders every stored `Finding` from both producers
+- **`sources` subcommand** — the third producer: reads a user-curated list of
+  external sources (`scripts/external-sources.toml`) weekly and picks up only
+  entries it has not seen. The model produces one cached claim per entry
+  (difficulty removed, mechanism, evidence level, candidate new feeds); code
+  validates it against closed vocabularies. An idea reaches the report's main
+  lane only when its `addresses` exactly match one of our own open difficulties
+  (a telemetry store key or a backlog `source_ref`), ranked measured > anecdote >
+  opinion; ideas matching none are listed apart, unranked. Each candidate source
+  is a dossier row of separate signals (no composite score). Adding a source
+  stays the user's act. Stored ideas are advisory rows of kind `external-idea`
+  and never enter the difficulty cost bands.
+- **`report` subcommand** — renders every stored `Finding` from the producers
   into one cost-first-ranked report (measured cost bands never interleaved
-  with unmeasured ones).
+  with unmeasured ones), followed by the three external-source lanes.
 
-### Why two different resume schemes, not one
+### Why different resume schemes, not one
 
 - **Backlog** uses `PriorBoard`: a frozen baseline JSON snapshot, diffed
   against fresh collection on each run. Right for it because the Core+Org
@@ -76,6 +87,11 @@ the script's own closed vocabularies gate.
   baseline-diff scheme would force re-reading every historical session on
   every run for no benefit.
 
+- **Sources** uses `SeenCursor`: the set of entry ids already judged per source,
+  advanced only after the model's claims for those entries are accepted, over a
+  bounded FIFO queue. Right for it because a feed is a sliding window — an
+  entry is either seen or new, and a failed run must leave its entries new.
+
 A single unified resume scheme was considered and rejected: forcing the
 externally-mutable backlog through a position cursor would silently miss
 external edits between runs; forcing the append-only ledger through a
@@ -83,7 +99,7 @@ baseline-diff would re-read strictly more data for the same result.
 
 ### The report-only boundary
 
-Neither producer, nor the `report` renderer, ever files a difficulty,
+No producer, nor the `report` renderer, ever files a difficulty,
 dispatches a specialist, or picks an item to work on — asserted by
 `scripts/tests/test_improvement_scan.py` via `ast_purity.impure_names`. The
 `improvement-scan` skill inherits this boundary explicitly (its own §

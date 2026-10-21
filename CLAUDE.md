@@ -125,7 +125,7 @@ A **specialist** is a specialization skill run **inline** (`Skill`, per the § C
 | Code just written — maintainability / readability review before done | `code-reviewer` | inline (self-review) / spawn (independent) |
 | Independent reasoning check on a non-trivial chain | `thinker` | spawn (fresh context is the point) |
 | Yandex Cloud / `yc` operations | `yandex-cloud-expert` | inline / spawn |
-| README / docs; polishing a plan or a long comment, in the dialogue language | `tech-writer` | inline (polish) / spawn (from scratch) |
+| README / docs; polishing a plan, a long reply/comment or a file-report for the user | `tech-writer` | inline (polish) / spawn (from scratch) |
 | Difficulty in the work itself | `overcome-difficulty` | inline |
 | User correction / feedback about agent behavior | `self-improvement` | inline |
 | Ticket / issue / tracker mention, or an `ABC-123` key | `tracker-management` | inline |

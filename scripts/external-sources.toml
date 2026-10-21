@@ -1,0 +1,218 @@
+[meta]
+armed = 2026-10-20
+review_after_weeks = 8
+enabled = true
+max_items_per_run = 10
+queue_cap = 100
+max_external_calls_per_run = 30
+
+# External sources read by `improvement-scan.py sources`.
+# Adding, enabling or removing a source is the user's act; the scan only proposes candidates.
+
+[[source]]
+id = "lilianweng"
+name = "Lil'Log (Lilian Weng)"
+url = "https://lilianweng.github.io/index.xml"
+kind = "rss"
+enabled = true
+reason = "Deep survey posts directly on agents and harness engineering for self-improvement; low volume."
+
+[[source]]
+id = "simonwillison-agents"
+name = "Simon Willison (tag ai-agents)"
+url = "https://simonwillison.net/tags/ai-agents.atom"
+kind = "atom"
+enabled = true
+reason = "Practitioner commentary on agents, tag feed keeps it on topic."
+
+[[source]]
+id = "langchain"
+name = "LangChain blog"
+url = "https://www.langchain.com/blog/rss.xml"
+kind = "rss"
+enabled = true
+reason = "Harness, evals and context-engineering posts; vendor blog, promotional items mixed in."
+
+[[source]]
+id = "hamel"
+name = "Hamel Husain"
+url = "https://hamel.dev/index.xml"
+kind = "rss"
+enabled = true
+reason = "Evals for LLM applications, current and directly on topic."
+
+[[source]]
+id = "eugeneyan"
+name = "Eugene Yan"
+url = "https://eugeneyan.com/rss/"
+kind = "rss"
+enabled = true
+reason = "Applied-LLM and evals practitioner with a long record."
+
+[[source]]
+id = "huyenchip"
+name = "Chip Huyen"
+url = "https://huyenchip.com/feed.xml"
+kind = "rss"
+enabled = false
+reason = "Respected applied-AI author, but the feed is dormant: no entry since 2025-01-16."
+
+[[source]]
+id = "arxiv-self-improving-agents"
+name = "arXiv: self-improving agents (API query)"
+url = "http://export.arxiv.org/api/query?search_query=abs:%22self-improving%22+AND+abs:agent&sortBy=submittedDate&sortOrder=descending&max_results=20"
+kind = "atom"
+enabled = true
+reason = "Research coverage of the exact topic; a query feed with no single author, so noisy."
+
+[[source]]
+id = "jason-liu"
+name = "Jason Liu (jxnl.co)"
+url = "https://jxnl.co/feed_rss_created.xml"
+kind = "rss"
+enabled = true
+reason = "Context engineering, agents and evals from a practitioner on the Codex team."
+
+[[source]]
+id = "latent-space"
+name = "Latent Space"
+url = "https://www.latent.space/feed"
+kind = "rss"
+enabled = true
+reason = "Interviews and essays on agents and harnesses; many items are podcast episodes."
+
+[[source]]
+id = "philschmid"
+name = "Philipp Schmid"
+url = "https://www.philschmid.de/rss"
+kind = "rss"
+enabled = true
+reason = "Frequent posts directly on self-improvement, harness engineering and agent evals."
+
+[[source]]
+id = "mitchellh"
+name = "Mitchell Hashimoto"
+url = "https://mitchellh.com/feed.xml"
+kind = "atom"
+enabled = true
+reason = "Coined harness engineering; general blog, most posts off topic."
+
+[[source]]
+id = "addy-osmani"
+name = "Addy Osmani"
+url = "https://addyosmani.com/feed.xml"
+kind = "atom"
+enabled = true
+reason = "Harness-engineering writing from the Claude Code team; broader engineering topics mixed in."
+
+[[source]]
+id = "polomodov-tech"
+name = "Alexander Polomodov (polomodov.tech)"
+url = "https://polomodov.tech/feed.xml"
+kind = "atom"
+enabled = true
+reason = "The one verified Russian-language source: agent stacks and evals, mixed with talks and podcasts."
+
+[[source]]
+id = "anthropic-engineering"
+name = "Anthropic Engineering"
+url = "https://www.anthropic.com/engineering"
+kind = "html"
+enabled = false
+reason = "Highly on topic but publishes no feed; kept as a reference until an html reader exists."
+
+[[source]]
+id = "shreya-shankar"
+name = "Shreya Shankar"
+url = "https://www.sh-reya.com/rss.xml"
+kind = "rss"
+enabled = false
+reason = "Strong evals authority, but one post in six months."
+
+[[source]]
+id = "interconnects"
+name = "Interconnects (Nathan Lambert)"
+url = "https://www.interconnects.ai/feed"
+kind = "rss"
+enabled = false
+reason = "Mostly model training and RL, agents are secondary."
+
+[[source]]
+id = "raschka"
+name = "Ahead of AI (Sebastian Raschka)"
+url = "https://magazine.sebastianraschka.com/feed"
+kind = "rss"
+enabled = false
+reason = "Centred on model architecture and reasoning, not agent harnesses; feed exceeds the 2 MB cap."
+
+[[source]]
+id = "martin-fowler"
+name = "martinfowler.com"
+url = "https://martinfowler.com/feed.atom"
+kind = "atom"
+enabled = false
+reason = "Whole-site feed, mostly unrelated topics; only single articles are on topic."
+
+[[source]]
+id = "amp-news"
+name = "Amp (ampcode.com) news"
+url = "https://ampcode.com/news.rss"
+kind = "rss"
+enabled = false
+reason = "Product changelog with little harness analysis."
+
+[[source]]
+id = "openai-news"
+name = "OpenAI News"
+url = "https://openai.com/news/rss.xml"
+kind = "rss"
+enabled = false
+reason = "Whole corporate feed, 341 entries in six months, mostly off topic."
+
+[[source]]
+id = "tg-gonzo-ml"
+name = "gonzo-обзоры ML статей (Telegram)"
+url = "https://t.me/s/gonzo_ML"
+kind = "telegram"
+enabled = true
+reason = "Russian paper reviews incl. code agents by Grigory Sapunov; read through the t.me/s preview."
+
+[[source]]
+id = "gonzoml-substack"
+name = "gonzo_ML on Substack"
+url = "https://gonzoml.substack.com/feed"
+kind = "rss"
+enabled = false
+reason = "Partial mirror of the Telegram channel: 3 entries in six months, newest 2026-05-10."
+
+[[source]]
+id = "tg-llm-under-hood"
+name = "LLM под капотом (Telegram)"
+url = "https://t.me/s/llm_under_hood"
+kind = "telegram"
+enabled = true
+reason = "LLM product case studies by Rinat Abdullin, 17 of 19 recent posts on topic."
+
+[[source]]
+id = "tg-boris-again"
+name = "Борис опять (Telegram)"
+url = "https://t.me/s/boris_again"
+kind = "telegram"
+enabled = true
+reason = "ML engineering and LLM practice mixed with personal notes."
+
+[[source]]
+id = "tg-abstractdl"
+name = "AbstractDL (Telegram)"
+url = "https://t.me/s/abstractDL"
+kind = "telegram"
+enabled = true
+reason = "Short research notes by Anton Razzhigaev, partly on topic."
+
+[[source]]
+id = "tg-cryptovalerii"
+name = "Время Валеры (Telegram)"
+url = "https://t.me/s/cryptovalerii"
+kind = "telegram"
+enabled = false
+reason = "Management and career topics dominate; agents appear occasionally."

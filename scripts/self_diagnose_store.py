@@ -95,7 +95,13 @@ KIND_POLICY_FLAG = "policy-flag"
 KIND_BACKLOG_ITEM = "backlog-item"
 KIND_TELEMETRY_PATTERN = "telemetry-pattern"
 
-EXTERNAL_KINDS = frozenset({KIND_POLICY_FLAG, KIND_BACKLOG_ITEM, KIND_TELEMETRY_PATTERN})
+# `external-idea` is improvement-scan.py's third producer (`sources`): an idea read
+# from an outside source and left as an advisory row for the report to rank or list.
+KIND_EXTERNAL_IDEA = "external-idea"
+
+EXTERNAL_KINDS = frozenset(
+    {KIND_POLICY_FLAG, KIND_BACKLOG_ITEM, KIND_TELEMETRY_PATTERN, KIND_EXTERNAL_IDEA}
+)
 
 # The declared complement. Nothing reads this at runtime — `is_actionable` stays
 # a membership test against ACTIONABLE_KINDS alone, so an UNKNOWN kind still
@@ -124,6 +130,7 @@ ADVISORY_KINDS = frozenset(
         "writer-gate-unresolved",
         KIND_BACKLOG_ITEM,
         KIND_TELEMETRY_PATTERN,
+        KIND_EXTERNAL_IDEA,
     }
 )
 
@@ -162,6 +169,7 @@ REMEDIATION = {
     "policy-flag": "invoke `self-improvement` to adjust the policy, then record the adjustment and the observed metric movement in memory-global/leaves/policy-effectiveness-tracking.md",
     "backlog-item": "see the item's recommended_next_step (self-improvement | planner | file-difficulty) in the improvement-scan report",
     "telemetry-pattern": "see the pattern's recommended_next_step (self-improvement | planner | file-difficulty) in the improvement-scan report",
+    "external-idea": "read the idea in the improvement-scan report; act on it only through an issue or commit that cites its store key",
     "crutch-defer-overdue": "re-run scripts/gen_crutch_registry.py and re-disposition the entry (keep it deferred with an updated ground, or remediate it)",
     "crutch-registry-drift": "run scripts/verify-semantic-gates.py to see the newly-unregistered sites, then re-run scripts/gen_crutch_registry.py to classify and register them",
     "writer-gate-unresolved": "read the sink's `shape` breakdown: a route the seam does not declare goes into ~/.claude-agent/publication-tools.local; a declared route whose body shape lib/published_body.py cannot read needs a new shape resolver there",
