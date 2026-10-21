@@ -18,6 +18,7 @@ from agentctl.directive import Directive
 from agentctl.render import dispatch_ceiling_chars, render_plan_md
 from agentctl.plan import load_plan
 from agentctl.state import Node, Route, SessionState, WeightClass
+from lib.spawn_prompt_files import composed_prompt_files, skill_path
 
 from test_plan_review_topo import _blockers, _record_pairs, make_env  # noqa: F401
 
@@ -57,21 +58,9 @@ def _plan(tmp_path: Path, deps: list[list[int]], tiers=None, extra: str = "", pr
     return path
 
 
-def _set_row(tmp_path, monkeypatch, line: str | None):
-    lines = [
-        entry for entry in agentctl_config.CONFIG_MD.read_text(encoding="utf-8").splitlines()
-        if not entry.startswith(f"| `{ROW}` |")
-    ]
-    if line is not None:
-        lines.append(line)
-    copy = tmp_path / "config.md"
-    copy.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    monkeypatch.setattr(agentctl_config, "CONFIG_MD", copy)
-
-
 @pytest.fixture(autouse=True)
-def row(tmp_path, monkeypatch):
-    _set_row(tmp_path, monkeypatch, f"| `{ROW}` | `{THRESHOLD}` | test |")
+def row(config_row):
+    config_row(ROW, THRESHOLD)
 
 
 def _state(plan: Path | None, route: str = Route.SPAWN.value) -> SessionState:
@@ -140,17 +129,17 @@ def test_non_spawn_route_never_pairs(tmp_path):
     assert _route(_plan(tmp_path, CHAIN), route=Route.IN_THREAD.value) is False
 
 
-def test_altered_row_moves_the_boundary(tmp_path, monkeypatch):
+def test_altered_row_moves_the_boundary(tmp_path, config_row):
     plan = _plan(tmp_path, CHAIN[:3])  # 2 edges
     assert _route(plan) is False
-    _set_row(tmp_path, monkeypatch, f"| `{ROW}` | `2` | test |")
+    config_row(ROW, 2)
     assert _route(plan) is True
 
 
 @pytest.mark.parametrize("line", [None, f"| `{ROW}` | `many` | test |"])
-def test_missing_or_non_integer_row_gives_pairs(tmp_path, monkeypatch, line):
+def test_missing_or_non_integer_row_gives_pairs(tmp_path, config_row, line):
     plan = _plan(tmp_path, CHAIN[:2])
-    _set_row(tmp_path, monkeypatch, line)
+    config_row(ROW, line)
     assert _route(plan) is True
 
 
@@ -161,8 +150,8 @@ def test_unloadable_plan_gives_pairs(tmp_path):
     assert gates.pairwise_review_route(_state(tmp_path / "missing.toml")) is True
 
 
-def test_one_stage_wins_over_a_missing_row(tmp_path, monkeypatch):
-    _set_row(tmp_path, monkeypatch, None)
+def test_one_stage_wins_over_a_missing_row(tmp_path, config_row):
+    config_row(ROW, None)
     assert _route(_plan(tmp_path, [[]])) is False
 
 
@@ -215,11 +204,32 @@ def test_below_threshold_plan_with_pair_records_clears_with_one_whole_plan_pass(
     assert not calls
 
 
-def test_ceiling_counts_the_thinker_prompt_overhead(tmp_path, monkeypatch):
+def test_pair_revise_after_compose_blocks_when_ceiling_forces_pairs(make_env, monkeypatch):
+    env = make_env()
+    env.mutate_state(lambda s: setattr(s, "route", Route.SPAWN.value))
+    _record_pairs(env, skip=("3-1",))
+    assert env.record("", "pass").ok
+    assert env.record("topo:3-1", "revise", concerns=["blocking: needs work"]).ok
+    assert gates.whole_plan_by_shape(env.doc())
+    monkeypatch.setattr("agentctl.render.dispatch_ceiling_chars", lambda model=None: 10)
+    assert gates.pairwise_review_route(env.state(), env.doc()) is True
+    assert any("3-1" in blocker for blocker in _blockers(env))
+
+
+def test_mutation_gate_ignoring_the_ceiling_is_caught(make_env, monkeypatch):
+    shape_only = lambda state, doc=None, **kw: state is not None and not gates.whole_plan_by_shape(doc or env.doc())
+    env = make_env()
+    monkeypatch.setattr(gates, "pairwise_review_route", shape_only)
+    with pytest.raises(AssertionError):
+        test_pair_revise_after_compose_blocks_when_ceiling_forces_pairs(lambda: env, monkeypatch)
+
+
+def test_ceiling_counts_the_reader_context_overhead(tmp_path, monkeypatch):
     plan = _plan(tmp_path, [[]])
     size = len(render_plan_md(load_plan(plan)))
-    overhead = gates._whole_plan_prompt_overhead_chars()
-    assert overhead > 0
+    overhead = gates._whole_plan_reader_context_overhead_chars()
+    assert overhead
+    assert overhead == sum(p.stat().st_size for p in composed_prompt_files(skill_path("thinker")))
     monkeypatch.setattr("agentctl.render.dispatch_ceiling_chars", lambda model=None: size + overhead)
     assert _route(plan) is False
     monkeypatch.setattr("agentctl.render.dispatch_ceiling_chars", lambda model=None: size + overhead - 1)

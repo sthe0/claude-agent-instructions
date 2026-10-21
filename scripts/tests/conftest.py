@@ -626,17 +626,30 @@ def venued_fixtures_dir(tmp_path, tmp_path_factory):
 
 
 @pytest.fixture
-def pairwise_min_edges_1(tmp_path, monkeypatch):
-    """Opt-in: pins `review-pairwise-min-edges` to 1 through a temporary config.md, so a
-    suite exercising pair mechanics on a small fixture plan keeps reviewing pairwise."""
+def config_row(tmp_path, monkeypatch):
+    """Opt-in factory: `config_row(key, value)` points `agentctl.config.CONFIG_MD` at a
+    temporary copy of the live file whose `key` row holds `value` (a full row line when
+    `value` starts with `|`; `None` drops the row)."""
     from agentctl import config as agentctl_config
 
-    lines = agentctl_config.CONFIG_MD.read_text(encoding="utf-8").splitlines()
-    row = "| `review-pairwise-min-edges` | `1` | test pin |"
-    pinned = [row if line.startswith("| `review-pairwise-min-edges` |") else line for line in lines]
-    if pinned == lines:
-        pinned.append(row)
-    copy = tmp_path / "config-pairwise-1.md"
-    copy.write_text("\n".join(pinned) + "\n", encoding="utf-8")
-    monkeypatch.setattr(agentctl_config, "CONFIG_MD", copy)
-    return copy
+    live = agentctl_config.CONFIG_MD
+    copies = iter(range(1_000_000))
+
+    def set_row(key: str, value) -> Path:
+        prefix = f"| `{key}` |"
+        lines = [line for line in live.read_text(encoding="utf-8").splitlines() if not line.startswith(prefix)]
+        if value is not None:
+            lines.append(value if str(value).startswith("|") else f"| `{key}` | `{value}` | test pin |")
+        copy = tmp_path / f"config-{next(copies)}.md"
+        copy.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        monkeypatch.setattr(agentctl_config, "CONFIG_MD", copy)
+        return copy
+
+    return set_row
+
+
+@pytest.fixture
+def pairwise_min_edges_1(config_row):
+    """Opt-in: pins `review-pairwise-min-edges` to 1, so a suite exercising pair mechanics
+    on a small fixture plan keeps reviewing pairwise."""
+    return config_row("review-pairwise-min-edges", 1)

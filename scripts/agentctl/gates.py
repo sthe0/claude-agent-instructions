@@ -1300,27 +1300,36 @@ def whole_plan_by_shape(doc) -> bool:
         return False
 
 
-def _whole_plan_prompt_overhead_chars() -> int:
-    """What the whole-plan thinker prompt adds around the plan: the thinker SKILL.md and
-    the shared marker protocol the spawner appends to it. Sized in bytes, an upper bound
-    on the character count."""
-    skills = Path(__file__).resolve().parents[2] / "skills" / "specializations"
-    total = 0
-    for path in (skills / "thinker" / "SKILL.md", skills / "_shared" / "marker-protocol.md"):
-        try:
-            total += path.stat().st_size
-        except OSError:
-            pass
-    return total
+def _whole_plan_reader_context_overhead_chars() -> int | None:
+    """The reader-context overhead of a whole-plan thinker review: the size of the files
+    the spawner composes into a thinker's system prompt (`lib.spawn_prompt_files`, the
+    same list `spawn-specialist.py` appends), in bytes, an upper bound on characters.
+    The brief scaffold and the question list are not counted, so the ceiling clause errs
+    toward pairs. None when a file cannot be read — the caller then reads pairs."""
+    from lib.spawn_prompt_files import composed_prompt_files, skill_path
+
+    try:
+        return sum(path.stat().st_size for path in composed_prompt_files(skill_path("thinker")))
+    except OSError:
+        return None
+
+
+def _uses_pair_review(state: SessionState | None, doc) -> bool:
+    """True on a SPAWN route whose review runs pairwise for this plan (a plan that did
+    not load, `doc=None`, reads as pairs); False on any other route."""
+    if state is None or state.route != Route.SPAWN.value:
+        return False
+    return doc is None or pairwise_review_route(state, doc)
 
 
 def pairwise_review_route(state: SessionState | None, doc=None) -> bool:
     """Whether plan review runs pairwise for this session — the one predicate the
     `submit_plan` directive and the blocker message both read, so trigger and gate
     never name different routes. On a spawn route, decided in this order: the plan
-    does not load -> pairs; its whole-plan rendering plus the thinker prompt overhead
-    is over the dispatch prompt ceiling -> pairs; `whole_plan_by_shape` -> whole-plan
-    review; otherwise pairs. `doc=None` loads `state.plan_path`."""
+    does not load -> pairs; its whole-plan rendering plus the reader-context overhead
+    (unreadable -> pairs) is over the dispatch prompt ceiling -> pairs;
+    `whole_plan_by_shape` -> whole-plan review; otherwise pairs. `doc=None` loads
+    `state.plan_path`."""
     if state is None or state.route != Route.SPAWN.value:
         return False
     if doc is None:
@@ -1331,7 +1340,8 @@ def pairwise_review_route(state: SessionState | None, doc=None) -> bool:
     if doc is None:
         return True
     from .render import dispatch_ceiling_chars, render_plan_md
-    if len(render_plan_md(doc)) + _whole_plan_prompt_overhead_chars() > dispatch_ceiling_chars():
+    overhead = _whole_plan_reader_context_overhead_chars()
+    if overhead is None or len(render_plan_md(doc)) + overhead > dispatch_ceiling_chars():
         return True
     return not whole_plan_by_shape(doc)
 
@@ -1339,9 +1349,7 @@ def pairwise_review_route(state: SessionState | None, doc=None) -> bool:
 def _no_review_blocker(state: SessionState | None, doc=None) -> str:
     """`doc` is the plan the caller already loaded; None means it did not load, which
     the route predicate reads as pairs, so it is not loaded a second time here."""
-    spawn = state is not None and state.route == Route.SPAWN.value
-    pairwise = spawn and (doc is None or pairwise_review_route(state, doc))
-    return _NO_REVIEW_BLOCKER_PAIRWISE if pairwise else _NO_REVIEW_BLOCKER
+    return _NO_REVIEW_BLOCKER_PAIRWISE if _uses_pair_review(state, doc) else _NO_REVIEW_BLOCKER
 
 
 def _plan_review_blockers_whole(pr, target_plan: str | None, *, state: SessionState | None = None, doc=None) -> list[str]:
@@ -2308,7 +2316,7 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
         bool(state.plan_stage_reviews)
         or (
             has_pair_records_for(state, target_plan)
-            and not (state.route == Route.SPAWN.value and whole_plan_by_shape(doc))
+            and not (state.route == Route.SPAWN.value and not pairwise_review_route(state, doc))
         )
         or (state.plan_review is not None and (state.plan_review.carried_tier or 0) >= 2)
     )
