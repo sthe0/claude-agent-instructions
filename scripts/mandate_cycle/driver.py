@@ -62,6 +62,7 @@ REAP_TIMEOUT_S = 30
 HEARTBEAT_S = 60.0
 SUMMARY_CHARS = 3000
 REASON_CHARS = 300
+DIGEST_EXCUSED_IDS = 10
 DEFAULT_SUITE = (sys.executable, "-m", "pytest", "-q", "scripts/tests")
 GATE_SCRIPTS = ("scripts/verify-all.py", "scripts/lint-prose-length.py")
 
@@ -722,7 +723,7 @@ class Cycle:
         """An items.jsonl row with every R6 field present, defaulted to the not-run state."""
         return {
             "cycle_id": self.id, "issue": number, "branch": branch, "pr_url": None, "outcome": "failed",
-            "tests": NOT_RUN, "review": NOT_RUN,
+            "tests": NOT_RUN, "review": NOT_RUN, "excused_tests": [], "excused_count": 0,
             "gates": {"constitution": NOT_RUN, "org_neutral": NOT_RUN, "lint": NOT_RUN},
             "cost_usd": 0.0, "duration_s": 0.0,
         }
@@ -817,7 +818,11 @@ class Cycle:
             return
 
         item_suite = self.run_suite(worktree, item_dir / "item.xml")
-        failing = rules.failing_ids(baseline.passed, item_suite.passed)
+        failing, excused = rules.split_failures(
+            baseline.passed, baseline.seen, item_suite.passed, item_suite.seen, rules.diff_path_groups(lines),
+        )
+        row["excused_tests"] = excused[:DIGEST_EXCUSED_IDS]
+        row["excused_count"] = len(excused)
         if failing:
             rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))
             green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed)
@@ -943,6 +948,11 @@ class Cycle:
             link = f" -- {row['pr_url']}" if row.get("pr_url") else ""
             kind = f" ({row['failure_kind']})" if row.get("failure_kind") else ""
             items.append(f"- #{row['issue']}: {row['outcome']}{kind}{link} -- ${row.get('cost_usd') or 0:.2f}")
+            if row.get("excused_count"):
+                ids = ", ".join(row.get("excused_tests") or [])
+                more = row["excused_count"] - len(row.get("excused_tests") or [])
+                items[-1] += f" -- excused (removed or renamed by the item): {row['excused_count']}: {ids}"
+                items[-1] += f", ... and {more} more" if more > 0 else ""
         overruns = [
             f"- #{r['issue']}: {', '.join(r.get('overrun_reasons') or ['unknown'])}"
             for r in self.items if r["outcome"] == "overrun"

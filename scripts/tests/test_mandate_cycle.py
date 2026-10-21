@@ -754,6 +754,69 @@ def test_a_test_failing_on_the_baseline_does_not_count_against_the_item(env):
     assert item_rows()[0]["tests"] == "pass"
 
 
+def remove_tests(env, baseline, item):
+    """The item edits `scripts/tests/test_a.py` and its suite lacks tests the baseline passed."""
+    env.world.name_status = "M\tscripts/tests/test_a.py\n"
+    env.world.suites["baseline.xml"] = (baseline, [])
+    env.world.suites["item.xml"] = (item, [])
+    env.world.suites["rerun.xml"] = (item, [])
+
+
+def test_a_test_removed_by_the_item_does_not_fail_the_gate_and_is_reported(env):
+    env.grant()
+    eligible(env, 1)
+    remove_tests(env, ["t1", "t2"], ["t1"])
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["tests"], row["outcome"]) == ("pass", "pr-opened")
+    assert row["excused_tests"] == ["scripts.tests.test_a::t2"] and row["excused_count"] == 1
+    assert not any(x.endswith("rerun.xml") for c in env.world.calls for x in c)
+
+
+def test_a_test_vanishing_from_an_untouched_module_still_fails_the_gate(env):
+    env.grant()
+    eligible(env, 1)
+    remove_tests(env, ["t1", "t2"], ["t1"])
+    env.world.name_status = "M\tscripts/foo.py\n"
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["tests"], row["failure_kind"]) == ("fail", "tests")
+    assert row["excused_tests"] == [] and row["excused_count"] == 0
+
+
+def test_a_collection_error_in_the_touched_module_fails_the_gate(tmp_path):
+    module = tmp_path / "scripts" / "tests" / "test_broken.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("import a_module_that_does_not_exist\n\n\ndef test_x():\n    pass\n", encoding="utf-8")
+    xml_path = tmp_path / "item.xml"
+    env_ = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
+    subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist", f"--rootdir={tmp_path}",
+         f"--junitxml={xml_path}", str(module)],
+        cwd=tmp_path, env=env_, capture_output=True, check=False,
+    )
+    item = driver.read_junit(xml_path)
+    assert item.ran and not item.passed
+    baseline_id = "scripts.tests.test_broken::test_x"
+    failing, excused = rules.split_failures(
+        {baseline_id}, {baseline_id}, item.passed, item.seen, rules.diff_path_groups(["M\tscripts/tests/test_broken.py"]),
+    )
+    assert (failing, excused) == ([baseline_id], [])
+
+
+def test_the_digest_lists_the_excused_ids_capped(env):
+    env.grant()
+    eligible(env, 1)
+    names = [f"u{n:02d}" for n in range(1, 13)]
+    remove_tests(env, ["t1", *names], ["t1"])
+    env.cycle()
+    row = item_rows()[0]
+    ids = [f"scripts.tests.test_a::{n}" for n in names]
+    assert row["excused_tests"] == ids[:10] and row["excused_count"] == 12
+    line = digest_section(digest_text(), "Items")[0]
+    assert f"excused (removed or renamed by the item): 12: {', '.join(ids[:10])}, ... and 2 more" in line
+
+
 PATH_ID = "test_c[Bash(python3 {worktree}/scripts/agentctl-cli.py:*)]"
 PATH_ID_REAL = "test_c[Bash(python3 {realpath}/scripts/agentctl-cli.py:*)]"
 

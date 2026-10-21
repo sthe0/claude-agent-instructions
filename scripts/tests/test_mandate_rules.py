@@ -8,7 +8,9 @@ from __future__ import annotations
 import ast
 import dataclasses
 import inspect
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -439,6 +441,76 @@ def test_a_vanished_test_is_a_failure():
 def test_one_rerun_can_clear_a_first_run_failure():
     assert m.passes_after_rerun({"a", "b"}, {"a"}, {"b"})
     assert not m.passes_after_rerun({"a", "b"}, {"a"}, set())
+
+
+OLD = "scripts.tests.test_a.TestA"
+NEW_SIDE = "scripts.tests.test_b.TestB"
+TOUCHED_A = [["scripts/tests/test_a.py"]]
+RENAMED_A_TO_B = [["scripts/tests/test_a.py", "scripts/tests/test_b.py"]]
+JUNIT_364 = Path(__file__).parent / "fixtures" / "mandate" / "junit-364"
+
+
+def test_module_of_maps_a_collection_error_and_only_whole_dotted_prefixes():
+    groups = [["docs/x.md"], ["scripts/tests/test_a.py"]]
+    assert m.test_module_of(f"{OLD}::t1", groups) == 1
+    assert m.test_module_of("::scripts.tests.test_a", groups) == 1
+    assert m.test_module_of("scripts.tests.test_ab.TestA::t1", groups) is None
+    assert m.test_module_of(f"{OLD}::t1", [["docs/x.md"]]) is None
+
+
+def test_vanished_id_in_a_touched_module_is_excused():
+    ids = {f"{OLD}::t1", f"{OLD}::t2"}
+    assert m.split_failures(ids, ids, {f"{OLD}::t1"}, {f"{OLD}::t1"}, TOUCHED_A) == ([], [f"{OLD}::t2"])
+
+
+def test_vanished_id_in_an_untouched_module_still_fails():
+    ids = {f"{OLD}::t1", f"{OLD}::t2"}
+    untouched = [["scripts/tests/test_c.py"]]
+    assert m.split_failures(ids, ids, {f"{OLD}::t1"}, {f"{OLD}::t1"}, untouched) == ([f"{OLD}::t2"], [])
+
+
+def test_a_new_failure_in_the_touched_module_voids_the_excuse():
+    ids = {f"{OLD}::t1", f"{OLD}::t2"}
+    item_seen = {f"{OLD}::t1", f"{OLD}::t3"}
+    assert m.split_failures(ids, ids, {f"{OLD}::t1"}, item_seen, TOUCHED_A) == ([f"{OLD}::t2"], [])
+    already_red = {f"{OLD}::t4"}
+    assert m.split_failures(ids, ids | already_red, {f"{OLD}::t1"}, item_seen | already_red, TOUCHED_A) == (
+        [f"{OLD}::t2"], [],
+    )
+    assert m.split_failures(ids, ids | already_red, {f"{OLD}::t1"}, {f"{OLD}::t1"} | already_red, TOUCHED_A) == (
+        [], [f"{OLD}::t2"],
+    )
+
+
+def test_a_renamed_module_old_path_excuses_its_ids():
+    ids = {f"{OLD}::t1", f"{OLD}::t2"}
+    assert m.split_failures(ids, ids, {f"{OLD}::t1"}, {f"{OLD}::t1"}, RENAMED_A_TO_B) == ([], [f"{OLD}::t2"])
+
+
+def test_a_new_failure_in_the_renamed_to_module_voids_the_excuse():
+    ids = {f"{OLD}::t1", f"{OLD}::t2"}
+    item_seen = {f"{OLD}::t1", f"{NEW_SIDE}::t2"}
+    assert m.split_failures(ids, ids, {f"{OLD}::t1"}, item_seen, RENAMED_A_TO_B) == ([f"{OLD}::t2"], [])
+
+
+def test_the_recorded_364_junit_excuses_exactly_the_removed_id():
+    roots = ("/srv/placeholder-root",)
+
+    def read(name):
+        passed, seen = set(), set()
+        for case in ET.parse(JUNIT_364 / name).getroot().iter("testcase"):
+            ident = m.canonical_test_id(f"{case.get('classname', '')}::{case.get('name', '')}", roots)
+            seen.add(ident)
+            if all(case.find(tag) is None for tag in ("failure", "error", "skipped")):
+                passed.add(ident)
+        return passed, seen
+
+    baseline_passed, baseline_seen = read("baseline.xml")
+    item_passed, item_seen = read("item.xml")
+    groups = m.diff_path_groups(["M\tscripts/tests/test_sync_pull_rewires_hooks.py"])
+    removed = "scripts.tests.test_sync_pull_rewires_hooks.TestPullRewiresHooks::test_up_to_date_pull_skips_the_installer"
+    assert m.failing_ids(baseline_passed, item_passed) == [removed]
+    assert m.split_failures(baseline_passed, baseline_seen, item_passed, item_seen, groups) == ([], [removed])
 
 
 def test_a_test_id_that_embeds_the_worktree_path_is_the_same_id_in_every_worktree():

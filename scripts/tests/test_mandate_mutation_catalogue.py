@@ -30,7 +30,8 @@ EXPECTED_ENTRIES = (
     "reject-spares-skipped", "reject-names-skipped-refused", "push-refuses-skipped-origin",
     "agent-cannot-revive-declined", "declined-follows-identity", "declined-in-ledger",
     "declined-required-in-ledger", "declined-title-half", "declined-seeded-from-ledger",
-    "worktree-canonical-ids",
+    "worktree-canonical-ids", "vanished-test-excused", "vanished-test-dirty-module",
+    "vanished-test-rename-group",
 )
 
 

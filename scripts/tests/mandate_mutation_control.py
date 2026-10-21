@@ -170,11 +170,17 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "baseline-relative-tests": Mutant(
         DRIVER,
-        "        failing = rules.failing_ids(baseline.passed, item_suite.passed)\n"
+        "            baseline.passed, baseline.seen, item_suite.passed, item_suite.seen, rules.diff_path_groups(lines),\n"
+        "        )\n"
+        '        row["excused_tests"] = excused[:DIGEST_EXCUSED_IDS]\n'
+        '        row["excused_count"] = len(excused)\n'
         "        if failing:\n"
         '            rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))\n'
         "            green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed)\n",
-        "        failing = rules.failing_ids(baseline.seen, item_suite.passed)\n"
+        "            baseline.seen, baseline.seen, item_suite.passed, item_suite.seen, rules.diff_path_groups(lines),\n"
+        "        )\n"
+        '        row["excused_tests"] = excused[:DIGEST_EXCUSED_IDS]\n'
+        '        row["excused_count"] = len(excused)\n'
         "        if failing:\n"
         '            rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))\n'
         "            green = rules.passes_after_rerun(baseline.seen, item_suite.passed, rerun.passed)\n",
@@ -472,6 +478,33 @@ CATALOGUE: "dict[str, Mutant]" = {
         "::{case.get('name', '')}\", roots)",
         "::{case.get('name', '')}\", ())",
         _ids(T_CYCLE, "test_a_test_id_that_embeds_the_worktree_path_is_the_same_test_on_the_item"),
+    ),
+    "vanished-test-excused": Mutant(
+        RULES,
+        "        if ident in item_seen or index is None or index in dirty:\n",
+        "        if True:\n",
+        _ids(
+            T_RULES,
+            "test_vanished_id_in_a_touched_module_is_excused",
+            "test_a_renamed_module_old_path_excuses_its_ids",
+            "test_the_recorded_364_junit_excuses_exactly_the_removed_id",
+        ) + _ids(T_CYCLE, "test_a_test_removed_by_the_item_does_not_fail_the_gate_and_is_reported"),
+    ),
+    "vanished-test-dirty-module": Mutant(
+        RULES,
+        " or index in dirty:\n",
+        ":\n",
+        _ids(
+            T_RULES,
+            "test_a_new_failure_in_the_touched_module_voids_the_excuse",
+            "test_a_new_failure_in_the_renamed_to_module_voids_the_excuse",
+        ) + _ids(T_CYCLE, "test_a_collection_error_in_the_touched_module_fails_the_gate"),
+    ),
+    "vanished-test-rename-group": Mutant(
+        RULES,
+        "test_module_of(ident, groups) for ident in new_bad",
+        "test_module_of(ident, [g[:1] for g in groups]) for ident in new_bad",
+        _ids(T_RULES, "test_a_new_failure_in_the_renamed_to_module_voids_the_excuse"),
     ),
 }
 

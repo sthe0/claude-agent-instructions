@@ -489,6 +489,49 @@ def passes(baseline_passed: Iterable[str], item_passed: Iterable[str]) -> bool:
     return not failing_ids(baseline_passed, item_passed)
 
 
+def test_module_of(test_id: str, groups: "Sequence[Iterable[str]]") -> "int | None":
+    """Index of the group holding the `.py` path whose dotted form is, or is a dotted prefix of,
+    the module part of `test_id`; None when no group holds one. Pure: the filesystem is never read.
+
+    The module part is what precedes `::`; a collection error has an empty classname, so its
+    id is `::<dotted module>` and the module part is what follows."""
+    head, _, tail = test_id.partition("::")
+    module = head or tail
+    for index, group in enumerate(groups):
+        for path in group:
+            if not path.endswith(".py"):
+                continue
+            dotted = path[:-3].replace("/", ".")
+            if module == dotted or module.startswith(dotted + "."):
+                return index
+    return None
+
+
+def split_failures(
+    baseline_passed: Iterable[str], baseline_seen: Iterable[str],
+    item_passed: Iterable[str], item_seen: Iterable[str],
+    groups: "Sequence[Iterable[str]]",
+) -> "tuple[list[str], list[str]]":
+    """`failing_ids` split into (failing, excused), both sorted.
+
+    An id is excused when the item run never saw it (the item removed or renamed the test),
+    it maps to a module group of the item's diff (`groups`: the paths of one name-status line,
+    so a rename holds both sides), and nothing in that whole group is a new failure -- an id
+    not passing on the item that was not already not passing on the baseline."""
+    item_seen = set(item_seen)
+    new_bad = (item_seen - set(item_passed)) - (set(baseline_seen) - set(baseline_passed))
+    groups = [list(group) for group in groups]
+    dirty = {index for index in (test_module_of(ident, groups) for ident in new_bad) if index is not None}
+    failing, excused = [], []
+    for ident in failing_ids(baseline_passed, item_passed):
+        index = test_module_of(ident, groups)
+        if ident in item_seen or index is None or index in dirty:
+            failing.append(ident)
+        else:
+            excused.append(ident)
+    return failing, excused
+
+
 def passes_after_rerun(
     baseline_passed: Iterable[str], item_passed: Iterable[str], rerun_passed: Iterable[str],
 ) -> bool:
@@ -585,6 +628,11 @@ def _diff_paths(line: str) -> "list[str]":
     if not text:
         return []
     return [_unquote(text)] + [_unquote(token) for token in text.split() if token != text]
+
+
+def diff_path_groups(lines: Iterable[str]) -> "list[list[str]]":
+    """One group of paths per `git diff --name-status` line (a rename holds both sides)."""
+    return [_diff_paths(line) for line in lines]
 
 
 def _normal(path: str) -> str:
