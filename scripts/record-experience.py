@@ -71,6 +71,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import edit_ledger  # noqa: E402
 from lib import memory_retrieval_ledger  # noqa: E402
+from lib import principle_provenance as pp  # noqa: E402
 from lib import semantic_join  # noqa: E402
 from lib import worktree_route  # noqa: E402
 
@@ -162,6 +163,10 @@ def context_block(date: str, label: str, where: str, plan: str) -> str:
 # --------------------------------------------------------------------------
 # leaf assembly
 # --------------------------------------------------------------------------
+def birth_lines() -> list[str]:
+    return [f"{key}: {pp.format_list(value)}" for key, value in pp.birth_fields().items()]
+
+
 def frontmatter(name: str, description: str, confirmed_by: str,
                 refs: list[str] | None, plan_file: str | None,
                 ticket: str | None, date: str, tier: int | None = None) -> str:
@@ -176,6 +181,7 @@ def frontmatter(name: str, description: str, confirmed_by: str,
         # profile of the unified difficulty-record model whose generality>=1
         # profile is the principle/v1 leaf — see experience-leaf-schema.md.
         "generality: 0",
+        *birth_lines(),
         f'resolution_confirmed_by_user: "{confirmed_by}"',
     ]
     # Difficulty tier (ADR-0002): emitted only when explicitly tier-1. Absence
@@ -965,6 +971,7 @@ def cluster_leaf_text(cluster: dict, blocks: list[str], carried: dict[str, str],
                       source: Path, leaf: Path, date: str) -> str:
     fm = ["---", f"name: {cluster['slug']}", f"description: {one_line(cluster['description'])}"]
     fm += [f"{key}: {carried[key]}" for key in CARRIED_KEYS if key in carried]
+    fm += birth_lines()
     fm += [f"resolution_confirmed_by_user: {carried['resolution_confirmed_by_user']}",
            f"created: {date}", f"last_verified: {date}", "---", ""]
     origin = os.path.relpath(source, leaf.parent)
@@ -997,6 +1004,22 @@ def cmd_split_contexts(a) -> int:
     return 0
 
 
+def cluster_principle_links(leaves_dir: Path, clusters: list[dict], leaves: dict[str, Path],
+                            writes: dict[Path, str]) -> dict[Path, str]:
+    """Both sides of the link from each cluster leaf to its `existing_principle`."""
+    corpus = pp.load_corpus(leaves_dir).apply(
+        pp.Change(path, text, "leaf") for path, text in writes.items())
+    out: dict[Path, str] = {}
+    for cluster in clusters:
+        principle = corpus.find(cluster.get("existing_principle") or "", "global")
+        if principle is None or principle.area != "principle":
+            continue
+        changes = pp.link_changes(corpus.find(cluster["slug"]), principle, corpus)
+        corpus = corpus.apply(changes)
+        out.update({ch.path: ch.new_text for ch in changes})
+    return out
+
+
 def cmd_split_apply(a) -> int:
     manifest, manifest_path = read_manifest(a.manifest)
     root = manifest_root(manifest, manifest_path)
@@ -1023,6 +1046,9 @@ def cmd_split_apply(a) -> int:
     problems += [f"principle {s} is listed but {root / 'leaves/principles' / (s + '.md')} "
                  f"does not exist" for s in principles
                  if not (root / "leaves/principles" / f"{s}.md").is_file()]
+    problems += [f"cluster {c['slug']}: existing_principle {c['existing_principle']} does not "
+                 f"exist" for c in manifest["clusters"] if c.get("existing_principle")
+                 and not (root / "leaves/principles" / f"{c['existing_principle']}.md").is_file()]
     carried = frontmatter_values(text)
     if not carried.get("resolution_confirmed_by_user"):
         problems.append("source has no resolution_confirmed_by_user to carry over")
@@ -1041,6 +1067,7 @@ def cmd_split_apply(a) -> int:
         blocks = [b for i, b in zip(ids, moved_blocks) if i in wanted]
         leaf = leaves[cluster["slug"]]
         writes[leaf] = cluster_leaf_text(cluster, blocks, carried, source, leaf, a.date)
+    writes.update(cluster_principle_links(root / "leaves", manifest["clusters"], leaves, writes))
 
     index = experience / "MEMORY.md"
     snapshot = Snapshot([index, *writes])
@@ -1079,10 +1106,24 @@ def cmd_promote(a) -> int:
     if manifest is not None:
         problems += manifest_problems(manifest)
     leaves = root / "leaves"
+    project = Path(a.project_dir).resolve() if a.project_dir else None
+    tier = "project" if project else "global"
+    corpus = pp.load_corpus(leaves, project)
+    kinds = []
     for slug in a.induced_from:
-        if not SLUG.fullmatch(slug) or not any(leaves.rglob(f"{slug}.md")):
-            problems.append(f"induced-from leaf {slug!r} not found under {leaves}")
-    path = leaves / "principles" / f"{a.slug}.md"
+        found = corpus.find(slug, tier) if SLUG.fullmatch(slug) else None
+        if found is None or (project and found.tier != "project"):
+            problems.append(f"induced-from leaf {slug!r} not found under {project or leaves}")
+        else:
+            kinds.append(pp.classify(slug, corpus, tier))
+    if not problems and not pp.promote_sources_ok(kinds, a.rule_derived):
+        problems.append("no induced-from leaf is an experience leaf or a case; name one, "
+                        "or give --rule-derived REASON for a principle written from rules")
+    if a.rule_derived and any(k in pp.EXPERIENCE_SOURCE_KINDS for k in kinds):
+        problems.append("--rule-derived is for a principle with no experience source, "
+                        "but an induced-from leaf is an experience leaf or a case")
+    principles_dir = (project / "principles") if project else (leaves / "principles")
+    path = principles_dir / f"{a.slug}.md"
     if path.exists():
         problems.append(f"principle already exists: {path}")
     if problems:
@@ -1096,6 +1137,8 @@ def cmd_promote(a) -> int:
         "schema: principle/v1\n"
         f"generality: {a.generality}\n"
         f"induced_from: [{', '.join(a.induced_from)}]\n"
+        + (f"{pp.RULE_DERIVED}: {json.dumps(one_line(a.rule_derived))}\n"
+           if a.rule_derived else "")
         + (f"domain: {a.domain}\n" if a.domain else "")
         + f"created: {a.date}\n"
         f"last_verified: {a.date}\n"
@@ -1114,7 +1157,7 @@ def cmd_promote(a) -> int:
         "## See also\n\n"
         "- TODO (curator): sibling principles and the leaves that apply this one.\n"
     )
-    index = leaves / "principles" / "MEMORY.md"
+    index = principles_dir / "MEMORY.md"
     pointer = (f"- [{one_line(a.name)}]({a.slug}.md) — {one_line(a.description)} "
                f"← {', '.join(f'`{s}`' for s in a.induced_from)}.\n")
     index_text = read_text_exact(index) if index.exists() else (
@@ -1132,6 +1175,12 @@ def cmd_promote(a) -> int:
                       f"{LEVEL_LABELS[a.generality]}\n\n{pointer}")
 
     writes = {path: text, index: index_text}
+    principle = pp.Leaf(a.slug, path, tier, "principle", text)
+    for slug in a.induced_from:
+        source = corpus.find(slug, tier)
+        if source.area in pp.EXPERIENCE_SOURCE_KINDS:
+            writes.update({ch.path: ch.new_text for ch in pp.link_changes(source, principle, corpus)
+                           if ch.role == "leaf"})
     if manifest is not None:
         principles = list(manifest.get("principles", []))
         if a.slug not in principles:
@@ -1155,6 +1204,203 @@ def cmd_promote(a) -> int:
         edit_ledger.stamp(str(target), "record-experience:promote",
                           session=getattr(a, "session", None))
     print(f"wrote {path}\nupdated {index}")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# provenance links (lib/principle_provenance.py)
+# --------------------------------------------------------------------------
+def memory_root(a) -> Path:
+    return Path(a.root).resolve() if a.root else (REPO_ROOT / "memory-global").resolve()
+
+
+def provenance_corpus(a) -> pp.Corpus:
+    project = Path(a.project_dir).resolve() if getattr(a, "project_dir", None) else None
+    return pp.load_corpus(memory_root(a) / "leaves", project)
+
+
+def commit_changes(a, changes, command: str) -> None:
+    """Write every change or none; refuses the canonical checkout like the split flow."""
+    by_path = {Path(ch.path): ch for ch in changes}
+    root = memory_root(a)
+    if any(path.is_relative_to(root) for path in by_path):
+        refuse_canon(root, command)
+    try:
+        pp.write_all(by_path.values())
+    except OSError as exc:
+        sys.exit(f"{command} failed, nothing written: {exc}")
+    for path in by_path:
+        edit_ledger.stamp(str(path), f"record-experience:{command}",
+                          session=getattr(a, "session", None))
+        print(f"updated {path}")
+
+
+def link_pairs(a) -> list[tuple[str, str]]:
+    if a.pairs:
+        lines = Path(a.pairs).read_text(encoding="utf-8").splitlines()
+        pairs = [tuple(line.split("\t")) for line in lines if line.strip()]
+        bad = [p for p in pairs if len(p) != 2]
+        if bad:
+            refuse(*(f"--pairs line is not 'source<TAB>target': {chr(9).join(p)!r}" for p in bad))
+        return pairs
+    if not (a.source and a.target):
+        refuse("give SOURCE TARGET or --pairs FILE")
+    return [(a.source, a.target)]
+
+
+def resolve_pair(corpus: pp.Corpus, tier: str, source_slug: str, target_slug: str):
+    source = corpus.find(source_slug, tier)
+    if source is None or source.area not in pp.EXPERIENCE_SOURCE_KINDS:
+        refuse(f"{source_slug!r} is not an experience leaf or a case")
+    target = pp.target_of(target_slug, corpus, source.tier)
+    if target is None:
+        refuse(f"{target_slug!r} is not a principle or a case this leaf may name")
+    return source, target
+
+
+def cmd_link(a) -> int:
+    corpus = provenance_corpus(a)
+    tier = "project" if a.project_dir else "global"
+    changes = []
+    for source_slug, target_slug in link_pairs(a):
+        source, target = resolve_pair(corpus, tier, source_slug, target_slug)
+        if not pp.target_allowed(source.tier, f"{target.tier}_{target.area}"):
+            refuse(f"project leaf {source_slug} may not name global principle {target_slug}; "
+                   "write a case with case-add and link the leaf to the case")
+        step = pp.link_changes(source, target, corpus)
+        corpus = corpus.apply(step)
+        changes += step
+    commit_changes(a, changes, "link")
+    return 0
+
+
+def cmd_unlink(a) -> int:
+    corpus = provenance_corpus(a)
+    tier = "project" if a.project_dir else "global"
+    changes = []
+    for source_slug, target_slug in link_pairs(a):
+        source, target = resolve_pair(corpus, tier, source_slug, target_slug)
+        step = pp.unlink_changes(source, target, corpus)
+        corpus = corpus.apply(step)
+        changes += step
+    commit_changes(a, changes, "unlink")
+    return 0
+
+
+CASE_SPEC_KEYS = ("slug", "description", "source", "into", "aspect", "expected", "actual",
+                  "mismatch")
+
+
+def case_text(spec: dict, digest: str, date: str) -> str:
+    sections = "".join(f"\n## {name}\n\n{spec[name.lower()].strip()}\n"
+                       for name in pp.CASE_SECTIONS)
+    return (
+        "---\n"
+        f"name: {spec['slug']}\n"
+        f"description: {one_line(spec['description'])}\n"
+        "type: reference\n"
+        f"schema: {pp.CASE_SCHEMA}\n"
+        f"{pp.ORIGIN_TIER_FIELD}: {pp.ORIGIN_TIER}\n"
+        f"{pp.SOURCE_DIGEST}: {digest}\n"
+        f"{pp.FIELD}: []\n"
+        f"created: {date}\n"
+        f"last_verified: {date}\n"
+        "---\n\n"
+        f"# Case: {spec['slug']}\n"
+        + sections
+    )
+
+
+def cmd_case_add(a) -> int:
+    try:
+        specs = json.loads(Path(a.spec).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        refuse(f"cannot read --spec {a.spec}: {exc}")
+    if not isinstance(specs, list):
+        refuse("--spec must hold a JSON list of case objects")
+    leaves = memory_root(a) / "leaves"
+    cases_dir = leaves / pp.CASES_DIR
+    problems, changes = [], []
+    corpus = None
+    for spec in specs:
+        missing = [k for k in CASE_SPEC_KEYS if not isinstance(spec, dict) or k not in spec]
+        if missing:
+            problems.append(f"case spec lacks {', '.join(missing)}")
+            continue
+        slug, source = spec["slug"], Path(spec["source"]).resolve()
+        if not SLUG.fullmatch(slug):
+            problems.append(f"case slug {slug!r} must match [a-z0-9][a-z0-9-]*")
+            continue
+        project = Path(a.project_dir).resolve() if a.project_dir else source.parent.parent
+        if corpus is None:
+            corpus = pp.load_corpus(leaves, project)
+        try:
+            source_text = read_text_exact(source)
+        except (OSError, UnicodeDecodeError) as exc:
+            problems.append(f"case {slug}: cannot read source leaf: {exc}")
+            continue
+        path = cases_dir / f"{slug}.md"
+        text = case_text(spec, pp.body_digest(source_text), a.date)
+        identifiers = pp.project_identifiers(corpus) + [
+            i for i in (str(source), source.stem) if len(i) >= pp.MIN_IDENTIFIER_LEN]
+        if path.exists():
+            problems.append(f"case already exists: {path}")
+        error = pp.case_section_error(text)
+        if error:
+            problems.append(f"case {slug}: {error}")
+        leaked = pp.leaks(text, identifiers)
+        if leaked:
+            problems.append(f"case {slug} carries project identifier(s): {', '.join(leaked)}")
+        targets = [pp.target_of(p, corpus, "global") for p in spec["into"]]
+        problems += [f"case {slug}: unknown principle {p!r}"
+                     for p, t in zip(spec["into"], targets) if t is None]
+        if problems:
+            continue
+        step = [pp.Change(path, text, "case")]
+        corpus = corpus.apply(step)
+        for target in targets:
+            link = pp.link_changes(corpus.find(slug), target, corpus)
+            corpus = corpus.apply(link)
+            step += link
+        changes += step
+    if problems:
+        refuse(*problems)
+    commit_changes(a, changes, "case-add")
+    return 0
+
+
+def cmd_backfill(a) -> int:
+    marks = {}
+    for pair in a.rule_derived or []:
+        slug, sep, reason = pair.partition("=")
+        if not sep or not reason.strip():
+            refuse(f"--rule-derived wants SLUG=REASON, got {pair!r}")
+        marks[slug] = json.dumps(one_line(reason))
+    try:
+        changes = pp.backfill_status(provenance_corpus(a), marks)
+    except ValueError as exc:
+        refuse(str(exc))
+    commit_changes(a, changes, "backfill")
+    print(f"backfill: {len(changes)} file(s) changed")
+    return 0
+
+
+def cmd_provenance(a) -> int:
+    corpus = provenance_corpus(a)
+    if a.of:
+        tier = "project" if a.project_dir else "global"
+        principle = corpus.find(a.of, tier)
+        if principle is None or principle.area != "principle":
+            refuse(f"{a.of!r} is not a principle")
+        for leaf in pp.experiences_of(principle, corpus):
+            print(f"{leaf.tier}\t{leaf.slug}\t{leaf.path}")
+    findings = pp.unaccounted(corpus)
+    if a.check:
+        for f in findings:
+            print(f"{f.kind}\t{f.path}\t{f.detail}")
+        return 1 if findings else 0
+    if not a.of:
+        print(f"provenance: {len(findings)} unaccounted item(s); --check lists them")
     return 0
 
 
@@ -1428,7 +1674,43 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--date", default=today())
     pr.add_argument("--session", default=None,
                     help="ledger session_id for the edit-ledger stamp of this write")
+    pr.add_argument("--rule-derived", metavar="REASON",
+                    help="why a principle with no experience or case source exists")
+    pr.add_argument("--project-dir", metavar="D",
+                    help="project memory dir: write D/principles/<slug>.md from project leaves")
     pr.set_defaults(func=cmd_promote)
+
+    def provenance_parser(name: str, help_text: str, func) -> argparse.ArgumentParser:
+        sp = sub.add_parser(name, help=help_text)
+        sp.add_argument("--root", help="memory root (default: <repo>/memory-global)")
+        sp.add_argument("--project-dir", metavar="D",
+                        help="project memory dir holding experience/ and principles/")
+        sp.add_argument("--session", default=None,
+                        help="ledger session_id for the edit-ledger stamp of this write")
+        sp.set_defaults(func=func)
+        return sp
+
+    for name, func, verb in (("link", cmd_link, "write"), ("unlink", cmd_unlink, "remove")):
+        lk = provenance_parser(name, f"{verb} every side of a leaf -> principle/case link",
+                               func)
+        lk.add_argument("source", nargs="?", metavar="SOURCE")
+        lk.add_argument("target", nargs="?", metavar="TARGET")
+        lk.add_argument("--pairs", metavar="FILE", help="one 'source<TAB>target' line each")
+
+    ca = provenance_parser("case-add", "write sanitized cases of project leaves and link "
+                                       "them to global principles", cmd_case_add)
+    ca.add_argument("--spec", required=True, metavar="FILE",
+                    help="JSON list of {" + ", ".join(CASE_SPEC_KEYS) + "}")
+    ca.add_argument("--date", default=today())
+
+    bf = provenance_parser("backfill", "stamp generalized_into on every leaf from the "
+                                       "principles' induced_from", cmd_backfill)
+    bf.add_argument("--rule-derived", action="append", metavar="SLUG=REASON")
+
+    pv = provenance_parser("provenance", "report provenance links (read-only)",
+                           cmd_provenance)
+    pv.add_argument("--check", action="store_true", help="list unaccounted items; exit 1 on any")
+    pv.add_argument("--of", metavar="SLUG", help="every leaf a revision of SLUG must consult")
     return p
 
 

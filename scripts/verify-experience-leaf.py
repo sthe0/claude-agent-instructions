@@ -56,6 +56,7 @@ import sys
 from pathlib import Path
 
 import memory_dates as md
+from lib import principle_provenance as pp
 
 EXPERIENCE_PATH_RE = re.compile(r"(^|/)experience/(?!MEMORY\.md$)[^/]+\.md$")
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
@@ -188,6 +189,9 @@ def check_content(content: str) -> str | None:
     schema = _fm_field(fm_body, SCHEMA_RE)
     if "difficulty/v1" not in schema:
         return None
+    status = pp.status_error(content)
+    if status:
+        return status
 
     body = content[fm.end():]
     if _fm_field(fm_body, TICKET_RE):

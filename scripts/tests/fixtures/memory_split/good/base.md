@@ -4,6 +4,7 @@ description: A sample difficulty used as a split fixture — a check runs where 
 type: reference
 schema: difficulty/v1
 generality: 0
+generalized_into: []
 resolution_confirmed_by_user: "fixture (AskUserQuestion: 'Yes — resolved')"
 created: 2026-01-05
 last_verified: 2026-03-01

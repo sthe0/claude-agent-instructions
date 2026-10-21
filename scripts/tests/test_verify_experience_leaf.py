@@ -22,10 +22,12 @@ _SPEC.loader.exec_module(vel)
 
 
 _CONFIRMED = 'resolution_confirmed_by_user: "looks good, ship it"'
+_UNLINKED = "generalized_into: []"
 
 _STANDALONE_OK = f"""---
 schema: difficulty/v1
 {_CONFIRMED}
+{_UNLINKED}
 ---
 
 # Some difficulty
@@ -48,6 +50,7 @@ $1.23 on claude -p spawns, 5 min wall-clock, 0 user interventions (agentctl reso
 _STANDALONE_TODO = f"""---
 schema: difficulty/v1
 {_CONFIRMED}
+{_UNLINKED}
 ---
 
 # Some difficulty
@@ -70,6 +73,7 @@ TODO — fill from the figure surfaced by `agentctl resolve` (see also scripts/c
 _STANDALONE_TODO_OLD = f"""---
 schema: difficulty/v1
 {_CONFIRMED}
+{_UNLINKED}
 ---
 
 # Some difficulty
@@ -92,6 +96,7 @@ TODO — fill via cost-report.py / tool-usage-report.py
 _TICKET_LEAF = f"""---
 schema: difficulty/v1
 {_CONFIRMED}
+{_UNLINKED}
 ticket: PROJ-42
 ---
 
@@ -170,6 +175,7 @@ def test_section_body_returns_none_when_heading_absent():
 _SIDE_DIFFICULTY_NO_LINK = f"""---
 schema: difficulty/v1
 {_CONFIRMED}
+{_UNLINKED}
 ---
 
 # Difficulty with inlined side-difficulty
@@ -193,6 +199,7 @@ $1.00 on spawns. The overhead from side-difficulties: (1) bad thing; (2) other t
 _SIDE_DIFFICULTY_WITH_LINK = f"""---
 schema: difficulty/v1
 {_CONFIRMED}
+{_UNLINKED}
 ---
 
 # Difficulty with linked side-difficulty
@@ -228,6 +235,7 @@ def test_side_difficulty_ticket_exempt():
     content = f"""---
 schema: difficulty/v1
 {_CONFIRMED}
+{_UNLINKED}
 ticket: PROJ-42
 ---
 

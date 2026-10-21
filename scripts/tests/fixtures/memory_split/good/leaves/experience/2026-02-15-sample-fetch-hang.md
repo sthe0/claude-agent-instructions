@@ -4,6 +4,7 @@ description: A sample cluster for the split fixture — a fetch inside an auto-r
 type: reference
 schema: difficulty/v1
 generality: 0
+generalized_into: []
 resolution_confirmed_by_user: "fixture (AskUserQuestion: 'Yes — resolved')"
 created: 2026-10-12
 last_verified: 2026-10-12

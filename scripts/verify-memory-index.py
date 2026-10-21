@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 import memory_dates as md
+from lib import principle_provenance as pp
 
 LEAVES_REL = "memory-global/leaves"
 ALLOWED_TYPES = {"user", "feedback", "project", "reference"}
@@ -187,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for leaf in sorted(leaf_files):
         rel = leaf.relative_to(root)
-        if leaf.resolve() not in referenced:
+        if leaf.resolve() not in referenced and not pp.index_exempt(str(rel)):
             failures.append(f"  unindexed: {rel} — add a pointer in MEMORY.md (main or a sub-index)")
         fm = _frontmatter_body(leaf)
         t = _frontmatter_type(fm)

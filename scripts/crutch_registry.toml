@@ -23,6 +23,7 @@
 # scripts/lib/semantic_join.py (judge-guarded)               | code   | semantic-guarded
 # scripts/lib/review_block.py                                | code   | structural
 # scripts/lib/marker_extract.py                              | code   | structural
+# scripts/lib/principle_provenance.py                        | code   | structural
 # scripts/lib/** (incl. term_ruleset.py, published_body.py)  | code   | structural
 # scripts/crutch-inventory.py (self)                         | code   | not-a-gate
 # scripts/gen_crutch_registry.py (self)                      | code   | not-a-gate
@@ -2781,6 +2782,86 @@ disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
 
 [[entry]]
+id = "6a3ec097c6107b6c"
+domain = "code"
+file = "scripts/lib/principle_provenance.py"
+class = "structural"
+disposition = "keep"
+ground = "Parses the fixed leaf grammar only — the `---` frontmatter block, a `key:` line and its `[a, b]` list value, `## <name>` section headings, the backtick slugs after the `← ` index-pointer arrow and the `sha256:<64 hex>` digest format — never the meaning of leaf prose; whether a principle generalizes a leaf is recorded by the author through the link verbs, not inferred from text."
+
+[[entry]]
+id = "c3699d0180a31345"
+domain = "code"
+file = "scripts/lib/principle_provenance.py"
+class = "structural"
+disposition = "keep"
+ground = "Parses the fixed leaf grammar only — the `---` frontmatter block, a `key:` line and its `[a, b]` list value, `## <name>` section headings, the backtick slugs after the `← ` index-pointer arrow and the `sha256:<64 hex>` digest format — never the meaning of leaf prose; whether a principle generalizes a leaf is recorded by the author through the link verbs, not inferred from text."
+
+[[entry]]
+id = "6bc68e49e35f0c53"
+domain = "code"
+file = "scripts/lib/principle_provenance.py"
+class = "structural"
+disposition = "keep"
+ground = "Parses the fixed leaf grammar only — the `---` frontmatter block, a `key:` line and its `[a, b]` list value, `## <name>` section headings, the backtick slugs after the `← ` index-pointer arrow and the `sha256:<64 hex>` digest format — never the meaning of leaf prose; whether a principle generalizes a leaf is recorded by the author through the link verbs, not inferred from text."
+
+[[entry]]
+id = "729b88d4b5cc946a"
+domain = "code"
+file = "scripts/lib/principle_provenance.py"
+class = "structural"
+disposition = "keep"
+ground = "Parses the fixed leaf grammar only — the `---` frontmatter block, a `key:` line and its `[a, b]` list value, `## <name>` section headings, the backtick slugs after the `← ` index-pointer arrow and the `sha256:<64 hex>` digest format — never the meaning of leaf prose; whether a principle generalizes a leaf is recorded by the author through the link verbs, not inferred from text."
+
+[[entry]]
+id = "a94a461364b26c48"
+domain = "code"
+file = "scripts/lib/principle_provenance.py"
+class = "structural"
+disposition = "keep"
+ground = "Parses the fixed leaf grammar only — the `---` frontmatter block, a `key:` line and its `[a, b]` list value, `## <name>` section headings, the backtick slugs after the `← ` index-pointer arrow and the `sha256:<64 hex>` digest format — never the meaning of leaf prose; whether a principle generalizes a leaf is recorded by the author through the link verbs, not inferred from text."
+
+[[entry]]
+id = "35cf7fd69452a75f"
+domain = "code"
+file = "scripts/lib/principle_provenance.py"
+class = "structural"
+disposition = "keep"
+ground = "Parses the fixed leaf grammar only — the `---` frontmatter block, a `key:` line and its `[a, b]` list value, `## <name>` section headings, the backtick slugs after the `← ` index-pointer arrow and the `sha256:<64 hex>` digest format — never the meaning of leaf prose; whether a principle generalizes a leaf is recorded by the author through the link verbs, not inferred from text."
+
+[[entry]]
+id = "5e1ac63acb5bcc10"
+domain = "code"
+file = "scripts/lib/principle_provenance.py"
+class = "structural"
+disposition = "keep"
+ground = "Parses the fixed leaf grammar only — the `---` frontmatter block, a `key:` line and its `[a, b]` list value, `## <name>` section headings, the backtick slugs after the `← ` index-pointer arrow and the `sha256:<64 hex>` digest format — never the meaning of leaf prose; whether a principle generalizes a leaf is recorded by the author through the link verbs, not inferred from text."
+
+[[entry]]
+id = "87ac76db0de2b783"
+domain = "code"
+file = "scripts/lib/principle_provenance.py"
+class = "structural"
+disposition = "keep"
+ground = "Parses the fixed leaf grammar only — the `---` frontmatter block, a `key:` line and its `[a, b]` list value, `## <name>` section headings, the backtick slugs after the `← ` index-pointer arrow and the `sha256:<64 hex>` digest format — never the meaning of leaf prose; whether a principle generalizes a leaf is recorded by the author through the link verbs, not inferred from text."
+
+[[entry]]
+id = "2a2b22c957f3d7f6"
+domain = "code"
+file = "scripts/lib/principle_provenance.py"
+class = "structural"
+disposition = "keep"
+ground = "Parses the fixed leaf grammar only — the `---` frontmatter block, a `key:` line and its `[a, b]` list value, `## <name>` section headings, the backtick slugs after the `← ` index-pointer arrow and the `sha256:<64 hex>` digest format — never the meaning of leaf prose; whether a principle generalizes a leaf is recorded by the author through the link verbs, not inferred from text."
+
+[[entry]]
+id = "4fe47a8e27827515"
+domain = "code"
+file = "scripts/lib/principle_provenance.py"
+class = "structural"
+disposition = "keep"
+ground = "Parses the fixed leaf grammar only — the `---` frontmatter block, a `key:` line and its `[a, b]` list value, `## <name>` section headings, the backtick slugs after the `← ` index-pointer arrow and the `sha256:<64 hex>` digest format — never the meaning of leaf prose; whether a principle generalizes a leaf is recorded by the author through the link verbs, not inferred from text."
+
+[[entry]]
 id = "5f918c26ca61952d"
 domain = "code"
 file = "scripts/lib/prompt_judges.py"
@@ -3830,6 +3911,14 @@ ground = "Regexes found are markdown/frontmatter/command-syntax parsing (heading
 
 [[entry]]
 id = "52e9315e2ec5862c"
+domain = "code"
+file = "scripts/record-experience.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "4e576e35ca14c638"
 domain = "code"
 file = "scripts/record-experience.py"
 class = "structural"
@@ -17939,6 +18028,14 @@ file = "scripts/lib/planner_plan_check.py"
 class = "structural"
 disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "0234cba55be3f1da"
+domain = "code_file_rollup"
+file = "scripts/lib/principle_provenance.py"
+class = "structural"
+disposition = "keep"
+ground = "Parses the fixed leaf grammar only — the `---` frontmatter block, a `key:` line and its `[a, b]` list value, `## <name>` section headings, the backtick slugs after the `← ` index-pointer arrow and the `sha256:<64 hex>` digest format — never the meaning of leaf prose; whether a principle generalizes a leaf is recorded by the author through the link verbs, not inferred from text. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "d7c90058638379bf"

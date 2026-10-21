@@ -28,6 +28,7 @@ CHECKS: list[str] = [
     "verify-agentctl",
     "verify-readme",
     "verify-memory-index",
+    "verify-principle-provenance",
     "lint-hooks-executable",
     "verify-doc-concepts",
     "verify-onboarding-entrypoint",

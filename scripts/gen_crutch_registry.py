@@ -294,6 +294,18 @@ CODE_PARTITIONS = [
         "or out-of-vocabulary reply fails closed to no marker rather than a guess.",
     ),
     (
+        "scripts/lib/principle_provenance.py",
+        lambda f: f == "scripts/lib/principle_provenance.py",
+        "structural",
+        "keep",
+        "Parses the fixed leaf grammar only — the `---` frontmatter block, a "
+        "`key:` line and its `[a, b]` list value, `## <name>` section headings, "
+        "the backtick slugs after the `← ` index-pointer arrow and the "
+        "`sha256:<64 hex>` digest format — never the meaning of leaf prose; "
+        "whether a principle generalizes a leaf is recorded by the author through "
+        "the link verbs, not inferred from text.",
+    ),
+    (
         "scripts/lib/** (incl. term_ruleset.py, published_body.py)",
         lambda f: f.startswith("scripts/lib/"),
         "structural",

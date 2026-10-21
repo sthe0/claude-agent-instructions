@@ -1606,6 +1606,92 @@ hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
+[sites."scripts/lib/principle_provenance.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles the `---` frontmatter block, the `sha256:<64 hex>` digest shape and the backtick slug after the `← ` index-pointer arrow; fixed leaf grammar."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/principle_provenance.py::_line_re::re.compile"]
+class = "structural"
+ground = "Compiles a `^key:` frontmatter line pattern from an escaped field name; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/principle_provenance.py::field_value::pattern.match"]
+class = "structural"
+ground = "Splits the `---` frontmatter block off a leaf before reading a field; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/principle_provenance.py::field_value::pattern.search"]
+class = "structural"
+ground = "Finds the `key:` line of a frontmatter field to read its value; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/principle_provenance.py::set_field::pattern.match"]
+class = "structural"
+ground = "Splits the `---` frontmatter block off a leaf before rewriting a field; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/principle_provenance.py::set_field::pattern.search"]
+class = "structural"
+ground = "Finds the `key:` line to replace with the new list value; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/principle_provenance.py::remove_field::pattern.match"]
+class = "structural"
+ground = "Splits the `---` frontmatter block off a leaf before dropping a field; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/principle_provenance.py::remove_field::pattern.search"]
+class = "structural"
+ground = "Finds the `key:` line to drop; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/principle_provenance.py::pointer_sources::re.findall"]
+class = "structural"
+ground = "Reads the backtick-quoted slugs after the `← ` arrow of a principles/MEMORY.md pointer line; fixed index-line syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/principle_provenance.py::_pointer_index::pattern.match"]
+class = "structural"
+ground = "Reads the linked leaf slug of a `- [title](slug.md)` index pointer line; markdown link syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/principle_provenance.py::body_digest::pattern.match"]
+class = "structural"
+ground = "Splits the `---` frontmatter block off a case so the digest covers the body only; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/principle_provenance.py::digest_format_ok::pattern.fullmatch"]
+class = "structural"
+ground = "Tests the `sha256:<64 hex>` digest format of a case; a format check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/principle_provenance.py::_section_body::re.search"]
+class = "structural"
+ground = "Finds a `## <name>` section heading and the next heading to cut a section body; markdown heading syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::cmd_case_add::pattern.fullmatch"]
+class = "structural"
+ground = "SLUG.fullmatch checks a case or principle slug against the `[a-z0-9-]` file-stem charset; a format check."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/lint-prose-length.py::extract_frontmatter_description::pattern.search"]
 class = "structural"
 ground = "FRONTMATTER_DESC_RE extracts the description: line from YAML frontmatter, markdown/frontmatter structure."
