@@ -1,0 +1,27 @@
+{
+  "session_id": "aaaaaaaa-0000-4000-8000-000000000001",
+  "node": "PLAN_READY",
+  "user_prompt_count": 6,
+  "effort_actuals": {"active_minutes": 65.0},
+  "effort_child_runs": [],
+  "history": [
+    {"event": "submit_plan", "ts": "2026-01-01T10:01:00Z", "plan_sha256": "a1a1a1a1a1a1a1a1", "verified": true},
+    {"event": "plan_review", "ts": "2026-01-01T10:02:00Z", "verdict": "pass", "reviewer": "thinker"},
+    {"event": "plan_pair_review", "ts": "2026-01-01T10:03:00Z", "verdict": "revise", "reviewer": "thinker"},
+    {"event": "plan_pair_review", "ts": "2026-01-01T10:04:00Z", "verdict": "pass", "reviewer": "thinker"},
+    {"event": "plan_review", "ts": "2026-01-01T10:05:00Z", "verdict": "override", "reviewer": "agent"},
+    {"event": "plan_review", "ts": "2026-01-01T10:06:00Z", "verdict": "pass", "reviewer": "topological-composition"},
+    {"event": "review_carried", "ts": "2026-01-01T10:07:00Z", "verdict": "pass", "reviewer": "thinker"},
+    {"event": "submit_plan", "ts": "2026-01-01T10:08:00Z", "plan_sha256": "a1a1a1a1a1a1a1a1", "verified": true},
+    {"event": "plan_review", "ts": "2026-01-01T10:09:00Z", "verdict": "pass", "reviewer": "thinker"},
+    {"event": "replan", "ts": "2026-01-01T10:20:00Z", "plan_sha256": "b2b2b2b2b2b2b2b2"},
+    {"event": "plan_review", "ts": "2026-01-01T10:21:00Z", "verdict": "pass", "reviewer": "thinker"},
+    {"event": "approve", "ts": "2026-01-01T11:45:00Z"},
+    {"event": "replan", "ts": "2026-01-01T11:46:00Z", "plan_sha256": "c3c3c3c3c3c3c3c3"},
+    {"event": "plan_review", "ts": "2026-01-01T11:47:00Z", "verdict": "pass", "reviewer": "thinker"},
+    {"event": "submit_plan", "ts": "2026-01-01T11:48:00Z", "plan_sha256": "d4d4d4d4d4d4d4d4", "verified": false},
+    {"event": "submit_plan", "ts": "2026-01-01T11:48:30Z", "plan_sha256": "d4d4d4d4d4d4d4d4", "verified": true},
+    {"event": "plan_review", "ts": "2026-01-01T11:49:00Z", "verdict": "revise", "reviewer": "thinker"},
+    {"event": "plan_pair_review", "ts": "2026-01-01T11:49:30Z", "verdict": "pass", "reviewer": "thinker"}
+  ]
+}

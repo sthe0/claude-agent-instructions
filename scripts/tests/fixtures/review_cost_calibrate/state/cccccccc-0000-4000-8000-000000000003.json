@@ -1,0 +1,10 @@
+{
+  "session_id": "cccccccc-0000-4000-8000-000000000003",
+  "node": "CHAT",
+  "user_prompt_count": 1,
+  "effort_actuals": {},
+  "effort_child_runs": [],
+  "history": [
+    {"event": "classify", "ts": "2026-01-03T10:00:00Z"}
+  ]
+}
