@@ -106,6 +106,30 @@ removed: recurrence-only induction has no counterpart to a held-out/OOD split, s
 over-generalize and ship unrefuted — the gap this adds is a cheap judgment pass, not a benchmark, since
 no automated evaluator exists for a principle's correctness.*
 
+### Provenance completeness
+
+It is known in advance which experience was generalized into which principle. Every experience leaf carries a required `generalized_into` list (`[]` = not yet generalized); every principle names its experience sources in `induced_from` or carries an explicit `rule_derived` reason. The link is two-sided and the writing tools keep it so at write time: `record-experience.py promote` writes the principle and stamps each source leaf, `record-experience.py link` / `unlink` write or remove every side of one pair, and `record-experience.py backfill` stamps a corpus from the principles' `induced_from`. The `## Induced from` prose is narrative and is not mirrored; only the frontmatter fields are checked.
+
+`record-experience.py provenance --of <principle>` lists exactly the experience to consult when that principle is revised; `record-experience.py provenance --check` lists unaccounted items and exits 1 on any, and `verify-principle-provenance.py` runs the same check in the pre-commit verifier.
+
+How experience unrelated to a principle became possible, each cause in its own words:
+
+- Seed principles were lifted from a coordinator-pitfalls row and from rule leaves, so they had no experience source to name.
+- Induction was hand-written and one-way: the principle listed its sources, nothing wrote the mark back on the leaves.
+- `promote-scan` only flags a candidate cluster; nothing recorded which leaves a later principle consumed.
+- Leaves were born without a status field, so "not generalized yet" and "never considered" looked the same.
+- `induced_from` accepted non-experience sources (rule leaves, notes), which satisfied the field without any experience behind it.
+
+### Sanitized cases (case/v1)
+
+A project experience leaf reaches a global principle only through a sanitized case, because Core is public and holds no project identifier. Cases live in `principles/cases/` of the global tier and are not indexed in `principles/MEMORY.md`. A case carries frontmatter `schema: case/v1`, `origin_tier: project`, `source_digest` (a `sha256:` digest of the source leaf's body only, frontmatter excluded, so a stamp change does not stale it) and `generalized_into` (the global principles); its body has four sections, `## Aspect`, `## Expected`, `## Actual` and a closing `## Mismatch`. `record-experience.py case-add --spec FILE` writes the case and links it to its principles; the identifier check on the text is a literal substring match, so a paraphrase of a project name is not caught.
+
+Cross-tier findings: `stale_case` (the source leaf's body changed after the case was written), `orphan_case` (no source leaf or no principle cites it), `case_leak` (the case text contains a project identifier).
+
+### Project principle catalog
+
+A project keeps its own principles in `<project memory dir>/principles`, with the same `principle/v1` shape; its leaves link to them two-sided exactly as in the global tier. `record-experience.py promote` and `link` take `--project-dir` to write there. A project leaf never lists a global principle directly: that is reported as `project_direct_global`, and the route is a case, which Core holds without any project identifier.
+
 ## See also
 
 - `docs/adr/0001-consensus-architecture.md` § *Principle as a concept with a generality gradient*.
