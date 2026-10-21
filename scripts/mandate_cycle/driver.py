@@ -69,8 +69,8 @@ GATE_SCRIPTS = ("scripts/verify-all.py", "scripts/lint-prose-length.py")
 EXIT_OK, EXIT_ERROR, EXIT_BUSY = 0, 1, 3
 
 # Kinds beyond rules.FAILURE_KINDS the driver records: a spawn that returned nothing usable, and a
-# git/gh step that failed. Both open the breaker like any failed item -- a cycle that cannot
-# complete its own plumbing should stop and be looked at.
+# git/gh step that failed. Both open the breaker -- a cycle that cannot complete its own
+# plumbing should stop and be looked at.
 KIND_SPAWN_ERROR, KIND_INFRA = "spawn-error", "infra"
 VERDICT_LABEL = {"auto-ok": "ok", "auto-no": "no"}
 VERDICT_RE = re.compile(r"VERDICT:\s*(accept|reject)\b", re.IGNORECASE)
@@ -463,10 +463,22 @@ class Cycle:
         stored = store.append_item_row(self.mid, row, now=self.now())
         self.items.append(stored)
         outcome = row["outcome"]
-        if row.get("failure_kind") == "state-tampered":
+        kind = row.get("failure_kind", "")
+        if kind == "state-tampered":
             self.trip("state-tampered")
-        elif rules.opens_breaker(outcome):
-            self.trip(f"{outcome}:{row.get('failure_kind', 'unknown')} on #{row['issue']}")
+        elif rules.opens_breaker(outcome, kind):
+            self.trip(f"{outcome}:{kind or 'unknown'} on #{row['issue']}")
+        elif outcome == "failed":
+            run = rules.local_failure_run(store.read_item_rows(self.mid), self.streak_since())
+            if len(run) >= rules.LOCAL_FAILURE_STREAK:
+                self.trip(f"{len(run)} consecutive item failures: {', '.join(f'#{n}' for n in run)}")
+
+    def streak_since(self) -> str:
+        """The last user resume, else the grant: failures the user already looked at do not count."""
+        stamps = [e["ts"] for e in store.read_events(self.mid) if e.get("event") == "resumed" and e.get("ts")]
+        if stamps:
+            return max(stamps, key=rules.parse_ts)
+        return store.load_mandate(self.mid).granted_at
 
     # ---- github reads
 
@@ -489,10 +501,12 @@ class Cycle:
         label_rows = store.read_label_rows(self.mid)
         digests = store.read_digests(self.mid)
         now = self.now()
+        failed = rules.failed_issues(store.read_item_rows(self.mid), store.read_events(self.mid))
         return [
             rules.evaluate_candidate(
                 issue, owner=owner, labels_cfg=mandate.labels, label_rows=label_rows, digests=digests,
                 pr_refs=pr_refs, veto_window_hours=mandate.veto_window_hours, now=now,
+                failed_issues=failed,
             )
             for issue in issues
         ]
@@ -961,6 +975,10 @@ class Cycle:
             f"- {l['phase']}" + (f" (#{l['issue']})" if "issue" in l else "") + f": {', '.join(l['reasons'])}"
             for l in self.limits
         ]
+        not_retried = [
+            f"- #{n} ({row.get('failure_kind')}) - run `agentctl mandate-retry --issue {n} --by <you>`"
+            for n, row in sorted(rules.failed_attempts(store.read_item_rows(self.mid), store.read_events(self.mid)).items())
+        ]
         mandate_prs = {pr.get("url") or f"#{pr.get('number')}" for pr in self.open_prs}
         mandate_prs |= {r["pr_url"] for r in self.items if r.get("pr_url")}
         lines = [
@@ -986,6 +1004,7 @@ class Cycle:
         ])
         lines += section("Limits hit", limits)
         lines += section("Overruns", overruns)
+        lines += section("Not retried (failed before)", not_retried)
         lines += section(f"Open mandate pull requests ({len(mandate_prs)})", [f"- {url}" for url in sorted(mandate_prs)])
         lines += section("Remote `mandate/*` branches without a pull request", [f"- {b}" for b in self.orphans])
         if mandate.breaker_open:

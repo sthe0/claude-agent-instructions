@@ -188,6 +188,11 @@ def open_breaker(
     return tripped
 
 
+def allow_retry(mandate_id: str, issue: int, *, by: str, now: "datetime | None" = None) -> dict:
+    """Record that the user lets the cycle take `issue` again after an item-local failure."""
+    return append_event(mandate_id, rules.RETRY_ALLOWED_EVENT, {"issue": int(issue)}, by=by, now=now)
+
+
 def read_events(mandate_id: str) -> "list[dict]":
     return read_jsonl(path_of(mandate_id, EVENTS_FILE))
 

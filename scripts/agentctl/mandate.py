@@ -59,6 +59,10 @@ OUTCOMES = ("pr-opened", "failed", "overrun", "declined", "limit")
 FAILURE_KINDS = (
     "tests", "review-reject", "constitution", "permission", "org-neutral", "state-tampered",
 )
+CYCLE_FAILURE_KINDS = ("spawn-error", "infra", "state-tampered")
+ITEM_FAILURE_KINDS = ("tests", "review-reject", "constitution", "permission", "org-neutral")
+LOCAL_FAILURE_STREAK = 3
+RETRY_ALLOWED_EVENT = "retry-allowed"
 
 
 class MandateError(ValueError):
@@ -392,6 +396,7 @@ def evaluate_candidate(
     pr_refs: "set[int]",
     veto_window_hours: float,
     now: datetime,
+    failed_issues: "frozenset[int]" = frozenset(),
 ) -> Candidate:
     """May this issue be taken in this cycle, and if not, why not.
 
@@ -418,6 +423,8 @@ def evaluate_candidate(
         return result(False, "process-umbrella")
     if number in pr_refs:
         return result(False, "open-pr")
+    if number in failed_issues:
+        return result(False, "failed-before")
     if no in names:
         return result(False, "auto-no")
     if ok not in names:
@@ -581,9 +588,74 @@ def killed_spawn_charge(has_cost_row: bool, usd_cap: float) -> float:
     return 0.0 if has_cost_row else float(usd_cap)
 
 
-def opens_breaker(outcome: str) -> bool:
-    """Only a failed item opens the breaker; an unknown outcome is treated as one."""
-    return outcome not in ("pr-opened", "overrun", "declined", "limit")
+def opens_breaker(outcome: str, failure_kind: str = "") -> bool:
+    """A failed item opens the breaker unless its kind is item-local: one issue's own
+    failure says nothing about the cycle. An unknown outcome or kind opens it (fail-safe)."""
+    if outcome in ("pr-opened", "overrun", "declined", "limit"):
+        return False
+    return outcome != "failed" or failure_kind not in ITEM_FAILURE_KINDS
+
+
+def _ordered_rows(item_rows: Iterable[Mapping]) -> "list[Mapping]":
+    """Rows oldest first: by timestamp, file order breaking ties; unparsable timestamps first."""
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    keyed = [(parse_ts(row.get("ts")) or floor, index, row) for index, row in enumerate(item_rows)]
+    return [row for _, _, row in sorted(keyed, key=lambda entry: entry[:2])]
+
+
+def _is_item_local_failure(row: Mapping) -> bool:
+    return row.get("outcome") == "failed" and row.get("failure_kind") in ITEM_FAILURE_KINDS
+
+
+def local_failure_run(item_rows: Iterable[Mapping], since_ts) -> "list[int]":
+    """Issues of the trailing run of item-local failures among the rows stamped at or after
+    `since_ts`. A pr-opened row (or any failure that is not item-local) ends the run;
+    declined, overrun and limit rows are neither a success nor a failure and are skipped."""
+    since = parse_ts(since_ts, strict=True)
+    run: "list[int]" = []
+    for row in _ordered_rows(item_rows):
+        moment = parse_ts(row.get("ts"))
+        if moment is None or moment < since:
+            continue
+        if _is_item_local_failure(row):
+            run.append(int(row["issue"]))
+        elif row.get("outcome") not in ("declined", "overrun", "limit"):
+            run = []
+    return run
+
+
+def local_failure_streak(item_rows: Iterable[Mapping], since_ts) -> int:
+    return len(local_failure_run(item_rows, since_ts))
+
+
+def failed_issues(item_rows: Iterable[Mapping], events: Iterable[Mapping]) -> "frozenset[int]":
+    return frozenset(failed_attempts(item_rows, events))
+
+
+def failed_attempts(item_rows: Iterable[Mapping], events: Iterable[Mapping]) -> "dict[int, Mapping]":
+    """Per issue, the failing row of an issue whose latest attempt (a failed or pr-opened
+    row) failed item-locally and that the user has not allowed again since: declined,
+    overrun and limit rows are not attempts, so a later one never lifts a failure."""
+    latest: "dict[int, Mapping]" = {}
+    for row in _ordered_rows(item_rows):
+        if row.get("outcome") in ("failed", "pr-opened"):
+            latest[int(row["issue"])] = row
+    allowed: "dict[int, datetime]" = {}
+    for event in events:
+        if event.get("event") != RETRY_ALLOWED_EVENT:
+            continue
+        moment = parse_ts(event.get("ts"))
+        try:
+            issue = int((event.get("detail") or {}).get("issue"))
+        except (TypeError, ValueError):
+            continue
+        if moment is not None and (issue not in allowed or moment > allowed[issue]):
+            allowed[issue] = moment
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    return {
+        issue: row for issue, row in latest.items()
+        if _is_item_local_failure(row) and allowed.get(issue, floor) <= (parse_ts(row.get("ts")) or floor)
+    }
 
 
 # --- the constitution classifier ------------------------------------------------------

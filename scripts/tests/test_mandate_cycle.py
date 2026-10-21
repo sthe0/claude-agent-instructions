@@ -886,7 +886,7 @@ def test_a_baseline_passing_test_that_fails_on_the_item_fails_it_and_is_not_push
     assert (row["outcome"], row["failure_kind"], row["tests"]) == ("failed", "tests", "fail")
     assert env.world.calls_with("git", "push") == []
     assert env.world.calls_with("gh", "pr", "create") == []
-    assert store.load_mandate(ID).breaker_open
+    assert not store.load_mandate(ID).breaker_open
 
 
 def test_a_failure_that_passes_on_its_single_rerun_does_not_fail_the_item(env):
@@ -939,7 +939,7 @@ def test_a_gate_script_the_item_breaks_fails_it(env):
 
 # --- what a diff may not touch, what may not be published -------------------------------
 
-def test_a_diff_that_touches_the_constitution_is_never_pushed_and_trips_the_breaker(env):
+def test_a_diff_that_touches_the_constitution_is_never_pushed_and_fails_only_that_item(env):
     env.grant()
     eligible(env, 1)
     env.world.name_status = "M\tscripts/foo.py\nM\tscripts/agentctl/mandate.py\n"
@@ -948,7 +948,7 @@ def test_a_diff_that_touches_the_constitution_is_never_pushed_and_trips_the_brea
     assert (row["outcome"], row["failure_kind"]) == ("failed", "constitution")
     assert env.world.calls_with("git", "push") == []
     assert env.spawner.of("code-reviewer") == []
-    assert store.load_mandate(ID).breaker_open
+    assert not store.load_mandate(ID).breaker_open
 
 
 def test_published_text_that_fails_the_org_neutral_check_is_not_pushed(env):
@@ -1013,7 +1013,7 @@ def test_a_permission_request_fails_the_item_with_the_permission_kind(env):
     env.cycle()
     row = item_rows()[0]
     assert (row["outcome"], row["failure_kind"]) == ("failed", "permission")
-    assert store.load_mandate(ID).breaker_open
+    assert not store.load_mandate(ID).breaker_open
 
 
 def test_a_specialist_that_returns_no_marker_fails_the_item(env):
@@ -1023,6 +1023,18 @@ def test_a_specialist_that_returns_no_marker_fails_the_item(env):
     env.cycle()
     row = item_rows()[0]
     assert (row["outcome"], row["failure_kind"]) == ("failed", "spawn-error")
+
+
+def test_a_spawn_error_still_opens_the_breaker(env):
+    env.grant(max_items=2)
+    eligible(env, 1, day=1)
+    eligible(env, 2, day=2)
+    env.spawner.developer = lambda argv, cwd: driver.SpawnResult(1, "", "traceback")
+    env.cycle()
+    assert [r["issue"] for r in item_rows()] == [1]
+    mandate = store.load_mandate(ID)
+    assert mandate.breaker_open and mandate.breaker_reason == "failed:spawn-error on #1"
+    assert list(store.read_cycle_records(ID).values())[0]["status"] == "breaker"
 
 
 # --- overrun, breaker, limits -----------------------------------------------------------
@@ -1075,17 +1087,105 @@ def test_a_killed_spawn_that_left_a_cost_row_is_not_charged_twice(env):
     assert (spend.day_usd, spend.week_usd) == (pytest.approx(1.5), pytest.approx(1.5))
 
 
-def test_a_failed_item_opens_the_breaker_and_no_further_item_is_taken(env):
+def test_an_item_local_failure_is_recorded_and_the_cycle_continues(env):
     env.grant(max_items=2)
     eligible(env, 1, day=1)
     eligible(env, 2, day=2)
+    n = {"count": 0}
+
+    def developer(argv, cwd):
+        n["count"] += 1
+        text = "PERMISSION-REQUEST:\nAction: x\n" if n["count"] == 1 else "COMPLETED:\nok\n"
+        return driver.SpawnResult(0, text)
+
+    env.spawner.developer = developer
+    env.cycle()
+    assert [(r["issue"], r["outcome"]) for r in item_rows()] == [(1, "failed"), (2, "pr-opened")]
+    assert not store.load_mandate(ID).breaker_open
+    assert events("breaker-open") == []
+    assert list(store.read_cycle_records(ID).values())[0]["status"] == "ok"
+
+
+def test_three_consecutive_item_failures_open_the_breaker(env):
+    env.grant(max_items=4)
+    for n in (1, 2, 3, 4):
+        eligible(env, n, day=n)
     env.spawner.developer = lambda argv, cwd: driver.SpawnResult(0, "PERMISSION-REQUEST:\nAction: x\n")
     env.cycle()
-    assert [r["issue"] for r in item_rows()] == [1]
+    assert [r["issue"] for r in item_rows()] == [1, 2, 3]
     mandate = store.load_mandate(ID)
-    assert mandate.breaker_open and "#1" in mandate.breaker_reason
+    assert mandate.breaker_open and mandate.breaker_reason == "3 consecutive item failures: #1, #2, #3"
     assert [e["detail"] for e in events("breaker-open")] == [{"reason": mandate.breaker_reason}]
     assert list(store.read_cycle_records(ID).values())[0]["status"] == "breaker"
+
+
+def test_a_pull_request_between_failures_resets_the_streak(env):
+    env.grant(max_items=4)
+    for n in (1, 2, 3, 4):
+        eligible(env, n, day=n)
+    n = {"count": 0}
+
+    def developer(argv, cwd):
+        n["count"] += 1
+        text = "COMPLETED:\nok\n" if n["count"] == 2 else "PERMISSION-REQUEST:\nAction: x\n"
+        return driver.SpawnResult(0, text)
+
+    env.spawner.developer = developer
+    env.cycle()
+    assert [(r["issue"], r["outcome"]) for r in item_rows()] == [
+        (1, "failed"), (2, "pr-opened"), (3, "failed"), (4, "failed"),
+    ]
+    assert not store.load_mandate(ID).breaker_open
+
+
+def test_failures_before_the_resume_do_not_count_toward_the_streak(env):
+    env.grant()
+    seams = driver.Seams(run=env.world.run, spawn=env.spawner, judge=env.judge, clock=env.clock)
+    cycle = driver.Cycle(env.cfg(), seams, "c1")
+
+    def fail(issue):
+        env.clock.advance(seconds=1)
+        cycle.record_item({"cycle_id": "c1", "issue": issue, "outcome": "failed", "failure_kind": "tests"})
+
+    for issue in (1, 2, 3):
+        fail(issue)
+    assert len(events("breaker-open")) == 1
+    env.clock.advance(seconds=1)
+    store.save_mandate(rules.resumed(store.load_mandate(ID)))
+    store.append_event(ID, "resumed", {}, by="alice", now=env.clock())
+    fail(4)
+    assert len(events("breaker-open")) == 1
+    assert not store.load_mandate(ID).breaker_open
+
+
+def test_the_cycle_does_not_retake_a_failed_issue(env):
+    env.grant()
+    eligible(env, 1)
+    store.append_item_row(
+        ID, {"cycle_id": "old", "issue": 1, "outcome": "failed", "failure_kind": "tests"}, now=env.clock(),
+    )
+    env.clock.advance(seconds=10)
+    rc, out = env.main("run", "--dry-run", "--json")
+    report = json.loads(out)
+    assert report["would_take"] == []
+    assert {c["issue"]: c["reason"] for c in report["candidates"]} == {1: "failed-before"}
+    env.cycle()
+    assert [r["cycle_id"] for r in item_rows()] == ["old"]
+    assert env.spawner.of("developer") == []
+    env.clock.advance(seconds=10)
+    store.allow_retry(ID, 1, by="alice", now=env.clock())
+    env.clock.advance(seconds=10)
+    env.cycle()
+    assert [r["outcome"] for r in item_rows()] == ["failed", "pr-opened"]
+
+
+def test_a_declined_item_is_not_a_failed_issue_and_is_not_blocked_by_the_rule(env):
+    env.grant()
+    eligible(env, 1)
+    store.append_item_row(ID, {"cycle_id": "old", "issue": 1, "outcome": "declined"}, now=env.clock())
+    env.clock.advance(seconds=10)
+    env.cycle()
+    assert [r["outcome"] for r in item_rows()] == ["declined", "pr-opened"]
 
 
 def test_a_spawn_that_touches_the_mandate_state_fails_the_item_and_opens_the_breaker(env):
@@ -1373,12 +1473,24 @@ def test_the_digest_lists_the_labels_applied_and_the_comments_the_neutral_check_
 def test_the_digest_states_the_open_breaker_and_how_to_close_it(env):
     env.grant()
     eligible(env, 1)
+    env.spawner.developer = lambda argv, cwd: driver.SpawnResult(1, "", "traceback")
+    env.cycle()
+    text = digest_text()
+    assert "**Breaker open**: failed:spawn-error on #1." in text
+    assert "`agentctl mandate-resume`" in text
+    assert "- #1: failed (spawn-error)" in text
+
+
+def test_the_digest_lists_failed_issues_with_the_retry_command(env):
+    env.grant()
+    eligible(env, 1)
     env.spawner.developer = lambda argv, cwd: driver.SpawnResult(0, "PERMISSION-REQUEST:\nAction: x\n")
     env.cycle()
     text = digest_text()
-    assert "**Breaker open**: failed:permission on #1." in text
-    assert "`agentctl mandate-resume`" in text
     assert "- #1: failed (permission)" in text
+    assert "Not retried (failed before)" in text
+    assert "- #1 (permission) - run `agentctl mandate-retry --issue 1 --by <you>`" in text
+    assert "Breaker open" not in text
 
 
 def test_a_user_set_label_is_eligible_without_any_digest(env):
@@ -1436,6 +1548,7 @@ def test_no_cycle_source_names_issue_create(name):
 FORBIDDEN_NAMES = {
     "new_mandate", "extended", "resumed", "resume_cycle", "save_mandate", "stop_cycle", "stopped",
     "cmd_mandate_grant", "cmd_mandate_extend", "cmd_mandate_resume", "cmd_mandate_stop",
+    "allow_retry", "cmd_mandate_retry",
 }
 
 
@@ -1447,7 +1560,7 @@ def test_no_cycle_source_references_a_user_authority_transition(name):
     names |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
     assert not (names & FORBIDDEN_NAMES), names & FORBIDDEN_NAMES
     for text in string_constants(source):
-        assert not re.fullmatch(r"mandate-(grant|extend|resume|stop)", text), text
+        assert not re.fullmatch(r"mandate-(grant|extend|resume|retry|stop)", text), text
 
 
 def test_push_refspec_pushes_the_given_commit_to_a_mandate_branch_only():

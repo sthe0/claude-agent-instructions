@@ -544,12 +544,126 @@ def test_a_killed_spawn_without_a_cost_row_is_charged_the_whole_cap():
     assert m.killed_spawn_charge(True, 15.0) == 0.0
 
 
-@pytest.mark.parametrize("outcome,opens", [
-    ("pr-opened", False), ("overrun", False), ("declined", False), ("limit", False),
-    ("failed", True), ("surprise", True), ("", True),
-])
-def test_only_a_failed_or_unknown_outcome_opens_the_breaker(outcome, opens):
-    assert m.opens_breaker(outcome) is opens
+@pytest.mark.parametrize("outcome", ["pr-opened", "overrun", "declined", "limit"])
+@pytest.mark.parametrize("kind", ["", "tests", "spawn-error", "whatever"])
+def test_a_non_failure_outcome_never_opens_the_breaker(outcome, kind):
+    assert m.opens_breaker(outcome, kind) is False
+
+
+@pytest.mark.parametrize("kind", m.CYCLE_FAILURE_KINDS)
+def test_opens_breaker_only_for_cycle_level_kinds(kind):
+    assert m.opens_breaker("failed", kind) is True
+
+
+def test_an_item_local_failure_kind_does_not_open_the_breaker():
+    for kind in m.ITEM_FAILURE_KINDS:
+        assert m.opens_breaker("failed", kind) is False, kind
+
+
+def test_an_unknown_failure_kind_opens_the_breaker():
+    for outcome, kind in [("failed", "surprise"), ("failed", ""), ("surprise", "tests"), ("", "")]:
+        assert m.opens_breaker(outcome, kind) is True, (outcome, kind)
+
+
+def test_every_recorded_failure_kind_is_classified_exactly_once():
+    classified = set(m.CYCLE_FAILURE_KINDS) | set(m.ITEM_FAILURE_KINDS)
+    assert set(m.FAILURE_KINDS) <= classified
+    assert not set(m.CYCLE_FAILURE_KINDS) & set(m.ITEM_FAILURE_KINDS)
+
+
+# --- the item-local failure streak and the failed-before exclusion -----------------------
+
+def attempt(issue_no, outcome="failed", kind="tests", ago=10.0):
+    return {"ts": hours(ago), "issue": issue_no, "outcome": outcome, "failure_kind": kind}
+
+
+def retry_event(issue_no, ago):
+    return {"ts": hours(ago), "event": m.RETRY_ALLOWED_EVENT, "detail": {"issue": issue_no}}
+
+
+def test_local_failure_streak_counts_since_the_last_resume():
+    rows = [attempt(1, ago=9), attempt(2, ago=8), attempt(3, ago=7), attempt(4, ago=3)]
+    assert m.local_failure_streak(rows, hours(10)) == 4
+    assert m.local_failure_streak(rows, hours(5)) == 1
+    assert m.local_failure_streak(rows, hours(2)) == 0
+    assert m.local_failure_run(rows, hours(5)) == [4]
+
+
+def test_a_pr_opened_row_resets_the_streak():
+    rows = [attempt(1, ago=9), attempt(2, ago=8), attempt(3, "pr-opened", "", ago=7), attempt(4, ago=6)]
+    assert m.local_failure_run(rows, hours(10)) == [4]
+
+
+def test_a_declined_overrun_or_limit_row_neither_extends_nor_resets_the_streak():
+    rows = [attempt(1, ago=9), attempt(2, "declined", "", ago=8), attempt(3, "overrun", "", ago=7),
+            attempt(4, "limit", "", ago=6), attempt(5, ago=5)]
+    assert m.local_failure_run(rows, hours(10)) == [1, 5]
+
+
+def test_a_cycle_level_failure_ends_the_streak():
+    rows = [attempt(1, ago=9), attempt(2, kind="infra", ago=8), attempt(3, ago=7)]
+    assert m.local_failure_run(rows, hours(10)) == [3]
+
+
+def test_the_streak_orders_rows_by_timestamp_not_file_order():
+    rows = [attempt(3, ago=7), attempt(1, ago=9), attempt(2, "pr-opened", "", ago=8)]
+    assert m.local_failure_run(rows, hours(10)) == [3]
+
+
+def test_a_failed_issue_is_not_eligible_again():
+    verdict = m.evaluate_candidate(
+        issue(7), owner=OWNER, labels_cfg=LABELS, label_rows=[], digests={}, pr_refs=set(),
+        veto_window_hours=24.0, now=NOW, failed_issues=frozenset({7}),
+    )
+    assert not verdict.eligible and verdict.reason == "failed-before"
+    other = m.evaluate_candidate(
+        issue(8), owner=OWNER, labels_cfg=LABELS, label_rows=[], digests={}, pr_refs=set(),
+        veto_window_hours=24.0, now=NOW, failed_issues=frozenset({7}),
+    )
+    assert other.eligible
+
+
+def test_an_open_pr_is_reported_before_the_failed_before_reason():
+    verdict = m.evaluate_candidate(
+        issue(7), owner=OWNER, labels_cfg=LABELS, label_rows=[], digests={}, pr_refs={7},
+        veto_window_hours=24.0, now=NOW, failed_issues=frozenset({7}),
+    )
+    assert verdict.reason == "open-pr"
+
+
+def test_failed_issues_holds_an_issue_whose_latest_attempt_failed_locally():
+    assert m.failed_issues([attempt(1)], []) == frozenset({1})
+    assert m.failed_issues([attempt(1, ago=9), attempt(1, "pr-opened", "", ago=5)], []) == frozenset()
+    assert m.failed_issues([attempt(1, "pr-opened", "", ago=9), attempt(1, ago=5)], []) == frozenset({1})
+
+
+@pytest.mark.parametrize("outcome", ["declined", "overrun", "limit"])
+def test_a_failed_issue_stays_excluded_after_a_later_declined_row(outcome):
+    rows = [attempt(1, ago=9), attempt(1, outcome, "", ago=5)]
+    assert m.failed_issues(rows, []) == frozenset({1})
+    assert m.failed_issues(rows, [retry_event(1, 2)]) == frozenset()
+
+
+def test_a_retry_allowed_after_the_failure_makes_it_eligible():
+    rows = [attempt(1, ago=9)]
+    assert m.failed_issues(rows, [retry_event(1, 8)]) == frozenset()
+    assert m.failed_issues(rows, [retry_event(1, 10)]) == frozenset({1})
+    assert m.failed_issues(rows, [retry_event(2, 8)]) == frozenset({1})
+
+
+def test_a_retry_allowed_is_spent_by_the_next_failure():
+    rows = [attempt(1, ago=9), attempt(1, ago=3)]
+    assert m.failed_issues(rows, [retry_event(1, 8)]) == frozenset({1})
+
+
+def test_a_cycle_level_failure_does_not_mark_the_issue():
+    assert m.failed_issues([attempt(1, kind="spawn-error"), attempt(2, kind="state-tampered")], []) == frozenset()
+
+
+def test_a_malformed_retry_event_is_ignored():
+    events = [{"ts": hours(1), "event": m.RETRY_ALLOWED_EVENT, "detail": {}},
+              {"ts": hours(1), "event": m.RETRY_ALLOWED_EVENT}]
+    assert m.failed_issues([attempt(1)], events) == frozenset({1})
 
 
 # --- the constitution classifier ------------------------------------------------------

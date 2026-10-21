@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -172,6 +173,40 @@ def test_resume_refuses_the_coordinator_and_leaves_the_breaker_open(env):
     assert env.runner.calls == []
 
 
+# --- retry ----------------------------------------------------------------------------
+
+def test_mandate_retry_records_retry_allowed(env):
+    grant(env)
+    rc, out = env.run("mandate-retry", "--issue", "7", "--by", "alice")
+    assert rc == 0 and out["data"]["issue"] == 7
+    events = [e for e in store.read_events(ID) if e["event"] == rules.RETRY_ALLOWED_EVENT]
+    assert [(e["by"], e["detail"]) for e in events] == [("alice", {"issue": 7})]
+    assert env.runner.calls == []
+
+
+def test_mandate_retry_refuses_by_agent(env):
+    grant(env)
+    rc, _ = env.run("mandate-retry", "--issue", "7", "--by", "agent")
+    assert rc == 1
+    assert [e for e in store.read_events(ID) if e["event"] == rules.RETRY_ALLOWED_EVENT] == []
+
+
+def test_mandate_retry_of_an_unknown_mandate_fails(env):
+    rc, _ = env.run("mandate-retry", "--id", "ghost", "--issue", "7", "--by", "alice")
+    assert rc == 1
+
+
+def test_mandate_retry_lifts_the_failed_before_exclusion(env):
+    grant(env)
+    ts = datetime.now(timezone.utc) - timedelta(hours=2)
+    store.append_item_row(
+        ID, {"cycle_id": "c0", "issue": 7, "outcome": "failed", "failure_kind": "tests"}, now=ts,
+    )
+    assert rules.failed_issues(store.read_item_rows(ID), store.read_events(ID)) == frozenset({7})
+    env.run("mandate-retry", "--issue", "7", "--by", "alice")
+    assert rules.failed_issues(store.read_item_rows(ID), store.read_events(ID)) == frozenset()
+
+
 # --- stop -----------------------------------------------------------------------------
 
 def test_stop_pauses_and_disables_the_timer_without_killing_an_idle_mandate(env):
@@ -299,11 +334,20 @@ def test_mandate_verbs_survive_the_default_session_injection(env, monkeypatch):
 
 # --- user authority -------------------------------------------------------------------
 
-def test_grant_extend_and_resume_are_user_authority_verbs():
-    for verb in ("mandate-grant", "mandate-extend", "mandate-resume"):
+def test_grant_extend_resume_and_retry_are_user_authority_verbs():
+    for verb in ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry"):
         assert verb in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS, verb
         call = ["python3", "scripts/agentctl-cli.py", verb, "--by", "alice"]
         assert widening_targets.agentctl_user_authority_call(call) == verb
+
+
+def test_the_docs_name_the_streak_failed_before_and_mandate_retry():
+    root = Path(__file__).resolve().parents[2]
+    operations = (root / "docs/operations/background-mandate.md").read_text(encoding="utf-8")
+    for phrase in ("consecutive item failures", "failed-before", "mandate-retry"):
+        assert phrase in operations, phrase
+    assert "mandate-retry" in (root / "docs/adr/0008-standing-mandate.md").read_text(encoding="utf-8")
+    assert "`mandate-retry " in (root / "scripts/agentctl/README.md").read_text(encoding="utf-8")
 
 
 def test_stop_and_status_are_not_user_authority_verbs():

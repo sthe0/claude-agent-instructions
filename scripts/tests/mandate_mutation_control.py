@@ -145,8 +145,10 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_RULES, "test_triage_sees_only_unlabelled_owner_authored_domain_issues_oldest_first"),
     ),
     "user-authority-verbs": Mutant(
-        WIDENING, '"plugin-record", "mandate-grant", "mandate-extend", "mandate-resume",', '"plugin-record",',
-        _ids(T_CLI, "test_grant_extend_and_resume_are_user_authority_verbs"),
+        WIDENING,
+        '"plugin-record", "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry",',
+        '"plugin-record",',
+        _ids(T_CLI, "test_grant_extend_resume_and_retry_are_user_authority_verbs"),
     ),
     "cycle-minutes-cap": Mutant(
         RULES, "if cycle_elapsed_minutes >= mandate.cycle_minutes_cap:", "if False:",
@@ -292,13 +294,57 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "overrun-not-breaker": Mutant(
         DRIVER,
-        "elif rules.opens_breaker(outcome):",
+        "elif rules.opens_breaker(outcome, kind):",
         "elif True:",
         _ids(
             T_CYCLE,
             "test_an_overrun_does_not_open_the_breaker_and_the_cycle_continues",
             "test_a_killed_spawn_with_no_cost_row_is_charged_the_whole_item_cap",
         ),
+    ),
+    "item-local-not-breaker": Mutant(
+        RULES,
+        'return outcome != "failed" or failure_kind not in ITEM_FAILURE_KINDS',
+        "return True",
+        _ids(T_RULES, "test_an_item_local_failure_kind_does_not_open_the_breaker")
+        + _ids(T_CYCLE, "test_an_item_local_failure_is_recorded_and_the_cycle_continues"),
+    ),
+    "unknown-kind-opens-breaker": Mutant(
+        RULES,
+        'return outcome != "failed" or failure_kind not in ITEM_FAILURE_KINDS',
+        'return outcome == "failed" and failure_kind in CYCLE_FAILURE_KINDS',
+        _ids(T_RULES, "test_an_unknown_failure_kind_opens_the_breaker"),
+    ),
+    "local-failure-streak": Mutant(
+        DRIVER,
+        "if len(run) >= rules.LOCAL_FAILURE_STREAK:",
+        "if False:",
+        _ids(T_CYCLE, "test_three_consecutive_item_failures_open_the_breaker"),
+    ),
+    "streak-since-granted": Mutant(
+        DRIVER,
+        "        if stamps:\n",
+        "        if False:\n",
+        _ids(T_CYCLE, "test_failures_before_the_resume_do_not_count_toward_the_streak"),
+    ),
+    "failed-before": Mutant(
+        RULES,
+        "if number in failed_issues:",
+        "if False:",
+        _ids(T_RULES, "test_a_failed_issue_is_not_eligible_again")
+        + _ids(T_CYCLE, "test_the_cycle_does_not_retake_a_failed_issue"),
+    ),
+    "failed-issues-passed": Mutant(
+        DRIVER,
+        "failed_issues=failed,",
+        "failed_issues=frozenset(),",
+        _ids(T_CYCLE, "test_the_cycle_does_not_retake_a_failed_issue"),
+    ),
+    "retry-allowed-clears": Mutant(
+        RULES,
+        'and allowed.get(issue, floor) <= (parse_ts(row.get("ts")) or floor)',
+        "and True",
+        _ids(T_RULES, "test_a_retry_allowed_after_the_failure_makes_it_eligible"),
     ),
     "single-instance-lock": Mutant(
         DRIVER,

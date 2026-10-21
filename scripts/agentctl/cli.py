@@ -3015,6 +3015,22 @@ def cmd_mandate_resume(args, *, store: StateStore, runner: Runner | None = None)
     )
 
 
+def cmd_mandate_retry(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Let the cycle take an issue again after an item-local failure -- a user decision,
+    since the cycle excludes a failed issue until the user says otherwise."""
+    refusal = _mandate_by_refusal(args)
+    if refusal:
+        return refusal
+    if mandate_store.load_mandate(args.mandate_id) is None:
+        return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
+    mandate_store.allow_retry(args.mandate_id, args.issue, by=args.by.strip())
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {args.mandate_id!r}: issue #{args.issue} may be taken again, allowed by {args.by.strip()}",
+        data={"mandate": args.mandate_id, "issue": args.issue},
+    )
+
+
 def cmd_mandate_stop(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Pause the mandate, disable its timer and kill a running cycle. Open to the agent:
     stopping only ever narrows authority."""
@@ -13054,6 +13070,7 @@ COMMANDS = {
     "mandate-grant": cmd_mandate_grant,
     "mandate-extend": cmd_mandate_extend,
     "mandate-resume": cmd_mandate_resume,
+    "mandate-retry": cmd_mandate_retry,
     "mandate-stop": cmd_mandate_stop,
     "mandate-status": cmd_mandate_status,
 }
@@ -13104,7 +13121,7 @@ _SESSION_COMMANDS = (
     "verify-final", "resolve", "reject",
     "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status", "children",
     "adopt-escalation", "drive", "close", "push-subplan", "pop-subplan", "task-reset",
-    "mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop", "mandate-status",
+    "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry", "mandate-stop", "mandate-status",
     "workspace-register",
 )
 
@@ -13201,11 +13218,11 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "comma-separated stage indices the launcher narrowed the pass to"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
-    ("mandate_id", ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-stop",
-                    "mandate-status"),
+    ("mandate_id", ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry",
+                    "mandate-stop", "mandate-status"),
      "mandate slug the state directory is keyed by"),
     ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission",
-            "task-reset", "mandate-grant", "mandate-extend", "mandate-resume"),
+            "task-reset", "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry"),
      "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
      "identity token like any other --by, not free text)"),
     # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
@@ -14119,6 +14136,8 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp = add_mandate("mandate-extend", "push the mandate's expiry out", by=True)
     sp.add_argument("--days", type=float, required=True, help="days to add past the later of now and expiry")
     add_mandate("mandate-resume", "unpause the mandate and close its breaker", by=True)
+    sp = add_mandate("mandate-retry", "let the cycle take an issue again after an item-local failure", by=True)
+    sp.add_argument("--issue", type=int, required=True, help="the issue number to allow again")
     add_mandate("mandate-stop", "pause the mandate, disable its timer, kill a running cycle")
     add_mandate("mandate-status", "show the mandate, its spend windows and whether a cycle may start")
     return p
