@@ -627,11 +627,33 @@ def test_verifier_reports_unaccounted(tmp_path, capsys):
     assert pp.MISSING_STATUS in capsys.readouterr().out
 
 
-def test_verifier_staged_scans_corpus(tmp_path):
-    root, w = _verifier_world(tmp_path)
-    w.exp("2026-01-02-missing", status=None)
-    staged = w.exp("2026-01-01-sample", status=[])
+def _stage(tmp_path, root, *paths):
     env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(tmp_path))
     subprocess.run(["git", "init", "-q", str(root)], check=True, env=env)
-    subprocess.run(["git", "-C", str(root), "add", str(staged)], check=True, env=env)
+    subprocess.run(["git", "-C", str(root), "add", *map(str, paths)], check=True, env=env)
+
+
+def test_verifier_staged_scans_corpus(tmp_path):
+    root, w = _verifier_world(tmp_path)
+    broken = w.exp("2026-01-02-missing", status=None)
+    staged = w.exp("2026-01-01-sample", status=[])
+    _stage(tmp_path, root, staged, broken)
+    assert _run(VPP, ["--root", root, "--staged"]) == 1
+
+
+def test_verifier_staged_ignores_untracked_leaf(tmp_path):
+    root, w = _verifier_world(tmp_path)
+    w.exp("2026-01-02-untracked", status=None)
+    staged = w.exp("2026-01-01-sample", status=[])
+    _stage(tmp_path, root, staged)
+    assert _run(VPP, ["--root", root, "--staged"]) == 0
+
+
+def test_verifier_staged_reads_the_index_not_the_working_tree(tmp_path):
+    root, w = _verifier_world(tmp_path)
+    leaf = w.exp("2026-01-01-sample", status=[])
+    principle = w.principle("sample-principle", induced=["2026-01-01-sample"])
+    _stage(tmp_path, root, leaf, principle)
+    w.exp("2026-01-01-sample", status=["sample-principle"])
+    assert _run(VPP, ["--root", root]) == 0
     assert _run(VPP, ["--root", root, "--staged"]) == 1

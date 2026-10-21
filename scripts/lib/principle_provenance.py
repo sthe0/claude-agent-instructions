@@ -22,7 +22,7 @@ import hashlib
 import os
 import re
 import tempfile
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 FIELD = "generalized_into"
@@ -163,6 +163,12 @@ def load_corpus(leaves_dir, project_root=None) -> Corpus:
             for path in sorted(base.rglob("*.md")):
                 files[path] = path.read_bytes().decode("utf-8")
     return _build(leaves_dir, project_root, files)
+
+
+def corpus_from_texts(leaves_dir, files, project_root=None) -> Corpus:
+    """A corpus over the given path -> text map instead of the working tree (e.g. the git index)."""
+    return _build(Path(leaves_dir), Path(project_root) if project_root is not None else None,
+                  {Path(p): t for p, t in files.items()})
 
 
 # --------------------------------------------------------------------------
@@ -335,8 +341,8 @@ def promote_sources_ok(kinds, rule_derived) -> bool:
     return bool(rule_derived) or any(k in EXPERIENCE_SOURCE_KINDS for k in kinds)
 
 
-def target_allowed(leaf_tier: str, target_kind: str) -> bool:
-    return not (leaf_tier == "project" and target_kind == "global_principle")
+def target_allowed(leaf_tier: str, target: Leaf) -> bool:
+    return not (leaf_tier == "project" and target.tier == "global" and target.area == "principle")
 
 
 def is_cross_tier(leaf: Leaf, target: Leaf) -> bool:
@@ -473,6 +479,7 @@ def project_identifiers(corpus: Corpus) -> list[str]:
 
 
 def leaks(text: str, identifiers) -> list[str]:
+    """Identifiers that occur in `text` as a literal substring; a paraphrase is not caught."""
     return [i for i in identifiers if i in text]
 
 
@@ -515,7 +522,7 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
             target = target_of(slug, corpus, leaf.tier)
             if target is None:
                 continue
-            if not target_allowed(leaf.tier, f"{target.tier}_{target.area}"):
+            if not target_allowed(leaf.tier, target):
                 report(PROJECT_DIRECT_GLOBAL, leaf,
                        f"a project leaf names global principle {slug!r}; cite a case instead")
                 continue
@@ -697,7 +704,3 @@ def _unlink_quiet(path) -> None:
         os.unlink(path)
     except OSError:
         pass
-
-
-def with_text(leaf: Leaf, text: str) -> Leaf:
-    return replace(leaf, text=text)

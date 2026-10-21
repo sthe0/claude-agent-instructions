@@ -1283,7 +1283,7 @@ def cmd_link(a) -> int:
     changes = []
     for source_slug, target_slug in link_pairs(a):
         source, target = resolve_pair(corpus, tier, source_slug, target_slug)
-        if not pp.target_allowed(source.tier, f"{target.tier}_{target.area}"):
+        if not pp.target_allowed(source.tier, target):
             refuse(f"project leaf {source_slug} may not name global principle {target_slug}; "
                    "write a case with case-add and link the leaf to the case")
         step = pp.link_changes(source, target, corpus)
