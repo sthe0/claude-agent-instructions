@@ -39,7 +39,10 @@ Subcommands:
                       pointer, and record it in a --manifest; stamps the new
                       principle into each source leaf's `generalized_into`.
                       --rule-derived REASON for a principle with no experience
-                      source; --project-dir D writes D/principles/.
+                      source; --project-dir D writes the project's own
+                      principles/ (D is the repo dir, as for every verb; a
+                      memory dir holding experience/ or principles/ is also
+                      accepted).
   link / unlink       Write / remove every side of a leaf -> principle (or
                       project leaf -> case) link: the leaf's
                       `generalized_into`, the principle's `induced_from` and
@@ -106,6 +109,21 @@ def experience_dir(scope: str, project_dir: str | None) -> Path:
             sys.exit("--scope project requires --project-dir")
         return Path(project_dir) / ".claude/agent-memory/experience"
     return REPO_ROOT / "memory-global/leaves/experience"
+
+
+PROJECT_MEMORY_REL = Path(".claude/agent-memory")
+
+
+def project_memory(project_dir: str | None) -> Path | None:
+    """The project memory dir for --project-dir: the repo dir (its `.claude/agent-memory`),
+    or the memory dir itself when `experience/` or `principles/` sits directly under it."""
+    if not project_dir:
+        return None
+    base = Path(project_dir).resolve()
+    nested = base / PROJECT_MEMORY_REL
+    if nested.is_dir() or not any((base / d).is_dir() for d in ("experience", "principles")):
+        return nested
+    return base
 
 
 # The ranking section per tier: experience leaves rank on their `## Difficulty`,
@@ -1121,7 +1139,7 @@ def cmd_promote(a) -> int:
     if manifest is not None:
         problems += manifest_problems(manifest)
     leaves = root / "leaves"
-    project = Path(a.project_dir).resolve() if a.project_dir else None
+    project = project_memory(a.project_dir)
     tier = "project" if project else "global"
     corpus = pp.load_corpus(leaves, project)
     kinds = []
@@ -1234,8 +1252,7 @@ def provenance_tier(a) -> str:
 
 
 def provenance_corpus(a) -> pp.Corpus:
-    project = Path(a.project_dir).resolve() if getattr(a, "project_dir", None) else None
-    return pp.load_corpus(memory_root(a) / "leaves", project)
+    return pp.load_corpus(memory_root(a) / "leaves", project_memory(a.project_dir))
 
 
 def commit_changes(a, changes, command: str) -> None:
@@ -1340,24 +1357,31 @@ def cmd_case_add(a) -> int:
     leaves = memory_root(a) / "leaves"
     cases_dir = leaves / pp.CASES_DIR
     problems, changes = [], []
-    corpus = None
     for spec in specs:
         missing = [k for k in CASE_SPEC_KEYS if not isinstance(spec, dict) or k not in spec]
         if missing:
             problems.append(f"case spec lacks {', '.join(missing)}")
-            continue
+    if problems:
+        refuse(*problems)
+    explicit = project_memory(a.project_dir)
+    projects = {explicit or Path(s["source"]).resolve().parent.parent for s in specs}
+    if len(projects) > 1:
+        refuse("case specs name leaves of more than one project: "
+               + ", ".join(sorted(str(p) for p in projects)) + "; run case-add once per project")
+    corpus = pp.load_corpus(leaves, projects.pop() if projects else None)
+    project_leaves = {l.path: l for l in corpus.of("experience", "project")}
+    for spec in specs:
         slug, source = spec["slug"], Path(spec["source"]).resolve()
         if not SLUG.fullmatch(slug):
             problems.append(f"case slug {slug!r} must match [a-z0-9][a-z0-9-]*")
             continue
-        project = Path(a.project_dir).resolve() if a.project_dir else source.parent.parent
-        if corpus is None:
-            corpus = pp.load_corpus(leaves, project)
-        try:
-            source_text = read_text_exact(source)
-        except (OSError, UnicodeDecodeError) as exc:
-            problems.append(f"case {slug}: cannot read source leaf: {exc}")
+        if source not in project_leaves:
+            problems.append(f"case {slug}: source {source} is not an experience leaf of the project")
             continue
+        if not isinstance(spec["into"], list) or not spec["into"]:
+            problems.append(f"case {slug}: `into` names no principle")
+            continue
+        source_text = project_leaves[source].text
         path = cases_dir / f"{slug}.md"
         text = case_text(spec, pp.body_digest(source_text), a.date)
         identifiers = pp.project_identifiers(corpus) + [
@@ -1412,13 +1436,14 @@ def cmd_provenance(a) -> int:
             refuse(f"{a.of!r} is not a principle")
         for leaf in pp.experiences_of(principle, corpus):
             print(f"{leaf.tier}\t{leaf.slug}\t{leaf.path}")
+    if a.of and not a.check:
+        return 0
     findings = pp.unaccounted(corpus)
     if a.check:
         for f in findings:
             print(f"{f.kind}\t{f.path}\t{f.detail}")
         return 1 if findings else 0
-    if not a.of:
-        print(f"provenance: {len(findings)} unaccounted item(s); --check lists them")
+    print(f"provenance: {len(findings)} unaccounted item(s); --check lists them")
     return 0
 
 
@@ -1695,14 +1720,16 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--rule-derived", metavar="REASON",
                     help="why a principle with no experience or case source exists")
     pr.add_argument("--project-dir", metavar="D",
-                    help="project memory dir: write D/principles/<slug>.md from project leaves")
+                    help="project repo dir (a memory dir holding experience/ or principles/ is "
+                         "also accepted): write the project's principles/<slug>.md from its leaves")
     pr.set_defaults(func=cmd_promote)
 
     def provenance_parser(name: str, help_text: str, func) -> argparse.ArgumentParser:
         sp = sub.add_parser(name, help=help_text)
         sp.add_argument("--root", help="memory root (default: <repo>/memory-global)")
         sp.add_argument("--project-dir", metavar="D",
-                        help="project memory dir holding experience/ and principles/")
+                        help="project repo dir, as for every verb (a memory dir holding "
+                             "experience/ or principles/ is also accepted)")
         sp.add_argument("--session", default=None,
                         help="ledger session_id for the edit-ledger stamp of this write")
         sp.set_defaults(func=func)
@@ -1718,7 +1745,9 @@ def build_parser() -> argparse.ArgumentParser:
     ca = provenance_parser("case-add", "write sanitized cases of project leaves and link "
                                        "them to global principles", cmd_case_add)
     ca.add_argument("--spec", required=True, metavar="FILE",
-                    help="JSON list of {" + ", ".join(CASE_SPEC_KEYS) + "}")
+                    help="JSON list of {" + ", ".join(CASE_SPEC_KEYS) + "} of one project; the "
+                         "identifier check is a literal substring match, a paraphrase of a "
+                         "project name is not caught")
     ca.add_argument("--date", default=today())
 
     bf = provenance_parser("backfill", "stamp generalized_into on every leaf from the "

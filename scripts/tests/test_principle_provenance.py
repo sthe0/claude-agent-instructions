@@ -70,7 +70,8 @@ class World:
     def __init__(self, tmp: Path) -> None:
         self.mem = tmp / "mem"
         self.leaves = self.mem / "leaves"
-        self.project = tmp / "acme-widgets" / ".claude" / "agent-memory"
+        self.repo = tmp / "acme-widgets"
+        self.project = self.repo / ".claude" / "agent-memory"
         for d in (self.leaves / "experience", self.leaves / "principles" / "cases",
                   self.project / "experience", self.project / "principles"):
             d.mkdir(parents=True, exist_ok=True)
@@ -395,6 +396,52 @@ def test_case_add_writes_body_digest(tmp_path):
     assert "sample-case" in induced_of(w.leaves / "principles" / "sample-principle.md")
 
 
+def test_case_add_refuses_non_project_source(tmp_path):
+    w, _ = _case_add_world(tmp_path)
+    global_leaf = w.exp("2026-02-02-global-sample", status=[])
+    assert w.cli("case-add", "--spec", _case_spec(w, global_leaf)) == 2
+    assert not (w.leaves / pp.CASES_DIR / "sample-case.md").exists()
+
+
+def test_case_add_refuses_empty_into(tmp_path):
+    w, leaf = _case_add_world(tmp_path)
+    assert w.cli("case-add", "--spec", _case_spec(w, leaf, into=[])) == 2
+    assert not (w.leaves / pp.CASES_DIR / "sample-case.md").exists()
+
+
+def test_case_add_refuses_specs_of_two_projects(tmp_path):
+    w, leaf = _case_add_world(tmp_path)
+    other = tmp_path / "other-gadgets" / ".claude" / "agent-memory"
+    (other / "experience").mkdir(parents=True)
+    foreign = other / "experience" / leaf.name
+    foreign.write_bytes(leaf.read_bytes())
+    specs = json.loads(_case_spec(w, leaf).read_text(encoding="utf-8"))
+    specs.append({**specs[0], "slug": "second-case", "source": str(foreign)})
+    spec_path = w.mem / "two.json"
+    spec_path.write_text(json.dumps(specs), encoding="utf-8")
+    assert w.cli("case-add", "--spec", spec_path) == 2
+    assert not (w.leaves / pp.CASES_DIR / "sample-case.md").exists()
+
+
+def test_case_add_output_passes_memory_index(tmp_path):
+    root = tmp_path / "repo"
+    w = World(tmp_path)
+    w.mem = root / "memory-global"
+    w.leaves = w.mem / "leaves"
+    for d in ("experience", "principles"):
+        (w.leaves / d).mkdir(parents=True)
+    leaf = w.exp("2026-03-01-widget-drift", status=[], tier="project")
+    w.exp("2026-01-01-sample", status=["sample-principle"])
+    w.principle("sample-principle", induced=["2026-01-01-sample"])
+    (w.leaves / "experience" / "MEMORY.md").write_text(
+        "- [Sample](2026-01-01-sample.md) — a sample leaf\n", encoding="utf-8")
+    (w.mem / "MEMORY.md").write_text(
+        "# Global\n\n- [Principles](leaves/principles/MEMORY.md) — index\n", encoding="utf-8")
+    assert w.cli("case-add", "--spec", _case_spec(w, leaf)) == 0
+    assert (w.leaves / pp.CASES_DIR / "sample-case.md").is_file()
+    assert _run(VMI, ["--root", root]) == 0
+
+
 # --------------------------------------------------------------------------
 # queries
 # --------------------------------------------------------------------------
@@ -408,9 +455,10 @@ def test_experiences_of_both_tiers(tmp_path):
 
 def test_provenance_cli_reports(tmp_path, capsys):
     w, leaf = _cross_tier_world(tmp_path)
-    assert w.cli("provenance", "--project-dir", w.project, "--of", "sample-principle") == 0
+    assert w.cli("provenance", "--project-dir", w.repo, "--of", "sample-principle") == 0
     assert f"project\t{leaf.stem}\t{leaf}" in capsys.readouterr().out.splitlines()
     missing = w.exp("2026-01-01-sample", status=None)
+    assert w.cli("provenance", "--project-dir", w.repo, "--check") == 1
     assert w.cli("provenance", "--project-dir", w.project, "--check") == 1
     assert any(line.startswith(f"{pp.MISSING_STATUS}\t{missing}")
                for line in capsys.readouterr().out.splitlines())
@@ -435,7 +483,7 @@ def test_link_project_principle_both_sides(tmp_path):
     leaf = w.exp("2026-03-01-widget-drift", status=[], tier="project")
     principle = w.principle("widget-principle", induced=[], tier="project",
                             rule_derived="seeded from rules")
-    assert w.cli("link", leaf.stem, "widget-principle", "--project-dir", w.project) == 0
+    assert w.cli("link", leaf.stem, "widget-principle", "--project-dir", w.repo) == 0
     assert status_of(leaf) == ["widget-principle"]
     assert induced_of(principle) == [leaf.stem]
 
@@ -446,7 +494,7 @@ def test_link_project_case_leaf_only(tmp_path):
     case = w.case("sample-case", status=["sample-principle"])
     w.principle("sample-principle", induced=["sample-case"])
     case_bytes = case.read_bytes()
-    assert w.cli("link", leaf.stem, "sample-case", "--project-dir", w.project) == 0
+    assert w.cli("link", leaf.stem, "sample-case", "--project-dir", w.repo) == 0
     assert status_of(leaf) == ["sample-case"]
     assert case.read_bytes() == case_bytes
 
@@ -462,6 +510,7 @@ def test_link_clears_rule_mark(tmp_path):
     assert pp.unaccounted(w.corpus()) == []
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="read-only modes do not bind root")
 def test_link_atomic(tmp_path):
     w = World(tmp_path)
     leaf = w.exp("2026-01-01-sample", status=[])
@@ -523,7 +572,7 @@ def test_promote_writes_back_pointers(tmp_path):
 def test_promote_project_principle(tmp_path):
     w = World(tmp_path)
     leaf = w.exp("2026-03-01-widget-drift", status=[], tier="project")
-    assert _promote(w, "--induced-from", leaf.stem, "--project-dir", w.project) == 0
+    assert _promote(w, "--induced-from", leaf.stem, "--project-dir", w.repo) == 0
     assert induced_of(w.project / "principles" / "new-principle.md") == [leaf.stem]
     assert status_of(leaf) == ["new-principle"]
     assert not (w.leaves / "principles" / "new-principle.md").exists()
