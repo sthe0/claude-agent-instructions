@@ -31,9 +31,10 @@ TWO PATHS, one classifier, one structural check:
   happened does not mean the draft satisfies the tech-writer rules, so a bound
   body gets a content check against the tech-writer rule registry
   (`skills/specializations/tech-writer/publish-rules.toml`, read by
-  `lib.writer_rules`). A lexical prefilter (`writer_rules.find_candidates`)
-  only nominates judge-checkable rules whose handle occurs in the body -- it
-  never denies -- and a silent prefilter makes no model call. A non-empty
+  `lib.writer_rules`). A lexical and structural prefilter
+  (`writer_rules.find_all_candidates`: rule handles plus the form pickers)
+  only nominates judge-checkable rules whose handle or form occurs in the
+  body -- it never denies -- and a silent prefilter makes no model call. A non-empty
   candidate set goes to ONE fail-open judge,
   `agentctl.advisor.judge_published_text_rules`; only a genuine YES denies,
   naming each violated rule and quoting the offending span. NO, the killswitch
@@ -320,7 +321,7 @@ def _check_text_rules(resolution: "published_body.Resolution", command: str) -> 
 
     body = resolution.body or ""
     try:
-        candidates = writer_rules.find_candidates(body)
+        candidates = writer_rules.find_all_candidates(body)
     except Exception:  # a drifted registry must surface as an advisory, never as a block
         published_body.record_advisory("TEXT_RULE_JUDGE_FAIL_OPEN", resolution.shape, command)
         return "allow", ""

@@ -682,3 +682,90 @@ def test_attachment_path_unchanged_by_text_rule_judge(monkeypatch, tmp_path):
     assert mod._decide_attachment(resolution, "cmd") == ("allow", "")
     assert len(calls) == 1
     assert "published_text_rules" not in calls[0][2]
+
+
+# --- structural form candidates share the one judge call ---------------------
+
+def test_form_candidates_reach_single_judge_call(monkeypatch, tmp_path):
+    from tests.form_fixtures import TELEGRAPHIC_BODY
+
+    calls: list = []
+    result, _ = _bound_text_decision(monkeypatch, tmp_path, TELEGRAPHIC_BODY, _runner("NO\n", calls=calls))
+    assert result == ("allow", "")
+    assert len(calls) == 1
+    prompt = calls[0][2]
+    assert advisor._TEXT_RULES_FORM_NUANCE in prompt
+    assert "### how-3" in prompt and "### say-4" in prompt
+    assert "### say-15" not in prompt
+    assert advisor._TEXT_RULES_ESTIMATE_NUANCE not in prompt
+
+
+def test_form_yes_denies_with_verbatim_tail_line(monkeypatch, tmp_path):
+    from lib import writer_rules
+    from tests.form_fixtures import TELEGRAPHIC_BODY
+
+    tail_line = dict(writer_rules.find_all_candidates(TELEGRAPHIC_BODY))["how-3"][0]
+    assert tail_line in TELEGRAPHIC_BODY
+    (decision, reason), kinds = _bound_text_decision(
+        monkeypatch, tmp_path, TELEGRAPHIC_BODY, _runner(f'YES\nRULE how-3: "{tail_line}"\n'),
+    )
+    assert decision == "deny"
+    assert "how-3" in reason
+    assert kinds == ["TEXT_RULE_JUDGE_DENY"]
+
+
+def test_form_estimate_nuance_in_single_call(monkeypatch, tmp_path):
+    from tests.form_fixtures import ESTIMATE_BODY
+
+    calls: list = []
+    _bound_text_decision(monkeypatch, tmp_path, ESTIMATE_BODY, _runner("NO\n", calls=calls))
+    assert len(calls) == 1
+    prompt = calls[0][2]
+    assert advisor._TEXT_RULES_ESTIMATE_NUANCE in prompt
+    assert "### say-15" in prompt
+    assert advisor._TEXT_RULES_FORM_NUANCE not in prompt
+
+
+def test_form_long_prose_makes_no_call(monkeypatch, tmp_path):
+    from tests.form_fixtures import PROSE_BODY
+
+    calls: list = []
+    result, kinds = _bound_text_decision(monkeypatch, tmp_path, PROSE_BODY, _runner("YES\n", calls=calls))
+    assert result == ("allow", "")
+    assert calls == []
+    assert kinds == []
+
+
+def test_form_and_lexical_share_one_call(monkeypatch, tmp_path):
+    from tests.form_fixtures import TELEGRAPHIC_BODY
+
+    calls: list = []
+    body = YOU_BODY + "\n\n" + TELEGRAPHIC_BODY
+    _bound_text_decision(monkeypatch, tmp_path, body, _runner("NO\n", calls=calls))
+    assert len(calls) == 1
+    prompt = calls[0][2]
+    for rule_id in ("say-13", "how-3", "say-4"):
+        assert f"### {rule_id}" in prompt
+    assert advisor._TEXT_RULES_SAY13_NUANCE in prompt and advisor._TEXT_RULES_FORM_NUANCE in prompt
+
+
+def test_form_killswitch_and_budget_fail_open(monkeypatch, tmp_path):
+    from tests.form_fixtures import TELEGRAPHIC_BODY
+
+    calls: list = []
+    result, kinds = _bound_text_decision(
+        monkeypatch, tmp_path, TELEGRAPHIC_BODY, _runner("YES\n", calls=calls),
+        env={"CLAUDE_PUBLISHED_TEXT_RULES_SEMANTIC": "0"},
+    )
+    assert result == ("allow", "")
+    assert calls == []
+    assert kinds == ["TEXT_RULE_JUDGE_FAIL_OPEN"]
+
+    monkeypatch.delenv("CLAUDE_PUBLISHED_TEXT_RULES_SEMANTIC")
+    (tmp_path / "advisories.jsonl").unlink()
+    reads = iter([0.0, 1000.0])
+    monkeypatch.setattr(time, "monotonic", lambda: next(reads))
+    result, kinds = _bound_text_decision(monkeypatch, tmp_path, TELEGRAPHIC_BODY, _runner("YES\n", calls=calls))
+    assert result == ("allow", "")
+    assert calls == []
+    assert kinds == ["TEXT_RULE_JUDGE_BUDGET_EXHAUSTED"]

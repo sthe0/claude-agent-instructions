@@ -808,6 +808,30 @@ _TEXT_RULES_SAY13_NUANCE = (
     "is identifiable from the body itself.\n\n"
 )
 
+_TEXT_RULES_FORM_NUANCE = (
+    "Note on how-3 and say-4: judge the SHAPE of the text, not its vocabulary. "
+    "A violation is a body whose later sections are cramped fragments (cells or "
+    "items that make sense only to someone who already knows the content, with "
+    "the connectives dropped) after a lead in connected prose, or a table whose "
+    "headers do not say what the numbers count (quantity and unit). The HIT "
+    "LINES are a sample of structured lines (tail rows or items, or a table "
+    "header row) from the draft, which "
+    "may lie beyond the excerpt shown, so judge them as shown. A short "
+    "self-explanatory cell, or an item that is a complete statement, is not a "
+    "violation. Quote the offending line verbatim.\n\n"
+)
+
+_TEXT_RULES_ESTIMATE_NUANCE = (
+    "Note on say-15: the HIT LINES are unit-bearing figures found after the "
+    "opening quarter of a draft whose opening has no table. A bold figure in the "
+    "opening may be an intermediate value rather than the answer, so judge what "
+    "the opening states, not what it emphasizes. A violation is a text that "
+    "answers a quantity question (how much, how long, how many) without stating "
+    "the answer in its opening. A text that reports figures without being asked "
+    "a quantity is not a violation. Quote the offending line or the opening "
+    "sentence verbatim.\n\n"
+)
+
 
 def _text_rules_prompt(body: str, candidates) -> str:
     from lib import writer_rules
@@ -820,8 +844,13 @@ def _text_rules_prompt(body: str, candidates) -> str:
     for marker in (_TEXT_RULES_DRAFT_OPEN, _TEXT_RULES_DRAFT_CLOSE):
         excerpt = excerpt.replace(marker, "")
     ids = {rule_id for rule_id, _ in candidates}
+    nuance = (
+        (_TEXT_RULES_SAY13_NUANCE if "say-13" in ids else "")
+        + (_TEXT_RULES_FORM_NUANCE if ids & {"how-3", "say-4"} else "")
+        + (_TEXT_RULES_ESTIMATE_NUANCE if "say-15" in ids else "")
+    )
     return _TEXT_RULES_PROMPT.format(
-        nuance=_TEXT_RULES_SAY13_NUANCE if "say-13" in ids else "",
+        nuance=nuance,
         draft_open=_TEXT_RULES_DRAFT_OPEN, draft=excerpt, draft_close=_TEXT_RULES_DRAFT_CLOSE,
         rules="\n\n".join(blocks),
     )
