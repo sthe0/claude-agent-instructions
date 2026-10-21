@@ -8,6 +8,7 @@ systemd or real agent home. The mandate store and the cost log live in tmp dirs.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import json
 import os
 import re
@@ -355,6 +356,66 @@ def test_a_cycle_over_the_daily_budget_is_refused_and_says_why(env):
     env.add_cost(5.0, str(store.mandate_dir(ID) / "cycles" / "old" / "items" / "9" / "brief.md"))
     assert env.cycle() == 0
     assert events("limit")[0]["detail"]["reasons"] == ["daily-budget"]
+
+
+def paused_with_a_chat_notifier(env):
+    env.clock.t = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
+    env.grant()
+    store.save_mandate(rules.stopped(store.load_mandate(ID)))
+    sent = env.tmp / "sent.txt"
+    env.plugin(f"NAME = 'chat'\ndef send(text):\n    open({str(sent)!r}, 'a').write(text + '\\n=====\\n')\n    return True\n")
+    return sent
+
+
+def test_a_refused_start_sends_a_notice_through_the_digest_notifier(env):
+    sent = paused_with_a_chat_notifier(env)
+    assert env.cycle() == 0
+    text = sent.read_text(encoding="utf-8")
+    assert ID in text and "paused" in text
+    assert "agentctl mandate-resume --by <you>" in text
+    assert f"Blocked since {rules.format_ts(env.clock())}" in text
+    [notice] = events("refused-notice")
+    assert notice["detail"]["reasons"] == ["paused"]
+    assert notice["detail"]["notifier"] == "chat" and notice["detail"]["ok"] is True
+    assert notice["detail"]["blocked_since"] == rules.format_ts(env.clock())
+    assert notice["detail"]["unblock"] == ["paused: agentctl mandate-resume --by <you>"]
+    assert list(store.read_cycle_records(ID).values())[0]["notice"] == "sent"
+    assert list((store.mandate_dir(ID) / "notices").glob("*.md"))
+
+
+def test_a_second_refusal_the_same_day_is_suppressed(env):
+    sent = paused_with_a_chat_notifier(env)
+    env.cycle()
+    env.clock.advance(minutes=30)
+    assert env.cycle() == 0
+    assert sent.read_text(encoding="utf-8").count("=====") == 1
+    assert len(events("refused-notice")) == 1
+    assert [r["notice"] for r in store.read_cycle_records(ID).values()] == ["sent", "suppressed"]
+    env.clock.advance(days=1)
+    env.cycle()
+    assert sent.read_text(encoding="utf-8").count("=====") == 2
+
+
+def test_a_refusal_notice_is_not_recorded_as_a_digest(env):
+    paused_with_a_chat_notifier(env)
+    env.cycle()
+    assert store.read_digests(ID) == {}
+    assert all("digest" not in row for row in store.read_cycle_rows(ID))
+    assert not (store.mandate_dir(ID) / "digests").exists()
+
+
+def test_the_digest_warns_of_an_expiry_within_three_days(env):
+    env.grant()
+    mandate = store.load_mandate(ID)
+    env.cycle()
+    assert "Mandate expires in" not in digest_text()
+    for stale in (store.mandate_dir(ID) / "digests").glob("*.md"):
+        stale.unlink()
+    soon = rules.format_ts(env.clock() + timedelta(days=2, hours=1))
+    store.save_mandate(dataclasses.replace(mandate, expires_at=soon))
+    env.clock.advance(seconds=1)
+    env.cycle()
+    assert f"Mandate expires in 2 days ({soon}): run `agentctl mandate-extend --days <n> --by <you>`" in digest_text()
 
 
 def test_a_second_cycle_while_one_holds_the_lock_exits_busy_and_records_nothing(env):

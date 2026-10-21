@@ -63,6 +63,8 @@ CYCLE_FAILURE_KINDS = ("spawn-error", "infra", "state-tampered")
 ITEM_FAILURE_KINDS = ("tests", "review-reject", "constitution", "permission", "org-neutral")
 LOCAL_FAILURE_STREAK = 3
 RETRY_ALLOWED_EVENT = "retry-allowed"
+REFUSED_NOTICE_EVENT = "refused-notice"
+EXPIRY_WARN_DAYS = 3
 
 
 class MandateError(ValueError):
@@ -328,6 +330,86 @@ def gate(
     return GateResult(not reasons, tuple(reasons))
 
 
+# --- refused-start notice ------------------------------------------------------------
+
+def refusal_notice_due(reasons: Iterable[str], events: Iterable[Mapping], now: datetime) -> bool:
+    """False once a delivered notice for this reason set went out on the same UTC date."""
+    wanted = sorted(reasons)
+    for event in events:
+        if event.get("event") != REFUSED_NOTICE_EVENT:
+            continue
+        sent = parse_ts(event.get("ts"))
+        detail = event.get("detail") or {}
+        if (
+            sent is not None
+            and sent.date() == now.date()
+            and sorted(detail.get("reasons") or ()) == wanted
+            and digest_counts_as_delivered(detail)
+        ):
+            return False
+    return True
+
+
+def blocked_since(
+    cycle_rows: Sequence[Mapping], events: Iterable[Mapping], reasons: Iterable[str],
+) -> "datetime | None":
+    """Earliest of the trailing refused run's start and, for breaker-open, the last trip."""
+    candidates = []
+    run_start = None
+    for row in reversed(cycle_rows):
+        if row.get("status") != "refused":
+            break
+        run_start = parse_ts(row.get("started_at")) or run_start
+    if run_start is not None:
+        candidates.append(run_start)
+    if "breaker-open" in reasons:
+        trips = [t for t in (parse_ts(e.get("ts")) for e in events if e.get("event") == "breaker-open") if t]
+        if trips:
+            candidates.append(max(trips))
+    return min(candidates) if candidates else None
+
+
+def spend_clears_at(
+    cost_rows: Iterable[Mapping], events: Iterable[Mapping], mandate_dir: str,
+    now: datetime, window_hours: float, cap_usd: float,
+) -> "datetime | None":
+    """When the rolling window's spend falls under `cap_usd` if nothing more is spent."""
+    amounts = _spend_amounts(cost_rows, events, mandate_dir)
+    start = now - timedelta(hours=window_hours)
+    inside = sorted(
+        (m, a) for m, a in ((parse_ts(ts), a) for ts, a in amounts) if m is not None and m > start
+    )
+    total = sum(a for _, a in inside) + sum(a for ts, a in amounts if parse_ts(ts) is None)
+    for moment, amount in inside:
+        total -= amount
+        if total < cap_usd:
+            return moment + timedelta(hours=window_hours)
+    return None
+
+
+def unblock_commands(
+    reasons: Iterable[str],
+    mandate: "Mandate | None",
+    now: datetime,
+    clears_at: "Mapping[str, datetime] | None" = None,
+) -> "list[str]":
+    """One line per reason that someone can act on; budget reasons only say when they lift."""
+    clears_at = clears_at or {}
+    lines = []
+    for reason in reasons:
+        if reason in ("breaker-open", "paused"):
+            lines.append(f"{reason}: agentctl mandate-resume --by <you>")
+        elif reason == "expired":
+            lines.append(f"{reason}: agentctl mandate-extend --days <n> --by <you>")
+        elif reason in ("daily-budget", "weekly-budget"):
+            moment = clears_at.get(reason)
+            when = f"at {format_ts(moment)}" if moment else "when the spend window rolls over"
+            lines.append(f"{reason}: clears by itself {when}")
+        elif reason == "no-mandate":
+            lines.append(f"{reason}: agentctl mandate-grant ... --by <you>")
+    return lines
+
+
 # --- issues: normalization, open-PR references, eligibility, triage, selection ---------
 
 def normalize_issue(raw: Mapping) -> dict:
@@ -386,6 +468,17 @@ def _latest_cycle_label_row(label_rows: Iterable[Mapping], issue: int, label: st
     return latest
 
 
+def digest_counts_as_delivered(delivery) -> bool:
+    """Did this delivery record reach a real notifier -- the file copy nobody reads does not count."""
+    if not isinstance(delivery, Mapping):
+        return False
+    return (
+        delivery.get("ok") is True
+        and delivery.get("notifier") not in (None, "", "file")
+        and parse_ts(delivery.get("delivered_at")) is not None
+    )
+
+
 def evaluate_candidate(
     issue: Mapping,
     *,
@@ -435,14 +528,9 @@ def evaluate_candidate(
     if SEVERITY_HIGH_LABEL in names:
         return result(False, "severity-high-cycle-set", "cycle")
     delivery = digests.get(str(applied.get("cycle_id")))
-    delivered_at = parse_ts((delivery or {}).get("delivered_at"))
-    if (
-        delivery is None
-        or delivery.get("ok") is not True
-        or delivery.get("notifier") in (None, "", "file")
-        or delivered_at is None
-    ):
+    if not digest_counts_as_delivered(delivery):
         return result(False, "digest-not-delivered", "cycle")
+    delivered_at = parse_ts(delivery["delivered_at"])
     if now < delivered_at + timedelta(hours=veto_window_hours):
         return result(False, "veto-window", "cycle")
     return result(True, "cycle-set-veto-window-passed", "cycle")

@@ -111,7 +111,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_RULES, "test_a_cycle_set_auto_ok_on_severity_high_is_never_eligible"),
     ),
     "file-notifier-excluded": Mutant(
-        RULES, 'or delivery.get("notifier") in (None, "", "file")', 'or delivery.get("notifier") in (None, "")',
+        RULES, 'and delivery.get("notifier") not in (None, "", "file")', 'and delivery.get("notifier") not in (None, "")',
         _ids(T_RULES, "test_a_file_notifier_digest_does_not_count_as_delivered"),
     ),
     "expiry": Mutant(
@@ -557,6 +557,76 @@ CATALOGUE: "dict[str, Mutant]" = {
         "rerun.passed, excused)\n",
         "rerun.passed)\n",
         _ids(T_CYCLE, "test_an_excused_id_is_not_held_against_the_item_after_the_rerun"),
+    ),
+    "refusal-notice-sent": Mutant(
+        DRIVER,
+        "_notify_refusal(cycle, gate, mandate)",
+        "None",
+        _ids(T_CYCLE, "test_a_refused_start_sends_a_notice_through_the_digest_notifier"),
+    ),
+    "refusal-notice-throttle": Mutant(
+        RULES,
+        "    wanted = sorted(reasons)\n",
+        "    return True\n    wanted = sorted(reasons)\n",
+        _ids(T_RULES, "test_refusal_notice_due_once_per_day_per_reason_set")
+        + _ids(T_CYCLE, "test_a_second_refusal_the_same_day_is_suppressed"),
+    ),
+    "refusal-notice-file-only-suppresses": Mutant(
+        RULES,
+        "            and digest_counts_as_delivered(detail)\n",
+        "",
+        _ids(T_RULES, "test_a_file_only_notice_does_not_suppress"),
+    ),
+    "refusal-notice-not-a-digest": Mutant(
+        DRIVER,
+        "    cycle.event(rules.REFUSED_NOTICE_EVENT, detail)\n",
+        "    cycle.event(rules.REFUSED_NOTICE_EVENT, detail)\n"
+        "    store.record_digest(mid, cycle.id, ok=delivery.ok, notifier=delivery.notifier, delivered_at=now)\n",
+        _ids(T_CYCLE, "test_a_refusal_notice_is_not_recorded_as_a_digest"),
+    ),
+    "blocked-since-breaker-trip": Mutant(
+        RULES,
+        '    if "breaker-open" in reasons:',
+        "    if False:",
+        _ids(T_RULES, "test_blocked_since_is_the_trailing_refused_run_or_the_breaker_trip"),
+    ),
+    "unblock-command-per-reason": Mutant(
+        RULES,
+        '        if reason in ("breaker-open", "paused"):',
+        '        if reason in ("paused",):',
+        _ids(T_RULES, "test_unblock_commands_per_reason"),
+    ),
+    "expiry-warning": Mutant(
+        DRIVER,
+        "        if left <= timedelta(days=rules.EXPIRY_WARN_DAYS):",
+        "        if False:",
+        _ids(T_CYCLE, "test_the_digest_warns_of_an_expiry_within_three_days"),
+    ),
+    "redeliver-no-record": Mutant(
+        DRIVER,
+        "            record = store.record_digest(\n"
+        "                mid, cycle_id,\n"
+        "                ok=delivery.ok,\n"
+        "                notifier=delivery.notifier,\n"
+        "                delivered_at=seams.clock(),\n"
+        "            )\n",
+        "            record = {}\n",
+        _ids(T_NOTIFIER, "test_redeliver_digest_records_the_delivery_so_the_veto_window_starts_from_it"),
+    ),
+    "redeliver-record-without-send": Mutant(
+        DRIVER,
+        "            delivery = notifiers.deliver(\n"
+        "                REDELIVERED_PREFIX + stored.read_text(encoding=\"utf-8\"),\n"
+        "                digests_dir=store.mandate_dir(mid) / \"redelivered\", cycle_id=cycle_id, root=cfg.plugin_root,\n"
+        "            )\n",
+        "            delivery = notifiers.Delivery(\"chat\", True, \"\")\n",
+        _ids(T_NOTIFIER, "test_redeliver_digest_sends_the_stored_digest_through_the_notifier"),
+    ),
+    "redeliver-not-idempotent": Mutant(
+        DRIVER,
+        "            if rules.digest_counts_as_delivered(store.read_digests(mid).get(cycle_id)):\n",
+        "            if False:\n",
+        _ids(T_NOTIFIER, "test_redeliver_digest_is_idempotent_for_a_delivered_digest"),
     ),
 }
 

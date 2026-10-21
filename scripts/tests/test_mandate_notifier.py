@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import json
 import textwrap
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from agentctl import cost, mandate_store as store
+from agentctl import cost, mandate as rules, mandate_store as store
 from mandate_cycle import driver, notifiers
 
 
@@ -121,3 +122,125 @@ def test_notify_test_fails_when_the_plugin_does_not_deliver(mandate_env, plugins
     out = json.loads(capsys.readouterr().out)
     assert rc == 1
     assert out["ok"] is False and out["counts_as_delivered"] is False
+
+
+# --- redeliver-digest --------------------------------------------------------------------
+
+REDELIVER_NOW = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
+CYCLE = "c1"
+DIGEST_TEXT = "# Background debt cycle c1\nthe stored digest\n"
+
+
+def redeliver(plugins, cycle=CYCLE):
+    seams = driver.Seams(clock=lambda: REDELIVER_NOW)
+    return driver.main(["redeliver-digest", "--cycle", cycle, "--json"], seams=seams,
+                       cfg=driver.Config(plugin_root=plugins))
+
+
+def seed_cycle(mandate_env, *, delivery=("file", True)):
+    store.save_mandate(rules.new_mandate("core-debt", "alice", REDELIVER_NOW))
+    store.append_cycle_row("core-debt", {"cycle_id": CYCLE, "status": "ok"}, now=REDELIVER_NOW)
+    directory = store.mandate_dir("core-debt") / "digests"
+    directory.mkdir(parents=True)
+    (directory / f"{CYCLE}.md").write_text(DIGEST_TEXT, encoding="utf-8")
+    if delivery is not None:
+        notifier, ok = delivery
+        store.record_digest("core-debt", CYCLE, ok=ok, notifier=notifier, delivered_at=REDELIVER_NOW - timedelta(days=1))
+
+
+def recording_plugin(plugins, tmp_path, working=True):
+    """A notifier that appends what it is sent to sent.txt and reports ok while tmp_path/up exists."""
+    sent, up = tmp_path / "sent.txt", tmp_path / "up"
+    body = (
+        "import os\nNAME = 'chat'\ndef send(text):\n"
+        f"    open({str(sent)!r}, 'a').write(text + '=====\\n')\n    return os.path.exists({str(up)!r})\n"
+    )
+    write_plugin(plugins, "chat", body)
+    if working:
+        up.write_text("", encoding="utf-8")
+    else:
+        up.unlink(missing_ok=True)
+    return sent
+
+
+def redelivered_events():
+    return [e for e in store.read_events("core-debt") if e["event"] == "digest-redelivered"]
+
+
+def test_redeliver_digest_sends_the_stored_digest_through_the_notifier(mandate_env, plugins, tmp_path, capsys):
+    seed_cycle(mandate_env)
+    sent = recording_plugin(plugins, tmp_path)
+    assert redeliver(plugins) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["notifier"] == "chat" and out["counts_as_delivered"] is True
+    text = sent.read_text(encoding="utf-8")
+    assert text.count("=====") == 1 and DIGEST_TEXT in text
+    assert "the veto window counts from this message" in text.splitlines()[0]
+    [event] = redelivered_events()
+    assert event["detail"] == {"cycle_id": CYCLE, "ok": True, "notifier": "chat"}
+
+
+def test_redeliver_digest_records_the_delivery_so_the_veto_window_starts_from_it(mandate_env, plugins, tmp_path):
+    seed_cycle(mandate_env)
+    recording_plugin(plugins, tmp_path)
+    labelled = {"number": 7, "labels": ["backlog", "auto-ok"], "author": "owner", "created_at": "2026-10-01T00:00:00Z"}
+    label_rows = [{"ts": "2026-10-08T00:00:00Z", "issue": 7, "label": "auto-ok", "by": "cycle", "cycle_id": CYCLE}]
+
+    def verdict(now):
+        return rules.evaluate_candidate(
+            labelled, owner="owner", labels_cfg=dict(rules.DEFAULT_LABELS), label_rows=label_rows,
+            digests=store.read_digests("core-debt"), pr_refs=set(), veto_window_hours=24.0, now=now,
+        )
+
+    assert verdict(REDELIVER_NOW).reason == "digest-not-delivered"
+    assert redeliver(plugins) == 0
+    assert store.read_digests("core-debt")[CYCLE] == {
+        "ok": True, "notifier": "chat", "delivered_at": rules.format_ts(REDELIVER_NOW),
+    }
+    assert verdict(REDELIVER_NOW + timedelta(hours=1)).reason == "veto-window"
+    assert verdict(REDELIVER_NOW + timedelta(hours=25)).eligible
+
+
+def test_redeliver_digest_is_idempotent_for_a_delivered_digest(mandate_env, plugins, tmp_path, capsys):
+    seed_cycle(mandate_env, delivery=("chat", True))
+    sent = recording_plugin(plugins, tmp_path)
+    rows_before = store.read_cycle_rows("core-debt")
+    assert redeliver(plugins) == 0
+    assert json.loads(capsys.readouterr().out)["sent"] is False
+    assert not sent.exists()
+    assert store.read_cycle_rows("core-debt") == rows_before
+    assert redelivered_events() == []
+
+
+@pytest.mark.parametrize("first", [("chat", False), ("file", True), None])
+def test_redeliver_digest_retries_after_a_failed_or_file_only_digest(mandate_env, plugins, tmp_path, first):
+    seed_cycle(mandate_env, delivery=first)
+    recording_plugin(plugins, tmp_path, working=False)
+    assert redeliver(plugins) == 1
+    assert store.read_digests("core-debt")[CYCLE]["ok"] is False
+    recording_plugin(plugins, tmp_path)
+    assert redeliver(plugins) == 0
+    assert rules.digest_counts_as_delivered(store.read_digests("core-debt")[CYCLE])
+    assert redeliver(plugins) == 0
+    assert len(redelivered_events()) == 2
+
+
+def test_redeliver_digest_refuses_an_unknown_cycle_or_a_missing_file(mandate_env, plugins, tmp_path, capsys):
+    seed_cycle(mandate_env)
+    sent = recording_plugin(plugins, tmp_path)
+    assert redeliver(plugins, cycle="nope") == 1
+    assert "unknown cycle" in capsys.readouterr().out
+    (store.mandate_dir("core-debt") / "digests" / f"{CYCLE}.md").unlink()
+    assert redeliver(plugins) == 1
+    assert "no stored digest" in capsys.readouterr().out
+    assert not sent.exists()
+    assert redelivered_events() == []
+
+
+def test_redeliver_digest_keeps_the_original_digest_file(mandate_env, plugins, tmp_path):
+    seed_cycle(mandate_env)
+    recording_plugin(plugins, tmp_path)
+    assert redeliver(plugins) == 0
+    root = store.mandate_dir("core-debt")
+    assert (root / "digests" / f"{CYCLE}.md").read_text(encoding="utf-8") == DIGEST_TEXT
+    assert DIGEST_TEXT in (root / "redelivered" / f"{CYCLE}.md").read_text(encoding="utf-8")

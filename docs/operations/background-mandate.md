@@ -14,7 +14,7 @@ Nothing here merges, pushes to trunk or creates an issue. The user's merge of th
 | Driver | `scripts/mandate-cycle.py`, package `scripts/mandate_cycle/` | One cycle: reap, baseline, fix eligible items, triage the rest, deliver a digest |
 | Timer | `scripts/install-mandate-timer.sh` | `agent-debt-cycle.timer`, nightly at 01:00, runs `mandate-cycle.py run` |
 
-State lives under `<agent home>/agentctl/mandates/<id>/` (default id `core-debt`; `$AGENTCTL_MANDATE_DIR` overrides the root): `mandate.json`, `events.jsonl` (audit), `labels.jsonl`, `items.jsonl`, `cycles.jsonl`, `cycles/<cycle_id>/commands.jsonl` (every external command the driver ran), `digests/<cycle_id>.md`, `cycle.lock`.
+State lives under `<agent home>/agentctl/mandates/<id>/` (default id `core-debt`; `$AGENTCTL_MANDATE_DIR` overrides the root): `mandate.json`, `events.jsonl` (audit), `labels.jsonl`, `items.jsonl`, `cycles.jsonl`, `cycles/<cycle_id>/commands.jsonl` (every external command the driver ran), `digests/<cycle_id>.md`, `notices/<cycle_id>.md` (refused-start notices), `redelivered/<cycle_id>.md` (re-sent digests), `cycle.lock`.
 
 ## Granting, watching, stopping
 
@@ -40,7 +40,19 @@ An issue whose latest attempt failed item-locally is not taken again: its candid
 3. **Baseline.** The test suite and the two gate scripts run once on `origin/main`. A red baseline takes no item (the cycle still triages) and does not open the breaker.
 4. **Fix, oldest eligible first** (the planning board's rank, when one exists). Per item: worktree and branch, a `developer` spawn, then in order: constitution check on the diff, org-neutral check of commit messages + added lines + PR text, the suite compared to the baseline (one rerun of failing ids; a baseline-passed test id the item's own run never saw is *excused* when it maps to a module the diff touches, a rename counting both its old and new path as one module, and that whole module has no new failure -- one not-passing id that was not already not-passing on the baseline voids the excuse, and an id in an untouched module still fails), the gate scripts compared to the baseline, an independent `code-reviewer` spawn that must say `VERDICT: accept`, then push of the exact commit that passed those checks (by sha, to the `mandate/<issue>-<date>` branch; a worktree that moved since fails the item as `state-tampered`), `gh pr create --base main`, and a comment on the issue linking the PR. The gate is re-evaluated before the next item.
 5. **Triage.** Unlabelled owner-authored domain issues are judged in batches of ten, oldest first. A verdict is logged as a label row *before* `gh issue edit` applies it, and a short comment explains it and how to veto. Nothing is posted unless the org-neutral check of the comment is clean.
-6. **Digest.** The items with outcomes, cost and PR links; the labels the cycle applied; what was triaged and how to veto it (`no-auto`); triage comments the org-neutral check held back; limits hit (daily, weekly, cycle minutes); overruns; open mandate pull requests; remote `mandate/*` branches with no PR; issues not retried because they failed before; the mandate's expiry date, the breaker state and reason, and the kill switch `agentctl mandate-stop`. A cycle the gate refuses at the start writes no digest. It goes through the notifier and a copy is always written to `digests/<cycle_id>.md`.
+6. **Digest.** The items with outcomes, cost and PR links; the labels the cycle applied; what was triaged and how to veto it (`no-auto`); triage comments the org-neutral check held back; limits hit (daily, weekly, cycle minutes); overruns; open mandate pull requests; remote `mandate/*` branches with no PR; issues not retried because they failed before; the mandate's expiry date, the breaker state and reason, and the kill switch `agentctl mandate-stop`. A cycle the gate refuses at the start writes no digest. It goes through the notifier and a copy is always written to `digests/<cycle_id>.md`. When the mandate expires within 3 days, the digest opens with an expiry warning and the `mandate-extend` command.
+
+### A refused start sends a notice
+
+A start the gate refuses also goes through the notifier, as a notice rather than a digest: it lists the reasons, since when the cycle has been blocked, and per reason the command that unblocks it (`mandate-resume` for `paused` and `breaker-open`, `mandate-extend` for `expired`, "clears by itself at <time>" for the budgets, `mandate-grant` for `no-mandate`). At most one delivered notice goes out per UTC day for the same set of reasons; a changed set, or a day on which the earlier notice only reached the `file` notifier or failed, sends again. Each delivery attempt is a `refused-notice` event, the cycle row gets `notice` = `sent`, `failed` or `suppressed`, and a copy lands in `notices/`. A notice is never recorded as a digest, so it cannot start a veto window.
+
+### Re-sending an undelivered digest
+
+```
+python3 scripts/mandate-cycle.py redeliver-digest --cycle <cycle_id> [--json]
+```
+
+Use it when a cycle's digest only reached the `file` notifier or its delivery failed (`digests/<cycle_id>.md` exists but the delivery does not count). It sends the stored text, prefixed with a line saying the veto window counts from this message, through the notifier, writes `redelivered/<cycle_id>.md`, records the delivery (so the veto window of that cycle's labels starts from it) and logs a `digest-redelivered` event. A digest that already counts as delivered is not sent again (exit `0`, `sent` false); an unknown cycle or a missing stored digest exits `1`. It is a driver command, not an `agentctl` verb with `--by user`, because it changes no authority: it only re-sends text the cycle already wrote.
 
 ## Eligibility, in one place
 

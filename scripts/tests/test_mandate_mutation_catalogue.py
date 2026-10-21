@@ -34,6 +34,9 @@ EXPECTED_ENTRIES = (
     "declined-required-in-ledger", "declined-title-half", "declined-seeded-from-ledger",
     "worktree-canonical-ids", "vanished-test-excused", "vanished-test-dirty-module",
     "vanished-test-rename-group", "rerun-verdict-ignores-excused",
+    "refusal-notice-sent", "refusal-notice-throttle", "refusal-notice-file-only-suppresses",
+    "refusal-notice-not-a-digest", "blocked-since-breaker-trip", "unblock-command-per-reason",
+    "expiry-warning", "redeliver-no-record", "redeliver-record-without-send", "redeliver-not-idempotent",
 )
 
 

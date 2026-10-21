@@ -373,6 +373,91 @@ def test_the_veto_window_is_the_mandates_not_a_constant():
     assert evaluate(issue(), window=6.0, **row_set).eligible
 
 
+def test_a_digest_counts_as_delivered_only_when_a_real_notifier_reported_ok():
+    not_delivered = [
+        None,
+        "delivered",
+        {"ok": False, "notifier": "telegram", "delivered_at": hours(1)},
+        {"ok": True, "notifier": "file", "delivered_at": hours(1)},
+        {"ok": True, "notifier": "", "delivered_at": hours(1)},
+        {"ok": True, "notifier": None, "delivered_at": hours(1)},
+        {"ok": True, "notifier": "telegram"},
+        {"ok": True, "notifier": "telegram", "delivered_at": "never"},
+    ]
+    for record in not_delivered:
+        assert m.digest_counts_as_delivered(record) is False, record
+    assert m.digest_counts_as_delivered({"ok": True, "notifier": "telegram", "delivered_at": hours(1)}) is True
+
+
+# --- refused-start notice ---------------------------------------------------------------
+
+def notice_event(reasons, ago=1.0, notifier="telegram", ok=True, delivered=True):
+    detail = {"reasons": list(reasons), "notifier": notifier, "ok": ok}
+    if delivered:
+        detail["delivered_at"] = hours(ago)
+    return {"ts": hours(ago), "event": "refused-notice", "detail": detail}
+
+
+def test_refusal_notice_due_once_per_day_per_reason_set():
+    assert m.refusal_notice_due(["paused"], [], NOW)
+    sent = [notice_event(["paused"], ago=1)]
+    assert not m.refusal_notice_due(["paused"], sent, NOW)
+    assert not m.refusal_notice_due(["paused"], sent, NOW + timedelta(hours=5))
+    assert m.refusal_notice_due(["paused"], sent, NOW + timedelta(hours=12))
+    assert not m.refusal_notice_due(["expired", "paused"], [notice_event(["paused", "expired"])], NOW)
+
+
+def test_refusal_notice_due_again_when_reasons_change():
+    sent = [notice_event(["paused"])]
+    assert m.refusal_notice_due(["paused", "breaker-open"], sent, NOW)
+    assert m.refusal_notice_due(["breaker-open"], sent, NOW)
+
+
+def test_a_file_only_notice_does_not_suppress():
+    for kwargs in ({"notifier": "file"}, {"notifier": ""}, {"notifier": None}, {"ok": False}, {"delivered": False}):
+        assert m.refusal_notice_due(["paused"], [notice_event(["paused"], **kwargs)], NOW), kwargs
+    assert not m.refusal_notice_due(["paused"], [notice_event(["paused"], notifier="chat")], NOW)
+
+
+def test_blocked_since_is_the_trailing_refused_run_or_the_breaker_trip():
+    rows = [
+        {"cycle_id": "a", "status": "refused", "started_at": hours(70)},
+        {"cycle_id": "b", "status": "ok", "started_at": hours(60)},
+        {"cycle_id": "c", "status": "refused", "started_at": hours(48)},
+        {"cycle_id": "d", "status": "refused", "started_at": hours(24)},
+    ]
+    assert m.blocked_since(rows, [], ["paused"]) == NOW - timedelta(hours=48)
+    trip = [{"ts": hours(55), "event": "breaker-open"}, {"ts": hours(30), "event": "breaker-open"}]
+    assert m.blocked_since(rows, trip, ["paused"]) == NOW - timedelta(hours=48)
+    assert m.blocked_since(rows, trip, ["breaker-open"]) == NOW - timedelta(hours=48)
+    old_trip = [{"ts": hours(100), "event": "breaker-open"}, {"ts": hours(90), "event": "breaker-open"}]
+    assert m.blocked_since(rows, old_trip, ["breaker-open"]) == NOW - timedelta(hours=90)
+    assert m.blocked_since([{"cycle_id": "x", "status": "ok"}], [], ["paused"]) is None
+
+
+def test_unblock_commands_per_reason():
+    granted = mandate()
+    commands = m.unblock_commands(
+        ["expired", "paused", "breaker-open", "daily-budget", "weekly-budget", "no-mandate", "cycle-minutes-cap"],
+        granted, NOW, {"daily-budget": NOW + timedelta(hours=3)},
+    )
+    assert commands == [
+        "expired: agentctl mandate-extend --days <n> --by <you>",
+        "paused: agentctl mandate-resume --by <you>",
+        "breaker-open: agentctl mandate-resume --by <you>",
+        f"daily-budget: clears by itself at {m.format_ts(NOW + timedelta(hours=3))}",
+        "weekly-budget: clears by itself when the spend window rolls over",
+        "no-mandate: agentctl mandate-grant ... --by <you>",
+    ]
+
+
+def test_spend_clears_when_the_oldest_charges_leave_the_window():
+    rows = [row(8.0, 20), row(5.0, 10), row(5.0, 2)]
+    assert m.spend_clears_at(rows, [], MANDATE_DIR, NOW, 24, 10.0) == NOW + timedelta(hours=14)
+    assert m.spend_clears_at(rows, [], MANDATE_DIR, NOW, 24, 1.0) == NOW + timedelta(hours=22)
+    assert m.spend_clears_at([], [], MANDATE_DIR, NOW, 24, 10.0) is None
+
+
 def test_the_latest_cycle_label_row_picks_which_digest_applies():
     rows = [cycle_label_row(cycle_id="old", ts=hours(200)), cycle_label_row(cycle_id="new", ts=hours(50))]
     digests = {"old": delivered(190), "new": delivered(5)}
