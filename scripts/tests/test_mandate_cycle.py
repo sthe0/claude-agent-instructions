@@ -805,6 +805,26 @@ def test_an_excused_id_is_not_held_against_the_item_after_the_rerun(env):
     assert any(x.endswith("rerun.xml") for c in env.world.calls for x in c)
 
 
+def test_a_collection_error_in_the_touched_module_fails_the_gate(tmp_path):
+    module = tmp_path / "scripts" / "tests" / "test_broken.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("import a_module_that_does_not_exist\n\n\ndef test_x():\n    pass\n", encoding="utf-8")
+    xml_path = tmp_path / "item.xml"
+    env_ = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
+    subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist", f"--rootdir={tmp_path}",
+         f"--junitxml={xml_path}", str(module)],
+        cwd=tmp_path, env=env_, capture_output=True, check=False,
+    )
+    item = driver.read_junit(xml_path)
+    assert item.ran and not item.passed
+    baseline_id = "scripts.tests.test_broken::test_x"
+    failing, excused = rules.split_failures(
+        {baseline_id}, {baseline_id}, item.passed, item.seen, rules.diff_path_groups(["M\tscripts/tests/test_broken.py"]),
+    )
+    assert (failing, excused) == ([baseline_id], [])
+
+
 def test_the_digest_lists_the_excused_ids_capped(env):
     env.grant()
     eligible(env, 1)

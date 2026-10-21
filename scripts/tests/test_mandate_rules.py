@@ -8,9 +8,6 @@ from __future__ import annotations
 import ast
 import dataclasses
 import inspect
-import os
-import subprocess
-import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,7 +16,6 @@ import pytest
 
 from agentctl import mandate as m
 from ast_purity import impure_names
-from mandate_cycle import driver
 
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
 OWNER = "the-owner"
@@ -495,24 +491,6 @@ def test_a_new_failure_in_the_renamed_to_module_voids_the_excuse():
     ids = {f"{OLD}::t1", f"{OLD}::t2"}
     item_seen = {f"{OLD}::t1", f"{NEW_SIDE}::t2"}
     assert m.split_failures(ids, ids, {f"{OLD}::t1"}, item_seen, RENAMED_A_TO_B) == ([f"{OLD}::t2"], [])
-
-
-def test_a_collection_error_in_the_touched_module_fails_the_gate(tmp_path):
-    module = tmp_path / "scripts" / "tests" / "test_broken.py"
-    module.parent.mkdir(parents=True)
-    module.write_text("import a_module_that_does_not_exist\n\n\ndef test_x():\n    pass\n", encoding="utf-8")
-    xml_path = tmp_path / "item.xml"
-    env_ = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
-    subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist", f"--rootdir={tmp_path}",
-         f"--junitxml={xml_path}", str(module)],
-        cwd=tmp_path, env=env_, capture_output=True, check=False,
-    )
-    item = driver.read_junit(xml_path)
-    assert item.ran and not item.passed
-    baseline_id = "scripts.tests.test_broken::test_x"
-    groups = m.diff_path_groups(["M\tscripts/tests/test_broken.py"])
-    assert m.split_failures({baseline_id}, {baseline_id}, item.passed, item.seen, groups) == ([baseline_id], [])
 
 
 def test_an_excused_id_is_not_held_against_the_item_after_the_rerun_rule():

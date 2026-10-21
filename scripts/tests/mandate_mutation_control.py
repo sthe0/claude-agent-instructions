@@ -498,7 +498,7 @@ CATALOGUE: "dict[str, Mutant]" = {
             T_RULES,
             "test_a_new_failure_in_the_touched_module_voids_the_excuse",
             "test_a_new_failure_in_the_renamed_to_module_voids_the_excuse",
-        ) + _ids(T_RULES, "test_a_collection_error_in_the_touched_module_fails_the_gate"),
+        ) + _ids(T_CYCLE, "test_a_collection_error_in_the_touched_module_fails_the_gate"),
     ),
     "vanished-test-rename-group": Mutant(
         RULES,
