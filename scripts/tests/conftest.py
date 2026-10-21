@@ -1,6 +1,7 @@
 """Make the `agentctl` package importable and provide shared fixtures."""
 from __future__ import annotations
 
+import itertools
 import os
 import sys
 from pathlib import Path
@@ -628,16 +629,16 @@ def venued_fixtures_dir(tmp_path, tmp_path_factory):
 @pytest.fixture
 def config_row(tmp_path, monkeypatch):
     """Opt-in factory: `config_row(key, value)` points `agentctl.config.CONFIG_MD` at a
-    temporary copy of the live file whose `key` row holds `value` (a full row line when
+    temporary copy of the current file (so two pins compose) whose `key` row holds `value` (a full row line when
     `value` starts with `|`; `None` drops the row)."""
     from agentctl import config as agentctl_config
 
-    live = agentctl_config.CONFIG_MD
-    copies = iter(range(1_000_000))
+    copies = itertools.count()
 
     def set_row(key: str, value) -> Path:
         prefix = f"| `{key}` |"
-        lines = [line for line in live.read_text(encoding="utf-8").splitlines() if not line.startswith(prefix)]
+        current = agentctl_config.CONFIG_MD
+        lines = [line for line in current.read_text(encoding="utf-8").splitlines() if not line.startswith(prefix)]
         if value is not None:
             lines.append(value if str(value).startswith("|") else f"| `{key}` | `{value}` | test pin |")
         copy = tmp_path / f"config-{next(copies)}.md"

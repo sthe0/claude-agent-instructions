@@ -18,7 +18,7 @@ def skill_path(kind: str, skills_root: Path | None = None) -> Path:
     config root's skills) wins; project-local (`<cwd>/.claude/skills/specializations/<kind>/`)
     is the documented fallback. Returns the global path when neither exists, so the
     caller's not-found error names it."""
-    global_path = (skills_root or skills_dir()) / kind / "SKILL.md"
+    global_path = (skills_dir() if skills_root is None else skills_root) / kind / "SKILL.md"
     if global_path.exists():
         return global_path
     project_path = Path.cwd() / ".claude" / "skills" / "specializations" / kind / "SKILL.md"

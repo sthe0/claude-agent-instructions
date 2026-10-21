@@ -8,10 +8,13 @@ mutation control reaches it.
 """
 from __future__ import annotations
 
+import inspect
+import textwrap
 from pathlib import Path
 
 import pytest
 
+from agentctl import cli
 from agentctl import config as agentctl_config
 from agentctl import gates, plugins
 from agentctl.directive import Directive
@@ -20,7 +23,7 @@ from agentctl.plan import load_plan
 from agentctl.state import Node, Route, SessionState, WeightClass
 from lib.spawn_prompt_files import composed_prompt_files, skill_path
 
-from test_plan_review_topo import _blockers, _record_pairs, make_env  # noqa: F401
+from test_plan_review_topo import _blockers, _compose, _exit, _record_pairs, make_env  # noqa: F401
 
 ROW = "review-pairwise-min-edges"
 THRESHOLD = 3
@@ -204,24 +207,67 @@ def test_below_threshold_plan_with_pair_records_clears_with_one_whole_plan_pass(
     assert not calls
 
 
-def test_pair_revise_after_compose_blocks_when_ceiling_forces_pairs(make_env, monkeypatch):
+def _spawn_env_with_later_pair_revise(make_env, *, compose=False, monkeypatch=None) -> list[str]:
+    """Whole-by-shape spawn plan with every pair recorded but 3-1, then a whole-plan pass
+    (a composed one when `compose`), then a pair revise on 3-1 recorded after it; returns
+    the gate's blockers. Real records throughout."""
+    env = make_env()
+    env.mutate_state(lambda s: setattr(s, "route", Route.SPAWN.value))
+    assert gates.whole_plan_by_shape(env.doc())
+    if compose:
+        env.record_all()
+        monkeypatch.setattr(cli, "_record_first_thinker_verdict", lambda *a, **k: None)
+        assert _compose(env).ok
+    else:
+        _record_pairs(env, skip=("3-1",))
+        assert env.record("", "pass").ok
+    assert env.record(
+        "topo:3-1", "revise", concerns=["blocking: needs work"],
+        regression_command="check", runner=_exit(1),
+    ).ok
+    return _blockers(env)
+
+
+def test_pair_revise_after_a_whole_plan_pass_blocks(make_env):
+    assert any("3-1" in blocker for blocker in _spawn_env_with_later_pair_revise(make_env))
+
+
+def test_pair_revise_after_compose_blocks_when_ceiling_makes_the_predicate_say_pairs(make_env, monkeypatch):
+    monkeypatch.setattr("agentctl.render.dispatch_ceiling_chars", lambda model=None: 10)
+    blockers = _spawn_env_with_later_pair_revise(make_env, compose=True, monkeypatch=monkeypatch)
+    assert any("3-1" in blocker for blocker in blockers)
+
+
+def test_old_pair_revise_is_superseded_by_a_fresh_whole_plan_pass(make_env):
     env = make_env()
     env.mutate_state(lambda s: setattr(s, "route", Route.SPAWN.value))
     _record_pairs(env, skip=("3-1",))
-    assert env.record("", "pass").ok
     assert env.record("topo:3-1", "revise", concerns=["blocking: needs work"]).ok
-    assert gates.whole_plan_by_shape(env.doc())
-    monkeypatch.setattr("agentctl.render.dispatch_ceiling_chars", lambda model=None: 10)
-    assert gates.pairwise_review_route(env.state(), env.doc()) is True
-    assert any("3-1" in blocker for blocker in _blockers(env))
+    assert _blockers(env)
+    assert env.record("", "pass").ok
+    assert _blockers(env) == []
 
 
-def test_mutation_gate_ignoring_the_ceiling_is_caught(make_env, monkeypatch):
-    shape_only = lambda state, doc=None, **kw: state is not None and not gates.whole_plan_by_shape(doc or env.doc())
-    env = make_env()
-    monkeypatch.setattr(gates, "pairwise_review_route", shape_only)
-    with pytest.raises(AssertionError):
-        test_pair_revise_after_compose_blocks_when_ceiling_forces_pairs(lambda: env, monkeypatch)
+def test_mutation_gate_discarding_newer_pair_records_is_caught(make_env):
+    source = textwrap.dedent(inspect.getsource(gates._honours_pair_records))
+    assert "record.record_seq > whole.record_seq" in source
+    namespace = dict(vars(gates))
+    exec(source.replace("record.record_seq > whole.record_seq", "False"), namespace)
+    real = gates._honours_pair_records
+    try:
+        gates._honours_pair_records = namespace["_honours_pair_records"]
+        blockers = _spawn_env_with_later_pair_revise(make_env)
+    finally:
+        gates._honours_pair_records = real
+    assert not any("3-1" in blocker for blocker in blockers), "the mutant must lose the pair-3-1 blocker"
+
+
+def test_unreadable_reader_context_overhead_reads_pairs(tmp_path, monkeypatch):
+    plan = _plan(tmp_path, [[]])
+    assert _route(plan) is False
+    monkeypatch.setattr(gates, "composed_prompt_files", lambda skill: [tmp_path / "missing.md"])
+    assert gates._whole_plan_reader_context_overhead_chars() is None
+    assert _route(plan) is True
 
 
 def test_ceiling_counts_the_reader_context_overhead(tmp_path, monkeypatch):

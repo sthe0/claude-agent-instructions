@@ -44,6 +44,7 @@ from typing import NamedTuple
 
 from lib import config_root
 from lib import hook_wiring
+from lib.spawn_prompt_files import composed_prompt_files, skill_path
 
 from . import advisor as _advisor
 from . import delivery
@@ -1304,10 +1305,11 @@ def _whole_plan_reader_context_overhead_chars() -> int | None:
     """The reader-context overhead of a whole-plan thinker review: the size of the files
     the spawner composes into a thinker's system prompt (`lib.spawn_prompt_files`, the
     same list `spawn-specialist.py` appends), in bytes, an upper bound on characters.
-    The brief scaffold and the question list are not counted, so the ceiling clause errs
-    toward pairs. None when a file cannot be read — the caller then reads pairs."""
-    from lib.spawn_prompt_files import composed_prompt_files, skill_path
-
+    The brief scaffold and the question list are not counted, so the estimate can
+    under-estimate; that only moves which review the directive asks for, because the gate
+    never discards a pair record newer than the latest whole-plan pass
+    (`_honours_pair_records`). None when a file cannot be read — the caller then reads
+    pairs."""
     try:
         return sum(path.stat().st_size for path in composed_prompt_files(skill_path("thinker")))
     except OSError:
@@ -2273,6 +2275,23 @@ def _round_release_wrap(
     return [message]
 
 
+def _honours_pair_records(state: SessionState, target_plan: "str | None", doc) -> bool:
+    """Whether the pair records for `target_plan` count at the gate. On a SPAWN plan
+    that is whole-plan by shape, a whole-plan pass supersedes the pair records older
+    than it, but a pair record newer than that pass still counts; with no whole-plan
+    record, or on another route or shape, every pair record counts. The ceiling clause
+    of `pairwise_review_route` steers the directive only and is not read here."""
+    if not has_pair_records_for(state, target_plan):
+        return False
+    whole = state.plan_review
+    if state.route != Route.SPAWN.value or whole is None or not whole_plan_by_shape(doc):
+        return True
+    return any(
+        record.plan_path == target_plan and record.record_seq > whole.record_seq
+        for pid, record in state.plan_pair_reviews.items() if not is_unit_id(pid)
+    )
+
+
 def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[str]:
     """Precondition guardian for `approve` and every `replan`: a thinker review with
     a passing (or user-overridden) verdict, BOUND to the exact plan version being
@@ -2314,10 +2333,7 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
             doc = None
     coverage_route = doc is not None and (
         bool(state.plan_stage_reviews)
-        or (
-            has_pair_records_for(state, target_plan)
-            and not (state.route == Route.SPAWN.value and not pairwise_review_route(state, doc))
-        )
+        or _honours_pair_records(state, target_plan, doc)
         or (state.plan_review is not None and (state.plan_review.carried_tier or 0) >= 2)
     )
     if not coverage_route:
