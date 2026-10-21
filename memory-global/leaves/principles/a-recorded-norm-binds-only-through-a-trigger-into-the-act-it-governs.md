@@ -4,7 +4,7 @@ description: A remedy that lives in memory or in a warn-only advisory does not r
 type: reference
 schema: principle/v1
 generality: 2
-induced_from: [2026-10-12-stage-control-recorded-norm-not-mobilized, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]
+induced_from: [2026-10-12-stage-control-recorded-norm-not-mobilized, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-05-25-resolution-gate-confirm-before-record, 2026-05-26-agent-system-plan-vs-reality-drift, 2026-06-04-org-specific-vs-global-placement, 2026-06-27-critique-output-must-be-code-verified-into-downstream-artifact, 2026-06-30-mechanize-subdifficulty-extraction-and-audit, 2026-06-30-policy-as-code-split-judgment-defer-blocked-layer, 2026-07-14-determinize-memory-org-principle-in-code, 2026-07-16-onboarding-drift-after-crosscutting-refactor-needs-mechanical-guard, 2026-07-18-plan-presentation-two-act-delivery-gate, 2026-07-29-crutch-registry-standing-prevention, 2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer, 2026-09-18-precedent-retrieval-gap-missing-system-knowledge-search-tier, 2026-10-12-stage-control-authoring-interface-mismatch]
 domain: development
 created: 2026-10-12
 last_verified: 2026-10-12

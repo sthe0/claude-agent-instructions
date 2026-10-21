@@ -9,7 +9,7 @@ refs: [memory-global/leaves/question-provenance-gate.md, memory-global/leaves/ac
 plan_file: /home/the0/.claude-agent/plans/plan-review-override-customer-id-fix-v2.toml
 created: 2026-08-27
 last_verified: 2026-09-02
-generalized_into: []
+generalized_into: [renorming-at-principle-level-sweeps-the-class]
 ---
 
 # A self-recorded identity/verdict field (--reviewer, --author) is worthless without a declared-principal check, on BOTH the read gate and every sibling write gate

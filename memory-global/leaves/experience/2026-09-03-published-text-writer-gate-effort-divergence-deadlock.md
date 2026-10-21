@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [effort-divergence-trigger, agentctl-acceptance-judge-gate, landing-discipline]
 created: 2026-09-03
 last_verified: 2026-09-14
-generalized_into: []
+generalized_into: [review-loop-cannot-measure-its-own-convergence]
 ---
 
 # Publication-gate task landed; discovered a replans-absolute effort-divergence deadlock at DIAGNOSING exit

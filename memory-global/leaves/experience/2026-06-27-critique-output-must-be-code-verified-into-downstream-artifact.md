@@ -8,7 +8,7 @@ schema: difficulty/v1
 generality: 0
 resolution_confirmed_by_user: "user"
 refs: [2026-06-26-critique-primitive-unifies-conflict-and-principle.md, 2026-06-25-state-gate-needs-acting-session-at-executing-via-toml.md]
-generalized_into: []
+generalized_into: [a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs, specialist-behavior-determinization-recipe]
 ---
 
 # A structured diagnostic split is inert until code verifies its landing in the artifact it should shape

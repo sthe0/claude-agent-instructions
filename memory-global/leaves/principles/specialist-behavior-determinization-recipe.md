@@ -5,10 +5,9 @@ type: reference
 schema: principle/v1
 generality: 2
 domain: coordination
-induced_from: [regex-not-for-semantic-classification, partition-markers]
+induced_from: [regex-not-for-semantic-classification, partition-markers, 2026-06-27-critique-output-must-be-code-verified-into-downstream-artifact, 2026-06-30-policy-as-code-split-judgment-defer-blocked-layer, 2026-07-14-claim-provenance-ledger-reasoning-deliverable, 2026-07-14-determinize-memory-org-principle-in-code, 2026-07-22-semantic-gate-regex-to-judge]
 created: 2026-09-01
 last_verified: 2026-09-01
-rule_derived: "Written from the rule leaves regex-not-for-semantic-classification and partition-markers; no experience leaf recorded."
 ---
 
 # Determinizing a specialist's behavior: a four-step recipe

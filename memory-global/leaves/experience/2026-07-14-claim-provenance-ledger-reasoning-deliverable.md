@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev@gmail.com"
 refs: [formalization-ladder-l1-l3.md, 2026-07-14-determinize-memory-org-principle-in-code.md, 2026-07-09-gate-must-execute-what-it-attests.md]
 created: 2026-07-14
 last_verified: 2026-07-15
-generalized_into: []
+generalized_into: [specialist-behavior-determinization-recipe, verdict-covers-the-evidence-domain-it-claims]
 ---
 
 # Provenance is the done-axis for a reasoning deliverable: mechanize CLOSURE, keep enumeration as perception

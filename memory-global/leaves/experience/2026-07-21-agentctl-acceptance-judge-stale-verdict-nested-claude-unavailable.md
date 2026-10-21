@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev@gmail.com"
 refs: [gates.py:420-461, cli.py:1924-1954]
 created: 2026-07-21
 last_verified: 2026-10-06
-generalized_into: []
+generalized_into: [verdict-covers-the-evidence-domain-it-claims]
 ---
 
 # Acceptance-judge stale-verdict deadlock when nested claude -p is unavailable — escape via byte-identical stage-review binding

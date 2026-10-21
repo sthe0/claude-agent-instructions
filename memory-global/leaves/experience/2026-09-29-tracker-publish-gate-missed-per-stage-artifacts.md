@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [https://github.com/sthe0/claude-agent-instructions (commit 8fab7835606e8b5da83ff1fe85637bf1f3e5d446), memory-global/leaves/artifact-complaint-dual-signal.md]
 created: 2026-09-29
 last_verified: 2026-10-01
-generalized_into: []
+generalized_into: [verdict-covers-the-evidence-domain-it-claims]
 ---
 
 # Tracker publish gate covered only whole-task phases, missed per-stage artifact-declaring work

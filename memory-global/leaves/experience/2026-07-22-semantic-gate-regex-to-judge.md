@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev (Да, решено)"
 refs: [memory-global/leaves/regex-not-for-semantic-classification.md, scripts/agentctl/advisor.py, scripts/hook-turn-end-gate.py, scripts/hook-escalation-diagnosis-gate.py]
 created: 2026-07-22
 last_verified: 2026-07-22
-generalized_into: []
+generalized_into: [specialist-behavior-determinization-recipe]
 ---
 
 # Semantic hard-block gates: regex → prefilter + fail-open LLM judge

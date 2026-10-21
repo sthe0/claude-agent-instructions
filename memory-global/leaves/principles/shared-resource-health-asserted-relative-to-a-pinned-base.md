@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 domain: development
-induced_from: [2026-06-30-shared-tree-suite-failure-wrong-ownership-attribution, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]
+induced_from: [2026-06-30-shared-tree-suite-failure-wrong-ownership-attribution, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-03-foreign-wip-schema-leaks-into-session-state, 2026-10-12-stage-control-baseline-hostage]
 created: 2026-08-11
 last_verified: 2026-08-11
 ---

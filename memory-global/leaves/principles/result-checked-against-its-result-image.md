@@ -4,7 +4,7 @@ description: Every produced result is critiqued against the result-image its pla
 type: reference
 schema: principle/v1
 generality: 3
-induced_from: [coordinator-pitfalls, 2026-06-24-gate-exemption-is-category-error-for-result-images]
+induced_from: [coordinator-pitfalls, 2026-06-24-gate-exemption-is-category-error-for-result-images, static-checks-green-live-run-fails, 2026-05-26-agent-system-plan-vs-reality-drift, 2026-06-30-2026-06-30-verify-spawned-developer-commit-scope-shared-tree, 2026-07-23-expected-image-stale-vs-codereview-normative-reconcile]
 created: 2026-06-26
 last_verified: 2026-06-26
 ---

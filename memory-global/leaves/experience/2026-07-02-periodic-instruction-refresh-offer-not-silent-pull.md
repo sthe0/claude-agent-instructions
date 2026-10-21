@@ -9,7 +9,7 @@ refs: [scripts/hook-instructions-refresh-due.py, scripts/tests/test_hook_instruc
 plan_file: /home/the0/.claude-agent/plans/daily-instruction-refresh-prompt.toml
 created: 2026-07-02
 last_verified: 2026-07-02
-generalized_into: []
+generalized_into: [an-action-on-shared-state-names-its-object-and-leaves-others-untouched]
 ---
 
 # Periodic instruction refresh: agent OFFER via UserPromptSubmit hook, not silent background pull

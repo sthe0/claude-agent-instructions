@@ -4,7 +4,7 @@ description: A stage control is evaluated at record-result and again at verify-f
 type: reference
 schema: principle/v1
 generality: 2
-induced_from: [2026-10-12-stage-control-phase-of-evaluation, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]
+induced_from: [2026-10-12-stage-control-phase-of-evaluation, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-03-engine-replan-artifact-discipline]
 domain: development
 created: 2026-10-12
 last_verified: 2026-10-12

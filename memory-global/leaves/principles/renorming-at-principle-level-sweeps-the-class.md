@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 domain: planning
-induced_from: [2026-07-20-agentctl-premise-gate-blocks-venue-refinement-replan, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]
+induced_from: [2026-07-20-agentctl-premise-gate-blocks-venue-refinement-replan, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-16-onboarding-drift-after-crosscutting-refactor-needs-mechanical-guard, 2026-08-27-self-attested-identity-field-needs-declared-principal-check]
 created: 2026-08-11
 last_verified: 2026-08-11
 ---

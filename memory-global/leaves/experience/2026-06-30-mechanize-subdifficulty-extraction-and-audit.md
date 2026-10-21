@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "Да, решена"
 refs: [2026-05-26-agent-system-plan-vs-reality-drift, 2026-06-24-gate-exemption-is-category-error-for-result-images, 2026-06-29-org-portable-core-internal-coupling-opt-in]
 created: 2026-06-30
 last_verified: 2026-06-30
-generalized_into: []
+generalized_into: [a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs]
 ---
 
 # Mechanize 'child difficulties referenced, never inlined' as a write-time gate, then audit the corpus and extract the reusable ones

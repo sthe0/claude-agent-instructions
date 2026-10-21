@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [2b22784, 24af0bb, a622df4, 0bd7970]
 created: 2026-08-25
 last_verified: 2026-09-23
-generalized_into: []
+generalized_into: [a-child-process-shares-its-parent-ambient-root-until-isolated-explicitly]
 ---
 
 # An unisolated judge subprocess re-enters the agent; isolating it silently removes file-carried capability

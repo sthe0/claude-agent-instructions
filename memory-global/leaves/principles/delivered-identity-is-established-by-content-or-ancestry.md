@@ -4,7 +4,7 @@ description: A check that a delivery landed, or that an artifact is the one it n
 type: reference
 schema: principle/v1
 generality: 2
-induced_from: [2026-10-12-landed-state-identity-by-coordinate, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]
+induced_from: [2026-10-12-landed-state-identity-by-coordinate, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, pushed-to-personal-branch-is-not-landed, 2026-08-11-sync-stash-identity-not-position]
 domain: development
 created: 2026-10-12
 last_verified: 2026-10-12

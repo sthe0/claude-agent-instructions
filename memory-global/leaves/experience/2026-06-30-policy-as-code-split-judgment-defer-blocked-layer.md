@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [internal-review/14170183, trunk r20151520, Core dae4558..a0bdbf1, leaves/pr-land-review-gate.md]
 created: 2026-06-30
 last_verified: 2026-06-30
-generalized_into: []
+generalized_into: [a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs, specialist-behavior-determinization-recipe]
 ---
 
 # Verbal policy -> auto-applying code: split judgment from mechanism; ship the verifiable layer, defer the platform-blocked one

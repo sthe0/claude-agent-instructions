@@ -4,7 +4,7 @@ description: A stage control that consumes a network read, a live API or a flaky
 type: reference
 schema: principle/v1
 generality: 1
-induced_from: [2026-10-12-stage-control-liveness-nondeterminism, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]
+induced_from: [2026-10-12-stage-control-liveness-nondeterminism, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-16-benchmark-measurement-contamination-env-resource-artifact, 2026-08-18-fail-open-gate-exit-zero-and-underfetched-listing]
 domain: development
 created: 2026-10-12
 last_verified: 2026-10-12

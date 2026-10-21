@@ -7,7 +7,7 @@ resolution_confirmed_by_user: "давай закроем задачу"
 refs: [2026-06-24-gate-exemption-is-category-error-for-result-images, 2026-05-26-agent-system-plan-vs-reality-drift]
 created: 2026-06-24
 last_verified: 2026-07-24
-generalized_into: []
+generalized_into: [a-gate-on-form-is-checked-against-the-property-it-stands-for]
 ---
 
 # Spawned developer's return marker after a prose preamble false-BLOCKs the engine

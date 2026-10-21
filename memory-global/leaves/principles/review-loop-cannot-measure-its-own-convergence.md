@@ -4,7 +4,7 @@ description: A review loop with a non-zero finding floor and a pass-required gat
 type: reference
 schema: principle/v1
 generality: 1
-induced_from: [2026-08-11-review-loop-cannot-measure-its-own-convergence]
+induced_from: [2026-08-11-review-loop-cannot-measure-its-own-convergence, review-loop-shifting-grounds-never-converges, 2026-08-04-no-circuit-breaker-on-verification-effort, 2026-08-17-diagnosing-has-no-exit-to-the-customer, 2026-09-03-published-text-writer-gate-effort-divergence-deadlock, 2026-10-06-season2-metric-instruction-tuning]
 domain: coordination
 created: 2026-08-25
 last_verified: 2026-08-25

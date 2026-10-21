@@ -9,7 +9,7 @@ refs: [memory-global/leaves/experience/2026-07-29-crutch-registry-standing-preve
 plan_file: /home/the0/.claude-agent/plans/record-experience-hint-path.toml
 created: 2026-08-20
 last_verified: 2026-08-20
-generalized_into: []
+generalized_into: [verdict-covers-the-evidence-domain-it-claims]
 ---
 
 # Full-tree verification is blind to an untracked new file; its staged twin is not

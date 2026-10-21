@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev@gmail.com"
 refs: [/home/the0/agent-bench/report/report-opus-n120.md, /home/the0/agent-bench/report/grade_all.py]
 created: 2026-07-16
 last_verified: 2026-07-20
-generalized_into: []
+generalized_into: [a-control-over-a-non-hermetic-read-separates-unreadable-from-failed, verdict-covers-the-evidence-domain-it-claims]
 ---
 
 # Environment/resource artifacts silently contaminate a benchmark measurement

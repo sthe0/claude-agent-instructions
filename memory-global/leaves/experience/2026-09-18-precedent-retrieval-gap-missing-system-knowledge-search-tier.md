@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user, 2026-09-17, AskUserQuestion quality 5/5"
 refs: [memory-global/leaves/leaf-schema.md, memory-global/leaves/principle-leaf-schema.md, skills/specializations/planner/SKILL.md, scripts/record-experience.py]
 created: 2026-09-18
 last_verified: 2026-09-18
-generalized_into: []
+generalized_into: [a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs]
 ---
 
 # Existing system-knowledge precedent was never retrieved before planning — search tool only covered two of three tiers

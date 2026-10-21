@@ -9,7 +9,7 @@ refs: [scripts/project_entry/agent-dispatch.sh, scripts/cursor-launchers.sh, 202
 plan_file: /home/the0/.claude-agent/plans/cursor-agent-launchers.toml
 created: 2026-07-31
 last_verified: 2026-07-31
-generalized_into: []
+generalized_into: [an-assumed-ambient-facility-is-declared-with-a-generic-default]
 ---
 
 # Extract a task-entry launcher behind a backend descriptor before adding a second agent CLI

@@ -4,7 +4,7 @@ description: An artefact that will JUDGE other work — a plan's controls, a CI 
 type: reference
 schema: principle/v1
 generality: 2
-induced_from: [2026-07-09-gate-must-execute-what-it-attests, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-20-stage-verify-command-narrower-than-final-check]
+induced_from: [2026-07-09-gate-must-execute-what-it-attests, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-20-stage-verify-command-narrower-than-final-check, 2026-07-01-monitor-self-defeats-verify-its-own-run, 2026-09-03-hygiene-sweep-ownership-check-argument-order-bug, 2026-10-12-stage-control-authoring-interface-mismatch]
 created: 2026-08-11
 last_verified: 2026-08-11
 ---

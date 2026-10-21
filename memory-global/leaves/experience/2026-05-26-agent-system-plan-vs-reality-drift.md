@@ -7,7 +7,7 @@ resolution_confirmed_by_user: "<migrated 2026-06-11 to difficulty/v1; per-contex
 refs: [2026-05-25-resolution-gate-confirm-before-record, 2026-06-04-verify-load-bearing-axis, systemic-pattern-scan]
 created: 2026-06-11
 last_verified: 2026-06-24
-generalized_into: []
+generalized_into: [a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs, result-checked-against-its-result-image]
 ---
 
 # Agent-system plan vs. reality drift
