@@ -825,7 +825,7 @@ class Cycle:
         row["excused_count"] = len(excused)
         if failing:
             rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))
-            green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed)
+            green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed, excused)
         else:
             green = True
         gates = self.run_gates(worktree)

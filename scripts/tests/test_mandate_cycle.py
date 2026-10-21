@@ -52,10 +52,15 @@ def raw_issue(number, labels=("backlog",), author=OWNER, day=1, title=None, body
 
 def junit(passed, failed=()):
     suite = ET.Element("testsuite")
+    def split(name):
+        """`module|name` puts the case in another junit class than the default one."""
+        module, _, case = name.rpartition("|")
+        return module or "scripts.tests.test_a", case
+
     for name in passed:
-        ET.SubElement(suite, "testcase", classname="scripts.tests.test_a", name=name)
+        ET.SubElement(suite, "testcase", classname=split(name)[0], name=split(name)[1])
     for name in failed:
-        case = ET.SubElement(suite, "testcase", classname="scripts.tests.test_a", name=name)
+        case = ET.SubElement(suite, "testcase", classname=split(name)[0], name=split(name)[1])
         ET.SubElement(case, "failure", message="boom")
     return ET.tostring(ET.ElementTree(suite).getroot(), encoding="unicode")
 
@@ -784,24 +789,20 @@ def test_a_test_vanishing_from_an_untouched_module_still_fails_the_gate(env):
     assert row["excused_tests"] == [] and row["excused_count"] == 0
 
 
-def test_a_collection_error_in_the_touched_module_fails_the_gate(tmp_path):
-    module = tmp_path / "scripts" / "tests" / "test_broken.py"
-    module.parent.mkdir(parents=True)
-    module.write_text("import a_module_that_does_not_exist\n\n\ndef test_x():\n    pass\n", encoding="utf-8")
-    xml_path = tmp_path / "item.xml"
-    env_ = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
-    subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist", f"--rootdir={tmp_path}",
-         f"--junitxml={xml_path}", str(module)],
-        cwd=tmp_path, env=env_, capture_output=True, check=False,
-    )
-    item = driver.read_junit(xml_path)
-    assert item.ran and not item.passed
-    baseline_id = "scripts.tests.test_broken::test_x"
-    failing, excused = rules.split_failures(
-        {baseline_id}, {baseline_id}, item.passed, item.seen, rules.diff_path_groups(["M\tscripts/tests/test_broken.py"]),
-    )
-    assert (failing, excused) == ([baseline_id], [])
+def test_an_excused_id_is_not_held_against_the_item_after_the_rerun(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.worktree_files = ["scripts/tests/test_a.py", "scripts/tests/test_z.py"]
+    flaky = "scripts.tests.test_z|t9"
+    env.world.name_status = "M\tscripts/tests/test_a.py\n"
+    env.world.suites["baseline.xml"] = (["t1", "t2", flaky], [])
+    env.world.suites["item.xml"] = (["t1"], [flaky])
+    env.world.suites["rerun.xml"] = (["t1", flaky], [])
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["tests"], row["outcome"]) == ("pass", "pr-opened")
+    assert row["excused_tests"] == ["scripts.tests.test_a::t2"]
+    assert any(x.endswith("rerun.xml") for c in env.world.calls for x in c)
 
 
 def test_the_digest_lists_the_excused_ids_capped(env):

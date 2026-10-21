@@ -176,14 +176,14 @@ CATALOGUE: "dict[str, Mutant]" = {
         '        row["excused_count"] = len(excused)\n'
         "        if failing:\n"
         '            rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))\n'
-        "            green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed)\n",
+        "            green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed, excused)\n",
         "            baseline.seen, baseline.seen, item_suite.passed, item_suite.seen, rules.diff_path_groups(lines),\n"
         "        )\n"
         '        row["excused_tests"] = excused[:DIGEST_EXCUSED_IDS]\n'
         '        row["excused_count"] = len(excused)\n'
         "        if failing:\n"
         '            rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))\n'
-        "            green = rules.passes_after_rerun(baseline.seen, item_suite.passed, rerun.passed)\n",
+        "            green = rules.passes_after_rerun(baseline.seen, item_suite.passed, rerun.passed, excused)\n",
         _ids(T_CYCLE, "test_a_test_failing_on_the_baseline_does_not_count_against_the_item"),
     ),
     "no-trunk-push": Mutant(
@@ -498,13 +498,19 @@ CATALOGUE: "dict[str, Mutant]" = {
             T_RULES,
             "test_a_new_failure_in_the_touched_module_voids_the_excuse",
             "test_a_new_failure_in_the_renamed_to_module_voids_the_excuse",
-        ) + _ids(T_CYCLE, "test_a_collection_error_in_the_touched_module_fails_the_gate"),
+        ) + _ids(T_RULES, "test_a_collection_error_in_the_touched_module_fails_the_gate"),
     ),
     "vanished-test-rename-group": Mutant(
         RULES,
         "test_module_of(ident, groups) for ident in new_bad",
         "test_module_of(ident, [g[:1] for g in groups]) for ident in new_bad",
         _ids(T_RULES, "test_a_new_failure_in_the_renamed_to_module_voids_the_excuse"),
+    ),
+    "rerun-verdict-ignores-excused": Mutant(
+        DRIVER,
+        "rerun.passed, excused)\n",
+        "rerun.passed)\n",
+        _ids(T_CYCLE, "test_an_excused_id_is_not_held_against_the_item_after_the_rerun"),
     ),
 }
 

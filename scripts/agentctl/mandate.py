@@ -494,7 +494,10 @@ def test_module_of(test_id: str, groups: "Sequence[Iterable[str]]") -> "int | No
     the module part of `test_id`; None when no group holds one. Pure: the filesystem is never read.
 
     The module part is what precedes `::`; a collection error has an empty classname, so its
-    id is `::<dotted module>` and the module part is what follows."""
+    id is `::<dotted module>` and the module part is what follows.
+
+    Assumes junit classnames mirror repo paths (`scripts/tests/test_x.py` -> `scripts.tests.test_x`),
+    which holds for the suite run from the repo root."""
     head, _, tail = test_id.partition("::")
     module = head or tail
     for index, group in enumerate(groups):
@@ -534,9 +537,11 @@ def split_failures(
 
 def passes_after_rerun(
     baseline_passed: Iterable[str], item_passed: Iterable[str], rerun_passed: Iterable[str],
+    excused: Iterable[str] = (),
 ) -> bool:
-    """The item verdict once the ids that failed the first run have been rerun once."""
-    return passes(baseline_passed, set(item_passed) | set(rerun_passed))
+    """The item verdict once the ids that failed the first run have been rerun once; an id
+    `split_failures` excused is not held against the item, as it was not on the first run."""
+    return passes(set(baseline_passed) - set(excused), set(item_passed) | set(rerun_passed))
 
 
 WORKTREE_TOKEN = "<worktree>"
