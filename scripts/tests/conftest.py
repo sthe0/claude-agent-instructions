@@ -623,3 +623,20 @@ def venued_fixtures_dir(tmp_path, tmp_path_factory):
         else:
             target.symlink_to(entry)
     return dst
+
+
+@pytest.fixture
+def pairwise_min_edges_1(tmp_path, monkeypatch):
+    """Opt-in: pins `review-pairwise-min-edges` to 1 through a temporary config.md, so a
+    suite exercising pair mechanics on a small fixture plan keeps reviewing pairwise."""
+    from agentctl import config as agentctl_config
+
+    lines = agentctl_config.CONFIG_MD.read_text(encoding="utf-8").splitlines()
+    row = "| `review-pairwise-min-edges` | `1` | test pin |"
+    pinned = [row if line.startswith("| `review-pairwise-min-edges` |") else line for line in lines]
+    if pinned == lines:
+        pinned.append(row)
+    copy = tmp_path / "config-pairwise-1.md"
+    copy.write_text("\n".join(pinned) + "\n", encoding="utf-8")
+    monkeypatch.setattr(agentctl_config, "CONFIG_MD", copy)
+    return copy

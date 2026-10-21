@@ -126,6 +126,10 @@ class Thresholds:
     def loop_sensitivity_depth(self) -> int:
         return self._int("loop-sensitivity-depth")
 
+    @property
+    def review_pairwise_min_edges(self) -> int:
+        return self._int("review-pairwise-min-edges")
+
     def budget_usd(self, tier: str) -> str:
         """Expected-size telemetry LABEL for a tier — NOT the applied kill-cap.
         The cap passed to `claude -p --max-budget-usd` is runaway_ceiling_usd()."""

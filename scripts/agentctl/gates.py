@@ -70,6 +70,7 @@ from .plan import (
     pair_currency_keys,
     plan_has_any_grants,
     plan_interface_digests,
+    reliance_set,
     review_pairs,
     review_units,
     split_pair_id,
@@ -1271,20 +1272,53 @@ _NO_REVIEW_BLOCKER_PAIRWISE = (
 )
 
 
-def pairwise_review_route(state: SessionState | None) -> bool:
+def plan_shape(doc) -> "tuple[int, int, bool]":
+    """(stage count, reliance-edge count, every stage is `small`) — read only from
+    fields every stage carries, so no stage kind or prose length moves it. Edges are
+    `reliance_set` edges, not review pairs (no `base-<s>` coverage pairs)."""
+    stages = list(doc.stages)
+    edges = sum(len(reliance_set(doc, s.index)) for s in stages)
+    return len(stages), edges, all(s.actor.cost_tier == "small" for s in stages)
+
+
+def pairwise_review_route(state: SessionState | None, doc=None) -> bool:
     """Whether plan review runs pairwise for this session — the one predicate the
     `submit_plan` directive and the blocker message both read, so trigger and gate
-    never name different routes."""
-    return state is not None and state.route == Route.SPAWN.value
+    never name different routes. On a spawn route, decided in this order: the plan
+    does not load -> pairs; its whole-plan rendering is over the dispatch prompt
+    ceiling -> pairs; one stage or all stages small -> whole-plan review; the
+    `review-pairwise-min-edges` row missing or non-integer -> pairs; fewer reliance
+    edges than the row -> whole-plan review; otherwise pairs. `doc=None` loads
+    `state.plan_path`."""
+    if state is None or state.route != Route.SPAWN.value:
+        return False
+    if doc is None:
+        try:
+            doc = load_plan(state.plan_path) if state.plan_path else None
+        except (OSError, PlanError):
+            doc = None
+    if doc is None:
+        return True
+    from .render import dispatch_ceiling_chars, render_plan_md
+    if len(render_plan_md(doc)) > dispatch_ceiling_chars():
+        return True
+    stages, edges, all_small = plan_shape(doc)
+    if stages <= 1 or all_small:
+        return False
+    try:
+        min_edges = Thresholds().review_pairwise_min_edges
+    except (KeyError, ValueError, OSError):
+        return True
+    return edges >= min_edges
 
 
-def _no_review_blocker(state: SessionState | None) -> str:
-    return _NO_REVIEW_BLOCKER_PAIRWISE if pairwise_review_route(state) else _NO_REVIEW_BLOCKER
+def _no_review_blocker(state: SessionState | None, doc=None) -> str:
+    return _NO_REVIEW_BLOCKER_PAIRWISE if pairwise_review_route(state, doc) else _NO_REVIEW_BLOCKER
 
 
 def _plan_review_blockers_whole(pr, target_plan: str | None, *, state: SessionState | None = None, doc=None) -> list[str]:
     if pr is None:
-        return [_no_review_blocker(state)]
+        return [_no_review_blocker(state, doc)]
     if not target_plan:
         return [_stale_path_blocker(pr.plan_path, target_plan)]
     if pr.plan_path != target_plan:
@@ -1915,7 +1949,7 @@ def _plan_review_blockers_coverage(state: SessionState, target_plan: str, doc) -
     recorded" test."""
     whole = state.plan_review
     if whole is None:
-        return [_no_review_blocker(state)]
+        return [_no_review_blocker(state, doc)]
     if whole.plan_path != target_plan and not _binds_across_path_change(whole, target_plan, state):
         return [_stale_path_blocker(whole.plan_path, target_plan)]
     scope = review_scope(doc, whole)
@@ -2243,7 +2277,8 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
         except (OSError, PlanError):
             doc = None
     coverage_route = doc is not None and (
-        bool(state.plan_stage_reviews) or has_pair_records_for(state, target_plan)
+        bool(state.plan_stage_reviews)
+        or (has_pair_records_for(state, target_plan) and pairwise_review_route(state, doc))
         or (state.plan_review is not None and (state.plan_review.carried_tier or 0) >= 2)
     )
     if not coverage_route:

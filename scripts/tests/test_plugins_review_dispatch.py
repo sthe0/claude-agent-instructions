@@ -157,7 +157,7 @@ def test_submit_plan_fires_blocking_thinker_directive(capsys, tmp_path, venued_f
 
 
 def test_submit_plan_directive_names_topological_route_as_the_required_review(
-        capsys, tmp_path, venued_fixtures_dir):
+        capsys, tmp_path, venued_fixtures_dir, pairwise_min_edges_1):
     root = str(tmp_path / "state")
     plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _, d = _drive_to_plan_ready(capsys, root, "rd1t", plan)
