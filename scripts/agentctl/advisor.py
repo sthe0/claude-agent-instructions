@@ -376,7 +376,7 @@ _BINARY_ASK_QUESTION_MARKS = frozenset({
 # chars argument is given.
 _BINARY_ASK_TRAILING_DECORATION = "*_`~)]}>\"'»”’ \t\r\n"
 
-# LAST-RESORT default for the three judges below, used only when a caller names
+# LAST-RESORT default for judge_binary_ask below, used only when a caller names
 # no timeout of its own. Not "bounded well under _ADVISOR_TIMEOUT_S" any more:
 # that reading treated the cheap advisory model's cap as an upper bound for a
 # call it does not make, and produced 8 s -- under the FASTEST run any of these
@@ -600,6 +600,13 @@ def judge_binary_ask(
         judge_ledger.set_current_judge(None)
 
 
+# LAST-RESORT default for judge_same_difficulty, used only when a caller names
+# no timeout of its own. By lib/judge_latency.py::last_resort_ceiling_s, the
+# same rule and the same number as _BINARY_ASK_TIMEOUT_S. Named distinctly
+# because each judge's in-hook ceiling is derived per its own measured row, and
+# a shared name would invite a caller to reuse whichever it imported first.
+_SAME_DIFFICULTY_TIMEOUT_S = 185
+
 _SAME_DIFFICULTY_PROMPT = (
     "You are given two texts, each describing a recurring difficulty in how an "
     "AI agent system works, written in any language. Decide whether they "
@@ -619,7 +626,7 @@ def judge_same_difficulty(
     runner,
     *,
     enabled: bool = True,
-    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    timeout: int = _SAME_DIFFICULTY_TIMEOUT_S,
     remaining: float | None = None,
     ceiling: float | None = None,
     runtime_host: str = HOST_CLAUDE,
@@ -936,6 +943,12 @@ def judge_published_text_rules(
         judge_ledger.set_current_judge(None)
 
 
+# LAST-RESORT default for judge_feedback_signal, used only when a caller names
+# no timeout of its own. Same rule and number as _BINARY_ASK_TIMEOUT_S; own name
+# so each judge's in-hook ceiling stays independently derivable per its measured
+# row without the risk of a caller importing a neighbour's constant by mistake.
+_FEEDBACK_SIGNAL_TIMEOUT_S = 185
+
 _FEEDBACK_JUDGE_PROMPT = (
     "You are given a user's message to an AI coding assistant, written in any "
     "language. Decide whether this message carries AGENT-BEHAVIOR FEEDBACK -- a "
@@ -952,6 +965,12 @@ _FEEDBACK_JUDGE_PROMPT = (
     "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
     "MESSAGE:\n{text}"
 )
+
+# LAST-RESORT default for judge_outage_escalation, used only when a caller names
+# no timeout of its own. Same rule and number as _BINARY_ASK_TIMEOUT_S; own name
+# so each judge's in-hook ceiling stays independently derivable per its measured
+# row without the risk of a caller importing a neighbour's constant by mistake.
+_OUTAGE_ESCALATION_TIMEOUT_S = 185
 
 _OUTAGE_ESCALATION_JUDGE_PROMPT = (
     "You are given the final message of an AI assistant's turn, written in any "
@@ -1031,7 +1050,7 @@ def judge_feedback_signal(
     runner,
     *,
     enabled: bool = True,
-    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    timeout: int = _FEEDBACK_SIGNAL_TIMEOUT_S,
     remaining: float | None = None,
     ceiling: float | None = None,
     runtime_host: str = HOST_CLAUDE,
@@ -1097,6 +1116,12 @@ def judge_feedback_signal(
         judge_ledger.set_current_judge(None)
 
 
+# LAST-RESORT default for judge_user_question, used only when a caller names no
+# timeout of its own. Same rule and number as _BINARY_ASK_TIMEOUT_S; own name
+# so each judge's in-hook ceiling stays independently derivable per its measured
+# row without the risk of a caller importing a neighbour's constant by mistake.
+_USER_QUESTION_TIMEOUT_S = 185
+
 _USER_QUESTION_JUDGE_PROMPT = (
     "You are given a user's message to an AI coding assistant, written in any "
     "language. Decide whether the message ASKS the assistant a question -- it "
@@ -1110,6 +1135,12 @@ _USER_QUESTION_JUDGE_PROMPT = (
     "Answer on the FIRST line with exactly YES or NO, nothing else.\n\n"
     "MESSAGE:\n{text}"
 )
+
+# LAST-RESORT default for judge_resolution_confirmation, used only when a caller
+# names no timeout of its own. Same rule and number as _BINARY_ASK_TIMEOUT_S;
+# own name so each judge's in-hook ceiling stays independently derivable per its
+# measured row without the risk of a caller importing a neighbour's constant.
+_RESOLUTION_CONFIRMATION_TIMEOUT_S = 185
 
 _RESOLUTION_CONFIRMATION_JUDGE_PROMPT = (
     "You are given a user's message to an AI coding assistant, written in any "
@@ -1176,7 +1207,7 @@ def judge_user_question(
     runner,
     *,
     enabled: bool = True,
-    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    timeout: int = _USER_QUESTION_TIMEOUT_S,
     remaining: float | None = None,
     ceiling: float | None = None,
     runtime_host: str = HOST_CLAUDE,
@@ -1198,7 +1229,7 @@ def judge_resolution_confirmation(
     runner,
     *,
     enabled: bool = True,
-    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    timeout: int = _RESOLUTION_CONFIRMATION_TIMEOUT_S,
     remaining: float | None = None,
     ceiling: float | None = None,
     runtime_host: str = HOST_CLAUDE,
@@ -1219,7 +1250,7 @@ def judge_outage_escalation(
     runner,
     *,
     enabled: bool = True,
-    timeout: int = _BINARY_ASK_TIMEOUT_S,
+    timeout: int = _OUTAGE_ESCALATION_TIMEOUT_S,
     remaining: float | None = None,
     ceiling: float | None = None,
     runtime_host: str = HOST_CLAUDE,

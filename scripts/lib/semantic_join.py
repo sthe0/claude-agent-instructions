@@ -74,7 +74,7 @@ def _passes_nomination(score) -> bool:
 
 
 def _budget_allows(budget) -> bool:
-    return budget.remaining_and_timeout(advisor._BINARY_ASK_TIMEOUT_S)[1] is not None
+    return budget.remaining_and_timeout(advisor._SAME_DIFFICULTY_TIMEOUT_S)[1] is not None
 
 
 def _identity_join(a, b) -> bool:
@@ -231,7 +231,7 @@ def _decide_pair(a, b, *, judge, cache, budget, stats):
         return cached
     if not _budget_allows(budget):
         return None
-    timeout = min(advisor._BINARY_ASK_TIMEOUT_S, budget.remaining())
+    timeout = min(advisor._SAME_DIFFICULTY_TIMEOUT_S, budget.remaining())
     verdict, reason = _ask_judge(judge, a, b, timeout=timeout)
     if not _is_genuine(reason):
         return None
@@ -239,7 +239,7 @@ def _decide_pair(a, b, *, judge, cache, budget, stats):
     if verdict:
         if not _budget_allows(budget):
             return None
-        timeout = min(advisor._BINARY_ASK_TIMEOUT_S, budget.remaining())
+        timeout = min(advisor._SAME_DIFFICULTY_TIMEOUT_S, budget.remaining())
         again, reason = _ask_judge(judge, a, b, timeout=timeout)
         if not _is_genuine(reason):
             return None
