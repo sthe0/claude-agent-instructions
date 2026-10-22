@@ -1,0 +1,1230 @@
+{
+ "formula": {
+  "window": "a session is in the window when its first review record (plan_review, plan_pair_review, plan_review_compose, review_carried) falls in [window[0], window[1]) by UTC day",
+  "counted_act": "a plan_review or plan_pair_review history event for which agentctl.cli._is_counted_review holds (lib.review_cycles.is_act); carried, override and composition records are not acts",
+  "review_acts": "counted acts over the whole history",
+  "admissible_cut": "acts_to_cut = counted acts before the first approve event; acts_after_cut = review_acts - acts_to_cut; a session never approved has no cut (null) and is counted in totals.sessions_never_approved",
+  "plan_versions": "distinct plan_sha256 over submit_plan and replan events",
+  "active_minutes": "state effort_actuals.active_minutes, the booked quantity",
+  "cycle_minutes_to_cut": "sum of the rebuilt minutes of the review cycles of review-cost-calibrate.py (lib.review_cycles cycle cutting, scaled to active_minutes); null without a transcript",
+  "spend": "claude-spawn-costs.jsonl rows with event spawn and ts in the window, grouped by kind: cost_usd is list price (telemetry under flat billing, not money), hours = sum(duration_ms) / 3.6e6",
+  "axes": "R reachability, V controls, D format accounting, W wording, S safety and rollback; the label of one concern is taken from the dossier's classified-<session>.json as given (comp.py's rule: the first letter of the label; builds = label ends with * or is a bare R)",
+  "builds": "concerns whose label changes what the plan builds",
+  "counterfactual": "if only concerns that change what is built blocked approval, acts_to_cut shrinks by the share of such concerns: acts_to_cut * builds_share over the labelled sessions, an illustration under the labelling error, not a prediction",
+  "hash": "sha256 of json.dumps(table, sort_keys=True, separators=(',', ':')) over the table's rows",
+  "labelling_error": "labels are one reader's judgement, error about +-5 percentage points"
+ },
+ "window": [
+  "2026-10-08",
+  "2026-10-23"
+ ],
+ "inputs_sha256": "d1d890b0d5034f5329ac4478391f441adfcedd7e8c1686f188d9811f6d1139ab",
+ "row_columns": [
+  "session",
+  "first_review_day",
+  "plan_versions",
+  "review_acts",
+  "approved",
+  "acts_to_cut",
+  "acts_after_cut",
+  "pair_review_events",
+  "active_minutes",
+  "cycle_minutes_to_cut"
+ ],
+ "rows": [
+  [
+   "89a2690f",
+   "2026-10-11",
+   8,
+   86,
+   true,
+   64,
+   22,
+   86,
+   316.888,
+   98.811
+  ],
+  [
+   "985e5f21",
+   "2026-10-11",
+   1,
+   263,
+   false,
+   null,
+   null,
+   263,
+   649.082,
+   null
+  ],
+  [
+   "5b7be785",
+   "2026-10-12",
+   1,
+   3,
+   false,
+   null,
+   null,
+   3,
+   0.0,
+   0.0
+  ],
+  [
+   "a8a7646d",
+   "2026-10-12",
+   7,
+   159,
+   true,
+   56,
+   103,
+   159,
+   0.0,
+   null
+  ],
+  [
+   "1aed5a43",
+   "2026-10-13",
+   2,
+   6,
+   true,
+   6,
+   0,
+   6,
+   72.063,
+   null
+  ],
+  [
+   "2881d0ba",
+   "2026-10-13",
+   4,
+   77,
+   true,
+   30,
+   47,
+   77,
+   0.0,
+   null
+  ],
+  [
+   "2aa42ac4",
+   "2026-10-13",
+   0,
+   10,
+   false,
+   null,
+   null,
+   10,
+   0.0,
+   null
+  ],
+  [
+   "3dc5899e",
+   "2026-10-13",
+   1,
+   3,
+   true,
+   3,
+   0,
+   3,
+   48.121,
+   0.0
+  ],
+  [
+   "77ceb10a",
+   "2026-10-13",
+   1,
+   1,
+   false,
+   null,
+   null,
+   0,
+   1.2,
+   null
+  ],
+  [
+   "7b27261f",
+   "2026-10-13",
+   1,
+   0,
+   true,
+   0,
+   0,
+   0,
+   91.603,
+   0.0
+  ],
+  [
+   "a3c51861",
+   "2026-10-13",
+   7,
+   44,
+   true,
+   33,
+   11,
+   44,
+   0.0,
+   null
+  ],
+  [
+   "a7b54a72",
+   "2026-10-13",
+   1,
+   1,
+   true,
+   1,
+   0,
+   0,
+   201.447,
+   11.121
+  ],
+  [
+   "d3066ecd",
+   "2026-10-13",
+   4,
+   28,
+   true,
+   26,
+   2,
+   28,
+   0.0,
+   null
+  ],
+  [
+   "ddbb7345",
+   "2026-10-13",
+   1,
+   1,
+   false,
+   null,
+   null,
+   0,
+   0.0,
+   0.0
+  ],
+  [
+   "eca3d9fd",
+   "2026-10-13",
+   1,
+   4,
+   true,
+   4,
+   0,
+   5,
+   0.0,
+   0.0
+  ],
+  [
+   "f5401024",
+   "2026-10-13",
+   1,
+   2,
+   false,
+   null,
+   null,
+   2,
+   0.0,
+   0.0
+  ],
+  [
+   "fd5140d5",
+   "2026-10-13",
+   3,
+   6,
+   true,
+   6,
+   0,
+   6,
+   45.562,
+   34.925
+  ],
+  [
+   "d3066ecd",
+   "2026-10-14",
+   18,
+   332,
+   true,
+   294,
+   38,
+   294,
+   2778.795,
+   465.53
+  ],
+  [
+   "22372075",
+   "2026-10-16",
+   4,
+   11,
+   true,
+   8,
+   3,
+   11,
+   258.359,
+   null
+  ],
+  [
+   "63ed4c2f",
+   "2026-10-16",
+   2,
+   6,
+   true,
+   6,
+   0,
+   6,
+   0.0,
+   null
+  ],
+  [
+   "8d511470",
+   "2026-10-16",
+   5,
+   13,
+   true,
+   8,
+   5,
+   13,
+   69.246,
+   null
+  ],
+  [
+   "e403f975",
+   "2026-10-16",
+   3,
+   6,
+   true,
+   6,
+   0,
+   6,
+   30.0,
+   null
+  ],
+  [
+   "e7f76755",
+   "2026-10-16",
+   4,
+   10,
+   true,
+   10,
+   0,
+   10,
+   0.0,
+   null
+  ],
+  [
+   "32212548",
+   "2026-10-17",
+   3,
+   8,
+   true,
+   8,
+   0,
+   8,
+   67.561,
+   null
+  ],
+  [
+   "9a002c26",
+   "2026-10-17",
+   5,
+   16,
+   true,
+   11,
+   5,
+   16,
+   34.434,
+   null
+  ],
+  [
+   "d63bb019",
+   "2026-10-18",
+   6,
+   15,
+   true,
+   15,
+   0,
+   15,
+   101.826,
+   null
+  ],
+  [
+   "09321034",
+   "2026-10-20",
+   8,
+   99,
+   true,
+   90,
+   9,
+   99,
+   1031.143,
+   43.273
+  ],
+  [
+   "2283939a",
+   "2026-10-20",
+   12,
+   357,
+   true,
+   137,
+   220,
+   353,
+   1028.559,
+   null
+  ],
+  [
+   "97f80629",
+   "2026-10-20",
+   2,
+   3,
+   true,
+   3,
+   0,
+   3,
+   519.211,
+   null
+  ],
+  [
+   "dbe9be01",
+   "2026-10-20",
+   6,
+   10,
+   true,
+   10,
+   0,
+   10,
+   30.0,
+   null
+  ],
+  [
+   "1ac3cd53",
+   "2026-10-21",
+   2,
+   4,
+   true,
+   4,
+   0,
+   4,
+   45.989,
+   null
+  ],
+  [
+   "3c259100",
+   "2026-10-21",
+   2,
+   3,
+   true,
+   3,
+   0,
+   0,
+   0.0,
+   null
+  ],
+  [
+   "5da1814a",
+   "2026-10-21",
+   13,
+   150,
+   true,
+   150,
+   0,
+   150,
+   649.604,
+   389.237
+  ],
+  [
+   "62635e8c",
+   "2026-10-21",
+   4,
+   137,
+   true,
+   41,
+   96,
+   134,
+   689.319,
+   null
+  ],
+  [
+   "7f189199",
+   "2026-10-21",
+   5,
+   6,
+   true,
+   6,
+   0,
+   6,
+   117.744,
+   0.0
+  ],
+  [
+   "e9062ddf",
+   "2026-10-21",
+   5,
+   8,
+   true,
+   8,
+   0,
+   8,
+   93.021,
+   null
+  ],
+  [
+   "f4593fec",
+   "2026-10-21",
+   7,
+   11,
+   true,
+   11,
+   0,
+   11,
+   30.0,
+   null
+  ],
+  [
+   "si-form-",
+   "2026-10-21",
+   3,
+   15,
+   true,
+   12,
+   3,
+   15,
+   0.0,
+   null
+  ],
+  [
+   "123bae58",
+   "2026-10-22",
+   4,
+   9,
+   true,
+   9,
+   0,
+   9,
+   111.919,
+   null
+  ],
+  [
+   "399a2500",
+   "2026-10-22",
+   6,
+   43,
+   true,
+   43,
+   0,
+   40,
+   220.166,
+   117.964
+  ],
+  [
+   "4c7c269f",
+   "2026-10-22",
+   6,
+   11,
+   true,
+   11,
+   0,
+   11,
+   80.104,
+   null
+  ],
+  [
+   "603d5f7f",
+   "2026-10-22",
+   1,
+   3,
+   false,
+   null,
+   null,
+   3,
+   0.0,
+   0.0
+  ],
+  [
+   "6c549bb8",
+   "2026-10-22",
+   11,
+   147,
+   true,
+   145,
+   2,
+   147,
+   472.128,
+   403.91
+  ],
+  [
+   "9eec2cd6",
+   "2026-10-22",
+   5,
+   48,
+   true,
+   20,
+   28,
+   0,
+   6053.754,
+   null
+  ],
+  [
+   "b1aed237",
+   "2026-10-22",
+   3,
+   6,
+   true,
+   4,
+   2,
+   5,
+   59.809,
+   null
+  ],
+  [
+   "b57ae539",
+   "2026-10-22",
+   3,
+   4,
+   false,
+   null,
+   null,
+   4,
+   0.0,
+   0.0
+  ],
+  [
+   "b752068a",
+   "2026-10-22",
+   11,
+   14,
+   true,
+   14,
+   0,
+   14,
+   0.0,
+   null
+  ],
+  [
+   "ca1f477a",
+   "2026-10-22",
+   1,
+   12,
+   false,
+   null,
+   null,
+   12,
+   90.791,
+   null
+  ],
+  [
+   "cf1151ef",
+   "2026-10-22",
+   7,
+   9,
+   true,
+   9,
+   0,
+   9,
+   30.0,
+   null
+  ],
+  [
+   "f0604554",
+   "2026-10-22",
+   4,
+   31,
+   false,
+   null,
+   null,
+   31,
+   145.157,
+   90.752
+  ]
+ ],
+ "rows_sha256": "f34cbdccafba84631b980849e4491b411dd826b381c9580d6ab23c070f566ab3",
+ "role_columns": [
+  "role",
+  "spawns",
+  "cost_usd",
+  "hours"
+ ],
+ "role_rows": [
+  [
+   "code-reviewer",
+   267,
+   331.6383,
+   20.1338
+  ],
+  [
+   "developer",
+   411,
+   1078.2215,
+   114.3668
+  ],
+  [
+   "memory-curator",
+   1,
+   3.5485,
+   0.1588
+  ],
+  [
+   "planner",
+   196,
+   1022.2363,
+   46.6271
+  ],
+  [
+   "tech-writer",
+   5,
+   5.5448,
+   0.5186
+  ],
+  [
+   "thinker",
+   6541,
+   4192.8454,
+   180.5398
+  ]
+ ],
+ "role_rows_sha256": "551c59cf6b7937df46e224790ddc680c87e9bd9e5e3d4e8cc014065838dc6ca0",
+ "axis_columns": [
+  "session",
+  "plan_version",
+  "R",
+  "V",
+  "D",
+  "W",
+  "S",
+  "builds"
+ ],
+ "axis_rows": [
+  [
+   "09321034",
+   3,
+   12,
+   42,
+   14,
+   5,
+   2,
+   14
+  ],
+  [
+   "09321034",
+   4,
+   3,
+   17,
+   2,
+   0,
+   0,
+   3
+  ],
+  [
+   "09321034",
+   5,
+   2,
+   12,
+   4,
+   1,
+   1,
+   3
+  ],
+  [
+   "09321034",
+   7,
+   0,
+   1,
+   2,
+   0,
+   0,
+   0
+  ],
+  [
+   "2283939a",
+   1,
+   15,
+   45,
+   19,
+   17,
+   5,
+   19
+  ],
+  [
+   "2283939a",
+   2,
+   4,
+   14,
+   5,
+   2,
+   1,
+   5
+  ],
+  [
+   "2283939a",
+   3,
+   4,
+   11,
+   2,
+   4,
+   0,
+   4
+  ],
+  [
+   "2283939a",
+   4,
+   5,
+   18,
+   9,
+   1,
+   0,
+   5
+  ],
+  [
+   "2283939a",
+   5,
+   4,
+   16,
+   6,
+   1,
+   0,
+   4
+  ],
+  [
+   "2283939a",
+   8,
+   12,
+   64,
+   45,
+   20,
+   3,
+   15
+  ],
+  [
+   "5da1814a",
+   2,
+   5,
+   21,
+   6,
+   3,
+   1,
+   6
+  ],
+  [
+   "5da1814a",
+   3,
+   6,
+   10,
+   3,
+   4,
+   0,
+   6
+  ],
+  [
+   "5da1814a",
+   5,
+   5,
+   9,
+   7,
+   1,
+   0,
+   5
+  ],
+  [
+   "5da1814a",
+   8,
+   2,
+   1,
+   0,
+   0,
+   0,
+   2
+  ],
+  [
+   "5da1814a",
+   12,
+   6,
+   5,
+   1,
+   2,
+   0,
+   6
+  ],
+  [
+   "5da1814a",
+   18,
+   3,
+   10,
+   5,
+   4,
+   0,
+   3
+  ],
+  [
+   "d3066ecd",
+   3,
+   2,
+   15,
+   5,
+   1,
+   0,
+   2
+  ],
+  [
+   "d3066ecd",
+   4,
+   3,
+   11,
+   4,
+   3,
+   0,
+   3
+  ],
+  [
+   "d3066ecd",
+   5,
+   3,
+   6,
+   7,
+   2,
+   0,
+   3
+  ],
+  [
+   "d3066ecd",
+   6,
+   2,
+   9,
+   5,
+   1,
+   0,
+   2
+  ],
+  [
+   "d3066ecd",
+   7,
+   2,
+   4,
+   4,
+   1,
+   0,
+   2
+  ],
+  [
+   "d3066ecd",
+   8,
+   1,
+   4,
+   0,
+   0,
+   0,
+   1
+  ],
+  [
+   "d3066ecd",
+   9,
+   1,
+   6,
+   1,
+   3,
+   0,
+   1
+  ],
+  [
+   "d3066ecd",
+   10,
+   0,
+   0,
+   1,
+   0,
+   0,
+   0
+  ],
+  [
+   "d3066ecd",
+   13,
+   11,
+   0,
+   0,
+   1,
+   0,
+   11
+  ],
+  [
+   "d3066ecd",
+   14,
+   0,
+   0,
+   1,
+   0,
+   0,
+   0
+  ]
+ ],
+ "axis_rows_sha256": "a35666c8d0634334bb9b5b2794becc4e4cd4adf1064c834e9d2fefc4a57f20ee",
+ "totals": {
+  "sessions": 50,
+  "sessions_with_acts": 49,
+  "sessions_approved": 40,
+  "sessions_never_approved": 10,
+  "review_acts": 2251,
+  "acts_to_cut": 1325,
+  "acts_after_cut": 596,
+  "pair_review_events": 2149,
+  "plan_versions": 225,
+  "max_plan_versions": [
+   18,
+   13
+  ],
+  "active_minutes": 16264.605,
+  "cycle_minutes_to_cut": 1655.523,
+  "sessions_with_cycle_minutes": 18,
+  "spend_usd_by_role": {
+   "code-reviewer": 331.6383,
+   "developer": 1078.2215,
+   "memory-curator": 3.5485,
+   "planner": 1022.2363,
+   "tech-writer": 5.5448,
+   "thinker": 4192.8454
+  },
+  "hours_by_role": {
+   "code-reviewer": 20.1338,
+   "developer": 114.3668,
+   "memory-curator": 0.1588,
+   "planner": 46.6271,
+   "tech-writer": 0.5186,
+   "thinker": 180.5398
+  },
+  "spawns_by_role": {
+   "code-reviewer": 267,
+   "developer": 411,
+   "memory-curator": 1,
+   "planner": 196,
+   "tech-writer": 5,
+   "thinker": 6541
+  },
+  "spend_usd_total": 6634.0348,
+  "hours_total": 362.3449
+ },
+ "axes": {
+  "sessions": {
+   "09321034": {
+    "concerns": 120,
+    "versions": 4,
+    "counts": {
+     "R": 17,
+     "V": 72,
+     "D": 22,
+     "W": 6,
+     "S": 3
+    },
+    "share_pct": {
+     "R": 14.2,
+     "V": 60.0,
+     "D": 18.3,
+     "W": 5.0,
+     "S": 2.5
+    },
+    "builds": 20,
+    "builds_pct": 16.7
+   },
+   "2283939a": {
+    "concerns": 352,
+    "versions": 6,
+    "counts": {
+     "R": 44,
+     "V": 168,
+     "D": 86,
+     "W": 45,
+     "S": 9
+    },
+    "share_pct": {
+     "R": 12.5,
+     "V": 47.7,
+     "D": 24.4,
+     "W": 12.8,
+     "S": 2.6
+    },
+    "builds": 52,
+    "builds_pct": 14.8
+   },
+   "5da1814a": {
+    "concerns": 120,
+    "versions": 6,
+    "counts": {
+     "R": 27,
+     "V": 56,
+     "D": 22,
+     "W": 14,
+     "S": 1
+    },
+    "share_pct": {
+     "R": 22.5,
+     "V": 46.7,
+     "D": 18.3,
+     "W": 11.7,
+     "S": 0.8
+    },
+    "builds": 28,
+    "builds_pct": 23.3
+   },
+   "d3066ecd": {
+    "concerns": 120,
+    "versions": 10,
+    "counts": {
+     "R": 25,
+     "V": 55,
+     "D": 28,
+     "W": 12,
+     "S": 0
+    },
+    "share_pct": {
+     "R": 20.8,
+     "V": 45.8,
+     "D": 23.3,
+     "W": 10.0,
+     "S": 0.0
+    },
+    "builds": 25,
+    "builds_pct": 20.8
+   }
+  },
+  "concerns": 712,
+  "builds": 125,
+  "builds_pct": 17.6
+ },
+ "counterfactual": {
+  "builds_pct": 17.6,
+  "acts_to_cut": 1325,
+  "acts_if_only_building_concerns_block": 233.2,
+  "thinker_spend_usd": 4192.8454,
+  "thinker_spend_usd_if_only_building_concerns_block": 737.94,
+  "basis": "if only concerns that change what is built blocked approval, acts_to_cut shrinks by the share of such concerns: acts_to_cut * builds_share over the labelled sessions, an illustration under the labelling error, not a prediction"
+ },
+ "dossier_comparison": [
+  {
+   "claim": "thinker spend usd",
+   "dossier": 4055.0,
+   "derived": 4192.8454,
+   "delta": 0.034,
+   "unit": "rel",
+   "within": true,
+   "explanation": ""
+  },
+  {
+   "claim": "thinker hours",
+   "dossier": 174.0,
+   "derived": 180.5398,
+   "delta": 0.0376,
+   "unit": "rel",
+   "within": true,
+   "explanation": ""
+  },
+  {
+   "claim": "developer spend usd",
+   "dossier": 983.0,
+   "derived": 1078.2215,
+   "delta": 0.0969,
+   "unit": "rel",
+   "within": false,
+   "explanation": "the dossier was written during the last day of its span; its figures lie between the same sums over a window ending before that day and over the full window, so the difference is the part of that day the dossier had not yet seen"
+  },
+  {
+   "claim": "developer hours",
+   "dossier": 110.0,
+   "derived": 114.3668,
+   "delta": 0.0397,
+   "unit": "rel",
+   "within": true,
+   "explanation": ""
+  },
+  {
+   "claim": "planner spend usd",
+   "dossier": 964.0,
+   "derived": 1022.2363,
+   "delta": 0.0604,
+   "unit": "rel",
+   "within": false,
+   "explanation": "the dossier was written during the last day of its span; its figures lie between the same sums over a window ending before that day and over the full window, so the difference is the part of that day the dossier had not yet seen"
+  },
+  {
+   "claim": "planner hours",
+   "dossier": 44.0,
+   "derived": 46.6271,
+   "delta": 0.0597,
+   "unit": "rel",
+   "within": false,
+   "explanation": "the dossier was written during the last day of its span; its figures lie between the same sums over a window ending before that day and over the full window, so the difference is the part of that day the dossier had not yet seen"
+  },
+  {
+   "claim": "sessions with review",
+   "dossier": 30,
+   "derived": 50,
+   "delta": 0.6667,
+   "unit": "rel",
+   "within": false,
+   "explanation": "the dossier does not record its session criterion; this report counts every session with a review record in the window, including sessions with pair reviews only"
+  },
+  {
+   "claim": "axis R share in 2283939a pct",
+   "dossier": 12,
+   "derived": 12.5,
+   "delta": 0.5,
+   "unit": "pct",
+   "within": true,
+   "explanation": ""
+  },
+  {
+   "claim": "axis V share in 2283939a pct",
+   "dossier": 48,
+   "derived": 47.7,
+   "delta": -0.3,
+   "unit": "pct",
+   "within": true,
+   "explanation": ""
+  },
+  {
+   "claim": "axis D share in 2283939a pct",
+   "dossier": 24,
+   "derived": 24.4,
+   "delta": 0.4,
+   "unit": "pct",
+   "within": true,
+   "explanation": ""
+  },
+  {
+   "claim": "axis W share in 2283939a pct",
+   "dossier": 13,
+   "derived": 12.8,
+   "delta": -0.2,
+   "unit": "pct",
+   "within": true,
+   "explanation": ""
+  },
+  {
+   "claim": "axis S share in 2283939a pct",
+   "dossier": 3,
+   "derived": 2.6,
+   "delta": -0.4,
+   "unit": "pct",
+   "within": true,
+   "explanation": ""
+  },
+  {
+   "claim": "share of concerns that change what the plan builds, range over labelled sessions pct",
+   "dossier": [
+    15,
+    23
+   ],
+   "derived": [
+    14.8,
+    23.3
+   ],
+   "within": true,
+   "explanation": ""
+  },
+  {
+   "claim": "93 percent of thinker spend went to superseded plan versions",
+   "dossier": 93,
+   "derived": null,
+   "within": null,
+   "explanation": "not re-derivable: spawn rows carry neither session nor plan version; the dossier figure is an upper bound (the engine carries some verdicts to a new version)"
+  }
+ ],
+ "notes": [
+  "Concern labels are one reader's judgement, with an error of about 5 percentage points; they are used as the dossier gave them and were not re-labelled.",
+  "sessions never approved have no admissible cut: acts_to_cut and acts_after_cut are null",
+  "spend is list price, telemetry under flat billing, not money.",
+  "The counterfactual is an illustration from the building-concern share, not a measured saving."
+ ]
+}

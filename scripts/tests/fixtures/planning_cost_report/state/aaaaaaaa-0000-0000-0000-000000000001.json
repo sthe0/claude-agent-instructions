@@ -1,0 +1,13 @@
+{
+ "session_id": "aaaaaaaa-0000-0000-0000-000000000001",
+ "effort_actuals": {"active_minutes": 12.5},
+ "history": [
+  {"ts": "2026-10-10T10:00:00+00:00", "event": "submit_plan", "plan_sha256": "s1", "verified": true},
+  {"ts": "2026-10-10T10:05:00+00:00", "event": "plan_pair_review", "verdict": "revise", "reviewer": "thinker"},
+  {"ts": "2026-10-10T10:10:00+00:00", "event": "plan_pair_review", "verdict": "pass", "reviewer": "thinker"},
+  {"ts": "2026-10-10T10:11:00+00:00", "event": "plan_review", "verdict": "override", "reviewer": "agent"},
+  {"ts": "2026-10-10T10:20:00+00:00", "event": "approve"},
+  {"ts": "2026-10-10T10:30:00+00:00", "event": "replan", "plan_sha256": "s2"},
+  {"ts": "2026-10-10T10:35:00+00:00", "event": "plan_review", "verdict": "pass", "reviewer": "thinker"}
+ ]
+}
