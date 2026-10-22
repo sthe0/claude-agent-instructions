@@ -1938,6 +1938,7 @@ def _refresh_caches_from_plan_path(
     *,
     runner: Runner | None = None,
     advice: list[str] | None = None,
+    baseline=None,
 ) -> list[str]:
     """SUBMISSION SEAM (c). Re-load state.plan_path, validate it at submission grade, and
     — only if it is clean — refresh state.final_check plus each live stage's
@@ -1988,7 +1989,10 @@ def _refresh_caches_from_plan_path(
         refreshed = _load(state.plan_path)
     except (OSError, PlanError) as exc:
         return [f"cannot load the plan at {state.plan_path!r}: {exc}"]
-    violations = _submission_problems(refreshed, runner, state.weight_class)
+    # `baseline` is the last approved plan: a finished stage's unchanged edge is frozen
+    # against it, exactly as at replan, so approve judges the same exemption replan did.
+    violations = _submission_problems(refreshed, runner, state.weight_class,
+                                      _frozen_edge_stages(state, baseline, refreshed))
     if violations:
         return violations
     if advice is not None:
@@ -7126,7 +7130,9 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # entry point (_refresh_caches_from_plan_path is a private single-caller helper), so
     # the runner is resolved here and threaded down.
     run = runner if runner is not None else advisor.subprocess_runner
-    submission = _refresh_caches_from_plan_path(state, runner=run, advice=echo_advice)
+    submission = _refresh_caches_from_plan_path(
+        state, runner=run, advice=echo_advice,
+        baseline=_baseline_plan_for_tier(store, state))
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "cannot approve: the plan at plan_path does not meet submission "

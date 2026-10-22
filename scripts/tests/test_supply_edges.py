@@ -417,3 +417,21 @@ def test_only_a_finished_stage_with_unchanged_supplies_is_exempt(tmp_path):
                                    frozen_edge_stages=frozenset({2}))
     assert [p for p in refused if "names no element" in p]
     assert not [p for p in exempt if "names no element" in p]
+
+
+def test_approve_keeps_a_finished_stage_unchanged_untyped_edge_exempt(store, tmp_path, monkeypatch):
+    """Approve re-validates plan_path at the submission seam. The frozen-edge exemption that
+    lets replan pass must hold there too, or a replan reaches PLAN_READY and approve refuses
+    the same unchanged edge with `fix_plan`."""
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+    plan = _write_plan(tmp_path / "accepted.toml", edge=BARE_DEPENDS_ON)
+    _executing_with_finished_stages(store, monkeypatch, plan)
+    edited = tmp_path / "edited.toml"
+    edited.write_text(Path(plan).read_text(encoding="utf-8").replace(
+        'goal = "g"', 'goal = "g, restated"'), encoding="utf-8")
+    assert _replan(store, str(edited)).ok
+
+    d = cli.cmd_approve(ns(session="se", by="user"), store=store)
+
+    assert not [p for p in _problems(d) if "names no element" in p], _problems(d)
+    assert store.load("se").node != "PLAN_READY"
