@@ -1,0 +1,9 @@
+{
+ "session_id": "aaaaaaaa-0000-0000-0000-000000000003",
+ "effort_actuals": {"active_minutes": 1.0},
+ "history": [
+  {"ts": "2026-09-01T08:00:00+00:00", "event": "submit_plan", "plan_sha256": "s1", "verified": true},
+  {"ts": "2026-09-01T08:05:00+00:00", "event": "plan_review", "verdict": "pass", "reviewer": "thinker"},
+  {"ts": "2026-09-01T08:06:00+00:00", "event": "approve"}
+ ]
+}

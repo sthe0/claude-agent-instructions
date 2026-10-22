@@ -1,0 +1,7 @@
+[
+ {"index": 0, "plan_version": 1, "category": "R", "changes_what_is_built": true, "concern": "x"},
+ {"index": 1, "plan_version": 1, "category": "V", "changes_what_is_built": false, "concern": "x"},
+ {"index": 2, "plan_version": 1, "category": "V", "changes_what_is_built": false, "concern": "x"},
+ {"index": 3, "plan_version": 2, "category": "D", "changes_what_is_built": false, "concern": "x"},
+ {"index": 4, "plan_version": 2, "category": "W", "changes_what_is_built": false, "concern": "x"}
+]
