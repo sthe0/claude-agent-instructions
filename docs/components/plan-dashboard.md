@@ -8,7 +8,7 @@ The dashboard is built in layers. This page describes the data layer that the ot
 
 ## Data layer
 
-Code: `scripts/plan_dashboard/model.py` (the model) and `scripts/plan-dashboard.py` (the command line). Tests: `scripts/tests/test_plan_dashboard_model.py`, with fixtures in `plan_dashboard_fixtures.py`, a mutation plugin in `plan_dashboard_mutations.py` and the mutation driver `test_plan_dashboard_mutation_catalogue.py`.
+Code: `scripts/plan_dashboard/model.py` (the model) and `scripts/plan-dashboard.py` (the command line). Tests: `scripts/tests/test_plan_dashboard_model.py`, with fixtures in `plan_dashboard_fixtures.py`, a mutation plugin in `plan_dashboard_mutations.py` and the mutation driver `test_plan_dashboard_mutation_catalogue.py` (which covers `MUTATIONS`; the console view's family is described under Console view).
 
 Mutation control. The plugin breaks one property of the model per named mutation; the driver runs the model tests in a subprocess once with no mutation (must be green) and once per mutation (must be red), so a mutation that no test notices fails the driver. To add a mutation, add a row to `MUTATIONS` in the plugin; the driver picks it up. To run one by hand: `PLAN_DASHBOARD_MUTATION=<name> PYTHONPATH=scripts/tests:scripts python3 -m pytest -q -rf -p no:cacheprovider -p plan_dashboard_mutations scripts/tests/test_plan_dashboard_model.py`; the last line of the output names the mutation applied.
 
@@ -84,7 +84,26 @@ Cold, the text snapshot over the live state directory takes about a second and t
 
 ## Console view
 
-Not written yet.
+A live terminal view of the same tasks: a Tasks tab with one row per task and a Detail tab with the selected task's stages, phases, difficulties, child sessions and recent events. It reads through the data layer and writes nothing.
+
+```
+python3 scripts/plan-dashboard.py tui [--once] [--interval S]
+        [--all] [--session ID]... [--window-hours N] [--state-root DIR] [--cost-log FILE] [--transcripts-root DIR]
+```
+
+- `tui` starts the interactive view by running `uv run` on `scripts/plan_dashboard/tui_app.py`, whose PEP 723 block pins `textual==8.2.8`. Without `uv` on the path it prints `interactive console needs uv; use 'plan-dashboard.py tui --once'` to stderr and exits 4.
+- `tui --once` prints the task table once and exits 0, using only the standard library. Each `--session` adds that task's detail tree under the table, and a `--session` that names no state file prints `plan-dashboard: no such session: <id>` to stderr and exits 3, as `snapshot` does. It is the fallback where uv or a terminal is missing, and what scripts and tests read.
+- `--interval` is the number of seconds between reads (default 2). The screen is read again once that long has passed since the last read, and at once on `r`. A re-read keeps the cursor on the task it was on, even when the new order moves that task to another row; the cursor moves only if the task is gone.
+
+Keys: Up/Down (or `k`/`j`) move the cursor, Enter or a click opens the row, Esc or Backspace goes back to the Tasks tab, Tab switches tabs, `a` switches between live and all tasks, `r` reads again, `q` quits. The mouse works wherever textual supports it.
+
+The Tasks tab and `tui --once` open with a header line: the host name, the time of the read, and the counts of `active`, `idle` and all listed tasks. The table below it has one row per task, with the columns `session` (the first 8 characters of the session id), `task` (the task id, cut to 24 characters), `live` (the liveness), `node`, `stage`, `diff`, `replans`, `age` (time since the last activity), `wall`, `cost` and `goal`. `stage` reads `stage k/n` with an 8-cell progress bar (`stage 1/3 [###-----]`), or `no plan` when the task has no stages. `diff` is the number of difficulties the task has recorded, open, stacked and closed together, with a `!` before it while one is open (`!2`). `replans` is the replan count. Rows come active first, then by last activity, most recent first. A task whose state file cannot be read keeps its row as `stage ?/?` with `unreadable` and the reason. When the task selected on the Detail tab disappears, the tab shows a single `no such session` node. What the screen shows follows the data layer's honesty rules: a `~` before a figure marks an estimate, `≥` marks a total that is only a lower bound (a task row never counts the root session's own cost), `not counted` stands for a cost that was never measured and is never shown as 0, a phase that has not ended reads `open (<time> so far)` (`?` when its start cannot be read), and a nested spawn whose cost cannot be attributed reads `spawn not attributed`. A span that would be negative (a start later than the clock, from clock skew) reads as zero. A stage line starts with its status (`[done]`, `[active]`, `[failed]`, `[skipped]`, `[pending]`, `[?]` for any other).
+
+Code: `scripts/plan_dashboard/tui.py` holds every row, label, key decision and refresh decision as pure functions of the model and an explicit `now`; `scripts/plan_dashboard/tui_app.py` only maps them onto textual widgets and reads in a worker thread, so the screen never blocks on the disk. Tests: `scripts/tests/test_plan_dashboard_tui.py` (plain pytest: layout, keys, the `tui` subcommand, the confinement check, this section) and `scripts/tests/test_plan_dashboard_tui_app.py` (textual's headless pilot). Both build their tasks with `scripts/tests/plan_dashboard_support.py`, which also holds the confinement scan.
+
+Dependency decision. Textual is the only third-party package the dashboard uses. It is pinned exactly, run through `uv run` with no global install, and imported by `tui_app.py` alone (and by its pilot test); a plain test scans the dashboard's own sources and tests (`scripts/plan_dashboard/`, `plan-dashboard.py` and the `*plan_dashboard*` files under `scripts/tests/`) and fails if any file other than those two imports it. The data layer, the command line, `tui --once` and the web view stay standard library. Run the pilot test with `PLAN_DASHBOARD_REQUIRE_TEXTUAL=1 uv run --no-project --python 3.12 --with textual==8.2.8 --with pytest python -m pytest -q scripts/tests/test_plan_dashboard_tui_app.py`; with the variable set a missing textual fails the run, without it the file is skipped.
+
+Mutation control. `TUI_MUTATIONS` in the mutation plugin holds the console view's seven mutations; they are selected by name like the model's, but the model tests cannot see them. `test_plan_dashboard_mutation_catalogue.py` runs six of them against `test_plan_dashboard_tui.py` and requires that file to go red, with the system `pytest`. The seventh, `tui-app-no-refresh`, breaks `tui_app`, so the catalogue runs it against the pilot file, and only where textual can be imported: it is skipped under the system `pytest`. To include it, run the catalogue under the pilot command above with `scripts/tests/test_plan_dashboard_mutation_catalogue.py -k pilot`; with `PLAN_DASHBOARD_REQUIRE_TEXTUAL=1` a missing textual fails it instead of skipping.
 
 ## Web page
 

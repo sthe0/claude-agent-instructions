@@ -21,62 +21,19 @@ from pathlib import Path
 import pytest
 
 from agentctl import effort
-from agentctl.state import (
-    Actor, Criterion, CriterionType, Declaration, Difficulty, GateRecord, Means, Outcome, SessionState,
-    Stage, Subject,
-)
-from lib import transcript_cost
+from agentctl.state import Declaration, Difficulty, SessionState
 from plan_dashboard import model
 from plan_dashboard_fixtures import (
     WriteAttempt, build_fixture_root, read_only_guard, set_mtime, write_transcript,
+)
+from plan_dashboard_support import (  # noqa: F401  (isolated_home is an autouse fixture)
+    MILLION, NOW, RATE, at, event, isolated_home, iso, make_state, usage_row,
 )
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location("plan_dashboard_cli", SCRIPTS / "plan-dashboard.py")
 cli = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cli)
-
-NOW = dt.datetime(2026, 10, 22, 12, 0, tzinfo=dt.timezone.utc)
-MILLION = 1_000_000
-RATE = transcript_cost.token_cost({"input_tokens": MILLION}, "claude-sonnet-5-5")
-
-
-def at(**delta) -> dt.datetime:
-    return NOW - dt.timedelta(**delta)
-
-
-def iso(moment: dt.datetime) -> str:
-    return moment.isoformat(timespec="seconds")
-
-
-def event(name: str, moment: dt.datetime, **fields) -> dict:
-    return {"event": name, "ts": iso(moment), **fields}
-
-
-def make_stage(index: int, status: str) -> Stage:
-    return Stage(
-        index=index, title=f"Stage {index}", subject=Subject(material="m", result="r"),
-        means=Means(means="m", method="x"), actor=Actor(executor="in_thread"),
-        criterion=Criterion(criterion_type=CriterionType.MEASURABLE.value, done_criterion="d"),
-        outcome=Outcome(status=status),
-    )
-
-
-def make_state(sid: str, *, history=(), stages=(), node="EXECUTING", **fields) -> SessionState:
-    fields.setdefault("weight_class", "SUBSTANTIVE")
-    fields.setdefault("approval", GateRecord("plan_approval", passed=node not in ("CLASSIFIED", "ROUTED", "PLAN_READY")))
-    fields.setdefault("resolution", GateRecord("resolution", passed=node == "RESOLVED"))
-    return SessionState(
-        session_id=sid, task_id=f"task-{sid}", goal=fields.pop("goal", f"goal of {sid}"), node=node,
-        history=list(history),
-        stages=[make_stage(i, status) for i, status in enumerate(stages, 1)], **fields,
-    )
-
-
-def usage_row(message_id: str, moment, million_input_tokens: int) -> dict:
-    return {"message_id": message_id, "ts": moment, "model": "claude-sonnet-5-5",
-            "usage": {"input_tokens": million_input_tokens * MILLION, "output_tokens": 0}}
-
 
 def rows_by_session(snapshot: dict) -> dict:
     return {task["session_id"]: task for task in snapshot["tasks"]}
@@ -99,16 +56,6 @@ def recorded_opens():
         yield opened
     finally:
         builtins.open, io.open, os.open = real_open, real_io_open, real_os_open
-
-
-@pytest.fixture(autouse=True)
-def isolated_home(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "no-home"))
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "home"))
-    monkeypatch.delenv("CLAUDE_AGENT_HOME", raising=False)
-    model.clear_cache()
-    yield
-    model.clear_cache()
 
 
 def cli_args(root, *extra) -> list[str]:
