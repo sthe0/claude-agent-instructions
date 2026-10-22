@@ -4,9 +4,14 @@ Load it with ``-p plan_dashboard_mutations`` and name the mutation in
 ``PLAN_DASHBOARD_MUTATION``; unset or empty installs none. Each mutation wraps a public
 function of the module and breaks one property the tests are meant to pin, so a mutation
 that leaves the suite green is a test gap. Later dashboard stages add rows to MUTATIONS.
+TUI_MUTATIONS is the console view's family: it is looked up by name next to MUTATIONS but its rows
+are killed by ``test_plan_dashboard_tui.py`` (and, for the row that targets ``tui_app``, by the
+textual pilot file), not by the model tests.
 
-``test_plan_dashboard_mutation_catalogue.py`` runs every row in a subprocess and asserts the
-model tests go red; to add a mutation, add a row here and that test covers it. By hand:
+``test_plan_dashboard_mutation_catalogue.py`` runs every MUTATIONS row in a subprocess and asserts
+the model tests go red, every other TUI_MUTATIONS row likewise against the console tests, and the
+``tui_app`` row against the pilot file where textual is importable; to add a mutation, add a row
+here and that test covers it. By hand:
 ``PLAN_DASHBOARD_MUTATION=<name> PYTHONPATH=scripts/tests:scripts python3 -m pytest -q -rf
 -p no:cacheprovider -p plan_dashboard_mutations scripts/tests/test_plan_dashboard_model.py``.
 """
@@ -237,6 +242,56 @@ MUTATIONS = {
 }
 
 
+def _overview_blank(original):
+    def mutated(*args, **kwargs):
+        return [{**row, "cells": ("",) * len(row["cells"])} for row in original(*args, **kwargs)]
+    return mutated
+
+
+def _keys_ignored(original):
+    def mutated(view, key):
+        return view
+    return mutated
+
+
+def _since_real_clock(original):
+    def mutated(now, moment):
+        return original(dt.datetime.now(dt.timezone.utc), moment)
+    return mutated
+
+
+def _estimate_prefix_dropped(original):
+    def mutated(value, estimate, partial=False):
+        return original(value, False, False)
+    return mutated
+
+
+def _importers_blind(original):
+    def mutated(paths):
+        return []
+    return mutated
+
+
+def _refresh_never(original):
+    def mutated(app):
+        return None
+    return mutated
+
+
+TUI = "plan_dashboard.tui"
+TUI_APP = "plan_dashboard.tui_app"
+SUPPORT = "plan_dashboard_support"
+TUI_MUTATIONS = {
+    "tui-overview-blank": (TUI, "overview_rows", _overview_blank),
+    "tui-keys-ignored": (TUI, "handle_key", _keys_ignored),
+    "tui-ignores-now": (TUI, "_since", _since_real_clock),
+    "tui-writes-state": (TUI, "once", _collect_then(_touch_state_file)),
+    "tui-estimate-unmarked": (TUI, "fmt_value", _estimate_prefix_dropped),
+    "tui-confinement-blind": (SUPPORT, "textual_importers", _importers_blind),
+    "tui-app-no-refresh": (TUI_APP, "refresh_if_due", _refresh_never),
+}
+
+
 def pytest_addoption(parser):
     parser.addoption("--plan-dashboard-mutation", default="", help=f"same as {ENV}; the variable wins")
 
@@ -246,9 +301,10 @@ def pytest_configure(config):
     name = os.environ.get(ENV) or config.getoption("--plan-dashboard-mutation")
     if not name:
         return
-    if name not in MUTATIONS:
-        raise pytest.UsageError(f"{ENV}={name!r} is not a known mutation; known: {sorted(MUTATIONS)}")
-    module_name, attr, wrapper = MUTATIONS[name]
+    known = {**MUTATIONS, **TUI_MUTATIONS}
+    if name not in known:
+        raise pytest.UsageError(f"{ENV}={name!r} is not a known mutation; known: {sorted(known)}")
+    module_name, attr, wrapper = known[name]
     module = importlib.import_module(module_name)
     setattr(module, attr, wrapper(getattr(module, attr)))
     applied = name
