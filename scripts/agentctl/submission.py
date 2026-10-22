@@ -907,11 +907,18 @@ def submission_violations(
     session_weight_class: str | None = None,
     judge_runner=None,
     judge_enabled: bool = True,
+    frozen_edge_stages: frozenset[int] = frozenset(),
 ) -> list[str]:
     """Every submission-grade violation in `doc`, as author-readable strings. [] == clean.
 
     Returns rather than raises: the approve seam must answer with a Directive (see the
     module docstring), and returning the full list lets one round trip show everything.
+
+    `frozen_edge_stages` names stages whose edges are not held to the edge rule: finished
+    stages whose supplies a replan leaves unchanged. Their supplies are interface leaves
+    the replan freeze refuses to touch without --reopen, so refusing them here as well
+    left a plan approved before the edge rule existed no replan at all short of reopening
+    work that is already done.
 
     `judge_runner`/`judge_enabled` reach the violations here that a model decides (see
     `_conditions_restatement` and `_procedure_collapse`). Their defaults make those
@@ -969,7 +976,8 @@ def submission_violations(
                 f"stage {stage.index} missing {label!r} (required for substantive plans): "
                 f"{_WHY[label]}"
             )
-        out.extend(_edge_violations(stage, {s.index: s for s in doc.stages}))
+        if stage.index not in frozen_edge_stages:
+            out.extend(_edge_violations(stage, {s.index: s for s in doc.stages}))
         out.extend(_negative_control_violations(stage))
         out.extend(_ephemeral_artifacts_violations(stage, venue))
         restatement = _conditions_restatement(stage, judge_runner, judge_enabled)

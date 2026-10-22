@@ -869,6 +869,10 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "names the PASSED stages a non-substantive replan may not edit in an operative or "
         "interface leaf; a SKIPPED stage delivered nothing to protect"
     ),
+    ("agentctl/cli.py", "_frozen_edge_stages"): (
+        "exempts from the edge rule exactly the stages _frozen_stage_refusal freezes; a "
+        "SKIPPED stage is not frozen, so its edges stay the author's to type"
+    ),
     ("agentctl/cli.py", "_renormalize_replan"): (
         "same pending-set question as _replan_pending_indices, asked inline while carrying "
         "norm targets across a replan; a SKIPPED stage is likewise counted as pending. "

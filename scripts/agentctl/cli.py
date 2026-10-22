@@ -1602,6 +1602,21 @@ def _baseline_plan_for_tier(store: StateStore, state: SessionState):
     return _plan_from_snapshot(store, state, state.plan_snapshot_hash or "")
 
 
+def _frozen_edge_stages(state: SessionState, baseline, new) -> frozenset[int]:
+    """PASSED stages whose supplies `new` leaves as `baseline` had them. Their edges are
+    frozen (changing one needs --reopen), so the submission edge rule cannot ask for them
+    to change; an edge the replan adds or edits is still held to it. Empty without a
+    baseline."""
+    if baseline is None:
+        return frozenset()
+    old = {s.index: s.supplies for s in baseline.stages}
+    passed = {s.index for s in state.stages
+              if s.outcome.status == StageStatus.PASSED.value}
+    return frozenset(s.index for s in new.stages
+                     if s.index in passed and s.index in old
+                     and s.supplies == old[s.index])
+
+
 def _plan_from_snapshot(store: StateStore, state: SessionState, digest: str):
     """The plan version `digest` parsed from its stored snapshot, or None when no readable
     snapshot of it exists or it does not parse."""
@@ -2129,7 +2144,8 @@ def _submission_advice(
     return advice
 
 
-def _submission_problems(doc, runner: Runner | None, weight_class: str | None) -> list[str]:
+def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
+                         frozen_edge_stages: frozenset[int] = frozenset()) -> list[str]:
     """The submission seam's REFUSING channel, with its judge resolved the way the advice
     channel's is — one place per channel, so no seam re-derives the enabled rule.
 
@@ -2150,6 +2166,7 @@ def _submission_problems(doc, runner: Runner | None, weight_class: str | None) -
         session_weight_class=weight_class,
         judge_runner=runner,
         judge_enabled=enabled,
+        frozen_edge_stages=frozen_edge_stages,
     )
     # A node over plan-stage-max-chars cannot be reviewed in one pair prompt, so every seam
     # that admits plan bytes to a session (submit-plan, approve after an in-place edit,
@@ -11924,7 +11941,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # `_load(args.plan)` used to be a separate read from the digest stamp and the
     # snapshot write, leaving a window for a concurrent edit to desynchronize them.
     new, _new_plan_bytes, _new_plan_digest = load_plan_with_digest(args.plan)
-    submission = _submission_problems(new, run, state.weight_class)
+    submission = _submission_problems(
+        new, run, state.weight_class,
+        _frozen_edge_stages(state, _baseline_plan_for_tier(store, state), new))
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "replan blocked: the corrected plan does not meet submission "

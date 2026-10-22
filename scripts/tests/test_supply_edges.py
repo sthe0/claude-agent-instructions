@@ -42,7 +42,7 @@ from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER, declare_venue
 
 from agentctl import cli, plan as plan_mod, submission as submission_mod, text_shape
 from agentctl.plan import PlanError, load_plan
-from agentctl.state import Node
+from agentctl.state import Node, StageStatus
 from agentctl.submission import submission_violations, validate_submission
 
 # The three edge shapes an author can write, spliced into stage 2 of `_PLAN`. The first two
@@ -350,3 +350,70 @@ def test_the_loader_is_untouched_by_the_mandate(tmp_path):
     assert [p for p in submission_violations(doc) if "names no element" in p]
     with pytest.raises(PlanError, match="names no element"):
         validate_submission(doc)
+
+
+# --- a finished stage's unchanged edge at replan ------------------------------------------
+
+def _executing_with_finished_stages(store, monkeypatch, plan, session="se"):
+    """A session approved on `plan` before the edge rule existed (the rule is switched off
+    for the approval only), with both stages recorded PASSED."""
+    with monkeypatch.context() as m:
+        m.setattr(submission_mod, "_edge_violations", lambda stage, by_index: [])
+        d = _submit(store, plan, session)
+        assert d.ok, _problems(d) or d.detail
+        d = cli.cmd_approve(ns(session=session, by="user"), store=store)
+        assert d.ok, d.detail
+    cli.cmd_partition(ns(session=session, m1=False, m2=False, m3=False, m4=False,
+                         m3_severe=False, m4_severe=False), store=store)
+    state = store.load(session)
+    for s in state.stages:
+        s.outcome.status = StageStatus.PASSED.value
+    store.save(state)
+
+
+def _replan(store, plan, session="se"):
+    return cli.cmd_replan(ns(session=session, plan=plan), store=store)
+
+
+def test_a_finished_stage_keeps_its_unchanged_untyped_edge_at_replan(store, tmp_path, monkeypatch):
+    """The edge on a PASSED stage is frozen: changing it needs --reopen, which re-arms work
+    already done. Holding that same edge to the element rule at replan left a plan approved
+    before the rule existed no replan at all short of reopening done work. An edit
+    elsewhere in the plan must pass the submission seam while the frozen edge stays as
+    approved."""
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+    plan = _write_plan(tmp_path / "accepted.toml", edge=BARE_DEPENDS_ON)
+    _executing_with_finished_stages(store, monkeypatch, plan)
+    edited = tmp_path / "edited.toml"
+    edited.write_text(Path(plan).read_text(encoding="utf-8").replace(
+        'goal = "g"', 'goal = "g, restated"'), encoding="utf-8")
+
+    d = _replan(store, str(edited))
+
+    assert not [p for p in _problems(d) if "names no element" in p], _problems(d)
+
+
+def test_only_a_finished_stage_with_unchanged_supplies_is_exempt(tmp_path):
+    """The control for the exemption above: it covers exactly the edges the freeze protects.
+    An edge the replan changes, or one on a stage not yet PASSED, is still the author's to
+    type, and the seam still refuses it."""
+    from types import SimpleNamespace
+
+    untyped = load_plan(_write_plan(tmp_path / "untyped.toml", edge=UNTYPED_SUPPLY))
+    typed = load_plan(_write_plan(tmp_path / "typed.toml", edge=TYPED_SUPPLY))
+
+    def state(status):
+        return SimpleNamespace(stages=[
+            SimpleNamespace(index=i, outcome=SimpleNamespace(status=status)) for i in (1, 2)])
+
+    passed = state(StageStatus.PASSED.value)
+    assert 2 in cli._frozen_edge_stages(passed, untyped, untyped)
+    assert 2 not in cli._frozen_edge_stages(passed, typed, untyped)
+    assert 2 not in cli._frozen_edge_stages(state(StageStatus.PENDING.value), untyped, untyped)
+    assert cli._frozen_edge_stages(passed, None, untyped) == frozenset()
+
+    refused = submission_violations(untyped, session_weight_class="SUBSTANTIVE")
+    exempt = submission_violations(untyped, session_weight_class="SUBSTANTIVE",
+                                   frozen_edge_stages=frozenset({2}))
+    assert [p for p in refused if "names no element" in p]
+    assert not [p for p in exempt if "names no element" in p]
