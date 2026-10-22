@@ -294,6 +294,7 @@ def landed_containment_script(git: str, commit: str, refs: str, merge_base: str,
 def recorded_landing_script(
     git: str, *, landed_head: str, landed_base: str, delivered_head: str,
     delivered_base: str | None, trailer: str, refs: str, waiver: str | None, err: int,
+    session_trailer: str | None = None,
 ) -> str:
     """The shell fragment proving a landing `record-landing` recorded carries the
     delivered work. Exit 0 proven, 1 not proven (the caller falls back to the
@@ -302,7 +303,8 @@ def recorded_landing_script(
 
     The facts, in order: `landed_base` is an ancestor of `landed_head`, the range
     between them is non-empty and holds no merge commit; `landed_head` is on every
-    ref of `refs`; every range commit carries the `trailer` line; every non-merge
+    ref of `refs`; every range commit carries the `trailer` line or, when given, the exact
+    `session_trailer` line; every non-merge
     delivered commit's whole message equals some range commit's message; and, unless
     `waiver` is set, every added and removed line of the delivered diff of each path
     occurs at least as often in the landed diff of that path. With no
@@ -336,9 +338,10 @@ def recorded_landing_script(
     script = (
         f"LH={q(landed_head)}; LB={q(landed_base)}; DH={q(delivered_head)}; DB={db}; "
         f"TR={q(trailer)}; "
-        'for c in "$LH" "$LB" "$DH" "$DB"; do '
-        f'{git} cat-file -e "$c^{{commit}}" 2>/dev/null || '
-        f"{fall_back('commit %s is not in the repository', commit_word)}; done; "
+        + (f"ST={q(session_trailer)}; " if session_trailer else "")
+        + 'for c in "$LH" "$LB" "$DH" "$DB"; do '
+        + f'{git} cat-file -e "$c^{{commit}}" 2>/dev/null || '
+        + f"{fall_back('commit %s is not in the repository', commit_word)}; done; "
         + ancestor('"$LB"', '"$LH"', "the recorded base is not an ancestor of the recorded head")
         + f'n=$({git} rev-list --count "$LB..$LH") || exit {err}; '
         f'[ "$n" -gt 0 ] || {fall_back("the recorded range is empty")}; '
@@ -351,7 +354,7 @@ def recorded_landing_script(
         f'{git} rev-list "$LB..$LH" > "$T/range" || exit {err}; : > "$T/landed"; '
         "while IFS= read -r c; do "
         f'm=$({git} log -1 --format=%B "$c") || exit {err}; '
-        + found("printf '%s\\n' \"$m\" | grep -qxF -- \"$TR\"",
+        + found("printf '%s\\n' \"$m\" | grep -qxF " + ('-e "$TR" -e "$ST"' if session_trailer else '-- "$TR"'),
                 "range commit %s lacks the task trailer", commit_word)
         + f'(set -o pipefail; {message_hash}) >> "$T/landed" || exit {err}; '
         'done < "$T/range"; '
@@ -2800,6 +2803,7 @@ class SessionState:
                 git, landed_head=outcome.landed_head, landed_base=outcome.landed_base,
                 delivered_head=delivered, delivered_base=base, trailer=trailer,
                 refs=f"{target} {remote_target}", waiver=outcome.landed_content_waiver, err=err,
+                session_trailer=f"Agent-Session: {self.session_id}" if self.session_id else None,
             )
             command = (f'( {recorded} ); s=$?; [ "$s" -eq 0 ] && exit 0; '
                        f'[ "$s" -eq 1 ] || exit {err}; ' + command)

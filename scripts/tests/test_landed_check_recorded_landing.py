@@ -232,6 +232,31 @@ def test_a_recorded_range_with_a_foreign_commit_is_red(tmp_path):
     assert "lacks the task trailer" in result.stderr
 
 
+def _range_with_extra_commit(tmp_path, extra_message):
+    work = make_repo(tmp_path)
+    db, dh = deliver(work, {"f.txt": "a\nB\nc\nd\n"})
+    lb = move_trunk(work, TRUNK_NEAR_HUNK)
+    commit(work, LANDED_NEAR_HUNK, reuse=dh)
+    commit(work, {"h.txt": "coordinator\n"}, extra_message)
+    push(work)
+    return check(work, dh, db, lb, rev(work))
+
+
+def test_a_range_commit_with_the_order_session_line_is_green(tmp_path):
+    result = _range_with_extra_commit(tmp_path, f"in-thread edit\n\nAgent-Session: {SID}")
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("message", [
+    "in-thread edit\n\nAgent-Session: other",
+    f"in-thread edit\n\nsee Agent-Session: {SID} for context",
+])
+def test_a_range_commit_with_a_foreign_session_line_is_red(tmp_path, message):
+    result = _range_with_extra_commit(tmp_path, message)
+    assert result.returncode == 1
+    assert "lacks the task trailer" in result.stderr
+
+
 def test_a_range_missing_a_delivered_message_is_red(tmp_path):
     work = make_repo(tmp_path)
     db, dh = deliver(work, {"f.txt": "a\nB\nc\nd\n"}, {"g.txt": "g\n"})

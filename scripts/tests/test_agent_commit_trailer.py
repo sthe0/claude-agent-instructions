@@ -84,6 +84,16 @@ def test_task_id_used_when_no_tracker_key(monkeypatch, tmp_path):
     ]
 
 
+def test_trailers_stamp_the_plan_task_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    _write_state(tmp_path, "sess-plan", {"task_id": "t", "plan_task_id": "order-x"})
+    assert trailer_mod.trailers(session_id="sess-plan") == [
+        "Agent-Session: sess-plan", "Agent-Task: t", "Task: order-x",
+    ]
+    _write_state(tmp_path, "sess-empty", {"task_id": "t", "plan_task_id": ""})
+    assert trailer_mod.trailers(session_id="sess-empty") == ["Agent-Session: sess-empty", "Agent-Task: t"]
+
+
 def test_malformed_state_file_yields_no_trailers(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     state_dir = tmp_path / "agentctl" / "state"

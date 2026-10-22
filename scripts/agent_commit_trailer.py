@@ -92,6 +92,9 @@ def trailers(session_id: "str | None" = None) -> "list[str]":
     task = data.get("tracker_key") or data.get("task_id") or ""
     if task:
         lines.append(f"Agent-Task: {_publish_task(task)}")
+    plan_task = data.get("plan_task_id")
+    if isinstance(plan_task, str) and plan_task:
+        lines.append(f"Task: {plan_task}")
     return lines
 
 
