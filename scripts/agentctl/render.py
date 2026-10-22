@@ -364,7 +364,7 @@ def render_stage_brief(
     command/venue/kind detail, which belongs to the full plan file. Meta's
     `delivery_worktree` is carried alongside the plan's other meta fields.
     The mutable `Outcome` record (status/actual/fail_digests/cost_usd/
-    duration_ms/spawn_count/delivered_head) is deliberately never rendered:
+    duration_ms/spawn_count/delivered_head/landed_head) is deliberately never rendered:
     it is the engine's execution HISTORY of the stage, not an input to it.
 
     Raises ValueError if no stage in `doc` carries `stage_index`.

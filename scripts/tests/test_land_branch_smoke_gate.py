@@ -393,6 +393,15 @@ def test_land_branch_names_the_fetch_record_and_live_launch_even_remote_only(tmp
     assert _kinds(venue, "python3 scripts/land-branch.py --check") == []
 
 
+def test_a_landing_that_records_on_an_engine_session_stays_unresolved(tmp_path):
+    from agentctl import tool_contracts
+
+    venue = _venue_with_registry(tmp_path)
+    resolved = tool_contracts.resolve_command(
+        "python3 scripts/land-branch.py --branch b --keep-branch --session s --stage 1", str(venue))
+    assert resolved.status == "unresolved"
+
+
 def test_the_repository_registry_pins_match_the_live_scripts():
     from agentctl import script_effects
 

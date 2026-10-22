@@ -46,11 +46,11 @@ def git(*args, cwd, check=True):
     )
 
 
-def run_cli(*args, cwd):
+def run_cli(*args, cwd, env=None):
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         cwd=str(cwd),
-        env={**os.environ, **GIT_ENV},
+        env={**os.environ, **GIT_ENV, **(env or {})},
         capture_output=True,
         text=True,
     )
@@ -394,3 +394,82 @@ def test_land_skips_local_delete_when_branch_checked_out_here(tmp_path):
     # But the remote branch was still deleted and local trunk advanced.
     assert "feature" not in git("branch", "-a", cwd=origin).stdout
     assert git("rev-parse", "main", cwd=clone).stdout.strip() == sha
+
+
+# ── CLI: recording the landing on the engine session ───────────────────────
+
+def _seed_landed_session(home: Path, sid: str, repo_root: Path) -> None:
+    from agentctl.state import (
+        Actor, CheckKind, Criterion, CriterionType, FinalCheck, LandedSpec, Means, Outcome,
+        SessionState, Stage, StageStatus, Subject,
+    )
+    from agentctl.store import FileStateStore
+    stage = Stage(
+        index=1, title="s1", subject=Subject(material="m", result="img"),
+        means=Means(means="Edit", method="do"), actor=Actor(executor="in_thread"),
+        criterion=Criterion(criterion_type=CriterionType.MEASURABLE.value, done_criterion="c",
+                            verify_command="true", verify_venue="delivery"),
+        outcome=Outcome(status=StageStatus.PASSED.value),
+    )
+    final_check = [FinalCheck(command="", kind=CheckKind.LANDED.value,
+                              landed=LandedSpec(target="main", delivered_stage=1))]
+    FileStateStore(home / "agentctl" / "state").save(SessionState(
+        session_id=sid, task_id="t", stages=[stage], repo_root=str(repo_root),
+        final_check=final_check))
+
+
+def _isolated_home(tmp_path: Path) -> dict:
+    home = tmp_path / "home"
+    home.mkdir(parents=True)
+    return {"CLAUDE_CONFIG_DIR": str(home), "CLAUDE_AGENT_HOME": str(home)}
+
+
+def test_land_session_and_stage_go_together(tmp_path):
+    origin, clone = make_bare_and_clone(tmp_path)
+    make_feature_branch(clone)
+    git("push", "--quiet", "-u", "origin", "feature", cwd=clone)
+    before = git("rev-parse", "refs/heads/main", cwd=origin).stdout.strip()
+
+    for extra in (["--session", "s"], ["--stage", "1"]):
+        result = run_cli("--branch", "feature", "--trunk", "main", *extra, cwd=clone,
+                         env=_isolated_home(tmp_path / extra[0].strip("-")))
+        assert result.returncode == 2
+        assert "--session and --stage go together" in result.stderr
+        assert git("rev-parse", "refs/heads/main", cwd=origin).stdout.strip() == before
+
+
+def test_land_records_the_landing_on_the_session(tmp_path):
+    origin, clone = make_bare_and_clone(tmp_path)
+    old_tip = git("rev-parse", "refs/heads/main", cwd=origin).stdout.strip()
+    sha = make_feature_branch(clone)
+    git("push", "--quiet", "-u", "origin", "feature", cwd=clone)
+    env = _isolated_home(tmp_path)
+    home = Path(env["CLAUDE_CONFIG_DIR"])
+    _seed_landed_session(home, "land-sid", clone)
+
+    result = run_cli("--branch", "feature", "--trunk", "main", "--keep-branch",
+                     "--session", "land-sid", "--stage", "1", cwd=clone, env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert "recorded the landing of stage 1 in session land-sid" in result.stdout
+    from agentctl.store import FileStateStore
+    outcome = FileStateStore(home / "agentctl" / "state").load("land-sid").stages[0].outcome
+    assert (outcome.landed_head, outcome.landed_base, outcome.landed_content_waiver) == (sha, old_tip, None)
+
+
+def test_a_failed_record_keeps_the_branch_and_exits_3(tmp_path):
+    origin, clone = make_bare_and_clone(tmp_path)
+    sha = make_feature_branch(clone)
+    git("checkout", "--quiet", "main", cwd=clone)
+    git("push", "--quiet", "-u", "origin", "feature", cwd=clone)
+
+    result = run_cli("--branch", "feature", "--trunk", "main",
+                     "--session", "no-such-session", "--stage", "1", cwd=clone,
+                     env=_isolated_home(tmp_path))
+
+    assert result.returncode == 3
+    assert git("rev-parse", "refs/heads/main", cwd=origin).stdout.strip() == sha
+    assert "recording the landing of stage 1 FAILED (deletion skipped" in result.stderr
+    assert "record-landing --session no-such-session --stage 1" in result.stderr
+    assert git("rev-parse", "--verify", "--quiet", "feature", cwd=clone).stdout.strip() == sha
+    assert "feature" in git("branch", "-a", cwd=origin).stdout

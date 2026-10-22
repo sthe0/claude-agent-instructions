@@ -291,6 +291,91 @@ def landed_containment_script(git: str, commit: str, refs: str, merge_base: str,
     )
 
 
+def recorded_landing_script(
+    git: str, *, landed_head: str, landed_base: str, delivered_head: str,
+    delivered_base: str | None, trailer: str, refs: str, waiver: str | None, err: int,
+) -> str:
+    """The shell fragment proving a landing `record-landing` recorded carries the
+    delivered work. Exit 0 proven, 1 not proven (the caller falls back to the
+    frozen-head check), `err` when git could not answer. A missing object (a gc'd
+    pre-rebase commit) is "not proven", never an error.
+
+    The facts, in order: `landed_base` is an ancestor of `landed_head`, the range
+    between them is non-empty and holds no merge commit; `landed_head` is on every
+    ref of `refs`; every range commit carries the `trailer` line; every non-merge
+    delivered commit's whole message equals some range commit's message; and, unless
+    `waiver` is set, every added and removed line of the delivered diff of each path
+    occurs at least as often in the landed diff of that path. With no
+    `delivered_base` the delivered commit stands alone against its first parent."""
+    q = shlex.quote
+    commit_word, path_word = '"$c"', '"$p"'
+    awk = q("/^diff --git /{h=0;next} /^@@/{h=1;next} h&&/^[-+]/{print}")
+    message_hash = f'{git} log -1 --format=%B "$c" | {git} hash-object --stdin'
+
+    def fall_back(reason: str, arg: str = "") -> str:
+        text = f"landed check (recorded landing): {reason}; falling back to the frozen-head check\\n"
+        return f"{{ printf {q(text)} {arg} >&2; exit 1; }}"
+
+    def ancestor(older: str, newer: str, reason: str) -> str:
+        return (f"{git} merge-base --is-ancestor {older} {newer}; s=$?; "
+                f'[ "$s" -eq 1 ] && {fall_back(reason)}; [ "$s" -eq 0 ] || exit {err}; ')
+
+    def found(grep: str, reason: str, arg: str) -> str:
+        return (f"{grep}; s=$?; [ \"$s\" -eq 1 ] && {fall_back(reason, arg)}; "
+                f'[ "$s" -eq 0 ] || exit {err}; ')
+
+    def changed_lines(old: str, new: str, out: str) -> str:
+        return (f'(set -o pipefail; {git} --literal-pathspecs diff-tree -r -p -U0 --no-renames '
+                f'--no-color --no-ext-diff --no-textconv {old} {new} -- "$p" '
+                f"| LC_ALL=C awk {awk} | LC_ALL=C sort) > {out} || exit {err}; ")
+
+    if delivered_base:
+        db, delivered = q(delivered_base), f'{git} rev-list --no-merges "$DB..$DH"'
+    else:
+        db, delivered = '"$DH^1"', "printf '%s\\n' \"$DH\""
+    script = (
+        f"LH={q(landed_head)}; LB={q(landed_base)}; DH={q(delivered_head)}; DB={db}; "
+        f"TR={q(trailer)}; "
+        'for c in "$LH" "$LB" "$DH" "$DB"; do '
+        f'{git} cat-file -e "$c^{{commit}}" 2>/dev/null || '
+        f"{fall_back('commit %s is not in the repository', commit_word)}; done; "
+        + ancestor('"$LB"', '"$LH"', "the recorded base is not an ancestor of the recorded head")
+        + f'n=$({git} rev-list --count "$LB..$LH") || exit {err}; '
+        f'[ "$n" -gt 0 ] || {fall_back("the recorded range is empty")}; '
+        f'm=$({git} rev-list --merges "$LB..$LH") || exit {err}; '
+        f'[ -z "$m" ] || {fall_back("the recorded range holds a merge commit")}; '
+        f"for R in {refs}; do "
+        + ancestor('"$LH"', '"$R"', "the recorded head is not on the target ref")
+        + "done; "
+        f"T=$(mktemp -d) || exit {err}; trap '[ -n \"$T\" ] && rm -rf -- \"$T\"' EXIT; "
+        f'{git} rev-list "$LB..$LH" > "$T/range" || exit {err}; : > "$T/landed"; '
+        "while IFS= read -r c; do "
+        f'm=$({git} log -1 --format=%B "$c") || exit {err}; '
+        + found("printf '%s\\n' \"$m\" | grep -qxF -- \"$TR\"",
+                "range commit %s lacks the task trailer", commit_word)
+        + f'(set -o pipefail; {message_hash}) >> "$T/landed" || exit {err}; '
+        'done < "$T/range"; '
+        f'{delivered} > "$T/delivered" || exit {err}; '
+        "while IFS= read -r c; do "
+        f"h=$(set -o pipefail; {message_hash}) || exit {err}; "
+        + found('grep -qxF -- "$h" "$T/landed"',
+                "the message of delivered commit %s is not in the recorded range", commit_word)
+        + 'done < "$T/delivered"; '
+    )
+    if waiver:
+        notice = f"landed check: content fact waived by the user: {waiver}"
+        return script + f"printf '%s\\n' {q(notice)} >&2; exit 0"
+    return script + (
+        f'{git} diff-tree -r -z --name-only --no-renames "$DB" "$DH" > "$T/paths" || exit {err}; '
+        "while IFS= read -r -d '' p; do "
+        + changed_lines('"$DB"', '"$DH"', '"$T/d"')
+        + changed_lines('"$LB"', '"$LH"', '"$T/l"')
+        + f'x=$(LC_ALL=C comm -23 "$T/d" "$T/l") || exit {err}; '
+        f"[ -z \"$x\" ] || {fall_back('a delivered line of %s is missing from the recorded range', path_word)}; "
+        'done < "$T/paths"; exit 0'
+    )
+
+
 class StageStatus(str, Enum):
     PENDING = "PENDING"
     ACTIVE = "ACTIVE"
@@ -1245,6 +1330,10 @@ SHOW_FULL_PLAN_MARKER = "[show-full-plan]"
 # session transcript — single-sourced here so the two can never drift apart.
 RESOLUTION_ASK_MARKER = "[resolution-ask]"
 
+# The marker of the AskUserQuestion that lets `record-landing --accept-content-loss`
+# waive the recorded landing's content fact; checked by cli.cmd_record_landing.
+CONTENT_WAIVER_ASK_MARKER = "[content-waiver-ask]"
+
 # Language-independent ASCII marker a replan-diff rendering must embed so the
 # delivery hook (extended by stage 4) can recognize the turn as carrying a
 # replan-authorization presentation, exactly mirroring SHOW_FULL_PLAN_MARKER —
@@ -1868,6 +1957,12 @@ class Outcome:
     # moves. None on a state frozen before this field existed (legacy rule: only the
     # delivered commit's own message is inspected).
     delivered_base: str | None = None
+    # The landing `record-landing` recorded for this stage: the pushed trunk tip and the
+    # trunk tip it was rebased onto, plus the user's reason when the content fact is
+    # waived. Cleared whenever _freeze_delivered_head stamps a different head.
+    landed_head: str | None = None
+    landed_base: str | None = None
+    landed_content_waiver: str | None = None
     # Green-check cache: the venue tree identity (HEAD sha + a diff against HEAD
     # covering staged and unstaged changes + untracked files' contents, see
     # cli._venue_tree_identity) at the last time this stage's verify_command was
@@ -2628,7 +2723,11 @@ class SessionState:
         `merge-base <ref> <delivered>`).
         Known reds: a rebase or squash whose diff text changed (conflict
         resolution, context drift); an empty delivered commit is not
-        distinguished by cherry. Returns (command, refusal): `command` is the exact string a
+        distinguished by cherry. A landing recorded by `record-landing`
+        (Outcome.landed_head/landed_base) is tried first
+        (`recorded_landing_script`); only when it is not proven does the
+        command above run, byte-identical to the unrecorded case.
+        Returns (command, refusal): `command` is the exact string a
         caller passes as `bash -c <command>` — it carries its own
         `git -C <repo_root>`, so it needs no cwd/`cd`; `refusal` is set
         instead when the check cannot even be attempted (no repo_root, an
@@ -2695,6 +2794,15 @@ class SessionState:
             f'[ "$s" -eq 0 ] || exit {err}; '
             + landed_containment_script(git, commit, f"{target} {remote_target}", merge_base, err)
         )
+        outcome = stage.outcome
+        if outcome.landed_head and outcome.landed_base:
+            recorded = recorded_landing_script(
+                git, landed_head=outcome.landed_head, landed_base=outcome.landed_base,
+                delivered_head=delivered, delivered_base=base, trailer=trailer,
+                refs=f"{target} {remote_target}", waiver=outcome.landed_content_waiver, err=err,
+            )
+            command = (f'( {recorded} ); s=$?; [ "$s" -eq 0 ] && exit 0; '
+                       f'[ "$s" -eq 1 ] || exit {err}; ' + command)
         return command, None
 
     def _render_provider_landed_command(self, spec: "LandedSpec") -> tuple[str | None, str | None]:

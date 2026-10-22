@@ -24,6 +24,7 @@ to opt out (e.g. a release branch cut from the landed tip must outlive it).
   land-branch.py [--branch B] [--trunk main] [--remote origin] [-C DIR]
                  [--remote-only] [--keep-branch]
                  [--smoke-waiver REASON] [--smoke-timeout SECONDS] [--smoke-model ALIAS]
+                 [--session SID --stage N [--stage N ...]]
       Re-checks landability, then applies the instruction smoke gate (below),
       then runs, in order:
         git push <remote> <branch>:<trunk>
@@ -41,6 +42,18 @@ to opt out (e.g. a release branch cut from the landed tip must outlive it).
       Exit 0 on full success, 2 if refused (not landable), 3 if a
       landing-critical git command failed partway (state is reported so it can
       be finished manually).
+
+      --session SID --stage N (stage repeatable; both or neither, else exit 2
+      before any push) records the landing for the agentctl landed check of
+      each stage right after the landing push and before any deletion step:
+        agentctl-cli.py record-landing --session SID --stage N
+                        --head <branch-tip-sha> --base <fetched remote tip>
+      using the agentctl-cli.py next to this script, so a rebased delivery is
+      proven from the landed range (scripts/agentctl/README.md § Landed
+      checks). A failed record skips every deletion step (worktree and
+      branches stay), prints the exact manual command naming the main
+      checkout's agentctl-cli.py, and exits 3. It never passes
+      --accept-content-loss: that waiver is the user's.
 
       Instruction smoke gate (scripts/instruction-smoke-gate.py, library
       scripts/lib/instruction_smoke_gate.py): before any push it fetches
@@ -67,6 +80,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -75,6 +89,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lib import instruction_smoke_gate as gate  # noqa: E402
+
+AGENTCTL_CLI = Path(__file__).resolve().parent / "agentctl-cli.py"
 
 
 def _git(args, cwd):
@@ -212,7 +228,8 @@ def _report_check(repo_root, assessment: Assessment) -> int:
 
 
 def _smoke_gate(repo_root, assessment: Assessment, timeout_s, waiver, runner, model=None):
-    """The pre-push smoke gate. Returns (None, line) when landing may proceed, else (reason, None).
+    """The pre-push smoke gate. Returns (None, line, remote tip) when landing may proceed,
+    else (reason, None, None).
 
     Fetches the remote tip, requires it to be an ancestor of the candidate, then decides through
     the library: not required, a stored admitted record, or a fresh smoke run."""
@@ -225,38 +242,38 @@ def _smoke_gate(repo_root, assessment: Assessment, timeout_s, waiver, runner, mo
             return (
                 f"{remote}/{trunk} {gate.short(tip)} is not an ancestor of {branch!r}; "
                 f"merge {remote}/{trunk} into {branch!r} and rerun",
-                None,
+                None, None,
             )
         if not gate.gate_applies(repo_root, tip, sha):
-            return None, "SMOKE: not required (repository has no instruction sandbox)"
+            return None, "SMOKE: not required (repository has no instruction sandbox)", tip
         paths = gate.changed_paths(repo_root, tip, sha)
         if not gate.touches_surface(paths):
-            return None, "SMOKE: not required (diff touches only exempt paths)"
+            return None, "SMOKE: not required (diff touches only exempt paths)", tip
         stored = gate.record_for_model(_stored_record(repo_root, sha), model)
         decision = gate.decide(paths, True, stored, sha, tip)
         if decision.allowed:
-            return None, _admitted_line(sha, stored, "stored record")
+            return None, _admitted_line(sha, stored, "stored record"), tip
         if waiver is not None and _waivable_stored(stored, sha, tip):
             _, stored = gate.waive_record(repo_root, sha, waiver)
             admitted, reason = gate.record_admits(stored, sha, tip)
             if not admitted:
-                return f"instruction smoke gate: {reason}", None
-            return None, _admitted_line(sha, stored, "stored record")
+                return f"instruction smoke gate: {reason}", None, None
+            return None, _admitted_line(sha, stored, "stored record"), tip
         outcome = gate.run_smoke(
             repo_root, ref=sha, remote=remote, trunk=trunk,
             timeout_s=timeout_s, waiver=waiver, runner=runner, model=model,
         )
     except gate.GateError as exc:
-        return f"instruction smoke gate: {gate.one_line(exc, 400)}", None
+        return f"instruction smoke gate: {gate.one_line(exc, 400)}", None, None
     if not outcome.admitted:
         kept = f"; sandbox kept at {outcome.sandbox_root}" if outcome.sandbox_root else ""
         note = f"; {outcome.waiver_note}" if outcome.waiver_note else ""
         return (
             f"instruction smoke gate: {outcome.record['result']} for {gate.short(sha)}: "
             f"{outcome.reason}{note} (record {outcome.record_path}{kept})",
-            None,
+            None, None,
         )
-    return None, _admitted_line(sha, outcome.record, "ran", outcome.record_path)
+    return None, _admitted_line(sha, outcome.record, "ran", outcome.record_path), tip
 
 
 def _admitted_line(sha, record, how, record_path=None):
@@ -336,8 +353,42 @@ def _cleanup_local_branch(repo_root, branch):
         )
 
 
+def _canonical_agentctl_cli() -> Path:
+    """agentctl-cli.py in the main checkout of the repository holding this script: the
+    copy that outlives a linked worktree, so a printed manual command stays runnable."""
+    proc = _git(["rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir"],
+                AGENTCTL_CLI.parent)
+    lines = proc.stdout.split("\n")
+    if proc.returncode != 0 or len(lines) < 2:
+        return AGENTCTL_CLI
+    toplevel, common_dir = Path(lines[0]), Path(lines[1])
+    return common_dir.parent / AGENTCTL_CLI.relative_to(toplevel)
+
+
+def _record_landing(session, stages, head, base) -> bool:
+    """Run `agentctl record-landing` for every stage; on any failure print the manual
+    command of each failed stage and return False."""
+    ok = True
+    for stage in stages:
+        argv = ["record-landing", "--session", session, "--stage", str(stage),
+                "--head", head, "--base", base]
+        proc = subprocess.run([sys.executable, str(AGENTCTL_CLI), *argv],
+                              capture_output=True, text=True)
+        if proc.returncode == 0:
+            print(f"[land-branch] recorded the landing of stage {stage} in session {session}")
+            continue
+        ok = False
+        manual = shlex.join(["python3", str(_canonical_agentctl_cli()), *argv])
+        print(
+            f"[land-branch] recording the landing of stage {stage} FAILED (deletion skipped; "
+            f"manually: {manual}):\n{(proc.stdout + proc.stderr).strip()}",
+            file=sys.stderr,
+        )
+    return ok
+
+
 def _do_land(repo_root, assessment: Assessment, smoke_timeout=gate.DEFAULT_TIMEOUT_S,
-             smoke_waiver=None, runner=None, smoke_model=None) -> int:
+             smoke_waiver=None, runner=None, smoke_model=None, session=None, stages=()) -> int:
     if not assessment.ok:
         print(f"NOT-LANDABLE: {assessment.reason}", file=sys.stderr)
         return 2
@@ -346,7 +397,7 @@ def _do_land(repo_root, assessment: Assessment, smoke_timeout=gate.DEFAULT_TIMEO
         assessment.remote, assessment.branch, assessment.trunk, assessment.branch_sha
     )
 
-    refusal, smoke_line = _smoke_gate(repo_root, assessment, smoke_timeout, smoke_waiver, runner, smoke_model)
+    refusal, smoke_line, remote_tip = _smoke_gate(repo_root, assessment, smoke_timeout, smoke_waiver, runner, smoke_model)
     if refusal is not None:
         print(gate.defuse(f"NOT-LANDABLE: {refusal}"), file=sys.stderr)
         return 2
@@ -365,11 +416,14 @@ def _do_land(repo_root, assessment: Assessment, smoke_timeout=gate.DEFAULT_TIMEO
             print(line)
     print(f"[land-branch] pushed {branch} -> {remote}/{trunk} ({sha})")
 
+    recorded = session is None or _record_landing(session, stages, sha, remote_tip)
+    keep_branch = assessment.keep_branch or not recorded
+
     # delete_ok / branch_f_ok are the two landing-critical steps that gate the
     # exit code (3 on failure). Worktree + local-branch cleanup below never
     # affects the exit code — see the module docstring's exit-code asymmetry.
     delete_ok = True
-    if not assessment.keep_branch:
+    if not keep_branch:
         delete_remote = _git(["push", remote, "--delete", branch], repo_root)
         delete_ok = delete_remote.returncode == 0
         if delete_ok:
@@ -395,10 +449,10 @@ def _do_land(repo_root, assessment: Assessment, smoke_timeout=gate.DEFAULT_TIMEO
                 file=sys.stderr,
             )
 
-    if not assessment.keep_branch:
+    if not keep_branch:
         _cleanup_local_branch(repo_root, branch)
 
-    if delete_ok and branch_f_ok:
+    if recorded and delete_ok and branch_f_ok:
         print(f"[land-branch] landed {branch} onto {trunk} ({sha})")
         return 0
     return 3
@@ -437,7 +491,19 @@ def main(argv=None, *, runner=None) -> int:
         help=f"model for the live launches of the instruction smoke (default: {gate.DEFAULT_MODEL}); "
              "a stored record of another model is reused only when it passed",
     )
+    parser.add_argument(
+        "--session", default=None,
+        help="agentctl session whose landed check the landing proves (needs --stage)",
+    )
+    parser.add_argument(
+        "--stage", type=int, action="append", default=[],
+        help="delivered_stage to record the landing for (repeatable; needs --session)",
+    )
     args = parser.parse_args(argv)
+    if (args.session is None) != (not args.stage):
+        print("[land-branch] --session and --stage go together: give both or neither",
+              file=sys.stderr)
+        return 2
 
     root_proc = _git(["rev-parse", "--show-toplevel"], args.repo_dir)
     if root_proc.returncode != 0:
@@ -455,7 +521,7 @@ def main(argv=None, *, runner=None) -> int:
     return _do_land(
         repo_root, assessment,
         smoke_timeout=args.smoke_timeout, smoke_waiver=args.smoke_waiver, runner=runner,
-        smoke_model=args.smoke_model,
+        smoke_model=args.smoke_model, session=args.session, stages=args.stage,
     )
 
 

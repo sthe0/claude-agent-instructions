@@ -122,6 +122,7 @@ from .state import (
     CONCERN_RECORDED,
     CONCERN_SUPERSEDED,
     ConcernRecord,
+    CONTENT_WAIVER_ASK_MARKER,
     Critique,
     Criterion,
     CriterionType,
@@ -2543,6 +2544,7 @@ def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) ->
     writes the field, everyone else only reads it (SessionState.render_landed_command).
     `delivered_base` (merge-base of HEAD and the landed spec's `<remote>/<target>`) is
     stamped next to it: the lower bound of the range whose `Task:` trailer the check proves.
+    A changed head clears the landing `record-landing` recorded for the old one.
     Fails open: an unresolvable venue or a git error leaves whatever was
     already stamped (if anything) untouched, rather than clobbering it."""
     cwd = state.resolve_check_venue(stage.criterion.verify_venue)
@@ -2559,6 +2561,10 @@ def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) ->
         return
     previous_head = stage.outcome.delivered_head
     stage.outcome.delivered_head = head
+    if head != previous_head:
+        stage.outcome.landed_head = None
+        stage.outcome.landed_base = None
+        stage.outcome.landed_content_waiver = None
     if spec is None or (head == previous_head and stage.outcome.delivered_base):
         return
     # The base is frozen with the head: a re-record on an unchanged head keeps the base
@@ -2642,6 +2648,98 @@ def _landed_check_result(
             f"git could not answer (exit {LANDED_GIT_ERROR_EXIT})"
         ), result
     return result.returncode == 0, None, result
+
+
+def _content_waiver_blocker(state: SessionState, stage_index: int) -> str | None:
+    """Why `--accept-content-loss` is refused for `stage_index`, else None. The user
+    must have answered an AskUserQuestion carrying CONTENT_WAIVER_ASK_MARKER asked
+    after the stage's latest `record_landing` event, so a waiver follows a recorded
+    red and one answer cannot be spent on two waivers."""
+    stamps = [h for h in state.history
+              if h.get("event") == "record_landing" and h.get("stage") == stage_index]
+    anchor = stamps[-1].get("at") if stamps else None
+    if not isinstance(anchor, (int, float)):
+        return (f"no earlier record_landing of stage {stage_index} is stamped: run "
+                "record-landing without --accept-content-loss first, then ask the user")
+    path = _present_plan_transcript(state.session_id)
+    calls = transcript_turns.ask_user_question_calls(path) if path is not None else None
+    if calls is None:
+        return (f"cannot locate or read the transcript of session {state.session_id!r}, so "
+                f"the {CONTENT_WAIVER_ASK_MARKER!r} answer cannot be verified")
+    if not any(answered and ts is not None and ts > anchor
+               for tool_input, ts, answered in calls
+               if transcript_turns.has_marker_option(tool_input, CONTENT_WAIVER_ASK_MARKER)):
+        return (f"no answered AskUserQuestion carrying {CONTENT_WAIVER_ASK_MARKER!r} in an "
+                f"option label or description was asked after the latest record_landing of "
+                f"stage {stage_index}")
+    return None
+
+
+def cmd_record_landing(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record the landing of stage `--stage`: `--head` is the trunk tip the landing
+    pushed, `--base` the trunk tip the delivery was rebased onto. The git landed check
+    then proves the delivery from that range (SessionState.render_landed_command) before
+    its frozen-head path. Every call resets the content waiver to `--accept-content-loss`
+    (or None) and logs a stamped `record_landing` event; a refusal changes nothing."""
+    state = _require(store, args.session)
+
+    def refuse(reason: str) -> Directive:
+        return Directive(False, state.node, "noop", f"record-landing refused: {reason}")
+
+    try:
+        stage = state.stage(args.stage)
+    except KeyError:
+        return refuse(f"stage {args.stage} does not exist")
+    spec = _landed_spec_for_stage(state, args.stage)
+    if spec is None or spec.provider != "git":
+        return refuse(f"no git landed check names stage {args.stage} as its delivered_stage")
+    if not state.repo_root:
+        return refuse("[meta].repo_root is not set")
+    reason = getattr(args, "accept_content_loss", None)
+    if reason is not None and not reason.strip():
+        return refuse("--accept-content-loss needs a non-empty reason")
+    run = runner or subprocess_runner
+    resolved = {}
+    for name, sha in (("head", args.head), ("base", args.base)):
+        result = run(["git", "-C", state.repo_root, "rev-parse", "--verify", "--quiet",
+                      f"{sha}^{{commit}}"])
+        if result.returncode != 0 or not result.stdout.strip():
+            return refuse(f"--{name} {sha!r} is not a commit in {state.repo_root}")
+        resolved[name] = result.stdout.strip()
+    head, base = resolved["head"], resolved["base"]
+    ancestry = run(["git", "-C", state.repo_root, "merge-base", "--is-ancestor", base, head])
+    if head == base or ancestry.returncode != 0:
+        return refuse(f"--base {base} is not a proper ancestor of --head {head}")
+    if reason is not None:
+        blocker = _content_waiver_blocker(state, args.stage)
+        if blocker:
+            return refuse(blocker)
+        reason = reason.strip()
+    stage.outcome.landed_head = head
+    stage.outcome.landed_base = base
+    stage.outcome.landed_content_waiver = reason
+    state.log("record_landing", stage=args.stage, head=head, base=base,
+              content_waiver=reason, at=time.time())
+    store.save(state)
+    detail = f"stage {args.stage}: landing {base[:12]}..{head[:12]} recorded"
+    if reason:
+        detail += f"; the content fact is waived by the user: {reason}"
+    return Directive(True, state.node, "continue", detail,
+                     data={"stage": args.stage, "landed_head": head, "landed_base": base,
+                           "landed_content_waiver": reason})
+
+
+def _disclose_landed_content_waivers(state: SessionState, data: dict, detail: str) -> str:
+    """Name every stage whose recorded landing waives the content fact (verify-final
+    and resolve both surface them)."""
+    waivers = [{"stage": s.index, "reason": s.outcome.landed_content_waiver}
+               for s in state.stages if s.outcome.landed_content_waiver]
+    if not waivers:
+        return detail
+    data["landed_content_waivers"] = waivers
+    named = ", ".join(f"stage {w['stage']}: {w['reason']}" for w in waivers)
+    return (f"{detail}; NOTE: the landed check's content fact was waived by the user "
+            f"({named})")
 
 
 def _is_recursion_refusal(result) -> bool:
@@ -10218,6 +10316,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     detail = _disclose_backstop_crossings(state, data, detail)
     detail = _disclose_finished_work(state, data, detail)
     detail = _disclose_agent_plan_conversions(state, data, detail)
+    detail = _disclose_landed_content_waivers(state, data, detail)
     return Directive(True, state.node, "await_user_confirmation", detail, data=data)
 
 
@@ -10551,6 +10650,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     detail = _disclose_backstop_crossings(state, data, detail)
     detail = _disclose_finished_work(state, data, detail)
     detail = _disclose_agent_plan_conversions(state, data, detail)
+    detail = _disclose_landed_content_waivers(state, data, detail)
     if landing["override"] is not None:
         data["landing_gate_override"] = landing["override"]
         detail += (f" (landing gate overridden by AGENTCTL_LANDING_GATE={landing['override']}; "
@@ -12227,6 +12327,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 spawn_count=prev.outcome.spawn_count,
                 delivered_head=prev.outcome.delivered_head,
                 delivered_base=prev.outcome.delivered_base,
+                landed_head=prev.outcome.landed_head,
+                landed_base=prev.outcome.landed_base,
+                landed_content_waiver=prev.outcome.landed_content_waiver,
             ),
             prior_control=prev.control,
             reattest_digest=stage_reattest_digest(ns),
@@ -13238,6 +13341,7 @@ COMMANDS = {
     "workspace-register": cmd_workspace_register,
     "grant-stats": cmd_grant_stats,
     "record-result": cmd_record_result,
+    "record-landing": cmd_record_landing,
     "declare": cmd_declare,
     "investigate": cmd_investigate,
     "critique": cmd_critique,
@@ -13310,7 +13414,7 @@ _SESSION_COMMANDS = (
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
     "risk-accept", "accept-protected-grant", "stage-review", "code-review", "accept", "approve",
     "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
-    "record-result", "declare",
+    "record-result", "record-landing", "declare",
     "investigate", "critique", "normalize", "difficulty-open", "difficulty-close",
     "verify-final", "resolve", "reject",
     "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status", "children",
@@ -13364,6 +13468,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("reopen_reason", ("reset",)),
     ("reopen_user_decision", ("reset",)),
     ("rejection_text", ("present-plan",)),
+    ("accept_content_loss", ("record-landing",)),
 )
 
 # (dest, subcommands that declare it, why '@' means nothing here)
@@ -13434,6 +13539,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("norm_targets", ("critique",),
      "norm-target address (`stage:<n>` or a repo path) the critique must edit — an address, not narrative"),
     ("code_ref", ("code-review", "record-result"), "commit / PR reference the verdict binds to"),
+    ("head", ("record-landing",), "commit the landing pushed — a revision, not narrative"),
+    ("base", ("record-landing",), "commit the landing was rebased onto — a revision, not narrative"),
     ("unit", ("partition", "partition-units"), "'|'-delimited partition-unit record"),
     ("author", ("accept", "risk-accept"), "acceptance author id — an identity token, not narrative"),
     ("renegotiated_by", ("replan",), "who made the renegotiation decision — a name, not a narrative"),
@@ -14061,6 +14168,16 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp = add("grant-stats"); sp.add_argument("--session", required=True)
     sp.add_argument("--json", action="store_true")
+    sp = add("record-landing"); sp.add_argument("--session", required=True)
+    sp.add_argument("--stage", type=int, required=True,
+                    help="delivered_stage of the git landed check the landing proves")
+    sp.add_argument("--head", required=True, help="trunk commit the landing pushed")
+    sp.add_argument("--base", required=True,
+                    help="trunk commit the delivery was rebased onto (a proper ancestor of --head)")
+    sp.add_argument("--accept-content-loss", dest="accept_content_loss", default=None,
+                    help="user-confirmed reason to skip the content fact; needs an answered "
+                         f"{CONTENT_WAIVER_ASK_MARKER!r} AskUserQuestion asked after this "
+                         "stage's latest record-landing")
     sp = add("record-result"); sp.add_argument("--session", required=True)
     sp.add_argument("--status", choices=["passed", "failed"], required=True)
     sp.add_argument("--actual", default="")

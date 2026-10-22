@@ -106,6 +106,9 @@ _UNCLAIMED_STAGE_LEAVES = {
     "outcome.spawn_count": "the mutable execution record, not the declaration",
     "outcome.delivered_head": "the mutable execution record, not the declaration",
     "outcome.delivered_base": "the mutable execution record, not the declaration",
+    "outcome.landed_head": "the mutable execution record, not the declaration",
+    "outcome.landed_base": "the mutable execution record, not the declaration",
+    "outcome.landed_content_waiver": "the mutable execution record, not the declaration",
     "grants.allow.rule": "a declared permission surface, not a place an answer can rest "
                         "on — no target names it; covered instead by "
                         "gates._renorm_stage_residual via plan.grants_place, on the same "

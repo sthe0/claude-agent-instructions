@@ -330,7 +330,7 @@ AGENTCTL_USER_AUTHORITY_VERBS = frozenset({
     "start", "reset", "approve", "resolve-permission", "resolve", "reject",
     "accept", "risk-accept", "accept-protected-grant", "plan-review", "code-review", "stage-review",
     "confirm-delivery", "present-plan", "submit-plan", "dispatch",
-    "record-result", "verify-final", "replan", "close", "fire-acknowledge",
+    "record-result", "record-landing", "verify-final", "replan", "close", "fire-acknowledge",
     "block", "unblock", "drive", "push-subplan", "pop-subplan", "task-reset",
     "declare", "investigate", "critique", "normalize", "difficulty-open",
     "difficulty-close", "partition",

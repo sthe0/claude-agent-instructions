@@ -613,7 +613,9 @@ def test_the_user_authority_verb_set_differs_from_the_stage_five_set_by_the_live
         "plugin-record", "mandate-grant", "mandate-extend", "mandate-resume",
     })
 
-    added_on_main_since = {"accept-protected-grant", "adopt-escalation", "mandate-retry"}
+    added_on_main_since = {
+        "accept-protected-grant", "adopt-escalation", "mandate-retry", "record-landing",
+    }
 
     assert AGENTCTL_USER_AUTHORITY_VERBS - stage_five - added_on_main_since == {"plan-convert-live"}
     assert stage_five - AGENTCTL_USER_AUTHORITY_VERBS == set()
