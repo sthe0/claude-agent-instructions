@@ -457,6 +457,12 @@ def test_land_records_the_landing_on_the_session(tmp_path):
     assert (outcome.landed_head, outcome.landed_base, outcome.landed_content_waiver) == (sha, old_tip, None)
 
 
+def test_the_manual_command_falls_back_to_this_cli_outside_the_reported_toplevel(monkeypatch, tmp_path):
+    reported = subprocess.CompletedProcess([], 0, stdout=f"{tmp_path / 'elsewhere'}\n{tmp_path / '.git'}\n")
+    monkeypatch.setattr(land_branch, "_git", lambda args, cwd: reported)
+    assert land_branch._canonical_agentctl_cli() == land_branch.AGENTCTL_CLI
+
+
 def test_a_failed_record_keeps_the_branch_and_exits_3(tmp_path):
     origin, clone = make_bare_and_clone(tmp_path)
     sha = make_feature_branch(clone)

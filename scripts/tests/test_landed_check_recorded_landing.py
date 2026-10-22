@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from argparse import Namespace
@@ -271,6 +272,51 @@ def test_a_recorded_head_not_on_trunk_is_red_unless_the_frozen_head_path_proves_
     assert check(work, dh, db, lb, lh).returncode == 0
 
 
+def test_a_recorded_head_on_the_local_trunk_only_is_not_proven(tmp_path):
+    work = make_repo(tmp_path)
+    db, dh = deliver(work, {"f.txt": "a\nB\nc\nd\n"})
+    lb = move_trunk(work, TRUNK_NEAR_HUNK)
+    lh = commit(work, LANDED_NEAR_HUNK, reuse=dh)
+    result = check(work, dh, db, lb, lh)
+    assert result.returncode == 1
+    assert "the recorded head is not on the target ref" in result.stderr
+    push(work)
+    assert check(work, dh, db, lb, lh).returncode == 0
+
+
+def test_a_recorded_base_that_is_not_an_ancestor_of_the_head_is_not_proven(tmp_path):
+    work = make_repo(tmp_path)
+    db, dh = deliver(work, {"f.txt": "a\nB\nc\nd\n"})
+    lb = move_trunk(work, TRUNK_NEAR_HUNK)
+    git("checkout", "--quiet", "-b", "side", lb, cwd=work)
+    stray = commit(work, {"s.txt": "s\n"}, "side work")
+    git("checkout", "--quiet", "main", cwd=work)
+    _, lh = land(work, (LANDED_NEAR_HUNK, dh))
+    assert check(work, dh, db, lb, lh).returncode == 0
+    result = check(work, dh, db, stray, lh)
+    assert result.returncode == 1
+    assert "the recorded base is not an ancestor of the recorded head" in result.stderr
+
+
+def test_a_missing_delivered_commit_falls_through_rather_than_erroring(tmp_path):
+    from agentctl.state import recorded_landing_script
+    work = make_repo(tmp_path)
+    db, dh = deliver(work, {"f.txt": "a\nB\nc\nd\n"})
+    move_trunk(work, TRUNK_NEAR_HUNK)
+    lb, lh = land(work, (LANDED_NEAR_HUNK, dh))
+    ghost = "0123456789abcdef" * 2 + "01234567"
+    fragment = recorded_landing_script(
+        f"git -C {shlex.quote(str(work))}", landed_head=lh, landed_base=lb, delivered_head=ghost,
+        delivered_base=db, trailer=TRAILER, refs="main origin/main", waiver=None,
+        err=LANDED_GIT_ERROR_EXIT)
+    alone = subprocess.run(["bash", "-c", fragment], capture_output=True, text=True)
+    assert alone.returncode == 1
+    assert f"commit {ghost} is not in the repository" in alone.stderr
+    composed = check(work, ghost, db, lb, lh)
+    assert composed.returncode == LANDED_GIT_ERROR_EXIT
+    assert f"commit {ghost} is not in the repository" in composed.stderr
+
+
 def test_a_merge_commit_in_the_recorded_range_is_not_proven(tmp_path):
     work = make_repo(tmp_path)
     db, dh = deliver(work, {"f.txt": "a\nB\nc\nd\n"})
@@ -325,6 +371,19 @@ def test_legacy_state_without_delivered_base_compares_the_head_commit_alone(tmp_
     assert check(work, dh, None, lb, lh).returncode == 0
     lb2, lh2 = land(work, ({"f.txt": "a\nb\nc\nD\nq\n"}, dh))
     assert check(work, dh, None, lb2, lh2).returncode == 1
+
+
+def test_an_empty_delivery_is_green_on_a_trailered_recorded_range(tmp_path):
+    work = make_repo(tmp_path)
+    empty = rev(work)
+    commit(work, {"g.txt": "g\n"}, "untrailered")
+    push(work)
+    assert check(work, empty, empty, empty, rev(work)).returncode == 1
+    lb = rev(work)
+    commit(work, {"h.txt": "h\n"}, MSG)
+    push(work)
+    assert check(work, empty, empty).returncode == 1
+    assert check(work, empty, empty, lb, rev(work)).returncode == 0
 
 
 def test_a_git_error_in_the_recorded_path_exits_97(tmp_path):
@@ -384,19 +443,38 @@ def iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def write_asks(path: Path, *asks: tuple[str, float]) -> None:
-    entries = []
-    for call_id, ts in asks:
-        entries.append({"type": "assistant", "timestamp": iso(ts), "message": {
-            "role": "assistant", "content": [{
-                "type": "tool_use", "id": call_id, "name": "AskUserQuestion",
-                "input": {"questions": [{
-                    "question": "Accept the content loss?", "header": "Landing",
-                    "options": [{"label": f"Accept {WAIVER_MARKER}", "description": ""},
-                                {"label": "No", "description": ""}]}]}}]}})
-        entries.append({"type": "user", "timestamp": iso(ts + 1), "message": {
-            "role": "user", "content": [{"type": "tool_result", "tool_use_id": call_id,
-                                         "content": "Accept"}]}})
+QUESTION = "Accept the content loss?"
+ACCEPT = f"Accept {WAIVER_MARKER}"
+NO_ANSWERS = object()
+
+
+def ask(call_id: str, ts: float, *, choose: str = ACCEPT, labels=(ACCEPT, "No"),
+        answered: bool = True, answers=None) -> list[dict]:
+    """The transcript entries of one AskUserQuestion: the tool_use and, when answered,
+    the user's tool_result with the harness's `toolUseResult.answers` naming `choose`
+    (`answers=NO_ANSWERS` omits toolUseResult)."""
+    entries = [{"type": "assistant", "timestamp": iso(ts), "message": {
+        "role": "assistant", "content": [{
+            "type": "tool_use", "id": call_id, "name": "AskUserQuestion",
+            "input": {"questions": [{
+                "question": QUESTION, "header": "Landing", "multiSelect": False,
+                "options": [{"label": label, "description": ""} for label in labels]}]}}]}}]
+    if answered:
+        result = {"type": "user", "timestamp": iso(ts + 1), "message": {
+            "role": "user", "content": [{
+                "type": "tool_result", "tool_use_id": call_id,
+                "content": f'User has answered your questions: "{QUESTION}"="{choose}".'}]}}
+        if answers is not NO_ANSWERS:
+            result["toolUseResult"] = {"questions": entries[0]["message"]["content"][0]["input"]["questions"],
+                                       "answers": {QUESTION: choose} if answers is None else answers}
+        entries.append(result)
+    return entries
+
+
+def write_asks(path: Path, *asks) -> None:
+    """Each item is a (call id, ts) pair — an answered ask whose marked option was
+    chosen — or the entries `ask` built."""
+    entries = [e for a in asks for e in (ask(*a) if isinstance(a, tuple) else a)]
     path.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
 
 
@@ -511,6 +589,65 @@ def test_the_waiver_sequence_and_its_one_answer_per_waiver_rule(landed, transcri
     clock["t"] = 1_000_040.0
     assert record(landed).ok
     assert outcome_fields(landed)[2] is None
+
+
+@pytest.mark.parametrize("answer", [
+    ask("a", 1_000_005.0, choose="No"),
+    ask("a", 1_000_005.0, choose="something the user typed"),
+    ask("a", 1_000_005.0, answers=NO_ANSWERS),
+    ask("a", 1_000_005.0, answers={"another question": ACCEPT}),
+    ask("a", 1_000_005.0, labels=(ACCEPT, f"Also accept {WAIVER_MARKER}")),
+], ids=["declined", "free-text", "no-answers", "other-question", "no-way-to-decline"])
+def test_a_waiver_needs_the_user_to_choose_the_marked_option(landed, transcripts, clock, answer):
+    assert record(landed).ok
+    write_asks(transcripts, answer)
+    clock["t"] = 1_000_010.0
+    d = record(landed, accept_content_loss="ok")
+    assert not d.ok and "the user did not consent" in d.detail
+    assert outcome_fields(landed)[2] is None
+
+
+def test_an_unanswered_marked_ask_after_the_record_licenses_no_waiver(landed, transcripts, clock):
+    assert record(landed).ok
+    write_asks(transcripts, ask("a", 1_000_005.0, answered=False))
+    clock["t"] = 1_000_010.0
+    d = record(landed, accept_content_loss="ok")
+    assert not d.ok and "no answered AskUserQuestion" in d.detail
+
+
+def test_an_answered_unmarked_ask_after_the_record_licenses_no_waiver(landed, transcripts, clock):
+    clock["t"] = 999_990.0
+    assert record(landed).ok
+    clock["t"] = 1_000_000.0
+    assert record(landed).ok
+    write_asks(transcripts, ("before", 999_995.0),
+               ask("after", 1_000_005.0, choose="Accept", labels=("Accept", "No")))
+    clock["t"] = 1_000_010.0
+    d = record(landed, accept_content_loss="ok")
+    assert not d.ok and "no answered AskUserQuestion" in d.detail
+
+
+def test_one_answer_licenses_one_waiver_across_stages(landed, transcripts, clock):
+    state = landed.store.load(SID)
+    second = _stage(2)
+    second.outcome.delivered_head, second.outcome.delivered_base = landed.dh, landed.db
+    state.stages.append(second)
+    state.final_check.append(FinalCheck(command="", kind=CheckKind.LANDED.value,
+                                        landed=LandedSpec(target="main", delivered_stage=2)))
+    landed.store.save(state)
+    assert record(landed, stage=1).ok
+    assert record(landed, stage=2).ok
+    write_asks(transcripts, ("one", 1_000_005.0))
+    clock["t"] = 1_000_010.0
+    assert record(landed, stage=1, accept_content_loss="stage 1 loss").ok
+    clock["t"] = 1_000_020.0
+    d = record(landed, stage=2, accept_content_loss="stage 2 loss")
+    assert not d.ok and "no answered AskUserQuestion" in d.detail
+    assert landed.store.load(SID).stages[1].outcome.landed_content_waiver is None
+
+    write_asks(transcripts, ("one", 1_000_005.0), ("two", 1_000_025.0))
+    clock["t"] = 1_000_030.0
+    assert record(landed, stage=2, accept_content_loss="stage 2 loss").ok
 
 
 def test_record_landing_is_a_user_authority_session_command():

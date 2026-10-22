@@ -2650,28 +2650,100 @@ def _landed_check_result(
     return result.returncode == 0, None, result
 
 
+def _option_carries_waiver_marker(option: dict) -> bool:
+    return transcript_turns.has_marker_option({"questions": [{"options": [option]}]},
+                                              CONTENT_WAIVER_ASK_MARKER)
+
+
+def _chose_waiver_option(tool_input: dict, answers) -> bool:
+    """True iff some question offering both a marked and an unmarked option was answered
+    with the label of a marked one. A question whose options are all marked leaves no
+    way to decline, so it never consents."""
+    if not isinstance(answers, dict):
+        return False
+    for q in tool_input.get("questions") or []:
+        if not isinstance(q, dict):
+            continue
+        options = [o for o in q.get("options") or [] if isinstance(o, dict)]
+        marked = [o.get("label") for o in options if _option_carries_waiver_marker(o)]
+        if marked and len(marked) < len(options) and answers.get(q.get("question")) in marked:
+            return True
+    return False
+
+
+def _content_waiver_asks(path: Path) -> list[tuple[float | None, bool, bool]] | None:
+    """(ask time, answered, consented) for every AskUserQuestion with an option carrying
+    CONTENT_WAIVER_ASK_MARKER, in file order. The chosen labels are read from the
+    harness's `toolUseResult.answers` ({question text: chosen label}) on the user entry
+    holding the ask's one non-error tool_result; an entry holding several results, or
+    no readable answers, records an answer without consent (fail-closed). None iff the
+    transcript cannot be read."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return None
+    asks: dict[str, list] = {}
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except Exception:
+            continue
+        message = entry.get("message") if isinstance(entry, dict) else None
+        if not isinstance(message, dict):
+            continue
+        blocks = [b for b in transcript_turns._content_items(message) if isinstance(b, dict)]
+        results = [b for b in blocks if b.get("type") == "tool_result" and not b.get("is_error")]
+        for block in blocks:
+            call_id = block.get("id")
+            if (block.get("type") == "tool_use" and block.get("name") == "AskUserQuestion"
+                    and isinstance(call_id, str) and isinstance(block.get("input"), dict)
+                    and transcript_turns.has_marker_option(block["input"], CONTENT_WAIVER_ASK_MARKER)):
+                ts = entry.get("timestamp")
+                epoch = transcript_turns.iso_to_epoch(ts) if isinstance(ts, str) else None
+                seen = asks.setdefault(call_id, [block["input"], epoch, False, False])
+                if seen[1] is None:
+                    seen[1] = epoch
+        for block in results:
+            seen = asks.get(block.get("tool_use_id"))
+            if seen is None:
+                continue
+            seen[2] = True
+            tool_result = entry.get("toolUseResult")
+            answers = tool_result.get("answers") if isinstance(tool_result, dict) else None
+            seen[3] = seen[3] or (len(results) == 1 and _chose_waiver_option(seen[0], answers))
+    return [(ts, answered, consented) for _, ts, answered, consented in asks.values()]
+
+
 def _content_waiver_blocker(state: SessionState, stage_index: int) -> str | None:
-    """Why `--accept-content-loss` is refused for `stage_index`, else None. The user
-    must have answered an AskUserQuestion carrying CONTENT_WAIVER_ASK_MARKER asked
-    after the stage's latest `record_landing` event, so a waiver follows a recorded
-    red and one answer cannot be spent on two waivers."""
-    stamps = [h for h in state.history
-              if h.get("event") == "record_landing" and h.get("stage") == stage_index]
-    anchor = stamps[-1].get("at") if stamps else None
-    if not isinstance(anchor, (int, float)):
+    """Why `--accept-content-loss` is refused for `stage_index`, else None. The stage
+    must have an earlier `record_landing` event (the waiver follows a recorded red), and
+    the user must have CHOSEN the marked option of an AskUserQuestion asked after the
+    latest `record_landing` event of ANY stage — so one answer licenses one waiver even
+    when one landing recorded several stages."""
+    if not any(h.get("event") == "record_landing" and h.get("stage") == stage_index
+               for h in state.history):
         return (f"no earlier record_landing of stage {stage_index} is stamped: run "
                 "record-landing without --accept-content-loss first, then ask the user")
+    stamps = [h for h in state.history if h.get("event") == "record_landing"]
+    anchor = stamps[-1].get("at")
+    if not isinstance(anchor, (int, float)):
+        return ("the latest record_landing event is not stamped: run record-landing "
+                "without --accept-content-loss again, then ask the user")
     path = _present_plan_transcript(state.session_id)
-    calls = transcript_turns.ask_user_question_calls(path) if path is not None else None
-    if calls is None:
+    asks = _content_waiver_asks(path) if path is not None else None
+    if asks is None:
         return (f"cannot locate or read the transcript of session {state.session_id!r}, so "
                 f"the {CONTENT_WAIVER_ASK_MARKER!r} answer cannot be verified")
-    if not any(answered and ts is not None and ts > anchor
-               for tool_input, ts, answered in calls
-               if transcript_turns.has_marker_option(tool_input, CONTENT_WAIVER_ASK_MARKER)):
+    after = [consented for ts, answered, consented in asks
+             if answered and ts is not None and ts > anchor]
+    if not after:
         return (f"no answered AskUserQuestion carrying {CONTENT_WAIVER_ASK_MARKER!r} in an "
-                f"option label or description was asked after the latest record_landing of "
-                f"stage {stage_index}")
+                "option label or description was asked after the latest record_landing "
+                "of any stage")
+    if not any(after):
+        return (f"the {CONTENT_WAIVER_ASK_MARKER!r} ask after the latest record_landing was "
+                "not answered with an option carrying the marker (or its answer could not "
+                "be read), so the user did not consent to the waiver")
     return None
 
 
@@ -14175,9 +14247,9 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp.add_argument("--base", required=True,
                     help="trunk commit the delivery was rebased onto (a proper ancestor of --head)")
     sp.add_argument("--accept-content-loss", dest="accept_content_loss", default=None,
-                    help="user-confirmed reason to skip the content fact; needs an answered "
-                         f"{CONTENT_WAIVER_ASK_MARKER!r} AskUserQuestion asked after this "
-                         "stage's latest record-landing")
+                    help="user-confirmed reason to skip the content fact; needs an "
+                         f"AskUserQuestion, asked after the latest record-landing of any stage, "
+                         f"whose chosen option carries {CONTENT_WAIVER_ASK_MARKER!r}")
     sp = add("record-result"); sp.add_argument("--session", required=True)
     sp.add_argument("--status", choices=["passed", "failed"], required=True)
     sp.add_argument("--actual", default="")

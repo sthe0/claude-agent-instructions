@@ -362,7 +362,10 @@ def _canonical_agentctl_cli() -> Path:
     if proc.returncode != 0 or len(lines) < 2:
         return AGENTCTL_CLI
     toplevel, common_dir = Path(lines[0]), Path(lines[1])
-    return common_dir.parent / AGENTCTL_CLI.relative_to(toplevel)
+    try:
+        return common_dir.parent / AGENTCTL_CLI.relative_to(toplevel)
+    except ValueError:
+        return AGENTCTL_CLI
 
 
 def _record_landing(session, stages, head, base) -> bool:
