@@ -303,9 +303,9 @@ def recorded_landing_script(
 
     The facts, in order: `landed_base` is an ancestor of `landed_head`, the range
     between them is non-empty and holds no merge commit; `landed_head` is on every
-    ref of `refs`; every range commit carries the `trailer` line or, when given, the exact
-    `session_trailer` line; every non-merge
-    delivered commit's whole message equals some range commit's message; and, unless
+    ref of `refs`; every range commit carries the `trailer` line or, when given,
+    the exact `session_trailer` line; every non-merge delivered commit's whole
+    message equals some range commit's message; and, unless
     `waiver` is set, every added and removed line of the delivered diff of each path
     occurs at least as often in the landed diff of that path. With no
     `delivered_base` the delivered commit stands alone against its first parent."""
