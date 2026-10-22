@@ -3800,6 +3800,46 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "0c9e7d409eb29766"
+domain = "code"
+file = "scripts/plan_dashboard/model.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "784805e2615f0f34"
+domain = "code"
+file = "scripts/plan_dashboard/model.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "ecf7b80b933eb162"
+domain = "code"
+file = "scripts/plan_dashboard/model.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "fa954a2d6d977cce"
+domain = "code"
+file = "scripts/plan_dashboard/model.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
+id = "910dcd2c513206df"
+domain = "code"
+file = "scripts/plan_dashboard/model.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "3f2b72a3b25d9a65"
 domain = "code"
 file = "scripts/policy-scorecard.py"
@@ -4675,6 +4715,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "f6ae798198ed6543"
 domain = "code"
 file = "scripts/tests/conftest.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "d01105756db28fa4"
+domain = "code"
+file = "scripts/tests/plan_dashboard_mutations.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -11696,6 +11744,38 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "50b9f038d0e063c7"
+domain = "code"
+file = "scripts/tests/test_plan_dashboard_model.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "e92faa3a6dcb5772"
+domain = "code"
+file = "scripts/tests/test_plan_dashboard_model.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "08fb38787c08b698"
+domain = "code"
+file = "scripts/tests/test_plan_dashboard_model.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "79d84e6fc7d5dda7"
+domain = "code"
+file = "scripts/tests/test_plan_dashboard_model.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "97d44e9e709de971"
 domain = "code"
 file = "scripts/tests/test_plan_delivery_gate_hook.py"
@@ -18688,6 +18768,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "c4d4044d4642cded"
+domain = "code_file_rollup"
+file = "scripts/plan_dashboard/model.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "97d78e0c25d7b2ea"
 domain = "code_file_rollup"
 file = "scripts/policy-scorecard.py"
@@ -18875,6 +18963,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "4a893912392ebbc6"
 domain = "code_file_rollup"
 file = "scripts/tests/conftest.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "2191f9c5baae281a"
+domain = "code_file_rollup"
+file = "scripts/tests/plan_dashboard_mutations.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -19963,6 +20059,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "447901f7248de834"
 domain = "code_file_rollup"
 file = "scripts/tests/test_plan_convert.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "d09da707d5774b1e"
+domain = "code_file_rollup"
+file = "scripts/tests/test_plan_dashboard_model.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -23316,6 +23420,22 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
+id = "4f90586b5bb0248a"
+domain = "prose"
+file = "memory-global/leaves/experience-leaf-schema.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "d33c699c4bfcc20d"
+domain = "prose"
+file = "memory-global/leaves/experience-leaf-schema.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "f6265ab16c4e20cd"
 domain = "prose"
 file = "memory-global/leaves/experience-leaf-schema.md"
@@ -26164,6 +26284,14 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "8ecf8de40f638aa4"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
 id = "4d2867c8d5463d92"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md"
@@ -26316,6 +26444,14 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "a1011d810a23c87a"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-11-review-loop-cannot-measure-its-own-convergence.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
 id = "80dfe586998c4ed3"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-08-11-review-loop-cannot-measure-its-own-convergence.md"
@@ -26381,6 +26517,14 @@ ground = "Experience leaves (difficulty/v1) are historical narrative records of 
 
 [[entry]]
 id = "d84b5a41ceed0d1d"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-08-17-diagnosing-has-no-exit-to-the-customer.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "8d20297d234ffd88"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-08-17-diagnosing-has-no-exit-to-the-customer.md"
 class = "not-normative"
@@ -26796,6 +26940,14 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
+id = "699dea882fc324de"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-09-03-published-text-writer-gate-effort-divergence-deadlock.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
 id = "e66923663e485996"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-09-03-published-text-writer-gate-effort-divergence-deadlock.md"
@@ -26991,6 +27143,14 @@ ground = "The statement's own text names a concrete enforcing artifact (a script
 id = "ea76685096fc3517"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-09-29-tracker-publish-gate-missed-per-stage-artifacts.md"
+class = "not-normative"
+disposition = "keep"
+ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
+
+[[entry]]
+id = "ed537b161bb53d78"
+domain = "prose"
+file = "memory-global/leaves/experience/2026-10-06-season2-metric-instruction-tuning.md"
 class = "not-normative"
 disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
@@ -30668,6 +30828,30 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "07644d0dfb3fe6d2"
+domain = "prose"
+file = "memory-global/leaves/principle-leaf-schema.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "5999a97fa2494c12"
+domain = "prose"
+file = "memory-global/leaves/principle-leaf-schema.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "be6fcd0e9ff8b488"
+domain = "prose"
+file = "memory-global/leaves/principle-leaf-schema.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "21906a3343608bfd"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
@@ -30676,12 +30860,12 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "a32f614dceb4b2de"
+id = "2a2fde67b2b50a6a"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
-class = "perception"
+class = "already-mechanized"
 disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
 id = "b55e0551022faa6d"
@@ -30692,7 +30876,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "c9556cbab3fdeb6e"
+id = "d959552932b82764"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -30700,7 +30884,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "8b750a11b26aa205"
+id = "92a7af254fec5c51"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -30708,7 +30892,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "2c7382a91442e9cd"
+id = "17bb8d43a3eacf01"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -30716,7 +30900,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "c72269bf611aeabc"
+id = "84e0a2ca38cd87ea"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -30724,7 +30908,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "3858f1011eba700c"
+id = "1112fbebda749071"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -30740,7 +30924,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "8ca0f70dbc9b6502"
+id = "c047c468bea00aae"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -30748,7 +30932,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "d4dda5070bff89dc"
+id = "2d6f07d89ec8baea"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -30756,7 +30940,39 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "8bdb1a30731d98ce"
+id = "bd18fa7ccdb17c41"
+domain = "prose"
+file = "memory-global/leaves/principles/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "fc852661f0a5a793"
+domain = "prose"
+file = "memory-global/leaves/principles/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "89c7039b8e062b61"
+domain = "prose"
+file = "memory-global/leaves/principles/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "4dbf1e39c6856bdc"
+domain = "prose"
+file = "memory-global/leaves/principles/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "8e2b40c1d8368e98"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -30820,7 +31036,63 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "0c80b8f95057b85c"
+id = "a8855b60ede39363"
+domain = "prose"
+file = "memory-global/leaves/principles/a-defect-seen-in-an-artifact-is-fixed-at-its-writer.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "f84fa5e08078869d"
+domain = "prose"
+file = "memory-global/leaves/principles/a-defect-seen-in-an-artifact-is-fixed-at-its-writer.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "745c8fcac780e239"
+domain = "prose"
+file = "memory-global/leaves/principles/a-defect-seen-in-an-artifact-is-fixed-at-its-writer.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "82a46d443411d8a1"
+domain = "prose"
+file = "memory-global/leaves/principles/a-defect-seen-in-an-artifact-is-fixed-at-its-writer.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "02218eb2621a505c"
+domain = "prose"
+file = "memory-global/leaves/principles/a-defect-seen-in-an-artifact-is-fixed-at-its-writer.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "e4d395d4ad1ed6e1"
+domain = "prose"
+file = "memory-global/leaves/principles/a-gate-on-form-is-checked-against-the-property-it-stands-for.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "a6406cd24d13bcf9"
+domain = "prose"
+file = "memory-global/leaves/principles/a-gate-on-form-is-checked-against-the-property-it-stands-for.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "13c33332b3773335"
 domain = "prose"
 file = "memory-global/leaves/principles/a-judging-artefact-is-executed-before-it-judges.md"
 class = "perception"
@@ -30884,7 +31156,39 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
+id = "601fc5e04a9b0dd0"
+domain = "prose"
+file = "memory-global/leaves/principles/a-metric-is-keyed-and-weighted-to-the-decision-it-informs.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "4618dcddd6554ed6"
+domain = "prose"
+file = "memory-global/leaves/principles/a-metric-is-keyed-and-weighted-to-the-decision-it-informs.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "8b4d21bb468614d8"
+domain = "prose"
+file = "memory-global/leaves/principles/a-metric-is-keyed-and-weighted-to-the-decision-it-informs.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
 id = "acafaf458d49c2f9"
+domain = "prose"
+file = "memory-global/leaves/principles/a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "734458541f78a2e2"
 domain = "prose"
 file = "memory-global/leaves/principles/a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs.md"
 class = "perception"
@@ -30919,6 +31223,70 @@ ground = "Principle leaves (principle/v1) are deliberately generality-graded pro
 id = "da9b741161fb968f"
 domain = "prose"
 file = "memory-global/leaves/principles/a-rerunnable-control-asserts-a-phase-independent-property.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "3aadab099fecf1bc"
+domain = "prose"
+file = "memory-global/leaves/principles/a-spawned-child-inherits-nothing-the-brief-does-not-name.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "de1ad131299ac6cb"
+domain = "prose"
+file = "memory-global/leaves/principles/a-spawned-child-inherits-nothing-the-brief-does-not-name.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "03b8eb691f56aee5"
+domain = "prose"
+file = "memory-global/leaves/principles/a-spawned-child-inherits-nothing-the-brief-does-not-name.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "860afac1df5ac4f8"
+domain = "prose"
+file = "memory-global/leaves/principles/an-assumed-ambient-facility-is-declared-with-a-generic-default.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "99099ce911b27dd3"
+domain = "prose"
+file = "memory-global/leaves/principles/cases/evocative-sample-label-without-provenance.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "645cea94e4e317ee"
+domain = "prose"
+file = "memory-global/leaves/principles/cases/review-loop-shifting-grounds-never-converges.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "c343a9b2fdabe7f9"
+domain = "prose"
+file = "memory-global/leaves/principles/cases/review-loop-shifting-grounds-never-converges.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "2cac7f6ce99d086a"
+domain = "prose"
+file = "memory-global/leaves/principles/cases/static-checks-green-live-run-fails.md"
 class = "perception"
 disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
@@ -31132,7 +31500,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "c36eeec5ac493e84"
+id = "fb696e74858713d7"
 domain = "prose"
 file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
 class = "perception"
@@ -31284,6 +31652,14 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
+id = "a5903364d6e835dc"
+domain = "prose"
+file = "memory-global/leaves/principles/specialist-behavior-determinization-recipe.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
 id = "6aabb584f460a59a"
 domain = "prose"
 file = "memory-global/leaves/principles/specialist-behavior-determinization-recipe.md"
@@ -31348,12 +31724,12 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "a110b4ae5fa287ea"
+id = "0157a7067e5a8550"
 domain = "prose"
 file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
-class = "perception"
+class = "already-mechanized"
 disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
 id = "db594443f6bb2e7e"
@@ -31612,7 +31988,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "c80c528ff9987d47"
+id = "fca31f274a7ee36a"
 domain = "prose"
 file = "memory-global/leaves/published-text-writer-gate.md"
 class = "perception"
@@ -35738,6 +36114,14 @@ file = "skills/specializations/memory-curator/SKILL.md"
 class = "perception"
 disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "4a23e558739d747d"
+domain = "prose"
+file = "skills/specializations/memory-curator/SKILL.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
 id = "3a5e94bb5fe483ad"
