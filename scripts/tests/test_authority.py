@@ -55,7 +55,7 @@ def test_probe_skips_the_pre_push_hook():
     assert "--no-verify" in seen["cmd"]
 
 
-def _fake_run(returncode=0, raises=None, seen=None):
+def _fake_run(returncode=0, raises=None, seen=None, stderr=b""):
     """Stand-in for subprocess.run on the DEFAULT runner path (no injected runner), so these
     tests exercise the real default rather than a stub of it."""
     def _run(cmd, **kwargs):
@@ -63,7 +63,7 @@ def _fake_run(returncode=0, raises=None, seen=None):
             seen["cmd"], seen["kwargs"] = cmd, kwargs
         if raises is not None:
             raise raises
-        return subprocess.CompletedProcess(cmd, returncode)
+        return subprocess.CompletedProcess(cmd, returncode, stderr=stderr)
     return _run
 
 
@@ -99,6 +99,31 @@ def test_default_runner_answers_from_the_exit_code(monkeypatch):
     assert authority.probe_push_capability() is True
 
     monkeypatch.setattr(authority.subprocess, "run", _fake_run(returncode=128))
+    assert authority.probe_push_capability() is False
+
+
+def test_default_runner_treats_rejection_as_author(monkeypatch):
+    """'[rejected]' in stderr proves the remote accepted our credentials (stale local branch).
+    The probe must return True — the machine has push rights, the branch just needs a pull."""
+    stale_stderr = (
+        b"! [rejected]        main -> main (fetch first)\n"
+        b"error: failed to push some refs to 'origin'\n"
+    )
+    monkeypatch.setattr(authority.subprocess, "run", _fake_run(returncode=1, stderr=stale_stderr))
+    assert authority.probe_push_capability() is True
+
+
+def test_default_runner_non_fast_forward_rejection_is_author(monkeypatch):
+    """'[rejected] (non-fast-forward)' is also a credential-confirmed rejection."""
+    nff_stderr = b"! [rejected]        main -> main (non-fast-forward)\n"
+    monkeypatch.setattr(authority.subprocess, "run", _fake_run(returncode=1, stderr=nff_stderr))
+    assert authority.probe_push_capability() is True
+
+
+def test_default_runner_permission_failure_is_not_author(monkeypatch):
+    """A genuine auth/permission failure has no '[rejected]' line — must stay False."""
+    perm_stderr = b"remote: Permission to org/repo.git denied to user.\nfatal: unable to access\n"
+    monkeypatch.setattr(authority.subprocess, "run", _fake_run(returncode=128, stderr=perm_stderr))
     assert authority.probe_push_capability() is False
 
 
