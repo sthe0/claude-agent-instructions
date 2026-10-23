@@ -21,6 +21,19 @@ Usage:
       rows alone. Exits 1 with `MISMATCH: <key>` lines on any difference, 2 if malformed.
   planning-cost-report.py --check FILE --inputs SNAPSHOT_DIR
       Also regenerates the rows from the snapshot and compares them (and the inputs digest).
+
+Trial mode (the reachability-first trial: a control arm against a risk-shaped arm). ARMS_DIR holds
+control/ and risk/, each with state.json, history.jsonl, ledger.jsonl and plan.toml (the arm's final
+plan), and optionally classified.json ([{id, axis}]), judge.json ({R, V}) and skills.json.
+  planning-cost-report.py concerns ARMS_DIR
+      Blind export of every counted review concern: opaque id and text, no arm, phase, axis or bet.
+  planning-cost-report.py judge-view ARMS_DIR ARM
+      The arm's plan (plan.toml: for the risk arm the plan after its launch elaborations, an unwritten one
+      shown as it is) rendered without bets and phase, with each stage's knowledge appended because the
+      plan view omits it.
+  planning-cost-report.py trial ARMS_DIR [--out PATH] [--cap N] [--engine-commit SHA] [--baseline FILE]
+      One row per arm, the comparison and the decision. `--check FILE [--inputs ARMS_DIR]` of a
+      trial document re-derives them and asserts the arms ran under the trial's rules.
 """
 from __future__ import annotations
 
@@ -339,9 +352,310 @@ def assemble(rows: list, roles: list, axis_rows: list, inputs_sha256: str | None
     }
 
 
+ARMS = ("control", "risk")
+TRIAL_CAP = 137
+TRIAL_COLUMNS = [
+    "arm", "session_id", "bound", "state_sha256", "history_sha256", "stop_reason", "blockers", "lazy_pending",
+    "approve_sandbox", "approve_elaboration", "dispatch_events", "agent_overrides", "diagnosing_entries",
+    "replans", "review_acts_to_admissible", "review_acts_deferred", "review_acts_total",
+    "thinker_spawn_h_to_admissible", "thinker_spawn_h_deferred", "thinker_spawn_h_total", "minutes",
+    "skeleton_returns", "late_r", "judge_r", "judge_v", "skills_planner_sha256", "skills_thinker_sha256"]
+STOP_REASONS = ("admissible", "elaborated", "cap", "forced")
+TRIAL_KEYS = ("mode", "engine_commit", "baseline_sha256", "cap", "row_columns", "rows", "rows_sha256", "arms",
+              "comparison", "decision")
+FASTER_RATIO = 0.5
+TRIAL_FORMULA = {
+    "arms": "control is unbound (never approved) and runs until the plan has no review blockers; risk is bound, "
+            "is approved once as a sandbox and then elaborates its at-launch stages until none is pending",
+    "stop_reason": "forced = an agent override stands; elaborated = bound, approved, no lazy stage pending; "
+                   "admissible = no blocker and not (bound and approved); cap = the run stopped before the "
+                   "arm reached its condition (cap is the review-act budget the run was given)",
+    "review_acts": "counted acts (lib.review_cycles.is_act) before the first approve event are to_admissible, "
+                   "after it deferred; an arm that never approved has no deferred acts",
+    "thinker_spawn_h": "spawn-cost ledger rows of kind thinker whose spawner_session is the arm's session, "
+                       "duration_ms / 3.6e6, split at the ts of the first approve event",
+    "late_r": "concerns the classifier put on axis R that were raised after the first approve event",
+    "judge_r_v": "defects of axes R and V the blind judge found in the plan rendered by judge-view",
+    "faster": "the risk arm's total review acts AND thinker spawn-hours are each <= 50 percent of control's",
+    "quality_held": "the risk arm's judge R+V defects <= control's",
+    "verdict": "inconclusive unless control stopped admissible and risk stopped elaborated and both "
+               "comparisons are defined; then pass when faster and quality held, else fail",
+}
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        return [json.loads(line) for line in lines if line.strip()]
+    except (OSError, ValueError) as exc:
+        raise Malformed(f"{path}: {exc}")
+
+
+def read_json(path: Path, default=None):
+    if not path.is_file():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise Malformed(f"{path}: {exc}")
+
+
+def concern_id(arm: str, event_index: int, position: int, text: str) -> str:
+    return hashlib.sha256(f"{arm}\0{event_index}\0{position}\0{text}".encode()).hexdigest()[:12]
+
+
+def first_approve_index(history: list[dict]) -> int | None:
+    return next((i for i, e in enumerate(history) if e.get("event") == "approve"), None)
+
+
+def arm_concerns(arm: str, history: list[dict]) -> list[dict]:
+    """Every concern of a counted review, with its opaque id and whether it was raised after the approve."""
+    cut = first_approve_index(history)
+    out = []
+    for i, event in enumerate(history):
+        if not is_act(event):
+            continue
+        for position, text in enumerate(event.get("concerns") or ()):
+            out.append({"id": concern_id(arm, i, position, str(text)), "text": str(text),
+                        "deferred": cut is not None and i > cut})
+    return out
+
+
+def arm_dir_plan(arm_dir: Path) -> Path:
+    plan = arm_dir / "plan.toml"
+    if not plan.is_file():
+        raise Malformed(f"{plan} is missing")
+    return plan
+
+
+def gate_facts(state_text: str, plan: Path) -> tuple[bool, list[str], list[int], dict]:
+    """bound, plan_review_blockers and the stages whose launch is still owed, from the engine's own gates."""
+    import os
+    from agentctl import gates
+    from agentctl.state import SessionState
+    state = SessionState.from_json(state_text)
+    state.plan_path = str(plan)
+    saved = os.environ.get("AGENTCTL_PLAN_REVIEW")
+    os.environ["AGENTCTL_PLAN_REVIEW"] = "1"
+    try:
+        blockers = gates.plan_review_blockers(state, str(plan))
+        doc = gates.load_plan(str(plan))
+        pending = [s.index for s in doc.stages if gates.lazy_stage_blockers(state, s.index)]
+    finally:
+        if saved is None:
+            os.environ.pop("AGENTCTL_PLAN_REVIEW", None)
+        else:
+            os.environ["AGENTCTL_PLAN_REVIEW"] = saved
+    return bool(state.risk_planning), list(blockers), pending, state.effort_actuals or {}
+
+
+def skill_hashes(arm_dir: Path) -> tuple[str, str]:
+    given = read_json(arm_dir / "skills.json")
+    if given is not None:
+        return str(given["planner"]), str(given["thinker"])
+    return tuple(file_sha256(REPO_ROOT / "skills" / "specializations" / role / "SKILL.md")
+                 for role in ("planner", "thinker"))
+
+
+def derive_stop_reason(row: dict) -> str:
+    approved = row["approve_sandbox"] > 0
+    if row["agent_overrides"]:
+        return "forced"
+    if row["bound"] and approved and not row["lazy_pending"]:
+        return "elaborated"
+    if not (row["bound"] and approved) and not row["blockers"]:
+        return "admissible"
+    return "cap"
+
+
+def arm_row(arm: str, arm_dir: Path) -> list:
+    state_path = arm_dir / "state.json"
+    if not state_path.is_file():
+        raise Malformed(f"{state_path} is missing")
+    state_text = state_path.read_text(encoding="utf-8")
+    history = read_jsonl(arm_dir / "history.jsonl")
+    ledger = read_jsonl(arm_dir / "ledger.jsonl")
+    state_json = json.loads(state_text)
+    session = str(state_json.get("session_id"))
+    bound, blockers, pending, actuals = gate_facts(state_text, arm_dir_plan(arm_dir))
+    cut = first_approve_index(history)
+    cut_ts = parse_ts(history[cut].get("ts")) if cut is not None else None
+    acts = [(i, e) for i, e in enumerate(history) if is_act(e)]
+    deferred_acts = sum(1 for i, _ in acts if cut is not None and i > cut)
+    hours = [0.0, 0.0]
+    for item in ledger:
+        if item.get("event") != "spawn" or item.get("kind") != "thinker" or item.get("spawner_session") != session:
+            continue
+        ts = parse_ts(item.get("ts"))
+        late = cut_ts is not None and ts is not None and ts > cut_ts
+        hours[1 if late else 0] += float(item.get("duration_ms") or 0.0) / 3.6e6
+    approves = sum(1 for e in history if e.get("event") == "approve")
+    classified = read_json(arm_dir / "classified.json")
+    judged = read_json(arm_dir / "judge.json")
+    late_r = None
+    if classified is not None:
+        axes = {c["id"]: c["axis"] for c in classified}
+        late_r = sum(1 for c in arm_concerns(arm, history) if c["deferred"] and axes.get(c["id"]) == "R")
+    planner_sha, thinker_sha = skill_hashes(arm_dir)
+    row = {
+        "arm": arm, "session_id": session, "bound": bound,
+        "state_sha256": hashlib.sha256(state_text.encode()).hexdigest(),
+        "history_sha256": file_sha256(arm_dir / "history.jsonl"),
+        "blockers": blockers, "lazy_pending": pending,
+        "approve_sandbox": min(approves, 1), "approve_elaboration": max(approves - 1, 0),
+        "dispatch_events": sum(1 for e in history if e.get("event") == "dispatch"),
+        "agent_overrides": sum(1 for e in history if e.get("event") == "plan_review"
+                               and e.get("verdict") == "override" and e.get("reviewer") == "agent"),
+        "diagnosing_entries": sum(1 for e in history if e.get("event") == "declare"),
+        "replans": sum(1 for e in history if e.get("event") == "replan"),
+        "review_acts_to_admissible": len(acts) - deferred_acts, "review_acts_deferred": deferred_acts,
+        "review_acts_total": len(acts),
+        "thinker_spawn_h_to_admissible": round(hours[0], 4), "thinker_spawn_h_deferred": round(hours[1], 4),
+        "thinker_spawn_h_total": round(sum(hours), 4),
+        "minutes": round(float(actuals.get("active_minutes") or 0.0), 3),
+        "skeleton_returns": sum(1 for e in history if e.get("event") == "skeleton_return"),
+        "late_r": late_r,
+        "judge_r": None if judged is None else judged["R"], "judge_v": None if judged is None else judged["V"],
+        "skills_planner_sha256": planner_sha, "skills_thinker_sha256": thinker_sha,
+    }
+    row["stop_reason"] = derive_stop_reason(row)
+    return [row[c] for c in TRIAL_COLUMNS]
+
+
+def trial_rows(arms_dir: Path) -> list[list]:
+    return [arm_row(arm, arms_dir / arm) for arm in ARMS]
+
+
+def arms_from_rows(rows: list[list]) -> dict:
+    return {r[0]: dict(zip(TRIAL_COLUMNS, r)) for r in rows}
+
+
+def ratio(part, whole):
+    return round(part / whole, 4) if whole else None
+
+
+def derive_trial(rows: list[list]) -> tuple[dict, dict]:
+    arms = arms_from_rows(rows)
+    control, risk = arms["control"], arms["risk"]
+    acts = ratio(risk["review_acts_total"], control["review_acts_total"])
+    spawn = ratio(risk["thinker_spawn_h_total"], control["thinker_spawn_h_total"])
+    faster = None if acts is None or spawn is None else acts <= FASTER_RATIO and spawn <= FASTER_RATIO
+    judged = [v for a in (control, risk) for v in (a["judge_r"], a["judge_v"])]
+    held = None if any(v is None for v in judged) else (
+        risk["judge_r"] + risk["judge_v"] <= control["judge_r"] + control["judge_v"])
+    completed = control["stop_reason"] == "admissible" and risk["stop_reason"] == "elaborated"
+    if not completed or faster is None or held is None:
+        verdict = "inconclusive"
+    else:
+        verdict = "pass" if faster and held else "fail"
+    comparison = {"review_acts_ratio": acts, "thinker_spawn_h_ratio": spawn, "faster": faster,
+                  "quality_held": held}
+    return comparison, {"completed": completed, "verdict": verdict}
+
+
+def structure_violations(rows: list[list], cap: int) -> list[str]:
+    arms = arms_from_rows(rows)
+    control, risk = arms["control"], arms["risk"]
+    named = {
+        "stop_reason": any(derive_stop_reason(a) != a["stop_reason"] or a["stop_reason"] not in STOP_REASONS
+                           for a in arms.values()),
+        "dispatch": any(a["dispatch_events"] for a in arms.values()),
+        "agent_override": any(a["agent_overrides"] for a in arms.values()),
+        "approve_in_control": bool(control["approve_sandbox"] or control["approve_elaboration"]),
+        "approve_order": risk["approve_sandbox"] != 1,
+        "bound": control["bound"] or not risk["bound"],
+        "skill_hashes": control["skills_planner_sha256"] != risk["skills_planner_sha256"]
+        or control["skills_thinker_sha256"] != risk["skills_thinker_sha256"],
+        "cap": not isinstance(cap, int) or cap <= 0,
+    }
+    return [f"MISMATCH: structure {name}" for name, broken in named.items() if broken]
+
+
+def assemble_trial(rows: list[list], cap: int, engine_commit: str, baseline_sha256: str | None) -> dict:
+    comparison, decision = derive_trial(rows)
+    return {
+        "mode": "trial", "formula": TRIAL_FORMULA, "engine_commit": engine_commit,
+        "baseline_sha256": baseline_sha256, "cap": cap,
+        "row_columns": TRIAL_COLUMNS, "rows": rows, "rows_sha256": digest(rows),
+        "arms": arms_from_rows(rows), "comparison": comparison, "decision": decision,
+    }
+
+
+def check_trial(doc: dict, arms_dir: Path | None) -> list[str]:
+    for key in TRIAL_KEYS:
+        if key not in doc:
+            raise Malformed(f"missing key {key!r}")
+    rows = doc["rows"]
+    if doc["row_columns"] != TRIAL_COLUMNS:
+        raise Malformed("row_columns differ from the script's")
+    if not isinstance(rows, list) or [r[0] for r in rows if isinstance(r, list) and r] != list(ARMS) or any(
+            not isinstance(r, list) or len(r) != len(TRIAL_COLUMNS) for r in rows):
+        raise Malformed("rows are not one list of row_columns length per arm")
+    diffs: list[str] = []
+    if doc["rows_sha256"] != digest(rows):
+        diffs.append("MISMATCH: rows_sha256 does not match the rows")
+    try:
+        want = assemble_trial(rows, doc["cap"], doc["engine_commit"], doc["baseline_sha256"])
+        diffs.extend(structure_violations(rows, doc["cap"]))
+    except (TypeError, KeyError, ValueError) as exc:
+        raise Malformed(f"rows do not hold the declared columns: {exc}")
+    diffs.extend(f"MISMATCH: {key}" for key in ("arms", "comparison", "decision") if doc[key] != want[key])
+    if arms_dir is not None and rows != trial_rows(arms_dir):
+        diffs.append("MISMATCH: rows differ from the arms directory")
+    return diffs
+
+
+def trial_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="planning-cost-report.py", description="Trial mode of the report")
+    parser.add_argument("command", choices=["concerns", "judge-view", "trial"])
+    parser.add_argument("arms_dir", help="directory holding <arm>/{state.json,history.jsonl,ledger.jsonl,plan.toml}")
+    parser.add_argument("arm", nargs="?", choices=ARMS, help="judge-view: the arm whose plan to render")
+    parser.add_argument("--out")
+    parser.add_argument("--cap", type=int, default=TRIAL_CAP)
+    parser.add_argument("--engine-commit")
+    parser.add_argument("--baseline", default=str(DEFAULT_OUT))
+    args = parser.parse_args(argv)
+    arms_dir = Path(args.arms_dir)
+    try:
+        if args.command == "concerns":
+            items = [{"id": c["id"], "text": c["text"]} for arm in ARMS
+                     for c in arm_concerns(arm, read_jsonl(arms_dir / arm / "history.jsonl"))]
+            print(json.dumps(sorted(items, key=lambda c: c["id"]), indent=1))
+            return 0
+        if args.command == "judge-view":
+            if not args.arm:
+                parser.error("judge-view needs the arm")
+            sys.path.insert(0, str(SCRIPTS_DIR))
+            from agentctl.gates import load_plan
+            from agentctl.render import render_plan_md
+            plan_doc = load_plan(str(arm_dir_plan(arms_dir / args.arm)))
+            print(render_plan_md(plan_doc).rstrip())
+            for stage in plan_doc.stages:
+                if stage.knowledge:
+                    print(f"\n- **Knowledge, stage {stage.index}:** {stage.knowledge}")
+            return 0
+        import subprocess
+        commit = args.engine_commit or subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+        baseline = Path(args.baseline)
+        doc = assemble_trial(trial_rows(arms_dir), args.cap, commit,
+                             file_sha256(baseline) if baseline.is_file() else None)
+    except (OSError, ValueError, Malformed) as exc:
+        print(f"malformed: {exc}", file=sys.stderr)
+        return 2
+    text = json.dumps(doc, indent=1) + "\n"
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+    print(f"verdict={doc['decision']['verdict']} control={doc['arms']['control']['stop_reason']} "
+          f"risk={doc['arms']['risk']['stop_reason']}")
+    return 0
+
+
 def check(doc, snapshot: Path | None) -> list[str]:
     if not isinstance(doc, dict):
         raise Malformed("not an object")
+    if doc.get("mode") == "trial":
+        return check_trial(doc, snapshot)
     for key in ("row_columns", "rows", "role_columns", "role_rows", "axis_columns", "axis_rows", "rows_sha256",
                 "role_rows_sha256", "axis_rows_sha256", "totals", "axes", "counterfactual", "dossier_comparison"):
         if key not in doc:
@@ -379,6 +693,9 @@ def check(doc, snapshot: Path | None) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] in ("concerns", "judge-view", "trial"):
+        return trial_main(argv)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("snapshot", nargs="?", help="snapshot directory")
     parser.add_argument("--out", default=str(DEFAULT_OUT))
