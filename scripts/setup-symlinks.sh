@@ -125,7 +125,7 @@ Core's own rows. A fragment may be a symlink into another checkout.
 |---|---|
 | `@FRAGMENT_DIR@` | In a command, the real directory of the fragment file; it keeps a fragment's scripts addressable from where the fragment lives. |
 | Ownership | `hook-plugins.installed.json` (next to `settings.json`) records what each fragment installed; a run keeps those entries equal to the fragment's current ones, and removing the fragment removes exactly them. |
-| Collision | An entry whose script basename already runs in the same event and matcher (a hand entry, a Core row, another fragment) is skipped with a warning. |
+| Collision | An entry whose script (its file name, whatever interpreter launches it) already runs in the same event and matcher (a hand entry, a Core row, another fragment) is skipped with a warning; an entry already installed is dropped with a warning once another entry runs its script. |
 | Broken fragment | Unparsable, or naming a script that is missing under its directory: skipped with a warning, its installed entries kept. |
 
 Contract and loader: `scripts/lib/hook_fragments.py`.

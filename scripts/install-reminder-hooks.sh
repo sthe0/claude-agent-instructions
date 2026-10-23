@@ -282,7 +282,8 @@ def add_rows(hooks, rows, reconcile=False, fragment_owned=frozenset()):
     installed: they do not count as present, so a Core row added after a fragment
     entry for the same script is still added, and the fragment pass then drops its
     own entry (lib/hook_fragments.py) instead of Core's row being skipped or
-    having its timeout rewritten.
+    having its timeout rewritten. When that fragment is broken its entry is kept
+    and runs alongside the Core row until the fragment is fixed.
 
     `reconcile` decides what happens to an entry that IS already there. Without
     it the row is skipped outright, which made this script insert-only: a
