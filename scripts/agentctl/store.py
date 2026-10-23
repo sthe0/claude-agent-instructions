@@ -8,6 +8,8 @@ touching the state machine or classification logic.
 from __future__ import annotations
 
 import datetime as dt
+import os
+import tempfile
 from pathlib import Path
 from typing import Protocol
 
@@ -76,4 +78,18 @@ class FileStateStore:
         state.check_invariants()
         stamp_new_history(state)
         self.root.mkdir(parents=True, exist_ok=True)
-        self.path(state.session_id).write_text(state.to_json(), encoding="utf-8")
+        # Truncate-then-write lost the only good copy on ENOSPC (2026-10-23).
+        fd, tmp = tempfile.mkstemp(dir=self.root, prefix=f"{_safe(state.session_id)}.",
+                                   suffix=".tmp")
+        try:
+            umask = os.umask(0)
+            os.umask(umask)
+            os.fchmod(fd, 0o666 & ~umask)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(state.to_json())
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.path(state.session_id))
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
