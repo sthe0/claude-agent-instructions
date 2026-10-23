@@ -622,6 +622,18 @@ ground = "re.search finds a requirement-id identifier as a whole token inside no
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/submission.py::_prose_image_advisory::pattern.search"]
+class = "structural"
+ground = "_ENUMERATION_PRESENT.search detects list-marker syntax ('(1)', a line-start '1.', a line-start bullet) in an expected_result_image; it decides whether the image has enumerated structure, a property of the text's layout and not of its meaning, and feeds only a non-blocking, judge-free advisory."
+hits = 1
+reviewed_by = "salvage-2026-10-23"
+
+[sites."scripts/agentctl/submission.py::<module>::re.compile"]
+class = "structural"
+ground = "_ENUMERATION_PRESENT compiles the list-marker syntax patterns ('(1)', line-start '1.', line-start bullet) behind the unenumerated-image advisory; fixed markup, no meaning is judged."
+hits = 1
+reviewed_by = "salvage-2026-10-23"
+
 [sites."scripts/agentctl/tool_contracts.py::_check_command_shape::pattern.match"]
 class = "structural"
 ground = "_BARE_ASSIGNMENT_RE.match detects a leading NAME=value shell assignment token on a command segment."
