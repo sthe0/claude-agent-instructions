@@ -1421,7 +1421,7 @@ class JudgeBypass:
 @dataclass
 class RequirementVerdict:
     requirement_id: str
-    verdict: str  # "pass" | "fail"
+    verdict: str  # "pass" | "fail" | "withdrawn"
     note: str = ""
 
 

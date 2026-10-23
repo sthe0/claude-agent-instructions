@@ -376,17 +376,19 @@ def failing_acceptance_requirements(state: SessionState) -> list[str]:
     """The requirement ids an AcceptanceReview recorded as 'fail', or [] whenever
     there is nothing genuinely failing to report: acceptance inactive, no review
     recorded yet, a stale review, an unreadable plan, or missing (not yet
-    verdicted) requirement ids. Distinguishes the ONE resolution_blockers() cause
-    that is a genuine difficulty (a customer rejection) from the other three,
-    which are ordinary in-progress states that must keep their existing passive
-    'not ready yet' refusal — see cmd_verify_final's early-blockers branch."""
+    verdicted) requirement ids. 'withdrawn' requirements are excluded — they are
+    neither a delivery nor a customer rejection. Distinguishes the ONE
+    resolution_blockers() cause that is a genuine difficulty (a customer rejection)
+    from the other three, which are ordinary in-progress states that must keep their
+    existing passive 'not ready yet' refusal — see cmd_verify_final's early-blockers
+    branch."""
     status, requirement_ids, verdicted, _ = _acceptance_review_check(state)
     if status != "ok":
         return []
     missing = [rid for rid in requirement_ids if rid not in verdicted]
     if missing:
         return []
-    return sorted(rid for rid, v in verdicted.items() if v != "pass")
+    return sorted(rid for rid, v in verdicted.items() if v not in ("pass", "withdrawn"))
 
 
 def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
@@ -424,9 +426,12 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
         non-substantive session forced active by AGENTCTL_ACCEPTANCE=1 can be in
         that position (the submission seam requires an order of every substantive
         plan);
-      - every verdict must be 'pass' — a single 'fail' blocks resolution outright;
-        acceptance is the product-against-order check, and a failing requirement is
-        not the engine's to wave through.
+      - every verdict must be 'pass' or 'withdrawn' — a single 'fail' blocks
+        resolution outright; acceptance is the product-against-order check, and a
+        failing requirement is not the engine's to wave through. 'withdrawn'
+        requirements are neither deliveries nor failures: the customer retracted the
+        requirement (its premise was flawed, or the work showed it was no longer
+        wanted), so they neither block resolution nor count as delivered.
 
     Deliberately never reads state.acceptance_bypass: a bypass is a resolution
     OUTCOME the engine surfaces (verify-final), never a resolution PRECONDITION the
@@ -461,11 +466,12 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
             f"AcceptanceReview omits declared requirement id(s) {missing} — every "
             "order requirement needs a verdict before resolution"
         ]
-    failing = [rid for rid, v in verdicted.items() if v != "pass"]
+    failing = [rid for rid, v in verdicted.items() if v not in ("pass", "withdrawn")]
     if failing:
         return [
             f"AcceptanceReview carries a non-pass verdict on requirement id(s) "
-            f"{sorted(failing)} — resolution is blocked until every requirement passes"
+            f"{sorted(failing)} — resolution is blocked until every requirement passes "
+            "or is withdrawn"
         ]
     return []
 

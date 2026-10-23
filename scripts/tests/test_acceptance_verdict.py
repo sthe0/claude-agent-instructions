@@ -571,3 +571,70 @@ def test_case18_stale_review_keeps_the_passive_fix_stages_refusal(
     after = store.load("c18")
     assert after.node == Node.VERIFYING.value
     assert after.difficulty is None
+
+
+# --- GitHub #129: 'withdrawn' verdict — a requirement the customer retracts ----
+
+def test_case19_withdrawn_without_note_is_refused(store, tmp_path, monkeypatch):
+    """A withdrawn verdict with no note is a parse error at write time: the ledger
+    must record who withdrew the requirement and why, so the record is not silently
+    missing a delivery."""
+    monkeypatch.delenv("AGENTCTL_ACCEPTANCE", raising=False)
+    plan = _write_plan(tmp_path / "p19.toml")
+    store.save(_approved_state("c19", plan))
+    d = cli.cmd_accept(
+        ns(session="c19", author="user", verdict=["R1|pass", "R2|withdrawn"],
+           note="", bypass=False, bypass_reason=""),
+        store=store, runner=judge_yes,
+    )
+    assert d.ok is False
+    assert "withdrawn" in d.detail
+    assert "note" in d.detail
+    assert store.load("c19").acceptance_review is None
+
+
+def test_case20_withdrawn_with_note_is_accepted_and_does_not_block_resolution(
+    store, tmp_path, monkeypatch
+):
+    """A withdrawn requirement with a mandatory note is accepted at write time and
+    does not block resolution: it is neither a delivery (not 'pass') nor a failure
+    (not 'fail') — the customer retracted it."""
+    monkeypatch.delenv("AGENTCTL_ACCEPTANCE", raising=False)
+    plan = _write_plan(tmp_path / "p20.toml")
+    store.save(_approved_state("c20", plan))
+    d = cli.cmd_accept(
+        ns(session="c20", author="user",
+           verdict=["R1|pass", "R2|withdrawn|customer: premise was flawed, no longer needed"],
+           note="", bypass=False, bypass_reason=""),
+        store=store, runner=judge_yes,
+    )
+    assert d.ok is True, d.detail
+    after = store.load("c20")
+    assert after.acceptance_review is not None
+    # 'withdrawn' must not appear in failing_acceptance_requirements
+    assert gates.failing_acceptance_requirements(after) == []
+    # resolution gate must pass
+    assert gates.resolution_blockers(after) == []
+
+
+def test_case21_withdrawn_does_not_route_to_diagnosing_at_verify_final(
+    store, tmp_path, monkeypatch
+):
+    """verify-final must NOT treat a withdrawn requirement as a genuine customer
+    rejection (which would route VERIFYING -> DIAGNOSING). Withdrawn is retracted,
+    not failed."""
+    monkeypatch.delenv("AGENTCTL_ACCEPTANCE", raising=False)
+    plan = _write_plan(tmp_path / "p21.toml")
+    s = _approved_state("c21", plan)
+    s.acceptance_review = AcceptanceReview(
+        author="user", plan_sha256=s.accepted_plan_digest,
+        verdicts=[
+            RequirementVerdict("R1", "pass"),
+            RequirementVerdict("R2", "withdrawn",
+                               note="customer: premise was flawed, no longer needed"),
+        ],
+    )
+    store.save(s)
+    d = cli.cmd_verify_final(ns(session="c21"), store=store)
+    assert d.ok is True
+    assert d.node == Node.RESOLUTION.value

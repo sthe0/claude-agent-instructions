@@ -6876,11 +6876,17 @@ def cmd_code_review(args, *, store: StateStore, runner: Runner | None = None) ->
 
 
 def _parse_verdicts(raw_verdicts: list[str]) -> tuple[list[RequirementVerdict], list[str]]:
-    """Parse repeatable ``--verdict '<requirement_id>|<pass|fail>[|<note>]'`` specs into
-    typed RequirementVerdict objects. Returns ``(verdicts, errors)`` — a non-empty
+    """Parse repeatable ``--verdict '<requirement_id>|<pass|fail|withdrawn>[|<note>]'`` specs
+    into typed RequirementVerdict objects. Returns ``(verdicts, errors)`` — a non-empty
     ``errors`` list means the caller must reject with a failing Directive and record
     nothing. Mirrors ``_parse_partition_units``'s pipe-delimited shape and
     ``(parsed, errors)`` return contract.
+
+    ``withdrawn`` records that a requirement was retracted by the customer (its premise
+    was flawed, or the work demonstrated it was no longer wanted); it neither blocks
+    resolution nor counts as a delivered requirement. A note is MANDATORY for withdrawn:
+    the record must name who withdrew the requirement and why, so the ledger is not
+    silently missing a delivery.
 
     Deliberately does NOT cross-check requirement ids against the order here — that
     check is completeness, not parse well-formedness, and belongs to
@@ -6893,7 +6899,8 @@ def _parse_verdicts(raw_verdicts: list[str]) -> tuple[list[RequirementVerdict], 
         parts = spec.split("|")
         if len(parts) < 2:
             errors.append(
-                f"verdict {pos}: expected '<requirement_id>|<pass|fail>[|<note>]', got {spec!r}"
+                f"verdict {pos}: expected "
+                f"'<requirement_id>|<pass|fail|withdrawn>[|<note>]', got {spec!r}"
             )
             continue
         req_id = parts[0].strip()
@@ -6901,8 +6908,16 @@ def _parse_verdicts(raw_verdicts: list[str]) -> tuple[list[RequirementVerdict], 
         note = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else ""
         if not req_id:
             errors.append(f"verdict {pos}: empty requirement id")
-        if verdict not in ("pass", "fail"):
-            errors.append(f"verdict {pos}: verdict must be 'pass' or 'fail', got {verdict!r}")
+        if verdict not in ("pass", "fail", "withdrawn"):
+            errors.append(
+                f"verdict {pos}: verdict must be 'pass', 'fail', or 'withdrawn', "
+                f"got {verdict!r}"
+            )
+        elif verdict == "withdrawn" and not note:
+            errors.append(
+                f"verdict {pos}: 'withdrawn' requires a note naming who withdrew the "
+                "requirement and why (format: '<id>|withdrawn|<note>')"
+            )
         if req_id in seen:
             errors.append(
                 f"verdict {pos}: requirement id {req_id!r} already verdicted at position "
@@ -14171,8 +14186,9 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp.add_argument("--author", default="",
                     help="acceptance author id; must match [meta.order].customer_id when set")
     sp.add_argument("--verdict", dest="verdict", action="append", default=None,
-                    help="requirement verdict as '<requirement_id>|<pass|fail>[|<note>]'; "
-                         "repeatable, one per declared order requirement")
+                    help="requirement verdict as '<requirement_id>|<pass|fail|withdrawn>[|<note>]'; "
+                         "repeatable, one per declared order requirement; "
+                         "'withdrawn' requires a non-empty note naming who withdrew it and why")
     sp.add_argument("--note", default="",
                     help="free-text note on the acceptance review as a whole")
     sp.add_argument("--bypass", action="store_true",
