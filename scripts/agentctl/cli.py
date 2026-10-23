@@ -7916,6 +7916,11 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     stage = state.active_stage()
     if stage is None:
         return Directive(False, state.node, "next_stage", "no active stage to dispatch")
+    lazy = gates.lazy_stage_blockers(state, stage.index)
+    _log_gate(state, "lazy_stage", lazy, passed=not lazy)
+    if lazy:
+        return Directive(False, state.node, "noop",
+                         "dispatch refused: " + "; ".join(lazy), data={"blockers": lazy})
     if not stage.is_spawn():
         return Directive(True, state.node, "execute_in_thread", f"stage {stage.index} is in-thread; no spawn")
     # Stage 6: an explicit, OPT-IN re-attest request. Absent --re-attest this
@@ -12003,6 +12008,21 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                          "replan blocked: the fault must be routed to the inadequate "
                          "обеспечение (re-run critique with --failure-address)",
                          data={"blockers": fablock})
+
+    # bound session: the corrected plan answers a failed stage by raising that stage's bet
+    # or stating why the bet stands. Unbound, gates.bet_raise_blockers returns [].
+    if state.risk_planning:
+        try:
+            raise_blockers = gates.bet_raise_blockers(
+                state, _baseline_plan_for_tier(store, state), _load(args.plan, strict=False),
+                getattr(args, "reason", None))
+        except (OSError, PlanError):
+            raise_blockers = []
+        _log_gate(state, "bet_raise", raise_blockers, passed=not raise_blockers)
+        if raise_blockers:
+            return Directive(False, state.node, "replan",
+                             "replan blocked: " + "; ".join(raise_blockers),
+                             data={"blockers": raise_blockers})
 
     # plan-review gate: the corrected plan (args.plan) must carry a thinker review
     # with a passing/overridden verdict BOUND to it before it may be applied. Gates
