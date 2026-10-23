@@ -11,9 +11,11 @@ returns.
 
 Every returned candidate is an ABSOLUTE path: a leading `~` is expanded, and
 what is still relative is joined onto the `eff_cwd` the caller supplies —
-otherwise join-only, no existence check and no filesystem policy. A `$VAR` is
-NOT expanded and joins under the cwd like any other relative token; `_abs` says
-why the two are not one feature. That is why a `cp`/`mv`/`install` destination
+otherwise join-only, no existence check and no filesystem policy. A leading `$VAR`
+is expanded only from a literal assignment earlier in the same command or from the
+two inherited names `HOME`/`TMPDIR`, and only when `_variable_tracking_is_safe`
+holds; any other `$VAR` joins under the cwd like a relative token, and `_abs` says
+why that is the fail-closed direction. That is why a `cp`/`mv`/`install` destination
 yields both readings of an ambiguous final token rather than one resolved by
 `isdir` (see `_copy_targets`): CANDIDATES, plural and possibly over-inclusive,
 are the contract. Heredoc/here-string bodies are blanked (not removed) via
@@ -29,28 +31,56 @@ import re
 
 from . import shell_tokens
 
-# Matches a leading `$VAR` or `${VAR}` and captures the variable name plus the tail.
-_LEADING_VAR_RE = re.compile(r'^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?(.*)', re.DOTALL)
+#: A leading `$NAME` or `${NAME}` (group 1 or 2) followed by the rest of the token.
+#: `${NAME:-x}` and the other parameter-expansion operators deliberately do not match.
+_LEADING_VAR_RE = re.compile(r"^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})(.*)$", re.DOTALL)
 
-# Matches a shell assignment `VAR=value` (entire token).
-_ASSIGN_RE = re.compile(r'^([A-Za-z_][A-Za-z0-9_]*)=(.*)', re.DOTALL)
+#: An assignment word `NAME=value`, `NAME+=value` or `NAME[i]=value`.
+_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?(\+?)=(.*)$", re.DOTALL)
 
 _BASH_SEPS = {";", "&&", "||", "|", "|&", "&"}
+
+#: Variables the hook inherits from the same harness that spawned the command's shell.
+_INHERITED_VARS = ("HOME", "TMPDIR")
+
+#: A word that opens a compound command or a block: assignments inside one may run
+#: zero, one or many times, in an order the textual walk does not see.
+_COMPOUND_WORDS = frozenset({
+    "if", "then", "elif", "else", "fi", "for", "select", "while", "until", "do", "done",
+    "case", "esac", "function", "coproc", "{", "}", "(", ")",
+})
+
+#: Builtins that assign variables through an argument that is not an assignment word.
+_OPAQUE_VERBS = frozenset({
+    "eval", "source", ".", "read", "unset", "getopts", "mapfile", "readarray", "let",
+})
+
+#: Builtins whose `NAME=value` operands are assignments in the current shell.
+_ASSIGNING_BUILTINS = frozenset({"export", "declare", "typeset", "local", "readonly"})
+
+
+def _segments_with_separators(tokens: list[str]):
+    """Yield `(segment, separator_before, separator_after)` for each pipeline/list
+    segment of a tokenized command; a separator at the command's edge is `None`."""
+    seg: list[str] = []
+    before: str | None = None
+    for tok in tokens:
+        if tok in _BASH_SEPS:
+            if seg:
+                yield seg, before, tok
+            seg = []
+            before = tok
+        else:
+            seg.append(tok)
+    if seg:
+        yield seg, before, None
 
 
 def split_segments(tokens: list[str]):
     """Yield the pipeline/list segments of a tokenized command, split on the
     shell separators `; && || | |& &`. Best-effort: a separator glued inside a
     single shlex token (`a;b`) is left intact — an accepted residual."""
-    seg: list[str] = []
-    for tok in tokens:
-        if tok in _BASH_SEPS:
-            if seg:
-                yield seg
-            seg = []
-        else:
-            seg.append(tok)
-    if seg:
+    for seg, _, _ in _segments_with_separators(tokens):
         yield seg
 
 
@@ -159,36 +189,39 @@ def _copy_targets(rest: list[str], eff_cwd: str, var_env: dict[str, str] | None 
 
 
 def _try_expand_var(token: str, env: dict[str, str]) -> str:
-    """Expand a leading `$VAR` or `${VAR}` in `token` from `env`, or return `token` unchanged."""
+    """`token` with its leading `$NAME` / `${NAME}` replaced by `env[NAME]`, or `token`
+    unchanged when it has no such prefix or `NAME` is not in `env`."""
     m = _LEADING_VAR_RE.match(token)
     if m:
-        name, tail = m.group(1), m.group(2)
+        name = m.group(1) or m.group(2)
         if name in env:
-            return env[name] + tail
+            return env[name] + m.group(3)
     return token
 
 
 def _abs(candidate: str, eff_cwd: str, var_env: dict[str, str] | None = None) -> str:
-    """`candidate` as an absolute path: a leading `~` expanded, then optionally a
-    leading `$VAR` expanded from `var_env`, then the cwd join.
+    """`candidate` as an absolute path: a leading `$VAR` expanded from `var_env` when it
+    is there, then a leading `~` expanded, then the cwd join.
 
-    EXPANDUSER, AND SELECTIVELY EXPANDVARS — `~` means the invoking user's home, this
-    process runs as that user in that session, so expanding it names the path the
-    command will really write; and it does so by two independent routes rather than one,
-    since with `HOME` unset `expanduser` does NOT return the token unchanged (MEASURED,
-    and the opposite is the natural assumption) but falls back to the passwd entry for
-    `os.getuid()` — still that same user's home.
+    `~` MEANS THE INVOKING USER'S HOME, this process runs as that user in that
+    session, so expanding it names the path the command will really write; and it does
+    so by two independent routes rather than one, since with `HOME` unset `expanduser`
+    does NOT return the token unchanged (MEASURED, and the opposite is the natural
+    assumption) but falls back to the passwd entry for `os.getuid()` — still that same
+    user's home.
 
-    A `$VAR` is expanded only when `var_env` is supplied and the variable IS present in
-    it. `var_env` is built from two sources: assignments in preceding segments of the
-    same command (`o=/tmp/x; cat > $o/f`), and `os.environ` for OS-reliably-set
-    variables (`$TMPDIR`, `$HOME`, `$PATH`) that the command inherits. A variable NOT in
-    `var_env` stays unexpanded, joins under `eff_cwd`, and remains a named residual in
-    each consumer — the safe over-inclusive fallback for genuinely unknown variables.
+    A `$VAR` is expanded only from `var_env`, which a caller builds conservatively (see
+    `_VarTracker`): the hook's environment is not the command's, so a name is trusted
+    only when it is one of the two the hook and the command's shell both inherit from
+    the harness, or the command itself assigns it a literal value earlier in the same
+    text, and in both cases only when nothing in the command can have changed it behind
+    the tracker's back. Everything else stays unexpanded and joins under `eff_cwd` — the
+    over-inclusive direction: it can only turn an allow into a deny for a cwd inside a
+    protected tree, never the reverse — and remains a named residual in each consumer.
     """
-    candidate = os.path.expanduser(candidate)
     if var_env is not None and candidate.startswith("$"):
         candidate = _try_expand_var(candidate, var_env)
+    candidate = os.path.expanduser(candidate)
     return candidate if os.path.isabs(candidate) else os.path.join(eff_cwd, candidate)
 
 
@@ -293,17 +326,123 @@ def segment_write_target(seg: list[str], eff_cwd: str, var_env: dict[str, str] |
     return candidates
 
 
-def _update_var_env_from_seg(seg: list[str], var_env: dict[str, str]) -> None:
-    """Record any leading VAR=value assignment tokens from `seg` into `var_env`.
+def _dollar_may_be_literal(command: str) -> bool:
+    """True iff some `$` in `command` is single-quoted, backslash-escaped or opens an
+    ANSI-C / locale string (`$'..'`, `$".."`). The tokenizer drops quoting, so such a
+    `$NAME` reaches `_abs` indistinguishable from one the shell expands — and expanding
+    a token the shell leaves literal names a path the command never writes."""
+    quote: str | None = None
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if ch == "\\" and quote != "'":
+            if command[i + 1:i + 2] == "$":
+                return True
+            i += 2
+            continue
+        if quote is None and ch in "'\"":
+            quote = ch
+        elif quote == ch:
+            quote = None
+        elif ch == "$" and (quote == "'" or command[i + 1:i + 2] in ("'", '"')):
+            return True
+        i += 1
+    return False
 
-    Stops at the first non-assignment token, matching bash's own rule that
-    assignments before a command word are temporary env for that command."""
-    for tok in seg:
-        m = _ASSIGN_RE.match(tok)
-        if m:
-            var_env[m.group(1)] = m.group(2)
+
+def _variable_tracking_is_safe(command: str, tokens: list[str]) -> bool:
+    """Whether a textual walk can know a variable's value at each segment: it cannot
+    inside a compound command or block (an assignment there runs zero, one or many
+    times in an order the walk does not see) nor when a `$` may be literal."""
+    return not (_COMPOUND_WORDS.intersection(tokens) or _dollar_may_be_literal(command))
+
+
+class _VarTracker:
+    """The variables `_abs` may expand while walking one command's segments in order.
+
+    FAIL-CLOSED BY CONSTRUCTION — a name is in `var_env` only when its value is known
+    for certain, because a wrong entry turns a write into a protected tree into an
+    allowed one, while a missing entry only keeps the old over-inclusive cwd join.
+
+    * Seeded with `_INHERITED_VARS` from `os.environ` and nothing else: the hook is
+      spawned by the same harness as the command's shell, so those two agree, while an
+      arbitrary hook variable may be absent or different in a shell a profile
+      initialized.
+    * A standalone, unconditional assignment (`o=/tmp/x`, `export o=/tmp/x`) with a
+      literal value replaces the entry; the value's own leading `$VAR` is expanded first.
+    * Every other mention of an assignment word — a command prefix, after `&&`/`||`, in a
+      pipeline or background segment, `+=`, `name[i]=` , a value still holding `$` or a
+      backquote — POISONS the name for the rest of the command: it is dropped and never
+      trusted again, even by a later literal assignment.
+    * A builtin that assigns through an argument (`eval`, `read`, `unset`, `printf -v`,
+      `declare -n` ...) discards everything.
+    * When `_variable_tracking_is_safe` fails, `var_env` is `None` and nothing is expanded.
+    """
+
+    def __init__(self, command: str, tokens: list[str]):
+        self.enabled = _variable_tracking_is_safe(command, tokens)
+        self.env: dict[str, str] = (
+            {name: os.environ[name] for name in _INHERITED_VARS if name in os.environ}
+            if self.enabled else {}
+        )
+        self.poisoned: set[str] = set()
+
+    @property
+    def var_env(self) -> dict[str, str] | None:
+        return self.env if self.enabled else None
+
+    def _poison(self, name: str) -> None:
+        self.poisoned.add(name)
+        self.env.pop(name, None)
+
+    def _assign(self, name: str, value: str) -> None:
+        value = _try_expand_var(value, self.env)
+        if name in self.poisoned or "$" in value or "`" in value:
+            self._poison(name)
         else:
-            break
+            self.env[name] = value
+
+    def observe(self, seg: list[str], before: str | None, after: str | None) -> None:
+        """Account for `seg`, which has just been walked, and its separators."""
+        if not self.enabled:
+            return
+        rest = seg[1:]
+        if (
+            _OPAQUE_VERBS.intersection(seg)
+            or (os.path.basename(seg[0]) == "printf" and "-v" in rest)
+            or (
+                os.path.basename(seg[0]) in _ASSIGNING_BUILTINS
+                and any(t.startswith("-") and not t.startswith("--") and "n" in t for t in rest)
+            )
+        ):
+            self.env.clear()
+            return
+        builtin = os.path.basename(seg[0]) in _ASSIGNING_BUILTINS
+        words = rest if builtin else seg
+        standalone = builtin or all(_ASSIGN_RE.match(tok) for tok in seg)
+        unconditional = before in (None, ";") and after not in ("|", "|&", "&")
+        for tok in words:
+            m = _ASSIGN_RE.match(tok)
+            if not m:
+                continue
+            name, subscript, append, value = m.groups()
+            if standalone and unconditional and not subscript and not append:
+                self._assign(name, value)
+            else:
+                self._poison(name)
+
+
+def _process_substitution_bodies(tokens: list[str]):
+    """Yield the tokens between the parentheses of each `<(...)` / `>(...)`, outermost
+    first. The operator-exact tokenizer hands them over as `<`, `(`, ..., `)`."""
+    for i, tok in enumerate(tokens[:-1]):
+        if tok in ("<", ">") and tokens[i + 1] == "(":
+            depth = 0
+            for j in range(i + 1, len(tokens)):
+                depth += (tokens[j] == "(") - (tokens[j] == ")")
+                if depth == 0:
+                    yield tokens[i + 2:j]
+                    break
 
 
 def segments(command: str) -> list[list[str]]:
@@ -360,13 +499,15 @@ def command_write_targets(command: str, eff_cwd: str) -> list[str]:
     blind spot `patch`/`git apply` already answer with the directory they are
     applied in. Over-inclusive by the same contract every candidate here carries.
 
-    A READ PROCESS SUBSTITUTION `<(cmd)` IS NOT ADDED: `<(cmd)` forks `cmd` and
-    feeds its stdout into the outer command's argument list — the outer command
-    writes nothing extra due to `<(`. Only `>(` warrants the cwd candidate.
+    A READ PROCESS SUBSTITUTION `<(cmd)` ADDS NOTHING OF ITS OWN: `<(cmd)` forks
+    `cmd` and feeds its stdout into the outer command's argument list, so the outer
+    command writes nothing extra due to `<(`. But the nested `cmd` is a command like
+    any other, so the segments inside every `<(...)` and `>(...)` are walked as well
+    (`diff <(tee canon/f < x) y` still names `canon/f`).
 
-    Variable expansion is seeded from `os.environ` (reliably-set OS variables
-    like `$TMPDIR`/`$HOME`) and augmented by any `VAR=value` assignments from
-    preceding segments in the same command (e.g. `o=/tmp/x; echo > $o/f`)."""
+    `$VAR` expansion in the candidates is `_VarTracker`'s: only `HOME`/`TMPDIR` from
+    the hook's environment and literal assignments earlier in the same command
+    (`o=/tmp/x; echo > $o/f`), dropped whenever anything could have changed them."""
     command = shell_tokens.neutralize_heredoc_constructs(command)
     extra = [eff_cwd] if ">(" in command else []
     try:
@@ -375,9 +516,12 @@ def command_write_targets(command: str, eff_cwd: str) -> list[str]:
         return extra
     if not tokens:
         return extra
-    var_env: dict[str, str] = dict(os.environ)
+    tracker = _VarTracker(command, tokens)
     targets: list[str] = list(extra)
-    for seg in split_segments(tokens):
-        targets.extend(segment_write_target(seg, eff_cwd, var_env))
-        _update_var_env_from_seg(seg, var_env)
+    for seg, before, after in _segments_with_separators(tokens):
+        targets.extend(segment_write_target(seg, eff_cwd, tracker.var_env))
+        tracker.observe(seg, before, after)
+    for body in _process_substitution_bodies(tokens):
+        for seg in split_segments(body):
+            targets.extend(segment_write_target(seg, eff_cwd))
     return targets

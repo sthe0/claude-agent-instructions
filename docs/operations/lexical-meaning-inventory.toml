@@ -1357,6 +1357,26 @@ ground = "nominate (BM25F word overlap) picks top-k cluster representatives per 
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/lib/bash_write_targets.py::<module>::re.compile"]
+class = "structural"
+ground = "_LEADING_VAR_RE and _ASSIGN_RE compile shell variable syntax: a leading $NAME / ${NAME} and an assignment word NAME=value, fixed grammar of the shell."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "salvage-2026-10-23"
+
+[sites."scripts/lib/bash_write_targets.py::_VarTracker.observe::pattern.match"]
+class = "structural"
+ground = "_ASSIGN_RE.match recognizes an assignment word NAME=value / NAME+=value / NAME[i]=value in a shell command segment, fixed shell syntax; whether a variable is trusted is decided by the position of the segment, not by the text."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "salvage-2026-10-23"
+
+[sites."scripts/lib/bash_write_targets.py::_try_expand_var::pattern.match"]
+class = "structural"
+ground = "_LEADING_VAR_RE.match recognizes a leading $NAME / ${NAME} in a path token, fixed shell variable syntax."
+hits = 1
+reviewed_by = "salvage-2026-10-23"
+
 [sites."scripts/lib/semantic_join.py::judged_match::lexical.nominate"]
 class = "candidate-generation"
 ground = "nominate (BM25F word overlap) picks top-k candidates for a query, and _decide_pair calls the same-difficulty judge on each, which alone decides the match."

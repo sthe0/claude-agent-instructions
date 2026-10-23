@@ -2680,7 +2680,7 @@ disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
 
 [[entry]]
-id = "a54296e45717a592"
+id = "47fa4ccae0ba7863"
 domain = "code"
 file = "scripts/lib/bash_write_targets.py"
 class = "structural"
@@ -2688,7 +2688,7 @@ disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
 
 [[entry]]
-id = "b27e089867642626"
+id = "a54296e45717a592"
 domain = "code"
 file = "scripts/lib/bash_write_targets.py"
 class = "structural"
