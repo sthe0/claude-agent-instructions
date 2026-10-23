@@ -219,8 +219,8 @@ class Thresholds:
 
     def effort_absolute_interactions(self) -> int:
         """Absolute threshold on user-interaction count for the interactions scale;
-        `0` means the scale is accounting-only / disabled (see config.md row for
-        the re-enabling contract)."""
+        `0` means the scale is accounting-only / disabled (see the row in
+        docs/operations/config-rationale.md for the re-enabling contract)."""
         return self._int("effort-absolute-interactions")
 
     def runaway_ceiling_usd(self) -> str:
