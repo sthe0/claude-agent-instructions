@@ -76,6 +76,7 @@ def _new_args(tmp_path, ledger_path, **overrides):
 
 
 def test_cmd_new_stamps_leaf_and_subindex(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratchroot"))
     ledger_path = tmp_path / "edit-log.jsonl"
     monkeypatch.setenv("AGENTCTL_EDIT_LEDGER", str(ledger_path))
     exp_dir = tmp_path / "experience"
@@ -97,6 +98,7 @@ def test_cmd_new_stamps_leaf_and_subindex(tmp_path, monkeypatch):
 def test_cmd_new_without_session_stamps_with_empty_session(tmp_path, monkeypatch):
     # SimpleNamespace without a `session` attr must not raise (mirrors the
     # pre-existing test_promote_scan.py / test_tier_field.py call shape).
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratchroot"))
     ledger_path = tmp_path / "edit-log.jsonl"
     monkeypatch.setenv("AGENTCTL_EDIT_LEDGER", str(ledger_path))
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -113,6 +115,7 @@ def test_cmd_new_without_session_stamps_with_empty_session(tmp_path, monkeypatch
 
 
 def test_cmd_extend_stamps_leaf(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratchroot"))
     ledger_path = tmp_path / "edit-log.jsonl"
     monkeypatch.setenv("AGENTCTL_EDIT_LEDGER", str(ledger_path))
     leaf = tmp_path / "leaf.md"
@@ -132,6 +135,7 @@ def test_cmd_extend_stamps_leaf(tmp_path, monkeypatch):
 
 
 def test_cmd_set_last_verified_stamps_leaf(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratchroot"))
     ledger_path = tmp_path / "edit-log.jsonl"
     monkeypatch.setenv("AGENTCTL_EDIT_LEDGER", str(ledger_path))
     leaf = tmp_path / "leaf.md"
@@ -147,6 +151,7 @@ def test_cmd_set_last_verified_stamps_leaf(tmp_path, monkeypatch):
 
 
 def test_cmd_ticket_stamps_leaf_and_subindex(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratchroot"))
     ledger_path = tmp_path / "edit-log.jsonl"
     monkeypatch.setenv("AGENTCTL_EDIT_LEDGER", str(ledger_path))
     exp_dir = tmp_path / "experience"
@@ -172,6 +177,7 @@ def test_cmd_ticket_stamps_leaf_and_subindex(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_stamp_memory_dates_apply_stamps_and_dry_run_does_not(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratchroot"))
     ledger_path = tmp_path / "edit-log.jsonl"
     monkeypatch.setenv("AGENTCTL_EDIT_LEDGER", str(ledger_path))
     leaf = tmp_path / "leaves" / "note.md"

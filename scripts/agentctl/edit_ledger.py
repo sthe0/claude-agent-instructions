@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Iterator
 
 from lib import config_root
+from agentctl.exempt_paths import is_ledger_noise
 
 
 def _ledger_path(path: "Path | None") -> Path:
@@ -102,6 +103,8 @@ def stamp(
         env_id = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
         session_id = session if session is not None else env_id
         abspath = os.path.realpath(file)
+        if is_ledger_noise(abspath):
+            return
         append(session_id, env_id, abspath, tool, os.getcwd(), time.time(), path=path)
     except Exception:
         pass
