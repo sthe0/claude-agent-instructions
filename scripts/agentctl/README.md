@@ -656,7 +656,7 @@ Which arguments take `@` is not a prose list. [`cli.py`](cli.py) declares a part
 
 ## Modules
 
-Core spine: `classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `partition`, `permissions`, `plan`, `continuations`, `advisor`, `controls`, `cost`, `exempt_paths`, `text_shape`, `procedure`. Plugin framework: `plugins`, `plugins_tracker`, `plugins_experience` (§ Plugins). `cost` is covered in § Cost tracking; `exempt_paths` backs the `hook-state-gate.py` production-path lockstep, `text_shape` renders Directive text, `procedure` backs the method-vs-procedure collapse refusal (§ Renormalization) with the prefilter-plus-fail-open-judge pattern `conditions` established; `controls` is the single control-name resolver shared by `../check-order-coverage.py` and the `premise` question-materiality check (§ Plugins), parameterized by the admissible grammar set with **no default** so neither caller can silently inherit the other's.
+Core spine: `classify`, `config`, `state`, `store`, `machine`, `gates`, `directive`, `cli`, `dispatch`, `partition`, `permissions`, `plan`, `continuations`, `advisor`, `controls`, `cost`, `exempt_paths`, `text_shape`, `procedure`, `review_briefs`. Plugin framework: `plugins`, `plugins_tracker`, `plugins_experience` (§ Plugins). `cost` is covered in § Cost tracking; `exempt_paths` backs the `hook-state-gate.py` production-path lockstep, `text_shape` renders Directive text, `procedure` backs the method-vs-procedure collapse refusal (§ Renormalization) with the prefilter-plus-fail-open-judge pattern `conditions` established; `controls` is the single control-name resolver shared by `../check-order-coverage.py` and the `premise` question-materiality check (§ Plugins), parameterized by the admissible grammar set with **no default** so neither caller can silently inherit the other's.
 
 Two modules carry the load-bearing invariants:
 
@@ -672,6 +672,16 @@ Plan structure is defined **primarily by typed code**, not prose. `plan.py`'s `p
 **`verify_command` is mandatory on measurable substantive stages.** A measurable criterion you cannot execute is really `acceptance_review` — `_validate_substantive_stage` raises `PlanError` if `criterion_type == measurable` and `verify_command` is absent.
 
 **Acceptance-review passes require a distinct recorded observation.** When a stage's `criterion_type` is `acceptance_review`, `record-result --status passed` requires `--observation <text>` that (after normalization) differs from `subject.result` (the expected image). The reviewer records what they actually observed, not an echo of the target.
+
+### Risk-shaped planning, phase A (the skeleton)
+
+*Difficulty removed:* a full plan is reviewed and priced before anyone has checked that its stages form one chain to the goal, so a missing or orphaned stage is found only after the controls, grants and bets around it were written.
+
+**Binding.** A session binds at its first `submit-plan`: `state.risk_planning` is set once from the `risk-shaped-planning` row of `config.md` (`on` binds; `off`, another value or no row does not), `AGENTCTL_RISK_PLANNING=1|0` overriding the row in both directions. An unbound session ignores every key below and behaves as before (pinned by `test_unbound_session_unchanged`). The resolver is `config.risk_planning_enabled`, read as a module attribute so a control can force it.
+
+**Skeleton plan.** A bound session's plan with `[meta] phase = "skeleton"` is a skeleton: stages need only structure, not the substantive-stage fields. `plan.skeleton_problems` refuses it unless `[meta]` carries `goal`, `alternatives` or an `alternatives_waiver`, and an integer `base_stage` naming a stage, and every stage is `base_stage` or on its transitive `depends_on` chain. The skeleton skips the reachability blockers and `observe_stage_checks` and takes the whole-plan review route (`gates.pairwise_review_route` is false); `plan-render --skeleton` prints the brief the reviewer reads (`review_briefs.skeleton_brief`).
+
+**Freeze and counted return.** `plan.skeleton_digests` hashes the structure (per stage: title, executor, `depends_on`, `supplies`, result and `output_artifacts`, material, means, method, principle statement; meta: goal, `base_stage`, functional place, requirements). Bets, controls and grants are outside the digests. A counted whole-plan `pass` with an attested sha freezes them in `state.skeleton_freeze`. After the freeze, a resubmission whose digests moved, or a counted `revise` with a blocking `axis:R` concern (`plan.concern_axis` reads the `axis:<R|V|D|W|S>` token), opens return `R<n>` in `state.skeleton_returns`: the freeze is released and `gates.skeleton_return_blockers` blocks `plan_review_blockers` until a counted pass whose `--note` names the id clears it, which re-freezes the digests.
 
 ### Change tier and proportional review
 

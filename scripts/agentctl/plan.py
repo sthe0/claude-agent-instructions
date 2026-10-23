@@ -234,6 +234,15 @@ class PlanMeta:
     # registered at submit-plan as `assumed` premises. Not part of any digest: an
     # assumption is a record of a premise, never an input of the work.
     assumptions: "list[PlanAssumption]" = field(default_factory=list)
+    # Risk-shaped planning, phase A. `phase = "skeleton"` marks a plan that settles the chain
+    # only: a bound session (state.risk_planning) parses it without the per-stage substantive
+    # apparatus and validates it with `skeleton_problems` instead; any other session reads the
+    # key as nothing. `base_stage` is the stage the chain must reach; `alternatives` /
+    # `alternatives_waiver` record the other chains weighed, or why none was.
+    phase: str = ""
+    base_stage: int | None = None
+    alternatives: list[str] = field(default_factory=list)
+    alternatives_waiver: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1819,8 +1828,12 @@ def check_venue_warnings(
     return warnings
 
 
+SKELETON_PHASE = "skeleton"
+
+
 def parse_plan(
-    data: dict, *, strict: bool = True, strict_executor: bool | None = None
+    data: dict, *, strict: bool = True, strict_executor: bool | None = None,
+    skeleton: bool = True,
 ) -> PlanDoc:
     """Pure: a parsed-TOML dict -> PlanDoc. No filesystem.
 
@@ -1841,7 +1854,11 @@ def parse_plan(
     subfield parses to a partial Principle instead of raising KeyError.
 
     strict_executor is a retained back-compat alias for strict (the flag once
-    only gated the executor vocabulary check); when given it overrides strict."""
+    only gated the executor vocabulary check); when given it overrides strict.
+
+    skeleton=True (default) honours `[meta] phase = "skeleton"` by skipping the per-stage
+    substantive check; cmd_submit_plan passes False for a session not bound to risk-shaped
+    planning, so there the key is inert and the plan is graded as on origin/main."""
     if strict_executor is not None:
         strict = strict_executor
     if "meta" not in data:
@@ -1932,9 +1949,16 @@ def parse_plan(
         final_check=final_checks,
         order=order,
         assumptions=_parse_assumptions(m.get("assumption")),
+        phase=str(m.get("phase") or ""),
+        base_stage=m["base_stage"] if isinstance(m.get("base_stage"), int) else None,
+        alternatives=[str(a) for a in m["alternatives"]] if isinstance(m.get("alternatives"), list) else [],
+        alternatives_waiver=(
+            str(m["alternatives_waiver"]).strip() if str(m.get("alternatives_waiver") or "").strip() else None
+        ),
     )
 
     is_substantive = meta.weight_class is not None and meta.weight_class.lower() == "substantive"
+    is_skeleton = skeleton and meta.phase == SKELETON_PHASE
 
     if strict and is_substantive and not meta.external_research:
         raise PlanError(
@@ -1963,7 +1987,7 @@ def parse_plan(
                 f"stage {index} cost_tier {s['cost_tier']!r} is outside the vocabulary "
                 f"(expected one of {'|'.join(sorted(_COST_TIERS))})"
             )
-        if strict and is_substantive:
+        if strict and is_substantive and not is_skeleton:
             _validate_substantive_stage(s, index)
         raw_principle = s.get("principle")
         principle = None
@@ -2169,6 +2193,7 @@ def _resolve_plan_refs(raw: dict, path: Path, base_dir, root, read) -> dict:
 def load_plan(
     path: str | Path, *, strict: bool = True, strict_executor: bool | None = None,
     base_dir: str | Path | None = None, root: str | Path | None = None, read=None,
+    skeleton: bool = True,
 ) -> PlanDoc:
     p = Path(path)
     if not p.exists():
@@ -2184,12 +2209,13 @@ def load_plan(
         except tomllib.TOMLDecodeError as exc:
             raise PlanError(f"malformed TOML in plan file {p}: {exc}") from exc
     data = _resolve_plan_refs(data, p, base_dir, root, read)
-    return parse_plan(data, strict=strict, strict_executor=strict_executor)
+    return parse_plan(data, strict=strict, strict_executor=strict_executor, skeleton=skeleton)
 
 
 def load_plan_with_digest(
     path: str | Path, *, strict: bool = True, strict_executor: bool | None = None,
     base_dir: str | Path | None = None, root: str | Path | None = None, read=None,
+    skeleton: bool = True,
 ) -> tuple[PlanDoc, bytes, str]:
     """Read the plan file's bytes exactly once and derive the parsed doc, the raw
     bytes and their sha256 digest all from that single buffer.
@@ -2209,7 +2235,7 @@ def load_plan_with_digest(
     except tomllib.TOMLDecodeError as exc:
         raise PlanError(f"malformed TOML in plan file {p}: {exc}") from exc
     raw = _resolve_plan_refs(raw, p, base_dir, root, read)
-    doc = parse_plan(raw, strict=strict, strict_executor=strict_executor)
+    doc = parse_plan(raw, strict=strict, strict_executor=strict_executor, skeleton=skeleton)
     digest = hashlib.sha256(data).hexdigest()
     return doc, data, digest
 
@@ -2352,6 +2378,101 @@ def consumers(doc: PlanDoc, n: int) -> frozenset[int]:
     `reliance_set`. Raises PlanError when `n` is unknown."""
     _stage_by_index(doc, n)
     return frozenset(s.index for s in doc.stages if n in reliance_set(doc, s.index))
+
+
+def skeleton_problems(doc: PlanDoc) -> list[str]:
+    """Why a skeleton plan cannot be reviewed for reachability, or [] when it can.
+
+    Reachability is structural and decidable here: every stage must lie on the chain that
+    feeds `base_stage` (`base_stage` itself or a transitive dependency of it), so a stage
+    that feeds nothing the plan is for is refused before a reviewer reads it."""
+    meta = doc.meta
+    problems: list[str] = []
+    if not meta.goal.strip():
+        problems.append("skeleton plan declares no [meta] goal")
+    if not meta.alternatives and not meta.alternatives_waiver:
+        problems.append(
+            "skeleton plan declares neither [meta] alternatives (the other chains weighed) nor "
+            "an alternatives_waiver saying why there are none"
+        )
+    indices = {s.index for s in doc.stages}
+    if meta.base_stage is None:
+        problems.append("skeleton plan declares no integer [meta] base_stage")
+        return problems
+    if meta.base_stage not in indices:
+        problems.append(
+            f"skeleton plan base_stage {meta.base_stage} is not a stage (stages: {sorted(indices)})"
+        )
+        return problems
+    chain: set[int] = set()
+    frontier = [meta.base_stage]
+    while frontier:
+        n = frontier.pop()
+        if n in chain:
+            continue
+        chain.add(n)
+        frontier.extend(reliance_set(doc, n))
+    orphans = sorted(indices - chain)
+    if orphans:
+        problems.append(
+            f"stage(s) {orphans} are not on the chain feeding base_stage {meta.base_stage}: "
+            "each must be base_stage or a transitive depends_on of it"
+        )
+    return problems
+
+
+def _digest_text(*parts: object) -> str:
+    return hashlib.sha256("\x1f".join(str(p) for p in parts).encode("utf-8")).hexdigest()
+
+
+def skeleton_digests(doc: PlanDoc) -> dict[str, str]:
+    """The A2 structural digests of a skeleton: what a counted axis-R pass freezes.
+
+    Per stage: title, executor, depends_on, supplies, product (the result plus the
+    output artifacts), material, means, method, principle statement. From the meta: goal,
+    base_stage, functional place and requirements. Bets, controls and grants are outside
+    it by construction, so changing them never reopens the chain."""
+    out: dict[str, str] = {}
+    meta = doc.meta
+    order = meta.order
+    out["meta:goal"] = _digest_text(meta.goal)
+    out["meta:base_stage"] = _digest_text(meta.base_stage)
+    out["meta:functional_place"] = _digest_text(order.functional_place if order else "")
+    out["meta:requirements"] = _digest_text(
+        *(f"{r.id}={r.text}" for r in (order.requirements if order else []))
+    )
+    for s in sorted(doc.stages, key=lambda x: x.index):
+        k = f"stage:{s.index}:"
+        out[k + "title"] = _digest_text(s.title)
+        out[k + "executor"] = _digest_text(s.actor.executor)
+        out[k + "depends_on"] = _digest_text(*sorted(s.depends_on))
+        out[k + "supplies"] = _digest_text(
+            *sorted(f"{x.on}|{x.element}|{x.artifact}|{x.delivery}" for x in s.supplies)
+        )
+        out[k + "product"] = _digest_text(s.subject.result, *sorted(s.output_artifacts))
+        out[k + "material"] = _digest_text(s.subject.material)
+        out[k + "means"] = _digest_text(s.means.means)
+        out[k + "method"] = _digest_text(s.means.method)
+        out[k + "principle"] = _digest_text(s.principle.statement if s.principle else "")
+    return out
+
+
+def skeleton_changed(frozen: dict[str, str], current: dict[str, str]) -> list[str]:
+    """The digest keys that differ between two `skeleton_digests`, sorted; a key present
+    on one side only (a stage added or removed) counts as changed."""
+    return sorted(k for k in frozen.keys() | current.keys() if frozen.get(k) != current.get(k))
+
+
+AXES = "RVDWS"
+_AXIS_RE = re.compile(r"\baxis:([" + AXES + r"])\b")
+
+
+def concern_axis(body: str) -> str | None:
+    """The review axis a concern is tagged with (`axis:R`), or None when it carries no tag.
+    The tag is a structured token a reviewer writes, like the part tokens, not a reading of
+    the concern's meaning."""
+    found = _AXIS_RE.search(body or "")
+    return found.group(1) if found else None
 
 
 def first_hop(doc: PlanDoc, n: int) -> frozenset[int]:

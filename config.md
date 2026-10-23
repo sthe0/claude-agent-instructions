@@ -23,6 +23,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `difficulty-channel` | `github` | Channel for filing Core difficulties from non-author machines; auto-detected per machine. |
 | `advisor-mode` | `substantive` | When the agentctl advisory judge activates: `off` or `substantive`; `AGENTCTL_ADVISOR` overrides. |
 | `child-contour-linking` | `on` | Kill switch linking a spawned specialist into its own engine contour; `AGENTCTL_CHILD_LINKING` overrides. |
+| `risk-shaped-planning` | `off` | Switch for the bound mode of reachability-first planning; bound once per session at its first submit-plan; `AGENTCTL_RISK_PLANNING` overrides. |
 | `principle-promotion-threshold` | `3` | Context-block count at which promote-scan flags an experience cluster for a regularity leaf. |
 | `skill-description-max-chars` | `850` | Character ceiling on a SKILL.md frontmatter `description:`. |
 | `always-loaded-surface-advisory-chars` | `80000` | Advisory-only ceiling on the aggregate always-loaded surface; never fails. |
