@@ -9,6 +9,7 @@
 # -----------------------------------------------------------|--------|----------------
 # scripts/tests/**                                           | code   | not-a-gate
 # scripts/lib/writer_rules.py (candidate generation)         | code   | semantic-guarded
+# scripts/lib/hook_script.py + hook_fragments.py (hook command syntax) | code   | structural
 # scripts/agentctl/result_image.py (judge-guarded)           | code   | semantic-guarded
 # scripts/agentctl/conditions.py (judge-guarded)             | code   | semantic-guarded
 # scripts/agentctl/procedure.py (judge-guarded)              | code   | semantic-guarded
@@ -2680,20 +2681,28 @@ disposition = "keep"
 ground = "The word-overlap scorer behind `semantic_join.nominate` and the memory retrieval hook. A score only ORDERS candidate texts; the callers never treat it as a verdict on meaning — one hands the ranked candidates to a judge, the other to the root model. The `\\w+` split in `tokenize` is word boundary syntax. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and command syntax, misdescribes this file."
 
 [[entry]]
-id = "704197173942a7a4"
+id = "46a195fcb7f02cbd"
 domain = "code"
-file = "scripts/lib/hook_fragments.py"
+file = "scripts/lib/hook_script.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares those script names and exact command strings inside the (event, matcher) groups of a hooks object. A misparse can only skip or double-wire a hook, which the fragment contract's warnings surface."
 
 [[entry]]
-id = "6c261e065d8507eb"
+id = "c3449019a496b588"
 domain = "code"
-file = "scripts/lib/hook_fragments.py"
+file = "scripts/lib/hook_script.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares those script names and exact command strings inside the (event, matcher) groups of a hooks object. A misparse can only skip or double-wire a hook, which the fragment contract's warnings surface."
+
+[[entry]]
+id = "c44d3269ecc5898b"
+domain = "code"
+file = "scripts/lib/hook_script.py"
+class = "structural"
+disposition = "keep"
+ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares those script names and exact command strings inside the (event, matcher) groups of a hooks object. A misparse can only skip or double-wire a hook, which the fragment contract's warnings surface."
 
 [[entry]]
 id = "6c7be3eda8d17d86"
@@ -4281,14 +4290,6 @@ ground = "Regexes found are markdown/frontmatter/command-syntax parsing (heading
 
 [[entry]]
 id = "75260fa2d8e69a4c"
-domain = "code"
-file = "scripts/self-diagnose.py"
-class = "structural"
-disposition = "keep"
-ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
-
-[[entry]]
-id = "a98026e16d075eef"
 domain = "code"
 file = "scripts/self-diagnose.py"
 class = "structural"
@@ -8259,6 +8260,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "6ad0bb3835e311a5"
 domain = "code"
 file = "scripts/tests/test_hook_escalation_diagnosis_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "1276c91e8e141911"
+domain = "code"
+file = "scripts/tests/test_hook_fragments.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -18472,12 +18481,12 @@ disposition = "keep"
 ground = "The word-overlap scorer behind `semantic_join.nominate` and the memory retrieval hook. A score only ORDERS candidate texts; the callers never treat it as a verdict on meaning — one hands the ranked candidates to a judge, the other to the root model. The `\\w+` split in `tokenize` is word boundary syntax. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and command syntax, misdescribes this file. (file-level rollup of the file's scopes.)"
 
 [[entry]]
-id = "5f93886042bc994e"
+id = "3df3ccfc94720a25"
 domain = "code_file_rollup"
-file = "scripts/lib/hook_fragments.py"
+file = "scripts/lib/hook_script.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"
+ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares those script names and exact command strings inside the (event, matcher) groups of a hooks object. A misparse can only skip or double-wire a hook, which the fragment contract's warnings surface. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "742822a310126b82"
