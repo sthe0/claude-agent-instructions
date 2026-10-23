@@ -215,6 +215,49 @@ def test_pull_all_skips_a_channel_this_machine_cannot_resolve(monkeypatch, tmp_p
     assert "not-installed-here" in capsys.readouterr().err
 
 
+# ── not-estimable share counter ───────────────────────────────────────────────
+
+def test_not_estimable_count_property_counts_only_prefixed_entries():
+    recs = [
+        _rec("ground A", dc.Severity.HIGH, "c1", cost_estimate="not estimable: no baseline"),
+        _rec("ground A", dc.Severity.HIGH, "c2", cost_estimate="$3/week"),
+        _rec("ground A", dc.Severity.HIGH, "c3", cost_estimate=""),
+    ]
+    [cluster] = digest_mod.cluster_records(recs)
+    assert cluster.not_estimable_count == 1
+
+
+def test_digest_shows_not_estimable_share_when_present():
+    recs = [
+        _rec("ground A", dc.Severity.HIGH, "c1",
+             cost_estimate="not estimable: machine-detected; not measured at detection time"),
+        _rec("ground A", dc.Severity.HIGH, "c2", cost_estimate="$3/week"),
+    ]
+    out = digest_mod._format(digest_mod.digest(recs, threshold=1))
+    assert "1 of 2 not estimable" in out
+
+
+def test_digest_not_estimable_share_absent_when_no_not_estimable_records():
+    recs = [
+        _rec("ground A", dc.Severity.HIGH, "c1", cost_estimate="$3/week"),
+        _rec("ground A", dc.Severity.HIGH, "c2", cost_estimate="~8k tokens per session"),
+    ]
+    out = digest_mod._format(digest_mod.digest(recs, threshold=1))
+    assert "not estimable" not in out
+
+
+def test_digest_shows_not_estimable_alongside_outside_cost_gate_marker():
+    """Both markers appear when a cluster has some not-estimable AND some empty records."""
+    recs = [
+        _rec("ground A", dc.Severity.HIGH, "c1", cost_estimate="not estimable: no baseline"),
+        _rec("ground A", dc.Severity.HIGH, "c2", cost_estimate=""),
+        _rec("ground A", dc.Severity.HIGH, "c3", cost_estimate="$3/week"),
+    ]
+    out = digest_mod._format(digest_mod.digest(recs, threshold=1))
+    assert "1 of 3 not estimable" in out
+    assert "1 of 3 filed outside the cost gate" in out
+
+
 def test_pull_all_resolves_a_plugin_channel_through_the_port_registry(monkeypatch, tmp_path):
     """The path a machine WITH the overlay installed takes: pull_all loads the plugin, the plugin
     registers itself, and get_channel resolves it — with no static import of the adapter."""
