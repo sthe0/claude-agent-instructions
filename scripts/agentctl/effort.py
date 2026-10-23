@@ -151,7 +151,8 @@ SCALE_INTERACTIONS = "interactions"
 
 #: Scales compared as `delta / estimate >= effort-divergence-multiple`. An estimate of 0
 #: makes a ratio scale INAPPLICABLE (and is the division-by-zero guard) — there is no
-#: separate numeric floor row; see `effort-divergence-multiple` in docs/operations/config-rationale.md for why.
+#: separate numeric floor row; basis: `effort-divergence-multiple` in
+#: docs/operations/config-rationale.md.
 RATIO_SCALES = (SCALE_SPEND, SCALE_WALL_CLOCK)
 
 #: Scales compared as `delta >= <configured absolute count>`. They carry no ratio: a
@@ -167,7 +168,7 @@ SCALE_ORDER = (SCALE_SPEND, SCALE_WALL_CLOCK, SCALE_REPLANS, SCALE_INTERACTIONS)
 #: Scales armed but excluded from divergence(): crossing the threshold is observed and
 #: appended to SessionState.effort_crossings, but never returned as a Divergence — no
 #: fire, no baseline rebase, no DIAGNOSING route. See
-#: `effort-absolute-interactions` in docs/operations/config-rationale.md for why this scale specifically is record-only.
+#: `effort-absolute-interactions` in docs/operations/config-rationale.md (why record-only).
 RECORD_ONLY_SCALES = frozenset({SCALE_INTERACTIONS})
 
 _LABEL = {
