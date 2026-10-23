@@ -76,6 +76,12 @@ class Cluster:
         # makes that bypass visible instead of letting it read as a legitimate zero.
         return sum(1 for r in self.items if not r.cost_estimate)
 
+    @property
+    def not_estimable_count(self) -> int:
+        # members that explicitly declared no estimate via --cost-not-estimable; the canonical
+        # prefix is set by file-difficulty.py's _build_record.
+        return sum(1 for r in self.items if r.cost_estimate.startswith("not estimable: "))
+
 
 class ClusterList(list):
     """A list of clusters that also carries ``unjudged_pairs``: nominated record pairs the
@@ -173,6 +179,9 @@ def _format(flagged: list[Cluster]) -> str:
         cost_bits = []
         if c.costs:
             cost_bits.append("cost: " + "; ".join(repr(v) for v in c.costs))
+        ne = c.not_estimable_count
+        if ne:
+            cost_bits.append(f"{ne} of {len(c.items)} not estimable")
         gap = c.outside_cost_gate_count
         if gap:
             cost_bits.append(f"{gap} of {len(c.items)} filed outside the cost gate")
