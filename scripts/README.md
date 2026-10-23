@@ -202,6 +202,7 @@ Core tests: `python3 -m pytest scripts/tests`; the suite runs in parallel when p
 | [verify-terms.py](verify-terms.py) | Check-module contract: scan all tracked files (content + path) against the discovered term ruleset(s) (`lib/term_ruleset.py`); registered in `verify-all.py`; `--expect-rulesets N` asserts the ruleset count discovered (used to prove the Core tree itself carries zero rulesets) |
 | [verify-tests-accompany-code.py](verify-tests-accompany-code.py) | `commit-msg` advisory (warn-only, never blocks): nudge when staged non-test `scripts/**.py` carries no test delta; `[skip-test-guard: <reason>]` trailer suppresses it |
 | [verify-ticket-plan-sync.py](verify-ticket-plan-sync.py) | Compare a ticket's posted plan against the local TOML via an embedded/extracted `plan_sha256` marker (`--emit-marker` / `--plan … --comment-file -` / `--marker`); tracker-agnostic, `--selftest` covers the OK/DRIFT/NO-PLAN cases |
+| [wait-for-pid.sh](wait-for-pid.sh) | Wait for a process to exit by explicit PID (`kill -0`), never by a search pattern. `--expect-substring TEXT` cross-checks the live cmdline on each poll and exits 2 if the PID was silently reused. `--interval N` (default 10 s). Exits 0 when gone, 1 on bad args, 2 on PID reuse. Tests: [tests/test-wait-for-pid.sh](tests/test-wait-for-pid.sh) |
 <!-- inventory:scripts:end -->
 
 ## Project-entry libraries
