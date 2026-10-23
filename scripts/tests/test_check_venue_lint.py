@@ -91,3 +91,55 @@ def test_lint_covers_both_a_stage_and_a_final_check_in_one_call(tmp_path):
     assert len(warnings) == 2
     assert any("stage 2" in w for w in warnings)
     assert any("fc" in w for w in warnings)
+
+
+# --- full command-text embedding (the cd-argument-only gap) ------------------
+
+
+def test_repo_root_venue_embeds_worktree_path_in_arg_warns(tmp_path):
+    """A repo_root-venue command that passes the worktree as an argument
+    (not as a cd target) should warn — the fix extends detection to the
+    whole command text."""
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    stage = _stage(f"python3 {worktree}/scripts/check.py", verify_venue="repo_root")
+    warnings = check_venue_warnings([stage], [], str(repo_root), str(worktree))
+    assert len(warnings) == 1
+    assert "stage 1" in warnings[0]
+    assert "repo_root" in warnings[0]
+
+
+def test_delivery_venue_embeds_repo_root_path_in_arg_warns(tmp_path):
+    """A delivery-venue command that passes the repo_root as an argument
+    (not as a cd target) should warn."""
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    stage = _stage(f"python3 {repo_root}/scripts/check.py", verify_venue="delivery")
+    warnings = check_venue_warnings([stage], [], str(repo_root), str(worktree))
+    assert len(warnings) == 1
+    assert "stage 1" in warnings[0]
+    assert "delivery" in warnings[0]
+
+
+def test_no_cd_no_embedded_path_is_silent(tmp_path):
+    """A command with neither a cd target nor an embedded contradicting path
+    should produce no warning."""
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    stage = _stage("pytest -q scripts/tests/", verify_venue="delivery")
+    assert check_venue_warnings([stage], [], str(repo_root), str(worktree)) == []
+
+
+def test_final_check_embeds_worktree_path_in_arg_warns(tmp_path):
+    """A repo_root-venue final_check that embeds the worktree path as a
+    non-cd argument should warn."""
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    fc = FinalCheck(
+        command=f"diff {worktree}/out.txt expected.txt",
+        venue="repo_root",
+        label="diff-check",
+    )
+    warnings = check_venue_warnings([], [fc], str(repo_root), str(worktree))
+    assert len(warnings) == 1
+    assert "diff-check" in warnings[0]
