@@ -4,7 +4,7 @@ The keys and values live in [`config.md`](../../config.md), which is loaded into
 
 Single source of truth for the numeric constants used by the coordination machinery defined in `CLAUDE.md`, the cursor mirror, and the skills. Imported into every Claude Code session via `@~/.claude-agent/config.md` at the end of `CLAUDE.md`.
 
-Edit values **here** — not in the prose that references them. Every cross-reference uses the **key**, not the literal value. Where a mechanical surface (spawn template, shell script) must embed a literal number, an inline comment names the key so `rg <key>` still finds the use site.
+Edit values in `config.md` — not in the prose that references them. Every cross-reference uses the **key**, not the literal value. Where a mechanical surface (spawn template, shell script) must embed a literal number, an inline comment names the key so `rg <key>` still finds the use site.
 
 | Key | Value | Meaning |
 |---|---|---|

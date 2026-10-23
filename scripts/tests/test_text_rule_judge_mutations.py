@@ -158,8 +158,8 @@ HOOK_MUTATIONS = {
     "silent_prefilter_still_calls_judge": (
         "    if not candidates:\n        return \"allow\", \"\"\n", ""),
     "prefilter_bypassed": (
-        "candidates = writer_rules.find_candidates(body)",
-        'candidates = writer_rules.find_candidates(body) or [("say-13", ["you"])]'),
+        "candidates = writer_rules.find_all_candidates(body)",
+        'candidates = writer_rules.find_all_candidates(body) or [("say-13", ["you"])]'),
     "unbound_body_reaches_content_check": (
         "if binding.strength in (writer_pass.WRITER_OUTPUT, writer_pass.POST_WITNESS):", "if True:"),
     "findings_outside_candidates_not_filtered": ("if rule_id in fired and span.strip()", "if span.strip()"),
