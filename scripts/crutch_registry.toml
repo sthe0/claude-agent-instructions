@@ -1448,6 +1448,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
+id = "4851fba5b5e898da"
+domain = "code"
+file = "scripts/agentctl/submission.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "a0a0caa667c26919"
 domain = "code"
 file = "scripts/agentctl/submission.py"
@@ -1457,6 +1465,14 @@ ground = "The deterministic engine. Its regexes parse the engine's own structure
 
 [[entry]]
 id = "06d18fb842324672"
+domain = "code"
+file = "scripts/agentctl/submission.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "86db1362ff68e1ba"
 domain = "code"
 file = "scripts/agentctl/submission.py"
 class = "structural"
@@ -16712,6 +16728,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "66fd3da38b0c44ff"
+domain = "code"
+file = "scripts/tests/test_submission_prose_image_advisory.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "4bdcd6442162ccc4"
 domain = "code"
 file = "scripts/tests/test_sweep_grant_surface.py"
@@ -20659,6 +20683,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "812528d7b305784c"
 domain = "code_file_rollup"
 file = "scripts/tests/test_state_roundtrip.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "c1f61cc17143bc3b"
+domain = "code_file_rollup"
+file = "scripts/tests/test_submission_prose_image_advisory.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
