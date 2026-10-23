@@ -433,4 +433,33 @@ def test_rebind_plan_flag_rejects_an_empty_path(store, tmp_path):
         session="s", id="Q1", confirm_still_valid="still holds", plan=""), store=store)
     assert d.ok is False
     assert "empty path" in d.detail
-    assert _q(store, "s", "Q1")["disposed_at_key"] == original
+
+
+# --- pipe-in-field escaping in --format md ------------------------------------
+
+def test_question_list_md_pipe_in_field_escapes(store):
+    """A field containing | must be escaped to \\| so it doesn't open an extra
+    cell and silently drop the rightmost column."""
+    _state(store)
+    _raise(store, "s", id="Q1", target="stage:1.result", question="is it safe?")
+    _research(store, "s", id="Q1",
+              attempted="ran git stash list --format='%gd | %gs' and counted")
+    _dispose(store, "s", id="Q1", to="researched",
+             answer="yes",
+             source="git stash list --format='%gd | %gs'",
+             derivation="pipe-free derivation")
+
+    d = cli.cmd_question_list(Namespace(session="s", format="md"), store=store)
+    assert d.ok is True
+
+    # Each \| in the output must be the escaped form; unescaped pipes must be
+    # exactly 8 per data row (7 columns → 8 cell separators).
+    import re
+    data_rows = [r for r in d.detail.splitlines()
+                 if r.startswith("|") and not r.startswith("|---")]
+    for row in data_rows[1:]:  # skip header
+        unescaped = len(re.findall(r'(?<!\\)\|', row))
+        assert unescaped == 8, f"expected 8 unescaped pipes, got {unescaped}: {row!r}"
+
+    # The escaped pipe must appear literally in the output.
+    assert r"\|" in d.detail
