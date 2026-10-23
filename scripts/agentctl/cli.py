@@ -10271,8 +10271,12 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
                     estimate=_ro_comparand[_ro_scale], now=_utcnow(),
                 )
     # Final-gate execution (defense in depth): re-run every measurable stage's
-    # verify_command — a later stage may have regressed an earlier one. Any
-    # non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
+    # verify_command unless the venue tree is unchanged since the stage last passed
+    # (same checked_tree_identity — the same cache record-result maintains). A later
+    # stage may have regressed an earlier one, so the loop still runs for every
+    # non-skipped stage; a re-run is skipped only when the tree identity proves the
+    # tree and the check definition haven't moved since the cached green result.
+    # Any non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
     failures: list[str] = []
     for stage in state.stages:
         if is_skipped(stage):
@@ -10300,6 +10304,13 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
                 return _diagnose_venue_refusal(
                     state, store, f"stage {stage.index} verify_command refused: {refusal}", div,
                 )
+            tree_id = _venue_tree_identity(cwd, runner)
+            identity = (
+                f"{tree_id}:{_check_definition_digest(crit)}"
+                if tree_id is not None else None
+            )
+            if _cached_check_hit(stage, identity):
+                continue
         ok, result = _verify_command_result(stage, runner, cwd=cwd)
         if not ok:
             failures.append(

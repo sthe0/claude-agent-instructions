@@ -168,7 +168,8 @@ def test_opted_in_stage_survives_delivery_venue_removal(store, tmp_path):
     )
     assert d2.ok is True, d2.detail
     assert d2.action == "await_user_confirmation"
-    assert cap2.calls == [["bash", "-c", f"cd {shlex.quote(str(repo_root))} && pytest -q"]]
+    bash_cmd2 = ["bash", "-c", f"cd {shlex.quote(str(repo_root))} && pytest -q"]
+    assert bash_cmd2 in cap2.calls, f"expected {bash_cmd2!r} in calls; got {cap2.calls!r}"
 
 
 # --- (b): a bare (non-opted-in) stage still refuses once the worktree is gone --
@@ -315,7 +316,8 @@ def test_absent_verify_venue_at_final_is_byte_identical_to_pre_change(store, tmp
     assert d.action == "await_user_confirmation"
     # Same tree cmd_dispatch/cmd_record_result would have used — the venue never
     # moves to repo_root just because this field now exists on the Criterion.
-    assert cap.calls == [["bash", "-c", f"cd {shlex.quote(str(worktree))} && pytest -q"]]
+    bash_cmd = ["bash", "-c", f"cd {shlex.quote(str(worktree))} && pytest -q"]
+    assert bash_cmd in cap.calls, f"expected {bash_cmd!r} in calls; got {cap.calls!r}"
 
 
 # --- re-entry idempotency: verify-final called again from DIAGNOSING/RESOLUTION --
