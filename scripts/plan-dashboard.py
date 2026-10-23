@@ -4,7 +4,8 @@
 Subcommand ``snapshot`` prints every selected task with its totals as JSON or text;
 ``--detail`` adds each task's stages, difficulties, history tail and phase tree. Subcommand
 ``tui`` is the console view: interactive through ``uv run`` (exit 4 without uv), or plain
-text with ``--once``. The shared
+text with ``--once``. Subcommand ``web`` serves the read-only page on the loopback address
+(``--port``; exit 5 when it cannot listen; ``--self-test`` probes a throwaway server). The shared
 options (state root, window, selection, ledger, transcripts) come from one parent parser so
 later views reuse them. Exit code 3: a ``--session`` that names no state file, in ``snapshot``
 and ``tui --once`` (the interactive ``tui`` opens with an empty list instead).
@@ -22,10 +23,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from agentctl import cost  # noqa: E402
 from lib import config_root  # noqa: E402
-from plan_dashboard import model, tui  # noqa: E402
+from plan_dashboard import model, tui, web  # noqa: E402
 
 EXIT_NO_SUCH_SESSION = 3
 EXIT_NEEDS_UV = 4
+EXIT_CANNOT_LISTEN = 5
+DEFAULT_PORT = 8765
 GOAL_WIDTH = 100
 
 
@@ -49,6 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
     console = sub.add_parser("tui", parents=[shared_parser()])
     console.add_argument("--once", action="store_true")
     console.add_argument("--interval", type=float, default=tui.DEFAULT_INTERVAL_S)
+    page = sub.add_parser("web", parents=[shared_parser()])
+    page.add_argument("--port", type=int, default=DEFAULT_PORT)
+    page.add_argument("--interval", type=float, default=web.DEFAULT_INTERVAL_S)
+    page.add_argument("--self-test", action="store_true")
     return parser
 
 
@@ -131,10 +138,34 @@ def run_tui(args) -> int:
     return subprocess.call(tui.launch_argv(args))
 
 
+def run_web(args) -> int:
+    options = dict(window_hours=args.window_hours, include_all=args.include_all, sessions=args.sessions,
+                   cost_log=args.cost_log, transcripts_root=args.transcripts_root)
+
+    def announce(server):
+        print(f"plan dashboard on http://{web.LOOPBACK}:{server.port}/ (loopback only; "
+              f"from another machine: ssh -L {server.port}:{web.LOOPBACK}:{server.port} <host>)", flush=True)
+
+    if args.self_test:
+        failures = web.self_test(args.state_root, **options)
+        print("web self-test: " + ("ok" if not failures else "failed: " + ", ".join(failures)))
+        return 1 if failures else 0
+    try:
+        web.serve(args.state_root, web.LOOPBACK, args.port, interval=args.interval, ready=announce, **options)
+    except OSError as exc:
+        print(f"plan-dashboard: cannot listen on {web.LOOPBACK}:{args.port}: {exc}", file=sys.stderr)
+        return EXIT_CANNOT_LISTEN
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "tui":
         return run_tui(args)
+    if args.command == "web":
+        return run_web(args)
     now = dt.datetime.now(dt.timezone.utc)
     snapshot = model.collect(
         args.state_root, now=now, window_hours=args.window_hours, include_all=args.include_all,

@@ -83,7 +83,8 @@ def _cost(totals) -> str:
 def _stage_progress(done, total) -> str:
     if not total:
         return "no plan"
-    filled = min(max(round(BAR_WIDTH * (done or 0) / total), 0), BAR_WIDTH)
+    done = done or 0
+    filled = min(max(round(BAR_WIDTH * done / total), 0), BAR_WIDTH)
     return f"stage {done}/{total} [{'#' * filled}{'-' * (BAR_WIDTH - filled)}]"
 
 

@@ -18,10 +18,11 @@ from pathlib import Path
 import pytest
 
 import plan_dashboard_support as support
+from agentctl.state import Declaration, Difficulty
 from plan_dashboard import model, tui
 from plan_dashboard_fixtures import build_fixture_root, read_only_guard
 from plan_dashboard_support import (  # noqa: F401  (isolated_home is an autouse fixture)
-    ALPHA, BETA, NOW, RATE, STALE, console_root, isolated_home,
+    ALPHA, BETA, NOW, RATE, STALE, at, console_root, event, isolated_home, make_state,
 )
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -107,7 +108,7 @@ def test_the_header_opens_the_plain_view_and_the_table_follows(tmp_path):
 
 @pytest.mark.parametrize("done, total, expected", [
     (0, 0, "no plan"), (None, 0, "no plan"), (0, 4, "stage 0/4 [--------]"), (1, 4, "stage 1/4 [##------]"),
-    (4, 4, "stage 4/4 [########]"), (5, 4, "stage 5/4 [########]"),
+    (4, 4, "stage 4/4 [########]"), (5, 4, "stage 5/4 [########]"), (None, 4, "stage 0/4 [--------]"),
 ])
 def test_stage_progress_has_a_bar_and_says_no_plan_without_stages(done, total, expected):
     cells = cells_of(tui.overview_rows(listing(summary("a", stages_done=done, stages_total=total)), NOW), "a")
@@ -128,6 +129,19 @@ def test_difficulty_cell_marks_an_open_one_and_counts_all(counts, title, expecte
 
 def test_replans_cell_shows_the_replan_count():
     assert cells_of(tui.overview_rows(listing(summary("a", replans=3)), NOW), "a")["replans"] == "3"
+
+
+def test_diff_and_replans_cells_come_from_a_collected_task(tmp_path):
+    busy = make_state(
+        "busy", stages=("ACTIVE",), closed_difficulties=[{"declaration": {"mismatch": "old"}}],
+        difficulty_stack=[Difficulty(declaration=Declaration(expected="e", actual="a", mismatch="parked"))],
+        difficulty=Difficulty(declaration=Declaration(expected="e", actual="a", mismatch="live")),
+        history=[event("approve", at(hours=2)), event("replan", at(hours=1)), event("replan", at(minutes=50))])
+    calm = make_state("calm", stages=("ACTIVE",), closed_difficulties=[{"declaration": {"mismatch": "old"}}],
+                      history=[event("approve", at(hours=2))])
+    rows = tui.overview_rows(snapshot(build_fixture_root(tmp_path, [busy, calm], now=NOW)), NOW)
+    assert (cells_of(rows, "busy")["diff"], cells_of(rows, "busy")["replans"]) == ("!3", "2")
+    assert (cells_of(rows, "calm")["diff"], cells_of(rows, "calm")["replans"]) == ("1", "0")
 
 
 def test_long_task_ids_are_cut():
@@ -155,6 +169,12 @@ def test_unreadable_task_is_a_row_with_unknown_stage(tmp_path):
     cells = cells_of(tui.overview_rows(snapshot(console_root(tmp_path)), NOW), "broken")
     assert cells["stage"] == "stage ?/?"
     assert cells["goal"].startswith("unreadable")
+    assert (cells["task"], cells["diff"], cells["replans"]) == ("-", "-", "-")
+
+
+def test_a_task_without_a_task_id_shows_a_dash():
+    row = summary("a", task_id=None)
+    assert cells_of(tui.overview_rows(listing(row), NOW), "a")["task"] == "-"
 
 
 def test_overview_age_is_measured_from_the_given_clock(tmp_path):
@@ -371,7 +391,8 @@ def test_once_cuts_the_goal_to_the_width(tmp_path):
     assert "Build the thing [with brackets]" in once(root, width=200)
     narrow = once(root, width=140)
     assert "Build the thing [with brackets]" not in narrow
-    assert "Build the thing" in narrow and "…" in narrow
+    alpha = next(line for line in narrow.splitlines() if line.startswith("alpha-00"))
+    assert alpha.endswith("  ≥$1.50  Build the thing [with b…")
 
 
 def test_the_console_view_writes_nothing(tmp_path):

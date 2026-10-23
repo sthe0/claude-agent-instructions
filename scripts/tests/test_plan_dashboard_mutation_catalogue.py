@@ -2,7 +2,8 @@
 
 Each case runs a test file in a subprocess with one mutation installed, so a mutation that no
 test notices fails here: ``MUTATIONS`` against the model tests, the standard-library rows of
-``TUI_MUTATIONS`` against ``test_plan_dashboard_tui.py``, and the row that targets the textual
+``TUI_MUTATIONS`` against ``test_plan_dashboard_tui.py``, ``WEB_MUTATIONS`` against
+``test_plan_dashboard_web.py``, and the row that targets the textual
 layer against the pilot file, when textual can be imported (see ``pilot_interpreter_has_textual``).
 """
 from __future__ import annotations
@@ -23,6 +24,7 @@ SCRIPTS = TESTS.parent
 MODEL_TESTS = TESTS / "test_plan_dashboard_model.py"
 TUI_TESTS = TESTS / "test_plan_dashboard_tui.py"
 PILOT_TESTS = TESTS / "test_plan_dashboard_tui_app.py"
+WEB_TESTS = TESTS / "test_plan_dashboard_web.py"
 WORKERS = 4
 PILOT_MUTATIONS = sorted(name for name, (module, _, _) in mutations.TUI_MUTATIONS.items()
                          if module == mutations.TUI_APP)
@@ -60,6 +62,11 @@ def tui_results():
 
 
 @pytest.fixture(scope="module")
+def web_results():
+    return run_all(WEB_TESTS, sorted(mutations.WEB_MUTATIONS))
+
+
+@pytest.fixture(scope="module")
 def pilot_results():
     if not (REQUIRED or pilot_interpreter_has_textual()):
         pytest.skip("textual is not importable here; run this file under the uv command of docs/components/plan-dashboard.md")
@@ -93,6 +100,15 @@ def test_the_console_tests_are_green_with_no_mutation(tui_results):
 @pytest.mark.parametrize("name", STDLIB_TUI_MUTATIONS)
 def test_a_console_mutation_turns_a_console_test_red(name, tui_results):
     assert_red(name, tui_results[name], "console tests")
+
+
+def test_the_web_tests_are_green_with_no_mutation(web_results):
+    assert_green(web_results[""])
+
+
+@pytest.mark.parametrize("name", sorted(mutations.WEB_MUTATIONS))
+def test_a_web_mutation_turns_a_web_test_red(name, web_results):
+    assert_red(name, web_results[name], "web tests")
 
 
 def test_the_pilot_tests_are_green_with_no_mutation(pilot_results):
