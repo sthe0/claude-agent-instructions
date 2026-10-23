@@ -7,6 +7,8 @@ Sends run under ``read_only_guard`` over the fixture root, with the publish stat
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import importlib.util
 import socket
 import textwrap
@@ -25,6 +27,18 @@ DOC = REPO / "docs" / "components" / "plan-dashboard.md"
 _spec = importlib.util.spec_from_file_location("plan_dashboard_cli", SCRIPTS / "plan-dashboard.py")
 cli = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cli)
+
+
+REAL_FLOCK = fcntl.flock
+
+
+@contextlib.contextmanager
+def guarded_root(home):
+    """``read_only_guard`` with locking allowed: publishing locks a file beside its state, outside the
+    guarded root, and the guard refuses every lock request."""
+    with read_only_guard(home):
+        fcntl.flock = REAL_FLOCK
+        yield
 
 
 class FakePublisher:
@@ -109,7 +123,7 @@ def test_run_once_sends_then_edits_the_same_message_and_skips_an_unchanged_text(
     root = console_root(tmp_path)
     state_path = tmp_path / "pub" / "state.json"
     plugin, clock = FakePublisher(), Clock()
-    with read_only_guard(root.home):
+    with guarded_root(root.home):
         assert one_pass(root, plugin, state_path, clock) == "sent"
         clock.now += 1000
         assert one_pass(root, plugin, state_path, clock) == "unchanged"
@@ -140,18 +154,112 @@ def test_a_changed_text_inside_the_rate_bound_waits(tmp_path):
     assert one_pass(root, plugin, state_path, clock) == "edited"
 
 
-def test_a_failing_transport_saves_nothing(tmp_path):
+class RateLimited(RuntimeError):
+    retry_after = 120
+
+
+def test_a_failing_transport_keeps_the_handle_but_records_the_attempt(tmp_path):
     root = console_root(tmp_path)
     state_path = tmp_path / "pub" / "state.json"
+    clock = Clock()
     with pytest.raises(RuntimeError):
-        one_pass(root, FakePublisher(fail=True), state_path, Clock())
-    assert not state_path.exists()
+        one_pass(root, FakePublisher(fail=True), state_path, clock)
+    entry = next(iter(publish.read_state(state_path).values()))
+    assert entry == {"attempt_at": 1000.0, "retry_until": 0}
+
+
+def test_a_failed_attempt_is_throttled_by_the_rate_bound(tmp_path):
+    root = console_root(tmp_path)
+    state_path = tmp_path / "pub" / "state.json"
+    clock = Clock()
+    with pytest.raises(RuntimeError):
+        one_pass(root, FakePublisher(fail=True), state_path, clock)
+    healthy = FakePublisher()
+    clock.now += publish.MIN_INTERVAL_S - 1
+    assert one_pass(root, healthy, state_path, clock) == "skipped"
+    assert healthy.calls == []
+    clock.now += 1
+    assert one_pass(root, healthy, state_path, clock) == "sent"
+
+
+def test_a_retry_after_from_the_plugin_is_honoured(tmp_path):
+    root = console_root(tmp_path)
+    state_path = tmp_path / "pub" / "state.json"
+    clock = Clock()
+
+    class Limited(FakePublisher):
+        def publish(self, key, text, handle):
+            raise RateLimited("slow down")
+
+    with pytest.raises(RateLimited):
+        one_pass(root, Limited(), state_path, clock)
+    healthy = FakePublisher()
+    clock.now += RateLimited.retry_after - 1
+    assert one_pass(root, healthy, state_path, clock) == "skipped"
+    clock.now += 1
+    assert one_pass(root, healthy, state_path, clock) == "sent"
+
+
+def test_an_unsavable_state_after_a_send_fails_loudly(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+    state_path = tmp_path / "pub" / "state.json"
+    plugin = FakePublisher()
+
+    def refuse(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(publish, "write_state", refuse)
+    with pytest.raises(publish.StatePersistError, match="duplicate"):
+        one_pass(root, plugin, state_path, Clock())
+    assert len(plugin.calls) == 1
+
+
+def test_a_second_process_cannot_send_while_the_lock_is_held(tmp_path):
+    root = console_root(tmp_path)
+    state_path = tmp_path / "pub" / "state.json"
+    plugin = FakePublisher()
+    with publish.single_instance(state_path):
+        with pytest.raises(publish.PublisherBusy):
+            one_pass(root, plugin, state_path, Clock())
+    assert plugin.calls == []
+    assert one_pass(root, plugin, state_path, Clock()) == "sent"
+
+
+def test_the_backoff_doubles_is_capped_and_never_below_a_retry_after():
+    assert [publish.backoff_s(60, n) for n in (1, 2, 3)] == [60, 120, 240]
+    assert publish.backoff_s(60, 20) == publish.MAX_BACKOFF_S
+    assert publish.backoff_s(60, 1, retry_after=500) == 500
+
+
+def test_watch_backs_off_and_gives_up_after_consecutive_failures(tmp_path):
+    root = console_root(tmp_path)
+    state_path = tmp_path / "pub" / "state.json"
+    clock = Clock()
+    sleeps, outcomes = [], []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock.now += 1000
+
+    with pytest.raises(publish.PublishAborted):
+        publish.watch(root.state_root, FakePublisher(fail=True), state_path, interval=7, sleep=sleep,
+                      now=lambda: NOW, clock=clock, report=outcomes.append, **collect_options(root))
+    assert sleeps == [7 * 2 ** n for n in range(publish.MAX_CONSECUTIVE_FAILURES - 1)]
+    assert len(outcomes) == publish.MAX_CONSECUTIVE_FAILURES
+
+
+def test_watch_stops_at_once_when_the_state_cannot_be_saved(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+    monkeypatch.setattr(publish, "write_state", lambda *a, **k: (_ for _ in ()).throw(OSError("ro")))
+    with pytest.raises(publish.StatePersistError):
+        publish.watch(root.state_root, FakePublisher(), tmp_path / "s.json", interval=1, sleep=lambda s: None,
+                      now=lambda: NOW, clock=Clock(), **collect_options(root))
 
 
 def test_publishing_writes_nothing_under_the_state_root_or_the_ledger(tmp_path):
     root = console_root(tmp_path)
     state_path = tmp_path / "pub" / "state.json"
-    with read_only_guard(root.home):
+    with guarded_root(root.home):
         one_pass(root, FakePublisher(), state_path, Clock())
     assert state_path.is_file()
     assert not any(p.name.startswith(".") for p in root.state_root.iterdir())
@@ -257,6 +365,18 @@ def test_dry_run_names_a_session_that_does_not_exist(tmp_path, capsys):
     root = console_root(tmp_path)
     assert cli.main(args_for(root, "--dry-run", "--session", "nope")) == cli.EXIT_NO_SUCH_SESSION
     assert "no such session: nope" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("mode", ["--once", "--watch"])
+def test_sending_modes_refuse_a_session_that_does_not_exist(tmp_path, capsys, mode):
+    root = console_root(tmp_path)
+    write_plugin(tmp_path / "plugins", "a", GOOD)
+    state_path = tmp_path / "pub" / "state.json"
+    code = cli.main(args_for(root, mode, "--session", "nope", "--plugin-dir", str(tmp_path / "plugins"),
+                             "--publish-state", str(state_path)))
+    assert code == cli.EXIT_NO_SUCH_SESSION
+    assert "no such session: nope" in capsys.readouterr().err
+    assert not state_path.exists()
 
 
 def test_check_publisher_reports_health_and_a_missing_plugin(tmp_path, capsys):

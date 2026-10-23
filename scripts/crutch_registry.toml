@@ -3864,6 +3864,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "6b492d74d7c03af8"
+domain = "code"
+file = "scripts/plan_dashboard/publish.py"
+class = "structural"
+disposition = "keep"
+ground = "record_attempt only stores the time of a failed publish and the plugin's numeric retry_after in the publish state file; it matches no text and decides no meaning, so it is a rate-bound bookkeeping step, not a semantic gate."
+
+[[entry]]
 id = "84df5a97ab4d960a"
 domain = "code"
 file = "scripts/plan_dashboard/publish.py"

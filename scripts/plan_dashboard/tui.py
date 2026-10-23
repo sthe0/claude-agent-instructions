@@ -69,12 +69,12 @@ def _since(now: dt.datetime, moment) -> str | None:
     return None if start is None else fmt_duration((now - start).total_seconds())
 
 
-def _one_line(text, width=None) -> str:
+def one_line(text, width=None) -> str:
     line = " ".join((text or "").split())
     return line if width is None or len(line) <= width else line[: max(width - 1, 0)] + "…"
 
 
-def _cost(totals) -> str:
+def cost_text(totals) -> str:
     if not totals:
         return "-"
     return fmt_value(totals["cost_usd"], totals["estimate"]["cost_usd"], partial=totals["partial"])
@@ -95,7 +95,7 @@ def _difficulty(task) -> str:
     return f"!{count}" if counts["open"] else str(count)
 
 
-def _by_recency_live_first(tasks) -> list[dict]:
+def by_recency_live_first(tasks) -> list[dict]:
     recent = sorted(tasks, key=lambda t: (t["last_activity"] or "", t["session_id"]), reverse=True)
     return sorted(recent, key=lambda t: t["liveness"] != "active")
 
@@ -112,7 +112,7 @@ def overview_rows(snapshot: dict, now: dt.datetime) -> list[dict]:
     """One row per task, active first and then the most recent: ``session_id`` and the ``cells``
     of ``OVERVIEW_COLUMNS``."""
     rows = []
-    for task in _by_recency_live_first(snapshot["tasks"]):
+    for task in by_recency_live_first(snapshot["tasks"]):
         sid = task["session_id"]
         since = _since(now, task["last_activity"])
         age = "?" if since is None else f"{since} ago"
@@ -121,11 +121,11 @@ def overview_rows(snapshot: dict, now: dt.datetime) -> list[dict]:
                      f"unreadable: {task['reason']}")
         else:
             totals = task["totals"]
-            cells = (sid[:SESSION_ID_WIDTH], _one_line(task["task_id"], TASK_ID_WIDTH) or "-", task["liveness"],
+            cells = (sid[:SESSION_ID_WIDTH], one_line(task["task_id"], TASK_ID_WIDTH) or "-", task["liveness"],
                      task["node"] or "?", _stage_progress(task["stages_done"], task["stages_total"]),
                      _difficulty(task), str(task["replans"]), age,
-                     _wall(totals["wall_clock_s"], totals["estimate"]["wall_clock_s"]), _cost(totals),
-                     _one_line(task["goal"]))
+                     _wall(totals["wall_clock_s"], totals["estimate"]["wall_clock_s"]), cost_text(totals),
+                     one_line(task["goal"]))
         rows.append({"session_id": sid, "cells": cells})
     return rows
 
@@ -160,12 +160,12 @@ def detail_tree(detail: dict, now: dt.datetime) -> list[dict]:
     difficulties = ([_difficulty_node(d, "open") for d in detail["open_difficulties"]]
                     + [_difficulty_node(d, "closed") for d in detail["closed_difficulties"]])
     children = [_node(f"{c['session_id'][:SESSION_ID_WIDTH]} {c['node'] or '?'} (stage {c['stage_index']}) "
-                      f"{_one_line(c['goal'], 60)}") for c in detail["children"]]
+                      f"{one_line(c['goal'], 60)}") for c in detail["children"]]
     history = [_node(f"{e.get('ts', '?')} {e.get('event', '?')}") for e in detail["history"]]
     tree = [
-        _node(f"{detail['session_id'][:SESSION_ID_WIDTH]} {detail['node'] or '?'}  {_one_line(detail['goal'], 100)}"),
+        _node(f"{detail['session_id'][:SESSION_ID_WIDTH]} {detail['node'] or '?'}  {one_line(detail['goal'], 100)}"),
         _node(f"totals: wall {_wall(totals['wall_clock_s'], totals['estimate']['wall_clock_s'])}  "
-              f"cost {_cost(totals)}  root {fmt_value(totals['root_cost_usd'], totals['estimate']['root_cost_usd'])}"),
+              f"cost {cost_text(totals)}  root {fmt_value(totals['root_cost_usd'], totals['estimate']['root_cost_usd'])}"),
         _node("stages", stages),
         _node("phases", [_phase_node(item, now) for item in detail["phases"]]),
     ]
@@ -244,7 +244,7 @@ def _table(rows: list[dict], width: int) -> list[str]:
     room = max(width - len(head) - 2, 10)
     for row in rows:
         left = "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row["cells"][:-1]))
-        lines.append(f"{left}  {_one_line(row['cells'][-1], room)}".rstrip())
+        lines.append(f"{left}  {one_line(row['cells'][-1], room)}".rstrip())
     return lines
 
 

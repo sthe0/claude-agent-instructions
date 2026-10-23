@@ -366,6 +366,8 @@ PUBLISH_MUTATIONS = {
     "publish-watch-once": (PUBLISH, "watch", _stop_after_one_pass),
     "publish-writes-state": (PUBLISH, "run_once", _collect_then(_touch_state_file)),
     "publish-health-net-open": (PUBLISH, "network_blocked", _health_unstubbed),
+    "publish-no-lock": (PUBLISH, "single_instance", _health_unstubbed),
+    "publish-attempt-unrecorded": (PUBLISH, "record_attempt", _always(None)),
 }
 
 
