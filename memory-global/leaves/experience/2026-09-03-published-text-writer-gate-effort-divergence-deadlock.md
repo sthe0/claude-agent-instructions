@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user"
 refs: [effort-divergence-trigger, agentctl-acceptance-judge-gate, landing-discipline]
 created: 2026-09-03
-last_verified: 2026-09-14
+last_verified: 2026-10-23
 generalized_into: [review-loop-cannot-measure-its-own-convergence]
 ---
 
@@ -32,6 +32,16 @@ Deliver the publication-time tech-writer gate (issue #125) to origin/main, verif
 - Same replans-absolute fire (effort-replan-absolute=3) recurred at DIAGNOSING exit, matching this leaf's description exactly: acknowledging the fire did not exit DIAGNOSING, and an exit replan risked incrementing the same non-resettable counter the trigger compares.
 - **Working escape confirmed: `agentctl task-reset` on the task-level effort accumulator**, offered to and chosen by the user via AskUserQuestion ("обнулить и закрыть") rather than attempted unilaterally -- distinct from this leaf's own AGENTCTL_EFFORT=0 kill-switch attempt (which cost an extra round here per the Self-critique below). task-reset zeros the cross-session task accumulator that effort-divergence compares against, but does NOT by itself exit DIAGNOSING or complete the declare->investigate->critique->replan cycle the gate still requires -- the two are separate preconditions and both must be satisfied.
 - Separate, adjacent finding on the same replan path: `--renormalize` compares the new plan against `plan_snapshot_path`, which is only refreshed at `approve` -- a replan issued after the plan file was hand-edited (or regenerated) without a fresh `approve` in between sees a stale snapshot and reports a spurious diff against content that no longer matches what is actually being replanned. Not yet root-caused to a specific gates.py line; flagged here as a related-but-distinct vector on the same replan/DIAGNOSING-exit surface rather than folded into the replans-absolute mechanism above.
+
+
+### 2026-10-23 — experience-principle-link: replans-scale fire on finished work
+- Where it arose: Core experience/principle provenance link, after stage 9 re-run
+- Working plan: /home/the0/.claude-agent/plans/experience-principle-link.toml
+
+## Common core & variations
+**Common:** With every stage passed, the replans-scale effort fire routed the session into DIAGNOSING; the agent's own fire-acknowledgement was refused for lack of a user-approved version, and the renegotiation had to name the order's customer_id (parent-session-<id>), not 'user'.
+
+**Variations:** Escape this time was a real norm edit to the norm-target stage plus a stage-scoped topological review, --reopen of the passed stage and re-binding of stale premises - heavy for a wording fix on finished work.
 
 ## Cost
 13 spawns, ~$59 attributed spend, ~15.5k s duration across 6 attributed stages (per verify-final cost-log); plus this session's own DIAGNOSING/deadlock recovery on top

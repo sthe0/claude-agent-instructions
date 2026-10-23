@@ -6,7 +6,7 @@ schema: difficulty/v1
 generality: 0
 resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-10-12
-last_verified: 2026-10-13
+last_verified: 2026-10-23
 generalized_into: [shared-resource-health-asserted-relative-to-a-pinned-base]
 ---
 
@@ -69,6 +69,10 @@ Split out of [2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan
 - Where it arose: stage 2 check-r24.sh exit 6 at verify-final, 2026-10-13
 - Working plan: A replay control compared a boundary computation on a frozen snapshot of a live harness session with the same computation on the live files, demanding exact equality of the spend/wall-clock bound reasons. Its drift step already ignored the three hook-telemetry fields (active_minutes among them), but the fidelity step still compared the wall-clock ratio reason those fields drive; hours later the live ratio crossed 5x and the correct landed change failed its own replay. Fix: compare time-derived quantities monotonically (live may add or grow a wall_clock reason, everything else exact), unit-check the predicate on its six edge cases, re-run the negative control.
 
+
+### 2026-10-23 — experience-principle-link: clean-checks and landing over a moving shared trunk and memory store
+- Where it arose: Core experience/principle provenance link, stages 7-9 (merge, landing, project tier)
+- Working plan: /home/the0/.claude-agent/plans/experience-principle-link.toml
 ## Common core & variations
 **Common:** the control asserts equality on a quantity that changes independently of the delivered change (time, unrelated commits, parallel work)
 
