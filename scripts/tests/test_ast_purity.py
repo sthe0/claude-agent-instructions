@@ -8,9 +8,12 @@ subprocess reach — `import subprocess`, `from subprocess import run`, and a ba
 from __future__ import annotations
 
 import subprocess  # noqa: F401  (referenced by the impure sample below)
+from unittest.mock import patch
+
+import pytest
 
 from agentctl import gates
-from ast_purity import IMPURE_ROOTS, impure_names
+from ast_purity import IMPURE_ROOTS, _LINECACHE_HINT, impure_names
 
 
 # --- the real guardians are pure --------------------------------------------
@@ -67,3 +70,28 @@ def test_impure_roots_are_transport_only():
     # File-I/O roots are deliberately NOT impure — a guardian reads recorded state.
     assert "subprocess" in IMPURE_ROOTS and "socket" in IMPURE_ROOTS
     assert "os" not in IMPURE_ROOTS and "pathlib" not in IMPURE_ROOTS
+
+
+# --- concurrent-edit / linecache desync hint ---------------------------------
+
+def test_oserror_from_getsource_carries_linecache_hint():
+    """OSError from inspect.getsource (source unlocatable) re-raises with a hint
+    about linecache desync so the failure is not mistaken for a code regression."""
+    with patch("ast_purity.inspect.getsource", side_effect=OSError("could not get source")):
+        with pytest.raises(OSError, match="linecache"):
+            impure_names(lambda: None)
+
+
+def test_syntaxerror_from_ast_parse_carries_linecache_hint():
+    """SyntaxError from ast.parse (e.g. garbled source from a concurrent edit)
+    re-raises with a hint about linecache desync."""
+    with patch("ast_purity.inspect.getsource", return_value="def f(\n  # truncated"):
+        with pytest.raises(SyntaxError, match="linecache"):
+            impure_names(lambda: None)
+
+
+def test_linecache_hint_text_present():
+    """The hint constant is non-empty and mentions the key diagnostic terms."""
+    assert "linecache" in _LINECACHE_HINT
+    assert "concurrent" in _LINECACHE_HINT
+    assert "Re-run" in _LINECACHE_HINT
