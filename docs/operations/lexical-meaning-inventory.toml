@@ -327,6 +327,12 @@ ground = "re.split on '&&', ';' and '|' splits a shell command into segments."
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/plan.py::check_venue_warnings._embeds_path::re.split"]
+class = "structural"
+ground = "re.split on '&&', ';' and '|' splits a shell command into segments; the path tokens are then matched against a declared scaffolding root by path-prefix, not by meaning."
+hits = 1
+reviewed_by = "salvage-2026-10-23"
+
 [sites."scripts/agentctl/plan.py::_first_unscoped_subcommand::re.split"]
 class = "structural"
 ground = "re.split on '&&', ';' and '|' splits a shell command into segments."
