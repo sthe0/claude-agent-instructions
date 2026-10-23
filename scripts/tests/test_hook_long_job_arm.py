@@ -72,6 +72,18 @@ def test_detect_silent_on_orchestrator_name_inside_quotes(monkeypatch):
     assert mod.detect('echo "airflow start"') is None
 
 
+def test_detect_silent_on_nohup_as_unquoted_argument():
+    """nohup as an unquoted argument (e.g. grep search pattern) must not trigger."""
+    assert mod.detect("grep -rn nohup scripts/") is None
+    assert mod.detect("ps aux | grep nohup") is None
+
+
+def test_detect_silent_on_nohup_in_heredoc_body():
+    """nohup inside a heredoc body consumed by cat must not trigger."""
+    cmd = "cat <<'EOF'\nnohup python3 watch.py &\nEOF"
+    assert mod.detect(cmd) is None
+
+
 # --- configurable orchestrator list ------------------------------------------
 
 def test_default_orchestrator_list_unconfigured(tmp_path):

@@ -29,10 +29,47 @@ NOHUP_RE = re.compile(r"\bnohup\b")
 _SINGLE_QUOTED_RE = re.compile(r"'[^']*'")
 _DOUBLE_QUOTED_RE = re.compile(r'"[^"]*"')
 
+# Separators after which the next unquoted word starts a new simple command.
+_NOHUP_CMD_SEPS = frozenset({"|", "||", "&&", "|&", ";", "&", "("})
+# Shell variable assignment prefix: VAR=value is not the command word.
+_NOHUP_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
+
 
 def _strip_quoted(cmd: str) -> str:
     """Drop quoted spans so a keyword inside a search pattern is not read as a launch."""
     return _DOUBLE_QUOTED_RE.sub("", _SINGLE_QUOTED_RE.sub("", cmd))
+
+
+def _nohup_is_command_word(cmd: str) -> bool:
+    """True iff `nohup` appears as the command word of a simple command in `cmd`.
+
+    Blanks heredoc bodies with `shell_tokens.neutralize_heredoc_constructs`
+    and tokenizes with `shell_tokens.separator_exact_split` (posix, quote-aware),
+    then checks whether `nohup` is the first non-assignment word after a command
+    separator or at the start.  Fail-open: falls back to a plain NOHUP_RE text
+    search on any tokenizer error so a real nohup launch is never silently missed.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from lib import shell_tokens
+        neutralized = shell_tokens.neutralize_heredoc_constructs(cmd)
+        tokens = shell_tokens.separator_exact_split(neutralized)
+    except Exception:
+        return bool(NOHUP_RE.search(cmd))
+
+    in_cmd = True  # start of command is always a command position
+    for token in tokens:
+        if token in _NOHUP_CMD_SEPS:
+            in_cmd = True
+        elif token == ")":
+            in_cmd = False
+        elif in_cmd:
+            if _NOHUP_ASSIGN_RE.fullmatch(token):
+                continue  # variable assignment; command word not yet seen
+            in_cmd = False
+            if token == "nohup":
+                return True
+    return False
 
 # Core carries no org-specific orchestrator names; the list is entirely
 # operator-supplied via agent-identity.local's `long_job_orchestrators=` key.
@@ -78,9 +115,9 @@ VERB_RE = re.compile(
 
 def detect(cmd: str) -> str | None:
     """Return a short reason string if the command looks like a long-job launch."""
-    scan = _strip_quoted(cmd)
-    if NOHUP_RE.search(scan):
+    if _nohup_is_command_word(cmd):
         return "detached process (nohup)"
+    scan = _strip_quoted(cmd)
     if TOOL_RE.search(scan) and VERB_RE.search(scan):
         tool = TOOL_RE.search(scan).group(1).lower()
         return f"orchestrator launch ({tool})"
