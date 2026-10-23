@@ -3880,6 +3880,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
 
 [[entry]]
+id = "a68093a9cc97e8a4"
+domain = "code"
+file = "scripts/planning-cost-report.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification."
+
+[[entry]]
 id = "3f2b72a3b25d9a65"
 domain = "code"
 file = "scripts/policy-scorecard.py"
@@ -13640,6 +13648,22 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "cf0003ac2245edfd"
+domain = "code"
+file = "scripts/tests/test_planning_trial_mode.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "ff1610e4c09f3e3c"
+domain = "code"
+file = "scripts/tests/test_planning_trial_mode.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "403824fd7033e93e"
 domain = "code"
 file = "scripts/tests/test_plugins.py"
@@ -19000,6 +19024,14 @@ disposition = "keep"
 ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "692ae805d990f5b1"
+domain = "code_file_rollup"
+file = "scripts/planning-cost-report.py"
+class = "structural"
+disposition = "keep"
+ground = "Regexes found are markdown/frontmatter/command-syntax parsing (headings, `---` frontmatter delimiters, shell command-prefix shape); hard-behaviour sinks reached in the same file are the engine-adjacent verbs (record_result/dispatch/route/select) used for legitimate structural purposes (tokenizing, scoring, spawn-tag extraction), not meaning classification. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "97d78e0c25d7b2ea"
 domain = "code_file_rollup"
 file = "scripts/policy-scorecard.py"
@@ -20435,6 +20467,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "315bac11a6a8eb16"
 domain = "code_file_rollup"
 file = "scripts/tests/test_plan_views.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "d0f6f0961689056d"
+domain = "code_file_rollup"
+file = "scripts/tests/test_planning_trial_mode.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -37204,6 +37244,54 @@ disposition = "keep"
 ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
 
 [[entry]]
+id = "e00e1668c1d6f91e"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "59a93052daa000ae"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "b89d521e8f70f0c6"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "d152ad66890fb5e6"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "859b9edbe201ddd1"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "4085de3f91005b2f"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
 id = "3a8f4e922dbae2a4"
 domain = "prose"
 file = "skills/specializations/tech-writer/SKILL.md"
@@ -37717,6 +37805,14 @@ ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the s
 
 [[entry]]
 id = "3f45baf7aca8ac2a"
+domain = "prose"
+file = "skills/specializations/thinker/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "b2174f245ec8be74"
 domain = "prose"
 file = "skills/specializations/thinker/SKILL.md"
 class = "perception"
