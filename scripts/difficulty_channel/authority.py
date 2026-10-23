@@ -56,9 +56,17 @@ def probe_push_capability(
     """
     def _default_runner(cmd: list[str]) -> int:
         try:
-            return subprocess.run(
+            result = subprocess.run(
                 cmd, cwd=REPO_ROOT, capture_output=True, timeout=GIT_TIMEOUT_SEC
-            ).returncode
+            )
+            if result.returncode == 0:
+                return 0
+            # A "[rejected]" line (stale branch / non-fast-forward) proves the remote
+            # accepted our credentials — push rights are confirmed; only the local ref
+            # is behind.  Reserve non-zero for genuine auth/permission failures.
+            if b"[rejected]" in (result.stderr or b""):
+                return 0
+            return result.returncode
         except (subprocess.TimeoutExpired, OSError):
             return 1
 
