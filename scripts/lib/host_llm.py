@@ -36,8 +36,8 @@ DEFAULT_CURSOR_API_KEY_FILE = Path.home() / ".cursor_api_key"
 # inherits the ambient CLAUDE_CONFIG_DIR and cwd, so it loads the fleet's own
 # settings.json and registers the same hooks the coordinating session runs under.
 # Measured on this machine: a judge prompt containing feedback-shaped example text
-# (the self-improvement judge's own template) re-entered hook-self-improvement-
-# reminder.py on itself, recursing 126 levels deep to a 111 364-char prompt, and
+# (the self-improvement judge's own template) re-entered the
+# self-improvement reminder of hook-prompt-reminders.py on itself, recursing 126 levels deep to a 111 364-char prompt, and
 # 1583 such calls exhausted a 5-hour quota window in 48 minutes. Pointing
 # CLAUDE_CONFIG_DIR at an empty, agent-owned directory and running from an empty
 # cwd (no CLAUDE.md chain to discover) leaves no settings.json for any hook to

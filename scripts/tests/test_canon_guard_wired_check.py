@@ -327,7 +327,7 @@ def test_advisory_hooks_are_never_reported(tmp_path):
     any other gate-bearing hook — see test_names_every_missing_registry_hook."""
     proc = _run(tmp_path, {"hooks": {"PreToolUse": [
         _group("Edit|Write", GUARD_PATH), _group("Bash", GUARD_PATH)]}})
-    for advisory in ("hook-self-diagnose-due.py", "hook-skill-first.py"):
+    for advisory in ("hook-session-due.py", "hook-skill-first.py"):
         assert advisory not in proc.stdout
 
 

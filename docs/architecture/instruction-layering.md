@@ -72,7 +72,7 @@ caveat live in `docs/operations/layer-maintenance.md` (kept in one place to avoi
 ## Staying current: the daily refresh offer
 
 Both a moving Core and a moving Team layer need pulling, but a *silent* background pull risks
-stashing/rebasing over uncommitted local work with no one watching. Instead, `hook-instructions-refresh-due.py`
+stashing/rebasing over uncommitted local work with no one watching. Instead, `hook-prompt-reminders.py`
 (a `UserPromptSubmit` hook) checks once per calendar day, on the day's first prompt, whether the
 Core repo and — if the current project carries a git-tracked `.claude/` Team layer distinct from
 Core — that project's own repo are behind their upstream (`git fetch` + `rev-list --count`, bounded

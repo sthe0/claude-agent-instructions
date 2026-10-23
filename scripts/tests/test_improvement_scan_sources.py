@@ -845,14 +845,14 @@ def test_purity_only_the_fetch_module_names_urllib():
 # --- the due hook ----------------------------------------------------------------------------------------------------------
 
 def _hook():
-    spec = importlib.util.spec_from_file_location("improvement_scan_due_for_sources", SCRIPTS_DIR / "hook-improvement-scan-due.py")
+    spec = importlib.util.spec_from_file_location("improvement_scan_due_for_sources", SCRIPTS_DIR / "hook-session-due.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
 def test_due_hook_does_not_special_case_the_new_kind():
-    assert "external-idea" not in (SCRIPTS_DIR / "hook-improvement-scan-due.py").read_text(encoding="utf-8")
+    assert "external-idea" not in (SCRIPTS_DIR / "hook-session-due.py").read_text(encoding="utf-8")
 
 
 def test_due_hook_counts_an_open_idea_like_any_advisory_row(tmp_path, monkeypatch):
@@ -862,7 +862,7 @@ def test_due_hook_counts_an_open_idea_like_any_advisory_row(tmp_path, monkeypatc
         [{"kind": sds.KIND_EXTERNAL_IDEA, "path": "external-idea:e1", "detail": "{}"}],
         path=store, source=sds.SOURCE_IMPROVEMENT_SCAN, kinds=frozenset({sds.KIND_EXTERNAL_IDEA}),
     )
-    rows = _hook().open_findings()
+    rows = _hook().open_improvement_findings()
     assert [r["kind"] for r in rows] == [sds.KIND_EXTERNAL_IDEA]
 
 

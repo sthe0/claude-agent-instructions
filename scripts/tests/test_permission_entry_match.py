@@ -227,7 +227,7 @@ CORPUS_BASH_FIND_ROOT = (
 
 CORPUS_BASH_NEWLINE_RM = (
     "rm -rf /tmp/phase3-installer-test.Fwoo6r\n"
-    'grep -c "hook-phase3-due" /home/the0/.claude-agent/settings.json'
+    'grep -c "hook-session-due" /home/the0/.claude-agent/settings.json'
 )  # permission-rule -- the repo's destructive-rm guard
 
 CORPUS_EDIT_PATH = "/home/the0/claude-agent-instructions/scripts/self-diagnose.py"

@@ -22,7 +22,7 @@ When that plan is the **agent system** and the fault is `normative` (a norm — 
 
 ## Proactive self-diagnosis (standing obligation)
 
-Invoking this skill is not gated on a user-visible failure. Material = the norm itself (see `reflexive-exit-is-base-activity-figure.md`): the agent's own memory and instructions are a plan, so a mechanically-decidable divergence in them — an oversized memory index, a dangling memory pointer, an instruction file near its ceiling — is already a Declaration waiting to be read, not something to wait for the user to notice. `scripts/self-diagnose.py` determinizes exactly that decidable half; `hook-self-diagnose-due.py` runs it once per session (throttled, fail-open) and prints any worklist. A non-empty worklist is worked through the same declare → investigate → critique cycle as any other difficulty, with the resulting re-norming edit authored through `self-improvement`.
+Invoking this skill is not gated on a user-visible failure. Material = the norm itself (see `reflexive-exit-is-base-activity-figure.md`): the agent's own memory and instructions are a plan, so a mechanically-decidable divergence in them — an oversized memory index, a dangling memory pointer, an instruction file near its ceiling — is already a Declaration waiting to be read, not something to wait for the user to notice. `scripts/self-diagnose.py` determinizes exactly that decidable half; `hook-session-due.py` runs it once per session (throttled, fail-open) and prints any worklist. A non-empty worklist is worked through the same declare → investigate → critique cycle as any other difficulty, with the resulting re-norming edit authored through `self-improvement`.
 
 ## What this skill does
 

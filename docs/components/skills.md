@@ -14,8 +14,8 @@ Both tables below are machine-checked against the filesystem by [verify-readme.p
 <!-- inventory:skills:begin -->
 | name | Triggers (summary) | File |
 |---|---|---|
-| `improvement-scan` | User asks to scan for standing self-improvement work, or `hook-improvement-scan-due.py`'s throttled nudge reports open findings | [skills/improvement-scan/SKILL.md](../../skills/improvement-scan/SKILL.md) |
-| `instruction-grooming` | An instruction file crosses the `lint-prose-length.py` 90% WARN threshold, flagged directly or via `hook-instruction-grooming-due.py` | [skills/instruction-grooming/SKILL.md](../../skills/instruction-grooming/SKILL.md) |
+| `improvement-scan` | User asks to scan for standing self-improvement work, or the `hook-session-due.py` improvement-scan nudge reports open findings | [skills/improvement-scan/SKILL.md](../../skills/improvement-scan/SKILL.md) |
+| `instruction-grooming` | An instruction file crosses the `lint-prose-length.py` 90% WARN threshold, flagged directly or via the `hook-session-due.py` grooming offer | [skills/instruction-grooming/SKILL.md](../../skills/instruction-grooming/SKILL.md) |
 | `overcome-difficulty` | Reality diverges from the plan; verification failed; repeated error; missing observable | [skills/overcome-difficulty/SKILL.md](../../skills/overcome-difficulty/SKILL.md) |
 | `self-improvement` | User correction or feedback about agent behavior | [skills/self-improvement/SKILL.md](../../skills/self-improvement/SKILL.md) |
 | `tracker-management` | User mentions a ticket / issue / tracker, or a ticket key like `ABC-123` | [skills/tracker-management/SKILL.md](../../skills/tracker-management/SKILL.md) |

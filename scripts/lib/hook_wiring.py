@@ -201,7 +201,19 @@ TIMEOUT_REQUIREMENTS: "tuple[tuple[str, int, str], ...]" = (
      "MEASURED row n=0), under a 190s whole-invocation budget — at or above "
      "LAST_RESORT_CEILING_S + SIZE_HEADROOM_S since no per-judge floor exists "
      "to size against"),
+    ("hook-session-due.py", 25,
+     "nine due checks sharing one wall-clock budget (TOTAL_BUDGET_S) plus the "
+     "interpreter-start margin in TIMEOUT_REQUIREMENT_NON_JUDGE_MARGIN_S; a check "
+     "not started keeps its stale stamp and runs at the next session"),
 )
+
+# TIMEOUT_REQUIREMENTS rows whose budget is NOT a judge budget: the hook spends
+# a wall-clock budget on subprocess checks and calls no judge, so the
+# judge-latency sizing (HOOK_CALL_SEQUENCE, K) does not apply. Value = the margin
+# the row's minimum adds on top of the hook's own budget constant.
+TIMEOUT_REQUIREMENT_NON_JUDGE_MARGIN_S: "dict[str, int]" = {
+    "hook-session-due.py": 5,
+}
 
 # Each TIMEOUT_REQUIREMENTS minimum, above, is a copy of a number the hook
 # module itself already owns as a constant — the whole-invocation budget it
@@ -217,6 +229,7 @@ TIMEOUT_REQUIREMENT_OWN_CONSTANT: "dict[str, str]" = {
     "hook-plan-delivery-gate.py": "_APPROVAL_ASK_JUDGE_BUDGET_S",
     "hook-resolution-reminder.py": "_LANDING_DISCIPLINE_JUDGE_BUDGET_S",
     "hook-published-text-writer-gate.py": "_PUBLISHED_TEXT_JUDGE_BUDGET_S",
+    "hook-session-due.py": "TOTAL_BUDGET_S",
 }
 
 # K: how many judge calls one invocation of each hook may make. Keyed as a

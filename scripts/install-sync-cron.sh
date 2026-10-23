@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # DEPRECATED: superseded by the daily explicit refresh OFFER
-# (hook-instructions-refresh-due.py, a UserPromptSubmit hook that nudges the
+# (hook-prompt-reminders.py, a UserPromptSubmit hook that nudges the
 # agent to ask before pulling, once per calendar day) — see
 # docs/architecture/instruction-layering.md. This silent 10-min background
 # pull can stash/rebase into a conflict on top of uncommitted local work with

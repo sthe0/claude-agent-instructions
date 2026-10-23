@@ -284,6 +284,6 @@ instead of more model passes.
 
 ## The due-hook
 
-`scripts/hook-improvement-scan-due.py` (SessionStart, throttled weekly) never invokes this CLI. It
+The improvement-scan check of `scripts/hook-session-due.py` (SessionStart, throttled weekly) never invokes this CLI. It
 only counts already-stored open findings and, if any are open, prints a reminder to invoke the
 `improvement-scan` skill — running the producers themselves remains a live session's job.

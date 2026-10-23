@@ -7,7 +7,7 @@ the publish gate blocks `resolve` until the mandatory phases are recorded, and t
 task-scoped plugin auto-retires once resolution actually passes. End-to-end paths
 run through cli.main() so the real _fire_plugins wiring exercises it.
 
-Also covers the state-aware reminder hook (hook-tracker-publish-reminder.py).
+Also covers the state-aware reminder hook (the tracker-publish check of hook-prompt-reminders.py).
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from agentctl.state import Node, Partition, PartitionUnit, SessionState, WeightC
 from conftest import STAGE_OBSERVATIONS
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
-HOOK_SCRIPT = SCRIPTS_DIR / "hook-tracker-publish-reminder.py"
+HOOK_SCRIPT = SCRIPTS_DIR / "hook-prompt-reminders.py"
 
 
 def _new_state(sid="s", **kw):
@@ -605,7 +605,7 @@ def test_e2e_non_tracker_session_has_no_tracker_effect(capsys, tmp_path, venued_
 # --- the state-aware reminder hook -------------------------------------------
 
 def _load_hook():
-    spec = importlib.util.spec_from_file_location("hook_tracker_publish_reminder", HOOK_SCRIPT)
+    spec = importlib.util.spec_from_file_location("hook_prompt_reminders", HOOK_SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

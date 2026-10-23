@@ -92,7 +92,7 @@ When an activity transforms an object that has bound documentation, that documen
 Two currencies, two enforcement grains:
 
 - **Structural currency** — the doc still names code landmarks (sections, symbols) that still exist — is *mechanically* guaranteeable at the **concept grain** (not per-symbol, which rots). The registry [`scripts/doc-bindings.json`](../../scripts/doc-bindings.json) binds each foundational concept to a doc section + a few representative code anchors; [`verify-doc-concepts.py`](../../scripts/verify-doc-concepts.py) (in `verify-all`) asserts the section is present and the anchors resolve.
-- **Semantic currency** — the prose *meaning* matches the code *intent* — is **not** mechanically guaranteeable; it is carried by the actor rule (developer SKILL § While developing) and a commit-time soft reminder (`hook-readme-currency-reminder.py`, registry-driven) that names which concept's doc to review when its code changes.
+- **Semantic currency** — the prose *meaning* matches the code *intent* — is **not** mechanically guaranteeable; it is carried by the actor rule (developer SKILL § While developing); the former commit-time soft reminder (a standalone README-currency hook) was removed in the hook consolidation.
 
 So documentation currency is the same element-5 discipline as any preserved invariant: the control criterion (element 3) at final verification should treat "the changed object's bound documentation is still consistent" as part of conformance, with the registry making *which* documentation explicit.
 

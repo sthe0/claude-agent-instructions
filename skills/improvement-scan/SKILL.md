@@ -181,7 +181,7 @@ Procedure step 6).
   stated user correction — CLAUDE.md § When the user corrects agent behavior).
   This skill is proactive and runs on its own trigger, never as a substitute
   for that reactive obligation.
-- Not the due-hook (`scripts/hook-improvement-scan-due.py`). The hook only
+- Not the due-hook (`scripts/hook-session-due.py`). The hook only
   nudges — it counts already-stored open findings and prints a reminder to run
   this skill; it never runs the producers itself.
 

@@ -1096,7 +1096,7 @@ SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
     "hook-canon-guard-wired-check.py": "reader",
     "hook-guard-canon-readonly.py": "mention",
     "hook-guard-permission-surface.py": "reader",
-    "hook-instructions-refresh-due.py": "reader",
+    "hook-prompt-reminders.py": "reader",
     "install-reminder-hooks.sh": "writer",
     "lib/config_root.py": "mention",
     "lib/dispatch_witness_snapshot.py": "mention",

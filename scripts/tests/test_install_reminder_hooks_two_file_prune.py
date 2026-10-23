@@ -120,7 +120,7 @@ def test_an_unexempted_desired_entry_is_never_added_to_dot_claude_settings(tmp_p
     }
     # An advisory reminder is added to CLAUDE_AGENT_HOME only: it is neither the
     # named exemption nor gate-bearing, so it stands for the ordinary DESIRED row.
-    assert "hook-context-growth-reminder.py" not in wired_basenames
+    assert "hook-prompt-reminders.py" not in wired_basenames
 
 
 def test_interpreter_prefixed_dangling_entry_in_dot_claude_settings_is_deleted(tmp_path):
@@ -203,7 +203,7 @@ def test_dot_claude_settings_untouched_when_nothing_left_to_reconcile(tmp_path):
     so a second run must not rewrite the file or leave a .bak behind. This is
     also the exemption's idempotence: it adds by basename, once."""
     env = _shell_env(tmp_path)
-    real = str(SCRIPTS_DIR / "hook-context-growth-reminder.py")
+    real = str(SCRIPTS_DIR / "hook-prompt-reminders.py")
     detector = str(SCRIPTS_DIR / "hook-canon-guard-wired-check.py")
     assert Path(real).exists() and Path(detector).exists()
     settings = _dot_claude_settings(env)
@@ -235,7 +235,7 @@ def test_reconciliation_does_not_reach_into_the_prune_only_root(tmp_path):
     present: if reconciliation were run over this root unscoped, the exemption
     is precisely the entry that would silently change under it."""
     env = _shell_env(tmp_path)
-    real = str(SCRIPTS_DIR / "hook-context-growth-reminder.py")
+    real = str(SCRIPTS_DIR / "hook-prompt-reminders.py")
     detector = str(SCRIPTS_DIR / "hook-canon-guard-wired-check.py")
     slow_judge = str(SCRIPTS_DIR / "hook-escalation-diagnosis-gate.py")
     original = {"hooks": {

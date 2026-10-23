@@ -115,7 +115,7 @@ When triggered → read `~/.claude-agent/skills/tracker-management/SKILL.md` and
 
 ### `instruction-grooming`
 
-**TRIGGER:** an instruction file crosses `lint-prose-length.py`'s 90% WARN threshold (`CLAUDE.md`, `README.md`, the cursor mirror, any `SKILL.md`/`policy.md`) — flagged directly by the linter or via the `hook-instruction-grooming-due.py` OFFER — or the user asks to slim / groom / consolidate / deduplicate a bloated instruction file.
+**TRIGGER:** an instruction file crosses `lint-prose-length.py`'s 90% WARN threshold (`CLAUDE.md`, `README.md`, the cursor mirror, any `SKILL.md`/`policy.md`) — flagged directly by the linter or via the `hook-session-due.py` OFFER — or the user asks to slim / groom / consolidate / deduplicate a bloated instruction file.
 
 **SKIP** when the file is comfortably under 90% of its ceiling and no user request references grooming.
 

@@ -1,4 +1,4 @@
-"""Tests for hook-memory-consistency.py and hook-experience-record-reminder.py."""
+"""Tests for hook-memory-consistency.py and the experience-record check of hook-prompt-reminders.py."""
 from __future__ import annotations
 
 import importlib.util
@@ -192,7 +192,7 @@ class TestMemoryConsistencyHook:
 
 
 # ---------------------------------------------------------------------------
-# hook-experience-record-reminder.py
+# hook-prompt-reminders.py :: check_experience_record
 # ---------------------------------------------------------------------------
 
 def _point_roots_at(monkeypatch, tmp_path: Path) -> Path:
@@ -218,14 +218,11 @@ def _make_state(tmp_path: Path, session_id: str, node: str, bag: dict | None) ->
 
 def _run_exp(monkeypatch, tmp_path: Path, session_id: str, node: str,
              bag: dict | None) -> tuple[str, int]:
-    mod = _load("hook-experience-record-reminder.py")
+    mod = _load("hook-prompt-reminders.py")
     _point_roots_at(monkeypatch, tmp_path)
     _make_state(tmp_path, session_id, node, bag)
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": session_id})))
-    printed = []
-    monkeypatch.setattr("builtins.print", lambda *a, **kw: printed.append(" ".join(str(x) for x in a)))
-    rc = mod.main()
-    return "\n".join(printed), rc
+    lines = mod.check_experience_record(mod.Turn({"session_id": session_id}))
+    return "\n".join(lines), 0
 
 
 _EMPTY_BAG = {"searched": False, "decision": "", "recorded": False, "skipped": False, "skip_reason": ""}
@@ -272,21 +269,16 @@ class TestExperienceRecordReminder:
         assert out == ""
 
     def test_silent_when_no_state_file(self, monkeypatch, tmp_path):
-        mod = _load("hook-experience-record-reminder.py")
+        mod = _load("hook-prompt-reminders.py")
         _point_roots_at(monkeypatch, tmp_path)
-        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"session_id": "nosuchsession"})))
-        printed = []
-        monkeypatch.setattr("builtins.print", lambda *a, **kw: printed.append(str(a)))
-        rc = mod.main()
-        assert rc == 0
-        assert printed == []
+        assert mod.check_experience_record(mod.Turn({"session_id": "nosuchsession"})) == []
 
     def test_always_exits_0(self, monkeypatch, tmp_path):
         _, rc = _run_exp(monkeypatch, tmp_path, "s7", "RESOLUTION", _EMPTY_BAG)
         assert rc == 0
 
     def test_corrupt_json_input_is_silent(self, monkeypatch, tmp_path):
-        mod = _load("hook-experience-record-reminder.py")
+        mod = _load("hook-prompt-reminders.py")
         _point_roots_at(monkeypatch, tmp_path)
         monkeypatch.setattr("sys.stdin", io.StringIO("not-json{{{"))
         printed = []

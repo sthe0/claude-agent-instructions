@@ -63,7 +63,9 @@ _hook_script_path = _sd_mod._hook_script_path
 
 # (event, matcher-or-None, script-basename [+ optional args], timeout)
 DESIRED = [
-    ("UserPromptSubmit", None,    "hook-context-growth-reminder.py", 5),
+    # 10 = the largest timeout among the eight reminders merged into this hook
+    # (the instructions-refresh check runs up to two bounded git fetches).
+    ("UserPromptSubmit", None,    "hook-prompt-reminders.py",        10),
     # The fast-burn companion to policy-scorecard.py's 7-day spend flag, which by
     # construction can only fire after the window it would report on has closed.
     # Warns (never blocks) when the last 15 min AND the last 3 h are both past the
@@ -74,25 +76,12 @@ DESIRED = [
     # tail read), so this timeout does not need to grow with a long session.
     ("UserPromptSubmit", None,    "hook-burn-rate-guard.py",         5),
     ("UserPromptSubmit", None,    "hook-engine-start.py",            5),
-    # Turn-driven half of the effort-divergence trigger, which otherwise only ever
-    # compares inside a command the coordinator chose to run. Drives the read-only
-    # `agentctl effort-check` in a subprocess — a state load plus a cost-ledger read,
-    # with the hook's own CHECK_TIMEOUT_S (8 s) bounding it from the inside; 10 here
-    # so the outer timeout cannot pre-empt that inner one and lose its silence.
-    ("UserPromptSubmit", None,    "hook-effort-divergence-watch.py", 10),
     # 22 = the hook's own _LANDING_DISCIPLINE_JUDGE_BUDGET_S, raised from the prior
     # flat 5 once this hook grew a landing-discipline judge consult (see the
     # PreToolUse/AskUserQuestion registration below) — hook_wiring.TIMEOUT_
     # REQUIREMENTS is keyed by bare basename, so the floor binds both of this
     # hook's registrations even though only the other one calls the judge.
     ("UserPromptSubmit", None,    "hook-resolution-reminder.py",     22),
-    ("UserPromptSubmit", None,    "hook-self-improvement-reminder.py", 5),
-    ("UserPromptSubmit", None,    "hook-tracker-reminder.py",        5),
-    ("UserPromptSubmit", None,    "hook-tracker-publish-reminder.py", 5),
-    ("UserPromptSubmit", None,    "hook-ticket-plan-sync.py",        5),
-    ("UserPromptSubmit", None,    "hook-experience-record-reminder.py", 5),
-    ("PreToolUse",       "Bash",  "hook-push-confirmation-reminder.py", 5),
-    ("PreToolUse",       "Bash",  "hook-readme-currency-reminder.py", 5),
     ("PreToolUse",       "Edit|Write", "hook-memory-consistency.py",         5),
     ("PreToolUse",       "Edit|Write", "hook-prewrite-plan-check.py", 5),
     ("PreToolUse",       "Edit|Write", "hook-state-gate.py",          5),
@@ -146,16 +135,9 @@ DESIRED = [
     ("PreToolUse",       "Edit|Write", "hook-scope-conflict.py",      5),
     ("PreToolUse",       "Bash",  "hook-retry-detector.py",          5),
     # Advisory determinization nudges (never block): arm long-job monitoring,
-    # prefer a domain Skill over hand-rolled CLI, reply in the user's language.
+    # prefer a domain Skill over hand-rolled CLI.
     ("PreToolUse",       "Bash",  "hook-long-job-arm.py",            5),
     ("PreToolUse",       "Bash",  "hook-skill-first.py",             5),
-    ("UserPromptSubmit", None,    "hook-language-reminder.py",       5),
-    # Daily proactive OFFER to refresh Core + project-layer instructions (replaces the
-    # silent 10-min auto-pull cron/timer). Higher timeout: up to two bounded git fetches.
-    ("UserPromptSubmit", None,    "hook-instructions-refresh-due.py", 10),
-    # Proactive OFFER (per-file debounced) to run the instruction-grooming skill once
-    # a governed file crosses lint-prose-length.py's 90% WARN threshold.
-    ("UserPromptSubmit", None,    "hook-instruction-grooming-due.py", 5),
     # Lexical pointers to the memory leaves whose text overlaps the prompt (BM25F, no judge,
     # no network); the model decides relevance.
     ("UserPromptSubmit", None,    "hook-memory-retrieval.py",        5),
@@ -220,23 +202,11 @@ DESIRED = [
     # Silent no-op unless `review_probe=` is configured (Core ships no probe).
     # Spawns and returns immediately, so a short timeout is the right bound.
     ("PostToolUse",      "Bash",  "hook-review-monitor-arm.py",      5),
-    ("SessionStart",     None,    "hook-policy-scorecard-due.py",    5),
-    # Throttled nudge (once/7d): runs budget-calibration.py --check and speaks only
-    # when a spawn budget tier looks miscalibrated against realized spend, routing
-    # to self-improvement to adjust the config.md tier values. Fail-open, never blocks.
-    ("SessionStart",     None,    "hook-budget-calibration-due.py",  10),
-    ("SessionStart",     None,    "hook-sigma-sentinel-due.py",  5),
-    # Standing proactive self-diagnosis: run self-diagnose.py's read-only scan
-    # for self-friction (oversized memory index, dangling pointer, instruction
-    # file near its ceiling) and surface any worklist to stderr. Self-throttled,
-    # fail-open — never blocks or slows session start.
-    ("SessionStart",     None,    "hook-self-diagnose-due.py",   5),
-    # Throttled nudge (once/7d): counts open, improvement-scan-sourced rows
-    # already in the durable findings store and, if any are open, prints an
-    # instruction to invoke the `improvement-scan` skill. Never runs the scan
-    # itself — that is a full live-session task the hook deliberately defers.
-    # Fail-open, never blocks or slows session start.
-    ("SessionStart",     None,    "hook-improvement-scan-due.py",   5),
+    # The nine throttled due checks (self-diagnose, phase-3 readiness, promote-scan,
+    # policy scorecard, budget calibration, sigma sentinel, improvement-scan,
+    # judge-ceiling drift, instruction grooming) run in one process under the
+    # hook's TOTAL_BUDGET_S; the registration adds interpreter-start headroom.
+    ("SessionStart",     None,    "hook-session-due.py",            25),
     # Fail-loud detector: the gate-bearing hooks are present in the repo but NOT
     # wired into the root THIS session loads from — i.e. canon may silently be
     # writable and the spine's gates silently off. Reports on stdout, so the
@@ -245,19 +215,6 @@ DESIRED = [
     # The one row PRUNE_ONLY_ALSO_ADD also installs into the personal root — see
     # the comment there for why a detector is not the enforcement it sits beside.
     ("SessionStart",     None,    "hook-canon-guard-wired-check.py", 5),
-    # Phase-3 forcing trigger: throttled (7d), speaks only when
-    # rule-salience-report.py's phase3_readiness predicate says the deferred
-    # instruction-surface compression phase is DUE (pressure + data-sufficiency
-    # + reclaimable all satisfied). Establishes its own write-once baseline
-    # stamp; never reimplements the predicate. Fail-open, never blocks.
-    ("SessionStart",     None,    "hook-phase3-due.py",  10),
-    # Throttled nudge (once/7d): runs judge-usage-report.py --check-drift
-    # (DEFAULT mode only) and speaks only when a judge's live latency has
-    # drifted up to meet its declared ceiling — the detector half of the
-    # ceiling-drift plan closes here, since a ceiling correctly derived today
-    # says nothing about whether tomorrow's call population still fits under
-    # it. Fail-open, never blocks.
-    ("SessionStart",     None,    "hook-judge-ceiling-drift-due.py", 15),
     # Stale-residue cleanup: runs every registered reaper (Core built-ins, the machine-local
     # reaper-plugins dir, the project's .claude/reapers) under the shared throttle, ownership,
     # keep-wins, removal-log and error-isolation rules. Always exits 0. The timeout covers one git
