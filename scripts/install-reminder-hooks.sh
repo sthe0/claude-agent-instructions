@@ -47,6 +47,7 @@ prune_only_paths = sys.argv[2:]
 scripts = os.environ["SCRIPTS_DIR"]
 sys.path.insert(0, os.environ["STAMP_SCRIPTS_DIR"])
 from agentctl import edit_ledger
+from lib import hook_fragments
 
 # Reuse self-diagnose.py's own absolute-script resolution so the prune pass
 # below and the broken-hook-registration detector agree by construction.
@@ -430,7 +431,18 @@ def prune_dangling_managed_hooks(hooks, managed_dir):
 
 pruned = prune_dangling_managed_hooks(hooks, scripts)
 
-if changed or reconciled or pruned:
+# Hook fragments (see lib/hook_fragments.py) reach the agent root only, after
+# Core's own rows, so a Core row always wins a basename collision.
+agent_home = os.path.dirname(settings_path)
+record_path = os.path.join(agent_home, hook_fragments.RECORD_NAME)
+old_record = hook_fragments.load_record(record_path)
+fragment_changes, fragment_warnings, new_record = hook_fragments.sync(
+    hooks, os.path.join(agent_home, hook_fragments.FRAGMENT_DIR_NAME), old_record
+)
+for w in fragment_warnings:
+    print("install-reminder-hooks: warning: " + w, file=sys.stderr)
+
+if changed or reconciled or pruned or fragment_changes:
     shutil.copy2(settings_path, settings_path + ".bak")
     with open(settings_path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2, ensure_ascii=False)
@@ -448,8 +460,14 @@ if changed or reconciled or pruned:
         print("install-reminder-hooks: pruned " + str(len(pruned)) + " dangling hook registration(s):")
         for p in pruned:
             print("  - " + p)
+    if fragment_changes:
+        print("install-reminder-hooks: synced " + str(len(fragment_changes)) + " fragment hook(s):")
+        for c in fragment_changes:
+            print("  " + c)
 else:
     print("install-reminder-hooks: all canonical reminder hooks already wired")
+if new_record != old_record:
+    hook_fragments.save_record(record_path, new_record)
 
 
 # Prune-only pass: same ownership predicate (prune_dangling_managed_hooks),

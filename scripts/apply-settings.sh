@@ -14,7 +14,8 @@
 #   - permissions.defaultMode: local value wins; else taken from base; omitted if neither
 #   - every other key in the live file is preserved untouched
 # Machine-specific keys (hooks, marketplaces, absolute Read/Write paths, model)
-# live only in the local file and are never removed.
+# live only in the local file and are never removed. Hooks are written there by
+# install-reminder-hooks.sh (Core's rows, plus the fragments in hook-plugins/).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
