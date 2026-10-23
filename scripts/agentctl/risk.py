@@ -133,6 +133,21 @@ def effective(bet: Bet) -> Derived:
     return Derived(elaboration, _timing(elaboration), depth)
 
 
+def bet_raised(old: Bet, new: Bet) -> bool:
+    """True when `new` rates the stage's risk above `old` on any axis: a higher likelihood,
+    damage or recovery cost, a silent detection where it was loud, or an elaboration kind
+    or review depth the effective call did not have before."""
+    before, after = effective(old), effective(new)
+    return (
+        LEVELS.index(new.likelihood) > LEVELS.index(old.likelihood)
+        or LEVELS.index(new.damage) > LEVELS.index(old.damage)
+        or RECOVERIES.index(new.recovery) > RECOVERIES.index(old.recovery)
+        or (old.detection, new.detection) == ("loud", "silent")
+        or bool(set(after.elaboration) - set(before.elaboration))
+        or DEPTHS.index(after.depth) > DEPTHS.index(before.depth)
+    )
+
+
 def field_present(stage, field: str) -> bool:
     if field == "knowledge":
         return bool((stage.knowledge or "").strip())

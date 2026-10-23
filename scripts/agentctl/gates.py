@@ -2106,6 +2106,40 @@ def _stage_route_gaps(
     return _plan_review_verdict_blockers(spr, state=state, doc=doc)
 
 
+def failed_stage_indices(state: SessionState) -> frozenset[int]:
+    """The stages a difficulty is being worked on: FAILED while a difficulty record stands.
+    A bound replan owes each of them a neighbours-depth review of the corrected plan."""
+    if state.difficulty is None:
+        return frozenset()
+    return frozenset(s.index for s in state.stages
+                     if s.outcome.status == StageStatus.FAILED.value)
+
+
+def bet_raise_blockers(state: SessionState, old_doc, new_doc, reason: str | None) -> list[str]:
+    """What a bound replan after a difficulty owes for each failed stage: its bet raised in
+    the corrected plan, or a stated reason for leaving it. [] for an unbound session, when
+    no stage failed, or when the old plan is unknown (nothing to compare against)."""
+    if not state.risk_planning or old_doc is None:
+        return []
+    if (reason or "").strip():
+        return []
+    blockers = []
+    for index in sorted(failed_stage_indices(state)):
+        old_raw, new_raw = old_doc.bets.get(index), new_doc.bets.get(index)
+        try:
+            raised = (old_raw is not None and new_raw is not None
+                      and risk.bet_raised(risk.parse_bet(old_raw), risk.parse_bet(new_raw)))
+        except risk.BetError as exc:
+            blockers.append(f"stage {index}: {exc}")
+            continue
+        if not raised:
+            blockers.append(
+                f"stage {index} failed and its risk bet is not raised in the corrected plan — "
+                "raise the bet or state why it stands with --reason"
+            )
+    return blockers
+
+
 def bound_review_blockers(state: SessionState, target_plan: str, doc) -> list[str]:
     """What a bound session's full plan owes before approval: the skeleton freeze, still
     matching the plan, and for every stage whose bet calls for elaboration before approval a
@@ -2118,12 +2152,15 @@ def bound_review_blockers(state: SessionState, target_plan: str, doc) -> list[st
         return [f"the plan's skeleton changed since it was frozen ({', '.join(changed)}): "
                 "resubmit it for a skeleton pass"]
     blockers = []
+    failed = failed_stage_indices(state)
     for stage in sorted(doc.stages, key=lambda s: s.index):
         try:
             derived = risk.effective(risk.parse_bet(doc.bets.get(stage.index) or {}))
         except risk.BetError as exc:
             blockers.append(f"stage {stage.index}: {exc}")
             continue
+        if stage.index in failed:
+            derived = risk.Derived(derived.elaboration, risk.BEFORE_APPROVE, risk.NEIGHBOURS)
         if derived.timing != risk.BEFORE_APPROVE:
             continue
         neighbours = first_hop(doc, stage.index) if derived.depth == risk.NEIGHBOURS else ()
@@ -2137,6 +2174,47 @@ def bound_review_blockers(state: SessionState, target_plan: str, doc) -> list[st
                 f"stage {stage.index}: its risk bet calls for a {derived.depth}-depth review "
                 f"before approval ({gap}) — run: plan-review --scope {scope}"
             )
+    return blockers
+
+
+def lazy_stage_blockers(state: SessionState, stage_index: int) -> list[str]:
+    """What a bound session's stage owes at launch: for a stage whose bet defers its
+    elaboration to dispatch, the fields that elaboration calls for and a current
+    stage-scoped review at the depth the bet derives. [] for an unbound session, a stage
+    elaborated before approval, or a plan that cannot be read."""
+    if not state.risk_planning or not state.plan_path:
+        return []
+    try:
+        doc = load_plan(state.plan_path)
+    except (OSError, PlanError):
+        return []
+    stage = next((s for s in doc.stages if s.index == stage_index), None)
+    raw = doc.bets.get(stage_index)
+    if stage is None or raw is None:
+        return []
+    try:
+        derived = risk.effective(risk.parse_bet(raw))
+    except risk.BetError as exc:
+        return [f"stage {stage_index}: {exc}"]
+    if derived.timing != risk.AT_LAUNCH:
+        return []
+    blockers = [
+        f"stage {stage_index}: its bet defers elaboration to launch and {field!r} is still missing"
+        for field in risk.missing_called_fields(stage, derived)
+    ]
+    if derived.depth == risk.SKELETON:
+        return blockers
+    neighbours = first_hop(doc, stage_index) if derived.depth == risk.NEIGHBOURS else ()
+    scope = _plan_review_scope_for_stage(stage_index)
+    if scope in state.plan_stage_reviews:
+        gap = next(iter(_stage_route_gaps(state, state.plan_path, doc, stage_index, neighbours)), "")
+    else:
+        gap = "no stage-scoped review is recorded"
+    if gap:
+        blockers.append(
+            f"stage {stage_index}: its risk bet calls for a {derived.depth}-depth review "
+            f"before launch ({gap}) — run: plan-review --scope {scope}"
+        )
     return blockers
 
 
