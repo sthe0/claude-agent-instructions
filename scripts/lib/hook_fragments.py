@@ -29,7 +29,9 @@ Contract:
   run), and nothing is removed later. To recover, delete the fragment's entries from
   settings.json by hand and rerun the installer, which installs and records them anew.
 * A broken fragment (unparsable, malformed, or naming a script that is missing under
-  its own directory) is skipped with a warning and keeps the entries it owns.
+  its own directory) is skipped with a warning and keeps the entries it owns. If Core
+  later adds a row for the same script, both run until the fragment is fixed, because
+  a skipped fragment is not checked for collisions.
 * A plugin entry whose fragment file is gone loses its owned entries.
 """
 import json
@@ -203,6 +205,8 @@ def sync(hooks, fragment_dir, record):
         owned = []
         for event, matcher, hook in entries:
             key = _key(event, matcher, hook["command"])
+            if key in owned:
+                continue
             group = _find_group(hooks, event, matcher)
             siblings = group["hooks"] if group else []
             same = [h for h in siblings if h.get("command") == key[2]]

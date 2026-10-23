@@ -37,6 +37,20 @@ def hook_script_path(command):
     unflagged either way — fail-safe: we would rather miss a broken hook than
     false-flag a legitimate bare command.
     """
+    parsed = _split(command)
+    if parsed is None:
+        return None
+    tokens, idx = parsed
+    candidate = Path(tokens[idx])
+    if candidate.is_absolute():
+        return candidate
+    if candidate.name not in HOOK_INTERPRETER_BASENAMES:
+        return None
+    return _operand_script(tokens, idx + 1)
+
+
+def _split(command):
+    """``(tokens, index of the first non-assignment token)``, or None if there is none."""
     if not command:
         return None
     expanded = os.path.expanduser(os.path.expandvars(command))
@@ -44,22 +58,17 @@ def hook_script_path(command):
         tokens = shlex.split(expanded)
     except ValueError:
         return None
-    if not tokens:
-        return None
-
     idx = 0
     while idx < len(tokens) and _VAR_ASSIGNMENT_RE.match(tokens[idx]):
         idx += 1
     if idx >= len(tokens):
         return None
+    return tokens, idx
 
-    candidate = Path(tokens[idx])
-    if candidate.is_absolute():
-        return candidate
-    if candidate.name not in HOOK_INTERPRETER_BASENAMES:
-        return None
 
-    for tok in tokens[idx + 1:]:
+def _operand_script(tokens, start):
+    """The first absolute-path operand from ``start`` on, skipping flags and assignments."""
+    for tok in tokens[start:]:
         if tok.startswith("-"):
             continue
         if _VAR_ASSIGNMENT_RE.match(tok):
@@ -72,18 +81,23 @@ def hook_script_path(command):
 
 
 def script_name(command):
-    """Identity of the script a hook command runs: its file name.
+    """Identity of the script a hook command runs.
 
-    ``hook_script_path(...).name`` when a script path resolves (so ``python3 /a/x.py``,
-    ``env python3 /a/x.py``, ``python3 -X utf8 /a/x.py`` and a bare ``/a/x.py`` are all
-    ``x.py``); otherwise the basename of the first non-assignment word.
+    The script's file name when one resolves: ``python3 /a/x.py``, ``env python3
+    /a/x.py``, ``python3 -X utf8 /a/x.py``, ``/venv/bin/python /a/x.py`` and a bare
+    ``/a/x.py`` are all ``x.py``. A launcher with no script operand (``python3 -m pkg``,
+    ``bash -c '…'``, ``uv run x.py``, an unexpanded ``$VAR/x.py``) has no file identity,
+    so the whole whitespace-normalized command stands for it and two such entries
+    collide only when identical.
     """
-    path = hook_script_path(command)
-    if path is not None:
-        return path.name
-    try:
-        tokens = shlex.split(command or "")
-    except ValueError:
-        tokens = (command or "").split()
-    tokens = [t for t in tokens if not _VAR_ASSIGNMENT_RE.match(t)]
-    return os.path.basename(tokens[0]) if tokens else ""
+    parsed = _split(command)
+    if parsed is not None:
+        tokens, idx = parsed
+        first = Path(tokens[idx])
+        if first.is_absolute() and first.name not in HOOK_INTERPRETER_BASENAMES:
+            return first.name
+        if first.is_absolute() or first.name in HOOK_INTERPRETER_BASENAMES:
+            script = _operand_script(tokens, idx + 1)
+            if script is not None:
+                return script.name
+    return " ".join((command or "").split())

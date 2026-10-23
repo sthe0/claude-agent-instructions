@@ -8,9 +8,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from lib.hook_script import script_name  # noqa: E402
+
 REPO_ROOT = SCRIPTS_DIR.parent
 INSTALLER = SCRIPTS_DIR / "install-reminder-hooks.sh"
 CORE_PREFIX = str(SCRIPTS_DIR) + "/"
@@ -101,21 +106,32 @@ def core_script_commands(box):
 
 
 def test_script_name_looks_past_env_and_interpreter_flags():
-    import sys
-
-    sys.path.insert(0, str(SCRIPTS_DIR))
-    from lib.hook_script import script_name
-
     for command in (
         "/a/gate.py",
         "python3 /a/gate.py",
         "env python3 /a/gate.py",
         "python3 -X utf8 /c/gate.py",
         "FOO=1 python3 /a/gate.py --flag",
+        "/home/u/.venv/bin/python /x/gate.py",
+        "/usr/bin/env python3 /x/gate.py",
     ):
         assert script_name(command) == "gate.py", command
-    assert script_name("jq . file") == "jq"
     assert script_name("") == ""
+
+
+def test_script_name_without_a_script_operand_is_the_whole_command():
+    for command in (
+        "python3 -m pkg.one",
+        "/venv/bin/python -m pkg.one",
+        "bash -c '/x/gate.py arg'",
+        "uv run x.py",
+        "npx tool",
+        "jq . file",
+        "$UNSET_DIR_FOR_TEST/gate.py --flag",
+    ):
+        assert script_name(command) == " ".join(command.split()), command
+    assert script_name("python3  -m   pkg.one") == script_name("python3 -m pkg.one")
+    assert script_name("python3 -m pkg.one") != script_name("python3 -m pkg.two")
 
 
 def test_env_and_flag_forms_block_a_same_script_fragment_entry(tmp_path):
@@ -292,6 +308,50 @@ def test_two_same_basename_entries_of_one_fragment_are_both_installed(tmp_path):
         cmds = box.entries()
         assert cmds.count(f"python3 {d.resolve()}/scripts/gate.py --a") == 1
         assert cmds.count(f"python3 {d.resolve()}/scripts/gate.py --b") == 1
+
+
+def test_different_module_launches_in_one_group_do_not_block_each_other(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org")
+    box.fragment(d, ["python3 -m pkg.one", "python3 -m pkg.two"], link="org.json")
+    box.seed({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "python3 -m pkg.hand"}]}]}})
+    for _ in range(2):
+        proc = box.run()
+        cmds = box.entries()
+        assert "python3 -m pkg.one" in cmds and "python3 -m pkg.two" in cmds
+        assert "python3 -m pkg.hand" in cmds
+        assert "org.json" not in proc.stderr
+
+
+def test_venv_python_and_python3_running_one_script_are_one_identity(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org")
+    box.fragment(d, ["/venv/bin/python @FRAGMENT_DIR@/scripts/gate.py"], link="org.json")
+    box.seed({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "python3 /hand/gate.py"}]}]}})
+    proc = box.run()
+    assert not any(str(d.resolve()) in c for c in box.entries())
+    assert "org.json" in proc.stderr and "blocked" in proc.stderr
+
+
+def test_hand_entry_added_later_displaces_an_installed_fragment_entry(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org")
+    box.fragment(d, ["python3 @FRAGMENT_DIR@/scripts/gate.py"], link="org.json")
+    box.run()
+    owned = f"python3 {d.resolve()}/scripts/gate.py"
+    assert owned in box.entries()
+
+    data = json.loads(box.settings.read_text())
+    group = next(g for g in data["hooks"]["PreToolUse"] if g.get("matcher") == "Bash")
+    group["hooks"].append({"type": "command", "command": "python3 /hand/gate.py"})
+    box.seed(data)
+    proc = box.run()
+    assert owned not in box.entries()
+    assert "python3 /hand/gate.py" in box.entries()
+    assert "org.json" in proc.stderr and "dropped" in proc.stderr
+    assert box.record.read_text().strip() in ("{}", "")
 
 
 def test_fragment_entry_twinning_a_core_row_is_blocked(tmp_path):

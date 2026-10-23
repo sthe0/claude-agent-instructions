@@ -279,8 +279,6 @@ def scan_dangling_pointers(memory_root: Path) -> "list[Difficulty]":
     return out
 
 
-
-
 def scan_broken_hooks(settings_paths: "list[Path]") -> "list[Difficulty]":
     """Flag settings.json hook commands whose absolute script does not exist."""
     out: "list[Difficulty]" = []
