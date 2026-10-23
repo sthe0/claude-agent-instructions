@@ -689,6 +689,50 @@ def discover_prose_paths(repo_root: Path) -> list[Path]:
     return sorted(paths)
 
 
+def find_untracked_relevant_files(repo_root: Path) -> list[Path]:
+    """Untracked (unstaged, not committed) files under `repo_root` that fall
+    within the enumeration domains: scripts/*.py, CLAUDE.md,
+    skills/**/SKILL.md, skills/**/policy.md, memory-global/leaves/**/*.md.
+
+    Used by gen_crutch_registry.py to detect the ordering trap: an author
+    writes new files, regenerates the registry (which enumerates only
+    tracked files), and silently gets a partial registry. By calling this
+    before writing the registry, the generator can fail loudly instead.
+
+    Returns an empty list if `repo_root` is not inside a git checkout or git
+    is unavailable."""
+    env = _clean_git_env()
+    try:
+        listing = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "--others", "--exclude-standard", "-z"],
+            capture_output=True,
+            check=True,
+            env=env,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return []
+
+    scripts_dir = repo_root / "scripts"
+    skills_dir = repo_root / "skills"
+    leaves_dir = repo_root / "memory-global" / "leaves"
+    claude_md = repo_root / "CLAUDE.md"
+
+    result = []
+    for entry in listing.decode("utf-8").split("\0"):
+        if not entry:
+            continue
+        p = repo_root / entry
+        if p == claude_md:
+            result.append(p)
+        elif p.is_relative_to(scripts_dir) and p.suffix == ".py":
+            result.append(p)
+        elif p.is_relative_to(skills_dir) and p.name in ("SKILL.md", "policy.md"):
+            result.append(p)
+        elif p.is_relative_to(leaves_dir) and p.suffix == ".md":
+            result.append(p)
+    return sorted(result)
+
+
 # --- Registry check ----------------------------------------------------------
 
 

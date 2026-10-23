@@ -305,6 +305,63 @@ def test_git_tracked_helper_falls_back_to_rglob_outside_git(tmp_path):
     assert "loose_site.py" in rollup_files
 
 
+def test_find_untracked_relevant_files(tmp_path):
+    """find_untracked_relevant_files returns exactly the untracked files that
+    fall within the registry's enumeration domains (scripts/*.py, CLAUDE.md,
+    skills/**/SKILL.md, skills/**/policy.md, memory-global/leaves/**/*.md),
+    and nothing else — committed files, staged files, and untracked files
+    outside those domains are not returned."""
+    repo = _init_git_repo(tmp_path)
+    scripts_dir = repo / "scripts"
+    scripts_dir.mkdir()
+    leaves_dir = repo / "memory-global" / "leaves"
+    leaves_dir.mkdir(parents=True)
+    skills_dir = repo / "skills" / "myskill"
+    skills_dir.mkdir(parents=True)
+
+    # Files that are committed — must NOT be returned (not untracked).
+    (scripts_dir / "committed.py").write_text("# committed", encoding="utf-8")
+    (leaves_dir / "committed_leaf.md").write_text("# leaf", encoding="utf-8")
+    _git("add", "scripts/committed.py", "memory-global/leaves/committed_leaf.md", cwd=repo)
+    _git("commit", "-q", "-m", "initial", cwd=repo)
+
+    # File that is staged but not committed — must NOT be returned (already tracked).
+    (scripts_dir / "staged.py").write_text("# staged", encoding="utf-8")
+    _git("add", "scripts/staged.py", cwd=repo)
+
+    # Untracked files INSIDE the relevant domains — must be returned.
+    (scripts_dir / "new_hook.py").write_text("# new hook", encoding="utf-8")
+    (leaves_dir / "new_leaf.md").write_text("# new leaf", encoding="utf-8")
+    (skills_dir / "SKILL.md").write_text("# skill", encoding="utf-8")
+
+    # Untracked file OUTSIDE the relevant domains — must NOT be returned.
+    docs_dir = repo / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "readme.md").write_text("# docs readme", encoding="utf-8")
+
+    inv._tracked_files.cache_clear()
+    try:
+        untracked = inv.find_untracked_relevant_files(repo)
+    finally:
+        inv._tracked_files.cache_clear()
+
+    names = {p.name for p in untracked}
+    assert "new_hook.py" in names
+    assert "new_leaf.md" in names
+    assert "SKILL.md" in names
+    assert "committed.py" not in names
+    assert "staged.py" not in names
+    assert "readme.md" not in names
+
+
+def test_find_untracked_relevant_files_returns_empty_outside_git(tmp_path):
+    """find_untracked_relevant_files returns an empty list when the directory
+    is not inside a git checkout — no exception, no crash."""
+    (tmp_path / "some_file.py").write_text("# not in git", encoding="utf-8")
+    result = inv.find_untracked_relevant_files(tmp_path)
+    assert result == []
+
+
 # --- Domain B: prose sites -----------------------------------------------------
 
 _PROSE_FIXTURE = """\

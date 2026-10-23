@@ -879,6 +879,16 @@ def main() -> int:
             REPO_ROOT, "scripts/gen_crutch_registry.py", sys.argv[1:],
             "crutch-registry: regenerate",
         )
+    untracked = inv.find_untracked_relevant_files(REPO_ROOT)
+    if untracked:
+        rel = [str(p.relative_to(REPO_ROOT)) for p in untracked]
+        print(
+            "error: untracked files match the registry's enumeration domain.\n"
+            "Stage them with `git add` before regenerating so the registry is complete:\n"
+            + "".join(f"  {r}\n" for r in rel),
+            file=sys.stderr,
+        )
+        return 1
     entries = build_entries()
     text = render_registry(entries)
     REGISTRY_PATH.write_text(text, encoding="utf-8")
