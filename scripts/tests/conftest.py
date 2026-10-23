@@ -85,6 +85,21 @@ expected_exit = 0
 
 
 @pytest.fixture(autouse=True)
+def _isolate_edit_ledger(tmp_path, monkeypatch):
+    """Redirect the durable edit ledger to tmp for the suite at large.
+
+    edit_ledger.append() (called by both the hook feeder and stamp()) appends to
+    the ledger resolved from $AGENTCTL_EDIT_LEDGER (else the default
+    config_root.agentctl_edit_log() path). Without this fixture every test that
+    calls stamp() or drives hook-scope-track.py writes into the live ledger, which
+    is exactly the leak the issue diagnosed: scripts/tests/conftest.py carried
+    autouse isolation for the task-quality ledger, the judge ledger and the
+    self-diagnose store, but none for AGENTCTL_EDIT_LEDGER. Same accommodation as
+    `_isolate_task_quality_ledger`."""
+    monkeypatch.setenv("AGENTCTL_EDIT_LEDGER", str(tmp_path / "edit-log.jsonl"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_task_quality_ledger(tmp_path, monkeypatch):
     """The scorecard aggregates the real ledger into degradation flags, so a
     test resolve must never append to it (unlike GATE_LOG, which is inert

@@ -33,8 +33,12 @@ HOOK_PATH = SCRIPTS_DIR / "hook-scope-track.py"
 
 def test_stamp_writes_one_well_formed_row(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    # Pin scratch to a dedicated subdir so the target (under repo/) is non-scratch.
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratchroot"))
     ledger_path = tmp_path / "edit-log.jsonl"
-    target = tmp_path / "leaf.md"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "leaf.md"
     target.write_text("x", encoding="utf-8")
 
     edit_ledger.stamp(str(target), "record-experience:new", path=ledger_path)
@@ -50,8 +54,12 @@ def test_stamp_writes_one_well_formed_row(tmp_path, monkeypatch):
 
 
 def test_stamp_session_precedence(tmp_path, monkeypatch):
+    # Pin scratch to a dedicated subdir so the target (under repo/) is non-scratch.
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratchroot"))
     ledger_path = tmp_path / "edit-log.jsonl"
-    target = tmp_path / "a.md"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "a.md"
     target.write_text("x", encoding="utf-8")
 
     # explicit session= wins over env for session_id; env_session_id keeps env.
@@ -83,6 +91,42 @@ def test_stamp_never_raises_on_unwritable_ledger(tmp_path):
     target.write_text("x", encoding="utf-8")
 
     assert edit_ledger.stamp(str(target), "t", path=unwritable) is None  # must not raise
+
+
+def test_stamp_drops_scratch_path_silently(tmp_path, monkeypatch):
+    """stamp() must not record scratch paths — the direct-IO feeder applies the
+    same is_ledger_noise filter the hook path does, so canon writers that call
+    stamp() never write temp-fixture paths into the durable ledger."""
+    scratch_root = tmp_path / "scratchroot"
+    scratch_root.mkdir()
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(scratch_root))
+
+    ledger_path = tmp_path / "edit-log.jsonl"
+    scratch_file = scratch_root / "leaf.md"
+    scratch_file.write_text("x", encoding="utf-8")
+
+    edit_ledger.stamp(str(scratch_file), "record-experience:new", path=ledger_path)
+
+    assert list(edit_ledger.read_records(ledger_path)) == []
+
+
+def test_stamp_records_non_scratch_path(tmp_path, monkeypatch):
+    """stamp() records a non-scratch path as before — the filter is additive."""
+    scratch_root = tmp_path / "scratchroot"
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(scratch_root))
+
+    ledger_path = tmp_path / "edit-log.jsonl"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "leaf.md"
+    target.write_text("x", encoding="utf-8")
+
+    edit_ledger.stamp(str(target), "record-experience:new", path=ledger_path)
+
+    rows = list(edit_ledger.read_records(ledger_path))
+    assert len(rows) == 1
+    assert rows[0]["file"] == str(target.resolve())
+    assert rows[0]["tool"] == "record-experience:new"
 
 
 # ---------------------------------------------------------------------------
@@ -149,9 +193,14 @@ def test_is_ledger_noise_false_for_memory_paths_which_stay_gate_exempt(tmp_path,
 # edit-ledger.py `stamp` subcommand — real subprocess, no mocking.
 # ---------------------------------------------------------------------------
 
-def test_cli_stamp_writes_a_row(tmp_path):
+def test_cli_stamp_writes_a_row(tmp_path, monkeypatch):
+    # Pin scratch to a dedicated subdir so the target (under repo/) is non-scratch;
+    # the subprocess inherits os.environ, which the monkeypatch modifies in place.
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratchroot"))
     ledger_path = tmp_path / "edit-log.jsonl"
-    target = tmp_path / "leaf.md"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "leaf.md"
     target.write_text("x", encoding="utf-8")
 
     proc = subprocess.run(

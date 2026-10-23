@@ -64,6 +64,7 @@ def env(tmp_path):
     base = {k: v for k, v in os.environ.items()
             if k not in (re_mod.worktree_route.DISABLE_ENV, re_mod.worktree_route.GUARD_ENV)}
     base["AGENTCTL_EDIT_LEDGER"] = str(tmp_path / "edit-ledger.jsonl")
+    base["AGENTCTL_SCRATCH_ROOTS"] = str(tmp_path / "scratchroot")
     return base
 
 
