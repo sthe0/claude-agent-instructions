@@ -1,7 +1,7 @@
 """is_engine_exempt: scratch roots and personal local-state are exempt by realpath
 containment (never substring), and a scratch root as broad as $HOME exempts nothing.
 
-Positive cases use synthetic roots whose names contain no _EXEMPT_SUBSTRINGS member,
+Positive cases use synthetic roots whose names contain no _EXEMPT_MEMORY_SUBSTRINGS member,
 so the base substring list cannot mask a missing containment rule."""
 from __future__ import annotations
 
