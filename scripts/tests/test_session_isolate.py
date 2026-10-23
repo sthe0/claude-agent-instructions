@@ -60,6 +60,7 @@ def _run(
     session_id: "str | None" = "s-me",
     dry_run: bool = True,
     detector: "Path | None" = None,
+    plugin_dir: "Path | None" = None,
 ) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["HOME"] = str(home)
@@ -87,6 +88,8 @@ def _run(
         det = tmp_path / "det-git.py"
         det.write_text("print('git none')\n")
         env["CLAUDE_BACKEND_DETECTOR"] = str(det)
+    if plugin_dir is not None:
+        env["CLAUDE_PROJECT_PLUGIN_DIR"] = str(plugin_dir)
     return subprocess.run(
         ["bash", str(SCRIPT), task_name],
         cwd=str(fake_toplevel),
@@ -243,3 +246,53 @@ def test_missing_task_name_argument_errors():
     )
     assert proc.returncode != 0
     assert "usage" in proc.stderr
+
+
+def test_non_git_backend_no_noise_when_real_detector_used(tmp_path):
+    """Regression: when the machine-local detect hook returns a non-git backend,
+    session-isolate.sh must still use git without printing a 'falling back' warning.
+
+    The fix lives in detect_backend.py's __main__: it derives target_dir from its
+    own grandparent (the instructions-repo root, a git checkout) and overrides
+    a non-git hook result to git.  Before the fix, session-isolate.sh would detect
+    the non-git backend, fail to find it installed, and print a warning before
+    falling back to git.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    fake_toplevel = tmp_path / "myrepo"
+    fake_toplevel.mkdir()
+    git_calls = tmp_path / "git-calls.log"
+    wt_list = tmp_path / "wt-list.txt"
+    git_calls.write_text("")
+    wt_list.write_text("")
+
+    # Plugin whose detect hook always returns a non-git workspace backend.
+    plugin_dir = tmp_path / "plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "detect.py").write_text(
+        "def detect(**kwargs):\n    return ('orgws', 'orgtr')\n",
+        encoding="utf-8",
+    )
+
+    # Use the REAL detect_backend.py (not a stub) so the target_dir logic runs.
+    real_detector = SCRIPT.parent / "project_entry" / "detect_backend.py"
+
+    proc = _run(
+        tmp_path,
+        "task-name",
+        home,
+        fake_toplevel,
+        git_calls,
+        wt_list,
+        dry_run=True,
+        detector=real_detector,
+        plugin_dir=plugin_dir,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    # detect_backend.py returns git directly (instructions repo is a git checkout),
+    # so session-isolate.sh must NOT emit a 'falling back' warning.
+    assert "falling back to git" not in proc.stderr
+    expected_dir = str(tmp_path / "myrepo-task-name")
+    assert proc.stdout.strip().splitlines()[-1] == expected_dir

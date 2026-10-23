@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from project_entry.detect_backend import detect_backends, load_detect_hook
+from project_entry.detect_backend import (
+    detect_backends,
+    detect_this_machine,
+    is_git_repo,
+    load_detect_hook,
+)
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 ENTER_TASK = SCRIPTS / "enter-task.sh"
@@ -351,3 +356,120 @@ def test_tr_flag_overrides_env(env_tr):
     )
     assert r.returncode == 0, r.stderr
     assert _log_tr(r.stderr) == "trtest"
+
+
+# ── is_git_repo ────────────────────────────────────────────────────────────
+
+
+def test_is_git_repo_true_when_dot_git_exists(tmp_path):
+    (tmp_path / ".git").mkdir()
+    assert is_git_repo(tmp_path) is True
+
+
+def test_is_git_repo_true_for_subdirectory(tmp_path):
+    """Ancestor walk: a nested subdirectory is also inside the repo."""
+    (tmp_path / ".git").mkdir()
+    sub = tmp_path / "a" / "b"
+    sub.mkdir(parents=True)
+    assert is_git_repo(sub) is True
+
+
+def test_is_git_repo_false_when_no_dot_git(tmp_path):
+    assert is_git_repo(tmp_path) is False
+
+
+# ── detect_this_machine target_dir override ────────────────────────────────
+
+
+def _make_non_git_plugin(tmp_path: Path) -> Path:
+    """Plugin dir whose detect hook always returns ('orgws', 'orgtr')."""
+    plugin = tmp_path / "plugins"
+    plugin.mkdir(exist_ok=True)
+    (plugin / "detect.py").write_text(
+        "def detect(**kwargs):\n    return ('orgws', 'orgtr')\n",
+        encoding="utf-8",
+    )
+    return plugin
+
+
+def test_detect_this_machine_overrides_non_git_hook_for_git_target(tmp_path, monkeypatch):
+    """When a plugin hook returns non-git but target_dir is a git checkout,
+    detect_this_machine overrides the workspace backend to git."""
+    git_repo = tmp_path / "repo"
+    git_repo.mkdir()
+    (git_repo / ".git").mkdir()
+
+    monkeypatch.setenv("CLAUDE_PROJECT_PLUGIN_DIR", str(_make_non_git_plugin(tmp_path)))
+
+    ws, tr = detect_this_machine(target_dir=git_repo)
+    assert ws == "git"
+    assert tr == "orgtr"  # tracker from hook is preserved
+
+
+def test_detect_this_machine_no_override_for_non_git_target(tmp_path, monkeypatch):
+    """When target_dir is NOT a git checkout the hook's workspace result is kept."""
+    monkeypatch.setenv("CLAUDE_PROJECT_PLUGIN_DIR", str(_make_non_git_plugin(tmp_path)))
+
+    ws, tr = detect_this_machine(target_dir=tmp_path)
+    assert ws == "orgws"
+    assert tr == "orgtr"
+
+
+def test_detect_this_machine_no_target_dir_keeps_hook_result(tmp_path, monkeypatch):
+    """Without target_dir the hook result is returned unchanged (existing behaviour)."""
+    monkeypatch.setenv("CLAUDE_PROJECT_PLUGIN_DIR", str(_make_non_git_plugin(tmp_path)))
+
+    ws, tr = detect_this_machine()
+    assert ws == "orgws"
+
+
+# ── __main__ CLI: CLAUDE_BACKEND_DETECT_DIR + default target ──────────────
+
+_DETECT_BACKEND_PY = SCRIPTS / "project_entry" / "detect_backend.py"
+
+
+def _run_cli(env: dict) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["python3", str(_DETECT_BACKEND_PY)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_main_returns_git_when_detect_dir_is_git_repo(tmp_path, monkeypatch):
+    """CLAUDE_BACKEND_DETECT_DIR pointing to a git repo overrides a non-git hook."""
+    git_repo = tmp_path / "repo"
+    git_repo.mkdir()
+    (git_repo / ".git").mkdir()
+
+    plugin = _make_non_git_plugin(tmp_path)
+    env = {
+        **os.environ,
+        "CLAUDE_BACKEND_DETECT_DIR": str(git_repo),
+        "CLAUDE_PROJECT_PLUGIN_DIR": str(plugin),
+        "PATH": "/usr/bin:/bin",
+    }
+    r = _run_cli(env)
+    assert r.returncode == 0, r.stderr
+    ws, _ = r.stdout.strip().split()
+    assert ws == "git"
+
+
+def test_main_default_target_is_instructions_repo_root(tmp_path):
+    """Without CLAUDE_BACKEND_DETECT_DIR, the CLI derives target_dir from its own
+    location (scripts/project_entry/detect_backend.py → scripts/ → repo-root).
+    The instructions repo IS a git checkout, so a non-git plugin hook is overridden."""
+    plugin = _make_non_git_plugin(tmp_path)
+    env = {
+        **os.environ,
+        "CLAUDE_PROJECT_PLUGIN_DIR": str(plugin),
+        "PATH": "/usr/bin:/bin",
+    }
+    env.pop("CLAUDE_BACKEND_DETECT_DIR", None)
+    r = _run_cli(env)
+    assert r.returncode == 0, r.stderr
+    ws, _ = r.stdout.strip().split()
+    # The instructions repo is a git checkout → git is returned even though the
+    # hook would have returned orgws.
+    assert ws == "git"
