@@ -29,7 +29,7 @@ from pathlib import Path
 
 from lib import argv_text, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, carry_forward, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, carry_forward, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, risk, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from . import config as agentctl_config
@@ -4705,6 +4705,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     problems: list[str] = (
         skeleton_problems(doc) if skeleton else _submission_problems(doc, run, state.weight_class)
     )
+    if state.risk_planning and not skeleton:
+        problems.extend(risk.bet_problems(doc))
     if state.weight_class == WeightClass.SUBSTANTIVE.value and not skeleton:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
@@ -5586,13 +5588,17 @@ def _plan_concern_severity(
             target is None or regression_command not in target.regression_commands
         )
         parts_by_concern.append(parts)
-        effective.append(gates.effective_concern_severity(
+        severity = gates.effective_concern_severity(
             pc.severity, parts, has_prev=prev is not None, changed=changed,
             open_parts=open_parts, restates_dispositioned=dispositioned,
             new_evidence=evidence or differs,
             after_pass_on_changed=bool(delta_changed),
             restates_open=target is not None and gates.concern_unresolved(target, state, doc),
-        ))
+        )
+        if (state.risk_planning and not gates.skeleton_review_active(state)
+                and severity == gates.EFFECTIVE_BLOCKING and not risk.concern_blocks(pc.body)):
+            severity = gates.EFFECTIVE_ADVISORY
+        effective.append(severity)
     effective_verdict = verdict
     if (verdict == gates._PLAN_REVIEW_REVISE and parsed and attested and may_promote
             and gates.EFFECTIVE_BLOCKING not in effective):

@@ -49,10 +49,14 @@ from lib.spawn_prompt_files import composed_prompt_files, skill_path
 from . import advisor as _advisor
 from . import delivery
 from . import effort
+from . import risk
 from .config import Thresholds
 from .plan import (
     PlanError,
     SEVERITY_BLOCKING,
+    first_hop,
+    skeleton_changed,
+    skeleton_digests,
     acceptance_requirement_bindings,
     changed_parts,
     consumers,
@@ -1359,7 +1363,7 @@ def pairwise_review_route(state: SessionState | None, doc=None) -> bool:
     `state.plan_path`."""
     if state is None or state.route != Route.SPAWN.value:
         return False
-    if skeleton_review_active(state):
+    if state.risk_planning:
         return False
     if doc is None:
         try:
@@ -1406,6 +1410,10 @@ def _plan_review_baseline(pr) -> dict:
     }
 
 
+#: The severity tags a reviewer may put before the part token (`axis:R`, `[bet:<n>]`); they
+#: are skipped so a tagged concern names the same part as the untagged one.
+_LEADING_TAGS = r"(?:(?:axis:[rvdws]|\[bet:\d+\])\s*)*"
+
 #: Matches a LEADING structural part token (`meta:`, `order:`, `stage:<n>`) a
 #: reviewer typed into a `--concern` string, optionally after an already-parsed
 #: `cut:`/`add:` remedy prefix (`_REMEDY_TAG_PREFIX_RE`) — anchored at the start
@@ -1416,14 +1424,14 @@ def _plan_review_baseline(pr) -> dict:
 #: free-text meaning — the permitted case under
 #: regex-not-for-semantic-classification.md, not the forbidden one.
 _PLAN_REVIEW_PART_TOKEN_RE = re.compile(
-    r"^\s*(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
+    rf"^\s*{_LEADING_TAGS}(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
 )
 
 #: The same token, additionally accepted right after the reviewer's `C<n>:` marker
 #: (`blocking: C1: stage:3 ...`). Only the topological pair/unit path asks for it, and only
 #: while the delta rule applies (a pass on a row with changed parts).
 _PLAN_REVIEW_MARKED_PART_TOKEN_RE = re.compile(
-    r"^\s*(?:[Cc][1-4]:\s*)?(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
+    rf"^\s*(?:[Cc][1-4]:\s*)?{_LEADING_TAGS}(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
 )
 
 
@@ -2098,6 +2106,40 @@ def _stage_route_gaps(
     return _plan_review_verdict_blockers(spr, state=state, doc=doc)
 
 
+def bound_review_blockers(state: SessionState, target_plan: str, doc) -> list[str]:
+    """What a bound session's full plan owes before approval: the skeleton freeze, still
+    matching the plan, and for every stage whose bet calls for elaboration before approval a
+    current stage-scoped review at the depth that bet derives. Nothing else is owed, so one
+    blocker names exactly one unreviewed stage."""
+    if state.skeleton_freeze is None:
+        return ["the skeleton is not frozen: a counted whole-plan pass of the skeleton must come first"]
+    changed = skeleton_changed(state.skeleton_freeze["digests"], skeleton_digests(doc))
+    if changed:
+        return [f"the plan's skeleton changed since it was frozen ({', '.join(changed)}): "
+                "resubmit it for a skeleton pass"]
+    blockers = []
+    for stage in sorted(doc.stages, key=lambda s: s.index):
+        try:
+            derived = risk.effective(risk.parse_bet(doc.bets.get(stage.index) or {}))
+        except risk.BetError as exc:
+            blockers.append(f"stage {stage.index}: {exc}")
+            continue
+        if derived.timing != risk.BEFORE_APPROVE:
+            continue
+        neighbours = first_hop(doc, stage.index) if derived.depth == risk.NEIGHBOURS else ()
+        scope = _plan_review_scope_for_stage(stage.index)
+        if scope in state.plan_stage_reviews:
+            gap = next(iter(_stage_route_gaps(state, target_plan, doc, stage.index, neighbours)), "")
+        else:
+            gap = "no stage-scoped review is recorded"
+        if gap:
+            blockers.append(
+                f"stage {stage.index}: its risk bet calls for a {derived.depth}-depth review "
+                f"before approval ({gap}) — run: plan-review --scope {scope}"
+            )
+    return blockers
+
+
 def pair_discharged_stages(state: SessionState, doc, plan_path: str) -> "list[str]":
     """The `stage:<n>` scopes that show no blocker only because every pair of the
     walk-stale set is current or override, not because of their own stage-scoped
@@ -2416,7 +2458,9 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
         or _honours_pair_records(state, target_plan, doc)
         or (state.plan_review is not None and (state.plan_review.carried_tier or 0) >= 2)
     )
-    if not coverage_route:
+    if state.risk_planning and doc is not None and not skeleton_review_active(state):
+        blockers = bound_review_blockers(state, target_plan, doc)
+    elif not coverage_route:
         blockers = _plan_review_blockers_whole(state.plan_review, target_plan, state=state, doc=doc)
     else:
         blockers = _plan_review_blockers_coverage(state, target_plan, doc)

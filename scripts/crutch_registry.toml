@@ -696,6 +696,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
+id = "f53e495bfdb8f19f"
+domain = "code"
+file = "scripts/agentctl/gates.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "66001a6d83db48d5"
 domain = "code"
 file = "scripts/agentctl/gates.py"
@@ -1430,6 +1438,38 @@ file = "scripts/agentctl/result_image.py"
 class = "semantic-guarded"
 disposition = "keep"
 ground = "The one file in the engine whose subject IS free-text meaning: it decides whether a stage's expected_result_image restates the check that judges it. Its regexes are `echo_prefilter`, a high-recall structural PREFILTER whose every consumer (`submission.submission_advice`) gates it behind `judge_echo` before anything is said — the prefilter alone produces no output at all. So the `scripts/agentctl/**` row below, which grounds its structural verdict on the engine's regexes reading the engine's own syntax rather than free-text meaning, states the opposite of what is true here."
+
+[[entry]]
+id = "7b6f0f9c8e7684ed"
+domain = "code"
+file = "scripts/agentctl/risk.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "819da0742f5c7f0d"
+domain = "code"
+file = "scripts/agentctl/risk.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "d12ced4c3ff5e1b0"
+domain = "code"
+file = "scripts/agentctl/risk.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "51fb3e5a2d1d2ddf"
+domain = "code"
+file = "scripts/agentctl/risk.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
 id = "2115d7fb919a4671"
@@ -15872,6 +15912,94 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "e84f9c7822f7ee3f"
+domain = "code"
+file = "scripts/tests/test_risk_bet.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "dad2182ac4946128"
+domain = "code"
+file = "scripts/tests/test_risk_bet.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3ed46c54862efa06"
+domain = "code"
+file = "scripts/tests/test_risk_bet.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "f5a446d562528549"
+domain = "code"
+file = "scripts/tests/test_risk_bet.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "d369fedfa57ae813"
+domain = "code"
+file = "scripts/tests/test_risk_bet.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "e4d88b40d69e3790"
+domain = "code"
+file = "scripts/tests/test_risk_bet.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "ef5d5ea1d3f000c5"
+domain = "code"
+file = "scripts/tests/test_risk_bet.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "09f61917828cc475"
+domain = "code"
+file = "scripts/tests/test_risk_bet.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "9c8dedf3b68a8064"
+domain = "code"
+file = "scripts/tests/test_risk_bet.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "cf834d971084f1a0"
+domain = "code"
+file = "scripts/tests/test_risk_bet.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "f683ab307b1398f9"
+domain = "code"
+file = "scripts/tests/test_risk_bet.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "958f9f8834f5eadc"
 domain = "code"
 file = "scripts/tests/test_scorecard_flag_routing.py"
@@ -18238,6 +18366,14 @@ file = "scripts/agentctl/result_image.py"
 class = "semantic-guarded"
 disposition = "keep"
 ground = "The one file in the engine whose subject IS free-text meaning: it decides whether a stage's expected_result_image restates the check that judges it. Its regexes are `echo_prefilter`, a high-recall structural PREFILTER whose every consumer (`submission.submission_advice`) gates it behind `judge_echo` before anything is said — the prefilter alone produces no output at all. So the `scripts/agentctl/**` row below, which grounds its structural verdict on the engine's regexes reading the engine's own syntax rather than free-text meaning, states the opposite of what is true here. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "fcf69212d15fd8f5"
+domain = "code_file_rollup"
+file = "scripts/agentctl/risk.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "1dd077dca93648cf"
@@ -20683,6 +20819,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "8d66b5c21da888d9"
 domain = "code_file_rollup"
 file = "scripts/tests/test_review_route_shape.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "daf6ead3a2dd7ae4"
+domain = "code_file_rollup"
+file = "scripts/tests/test_risk_bet.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

@@ -6,7 +6,8 @@ what is later held fixed are the same text. Every other session reads the full p
 """
 from __future__ import annotations
 
-from .plan import SKELETON_PHASE, PlanDoc
+from .plan import SKELETON_PHASE, PlanDoc, first_hop
+from .risk import NEIGHBOURS, tag_instruction
 
 FULL = "full"
 SKELETON = "skeleton"
@@ -16,6 +17,37 @@ def brief_kind(risk_planning: bool | None, plan_phase: str) -> str:
     """The brief a session's reviewer gets: the skeleton one only for a bound session whose
     current plan declares the skeleton phase."""
     return SKELETON if risk_planning and plan_phase == SKELETON_PHASE else FULL
+
+
+def neighbours_brief(doc: PlanDoc, n: int) -> str:
+    """Markdown of what stage `n` hands over and takes in, for a reviewer who owes the
+    neighbours depth: each first-hop neighbour's declared product and the supplies that
+    join it to `n`."""
+    stages = {s.index: s for s in doc.stages}
+    out = [f"## Neighbours of stage {n}", ""]
+    for m in sorted(first_hop(doc, n)):
+        s = stages[m]
+        out += [f"### Stage {m}: {s.title}", ""]
+        out += _lines("result", [s.subject.result])
+        out += _lines("output_artifacts", sorted(s.output_artifacts))
+        out += _lines("supplies", sorted(f"{x.on}:{x.element}={x.artifact}" for x in s.supplies))
+        out.append("")
+    if len(out) == 2:
+        out.append("(none)")
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def bound_addendum(doc: PlanDoc, risk_planning: bool | None, plan_phase: str, depth: str = "",
+                   n: int | None = None) -> str:
+    """What a bound session's reviewer reads beyond the full brief: the tagging
+    instruction, and at the neighbours depth the neighbours of stage `n`. Empty for an
+    unbound session or a skeleton plan, whose brief is unchanged."""
+    if not risk_planning or brief_kind(risk_planning, plan_phase) == SKELETON:
+        return ""
+    parts = [tag_instruction(True)]
+    if depth == NEIGHBOURS and n is not None:
+        parts.append(neighbours_brief(doc, n))
+    return "\n\n".join(parts) + "\n"
 
 
 def _lines(label: str, values) -> list[str]:
