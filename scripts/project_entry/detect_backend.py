@@ -86,16 +86,55 @@ def _real_path_exists(p: str) -> bool:
     return os.path.exists(os.path.expanduser(p))
 
 
-def detect_this_machine() -> "tuple[str, str]":
-    """Reference wiring: the real probes plus this machine's detect hook."""
-    return detect_backends(
+def is_git_repo(path: Path) -> bool:
+    """Return True if *path* is inside a git work tree.
+
+    Walks the ancestor chain looking for a ``.git`` entry — the same indicator
+    git itself uses to locate the work tree root.  Pure filesystem, no subprocess.
+    """
+    p = path.resolve()
+    while True:
+        if (p / ".git").exists():
+            return True
+        parent = p.parent
+        if parent == p:  # filesystem root
+            return False
+        p = parent
+
+
+def detect_this_machine(target_dir: "Path | None" = None) -> "tuple[str, str]":
+    """Reference wiring: the real probes plus this machine's detect hook.
+
+    *target_dir* — when supplied, the workspace backend is derived from that
+    directory: if it sits inside a git checkout, ``git`` is always returned
+    regardless of what machine-level detection (the hook or the toolchain
+    neutral rules) decided.  Pass the instructions-repo root so that running
+    from a non-git project cwd does not bleed into the isolation choice.
+    """
+    ws, tr = detect_backends(
         has_command=lambda cmd: shutil.which(cmd) is not None,
         path_exists=_real_path_exists,
         getenv=os.environ.get,
         hook=load_detect_hook(),
     )
+    if target_dir is not None and ws != "git" and is_git_repo(target_dir):
+        ws = "git"
+    return (ws, tr)
 
 
 if __name__ == "__main__":
-    ws, tr = detect_this_machine()
+    # Derive target_dir for workspace-backend detection from, in order:
+    #   1. CLAUDE_BACKEND_DETECT_DIR env var (explicit caller override)
+    #   2. this script's own grandparent — always the instructions-repo root
+    #      when deployed at scripts/project_entry/detect_backend.py
+    # This ensures callers such as session-isolate.sh, which may run from a
+    # non-git project cwd, still derive the workspace backend from the git
+    # checkout the instructions repo lives in rather than from the cwd.
+    _td_env = os.environ.get("CLAUDE_BACKEND_DETECT_DIR")
+    if _td_env:
+        _target: "Path | None" = Path(_td_env)
+    else:
+        # scripts/project_entry/detect_backend.py → scripts/ → repo-root
+        _target = Path(__file__).resolve().parents[2]
+    ws, tr = detect_this_machine(target_dir=_target)
     print(f"{ws} {tr}")
