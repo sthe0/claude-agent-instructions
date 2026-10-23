@@ -38,7 +38,7 @@ NON_STRING_FIELDS: dict[str, frozenset[str]] = {
         "expected_exit", "landed", "principle", "supplies", "output_artifacts", "renorms",
         "grants", "effects", "optional", "amendments",
     }),
-    "meta": frozenset({"order", "assumption"}),
+    "meta": frozenset({"order", "assumption", "base_stage", "alternatives"}),
     "order": frozenset({"requirements", "requires_traceability", "coverage"}),
 }
 
@@ -56,6 +56,7 @@ EXTERNALIZABLE_FIELDS: dict[str, frozenset[str]] = {
     "meta": frozenset({
         "task_id", "goal", "done_criterion", "criterion_type", "weight_class",
         "external_research", "repo_root", "delivery_worktree", "landing_waiver",
+        "phase", "alternatives_waiver",
     }),
     "order": frozenset({"customer_id", "customer", "functional_place", "parent_norm"}),
 }
