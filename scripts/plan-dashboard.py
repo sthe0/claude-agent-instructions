@@ -5,13 +5,14 @@ Subcommand ``snapshot`` prints every selected task with its totals as JSON or te
 ``--detail`` adds each task's stages, difficulties, history tail and phase tree. Subcommand
 ``tui`` is the console view: interactive through ``uv run`` (exit 4 without uv), or plain
 text with ``--once``. Subcommand ``web`` serves the read-only page on the loopback address
-(``--port``; exit 5 when it cannot listen; ``--self-test`` probes a throwaway server). Subcommand ``publish`` keeps one status message per
-machine up to date through the machine-local publisher plugin: ``--dry-run`` prints the digest,
-``--check-publisher`` runs the plugin's local health check, ``--once`` and ``--watch`` send (exit 6:
-no usable plugin). The shared
+(``--port``; exit 5 when it cannot listen; ``--self-test`` probes a throwaway server).
+Subcommand ``publish`` keeps one status message per machine up to date through the
+machine-local publisher plugin: ``--dry-run`` prints the digest, ``--check-publisher`` runs the
+plugin's local health check, ``--once`` and ``--watch`` send (exit 6: no usable plugin; exit 1:
+a failed send, repeated failures in ``--watch``, a busy lock or an unsavable state). The shared
 options (state root, window, selection, ledger, transcripts) come from one parent parser so
-later views reuse them. Exit code 3: a ``--session`` that names no state file, in ``snapshot``
-and ``tui --once`` (the interactive ``tui`` opens with an empty list instead).
+later views reuse them. Exit code 3: a ``--session`` that names no state file, in ``snapshot``,
+``tui --once`` and ``publish`` (the interactive ``tui`` opens with an empty list instead).
 """
 from __future__ import annotations
 
@@ -177,13 +178,14 @@ def run_web(args) -> int:
 def run_publish(args) -> int:
     options = dict(window_hours=args.window_hours, include_all=args.include_all, sessions=args.sessions,
                    cost_log=args.cost_log)
-    if args.dry_run:
+    if args.dry_run or args.once or args.watch:
         snapshot = model.collect(args.state_root, now=dt.datetime.now(dt.timezone.utc), **options)
         missing = tui.missing_sessions(snapshot, args.sessions)
         if missing:
             return no_such_session(missing)
-        print(publish.digest(snapshot))
-        return 0
+        if args.dry_run:
+            print(publish.digest(snapshot))
+            return 0
     try:
         plugin = publish.select_publisher(args.plugin_dir)
     except publish.PublisherError as exc:
@@ -206,6 +208,9 @@ def run_publish(args) -> int:
     try:
         publish.watch(args.state_root, plugin, state_path, interval=args.interval,
                       report=lambda outcome: print(outcome, flush=True), **common)
+    except (publish.PublishAborted, publish.StatePersistError) as exc:
+        print(f"plan-dashboard: publish stopped: {exc}", file=sys.stderr)
+        return 1
     except KeyboardInterrupt:
         pass
     return 0
