@@ -7,7 +7,7 @@ what is later held fixed are the same text. Every other session reads the full p
 from __future__ import annotations
 
 from .plan import SKELETON_PHASE, PlanDoc, first_hop
-from .risk import NEIGHBOURS, tag_instruction
+from .risk import NEIGHBOURS, BetError, effective, parse_bet, tag_instruction
 
 FULL = "full"
 SKELETON = "skeleton"
@@ -48,6 +48,27 @@ def bound_addendum(doc: PlanDoc, risk_planning: bool | None, plan_phase: str, de
     if depth == NEIGHBOURS and n is not None:
         parts.append(neighbours_brief(doc, n))
     return "\n\n".join(parts) + "\n"
+
+
+def render_addendum(doc: PlanDoc, stage_indices=None) -> str:
+    """The bound addendum a rendered review brief ends with: the tagging instruction once,
+    then the neighbours of each rendered stage whose effective bet depth is `neighbours`
+    (a whole-plan render lists every stage's own products already, so it adds none)."""
+    plan_phase = doc.meta.phase
+    text = bound_addendum(doc, True, plan_phase)
+    if not text:
+        return ""
+    for n in sorted(stage_indices or ()):
+        raw = doc.bets.get(n)
+        if raw is None:
+            continue
+        try:
+            depth = effective(parse_bet(raw)).depth
+        except BetError:
+            continue
+        if depth == NEIGHBOURS:
+            text += "\n" + neighbours_brief(doc, n)
+    return text
 
 
 def _lines(label: str, values) -> list[str]:
