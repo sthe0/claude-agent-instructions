@@ -61,6 +61,7 @@
 "scripts/measure-marker-extractor-latency.py" = { disposition = "deferred", category = "deferred", reason = "appends docs/operations/marker-extractor-calibration.jsonl; a calibration run, outside #353" }
 
 # --- not-canon: writes only outside the repo, or names a write primitive without using it ---
+"scripts/plan_dashboard/publish.py" = { disposition = "not-canon", category = "not-canon", reason = "writes one publish-state file under XDG_STATE_HOME (or the path --publish-state names); no tracked file" }
 "scripts/lib/instruction_smoke_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes smoke records under the git common dir and a throwaway sandbox under the temp dir; no tracked file" }
 "scripts/lib/engine_session_binding.py" = { disposition = "not-canon", category = "not-canon", reason = "harness-to-engine session binding records under the agentctl state dir, temp file then rename; no tracked file" }
 "scripts/hook-memory-retrieval.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session surfaced-leaf dedupe state under the agent state dir; reads the memory corpus, writes no tracked file" }

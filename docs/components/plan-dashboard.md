@@ -130,4 +130,19 @@ Code: `scripts/plan_dashboard/web.py` (`serve`, `check_bind`, `host_allowed`, `m
 
 ## Status digest
 
-Not written yet.
+A short text summary of the live tasks, kept in one chat message that is edited in place. Core does not know which messenger carries it (ADR-0008 § 7): it produces the text, a stable key per machine (`plan-dashboard:<host>`), and calls a machine-local publisher plugin that owns the transport.
+
+```
+python3 scripts/plan-dashboard.py publish (--dry-run | --check-publisher | --once | --watch)
+        [--plugin-dir DIR] [--publish-state FILE] [--interval S] [--min-interval S]
+        [--all] [--session ID]... [--window-hours N] [--state-root DIR] [--cost-log FILE]
+```
+
+- `--dry-run` prints the digest and exits; it loads no plugin and writes no file. `--session` with an id that names no state file exits 3.
+- `--check-publisher` loads the plugin and runs its `health()` with the network and process spawning stubbed to raise, so a check that reaches out fails instead of passing quietly. It exits 0 when healthy, 1 otherwise.
+- `--once` makes one pass and prints `sent`, `edited`, `unchanged` or `skipped`. `--watch` repeats it every `--interval` seconds (default 60) until interrupted; a failing pass is printed and retried on the next tick. `publish --watch` is the long-running form.
+- The text has a header (host name, task count) and one line per task: session, liveness, node, stages done/total, `!` while a difficulty is open, wall-clock, cost, goal. Estimates and lower bounds carry `~` and `≥` as everywhere else. It holds no clock reading, so it changes only when a shown figure does. It is cut to 4096 characters with `… and N more` for the rest.
+- Sending is change-driven on the sha256 of that text and rate-bounded: a changed text is sent only when `--min-interval` (default 30 s) has passed since the last send, so the message is edited at most about twice a minute. The first send creates the message; later ones edit it through the handle the plugin returned, kept with the hash in the publish state file (`$XDG_STATE_HOME/plan-dashboard/publish-state.json`, or `--publish-state`). That file is the only file the command writes, and it lies outside the engine's state directory. A plugin that raises leaves the state unchanged.
+- The plugin is `<plugin dir>/publishers/<name>.py` with `NAME`, `publish(key, text, handle) -> handle` (send when `handle` is None, otherwise edit that message and return its handle) and `health() -> bool | (bool, detail)`. Plugin dir: `--plugin-dir`, else `$PLAN_DASHBOARD_PLUGIN_DIR`, else `<agent home>/plan-dashboard-plugins`. Exactly one plugin must be present: none, several, one that fails to import or one without the two functions is an error (exit 6), never a guess. A plugin uses absolute imports only and keeps its credentials out of argv and output.
+
+Code: `scripts/plan_dashboard/publish.py` (`digest`, `should_send`, `run_once`, `watch`, `select_publisher`, `check_health`). Tests: `scripts/tests/test_plan_dashboard_publish.py`, with fake plugins only; `PUBLISH_MUTATIONS` in the mutation plugin holds five mutations (`publish-no-cap`, `publish-always-send`, `publish-watch-once`, `publish-writes-state`, `publish-health-net-open`) and is run with the command of the data layer's mutation control against that test file.
