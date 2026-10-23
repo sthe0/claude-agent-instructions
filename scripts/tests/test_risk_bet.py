@@ -339,3 +339,83 @@ def test_unbound_tagged_concern_unchanged(unbound, tag):
     assert gates._concern_part_token("C1: " + tagged, after_marker=True) == "stage:1"
     assert plan.parse_concern("blocking: " + tagged).severity == plan.parse_concern("blocking: " + plain).severity
     assert unbound_blockers(unbound, "blocking: " + tagged)
+
+
+def render_cmd(path: str, *, stage=None, bound=False) -> str:
+    import argparse
+
+    from agentctl import render
+
+    return render.cmd_plan_render(argparse.Namespace(plan=path, stage=stage, bound=bound)).detail
+
+
+def test_the_plan_render_flag_is_parsed():
+    from agentctl import cli
+
+    parsed = cli.build_parser().parse_args(["plan-render", "--plan", "p.toml", "--bound"])
+    assert parsed.bound is True
+    assert cli.build_parser().parse_args(["plan-render", "--plan", "p.toml"]).bound is False
+
+
+def test_bound_rendering_carries_the_addendum(tmp_path):
+    path = tmp_path / "plan.toml"
+    path.write_text(with_bets(TWO_STAGES, {1: QUIET_BET, 2: bet_toml(damage="high")}), encoding="utf-8")
+    whole = render_cmd(str(path), bound=True)
+    assert whole.endswith(risk.TAG_INSTRUCTION + "\n") and "Neighbours of" not in whole
+    deep = render_cmd(str(path), stage="2", bound=True)
+    assert risk.TAG_INSTRUCTION in deep and "Neighbours of stage 2" in deep
+    assert "Stage 1: Scaffold module" in deep.split("Neighbours of stage 2")[1]
+    shallow = render_cmd(str(path), stage="1", bound=True)
+    assert risk.TAG_INSTRUCTION in shallow and "Neighbours of" not in shallow
+    many = render_cmd(str(path), stage="1,2", bound=True)
+    assert many.count(risk.TAG_INSTRUCTION) == 1 and "Neighbours of stage 2" in many
+
+
+@pytest.mark.parametrize("stage", [None, "2", "1,2"])
+def test_unbound_rendering_is_unchanged(tmp_path, stage):
+    from agentctl import render as render_mod
+
+    path = tmp_path / "plan.toml"
+    path.write_text(with_bets(TWO_STAGES, {1: QUIET_BET, 2: bet_toml(damage="high")}), encoding="utf-8")
+    plain = render_cmd(str(path), stage=stage)
+    assert risk.TAG_INSTRUCTION not in plain and "Neighbours of" not in plain
+    doc = plan.load_plan(str(path), strict=False)
+    expected = {None: render_mod.render_plan_md(doc),
+                "2": render_mod.render_stage_brief(doc, 2),
+                "1,2": render_mod.render_stages_md(doc, [1, 2])}[stage]
+    assert plain == expected
+
+
+def test_a_skeleton_plan_renders_without_the_addendum(tmp_path):
+    path = tmp_path / "skeleton.toml"
+    path.write_text(skeleton_text(), encoding="utf-8")
+    assert render_cmd(str(path), bound=True) == render_cmd(str(path))
+
+
+def test_the_review_directive_points_a_bound_reviewer_at_the_addendum(sc):
+    from agentctl import plugins_review_dispatch as dispatch
+
+    skeleton = sc.write(skeleton_text(), "skeleton.toml")
+    sc.submit(skeleton)
+    command = gates.review_delta(sc.state(), plan.load_plan(skeleton), skeleton)["render_command"]
+    assert command.endswith(" --skeleton")
+    assert command in dispatch._obs_submit_plan(sc.state(), {})[0].detail
+    path = bound_plan_after_freeze(sc, skeleton)
+    delta = gates.review_delta(sc.state(), plan.load_plan(path), path)
+    assert delta["render_command"].endswith(" --bound")
+    assert delta["render_command"] in dispatch._obs_submit_plan(sc.state(), {})[0].detail
+
+
+def bound_plan_after_freeze(sc: Scenario, skeleton: str) -> str:
+    assert sc.review(skeleton)["ok"] is True
+    path, d = submit_full(sc, with_bets(TWO_STAGES, STAGE_TWO_REVIEWED, {2: WAIVER}))
+    assert d["marker"] == "PLAN-READY", d
+    return path
+
+
+def test_the_unbound_review_directive_names_the_plain_render(unbound):
+    path = unbound.write(TWO_STAGES, "full.toml")
+    unbound.submit(path)
+    delta = gates.review_delta(unbound.state(), plan.load_plan(path), path)
+    assert "--bound" not in delta["render_command"] and "--skeleton" not in delta["render_command"]
+    assert delta["render_command"] == f"agentctl plan-render --plan {path}"

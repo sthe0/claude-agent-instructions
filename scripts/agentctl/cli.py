@@ -14086,6 +14086,10 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp.add_argument("--skeleton", action="store_true", default=False,
         help="render the phase-A skeleton brief (the chain the axis-R reviewer reads) of a "
              "plan that declares [meta] phase = \"skeleton\"")
+    sp.add_argument("--bound", action="store_true", default=False,
+        help="append the bound-session review addendum (the axis:R / [bet:<n>] tagging "
+             "instruction, and the neighbours of each rendered stage whose bet asks for the "
+             "neighbours depth); the review directive adds it in a bound session")
     # Accept (and ignore) --session so the harness-session auto-injection
     # (_inject_default_session) is a no-op here: rendering is a pure, session-free
     # read of the plan file, unlike every other verb which drives session state.
