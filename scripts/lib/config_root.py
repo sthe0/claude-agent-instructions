@@ -237,7 +237,12 @@ def agentctl_state_dir() -> Path:
 
 
 def agentctl_gate_log() -> Path:
-    """Gate-transition telemetry log (``<root>/agentctl/gate-log.jsonl``)."""
+    """Gate-transition telemetry log (``<root>/agentctl/gate-log.jsonl``). Honors an
+    ``$AGENTCTL_GATE_LOG`` override, mirroring ``agentctl_edit_log()``'s
+    ``$AGENTCTL_EDIT_LEDGER`` pattern, so a test run never appends to the real log."""
+    override = os.environ.get("AGENTCTL_GATE_LOG")
+    if override:
+        return Path(override).expanduser()
     return agentctl_dir() / "gate-log.jsonl"
 
 

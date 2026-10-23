@@ -102,10 +102,20 @@ def _isolate_edit_ledger(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def _isolate_task_quality_ledger(tmp_path, monkeypatch):
     """The scorecard aggregates the real ledger into degradation flags, so a
-    test resolve must never append to it (unlike GATE_LOG, which is inert
-    telemetry)."""
+    test resolve must never append to it."""
     from agentctl import cli
     monkeypatch.setattr(cli, "TASK_QUALITY_LOG", tmp_path / "task-quality.jsonl")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_gate_log(tmp_path, monkeypatch):
+    """policy-scorecard reads the gate log as production telemetry, so no test may append
+    to the real one. The env var reaches subprocesses; cli.GATE_LOG is bound at import,
+    so it is patched as well."""
+    from agentctl import cli
+    log = tmp_path / "gate-log.jsonl"
+    monkeypatch.setenv("AGENTCTL_GATE_LOG", str(log))
+    monkeypatch.setattr(cli, "GATE_LOG", log)
 
 
 @pytest.fixture(autouse=True)

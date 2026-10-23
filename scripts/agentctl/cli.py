@@ -2045,7 +2045,12 @@ def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bo
     Fail-open: any I/O error is swallowed so telemetry never blocks a gate
     transition. Mirrors cost.py's tolerant append-only JSONL-ledger idiom. Reads
     GATE_LOG as a module global (not a captured default) so tests can monkeypatch
-    cli.GATE_LOG and have this pick it up on the next call."""
+    cli.GATE_LOG and have this pick it up on the next call.
+
+    The log is not a record of every evaluation of every gate. The refusal-only labels
+    are written only when the gate refuses (always passed=False): escalation_orphans,
+    frozen_stage, renorm_final. Their block rate is 100% by construction, since the
+    denominator is the refusals themselves, so it says nothing about the gate."""
     row = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "session": state.session_id,
