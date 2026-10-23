@@ -3,7 +3,7 @@
 
 Difficulty removed: the same "is this an agent-behavior-feedback turn?" decision
 is needed in two places — the advisory `UserPromptSubmit` reminder
-(`hook-self-improvement-reminder.py`) and the end-of-turn `Stop` gate
+(`hook-prompt-reminders.py`) and the end-of-turn `Stop` gate
 (`hook-self-improvement-gate.py`). Keeping the regexes in one importable module
 means the reminder and the gate can never drift apart.
 

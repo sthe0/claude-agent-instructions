@@ -2,7 +2,7 @@
 
 Processes that die hard (SIGKILL, OOM, a crashed harness) leave residue behind: a worktree directory, a state file, a cache. A cleanup that runs only on graceful exit cannot reap it, so a periodic reaper has to. Deleting is irreversible, and the rules that make it safe (do not touch what a live session owns, never act on a guess, say what was removed, survive a bug in one reaper) are the same for every kind of residue. They live **once**, in the runner (`scripts/reaper/runner.py`); a reaper only proves what it can about its own kind of residue.
 
-`scripts/hook-reaper.py` is the SessionStart entry. `scripts/hook-orphan-worktree-sweep.py` is a shim that runs the same runner, so machine-local settings that still name the old sweep keep working.
+`scripts/hook-reaper.py` is the SessionStart entry.
 
 ## The reaper contract
 

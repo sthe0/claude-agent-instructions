@@ -4,13 +4,13 @@ Difficulty removed
 ------------------
 
 An advisory ``UserPromptSubmit`` hook runs on EVERY prompt of every session. A
-nudge that re-emits each time is worse than useless — ``hook-context-growth-
-reminder.py``'s whole subject is context bloat, and re-printing its own warning
+nudge that re-emits each time is worse than useless — the context-growth
+reminder's whole subject is context bloat, and re-printing its own warning
 every turn is bloat it caused. So each such hook remembers the highest band it
 has already spoken at, per session, and stays quiet until the situation gets
 worse.
 
-That is one rule, and it was written twice: ``hook-context-growth-reminder.py``
+That is one rule, and it was written twice: a context-growth reminder
 and ``hook-burn-rate-guard.py`` carried byte-similar ``state_path`` /
 ``already_fired`` / ``record_fired`` triples differing only in where the stamps
 live. The next hook that needs it would have copied a third. It lives here now.

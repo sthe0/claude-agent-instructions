@@ -5,9 +5,9 @@ ambient session cwd misfires when the triggering command embeds its own
 `cd <dir> &&` / `git -C <dir>` redirect — the command targets a DIFFERENT tree
 than the session sits in (the standard isolated-worktree landing pattern). This
 shared primitive parses that redirect so every consumer keys off the tree the
-command really commits to. Two hooks need it: hook-guard-canon-readonly.py (its
-original home, #44) and hook-readme-currency-reminder.py; extracting it here
-gives one implementation and one test surface, so the rule cannot drift.
+command really commits to. It lives here, not in hook-guard-canon-readonly.py (its
+original home, #44), so every consumer shares one implementation and one test
+surface and the rule cannot drift.
 """
 from __future__ import annotations
 

@@ -89,25 +89,17 @@
 "scripts/doctor.sh" = { disposition = "not-canon", category = "not-canon", reason = "read-only diagnostic report to stdout; `>` matches are inside messages and comparisons" }
 "scripts/enter-task.sh" = { disposition = "not-canon", category = "not-canon", reason = "adds a linked task worktree and branch; the canonical working tree is untouched, the same operation the route performs" }
 "scripts/file-difficulty.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only the caller-supplied --filing-preview path" }
-"scripts/hook-budget-calibration-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
 "scripts/hook-engine-start.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session marker under the hook state dir" }
 "scripts/hook-guard-bash-source-edit.py" = { disposition = "not-canon", category = "not-canon", reason = "detects `sed -i`; appends to its guard log under ~/.local/log, edits no file itself" }
 "scripts/hook-guard-canon-readonly.py" = { disposition = "not-canon", category = "not-canon", reason = "the read-only guard: names `git commit`/`sed -i` as patterns to deny, writes no file" }
 "scripts/hook-guard-permission-surface.py" = { disposition = "not-canon", category = "not-canon", reason = "fire log under ~/.local/log/claude-permission-guard.jsonl" }
-"scripts/hook-improvement-scan-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
-"scripts/hook-instruction-grooming-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
-"scripts/hook-instructions-refresh-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
-"scripts/hook-judge-ceiling-drift-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
 "scripts/hook-long-job-arm.py" = { disposition = "not-canon", category = "not-canon", reason = "arm marker under the hook state dir" }
-"scripts/hook-phase3-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
-"scripts/hook-policy-scorecard-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
 "scripts/hook-prewrite-plan-check.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session check markers and logs under the hook state dir" }
-"scripts/hook-promote-scan-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
+"scripts/hook-prompt-reminders.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session language-reminder stamp and the instructions-refresh stamp under the hook state dir" }
 "scripts/hook-retry-detector.py" = { disposition = "not-canon", category = "not-canon", reason = "retry counter state under the hook state dir" }
 "scripts/hook-review-mergeable-guardian.py" = { disposition = "not-canon", category = "not-canon", reason = "guardian state under the hook state dir" }
 "scripts/hook-review-monitor-arm.py" = { disposition = "not-canon", category = "not-canon", reason = "monitor arm files under the hook state dir" }
-"scripts/hook-self-diagnose-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
-"scripts/hook-sigma-sentinel-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamp under the hook state dir" }
+"scripts/hook-session-due.py" = { disposition = "not-canon", category = "not-canon", reason = "due-throttle stamps under the hook state dir" }
 "scripts/hook-skill-first.py" = { disposition = "not-canon", category = "not-canon", reason = "fired-skills marker under the hook state dir" }
 "scripts/hook-turn-end-gate.py" = { disposition = "not-canon", category = "not-canon", reason = "turn-gate markers under the hook state dir" }
 "scripts/improvement-scan.py" = { disposition = "not-canon", category = "not-canon", reason = "scan ledger and report under ~/.local/state" }

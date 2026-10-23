@@ -172,7 +172,7 @@ def test_reconciliation_never_rewrites_a_command(tmp_path):
     before the run is gone after it."""
     env = _shell_env(tmp_path)
     foreign = str(tmp_path / "elsewhere" / SLOW_HOOK)
-    other = str(tmp_path / "elsewhere" / "hook-context-growth-reminder.py")
+    other = str(tmp_path / "elsewhere" / "hook-prompt-reminders.py")
     settings = _write(env, {
         SLOW_EVENT: [_group(SLOW_MATCHER, [foreign], 5)],
         "UserPromptSubmit": [_group(None, [other], 5)],

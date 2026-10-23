@@ -95,7 +95,6 @@ scripts/agentctl/advisor.py:855:c43835c3  # 53.42s = outage_escalation's re-samp
 scripts/agentctl/advisor.py:702:fe253a10  # n=0 = judge_latency.MEASURED["published_attachment"]'s UNMEASURED_NOTE row -- this judge has never been measured, so _PUBLISHED_ATTACHMENT_TIMEOUT_S falls back to the family LAST_RESORT_CEILING_S(41) instead of a per-judge p90
 
 # --- scripts/install-reminder-hooks.sh ---------------------------------------
-scripts/install-reminder-hooks.sh:80:486f9f77  # 8 s = hook-effort-divergence-watch.py's own CHECK_TIMEOUT_S, the declared subprocess bound the 10 s registration must not pre-empt; a chosen constant, not a measurement — this hook runs no judge, it drives the read-only `agentctl effort-check`
 scripts/install-reminder-hooks.sh:107:a3879c8a  # n=32, max 11.42s = judge_latency's prior approval_ask stats from approval-sample.json alone, the basis the superseded 18s registration rested on
 scripts/install-reminder-hooks.sh:109:94d47d98  # 19.14s = approval2-sample.json's max, the second n=32 sample whose calls ran past the first sample's ceiling in production
 scripts/install-reminder-hooks.sh:111:4d3f1fb8  # 21s = judge_latency.call_ceiling_s("approval_ask") = ceil(max 19.14) + 1 over the merged n=64 population

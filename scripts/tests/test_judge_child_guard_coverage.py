@@ -49,7 +49,7 @@ Scope, stated honestly: a hook counts as judge-calling when it imports
 of every hook that touches the engine at all, including ones that never spawn
 anything, and a rule that over-demands gets suppressed rather than obeyed. The
 residual: a hook that reaches a judge only through a third module is invisible
-here. `hook-self-improvement-reminder.py` is the live example of the other
+here. `hook-prompt-reminders.py` is the live example of the other
 direction — it calls no judge, and is guarded anyway because its OUTPUT lands
 inside one; extra guards are never failures here, only missing ones are.
 """
@@ -304,13 +304,13 @@ def test_the_predicate_admits_all_five_real_hook_guards():
     """Positive control. An allowlist is only useful if it admits the shapes
     that actually appear in the tree — otherwise it is a rule that will be
     suppressed on first contact with real code. The five hooks below carry the
-    marker guard today (four are judge-callers; `hook-self-improvement-reminder`
+    marker guard today (four are judge-callers; `hook-prompt-reminders`
     is guarded defensively because its OUTPUT lands inside a judge). The
     predicate must accept every one of them, unmodified."""
     expected = {
         "hook-turn-end-gate.py",
         "hook-escalation-diagnosis-gate.py",
-        "hook-self-improvement-reminder.py",
+        "hook-prompt-reminders.py",
         "hook-plan-delivery-gate.py",
         "hook-deferring-disposition-gate.py",
     }

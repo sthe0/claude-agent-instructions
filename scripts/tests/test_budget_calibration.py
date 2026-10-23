@@ -1,11 +1,10 @@
-"""P3: budget-calibration.py + hook-budget-calibration-due.py.
+"""P3: budget-calibration.py + the budget-calibration check of hook-session-due.py.
 
 Grouping of realized spend by (kind x tier) and by task-type, the raise/lower
 flag conditions, the spawn_count==0 exclusion contract from P2, --check mode, and
 the throttled fail-open nudge hook.
 """
 import importlib.util
-import io
 import json
 import sys
 from pathlib import Path
@@ -23,7 +22,7 @@ def _load(mod_name: str, filename: str):
 
 
 bc = _load("budget_calibration", "budget-calibration.py")
-hook = _load("hook_budget_calibration_due", "hook-budget-calibration-due.py")
+hook = _load("hook_session_due", "hook-session-due.py")
 
 
 # A minimal config.md with the tier knobs the analyzer calibrates against.
@@ -189,58 +188,61 @@ def test_report_prints_both_groups(tmp_path, capsys):
 
 # ---------- nudge hook ----------
 
-def _run_hook(monkeypatch, stamp_path, check_line=None):
-    monkeypatch.setattr(hook, "STAMP", stamp_path)
-    monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
+_STAMP = "claude-budget-calibration.stamp"
 
-    class _Proc:
-        stdout = check_line or ""
-    monkeypatch.setattr(hook, "run_check",
-                        lambda: (check_line.strip() if check_line else None))
-    return hook.main()
+
+class _Proc:
+    def __init__(self, stdout):
+        self.stdout = stdout
+        self.returncode = 0
+
+
+def _session_run(monkeypatch, tmp_path, check_line=None):
+    """A session-due Run whose stamp store is tmp and whose `--check` producer is
+    faked to print `check_line`; returns (run, calls)."""
+    monkeypatch.setattr(hook, "state_path", lambda name: tmp_path / name)
+    run = hook.Run(dry_run=False, force=False, budget_s=20.0)
+    calls = {"n": 0}
+
+    def _produce(script, *args, **kw):
+        calls["n"] += 1
+        return _Proc(check_line or "")
+    monkeypatch.setattr(run, "produce", _produce)
+    return run, calls
 
 
 def test_hook_nudges_on_flag(tmp_path, monkeypatch, capsys):
-    stamp = tmp_path / "stamp"
-    rc = _run_hook(monkeypatch, stamp, check_line="RAISE medium: developer ...")
+    run, _ = _session_run(monkeypatch, tmp_path, check_line="RAISE medium: developer ...")
+    hook.check_budget_calibration(run, _STAMP)
     err = capsys.readouterr().err
-    assert rc == 0
     assert "miscalibrated" in err
     assert "self-improvement" in err
-    assert stamp.exists()  # window recorded
+    assert (tmp_path / _STAMP).exists()  # window recorded
 
 
 def test_hook_silent_when_no_flag(tmp_path, monkeypatch, capsys):
-    stamp = tmp_path / "stamp"
-    rc = _run_hook(monkeypatch, stamp, check_line=None)
+    run, _ = _session_run(monkeypatch, tmp_path, check_line=None)
+    hook.check_budget_calibration(run, _STAMP)
     err = capsys.readouterr().err
-    assert rc == 0
     assert err.strip() == ""
-    assert stamp.exists()  # clean check still resets the window
+    assert (tmp_path / _STAMP).exists()  # clean check still resets the window
 
 
 def test_hook_throttled_within_window(tmp_path, monkeypatch, capsys):
-    import datetime as dt
-    stamp = tmp_path / "stamp"
-    stamp.write_text(dt.datetime.now().isoformat(), encoding="utf-8")
-    called = {"n": 0}
-
-    def _check():
-        called["n"] += 1
-        return "RAISE medium: x"
-    monkeypatch.setattr(hook, "STAMP", stamp)
-    monkeypatch.setattr(hook, "run_check", _check)
-    monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
-    rc = hook.main()
-    assert rc == 0
-    assert called["n"] == 0  # throttled: check never ran
+    import time
+    (tmp_path / _STAMP).write_text(repr(time.time()), encoding="utf-8")
+    run, calls = _session_run(monkeypatch, tmp_path, check_line="RAISE medium: x")
+    hook.check_budget_calibration(run, _STAMP)
+    assert calls["n"] == 0  # throttled: check never ran
     assert capsys.readouterr().err.strip() == ""
 
 
-def test_hook_fail_open_on_bad_stdin(tmp_path, monkeypatch, capsys):
-    stamp = tmp_path / "stamp"
-    monkeypatch.setattr(hook, "STAMP", stamp)
-    monkeypatch.setattr(hook, "run_check", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
-    rc = hook.main()  # must not raise
+def test_hook_fail_open_when_check_raises(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(hook, "state_path", lambda name: tmp_path / name)
+    monkeypatch.setattr(hook, "CHECKS", [(_STAMP, hook.check_budget_calibration)])
+
+    def _boom(self, *a, **kw):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(hook.Run, "produce", _boom)
+    rc = hook.main([])  # must not raise
     assert rc == 0

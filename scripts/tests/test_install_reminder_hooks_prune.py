@@ -74,7 +74,7 @@ def test_dangling_managed_hook_is_pruned(tmp_path):
 
 def test_existing_managed_hook_is_kept(tmp_path):
     env = _shell_env(tmp_path)
-    real = str(SCRIPTS_DIR / "hook-context-growth-reminder.py")
+    real = str(SCRIPTS_DIR / "hook-prompt-reminders.py")
     assert Path(real).exists()
     settings = _seed(env, {"UserPromptSubmit": [_group(None, [real])]})
 

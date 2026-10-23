@@ -1,6 +1,6 @@
 ---
 name: instruction-grooming
-description: TRIGGER when an instruction file crosses the lint-prose-length.py WARN threshold (>=90% of its ceiling — CLAUDE.md, README.md, cursor mirror, or any SKILL.md/policy.md) either flagged directly by the linter or via the hook-instruction-grooming-due.py OFFER, or when the user asks to slim / groom / consolidate / deduplicate a bloated instruction file. Also usable proactively before a file is expected to grow further. Work through measure -> survey -> verify -> plan; the actual edit still rides the standard plan-approval spine. SKIP when the file is comfortably under 90% of its ceiling and no user request references grooming.
+description: TRIGGER when an instruction file crosses the lint-prose-length.py WARN threshold (>=90% of its ceiling — CLAUDE.md, README.md, cursor mirror, or any SKILL.md/policy.md) either flagged directly by the linter or via the hook-session-due.py OFFER, or when the user asks to slim / groom / consolidate / deduplicate a bloated instruction file. Also usable proactively before a file is expected to grow further. Work through measure -> survey -> verify -> plan; the actual edit still rides the standard plan-approval spine. SKIP when the file is comfortably under 90% of its ceiling and no user request references grooming.
 ---
 
 # Instruction grooming

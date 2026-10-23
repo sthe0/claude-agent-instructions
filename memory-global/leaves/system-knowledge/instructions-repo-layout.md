@@ -72,11 +72,9 @@ scripts/
   verify-leaf-structure.py             # verify non-experience leaves: schema:leaf/v1 enforces ## Difficulty/Guidance/See also; grandfathered SK leaves keep the difficulty-lead baseline (subsumes verify-difficulty-lead.py)
   record-experience.py                 # generate / extend difficulty-centric experience leaves (search/new/extend/ticket); auto-maintains the experience/MEMORY.md sub-index (see memory-global/leaves/experience-leaf-schema.md)
   hook-self-critique-reminder.py       # PostToolUse Write: nudge to invoke `self-improvement` when an experience leaf has substantive § Self-critique
-  hook-tracker-reminder.py             # UserPromptSubmit: detect tracker references (ticket keys, keywords) and nudge to invoke `tracker-management`
-  hook-push-confirmation-reminder.py   # PreToolUse Bash: nudge to verify user push-confirmation before `git push` / `sync-instructions-repo.sh push`
-  hook-readme-currency-reminder.py     # PreToolUse Bash: before a VCS commit (git or otherwise), list READMEs next to changed code that aren't in the changeset — verify currency
+  hook-prompt-reminders.py             # UserPromptSubmit: self-improvement feedback, tracker / tracker-publish / ticket-plan-sync, experience-record, language, instructions-refresh and context-growth reminders
+  hook-session-due.py                  # SessionStart: throttled due checks (self-diagnose, phase3, promote-scan, policy-scorecard, budget-calibration, sigma-sentinel, improvement-scan, judge-ceiling-drift, instruction-grooming)
   hook-resolution-reminder.py          # UserPromptSubmit: nudge when user reply is brief gratitude — do NOT treat as resolution confirmation
-  hook-context-growth-reminder.py      # UserPromptSubmit: nudge when live context size crosses a band (reads transcript usage); throttled per band per session
   hook-burn-rate-guard.py              # UserPromptSubmit: fast-burn companion to policy-scorecard.py's 7-day spend flag — warns when the last 15 min AND the last 3 h are both past a multiple of the declared medium-tier rate; advisory, throttled per band per session
   install-reminder-hooks.sh            # idempotently wire the canonical reminder-hook set into machine-local settings.json (hooks are not merged from base.json)
   set-context-cap.sh                   # set the context window (and so the auto-compaction trigger): writes CLAUDE_CODE_AUTO_COMPACT_WINDOW + autoCompactWindow into base.json, deletes the two deprecated keys, refuses windows under ~210k

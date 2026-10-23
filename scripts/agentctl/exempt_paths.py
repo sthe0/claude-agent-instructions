@@ -214,7 +214,7 @@ def under_scratch_root(path: str) -> bool:
     """True if `path` resolves under one of scratch_roots(), by root containment
     (never a substring test): "<root>-evil/x.py" must not match root "<root>", and a
     path need not literally contain a trailing slash to be recognized as being at a
-    root — mirrors hook-orphan-worktree-sweep.py's is_temp_root(). The one place that
+    root — the same containment test the worktree reaper applies to temp roots. The one place that
     decides "is this path OS-temp scratch"; is_ledger_noise and the engine's
     ephemeral-output-artifact and evidence-directory checks all answer their own
     questions by calling this rather than re-deriving the containment test.

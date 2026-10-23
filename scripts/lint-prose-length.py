@@ -176,8 +176,8 @@ def _skill_description_total() -> tuple[int, int]:
 def _load_config_root():
     """Import lib/config_root.py lazily, and tolerate its absence.
 
-    This script is deliberately COPYABLE on its own: hook-instruction-grooming-
-    due.py runs `<repo>/scripts/lint-prose-length.py` out of whatever tree
+    This script is deliberately COPYABLE on its own: hook-session-due.py's
+    grooming check runs `<repo>/scripts/lint-prose-length.py` out of whatever tree
     CLAUDE_INSTRUCTIONS_REPO names, and that tree need not carry a `lib/`
     sibling. A module-level `from lib import config_root` therefore turns a
     missing sibling into an import error for EVERY governed-file check, not just

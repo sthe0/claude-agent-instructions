@@ -3,7 +3,7 @@
 detected finding outlive the moment of detection.
 
 Difficulty removed: `self-diagnose.py` already enumerates every self-friction
-finding and `hook-self-diagnose-due.py` already runs it at session start — but
+finding and `hook-session-due.py` already runs it at session start — but
 the worklist went to stderr, where it scrolled away unread. The same broken hook
 registration was printed every session for four days and nothing closed it. A
 stderr line has no CLOSURE STATE: nothing records that a finding was seen, acted
@@ -62,7 +62,7 @@ DEFAULT_STORE = Path.home() / ".local" / "state" / "claude-self-diagnose-finding
 # its owning MEMORY.md, delete it, or re-run the hook installer).
 #
 # `ceiling-proximity` is deliberately EXCLUDED and must stay excluded:
-# hook-instruction-grooming-due.py already owns that kind with a per-file
+# hook-prompt-reminders.py already owns that kind with a per-file
 # debounced OFFER at UserPromptSubmit. A second inbox for one finding
 # redistributes noise instead of reducing it — the alert-fatigue anti-pattern,
 # not a fix.

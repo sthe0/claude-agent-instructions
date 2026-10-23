@@ -194,7 +194,7 @@ def test_every_detector_kind_is_placed_in_exactly_one_table():
 
 
 def test_ceiling_proximity_never_blocks(store_file):
-    """It already has a dedicated debounced channel (hook-instruction-grooming-due);
+    """It already has a dedicated debounced channel (the grooming check of hook-session-due);
     a second inbox for one finding is alert fatigue, not a fix."""
     sds.upsert_findings([CEILING], store_file, T0)
     rows = sds.load_rows(store_file, T0 + timedelta(days=365))

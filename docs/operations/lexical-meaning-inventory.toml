@@ -865,32 +865,6 @@ ground = "_PLUS_OPTION.fullmatch tests whether a shell argv token is a `+opt` fl
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/hook-instruction-grooming-due.py::<module>::re.compile"]
-class = "structural"
-ground = "WARN_RE matches the fixed output line format of lint-prose-length.py (`lint-prose-length: WARN — file: ... N% of limit`)."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-instruction-grooming-due.py::parse_warnings::pattern.match"]
-class = "structural"
-ground = "WARN_RE.match parses the linter's structured WARN line into (file, percent)."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-language-reminder.py::is_cyrillic_prompt::pattern.findall"]
-class = "structural"
-ground = "CYRILLIC_RE and LATIN_RE findall count characters of the Cyrillic Unicode block and Latin letters, a script-share ratio determinate from the characters themselves, not a meaning judgement."
-hits = 2
-hit_classes = ["structural", "structural"]
-reviewed_by = "developer"
-
-[sites."scripts/hook-language-reminder.py::<module>::re.compile"]
-class = "structural"
-ground = "CYRILLIC_RE is the Unicode block range U+0400-U+04FF and LATIN_RE is [A-Za-z]; both are character-class (script) checks."
-hits = 2
-hit_classes = ["structural", "structural"]
-reviewed_by = "developer"
-
 [sites."scripts/hook-memory-consistency.py::_check_frontmatter._get::re.search"]
 class = "structural"
 ground = "re.search extracts a `key: value` line from the YAML frontmatter body (frontmatter structure)."
@@ -947,6 +921,40 @@ ground = "PLAN_PATH_RE compiles the `.claude(-agent)/plans/` path-component patt
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/hook-prompt-reminders.py::<module>::re.compile"]
+class = "meaning-decision"
+ground = "CYRILLIC_RE (U+0400-U+04FF) and LATIN_RE ([A-Za-z]) are script character classes and TICKET_KEY_RE matches the ABC-123 ticket-key shape (structural); KEYWORDS_RE is a keyword list (ticket/issue/tracker/тикет/тред) that by itself decides whether a prompt mentions a tracker (meaning)."
+hits = 4
+hit_classes = ["structural", "structural", "structural", "meaning-decision"]
+open_violation = "the compiled KEYWORDS_RE tracker keyword list behind the tracker reminder and the plan-sync nudge"
+reviewed_by = "developer"
+
+[sites."scripts/hook-prompt-reminders.py::_language_stamp::re.sub"]
+class = "structural"
+ground = "re.sub replaces characters outside [A-Za-z0-9._-] in a session key so it is a safe stamp filename (filename syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-prompt-reminders.py::find_ticket_keys::pattern.findall"]
+class = "structural"
+ground = "TICKET_KEY_RE.findall extracts ABC-123-shaped ticket keys minus a fixed false-positive list; ticket-key syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/hook-prompt-reminders.py::find_tracker_signals::pattern.finditer"]
+class = "meaning-decision"
+ground = "KEYWORDS_RE.finditer collects ticket/issue/tracker/тикет/тред words from the user prompt and alone decides a 'keyword' tracker signal that triggers the reminder, no judge."
+hits = 1
+open_violation = "KEYWORDS_RE alone decides a prompt carries a tracker signal and triggers the tracker reminder"
+reviewed_by = "developer"
+
+[sites."scripts/hook-prompt-reminders.py::is_cyrillic_prompt::pattern.findall"]
+class = "structural"
+ground = "CYRILLIC_RE and LATIN_RE findall count characters of the Cyrillic Unicode block and Latin letters, a script-share ratio determinate from the characters themselves, not a meaning judgement."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
 [sites."scripts/hook-published-text-writer-gate.py::<module>::re.compile"]
 class = "structural"
 ground = "_UNIFIED_DIFF_RE compiles the three-line unified-diff anchor (--- / +++ / @@ hunk header), a file-format structure check."
@@ -956,63 +964,6 @@ reviewed_by = "developer"
 [sites."scripts/hook-published-text-writer-gate.py::_recognized_artifact_kind::pattern.search"]
 class = "structural"
 ground = "_UNIFIED_DIFF_RE.search recognizes a unified-diff artifact by its header structure so it is excluded from the judge; syntax-only, not meaning."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-push-confirmation-reminder.py::detect::pattern.search"]
-class = "structural"
-ground = "PUSH_PATTERNS search the Bash command for the tokens `git push` / `sync-instructions-repo.sh push|sync` (shell-command tokens)."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-push-confirmation-reminder.py::<module>::re.compile"]
-class = "structural"
-ground = "Both patterns compile shell-command tokens (`git push`, `sync-instructions-repo.sh push|sync`)."
-hits = 2
-hit_classes = ["structural", "structural"]
-reviewed_by = "developer"
-
-[sites."scripts/hook-readme-currency-reminder.py::build_commit_re::re.compile"]
-class = "structural"
-ground = "Compiles `\\b(git|<vcs verbs>)\\s+commit` for the Bash command token sequence."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-readme-currency-reminder.py::_commit_verbs::re.split"]
-class = "structural"
-ground = "re.split on commas/whitespace splits the configured commit_command_verbs value into tool names (config syntax)."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-readme-currency-reminder.py::_expand_braces::re.search"]
-class = "structural"
-ground = "re.search finds a `{a,b}` brace group in a glob pattern for expansion (glob syntax)."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-readme-currency-reminder.py::_is_readme::pattern.match"]
-class = "structural"
-ground = "README_RE.match tests whether a file basename is README[.ext] (file name)."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-readme-currency-reminder.py::main::pattern.search"]
-class = "structural"
-ground = "COMMIT_RE.search detects a `git commit` command token and GIT_ALL_RE.search detects `--all` / `-a` flags on it (command-line flags)."
-hits = 2
-hit_classes = ["structural", "structural"]
-reviewed_by = "developer"
-
-[sites."scripts/hook-readme-currency-reminder.py::<module>::re.compile"]
-class = "structural"
-ground = "GIT_ALL_RE matches the commit `--all`/`-a` flag and README_RE matches README file names."
-hits = 2
-hit_classes = ["structural", "structural"]
-reviewed_by = "developer"
-
-[sites."scripts/hook-readme-currency-reminder.py::_nearest_readme::pattern.match"]
-class = "structural"
-ground = "README_RE.match tests directory entry names for README[.ext] (file name)."
 hits = 1
 reviewed_by = "developer"
 
@@ -1146,6 +1097,12 @@ ground = "HEADING_RE.search finds the next markdown heading to delimit a section
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/hook-session-due.py::<module>::re.compile"]
+class = "structural"
+ground = "WARN_RE matches the fixed output line format of lint-prose-length.py (`lint-prose-length: WARN — file: ... N% of limit`)."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/hook-si-freetext-answer.py::free_text_questions::pattern.findall"]
 class = "structural"
 ground = "PAIR_RE.findall extracts '\"question\"=\"answer\"' pairs from the AskUserQuestion tool response, then compares answers to offered labels by set membership; tool-response syntax."
@@ -1180,48 +1137,6 @@ reviewed_by = "developer"
 class = "structural"
 ground = "Splits a config value into host/path fragments on commas/whitespace; pure splitting."
 hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-ticket-plan-sync.py::mentions_tracker::pattern.findall"]
-class = "structural"
-ground = "TICKET_KEY_RE.findall extracts ABC-123-shaped ticket keys and filters a fixed false-positive set; ticket-key syntax."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-ticket-plan-sync.py::mentions_tracker::pattern.search"]
-class = "meaning-decision"
-ground = "KEYWORDS_RE.search on the user prompt for the words ticket/issue/tracker/тикет/тред alone decides whether the prompt mentions a tracker, which gates the plan-sync nudge, with no judge."
-hits = 1
-open_violation = "KEYWORDS_RE alone decides a prompt mentions a tracker and gates the plan-sync nudge"
-reviewed_by = "developer"
-
-[sites."scripts/hook-ticket-plan-sync.py::<module>::re.compile"]
-class = "meaning-decision"
-ground = "TICKET_KEY_RE matches the ABC-123 ticket-key shape (structural); KEYWORDS_RE is a keyword list (ticket/issue/tracker/тикет/тред) that by itself decides whether a prompt mentions a ticket (meaning)."
-hits = 2
-hit_classes = ["structural", "meaning-decision"]
-open_violation = "the compiled KEYWORDS_RE tracker keyword list behind the plan-sync nudge"
-reviewed_by = "developer"
-
-[sites."scripts/hook-tracker-reminder.py::find_signals::pattern.finditer"]
-class = "meaning-decision"
-ground = "KEYWORDS_RE.finditer collects ticket/issue/tracker/тикет/тред words from the user prompt and alone decides a 'keyword' tracker signal that triggers the reminder, no judge."
-hits = 1
-open_violation = "KEYWORDS_RE alone decides a prompt carries a tracker signal and triggers the reminder"
-reviewed_by = "developer"
-
-[sites."scripts/hook-tracker-reminder.py::find_ticket_keys::pattern.findall"]
-class = "structural"
-ground = "TICKET_KEY_RE.findall extracts ABC-123-shaped ticket keys minus a fixed false-positive list; ticket-key syntax."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-tracker-reminder.py::<module>::re.compile"]
-class = "meaning-decision"
-ground = "TICKET_KEY_RE matches the ABC-123 ticket-key shape (structural); KEYWORDS_RE is a keyword list that by itself decides whether free-text prompt mentions a ticket/tracker (meaning)."
-hits = 2
-hit_classes = ["structural", "meaning-decision"]
-open_violation = "the compiled KEYWORDS_RE tracker keyword list behind the tracker reminder"
 reviewed_by = "developer"
 
 [sites."scripts/improvement-scan.py::_candidate_text::re.search"]

@@ -44,7 +44,6 @@ to be exactly that set.
 | `scripts/agentctl/render.py`:`non_plan_brief_text` | not a plan | Reads a `--plan` file that already failed to load as a typed plan — a plain brief — and returns its text, refusing one past `NON_PLAN_BRIEF_MAX_CHARS`. |
 | `scripts/check-exception-set-enumeration.py`:`_field_sentences` | index-only | A report-only line scanner over the index text (it needs line numbers); it never changes an exit code. A field held in a referenced file is not scanned. |
 | `scripts/hook-state-gate.py`:`diagnosing_plan_write_ok` | not a plan | Reads the session state (JSON) to decide whether a plan write is allowed. |
-| `scripts/hook-ticket-plan-sync.py`:`session_plan_path` | not a plan | Reads the session state (JSON) for the registered plan path. |
 | `scripts/plan-review-topological.py`:`Driver.launch` | index-only | Recomputes the root digest the reviewer attests: the sha256 of the index bytes. |
 | `scripts/verify-agentctl.py`:`check_obligations` | index-only | Hashes the index bytes of a synthetic plan to attest a review in a self-check. |
 | `scripts/verify-agentctl.py`:`check_review_dispatch` | index-only | Same, for the review-dispatch self-check. |

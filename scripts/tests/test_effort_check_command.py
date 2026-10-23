@@ -130,7 +130,7 @@ def test_every_scale_row_agrees_with_would_fire(store, venued_fixtures_dir):
     replans row specifically (the one this change made cross-session), NOT as a general
     claim about every scale: `would_fire` can legitimately be None with `over_threshold`
     non-empty (belt 2 already spent this scale's one-fire-per-replan budget, see
-    `hook-effort-divergence-watch.py`'s `already_fired` branch), and that is not a
+    the effort-divergence watcher's `already_fired` branch), and that is not a
     disagreement this test is meant to catch. A future scale that grows a cross-session
     (or otherwise non-session-local) source should extend this same replans-shaped check
     for its own row, not lean on this one to have generalized for it."""

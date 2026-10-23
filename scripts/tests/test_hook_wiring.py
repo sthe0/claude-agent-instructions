@@ -779,7 +779,9 @@ def test_timeout_requirements_scope_matches_every_judge_caller():
     directions: a caller absent from the table, and a table row naming a hook
     that no longer calls a judge."""
     callers = _hooks_that_call_a_judge()
-    required = {name for name, _minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS}
+    required = {
+        name for name, _minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS
+    } - set(hook_wiring.TIMEOUT_REQUIREMENT_NON_JUDGE_MARGIN_S)
     missing_rows = sorted(callers - required)
     assert not missing_rows, (
         "hooks that call an agentctl.advisor judge_* but carry no "
@@ -849,9 +851,10 @@ def test_timeout_requirement_minimum_matches_the_hooks_own_budget_constant():
         )
         module = _load_hook_module(name)
         actual = getattr(module, const_name)
-        assert actual == minimum, (
-            f"{name}.{const_name} is {actual}, but TIMEOUT_REQUIREMENTS says "
-            f"{minimum} — the two must be the same number"
+        margin = hook_wiring.TIMEOUT_REQUIREMENT_NON_JUDGE_MARGIN_S.get(name, 0)
+        assert actual + margin == minimum, (
+            f"{name}.{const_name} is {actual} (+{margin}s margin), but "
+            f"TIMEOUT_REQUIREMENTS says {minimum} — the two must be the same number"
         )
 
 
@@ -897,7 +900,9 @@ def test_every_timeout_requirement_declares_its_call_count():
     """Bidirectional coverage, the same shape as
     test_timeout_requirement_own_constant_covers_every_requirement: a budget
     without a declared K cannot be checked against the sizing rule at all."""
-    required = {name for name, _minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS}
+    required = {
+        name for name, _minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS
+    } - set(hook_wiring.TIMEOUT_REQUIREMENT_NON_JUDGE_MARGIN_S)
     assert required == set(hook_wiring.TIMEOUT_REQUIREMENT_CALLS)
     for name, k in hook_wiring.TIMEOUT_REQUIREMENT_CALLS.items():
         assert isinstance(k, int) and k >= 1, f"{name} declares a nonsense K: {k}"
@@ -931,6 +936,8 @@ def test_each_hooks_budget_covers_the_calls_it_declares():
     from lib import judge_latency
 
     for name, minimum, _why in hook_wiring.TIMEOUT_REQUIREMENTS:
+        if name in hook_wiring.TIMEOUT_REQUIREMENT_NON_JUDGE_MARGIN_S:
+            continue
         sequence = judge_latency.HOOK_CALL_SEQUENCE[name]
         if any(not judge_latency.row(j).measured for j in sequence):
             needed = judge_latency.LAST_RESORT_CEILING_S + judge_latency.SIZE_HEADROOM_S

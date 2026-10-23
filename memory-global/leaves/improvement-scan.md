@@ -112,7 +112,7 @@ file and findings store, and it only ranks. It files nothing and selects no work
 
 ### The due-hook is a nudge, not a trigger
 
-`scripts/hook-improvement-scan-due.py` (SessionStart, throttled 7 days) never
+The improvement-scan check in `scripts/hook-session-due.py` (SessionStart, throttled 7 days) never
 runs either producer. It only counts already-stored, still-open findings
 carrying the improvement-scan source tag and, if any are open, prints a
 reminder naming the skill. Running the producers, supplying classifications,
