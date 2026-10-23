@@ -922,6 +922,43 @@ def verify_command_scope_warnings(stages, final_check=None) -> list[str]:
     return warnings
 
 
+def final_check_duplicate_warnings(stages, final_check=None) -> list[str]:
+    """Warn (never block) when a final_check entry's command is identical to
+    a stage verify_command in the same plan (after whitespace normalization).
+
+    The duplication is wasteful — verify-final re-runs every stage's
+    verify_command then runs every final_check, so a byte-identical pair costs
+    a second full run of the same command at resolution time while adding zero
+    discriminating power (no state change separates the two invocations).
+
+    The check is warn-only: the duplication is legitimate when the owning stage
+    may be re-armed by a replan (the final_check then provides the guarantee the
+    conditionally-run stage might not), so a blocker would refuse valid plans."""
+    def _norm(cmd: str) -> str:
+        return " ".join(cmd.split())
+
+    stage_commands = {
+        _norm(s.criterion.verify_command)
+        for s in stages
+        if s.criterion.verify_command
+    }
+    warnings: list[str] = []
+    for fi, fc in enumerate(final_check or [], 1):
+        if not fc.command:
+            continue
+        normed = _norm(fc.command)
+        if normed in stage_commands:
+            label = fc.label or fc.command
+            warnings.append(
+                f"final_check {fi} ({label!r}): command is identical to a stage "
+                f"verify_command — verify-final will run it twice with no state "
+                f"change in between, doubling resolution wall-clock for zero added "
+                f"coverage; replace it with a narrower end-state assertion or remove "
+                f"it (issue #141)."
+            )
+    return warnings
+
+
 # --- cost-tier floor advisory (WARN only) -------------------------------------
 # Decidability, stated where the rule lives: every input below is a typed field of
 # the stage (criterion_type, negative_control, the program a verify_command runs), so

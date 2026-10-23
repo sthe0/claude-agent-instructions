@@ -256,3 +256,96 @@ def test_question_enumerate_stays_retired(tmp_path):
     d, _ = _submit(tmp_path, sid="surf3")
     assert d.ok is True
     assert not [a for a in d.data.get("advisories", []) if "question-enumerate" in a]
+
+
+# --- (e) #141: final_check duplicate of stage verify_command warns -------------
+
+_PLAN_WITH_DUPLICATE_FC = """
+[meta]
+task_id = "demo"
+goal = "g"
+done_criterion = "dc"
+criterion_type = "measurable"
+weight_class = "substantive"
+external_research = "n/a"
+repo_root = "{root}"
+""" + SUBSTANTIVE_ORDER + """
+[[stage]]
+index = 1
+title = "Produce a file"
+executor = "in_thread"
+expected_result_image = "i"
+criterion_type = "measurable"
+done_criterion = "d"
+material = "m (traces to R1)"
+material_refs = ["m"]
+knowledge_refs = ["k"]
+knowledge = "kn"
+means = "me"
+method = "mt"
+procedure = "1. read. 2. edit. 3. check"
+invariants = "inv"
+capability_required = "c"
+conditions = "co"
+preconditions = "p"
+cost_tier = "medium"
+verify_command = "{verify}"
+negative_control = "false"
+
+[stage.principle]
+statement = "s"
+source = "src"
+derivation = "a distinct derivation clause"
+confidence = "high"
+refutation = "r"
+
+[[final_check]]
+command = "{final_cmd}"
+label = "end-state"
+"""
+
+_DUP_MARK = "issue #141"
+
+
+def _dup_advisories(tmp_path, verify, final_cmd, sid="dup"):
+    plan = tmp_path / "plan.toml"
+    plan.write_text(
+        _PLAN_WITH_DUPLICATE_FC.format(root=str(tmp_path), verify=verify,
+                                       final_cmd=final_cmd),
+        encoding="utf-8",
+    )
+    store = FileStateStore(tmp_path / "state")
+    _session(store, sid)
+    d = cli.cmd_submit_plan(Namespace(session=sid, plan=str(plan)), store=store)
+    return d.data.get("advisories", []), d
+
+
+def test_identical_final_check_warns(tmp_path):
+    advisories, d = _dup_advisories(tmp_path, verify="echo ok", final_cmd="echo ok")
+    assert d.ok is True, d.data.get("problems")
+    assert d.marker == "PLAN-READY"
+    dup = [a for a in advisories if _DUP_MARK in a]
+    assert len(dup) == 1
+    assert "final_check 1" in dup[0]
+
+
+def test_whitespace_normalized_duplicate_warns(tmp_path):
+    advisories, d = _dup_advisories(tmp_path, verify="echo  ok",
+                                    final_cmd="echo ok", sid="dup2")
+    assert d.ok is True
+    dup = [a for a in advisories if _DUP_MARK in a]
+    assert len(dup) == 1
+
+
+def test_different_final_check_does_not_warn(tmp_path):
+    advisories, d = _dup_advisories(tmp_path, verify="echo hello",
+                                    final_cmd="echo world", sid="dup3")
+    assert d.ok is True
+    assert not [a for a in advisories if _DUP_MARK in a]
+
+
+def test_duplicate_warn_is_not_a_blocker(tmp_path):
+    _, d = _dup_advisories(tmp_path, verify="true", final_cmd="true", sid="dup4")
+    assert d.ok is True
+    assert d.marker == "PLAN-READY"
+    assert not d.data.get("problems")
