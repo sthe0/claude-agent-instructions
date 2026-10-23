@@ -7,7 +7,8 @@ that leaves the suite green is a test gap. Later dashboard stages add rows to MU
 TUI_MUTATIONS is the console view's family: it is looked up by name next to MUTATIONS but its rows
 are killed by ``test_plan_dashboard_tui.py`` (and, for the row that targets ``tui_app``, by the
 textual pilot file), not by the model tests. WEB_MUTATIONS is the web page's family, killed by
-``test_plan_dashboard_web.py``.
+``test_plan_dashboard_web.py``. PUBLISH_MUTATIONS is the status digest's family, killed by
+``test_plan_dashboard_publish.py``.
 
 ``test_plan_dashboard_mutation_catalogue.py`` runs every MUTATIONS row in a subprocess and asserts
 the model tests go red, every other TUI_MUTATIONS row likewise against the console tests, and the
@@ -18,6 +19,7 @@ here and that test covers it. By hand:
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import fcntl
 import importlib
@@ -343,6 +345,30 @@ WEB_MUTATIONS = {
 }
 
 
+def _stop_after_one_pass(original):
+    def mutated(*args, **kwargs):
+        calls = []
+        kwargs["stop"] = lambda: calls.append(1) or len(calls) > 2
+        return original(*args, **kwargs)
+    return mutated
+
+
+def _health_unstubbed(original):
+    def mutated(*args, **kwargs):
+        return contextlib.nullcontext()
+    return mutated
+
+
+PUBLISH = "plan_dashboard.publish"
+PUBLISH_MUTATIONS = {
+    "publish-no-cap": (PUBLISH, "should_send", _with_kwargs(min_interval_s=0)),
+    "publish-always-send": (PUBLISH, "should_send", _always(True)),
+    "publish-watch-once": (PUBLISH, "watch", _stop_after_one_pass),
+    "publish-writes-state": (PUBLISH, "run_once", _collect_then(_touch_state_file)),
+    "publish-health-net-open": (PUBLISH, "network_blocked", _health_unstubbed),
+}
+
+
 def pytest_addoption(parser):
     parser.addoption("--plan-dashboard-mutation", default="", help=f"same as {ENV}; the variable wins")
 
@@ -352,7 +378,7 @@ def pytest_configure(config):
     name = os.environ.get(ENV) or config.getoption("--plan-dashboard-mutation")
     if not name:
         return
-    known = {**MUTATIONS, **TUI_MUTATIONS, **WEB_MUTATIONS}
+    known = {**MUTATIONS, **TUI_MUTATIONS, **WEB_MUTATIONS, **PUBLISH_MUTATIONS}
     if name not in known:
         raise pytest.UsageError(f"{ENV}={name!r} is not a known mutation; known: {sorted(known)}")
     module_name, attr, wrapper = known[name]

@@ -5,7 +5,10 @@ Subcommand ``snapshot`` prints every selected task with its totals as JSON or te
 ``--detail`` adds each task's stages, difficulties, history tail and phase tree. Subcommand
 ``tui`` is the console view: interactive through ``uv run`` (exit 4 without uv), or plain
 text with ``--once``. Subcommand ``web`` serves the read-only page on the loopback address
-(``--port``; exit 5 when it cannot listen; ``--self-test`` probes a throwaway server). The shared
+(``--port``; exit 5 when it cannot listen; ``--self-test`` probes a throwaway server). Subcommand ``publish`` keeps one status message per
+machine up to date through the machine-local publisher plugin: ``--dry-run`` prints the digest,
+``--check-publisher`` runs the plugin's local health check, ``--once`` and ``--watch`` send (exit 6:
+no usable plugin). The shared
 options (state root, window, selection, ledger, transcripts) come from one parent parser so
 later views reuse them. Exit code 3: a ``--session`` that names no state file, in ``snapshot``
 and ``tui --once`` (the interactive ``tui`` opens with an empty list instead).
@@ -23,11 +26,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from agentctl import cost  # noqa: E402
 from lib import config_root  # noqa: E402
-from plan_dashboard import model, tui, web  # noqa: E402
+from plan_dashboard import model, publish, tui, web  # noqa: E402
 
 EXIT_NO_SUCH_SESSION = 3
 EXIT_NEEDS_UV = 4
 EXIT_CANNOT_LISTEN = 5
+EXIT_PUBLISHER = 6
 DEFAULT_PORT = 8765
 GOAL_WIDTH = 100
 
@@ -56,6 +60,16 @@ def build_parser() -> argparse.ArgumentParser:
     page.add_argument("--port", type=int, default=DEFAULT_PORT)
     page.add_argument("--interval", type=float, default=web.DEFAULT_INTERVAL_S)
     page.add_argument("--self-test", action="store_true")
+    pub = sub.add_parser("publish", parents=[shared_parser()])
+    mode = pub.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--check-publisher", action="store_true")
+    mode.add_argument("--once", action="store_true")
+    mode.add_argument("--watch", action="store_true")
+    pub.add_argument("--plugin-dir", type=Path, default=None)
+    pub.add_argument("--publish-state", type=Path, default=None)
+    pub.add_argument("--interval", type=float, default=publish.DEFAULT_INTERVAL_S)
+    pub.add_argument("--min-interval", type=float, default=publish.MIN_INTERVAL_S)
     return parser
 
 
@@ -160,12 +174,51 @@ def run_web(args) -> int:
     return 0
 
 
+def run_publish(args) -> int:
+    options = dict(window_hours=args.window_hours, include_all=args.include_all, sessions=args.sessions,
+                   cost_log=args.cost_log)
+    if args.dry_run:
+        snapshot = model.collect(args.state_root, now=dt.datetime.now(dt.timezone.utc), **options)
+        missing = tui.missing_sessions(snapshot, args.sessions)
+        if missing:
+            return no_such_session(missing)
+        print(publish.digest(snapshot))
+        return 0
+    try:
+        plugin = publish.select_publisher(args.plugin_dir)
+    except publish.PublisherError as exc:
+        print(f"plan-dashboard: {exc}", file=sys.stderr)
+        return EXIT_PUBLISHER
+    name = getattr(plugin, "NAME", "?")
+    if args.check_publisher:
+        ok, detail = publish.check_health(plugin)
+        print(f"publisher {name}: {'ok' if ok else 'unhealthy'}{': ' + detail if detail else ''}")
+        return 0 if ok else 1
+    state_path = args.publish_state or publish.default_state_path()
+    common = dict(min_interval_s=args.min_interval, **options)
+    if args.once:
+        try:
+            print(publish.run_once(args.state_root, plugin, state_path, now=dt.datetime.now(dt.timezone.utc), **common))
+        except Exception as exc:
+            print(f"plan-dashboard: publish failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+        return 0
+    try:
+        publish.watch(args.state_root, plugin, state_path, interval=args.interval,
+                      report=lambda outcome: print(outcome, flush=True), **common)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "tui":
         return run_tui(args)
     if args.command == "web":
         return run_web(args)
+    if args.command == "publish":
+        return run_publish(args)
     now = dt.datetime.now(dt.timezone.utc)
     snapshot = model.collect(
         args.state_root, now=now, window_hours=args.window_hours, include_all=args.include_all,
