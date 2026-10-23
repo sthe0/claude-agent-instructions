@@ -42,7 +42,7 @@ body against the live ticket.
   re-run later against a world that has moved on.
 - When `verify-final` fails on what looks like a scope-growth mismatch (the
   live system now has *more* of something than a stage once asserted), that
-  is `--failure-address нормативное` (the plan's own verification method was
+  is `--failure-address normative` (the plan's own verification method was
   inadequate) — not "the plan/goal changed" and not a resource problem.
 
 ## See also

@@ -17,7 +17,7 @@ Concrete precedent (the permission-self-grant-gate hook, `hook-guard-permission-
 
 ## Guidance
 
-When `overcome-difficulty`'s critique phase (`[[overcome-difficulty]]` § 3) traces a mechanization's failure to **its own operating cost** rather than to a wrong design premise — `--failure-address ресурсное`, typically, since the norm itself (the rule the mechanism enforces) is usually still correct; only its *implementation's* blast radius was wrong — the replanning task must not jump straight to full reversion:
+When `overcome-difficulty`'s critique phase (`[[overcome-difficulty]]` § 3) traces a mechanization's failure to **its own operating cost** rather than to a wrong design premise — `--failure-address resource`, typically, since the norm itself (the rule the mechanism enforces) is usually still correct; only its *implementation's* blast radius was wrong — the replanning task must not jump straight to full reversion:
 
 - **Evaluate a narrowed version first.** Could the observed cost be removed by tightening the trigger condition, adding a fail-open branch on the specific ambiguous case that caused the false positives, staging the rollout behind a canary/warn-only period, or rate-limiting the deny? If a narrowing plausibly preserves most of the mechanized coverage while removing the observed cost, it is cheaper on the autonomy axis than reversion and must be evaluated, not skipped because reversion is quicker to write.
 - **Name full reversion for what it costs, not just what it avoids.** If reversion is still the right call (the narrowed version can't be made safe, or the residual risk genuinely doesn't warrant further engineering), say so — but state explicitly, in the replanning task and in what reaches the user, that this trades the mechanized/automated enforcement back for a prose-only norm the user (or a future session) must re-notice on their own. Folding that trade into "the safe/pragmatic fix" without naming it is what produced the low rating in the precedent above.
@@ -27,6 +27,6 @@ This is a perception-heavy judgment (is the observed cost narrowable, or fundame
 
 ## See also
 
-- [[overcome-difficulty]] § 3 Critique — the phase this leaf constrains; the `--failure-address ресурсное` case specifically.
+- [[overcome-difficulty]] § 3 Critique — the phase this leaf constrains; the `--failure-address resource` case specifically.
 - [[coordinator-objective]] — the autonomy/user-involvement axis this trade-off is measured against.
 - [[recurring-normalize-factor-is-architecture-signal]] — the sibling rule for a *recurring* factor; this leaf covers the categorically-expensive first occurrence (full reversion of working automation) instead of waiting for a second instance.

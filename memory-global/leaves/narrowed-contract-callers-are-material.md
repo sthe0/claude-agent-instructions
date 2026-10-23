@@ -10,7 +10,7 @@ last_verified: 2026-10-10
 
 A stage whose change makes an existing call stop working — a newly required argument, a new refusal, a removed default — breaks every caller of that contract, not only the files the order names. When the plan derives the stage's material from the order's own surface, the executor finishes the change, then meets the broken callers outside its edit grants and cannot commit. The same happens with commit-time regeneration a hook demands (a generated registry that "must not be hand-edited"): if the regeneration command is not in the stage's grants, the commit is refused after all the work is done.
 
-Concrete instance: a stage made `critique --failure-address нормативное` require `--norm-target`. The plan listed four test suites as material; a grep found seventeen suites calling the old form, and three more pin suites enumerating stage fields. The pre-commit hook also required `scripts/gen_crutch_registry.py` to register the new gate functions. The executor stopped with a permission request; the stage went to DIAGNOSING and a replan.
+Concrete instance: a stage made `critique --failure-address normative` require `--norm-target`. The plan listed four test suites as material; a grep found seventeen suites calling the old form, and three more pin suites enumerating stage fields. The pre-commit hook also required `scripts/gen_crutch_registry.py` to register the new gate functions. The executor stopped with a permission request; the stage went to DIAGNOSING and a replan.
 
 ## Guidance
 

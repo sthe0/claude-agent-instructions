@@ -17,10 +17,9 @@ to look 1 and **31.3** to look 2. Run for real on 2026-08-21, the stage's own
 `verify_command` failed exactly as designed: 1 post-fix row of 462 needed,
 `STATUS: not-ready`. That failure went through `agentctl`'s
 declare → investigate → critique cycle, which concluded the fault was
-<!-- Language exception: нормативное/норма are the settled SMD source-ontology terms used throughout the overcome-difficulty skill; preserved verbatim for traceability. -->
-**нормативное**: the plan's own goal-to-criterion mapping bound an inherently
+**normative**: the plan's own goal-to-criterion mapping bound an inherently
 multi-week observation to a single delivery session's own passability — a
-норма problem, not a means or resource problem (see stage 8's
+norm problem, not a means or resource problem (see stage 8's
 `[stage.principle]` in the plan TOML for the full derivation).
 
 By the user's explicit decision of 2026-08-21 (session order element **O6**,

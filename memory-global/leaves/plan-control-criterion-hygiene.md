@@ -697,7 +697,7 @@ never to the dialogue-language body a tech-writer pass is required to clean.
 > So `record-result --status passed` was rejected on an otherwise-complete,
 > otherwise-correct draft. Nine of the verify_command's ten assertion groups
 > passed; only this one, literal-identifier-bound assertion failed. Routed
-> `--failure-address нормативное` (the control criterion's own authoring was
+> `--failure-address normative` (the control criterion's own authoring was
 > wrong, not the draft): the fix replaced the literal match with a check for
 > the Russian terms for "confidence interval" and "bootstrap", both
 > case-insensitive, plus a marker for the single-group/no-comparison framing

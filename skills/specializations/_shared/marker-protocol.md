@@ -38,7 +38,7 @@ Two things do still matter. Do not present a marker you do not mean — the pass
   Resumes with: <what you'll do once answered>
   ```
 
-- `REPLAN:` — the difficulty is **plan-level**: the step's done criterion or its place in the broader plan is wrong (overcome-difficulty concluded this). Propose the revision and reasoning. Do not unilaterally rewrite the broader plan. When the difficulty is the **parent's norm** itself (it cannot be met as stated), record it with `critique --failure-address нормативное --norm-target parent` through `agentctl-own.py` first and then return `REPLAN:`; the parent's `dispatch` trusts that engine record (it surfaces as `norm_mismatch`), never the marker text.
+- `REPLAN:` — the difficulty is **plan-level**: the step's done criterion or its place in the broader plan is wrong (overcome-difficulty concluded this). Propose the revision and reasoning. Do not unilaterally rewrite the broader plan. When the difficulty is the **parent's norm** itself (it cannot be met as stated), record it with `critique --failure-address normative --norm-target parent` through `agentctl-own.py` first and then return `REPLAN:`; the parent's `dispatch` trusts that engine record (it surfaces as `norm_mismatch`), never the marker text.
 - `PERMISSION-REQUEST:` — you cannot proceed without explicit permission for a specific external / irreversible action (push to a shared branch, deploy, modify a file outside the agreed scope, call an external API that costs money, etc.). Format:
 
   ```

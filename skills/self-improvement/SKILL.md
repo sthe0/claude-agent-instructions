@@ -7,7 +7,7 @@ description: TRIGGER when the user gives substantive correction/feedback about a
 
 You improve the **agent system as a whole**: which components exist, the quality of each, the links between them. Success: future sessions solve user tasks faster, more accurately, with fewer repeated mistakes.
 
-**Self-improvement is `overcome-difficulty` specialized to a _normative_ difficulty in the agent-system-as-plan** (`CLAUDE.md` § When the work is stuck is the general case). The material is the norm-set (instructions / config / memory); the failure-address is `нормативное` by construction; the closing ACT is a **re-norming** edit. The two beats below are that cycle applied to this material:
+**Self-improvement is `overcome-difficulty` specialized to a _normative_ difficulty in the agent-system-as-plan** (`CLAUDE.md` § When the work is stuck is the general case). The material is the norm-set (instructions / config / memory); the failure-address is `normative` by construction; the closing ACT is a **re-norming** edit. The two beats below are that cycle applied to this material:
 
 | self-improvement | = overcome-difficulty phase |
 |---|---|
