@@ -28,7 +28,7 @@ from agentctl.stage_norm import StageNorm
 
 PARENT = "parent-session"
 CHILD = "child-session"
-NORMATIVE = "нормативное"
+NORMATIVE = "normative"
 REPLAN_TEXT = "REPLAN: the stage's done criterion cannot be met as written\n"
 EXPECTED = "stage 1's done criterion is checkable from the stage's own material"
 ACTUAL = "the criterion names an artifact no stage produces"
@@ -272,7 +272,7 @@ def test_closed_nested_escalation_dispatches_via_receiving_record(store, fixture
     parent adopts A, and once it closes its difficulty both sides show one closed escalation."""
     _executing(store, PARENT, fixtures_dir)
     _child(store, fixtures_dir, tmp_path, monkeypatch)
-    _critique(store, failure_address="ресурсное", targets=())
+    _critique(store, failure_address="resource", targets=())
     assert store.load(CHILD).difficulty.escalated_to == {}
     _nested_escalation(store)
     child = store.load(CHILD)
@@ -307,7 +307,7 @@ def test_sequential_nested_escalations_show_one_row(store, fixtures_dir, tmp_pat
     adopts it, while it works it, and once it has closed it."""
     _executing(store, PARENT, fixtures_dir)
     _child(store, fixtures_dir, tmp_path, monkeypatch)
-    _critique(store, failure_address="ресурсное", targets=())
+    _critique(store, failure_address="resource", targets=())
     _nested_escalation(store)
     _nested_escalation(store)
     child = store.load(CHILD)
@@ -458,7 +458,7 @@ def test_nested_escalation_opens_parent_difficulty_with_the_escalating_declarati
     declaration, not A's, while still pointing at the record that carries the link."""
     _executing(store, PARENT, fixtures_dir)
     _child(store, fixtures_dir, tmp_path, monkeypatch)
-    _critique(store, failure_address="ресурсное", targets=())
+    _critique(store, failure_address="resource", targets=())
     _nested_escalation_with_own_declaration(store)
     child = store.load(CHILD)
 
@@ -480,7 +480,7 @@ def test_nested_escalation_adopt_carries_the_escalating_declaration(
     B's declaration."""
     _executing(store, PARENT, fixtures_dir)
     _child(store, fixtures_dir, tmp_path, monkeypatch)
-    _critique(store, failure_address="ресурсное", targets=())
+    _critique(store, failure_address="resource", targets=())
     _nested_escalation_with_own_declaration(store)
     _verifying_parent(store)
 

@@ -2,7 +2,7 @@
 
 A child session spawned for a parent stage holds the norm handoff (`parent_link`). When
 its own critique finds that the fault lies in that stage's norm -- a thing the child cannot
-edit -- it records `critique --failure-address нормативное --norm-target parent` and ends
+edit -- it records `critique --failure-address normative --norm-target parent` and ends
 with `REPLAN:`. The parent's dispatch then decides from the child's state record, never
 from the marker text: the record must exist, belong to this session and stage, carry a
 parent norm target whose baseline is the stage's current norm digest, and declare
@@ -29,7 +29,7 @@ from agentctl.stage_norm import StageNorm
 
 PARENT = "parent-session"
 CHILD = "child-session"
-NORMATIVE = "нормативное"
+NORMATIVE = "normative"
 REPLAN_TEXT = "REPLAN: the stage's done criterion cannot be met as written\n"
 EXPECTED = "stage 1's done criterion is checkable from the stage's own material"
 ACTUAL = "the criterion names an artifact no stage produces"
@@ -200,9 +200,9 @@ def test_critique_parent_target_refused_unlinked(store, fixtures_dir):
 def test_critique_parent_target_refused_wrong_address(store, fixtures_dir, tmp_path, monkeypatch):
     _parent(store, fixtures_dir)
     _child(store, fixtures_dir, tmp_path, monkeypatch)
-    d = _critique(store, failure_address="ресурсное")
+    d = _critique(store, failure_address="resource")
     assert d.ok is False
-    assert "нормативное" in d.detail
+    assert "normative" in d.detail
     assert store.load(CHILD).difficulty.norm_targets == []
 
 
@@ -272,7 +272,7 @@ def test_replan_malformed_state_keeps_directive(store, fixtures_dir, tmp_path, m
 def test_replan_text_without_record_keeps_directive(store, fixtures_dir, tmp_path, monkeypatch):
     _parent(store, fixtures_dir)
     _child(store, fixtures_dir, tmp_path, monkeypatch)
-    _critique(store, failure_address="ресурсное", targets=())
+    _critique(store, failure_address="resource", targets=())
     d = _dispatch(store, "REPLAN: the parent stage's norm is wrong -- norm mismatch, "
                          "difficulty addressed to the parent\n")
     assert d.action == "replan"
@@ -287,7 +287,7 @@ def test_replan_child_without_a_parent_target_keeps_directive(store, fixtures_di
                                                               monkeypatch):
     _parent(store, fixtures_dir)
     _child(store, fixtures_dir, tmp_path, monkeypatch)
-    _critique(store, failure_address="ресурсное", targets=())
+    _critique(store, failure_address="resource", targets=())
     _assert_directive_kept(_dispatch(store), store, "names no parent norm target")
 
 

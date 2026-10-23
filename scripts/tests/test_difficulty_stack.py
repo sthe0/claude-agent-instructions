@@ -88,7 +88,7 @@ def _investigate(store, sid):
                                   hypotheses=["h1", "h2"]), store=store)
 
 
-def _critique(store, sid, failure_address="ресурсное", targets=None):
+def _critique(store, sid, failure_address="resource", targets=None):
     kw = dict(session=sid, functional_ground="fg", replanning_task="rt",
               failure_address=failure_address)
     if targets:
@@ -105,7 +105,7 @@ def _waive(store, sid, reason="one-off, not reproducible", factor=None):
                                 normalization_waiver=reason), store=store)
 
 
-def _work(store, sid, *, failure_address="ресурсное", targets=None, normalize=True):
+def _work(store, sid, *, failure_address="resource", targets=None, normalize=True):
     """Declare, investigate, critique and (by default) normalize the open record."""
     _declare(store, sid)
     _investigate(store, sid)
@@ -177,7 +177,7 @@ def _with_child_target(store, tmp_path, venued_fixtures_dir, sid, *, parent_addr
     assert _critique(store, sid, parent_address).ok is True
     assert _open(store, sid).ok is True
     child_uid = store.load(sid).difficulty.uid
-    _work(store, sid, failure_address="нормативное", targets=[str(path)])
+    _work(store, sid, failure_address="normative", targets=[str(path)])
     if edit_after:
         path.write_text("norm v2\n", encoding="utf-8")
     d = _close(store, sid)
@@ -216,7 +216,7 @@ def test_older_state_files_load_with_stack_defaults(store, venued_fixtures_dir, 
     _diagnosing(store, "mig", venued_fixtures_dir)
     _declare(store, "mig")
     _investigate(store, "mig")
-    _critique(store, "mig", "нормативное", ["stage:1"])
+    _critique(store, "mig", "normative", ["stage:1"])
     live = store.load("mig")
     data = asdict(live)
     for key in ("difficulty_stack", "parent_difficulty", "closed_difficulties"):
@@ -305,7 +305,7 @@ def test_close_moves_norm_targets_to_the_parent_and_resumes_it(store, venued_fix
     parent_uid = store.load("c1").difficulty.uid
     _open(store, "c1")
     child_uid = store.load("c1").difficulty.uid
-    _work(store, "c1", failure_address="нормативное", targets=["stage:1"])
+    _work(store, "c1", failure_address="normative", targets=["stage:1"])
     d = _close(store, "c1")
     assert d.ok, d.detail
     state = store.load("c1")
@@ -327,9 +327,9 @@ def test_unedited_stage_target_from_a_child_blocks_the_closing_replan(store, ven
     _declare(store, "c1b")
     _investigate(store, "c1b")
     _open(store, "c1b")
-    _work(store, "c1b", failure_address="нормативное", targets=["stage:1"])
+    _work(store, "c1b", failure_address="normative", targets=["stage:1"])
     assert _close(store, "c1b").ok is True
-    _critique(store, "c1b", "ресурсное")
+    _critique(store, "c1b", "resource")
     _normalize(store, "c1b", factor="root factor")
     before = store.path("c1b").read_bytes()
     d = _replan(store, "c1b", _stage2_only_edit(tmp_path, venued_fixtures_dir))
@@ -351,7 +351,7 @@ def test_close_moves_a_target_whose_norm_was_already_edited(store, venued_fixtur
     _investigate(store, "c2")
     _open(store, "c2")
     child_uid = store.load("c2").difficulty.uid
-    _work(store, "c2", failure_address="нормативное", targets=[str(path)])
+    _work(store, "c2", failure_address="normative", targets=[str(path)])
     path.write_text("norm v2\n", encoding="utf-8")
     d = _close(store, "c2")
     assert d.ok, d.detail
@@ -368,10 +368,10 @@ def test_already_edited_file_target_still_needs_a_renorms_reference(store, venue
     _declare(store, "c2b")
     _investigate(store, "c2b")
     _open(store, "c2b")
-    _work(store, "c2b", failure_address="нормативное", targets=[str(path)])
+    _work(store, "c2b", failure_address="normative", targets=[str(path)])
     path.write_text("norm v2\n", encoding="utf-8")
     assert _close(store, "c2b").ok is True
-    _critique(store, "c2b", "ресурсное")
+    _critique(store, "c2b", "resource")
     _normalize(store, "c2b", factor="root factor")
     before = store.path("c2b").read_bytes()
     d = _replan(store, "c2b", venued_fixtures_dir / "plan_two_stage_refined.toml")
@@ -407,7 +407,7 @@ def test_close_without_failure_address_or_normalization_is_refused(store, venued
     assert unrouted.ok is False, "BEHAVIOUR: an unrouted nested record was closed"
     assert unrouted.action == "critique"
     assert len(store.load("c4").difficulty_stack) == 1
-    _critique(store, "c4", failure_address="ресурсное")
+    _critique(store, "c4", failure_address="resource")
     assert _close(store, "c4").ok is True
 
 
@@ -450,7 +450,7 @@ def test_closing_replan_files_the_closed_root_with_its_children(store, venued_fi
     root_uid = store.load("c8").difficulty.uid
     _open(store, "c8")
     child_uid = store.load("c8").difficulty.uid
-    _work(store, "c8", failure_address="нормативное", targets=["stage:1"])
+    _work(store, "c8", failure_address="normative", targets=["stage:1"])
     assert _close(store, "c8").ok
     _critique(store, "c8")
     _normalize(store, "c8", factor="root factor")
@@ -467,7 +467,7 @@ def test_closing_replan_files_the_closed_root_with_its_children(store, venued_fi
 
 # --- a child's target on a parent critiqued without a norm --------------------
 
-@pytest.mark.parametrize("parent_address", ["ресурсное", "not_applicable"])
+@pytest.mark.parametrize("parent_address", ["resource", "not_applicable"])
 def test_child_file_target_binds_a_parent_that_was_not_critiqued_normative(
         store, venued_fixtures_dir, tmp_path, parent_address):
     """negative control: the gate keys on the record carrying a norm target, not on its
@@ -512,8 +512,8 @@ def test_replan_waiver_cannot_stand_in_for_the_renorm_of_a_target_bearing_record
     --normalization-waiver is the only thing that could let the closing replan past the
     missing normalization -- and a record carrying an inherited norm target refuses it."""
     sid = "f1-waiver-only"
-    path, _ = _with_child_target(store, tmp_path, venued_fixtures_dir, sid, parent_address="ресурсное")
-    assert _critique(store, sid, "ресурсное").ok is True
+    path, _ = _with_child_target(store, tmp_path, venued_fixtures_dir, sid, parent_address="resource")
+    assert _critique(store, sid, "resource").ok is True
     plan = _renorms_plan(tmp_path, venued_fixtures_dir, path)
 
     plain = _replan(store, sid, plan)
@@ -538,14 +538,14 @@ def test_collision_takes_the_childs_baseline(store, venued_fixtures_dir, tmp_pat
     _diagnosing(store, "col", venued_fixtures_dir)
     _declare(store, "col")
     _investigate(store, "col")
-    assert _critique(store, "col", "нормативное", [str(path)]).ok is True
+    assert _critique(store, "col", "normative", [str(path)]).ok is True
     held = {t["target"]: t for t in store.load("col").difficulty.norm_targets}
     assert held[str(path)]["baseline"] == first
     path.write_text("norm v2\n", encoding="utf-8")
     second = _digest(path)
     assert _open(store, "col").ok is True
     child_uid = store.load("col").difficulty.uid
-    _work(store, "col", failure_address="нормативное", targets=[str(path)])
+    _work(store, "col", failure_address="normative", targets=[str(path)])
     assert _close(store, "col").ok is True
     entries = [t for t in store.load("col").difficulty.norm_targets if t["target"] == str(path)]
     assert len(entries) == 1, "BEHAVIOUR: a colliding target was entered twice"
@@ -561,7 +561,7 @@ def test_waiver_is_refused_for_a_target_bearing_nested_record(store, venued_fixt
     _declare(store, "c6")
     _investigate(store, "c6")
     _open(store, "c6")
-    _work(store, "c6", failure_address="нормативное", targets=["stage:1"], normalize=False)
+    _work(store, "c6", failure_address="normative", targets=["stage:1"], normalize=False)
     refused = _waive(store, "c6")
     assert refused.ok is False, "BEHAVIOUR: a waiver was recorded on a target-bearing record"
     after = store.load("c6")
@@ -578,7 +578,7 @@ def test_waiver_recorded_before_a_target_appears_no_longer_closes(store, venued_
     _open(store, "c6b")
     _work(store, "c6b", normalize=False)
     assert _waive(store, "c6b").ok is True
-    assert _critique(store, "c6b", "нормативное", ["stage:1"]).ok is True
+    assert _critique(store, "c6b", "normative", ["stage:1"]).ok is True
     refused = _close(store, "c6b")
     assert refused.ok is False, \
         "BEHAVIOUR: a waiver taken earlier closed a record that then named a norm target"
@@ -670,7 +670,7 @@ def test_refused_waiver_gate_row_carries_the_blocker_text(store, venued_fixtures
     log = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(cli, "GATE_LOG", log)
     sid = "c7g"
-    _with_child_target(store, tmp_path, venued_fixtures_dir, sid, parent_address="ресурсное")
+    _with_child_target(store, tmp_path, venued_fixtures_dir, sid, parent_address="resource")
     d = _replan(store, sid, venued_fixtures_dir / "plan_two_stage_refined.toml",
                 normalization_waiver="genuinely one-off")
     assert d.ok is False

@@ -163,7 +163,7 @@ class Eng:
         self.run("investigate", session=sid, localized_expectation=f"le-{tag}",
                  localized_actual=f"la-{tag}", hypothesis=[f"h1-{tag}", f"h2-{tag}"])
         self.run("critique", session=sid, functional_ground=f"fg-{tag}", replanning_task=f"rt-{tag}",
-                 failure_address="нормативное", norm_target="stage:1",
+                 failure_address="normative", norm_target="stage:1",
                  difference_to_remove=[f"d-{tag}"] if difference else None)
         if normalize:
             self.run("normalize", session=sid, factor=f"factor-{tag}", level="note")
@@ -1037,7 +1037,7 @@ def test_e2e_agent_replan_cycle_without_user(eng):
         ("investigate", dict(localized_expectation="le", localized_actual="la",
                              hypothesis=["h1", "h2"])),
         ("critique", dict(functional_ground="fg", replanning_task="rt",
-                          failure_address="нормативное", norm_target="stage:1",
+                          failure_address="normative", norm_target="stage:1",
                           difference_to_remove="d")),
         ("normalize", dict(factor="f", level="note")),
     ):

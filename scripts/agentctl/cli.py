@@ -129,7 +129,9 @@ from .state import (
     CriterionType,
     Declaration,
     Difficulty,
+    canonical_failure_address,
     EFFORT_FIRE_FINISHED_WORK,
+    FAILURE_ADDRESS_ALIASES,
     FAILURE_ADDRESS_VALUES,
     FinalCheck,
     Investigation,
@@ -9792,7 +9794,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
             return Directive(
                 False, state.node, "renorm",
                 f"stage {stage.index} cannot pass: it is the re-norming stage of a "
-                "нормативное difficulty and the norm file is unchanged",
+                "normative difficulty and the norm file is unchanged",
                 data={"blockers": renorm_block})
     actual = args.actual or ""
     stage.outcome.actual = actual
@@ -10256,7 +10258,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     if renorm_block:
         _log_gate(state, "renorm_final", renorm_block, passed=False)
         return Directive(False, state.node, "renorm",
-                         "not ready for resolution: a нормативное difficulty's norm edit is "
+                         "not ready for resolution: a normative difficulty's norm edit is "
                          "still owed", data={"blockers": renorm_block})
     orphan_block = gates.escalation_orphan_blockers(
         gates.escalation_orphans(state, _linked_children(store, state.session_id)))
@@ -11048,7 +11050,7 @@ def _norm_file_refusal(state: SessionState, target: str) -> str | None:
 
 
 def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[list[dict], str | None]:
-    """The `norm_targets` entries for a нормативное critique's --norm-target values, or
+    """The `norm_targets` entries for a normative critique's --norm-target values, or
     the first refusal. A stage target is snapshotted from the live state's stage -- the
     stage that actually ran, which refinement replans rebuild and `--renormalize` patches
     -- never from a plan file, which is editable while DIAGNOSING. A stage the state does
@@ -11109,7 +11111,7 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
                          "critique is out of order: declaration and investigation must come first")
     # getattr-with-default: in-process Namespace callers (test_replan.py builds one by
     # hand with only the two required fields) must keep working — an absent field is None.
-    failure_address = getattr(args, "failure_address", None)
+    failure_address = canonical_failure_address(getattr(args, "failure_address", None))
     # Reject a bogus value HERE (mirroring cmd_normalize's --level check) so an in-process
     # caller bypassing the argparse `choices` is caught before the Critique is built — this
     # (with argparse) is the ONLY validation of the value set. The closure gate
@@ -11122,14 +11124,14 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
                          f"--failure-address must be one of {list(FAILURE_ADDRESS_VALUES)} "
                          f"or omitted, got {failure_address!r}")
     norm_targets = list(getattr(args, "norm_targets", None) or [])
-    if failure_address == "нормативное" and not norm_targets:
+    if failure_address == "normative" and not norm_targets:
         return Directive(False, state.node, "critique",
-                         "a нормативное critique must name the norm that failed: pass "
+                         "a normative critique must name the norm that failed: pass "
                          "--norm-target stage:<n> or the path of the norm file "
                          "(repeatable), the edit the closing replan has to make")
-    if norm_targets and failure_address != "нормативное":
+    if norm_targets and failure_address != "normative":
         return Directive(False, state.node, "critique",
-                         "--norm-target names the norm of a нормативное fault; it is "
+                         "--norm-target names the norm of a normative fault; it is "
                          f"refused with --failure-address {failure_address!r}")
     snapshots, refusal = _snapshot_norm_targets(state, norm_targets)
     if refusal:
@@ -11902,7 +11904,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
         _log_gate(state, "normalization_blockers", nblock, passed=True)
 
     # closure precondition (R2): the fault must be ROUTED — the critique's failure_address
-    # must be recorded (ресурсное/нормативное/not_applicable обеспечение), never a bare
+    # must be recorded (resource/normative/not_applicable обеспечение), never a bare
     # omission — before the difficulty may be closed. Mirrors normalization_blockers: an
     # INTERNAL precondition (absent from GUARDIANS), [] outside the DIAGNOSING-closure
     # path, so a non-difficulty replan is unaffected. Unlike the normalization gate there
@@ -14347,14 +14349,16 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                     help="a difference whose removal requires a CHANGED means/method "
                          "(repeatable); the engine verifies a means/method changed on replan")
     sp.add_argument("--failure-address", dest="failure_address", default=None,
-                    choices=list(FAILURE_ADDRESS_VALUES),
-                    help="route the fault to the inadequate обеспечение (R2): ресурсное "
-                         "(ресурсное обеспечение — материал/средство) | нормативное "
-                         "(нормативное обеспечение — норма/способ) | not_applicable (routing "
-                         "does not apply); the closure gate demands it on a difficulty-closing replan")
+                    choices=list(FAILURE_ADDRESS_VALUES) + list(FAILURE_ADDRESS_ALIASES),
+                    metavar="{" + ",".join(FAILURE_ADDRESS_VALUES) + "}",
+                    help="route the fault to the inadequate обеспечение (R2): resource "
+                         "(resource обеспечение — материал/средство) | normative "
+                         "(normative обеспечение — норма/способ) | not_applicable (routing "
+                         "does not apply); the original Russian spellings are accepted as aliases; "
+                         "the closure gate demands it on a difficulty-closing replan")
     sp.add_argument("--norm-target", dest="norm_targets", action="append", default=None,
-                    help="the norm a нормативное fault names, repeatable and required with "
-                         "--failure-address нормативное: `stage:<n>` (a stage of the current "
+                    help="the norm a normative fault names, repeatable and required with "
+                         "--failure-address normative: `stage:<n>` (a stage of the current "
                          "plan) or the absolute path of an existing norm file (a linked "
                          "worktree of the instructions repo, a memory leaf, or a file under "
                          "the agent home's skills/ or plans/); the closing replan must "

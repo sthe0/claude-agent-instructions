@@ -49,16 +49,16 @@ def _investigate(store, sid, hypotheses=("h1", "h2")):
 
 
 def _critique(store, sid, *, norm_fault=True):
-    """A `нормативное` critique names stage 1 as the norm at fault, so the closing replan
+    """A `normative` critique names stage 1 as the norm at fault, so the closing replan
     must carry a different stage-1 norm; `norm_fault=False` is for a replan that only adds
     stages."""
     if not norm_fault:
         return cli.cmd_critique(ns(session=sid, functional_ground="fg",
                                    replanning_task="rt",
-                                   failure_address="ресурсное"), store=store)
+                                   failure_address="resource"), store=store)
     return cli.cmd_critique(ns(session=sid, functional_ground="fg",
                                replanning_task="rt",
-                               failure_address="нормативное",
+                               failure_address="normative",
                                norm_targets=["stage:1"]), store=store)
 
 

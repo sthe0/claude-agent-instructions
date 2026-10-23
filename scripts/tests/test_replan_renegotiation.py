@@ -54,8 +54,8 @@ def _to_diagnosing(store, venued_fixtures_dir, sid, *, normalize=True, norm_faul
     cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
-    fault = (dict(failure_address="нормативное", norm_targets=["stage:1"]) if norm_fault
-             else dict(failure_address="ресурсное"))
+    fault = (dict(failure_address="normative", norm_targets=["stage:1"]) if norm_fault
+             else dict(failure_address="resource"))
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt", **fault),
                      store=store)
     if normalize:

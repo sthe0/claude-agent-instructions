@@ -71,7 +71,7 @@ SCHEMA_VERSION = 59  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # service_iface_norm/edge_norm) and unit_norm for unit records
                      # (`unit:<node>` keys in plan_pair_reviews); PlanReview gains
                      # reviewed_unit_currency
-                     # 47: Difficulty gains norm_targets (the norms a нормативное critique
+                     # 47: Difficulty gains norm_targets (the norms a normative critique
                      # names for editing); Stage gains `renorms` (the files a re-norming
                      # stage edits); SessionState gains pending_renorms (norm-edit
                      # obligations that outlive the closing replan)
@@ -417,10 +417,10 @@ class Confidence(str, Enum):
 
 # The legal values of a Critique.failure_address (R2 — the fault-address of преодоление
 # затруднения). A затруднение is overcome by fixing its ОБЕСПЕЧЕНИЕ, and the address is one
-# of two special cases of that ONE act: inadequate РЕСУРСНОЕ обеспечение ('ресурсное' —
+# of two special cases of that ONE act: inadequate resource обеспечение ('resource' —
 # материал/средство: the model of the material, or the tool, was wrong) or inadequate
-# НОРМАТИВНОЕ обеспечение ('нормативное' — норма/способ: the goal, or the method to reach it,
-# was wrong). These are NOT two ontologies — «норма — тоже ресурс» (нормативное обеспечение
+# normative обеспечение ('normative' — норма/способ: the goal, or the method to reach it,
+# was wrong). These are NOT two ontologies — «норма — тоже ресурс» (normative обеспечение
 # ⊂ обеспечение деятельности) — and both reduce reflexively to знание. This is deliberately
 # NOT an is/ought (сущее/должное) tag: the value set is its OWN, decoupled from the retired
 # StatementKind enum a-priori-typing dropped in ADR-0004 (§R2 records the reframe). The
@@ -437,7 +437,15 @@ class Confidence(str, Enum):
 # NORMALIZATION_DESTINATIONS, and is orthogonal to this two-valued address: the address
 # says which обеспечение failed, the destination says which functional place the re-norming
 # repairs. A single value cannot carry both without collapsing the distinction.
-FAILURE_ADDRESS_VALUES = ("ресурсное", "нормативное", "not_applicable")
+FAILURE_ADDRESS_VALUES = ("resource", "normative", "not_applicable")
+
+# The original Russian spellings of the two routed values, still accepted on the CLI and in stored state.
+FAILURE_ADDRESS_ALIASES = {"ресурсное": "resource", "нормативное": "normative"}
+
+
+def canonical_failure_address(value: str | None) -> str | None:
+    """The English spelling of a failure address; an unknown value is returned unchanged."""
+    return FAILURE_ADDRESS_ALIASES.get(value, value) if isinstance(value, str) else value
 
 
 class InvariantError(Exception):
@@ -562,8 +570,8 @@ class Critique:
 
     `failure_address` (schema 17, R2; values reframed schema 19 per ADR-0004 §R2) types
     the fault-address of преодоление затруднения: the затруднение is overcome by fixing its
-    обеспечение, either inadequate РЕСУРСНОЕ обеспечение ('ресурсное' — материал/средство) or
-    inadequate НОРМАТИВНОЕ обеспечение ('нормативное' — норма/способ), or explicitly
+    обеспечение, either inadequate resource обеспечение ('resource' — материал/средство) or
+    inadequate normative обеспечение ('normative' — норма/способ), or explicitly
     not_applicable. Two special cases of ONE act («норма — тоже ресурс»), both reducing
     reflexively to знание — NOT an is/ought tag. A legal value (for a NEW write) is one of
     FAILURE_ADDRESS_VALUES; None is the untouched-legacy default (a critique recorded before
@@ -596,7 +604,7 @@ NORMALIZATION_LEVELS = ("note", "leaf", "principle")
 #
 # The members are the functional places обеспечение деятельности decomposes into (see the
 # FAILURE_ADDRESS_VALUES comment above for the same decomposition on the fault-address
-# axis): ресурсное обеспечение splits into материал and средство, нормативное обеспечение
+# axis): resource обеспечение splits into материал and средство, normative обеспечение
 # into норма and способ, and знание stands upstream of both as the place a норма is
 # selected against and a ресурс judged adequate by. Closed because an open destination is
 # not a place — it is free text, and the axis then records nothing checkable.
@@ -654,7 +662,7 @@ class Difficulty:
     investigation: Investigation | None = None
     critique: Critique | None = None
     normalization: Normalization | None = None
-    # The norms a нормативное critique names for editing (schema 47). Kept on the record
+    # The norms a normative critique names for editing (schema 47). Kept on the record
     # rather than inside `Critique`: `Critique(**crit)` raises on an unknown key, so a
     # field there would make every state written after this one unloadable by an older
     # engine, while this class reads only the keys it knows.
@@ -701,10 +709,13 @@ class Difficulty:
         # normalization defaults to None so any pre-SCHEMA_VERSION-16 persisted state
         # (which never carried the key) loads unchanged — the grandfather migration.
         norm = d.get("normalization")
+        critique = Critique(**crit) if crit else None
+        if critique is not None:
+            critique.failure_address = canonical_failure_address(critique.failure_address)
         return cls(
             declaration=Declaration(**decl) if decl else None,
             investigation=Investigation(**inv) if inv else None,
-            critique=Critique(**crit) if crit else None,
+            critique=critique,
             normalization=Normalization(**norm) if norm else None,
             norm_targets=[dict(t) for t in (d.get("norm_targets") or [])],
             normalization_waiver=d.get("normalization_waiver"),

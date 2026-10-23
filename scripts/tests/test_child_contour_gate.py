@@ -499,7 +499,7 @@ def test_own_channel_reaches_parent_norm_critique(contour):
     critique = contour.own(
         "critique", "--functional-ground", "the parent stage's norm cannot be met",
         "--replanning-task", "rewrite the parent stage's done criterion",
-        "--failure-address", "нормативное", "--norm-target", "parent",
+        "--failure-address", "normative", "--norm-target", "parent",
     )
     result = _expect_ok(critique, "own channel `critique`")
     assert result["marker"] == "REPLAN" and result["action"] == "return_replan", result

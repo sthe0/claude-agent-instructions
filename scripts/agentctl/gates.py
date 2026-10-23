@@ -570,8 +570,8 @@ def normalization_blockers(state: SessionState, *, pending_factor: str | None = 
 def failure_address_blockers(state: SessionState) -> list[str]:
     """Precondition guardian for `replan` at DIAGNOSING closure: a затруднение is overcome
     by fixing its обеспечение, and the fault-address is ambiguous until ROUTED — inadequate
-    РЕСУРСНОЕ обеспечение ('ресурсное': материал/средство) or inadequate НОРМАТИВНОЕ
-    обеспечение ('нормативное': норма/способ), or explicitly not_applicable. Two special
+    resource provision ('resource': материал/средство) or inadequate normative
+    provision ('normative': норма/способ), or explicitly not_applicable. Two special
     cases of ONE act («норма — тоже ресурс»), both reducing reflexively to знание — NOT an
     is/ought tag (ADR-0004 §R2). Like difficulty_blockers/normalization_blockers it is an
     INTERNAL command precondition — deliberately absent from GUARDIANS so verify-agentctl
@@ -593,8 +593,8 @@ def failure_address_blockers(state: SessionState) -> list[str]:
     fa = d.critique.failure_address
     if fa is None:
         return ["difficulty closure requires routing the fault — record the critique with "
-                "--failure-address (ресурсное: inadequate ресурсное обеспечение, "
-                "материал/средство | нормативное: inadequate нормативное обеспечение, "
+                "--failure-address (resource: inadequate resource provision, "
+                "материал/средство | normative: inadequate normative provision, "
                 "норма/способ | not_applicable: routing does not apply)"]
     return []
 
@@ -866,7 +866,7 @@ def pending_renorm_final_blockers(state: SessionState) -> list[str]:
     depth = len(state.plan_stack)
     return [
         f"norm target {e['target']} (bound to stage {e.get('stage')}) was named by a "
-        f"нормативное critique and its file still has its baseline bytes -- edit it, "
+        f"normative critique and its file still has its baseline bytes -- edit it, "
         f"the re-norming act that closes the difficulty"
         for e in open_renorms(state)
         if e.get("depth", 0) == depth
@@ -3738,7 +3738,7 @@ def _renorm_stage_residual(stage) -> tuple:
       to optional under the light path would let it be declined without an approval
       that saw it offered as declinable.
     * `renorms` — the norm files a re-norming stage edits. Same footing again: it binds a
-      нормативное critique to its consequence, and moving it under the light path would
+      normative critique to its consequence, and moving it under the light path would
       re-route which stage owns an open norm-edit obligation.
 
     Deliberately outside, and the only things outside: `index` (the key both sides are

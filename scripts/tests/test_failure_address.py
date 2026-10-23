@@ -1,8 +1,8 @@
 """Fault-address routing at difficulty closure (R2, reframed v4).
 
 A затруднение is overcome by fixing its обеспечение, and a goal-failure is ambiguous
-until ROUTED: was the inadequate обеспечение РЕСУРСНОЕ (материал/средство — 'ресурсное')
-or НОРМАТИВНОЕ (норма/способ — 'нормативное'), or does routing explicitly not apply
+until ROUTED: was the inadequate обеспечение resource (материал/средство — 'resource')
+or normative (норма/способ — 'normative'), or does routing explicitly not apply
 (not_applicable)? These are two special cases of ONE act («норма — тоже ресурс»), both
 reducing reflexively to знание — NOT an is/ought (сущее/должное) tag; that v3 typing was
 rejected (ADR-0004 §R2). The engine types the routing as `Critique.failure_address` and
@@ -19,12 +19,16 @@ re-blocked. Bogus values never reach a persisted record — cmd_critique and the
 `choices` reject them at write time. This covers the deterministic SHELL: the pure
 guardian, cmd_critique validation, the argparse `choices` guard, round-trip persistence,
 the legacy grandfather migration, and the end-to-end block/route path at closure."""
+import re
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
 from agentctl import cli, gates
 from agentctl.state import (
+    canonical_failure_address,
+    FAILURE_ADDRESS_ALIASES,
     Critique,
     Declaration,
     Difficulty,
@@ -40,11 +44,11 @@ def ns(**kw):
     return Namespace(**kw)
 
 
-# FAILURE_ADDRESS_VALUES routes the fault to the inadequate обеспечение (ресурсное vs
-# нормативное) + the not_applicable sentinel — DECOUPLED from the retired StatementKind
+# FAILURE_ADDRESS_VALUES routes the fault to the inadequate обеспечение (resource vs
+# normative) + the not_applicable sentinel — DECOUPLED from the retired StatementKind
 # enum (ADR-0004 §R2). Pin the exact set so a future rename trips here.
 def test_failure_address_values_are_obespechenie_kinds():
-    assert FAILURE_ADDRESS_VALUES == ("ресурсное", "нормативное", "not_applicable")
+    assert FAILURE_ADDRESS_VALUES == ("resource", "normative", "not_applicable")
 
 
 # --- guardian unit -----------------------------------------------------------
@@ -82,12 +86,12 @@ def test_blockers_block_complete_cycle_without_routing():
 
 
 def test_blockers_clear_with_resource_obespechenie():
-    s = _diagnosing(_full_difficulty(failure_address="ресурсное"))
+    s = _diagnosing(_full_difficulty(failure_address="resource"))
     assert gates.failure_address_blockers(s) == []
 
 
 def test_blockers_clear_with_normative_obespechenie():
-    s = _diagnosing(_full_difficulty(failure_address="нормативное"))
+    s = _diagnosing(_full_difficulty(failure_address="normative"))
     assert gates.failure_address_blockers(s) == []
 
 
@@ -135,9 +139,9 @@ def test_cmd_critique_accepts_valid_routing(store, venued_fixtures_dir):
     _to_failed_stage1(store, "cc1", str(venued_fixtures_dir / "plan_two_stage.toml"))
     _declare_investigate(store, "cc1")
     d = cli.cmd_critique(ns(session="cc1", functional_ground="fg", replanning_task="rt",
-                            failure_address="ресурсное"), store=store)
+                            failure_address="resource"), store=store)
     assert d.ok is True
-    assert store.load("cc1").difficulty.critique.failure_address == "ресурсное"
+    assert store.load("cc1").difficulty.critique.failure_address == "resource"
 
 
 def test_cmd_critique_rejects_bogus_routing(store, venued_fixtures_dir):
@@ -196,7 +200,7 @@ def test_legacy_critique_without_failure_address_migrates_to_none():
     with failure_address defaulting to None."""
     s = SessionState(
         session_id="mig", task_id="t", node=Node.DIAGNOSING.value,
-        difficulty=_full_difficulty(failure_address="нормативное"),
+        difficulty=_full_difficulty(failure_address="normative"),
     )
     data = s.to_dict()
     data["difficulty"]["critique"].pop("failure_address")
@@ -248,7 +252,7 @@ def test_routed_critique_unblocks_replan(store, venued_fixtures_dir):
     _to_failed_stage1(store, "e2", plan)
     _declare_investigate(store, "e2")
     cli.cmd_critique(ns(session="e2", functional_ground="fg", replanning_task="rt",
-                        failure_address="нормативное", norm_targets=["stage:1"]),
+                        failure_address="normative", norm_targets=["stage:1"]),
                      store=store)
     _renorm(store, "e2")
     d = cli.cmd_replan(ns(session="e2", plan=refined), store=store)
@@ -271,3 +275,86 @@ def test_explicit_not_applicable_unblocks_replan(store, venued_fixtures_dir):
     d = cli.cmd_replan(ns(session="e3", plan=refined), store=store)
     assert d.ok is True
     assert store.load("e3").node == Node.VERIFYING.value
+
+
+# --- Cyrillic aliases ----------------------------------------------------------
+
+def _critique_args(address):
+    return ["critique", "--session", "s", "--functional-ground", "fg", "--replanning-task", "rt",
+            "--failure-address", address]
+
+
+def test_alias_every_routed_value_has_a_cyrillic_spelling():
+    assert set(FAILURE_ADDRESS_ALIASES.values()) == set(FAILURE_ADDRESS_VALUES) - {"not_applicable"}
+    assert all(alias not in FAILURE_ADDRESS_VALUES for alias in FAILURE_ADDRESS_ALIASES)
+
+
+@pytest.mark.parametrize("alias", list(FAILURE_ADDRESS_ALIASES))
+def test_alias_is_accepted_by_the_cli_parser(alias):
+    args = cli.build_parser().parse_args(_critique_args(alias))
+    assert args.failure_address == alias
+
+
+@pytest.mark.parametrize("alias", list(FAILURE_ADDRESS_ALIASES))
+def test_alias_cli_critique_stores_the_english_value(store, venued_fixtures_dir, alias):
+    _to_failed_stage1(store, "al1", str(venued_fixtures_dir / "plan_two_stage.toml"))
+    _declare_investigate(store, "al1")
+    english = FAILURE_ADDRESS_ALIASES[alias]
+    d = cli.cmd_critique(ns(session="al1", functional_ground="fg", replanning_task="rt",
+                            failure_address=alias,
+                            norm_targets=["stage:1"] if english == "normative" else []),
+                         store=store)
+    assert d.ok is True, d.detail
+    assert store.load("al1").difficulty.critique.failure_address == english
+
+
+def test_alias_hard_coded_cyrillic_literal_is_stored_as_english(store, venued_fixtures_dir):
+    _to_failed_stage1(store, "al2", str(venued_fixtures_dir / "plan_two_stage.toml"))
+    _declare_investigate(store, "al2")
+    d = cli.cmd_critique(ns(session="al2", functional_ground="fg", replanning_task="rt",
+                            failure_address="ресурсное"), store=store)
+    assert d.ok is True
+    assert store.load("al2").difficulty.critique.failure_address == "resource"
+
+
+@pytest.mark.parametrize("alias", list(FAILURE_ADDRESS_ALIASES))
+def test_alias_stored_critique_loads_as_english(alias):
+    stored = {"critique": {"functional_ground": "fg", "replanning_task": "rt",
+                           "failure_address": alias}}
+    loaded = Difficulty.from_dict(stored)
+    assert loaded.critique.failure_address == FAILURE_ADDRESS_ALIASES[alias]
+
+
+def test_alias_unknown_stored_value_is_left_unchanged():
+    assert canonical_failure_address("сущее") == "сущее"
+    assert canonical_failure_address(None) is None
+
+
+_CYRILLIC_VALUES = re.compile("ресурсное|нормативное|РЕСУРСНОЕ|НОРМАТИВНОЕ")
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def _lines_with_spelling(path):
+    return [i for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+            if _CYRILLIC_VALUES.search(line) and "FAILURE_ADDRESS_ALIASES" not in line]
+
+
+def test_cyrillic_spellings_stay_on_alias_lines_in_engine_and_docs():
+    scanned = [p for p in (_REPO / "scripts" / "agentctl").rglob("*") if p.suffix in {".py", ".md"}]
+    scanned.append(_REPO / "scripts" / "spawn-specialist.py")
+    offenders = {str(p.relative_to(_REPO)): _lines_with_spelling(p) for p in scanned}
+    assert {k: v for k, v in offenders.items() if v} == {}
+
+
+def test_cyrillic_spellings_in_tests_live_only_in_this_file():
+    tests = _REPO / "scripts" / "tests"
+    holders = {p.name for p in tests.rglob("*") if p.suffix in {".py", ".toml"}
+               and _CYRILLIC_VALUES.search(p.read_text(encoding="utf-8"))}
+    assert holders <= {Path(__file__).name}
+
+
+def test_scan_flags_a_cyrillic_spelling_off_the_alias_line(tmp_path):
+    probe = tmp_path / "probe.py"
+    probe.write_text('X = "нормативное"\nFAILURE_ADDRESS_ALIASES = {"ресурсное": "resource"}\n',
+                     encoding="utf-8")
+    assert _lines_with_spelling(probe) == [1]

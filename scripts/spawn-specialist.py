@@ -311,7 +311,7 @@ def own_contour_brief_lines(args: argparse.Namespace, own_plan: "Path | None" = 
         "the command.",
         "",
         "If the norm itself is wrong — it cannot be met as stated — run `declare`, "
-        "`investigate`, then `critique --failure-address нормативное --norm-target "
+        "`investigate`, then `critique --failure-address normative --norm-target "
         "parent` through the channel, and return `REPLAN:`; do not rewrite the "
         "parent's norm or plan.",
         "",

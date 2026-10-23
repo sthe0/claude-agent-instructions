@@ -640,7 +640,7 @@ def test_destination_axis_shares_no_member_with_the_level_axis():
 
 
 def test_destination_covers_both_halves_of_обеспечение():
-    """ресурсное (материал / средство) and нормативное (норма / способ), plus знание —
+    """resource (материал / средство) and normative (норма / способ), plus знание —
     the place upstream of both. A destination set missing знание would leave the very
     re-norming this stage exists to make recordable with nowhere to land."""
     assert set(NORMALIZATION_DESTINATIONS) == {
@@ -666,7 +666,7 @@ def _to_normalize_ready(store, sid, plan):
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="ресурсное"), store=store)
+                        failure_address="resource"), store=store)
 
 
 def test_submission_seam_b_refuses_on_the_new_side_of_replan(tmp_path, store):
@@ -779,7 +779,7 @@ def test_a_refused_replan_leaves_the_accepted_digest_unchanged(tmp_path, store,
                       store=store)
     # a similarity the corrected plan does not carry -> the coverage gate refuses
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="ресурсное",
+                        failure_address="resource",
                         invariants_to_preserve=["the seam never tightens the loader"],
                         differences_to_remove=[]), store=store)
 

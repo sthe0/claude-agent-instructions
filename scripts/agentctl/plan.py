@@ -3993,7 +3993,7 @@ def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fals
              # dropped rather than carried by `_apply_refined_stage_fields`.
              *((("ephemeral_artifacts_waiver", s.ephemeral_artifacts_waiver),)
                if s.ephemeral_artifacts_waiver else ()),
-             # Same footing again: a stage's `renorms` is the consequence a нормативное
+             # Same footing again: a stage's `renorms` is the consequence a normative
              # critique is bound to, so an edit of it must not diff as 'no_change'.
              *((("renorms", tuple(s.renorms)),) if s.renorms else ()),
              # The two cells the change-tier table found outside every change-decision

@@ -140,7 +140,7 @@ def test_critique_event_captures_critique(store, venued_fixtures_dir):
     d = cli.cmd_critique(ns(
         session=sid, functional_ground="fg", replanning_task="rt",
         invariants_to_preserve=["inv1"], differences_to_remove=["diff1"],
-        failure_address="нормативное", norm_targets=["stage:1"],
+        failure_address="normative", norm_targets=["stage:1"],
     ), store=store)
     assert d.ok is True
 
@@ -150,7 +150,7 @@ def test_critique_event_captures_critique(store, venued_fixtures_dir):
     assert event["replanning_task"] == "rt"
     assert event["invariants_to_preserve"] == ["inv1"]
     assert event["differences_to_remove"] == ["diff1"]
-    assert event["failure_address"] == "нормативное"
+    assert event["failure_address"] == "normative"
 
 
 # --- replan --------------------------------------------------------------------
@@ -163,7 +163,7 @@ def test_replan_no_change_event_captures_cause_from_difficulty(store, venued_fix
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg-cause", replanning_task="rt-cause",
-                        failure_address="ресурсное"), store=store)
+                        failure_address="resource"), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
     d = cli.cmd_replan(ns(session=sid, plan=plan), store=store)
@@ -200,7 +200,7 @@ def test_replan_substantive_event_captures_cause_from_difficulty(store, venued_f
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg-subst", replanning_task="rt-subst",
-                        failure_address="ресурсное"), store=store)
+                        failure_address="resource"), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
     d = cli.cmd_replan(ns(session=sid, plan=bigger), store=store)
@@ -329,7 +329,7 @@ def test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes
     ), f"investigate mismatch: got {d}"
 
     d = cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                            failure_address="ресурсное"), store=store)
+                            failure_address="resource"), store=store)
     assert d == cli.Directive(
         ok=True,
         node="DIAGNOSING",

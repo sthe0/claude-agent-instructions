@@ -108,7 +108,7 @@ def _to_diagnosing(store, venued_fixtures_dir, sid: str, task: str) -> None:
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="ресурсное"), store=store)
+                        failure_address="resource"), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 
@@ -155,7 +155,7 @@ def _declare_investigate_critique_normalize(store, sid: str) -> None:
     cli.cmd_investigate(ns(session=sid, localized_expectation="le2", localized_actual="la2",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg2", replanning_task="rt2",
-                        failure_address="ресурсное"), store=store)
+                        failure_address="resource"), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 

@@ -375,11 +375,11 @@ def _work_the_difficulty(store, sid):
     cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
-    # The only caller refines stage 2 (the rejected stage) and replans; a нормативное
+    # The only caller refines stage 2 (the rejected stage) and replans; a normative
     # critique must name the norm it corrects, and renorm_retention_blockers then holds
     # the replan until that stage's norm actually changes.
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="нормативное", norm_targets=["stage:2"]), store=store)
+                        failure_address="normative", norm_targets=["stage:2"]), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 
@@ -1120,9 +1120,9 @@ def eng(tmp_path, monkeypatch):
 
 
 def _diagnose_resource(eng, sid: str, tag: str = "a", *, difference: bool = True):
-    """Work a synthetic difficulty routed as ресурсное (no norm target).
+    """Work a synthetic difficulty routed as resource (no norm target).
 
-    The harness's own ``Eng.diagnose`` hardwires a нормативное critique against
+    The harness's own ``Eng.diagnose`` hardwires a normative critique against
     ``stage:1``, which ``gates.renorm_retention_blockers`` then holds until the corrected
     plan changes stage 1's norm. The decline tests below correct the plan by renumbering,
     inserting or re-offering stage 3; stage 1's norm never moves, so the difficulty is
@@ -1133,7 +1133,7 @@ def _diagnose_resource(eng, sid: str, tag: str = "a", *, difference: bool = True
     eng.run("investigate", session=sid, localized_expectation=f"le-{tag}",
             localized_actual=f"la-{tag}", hypothesis=[f"h1-{tag}", f"h2-{tag}"])
     eng.run("critique", session=sid, functional_ground=f"fg-{tag}", replanning_task=f"rt-{tag}",
-            failure_address="ресурсное",
+            failure_address="resource",
             difference_to_remove=[f"d-{tag}"] if difference else None)
     eng.run("normalize", session=sid, factor=f"factor-{tag}", level="note")
 

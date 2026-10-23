@@ -1,7 +1,7 @@
 """A re-SELECTED material must be visible to the coverage gate; a re-WORDED one must not.
 
 Defect 4 of the SMD act-modelling rework. The engine classifies a difficulty's address as
-"ресурсное" — material or means — but the CHANGE half of `replan_coverage_blockers` could
+"resource" — material or means — but the CHANGE half of `replan_coverage_blockers` could
 not see a material at all: `subject.material` is prose, and prose is excluded from the
 operative surface on purpose, so that no amount of narrative rewriting satisfies the gate.
 
