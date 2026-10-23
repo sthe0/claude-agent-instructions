@@ -62,7 +62,9 @@ semantic property it purports to enforce.
   (memory — curation by judgment).
 
 - **No premature optimization in design proposals.** When drafting a
-  Turn-1 self-improvement proposal, mark each component as either
+  Turn-1 self-improvement proposal — or any proposal of new machinery
+  (hook, gate, validator, script), including one made
+  after an incident — mark each component as either
   *solves a concrete current difficulty* or *speculative*. Drop the
   speculative items unless the user explicitly asks for them. New
   frontmatter fields, validators, helper scripts, generic interfaces:
@@ -70,9 +72,13 @@ semantic property it purports to enforce.
   one is imagined. One-off duplication is cheaper than premature
   abstraction; visible noise from a missing validator is cheaper than
   a validator that has no observed failure to prevent. Machinery is
-  justified up front only when (a) a single failure is unrecoverable,
-  (b) the failure mode has already been observed, or (c) the mechanism
-  is a thin wrapper around something already needed.
+  justified up front only when (a) a single failure is unrecoverable
+  (data loss, an irreversible external effect — not merely costly or
+  annoying), (b) the failure recurs (≥2 occurrences) or noticeably
+  keeps getting in the way — one occurrence is not enough, or (c) the
+  mechanism is a thin wrapper around something already needed. Until
+  then, record the incident as a memory note with an occurrence count
+  and propose the mechanism on the next occurrence.
 
 - **No brittle proxy of a semantic property.** Before mechanizing a rule
   as a check, confirm the decidable quantity it computes actually
