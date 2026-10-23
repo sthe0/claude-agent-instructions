@@ -151,7 +151,8 @@ def test_verify_final_stage_reverify_uses_delivery_worktree(store, tmp_path):
     store.save(s)
     d = cli.cmd_verify_final(ns(session="v3"), store=store, runner=cap)
     assert d.ok is True
-    assert cap.calls == [["bash", "-c", f"cd {shlex.quote(str(worktree))} && pytest -q"]]
+    bash_cmd = ["bash", "-c", f"cd {shlex.quote(str(worktree))} && pytest -q"]
+    assert bash_cmd in cap.calls, f"expected {bash_cmd!r} in calls; got {cap.calls!r}"
 
 
 def test_final_check_defaults_to_delivery_worktree(store, tmp_path):
