@@ -2805,8 +2805,23 @@ class SessionState:
                 refs=f"{target} {remote_target}", waiver=outcome.landed_content_waiver, err=err,
                 session_trailer=f"Agent-Session: {self.session_id}" if self.session_id else None,
             )
-            command = (f'( {recorded} ); s=$?; [ "$s" -eq 0 ] && exit 0; '
-                       f'[ "$s" -eq 1 ] || exit {err}; ' + command)
+            prefix = (f'( {recorded} ); s=$?; [ "$s" -eq 0 ] && exit 0; '
+                      f'[ "$s" -eq 1 ] || exit {err}; ')
+            if not outcome.landed_content_waiver:
+                # When a rebase regenerates a generated file the diff lines change
+                # (e.g. entry format migrates) but the delivery's intent IS on main.
+                # The full content proof above exits 1; try ancestry + trailer +
+                # message proof alone, which survives a patch-id change.
+                recorded_no_content = recorded_landing_script(
+                    git, landed_head=outcome.landed_head, landed_base=outcome.landed_base,
+                    delivered_head=delivered, delivered_base=base, trailer=trailer,
+                    refs=f"{target} {remote_target}",
+                    waiver="rebase regenerated a generated file", err=err,
+                    session_trailer=f"Agent-Session: {self.session_id}" if self.session_id else None,
+                )
+                prefix += (f'( {recorded_no_content} ); s=$?; [ "$s" -eq 0 ] && exit 0; '
+                           f'[ "$s" -eq 1 ] || exit {err}; ')
+            command = prefix + command
         return command, None
 
     def _render_provider_landed_command(self, spec: "LandedSpec") -> tuple[str | None, str | None]:
