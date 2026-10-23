@@ -31,8 +31,25 @@ _DOUBLE_QUOTED_RE = re.compile(r'"[^"]*"')
 
 # Separators after which the next unquoted word starts a new simple command.
 _NOHUP_CMD_SEPS = frozenset({"|", "||", "&&", "|&", ";", "&", "("})
+# Reserved words after which the next word is still a command word.
+_NOHUP_CMD_KEYWORDS = frozenset({"then", "do", "else", "elif", "if", "while", "until", "{", "!"})
 # Shell variable assignment prefix: VAR=value is not the command word.
 _NOHUP_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
+# Command wrappers that run their remaining arguments as a command, mapped to
+# the options that consume the next token as a value.
+_WRAPPER_VALUE_OPTS: dict[str, frozenset[str]] = {
+    "setsid": frozenset(),
+    "exec": frozenset({"-a"}),
+    "env": frozenset({"-u", "-C", "-S"}),
+    "nice": frozenset({"-n"}),
+    "ionice": frozenset({"-c", "-n", "-p"}),
+    "time": frozenset({"-f", "-o"}),
+    "command": frozenset(),
+    "sudo": frozenset({"-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U"}),
+    "timeout": frozenset({"-s", "-k"}),
+    "stdbuf": frozenset({"-i", "-o", "-e"}),
+}
+_WRAPPER_POSITIONALS = {"timeout": 1}
 
 
 def _strip_quoted(cmd: str) -> str:
@@ -58,17 +75,37 @@ def _nohup_is_command_word(cmd: str) -> bool:
         return bool(NOHUP_RE.search(cmd))
 
     in_cmd = True  # start of command is always a command position
+    wrapper: str | None = None  # command wrapper whose own arguments are being skipped
+    skip_value = False  # previous token was a wrapper option that takes a value
+    positionals = 0  # wrapper positional arguments still to skip (timeout's duration)
     for token in tokens:
         if token in _NOHUP_CMD_SEPS:
-            in_cmd = True
+            in_cmd, wrapper, skip_value, positionals = True, None, False, 0
         elif token == ")":
-            in_cmd = False
+            in_cmd, wrapper = False, None
         elif in_cmd:
             if _NOHUP_ASSIGN_RE.fullmatch(token):
                 continue  # variable assignment; command word not yet seen
-            in_cmd = False
+            if wrapper is not None:
+                if skip_value:
+                    skip_value = False
+                    continue
+                if token.startswith("-") and token != "-":
+                    skip_value = token in _WRAPPER_VALUE_OPTS[wrapper]
+                    continue
+                if positionals:
+                    positionals -= 1
+                    continue
             if token == "nohup":
                 return True
+            if token in _NOHUP_CMD_KEYWORDS:
+                wrapper = None
+                continue
+            if token in _WRAPPER_VALUE_OPTS:
+                wrapper = token
+                positionals = _WRAPPER_POSITIONALS.get(token, 0)
+                continue
+            in_cmd = False
     return False
 
 # Core carries no org-specific orchestrator names; the list is entirely

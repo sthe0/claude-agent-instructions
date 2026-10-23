@@ -7,6 +7,8 @@ import sys
 import uuid
 from pathlib import Path
 
+import pytest
+
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -81,6 +83,46 @@ def test_detect_silent_on_nohup_as_unquoted_argument():
 def test_detect_silent_on_nohup_in_heredoc_body():
     """nohup inside a heredoc body consumed by cat must not trigger."""
     cmd = "cat <<'EOF'\nnohup python3 watch.py &\nEOF"
+    assert mod.detect(cmd) is None
+
+
+@pytest.mark.parametrize("cmd", [
+    "setsid nohup ./poll.sh &",
+    "exec nohup ./poll.sh",
+    "env nohup ./poll.sh &",
+    "env FOO=1 BAR=2 nohup ./poll.sh &",
+    "env -u HOME nohup ./poll.sh &",
+    "FOO=1 nohup ./poll.sh &",
+    "nice nohup ./poll.sh &",
+    "nice -n 10 nohup ./poll.sh &",
+    "time nohup ./poll.sh",
+    "sudo nohup ./poll.sh &",
+    "sudo -u bob nohup ./poll.sh &",
+    "timeout 5 nohup ./poll.sh",
+    "timeout -s KILL 5 nohup ./poll.sh",
+    "command nohup ./poll.sh &",
+    "stdbuf -oL nohup ./poll.sh &",
+    "setsid env X=1 nice -n 5 nohup ./poll.sh &",
+    "nohup nohup ./poll.sh &",
+    "cd /tmp && setsid nohup ./poll.sh &",
+    "(setsid nohup ./poll.sh &)",
+    "if true; then nohup ./poll.sh & fi",
+    "for i in 1; do setsid nohup ./poll.sh & done",
+])
+def test_detect_nohup_through_command_wrappers(cmd):
+    assert mod.detect(cmd) == "detached process (nohup)"
+
+
+@pytest.mark.parametrize("cmd", [
+    "setsid grep nohup scripts/",
+    "env FOO=1 grep nohup scripts/",
+    "timeout 5 grep nohup scripts/",
+    "sudo -u bob grep nohup scripts/",
+    "nice -n 10 echo nohup",
+    "if true; then echo nohup; fi",
+    "python3 -c \"print('do not use nohup')\"",
+])
+def test_detect_silent_on_nohup_argument_of_wrapped_command(cmd):
     assert mod.detect(cmd) is None
 
 

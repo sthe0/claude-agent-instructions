@@ -1726,17 +1726,29 @@ reviewed_by = "developer"
 
 [sites."scripts/long_job_detect.py::detect::pattern.search"]
 class = "structural"
-ground = "Search a Bash command for the nohup token, the configured orchestrator program name and a launch-verb token (start/submit/run); shell command-token matching, not free-text meaning."
-hits = 4
-hit_classes = ["structural", "structural", "structural", "structural"]
+ground = "Search the quote-stripped Bash command for the configured orchestrator program name and a launch-verb token (start/submit/run); shell command-token matching, not free-text meaning."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/long_job_detect.py::<module>::re.compile"]
 class = "structural"
-ground = "Compile the nohup shell-token pattern, the launch-verb command-word pattern and the single-/double-quoted-span patterns used on Bash commands; shell syntax, no free-text meaning."
-hits = 4
-hit_classes = ["structural", "structural", "structural", "structural"]
+ground = "Compile the nohup fail-open fallback pattern, the shell variable-assignment token pattern, the launch-verb command-word pattern and the single-/double-quoted-span patterns used on Bash commands; shell syntax, no free-text meaning."
+hits = 5
+hit_classes = ["structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
+
+[sites."scripts/long_job_detect.py::_nohup_is_command_word::pattern.fullmatch"]
+class = "structural"
+ground = "Recognizes a shell VAR=value assignment token while walking the tokenized command to find the command word; shell syntax, no free-text meaning."
+hits = 1
+reviewed_by = "salvage-2026-10-23"
+
+[sites."scripts/long_job_detect.py::_nohup_is_command_word::pattern.search"]
+class = "structural"
+ground = "Fail-open fallback: when the shell tokenizer raises, the plain nohup word search keeps a real launch from being missed; the primary decision is by command-word position in tokenized shell syntax."
+hits = 1
+reviewed_by = "salvage-2026-10-23"
 
 [sites."scripts/long_job_detect.py::_strip_quoted::pattern.sub"]
 class = "structural"
