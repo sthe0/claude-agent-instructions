@@ -55,6 +55,33 @@ def child_contour_linking_enabled(
     return constants.get(CHILD_CONTOUR_LINKING_KEY) == "on"
 
 
+RISK_PLANNING_KEY = "risk-shaped-planning"
+RISK_PLANNING_ENV = "AGENTCTL_RISK_PLANNING"
+
+
+def risk_planning_enabled(
+    env: Mapping[str, str] | None = None,
+    constants: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether a session is bound to risk-shaped planning at its first submit-plan.
+
+    AGENTCTL_RISK_PLANNING `1` / `0` wins in both directions; otherwise config.md's
+    `risk-shaped-planning` row decides, and only exactly `on` binds. Anything else --
+    another value, a missing row, an unreadable config.md -- is the unbound state."""
+    environ = os.environ if env is None else env
+    forced = environ.get(RISK_PLANNING_ENV)
+    if forced == "1":
+        return True
+    if forced == "0":
+        return False
+    if constants is None:
+        try:
+            constants = parse_config_md()
+        except (OSError, UnicodeDecodeError):
+            return False
+    return constants.get(RISK_PLANNING_KEY) == "on"
+
+
 # The calibrated plan-field-inline-max-chars (docs/operations/plan-size-calibration.json, F),
 # used when the config.md row is missing or unparsable; a test keeps it equal to the row.
 PLAN_FIELD_INLINE_FALLBACK_CHARS = 3000

@@ -55,10 +55,12 @@ from .plan import (
     PlanError,
     SEVERITY_BLOCKING,
     SEVERITY_NOTE,
+    SKELETON_PHASE,
     acceptance_requirement_bindings,
     change_tier,
     changed_parts,
     check_venue_warnings,
+    concern_axis,
     customer_question_defect,
     entries_grants_sha256,
     grants_sha256,
@@ -83,6 +85,9 @@ from .plan import (
     refined_grant_entries,
     replan_class,
     review_ids,
+    skeleton_changed,
+    skeleton_digests,
+    skeleton_problems,
     stage_norm_keys,
     stage_part,
     stage_question_key,
@@ -106,6 +111,7 @@ from .render import (
     render_plan_md,
     render_stages_md,
 )
+from .review_briefs import skeleton_brief
 from .submission import plan_size_blocks, plan_size_warnings, submission_advice, submission_violations
 from .state import (
     _EXECUTION_NODES,
@@ -4665,7 +4671,11 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # and the plan-version snapshot below from that same buffer, so a concurrent edit
     # between separate reads can't desynchronize accepted_plan_digest from the bytes
     # that were actually parsed and verified.
-    doc, _submitted_plan_bytes, _submitted_plan_digest = load_plan_with_digest(plan_path)
+    if state.risk_planning is None:
+        state.risk_planning = bool(agentctl_config.risk_planning_enabled())
+    doc, _submitted_plan_bytes, _submitted_plan_digest = load_plan_with_digest(
+        plan_path, skeleton=bool(state.risk_planning))
+    state.plan_phase = doc.meta.phase if state.risk_planning and doc.meta.phase == SKELETON_PHASE else ""
     _prior_baseline = (*_review_baseline(store, state), state.plan_path) if resubmitting else None
     state.stages = doc.stages
     _sync_venue_from_plan(state, doc)
@@ -4689,8 +4699,11 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # and a refusal cannot be computed after the return that acts on it. The binding itself
     # costs nothing; only a prefilter hit spends a judge call.
     run = runner if runner is not None else advisor.subprocess_runner
-    problems: list[str] = _submission_problems(doc, run, state.weight_class)
-    if state.weight_class == WeightClass.SUBSTANTIVE.value:
+    skeleton = gates.skeleton_review_active(state)
+    problems: list[str] = (
+        skeleton_problems(doc) if skeleton else _submission_problems(doc, run, state.weight_class)
+    )
+    if state.weight_class == WeightClass.SUBSTANTIVE.value and not skeleton:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
         # go honestly GREEN because it names a path no stage produces and
@@ -4771,6 +4784,9 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         }
     _register_plan_assumptions(state, doc, plan_path)
     state.plan_submitted_ts = time.time()
+    skeleton_return = (
+        _reopen_skeleton_on_change(state, doc, _submitted_plan_sha256) if skeleton else None
+    )
     state.log("submit_plan", plan=plan_path, verified=True, revised=resubmitting,
               plan_sha256=_submitted_plan_sha256)
     if not _review_cycle_arrive(state, _submitted_plan_sha256) and resubmitting:
@@ -4781,7 +4797,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     store.save(state)
     autonomy = _autonomy_directive_data(state, doc)
     override = _agent_review_override(state)
-    directive_data = {"autonomy": autonomy, **({"agent_review_override": override} if override else {})}
+    directive_data = {"autonomy": autonomy, **({"agent_review_override": override} if override else {}),
+                      **({"skeleton_return": skeleton_return} if skeleton_return else {})}
     if autonomy["action"] == "self_approve":
         d = Directive(
             True, state.node, "self_approve",
@@ -4839,7 +4856,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # Substantive-only, mirroring the reachability-blocker gate above: a
     # non-substantive plan carries no verify_command discipline through this
     # cycle at all, so there is nothing here for it to observe.
-    if state.weight_class == WeightClass.SUBSTANTIVE.value:
+    if state.weight_class == WeightClass.SUBSTANTIVE.value and not skeleton:
         d.data.setdefault("advisories", []).extend(
             format_observations(
                 observe_stage_checks(doc.stages, state.resolve_check_venue, runner)
@@ -5909,6 +5926,56 @@ def _count_review_act(state: SessionState, verdict: str, reviewer: str, *,
             state.review_stage_streaks[stage_scope] = state.review_stage_streaks.get(stage_scope, 0) + 1
 
 
+def _open_skeleton_return(state: SessionState, cause: str, changed: list[str], sha: str) -> dict:
+    """Record a counted return of a frozen skeleton: the freeze is gone and the return stays
+    open (a blocker, `gates.skeleton_return_blockers`) until a skeleton pass names its id."""
+    record = {"id": f"R{len(state.skeleton_returns) + 1}", "cause": cause, "changed": changed,
+              "plan_sha256": sha, "ts": time.time(), "cleared": False}
+    state.skeleton_returns.append(record)
+    state.skeleton_freeze = None
+    state.log("skeleton_return", id=record["id"], cause=cause, changed=changed, plan_sha256=sha)
+    return record
+
+
+def _reopen_skeleton_on_change(state: SessionState, doc, sha: str) -> dict | None:
+    """A resubmitted skeleton whose A2 digests moved off the frozen ones opens a return."""
+    if state.skeleton_freeze is None:
+        return None
+    changed = skeleton_changed(state.skeleton_freeze["digests"], skeleton_digests(doc))
+    if not changed:
+        return None
+    return _open_skeleton_return(state, "structural change after freeze", changed, sha)
+
+
+def _skeleton_review_step(
+    state: SessionState, review: PlanReview, doc, scope: str, blocking: list[str],
+) -> dict | None:
+    """Phase A's reaction to a counted whole-plan record on a skeleton plan. Frozen: a
+    blocking `axis:R` concern opens a return. Unfrozen: an attested pass first clears every
+    open return whose id its note names (a bare token match on the id, not a reading of the
+    note), then freezes the digests once none is left open. Returns the return it opened."""
+    if (not gates.skeleton_review_active(state) or scope or doc is None
+            or not _is_counted_review(review.verdict, review.reviewer)):
+        return None
+    if state.skeleton_freeze is not None:
+        if review.verdict == gates._PLAN_REVIEW_REVISE and any(
+                concern_axis(c) == "R" for c in blocking):
+            return _open_skeleton_return(
+                state, "blocking axis:R concern after freeze", [], review.plan_sha256)
+        return None
+    if review.verdict != gates._PLAN_REVIEW_PASS or not review.plan_sha256:
+        return None
+    for record in state.skeleton_returns:
+        if not record["cleared"] and re.search(rf"\b{re.escape(record['id'])}\b", review.note):
+            record["cleared"] = True
+            state.log("skeleton_return_cleared", id=record["id"], plan_sha256=review.plan_sha256)
+    if not any(not r["cleared"] for r in state.skeleton_returns):
+        state.skeleton_freeze = {"plan_sha256": review.plan_sha256, "record_seq": review.record_seq,
+                                 "digests": skeleton_digests(doc)}
+        state.log("skeleton_freeze", plan_sha256=review.plan_sha256, record_seq=review.record_seq)
+    return None
+
+
 def _spend_review_trigger(state: SessionState, fire: dict) -> None:
     """Record the evidence a crossed trigger fired on, so `gates.review_trigger` stays
     quiet until fresh evidence arrives: the act count, the minutes anchor, the streak value."""
@@ -6191,7 +6258,19 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                    regression_exit=review.regression_exit,
                    regression_command_error=regression_command_error,
                    remedy_cut=remedy_cut, remedy_add=remedy_add)
+        skeleton_return = _skeleton_review_step(
+            state, review, doc, scope,
+            [pc.body for pc in parsed if pc.severity == SEVERITY_BLOCKING])
         store.save(state)
+        if skeleton_return:
+            return Directive(
+                False, state.node, "plan_review",
+                f"a blocking axis:R concern after the skeleton froze opens return "
+                f"{skeleton_return['id']}: the freeze is released and the chain is reviewed "
+                f"again; clear it with a counted whole-plan pass whose --note names "
+                f"{skeleton_return['id']}",
+                data={"skeleton_return": skeleton_return, "concern_ids": review.stable_ids},
+            )
         concern_text = "; ".join(review.concerns) if review.concerns else "(no concern text given)"
         data = {
             "plan_review_post_pass_unevidenced": True,
@@ -6267,6 +6346,9 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     if _is_counted_review(review.verdict, review.reviewer):
         _count_review_round(state, review.plan_sha256 or _plan_file_sha256(target), thinker_record=True)
     _count_review_act(state, review.verdict, review.reviewer, stage_scope=scope)
+    skeleton_return = _skeleton_review_step(
+        state, review, doc, scope, [pc.body for pc in parsed if pc.severity == SEVERITY_BLOCKING])
+    skeleton_data = {"skeleton_return": skeleton_return} if skeleton_return else {}
     blockers =gates.plan_review_blockers(state, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
     state.log("plan_review", target=target, verdict=review.verdict, raw_verdict=args.verdict,
@@ -6301,6 +6383,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
                 "plan_review_round_release": round_release,
                 "regression_command_error": regression_command_error,
                 **_crossing_data(crossing),
+                **skeleton_data,
             },
         )
     out_of_scope_note = ""
@@ -6314,7 +6397,7 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
         f"thinker review recorded for {target} (verdict={review.verdict}); "
         "the plan-review gate is now satisfied for this plan version" + out_of_scope_note,
         data={"concern_ids": review.stable_ids, **_question_data(state, args, question_ids),
-              **_crossing_data(crossing)},
+              **_crossing_data(crossing), **skeleton_data},
     )
 
 
@@ -13416,6 +13499,19 @@ def cmd_close(args, *, store: StateStore, runner: Runner | None = None) -> Direc
     return Directive(True, node, "inspect", f"close: stopped at {node}", data={"trace": trace})
 
 
+def cmd_plan_render_skeleton(args, *, store=None, runner=None) -> Directive:
+    """`plan-render --skeleton`: the phase-A brief the axis-R reviewer reads, for a plan
+    declaring `[meta] phase = "skeleton"`. `main` routes the flag here; the verb itself stays
+    `cmd_plan_render`."""
+    doc = load_plan(args.plan)
+    if doc.meta.phase != SKELETON_PHASE:
+        return Directive(False, "(render)", "error",
+                         f'--skeleton: {args.plan} declares no [meta] phase = "{SKELETON_PHASE}"',
+                         data={})
+    md = skeleton_brief(doc)
+    return Directive(True, "(render)", "inspect", md, data={"markdown": md})
+
+
 COMMANDS = {
     "start": cmd_start,
     "reset": cmd_reset,
@@ -13981,6 +14077,9 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
              "indices (e.g. '3,5'), as a brief projection instead of the whole "
              "plan (the spawn prompt's per-dispatch projection, or a reviewer's "
              "scoped delta)")
+    sp.add_argument("--skeleton", action="store_true", default=False,
+        help="render the phase-A skeleton brief (the chain the axis-R reviewer reads) of a "
+             "plan that declares [meta] phase = \"skeleton\"")
     # Accept (and ignore) --session so the harness-session auto-injection
     # (_inject_default_session) is a no-op here: rendering is a pure, session-free
     # read of the plan file, unlike every other verb which drives session state.
@@ -14624,6 +14723,8 @@ def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
         else FileStateStore(Path(args.state_root) if args.state_root else None)
     )
     fn = COMMANDS[args.command]
+    if args.command == "plan-render" and getattr(args, "skeleton", False):
+        fn = cmd_plan_render_skeleton
     try:
         directive = fn(args, store=store)
     except Exception as exc:  # surface as a failed directive, not a traceback

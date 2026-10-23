@@ -1331,6 +1331,24 @@ def _uses_pair_review(state: SessionState | None, doc) -> bool:
     return doc is None or pairwise_review_route(state, doc)
 
 
+def skeleton_review_active(state: SessionState | None) -> bool:
+    """Whether the session's current plan is a skeleton under risk-shaped planning: the
+    one condition every phase-A branch reads, so an unbound session never reaches one."""
+    return bool(state is not None and state.risk_planning and state.plan_phase == "skeleton")
+
+
+def skeleton_return_blockers(state: SessionState | None) -> list[str]:
+    """One blocker per open skeleton return: it stays until a skeleton pass whose note
+    names the return id clears it. [] for any session not on a skeleton plan."""
+    if not skeleton_review_active(state):
+        return []
+    return [
+        f"skeleton return {r['id']} is open ({r['cause']}): record a counted whole-plan pass "
+        f"whose --note names {r['id']}"
+        for r in state.skeleton_returns if not r.get("cleared")
+    ]
+
+
 def pairwise_review_route(state: SessionState | None, doc=None) -> bool:
     """Whether plan review runs pairwise for this session — the one predicate the
     `submit_plan` directive and the blocker message both read, so trigger and gate
@@ -1340,6 +1358,8 @@ def pairwise_review_route(state: SessionState | None, doc=None) -> bool:
     `whole_plan_by_shape` -> whole-plan review; otherwise pairs. `doc=None` loads
     `state.plan_path`."""
     if state is None or state.route != Route.SPAWN.value:
+        return False
+    if skeleton_review_active(state):
         return False
     if doc is None:
         try:
@@ -2400,6 +2420,7 @@ def plan_review_blockers(state: SessionState, target_plan: str | None) -> list[s
         blockers = _plan_review_blockers_whole(state.plan_review, target_plan, state=state, doc=doc)
     else:
         blockers = _plan_review_blockers_coverage(state, target_plan, doc)
+    blockers = [*skeleton_return_blockers(state), *blockers]
     template = (
         _PLAN_REVIEW_ROUND_RELEASE_MESSAGE_POST_PASS
         if state.plan_review_passes

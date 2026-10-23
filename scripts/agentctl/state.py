@@ -2517,6 +2517,19 @@ class SessionState:
     review_stage_streaks: dict[str, int] = field(default_factory=dict)
     review_trigger_fire: dict | None = None
     review_trigger_spent: dict[str, float] = field(default_factory=dict)
+    # Risk-shaped planning, phase A (config.md `risk-shaped-planning`). Every new branch of the
+    # skeleton phase is gated on `risk_planning`; an unbound session never reads the rest.
+    #   risk_planning     None until the first submit-plan decides it; then fixed for the session
+    #                     (a later change of the config row or env does not rebind it)
+    #   plan_phase        "skeleton" while the latest submitted plan declares [meta] phase =
+    #                     "skeleton", "" otherwise
+    #   skeleton_freeze   the counted axis-R pass: plan sha, record seq and the A2 structural
+    #                     digests it froze; None while no skeleton pass is counted
+    #   skeleton_returns  one record per counted return (cause, changed digests, sha, ts)
+    risk_planning: bool | None = None
+    plan_phase: str = ""
+    skeleton_freeze: dict | None = None
+    skeleton_returns: list[dict] = field(default_factory=list)
     # DIAGNOSING-renegotiation audit trail (GitHub #177) — one record per customer
     # decision at the diagnosing_replan round-release gate, keyed by string (decision,
     # note, by, ts, task_replan_count_at_decision). Same plain list[dict] shape as
@@ -3055,4 +3068,5 @@ SESSION_SCOPED_FIELDS = frozenset({
     "declined_issues", "planning_misses", "materialization_defects",
     "settings_drift", "cwd_drift", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions",
+    "risk_planning", "plan_phase", "skeleton_freeze", "skeleton_returns",
 })
