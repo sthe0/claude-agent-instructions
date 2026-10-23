@@ -82,9 +82,13 @@ def extract_marker(text: str) -> "dict | None":
     return {"plan_sha256": m.group("sha"), "plan": m.group("name")}
 
 
-def check(current_sha256: str, marker: "dict | None") -> str:
+def check(current_sha256: str, marker: "dict | None", current_plan_name: str) -> str:
     """OK / DRIFT / NO-PLAN — see module docstring."""
     if marker is None:
+        return "NO-PLAN"
+    if marker["plan"] != current_plan_name:
+        # A marker for plan B is not a marker for plan A, whatever its hash.
+        # Treat as NO-PLAN so the "was this ticket ever planned?" check fires.
         return "NO-PLAN"
     if marker["plan_sha256"] == current_sha256:
         return "OK"
@@ -106,22 +110,32 @@ def _selftest() -> bool:
         plan_path.write_text("[meta]\ntask_id = \"t\"\n", encoding="utf-8")
         current_sha = plan_file_sha256(str(plan_path))
 
+        plan_name = plan_path.name  # "plan.toml"
+
         # OK: marker emitted for this exact plan, round-tripped through extract.
         posted = f"Plan posted.\n{format_marker(str(plan_path), current_sha)}\n"
-        status = check(current_sha, extract_marker(posted))
+        status = check(current_sha, extract_marker(posted), plan_name)
         print(f"selftest OK case: {status}")
         ok_all = ok_all and status == "OK"
 
-        # DRIFT: marker names a different hash (plan was edited after posting).
+        # DRIFT: marker names the same plan file but a different hash (plan edited after posting).
         stale_sha = "0" * 64 if current_sha != "0" * 64 else "1" * 64
         posted_stale = f"Plan posted.\n{format_marker(str(plan_path), stale_sha)}\n"
-        status = check(current_sha, extract_marker(posted_stale))
+        status = check(current_sha, extract_marker(posted_stale), plan_name)
         print(f"selftest DRIFT case: {status}")
         ok_all = ok_all and status == "DRIFT"
 
         # NO-PLAN: no marker in the comment text at all.
-        status = check(current_sha, extract_marker("No plan comment posted yet."))
-        print(f"selftest NO-PLAN case: {status}")
+        status = check(current_sha, extract_marker("No plan comment posted yet."), plan_name)
+        print(f"selftest NO-PLAN(no-marker) case: {status}")
+        ok_all = ok_all and status == "NO-PLAN"
+
+        # NO-PLAN: marker present but names a different plan file.
+        other_marker = (
+            f"<!-- agent-plan-sync: plan_sha256={current_sha} plan=other_plan.toml -->"
+        )
+        status = check(current_sha, extract_marker(other_marker), plan_name)
+        print(f"selftest NO-PLAN(wrong-plan) case: {status}")
         ok_all = ok_all and status == "NO-PLAN"
 
     return ok_all
@@ -168,7 +182,8 @@ def main(argv: "list[str] | None" = None) -> int:
         return 2
 
     marker = extract_marker(text)
-    status = check(current_sha, marker)
+    current_plan_name = Path(args.plan).name
+    status = check(current_sha, marker, current_plan_name)
 
     if status == "OK":
         print(f"verify-ticket-plan-sync: OK — posted plan matches {args.plan} (plan_sha256={current_sha})")
@@ -180,11 +195,20 @@ def main(argv: "list[str] | None" = None) -> int:
             "Re-post the plan (this is a plan actualization, not silent divergence)."
         )
         return 1
-    print(
-        f"verify-ticket-plan-sync: NO-PLAN — no agent-plan-sync marker found in the "
-        f"given comment text for {args.plan}. Confirm a plan is actually attached "
-        "to the ticket, then post one with its marker."
-    )
+    # NO-PLAN — distinguish "no marker at all" from "marker for a different plan file".
+    if marker is not None:
+        print(
+            f"verify-ticket-plan-sync: NO-PLAN — posted marker names plan "
+            f"{marker['plan']!r}, not {current_plan_name!r}. A marker for a "
+            "different plan is not a marker for this plan. Confirm a plan is "
+            "actually attached to the ticket, then post one with its marker."
+        )
+    else:
+        print(
+            f"verify-ticket-plan-sync: NO-PLAN — no agent-plan-sync marker found in the "
+            f"given comment text for {args.plan}. Confirm a plan is actually attached "
+            "to the ticket, then post one with its marker."
+        )
     return 1
 
 
