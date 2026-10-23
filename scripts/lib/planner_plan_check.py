@@ -275,8 +275,9 @@ def check_planner_return(
     the legacy any-line regex scan would miss, e.g. under markdown emphasis) is accepted
     and canonicalised, and a ``marker=None`` verdict is MALFORMED rather than an excuse to
     re-ask the legacy scan — falling back there would resurrect exactly the classifier this
-    pass replaces. Only ``degraded`` (``claude`` absent — an observable condition, never a
-    judgement) falls back to the legacy scan unchanged."""
+    pass replaces. ``degraded`` (an OBSERVATION: ``claude`` absent, or the extractor
+    subprocess failed or timed out) falls back to the legacy scan unchanged — a transport
+    failure is not a finding about the specialist's output."""
     if extraction is not None and not extraction.degraded:
         if extraction.marker is None:
             return (
