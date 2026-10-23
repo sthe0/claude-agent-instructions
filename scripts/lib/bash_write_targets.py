@@ -25,8 +25,15 @@ truly inert.
 from __future__ import annotations
 
 import os
+import re
 
 from . import shell_tokens
+
+# Matches a leading `$VAR` or `${VAR}` and captures the variable name plus the tail.
+_LEADING_VAR_RE = re.compile(r'^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?(.*)', re.DOTALL)
+
+# Matches a shell assignment `VAR=value` (entire token).
+_ASSIGN_RE = re.compile(r'^([A-Za-z_][A-Za-z0-9_]*)=(.*)', re.DOTALL)
 
 _BASH_SEPS = {";", "&&", "||", "|", "|&", "&"}
 
@@ -106,7 +113,7 @@ def _copy_operands(rest: list[str]) -> tuple[list[str], str | None]:
     return positionals, dest_opt
 
 
-def _copy_targets(rest: list[str], eff_cwd: str) -> list[str]:
+def _copy_targets(rest: list[str], eff_cwd: str, var_env: dict[str, str] | None = None) -> list[str]:
     """Every path a `cp`/`mv`/`install` segment writes.
 
     A DESTINATION DIRECTORY IS RESOLVED TO THE FILES IT MEANS. `cp s.json d/`
@@ -138,11 +145,11 @@ def _copy_targets(rest: list[str], eff_cwd: str) -> list[str]:
         # One operand and no `-t`: not a well-formed copy, and there is no
         # source to join. Report it as the destination, as this verb's handling
         # always has.
-        return [_abs(positionals[-1], eff_cwd)]
+        return [_abs(positionals[-1], eff_cwd, var_env)]
     else:
         return []
 
-    abs_dest = _abs(dest, eff_cwd)
+    abs_dest = _abs(dest, eff_cwd, var_env)
     targets: list[str] = [] if dest_is_dir else [abs_dest]
     for src in sources:
         base = os.path.basename(src.rstrip(os.sep))
@@ -151,30 +158,41 @@ def _copy_targets(rest: list[str], eff_cwd: str) -> list[str]:
     return targets
 
 
-def _abs(candidate: str, eff_cwd: str) -> str:
-    """`candidate` as an absolute path: a leading `~` expanded, then the cwd join.
+def _try_expand_var(token: str, env: dict[str, str]) -> str:
+    """Expand a leading `$VAR` or `${VAR}` in `token` from `env`, or return `token` unchanged."""
+    m = _LEADING_VAR_RE.match(token)
+    if m:
+        name, tail = m.group(1), m.group(2)
+        if name in env:
+            return env[name] + tail
+    return token
 
-    EXPANDUSER, AND DELIBERATELY NOT EXPANDVARS — the asymmetry is this function's
-    whole content, because the two look like one feature and are not. `~` means the
-    invoking user's home, this process runs as that user in that session, so
-    expanding it names the path the command will really write; and it does so by two
-    independent routes rather than one, since with `HOME` unset `expanduser` does NOT
-    return the token unchanged (MEASURED, and the opposite is the natural assumption)
-    but falls back to the passwd entry for `os.getuid()` — still that same user's home.
 
-    A `$VAR` carries no such guarantee: THE HOOK'S ENVIRONMENT IS NOT THE COMMAND'S.
-    A command supplies its own (`HOME=/x cp …`), or names a variable exported in a
-    shell this process never saw, so substituting what this process happens to hold
-    would resolve the token to a path the command never writes — and a consumer would
-    then answer confidently about the wrong file, in either direction. A `$VAR`
-    therefore stays unexpanded, joins under `eff_cwd`, and is a named residual in each
-    consumer rather than a guess made here.
+def _abs(candidate: str, eff_cwd: str, var_env: dict[str, str] | None = None) -> str:
+    """`candidate` as an absolute path: a leading `~` expanded, then optionally a
+    leading `$VAR` expanded from `var_env`, then the cwd join.
+
+    EXPANDUSER, AND SELECTIVELY EXPANDVARS — `~` means the invoking user's home, this
+    process runs as that user in that session, so expanding it names the path the
+    command will really write; and it does so by two independent routes rather than one,
+    since with `HOME` unset `expanduser` does NOT return the token unchanged (MEASURED,
+    and the opposite is the natural assumption) but falls back to the passwd entry for
+    `os.getuid()` — still that same user's home.
+
+    A `$VAR` is expanded only when `var_env` is supplied and the variable IS present in
+    it. `var_env` is built from two sources: assignments in preceding segments of the
+    same command (`o=/tmp/x; cat > $o/f`), and `os.environ` for OS-reliably-set
+    variables (`$TMPDIR`, `$HOME`, `$PATH`) that the command inherits. A variable NOT in
+    `var_env` stays unexpanded, joins under `eff_cwd`, and remains a named residual in
+    each consumer — the safe over-inclusive fallback for genuinely unknown variables.
     """
     candidate = os.path.expanduser(candidate)
+    if var_env is not None and candidate.startswith("$"):
+        candidate = _try_expand_var(candidate, var_env)
     return candidate if os.path.isabs(candidate) else os.path.join(eff_cwd, candidate)
 
 
-def redirect_targets(seg: list[str], eff_cwd: str) -> list[str]:
+def redirect_targets(seg: list[str], eff_cwd: str, var_env: dict[str, str] | None = None) -> list[str]:
     """Output-redirect candidates anywhere in `seg` — `> f`, `>> f`, glued
     `>f`/`>>f` — as absolute paths resolved against `eff_cwd`. This is the
     shell's OWN effect, orthogonal to which verb the segment invokes, so a
@@ -182,20 +200,28 @@ def redirect_targets(seg: list[str], eff_cwd: str) -> list[str]:
     module's `_COPY_VERBS`/`patch`/`sed`/`tee` dispatch below) can still pick
     up a layered redirect via this function alone, without re-deriving the
     redirect grammar. Extracted from `segment_write_target` (part (a) below,
-    unchanged) rather than duplicated."""
+    unchanged) rather than duplicated.
+
+    A `>` or `>>` followed by `(` is the start of a write process substitution
+    `>(cmd)`, not an ordinary redirect — `(` is not a file path. The operator-exact
+    tokenizer splits `>(tee y)` into `['>', '(', 'tee', ...]`, so the `(` would
+    otherwise be read as the redirect's file operand. Skipping it avoids the
+    artifact; `command_write_targets` adds `eff_cwd` for `>(` via a separate check."""
     candidates: list[str] = []
     for i, tok in enumerate(seg):
         redirect_tgt: str | None = None
         if tok in (">", ">>"):
-            redirect_tgt = seg[i + 1] if i + 1 < len(seg) else None
+            nxt = seg[i + 1] if i + 1 < len(seg) else None
+            if nxt is not None and nxt != "(":
+                redirect_tgt = nxt
         elif tok.startswith(">") and tok.strip(">"):
             redirect_tgt = tok.lstrip(">")
         if redirect_tgt:
-            candidates.append(_abs(redirect_tgt, eff_cwd))
+            candidates.append(_abs(redirect_tgt, eff_cwd, var_env))
     return candidates
 
 
-def segment_write_target(seg: list[str], eff_cwd: str) -> list[str]:
+def segment_write_target(seg: list[str], eff_cwd: str, var_env: dict[str, str] | None = None) -> list[str]:
     """Every write-target candidate of a single command segment, as absolute
     paths resolved against `eff_cwd`, in the order a caller should prefer them:
     output-redirect targets in left-to-right order, then a verb-based writer's
@@ -212,7 +238,7 @@ def segment_write_target(seg: list[str], eff_cwd: str) -> list[str]:
         return []
 
     # (a) output redirection anywhere in the segment: `> f`, `>> f`, glued `>f`/`>>f`.
-    candidates: list[str] = redirect_targets(seg, eff_cwd)
+    candidates: list[str] = redirect_targets(seg, eff_cwd, var_env)
 
     # (b) verb-based writers.
     verb = os.path.basename(seg[0]) if seg[0] else ""
@@ -233,19 +259,51 @@ def segment_write_target(seg: list[str], eff_cwd: str) -> list[str]:
     elif verb == "git" and "apply" in rest:
         candidates.append(eff_cwd)
     elif verb == "sed" and _sed_in_place(rest):
+        # sed's operand list is SCRIPT [FILE ...] when no -e/-f is present, and
+        # FILE ... when -e or -f supplies the script. Without this distinction
+        # every inline sed script (e.g. `s/a/b/`) is an over-emitted candidate
+        # that joins under eff_cwd and looks like a real path to every consumer.
+        has_ef = any(
+            tok in ("-e", "-f", "--expression", "--file")
+            or tok.startswith(("--expression=", "--file="))
+            for tok in rest
+        )
+        skip_next = False
+        first_operand = True
         for tok in rest:
-            if tok.startswith("-"):
+            if skip_next:
+                skip_next = False
                 continue
-            candidates.append(_abs(tok, eff_cwd))
+            if tok.startswith("-"):
+                if tok in ("-e", "-f", "--expression", "--file"):
+                    skip_next = True
+                continue
+            if not has_ef and first_operand:
+                first_operand = False
+                continue  # inline script operand, not a file path
+            candidates.append(_abs(tok, eff_cwd, var_env))
     elif verb == "tee":
         for tok in rest:
             if tok.startswith("-"):
                 continue
-            candidates.append(_abs(tok, eff_cwd))
+            candidates.append(_abs(tok, eff_cwd, var_env))
     elif verb in _COPY_VERBS:
-        candidates.extend(_copy_targets(rest, eff_cwd))
+        candidates.extend(_copy_targets(rest, eff_cwd, var_env))
 
     return candidates
+
+
+def _update_var_env_from_seg(seg: list[str], var_env: dict[str, str]) -> None:
+    """Record any leading VAR=value assignment tokens from `seg` into `var_env`.
+
+    Stops at the first non-assignment token, matching bash's own rule that
+    assignments before a command word are temporary env for that command."""
+    for tok in seg:
+        m = _ASSIGN_RE.match(tok)
+        if m:
+            var_env[m.group(1)] = m.group(2)
+        else:
+            break
 
 
 def segments(command: str) -> list[list[str]]:
@@ -292,29 +350,34 @@ def command_write_targets(command: str, eff_cwd: str) -> list[str]:
     never read as command syntax. Fail-open (empty list) on any parse error —
     matching every other consumer's convention in this hook family.
 
-    A PROCESS SUBSTITUTION ADDS `eff_cwd` AS AN EXTRA CANDIDATE, deliberately
-    ahead of the segment loop: `<(cmd)`/`>(cmd)` forks and runs `cmd` as a side
-    effect of preparing the outer command's argument list, and neither `<` nor
-    `>` is a bash separator, so `split_segments` never starts a new segment for
-    it and `_operands_until_redirect` stops scanning before it either -- the
-    nested command is invisible to every verb dispatch in this module, exactly
-    the same blind spot `patch`/`git apply` already answer with the directory
-    they are applied in, because which files are really written is not
-    derivable from the command line alone. Over-inclusive by the same
-    contract every candidate here already carries; a caller with a stricter
-    policy than "is a directory" (this module's own self-grant-gate consumer,
-    which treats a directory as no surface) closes the gap on its own text
-    directly via `shell_tokens.has_process_substitution` rather than relying on
-    this candidate."""
+    A WRITE PROCESS SUBSTITUTION `>(cmd)` ADDS `eff_cwd` AS AN EXTRA CANDIDATE,
+    deliberately ahead of the segment loop: `>(cmd)` forks and runs `cmd` as a
+    side effect of preparing the outer command's argument list, piping the outer
+    command's output somewhere the command line does not name. Neither `>` nor
+    `(` is a bash separator, so `split_segments` never starts a new segment for
+    it and `_operands_until_redirect` stops scanning before it — the nested
+    command is invisible to every verb dispatch in this module, exactly the same
+    blind spot `patch`/`git apply` already answer with the directory they are
+    applied in. Over-inclusive by the same contract every candidate here carries.
+
+    A READ PROCESS SUBSTITUTION `<(cmd)` IS NOT ADDED: `<(cmd)` forks `cmd` and
+    feeds its stdout into the outer command's argument list — the outer command
+    writes nothing extra due to `<(`. Only `>(` warrants the cwd candidate.
+
+    Variable expansion is seeded from `os.environ` (reliably-set OS variables
+    like `$TMPDIR`/`$HOME`) and augmented by any `VAR=value` assignments from
+    preceding segments in the same command (e.g. `o=/tmp/x; echo > $o/f`)."""
     command = shell_tokens.neutralize_heredoc_constructs(command)
-    extra = [eff_cwd] if shell_tokens.has_process_substitution(command) else []
+    extra = [eff_cwd] if ">(" in command else []
     try:
         tokens = shell_tokens.separator_exact_split(command)
     except Exception:
         return extra
     if not tokens:
         return extra
+    var_env: dict[str, str] = dict(os.environ)
     targets: list[str] = list(extra)
     for seg in split_segments(tokens):
-        targets.extend(segment_write_target(seg, eff_cwd))
+        targets.extend(segment_write_target(seg, eff_cwd, var_env))
+        _update_var_env_from_seg(seg, var_env)
     return targets
