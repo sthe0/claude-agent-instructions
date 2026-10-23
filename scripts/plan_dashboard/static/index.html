@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Plan dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 1rem 2rem; color: #1b1f24; background: #fff; }
+  h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+  #status { color: #57606a; margin-bottom: .75rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .25rem .6rem; border-bottom: 1px solid #d0d7de; white-space: nowrap; }
+  td.goal { white-space: normal; }
+  tr.task { cursor: pointer; }
+  tr.task:hover, tr.selected { background: #eef3f8; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .dim { color: #8c959f; }
+  #detail { margin-top: 1.25rem; }
+  #detail h2 { font-size: 1rem; }
+  ul.phases { list-style: none; padding-left: 1.2rem; margin: .1rem 0; }
+  ul.phases.root { padding-left: 0; }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e6edf3; background: #0d1117; }
+    th, td { border-color: #30363d; }
+    tr.task:hover, tr.selected { background: #161b22; }
+    #status, .dim { color: #8b949e; }
+  }
+</style>
+</head>
+<body>
+<h1>Plan dashboard</h1>
+<div id="status">connecting…</div>
+<table>
+  <thead><tr id="head"></tr></thead>
+  <tbody id="tasks"></tbody>
+</table>
+<div id="detail"></div>
+<script>
+"use strict";
+const COLUMNS = ["session", "live", "node", "stage", "wall", "cost", "goal"];
+const NOT_COUNTED = "not counted";
+let snapshot = null;
+let selected = null;
+let lastDetail = null;
+
+function el(tag, text, className) {
+  const node = document.createElement(tag);
+  if (text !== undefined && text !== null) node.textContent = text;
+  if (className) node.className = className;
+  return node;
+}
+
+function duration(seconds) {
+  if (seconds === null || seconds === undefined) return "?";
+  const total = Math.max(Math.floor(seconds), 0);
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  return h ? h + "h" + String(m).padStart(2, "0") + "m" : m + "m" + String(s).padStart(2, "0") + "s";
+}
+
+// A value that is an estimate reads "~", one that is a lower bound reads "≥"; never a bare number.
+function estimateMark(estimate, partial) {
+  return partial ? "≥" : (estimate ? "~" : "");
+}
+
+function money(value, estimate, partial) {
+  if (value === null || value === undefined) return NOT_COUNTED;
+  return estimateMark(estimate, partial) + "$" + value.toFixed(2);
+}
+
+function wall(seconds, estimate) {
+  return (seconds === null || seconds === undefined ? "" : estimateMark(estimate, false)) + duration(seconds);
+}
+
+function rowCells(task) {
+  if (!task.readable) {
+    return [task.session_id.slice(0, 36), task.liveness, "?", "?/?", "-", "-", "unreadable: " + task.reason];
+  }
+  const totals = task.totals;
+  return [
+    task.session_id.slice(0, 36), task.liveness, task.node || "?",
+    task.stages_done + "/" + task.stages_total,
+    wall(totals.wall_clock_s, totals.estimate.wall_clock_s),
+    money(totals.cost_usd, totals.estimate.cost_usd, totals.partial) +
+      (totals.root_counted ? " + root " + money(totals.root_cost_usd, totals.estimate.root_cost_usd, false) : " (root " + NOT_COUNTED + ")"),
+    (task.goal || "").split(/\s+/).join(" "),
+  ];
+}
+
+function renderTasks() {
+  const head = document.getElementById("head");
+  head.replaceChildren(...COLUMNS.map((name) => el("th", name)));
+  const rows = snapshot.tasks.map((task) => {
+    const tr = el("tr", null, "task" + (task.session_id === selected ? " selected" : ""));
+    rowCells(task).forEach((text, i) => tr.appendChild(el("td", text, COLUMNS[i] === "goal" ? "goal" : "")));
+    tr.addEventListener("click", () => { selected = task.session_id; renderTasks(); loadDetail(); });
+    return tr;
+  });
+  document.getElementById("tasks").replaceChildren(...rows);
+  document.getElementById("status").textContent =
+    snapshot.tasks.length ? snapshot.tasks.length + " task(s), updated " + new Date().toLocaleTimeString() : "no live tasks";
+}
+
+// A window whose end is null is still running and the model gives it no wall-clock; the time so
+// far is measured from its start to the snapshot's own clock, as the console view does.
+function openWindowText(start, nowMs) {
+  return "open (" + duration((nowMs - Date.parse(start)) / 1000) + " so far)";
+}
+
+// The server's clock at the last snapshot, as an offset from the browser's, so an open window keeps
+// counting between pushes (a snapshot is pushed only when the state changes).
+let clockOffsetMs = 0;
+function serverNow() { return Date.now() + clockOffsetMs; }
+
+function phaseWall(item) {
+  if (item.end === null && item.start) return openWindowText(item.start, serverNow());
+  return wall(item.wall_clock_s, item.estimate.wall_clock_s);
+}
+
+function phaseRows(items, depth, expanded, body) {
+  for (const item of items) {
+    const key = depth + ":" + item.label + ":" + item.start;
+    const tr = el("tr");
+    const label = el("td", null, "label");
+    label.style.paddingLeft = (depth * 1.2 + 0.6) + "rem";
+    const open = item.children.length > 0;
+    if (open) {
+      const toggle = el("button", expanded.has(key) ? "−" : "+");
+      toggle.addEventListener("click", () => {
+        if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
+        loadDetail();
+      });
+      label.appendChild(toggle);
+    }
+    label.appendChild(el("span", " " + item.label));
+    tr.appendChild(label);
+    tr.appendChild(el("td", phaseWall(item), "num"));
+    tr.appendChild(el("td", item.spawn_cost_usd === null ? "not attributed" : money(item.spawn_cost_usd, item.estimate.spawn_cost_usd, false), "num"));
+    tr.appendChild(el("td", money(item.root_cost_usd, item.estimate.root_cost_usd, false), "num"));
+    body.appendChild(tr);
+    if (open && expanded.has(key)) phaseRows(item.children, depth + 1, expanded, body);
+  }
+}
+
+const expandedPhases = new Set();
+
+function phasesTable(items) {
+  const table = el("table");
+  const head = el("tr");
+  ["phase", "wall-clock", "spawn cost", "root cost"].forEach((name) => head.appendChild(el("th", name)));
+  table.appendChild(el("thead")).appendChild(head);
+  const body = el("tbody");
+  phaseRows(items, 0, expandedPhases, body);
+  table.appendChild(body);
+  return table;
+}
+
+function stagesList(stages) {
+  const list = el("ul", null, "phases root");
+  for (const stage of stages) {
+    list.appendChild(el("li", stage.index + ". " + (stage.title || "?") + " — " + (stage.status || "pending") +
+      " (" + (stage.actor || "?") + ")"));
+  }
+  return list;
+}
+
+async function loadDetail() {
+  const box = document.getElementById("detail");
+  // The ticking timer re-renders lastDetail, so it must never outlive the task it was fetched for.
+  lastDetail = null;
+  if (!selected) { box.replaceChildren(); return; }
+  const wanted = selected;
+  const response = await fetch("/api/task/" + encodeURIComponent(wanted));
+  if (wanted !== selected) return;
+  if (!response.ok) { box.replaceChildren(el("p", "task is gone", "dim")); return; }
+  const detail = await response.json();
+  if (wanted !== selected) return;
+  lastDetail = detail;
+  renderDetail();
+}
+
+function renderDetail() {
+  const box = document.getElementById("detail");
+  const detail = lastDetail;
+  if (!detail) return;
+  if (!detail.readable) { box.replaceChildren(el("p", "unreadable: " + detail.reason, "dim")); return; }
+  box.replaceChildren(el("h2", "Stages of " + selected.slice(0, 36)), stagesList(detail.stages),
+    el("h2", "Phases"), phasesTable(detail.phases));
+}
+
+setInterval(() => { if (selected && lastDetail) renderDetail(); }, 1000);
+
+function apply(data) {
+  snapshot = data;
+  if (data.generated_at) clockOffsetMs = Date.parse(data.generated_at) - Date.now();
+  renderTasks();
+  if (selected) loadDetail();
+}
+
+let polling = null;
+function poll() {
+  if (polling) return;
+  polling = setInterval(async () => {
+    try { apply(await (await fetch("/api/snapshot")).json()); } catch (e) { /* retry on the next tick */ }
+  }, 5000);
+}
+
+function connect() {
+  if (typeof EventSource === "undefined") { poll(); return; }
+  const source = new EventSource("/api/events");
+  source.addEventListener("snapshot", (event) => {
+    if (polling) { clearInterval(polling); polling = null; }
+    apply(JSON.parse(event.data));
+  });
+  source.onerror = () => { document.getElementById("status").textContent = "disconnected, retrying…"; poll(); };
+}
+
+connect();
+</script>
+</body>
+</html>

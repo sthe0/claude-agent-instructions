@@ -6,7 +6,8 @@ function of the module and breaks one property the tests are meant to pin, so a 
 that leaves the suite green is a test gap. Later dashboard stages add rows to MUTATIONS.
 TUI_MUTATIONS is the console view's family: it is looked up by name next to MUTATIONS but its rows
 are killed by ``test_plan_dashboard_tui.py`` (and, for the row that targets ``tui_app``, by the
-textual pilot file), not by the model tests.
+textual pilot file), not by the model tests. WEB_MUTATIONS is the web page's family, killed by
+``test_plan_dashboard_web.py``.
 
 ``test_plan_dashboard_mutation_catalogue.py`` runs every MUTATIONS row in a subprocess and asserts
 the model tests go red, every other TUI_MUTATIONS row likewise against the console tests, and the
@@ -292,6 +293,56 @@ TUI_MUTATIONS = {
 }
 
 
+def _always(value):
+    def wrap(original):
+        def mutated(*args, **kwargs):
+            return value
+        return mutated
+    return wrap
+
+
+def _post_answers_ok(original):
+    def mutated(*args, **kwargs):
+        handler = original(*args, **kwargs)
+
+        def do_POST(self):
+            self._send(200, "text/plain; charset=utf-8", b"ok\n")
+        handler.do_POST = do_POST
+        return handler
+    return mutated
+
+
+def _touch_then_serve(original):
+    def mutated(state_root, *args, **kwargs):
+        _touch_state_file(Path(state_root))
+        return original(state_root, *args, **kwargs)
+    return mutated
+
+
+def _head_streams(original):
+    def mutated(*args, **kwargs):
+        handler = original(*args, **kwargs)
+        events = handler._events
+
+        def _events(self):
+            self.command = "GET"
+            return events(self)
+        handler._events = _events
+        return handler
+    return mutated
+
+
+WEB = "plan_dashboard.web"
+WEB_MUTATIONS = {
+    "web-host-open": (WEB, "host_allowed", _always(True)),
+    "web-bind-open": (WEB, "check_bind", _always(None)),
+    "web-method-open": (WEB, "make_handler", _post_answers_ok),
+    "web-events-every-tick": (WEB, "event_due", _always(True)),
+    "web-writes-state": (WEB, "serve", _touch_then_serve),
+    "web-head-streams": (WEB, "make_handler", _head_streams),
+}
+
+
 def pytest_addoption(parser):
     parser.addoption("--plan-dashboard-mutation", default="", help=f"same as {ENV}; the variable wins")
 
@@ -301,7 +352,7 @@ def pytest_configure(config):
     name = os.environ.get(ENV) or config.getoption("--plan-dashboard-mutation")
     if not name:
         return
-    known = {**MUTATIONS, **TUI_MUTATIONS}
+    known = {**MUTATIONS, **TUI_MUTATIONS, **WEB_MUTATIONS}
     if name not in known:
         raise pytest.UsageError(f"{ENV}={name!r} is not a known mutation; known: {sorted(known)}")
     module_name, attr, wrapper = known[name]
