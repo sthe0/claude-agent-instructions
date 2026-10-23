@@ -161,6 +161,10 @@ A plan too big to review or to hand to a model in one piece is written as a hype
 - Every stage of a hypertext plan, inline or in its own file, declares `index` and `depends_on` (`[]` for a stage with no predecessor); dependencies are the only source of run order, and a stage without `depends_on` is refused. `agentctl plan-seal` assembles the index's stage list from the `<stem>.parts/stage-<n>.toml` files, sorted by index: add or remove a stage by adding or removing its file, then reseal. A single-file plan without references keeps the old rules: list order still decides run order between independent stages, and `depends_on` stays optional.
 - Whole-stage files come only from `agentctl plan-convert`, which converts an old single-file plan read-only into a separate directory. For a live session whose plan outgrew the context, the **root coordinator** runs `agentctl plan-convert-live --session <id> --by agent|user` (approvals and reviews carry over). It is a user-authority verb: a spawned planner never calls it and instead recommends it in its returned marker.
 
+### Risk-shaped planning
+
+Only when the brief says the session is bound: skeleton first, then a risk bet per stage that sets its elaboration, timing and review depth. Rules: [policy.md](policy.md) § Risk-shaped planning.
+
 ### Tool guidance
 
 You inherit the manager's full toolset. For planning work, prefer **read-only** discovery (`Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, intrasearch, wiki MCP, tracker MCP). The only `Write` you should perform during planning is writing the plan markdown file itself.
