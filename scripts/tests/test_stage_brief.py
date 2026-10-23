@@ -343,6 +343,10 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         # excluded: plan-level assumptions are registered as premises at submit-plan,
         # a root-side gate input; a stage executor works from its own stage fields.
         (PlanMeta, "assumptions"),
+        # excluded: the skeleton phase's plan-level fields (phase marker, base stage and the
+        # alternatives record) steer the root's skeleton review, not a stage executor.
+        (PlanMeta, "phase"), (PlanMeta, "base_stage"),
+        (PlanMeta, "alternatives"), (PlanMeta, "alternatives_waiver"),
         (FinalCheck, "label"),
         (FinalCheck, "command"),  # excluded: labels-only method
         (FinalCheck, "expected_exit"),  # excluded: labels-only method
