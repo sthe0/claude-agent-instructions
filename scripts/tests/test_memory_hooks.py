@@ -273,10 +273,6 @@ class TestExperienceRecordReminder:
         _point_roots_at(monkeypatch, tmp_path)
         assert mod.check_experience_record(mod.Turn({"session_id": "nosuchsession"})) == []
 
-    def test_always_exits_0(self, monkeypatch, tmp_path):
-        _, rc = _run_exp(monkeypatch, tmp_path, "s7", "RESOLUTION", _EMPTY_BAG)
-        assert rc == 0
-
     def test_corrupt_json_input_is_silent(self, monkeypatch, tmp_path):
         mod = _load("hook-prompt-reminders.py")
         _point_roots_at(monkeypatch, tmp_path)

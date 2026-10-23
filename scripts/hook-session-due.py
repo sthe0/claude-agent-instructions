@@ -11,7 +11,8 @@ runs its read-only producer as a bounded subprocess and prints to stderr; the
 grooming offer goes to stdout because it is an instruction to the model.
 
 The checks share one TOTAL_BUDGET_S wall-clock budget. A check that cannot start
-inside it is skipped without stamping, so it runs at the next session start.
+inside it, or whose producer is missing or killed by it, keeps its stale stamp, so
+it runs again at the next session start.
 
 Fail-open: an error in one check is swallowed and the next check still runs.
 Exit status is always 0.
@@ -102,6 +103,7 @@ class Run:
         self.writes_stamps = not (dry_run or force)
         self.now = time.time()
         self.deadline = time.monotonic() + budget_s
+        self.produced = False
 
     def left(self) -> float:
         return self.deadline - time.monotonic()
@@ -120,17 +122,27 @@ class Run:
         if self.writes_stamps:
             record_due_stamp(stamp, self.now)
 
+    def record_produced(self, stamp: str) -> None:
+        """Stamp only when the last produce() ran to completion: a producer that
+        was missing, failed to start or was killed by the budget keeps its stale
+        stamp, so the check runs again at the next session start."""
+        if self.produced:
+            self.record(stamp)
+
     def produce(self, script: Path, *args: str, cap_s: float,
                 env: "dict | None" = None) -> "subprocess.CompletedProcess | None":
+        self.produced = False
         if not script.is_file():
             return None
         try:
-            return subprocess.run(
+            proc = subprocess.run(
                 [sys.executable, str(script), *args],
                 capture_output=True, text=True, timeout=min(cap_s, self.left()), env=env,
             )
         except Exception:
             return None
+        self.produced = True
+        return proc
 
 
 def repo_root() -> Path:
@@ -245,7 +257,7 @@ def check_self_diagnose(run: Run, stamp: str) -> None:
     findings = scan_self_diagnose(run)
     if findings is not None:
         report_self_diagnose(findings, [] if run.dry_run else persist_findings(findings))
-    run.record(stamp)
+    run.record_produced(stamp)
 
 
 def ensure_phase3_baseline(now: float) -> None:
@@ -268,7 +280,7 @@ def check_phase3(run: Run, stamp: str) -> None:
         return
     proc = run.produce(SCRIPTS_DIR / "rule-salience-report.py", "--check-due", cap_s=15)
     verdict = (proc.stdout or "").strip() if proc else ""
-    run.record(stamp)
+    run.record_produced(stamp)
     if not verdict.startswith(PHASE3_DUE_PREFIX):
         return
     lines = verdict.splitlines()
@@ -333,7 +345,7 @@ def check_promote_scan(run: Run, stamp: str) -> None:
     scan = scan_promote(run)
     if scan is not None:
         report_promote(scan)
-    run.record(stamp)
+    run.record_produced(stamp)
 
 
 def launch_scorecard(cmd: "list[str]") -> None:
@@ -370,7 +382,7 @@ def check_budget_calibration(run: Run, stamp: str) -> None:
         return
     proc = run.produce(SCRIPTS_DIR / "budget-calibration.py", "--check", cap_s=10)
     flag = (proc.stdout or "").strip() if proc else ""
-    run.record(stamp)
+    run.record_produced(stamp)
     if flag:
         err(
             f"💵 Budget tiers may be miscalibrated: {flag}. "
@@ -424,7 +436,7 @@ def check_judge_ceiling_drift(run: Run, stamp: str) -> None:
         return
     proc = run.produce(SCRIPTS_DIR / "judge-usage-report.py", "--check-drift", cap_s=15)
     drift = (proc.stdout or "").strip() if proc and proc.returncode != 0 else ""
-    run.record(stamp)
+    run.record_produced(stamp)
     if drift:
         err(
             "\N{WARNING SIGN} A judge's live latency has drifted up to meet its "

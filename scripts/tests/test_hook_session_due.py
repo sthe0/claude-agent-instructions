@@ -431,6 +431,36 @@ def test_a_producer_never_outlives_the_remaining_budget(env):
     assert time.monotonic() - started < 5
 
 
+PRODUCER_CHECKS = [
+    pytest.param("check_budget_calibration", "claude-budget-calibration.stamp", "budget-calibration.py", id="budget"),
+    pytest.param("check_judge_ceiling_drift", "claude-judge-ceiling-drift.stamp", "judge-usage-report.py", id="judge"),
+    pytest.param("check_phase3", "claude-phase3-due.stamp", "rule-salience-report.py", id="phase3"),
+    pytest.param("check_self_diagnose", "claude-self-diagnose.stamp", "self-diagnose.py", id="self-diagnose"),
+    pytest.param("check_promote_scan", "claude-promote-scan.stamp", "record-experience.py", id="promote-scan"),
+]
+
+
+@pytest.mark.parametrize("check,stamp,script", PRODUCER_CHECKS)
+def test_a_producer_killed_by_the_budget_keeps_its_stale_stamp(env, check, stamp, script):
+    fake_sleeper(env.scripts / script)
+    stale = seed_stamp(env, stamp, age_s=30 * 86400)
+    run_check(check, stamp, budget=0.5)
+    assert stamp_file(env, stamp).read_text(encoding="utf-8") == stale
+
+
+@pytest.mark.parametrize("check,stamp,script", PRODUCER_CHECKS)
+def test_a_missing_producer_leaves_the_check_unstamped(env, check, stamp, script):
+    run_check(check, stamp)
+    assert not stamp_file(env, stamp).exists()
+
+
+@pytest.mark.parametrize("check,stamp,script", PRODUCER_CHECKS)
+def test_a_producer_that_completes_with_a_failure_exit_is_stamped(env, check, stamp, script):
+    fake_producer(env, script, "", exit_code=3)
+    run_check(check, stamp)
+    assert stamp_file(env, stamp).exists()
+
+
 def test_the_default_budget_is_twenty_seconds():
     assert hook.TOTAL_BUDGET_S == 20.0
 
