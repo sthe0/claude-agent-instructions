@@ -16,7 +16,7 @@ This means a fresh clone in another org needs **zero edits** to Core.
 
 ## The seams, at a glance
 
-Every org-specific facility attaches to Core through one of ten seams. Each is *mechanism in Core, data outside it* — Core ships the resolver, the neutral default and the contract; a higher layer (Personal, machine-local, or a project overlay) supplies the org half.
+Every org-specific facility attaches to Core through one of eleven seams. Each is *mechanism in Core, data outside it* — Core ships the resolver, the neutral default and the contract; a higher layer (Personal, machine-local, or a project overlay) supplies the org half.
 
 | Seam | Core ships | A higher layer installs | Where |
 |---|---|---|---|

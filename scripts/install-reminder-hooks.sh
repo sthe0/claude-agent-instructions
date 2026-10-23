@@ -38,7 +38,6 @@ STAMP_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPTS_DIR="$REPO/scripts" STAMP_SCRIPTS_DIR="$STAMP_REPO/scripts" \
 PRUNE_ONLY_ALSO_ADD="${PRUNE_ONLY_ALSO_ADD[*]+${PRUNE_ONLY_ALSO_ADD[*]}}" \
 python3 - "$SETTINGS" "${PRUNE_ONLY_SETTINGS[@]+"${PRUNE_ONLY_SETTINGS[@]}"}" <<'PY'
-import importlib.util
 import json, os, shutil, sys
 from pathlib import Path
 
@@ -48,19 +47,11 @@ scripts = os.environ["SCRIPTS_DIR"]
 sys.path.insert(0, os.environ["STAMP_SCRIPTS_DIR"])
 from agentctl import edit_ledger
 from lib import hook_fragments
-
-# Reuse self-diagnose.py's own absolute-script resolution so the prune pass
-# below and the broken-hook-registration detector agree by construction.
-# Loaded from STAMP_SCRIPTS_DIR (this script's own, always-real location)
+# The prune pass, the row dedup and the fragment merge share self-diagnose's own
+# script resolution, so they agree by construction on which script a hook runs.
+# Imported from STAMP_SCRIPTS_DIR (this script's own, always-real location)
 # rather than SCRIPTS_DIR, which a test may point at a minimal fake repo.
-_sd_spec = importlib.util.spec_from_file_location(
-    "_install_reminder_self_diagnose",
-    os.path.join(os.environ["STAMP_SCRIPTS_DIR"], "self-diagnose.py"),
-)
-_sd_mod = importlib.util.module_from_spec(_sd_spec)
-sys.modules[_sd_spec.name] = _sd_mod
-_sd_spec.loader.exec_module(_sd_mod)
-_hook_script_path = _sd_mod._hook_script_path
+from lib.hook_script import hook_script_path, script_name
 
 # (event, matcher-or-None, script-basename [+ optional args], timeout)
 DESIRED = [
@@ -315,10 +306,6 @@ with open(settings_path, encoding="utf-8") as fh:
 hooks = data.setdefault("hooks", {})
 
 
-def basename_of(cmd: str) -> str:
-    return os.path.basename((cmd or "").split()[0]) if cmd else ""
-
-
 def group_for(event_groups, matcher):
     for g in event_groups:
         if (g.get("matcher") or None) == matcher:
@@ -329,10 +316,16 @@ def group_for(event_groups, matcher):
     return g
 
 
-def add_rows(hooks, rows, reconcile=False):
+def add_rows(hooks, rows, reconcile=False, fragment_owned=frozenset()):
     """Register `rows` (DESIRED tuples) in `hooks`, never adding a script whose
     basename is already in the target group. Shared by the full ADD pass and the
     prune-only roots' single-row exemption, so the two cannot drift.
+
+    `fragment_owned` holds the (event, matcher, command) keys a hook fragment
+    installed: they do not count as present, so a Core row added after a fragment
+    entry for the same script is still added, and the fragment pass then drops its
+    own entry (lib/hook_fragments.py) instead of Core's row being skipped or
+    having its timeout rewritten.
 
     `reconcile` decides what happens to an entry that IS already there. Without
     it the row is skipped outright, which made this script insert-only: a
@@ -369,7 +362,11 @@ def add_rows(hooks, rows, reconcile=False):
         groups = hooks.setdefault(event, [])
         grp = group_for(groups, matcher)
         grp.setdefault("hooks", [])
-        present = [h for h in grp["hooks"] if basename_of(h.get("command", "")) == script_base]
+        present = [
+            h for h in grp["hooks"]
+            if script_name(h.get("command", "")) == script_base
+            and (event, matcher, h.get("command")) not in fragment_owned
+        ]
         if present:
             if reconcile:
                 for hook in present:
@@ -391,7 +388,12 @@ if missing_exemptions:
     # A name that matches no DESIRED row would silently add nothing at all.
     sys.exit(f"install-reminder-hooks: PRUNE_ONLY_ALSO_ADD names no DESIRED hook: {sorted(missing_exemptions)}")
 
-changed, reconciled = add_rows(hooks, DESIRED, reconcile=True)
+agent_home = os.path.dirname(settings_path)
+record_path = os.path.join(agent_home, hook_fragments.RECORD_NAME)
+old_record = hook_fragments.load_record(record_path)
+changed, reconciled = add_rows(
+    hooks, DESIRED, reconcile=True, fragment_owned=hook_fragments.owned_keys(old_record)
+)
 
 
 def prune_dangling_managed_hooks(hooks, managed_dir):
@@ -408,7 +410,7 @@ def prune_dangling_managed_hooks(hooks, managed_dir):
             kept_hooks = []
             for hk in grp.get("hooks", []) or []:
                 cmd = hk.get("command", "")
-                script = _hook_script_path(cmd)
+                script = hook_script_path(cmd)
                 if script is not None:
                     try:
                         resolved = script.resolve()
@@ -433,9 +435,6 @@ pruned = prune_dangling_managed_hooks(hooks, scripts)
 
 # Hook fragments (see lib/hook_fragments.py) reach the agent root only, after
 # Core's own rows, so a Core row always wins a basename collision.
-agent_home = os.path.dirname(settings_path)
-record_path = os.path.join(agent_home, hook_fragments.RECORD_NAME)
-old_record = hook_fragments.load_record(record_path)
 fragment_changes, fragment_warnings, new_record = hook_fragments.sync(
     hooks, os.path.join(agent_home, hook_fragments.FRAGMENT_DIR_NAME), old_record
 )

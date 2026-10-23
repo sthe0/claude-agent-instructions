@@ -108,6 +108,31 @@ ground = "TOKEN_SHAPED.sub masks token-shaped strings in the text of a failed la
 hits = 1
 reviewed_by = "developer"
 
+[sites."scripts/lib/hook_script.py::<module>::re.compile"]
+class = "structural"
+ground = "Compile the shell `VAR=value` assignment pattern; shell-command syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/hook_script.py::hook_script_path::pattern.match"]
+class = "structural"
+ground = "Match `VAR=value` shell assignment tokens in a hook command to skip them; shell-command syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/hook_script.py::hook_script_path::re.search"]
+class = "structural"
+ground = "Detects whitespace in a command token (quoted payload) to exclude it as a script path; shell-token syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/hook_script.py::script_name::pattern.match"]
+class = "structural"
+ground = "Match `VAR=value` shell assignment tokens to skip them when naming the command's first word; shell-command syntax."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/lib/instruction_smoke_gate.py::<module>::re.compile"]
 class = "structural"
 ground = "Compiles: the push-rights wording used only to defuse a log line, the all-zero SHA and the 40/64-hex object-id shape; none decides meaning."
@@ -2202,24 +2227,11 @@ ground = "Splits a leaf's name and description into word tokens whose Jaccard ov
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/self-diagnose.py::_hook_script_path::pattern.match"]
-class = "structural"
-ground = "Match `VAR=value` shell assignment tokens in a hook command to skip them; shell-command syntax."
-hits = 2
-hit_classes = ["structural", "structural"]
-reviewed_by = "developer"
-
-[sites."scripts/self-diagnose.py::_hook_script_path::re.search"]
-class = "structural"
-ground = "Detects whitespace in a command token (quoted payload) to exclude it as a script path; shell-token syntax."
-hits = 1
-reviewed_by = "developer"
-
 [sites."scripts/self-diagnose.py::<module>::re.compile"]
 class = "structural"
-ground = "Compile markdown link, wikilink, HTML-comment, frontmatter name/description and shell VAR= assignment patterns; all fixed syntax."
-hits = 6
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Compile markdown link, wikilink, HTML-comment and frontmatter name/description patterns; all fixed syntax."
+hits = 5
+hit_classes = ["structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/self-diagnose.py::scan_dangling_pointers::pattern.finditer"]

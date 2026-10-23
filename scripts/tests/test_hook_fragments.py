@@ -80,6 +80,98 @@ class Box:
         return path
 
 
+CORE_SCRIPT = "hook-skill-first.py"
+CORE_COMMAND = CORE_PREFIX + CORE_SCRIPT
+
+
+def adopt(box, fragment_name, command, timeout=99):
+    """Leave settings as an earlier run did, before Core wired CORE_SCRIPT: the
+    fragment's entry is installed and recorded, and Core's own row is absent."""
+    box.run()
+    data = json.loads(box.settings.read_text())
+    group = next(g for g in data["hooks"]["PreToolUse"] if g.get("matcher") == "Bash")
+    group["hooks"] = [h for h in group["hooks"] if h["command"] != CORE_COMMAND]
+    group["hooks"].append({"type": "command", "command": command, "timeout": timeout})
+    box.seed(data)
+    box.record.write_text(json.dumps({fragment_name: [["PreToolUse", "Bash", command]]}))
+
+
+def core_script_commands(box):
+    return [c for c in box.entries() if CORE_SCRIPT in c]
+
+
+def test_script_name_looks_past_env_and_interpreter_flags():
+    import sys
+
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    from lib.hook_script import script_name
+
+    for command in (
+        "/a/gate.py",
+        "python3 /a/gate.py",
+        "env python3 /a/gate.py",
+        "python3 -X utf8 /c/gate.py",
+        "FOO=1 python3 /a/gate.py --flag",
+    ):
+        assert script_name(command) == "gate.py", command
+    assert script_name("jq . file") == "jq"
+    assert script_name("") == ""
+
+
+def test_env_and_flag_forms_block_a_same_script_fragment_entry(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org")
+    box.fragment(d, ["env python3 @FRAGMENT_DIR@/scripts/gate.py"], link="org.json")
+    box.seed({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "python3 -X utf8 /elsewhere/gate.py"}]}]}})
+    proc = box.run()
+    assert str(d.resolve()) not in box.settings.read_text()
+    assert "org.json" in proc.stderr
+
+
+def test_core_row_added_after_an_interpreter_form_fragment_entry_displaces_it(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org", scripts=(CORE_SCRIPT,))
+    command = f"python3 {d.resolve()}/scripts/{CORE_SCRIPT}"
+    box.fragment(d, [command], link="org.json")
+    adopt(box, "org.json", command)
+    proc = box.run()
+    assert core_script_commands(box) == [CORE_COMMAND]
+    assert "org.json" in proc.stderr and "dropped" in proc.stderr
+    assert box.record.read_text().strip() in ("{}", "")
+
+    (box.agent / "settings.json.bak").unlink()
+    settled = box.settings.read_bytes()
+    box.run()
+    assert box.settings.read_bytes() == settled
+    assert not (box.agent / "settings.json.bak").exists()
+    assert core_script_commands(box) == [CORE_COMMAND]
+
+
+def test_core_row_added_after_a_bare_path_fragment_entry_keeps_one_core_row(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org")
+    box.fragment(d, [CORE_COMMAND], link="org.json")
+    adopt(box, "org.json", CORE_COMMAND, timeout=99)
+    proc = box.run()
+    data = json.loads(box.settings.read_text())
+    hooks = [
+        h
+        for g in data["hooks"]["PreToolUse"]
+        if g.get("matcher") == "Bash"
+        for h in g["hooks"]
+        if h["command"] == CORE_COMMAND
+    ]
+    assert len(hooks) == 1 and hooks[0]["timeout"] == 5
+    assert "org.json" in proc.stderr
+
+    (box.agent / "settings.json.bak").unlink()
+    settled = box.settings.read_bytes()
+    box.run()
+    assert box.settings.read_bytes() == settled
+    assert not (box.agent / "settings.json.bak").exists()
+
+
 def test_install_expands_placeholder_through_symlink_and_is_idempotent(tmp_path):
     box = Box(tmp_path)
     d = box.fragment_dir("org")

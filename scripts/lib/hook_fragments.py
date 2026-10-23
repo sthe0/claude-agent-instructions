@@ -16,48 +16,36 @@ Contract:
   never a hand-added hook, even one with an identical command.
 * Every run makes a healthy fragment's owned entries equal its current entries: an
   edited command or a moved directory leaves no dead or doubled entry.
-* An entry is blocked, with a warning, when its script basename is already used in
-  its (event, matcher) group by an entry the same fragment does not own (a hand
-  entry, a Core row, another fragment's entry), so one script never fires twice.
-  Entries of one fragment never block each other.
+* An entry is blocked, with a warning, when its script (``lib/hook_script.py``
+  ``script_name``, the same identity Core's installer uses) is already used in its
+  (event, matcher) group by an entry the same fragment does not own (a hand entry, a
+  Core row, another fragment's entry), so one script never fires twice. The check also
+  covers entries the fragment already owns: when Core or a hand edit later adds the
+  same script, the fragment's entry is dropped with a warning on that run. Entries of
+  one fragment never block each other. Only the first group with a given matcher under
+  an event is looked at.
+* A lost or corrupt ``hook-plugins.installed.json`` fails safe: it reads as empty, the
+  entries already in settings.json look hand-added and are left alone (a warning each
+  run), and nothing is removed later. To recover, delete the fragment's entries from
+  settings.json by hand and rerun the installer, which installs and records them anew.
 * A broken fragment (unparsable, malformed, or naming a script that is missing under
   its own directory) is skipped with a warning and keeps the entries it owns.
 * A plugin entry whose fragment file is gone loses its owned entries.
 """
 import json
 import os
-import re
 import shlex
 import sys
 from pathlib import Path
 
+try:
+    from lib.hook_script import script_name
+except ImportError:
+    from hook_script import script_name
+
 PLACEHOLDER = "@FRAGMENT_DIR@"
 FRAGMENT_DIR_NAME = "hook-plugins"
 RECORD_NAME = "hook-plugins.installed.json"
-
-
-_INTERPRETER = re.compile(r"^(python[\d.]*|bash|sh|zsh|env|node)$")
-
-
-def basename_of(cmd):
-    """Basename of the script a hook command runs, looking past an interpreter.
-
-    Core's rows are bare script paths while a fragment's usually read
-    ``python3 <path>``, so the script's identity is the first operand after any
-    interpreter and its flags, not the command's first word.
-    """
-    try:
-        tokens = shlex.split(cmd or "")
-    except ValueError:
-        tokens = (cmd or "").split()
-    tokens = [t for t in tokens if "=" not in t.split("/")[0]]
-    if not tokens:
-        return ""
-    if _INTERPRETER.match(os.path.basename(tokens[0])):
-        operands = [t for t in tokens[1:] if not t.startswith("-")]
-        if operands:
-            return os.path.basename(operands[0])
-    return os.path.basename(tokens[0])
 
 
 def _key(event, matcher, command):
@@ -144,22 +132,33 @@ def _group_for(event_groups, matcher):
 
 
 def _find_group(hooks, event, matcher):
+    """The first group under ``event`` with this matcher (a second one is not seen)."""
     for g in hooks.get(event, []):
         if (g.get("matcher") or None) == matcher:
             return g
     return None
 
 
+def owned_keys(record):
+    """Every (event, matcher, command) key some fragment has installed."""
+    return {k for keys in record.values() for k in keys}
+
+
 def _remove(hooks, event, matcher, command):
-    """Drop one exact entry; drop the group and event it empties. True if removed."""
+    """Drop one instance of an exact entry; drop the group and event it empties.
+
+    True if removed. An identical hand copy of the command keeps its other instance.
+    """
     group = _find_group(hooks, event, matcher)
     if group is None:
         return False
-    kept = [h for h in group["hooks"] if h.get("command") != command]
-    if len(kept) == len(group["hooks"]):
+    for i, h in enumerate(group["hooks"]):
+        if h.get("command") == command:
+            del group["hooks"][i]
+            break
+    else:
         return False
-    group["hooks"] = kept
-    if not kept:
+    if not group["hooks"]:
         hooks[event].remove(group)
         if not hooks[event]:
             del hooks[event]
@@ -206,13 +205,31 @@ def sync(hooks, fragment_dir, record):
             key = _key(event, matcher, hook["command"])
             group = _find_group(hooks, event, matcher)
             siblings = group["hooks"] if group else []
-            existing = next((h for h in siblings if h.get("command") == key[2]), None)
-            if existing is not None:
+            same = [h for h in siblings if h.get("command") == key[2]]
+            sname = script_name(key[2])
+            foreign = [
+                h["command"]
+                for h in siblings
+                if script_name(h.get("command")) == sname
+                and owner.get(_key(event, matcher, h.get("command"))) != name
+            ]
+            if owner.get(key) == name and len(same) > 1:
+                foreign.append(key[2])
+            if owner.get(key) == name and foreign:
+                _remove(hooks, event, matcher, key[2])
+                owner.pop(key, None)
+                changes.append(f"- {event}/{matcher or '*'}: {key[2]} ({name} displaced)")
+                warnings.append(
+                    f"{name}: {key[2]} dropped, {foreign[0]} now runs {sname} "
+                    f"in {event}/{matcher or '*'}"
+                )
+                continue
+            if same:
+                existing = same[0]
                 if owner.get(key) not in (None, name):
                     warnings.append(f"{name}: {key[2]} is already installed by {owner[key]}")
                 elif owner.get(key) == name:
                     owned.append(key)
-                    owner[key] = name
                     if existing != hook:
                         existing.clear()
                         existing.update(hook)
@@ -220,19 +237,10 @@ def sync(hooks, fragment_dir, record):
                 else:
                     warnings.append(f"{name}: {key[2]} is already present as a hand entry")
                 continue
-            blocker = next(
-                (
-                    h["command"]
-                    for h in siblings
-                    if basename_of(h.get("command")) == basename_of(key[2])
-                    and owner.get(_key(event, matcher, h.get("command"))) != name
-                ),
-                None,
-            )
-            if blocker is not None:
+            if foreign:
                 warnings.append(
-                    f"{name}: {key[2]} blocked, {blocker} already runs "
-                    f"{basename_of(key[2])} in {event}/{matcher or '*'}"
+                    f"{name}: {key[2]} blocked, {foreign[0]} already runs "
+                    f"{sname} in {event}/{matcher or '*'}"
                 )
                 continue
             if group is None:
