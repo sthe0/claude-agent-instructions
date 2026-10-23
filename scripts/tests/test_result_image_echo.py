@@ -223,12 +223,20 @@ def test_judge_unavailable_warns_about_nothing(store, tmp_path, runner):
 def test_judge_verdict_decides_between_two_identical_prefilter_hits(store, tmp_path):
     """The prefilter proposes and the judge disposes: the same bytes, warned about or not
     purely on the judge's answer. This is the boundary the whole design rests on — a
-    structural test may not classify meaning."""
+    structural test may not classify meaning.
+
+    The structural prose-image advisory fires in both cases (ECHO_KEYS[0] is 211 chars,
+    unenumerated); only the echo advisory is decided by the judge verdict."""
     image = _corpus_image(ECHO_KEYS[0])
     plan = _write_plan(tmp_path / "p.toml", image)
 
-    assert submission_advice(plan_mod.load_plan(plan), judge_runner=_judge("ECHO"))
-    assert submission_advice(plan_mod.load_plan(plan), judge_runner=_judge("GENUINE")) == []
+    echo_advice = submission_advice(plan_mod.load_plan(plan), judge_runner=_judge("ECHO"))
+    genuine_advice = submission_advice(plan_mod.load_plan(plan), judge_runner=_judge("GENUINE"))
+
+    assert any("restates the stage's own check" in a for a in echo_advice)
+    assert not any("restates the stage's own check" in a for a in genuine_advice)
+    assert any("prose block" in a for a in echo_advice)
+    assert any("prose block" in a for a in genuine_advice)
 
 
 def test_no_runner_reaches_the_judge_via_the_production_fallback(store, tmp_path, monkeypatch):
@@ -353,12 +361,32 @@ def test_replan_carries_the_warning_and_pays_for_it_only_past_the_refusals(
 
 
 def test_validate_submission_returns_advice_without_raising(tmp_path):
-    """The seam's raising wrapper gained a way to SAY something. Existing callers, which
-    pass no judge and ignore the return, still see the same nothing."""
-    plan = plan_mod.load_plan(_write_plan(tmp_path / "p.toml", _corpus_image(ECHO_KEYS[0])))
+    """The seam's raising wrapper returns advice without raising on it.
 
-    assert validate_submission(plan) == []
-    assert validate_submission(plan, judge_runner=_judge("ECHO"))
+    Two advisory channels with different runner requirements:
+
+      * Structural advice (prose-image advisory) fires from plan bytes alone — no runner
+        needed. ECHO_KEYS[0] is 211 chars and unenumerated, so it fires without a runner.
+      * Judge-dependent advice (echo check) requires a runner. With one, both advisories
+        appear on the same list.
+
+    ECHO_KEYS[1] is 119 chars, below the prose-image floor, so validate_submission on it
+    returns [] without a runner — preserving the prior behaviour for short images.
+    """
+    plan_above = plan_mod.load_plan(_write_plan(tmp_path / "above.toml", _corpus_image(ECHO_KEYS[0])))
+    plan_below = plan_mod.load_plan(_write_plan(tmp_path / "below.toml", _corpus_image(ECHO_KEYS[1])))
+
+    # Below floor: no structural advice; no runner means no echo advice either.
+    assert validate_submission(plan_below) == []
+    assert validate_submission(plan_below, judge_runner=_judge("ECHO"))
+
+    # Above floor, unenumerated: structural advice fires even without a runner.
+    structural = validate_submission(plan_above)
+    assert any("prose block" in a for a in structural)
+    # With a runner, echo advice is added on top.
+    full = validate_submission(plan_above, judge_runner=_judge("ECHO"))
+    assert any("restates the stage's own check" in a for a in full)
+    assert len(full) > len(structural)
 
 
 # --- the prefilter's structural conditions ----------------------------------
