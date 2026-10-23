@@ -7,7 +7,7 @@ skills/**, settings*.json, the instructions repo) used to bypass the coordinatio
 spine via a broad ``claude-agent-instructions`` / ``/.claude/`` skip set, so edits
 to the agent system itself never passed classify -> approve -> resolve. The policy
 is now uniform: EVERY state-changing edit flows through the spine; the only
-unconditionally exempt writes are the three memory roots and scratch (``/tmp``).
+unconditionally exempt writes are the three memory roots and OS-temp scratch.
 
 Plan artifacts (``~/.claude/plans/`` or, on an isolated-root install,
 ``~/.claude-agent/plans/``) are NOT unconditionally exempt: a plan is the
@@ -44,11 +44,12 @@ _PRODUCTION_FILE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# The ONLY edits unconditionally exempt from the engine gate. Memory (all three
-# scopes) is exempt by design; ``/tmp`` is scratch. Plan artifacts are NOT here —
+# Memory paths unconditionally exempt from the engine gate (all three scopes).
+# Scratch is NOT listed here — it is resolved from the environment via
+# _gate_scratch_roots() -> scratch_roots(), so a write under $TMPDIR is exempt
+# regardless of whether it looks like "/tmp/". Plan artifacts are NOT here either —
 # they are node-aware (see is_plan_file + hook-state-gate.py).
-_EXEMPT_SUBSTRINGS = (
-    "/tmp/",
+_EXEMPT_MEMORY_SUBSTRINGS = (
     "/memory/",
     "/memory-global/",
     "/agent-memory/",
@@ -105,12 +106,12 @@ def _under_local_state(p: str) -> bool:
 
 def is_engine_exempt(path: str) -> bool:
     """True if the path is unconditionally exempt from the engine gate: memory,
-    ``/tmp/``, anything that resolves (realpath containment, never substring) under
-    a scratch root that is not as broad as $HOME, and the personal per-project
+    anything that resolves (realpath containment, never substring) under a scratch
+    root that is not as broad as $HOME, and the personal per-project
     ``<projects-root>/<hash>/local-state/`` directory. Plan files are NOT exempt
     here — see is_plan_file."""
     p = path or ""
-    if any(seg in p for seg in _EXEMPT_SUBSTRINGS):
+    if any(seg in p for seg in _EXEMPT_MEMORY_SUBSTRINGS):
         return True
     if not p:
         return False
