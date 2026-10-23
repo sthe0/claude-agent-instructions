@@ -29,10 +29,84 @@ NOHUP_RE = re.compile(r"\bnohup\b")
 _SINGLE_QUOTED_RE = re.compile(r"'[^']*'")
 _DOUBLE_QUOTED_RE = re.compile(r'"[^"]*"')
 
+# Separators after which the next unquoted word starts a new simple command.
+_NOHUP_CMD_SEPS = frozenset({"|", "||", "&&", "|&", ";", "&", "("})
+# Reserved words after which the next word is still a command word.
+_NOHUP_CMD_KEYWORDS = frozenset({"then", "do", "else", "elif", "if", "while", "until", "{", "!"})
+# Shell variable assignment prefix: VAR=value is not the command word.
+_NOHUP_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
+# Command wrappers that run their remaining arguments as a command, mapped to
+# the options that consume the next token as a value.
+_WRAPPER_VALUE_OPTS: dict[str, frozenset[str]] = {
+    "setsid": frozenset(),
+    "exec": frozenset({"-a"}),
+    "env": frozenset({"-u", "-C", "-S"}),
+    "nice": frozenset({"-n"}),
+    "ionice": frozenset({"-c", "-n", "-p"}),
+    "time": frozenset({"-f", "-o"}),
+    "command": frozenset(),
+    "sudo": frozenset({"-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U"}),
+    "timeout": frozenset({"-s", "-k"}),
+    "stdbuf": frozenset({"-i", "-o", "-e"}),
+}
+_WRAPPER_POSITIONALS = {"timeout": 1}
+
 
 def _strip_quoted(cmd: str) -> str:
     """Drop quoted spans so a keyword inside a search pattern is not read as a launch."""
     return _DOUBLE_QUOTED_RE.sub("", _SINGLE_QUOTED_RE.sub("", cmd))
+
+
+def _nohup_is_command_word(cmd: str) -> bool:
+    """True iff `nohup` appears as the command word of a simple command in `cmd`.
+
+    Blanks heredoc bodies with `shell_tokens.neutralize_heredoc_constructs`
+    and tokenizes with `shell_tokens.separator_exact_split` (posix, quote-aware),
+    then checks whether `nohup` is the first non-assignment word after a command
+    separator or at the start.  Fail-open: falls back to a plain NOHUP_RE text
+    search on any tokenizer error so a real nohup launch is never silently missed.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from lib import shell_tokens
+        neutralized = shell_tokens.neutralize_heredoc_constructs(cmd)
+        tokens = shell_tokens.separator_exact_split(neutralized)
+    except Exception:
+        return bool(NOHUP_RE.search(cmd))
+
+    in_cmd = True  # start of command is always a command position
+    wrapper: str | None = None  # command wrapper whose own arguments are being skipped
+    skip_value = False  # previous token was a wrapper option that takes a value
+    positionals = 0  # wrapper positional arguments still to skip (timeout's duration)
+    for token in tokens:
+        if token in _NOHUP_CMD_SEPS:
+            in_cmd, wrapper, skip_value, positionals = True, None, False, 0
+        elif token == ")":
+            in_cmd, wrapper = False, None
+        elif in_cmd:
+            if _NOHUP_ASSIGN_RE.fullmatch(token):
+                continue  # variable assignment; command word not yet seen
+            if wrapper is not None:
+                if skip_value:
+                    skip_value = False
+                    continue
+                if token.startswith("-") and token != "-":
+                    skip_value = token in _WRAPPER_VALUE_OPTS[wrapper]
+                    continue
+                if positionals:
+                    positionals -= 1
+                    continue
+            if token == "nohup":
+                return True
+            if token in _NOHUP_CMD_KEYWORDS:
+                wrapper = None
+                continue
+            if token in _WRAPPER_VALUE_OPTS:
+                wrapper = token
+                positionals = _WRAPPER_POSITIONALS.get(token, 0)
+                continue
+            in_cmd = False
+    return False
 
 # Core carries no org-specific orchestrator names; the list is entirely
 # operator-supplied via agent-identity.local's `long_job_orchestrators=` key.
@@ -78,9 +152,9 @@ VERB_RE = re.compile(
 
 def detect(cmd: str) -> str | None:
     """Return a short reason string if the command looks like a long-job launch."""
-    scan = _strip_quoted(cmd)
-    if NOHUP_RE.search(scan):
+    if _nohup_is_command_word(cmd):
         return "detached process (nohup)"
+    scan = _strip_quoted(cmd)
     if TOOL_RE.search(scan) and VERB_RE.search(scan):
         tool = TOOL_RE.search(scan).group(1).lower()
         return f"orchestrator launch ({tool})"
