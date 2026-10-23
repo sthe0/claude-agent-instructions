@@ -95,12 +95,10 @@ def test_a_copy_destination_resolves_to_the_files_it_means(command, expected):
     # the other verb families expand too rather than needing four separate fixes.
     ("echo x > ~/.claude-agent/settings.json", ["/home/u/.claude-agent/settings.json"]),
     ("tee ~/.claude-agent/settings.json", ["/home/u/.claude-agent/settings.json"]),
-    # `sed -i` emits its SCRIPT token as a candidate as well, which is the over-emission this
-    # module's contract permits: `/w/s/a/b/` is a path nothing is on, so it answers nothing.
-    # Pinned rather than tidied, because a reader who does not expect it will read the second
-    # entry as the only one and mis-set their own policy.
+    # `sed -i` no longer emits its inline script as a candidate — the script token is
+    # consumed before file operands are collected, so only the real file path appears.
     ("sed -i s/a/b/ ~/.claude-agent/settings.json",
-     ["/w/s/a/b/", "/home/u/.claude-agent/settings.json"]),
+     ["/home/u/.claude-agent/settings.json"]),
     # A bare `~` resolves, and the ambiguous-token rule applies on top of it.
     ("cp s.json ~", ["/home/u", "/home/u/s.json"]),
     # `~` anywhere but the front is NOT a home reference and must not become one.
@@ -112,20 +110,28 @@ def test_a_leading_tilde_is_expanded(command, expected, monkeypatch):
 
 
 @pytest.mark.parametrize("command, expected", [
-    # `$VAR` IS NOT EXPANDED, AND THAT IS A DECISION -- pinned so it cannot drift into one by
-    # accident in either direction. THE HOOK'S ENVIRONMENT IS NOT THE COMMAND'S: a command
-    # supplies its own (`HOME=/x cp ...`) or names a variable exported in a shell this process
-    # never saw, so substituting what this process happens to hold resolves the token to a
-    # path the command may never write, and a consumer then answers confidently about the
-    # wrong file. So the token joins under the cwd like any other relative one, and each
-    # consumer names it as a residual instead. `_abs` carries the argument in full.
+    # A variable PRESENT in os.environ IS expanded: OS-reliably-set variables like $HOME,
+    # $TMPDIR, $PATH are always available and always point to paths outside of any canon root,
+    # so expanding them gives the right candidate rather than the over-inclusive cwd-join.
     ("cp s.json $HOME/.claude/settings.json",
-     ["/w/$HOME/.claude/settings.json", "/w/$HOME/.claude/settings.json/s.json"]),
-    ("cp s.json ${HOME}/.claude/", ["/w/${HOME}/.claude/s.json"]),
-    ("echo x > $HOME/.claude/settings.json", ["/w/$HOME/.claude/settings.json"]),
+     ["/home/u/.claude/settings.json", "/home/u/.claude/settings.json/s.json"]),
+    ("cp s.json ${HOME}/.claude/", ["/home/u/.claude/s.json"]),
+    ("echo x > $HOME/.claude/settings.json", ["/home/u/.claude/settings.json"]),
 ])
-def test_a_variable_is_not_expanded(command, expected, monkeypatch):
+def test_a_variable_present_in_osenv_is_expanded(command, expected, monkeypatch):
     monkeypatch.setenv("HOME", "/home/u")
+    assert command_write_targets(command, CWD) == expected
+
+
+@pytest.mark.parametrize("command, expected", [
+    # A variable NOT in os.environ is NOT expanded: the token joins under the cwd as the
+    # safe over-inclusive fallback. Each consumer names it as a residual.
+    ("cp s.json $ZZZZUNDEF_299/.claude/settings.json",
+     ["/w/$ZZZZUNDEF_299/.claude/settings.json", "/w/$ZZZZUNDEF_299/.claude/settings.json/s.json"]),
+    ("echo x > $ZZZZUNDEF_299/.claude/settings.json", ["/w/$ZZZZUNDEF_299/.claude/settings.json"]),
+])
+def test_a_variable_absent_from_osenv_is_not_expanded(command, expected, monkeypatch):
+    monkeypatch.delenv("ZZZZUNDEF_299", raising=False)
     assert command_write_targets(command, CWD) == expected
 
 
@@ -160,9 +166,10 @@ def test_an_absent_home_still_resolves_to_the_invoking_users_home(monkeypatch):
     # derivable from the command line.
     ("patch -p1 -i p.patch", ["/w"]),
     ("git apply p.patch", ["/w"]),
-    # `sed` without an in-place flag writes nothing.
+    # `sed` without an in-place flag writes nothing. With `-i`, only file operands
+    # are returned — the inline script token is consumed without being added.
     ("sed s/a/b/ f.txt", []),
-    ("sed -i s/a/b/ f.txt", ["/w/s/a/b/", "/w/f.txt"]),
+    ("sed -i s/a/b/ f.txt", ["/w/f.txt"]),
     # A verb this table does not model reports nothing -- for the self-grant gate an ALLOW by
     # a route that never reached a verdict, and axis-1 member (ii) of its named residuals.
     # Pinned here so that enumeration stays honest about what is outside it.
@@ -208,39 +215,30 @@ def test_bare_newline_separated_statement_is_found_via_general_path(command, exp
     # (destination file, and destination directory receiving `a.json`) -- the same
     # ambiguity the `cp s.json d` row above already pins. Unrelated to the comment.
     ("echo hi # note\ncp a.json d/s.json\n", ["/w/d/s.json", "/w/d/s.json/a.json"]),
-    ("git log --oneline # a\nsed -i s/x/y/ d/s.json\n", ["/w/s/x/y/", "/w/d/s.json"]),
+    ("git log --oneline # a\nsed -i s/x/y/ d/s.json\n", ["/w/d/s.json"]),
 ])
 def test_a_hash_comment_does_not_hide_a_later_write_target(command, expected):
     assert command_write_targets(command, CWD) == expected
 
 
-# --- a process substitution adds the cwd as an extra, over-inclusive candidate ------
+# --- write process substitution adds cwd; read process substitution does not ----------
 
 @pytest.mark.parametrize("command, expected", [
-    # `<(dd if=x of=<surface> bs=1)` FORKS AND RUNS `dd` as a side effect of building
-    # the outer command's argument list -- neither `<` nor `>` is a bash separator, so
-    # `split_segments` never starts a new segment for it, and `_operands_until_redirect`
-    # stops scanning the outer segment's own operands at the very token that opens it.
-    # `dd`'s real write is invisible to every verb dispatch in this module, MEASURED via
-    # a real-bash transcript: without this row's candidate, `git commit -F - <(dd
-    # if=x of=y bs=1)` reports no target at all, indistinguishable from a command that
-    # writes nothing. `eff_cwd` is the same over-inclusive answer `patch`/`git apply`
-    # already give for the same reason -- the real destination is not derivable from
-    # the command line alone.
-    ("git commit -F - <(dd if=x of=y bs=1)", ["/w"]),
-    # `>(...)` additionally yields an accidental extra candidate: `>` now comes back as
-    # its OWN token (the operator-exact tokenization), so the redirect's operand is read
-    # as the next token, `(`, and joined against the cwd. That is the mechanism today --
-    # NOT the older glued-redirect detection, which saw `>(tee` as one token and reported
-    # `/w/(tee`. Pinned rather than hidden, since a reader who only expects the cwd would
-    # misread the second entry; no verdict rides on it either way, because
-    # `echo hi >(tee y)` is denied by the process-substitution check regardless of what
-    # the candidate list says.
-    ("echo hi >(tee y)", ["/w", "/w/("]),
-    # No process substitution: no extra candidate, unchanged from before this row.
+    # `>(tee y)` is a WRITE substitution: the outer command pipes its output into `tee`,
+    # which may write anywhere — the real destination is not derivable from the command
+    # line alone. `eff_cwd` is the same over-inclusive answer `patch`/`git apply` give.
+    # The operator-exact tokenizer splits `>(tee y)` into `['>', '(', 'tee', ...]`, so
+    # `redirect_targets` skips `(` to avoid a spurious `/w/(` artifact.
+    ("echo hi >(tee y)", ["/w"]),
+    # `<(dd if=x of=y bs=1)` is a READ substitution: the inner command's stdout feeds
+    # the outer command's INPUT. The outer command writes nothing due to `<(`. Before
+    # this fix, `<(` added `eff_cwd` as an extra candidate (same as `>(`) causing false
+    # denies when the cwd was a canon checkout. Now only `>(` triggers the cwd candidate.
+    ("git commit -F - <(dd if=x of=y bs=1)", []),
+    # No process substitution: no extra candidate.
     ("git commit -F -", []),
 ])
-def test_a_process_substitution_adds_the_cwd_as_an_extra_candidate(command, expected):
+def test_write_process_substitution_adds_cwd_read_does_not(command, expected):
     assert command_write_targets(command, CWD) == expected
 
 
@@ -283,6 +281,36 @@ def test_an_unrecognized_prior_statement_on_an_earlier_line_still_lets_a_later_h
     # the body was never neutralized and its `>=` read as a second, phantom write target
     # alongside the real one at `f`.
     assert command_write_targets("myunknowncmd\ncat <<'D' > f\nx >= 1\nD", CWD) == ["/w/f"]
+
+
+# --- issue-299: the four false-positive shapes that triggered false canon denials ----
+
+def test_issue299_sed_script_operand_not_treated_as_path():
+    """The inline script token (`s/a/b/`) is not a file path; only the file operand is."""
+    assert command_write_targets("sed -i 's/a/b/' /tmp/x.py", CWD) == ["/tmp/x.py"]
+
+
+def test_issue299_sed_with_ef_flag_treats_all_operands_as_files():
+    """`-e` supplies the script; every non-option token is then a file operand."""
+    assert command_write_targets("sed -i -e 's/a/b/' f.txt g.txt", CWD) == [
+        "/w/f.txt", "/w/g.txt"
+    ]
+
+
+def test_issue299_same_command_var_assignment_expands():
+    """A VAR=value assignment in a preceding segment expands $VAR in a later segment."""
+    assert command_write_targets("o=/tmp/out; echo hi > $o/f.txt", CWD) == ["/tmp/out/f.txt"]
+
+
+def test_issue299_env_variable_expands(monkeypatch):
+    """A $VAR present in os.environ expands rather than joining under the cwd."""
+    monkeypatch.setenv("MYOUTDIR_299", "/tmp/outdir")
+    assert command_write_targets("printf x > $MYOUTDIR_299/o.txt", CWD) == ["/tmp/outdir/o.txt"]
+
+
+def test_issue299_read_process_substitution_does_not_add_cwd():
+    """`<(cmd)` is a read substitution — the outer command writes nothing extra."""
+    assert command_write_targets("diff <(cat /tmp/a) <(cat /tmp/b)", CWD) == []
 
 
 # THE OTHER CONSUMER'S BEHAVIOUR CHANGED TOO, and it has rows of its own for it.
