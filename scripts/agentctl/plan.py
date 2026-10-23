@@ -264,6 +264,9 @@ class PlanDoc:
     # list as written and is filled by `parse_plan` for EVERY stage index (empty
     # tuple when the stage declares no `depends_on`).
     raw_depends_on: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    # The RAW `[stage.bet]` table of every stage that declares one, keyed by stage index.
+    # Kept as written: `risk.parse_bet` is the grammar, and only a bound session reads it.
+    bets: dict[int, dict] = field(default_factory=dict)
 
 
 class PlanError(Exception):
@@ -1969,11 +1972,14 @@ def parse_plan(
 
     stages: list[Stage] = []
     raw_depends_on: dict[int, tuple[int, ...]] = {}
+    bets: dict[int, dict] = {}
     for i, s in enumerate(raw_stages, start=1):
         index = int(s.get("index", i))
         # The raw list as written, kept beside the derived Stage.depends_on
         # (see PlanDoc.raw_depends_on).
         raw_depends_on[index] = tuple(int(d) for d in s.get("depends_on", []))
+        if isinstance(s.get("bet"), dict) and s["bet"]:
+            bets[index] = dict(s["bet"])
         for required in ("title", "executor", "expected_result_image", "done_criterion"):
             if not s.get(required):
                 raise PlanError(f"stage {index} missing {required!r}")
@@ -2168,7 +2174,7 @@ def parse_plan(
     if len(set(indices)) != len(indices):
         raise PlanError(f"duplicate stage indices: {indices}")
     _validate_graph(stages, is_substantive=is_substantive)
-    doc = PlanDoc(meta=meta, stages=stages, raw_depends_on=raw_depends_on)
+    doc = PlanDoc(meta=meta, stages=stages, raw_depends_on=raw_depends_on, bets=bets)
     problems = optional_stage_violations(doc)
     if problems:
         raise PlanError(problems[0])
@@ -3167,8 +3173,20 @@ def plan_meta_element_keys(doc: PlanDoc) -> dict[str, str]:
     }
 
 
+def bet_digest(raw: dict) -> str:
+    return hashlib.sha256(repr(sorted(raw.items())).encode("utf-8")).hexdigest()
+
+
 def plan_stage_digests(doc: PlanDoc) -> dict[int, str]:
-    return {s.index: stage_element_keys(s)[WHOLE_STAGE_ELEMENT] for s in doc.stages}
+    """Per-stage review digest. A stage with a `[stage.bet]` folds the bet in, so a bet change
+    stales that stage's review; a stage without one keeps its whole-stage digest unchanged."""
+    digests = {}
+    for s in doc.stages:
+        digest = stage_element_keys(s)[WHOLE_STAGE_ELEMENT]
+        if s.index in doc.bets:
+            digest = hashlib.sha256(f"{digest}|bet|{bet_digest(doc.bets[s.index])}".encode()).hexdigest()
+        digests[s.index] = digest
+    return digests
 
 
 PAIR_PLAN_NODE = "plan"
