@@ -922,11 +922,10 @@ hits = 1
 reviewed_by = "developer"
 
 [sites."scripts/hook-prompt-reminders.py::<module>::re.compile"]
-class = "meaning-decision"
-ground = "CYRILLIC_RE (U+0400-U+04FF) and LATIN_RE ([A-Za-z]) are script character classes and TICKET_KEY_RE matches the ABC-123 ticket-key shape (structural); KEYWORDS_RE is a keyword list (ticket/issue/tracker/тикет/тред) that by itself decides whether a prompt mentions a tracker (meaning)."
-hits = 4
-hit_classes = ["structural", "structural", "structural", "meaning-decision"]
-open_violation = "the compiled KEYWORDS_RE tracker keyword list behind the tracker reminder and the plan-sync nudge"
+class = "structural"
+ground = "CYRILLIC_RE (U+0400-U+04FF) and LATIN_RE ([A-Za-z]) are script character classes and TICKET_KEY_RE matches the ABC-123 ticket-key shape; all three are determinate from the characters themselves."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/hook-prompt-reminders.py::_language_stamp::re.sub"]
@@ -939,13 +938,6 @@ reviewed_by = "developer"
 class = "structural"
 ground = "TICKET_KEY_RE.findall extracts ABC-123-shaped ticket keys minus a fixed false-positive list; ticket-key syntax."
 hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-prompt-reminders.py::find_tracker_signals::pattern.finditer"]
-class = "meaning-decision"
-ground = "KEYWORDS_RE.finditer collects ticket/issue/tracker/тикет/тред words from the user prompt and alone decides a 'keyword' tracker signal that triggers the reminder, no judge."
-hits = 1
-open_violation = "KEYWORDS_RE alone decides a prompt carries a tracker signal and triggers the tracker reminder"
 reviewed_by = "developer"
 
 [sites."scripts/hook-prompt-reminders.py::is_cyrillic_prompt::pattern.findall"]
@@ -2164,7 +2156,7 @@ reviewed_by = "developer"
 
 [sites."scripts/si_feedback_detect.py::find_signals::pattern.search"]
 class = "candidate-generation"
-ground = "The self-improvement mention, strong correction, second-person pronoun gate and weak correction patterns only nominate a prompt as agent-behavior feedback: the advisory hook-self-improvement-reminder nudges the model, which decides, and the blocking use in hook-turn-end-gate and the scorecard goes through advisor.judge_feedback_signal."
+ground = "The self-improvement mention, strong correction, second-person pronoun gate and weak correction patterns only nominate a prompt as agent-behavior feedback: the advisory hook-prompt-reminders.py nudges the model, which decides, and the blocking use in hook-turn-end-gate and the scorecard goes through advisor.judge_feedback_signal."
 hits = 4
 hit_classes = ["candidate-generation", "candidate-generation", "candidate-generation", "candidate-generation"]
 reviewed_by = "developer"

@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -45,6 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import band_throttle, config_root  # noqa: E402
 from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
 from si_feedback_detect import find_signals as find_feedback_signals  # noqa: E402
+from si_feedback_detect import strip_injected_context  # noqa: E402
 
 
 class Turn:
@@ -59,6 +61,9 @@ class Turn:
         self.cwd: str = cwd if isinstance(cwd, str) and cwd else os.getcwd()
         transcript_path = payload.get("transcript_path")
         self.transcript_path: str = transcript_path if isinstance(transcript_path, str) else ""
+        # Once-per-session stamps are recorded here, after the lines are printed,
+        # so a hook killed mid-run never spends a nudge it did not show.
+        self.after_print: list[Callable[[], None]] = []
 
     @functools.cached_property
     def state(self) -> dict | None:
@@ -231,7 +236,7 @@ def check_language(turn: Turn) -> list[str]:
     session_key = turn.session_id or dt.date.today().isoformat()
     if _language_already_said(session_key):
         return []
-    _record_language_said(session_key)
+    turn.after_print.append(lambda: _record_language_said(session_key))
     return [
         "[language-reminder] The user is writing in Russian. Per CLAUDE.md § Instruction "
         "language: user-facing replies — including technical narratives, retrospectives, "
@@ -260,10 +265,6 @@ def check_self_improvement(turn: Turn) -> list[str]:
 # ---------------------------------------------------------------------------
 
 TICKET_KEY_RE = re.compile(r"\b[A-Z]{2,10}-\d+\b")
-KEYWORDS_RE = re.compile(
-    r"\b(ticket|тикет|issue|tracker|тред)\b",
-    re.IGNORECASE | re.UNICODE,
-)
 
 # Ticket-key-shaped strings that are not tracker keys: a few standards, and
 # the prefixes of model names ("GPT-4").
@@ -284,16 +285,6 @@ def find_ticket_keys(prompt: str) -> list[str]:
         if key not in FALSE_POSITIVES and key.split("-", 1)[0] not in MODEL_NAME_PREFIXES
     })
 
-
-def find_tracker_signals(prompt: str) -> list[str]:
-    signals: list[str] = []
-    keys = find_ticket_keys(prompt)
-    if keys:
-        signals.append(f"ticket key(s): {', '.join(keys)}")
-    keywords = sorted({m.group(0).lower() for m in KEYWORDS_RE.finditer(prompt)})
-    if keywords:
-        signals.append(f"keyword(s): {', '.join(keywords)}")
-    return signals
 
 
 def mount_root() -> str | None:
@@ -337,14 +328,14 @@ def mount_mismatches(keys: list[str], cwd: str | None) -> list[tuple[str, str, l
 
 
 def check_tracker(turn: Turn) -> list[str]:
-    signals = find_tracker_signals(turn.prompt)
-    if not signals:
+    keys = find_ticket_keys(turn.prompt)
+    if not keys:
         return []
     lines = [
-        f"[tracker-reminder] User prompt references a tracker — {'; '.join(signals)}. "
+        f"[tracker-reminder] User prompt references a tracker — ticket key(s): {', '.join(keys)}. "
         f"Invoke the `tracker-management` skill (layered on top of normal coordination)."
     ]
-    for key, current, matches in mount_mismatches(find_ticket_keys(turn.prompt), turn.cwd):
+    for key, current, matches in mount_mismatches(keys, turn.cwd):
         lines.append(
             f"[mount-check] cwd is in mount '{current}', but {key} has dedicated "
             f"mount(s): {', '.join(matches)}. If this session will touch "
@@ -356,7 +347,7 @@ def check_tracker(turn: Turn) -> list[str]:
 
 
 def check_ticket_plan_sync(turn: Turn) -> list[str]:
-    if not find_tracker_signals(turn.prompt):
+    if not find_ticket_keys(turn.prompt):
         return []
     plan_path = (turn.state or {}).get("plan_path")
     if not isinstance(plan_path, str) or not plan_path:
@@ -381,18 +372,17 @@ def check_ticket_plan_sync(turn: Turn) -> list[str]:
 TRACKER_MANDATORY_PHASES = ("plan", "result", "status")
 
 
-def unpublished_phases(state: dict) -> list[str]:
+def unpublished_phases(bag: dict | None) -> list[str]:
     """Mandatory tracker phases not yet recorded as published. [] when the tracker
     plugin is inactive or every mandatory phase is recorded."""
-    bag = (state.get("plugins") or {}).get("tracker")
-    if not isinstance(bag, dict):
+    if bag is None:
         return []
     published = bag.get("published_phases") or {}
     return [p for p in TRACKER_MANDATORY_PHASES if p not in published]
 
 
 def check_tracker_publish(turn: Turn) -> list[str]:
-    missing = unpublished_phases(turn.state or {})
+    missing = unpublished_phases(turn.plugin_bag("tracker"))
     if not missing:
         return []
     phases = ", ".join(missing)
@@ -460,6 +450,11 @@ def check_experience_record(turn: Turn) -> list[str]:
 FETCH_TIMEOUT_S = 4
 GIT_TIMEOUT_S = 3
 
+# The whole refresh check shares the hook's 10 s registration with the cheap
+# reminders, so its git calls stop once this budget is spent.
+REFRESH_BUDGET_S = 6
+_refresh_deadline: float | None = None
+
 
 def _refresh_stamp_path() -> Path:
     return Path.home() / ".local" / "state" / "claude-instructions-refresh.stamp"
@@ -486,6 +481,10 @@ def _record_refresh(session_key: str) -> None:
 
 
 def _run(args: list[str], cwd: str, timeout: float) -> subprocess.CompletedProcess | None:
+    if _refresh_deadline is not None:
+        timeout = min(timeout, _refresh_deadline - time.monotonic())
+        if timeout <= 0:
+            return None
     try:
         return subprocess.run(
             args, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False,
@@ -747,8 +746,17 @@ def check_instructions_refresh(turn: Turn) -> list[str]:
     session_key = turn.session_id or dt.date.today().isoformat()
     if not _refresh_due(session_key):
         return []
-    _record_refresh(session_key)
+    turn.after_print.append(lambda: _record_refresh(session_key))
 
+    global _refresh_deadline
+    _refresh_deadline = time.monotonic() + REFRESH_BUDGET_S
+    try:
+        return _refresh_lines(turn)
+    finally:
+        _refresh_deadline = None
+
+
+def _refresh_lines(turn: Turn) -> list[str]:
     lines: list[str] = []
     layers = check_layers(turn.cwd)
     if layers:
@@ -786,9 +794,23 @@ CHECKS = (
 )
 
 
+def _spawned_child() -> bool:
+    try:
+        return int(os.environ.get("AGENT_RECURSION_DEPTH") or 0) >= 1
+    except ValueError:
+        return False
+
+
+def _only_injected_context(prompt: str) -> bool:
+    """A prompt with text, all of it harness-injected (a task-notification turn)."""
+    return bool(prompt.strip()) and not strip_injected_context(prompt).strip()
+
+
 def main() -> int:
     if os.environ.get(JUDGE_CHILD_ENV_VAR):
         return 0  # a sandboxed judge subprocess, not a real user turn — allow, no opinion
+    if _spawned_child():
+        return 0  # a specialist's prompt is the parent's brief, not a user turn
     try:
         payload = json.load(sys.stdin)
     except Exception:
@@ -797,14 +819,23 @@ def main() -> int:
         return 0
 
     turn = Turn(payload)
+    if _only_injected_context(turn.prompt):
+        return 0
     for check in CHECKS:
         try:
             lines = check(turn)
         except Exception:
+            turn.after_print.clear()
             continue
         for line in lines:
             print(line)
         sys.stdout.flush()
+        for record in turn.after_print:
+            try:
+                record()
+            except Exception:
+                pass
+        turn.after_print.clear()
     return 0
 
 

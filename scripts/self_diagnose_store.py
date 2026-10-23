@@ -62,8 +62,8 @@ DEFAULT_STORE = Path.home() / ".local" / "state" / "claude-self-diagnose-finding
 # its owning MEMORY.md, delete it, or re-run the hook installer).
 #
 # `ceiling-proximity` is deliberately EXCLUDED and must stay excluded:
-# hook-prompt-reminders.py already owns that kind with a per-file
-# debounced OFFER at UserPromptSubmit. A second inbox for one finding
+# hook-session-due.py already owns that kind with a per-file
+# debounced OFFER at SessionStart. A second inbox for one finding
 # redistributes noise instead of reducing it — the alert-fatigue anti-pattern,
 # not a fix.
 ACTIONABLE_KINDS = frozenset(

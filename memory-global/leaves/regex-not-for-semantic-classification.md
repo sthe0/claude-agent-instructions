@@ -64,9 +64,6 @@ Each bullet below is one `meaning-decision` key of the live inventory ([docs/ope
 - `scripts/hook-resolution-reminder.py` `is_brief_gratitude`: GRATITUDE_RE keywords alone decide a prompt is gratitude and trigger the resolution nudge.
 - `scripts/hook-resolution-reminder.py` `is_resolution_meta_question`: GRATITUDE_RE and META_RE keywords alone decide a prompt is a question about the resolution gate.
 - `scripts/hook-resolution-reminder.py` `<module>`: the compiled GRATITUDE_RE and META_RE multilingual keyword sets behind the resolution nudge.
-- `scripts/hook-prompt-reminders.py` `check_ticket_plan_sync`: the tracker-signal match alone decides a prompt mentions a tracker and gates the plan-sync nudge.
-- `scripts/hook-prompt-reminders.py` `find_tracker_signals`: KEYWORDS_RE alone decides a prompt carries a tracker signal and triggers the tracker reminder.
-- `scripts/hook-prompt-reminders.py` `<module>`: the compiled KEYWORDS_RE tracker keyword list behind the tracker reminder and the plan-sync nudge.
 - `scripts/consensus-synthesizer.py` `_same_directive`: a 0.6 word-overlap ratio alone decides two edits assert the same directive, and so whether `detect_conflict` fires.
 - `scripts/consensus-synthesizer.py` `induce_invariant`: word-set intersection alone decides what two edits have in common.
 - `scripts/consensus_eval/runner.py` `_tokens`: word overlap with protected terms alone decides a tenet is engaged by a candidate edit.

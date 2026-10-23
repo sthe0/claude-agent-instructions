@@ -39,6 +39,7 @@ GIT_ENV = {
 }
 
 DROPPED_CASES = {
+    "test_memory_hooks.py::test_always_exits_0": "asserted a literal 0 returned by its own helper; the exit-0 guarantee is pinned through the real main() by test_main_exits_0_even_when_every_check_raises",
     "test_hook_effort_divergence_watch.py::test_a_scale_past_its_threshold_speaks": "the per-prompt effort watch is deleted with no replacement; no code under test remains",
     "test_hook_effort_divergence_watch.py::test_the_same_band_is_said_only_once_per_session": "the per-prompt effort watch is deleted with no replacement; no code under test remains",
     "test_hook_effort_divergence_watch.py::test_a_scale_already_fired_and_awaiting_ack_names_fire_acknowledge": "the per-prompt effort watch is deleted with no replacement; no code under test remains",
@@ -106,13 +107,23 @@ def hermetic_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_INSTRUCTIONS_REPO", str(tmp_path / "no-core-repo"))
     monkeypatch.setenv("CLAUDE_SETTINGS_PATH", str(tmp_path / "no-settings.json"))
     monkeypatch.setenv("CLAUDE_CANON_ROOTS_FILE", str(tmp_path / "no-canon-roots"))
-    for var in (mod.JUDGE_CHILD_ENV_VAR, "CLAUDE_TASK_MOUNT_ROOT", "CC_CONTEXT_NUDGE_BANDS"):
+    for var in (mod.JUDGE_CHILD_ENV_VAR, "CLAUDE_TASK_MOUNT_ROOT", "CC_CONTEXT_NUDGE_BANDS",
+                "AGENT_RECURSION_DEPTH"):
         monkeypatch.delenv(var, raising=False)
     return home
 
 
 def turn(**payload) -> "mod.Turn":
     return mod.Turn(payload)
+
+
+def say(check, **payload) -> list[str]:
+    """Run one check as `main()` does: its lines, then the stamps it queued."""
+    t = turn(**payload)
+    lines = check(t)
+    for record in t.after_print:
+        record()
+    return lines
 
 
 def write_state(session_id: str, state: dict) -> None:
@@ -188,37 +199,48 @@ def test_silent_on_empty(tmp_path):
 
 def test_language_reminder_speaks_once_per_session():
     prompt = "Сделай ревью этого кода, пожалуйста"
-    first = mod.check_language(turn(prompt=prompt, session_id="s-1"))
+    first = say(mod.check_language, prompt=prompt, session_id="s-1")
     assert len(first) == 1 and first[0].startswith("[language-reminder]")
-    assert mod.check_language(turn(prompt=prompt, session_id="s-1")) == []
+    assert say(mod.check_language, prompt=prompt, session_id="s-1") == []
 
 
 def test_language_reminder_speaks_again_in_a_new_session():
     prompt = "Сделай ревью этого кода, пожалуйста"
-    assert mod.check_language(turn(prompt=prompt, session_id="s-1"))
-    assert mod.check_language(turn(prompt=prompt, session_id="s-2"))
+    assert say(mod.check_language, prompt=prompt, session_id="s-1")
+    assert say(mod.check_language, prompt=prompt, session_id="s-2")
 
 
 def test_language_reminder_stamp_lives_under_the_state_dir(hermetic_env):
-    mod.check_language(turn(prompt="Сделай ревью этого кода, пожалуйста", session_id="s-1"))
+    say(mod.check_language, prompt="Сделай ревью этого кода, пожалуйста", session_id="s-1")
     stamp = hermetic_env / ".local" / "state" / "claude-language-reminder" / "s-1.stamp"
     assert stamp.exists()
 
 
 def test_language_reminder_without_session_id_is_throttled_per_day():
     prompt = "Сделай ревью этого кода, пожалуйста"
-    assert mod.check_language(turn(prompt=prompt))
-    assert mod.check_language(turn(prompt=prompt)) == []
+    assert say(mod.check_language, prompt=prompt)
+    assert say(mod.check_language, prompt=prompt) == []
 
 
 def test_language_reminder_survives_an_unwritable_state_dir(hermetic_env):
     (hermetic_env / ".local").write_text("not a directory", encoding="utf-8")
-    assert mod.check_language(turn(prompt="Сделай ревью этого кода, пожалуйста", session_id="s-1"))
+    assert say(mod.check_language, prompt="Сделай ревью этого кода, пожалуйста", session_id="s-1")
 
 
 def test_language_reminder_does_not_stamp_an_english_prompt(hermetic_env):
-    assert mod.check_language(turn(prompt="Review this code please", session_id="s-1")) == []
+    assert say(mod.check_language, prompt="Review this code please", session_id="s-1") == []
     assert not (hermetic_env / ".local" / "state" / "claude-language-reminder").exists()
+
+
+def test_language_reminder_is_not_spent_until_its_line_is_printed(hermetic_env):
+    """A hook killed between computing and printing must not use up the nudge."""
+    t = turn(prompt="Сделай ревью этого кода, пожалуйста", session_id="s-1")
+    assert mod.check_language(t)
+    stamp = hermetic_env / ".local" / "state" / "claude-language-reminder" / "s-1.stamp"
+    assert not stamp.exists()
+    for record in t.after_print:
+        record()
+    assert stamp.exists()
 
 
 # ===========================================================================
@@ -297,6 +319,73 @@ def test_main_silent_inside_a_judge_child(tmp_path):
         tmp_path, env={mod.JUDGE_CHILD_ENV_VAR: "1"})
     assert rc == 0
     assert out.strip() == ""
+
+
+LOUD_PROMPT = "did you run self-improvement? ticket ABC-123, Сделай ревью этого кода"
+
+
+def test_main_silent_in_a_spawned_child(tmp_path):
+    """A specialist's prompt is its parent's brief, not a user turn."""
+    rc, out = run_main_payload({"prompt": LOUD_PROMPT}, tmp_path, env={"AGENT_RECURSION_DEPTH": "1"})
+    assert rc == 0
+    assert out.strip() == ""
+
+
+def test_main_speaks_at_recursion_depth_zero(tmp_path):
+    rc, out = run_main_payload({"prompt": LOUD_PROMPT}, tmp_path, env={"AGENT_RECURSION_DEPTH": "0"})
+    assert rc == 0
+    assert "[tracker-reminder]" in out
+
+
+def test_main_silent_on_a_task_notification_turn(tmp_path):
+    notification = (
+        "<task-notification><task-id>b1</task-id><summary>self-improvement ABC-123 "
+        "Сделай ревью этого кода</summary></task-notification>"
+    )
+    rc, out = run_main_payload({"prompt": notification}, tmp_path)
+    assert rc == 0
+    assert out.strip() == ""
+
+
+def test_main_still_speaks_on_human_text_beside_a_task_notification(tmp_path):
+    prompt = "<task-notification>done</task-notification> continue ABC-123"
+    rc, out = run_main_payload({"prompt": prompt}, tmp_path)
+    assert rc == 0
+    assert "[tracker-reminder]" in out
+
+
+NEUTRAL_CORPUS = [
+    "add a parser for the config",
+    "bump the dependency to v2.1.220 and rerun",
+    "compare GPT-4 and LLAMA-3 on the X86-64 box",
+    "see lines L109-113 and register Z0-9",
+    "UTF-8, ISO-8601, SHA-256 and RFC-5322 all pass",
+    "this issue is a duplicate; the ticket price is fixed",
+    "what is the tracker of the build here",
+    "Why does the cache miss on the second call?",
+]
+
+
+@pytest.mark.parametrize("prompt", NEUTRAL_CORPUS)
+def test_main_is_silent_on_a_neutral_prompt(prompt, tmp_path, monkeypatch, capsys):
+    """The real `main()` over a corpus: version strings, model names, line
+    ranges and bare tracker words must not wake any reminder."""
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(
+        json.dumps({"prompt": prompt, "cwd": str(work), "session_id": "s-neutral"})))
+    assert mod.main() == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_main_exits_0_even_when_every_check_raises(monkeypatch, capsys):
+    def boom(t):
+        raise RuntimeError("broken reminder")
+
+    monkeypatch.setattr(mod, "CHECKS", (boom, boom))
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps({"prompt": "x"})))
+    assert mod.main() == 0
+    assert capsys.readouterr().out == ""
 
 
 # ports test_hook_self_improvement_reminder.py::test_main_silent_on_neutral
@@ -407,12 +496,17 @@ def test_tracker_reminder_names_the_signals():
     assert len(lines) == 1
     assert lines[0].startswith("[tracker-reminder]")
     assert "ticket key(s): ABC-123" in lines[0]
-    assert "keyword(s): tracker" in lines[0]
+    assert "keyword" not in lines[0]
     assert "tracker-management" in lines[0]
 
 
-def test_tracker_reminder_fires_on_a_keyword_alone():
-    assert mod.check_tracker(turn(prompt="создай тикет для этого"))
+@pytest.mark.parametrize("prompt", [
+    "создай тикет для этого",
+    "open an issue about the tracker",
+    "this thread is long, тред закрыт",
+])
+def test_tracker_reminder_is_silent_on_a_bare_word(prompt):
+    assert mod.check_tracker(turn(prompt=prompt)) == []
 
 
 def test_tracker_reminder_silent_on_a_neutral_prompt():
@@ -447,8 +541,7 @@ def test_a_model_name_does_not_hide_a_real_key():
 def test_tracker_mount_check_is_a_noop_without_a_ticket_key(tmp_path, monkeypatch):
     root = _make_root(tmp_path, "main", "PROJ-440-foo")
     monkeypatch.setenv("CLAUDE_TASK_MOUNT_ROOT", str(root))
-    lines = mod.check_tracker(turn(prompt="open a ticket please", cwd=str(root / "main")))
-    assert [ln.split("]")[0] for ln in lines] == ["[tracker-reminder"]
+    assert mod.check_tracker(turn(prompt="open a ticket please", cwd=str(root / "main"))) == []
 
 
 # ===========================================================================
@@ -464,9 +557,9 @@ def test_ticket_plan_sync_fires_on_a_tracker_prompt_with_an_attached_plan():
     assert "verify-ticket-plan-sync.py --plan /plans/x.toml" in lines[0]
 
 
-def test_ticket_plan_sync_fires_on_a_keyword_too():
+def test_ticket_plan_sync_is_silent_on_a_bare_word():
     write_state("s-1", {"plan_path": "/plans/x.toml"})
-    assert mod.check_ticket_plan_sync(turn(prompt="update the ticket", session_id="s-1"))
+    assert mod.check_ticket_plan_sync(turn(prompt="update the ticket", session_id="s-1")) == []
 
 
 def test_ticket_plan_sync_silent_without_a_tracker_mention():
@@ -498,17 +591,16 @@ def test_ticket_plan_sync_silent_on_corrupt_state():
 
 # ports test_tracker_plugin.py::test_hook_lists_unpublished_phases_when_tracker_active
 def test_unpublished_phases_lists_the_missing_ones():
-    state = {"plugins": {"tracker": {"published_phases": {"plan": {}}}}}
-    assert mod.unpublished_phases(state) == ["result", "status"]
+    bag = {"published_phases": {"plan": {}}}
+    assert mod.unpublished_phases(bag) == ["result", "status"]
 
 
 def test_unpublished_phases_empty_when_the_plugin_is_inactive():
-    assert mod.unpublished_phases({"plugins": {}}) == []
-    assert mod.unpublished_phases({}) == []
+    assert mod.unpublished_phases(None) == []
 
 
 def test_unpublished_phases_empty_when_all_are_published():
-    full = {"plugins": {"tracker": {"published_phases": {"plan": {}, "result": {}, "status": {}}}}}
+    full = {"published_phases": {"plan": {}, "result": {}, "status": {}}}
     assert mod.unpublished_phases(full) == []
 
 
@@ -1361,3 +1453,39 @@ def test_refresh_offer_arrives_through_the_merged_hook_beside_other_reminders(tm
                           cwd=str(session_cwd), capture_output=True, text=True)
     tags = [ln.split("]")[0] for ln in proc.stdout.splitlines()]
     assert tags == ["[language-reminder", "[tracker-reminder", "[instructions-refresh"]
+
+
+def test_refresh_stamp_is_written_only_after_the_offer_is_printed(hermetic_env):
+    t = turn(session_id="s-1", cwd=str(hermetic_env))
+    mod.check_instructions_refresh(t)
+    stamp = mod._refresh_stamp_path()
+    assert not stamp.exists()
+    for record in t.after_print:
+        record()
+    assert stamp.read_text(encoding="utf-8") == "s-1"
+
+
+def test_refresh_git_calls_stop_once_the_budget_is_spent(monkeypatch):
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(mod, "_refresh_deadline", mod.time.monotonic() - 1)
+    assert mod._run(["git", "status"], ".", 3) is None
+    assert calls == []
+
+
+def test_refresh_budget_caps_a_single_git_timeout(monkeypatch):
+    seen = {}
+
+    def fake_run(args, **kwargs):
+        seen["timeout"] = kwargs["timeout"]
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(mod, "_refresh_deadline", mod.time.monotonic() + 1.5)
+    assert mod._run(["git", "status"], ".", 30) is not None
+    assert 0 < seen["timeout"] <= 1.5
+
+
+def test_refresh_budget_is_cleared_after_the_check(hermetic_env):
+    mod.check_instructions_refresh(turn(session_id="s-1", cwd=str(hermetic_env)))
+    assert mod._refresh_deadline is None

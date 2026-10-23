@@ -614,13 +614,11 @@ def _load_hook():
 def test_hook_lists_unpublished_phases_when_tracker_active():
     mod = _load_hook()
     state = {"node": "RESOLUTION", "plugins": {"tracker": {"published_phases": {"plan": True}}}}
-    assert mod.unpublished_phases(state) == ["result", "status"]
+    assert mod.unpublished_phases(state["plugins"]["tracker"]) == ["result", "status"]
 
 
 def test_hook_silent_when_tracker_inactive_or_complete():
     mod = _load_hook()
-    assert mod.unpublished_phases({"plugins": {}}) == []
-    full = {"plugins": {"tracker": {
-        "published_phases": {"plan": True, "result": True, "status": True},
-    }}}
+    assert mod.unpublished_phases(None) == []
+    full = {"published_phases": {"plan": True, "result": True, "status": True}}
     assert mod.unpublished_phases(full) == []

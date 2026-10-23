@@ -2136,14 +2136,6 @@ disposition = "keep"
 ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
 
 [[entry]]
-id = "e0004ee2d9996ebe"
-domain = "code"
-file = "scripts/hook-prompt-reminders.py"
-class = "structural"
-disposition = "keep"
-ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
-
-[[entry]]
 id = "52978d2266ea8fcd"
 domain = "code"
 file = "scripts/hook-prompt-reminders.py"
