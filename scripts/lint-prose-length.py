@@ -23,13 +23,13 @@ Governed files (per `config.md` keys):
 `memory-global/MEMORY.md` is measured in UTF-8 BYTES, not lines and not chars:
 the harness caps that file at 25000 bytes on the AutoMem context-assembly path
 and truncates it SILENTLY, so a line-count check reports safety it cannot
-establish (see the `memory-index-max-bytes` row in config.md).
+establish (see `memory-index-max-bytes` in docs/operations/config-rationale.md).
 
 CLAUDE.md also has a char ceiling (`claude-md-max-chars`), measured in UTF-16
 code units — the unit the harness's own `content.length` check uses, not
 UTF-8 bytes. Crossing it produces a display-only `/doctor` warning, not
 truncation (verified against the installed client bundle and an over-limit
-sentinel test; see the `claude-md-max-chars` row in config.md). The
+sentinel test; see `claude-md-max-chars` in docs/operations/config-rationale.md). The
 line-count guard does not catch char growth (a few long lines can cross the
 char budget while staying well under the line limit), so it is checked
 explicitly.
@@ -49,7 +49,7 @@ sum of all skill descriptions) against the ADVISORY (never FAIL)
 `always-loaded-surface-advisory-chars` ceiling, plus a per-surface
 breakdown and a PRICE block that converts the total into a measured
 tokens-per-step cost against a live transcript window (see
-always-loaded-surface-advisory-chars in config.md) — this block always reads
+always-loaded-surface-advisory-chars in docs/operations/config-rationale.md) — this block always reads
 live session transcripts, independent of `--include-dynamic`. It never
 changes the exit code and runs instead of (not alongside) the
 governed-ceiling checks above. With `--include-dynamic` it additionally
@@ -70,7 +70,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_MD = REPO_ROOT / "config.md"
 
 # The harness's OWN approximation for every current model (see
-# claude-md-max-chars in config.md) — not a tokenizer result. Named in every
+# claude-md-max-chars in docs/operations/config-rationale.md) — not a tokenizer result. Named in every
 # PRICE line that uses it so the approximation is never mistaken for a
 # measured token count.
 CHARS_PER_TOKEN = 3
@@ -367,7 +367,7 @@ def compute_price(
 def cmd_surface_report(constants: dict[str, str], include_dynamic: bool) -> int:
     """Report-only: the aggregate always-loaded surface plus its breakdown.
     Never fails — the aggregate is disclosed, not enforced (see
-    always-loaded-surface-advisory-chars in config.md)."""
+    always-loaded-surface-advisory-chars in docs/operations/config-rationale.md)."""
     breakdown, total = surface_breakdown()
 
     print("lint-prose-length: always-loaded-surface-report")
