@@ -42,14 +42,28 @@ def _attr_chain_root(node: ast.Attribute) -> ast.AST:
     return cur
 
 
+_LINECACHE_HINT = (
+    "A concurrent source edit can desynchronise linecache, producing empty or "
+    "unlocatable source that looks like a code regression. Re-run the suite without "
+    "an ongoing edit to distinguish a genuine failure from a transient race."
+)
+
+
 def impure_names(module_or_function) -> set[str]:
     """Return the set of impure module roots reached in the object's own source.
 
     Accepts a module or a function/method. Parses via inspect.getsource + dedent (a
     nested/indented def would otherwise be un-parseable). Empty set == pure (no
     transport-capable reach), which is the admit condition for a gate guardian."""
-    source = textwrap.dedent(inspect.getsource(module_or_function))
-    tree = ast.parse(source)
+    try:
+        source = textwrap.dedent(inspect.getsource(module_or_function))
+    except OSError as exc:
+        raise OSError(f"{exc}\nHint: {_LINECACHE_HINT}") from exc
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        raise SyntaxError(f"{exc}\nHint: {_LINECACHE_HINT}") from exc
     found: set[str] = set()
 
     for node in ast.walk(tree):
