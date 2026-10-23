@@ -667,6 +667,8 @@ Plan structure is defined **primarily by typed code**, not prose. `plan.py`'s `p
 
 **Lazy elaboration and the bet-raising replan.** A stage whose bet defers elaboration to launch (`at_launch`) is elaborated by an ordinary refinement replan, which owes no review of its own. `cmd_dispatch` closes that gap: `gates.lazy_stage_blockers` refuses (never warns) to dispatch a bound stage while a field its bet calls for is missing or its depth review (`plan-review --scope stage:<n>`, with the neighbours' interfaces at `neighbours` depth) does not stand. After a difficulty, a bound replan must carry a raised bet for each FAILED stage (`risk.bet_raised`: a higher level, a silent detection, or an elaboration kind or depth the effective call lacked) or state why it stands in the replan's `--reason` (`gates.bet_raise_blockers`), and `bound_review_blockers` owes that stage a `neighbours`-depth review of the corrected plan (`gates.failed_stage_indices`). Unbound sessions are unchanged (`test_unbound_dispatch_and_replan_unchanged`).
 
+The mode ships off (`risk-shaped-planning = off`); issues #477 and #479 track the design and its trial, whose baseline is `docs/operations/planning-cost-baseline.json`. The prose a bound agent reads is [planner/policy.md](../../skills/specializations/planner/policy.md) § Risk-shaped planning.
+
 ### Change tier and proportional review
 
 *Difficulty removed:* every revision of a plan owed the same review and re-run however small the edit, so a typo fix or a verify-command tweak cost a full review round and, at the stage level, the delivered work.
