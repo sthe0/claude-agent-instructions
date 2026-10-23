@@ -10,8 +10,8 @@ Edit|Write only, it also records the touched file's realpath — a Bash fire nev
 parses the command string for paths (that stays out of the deterministic rule
 part; see hook-scope-conflict.py's future Component B for why).
 
-Memory and scratch paths (agentctl.exempt_paths.is_engine_exempt: /tmp/, /memory/,
-/memory-global/, /agent-memory/) are never recorded as touched scope — those
+Memory and scratch paths (agentctl.exempt_paths.is_engine_exempt: scratch roots,
+/memory/, /memory-global/, /agent-memory/) are never recorded as touched scope — those
 writes are gate-exempt and carry no contention risk.
 
 The durable edit ledger (agentctl.edit_ledger) uses a DIFFERENT, narrower filter

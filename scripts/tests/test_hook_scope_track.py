@@ -60,12 +60,20 @@ def _make_arc_stub(bin_dir: Path, root: Path) -> None:
     )
 
 
-def run_hook(payload: dict, home: Path, bin_dir: str, lineage: "str | None" = None) -> subprocess.CompletedProcess:
+def run_hook(
+    payload: dict,
+    home: Path,
+    bin_dir: str,
+    lineage: "str | None" = None,
+    scratch_root: "Path | None" = None,
+) -> subprocess.CompletedProcess:
     # bin_dir first so a stub shadows the real binary; /usr/bin:/bin kept so the
     # stub's own "#!/usr/bin/env bash" shebang can still resolve bash.
     env = {"HOME": str(home), "PATH": f"{bin_dir}:/usr/bin:/bin"}
     if lineage is not None:
         env["AGENT_LINEAGE_IDS"] = lineage
+    if scratch_root is not None:
+        env["AGENTCTL_SCRATCH_ROOTS"] = str(scratch_root)
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload),
@@ -173,11 +181,16 @@ def test_tmp_path_not_recorded(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _make_git_stub(bin_dir, repo)
-    scratch = repo / "tmp" / "scratch.py"
+    # The scratch root must not be an ancestor of HOME: the gate drops such a
+    # root as too broad, and tmp_path (which holds HOME) is itself under /tmp.
+    scratch_root = tmp_path / "scratch-root"
+    scratch = scratch_root / "scratch.py"
     scratch.parent.mkdir(parents=True)
     scratch.write_text("x")
 
-    proc = run_hook(edit_payload("s1", str(repo), str(scratch)), home, str(bin_dir))
+    proc = run_hook(
+        edit_payload("s1", str(repo), str(scratch)), home, str(bin_dir), scratch_root=scratch_root
+    )
     assert proc.returncode == 0
 
     rec = _record(home, "s1")

@@ -24,7 +24,7 @@ allowlisted root:
     the home directory, whose own `.arc` is that client's global state, not a
     working-copy root;
   * allowlist: the engine gate's own exemptions (`exempt_paths.is_engine_exempt`:
-    memory roots and `/tmp/`) and `exempt_paths.scratch_roots()`, matched against
+    memory roots and scratch roots) and `exempt_paths.scratch_roots()`, matched against
     BOTH the nominal path and its symlink-resolved path — a match on either
     allows, so a memory root that resolves into a git or arc tree is never denied.
 

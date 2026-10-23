@@ -1,7 +1,7 @@
 """is_engine_exempt: scratch roots and personal local-state are exempt by realpath
 containment (never substring), and a scratch root as broad as $HOME exempts nothing.
 
-Positive cases use synthetic roots whose names contain no _EXEMPT_SUBSTRINGS member,
+Positive cases use synthetic roots whose names contain no _EXEMPT_MEMORY_SUBSTRINGS member,
 so the base substring list cannot mask a missing containment rule."""
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _env(monkeypatch):
 
 def _unmasked(path: str) -> None:
     for form in (path, os.path.realpath(path)):
-        assert not any(s in form for s in exempt_paths._EXEMPT_SUBSTRINGS), form
+        assert not any(s in form for s in exempt_paths._EXEMPT_MEMORY_SUBSTRINGS), form
 
 
 def test_pos_scratch_root_file():
@@ -39,7 +39,6 @@ def test_pos_scratch_root_file():
 
 
 def test_pos_symlink_into_scratch_root(tmp_path, monkeypatch):
-    monkeypatch.setattr(exempt_paths, "_EXEMPT_SUBSTRINGS", ("/memory/", "/memory-global/", "/agent-memory/"))
     root = tmp_path / "root"
     root.mkdir()
     outside = tmp_path / "outside"
@@ -113,3 +112,24 @@ def test_neg_tmpdir_equal_home_without_override(monkeypatch):
     monkeypatch.setenv("TMPDIR", HOME)
     monkeypatch.setattr(tempfile, "tempdir", None)
     assert not exempt_paths.is_engine_exempt(f"{HOME}/proj/x.py")
+
+
+def test_neg_path_containing_tmp_substring_but_not_scratch():
+    # A path whose text contains "/tmp/" as a non-leading component is NOT exempt:
+    # the "/tmp/" substring check was removed from _EXEMPT_MEMORY_SUBSTRINGS because
+    # it produced false positives. Only genuine scratch roots (resolved via
+    # _gate_scratch_roots() -> scratch_roots()) exempt a path.
+    # Red against an implementation that used "/tmp/" as a substring exemption.
+    path = "/nonexistent-rr-home/tmp/project/x.py"
+    _unmasked(path)
+    assert not exempt_paths.is_engine_exempt(path)
+    assert exempt_paths.is_gated_path(path)
+
+
+def test_scratch_roots_agree_with_engine_exempt():
+    # Second assertion from issue #62: one resolution path, shared by both
+    # consumers. For every root scratch_roots() returns, a path under it is exempt.
+    for root in exempt_paths.scratch_roots():
+        probe = root + "/probe.py"
+        _unmasked(probe)
+        assert exempt_paths.is_engine_exempt(probe), f"scratch root not exempt: {probe}"
