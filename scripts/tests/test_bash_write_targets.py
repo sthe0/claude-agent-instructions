@@ -228,8 +228,9 @@ def test_a_hash_comment_does_not_hide_a_later_write_target(command, expected):
     # which may write anywhere — the real destination is not derivable from the command
     # line alone. `eff_cwd` is the same over-inclusive answer `patch`/`git apply` give.
     # The operator-exact tokenizer splits `>(tee y)` into `['>', '(', 'tee', ...]`, so
-    # `redirect_targets` skips `(` to avoid a spurious `/w/(` artifact.
-    ("echo hi >(tee y)", ["/w"]),
+    # `redirect_targets` skips `(` to avoid a spurious `/w/(` artifact, and the nested
+    # `tee y` is walked like any command, so its own target is named as well.
+    ("echo hi >(tee y)", ["/w", "/w/y"]),
     # `<(dd if=x of=y bs=1)` is a READ substitution: the inner command's stdout feeds
     # the outer command's INPUT. The outer command writes nothing due to `<(`. Before
     # this fix, `<(` added `eff_cwd` as an extra candidate (same as `>(`) causing false
@@ -303,14 +304,97 @@ def test_issue299_same_command_var_assignment_expands():
 
 
 def test_issue299_env_variable_expands(monkeypatch):
-    """A $VAR present in os.environ expands rather than joining under the cwd."""
-    monkeypatch.setenv("MYOUTDIR_299", "/tmp/outdir")
-    assert command_write_targets("printf x > $MYOUTDIR_299/o.txt", CWD) == ["/tmp/outdir/o.txt"]
+    """An inherited `$TMPDIR` expands rather than joining under the cwd."""
+    monkeypatch.setenv("TMPDIR", "/tmp/outdir")
+    assert command_write_targets("printf x > $TMPDIR/o.txt", CWD) == ["/tmp/outdir/o.txt"]
 
 
 def test_issue299_read_process_substitution_does_not_add_cwd():
     """`<(cmd)` is a read substitution — the outer command writes nothing extra."""
     assert command_write_targets("diff <(cat /tmp/a) <(cat /tmp/b)", CWD) == []
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("sed -i -f s.sed t.txt", ["/w/t.txt"]),
+    ("sed -n -i 's/a/b/' t.txt u.txt", ["/w/t.txt", "/w/u.txt"]),
+    ("sed --expression=s/a/b/ --in-place t.txt", ["/w/t.txt"]),
+    ("sed -i --expression s/a/b/ t.txt", ["/w/t.txt"]),
+])
+def test_issue299_sed_script_operand_forms(command, expected):
+    assert command_write_targets(command, CWD) == expected
+
+
+def test_issue299_assignments_chain_and_cross_newlines():
+    assert command_write_targets("a=/tmp/x; b=$a/y\necho > $b/f", CWD) == ["/tmp/x/y/f"]
+
+
+def test_issue299_exported_assignment_expands_and_overrides_the_inherited_value(monkeypatch):
+    monkeypatch.setenv("TMPDIR", "/tmp/inherited")
+    assert command_write_targets("export TMPDIR=/elsewhere/t; echo > $TMPDIR/f", CWD) == ["/elsewhere/t/f"]
+    assert command_write_targets("HOME=/elsewhere/h; echo > $HOME/f", CWD) == ["/elsewhere/h/f"]
+
+
+def test_issue299_write_inside_a_process_substitution_is_still_a_candidate():
+    assert "/w/canon/f" in command_write_targets("diff <(tee canon/f) y", CWD)
+    assert "/w/canon/f" in command_write_targets("echo hi >(tee canon/f)", CWD)
+
+
+# --- fail closed: a value that cannot be known for certain is never expanded ----------
+#
+# Every row below would hide a write to `/canon/...` behind `/tmp/...` if the walker
+# trusted the wrong value. The expected answer is the unexpanded cwd join, the
+# over-inclusive direction every consumer already handles.
+
+@pytest.mark.parametrize("command", [
+    # a prefix assignment is temporary: it must not replace the earlier value
+    "o=/canon; o=/tmp true; echo > $o/f",
+    # conditional, piped and backgrounded assignments may or may not have run
+    "o=/canon; false && o=/tmp; echo > $o/f",
+    "o=/canon; false || o=/tmp; echo > $o/f",
+    "o=/canon; o=/tmp | cat; echo > $o/f",
+    "o=/canon; o=/tmp & echo > $o/f",
+    # once doubtful, a name stays doubtful even after a later literal assignment
+    "o=/canon; false && o=/tmp; o=/tmp; echo > $o/f",
+    # compound commands run assignments zero, one or many times, in any textual order
+    "o=/tmp; if true; then o=/canon; fi; echo > $o/f",
+    "o=/tmp; while true; do echo > $o/f; o=/canon; done",
+    "o=/tmp; { o=/canon; }; echo > $o/f",
+    "o=/tmp; (o=/canon); echo > $o/f",
+    # builtins that assign through an operand discard everything known
+    "read o; echo > $o/f",
+    "o=/tmp; eval 'o=/canon'; echo > $o/f",
+    "o=/tmp; printf -v o %s /canon; echo > $o/f",
+    "o=/tmp; declare -n o=other; echo > $o/f",
+    "o=/tmp; unset o; echo > $o/f",
+    # appends, subscripts and non-literal values
+    "o=/tmp; o+=/../canon; echo > $o/f",
+    "o=$UNKNOWN_299/x; echo > $o/f",
+    "o=`pwd`; echo > $o/f",
+    # a `$` the shell leaves literal, or a parameter-expansion operator, is not a plain name
+    "o=/tmp; echo > '$o/f'",
+    "o=/tmp; echo > \\$o/f",
+    "o=/tmp; echo > $'$o'/f",
+    "o=/tmp; echo > ${o:-/canon}/f",
+])
+def test_a_variable_that_cannot_be_known_for_certain_is_not_expanded(command, monkeypatch):
+    monkeypatch.setenv("TMPDIR", "/tmp")
+    for target in command_write_targets(command, CWD):
+        assert not target.startswith("/tmp/"), (command, target)
+
+
+@pytest.mark.parametrize("command", [
+    "export TMPDIR=/canon; false && export TMPDIR=/tmp; echo > $TMPDIR/f",
+    "read TMPDIR; echo > $TMPDIR/f",
+    "TMPDIR=/tmp true; TMPDIR=/canon; echo > $TMPDIR/f | cat",
+])
+def test_an_inherited_variable_is_dropped_when_the_command_may_change_it(command, monkeypatch):
+    monkeypatch.setenv("TMPDIR", "/tmp")
+    assert command_write_targets(command, CWD) == ["/w/$TMPDIR/f"]
+
+
+def test_only_home_and_tmpdir_are_taken_from_the_hook_environment(monkeypatch):
+    monkeypatch.setenv("REPO_299", "/tmp/elsewhere")
+    assert command_write_targets("echo > $REPO_299/f", CWD) == ["/w/$REPO_299/f"]
 
 
 # THE OTHER CONSUMER'S BEHAVIOUR CHANGED TOO, and it has rows of its own for it.

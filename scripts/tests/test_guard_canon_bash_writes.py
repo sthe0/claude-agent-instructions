@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 HOOK_SCRIPT = SCRIPTS_DIR / "hook-guard-canon-readonly.py"
 
@@ -56,8 +58,8 @@ def make_worktree(core: Path, tmp_path: Path) -> Path:
     return wt
 
 
-def run_hook(core, command: str, cwd) -> subprocess.CompletedProcess:
-    env = {**os.environ, **GIT_ENV, "CLAUDE_INSTRUCTIONS_REPO": str(core)}
+def run_hook(core, command: str, cwd, extra_env: dict | None = None) -> subprocess.CompletedProcess:
+    env = {**os.environ, **GIT_ENV, "CLAUDE_INSTRUCTIONS_REPO": str(core), **(extra_env or {})}
     payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)}
     return subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
@@ -402,12 +404,23 @@ def test_issue299_same_command_var_assignment_resolves_out_of_canon_allows(tmp_p
 
 
 def test_issue299_env_var_to_tmpdir_resolves_out_of_canon_allows(tmp_path):
-    """`printf x > $TMPDIR/o.txt` — $TMPDIR from os.environ is always outside canon;
-    before the fix it joined under cwd=canon → false deny."""
+    """`printf x > $TMPDIR/o.txt` — the inherited $TMPDIR names a directory outside
+    canon; before the fix it joined under cwd=canon → false deny."""
     core = make_core(tmp_path)
-    # TMPDIR is guaranteed by POSIX to point to a temporary directory outside canon.
-    proc = run_hook(core, "printf x > $TMPDIR/o.txt", cwd=core)
+    proc = run_hook(core, "printf x > $TMPDIR/o.txt", cwd=core, extra_env={"TMPDIR": str(tmp_path / "scratch")})
     assert _allowed(proc), proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+    "export TMPDIR={core}/scripts; printf x > $TMPDIR/o.txt",
+    "o={core}/scripts; false && o=/tmp; printf x > $o/o.txt",
+    "o=/tmp; if true; then o={core}/scripts; fi; printf x > $o/o.txt",
+    "diff <(tee {core}/scripts/o.txt) /tmp/x",
+])
+def test_issue299_a_variable_change_cannot_turn_a_canon_write_into_an_allow(tmp_path, command):
+    core = make_core(tmp_path)
+    proc = run_hook(core, command.format(core=core), cwd=core, extra_env={"TMPDIR": "/tmp"})
+    assert _denied(proc), (command, proc.stdout)
 
 
 def test_issue299_read_process_substitution_does_not_deny(tmp_path):
