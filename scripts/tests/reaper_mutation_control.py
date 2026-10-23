@@ -44,6 +44,8 @@ T_RUNNER = "tests/test_reaper_runner.py"
 T_GIT = "tests/test_reaper_git_worktrees.py"
 AGENTCTL_STATE = "reaper/builtin/agentctl_state.py"
 T_STATE = "tests/test_reaper_agentctl_state.py"
+PYTEST_BASETEMP = "reaper/builtin/pytest_basetemp.py"
+T_BASETEMP = "tests/test_reaper_pytest_basetemp.py"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
 CONTROL_RED = 7
@@ -261,6 +263,49 @@ CATALOGUE: "dict[str, Mutant]" = {
         'except Exception as exc:\n            outcome, detail = "error", f"{type(exc).__name__}: {exc}"',
         'except KeyboardInterrupt as exc:\n            outcome, detail = "error", f"{type(exc).__name__}: {exc}"',
         _ids(T_GIT, "test_one_branch_failing_does_not_stop_the_others"),
+    ),
+    "basetemp-live-lock": Mutant(
+        PYTEST_BASETEMP, "if pid_alive(pid):", "if False:",
+        _ids(T_BASETEMP, "test_dir_with_a_live_lock_pid_is_kept",
+             "test_remove_keeps_a_dir_whose_lock_became_live_after_the_scan"),
+    ),
+    "basetemp-age-floor": Mutant(
+        PYTEST_BASETEMP, "if age_hours < SHORT_FLOOR_HOURS:", "if age_hours < 0:",
+        _ids(T_BASETEMP, "test_dir_with_a_dead_pid_lock_younger_than_the_floor_is_kept",
+             "test_a_fresh_lock_keeps_an_old_directory",
+             "test_old_lockless_dir_is_removed_and_fresh_lockless_dir_is_kept"),
+    ),
+    "basetemp-name-filter": Mutant(
+        PYTEST_BASETEMP, 'NUMBERED_DIR = re.compile(r"pytest-[0-9]+")', 'NUMBERED_DIR = re.compile(r"pytest-.*")',
+        _ids(T_BASETEMP, "test_names_other_than_numbered_pytest_dirs_get_no_verdict",
+             "test_remove_refuses_a_path_that_is_not_a_direct_child_of_the_root"),
+    ),
+    "basetemp-cwd-holder": Mutant(
+        PYTEST_BASETEMP, "if any(_inside(real, held) for held in holders):", "if False:",
+        _ids(T_BASETEMP, "test_a_process_with_its_cwd_inside_the_dir_keeps_it",
+             "test_remove_keeps_a_dir_a_process_entered_after_the_scan"),
+    ),
+    "basetemp-holders-unavailable": Mutant(
+        PYTEST_BASETEMP, 'return _keep(path, "cwd scan unavailable")', "pass",
+        _ids(T_BASETEMP, "test_an_unavailable_cwd_scan_keeps_every_dir"),
+    ),
+    "basetemp-symlink": Mutant(
+        PYTEST_BASETEMP, "st = os.lstat(path)", "st = os.stat(path)",
+        _ids(T_BASETEMP, "test_a_symlink_named_like_a_numbered_dir_is_kept"),
+    ),
+    "basetemp-foreign-uid": Mutant(
+        PYTEST_BASETEMP, "if st.st_uid != _current_uid():", "if False:",
+        _ids(T_BASETEMP, "test_a_dir_of_another_uid_is_kept"),
+    ),
+    "basetemp-owned-scope": Mutant(
+        PYTEST_BASETEMP, "if ctx.owned_path(str(path)):", "if False:",
+        _ids(T_BASETEMP, "test_a_dir_owned_by_a_live_scope_record_is_kept"),
+    ),
+    "basetemp-remove-rejudge": Mutant(
+        PYTEST_BASETEMP, "if judge(target, ctx, _holders_or_none()).action != REMOVE:", "if False:",
+        _ids(T_BASETEMP, "test_remove_keeps_a_dir_whose_lock_became_live_after_the_scan",
+             "test_remove_keeps_a_dir_a_process_entered_after_the_scan",
+             "test_an_error_while_judging_one_dir_keeps_only_that_dir"),
     ),
 }
 

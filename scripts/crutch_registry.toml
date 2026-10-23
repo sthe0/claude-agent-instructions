@@ -3984,6 +3984,38 @@ disposition = "keep"
 ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output)."
 
 [[entry]]
+id = "e5889d7b796397dd"
+domain = "code"
+file = "scripts/reaper/builtin/pytest_basetemp.py"
+class = "structural"
+disposition = "keep"
+ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output)."
+
+[[entry]]
+id = "613cd96ed03b77fb"
+domain = "code"
+file = "scripts/reaper/builtin/pytest_basetemp.py"
+class = "structural"
+disposition = "keep"
+ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output)."
+
+[[entry]]
+id = "418bef94f6e86db0"
+domain = "code"
+file = "scripts/reaper/builtin/pytest_basetemp.py"
+class = "structural"
+disposition = "keep"
+ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output)."
+
+[[entry]]
+id = "e6d9e31179d4a6b3"
+domain = "code"
+file = "scripts/reaper/builtin/pytest_basetemp.py"
+class = "structural"
+disposition = "keep"
+ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output)."
+
+[[entry]]
 id = "d908fd2bdbece52d"
 domain = "code"
 file = "scripts/reaper/runner.py"
@@ -18787,6 +18819,14 @@ ground = "The regexes here match machine-made names, never free text: the runner
 id = "d6f8ba9c23d9d12f"
 domain = "code_file_rollup"
 file = "scripts/reaper/builtin/git_worktrees.py"
+class = "structural"
+disposition = "keep"
+ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output). (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "b1cdb41595003b54"
+domain = "code_file_rollup"
+file = "scripts/reaper/builtin/pytest_basetemp.py"
 class = "structural"
 disposition = "keep"
 ground = "The regexes here match machine-made names, never free text: the runner rewrites a reaper's NAME into a stamp file name (characters outside letters, digits, dot, underscore, hyphen become underscore), and the agentctl-state reaper selects plain <session>.json file names written by agentctl's own store. Removal decisions are made from verdicts that carry a path, an action and a reason, and from structured fields (a JSON node value, an mtime, git output). (file-level rollup of the file's scopes.)"
