@@ -107,6 +107,31 @@ Contract and loader: `scripts/agentctl/landed_providers.py`.
 PLUGIN_README
 }
 
+# The hook-fragment seam: install-reminder-hooks.sh merges every <name>.json here into
+# the agent root's settings.json after Core's own rows. Core creates the directory and
+# the README stub; the fragments themselves are machine-local and never ship here.
+ensure_hook_plugin_dir() {
+  local dir="$CLAUDE_AGENT_HOME/hook-plugins"
+  mkdir -p "$dir"
+  [[ -f "$dir/README.md" ]] && return 0
+  cat > "$dir/README.md" <<'PLUGIN_README'
+# Machine-local hook fragments
+
+Nothing here is versioned. Each `<name>.json` has the shape of settings.json's `hooks`
+key and is merged into `settings.json` by `scripts/install-reminder-hooks.sh`, after
+Core's own rows. A fragment may be a symlink into another checkout.
+
+| Rule | Meaning |
+|---|---|
+| `@FRAGMENT_DIR@` | In a command, the real directory of the fragment file; it keeps a fragment's scripts addressable from where the fragment lives. |
+| Ownership | `hook-plugins.installed.json` (next to `settings.json`) records what each fragment installed; a run keeps those entries equal to the fragment's current ones, and removing the fragment removes exactly them. |
+| Collision | An entry whose script basename already runs in the same event and matcher (a hand entry, a Core row, another fragment) is skipped with a warning. |
+| Broken fragment | Unparsable, or naming a script that is missing under its directory: skipped with a warning, its installed entries kept. |
+
+Contract and loader: `scripts/lib/hook_fragments.py`.
+PLUGIN_README
+}
+
 prune_dangling() {
   local dir="$1"
   local logfile="$HOME/.local/log/setup-symlinks-prune.log"
@@ -204,6 +229,7 @@ CLAUDE_SETTINGS="$CLAUDE_AGENT_HOME/settings.json" "$REPO/scripts/apply-settings
 # ...and the directory the channel it names may need an adapter from.
 ensure_plugin_dir
 ensure_landed_check_plugin_dir
+ensure_hook_plugin_dir
 
 # Wire the canonical reminder-hook set into settings.json. Hooks are a
 # machine-specific key (apply-settings.sh does not merge them), so the repo's

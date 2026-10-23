@@ -187,6 +187,16 @@ case $? in
   *) warn "MCP registration check failed: ${_mcp_out//$'\n'/; }" ;;
 esac
 
+# 7c. Soft: every entry of a hook fragment in <root>/hook-plugins/ should be present
+#     in <root>/settings.json (hook_fragments.py --check lists the ones that are not:
+#     not yet installed, blocked by a collision, or a broken fragment). Warn-only.
+_hook_out="$(python3 "$REPO/scripts/lib/hook_fragments.py" --check "$CLAUDE_AGENT_HOME" 2>&1)"
+if [[ -z "$_hook_out" ]]; then
+  pass "hook fragments installed (or none defined)"
+else
+  warn "hook-plugins entries not in settings.json: ${_hook_out//$'\n'/; } — run scripts/install-reminder-hooks.sh"
+fi
+
 # 8. Legacy layout advisory: if ~/.claude (the old in-place location) still holds
 #    repo-pointing system symlinks, the isolated root may be incomplete. Detection
 #    is the shared agent_legacy_inplace_layout helper (config-root.sh) — the single
