@@ -206,6 +206,7 @@ def _session_run(monkeypatch, tmp_path, check_line=None):
 
     def _produce(script, *args, **kw):
         calls["n"] += 1
+        run.produced = True
         return _Proc(check_line or "")
     monkeypatch.setattr(run, "produce", _produce)
     return run, calls
