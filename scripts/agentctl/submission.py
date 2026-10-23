@@ -1118,8 +1118,64 @@ def plan_size_blocks(doc_or_raw, stage_max: int | None = None) -> list[dict]:
     ]
 
 
+# Length floor for the unenumerated-prose-image advisory. Images shorter than this
+# carry one short description and do not create a multi-item attestation problem, so
+# they stay silent. An ordinary short image ("the package imports, `status` runs on
+# empty state") is well below this floor. The value is a tunable; the enumeration
+# patterns below are the other one.
+_PROSE_FLOOR = 150
+
+# Enumeration markers the prose-image advisory accepts as proof that an image IS
+# already structured. Any of these found in the image means the author has given the
+# acceptance judge a fixed list to attest against per item, so the advisory stays
+# silent. Three shapes cover the corpus authors use: (1)-style parenthesized numbers,
+# `1.` list items at line-start, and bullet points (-, *, •) at line-start.
+_ENUMERATION_PRESENT = re.compile(
+    r"""
+    \(\d+\)           # (1)-style parenthesized numbers
+    | ^\s*\d+\.       # 1. numbered list item at line-start
+    | ^\s*[-*•]  # bullet point (-, *, •) at line-start
+    """,
+    re.VERBOSE | re.MULTILINE,
+)
+
+
+def _prose_image_advisory(stage) -> str | None:
+    """Advisory for a stage whose expected_result_image is a long, unenumerated prose
+    block. Returns the advisory string, or None when the image is short enough or already
+    carries an enumeration marker.
+
+    Purely structural: no model call, no subprocess, no judge. Called only for
+    substantive plans (the caller gates on _is_substantive).
+    """
+    image = (stage.subject.result if stage.subject else "") or ""
+    if len(image) < _PROSE_FLOOR:
+        return None
+    if _ENUMERATION_PRESENT.search(image):
+        return None
+    return (
+        f"stage {stage.index} ({stage.title!r}): expected_result_image is one prose "
+        f"block. An acceptance judge re-derives the required attestation set each "
+        f"round from an unenumerated image, so the review does not converge. Enumerate "
+        f"the discrete observations this stage's own commands print, and say per item "
+        f"whether a larger number satisfies the image or fails it."
+    )
+
+
 def submission_advice(doc, *, judge_runner=None, judge_enabled: bool = True) -> list[str]:
     """Everything this seam has to SAY about `doc` without refusing it. [] == nothing.
+
+    Two advice channels, both on the same advisories list:
+
+      * Structural (prose-image advisory): decidable from the plan's bytes alone, no
+        judge or subprocess needed. Fires for every substantive plan whose stage carries
+        a long, unenumerated expected_result_image. An acceptance judge re-derives the
+        attestation set each round from such an image, so the review does not converge.
+
+      * Judge-dependent (echo check): asks a model whether an image merely restates its
+        own check. Fail-open throughout — no runner, a disabled judge, or a judge that
+        errors yields no echo advice at all. Silence here is indistinguishable from the
+        feature being absent.
 
     Advice is a strictly separate channel from `submission_violations`, because the two
     have opposite failure directions. A violation is a claim the engine can make from the
@@ -1129,31 +1185,35 @@ def submission_advice(doc, *, judge_runner=None, judge_enabled: bool = True) -> 
     images in 200). Refusing a submission on a judgement that shaky would spend an author's
     round trip on a coin flip, so an echo NEVER refuses: it names the stage, says what its
     image restates, and the submission proceeds.
-
-    Fail-open throughout: no runner, a disabled judge, or a judge that errors yields no
-    advice at all. Silence here is indistinguishable from the feature being absent.
     """
-    if not judge_enabled or judge_runner is None:
-        return []
     out: list[str] = []
-    for stage in doc.stages:
-        image = (stage.subject.result if stage.subject else "") or ""
-        command = (stage.criterion.verify_command or "") if stage.criterion else ""
-        reasons = echo_prefilter(image, verify_command=command)
-        if not reasons:
-            continue
-        if not judge_echo(
-            image,
-            judge_runner,
-            verify_command=command,
-            done_criterion=(stage.criterion.done_criterion if stage.criterion else ""),
-        ):
-            continue
-        out.append(
-            f"stage {stage.index} ({stage.title!r}): expected_result_image restates the "
-            f"stage's own check — {'; '.join(reasons)}. Say what the stage's result IS, "
-            f"so a reader who has not run the check learns what now exists"
-        )
+    # Structural advisory: unenumerated prose image on a substantive plan.
+    # Decidable from plan bytes — no judge, no subprocess, no runner required.
+    if _is_substantive(doc):
+        for stage in doc.stages:
+            advisory = _prose_image_advisory(stage)
+            if advisory:
+                out.append(advisory)
+    # Judge-dependent advisory: echo check. Fail-open throughout.
+    if judge_enabled and judge_runner is not None:
+        for stage in doc.stages:
+            image = (stage.subject.result if stage.subject else "") or ""
+            command = (stage.criterion.verify_command or "") if stage.criterion else ""
+            reasons = echo_prefilter(image, verify_command=command)
+            if not reasons:
+                continue
+            if not judge_echo(
+                image,
+                judge_runner,
+                verify_command=command,
+                done_criterion=(stage.criterion.done_criterion if stage.criterion else ""),
+            ):
+                continue
+            out.append(
+                f"stage {stage.index} ({stage.title!r}): expected_result_image restates the "
+                f"stage's own check — {'; '.join(reasons)}. Say what the stage's result IS, "
+                f"so a reader who has not run the check learns what now exists"
+            )
     return out
 
 
