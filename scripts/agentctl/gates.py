@@ -2559,12 +2559,15 @@ def review_delta(state: SessionState, doc, target_plan: "str | None" = None) -> 
     whole_plan, stages = plan_review_delta(state, doc)
     stage_list = sorted(stages)
     scopes = [] if whole_plan else [_plan_review_scope_for_stage(i) for i in stage_list]
+    bound_flag = ""
+    if state.risk_planning:
+        bound_flag = " --skeleton" if doc.meta.phase == "skeleton" else " --bound"
     if whole_plan or not stage_list:
-        render_command = f"agentctl plan-render --plan {quoted_plan_path}"
+        render_command = f"agentctl plan-render --plan {quoted_plan_path}{bound_flag}"
     else:
         render_command = (
             f"agentctl plan-render --plan {quoted_plan_path} "
-            f"--stage {','.join(str(i) for i in stage_list)}"
+            f"--stage {','.join(str(i) for i in stage_list)}{bound_flag}"
         )
     return {
         "whole_plan": whole_plan,
@@ -3878,6 +3881,10 @@ def _meta_place(meta) -> tuple:
         _final_check_surface(meta),
         order_place(meta),
         tuple((a.id, a.text, a.basis, a.risk, a.stage) for a in meta.assumptions),
+        meta.phase,
+        meta.base_stage,
+        tuple(meta.alternatives),
+        meta.alternatives_waiver,
     )
 
 

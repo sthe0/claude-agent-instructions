@@ -35,6 +35,7 @@ from lib.spawn_ceiling import dispatch_prompt_ceiling_chars
 from . import plan_refs, plan_store, protected_actions
 from .config import PlanLimitError, plan_field_inline_limit, plan_size_limits
 from .directive import Directive
+from .review_briefs import render_addendum
 from .plan import (
     CONDITION_MARKERS,
     CUSTOMER_QUESTION_MARKER,
@@ -1992,6 +1993,10 @@ def cmd_plan_render(args, *, store=None, runner=None) -> Directive:
             md = render_stages_md(doc, stage_indices)
         except ValueError as exc:
             return Directive(False, "(render)", "error", str(exc), data={})
+    if getattr(args, "bound", False):
+        addendum = render_addendum(doc, stage_indices)
+        if addendum:
+            md = md.rstrip("\n") + "\n\n" + addendum
     externalized = _externalized_fields(args.plan, stage_indices)
     if externalized:
         md += _externalized_section(externalized)
