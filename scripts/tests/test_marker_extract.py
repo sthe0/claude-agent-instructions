@@ -170,8 +170,9 @@ def test_build_prompt_omits_the_hint_sentence_when_no_hint():
 def test_every_failure_path_fails_closed(label, runner):
     result = marker_extract.extract("body", allowed=RETURN_MARKERS, runner=runner)
     assert result.marker is None, label
-    # degraded is reserved for the one OBSERVABLE condition (claude absent); a
-    # judgement-bearing failure must route to MALFORMED, not to the legacy scan.
+    # extract() itself never sets degraded — that is build_extraction()'s layer,
+    # where EXTRACTOR_FAILED (including timeouts) is widened to degraded=True so
+    # the legacy-scan fallback runs automatically.
     assert result.degraded is False, label
     assert result.reason, label
 
@@ -203,6 +204,13 @@ def test_no_marker_outcome_for_a_genuine_judgement(label, runner):
         ("unparseable_reply", _fake_runner("I think it is probably completed?\n")),
         ("nonzero_exit", _fake_runner("", returncode=1, stderr="boom")),
         ("runner_raises", _raising_runner(RuntimeError("exploded"))),
+        # A subprocess timeout is a transport failure (OBSERVATION), not a
+        # judgement about the specialist's output — it must degrade at
+        # build_extraction's layer and trigger the legacy-scan fallback there.
+        (
+            "timeout_runresult",
+            _fake_runner("", returncode=1, stderr="marker extractor timed out after 30s"),
+        ),
     ],
 )
 def test_extractor_failed_outcome_for_an_observation_failure(label, runner):
@@ -360,6 +368,28 @@ def test_build_extraction_degrades_when_claude_is_absent(monkeypatch):
     assert result.degraded is True
     assert "unavailable" in result.reason
     assert calls == []
+
+
+def test_build_extraction_degrades_when_extractor_fails(monkeypatch):
+    # A subprocess timeout is a transport OBSERVATION (EXTRACTOR_FAILED), not a
+    # judgement.  build_extraction() must widen it to degraded=True so the
+    # caller's legacy-scan fallback runs automatically — the fix for ADR-0005
+    # defect 5.  Mutation proof: removing the `replace(result, degraded=True)`
+    # line in build_extraction makes this test go red.
+    monkeypatch.delenv(marker_extract.ENV_KILL_SWITCH, raising=False)
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/claude")
+    calls: list = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return marker_extract.RunResult(1, "", "marker extractor timed out after 30s")
+
+    result = marker_extract.build_extraction("x", kind="developer", runner=run)
+    assert result is not None
+    assert result.marker is None
+    assert result.degraded is True
+    assert result.outcome == marker_extract.OUTCOME_EXTRACTOR_FAILED
+    assert len(calls) == marker_extract._MAX_EXTRACT_ATTEMPTS
 
 
 def test_build_extraction_runs_the_pass_when_reachable(monkeypatch):
