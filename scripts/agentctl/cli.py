@@ -91,6 +91,7 @@ from .plan import (
     unit_node,
     verify_command_reachability_blockers,
     cost_tier_floor_advisories,
+    final_check_duplicate_warnings,
     verify_command_scope_warnings,
     _derive_stage_grants,
     _venue_for,
@@ -4804,6 +4805,13 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # independent of the optional LLM advisor above; warn-only, never blocks.
     d.data.setdefault("advisories", []).extend(
         verify_command_scope_warnings(doc.stages, doc.meta.final_check)
+    )
+    # Duplicate final_check lint (issue #141) — warn when a final_check command
+    # is byte-identical (whitespace-normalized) to a stage verify_command; that
+    # pair makes verify-final run the command twice with no intervening state
+    # change, doubling resolution wall-clock for zero added coverage.
+    d.data.setdefault("advisories", []).extend(
+        final_check_duplicate_warnings(doc.stages, doc.meta.final_check)
     )
     # Deterministic check-venue lint (#45) — same warn-only channel; fires
     # only when [meta] delivery_worktree names a venue distinct from repo_root.
