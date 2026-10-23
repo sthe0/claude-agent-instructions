@@ -1593,27 +1593,53 @@ def check_venue_warnings(
             return target.resolve()
         return None
 
+    def _embeds_path(command: str, root: Path) -> bool:
+        """True if any absolute-path token anywhere in *command* is at or under
+        *root* — catches paths embedded outside the cd argument."""
+        root_str = str(root)
+        if root_str not in command:
+            return False  # fast path
+        for sub in re.split(r"&&|;|\|", command):
+            sub = sub.strip()
+            if not sub:
+                continue
+            try:
+                toks = shlex.split(sub)
+            except ValueError:
+                continue
+            for tok in toks:
+                if not tok.startswith("/"):
+                    continue
+                p = Path(tok)
+                if p == root or root in p.parents:
+                    return True
+        return False
+
     warnings: list[str] = []
 
     def _warn_if_contradicts_venue(command: str, venue: str, where: str) -> None:
         target = _first_cd_target(command)
-        if target is None:
-            return
-        under_repo_root = target == repo_root_p or repo_root_p in target.parents
-        under_worktree = target == worktree_p or worktree_p in target.parents
+        under_repo_root = (
+            (target is not None and (target == repo_root_p or repo_root_p in target.parents))
+            or _embeds_path(command, repo_root_p)
+        )
+        under_worktree = (
+            (target is not None and (target == worktree_p or worktree_p in target.parents))
+            or _embeds_path(command, worktree_p)
+        )
         if venue == CheckVenue.REPO_ROOT.value:
             if under_worktree and not under_repo_root:
                 warnings.append(
-                    f"{where} declares venue = \"repo_root\" but cd's into the "
-                    f"delivery worktree {delivery_worktree}; cd into {repo_root} "
+                    f"{where} declares venue = \"repo_root\" but embeds the "
+                    f"delivery worktree path {delivery_worktree}; use {repo_root} "
                     f"to match its declared venue, or drop the venue override if "
                     f"the worktree is the intended target."
                 )
         else:
             if under_repo_root and not under_worktree:
                 warnings.append(
-                    f"{where} cd's into the canonical repo_root but its declared "
-                    f"venue is \"delivery\"; cd into {delivery_worktree} so the "
+                    f"{where} embeds the canonical repo_root path but its declared "
+                    f"venue is \"delivery\"; use {delivery_worktree} so the "
                     f"check runs where the un-landed change lives, or declare "
                     f"venue = \"repo_root\" if this check is the intentional "
                     f"post-landing confirmation."
