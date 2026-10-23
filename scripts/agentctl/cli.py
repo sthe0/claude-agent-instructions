@@ -4004,6 +4004,9 @@ def cmd_question_list(args, *, store: StateStore, runner: Runner | None = None) 
     if bag is None:
         return Directive(False, state.node, "noop", "plugin 'premise' is not active")
     questions = premise.questions_from_dicts(bag.get("questions", []))
+    def _cell(v: str) -> str:
+        return str(v).replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
+
     if getattr(args, "format", None) == "md":
         rows = [
             "| target | control | question | disposition | own_research | source | derivation |",
@@ -4012,8 +4015,8 @@ def cmd_question_list(args, *, store: StateStore, runner: Runner | None = None) 
         for q in questions:
             disp = q.disposition + (f" — {q.stale_note}" if q.stale_note else "")
             rows.append(
-                f"| {q.target} | {q.control} | {q.question} | {disp} | "
-                f"{q.own_research} | {q.source} | {q.derivation} |"
+                f"| {_cell(q.target)} | {_cell(q.control)} | {_cell(q.question)} | {_cell(disp)} | "
+                f"{_cell(q.own_research)} | {_cell(q.source)} | {_cell(q.derivation)} |"
             )
         detail = "\n".join(rows)
     else:
