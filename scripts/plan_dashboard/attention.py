@@ -15,7 +15,7 @@ Shapes (stage 12 renders them as given)::
                  (the body of ``GET /api/attention`` and the ``attention`` event, built by ``event_payload``)
 
 ``waiting`` ranks choice > permission > idle > none. *choice*: an ``AskUserQuestion`` or
-``ExitPlanMode`` call with no later tool result. *permission*: the locator plugin reports a pending
+``ExitPlanMode`` call with no later tool result or user text. *permission*: the locator plugin reports a pending
 permission prompt. *idle*: the last assistant message holds text and no tool call (or ends its
 turn) and nothing followed. *none*: the session is working. ``None``: no transcript was found.
 
@@ -111,13 +111,14 @@ def _apply(tail: Tail, entry: dict) -> None:
             return
         texts = []
         for item in items:
-            if item.get("type") == "tool_result":
-                tail.pending.pop(item.get("tool_use_id"), None)
+            if item.get("type") == "tool_result" and isinstance(item.get("tool_use_id"), str):
+                tail.pending.pop(item["tool_use_id"], None)
             elif item.get("type") == "text" and isinstance(item.get("text"), str):
                 texts.append(item["text"])
         text = "\n".join(texts).strip()
         if text:
             tail.chat.append(chat_entry("user", text, None))
+            tail.pending.clear()
         tail.state, tail.state_ts, tail.last_ts = "working", ts, ts
         return
     has_text = tool_used = False
@@ -145,10 +146,10 @@ def _consume(tail: Tail, data: bytes) -> None:
     for line in lines:
         try:
             entry = json.loads(line)
-        except ValueError:
+            if isinstance(entry, dict):
+                _apply(tail, entry)
+        except (ValueError, TypeError, AttributeError, RecursionError):
             continue
-        if isinstance(entry, dict):
-            _apply(tail, entry)
 
 
 def _first_read(handle, size: int) -> bytes:
@@ -240,7 +241,7 @@ def waiting_state(tail: Tail | None, permission: bool | None) -> tuple[str | Non
     if tail is None:
         return None, None
     if tail.pending:
-        return "choice", list(tail.pending.values())[-1]
+        return "choice", next(iter(tail.pending.values()))
     if permission:
         return "permission", tail.last_ts
     if tail.state == "ended":

@@ -82,7 +82,8 @@ def _refuse(*_args, **_kwargs):
 def health_stubbed(hits: list):
     """Best effort, not a guarantee: replaces the common network and process entry points with
     functions that raise, and records each call in ``hits`` so a plugin that swallows the error
-    still fails the check. A plugin reaching them another way (ctypes, a pre-imported alias) is not stopped."""
+    still fails the check. A plugin reaching them another way (ctypes, a pre-imported alias) is not stopped.
+    The stubs are process-global, so this runs only on the one-shot ``locate --health`` path, never under a server."""
     def stub(*args, **kwargs):
         hits.append(1)
         return _refuse(*args, **kwargs)

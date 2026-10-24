@@ -119,11 +119,27 @@ ASKING = [user(10, "go on"), assistant(9, tool_use("q1", "AskUserQuestion", QUES
     (WORKING + [tool_result(8, "t1")], "none", stamp(8)),
     (ASKING + [tool_result(8, "q1", "Left")], "none", stamp(8)),
     (IDLE + [user(3, "and then?")], "none", stamp(3)),
-], ids=["ask-question", "exit-plan-mode", "idle", "working", "tool-answered", "choice-answered", "user-spoke-last"])
+    (ASKING + [user(3, "never mind")], "none", stamp(3)),
+    (ASKING + [assistant(7, tool_use("q2", "AskUserQuestion", QUESTION), stop="tool_use")], "choice", stamp(9)),
+], ids=["ask-question", "exit-plan-mode", "idle", "working", "tool-answered", "choice-answered", "user-spoke-last",
+        "choice-interrupted", "choice-since-earliest"])
 def test_waiting_value_from_the_transcript(tmp_path, entries, waiting, since):
     root = make_root(tmp_path)
     put(root, ALPHA, entries)
     assert overlay(root) == {"waiting": waiting, "harness_session": ALPHA, "since": since}
+
+
+@pytest.mark.parametrize("junk", [
+    "[1, 2]", '"text"', '{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": ["q1"]}]}}',
+    '{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "AskUserQuestion", "id": {}}]}}',
+    '{"type": "user", "message": "flat"}', "[" * 100000, "{not json",
+], ids=["list", "string", "unhashable-result-id", "dict-call-id", "flat-message", "deep-nesting", "broken"])
+def test_a_malformed_line_is_skipped_and_the_tail_still_builds(tmp_path, junk):
+    root = make_root(tmp_path)
+    path = put(root, ALPHA, ASKING)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(junk + "\n")
+    assert overlay(root) == {"waiting": "choice", "harness_session": ALPHA, "since": stamp(9)}
 
 
 @pytest.mark.parametrize("entries, permission, waiting", [
