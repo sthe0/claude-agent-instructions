@@ -440,6 +440,11 @@ else:
 for w in fragment_warnings:
     print("install-reminder-hooks: warning: " + w, file=sys.stderr)
 
+# The record goes first: a crash between the two writes leaves a record entry with
+# no hook behind it (harmless), never an installed hook that looks hand-added.
+if not record_error and new_record != old_record:
+    hook_fragments.save_record(record_path, new_record)
+
 if changed or reconciled or pruned or fragment_changes:
     shutil.copy2(settings_path, settings_path + ".bak")
     with open(settings_path, "w", encoding="utf-8") as fh:
@@ -464,8 +469,6 @@ if changed or reconciled or pruned or fragment_changes:
             print("  " + c)
 else:
     print("install-reminder-hooks: all canonical reminder hooks already wired")
-if not record_error and new_record != old_record:
-    hook_fragments.save_record(record_path, new_record)
 
 
 # Prune-only pass: same ownership predicate (prune_dangling_managed_hooks),

@@ -151,9 +151,15 @@ def test_record_never_enters_settings_and_backup_is_written(tmp_path):
     assert "installed" not in json.loads(box.settings.read_text())
     assert (box.agent / "settings.json.bak").exists()
     record = json.loads(box.record.read_text())
+    cmd = f"python3 {d.resolve()}/scripts/gate.py"
     assert record == {
         "org.json": [
-            {"event": "PreToolUse", "matcher": "Bash", "command": f"python3 {d.resolve()}/scripts/gate.py"}
+            {
+                "event": "PreToolUse",
+                "matcher": "Bash",
+                "command": cmd,
+                "hook": {"type": "command", "command": cmd, "timeout": 5},
+            }
         ]
     }
 
@@ -612,3 +618,117 @@ def test_doctor_check_lists_uninstalled_fragment_entries(tmp_path):
     box.run()
     after = subprocess.run(["python3", *check], capture_output=True, text=True, timeout=30)
     assert after.stdout == ""
+
+
+def test_doctor_check_survives_a_non_object_settings_file(tmp_path):
+    box = Box(tmp_path)
+    box.settings.write_text("[]\n")
+    d = box.fragment_dir("org")
+    box.fragment(d, [GATE], link="org.json")
+    check = [str(SCRIPTS_DIR / "lib" / "hook_fragments.py"), "--check", str(box.agent)]
+    out = subprocess.run(["python3", *check], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0 and "org.json" in out.stdout
+
+
+def _hand_before_owned(box, cmd):
+    """Settle the owned entry, then put a hand entry with the same command (another
+    body) in front of it."""
+    box.run()
+    data = json.loads(box.settings.read_text())
+    group = next(g for g in data["hooks"]["PreToolUse"] if g.get("matcher") == "Bash")
+    owned = next(h for h in group["hooks"] if h["command"] == cmd)
+    group["hooks"].insert(group["hooks"].index(owned), {"type": "command", "command": cmd, "timeout": 99})
+    box.seed(data)
+
+
+def test_hand_entry_before_owned_one_survives_removal(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org")
+    cmd = f"python3 {d.resolve()}/scripts/gate.py"
+    box.fragment(d, [GATE], link="org.json")
+    _hand_before_owned(box, cmd)
+    (box.plugins / "org.json").unlink()
+    box.run()
+    assert [h for h in box.hooks() if h["command"] == cmd] == [
+        {"type": "command", "command": cmd, "timeout": 99}
+    ]
+
+
+def test_hand_entry_before_owned_one_survives_a_command_edit(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org", scripts=("gate.py", "gate2.py"))
+    cmd = f"python3 {d.resolve()}/scripts/gate.py"
+    box.fragment(d, [{"id": "a", "command": GATE}], link="org.json")
+    _hand_before_owned(box, cmd)
+    box.fragment(d, [{"id": "a", "command": "python3 @FRAGMENT_DIR@/scripts/gate2.py"}])
+    box.run()
+    assert [h for h in box.hooks() if h["command"] == cmd] == [
+        {"type": "command", "command": cmd, "timeout": 99}
+    ]
+    assert box.entries().count(f"python3 {d.resolve()}/scripts/gate2.py") == 1
+
+
+def test_record_without_hook_object_falls_back_to_first_command_match(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org")
+    box.fragment(d, [GATE], link="org.json")
+    box.run()
+    record = json.loads(box.record.read_text())
+    for e in record["org.json"]:
+        del e["hook"]
+    box.record.write_text(json.dumps(record))
+    (box.plugins / "org.json").unlink()
+    box.run()
+    assert f"python3 {d.resolve()}/scripts/gate.py" not in box.entries()
+
+
+def test_non_string_matcher_in_a_fragment_is_broken_and_others_keep_syncing(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org", scripts=("gate.py", "gate2.py"))
+    box.fragment(d, [GATE], fname="a.json", link="a.json")
+    bad = box.fragment(d, ["python3 @FRAGMENT_DIR@/scripts/gate2.py"], fname="bad.json", link="bad.json")
+    body = json.loads(bad.read_text())
+    body["hooks"]["PreToolUse"][0]["matcher"] = 7
+    bad.write_text(json.dumps(body))
+    proc = box.run()
+    assert "bad.json" in proc.stderr and "matcher" in proc.stderr
+    proc = box.run()
+    assert "malformed" not in proc.stderr and "cannot read" not in proc.stderr
+    box.fragment(d, [{"id": "n", "command": "python3 @FRAGMENT_DIR@/scripts/gate2.py"}], fname="c.json", link="c.json")
+    box.run()
+    assert box.entries().count(f"python3 {d.resolve()}/scripts/gate.py") == 1
+    assert f"python3 {d.resolve()}/scripts/gate2.py" in box.entries()
+
+
+def test_existing_owner_of_a_command_keeps_it_across_fragments(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org", scripts=("c1.py", "c2.py"))
+    c1, c2 = (f"python3 @FRAGMENT_DIR@/scripts/{s}.py" for s in ("c1", "c2"))
+    box.fragment(d, [{"id": "x", "command": c1}], fname="a.json", link="a.json")
+    box.fragment(d, [c2], fname="b.json", link="b.json")
+    box.run()
+    box.fragment(d, [{"id": "x", "command": c2}], fname="a.json")
+    proc = box.run()
+    record = json.loads(box.record.read_text())
+    assert [e["command"] for e in record["b.json"]] == [f"python3 {d.resolve()}/scripts/c2.py"]
+    assert "a.json" not in record
+    assert "a.json" in proc.stderr and "dropped" in proc.stderr
+    box.assert_stable(box.settle())
+
+
+def test_same_command_under_two_ids_is_reported_as_listed_twice(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org")
+    box.fragment(d, [{"id": "a", "command": GATE}, {"id": "b", "command": GATE}], link="org.json")
+    proc = box.run()
+    assert "listed twice" in proc.stderr and "already present" not in proc.stderr
+    assert box.entries().count(f"python3 {d.resolve()}/scripts/gate.py") == 1
+
+
+def test_interpreter_only_script_name_gets_no_same_script_advisory(tmp_path):
+    box = Box(tmp_path)
+    box.hand("python3 -c 'print(1)'")
+    d = box.fragment_dir("org")
+    box.fragment(d, ["python3 -c 'print(2)'"], link="org.json")
+    proc = box.run()
+    assert "may fire twice" not in proc.stderr

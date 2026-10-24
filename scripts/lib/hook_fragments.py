@@ -17,8 +17,11 @@ Contract:
   installed entry keeps the entry in place.
 * The plugin entry name is the fragment's file name. Each installed entry is recorded
   in ``<agent home>/hook-plugins.installed.json`` as ``{name: [{event, matcher, id
-  (only when given), command}]}``, so a removal touches exactly what the fragment
-  installed and never a hand-added hook, even one with an identical command.
+  (only when given), command, hook}]}`` (``hook`` is the installed hook object), so a
+  removal touches exactly what the fragment installed and never a hand-added hook,
+  even one with an identical command placed earlier; a byte-identical hand copy is
+  indistinguishable. A record entry without ``hook`` falls back to the first hook
+  with the recorded command.
 * Every run makes a healthy fragment's owned entries equal its current entries, in
   place: an edited command (with a kept ``id``) or a moved directory leaves no dead
   or doubled entry. The installer detaches owned entries before Core's rows are added
@@ -49,11 +52,12 @@ import os
 import shlex
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 try:
-    from lib.hook_script import hook_script_path
+    from lib.hook_script import HOOK_INTERPRETER_BASENAMES, hook_script_path
 except ImportError:
-    from hook_script import hook_script_path
+    from hook_script import HOOK_INTERPRETER_BASENAMES, hook_script_path
 
 PLACEHOLDER = "@FRAGMENT_DIR@"
 FRAGMENT_DIR_NAME = "hook-plugins"
@@ -68,12 +72,25 @@ def _ident(event, matcher, id_, command):
     return ("cmd", event, matcher or None, command)
 
 
-def _entry(event, matcher, id_, command):
+def _entry(event, matcher, id_, command, hook=None):
     entry = {"event": event, "matcher": matcher or None}
     if id_ is not None:
         entry["id"] = id_
     entry["command"] = command
+    if hook is not None:
+        entry["hook"] = hook
     return entry
+
+
+class _Item(NamedTuple):
+    """One current fragment entry and the removed owned entry it continues (or None)."""
+
+    name: str
+    event: str
+    matcher: object
+    id_: object
+    hook: dict
+    old: object
 
 
 def _entry_ident(e):
@@ -104,10 +121,11 @@ def load_record(path):
                 and isinstance(e.get("command"), str)
                 and (e.get("matcher") is None or isinstance(e["matcher"], str))
                 and (e.get("id") is None or isinstance(e["id"], str))
+                and (e.get("hook") is None or isinstance(e["hook"], dict))
             )
             if not ok:
                 return None, f"{path}: a malformed entry under {name!r}"
-            record[name].append(_entry(e["event"], e.get("matcher"), e.get("id"), e["command"]))
+            record[name].append(_entry(e["event"], e.get("matcher"), e.get("id"), e["command"], e.get("hook")))
     return record, None
 
 
@@ -148,6 +166,8 @@ def load_fragment(path):
         for group in groups:
             if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
                 return None, f"a group under {event!r} has no 'hooks' list"
+            if not isinstance(group.get("matcher"), (str, type(None))):
+                return None, f"a group under {event!r} has a non-string 'matcher'"
             matcher = group.get("matcher") or None
             for hook in group["hooks"]:
                 if not isinstance(hook, dict) or not isinstance(hook.get("command"), str):
@@ -171,6 +191,7 @@ def load_fragment(path):
 
 
 def _group_for(event_groups, matcher):
+    # Mirrors group_for in the installer's heredoc, which cannot be imported.
     for g in event_groups:
         if (g.get("matcher") or None) == matcher:
             return g
@@ -207,10 +228,11 @@ def detach(hooks, record):
             group = _find_group(hooks, e["event"], e["matcher"])
             if group is None:
                 continue
-            for i, h in enumerate(group["hooks"]):
-                if not _is_sentinel(h) and h.get("command") == e["command"]:
-                    group["hooks"][i] = {"command": "", _OWNER: name, _HELD: h, _ENTRY: e}
-                    break
+            plain = [(i, h) for i, h in enumerate(group["hooks"]) if not _is_sentinel(h)]
+            exact = [(i, h) for i, h in plain if e.get("hook") is not None and h == e["hook"]]
+            same_command = [(i, h) for i, h in plain if h.get("command") == e["command"]]
+            for i, h in (exact or same_command)[:1]:
+                group["hooks"][i] = {"command": "", _OWNER: name, _HELD: h, _ENTRY: e}
 
 
 def _sentinels(hooks):
@@ -319,7 +341,7 @@ class _Merge:
 
     def warn_same_script(self, name, group, hook, where, own_hooks):
         script = hook_script_path(hook["command"])
-        if script is None:
+        if script is None or script.name in HOOK_INTERPRETER_BASENAMES:
             return
         for h in group["hooks"]:
             other = hook_script_path(_command(h))
@@ -337,15 +359,16 @@ class _Merge:
         pool = {}
         for r in removed:
             pool.setdefault(_entry_ident(r["entry"]), []).append(r)
-        seen, plan = set(), []
+        seen, seen_cmds, plan = set(), set(), []
         for event, matcher, id_, hook in entries:
             cmd = hook["command"]
             ident = _ident(event, matcher, id_, cmd)
-            if ident in seen:
+            if ident in seen or (event, matcher, cmd) in seen_cmds:
                 self.warnings.append(f"{name}: {cmd} is listed twice in {_where(event, matcher)}; installed once")
                 continue
             seen.add(ident)
-            plan.append((name, event, matcher, id_, hook, self.claim(pool, ident, event, matcher, cmd)))
+            seen_cmds.add((event, matcher, cmd))
+            plan.append(_Item(name, event, matcher, id_, hook, self.claim(pool, ident, event, matcher, cmd)))
         return plan, [r for rows in pool.values() for r in rows]
 
     def install(self, item):
@@ -360,7 +383,7 @@ class _Merge:
             if old is None:
                 self.warnings.append(f"{name}: {cmd} not installed, already present in {where} ({by})")
             else:
-                self.changes.append(f"- {where}: {cmd} ({name} displaced)")
+                self.changes.append(f"- {where}: {old['entry']['command']} ({name} displaced)")
                 self.warnings.append(f"{name}: {cmd} dropped, now also present in {where} ({by})")
             return None
         if group is None:
@@ -378,12 +401,11 @@ class _Merge:
         self.own_hooks.setdefault(name, set()).add(id(hook))
         self.installed_by[id(hook)] = name
         self.warn_same_script(name, group, hook, where, self.own_hooks[name])
-        return _entry(event, matcher, id_, cmd)
+        return _entry(event, matcher, id_, cmd, hook)
 
-    def report_leftovers(self, name, leftovers, owned):
-        """Owned entries no current entry continues; one whose command the fragment
+    def report_leftovers(self, name, leftovers, kept):
+        """Owned entries no current entry continues; one whose command any fragment
         still installs is not reported."""
-        kept = {(e["event"], e["matcher"], e["command"]) for e in owned}
         for left in leftovers:
             e = left["entry"]
             if (e["event"], e["matcher"], e["command"]) not in kept:
@@ -397,11 +419,10 @@ def sync(hooks, fragment_dir, record):
     warnings, new_record)``; ``changes`` describes what moved in ``hooks`` and is empty
     when the call left it unchanged. The run has two phases over all fragments at
     once: every healthy fragment's owned entries leave their groups, then the entries
-    that continue an owned one go back in, then the new ones, so an entry moved
-    between fragments lands in its new fragment on the same run. Group order is not
-    maintained: a reorder inside a fragment file emits no change. Detach picks the
-    first hook with an owned command, so a hand entry placed earlier with the same
-    command is the one a removal takes.
+    that continue an owned one go back in, in three tiers (command unchanged, command
+    changed, new), so an entry moved between fragments lands in its new fragment on
+    the same run and the existing owner of a command keeps it. Group order is not
+    maintained: a reorder inside a fragment file emits no change.
     """
     run = _Merge(hooks)
     new_record = {}
@@ -427,21 +448,24 @@ def sync(hooks, fragment_dir, record):
         plan, leftovers[name] = run.plan_fragment(name, entries, removed.get(name, []))
         plans += plan
 
-    owned = {name: [] for name in healthy}
-    for continuing in (True, False):
-        for item in plans:
-            if (item[5] is not None) == continuing:
-                entry = run.install(item)
-                if entry is not None:
-                    owned[item[0]].append(entry)
+    def tier(item):
+        if item.old is None:
+            return 2
+        return 0 if item.old["entry"]["command"] == item.hook["command"] else 1
 
+    owned = {name: [] for name in healthy}
+    for item in sorted(plans, key=tier):
+        entry = run.install(item)
+        if entry is not None:
+            owned[item.name].append(entry)
+
+    kept = {(e["event"], e["matcher"], e["command"]) for rows in owned.values() for e in rows}
     for name in healthy:
-        run.report_leftovers(name, leftovers[name], owned[name])
+        run.report_leftovers(name, leftovers[name], kept)
         if owned[name]:
             new_record[name] = owned[name]
 
-    for _, group, s in _sentinels(hooks):
-        _swap(group, s, s[_HELD])
+    assert not _sentinels(hooks), "a placeholder survived the sync"
     _tidy(hooks, run.touched)
     return run.changes, run.warnings, new_record
 
@@ -450,9 +474,11 @@ def missing_entries(settings_path, fragment_dir):
     """Fragment entries absent from settings.json, as ``[(name, command)]`` (for doctor)."""
     try:
         with open(settings_path, encoding="utf-8") as fh:
-            hooks = json.load(fh).get("hooks", {})
+            hooks = json.load(fh)
     except (OSError, ValueError):
-        hooks = {}
+        hooks = None
+    hooks = hooks.get("hooks") if isinstance(hooks, dict) else None
+    hooks = hooks if isinstance(hooks, dict) else {}
     installed = {
         (e, g.get("matcher") or None, h.get("command"))
         for e, gs in hooks.items()
