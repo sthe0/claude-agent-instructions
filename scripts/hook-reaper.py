@@ -16,6 +16,8 @@ and the project's .claude/reapers. Contract, flags and layers: docs/operations/r
                to origin) under a lock; exits 0 unless argv is invalid. Started detached
                by hook-branch-backup.py at turn end and session start.
   --no-wait    with --upkeep-only: exit 0 at once if another upkeep run holds the lock.
+  --on-pressure  run the reapers whose pressure paths are short of free space; started
+               detached by hook-branch-backup.py.
 """
 from __future__ import annotations
 

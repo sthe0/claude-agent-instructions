@@ -28,6 +28,16 @@ isolated, under an exclusive flock on ``<stamp dir>/upkeep.lock``. It waits up t
 ``UPKEEP_LOCK_WAIT_S`` for the lock (``--no-wait``: not at all) and exits 0 without
 running when another run still holds it. It exits 0 on every path except invalid argv.
 ``--dry-run`` is passed through to ``upkeep``; ``--only NAME`` restricts it to one reaper.
+
+``--on-pressure`` is a third mode: a reaper that names filesystem paths in its optional
+``pressure_paths(ctx)`` is due when the lowest free percentage among them is strictly below
+the config.md row ``reaper-pressure-free-percent`` and its cooldown
+(``PRESSURE_COOLDOWN_MIN``, stamp ``<NAME>.pressure.stamp``) has elapsed. Only the due
+reapers can remove; every other reaper still scans and vetoes, so the pass removes nothing a
+forced pass would keep. It never writes the throttle stamp, runs under a no-wait lock on
+``<stamp dir>/pressure.lock`` and appends one line per pass to ``<config root>/reaper/pressure.jsonl``.
+A missing or invalid row disarms it. It exits 0 on every path except invalid argv and,
+with ``--dry-run`` (which prints a status line per reaper and takes no lock), a runner error.
 """
 from __future__ import annotations
 
@@ -44,6 +54,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator, Sequence, TextIO
 
+from agentctl import config as agentctl_config
 from lib import config_root
 from reaper import registry
 from reaper.contract import KEEP, REMOVE, ReapContext, Verdict
@@ -52,6 +63,10 @@ from session_scope import registry as scope_registry
 THROTTLED_SENTINEL = "throttled: within window"
 UPKEEP_LOCK_WAIT_S = 120.0
 UPKEEP_LOCK_POLL_S = 0.25
+PRESSURE_THRESHOLD_KEY = "reaper-pressure-free-percent"
+# Minimum minutes between two pressured passes of one reaper; the hook fires at every turn end,
+# and a pass that frees nothing must not repeat that often.
+PRESSURE_COOLDOWN_MIN = 10.0
 
 
 def stamp_dir() -> Path:
@@ -60,6 +75,14 @@ def stamp_dir() -> Path:
 
 def upkeep_lock_path() -> Path:
     return stamp_dir() / "upkeep.lock"
+
+
+def pressure_lock_path() -> Path:
+    return stamp_dir() / "pressure.lock"
+
+
+def pressure_log_path() -> Path:
+    return config_root.agent_home() / "reaper" / "pressure.jsonl"
 
 
 def removal_log_path() -> Path:
@@ -116,6 +139,71 @@ def _nested(real_a: str, real_b: str) -> bool:
     return os.path.commonpath([real_a, real_b]) in (real_a, real_b)
 
 
+def read_pressure_threshold(config_path: "Path | None" = None) -> "float | None":
+    """The config.md row as a percentage strictly between 0 and 100; None (disarmed) otherwise."""
+    try:
+        value = float(agentctl_config.parse_config_md(config_path)[PRESSURE_THRESHOLD_KEY])
+    except (OSError, UnicodeDecodeError, KeyError, ValueError):
+        return None
+    return value if 0.0 < value < 100.0 else None
+
+
+def free_percent(path: str) -> "float | None":
+    """Free percentage (``f_bavail / f_blocks``) of the filesystem holding ``path``, measured at
+    its nearest existing ancestor; None when it cannot be read."""
+    probe = os.path.abspath(path)
+    while not os.path.lexists(probe) and probe != os.path.dirname(probe):
+        probe = os.path.dirname(probe)
+    try:
+        usage = os.statvfs(probe)
+    except OSError:
+        return None
+    return 100.0 * usage.f_bavail / usage.f_blocks if usage.f_blocks else None
+
+
+@dataclasses.dataclass(frozen=True)
+class PressureReading:
+    name: str
+    free: float
+    status: str  # "due" | "ok" | "cooldown"
+
+    def line(self, threshold: float) -> str:
+        return f"{self.name} free {self.free:.1f}% threshold {threshold:.1f}% -> {self.status}"
+
+
+def pressure_readings(
+    reapers: "list[registry.Reaper]",
+    ctx: ReapContext,
+    threshold: float,
+    stamps: Path,
+    free_fn: "Callable[[str], float | None]" = free_percent,
+) -> "list[PressureReading]":
+    """One reading per reaper that names readable ``pressure_paths``, judged on its lowest free
+    percentage: ``due`` below the threshold once its cooldown has elapsed, ``cooldown`` below it
+    before then, ``ok`` otherwise (a value equal to the threshold is ok). A reaper whose paths
+    cannot be named or read gets no reading and is never due."""
+    readings = []
+    for reaper in reapers:
+        paths_of = getattr(reaper.module, "pressure_paths", None)
+        if not callable(paths_of):
+            continue
+        try:
+            frees = [free_fn(str(path)) for path in paths_of(ctx)]
+        except Exception:
+            continue
+        if not frees or any(free is None for free in frees):
+            continue
+        free = min(frees)
+        if free >= threshold:
+            status = "ok"
+        else:
+            prev = _read_stamp(stamps, f"{reaper.name}.pressure")
+            elapsed = prev is None or (ctx.now - prev) >= PRESSURE_COOLDOWN_MIN * 60.0
+            status = "due" if elapsed else "cooldown"
+        readings.append(PressureReading(reaper.name, free, status))
+    return readings
+
+
 def execute_pass(
     reapers: "list[registry.Reaper]",
     ctx: ReapContext,
@@ -128,15 +216,21 @@ def execute_pass(
     out: TextIO,
     err: TextIO,
     skipped_modules: "Sequence[str]" = (),
-) -> None:
+    pressured: "frozenset[str] | None" = None,
+) -> int:
     """Run one pass over ``reapers`` (every discovered reaper). See the module docstring.
 
     ``skipped_modules`` are the discovery warnings for modules that did not load.
+    ``pressured`` makes exactly those reapers due and selected (others still scan and veto)
+    and, like a manual run, writes no throttle stamp. Returns the number of paths removed.
     """
     now = ctx.now
-    manual = dry_run or force_run or only is not None
-    selected = [r for r in reapers if only in (None, r.name)]
-    if dry_run or force_run:
+    manual = dry_run or force_run or only is not None or pressured is not None
+    selected = [r for r in reapers if only in (None, r.name) and (pressured is None or r.name in pressured)]
+    if pressured is not None:
+        ctx = dataclasses.replace(ctx, pressured=frozenset(pressured))
+        due = {r.name for r in selected}
+    elif dry_run or force_run:
         due = {r.name for r in selected}
     elif only is not None:
         due = {only}
@@ -147,7 +241,7 @@ def execute_pass(
         }
     if not due:
         print(THROTTLED_SENTINEL, file=err)
-        return
+        return 0
 
     cancelled: "list[str]" = []
     if ctx.scope_registry_error:
@@ -187,8 +281,9 @@ def execute_pass(
                     print(f"{reaper.name} REMOVE {verdict.path} ({verdict.reason})", file=out)
                 else:
                     print(f"{reaper.name} KEEP {verdict.path} ({reason or verdict.reason})", file=out)
-        return
+        return 0
 
+    removed = 0
     failed_removals: "set[str]" = set()
     for real, entries in joined.items():
         if blocker(real) is not None:
@@ -208,6 +303,7 @@ def execute_pass(
             failed_removals.add(reaper.name)
             print(f"reaper {reaper.name}: FAILED to remove {verdict.path}: {type(exc).__name__}: {exc}", file=err)
             continue
+        removed += 1
         print(f"reaper {reaper.name}: removed {verdict.path} ({verdict.reason})", file=err)
 
     for reaper in selected:
@@ -225,6 +321,54 @@ def execute_pass(
     if not manual and not cancelled:
         for name in due - failed_removals:
             _write_stamp(stamps, name, now)
+    return removed
+
+
+def execute_pressure(
+    reapers: "list[registry.Reaper]",
+    ctx: ReapContext,
+    *,
+    threshold: float,
+    stamps: Path,
+    log_path: Path,
+    pressure_log: Path,
+    out: TextIO,
+    err: TextIO,
+    skipped_modules: "Sequence[str]" = (),
+) -> None:
+    """One ``--on-pressure`` pass: read the free space of each reaper that names pressure paths,
+    run the due ones through ``execute_pass`` and start their cooldown.
+
+    A dry run prints one status line per reaper, then what the pass would do; it writes no
+    cooldown stamp and no pressure record. A live run prints only the readings that are not ok.
+    """
+    readings = pressure_readings(reapers, ctx, threshold, stamps, free_percent)
+    for reading in readings:
+        if ctx.dry_run or reading.status != "ok":
+            print(reading.line(threshold), file=out if ctx.dry_run else err)
+    due = frozenset(r.name for r in readings if r.status == "due")
+    if not due:
+        return
+    removed = execute_pass(
+        reapers, ctx,
+        dry_run=ctx.dry_run, force_run=False, only=None,
+        stamps=stamps, log_path=log_path, out=out, err=err,
+        skipped_modules=skipped_modules, pressured=due,
+    )
+    if ctx.dry_run:
+        return
+    for name in due:
+        _write_stamp(stamps, f"{name}.pressure", ctx.now)
+    record = {
+        "ts": _iso(ctx.now), "threshold": threshold,
+        "free": {r.name: round(r.free, 2) for r in readings}, "due": sorted(due), "removed": removed,
+    }
+    try:
+        pressure_log.parent.mkdir(parents=True, exist_ok=True)
+        with pressure_log.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        print(f"reaper: pressure log unavailable: {type(exc).__name__}: {exc}", file=err)
 
 
 @contextlib.contextmanager
@@ -301,6 +445,26 @@ def _discover_default(project_dir: Path, warn: "Callable[[str], None]") -> "list
     return registry.discover(project_dir, warn=warn)
 
 
+def _run_on_pressure(reapers: "list[registry.Reaper]", ctx: ReapContext, skipped: "list[str]") -> None:
+    threshold = read_pressure_threshold()
+    if threshold is None:
+        print(f"reaper: pressure mode disarmed: config.md row {PRESSURE_THRESHOLD_KEY} is missing or not a percentage above 0 and below 100", file=sys.stderr)
+        return
+
+    def run() -> None:
+        execute_pressure(
+            reapers, ctx, threshold=threshold, stamps=stamp_dir(), log_path=removal_log_path(),
+            pressure_log=pressure_log_path(), out=sys.stdout, err=sys.stderr, skipped_modules=skipped,
+        )
+
+    if ctx.dry_run:
+        run()
+        return
+    with _upkeep_lock(pressure_lock_path(), 0.0, sys.stderr) as acquired:
+        if acquired:
+            run()
+
+
 def main(
     argv: "list[str] | None" = None,
     *,
@@ -313,9 +477,12 @@ def main(
     parser.add_argument("--list", action="store_true", help="list discovered reapers and exit")
     parser.add_argument("--upkeep-only", action="store_true", help="run only each reaper's upkeep (e.g. the branch backup push), under a lock")
     parser.add_argument("--no-wait", action="store_true", help="with --upkeep-only: exit 0 at once if another upkeep run holds the lock")
+    parser.add_argument("--on-pressure", action="store_true", help="run the reapers whose pressure paths are short of free space (config.md row reaper-pressure-free-percent), under a no-wait lock")
     args = parser.parse_args(argv)
     if args.no_wait and not args.upkeep_only:
         parser.error("--no-wait needs --upkeep-only")
+    if args.on_pressure and (args.upkeep_only or args.only or args.force_run):
+        parser.error("--on-pressure combines only with --dry-run")
     fail_open = not (args.dry_run or args.force_run or args.only or args.list) or args.upkeep_only
 
     try:
@@ -339,6 +506,9 @@ def main(
             with _upkeep_lock(upkeep_lock_path(), wait_s, sys.stderr) as acquired:
                 if acquired:
                     execute_upkeep(reapers, ctx, only=args.only, out=sys.stdout, err=sys.stderr)
+            return 0
+        if args.on_pressure:
+            _run_on_pressure(reapers, ctx, skipped)
             return 0
         execute_pass(
             reapers, ctx,

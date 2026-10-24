@@ -22,6 +22,9 @@ children of the current user's pytest root and proposes removal when ALL hold:
 Everything else examined is kept with a reason; any error while judging one directory
 resolves to keep. `pytest-current`, `garbage-*` and any other name get no verdict.
 
+The pytest root is also this reaper's pressure path: a disk-pressure pass (`runner --on-pressure`)
+makes it due before its 24-hour throttle, under the same rules.
+
 remove() judges the directory again, with a fresh /proc scan, before deleting it, so a run
 that started between scan and removal is kept.
 """
@@ -135,6 +138,10 @@ def _holders_or_none() -> "list[str] | None":
         return cwd_holders()
     except OSError:
         return None
+
+
+def pressure_paths(ctx: ReapContext) -> "list[str]":
+    return [str(pytest_root())]
 
 
 def scan(ctx: ReapContext) -> "list[Verdict]":

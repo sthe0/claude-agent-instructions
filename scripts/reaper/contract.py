@@ -17,7 +17,11 @@ A reaper is a Python module defining
   maintenance (the ``git-worktrees`` reaper backs its branches up to origin), one report
   line per action. Only ``runner --upkeep-only`` calls it, under a lock and with errors
   isolated per reaper; ``scan`` and the SessionStart pass never do. When ``ctx.dry_run``
-  is set it must not write, push or fetch, and returns the lines a live run would act on.
+  is set it must not write, push or fetch, and returns the lines a live run would act on;
+* optionally ``pressure_paths(ctx) -> list[str]`` — paths of the filesystems this reaper's
+  residue fills. ``runner --on-pressure`` makes the reaper due (ignoring its throttle) when
+  the lowest free percentage among them is below the config.md row
+  ``reaper-pressure-free-percent``. It changes when the reaper runs, never what it may remove.
 
 A plugin module must use ABSOLUTE imports (``from reaper.contract import Verdict``):
 ``lib.plugin_dir.load_plugin_module`` executes it under a synthetic package name.
@@ -105,6 +109,8 @@ class ReapContext:
     forced); a ``scan`` that writes anything must check it and ``dry_run``.
     ``scope_registry_error`` is set when a session-scope record could not be read; the
     runner then removes nothing, since ``scope_records`` may be missing an owner.
+    ``pressured`` names the reapers a ``--on-pressure`` pass made due; it is empty in every
+    other pass.
     """
 
     now: float
@@ -115,6 +121,7 @@ class ReapContext:
     due: bool = True
     heartbeat_ttl_hours: float = OWNER_HEARTBEAT_TTL_HOURS
     scope_registry_error: "str | None" = None
+    pressured: "frozenset[str]" = frozenset()
 
     def owned_path(self, path: str) -> bool:
         return path_owned(path, self.scope_records, self.now, self.heartbeat_ttl_hours)

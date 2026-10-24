@@ -46,6 +46,9 @@ AGENTCTL_STATE = "reaper/builtin/agentctl_state.py"
 T_STATE = "tests/test_reaper_agentctl_state.py"
 PYTEST_BASETEMP = "reaper/builtin/pytest_basetemp.py"
 T_BASETEMP = "tests/test_reaper_pytest_basetemp.py"
+T_PRESSURE = "tests/test_reaper_pressure.py"
+HOOK_BACKUP = "hook-branch-backup.py"
+T_HOOK = "tests/test_hook_branch_backup.py"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
 CONTROL_RED = 7
@@ -306,6 +309,50 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_BASETEMP, "test_remove_keeps_a_dir_whose_lock_became_live_after_the_scan",
              "test_remove_keeps_a_dir_a_process_entered_after_the_scan",
              "test_an_error_while_judging_one_dir_keeps_only_that_dir"),
+    ),
+    "pressure-threshold": Mutant(
+        RUNNER, "if free >= threshold:", "if free > threshold:",
+        _ids(T_PRESSURE, "test_equal_to_threshold_is_not_due"),
+    ),
+    "pressure-keeps-veto": Mutant(
+        RUNNER,
+        "_normalize(reaper.module.scan(dataclasses.replace(ctx, due=reaper.name in due)))",
+        "(_normalize(reaper.module.scan(dataclasses.replace(ctx, due=reaper.name in due))) if reaper.name in due else [])",
+        _ids(T_PRESSURE, "test_non_due_keep_vetoes_pressured_removal",
+             "test_every_reaper_scans_in_a_pressure_pass_but_only_the_pressured_one_is_due"),
+    ),
+    "pressure-cooldown": Mutant(
+        RUNNER,
+        "elapsed = prev is None or (ctx.now - prev) >= PRESSURE_COOLDOWN_MIN * 60.0",
+        "elapsed = True",
+        _ids(T_PRESSURE, "test_cooldown_not_elapsed_is_not_due",
+             "test_a_second_pass_inside_the_cooldown_does_not_run"),
+    ),
+    "pressure-no-throttle-stamp": Mutant(
+        RUNNER,
+        "manual = dry_run or force_run or only is not None or pressured is not None",
+        "manual = dry_run or force_run or only is not None",
+        _ids(T_PRESSURE, "test_a_pressure_pass_writes_no_throttle_stamp"),
+    ),
+    "pressure-disarm-on-bad-row": Mutant(
+        RUNNER, "return value if 0.0 < value < 100.0 else None", "return value",
+        _ids(T_PRESSURE, "test_a_row_that_is_missing_or_not_a_percentage_disarms",
+             "test_main_disarms_on_a_bad_row_and_runs_nothing"),
+    ),
+    "pressure-hook-spawn": Mutant(
+        HOOK_BACKUP, "        spawn_pressure()\n", "        pass\n",
+        _ids(T_HOOK, "test_it_starts_the_pressure_check_detached_beside_the_upkeep",
+             "test_the_pressure_check_starts_for_a_stop_payload"),
+    ),
+    "pressure-hook-stop-only": Mutant(
+        HOOK_BACKUP,
+        "        sys.stdin.read()\n    except Exception:\n        pass\n"
+        "    try:\n        spawn_upkeep()\n    except Exception:\n        pass\n"
+        "    try:\n        spawn_pressure()\n",
+        "        raw = sys.stdin.read()\n    except Exception:\n        raw = \"\"\n"
+        "    try:\n        spawn_upkeep()\n    except Exception:\n        pass\n"
+        "    try:\n        if \"Stop\" in raw:\n            spawn_pressure()\n",
+        _ids(T_HOOK, "test_the_pressure_check_starts_for_a_session_start_payload"),
     ),
 }
 
