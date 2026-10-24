@@ -15,8 +15,10 @@ otherwise join-only, no existence check and no filesystem policy. A leading `$VA
 is expanded only from a literal assignment earlier in the same command or from the
 two inherited names `HOME`/`TMPDIR`, and only when `_variable_tracking_is_safe`
 holds; any other `$VAR` joins under the cwd like a relative token, and `_abs` says
-why that is the fail-closed direction. That is why a `cp`/`mv`/`install` destination
-yields both readings of an ambiguous final token rather than one resolved by
+why that is the fail-closed direction. The expansion is fail-closed by intent, not
+proven: it premises that the hook's `HOME`/`TMPDIR` equal the command shell's, and it
+walks the text in order (residuals named in `_VarTracker`). That is why a
+`cp`/`mv`/`install` destination yields both readings of an ambiguous final token rather than one resolved by
 `isdir` (see `_copy_targets`): CANDIDATES, plural and possibly over-inclusive,
 are the contract. Heredoc/here-string bodies are blanked (not removed) via
 `lib/shell_tokens.py`'s `neutralize_heredoc_constructs` before tokenizing, so a
@@ -48,6 +50,13 @@ _INHERITED_VARS = ("HOME", "TMPDIR")
 _COMPOUND_WORDS = frozenset({
     "if", "then", "elif", "else", "fi", "for", "select", "while", "until", "do", "done",
     "case", "esac", "function", "coproc", "{", "}", "(", ")",
+})
+
+#: Verbs that write to a path named on their command line but have no operand grammar in
+#: this module; found inside a `<(...)` body they keep the cwd as a candidate.
+_UNMODELED_WRITERS = frozenset({
+    "dd", "truncate", "touch", "ln", "rsync", "rm", "mkdir",
+    "python", "python3", "perl", "ruby", "node", "bash", "sh",
 })
 
 #: Builtins that assign variables through an argument that is not an assignment word.
@@ -104,6 +113,30 @@ def _sed_in_place(rest: list[str]) -> bool:
         if tok.startswith("-") and not tok.startswith("--") and "i" in tok[1:]:
             return True
     return False
+
+
+def _sed_script_flag(tok: str) -> str | None:
+    """How option `tok` supplies a sed script: `"next"` when its value is the FOLLOWING
+    token (`-e`, `--expression`, `-f`, `--file`, a cluster ending in `e`/`f` such as `-ne`),
+    `"glued"` when the value is inside `tok` itself (`-es/a/b/`, `-fscript.sed`,
+    `--expression=...`), `None` when `tok` is no script option. A short cluster is read
+    left to right: `i` swallows the rest of the token as its backup suffix, so `-ie` is
+    in-place with suffix `e`, not a script flag. GNU long options may be abbreviated
+    (`--expr`), so a prefix of `--expression` / `--file` counts."""
+    if not tok.startswith("-"):
+        return None
+    if tok.startswith("--"):
+        name, eq, _ = tok.partition("=")
+        for full, shortest in (("--expression", 3), ("--file", 4)):
+            if len(name) >= shortest and full.startswith(name):
+                return "glued" if eq else "next"
+        return None
+    for idx, ch in enumerate(tok[1:], start=1):
+        if ch == "i":
+            return None
+        if ch in "ef":
+            return "glued" if tok[idx + 1:] else "next"
+    return None
 
 
 #: Verbs of the form `VERB [options] SRC... DEST` — the destination is a write
@@ -218,9 +251,15 @@ def _abs(candidate: str, eff_cwd: str, var_env: dict[str, str] | None = None) ->
     the tracker's back. Everything else stays unexpanded and joins under `eff_cwd` — the
     over-inclusive direction: it can only turn an allow into a deny for a cwd inside a
     protected tree, never the reverse — and remains a named residual in each consumer.
+
+    A leading `~` follows the tracked `HOME` when `var_env` holds one, so `HOME=/x; cp s ~/f`
+    names `/x/f` as the shell does. A `HOME` the tracker had to drop (assigned conditionally,
+    in a pipeline, ...) is a named residual: `~` then resolves to the invoking user's home.
     """
     if var_env is not None and candidate.startswith("$"):
         candidate = _try_expand_var(candidate, var_env)
+    if var_env is not None and "HOME" in var_env and (candidate == "~" or candidate.startswith("~/")):
+        candidate = var_env["HOME"] + candidate[1:]
     candidate = os.path.expanduser(candidate)
     return candidate if os.path.isabs(candidate) else os.path.join(eff_cwd, candidate)
 
@@ -296,11 +335,7 @@ def segment_write_target(seg: list[str], eff_cwd: str, var_env: dict[str, str] |
         # FILE ... when -e or -f supplies the script. Without this distinction
         # every inline sed script (e.g. `s/a/b/`) is an over-emitted candidate
         # that joins under eff_cwd and looks like a real path to every consumer.
-        has_ef = any(
-            tok in ("-e", "-f", "--expression", "--file")
-            or tok.startswith(("--expression=", "--file="))
-            for tok in rest
-        )
+        has_ef = any(_sed_script_flag(tok) for tok in rest)
         skip_next = False
         first_operand = True
         for tok in rest:
@@ -308,8 +343,7 @@ def segment_write_target(seg: list[str], eff_cwd: str, var_env: dict[str, str] |
                 skip_next = False
                 continue
             if tok.startswith("-"):
-                if tok in ("-e", "-f", "--expression", "--file"):
-                    skip_next = True
+                skip_next = _sed_script_flag(tok) == "next"
                 continue
             if not has_ef and first_operand:
                 first_operand = False
@@ -357,17 +391,40 @@ def _variable_tracking_is_safe(command: str, tokens: list[str]) -> bool:
     return not (_COMPOUND_WORDS.intersection(tokens) or _dollar_may_be_literal(command))
 
 
+#: Words that run the next word as a command without changing which shell it runs in.
+_VERB_WRAPPERS = frozenset({"command", "builtin", "exec", "time"})
+
+
+def _verb_index(seg: list[str]) -> int | None:
+    """Index of the command word of `seg`, past leading `NAME=value` words and the
+    `_VERB_WRAPPERS`; `None` when the segment is assignments only."""
+    for i, tok in enumerate(seg):
+        if not _ASSIGN_RE.match(tok) and tok not in _VERB_WRAPPERS:
+            return i
+    return None
+
+
 class _VarTracker:
     """The variables `_abs` may expand while walking one command's segments in order.
 
-    FAIL-CLOSED BY CONSTRUCTION — a name is in `var_env` only when its value is known
-    for certain, because a wrong entry turns a write into a protected tree into an
-    allowed one, while a missing entry only keeps the old over-inclusive cwd join.
+    FAIL-CLOSED BY INTENT, NOT BY CONSTRUCTION — a name is in `var_env` only when the
+    tracker believes its value is known, because a wrong entry turns a write into a
+    protected tree into an allowed one, while a missing entry only keeps the old
+    over-inclusive cwd join. Two named residuals remain where a belief can be wrong:
 
-    * Seeded with `_INHERITED_VARS` from `os.environ` and nothing else: the hook is
-      spawned by the same harness as the command's shell, so those two agree, while an
-      arbitrary hook variable may be absent or different in a shell a profile
-      initialized.
+    * A `$X` that the shell resolves LATER than the textual walk does is not seen: text
+      the shell runs out of order without a compound word (a `trap` handler string, an
+      `alias` body, an `xargs`/`bash -c` string, which are not parsed at all) can read
+      a reassigned value where the walk used the earlier one.
+    * The seeded `HOME`/`TMPDIR` are premised on the hook and the command's shell having
+      been spawned by the same harness; a shell whose profile rewrites either differs
+      from the hook's value, and the expansion then names a path the command does not
+      write.
+
+    The rules:
+
+    * Seeded with `_INHERITED_VARS` from `os.environ` and nothing else: an arbitrary
+      hook variable may be absent or different in a shell a profile initialized.
     * A standalone, unconditional assignment (`o=/tmp/x`, `export o=/tmp/x`) with a
       literal value replaces the entry; the value's own leading `$VAR` is expanded first.
     * Every other mention of an assignment word — a command prefix, after `&&`/`||`, in a
@@ -406,20 +463,23 @@ class _VarTracker:
         """Account for `seg`, which has just been walked, and its separators."""
         if not self.enabled:
             return
-        rest = seg[1:]
+        verb_at = _verb_index(seg)
+        verb = os.path.basename(seg[verb_at]) if verb_at is not None else ""
+        rest = seg[verb_at + 1:] if verb_at is not None else []
         if (
-            _OPAQUE_VERBS.intersection(seg)
-            or (os.path.basename(seg[0]) == "printf" and "-v" in rest)
+            verb in _OPAQUE_VERBS
+            or (verb == "printf" and "-v" in rest)
             or (
-                os.path.basename(seg[0]) in _ASSIGNING_BUILTINS
+                verb in _ASSIGNING_BUILTINS
                 and any(t.startswith("-") and not t.startswith("--") and "n" in t for t in rest)
             )
         ):
             self.env.clear()
             return
-        builtin = os.path.basename(seg[0]) in _ASSIGNING_BUILTINS
-        words = rest if builtin else seg
-        standalone = builtin or all(_ASSIGN_RE.match(tok) for tok in seg)
+        builtin = verb in _ASSIGNING_BUILTINS
+        prefix = seg if verb_at is None else seg[:verb_at]
+        words = prefix + (rest if builtin else [])
+        standalone = verb_at is None or (builtin and verb_at == 0)
         unconditional = before in (None, ";") and after not in ("|", "|&", "&")
         for tok in words:
             m = _ASSIGN_RE.match(tok)
@@ -503,11 +563,19 @@ def command_write_targets(command: str, eff_cwd: str) -> list[str]:
     `cmd` and feeds its stdout into the outer command's argument list, so the outer
     command writes nothing extra due to `<(`. But the nested `cmd` is a command like
     any other, so the segments inside every `<(...)` and `>(...)` are walked as well
-    (`diff <(tee canon/f < x) y` still names `canon/f`).
+    (`diff <(tee canon/f < x) y` still names `canon/f`), and a body whose verb is in
+    `_UNMODELED_WRITERS` — a writer this module has no operand grammar for, `dd of=` —
+    adds `eff_cwd` as before; the table lists the common interpreters too. A body whose
+    verb is outside the table (`<(some-tool --out f)`) is a named residual: the command
+    line does not say what it writes, and denying every verb the walker has no grammar
+    for would deny every `diff <(git show ...) ...`, the case this module exists to allow.
 
     `$VAR` expansion in the candidates is `_VarTracker`'s: only `HOME`/`TMPDIR` from
     the hook's environment and literal assignments earlier in the same command
-    (`o=/tmp/x; echo > $o/f`), dropped whenever anything could have changed them."""
+    (`o=/tmp/x; echo > $o/f`), dropped whenever anything could have changed them. That
+    tracking is a belief about the shell, not a proof — its residuals (the inherited
+    `HOME`/`TMPDIR` premise, text the shell runs out of order) are named in `_VarTracker`.
+    Process-substitution bodies are walked without it."""
     command = shell_tokens.neutralize_heredoc_constructs(command)
     extra = [eff_cwd] if ">(" in command else []
     try:
@@ -524,4 +592,7 @@ def command_write_targets(command: str, eff_cwd: str) -> list[str]:
     for body in _process_substitution_bodies(tokens):
         for seg in split_segments(body):
             targets.extend(segment_write_target(seg, eff_cwd))
+            verb_at = _verb_index(seg)
+            if verb_at is not None and os.path.basename(seg[verb_at]) in _UNMODELED_WRITERS:
+                targets.append(eff_cwd)
     return targets

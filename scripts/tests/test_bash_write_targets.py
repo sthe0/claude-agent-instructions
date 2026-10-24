@@ -110,28 +110,28 @@ def test_a_leading_tilde_is_expanded(command, expected, monkeypatch):
 
 
 @pytest.mark.parametrize("command, expected", [
-    # A variable PRESENT in os.environ IS expanded: OS-reliably-set variables like $HOME,
-    # $TMPDIR, $PATH are always available and always point to paths outside of any canon root,
-    # so expanding them gives the right candidate rather than the over-inclusive cwd-join.
+    # `HOME` and `TMPDIR` are the two names expanded from the hook's own environment: the
+    # hook and the command's shell are spawned by the same harness, so they agree. This is
+    # a premise, not a proof (see `_VarTracker`); no other inherited name gets this trust.
     ("cp s.json $HOME/.claude/settings.json",
      ["/home/u/.claude/settings.json", "/home/u/.claude/settings.json/s.json"]),
     ("cp s.json ${HOME}/.claude/", ["/home/u/.claude/s.json"]),
     ("echo x > $HOME/.claude/settings.json", ["/home/u/.claude/settings.json"]),
 ])
-def test_a_variable_present_in_osenv_is_expanded(command, expected, monkeypatch):
+def test_a_variable_is_expanded_for_inherited_home_tmpdir(command, expected, monkeypatch):
     monkeypatch.setenv("HOME", "/home/u")
     assert command_write_targets(command, CWD) == expected
 
 
 @pytest.mark.parametrize("command, expected", [
-    # A variable NOT in os.environ is NOT expanded: the token joins under the cwd as the
-    # safe over-inclusive fallback. Each consumer names it as a residual.
+    # A name outside `HOME`/`TMPDIR` is NOT expanded, set or not: the token joins under the
+    # cwd as the safe over-inclusive fallback. Each consumer names it as a residual.
     ("cp s.json $ZZZZUNDEF_299/.claude/settings.json",
      ["/w/$ZZZZUNDEF_299/.claude/settings.json", "/w/$ZZZZUNDEF_299/.claude/settings.json/s.json"]),
     ("echo x > $ZZZZUNDEF_299/.claude/settings.json", ["/w/$ZZZZUNDEF_299/.claude/settings.json"]),
 ])
-def test_a_variable_absent_from_osenv_is_not_expanded(command, expected, monkeypatch):
-    monkeypatch.delenv("ZZZZUNDEF_299", raising=False)
+def test_an_unlisted_variable_is_not_expanded(command, expected, monkeypatch):
+    monkeypatch.setenv("ZZZZUNDEF_299", "/tmp/elsewhere")
     assert command_write_targets(command, CWD) == expected
 
 
@@ -231,11 +231,14 @@ def test_a_hash_comment_does_not_hide_a_later_write_target(command, expected):
     # `redirect_targets` skips `(` to avoid a spurious `/w/(` artifact, and the nested
     # `tee y` is walked like any command, so its own target is named as well.
     ("echo hi >(tee y)", ["/w", "/w/y"]),
-    # `<(dd if=x of=y bs=1)` is a READ substitution: the inner command's stdout feeds
-    # the outer command's INPUT. The outer command writes nothing due to `<(`. Before
-    # this fix, `<(` added `eff_cwd` as an extra candidate (same as `>(`) causing false
-    # denies when the cwd was a canon checkout. Now only `>(` triggers the cwd candidate.
-    ("git commit -F - <(dd if=x of=y bs=1)", []),
+    # `<(cmd)` is a READ substitution: `cmd`'s stdout feeds the outer command's INPUT, so
+    # `<(` adds nothing of its own (it used to add `eff_cwd`, a false deny in a canon cwd).
+    # But the body is a command that really runs: `dd of=y` has no operand grammar here, so
+    # a body whose verb is in `_UNMODELED_WRITERS` keeps the cwd candidate (fail closed),
+    # while a body that only reads does not.
+    ("git commit -F - <(dd if=x of=y bs=1)", ["/w"]),
+    ("diff <(git show HEAD:config.md) <(cat /tmp/x.md)", []),
+    ("diff <(python3 gen.py) x", ["/w"]),
     # No process substitution: no extra candidate.
     ("git commit -F -", []),
 ])
@@ -319,6 +322,18 @@ def test_issue299_read_process_substitution_does_not_add_cwd():
     ("sed -n -i 's/a/b/' t.txt u.txt", ["/w/t.txt", "/w/u.txt"]),
     ("sed --expression=s/a/b/ --in-place t.txt", ["/w/t.txt"]),
     ("sed -i --expression s/a/b/ t.txt", ["/w/t.txt"]),
+    # A script option with its value glued on (`-es/x/y/`, `-fscript.sed`) consumes no
+    # following token, so the file after it is still a write target.
+    ("sed -i -es/x/y/ f", ["/w/f"]),
+    ("sed -i -e's/a/b/' canon/f", ["/w/canon/f"]),
+    ("sed -i -fscript.sed f", ["/w/f"]),
+    ("sed -i --expr=s/a/b/ f", ["/w/f"]),
+    # A cluster ending in `e`/`f` takes its value from the next token, wherever `-i` sits.
+    ("sed -ne p -i f", ["/w/f"]),
+    ("sed -i -ne p f", ["/w/f"]),
+    ("sed -i --file s.sed f", ["/w/f"]),
+    # `-ie` is in-place with suffix `e`, not a script flag: `p` is the script operand.
+    ("sed -ie p f", ["/w/f"]),
 ])
 def test_issue299_sed_script_operand_forms(command, expected):
     assert command_write_targets(command, CWD) == expected
@@ -378,8 +393,35 @@ def test_issue299_write_inside_a_process_substitution_is_still_a_candidate():
 ])
 def test_a_variable_that_cannot_be_known_for_certain_is_not_expanded(command, monkeypatch):
     monkeypatch.setenv("TMPDIR", "/tmp")
-    for target in command_write_targets(command, CWD):
-        assert not target.startswith("/tmp/"), (command, target)
+    # the tokenizer drops the ANSI-C quoting, so `$'$o'/f` reaches the walker as `$$o/f`
+    unexpanded = {
+        "o=/tmp; echo > ${o:-/canon}/f": "/w/${o:-/canon}/f",
+        "o=/tmp; echo > $'$o'/f": "/w/$$o/f",
+    }.get(command, "/w/$o/f")
+    assert command_write_targets(command, CWD) == [unexpanded]
+
+
+@pytest.mark.parametrize("command, expected", [
+    # the assignment is a prefix of a verb whose operand is not an assignment word, and an
+    # opaque verb named only as an ARGUMENT discards nothing
+    ("o=/tmp; echo read o; echo > $o/f", ["/tmp/f"]),
+    ("o=/tmp; echo eval x=1; echo > $o/f", ["/tmp/f"]),
+    # an opaque verb behind a prefix assignment or a wrapper still discards everything
+    ("o=/tmp; A=1 read o; echo > $o/f", ["/w/$o/f"]),
+    ("o=/tmp; command eval 'o=/canon'; echo > $o/f", ["/w/$o/f"]),
+])
+def test_an_opaque_verb_counts_only_at_the_verb_position(command, expected):
+    assert command_write_targets(command, CWD) == expected
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("HOME=/x/h; cp s ~/f", ["/x/h/f", "/x/h/f/s"]),
+    ("HOME=/x/h; echo > ~/f", ["/x/h/f"]),
+    ("echo > ~/f", ["/home/u/f"]),
+])
+def test_a_leading_tilde_follows_a_home_assigned_in_the_command(command, expected, monkeypatch):
+    monkeypatch.setenv("HOME", "/home/u")
+    assert command_write_targets(command, CWD) == expected
 
 
 @pytest.mark.parametrize("command", [
