@@ -1,9 +1,5 @@
-"""Which script a hook command runs: the one parser every hook consumer shares.
-
-``self-diagnose`` (broken-hook scan), ``install-reminder-hooks.sh`` (Core rows,
-dangling-row prune) and ``hook_fragments`` (fragment merge) must agree on a hook's
-script identity, or one script gets wired twice under two spellings.
-"""
+"""Which script a hook command runs: the parser self-diagnose (broken-hook scan) and
+install-reminder-hooks.sh (dangling-row prune, fragment script check) share."""
 import os
 import re
 import shlex
@@ -37,20 +33,6 @@ def hook_script_path(command):
     unflagged either way — fail-safe: we would rather miss a broken hook than
     false-flag a legitimate bare command.
     """
-    parsed = _split(command)
-    if parsed is None:
-        return None
-    tokens, idx = parsed
-    candidate = Path(tokens[idx])
-    if candidate.is_absolute():
-        return candidate
-    if candidate.name not in HOOK_INTERPRETER_BASENAMES:
-        return None
-    return _operand_script(tokens, idx + 1)
-
-
-def _split(command):
-    """``(tokens, index of the first non-assignment token)``, or None if there is none."""
     if not command:
         return None
     expanded = os.path.expanduser(os.path.expandvars(command))
@@ -58,17 +40,22 @@ def _split(command):
         tokens = shlex.split(expanded)
     except ValueError:
         return None
+    if not tokens:
+        return None
+
     idx = 0
     while idx < len(tokens) and _VAR_ASSIGNMENT_RE.match(tokens[idx]):
         idx += 1
     if idx >= len(tokens):
         return None
-    return tokens, idx
 
+    candidate = Path(tokens[idx])
+    if candidate.is_absolute():
+        return candidate
+    if candidate.name not in HOOK_INTERPRETER_BASENAMES:
+        return None
 
-def _operand_script(tokens, start):
-    """The first absolute-path operand from ``start`` on, skipping flags and assignments."""
-    for tok in tokens[start:]:
+    for tok in tokens[idx + 1:]:
         if tok.startswith("-"):
             continue
         if _VAR_ASSIGNMENT_RE.match(tok):
@@ -78,26 +65,3 @@ def _operand_script(tokens, start):
         if tok.startswith("/"):
             return Path(tok)
     return None
-
-
-def script_name(command):
-    """Identity of the script a hook command runs.
-
-    The script's file name when one resolves: ``python3 /a/x.py``, ``env python3
-    /a/x.py``, ``python3 -X utf8 /a/x.py``, ``/venv/bin/python /a/x.py`` and a bare
-    ``/a/x.py`` are all ``x.py``. A launcher with no script operand (``python3 -m pkg``,
-    ``bash -c '…'``, ``uv run x.py``, an unexpanded ``$VAR/x.py``) has no file identity,
-    so the whole whitespace-normalized command stands for it and two such entries
-    collide only when identical.
-    """
-    parsed = _split(command)
-    if parsed is not None:
-        tokens, idx = parsed
-        first = Path(tokens[idx])
-        if first.is_absolute() and first.name not in HOOK_INTERPRETER_BASENAMES:
-            return first.name
-        if first.is_absolute() or first.name in HOOK_INTERPRETER_BASENAMES:
-            script = _operand_script(tokens, idx + 1)
-            if script is not None:
-                return script.name
-    return " ".join((command or "").split())

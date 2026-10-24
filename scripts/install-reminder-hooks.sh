@@ -47,11 +47,11 @@ scripts = os.environ["SCRIPTS_DIR"]
 sys.path.insert(0, os.environ["STAMP_SCRIPTS_DIR"])
 from agentctl import edit_ledger
 from lib import hook_fragments
-# The prune pass, the row dedup and the fragment merge share self-diagnose's own
-# script resolution, so they agree by construction on which script a hook runs.
+# The prune pass shares self-diagnose's own script resolution, so the two agree by
+# construction on which script a hook runs.
 # Imported from STAMP_SCRIPTS_DIR (this script's own, always-real location)
 # rather than SCRIPTS_DIR, which a test may point at a minimal fake repo.
-from lib.hook_script import hook_script_path, script_name
+from lib.hook_script import hook_script_path
 
 # (event, matcher-or-None, script-basename [+ optional args], timeout)
 DESIRED = [
@@ -316,17 +316,14 @@ def group_for(event_groups, matcher):
     return g
 
 
-def add_rows(hooks, rows, reconcile=False, fragment_owned=frozenset()):
+def basename_of(cmd: str) -> str:
+    return os.path.basename((cmd or "").split()[0]) if cmd else ""
+
+
+def add_rows(hooks, rows, reconcile=False):
     """Register `rows` (DESIRED tuples) in `hooks`, never adding a script whose
     basename is already in the target group. Shared by the full ADD pass and the
     prune-only roots' single-row exemption, so the two cannot drift.
-
-    `fragment_owned` holds the (event, matcher, command) keys a hook fragment
-    installed: they do not count as present, so a Core row added after a fragment
-    entry for the same script is still added, and the fragment pass then drops its
-    own entry (lib/hook_fragments.py) instead of Core's row being skipped or
-    having its timeout rewritten. When that fragment is broken its entry is kept
-    and runs alongside the Core row until the fragment is fixed.
 
     `reconcile` decides what happens to an entry that IS already there. Without
     it the row is skipped outright, which made this script insert-only: a
@@ -363,11 +360,7 @@ def add_rows(hooks, rows, reconcile=False, fragment_owned=frozenset()):
         groups = hooks.setdefault(event, [])
         grp = group_for(groups, matcher)
         grp.setdefault("hooks", [])
-        present = [
-            h for h in grp["hooks"]
-            if script_name(h.get("command", "")) == script_base
-            and (event, matcher, h.get("command")) not in fragment_owned
-        ]
+        present = [h for h in grp["hooks"] if basename_of(h.get("command", "")) == script_base]
         if present:
             if reconcile:
                 for hook in present:
@@ -391,10 +384,12 @@ if missing_exemptions:
 
 agent_home = os.path.dirname(settings_path)
 record_path = os.path.join(agent_home, hook_fragments.RECORD_NAME)
-old_record = hook_fragments.load_record(record_path)
-changed, reconciled = add_rows(
-    hooks, DESIRED, reconcile=True, fragment_owned=hook_fragments.owned_keys(old_record)
-)
+old_record, record_error = hook_fragments.load_record(record_path)
+if record_error:
+    print("install-reminder-hooks: warning: " + record_error + "; fragment pass skipped", file=sys.stderr)
+else:
+    hook_fragments.detach(hooks, old_record)
+changed, reconciled = add_rows(hooks, DESIRED, reconcile=True)
 
 
 def prune_dangling_managed_hooks(hooks, managed_dir):
@@ -435,10 +430,13 @@ def prune_dangling_managed_hooks(hooks, managed_dir):
 pruned = prune_dangling_managed_hooks(hooks, scripts)
 
 # Hook fragments (see lib/hook_fragments.py) reach the agent root only, after
-# Core's own rows, so a Core row always wins a basename collision.
-fragment_changes, fragment_warnings, new_record = hook_fragments.sync(
-    hooks, os.path.join(agent_home, hook_fragments.FRAGMENT_DIR_NAME), old_record
-)
+# Core's own rows.
+if record_error:
+    fragment_changes, fragment_warnings, new_record = [], [], old_record
+else:
+    fragment_changes, fragment_warnings, new_record = hook_fragments.sync(
+        hooks, os.path.join(agent_home, hook_fragments.FRAGMENT_DIR_NAME), old_record
+    )
 for w in fragment_warnings:
     print("install-reminder-hooks: warning: " + w, file=sys.stderr)
 
@@ -466,7 +464,7 @@ if changed or reconciled or pruned or fragment_changes:
             print("  " + c)
 else:
     print("install-reminder-hooks: all canonical reminder hooks already wired")
-if new_record != old_record:
+if not record_error and new_record != old_record:
     hook_fragments.save_record(record_path, new_record)
 
 
