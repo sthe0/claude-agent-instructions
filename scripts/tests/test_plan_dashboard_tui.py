@@ -10,19 +10,21 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import importlib.util
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import plan_dashboard_support as support
 from agentctl.state import Declaration, Difficulty
-from plan_dashboard import model, tui
+from plan_dashboard import attention, model, tui
 from plan_dashboard_fixtures import build_fixture_root, read_only_guard
 from plan_dashboard_support import (  # noqa: F401  (isolated_home is an autouse fixture)
-    ALPHA, BETA, NOW, RATE, STALE, at, console_root, event, isolated_home, make_state,
+    ALPHA, BETA, NOW, RATE, STALE, at, console_root, event, iso, isolated_home, make_state,
 )
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -79,7 +81,7 @@ def tree_text(nodes):
 def test_overview_row_cells(tmp_path):
     rows = tui.overview_rows(snapshot(console_root(tmp_path)), NOW)
     assert row_for(rows, ALPHA)["cells"] == (
-        "alpha-00", f"task-{ALPHA}", "active", "EXECUTING", "stage 1/3 [###-----]", "0", "0", "10m00s ago", "1h50m",
+        "", "alpha-00", f"task-{ALPHA}", "active", "EXECUTING", "stage 1/3 [###-----]", "0", "0", "10m00s ago", "1h50m",
         "≥$1.50", "Build the thing [with brackets]")
     beta = cells_of(rows, BETA)
     assert (beta["session"], beta["task"], beta["node"], beta["stage"], beta["age"]) == (
@@ -89,20 +91,21 @@ def test_overview_row_cells(tmp_path):
 def test_overview_header_names_host_time_and_the_counts(tmp_path):
     root = console_root(tmp_path)
     snap = snapshot(root)
-    assert tui.overview_header(snap, NOW) == f"{snap['hostname']}  2026-10-22 12:00:00 UTC  3 active  0 idle  3 total"
-    assert tui.overview_header(snapshot(root, include_all=True), NOW).endswith("3 active  0 idle  4 total")
-    assert tui.overview_header(listing(), NOW) == "host-1  2026-10-22 12:00:00 UTC  0 active  0 idle  0 total"
+    assert tui.overview_header(snap, NOW) == (
+        f"{snap['hostname']}  2026-10-22 12:00:00 UTC  3 active  0 idle  3 total  waiting: 0")
+    assert tui.overview_header(snapshot(root, include_all=True), NOW).endswith("3 active  0 idle  4 total  waiting: 0")
+    assert tui.overview_header(listing(), NOW) == "host-1  2026-10-22 12:00:00 UTC  0 active  0 idle  0 total  waiting: 0"
 
 
 def test_overview_header_counts_each_liveness_band():
     snap = listing(summary("a"), summary("b", liveness="idle"), summary("c", liveness="idle"),
                    summary("d", liveness="stale"))
-    assert tui.overview_header(snap, NOW).endswith("1 active  2 idle  4 total")
+    assert tui.overview_header(snap, NOW).endswith("1 active  2 idle  4 total  waiting: 0")
 
 
 def test_the_header_opens_the_plain_view_and_the_table_follows(tmp_path):
     lines = once(console_root(tmp_path)).splitlines()
-    assert lines[0].endswith("3 active  0 idle  3 total")
+    assert lines[0].endswith("3 active  0 idle  3 total  waiting: 0")
     assert lines[1].split() == list(tui.OVERVIEW_COLUMNS)
 
 
@@ -391,7 +394,7 @@ def test_tab_switches_tabs_and_asks_for_detail_only_when_something_is_selected()
     assert not press(view(), "tab").refresh
     after = press(view(), "enter", "escape", "tab")
     assert (after.tab, after.refresh) == ("detail", True)
-    assert press(after, "tab").tab == "tasks"
+    assert press(after, "tab", "tab").tab == "tasks"
 
 
 def test_a_toggles_all_and_asks_for_a_refresh():
@@ -438,6 +441,216 @@ def test_due(last, elapsed, expected):
     assert tui.due(NOW + dt.timedelta(seconds=elapsed), last, 2) is expected
 
 
+# --- waiting marks, session rows and the Chat tab --------------------------------------------
+
+PROJECT = "-console-project"
+ASK_SESSION, PERMISSION_SESSION, FREE_SESSION = "ask-session", "permission-session", "free-session"
+QUESTION = {"questions": [{"header": "HEADER-TEXT", "question": "Which way?", "multiSelect": False, "options": [
+    {"label": "Left", "description": "DESC-LEFT"}, {"label": "Right", "description": "DESC-RIGHT"}]}]}
+
+
+@pytest.fixture(autouse=True)
+def fresh_attention_cache():
+    attention._CACHE.clear()
+    yield
+    attention._CACHE.clear()
+
+
+def write_fixture_transcript(root, session, entries):
+    path = root.transcripts_root / PROJECT / f"{session}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
+    return path
+
+
+def line(role, minutes, content, stop=None):
+    message = {"role": role, "content": content}
+    if stop:
+        message["stop_reason"] = stop
+    return {"type": role, "timestamp": iso(at(minutes=minutes)), "message": message}
+
+
+def tool_use(tool_id, name, tool_input=None):
+    return {"type": "tool_use", "id": tool_id, "name": name, "input": tool_input or {}}
+
+
+ASKING = [line("user", 10, "go on"), line("assistant", 9, [tool_use("q1", "AskUserQuestion", QUESTION)], "tool_use")]
+IDLE = [line("user", 10, "go on"), line("assistant", 9, [{"type": "text", "text": "done"}], "end_turn")]
+WORKING = [line("user", 10, "go on"), line("assistant", 9, [tool_use("t1", "Bash", {"command": "ls"})], "tool_use")]
+
+
+def locator(sessions, *, permission=()):
+    return SimpleNamespace(NAME="fake", sessions=lambda: sessions, permission_wait=lambda harness: harness in permission)
+
+
+def attention_root(tmp_path):
+    root = console_root(tmp_path)
+    write_fixture_transcript(root, ALPHA, ASKING)
+    write_fixture_transcript(root, BETA, IDLE)
+    write_fixture_transcript(root, ASK_SESSION, ASKING)
+    write_fixture_transcript(root, PERMISSION_SESSION, WORKING)
+    write_fixture_transcript(root, FREE_SESSION, IDLE)
+    return root
+
+
+def attention_locator():
+    return locator([
+        {"harness_session": ASK_SESSION, "cwd": "/work/ask", "name": "Asker"},
+        {"harness_session": PERMISSION_SESSION, "cwd": None, "name": None},
+        {"harness_session": FREE_SESSION, "cwd": "/work/free", "name": "Free"},
+    ], permission=(PERMISSION_SESSION,))
+
+
+def overlay_of(root, snap=None, where=None):
+    snap = snap or snapshot(root)
+    return tui.read_attention(snap, where or attention_locator(), root.transcripts_root)
+
+
+@pytest.mark.parametrize("waiting, mark", [
+    ("choice", "?"), ("permission", "!"), ("idle", "…"), ("none", ""), (None, ""),
+])
+def test_wait_mark(waiting, mark):
+    assert tui.wait_mark(waiting) == mark
+
+
+def test_a_task_row_carries_the_mark_of_its_waiting_value(tmp_path):
+    root = attention_root(tmp_path)
+    rows = tui.overview_rows(snapshot(root), NOW, overlay_of(root))
+    assert (cells_of(rows, ALPHA)["wait"], cells_of(rows, BETA)["wait"]) == ("?", "…")
+    assert row_for(rows, ALPHA)["waiting"] == "choice"
+    assert cells_of(rows, "broken")["wait"] == ""
+
+
+def test_session_rows_follow_the_tasks_and_show_a_dash_in_the_task_columns(tmp_path):
+    root = attention_root(tmp_path)
+    snap = snapshot(root)
+    rows = tui.overview_rows(snap, NOW, overlay_of(root, snap))
+    tasks, sessions = rows[:len(snap["tasks"])], rows[len(snap["tasks"]):]
+    assert {r["kind"] for r in tasks} == {"task"}
+    assert [(r["kind"], r["session_id"]) for r in sessions] == [
+        ("session", ASK_SESSION), ("session", FREE_SESSION), ("session", PERMISSION_SESSION)]
+    asker = dict(zip(tui.OVERVIEW_COLUMNS, sessions[0]["cells"]))
+    assert asker["wait"] == "?" and asker["session"] == "Asker" and asker["goal"] == "/work/ask"
+    for column in ("task", "live", "node", "stage", "diff", "replans", "wall", "cost"):
+        assert asker[column] == "—", column
+    nameless = dict(zip(tui.OVERVIEW_COLUMNS, sessions[2]["cells"]))
+    assert (nameless["session"], nameless["wait"]) == (PERMISSION_SESSION, "!")
+
+
+def test_the_header_counts_rows_that_need_the_user_and_not_idle_ones(tmp_path):
+    root = attention_root(tmp_path)
+    snap = snapshot(root)
+    overlay = overlay_of(root, snap)
+    assert tui.overview_header(snap, NOW, overlay).endswith("  waiting: 3")
+    assert tui.waiting_count(snap, overlay) == 3
+    idle_only = {"tasks": {BETA: {"waiting": "idle"}, ALPHA: {"waiting": "none"}, "broken": {"waiting": None}},
+                 "sessions": [{"harness_session": "s", "waiting": "idle"}, {"harness_session": "t", "waiting": None}]}
+    assert tui.waiting_count(snap, idle_only) == 0
+    assert tui.waiting_count(snap, None) == 0
+
+
+def test_a_task_in_the_overlay_but_not_listed_is_not_counted(tmp_path):
+    root = console_root(tmp_path)
+    overlay = {"tasks": {"not-listed": {"waiting": "choice"}}, "sessions": []}
+    assert tui.waiting_count(snapshot(root), overlay) == 0
+
+
+@pytest.mark.parametrize("waiting, liveness, style", [
+    ("choice", "active", "bold yellow"), ("choice", "stale", "bold yellow"), ("permission", "idle", "bold red"),
+    ("idle", "active", "cyan"), ("idle", "stale", "cyan dim"), ("none", "active", ""), (None, "idle", "dim"),
+    (None, "active", ""), ("none", None, ""),
+])
+def test_row_style_by_waiting_and_liveness(waiting, liveness, style):
+    assert tui.row_style(waiting, liveness) == style
+
+
+def test_a_row_carries_its_style(tmp_path):
+    root = attention_root(tmp_path)
+    snap = snapshot(root)
+    rows = tui.overview_rows(snap, NOW, overlay_of(root, snap))
+    assert row_for(rows, ALPHA)["style"] == "bold yellow"
+    assert row_for(rows, PERMISSION_SESSION)["style"] == "bold red"
+    assert "bold" not in row_for(rows, BETA)["style"] and "bold" not in row_for(rows, FREE_SESSION)["style"]
+
+
+def test_without_an_overlay_the_rows_are_unmarked_and_have_no_session_rows(tmp_path):
+    rows = tui.overview_rows(snapshot(console_root(tmp_path)), NOW)
+    assert {r["kind"] for r in rows} == {"task"} and {r["cells"][0] for r in rows} == {""}
+
+
+def test_chat_lines_show_a_tool_name_and_an_asked_question_with_its_options(tmp_path):
+    root = attention_root(tmp_path)
+    lines = tui.chat_lines(attention.chat_tail(ASK_SESSION, None, root.transcripts_root))
+    assert lines == ["chat: ask-session", "you", "  go on", "assistant [AskUserQuestion]", "  Which way?", "  - Left",
+                     "  - Right"]
+    assert not any("HEADER-TEXT" in l or "DESC-" in l for l in lines)
+    working = tui.chat_lines(attention.chat_tail(PERMISSION_SESSION, None, root.transcripts_root))
+    assert working[-1] == "assistant [Bash]"
+
+
+def test_chat_lines_without_a_selection_or_messages():
+    assert tui.chat_lines(None) == ["no chat selected"]
+    assert tui.chat_lines({"harness_session": "h", "entries": []}) == ["chat: h", "no messages yet"]
+    assert tui.chat_lines({"harness_session": None, "entries": []})[0] == "chat: no session"
+
+
+def test_a_task_chat_reads_the_bound_transcript(tmp_path):
+    root = attention_root(tmp_path)
+    assert tui.read_chat(("task", BETA), None, root.transcripts_root)["harness_session"] == BETA
+    assert tui.read_chat(("session", FREE_SESSION), None, root.transcripts_root)["entries"][-1]["text"] == "done"
+    assert tui.read_chat(None, None, root.transcripts_root) is None
+
+
+@pytest.mark.parametrize("tab, key, owner", [
+    ("chat", "j", "chat"), ("chat", "k", "chat"), ("chat", "up", "chat"), ("chat", "down", "chat"),
+    ("chat", "enter", "global"), ("chat", "space", "global"), ("chat", "escape", "global"),
+    ("tasks", "j", "global"), ("detail", "j", "tree"), ("detail", "left", "tree"),
+])
+def test_the_chat_view_owns_the_scroll_keys_only_on_its_tab(tab, key, owner):
+    assert tui.key_owner(tab, key) == owner
+
+
+@pytest.mark.parametrize("key, step", [("down", 1), ("j", 1), ("up", -1), ("k", -1), ("x", 0)])
+def test_scroll_step(key, step):
+    assert tui.scroll_step(key) == step
+
+
+def test_chat_is_the_third_tab_and_escape_returns_to_tasks():
+    assert tui.TABS == ("tasks", "detail", "chat")
+    start = tui.View(session_ids=("a",), tab="chat", chat=("task", "a"))
+    assert press(start, "escape").tab == "tasks"
+    assert press(start, "j") == dataclasses.replace(start, refresh=False)
+
+
+def test_tab_reaches_the_chat_and_asks_for_it_only_when_something_is_open():
+    assert not press(view(), "tab", "tab").refresh
+    opened = press(view(harness_ids=frozenset({"a"})), "enter")
+    assert (opened.tab, opened.chat, opened.refresh) == ("chat", ("session", "a"), True)
+    task = press(view(), "enter")
+    assert (task.tab, task.selected, task.chat) == ("detail", "a", ("task", "a"))
+    assert press(task, "tab").tab == "chat" and press(task, "tab").refresh
+
+
+def test_enter_on_a_session_row_opens_its_chat_and_on_a_task_row_the_detail():
+    start = tui.reconcile(tui.View(), ("task-a", "harness-b"), ("harness-b",))
+    assert press(start, "enter").tab == "detail"
+    after = press(start, "down", "enter")
+    assert (after.tab, after.chat, after.selected, after.refresh) == ("chat", ("session", "harness-b"), None, True)
+
+
+def test_reconcile_remembers_which_rows_are_session_rows():
+    assert tui.reconcile(view(), ("a", "b"), ("b",)).harness_ids == frozenset({"b"})
+    assert tui.reconcile(view(harness_ids=frozenset({"b"})), ("a", "b")).harness_ids == frozenset()
+
+
+def test_the_console_view_reads_attention_without_writing(tmp_path):
+    root = attention_root(tmp_path)
+    where = attention_locator()
+    with read_only_guard(root.home):
+        overlay_of(root, where=where)
+        tui.read_chat(("session", ASK_SESSION), where, root.transcripts_root)
+
+
 # --- the plain-text fallback -----------------------------------------------------------------
 
 def test_once_lists_tasks_and_details_only_the_named_session(tmp_path):
@@ -452,16 +665,46 @@ def test_once_lists_tasks_and_details_only_the_named_session(tmp_path):
 
 def test_once_without_tasks(tmp_path):
     lines = once(build_fixture_root(tmp_path, [], now=NOW)).splitlines()
-    assert lines[1:] == ["no live tasks"] and lines[0].endswith("0 active  0 idle  0 total")
+    assert lines[1:] == ["no live tasks"] and lines[0].endswith("0 active  0 idle  0 total  waiting: 0")
 
 
 def test_once_cuts_the_goal_to_the_width(tmp_path):
     root = console_root(tmp_path)
     assert "Build the thing [with brackets]" in once(root, width=200)
-    narrow = once(root, width=140)
+    narrow = once(root, width=146)
     assert "Build the thing [with brackets]" not in narrow
-    alpha = next(line for line in narrow.splitlines() if line.startswith("alpha-00"))
+    alpha = next(line for line in narrow.splitlines() if "alpha-00" in line)
     assert alpha.endswith("  ≥$1.50  Build the thing [with b…")
+
+
+def test_once_prints_each_mark_the_session_rows_and_the_count(tmp_path):
+    root = attention_root(tmp_path)
+    plain = once(root, locator=attention_locator())
+    lines = plain.splitlines()
+    assert lines[0].endswith("  waiting: 3")
+    by_name = {name: next(l for l in lines[2:] if name in l) for name in ("alpha-00", "beta-111", "Asker", "Free")}
+    assert by_name["alpha-00"].startswith("?") and by_name["beta-111"].startswith("…")
+    assert by_name["Asker"].startswith("?") and by_name["Free"].startswith("…")
+    assert any(l.startswith("!") and PERMISSION_SESSION in l for l in lines)
+    assert "—" in by_name["Asker"]
+
+
+def test_once_without_a_locator_has_no_session_rows(tmp_path):
+    lines = once(attention_root(tmp_path)).splitlines()
+    assert lines[0].endswith("  waiting: 1")
+    assert not any(ASK_SESSION in l or "Asker" in l for l in lines)
+
+
+def test_tui_once_selects_the_locator_like_the_other_views(tmp_path, capsys, monkeypatch):
+    root = attention_root(tmp_path)
+    chosen = []
+    monkeypatch.setattr(cli.locate, "select_or_none", lambda plugin_dir, name: chosen.append((plugin_dir, name)) or
+                        attention_locator())
+    assert cli.main(cli_args(root, "--once", "--plugin-dir", str(tmp_path), "--locator", "fake")) == 0
+    assert chosen == [(tmp_path, "fake")]
+    out = capsys.readouterr().out
+    # the command runs on the real clock, so the fixture tasks are outside its window: session rows only
+    assert "waiting: 2" in out and "Asker" in out
 
 
 def test_the_console_view_writes_nothing(tmp_path):
@@ -550,6 +793,13 @@ def test_interactive_tui_runs_the_app_with_uv(tmp_path, monkeypatch):
     pairs = dict(zip(argv, argv[1:]))
     assert pairs["--interval"] == "3.0" and pairs["--window-hours"] == "6.0" and pairs["--session"] == ALPHA
     assert pairs["--state-root"] == str(root.state_root) and "--all" in argv
+    assert "--plugin-dir" not in argv and "--locator" not in argv
+
+
+def test_the_app_is_launched_with_the_locator_selection(tmp_path):
+    parsed = cli.build_parser().parse_args(cli_args(console_root(tmp_path), "--plugin-dir", "/p", "--locator", "fake"))
+    pairs = dict(zip(tui.launch_argv(parsed), tui.launch_argv(parsed)[1:]))
+    assert (pairs["--plugin-dir"], pairs["--locator"]) == ("/p", "fake")
 
 
 # --- textual stays in the app layer ----------------------------------------------------------
@@ -615,5 +865,6 @@ def console_section() -> str:
 def test_console_view_section_is_written():
     section = console_section()
     assert "Not written yet." not in section
-    for term in ("tui --once", "--interval", "textual==8.2.8", "uv run", "collapsed", "refresh", "Left", "Right", "Space"):
+    for term in ("tui --once", "--interval", "textual==8.2.8", "uv run", "collapsed", "refresh", "Left", "Right", "Space",
+                 "space", "Chat", "waiting"):
         assert term in section, term

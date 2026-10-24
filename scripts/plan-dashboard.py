@@ -159,6 +159,7 @@ def run_tui(args) -> int:
                 args.state_root, window_hours=args.window_hours, include_all=args.include_all,
                 sessions=args.sessions, cost_log=args.cost_log, transcripts_root=args.transcripts_root,
                 now=dt.datetime.now(dt.timezone.utc), width=shutil.get_terminal_size().columns,
+                locator=locate.select_or_none(args.plugin_dir, args.locator),
             )
         except tui.NoSuchSession as exc:
             return no_such_session(exc.names)

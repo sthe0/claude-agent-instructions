@@ -11,16 +11,22 @@ import datetime as dt
 from pathlib import Path
 
 from lib import config_root
-from plan_dashboard import model
+from plan_dashboard import attention, model
 
 SESSION_ID_WIDTH = 8
 TASK_ID_WIDTH = 24
 BAR_WIDTH = 8
 DEFAULT_INTERVAL_S = 2.0
-OVERVIEW_COLUMNS = ("session", "task", "live", "node", "stage", "diff", "replans", "age", "wall", "cost", "goal")
+OVERVIEW_COLUMNS = ("wait", "session", "task", "live", "node", "stage", "diff", "replans", "age", "wall", "cost",
+                    "goal")
 STATUS_MARKS = {"PASSED": "done", "ACTIVE": "active", "FAILED": "failed", "SKIPPED": "skipped", "PENDING": "pending"}
 NOT_COUNTED = "not counted"
-TABS = ("tasks", "detail")
+TABS = ("tasks", "detail", "chat")
+NO_VALUE = "—"
+WAIT_MARKS = {"choice": "?", "permission": "!", "idle": "…"}
+WAIT_STYLES = {"choice": "bold yellow", "permission": "bold red", "idle": "cyan"}
+NEEDS_YOU = ("choice", "permission")
+ROLE_LABELS = {"user": "you", "assistant": "assistant"}
 
 
 class NoSuchSession(Exception):
@@ -100,34 +106,94 @@ def by_recency_live_first(tasks) -> list[dict]:
     return sorted(recent, key=lambda t: t["liveness"] != "active")
 
 
-def overview_header(snapshot: dict, now: dt.datetime) -> str:
-    """The line above the table: host, time and how many listed tasks are active, idle, in all."""
+def wait_mark(waiting) -> str:
+    """The one-character mark of a waiting value; blank for ``none`` and for ``None`` (no transcript)."""
+    return WAIT_MARKS.get(waiting, "")
+
+
+def row_style(waiting, liveness) -> str:
+    """A rich style for a row: a session that needs the user stands out whatever its liveness, an idle
+    one is quieter, and anything not active fades."""
+    style = WAIT_STYLES.get(waiting, "")
+    if liveness in ("idle", "stale") and waiting not in NEEDS_YOU:
+        style = f"{style} dim".strip()
+    return style
+
+
+def _waiting_of(attention_payload, task_id) -> str | None:
+    overlay = ((attention_payload or {}).get("tasks") or {}).get(task_id)
+    return overlay.get("waiting") if isinstance(overlay, dict) else None
+
+
+def _session_rows(attention_payload) -> list[dict]:
+    return list((attention_payload or {}).get("sessions") or [])
+
+
+def waiting_count(snapshot: dict, attention_payload) -> int:
+    """How many rows of the table need the user: tasks and session rows whose waiting is a choice or a
+    permission prompt. An idle session, a working one and one without a transcript are not counted."""
+    tasks = sum(1 for t in snapshot["tasks"] if _waiting_of(attention_payload, t["session_id"]) in NEEDS_YOU)
+    return tasks + sum(1 for row in _session_rows(attention_payload) if row.get("waiting") in NEEDS_YOU)
+
+
+def overview_header(snapshot: dict, now: dt.datetime, attention_payload=None) -> str:
+    """The line above the table: host, time, how many listed tasks are active, idle, in all, and
+    how many rows wait for the user."""
     tasks = snapshot["tasks"]
     counts = {band: sum(1 for t in tasks if t["liveness"] == band) for band in ("active", "idle")}
     clock = f"{now:%Y-%m-%d %H:%M:%S %Z}".strip()
-    return f"{snapshot['hostname']}  {clock}  {counts['active']} active  {counts['idle']} idle  {len(tasks)} total"
+    return (f"{snapshot['hostname']}  {clock}  {counts['active']} active  {counts['idle']} idle  {len(tasks)} total"
+            f"  waiting: {waiting_count(snapshot, attention_payload)}")
 
 
-def overview_rows(snapshot: dict, now: dt.datetime) -> list[dict]:
-    """One row per task, active first and then the most recent: ``session_id`` and the ``cells``
-    of ``OVERVIEW_COLUMNS``."""
+def overview_rows(snapshot: dict, now: dt.datetime, attention_payload=None) -> list[dict]:
+    """One row per task, active first and then the most recent, then one per session the locator knows
+    that no task owns. A row is its ``session_id`` (a session row's harness id), the ``cells`` of
+    ``OVERVIEW_COLUMNS``, its ``kind`` (``task`` or ``session``), ``waiting`` and ``style``."""
     rows = []
     for task in by_recency_live_first(snapshot["tasks"]):
         sid = task["session_id"]
+        waiting = _waiting_of(attention_payload, sid)
+        mark = wait_mark(waiting)
         since = _since(now, task["last_activity"])
         age = "?" if since is None else f"{since} ago"
         if not task["readable"]:
-            cells = (sid[:SESSION_ID_WIDTH], "-", task["liveness"], "?", "stage ?/?", "-", "-", age, "-", "-",
+            cells = (mark, sid[:SESSION_ID_WIDTH], "-", task["liveness"], "?", "stage ?/?", "-", "-", age, "-", "-",
                      f"unreadable: {task['reason']}")
         else:
             totals = task["totals"]
-            cells = (sid[:SESSION_ID_WIDTH], one_line(task["task_id"], TASK_ID_WIDTH) or "-", task["liveness"],
+            cells = (mark, sid[:SESSION_ID_WIDTH], one_line(task["task_id"], TASK_ID_WIDTH) or "-", task["liveness"],
                      task["node"] or "?", _stage_progress(task["stages_done"], task["stages_total"]),
                      _difficulty(task), str(task["replans"]), age,
                      _wall(totals["wall_clock_s"], totals["estimate"]["wall_clock_s"]), cost_text(totals),
                      one_line(task["goal"]))
-        rows.append({"session_id": sid, "cells": cells})
+        rows.append({"session_id": sid, "cells": cells, "kind": "task", "waiting": waiting,
+                     "style": row_style(waiting, task["liveness"])})
+    for entry in _session_rows(attention_payload):
+        harness, waiting = entry["harness_session"], entry.get("waiting")
+        since = _since(now, entry.get("since"))
+        cells = (wait_mark(waiting), entry.get("name") or harness, NO_VALUE, NO_VALUE, NO_VALUE, NO_VALUE, NO_VALUE,
+                 NO_VALUE, NO_VALUE if since is None else f"{since} ago", NO_VALUE, NO_VALUE,
+                 one_line(entry.get("cwd")))
+        rows.append({"session_id": harness, "cells": cells, "kind": "session", "waiting": waiting,
+                     "style": row_style(waiting, None)})
     return rows
+
+
+def chat_lines(chat: dict | None) -> list[str]:
+    """The Chat tab as plain lines: a title, then each entry as ``you`` / ``assistant`` (with ``[tool]``
+    for a tool call) over its text indented two spaces. An ``AskUserQuestion`` entry carries its
+    question and option labels as that text."""
+    if chat is None:
+        return ["no chat selected"]
+    lines = [f"chat: {chat.get('harness_session') or 'no session'}"]
+    for entry in chat["entries"]:
+        tool = f" [{entry['tool']}]" if entry.get("tool") else ""
+        lines.append(f"{ROLE_LABELS.get(entry['role'], entry['role'])}{tool}")
+        lines += [f"  {line}" for line in entry["text"].splitlines()]
+    if not chat["entries"]:
+        lines.append("no messages yet")
+    return lines
 
 
 def _node(label: str, children=(), key: str | None = None) -> dict:
@@ -193,11 +259,22 @@ def render_lines(tree: list[dict], indent: int = 0) -> list[str]:
 
 
 TREE_KEYS = frozenset({"up", "down", "j", "k", "enter", "space", "left", "right"})
+CHAT_KEYS = frozenset({"up", "down", "j", "k"})
 
 
 def key_owner(tab: str, key: str) -> str:
-    """``tree`` for a key the Detail tab's tree handles itself, ``global`` for one the view handles."""
-    return "tree" if tab == "detail" and key in TREE_KEYS else "global"
+    """``tree`` for a key the Detail tab's tree handles itself, ``chat`` for one the Chat tab scrolls
+    with, ``global`` for one the view handles."""
+    if tab == "detail" and key in TREE_KEYS:
+        return "tree"
+    if tab == "chat" and key in CHAT_KEYS:
+        return "chat"
+    return "global"
+
+
+def scroll_step(key: str) -> int:
+    """Lines a Chat key scrolls: down for ``down`` and ``j``, up for ``up`` and ``k``, nothing else."""
+    return {"down": 1, "j": 1, "up": -1, "k": -1}.get(key, 0)
 
 
 def tree_action(key: str, *, expandable: bool, expanded: bool, has_parent: bool) -> str | None:
@@ -249,8 +326,10 @@ def surviving_path(nodes: list[dict], path: tuple[str, ...]) -> tuple[str, ...]:
 
 @dataclasses.dataclass(frozen=True)
 class View:
-    """What the screen is showing; ``session_ids`` are the rows of the Tasks tab in order.
-    ``refresh`` and ``quit`` are requests the last key made, for the app to act on."""
+    """What the screen is showing; ``session_ids`` are the rows of the Tasks tab in order, ``harness_ids``
+    those of them that are session rows (no task). ``chat`` is what the Chat tab shows, ``("task", id)``
+    or ``("session", harness id)``. ``refresh`` and ``quit`` are requests the last key made, for the
+    app to act on."""
     tab: str = "tasks"
     cursor: int = 0
     session_ids: tuple[str, ...] = ()
@@ -258,6 +337,15 @@ class View:
     include_all: bool = False
     refresh: bool = False
     quit: bool = False
+    harness_ids: frozenset[str] = frozenset()
+    chat: tuple[str, str] | None = None
+
+
+def open_row(view: View, session_id: str) -> View:
+    """``view`` with the row ``session_id`` opened: a task on the Detail tab, a session row on its Chat."""
+    if session_id in view.harness_ids:
+        return dataclasses.replace(view, tab="chat", chat=("session", session_id), refresh=True)
+    return dataclasses.replace(view, tab="detail", selected=session_id, chat=("task", session_id), refresh=True)
 
 
 def handle_key(view: View, key: str) -> View:
@@ -268,12 +356,13 @@ def handle_key(view: View, key: str) -> View:
     if key in ("up", "k") and view.tab == "tasks":
         return dataclasses.replace(view, cursor=max(view.cursor - 1, 0))
     if key == "enter" and view.tab == "tasks" and 0 <= view.cursor <= last:
-        return dataclasses.replace(view, tab="detail", selected=view.session_ids[view.cursor], refresh=True)
+        return open_row(view, view.session_ids[view.cursor])
     if key in ("escape", "backspace"):
         return dataclasses.replace(view, tab="tasks")
     if key == "tab":
         other = TABS[(TABS.index(view.tab) + 1) % len(TABS)]
-        return dataclasses.replace(view, tab=other, refresh=other == "detail" and view.selected is not None)
+        wanted = view.selected if other == "detail" else view.chat if other == "chat" else None
+        return dataclasses.replace(view, tab=other, refresh=wanted is not None)
     if key == "a":
         return dataclasses.replace(view, include_all=not view.include_all, refresh=True)
     if key == "r":
@@ -283,13 +372,13 @@ def handle_key(view: View, key: str) -> View:
     return view
 
 
-def reconcile(view: View, session_ids) -> View:
-    """``view`` over a re-read task list: the cursor stays on the task it was on, wherever the
-    re-sort moved it, and is clamped to the last row only when that task is gone."""
+def reconcile(view: View, session_ids, harness_ids=()) -> View:
+    """``view`` over a re-read row list: the cursor stays on the row it was on, wherever the
+    re-sort moved it, and is clamped to the last row only when that row is gone."""
     ids = tuple(session_ids)
     on = view.session_ids[view.cursor] if 0 <= view.cursor < len(view.session_ids) else None
     cursor = ids.index(on) if on in ids else min(view.cursor, max(len(ids) - 1, 0))
-    return dataclasses.replace(view, session_ids=ids, cursor=cursor)
+    return dataclasses.replace(view, session_ids=ids, cursor=cursor, harness_ids=frozenset(harness_ids))
 
 
 def due(now: dt.datetime, last_collect: dt.datetime | None, interval: float) -> bool:
@@ -307,16 +396,35 @@ def _table(rows: list[dict], width: int) -> list[str]:
     return lines
 
 
-def once(state_root, *, window_hours, include_all, sessions, cost_log, transcripts_root, now, width) -> str:
-    """The plain-text console view: the task table, then each ``--session``'s detail tree.
+def read_attention(snapshot: dict, locator, transcripts_root) -> dict:
+    """The attention overlay payload for the listed tasks: what the Tasks tab marks and counts."""
+    return attention.event_payload(*attention.collect([t["session_id"] for t in snapshot["tasks"]], locator,
+                                                      transcripts_root))
+
+
+def read_chat(target, locator, transcripts_root) -> dict | None:
+    """The chat tail the Chat tab shows for ``target`` (see ``View.chat``); None when nothing is selected."""
+    if target is None:
+        return None
+    kind, ident = target
+    if kind == "task":
+        return attention.task_chat(ident, locator, transcripts_root)
+    return attention.chat_tail(ident, locator, transcripts_root)
+
+
+def once(state_root, *, window_hours, include_all, sessions, cost_log, transcripts_root, now, width,
+         locator=None) -> str:
+    """The plain-text console view: the task table, each task's mark, the session rows and the
+    ``waiting: N`` count, then each ``--session``'s detail tree.
     Raises ``NoSuchSession`` for a ``--session`` that names no task."""
     snapshot = model.collect(state_root, now=now, window_hours=window_hours, include_all=include_all,
                              sessions=sessions, cost_log=cost_log)
     missing = missing_sessions(snapshot, sessions)
     if missing:
         raise NoSuchSession(missing)
-    rows = overview_rows(snapshot, now)
-    lines = [overview_header(snapshot, now), *(_table(rows, width) if rows else ["no live tasks"])]
+    overlay = read_attention(snapshot, locator, transcripts_root)
+    rows = overview_rows(snapshot, now, overlay)
+    lines = [overview_header(snapshot, now, overlay), *(_table(rows, width) if rows else ["no live tasks"])]
     pinned = {config_root.sanitize_session_id(s) for s in sessions or ()}
     shown = [task for task in snapshot["tasks"] if task["session_id"] in pinned]
     children = model.child_index(state_root) if shown else None
@@ -338,4 +446,7 @@ def launch_argv(args) -> list[str]:
         argv += ["--session", session]
     if args.transcripts_root is not None:
         argv += ["--transcripts-root", str(args.transcripts_root)]
+    for option, value in (("--plugin-dir", args.plugin_dir), ("--locator", args.locator)):
+        if value is not None:
+            argv += [option, str(value)]
     return argv

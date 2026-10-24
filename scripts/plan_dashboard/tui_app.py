@@ -9,6 +9,7 @@ Core file that imports textual; every row, label and key decision comes from ``t
 """
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import datetime as dt
 import importlib.util
@@ -22,15 +23,17 @@ if str(SCRIPTS) not in sys.path:
 from rich.text import Text  # noqa: E402
 from textual.app import App, ComposeResult  # noqa: E402
 from textual.binding import Binding  # noqa: E402
+from textual.containers import VerticalScroll  # noqa: E402
 from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane, Tree  # noqa: E402
 
-from plan_dashboard import model, tui  # noqa: E402
+from plan_dashboard import locate, model, tui  # noqa: E402
 
 TICK_S = 0.5
 KEYS = (
     ("up", "Up"), ("down", "Down"), ("j", "Down"), ("k", "Up"), ("enter", "Open"), ("escape", "Back"),
     ("backspace", "Back"), ("tab", "Tab"), ("a", "All/live"), ("r", "Refresh"), ("q", "Quit"),
 )
+KEY_ACTION_OWNERS = {"key": "global", "tree_key": "tree", "chat_key": "chat"}
 
 
 def utc_now() -> dt.datetime:
@@ -44,13 +47,37 @@ def refresh_if_due(app: "DashboardApp") -> None:
 
 def route_key(app: "DashboardApp", action: str, parameters) -> bool:
     """Whether a key binding is live: the priority ones step aside for the keys the Detail tab's tree
-    owns, and the tree's own bindings are live only there."""
-    owner = tui.key_owner(app.view.tab, parameters[0] if parameters else "")
-    return owner == ("tree" if action == "tree_key" else "global")
+    and the Chat tab's scroll own, and each of those two is live only on its tab."""
+    return tui.key_owner(app.view.tab, parameters[0] if parameters else "") == KEY_ACTION_OWNERS[action]
 
 
 def focus_for(app: "DashboardApp", tab: str) -> None:
-    (app.query_one(Tree) if tab == "detail" else app.query_one(DataTable)).focus()
+    widget = {"detail": Tree, "chat": VerticalScroll}.get(tab, DataTable)
+    app.query_one(widget).focus()
+
+
+def row_cells(row: dict) -> list[Text]:
+    return [Text(cell, style=row["style"]) for cell in row["cells"]]
+
+
+def chat_if_open(app: "DashboardApp", view: tui.View) -> dict | None:
+    """The chat tail to show, read only while the Chat tab is open on something."""
+    if view.tab != "chat" or view.chat is None:
+        return None
+    return tui.read_chat(view.chat, app.locator, app.transcripts_root)
+
+
+def scroll_chat(scroll: VerticalScroll, key: str) -> None:
+    scroll.scroll_relative(y=tui.scroll_step(key), animate=False)
+
+
+def show_chat(scroll: VerticalScroll, body: Static, chat: dict | None) -> None:
+    """Put the chat lines in ``body``; a reader who was at the end keeps following the tail, one who
+    scrolled up stays where they are."""
+    at_end = scroll.scroll_y >= scroll.max_scroll_y
+    body.update(Text("\n".join(tui.chat_lines(chat))))
+    if at_end:
+        scroll.call_after_refresh(scroll.scroll_end, animate=False)
 
 
 def tree_state_for(state: tui.TreeState, task: str | None) -> tui.TreeState:
@@ -119,13 +146,15 @@ class DashboardApp(App):
     TITLE = "plan dashboard"
     BINDINGS = [Binding(key, f"key('{key}')", label, priority=True, show=key in ("enter", "escape", "a", "r", "q"))
                 for key, label in KEYS] + [Binding(key, f"tree_key('{key}')", show=False)
-                                           for key in ("j", "k", "space", "left", "right")]
+                                           for key in ("j", "k", "space", "left", "right")] + [
+        Binding(key, f"chat_key('{key}')", priority=True, show=False) for key in sorted(tui.CHAT_KEYS)]
 
     def __init__(self, *, state_root, cost_log, transcripts_root=None, window_hours=24.0, include_all=False,
-                 sessions=(), interval=tui.DEFAULT_INTERVAL_S, clock=utc_now):
+                 sessions=(), interval=tui.DEFAULT_INTERVAL_S, clock=utc_now, locator=None):
         super().__init__()
         self.state_root, self.cost_log, self.transcripts_root = state_root, cost_log, transcripts_root
         self.window_hours, self.sessions, self.interval, self.clock = window_hours, list(sessions), interval, clock
+        self.locator = locator
         self.view = tui.View(include_all=include_all)
         self.last_collect: dt.datetime | None = None
         self._loading = False
@@ -133,7 +162,7 @@ class DashboardApp(App):
         self.tree_task: str | None = None
 
     def check_action(self, action: str, parameters) -> bool:
-        if action in ("key", "tree_key"):
+        if action in KEY_ACTION_OWNERS:
             return route_key(self, action, parameters)
         return True
 
@@ -145,6 +174,9 @@ class DashboardApp(App):
                 yield DataTable(cursor_type="row", zebra_stripes=True)
             with TabPane("Detail", id="detail"):
                 yield Tree("select a task on the Tasks tab")
+            with TabPane("Chat", id="chat"):
+                with VerticalScroll(id="chat-scroll"):
+                    yield Static(Text("\n".join(tui.chat_lines(None))), id="chat-body")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -180,7 +212,13 @@ class DashboardApp(App):
         except Exception as exc:
             self.call_from_thread(self._failed, exc)
             return
-        self.call_from_thread(self._apply, snapshot, detail, now, bool(view.selected) and detail is None)
+        try:
+            overlay = tui.read_attention(snapshot, self.locator, self.transcripts_root)
+            chat = chat_if_open(self, view)
+        except Exception as exc:
+            self.call_from_thread(self._failed, exc)
+            return
+        self.call_from_thread(self._apply, snapshot, detail, now, bool(view.selected) and detail is None, overlay, chat)
 
     def _finish_load(self) -> None:
         self._loading = False
@@ -192,17 +230,20 @@ class DashboardApp(App):
         self.sub_title = f"read failed: {exc}"
         self._finish_load()
 
-    def _apply(self, snapshot: dict, detail: dict | None, now: dt.datetime, selection_gone: bool = False) -> None:
-        rows = tui.overview_rows(snapshot, now)
-        self.query_one("#overview-head", Static).update(Text(tui.overview_header(snapshot, now)))
+    def _apply(self, snapshot: dict, detail: dict | None, now: dt.datetime, selection_gone: bool = False,
+               overlay: dict | None = None, chat: dict | None = None) -> None:
+        rows = tui.overview_rows(snapshot, now, overlay)
+        self.query_one("#overview-head", Static).update(Text(tui.overview_header(snapshot, now, overlay)))
         ids = tuple(row["session_id"] for row in rows)
-        self.view = tui.reconcile(self.view, ids)
+        self.view = tui.reconcile(self.view, ids, (row["session_id"] for row in rows if row["kind"] == "session"))
         table = self.query_one(DataTable)
         table.clear()
         for row in rows:
-            table.add_row(*(Text(cell) for cell in row["cells"]), key=row["session_id"])
+            table.add_row(*row_cells(row), key=row["session_id"])
         if ids:
             table.move_cursor(row=self.view.cursor)
+        if chat is not None or self.view.chat is None:
+            show_chat(self.query_one("#chat-scroll", VerticalScroll), self.query_one("#chat-body", Static), chat)
         if detail is not None or selection_gone:
             nodes = tui.detail_tree(detail, now) if detail is not None else tui.missing_detail_tree()
             task = detail["session_id"] if detail is not None else None
@@ -219,6 +260,9 @@ class DashboardApp(App):
 
     def action_tree_key(self, key: str) -> None:
         apply_tree_key(self.query_one(Tree), key)
+
+    def action_chat_key(self, key: str) -> None:
+        scroll_chat(self.query_one("#chat-scroll", VerticalScroll), key)
 
     def dispatch_key(self, key: str) -> None:
         previous = self.view
@@ -257,12 +301,13 @@ def _load_cli():
 
 
 def main(argv=None) -> int:
-    parser = _load_cli().shared_parser()
+    cli = _load_cli()
+    parser = argparse.ArgumentParser(parents=[cli.shared_parser(), cli.locator_parser()])
     parser.add_argument("--interval", type=float, default=tui.DEFAULT_INTERVAL_S)
     args = parser.parse_args(argv)
     DashboardApp(state_root=args.state_root, cost_log=args.cost_log, transcripts_root=args.transcripts_root,
                  window_hours=args.window_hours, include_all=args.include_all, sessions=args.sessions,
-                 interval=args.interval).run()
+                 interval=args.interval, locator=locate.select_or_none(args.plugin_dir, args.locator)).run()
     return 0
 
 

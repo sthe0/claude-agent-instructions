@@ -10,6 +10,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,13 +19,14 @@ if os.environ.get("PLAN_DASHBOARD_REQUIRE_TEXTUAL") == "1":
 else:
     pytest.importorskip("textual", exc_type=ImportError)
 
-from textual.widgets import DataTable, TabbedContent, Tree  # noqa: E402
+from textual.containers import VerticalScroll  # noqa: E402
+from textual.widgets import DataTable, Static, TabbedContent, Tree  # noqa: E402
 
-from plan_dashboard import model, tui  # noqa: E402
+from plan_dashboard import attention, model, tui  # noqa: E402
 from plan_dashboard.tui_app import DashboardApp  # noqa: E402
 from plan_dashboard_fixtures import build_fixture_root, read_only_guard  # noqa: E402
 from plan_dashboard_support import (  # noqa: E402,F401
-    ALPHA, BETA, NOW, STALE, at, console_root, event, isolated_home, make_state,
+    ALPHA, BETA, NOW, STALE, at, console_root, event, isolated_home, iso, make_state,
 )
 
 SIZE = (150, 40)
@@ -107,7 +109,7 @@ def test_tasks_tab_lists_the_live_tasks(tmp_path):
         assert table_cells(app, by_id["broken"])["stage"] == "stage ?/?"
         assert "3 live tasks" in app.sub_title
         head = str(app.query_one("#overview-head").render())
-        assert head.endswith("3 active  0 idle  3 total") and "2026-10-22 12:00:00 UTC" in head
+        assert head.endswith("3 active  0 idle  3 total  waiting: 0") and "2026-10-22 12:00:00 UTC" in head
 
     run(scenario, root)
 
@@ -156,6 +158,8 @@ def test_escape_goes_back_and_tab_returns_to_the_detail(tmp_path):
         await pilot.press("tab")
         await settle(app, pilot)
         assert app.query_one(TabbedContent).active == "detail"
+        await pilot.press("tab")
+        assert app.query_one(TabbedContent).active == "chat"
         await pilot.press("tab")
         assert app.query_one(TabbedContent).active == "tasks"
 
@@ -306,7 +310,8 @@ def test_every_key_of_the_pure_layer_is_bound():
     bound = {binding.key for binding in DashboardApp.BINDINGS}
     assert {"up", "down", "j", "k", "enter", "escape", "backspace", "tab", "a", "r", "q"} <= bound
     assert {"j", "k", "space", "left", "right"} <= {b.key for b in DashboardApp.BINDINGS if "tree_key" in b.action}
-    assert tui.TABS == ("tasks", "detail")
+    assert tui.TABS == ("tasks", "detail", "chat")
+    assert {b.key for b in DashboardApp.BINDINGS if "chat_key" in b.action} == set(tui.CHAT_KEYS)
 
 
 # --- the Detail tree: collapsed start, keyboard navigation, state kept across a refresh -------------
@@ -379,6 +384,9 @@ def test_tab_and_a_click_on_the_tab_focus_the_tree_and_escape_the_table(tmp_path
         await pilot.press("tab")
         await settle(app, pilot)
         assert app.focused is tree_of(app)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "chat" and app.focused is app.query_one(VerticalScroll)
         await pilot.press("tab")
         await settle(app, pilot)
         assert app.focused is app.query_one(DataTable)
@@ -526,3 +534,190 @@ def test_the_tree_pilot_runs_inside_the_read_only_guard(tmp_path):
 
     with read_only_guard(root.home):
         run(scenario, root)
+
+
+# --- waiting marks, session rows and the Chat tab ---------------------------------------------------
+
+PROJECT = "-console-project"
+ASK_SESSION, PERMISSION_SESSION, FREE_SESSION = "ask-session", "permission-session", "free-session"
+QUESTION = {"questions": [{"header": "HEADER-TEXT", "question": "Which way?", "multiSelect": False, "options": [
+    {"label": "Left", "description": "DESC-LEFT"}, {"label": "Right", "description": "DESC-RIGHT"}]}]}
+
+
+@pytest.fixture(autouse=True)
+def fresh_attention_cache():
+    attention._CACHE.clear()
+    yield
+    attention._CACHE.clear()
+
+
+def write_fixture_transcript(root, session, entries):
+    path = root.transcripts_root / PROJECT / f"{session}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
+    return path
+
+
+def append_fixture_transcript(root, session, entries):
+    with open(root.transcripts_root / PROJECT / f"{session}.jsonl", "a", encoding="utf-8") as handle:
+        handle.write("".join(json.dumps(entry) + "\n" for entry in entries))
+
+
+def line(role, minutes, content, stop=None):
+    message = {"role": role, "content": content}
+    if stop:
+        message["stop_reason"] = stop
+    return {"type": role, "timestamp": iso(at(minutes=minutes)), "message": message}
+
+
+def tool_use(tool_id, name, tool_input=None):
+    return {"type": "tool_use", "id": tool_id, "name": name, "input": tool_input or {}}
+
+
+ASKING = [line("user", 10, "go on"), line("assistant", 9, [tool_use("q1", "AskUserQuestion", QUESTION)], "tool_use")]
+IDLE = [line("user", 10, "go on"), line("assistant", 9, [{"type": "text", "text": "done"}], "end_turn")]
+WORKING = [line("user", 10, "go on"), line("assistant", 9, [tool_use("t1", "Bash", {"command": "ls"})], "tool_use")]
+
+
+def fake_locator(sessions, *, permission=()):
+    return SimpleNamespace(NAME="fake", sessions=lambda: sessions, permission_wait=lambda harness: harness in permission)
+
+
+def attention_root(tmp_path, alpha=ASKING):
+    root = console_root(tmp_path)
+    write_fixture_transcript(root, ALPHA, alpha)
+    write_fixture_transcript(root, BETA, IDLE)
+    write_fixture_transcript(root, ASK_SESSION, ASKING)
+    write_fixture_transcript(root, PERMISSION_SESSION, WORKING)
+    write_fixture_transcript(root, FREE_SESSION, IDLE)
+    return root
+
+
+def attention_locator():
+    return fake_locator([
+        {"harness_session": ASK_SESSION, "cwd": "/work/ask", "name": "Asker"},
+        {"harness_session": PERMISSION_SESSION, "cwd": None, "name": None},
+        {"harness_session": FREE_SESSION, "cwd": "/work/free", "name": "Free"},
+    ], permission=(PERMISSION_SESSION,))
+
+
+def guarded(root):
+    """Engine state is what the app must leave alone; transcripts stay writable so a test can grow one."""
+    return read_only_guard(root.state_root.parent)
+
+
+def row_of(app, sid):
+    return table_ids(app).index(sid)
+
+
+def chat_text(app):
+    return str(app.query_one("#chat-body", Static).render())
+
+
+def test_rows_carry_the_waiting_mark_style_and_the_header_count(tmp_path):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        marks = {sid: table_cells(app, row_of(app, sid))["wait"] for sid in table_ids(app)}
+        assert (marks[ALPHA], marks[BETA], marks["broken"]) == ("?", "…", "")
+        assert (marks[ASK_SESSION], marks[PERMISSION_SESSION], marks[FREE_SESSION]) == ("?", "!", "…")
+        table = app.query_one(DataTable)
+        assert table.get_row_at(row_of(app, ALPHA))[0].style == tui.WAIT_STYLES["choice"]
+        assert table.get_row_at(row_of(app, PERMISSION_SESSION))[0].style == tui.WAIT_STYLES["permission"]
+        assert table.get_row_at(row_of(app, "broken"))[0].style == ""
+        head = str(app.query_one("#overview-head").render())
+        assert head.endswith("waiting: 3")
+
+    with guarded(root):
+        run(scenario, root, locator=attention_locator())
+
+
+def test_session_rows_show_a_dash_where_a_task_has_its_columns(tmp_path):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        cells = table_cells(app, row_of(app, ASK_SESSION))
+        assert cells["session"] == "Asker" and {cells[name] for name in ("stage", "cost")} == {tui.NO_VALUE}
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_the_mark_and_the_chat_follow_a_transcript_that_grows_after_a_tick(tmp_path):
+    root = attention_root(tmp_path, alpha=WORKING)
+    clock = Clock()
+
+    async def scenario(app, pilot):
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == ""
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "chat"
+        assert "Bash" in chat_text(app) and "Which way?" not in chat_text(app)
+        append_fixture_transcript(root, ALPHA, [ASKING[1]])
+        clock.advance(5)
+        await pilot.pause(1.2)
+        await settle(app, pilot)
+        assert "Which way?" in chat_text(app) and "- Left" in chat_text(app)
+        await pilot.press("escape")
+        await settle(app, pilot)
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "?"
+
+    with guarded(root):
+        run(scenario, root, clock=clock, interval=1.0, locator=attention_locator())
+
+
+def test_j_k_up_and_down_scroll_the_chat_and_leave_the_task_cursor(tmp_path):
+    long = [line("user", 30, "go on")] + [
+        line("assistant", 29 - i // 4, [{"type": "text", "text": f"entry {i}\nsecond line {i}"}], "end_turn")
+        for i in range(40)]
+    root = attention_root(tmp_path, alpha=long)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        cursor = (app.view.cursor, app.query_one(DataTable).cursor_row)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        await pilot.pause(0.2)
+        scroll = app.query_one(VerticalScroll)
+        assert scroll.max_scroll_y > 4 and scroll.scroll_y == scroll.max_scroll_y
+        for key, sign in (("k", -1), ("up", -1), ("j", 1), ("down", 1)):
+            before = scroll.scroll_y
+            await pilot.press(key)
+            await pilot.pause(0.1)
+            assert (scroll.scroll_y - before) * sign > 0, key
+        assert (app.view.cursor, app.query_one(DataTable).cursor_row) == cursor
+        assert app.query_one(TabbedContent).active == "chat"
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_escape_leaves_the_chat_for_the_tasks(tmp_path):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        await pilot.press("escape")
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "tasks" and app.focused is app.query_one(DataTable)
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_enter_on_a_session_row_opens_its_chat(tmp_path):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        target = row_of(app, ASK_SESSION)
+        while app.view.cursor != target:
+            await pilot.press("down")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "chat"
+        text = chat_text(app)
+        assert f"chat: {ASK_SESSION}" in text and "Which way?" in text and "- Left" in text and "- Right" in text
+        assert "HEADER-TEXT" not in text and "DESC-LEFT" not in text
+
+    with guarded(root):
+        run(scenario, root, locator=attention_locator())
