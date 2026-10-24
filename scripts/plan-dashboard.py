@@ -2,7 +2,12 @@
 """Plan dashboard command line: read-only views of the live agentctl tasks.
 
 Subcommand ``snapshot`` prints every selected task with its totals as JSON or text;
-``--detail`` adds each task's stages, difficulties, history tail and phase tree. Subcommand
+``--detail`` adds each task's stages, difficulties, history tail and phase tree; ``--attention``
+adds each task's waiting state and a top-level ``sessions`` list; ``--chat ID`` prints the chat
+tail of a task or of a listed session. Subcommand ``locate`` selects the machine-local
+session-locator plugin (``--plugin-dir``, ``--locator``, also accepted by ``snapshot``, ``tui`` and
+``web``): ``--health`` runs its local health check (exit 0 healthy, 1 unhealthy, 3 none or several
+without ``--locator``), ``--session ID`` reports what it knows of that task's session. Subcommand
 ``tui`` is the console view: interactive through ``uv run`` (exit 4 without uv), or plain
 text with ``--once``. Subcommand ``web`` serves the read-only page on the loopback address
 (``--port``; exit 5 when it cannot listen; ``--self-test`` probes a throwaway server).
@@ -27,9 +32,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from agentctl import cost  # noqa: E402
 from lib import config_root  # noqa: E402
-from plan_dashboard import model, publish, tui, web  # noqa: E402
+from plan_dashboard import attention, locate, model, publish, tui, web  # noqa: E402
 
 EXIT_NO_SUCH_SESSION = 3
+EXIT_NO_LOCATOR = 3
 EXIT_NEEDS_UV = 4
 EXIT_CANNOT_LISTEN = 5
 EXIT_PUBLISHER = 6
@@ -48,19 +54,30 @@ def shared_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def locator_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--plugin-dir", type=Path, default=None)
+    parser.add_argument("--locator", default=None)
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="plan-dashboard", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    snapshot = sub.add_parser("snapshot", parents=[shared_parser()])
+    snapshot = sub.add_parser("snapshot", parents=[shared_parser(), locator_parser()])
     snapshot.add_argument("--format", choices=("json", "text"), default="json")
     snapshot.add_argument("--detail", action="store_true")
-    console = sub.add_parser("tui", parents=[shared_parser()])
+    snapshot.add_argument("--attention", action="store_true")
+    snapshot.add_argument("--chat", metavar="ID", default=None)
+    console = sub.add_parser("tui", parents=[shared_parser(), locator_parser()])
     console.add_argument("--once", action="store_true")
     console.add_argument("--interval", type=float, default=tui.DEFAULT_INTERVAL_S)
-    page = sub.add_parser("web", parents=[shared_parser()])
+    page = sub.add_parser("web", parents=[shared_parser(), locator_parser()])
     page.add_argument("--port", type=int, default=DEFAULT_PORT)
     page.add_argument("--interval", type=float, default=web.DEFAULT_INTERVAL_S)
     page.add_argument("--self-test", action="store_true")
+    where = sub.add_parser("locate", parents=[shared_parser(), locator_parser()])
+    where.add_argument("--health", action="store_true")
     pub = sub.add_parser("publish", parents=[shared_parser()])
     mode = pub.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
@@ -155,7 +172,8 @@ def run_tui(args) -> int:
 
 def run_web(args) -> int:
     options = dict(window_hours=args.window_hours, include_all=args.include_all, sessions=args.sessions,
-                   cost_log=args.cost_log, transcripts_root=args.transcripts_root)
+                   cost_log=args.cost_log, transcripts_root=args.transcripts_root,
+                   locator=locate.select_or_none(args.plugin_dir, args.locator))
 
     def announce(server):
         print(f"plan dashboard on http://{web.LOOPBACK}:{server.port}/ (loopback only; "
@@ -173,6 +191,51 @@ def run_web(args) -> int:
     except KeyboardInterrupt:
         pass
     return 0
+
+
+def run_locate(args) -> int:
+    try:
+        locator = locate.select(args.plugin_dir, args.locator)
+    except locate.LocatorError as exc:
+        print(f"plan-dashboard: {exc}", file=sys.stderr)
+        return EXIT_NO_LOCATOR
+    name = locate.name_of(locator)
+    if args.health:
+        ok, detail = locate.check_health(locator)
+        print(f"locator {name}: {'ok' if ok else 'unhealthy'}{': ' + detail if detail else ''}")
+        return 0 if ok else 1
+    print(f"locator: {name}")
+    print("hooks: " + ", ".join(locate.defined_hooks(locator)))
+    for session in args.sessions:
+        harness, path, _ = attention.bind_session(session, locator, args.transcripts_root)
+        waiting = attention.task_overlay(session, locator, args.transcripts_root)["waiting"]
+        target = locate.jump_target(locator, harness) if harness else None
+        print(f"session {session}")
+        print(f"  harness session: {harness or 'none'}")
+        print(f"  transcript: {'found' if path else 'not found'}")
+        print(f"  waiting: {waiting or 'unknown'}")
+        print(f"  jump: {target['label'] + ' (return: ' + target['return_hint'] + ')' if target else 'no jump target'}")
+    return 0
+
+
+def add_attention(snapshot: dict, args) -> None:
+    locator = locate.select_or_none(args.plugin_dir, args.locator)
+    overlays, rows = attention.collect([t["session_id"] for t in snapshot["tasks"]], locator, args.transcripts_root)
+    for task in snapshot["tasks"]:
+        task["attention"] = overlays[task["session_id"]]
+    snapshot["sessions"] = rows
+
+
+def run_chat(snapshot: dict, args) -> int:
+    locator = locate.select_or_none(args.plugin_dir, args.locator)
+    if any(t["session_id"] == args.chat for t in snapshot["tasks"]):
+        print(model.to_json(attention.task_chat(args.chat, locator, args.transcripts_root)))
+        return 0
+    _, rows = attention.collect([t["session_id"] for t in snapshot["tasks"]], locator, args.transcripts_root)
+    if any(row["harness_session"] == args.chat for row in rows):
+        print(model.to_json(attention.chat_tail(args.chat, locator, args.transcripts_root)))
+        return 0
+    return no_such_session([args.chat])
 
 
 def run_publish(args) -> int:
@@ -224,6 +287,8 @@ def main(argv=None) -> int:
         return run_web(args)
     if args.command == "publish":
         return run_publish(args)
+    if args.command == "locate":
+        return run_locate(args)
     now = dt.datetime.now(dt.timezone.utc)
     snapshot = model.collect(
         args.state_root, now=now, window_hours=args.window_hours, include_all=args.include_all,
@@ -232,6 +297,10 @@ def main(argv=None) -> int:
     missing = tui.missing_sessions(snapshot, args.sessions)
     if missing:
         return no_such_session(missing)
+    if args.chat is not None:
+        return run_chat(snapshot, args)
+    if args.attention:
+        add_attention(snapshot, args)
     if args.detail:
         children = model.child_index(args.state_root)
         for task in snapshot["tasks"]:

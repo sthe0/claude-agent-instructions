@@ -265,6 +265,8 @@ def test_the_first_event_arrives_on_connect_and_an_unchanged_state_sends_no_seco
         frame = next_frame(response)
         assert frame[0] == "event: snapshot" and frame[1].startswith("data: ")
         assert json.loads(frame[1][len("data: "):]) == json.loads(model.to_json(collected(root)))
+        frame = next_frame(response)
+        assert frame[0] == "event: attention" and frame[1].startswith("data: ")
         expect_silence(response, conn)
         conn.close()
 
@@ -273,6 +275,7 @@ def test_a_change_gives_exactly_one_more_event_and_touches_only_the_rewritten_fi
     with running(tmp_path, guarded=False) as (server, root):
         conn, response = open_stream(server)
         first = json.loads(next_frame(response)[1][len("data: "):])
+        assert next_frame(response)[0] == "event: attention"
         before = _snapshot(root.home)
         path = root.state_root / f"{ALPHA}.json"
         state = json.loads(path.read_text(encoding="utf-8"))

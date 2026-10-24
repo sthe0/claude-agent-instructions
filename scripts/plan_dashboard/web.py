@@ -1,8 +1,9 @@
 """Read-only web view of the live agentctl tasks.
 
 A stdlib HTTP server bound to a loopback address only, serving the static page, a JSON
-snapshot, one task's detail and a Server-Sent Events stream that sends a snapshot when its
-content changed. GET and HEAD only; a request whose ``Host`` header is not a loopback name is
+snapshot, one task's detail, the attention overlay and chat tails, and a Server-Sent Events stream
+that sends a snapshot when its content changed and an ``attention`` event when the overlay's digest
+changed. GET and HEAD only; a request whose ``Host`` header is not a loopback name is
 refused (DNS rebinding), so a page on another origin cannot read the data through the browser.
 Every read goes through ``model``, which never writes the state directory.
 """
@@ -21,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from agentctl import store
-from plan_dashboard import model
+from plan_dashboard import attention, model
 
 LOOPBACK = "127.0.0.1"
 HOST_NAMES = frozenset({LOOPBACK, "localhost", "[::1]"})
@@ -77,7 +78,7 @@ def sse_frame(event: str, data: str) -> bytes:
 
 
 def make_handler(state_root, *, window_hours=24, include_all=False, sessions=(), cost_log=None,
-                 transcripts_root=None, clock=time.time):
+                 transcripts_root=None, locator=None, clock=time.time):
     """The request handler class bound to one set of read options. The server it runs under
     supplies ``stopping`` (an Event) and ``interval`` (seconds)."""
     state_root = Path(state_root)
@@ -87,6 +88,9 @@ def make_handler(state_root, *, window_hours=24, include_all=False, sessions=(),
         return model.collect(state_root, now=dt.datetime.fromtimestamp(clock(), dt.timezone.utc),
                              window_hours=window_hours, include_all=include_all, sessions=sessions,
                              cost_log=cost_log)
+
+    def overlay(current: dict) -> tuple[dict, list]:
+        return attention.collect([t["session_id"] for t in current["tasks"]], locator, transcripts_root)
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -102,8 +106,15 @@ def make_handler(state_root, *, window_hours=24, include_all=False, sessions=(),
                 return self._send(HTTPStatus.OK, "text/html; charset=utf-8", page_bytes())
             if path == "/api/snapshot":
                 return self._send_json(snapshot())
+            if path == "/api/attention":
+                return self._send_json(attention.event_payload(*overlay(snapshot())))
             if path.startswith("/api/task/"):
-                return self._task(urllib.parse.unquote(path[len("/api/task/"):]))
+                rest = urllib.parse.unquote(path[len("/api/task/"):])
+                if rest.endswith("/chat"):
+                    return self._task_chat(rest[: -len("/chat")])
+                return self._task(rest)
+            if path.startswith("/api/session/") and path.endswith("/chat"):
+                return self._session_chat(urllib.parse.unquote(path[len("/api/session/"): -len("/chat")]))
             if path == "/api/events":
                 return self._events()
             return self._send(HTTPStatus.NOT_FOUND, TEXT, b"not found\n")
@@ -124,6 +135,17 @@ def make_handler(state_root, *, window_hours=24, include_all=False, sessions=(),
                 return self._send(HTTPStatus.NOT_FOUND, TEXT, b"no such session\n")
             self._send_json(payload)
 
+        def _task_chat(self, session_id: str):
+            if store.safe_session_id(session_id) != session_id or not (state_root / f"{session_id}.json").is_file():
+                return self._send(HTTPStatus.NOT_FOUND, TEXT, b"no such session\n")
+            self._send_json(attention.task_chat(session_id, locator, transcripts_root))
+
+        def _session_chat(self, harness_session: str):
+            rows = overlay(snapshot())[1] if store.safe_session_id(harness_session) == harness_session else []
+            if not any(row["harness_session"] == harness_session for row in rows):
+                return self._send(HTTPStatus.NOT_FOUND, TEXT, b"no such session\n")
+            self._send_json(attention.chat_tail(harness_session, locator, transcripts_root))
+
         def _events(self):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -134,15 +156,22 @@ def make_handler(state_root, *, window_hours=24, include_all=False, sessions=(),
             self.close_connection = True
             if self.command == "HEAD":
                 return
-            last, last_write = None, time.monotonic()
+            last, last_attention, last_write = None, None, time.monotonic()
             try:
                 self.wfile.write(b"retry: 2000\n\n")
                 while not self.server.stopping.is_set():
                     current = snapshot()
                     digest = model.content_digest(current)
+                    payload = attention.event_payload(*overlay(current))
+                    sent = False
                     if event_due(last, digest):
                         self.wfile.write(sse_frame("snapshot", model.to_json(current)))
-                        last, last_write = digest, time.monotonic()
+                        last, sent = digest, True
+                    if event_due(last_attention, payload["digest"]):
+                        self.wfile.write(sse_frame("attention", model.to_json(payload)))
+                        last_attention, sent = payload["digest"], True
+                    if sent:
+                        last_write = time.monotonic()
                     elif time.monotonic() - last_write >= HEARTBEAT_S:
                         self.wfile.write(b": keepalive\n\n")
                         last_write = time.monotonic()
@@ -187,12 +216,12 @@ class Server(ThreadingHTTPServer):
 
 
 def serve(state_root, host=LOOPBACK, port=0, *, interval=DEFAULT_INTERVAL_S, window_hours=24,
-          include_all=False, sessions=(), cost_log=None, transcripts_root=None, clock=time.time,
+          include_all=False, sessions=(), cost_log=None, transcripts_root=None, locator=None, clock=time.time,
           ready=None) -> None:
     """Serve until shut down. ``ready(server)`` is called once the socket is listening."""
     check_bind(host)
     handler = make_handler(state_root, window_hours=window_hours, include_all=include_all, sessions=sessions,
-                           cost_log=cost_log, transcripts_root=transcripts_root, clock=clock)
+                           cost_log=cost_log, transcripts_root=transcripts_root, locator=locator, clock=clock)
     server = Server((host, port), handler, interval)
     try:
         if ready:
