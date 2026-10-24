@@ -3190,7 +3190,8 @@ def acceptance_review_blockers(state: SessionState, stage: "_Stage") -> list[str
         if missing:
             return ["acceptance override requires a non-empty " + " and ".join(missing) + " (the user's explicit escape reason)"]
         return []
-    return [f"acceptance judge verdict is {review.verdict!r} — pass blocked until a passing verdict (or an explicit override) is recorded"]
+    reason_suffix = f": {review.note}" if review.note else ""
+    return [f"acceptance judge verdict is {review.verdict!r}{reason_suffix} — pass blocked until a passing verdict (or an explicit override) is recorded"]
 
 
 #: Message substituted for whatever `code_review_blockers` would otherwise return once
