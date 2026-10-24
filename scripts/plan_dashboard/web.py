@@ -162,11 +162,12 @@ def make_handler(state_root, *, window_hours=24, include_all=False, sessions=(),
                 while not self.server.stopping.is_set():
                     current = snapshot()
                     digest = model.content_digest(current)
-                    payload = attention.event_payload(*overlay(current))
                     sent = False
                     if event_due(last, digest):
                         self.wfile.write(sse_frame("snapshot", model.to_json(current)))
+                        self.wfile.flush()
                         last, sent = digest, True
+                    payload = attention.event_payload(*overlay(current))
                     if event_due(last_attention, payload["digest"]):
                         self.wfile.write(sse_frame("attention", model.to_json(payload)))
                         last_attention, sent = payload["digest"], True

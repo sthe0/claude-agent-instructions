@@ -9,7 +9,8 @@ are killed by ``test_plan_dashboard_tui.py`` (and, for the row that targets ``tu
 textual pilot file), not by the model tests. WEB_MUTATIONS is the web page's family, killed by
 ``test_plan_dashboard_web.py``. WEB_PAGE_MUTATIONS is the page's own family, byte substitutions in
 what ``web.page_bytes`` returns, killed by ``test_plan_dashboard_web_dom.py``. PUBLISH_MUTATIONS is the status digest's family, killed by
-``test_plan_dashboard_publish.py``.
+``test_plan_dashboard_publish.py``. ATTENTION_MUTATIONS is the attention overlay's and the session
+locator's family, killed by ``test_plan_dashboard_attention.py``.
 
 ``test_plan_dashboard_mutation_catalogue.py`` runs every MUTATIONS row in a subprocess and asserts
 the model tests go red, every other TUI_MUTATIONS row likewise against the console tests, and the
@@ -21,11 +22,14 @@ here and that test covers it. By hand:
 from __future__ import annotations
 
 import contextlib
+import copy
 import datetime as dt
 import fcntl
 import importlib
 import json
 import os
+import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -440,6 +444,185 @@ PUBLISH_MUTATIONS = {
 }
 
 
+def _tail_without_pending(original):
+    def mutated(tail, permission):
+        if tail is not None:
+            tail = copy.copy(tail)
+            tail.pending = {}
+        return original(tail, permission)
+    return mutated
+
+
+def _permission_first(original):
+    def mutated(tail, permission):
+        if tail is not None and permission:
+            return "permission", tail.last_ts
+        return original(tail, permission)
+    return mutated
+
+
+def _missing_transcript_reads_none(original):
+    def mutated(tail, permission):
+        return ("none", None) if tail is None else original(tail, permission)
+    return mutated
+
+
+def _idle_never(original):
+    def mutated(tail, permission):
+        waiting, since = original(tail, permission)
+        return ("none" if waiting == "idle" else waiting), since
+    return mutated
+
+
+def _bind_first_found(original):
+    def mutated(engine_session, locator, transcripts_root):
+        attention = importlib.import_module(ATTENTION)
+        bound = importlib.import_module("lib.engine_session_binding").harness_sessions_driving(engine_session)
+        for candidate in dict.fromkeys([engine_session, *bound]):
+            path = attention.find_transcript(candidate, locator, transcripts_root)
+            if path is not None:
+                return candidate, path, bound
+        return (max(bound) if bound else None), None, bound
+    return mutated
+
+
+def _chat_never_cut(original):
+    def mutated(role, text, tool):
+        return {"role": role, "text": text, "tool": tool, "cut": False}
+    return mutated
+
+
+def _question_is_whole_input(original):
+    def mutated(tool_input):
+        return json.dumps(tool_input)
+    return mutated
+
+
+def _reread_always(original):
+    def mutated(path):
+        importlib.import_module(ATTENTION)._CACHE.clear()
+        return original(path)
+    return mutated
+
+
+def _rows_ignore_binding(original):
+    def mutated(engine_sessions, locator, transcripts_root):
+        attention = importlib.import_module(ATTENTION)
+        overlays, _ = original(engine_sessions, locator, transcripts_root)
+        entries = sorted(importlib.import_module(LOCATE).sessions(locator), key=lambda e: e["harness_session"])
+        return overlays, [attention.session_row(e, locator, transcripts_root) for e in entries]
+    return mutated
+
+
+def _digest_moves(original):
+    def mutated(overlays, sessions):
+        return original(overlays, sessions) + str(time.monotonic_ns())
+    return mutated
+
+
+def _outside_root_opened(original):
+    def mutated(harness_session, locator, transcripts_root):
+        found = original(harness_session, locator, transcripts_root)
+        if found is None and transcripts_root is not None:
+            config_root = importlib.import_module("lib.config_root")
+            name = config_root.sanitize_session_id(harness_session)
+            return next(iter(config_root.iter_transcripts(f"*/{name}.jsonl")), None)
+        return found
+    return mutated
+
+
+def _jump_through_shell(original):
+    def mutated(argv):
+        return subprocess.run(argv, shell=True, timeout=5, capture_output=True, text=True)
+    return mutated
+
+
+def _waiting_always_none(original):
+    def mutated(tail, permission):
+        waiting, since = original(tail, permission)
+        return ("none" if waiting else None), since
+    return mutated
+
+
+def _content_items(entry):
+    message = entry.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    return content if isinstance(content, list) else []
+
+
+def _thinking_kept(original):
+    def mutated(tail, entry):
+        entry = copy.deepcopy(entry)
+        for item in _content_items(entry):
+            if isinstance(item, dict) and item.get("type") == "thinking":
+                item["type"], item["text"] = "text", item.get("thinking", "")
+        return original(tail, entry)
+    return mutated
+
+
+def _tool_result_kept(original):
+    def mutated(tail, entry):
+        original(tail, entry)
+        attention = importlib.import_module(ATTENTION)
+        for item in _content_items(entry):
+            if isinstance(item, dict) and item.get("type") == "tool_result":
+                tail.chat.append(attention.chat_entry("user", str(item.get("content")), None))
+    return mutated
+
+
+def _chat_unbounded(original):
+    def mutated(path):
+        attention = importlib.import_module(ATTENTION)
+        attention.CHAT_MAX_ENTRIES = attention.CHAT_TEXT_MAX = 10**9
+        return original(path)
+    return mutated
+
+
+def _overlay_writes_state(original):
+    def mutated(engine_sessions, locator, transcripts_root):
+        result = original(engine_sessions, locator, transcripts_root)
+        if transcripts_root is not None:
+            _touch_state_file(Path(transcripts_root))
+        return result
+    return mutated
+
+
+def _jump_lets_timeout_through(original):
+    def mutated(target, *, runner=None):
+        return (runner or importlib.import_module(LOCATE)._run)(list(target["argv"]))
+    return mutated
+
+
+ATTENTION = "plan_dashboard.attention"
+LOCATE = "plan_dashboard.locate"
+ATTENTION_MUTATIONS = {
+    "attention-waiting-none": (ATTENTION, "waiting_state", _waiting_always_none),
+    "attention-precedence-swapped": (ATTENTION, "waiting_state", _permission_first),
+    "chat-thinking-leak": (ATTENTION, "_apply", _thinking_kept),
+    "chat-tool-result-leak": (ATTENTION, "_apply", _tool_result_kept),
+    "chat-unbounded": (ATTENTION, "read_tail", _chat_unbounded),
+    "attention-writes-state": (ATTENTION, "collect", _overlay_writes_state),
+    "attention-reread": (ATTENTION, "read_tail", _reread_always),
+    "attention-event-every-tick": ("plan_dashboard.web", "event_due", _always(True)),
+    "locator-ignored": (LOCATE, "permission_wait", _always(None)),
+    "locator-health-net-open": (LOCATE, "health_stubbed", _health_unstubbed),
+    "locator-jump-raises": (LOCATE, "jump", _jump_lets_timeout_through),
+    "sessions-unbound-dropped": (LOCATE, "sessions", _always([])),
+    "sessions-bound-twice": (ATTENTION, "collect", _rows_ignore_binding),
+    "chat-ask-question-dropped": (ATTENTION, "question_text", _always("")),
+    "attention-choice-ignored": (ATTENTION, "waiting_state", _tail_without_pending),
+    "attention-no-transcript-reads-none": (ATTENTION, "waiting_state", _missing_transcript_reads_none),
+    "attention-idle-never": (ATTENTION, "waiting_state", _idle_never),
+    "attention-bindings-ignored": ("lib.engine_session_binding", "harness_sessions_driving", _always([])),
+    "attention-bind-first-found": (ATTENTION, "bind_session", _bind_first_found),
+    "attention-chat-never-cut": (ATTENTION, "chat_entry", _chat_never_cut),
+    "attention-chat-leaks-input": (ATTENTION, "question_text", _question_is_whole_input),
+    "attention-digest-moves": (ATTENTION, "attention_digest", _digest_moves),
+    "attention-outside-root-opened": (ATTENTION, "find_transcript", _outside_root_opened),
+    "locate-jump-through-shell": (LOCATE, "_run", _jump_through_shell),
+}
+
+
 def pytest_addoption(parser):
     parser.addoption("--plan-dashboard-mutation", default="", help=f"same as {ENV}; the variable wins")
 
@@ -449,7 +632,8 @@ def pytest_configure(config):
     name = os.environ.get(ENV) or config.getoption("--plan-dashboard-mutation")
     if not name:
         return
-    known = {**MUTATIONS, **TUI_MUTATIONS, **WEB_MUTATIONS, **WEB_PAGE_MUTATIONS, **PUBLISH_MUTATIONS}
+    known = {**MUTATIONS, **TUI_MUTATIONS, **WEB_MUTATIONS, **WEB_PAGE_MUTATIONS, **PUBLISH_MUTATIONS,
+             **ATTENTION_MUTATIONS}
     if name not in known:
         raise pytest.UsageError(f"{ENV}={name!r} is not a known mutation; known: {sorted(known)}")
     module_name, attr, wrapper = known[name]
