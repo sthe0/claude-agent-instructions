@@ -128,6 +128,20 @@ def test_revise_blocks():
     assert b and "revise" in b[0]
 
 
+def test_revise_includes_note_when_present():
+    obs = "obs"
+    s = _subst(_stage(obs), reviews=[_review(obs, "revise", note="observation missing teardown step")])
+    b = gates.acceptance_review_blockers(s, s.stages[0])
+    assert b and "observation missing teardown step" in b[0]
+
+
+def test_revise_without_note_omits_colon():
+    obs = "obs"
+    s = _subst(_stage(obs), reviews=[_review(obs, "revise", note="")])
+    b = gates.acceptance_review_blockers(s, s.stages[0])
+    assert b and ": —" not in b[0]
+
+
 def test_unknown_verdict_blocks():
     obs = "obs"
     s = _subst(_stage(obs), reviews=[_review(obs, "maybe")])
