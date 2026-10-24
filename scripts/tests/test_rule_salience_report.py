@@ -634,3 +634,11 @@ def test_main_default_mode_exits_zero_with_no_transcripts(tmp_path, monkeypatch)
 
     rc = rsr.main(["--registry", str(registry), "--claude-md", str(claude_md)])
     assert rc == 0
+
+
+def test_iter_messages_survives_invalid_utf8_mid_file(tmp_path):
+    jsonl = tmp_path / "damaged.jsonl"
+    lines = [json.dumps({"n": 1}).encode(), b'{"text": "\xd0', json.dumps({"n": 2}).encode()]
+    jsonl.write_bytes(b"\n".join(lines) + b"\n")
+
+    assert list(rsr.iter_messages(jsonl)) == [{"n": 1}, {"n": 2}]

@@ -347,7 +347,10 @@ def parse_ts(s: str) -> dt.datetime | None:
 
 def iter_messages(jsonl: Path):
     try:
-        with jsonl.open() as f:
+        # A write cut short (e.g. a full disk) leaves invalid UTF-8 mid-file;
+        # strict decoding would abort the whole scan, so a damaged line is
+        # replaced, fails json.loads and is skipped like any other bad line.
+        with jsonl.open(encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     yield json.loads(line)
