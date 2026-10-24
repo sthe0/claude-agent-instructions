@@ -496,6 +496,15 @@ def test_unparseable_timestamp_does_not_put_session_in_window(tmp_path):
     assert firing_counts.get("[my-tag]", 0) == 0
 
 
+def test_iter_messages_survives_invalid_utf8_byte(tmp_path):
+    jsonl = tmp_path / "session.jsonl"
+    first = json.dumps({"n": 1}).encode()
+    last = json.dumps({"n": 3}).encode()
+    jsonl.write_bytes(first + b"\n" + b'{"n": 2, "bad": "\xff"}\n' + last + b"\n")
+    ns = [m["n"] for m in rsr.iter_messages(jsonl)]
+    assert ns[0] == 1 and ns[-1] == 3
+
+
 def test_in_window_timestamp_counts_session(tmp_path):
     jsonl = tmp_path / "session.jsonl"
     write_transcript(

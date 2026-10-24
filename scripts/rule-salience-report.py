@@ -347,7 +347,7 @@ def parse_ts(s: str) -> dt.datetime | None:
 
 def iter_messages(jsonl: Path):
     try:
-        with jsonl.open() as f:
+        with jsonl.open(encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     yield json.loads(line)
