@@ -281,6 +281,38 @@ def _refresh_never(original):
     return mutated
 
 
+def _tree_expanded(original):
+    def mutated(tree, *args, **kwargs):
+        result = original(tree, *args, **kwargs)
+        tree.root.expand_all()
+        return result
+    return mutated
+
+
+def _tree_state_forgotten(original):
+    def mutated(tree, nodes, expanded, cursor):
+        return original(tree, nodes, frozenset(), ())
+    return mutated
+
+
+def _state_kept_across_tasks(original):
+    def mutated(state, task):
+        return state
+    return mutated
+
+
+def _every_key_global(original):
+    def mutated(app, action, parameters):
+        return True
+    return mutated
+
+
+def _nothing(original):
+    def mutated(*args, **kwargs):
+        return None
+    return mutated
+
+
 TUI = "plan_dashboard.tui"
 TUI_APP = "plan_dashboard.tui_app"
 SUPPORT = "plan_dashboard_support"
@@ -292,6 +324,11 @@ TUI_MUTATIONS = {
     "tui-estimate-unmarked": (TUI, "fmt_value", _estimate_prefix_dropped),
     "tui-confinement-blind": (SUPPORT, "textual_importers", _importers_blind),
     "tui-app-no-refresh": (TUI_APP, "refresh_if_due", _refresh_never),
+    "tui-app-tree-expanded": (TUI_APP, "fill_tree", _tree_expanded),
+    "tui-app-detail-keys-swallowed": (TUI_APP, "route_key", _every_key_global),
+    "tui-app-tree-state-forgotten": (TUI_APP, "fill_tree", _tree_state_forgotten),
+    "tui-app-detail-unfocused": (TUI_APP, "focus_for", _nothing),
+    "tui-app-expand-global": (TUI_APP, "tree_state_for", _state_kept_across_tasks),
 }
 
 

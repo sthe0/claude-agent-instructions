@@ -281,6 +281,75 @@ def test_unreadable_detail_is_one_line(tmp_path):
     assert len(tree) == 1 and tree[0]["label"].startswith("unreadable")
 
 
+# --- the Detail tree: keys, node keys and kept state -----------------------------------------
+
+def test_tree_keys_belong_to_the_tree_only_on_the_detail_tab():
+    for key in ("up", "down", "j", "k", "enter", "space", "left", "right"):
+        assert tui.key_owner("detail", key) == "tree", key
+        assert tui.key_owner("tasks", key) == "global", key
+    for key in ("escape", "backspace", "tab", "a", "r", "q"):
+        assert tui.key_owner("detail", key) == "global", key
+
+
+@pytest.mark.parametrize("key, node, action", [
+    ("j", {}, "down"), ("down", {}, "down"), ("k", {}, "up"), ("up", {}, "up"),
+    ("enter", {"expandable": True}, "toggle"), ("space", {"expandable": True}, "toggle"),
+    ("enter", {"expandable": False}, None),
+    ("right", {"expandable": True, "expanded": False}, "expand"),
+    ("right", {"expandable": True, "expanded": True}, None),
+    ("right", {"expandable": False}, None),
+    ("left", {"expandable": True, "expanded": True}, "collapse"),
+    ("left", {"expandable": True, "expanded": False, "has_parent": True}, "parent"),
+    ("left", {"expandable": False, "has_parent": True}, "parent"),
+    ("left", {"expandable": False, "has_parent": False}, None),
+    ("x", {}, None),
+])
+def test_tree_action_decides_what_a_tree_key_does(key, node, action):
+    node = {"expandable": False, "expanded": False, "has_parent": False, **node}
+    assert tui.tree_action(key, **node) == action
+
+
+def phase_detail(root, sid):
+    return model.detail(root.state_root, sid, cost_log=root.cost_log)
+
+
+def test_node_keys_do_not_change_when_only_the_live_part_of_a_label_changes(tmp_path):
+    root = console_root(tmp_path)
+    before = tui.detail_tree(phase_detail(root, ALPHA), NOW)
+    after = tui.detail_tree(phase_detail(root, ALPHA), NOW + dt.timedelta(seconds=90))
+    assert tui.key_paths(before) == tui.key_paths(after)
+    assert tui.render_lines(before) != tui.render_lines(after)
+    assert ("stages", "stage:2") in tui.key_paths(before)
+    assert ("phases", "phase:stage 2") in tui.key_paths(before)
+
+
+def test_node_keys_are_unique_among_siblings(tmp_path):
+    tree = tui.detail_tree(phase_detail(console_root(tmp_path), ALPHA), NOW)
+
+    def check(nodes):
+        keys = [node["key"] for node in nodes]
+        assert len(keys) == len(set(keys)), keys
+        for node in nodes:
+            check(node["children"])
+
+    check(tree)
+
+
+def test_state_is_kept_for_the_same_task_and_reset_for_another():
+    state = tui.TreeState(task="a", expanded=frozenset({("stages",)}), cursor=("stages", "stage:2"))
+    assert tui.state_for_task(state, "a") is state
+    other = tui.state_for_task(state, "b")
+    assert other == tui.TreeState(task="b") and not other.expanded and other.cursor == ()
+
+
+def test_surviving_path_falls_back_to_the_nearest_ancestor():
+    nodes = [{"label": "stages", "key": "stages", "children": [{"label": "1", "key": "stage:1", "children": []}]}]
+    assert tui.surviving_path(nodes, ("stages", "stage:1")) == ("stages", "stage:1")
+    assert tui.surviving_path(nodes, ("stages", "stage:9")) == ("stages",)
+    assert tui.surviving_path(nodes, ("gone", "x")) == ()
+    assert tui.surviving_path(nodes, ()) == ()
+
+
 # --- keys and refresh ------------------------------------------------------------------------
 
 def view(**fields):
@@ -546,5 +615,5 @@ def console_section() -> str:
 def test_console_view_section_is_written():
     section = console_section()
     assert "Not written yet." not in section
-    for term in ("tui --once", "--interval", "textual==8.2.8", "uv run"):
+    for term in ("tui --once", "--interval", "textual==8.2.8", "uv run", "collapsed", "refresh", "Left", "Right", "Space"):
         assert term in section, term
