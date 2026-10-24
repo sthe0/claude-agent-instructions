@@ -228,7 +228,7 @@ def test_two_fragments_identical_command_first_in_sorted_order_wins(tmp_path):
     box.fragment(d, [GATE], fname="b.json", link="b.json")
     proc = box.run()
     assert box.entries().count(f"python3 {d.resolve()}/scripts/gate.py") == 1
-    assert "b.json" in proc.stderr and "a.json" not in proc.stderr
+    assert "b.json" in proc.stderr and "fragment a.json" in proc.stderr
     assert list(json.loads(box.record.read_text())) == ["a.json"]
 
 
@@ -331,6 +331,60 @@ def test_id_carrying_entry_is_updated_in_place_and_id_never_reaches_settings(tmp
     assert after == [new if c == old else c for c in order]
     assert '"id"' not in box.settings.read_text()
     assert json.loads(box.record.read_text())["org.json"][0]["id"] == "guard"
+    box.assert_stable(box.settle())
+
+
+def test_adding_and_removing_an_id_keeps_the_installed_entry(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org")
+    want = f"python3 {d.resolve()}/scripts/gate.py"
+    box.fragment(d, [GATE], link="org.json")
+    box.run()
+    for body in ({"id": "guard", "command": GATE}, {"command": GATE}):
+        box.fragment(d, [body])
+        proc = box.run()
+        assert box.entries().count(want) == 1
+        assert "not installed" not in proc.stderr and "dropped" not in proc.stderr
+        entry = json.loads(box.record.read_text())["org.json"][0]
+        assert entry.get("id") == body.get("id")
+    box.assert_stable(box.settle())
+
+
+def test_new_id_entry_taking_the_old_command_of_a_retargeted_one_keeps_both(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org", scripts=("gate.py", "gate2.py"))
+    gate2 = "python3 @FRAGMENT_DIR@/scripts/gate2.py"
+    box.fragment(d, [{"id": "a", "command": GATE}], link="org.json")
+    box.run()
+    box.fragment(d, [{"id": "b", "command": GATE}, {"id": "a", "command": gate2}])
+    box.run()
+    base = f"python3 {d.resolve()}/scripts/"
+    assert sorted(c for c in box.entries() if c.startswith(base)) == [base + "gate.py", base + "gate2.py"]
+    box.assert_stable(box.settle())
+
+
+def test_collision_warning_names_the_holder_of_a_hand_entry(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org")
+    box.hand(f"python3 {d.resolve()}/scripts/gate.py")
+    box.fragment(d, [GATE], link="org.json")
+    proc = box.run()
+    assert "no fragment owns" in proc.stderr
+
+
+def test_dangling_fragment_symlink_keeps_entries_and_warns(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org")
+    want = f"python3 {d.resolve()}/scripts/gate.py"
+    path = box.fragment(d, [GATE], link="org.json")
+    box.run()
+    moved = path.with_name("moved.json")
+    path.rename(moved)
+    proc = box.run()
+    assert box.entries().count(want) == 1
+    assert "org.json" in proc.stderr and "skipped, owned entries kept" in proc.stderr
+    assert "org.json" in json.loads(box.record.read_text())
+    moved.rename(path)
     box.assert_stable(box.settle())
 
 

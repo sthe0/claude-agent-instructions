@@ -263,6 +263,10 @@ with open(settings_path, encoding="utf-8") as fh:
 hooks = data.setdefault("hooks", {})
 
 
+def basename_of(cmd: str) -> str:
+    return os.path.basename((cmd or "").split()[0]) if cmd else ""
+
+
 def group_for(event_groups, matcher):
     for g in event_groups:
         if (g.get("matcher") or None) == matcher:
@@ -271,10 +275,6 @@ def group_for(event_groups, matcher):
     g.setdefault("hooks", [])
     event_groups.append(g)
     return g
-
-
-def basename_of(cmd: str) -> str:
-    return os.path.basename((cmd or "").split()[0]) if cmd else ""
 
 
 def add_rows(hooks, rows, reconcile=False):

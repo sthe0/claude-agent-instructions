@@ -12,7 +12,8 @@ Contract:
   its own scripts.
 * An entry is identified by its optional string ``id`` (fragment-only, never written
   into settings.json) within its (event, matcher) group, else by its exact expanded
-  command. Nothing is parsed to decide identity.
+  command. Nothing is parsed to decide identity. Adding or removing an ``id`` on an
+  installed entry keeps the entry in place.
 * The plugin entry name is the fragment's file name. Each installed entry is recorded
   in ``<agent home>/hook-plugins.installed.json`` as ``{name: [{event, matcher, id
   (only when given), command}]}``, so a removal touches exactly what the fragment
@@ -24,8 +25,8 @@ Contract:
   hand-deleted Core row is restored.
 * An entry whose command is already present in its group (a Core row, a hand entry,
   another fragment's entry, an earlier entry of the same fragment) is not installed,
-  with a warning; an installed entry that later meets an identical command is dropped
-  with a warning. One command never fires twice from the seam.
+  with a warning naming the holder; an installed entry that later meets an identical
+  command is dropped with a warning. One command never fires twice from the seam.
 * An entry whose script file name equals that of another entry of the group that is
   not the fragment's own gets an advisory warning naming both; it blocks and removes
   nothing. A differently spelled copy of one gate may fire twice.
@@ -33,9 +34,13 @@ Contract:
   hand-added and are left alone (identical ones block with a warning). An unparsable
   record skips the whole fragment pass, with a warning: nothing is added, removed or
   recorded.
-* A broken fragment (unparsable, malformed, or naming a script that is missing under
-  its own directory) is skipped with a warning and keeps the entries it owns.
-* A plugin entry whose fragment file is gone loses its owned entries.
+* A broken fragment (unparsable, malformed, a dangling symlink, or naming a script
+  that is missing under its own directory) is skipped with a warning and keeps the
+  entries it owns.
+* A plugin entry whose file name is gone from the plugin directory loses its owned
+  entries.
+* When settings.json holds two groups with the same matcher under one event, only the
+  first is seen, as in the installer's own ``group_for``.
 """
 import json
 import os
@@ -105,9 +110,11 @@ def load_record(path):
 
 
 def save_record(path, record):
-    with open(path, "w", encoding="utf-8") as fh:
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(dict(sorted(record.items())), fh, indent=2, ensure_ascii=False)
         fh.write("\n")
+    os.replace(tmp, path)
 
 
 def _expand(value, real_dir):
@@ -145,7 +152,10 @@ def load_fragment(path):
                     return None, f"a hook under {event!r} has no string 'command'"
                 if "id" in hook and not isinstance(hook["id"], str):
                     return None, f"a hook under {event!r} has a non-string 'id'"
+                if hook.get("type", "command") != "command":
+                    return None, f"a hook under {event!r} is not of type 'command'"
                 hook = _expand(hook, real_dir)
+                hook.setdefault("type", "command")
                 id_ = hook.pop("id", None)
                 try:
                     tokens = shlex.split(hook["command"])
@@ -232,69 +242,99 @@ def _where(event, matcher):
     return f"{event}/{matcher or '*'}"
 
 
-def sync(hooks, fragment_dir, record):
-    """Merge the fragments in ``fragment_dir`` into ``hooks`` (edited in place).
-
-    ``hooks`` must have been through ``detach(hooks, record)``. Returns ``(changes,
-    warnings, new_record)``; ``changes`` describes what moved in ``hooks`` and is empty
-    when the call left it unchanged.
-    """
-    changes, warnings = [], []
-    new_record = {}
-    touched = set()
+def _present_fragments(fragment_dir):
+    """``{file name: path}`` of the fragment entries. A dangling symlink still counts:
+    it is a broken fragment, which keeps its entries, not a removed one."""
     present = {}
     if os.path.isdir(fragment_dir):
         for fname in sorted(os.listdir(fragment_dir)):
             path = os.path.join(fragment_dir, fname)
-            if fname.endswith(".json") and os.path.isfile(path):
+            if fname.endswith(".json") and os.path.lexists(path):
                 present[fname] = path
+    return present
 
-    def drop(event, group, sentinel, why):
+
+class _Merge:
+    """One ``sync`` run: the hooks being edited and what the run reports."""
+
+    def __init__(self, hooks):
+        self.hooks = hooks
+        self.changes, self.warnings = [], []
+        self.touched = set()
+        self.installed_by = {}
+
+    def drop(self, event, group, sentinel, why):
         _swap(group, sentinel, None)
-        touched.add((event, group.get("matcher") or None))
-        changes.append(f"- {_where(event, group.get('matcher'))}: {_command(sentinel)} ({why})")
+        self.touched.add((event, group.get("matcher") or None))
+        self.changes.append(f"- {_where(event, group.get('matcher'))}: {_command(sentinel)} ({why})")
 
-    for event, group, s in _sentinels(hooks):
-        if s[_OWNER] not in present:
-            drop(event, group, s, f"{s[_OWNER]} gone")
+    def owner_of(self, hook):
+        if _is_sentinel(hook):
+            return f"fragment {hook[_OWNER]}"
+        if id(hook) in self.installed_by:
+            return f"fragment {self.installed_by[id(hook)]}"
+        return "an entry no fragment owns, a Core row or a hand-added hook"
 
-    for name, path in present.items():
-        own = [(e, g, s) for e, g, s in _sentinels(hooks) if s[_OWNER] == name]
-        entries, error = load_fragment(path)
-        if error:
-            warnings.append(f"{name}: {error}; skipped, owned entries kept")
-            for _, group, s in own:
-                _swap(group, s, s[_HELD])
-            if own:
-                new_record[name] = [s[_ENTRY] for _, _, s in own]
-            continue
+    @staticmethod
+    def claim(pool, ident, event, matcher, cmd):
+        """Take the owned placeholder this entry continues: the one with its identity,
+        else the one holding the same command (an ``id`` added or removed in place)."""
+        if pool.get(ident):
+            return pool[ident].pop(0)
+        for sentinels in pool.values():
+            for s in sentinels:
+                e = s[_ENTRY]
+                if (e["event"], e["matcher"], e["command"]) == (event, matcher, cmd):
+                    sentinels.remove(s)
+                    return s
+        return None
+
+    def warn_same_script(self, name, group, hook, where, own_hooks):
+        script = hook_script_path(hook["command"])
+        if script is None:
+            return
+        for h in group["hooks"]:
+            other = hook_script_path(_command(h))
+            if id(h) not in own_hooks and other is not None and other.name == script.name:
+                self.warnings.append(
+                    f"{name}: {hook['command']} and {_command(h)} in {where} both run "
+                    f"{script.name}; it may fire twice"
+                )
+                return
+
+    def sync_fragment(self, name, entries, own):
+        """Make the fragment's owned entries equal ``entries``; returns its record rows."""
+        hooks = self.hooks
         pool = {}
         for _, _, s in own:
             pool.setdefault(_entry_ident(s[_ENTRY]), []).append(s)
-        mine = {id(s) for _, _, s in own}
-        seen, owned = set(), []
+        own_hooks, seen, owned = {id(s) for _, _, s in own}, set(), []
         for event, matcher, id_, hook in entries:
             cmd = hook["command"]
             where = _where(event, matcher)
             ident = _ident(event, matcher, id_, cmd)
             if ident in seen:
-                warnings.append(f"{name}: {cmd} is listed twice in {where}; installed once")
+                self.warnings.append(f"{name}: {cmd} is listed twice in {where}; installed once")
                 continue
             seen.add(ident)
-            sentinel = pool[ident].pop(0) if pool.get(ident) else None
+            sentinel = self.claim(pool, ident, event, matcher, cmd)
             group = _find_group(hooks, event, matcher)
-            siblings = group["hooks"] if group else []
-            if any(h is not sentinel and _command(h) == cmd for h in siblings):
+            holder = next(
+                (h for h in (group["hooks"] if group else []) if h is not sentinel and _command(h) == cmd),
+                None,
+            )
+            if holder is not None:
+                by = self.owner_of(holder)
                 if sentinel is None:
-                    warnings.append(f"{name}: {cmd} not installed, already present in {where}")
+                    self.warnings.append(f"{name}: {cmd} not installed, already present in {where} ({by})")
                 else:
-                    drop(event, group, sentinel, f"{name} displaced")
-                    warnings.append(f"{name}: {cmd} dropped, now also present in {where}")
+                    self.drop(event, group, sentinel, f"{name} displaced")
+                    self.warnings.append(f"{name}: {cmd} dropped, now also present in {where} ({by})")
                 continue
             if sentinel is not None:
                 held = sentinel[_HELD]
                 if held != hook:
-                    changes.append(f"~ {where}: {cmd}")
+                    self.changes.append(f"~ {where}: {cmd}")
                     _swap(group, sentinel, hook)
                 else:
                     _swap(group, sentinel, held)
@@ -303,33 +343,50 @@ def sync(hooks, fragment_dir, record):
                 if group is None:
                     group = _group_for(hooks.setdefault(event, []), matcher)
                 group["hooks"].append(hook)
-                changes.append(f"+ {where}: {cmd} ({name})")
-            mine.add(id(hook))
+                self.changes.append(f"+ {where}: {cmd} ({name})")
+            own_hooks.add(id(hook))
+            self.installed_by[id(hook)] = name
             owned.append(_entry(event, matcher, id_, cmd))
-            script = hook_script_path(cmd)
-            for h in group["hooks"]:
-                other_script = hook_script_path(_command(h))
-                if (
-                    script is not None
-                    and id(h) not in mine
-                    and other_script is not None
-                    and other_script.name == script.name
-                ):
-                    warnings.append(
-                        f"{name}: {cmd} and {_command(h)} in {where} both run "
-                        f"{script.name}; it may fire twice"
-                    )
-                    break
+            self.warn_same_script(name, group, hook, where, own_hooks)
         for s in [s for ss in pool.values() for s in ss]:
             event, group = next((e, g) for e, g, x in _sentinels(hooks) if x is s)
-            drop(event, group, s, f"{name} edited")
+            self.drop(event, group, s, f"{name} edited")
+        return owned
+
+
+def sync(hooks, fragment_dir, record):
+    """Merge the fragments in ``fragment_dir`` into ``hooks`` (edited in place).
+
+    ``hooks`` must have been through ``detach(hooks, record)``. Returns ``(changes,
+    warnings, new_record)``; ``changes`` describes what moved in ``hooks`` and is empty
+    when the call left it unchanged.
+    """
+    run = _Merge(hooks)
+    new_record = {}
+    present = _present_fragments(fragment_dir)
+
+    for event, group, s in _sentinels(hooks):
+        if s[_OWNER] not in present:
+            run.drop(event, group, s, f"{s[_OWNER]} gone")
+
+    for name, path in present.items():
+        own = [(e, g, s) for e, g, s in _sentinels(hooks) if s[_OWNER] == name]
+        entries, error = load_fragment(path)
+        if error:
+            run.warnings.append(f"{name}: {error}; skipped, owned entries kept")
+            for _, group, s in own:
+                _swap(group, s, s[_HELD])
+            if own:
+                new_record[name] = [s[_ENTRY] for _, _, s in own]
+            continue
+        owned = run.sync_fragment(name, entries, own)
         if owned:
             new_record[name] = owned
 
     for _, group, s in _sentinels(hooks):
         _swap(group, s, s[_HELD])
-    _tidy(hooks, touched)
-    return changes, warnings, new_record
+    _tidy(hooks, run.touched)
+    return run.changes, run.warnings, new_record
 
 
 def missing_entries(settings_path, fragment_dir):
@@ -346,20 +403,16 @@ def missing_entries(settings_path, fragment_dir):
         for h in g.get("hooks", [])
     }
     missing = []
-    if os.path.isdir(fragment_dir):
-        for fname in sorted(os.listdir(fragment_dir)):
-            path = os.path.join(fragment_dir, fname)
-            if not (fname.endswith(".json") and os.path.isfile(path)):
-                continue
-            entries, error = load_fragment(path)
-            if error:
-                missing.append((fname, error))
-                continue
-            missing += [
-                (fname, h["command"])
-                for e, m, _, h in entries
-                if (e, m, h["command"]) not in installed
-            ]
+    for fname, path in _present_fragments(fragment_dir).items():
+        entries, error = load_fragment(path)
+        if error:
+            missing.append((fname, error))
+            continue
+        missing += [
+            (fname, h["command"])
+            for e, m, _, h in entries
+            if (e, m, h["command"]) not in installed
+        ]
     return missing
 
 
