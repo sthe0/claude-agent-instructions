@@ -37,6 +37,10 @@ SECURITY_HEADERS = {
 TEXT = "text/plain; charset=utf-8"
 
 
+def page_bytes() -> bytes:
+    return INDEX.read_bytes()
+
+
 def check_bind(host: str) -> None:
     """Refuse any address that is not loopback; ``serve`` calls it, so no caller can widen it."""
     if host == "localhost":
@@ -95,7 +99,7 @@ def make_handler(state_root, *, window_hours=24, include_all=False, sessions=(),
                 return self._send(HTTPStatus.MISDIRECTED_REQUEST, TEXT, b"bad host\n")
             path = urllib.parse.urlsplit(self.path).path
             if path in ("/", "/index.html"):
-                return self._send(HTTPStatus.OK, "text/html; charset=utf-8", INDEX.read_bytes())
+                return self._send(HTTPStatus.OK, "text/html; charset=utf-8", page_bytes())
             if path == "/api/snapshot":
                 return self._send_json(snapshot())
             if path.startswith("/api/task/"):

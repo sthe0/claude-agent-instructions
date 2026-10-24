@@ -5,26 +5,59 @@
 <title>Plan dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  body { font: 14px/1.4 system-ui, sans-serif; margin: 1rem 2rem; color: #1b1f24; background: #fff; }
+  :root {
+    --text: #1b1f24; --text-dim: #4a5560; --text-ok: #0b5d1e; --text-warn: #7a4a00; --text-bad: #a01212; --text-accent: #0a4ea0;
+    --bg: #ffffff; --bg-panel: #f6f8fa; --bg-hover: #e9eef4; --bg-selected: #d4e4f7;
+    --bg-live-active: #e3f6e8; --bg-live-idle: #fff6d6; --bg-live-stale: #eceff2; --bg-live-resolved: #e8e4f7; --bg-live-stub: #f2f2f2;
+    --bg-wait-choice: #ffe0b3; --bg-wait-permission: #ffd0d0; --bg-wait-idle: #fff1b8;
+    --line: #8c959f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --text: #e6edf3; --text-dim: #a5b0bd; --text-ok: #6fdc8c; --text-warn: #f0b44c; --text-bad: #ff8f8f; --text-accent: #79b8ff;
+      --bg: #0d1117; --bg-panel: #161b22; --bg-hover: #1f2630; --bg-selected: #1d3a5c;
+      --bg-live-active: #12301d; --bg-live-idle: #33290a; --bg-live-stale: #1b1f24; --bg-live-resolved: #2a2347; --bg-live-stub: #20252b;
+      --bg-wait-choice: #4d3200; --bg-wait-permission: #5a1a1a; --bg-wait-idle: #4a3d00;
+      --line: #6e7681;
+    }
+  }
+  [hidden] { display: none !important; }
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 1rem 2rem; color: var(--text); background: var(--bg); }
   h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
-  #status { color: #57606a; margin-bottom: .75rem; }
+  #status { color: var(--text-dim); margin-bottom: .75rem; }
   table { border-collapse: collapse; width: 100%; }
-  th, td { text-align: left; padding: .25rem .6rem; border-bottom: 1px solid #d0d7de; white-space: nowrap; }
+  th, td { text-align: left; padding: .25rem .6rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
   td.goal { white-space: normal; }
-  tr.task { cursor: pointer; }
-  tr.task:hover, tr.selected { background: #eef3f8; }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
-  .dim { color: #8c959f; }
-  #detail { margin-top: 1.25rem; }
-  #detail h2 { font-size: 1rem; }
+  .dim { color: var(--text-dim); }
+  tr.task { cursor: pointer; border-left: .35rem solid transparent; }
+  tr.task:hover { background: var(--bg-hover); }
+  tr.task:focus-visible { outline: 2px solid var(--text-accent); outline-offset: -2px; }
+  tr.live-active { background: var(--bg-live-active); }
+  tr.live-idle { background: var(--bg-live-idle); }
+  tr.live-stale { background: var(--bg-live-stale); color: var(--text-dim); }
+  tr.live-resolved { background: var(--bg-live-resolved); }
+  tr.live-stub { background: var(--bg-live-stub); color: var(--text-dim); }
+  tr.wait-choice { background: var(--bg-wait-choice); }
+  tr.wait-permission { background: var(--bg-wait-permission); }
+  tr.wait-idle { background: var(--bg-wait-idle); }
+  tr.task.selected { background: var(--bg-selected); border-left-color: var(--text-accent); font-weight: 600; }
+  td.node-executing, .st-active { color: var(--text-accent); }
+  td.node-diagnosing, td.node-failed, .st-failed { color: var(--text-bad); }
+  td.node-resolved, .st-passed { color: var(--text-ok); }
+  td.node-plan_ready, td.node-routed, td.node-classified, .st-pending { color: var(--text-warn); }
+  #detail { position: fixed; top: 1rem; right: 1rem; width: min(46rem, calc(100vw - 2rem));
+    max-height: calc(100vh - 2rem); overflow-y: auto; overflow-x: auto;
+    box-sizing: border-box; padding: .75rem 1rem; z-index: 10;
+    background: var(--bg-panel); color: var(--text); border: 2px solid var(--text-accent); border-radius: .4rem; }
+  #detail:focus { outline: none; }
+  #detail-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  #detail h2 { font-size: 1rem; margin: .5rem 0 .25rem; }
+  #detail-close { font: inherit; cursor: pointer; padding: .1rem .6rem; color: var(--text); background: var(--bg-hover);
+    border: 1px solid var(--line); border-radius: .25rem; }
+  #detail-close:focus-visible, #detail button:focus-visible { outline: 2px solid var(--text-accent); }
   ul.phases { list-style: none; padding-left: 1.2rem; margin: .1rem 0; }
   ul.phases.root { padding-left: 0; }
-  @media (prefers-color-scheme: dark) {
-    body { color: #e6edf3; background: #0d1117; }
-    th, td { border-color: #30363d; }
-    tr.task:hover, tr.selected { background: #161b22; }
-    #status, .dim { color: #8b949e; }
-  }
 </style>
 </head>
 <body>
@@ -34,7 +67,10 @@
   <thead><tr id="head"></tr></thead>
   <tbody id="tasks"></tbody>
 </table>
-<div id="detail"></div>
+<aside id="detail" tabindex="-1" role="dialog" aria-label="Task detail" hidden>
+  <div id="detail-head"><strong id="detail-title"></strong><button id="detail-close" type="button">Close (Esc)</button></div>
+  <div id="detail-body"></div>
+</aside>
 <script>
 "use strict";
 const COLUMNS = ["session", "live", "node", "stage", "wall", "cost", "goal"];
@@ -86,13 +122,29 @@ function rowCells(task) {
   ];
 }
 
+function cssName(value) {
+  return String(value || "unknown").toLowerCase().replace(/[^a-z0-9_]+/g, "-");
+}
+
+function rowFor(session) {
+  return Array.from(document.getElementById("tasks").children).find((row) => row.dataset.session === session) || null;
+}
+
 function renderTasks() {
   const head = document.getElementById("head");
   head.replaceChildren(...COLUMNS.map((name) => el("th", name)));
   const rows = snapshot.tasks.map((task) => {
-    const tr = el("tr", null, "task" + (task.session_id === selected ? " selected" : ""));
-    rowCells(task).forEach((text, i) => tr.appendChild(el("td", text, COLUMNS[i] === "goal" ? "goal" : "")));
-    tr.addEventListener("click", () => { selected = task.session_id; renderTasks(); loadDetail(); });
+    const tr = el("tr", null, "task live-" + cssName(task.liveness) + (task.session_id === selected ? " selected" : ""));
+    tr.dataset.session = task.session_id;
+    tr.setAttribute("tabindex", "0");
+    rowCells(task).forEach((text, i) => {
+      const name = COLUMNS[i];
+      tr.appendChild(el("td", text, name === "goal" ? "goal" : name === "node" ? "node-" + cssName(text) : ""));
+    });
+    tr.addEventListener("click", () => openDetail(task.session_id));
+    tr.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); openDetail(task.session_id); }
+    });
     return tr;
   });
   document.getElementById("tasks").replaceChildren(...rows);
@@ -158,20 +210,43 @@ function stagesList(stages) {
   const list = el("ul", null, "phases root");
   for (const stage of stages) {
     list.appendChild(el("li", stage.index + ". " + (stage.title || "?") + " — " + (stage.status || "pending") +
-      " (" + (stage.actor || "?") + ")"));
+      " (" + (stage.actor || "?") + ")", "st-" + cssName(stage.status || "pending")));
   }
   return list;
 }
 
+function detailBody() { return document.getElementById("detail-body"); }
+
+function openDetail(session) {
+  const panel = document.getElementById("detail");
+  selected = session;
+  renderTasks();
+  document.getElementById("detail-title").textContent = session.slice(0, 36);
+  detailBody().replaceChildren(el("p", "loading…", "dim"));
+  panel.hidden = false;
+  panel.focus();
+  loadDetail();
+}
+
+function closeDetail() {
+  const session = selected;
+  selected = null;
+  lastDetail = null;
+  document.getElementById("detail").hidden = true;
+  detailBody().replaceChildren();
+  renderTasks();
+  const row = rowFor(session);
+  if (row) row.focus();
+}
+
 async function loadDetail() {
-  const box = document.getElementById("detail");
   // The ticking timer re-renders lastDetail, so it must never outlive the task it was fetched for.
   lastDetail = null;
-  if (!selected) { box.replaceChildren(); return; }
+  if (!selected) return;
   const wanted = selected;
   const response = await fetch("/api/task/" + encodeURIComponent(wanted));
   if (wanted !== selected) return;
-  if (!response.ok) { box.replaceChildren(el("p", "task is gone", "dim")); return; }
+  if (!response.ok) { detailBody().replaceChildren(el("p", "task is gone", "dim")); return; }
   const detail = await response.json();
   if (wanted !== selected) return;
   lastDetail = detail;
@@ -179,13 +254,17 @@ async function loadDetail() {
 }
 
 function renderDetail() {
-  const box = document.getElementById("detail");
   const detail = lastDetail;
   if (!detail) return;
-  if (!detail.readable) { box.replaceChildren(el("p", "unreadable: " + detail.reason, "dim")); return; }
-  box.replaceChildren(el("h2", "Stages of " + selected.slice(0, 36)), stagesList(detail.stages),
+  if (!detail.readable) { detailBody().replaceChildren(el("p", "unreadable: " + detail.reason, "dim")); return; }
+  detailBody().replaceChildren(el("h2", "Stages"), stagesList(detail.stages),
     el("h2", "Phases"), phasesTable(detail.phases));
 }
+
+document.getElementById("detail-close").addEventListener("click", closeDetail);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && selected) closeDetail();
+});
 
 setInterval(() => { if (selected && lastDetail) renderDetail(); }, 1000);
 

@@ -7,7 +7,8 @@ that leaves the suite green is a test gap. Later dashboard stages add rows to MU
 TUI_MUTATIONS is the console view's family: it is looked up by name next to MUTATIONS but its rows
 are killed by ``test_plan_dashboard_tui.py`` (and, for the row that targets ``tui_app``, by the
 textual pilot file), not by the model tests. WEB_MUTATIONS is the web page's family, killed by
-``test_plan_dashboard_web.py``. PUBLISH_MUTATIONS is the status digest's family, killed by
+``test_plan_dashboard_web.py``. WEB_PAGE_MUTATIONS is the page's own family, byte substitutions in
+what ``web.page_bytes`` returns, killed by ``test_plan_dashboard_web_dom.py``. PUBLISH_MUTATIONS is the status digest's family, killed by
 ``test_plan_dashboard_publish.py``.
 
 ``test_plan_dashboard_mutation_catalogue.py`` runs every MUTATIONS row in a subprocess and asserts
@@ -382,6 +383,31 @@ WEB_MUTATIONS = {
 }
 
 
+def _page_edit(target, replacement, *, count=1):
+    """Substitute ``replacement`` for ``target`` in the page bytes; the page must hold exactly
+    ``count`` occurrences of ``target`` when the plugin loads, so a rewritten page cannot leave
+    the mutation a silent no-op."""
+    def wrap(original):
+        found = original().decode("utf-8").count(target)
+        if found != count:
+            raise pytest.UsageError(f"page mutation target {target!r} occurs {found} times, expected {count}")
+
+        def mutated():
+            return original().decode("utf-8").replace(target, replacement).encode("utf-8")
+        return mutated
+    return wrap
+
+
+WEB_PAGE_MUTATIONS = {
+    "web-detail-offscreen": (WEB, "page_bytes", _page_edit("#detail { position: fixed;", "#detail { position: static;")),
+    "web-row-click-dead": (WEB, "page_bytes", _page_edit('tr.addEventListener("click",', 'tr.addEventListener("x-click",')),
+    "web-detail-no-close": (WEB, "page_bytes", _page_edit("function closeDetail() {", "function closeDetail() { return;")),
+    "web-colours-absent": (WEB, "page_bytes", _page_edit("background: var(--bg-live-", "background-image: var(--bg-live-", count=5)),
+    "web-contrast-low": (WEB, "page_bytes", _page_edit("--text-dim: #a5b0bd", "--text-dim: #1c2330")),
+    "web-detail-unscrollable": (WEB, "page_bytes", _page_edit("max-height: calc(100vh - 2rem); overflow-y: auto;", "")),
+}
+
+
 def _stop_after_one_pass(original):
     def mutated(*args, **kwargs):
         calls = []
@@ -417,7 +443,7 @@ def pytest_configure(config):
     name = os.environ.get(ENV) or config.getoption("--plan-dashboard-mutation")
     if not name:
         return
-    known = {**MUTATIONS, **TUI_MUTATIONS, **WEB_MUTATIONS, **PUBLISH_MUTATIONS}
+    known = {**MUTATIONS, **TUI_MUTATIONS, **WEB_MUTATIONS, **WEB_PAGE_MUTATIONS, **PUBLISH_MUTATIONS}
     if name not in known:
         raise pytest.UsageError(f"{ENV}={name!r} is not a known mutation; known: {sorted(known)}")
     module_name, attr, wrapper = known[name]
