@@ -58,11 +58,18 @@
   #detail-close:focus-visible, #detail button:focus-visible { outline: 2px solid var(--text-accent); }
   ul.phases { list-style: none; padding-left: 1.2rem; margin: .1rem 0; }
   ul.phases.root { padding-left: 0; }
+  td.wait { font-weight: 700; text-align: center; }
+  #waiting { font-weight: 700; margin-bottom: .5rem; }
+  .chat-entry { margin: .25rem 0; padding-left: .5rem; border-left: 3px solid var(--line); }
+  .chat-entry.chat-user { border-left-color: var(--text-accent); }
+  .chat-who { color: var(--text-dim); margin-right: .5rem; }
+  .chat-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
 <h1>Plan dashboard</h1>
 <div id="status">connecting…</div>
+<div id="waiting">waiting: 0</div>
 <table>
   <thead><tr id="head"></tr></thead>
   <tbody id="tasks"></tbody>
@@ -70,14 +77,24 @@
 <aside id="detail" tabindex="-1" role="dialog" aria-label="Task detail" hidden>
   <div id="detail-head"><strong id="detail-title"></strong><button id="detail-close" type="button">Close (Esc)</button></div>
   <div id="detail-body"></div>
+  <div id="detail-chat"></div>
 </aside>
 <script>
 "use strict";
-const COLUMNS = ["session", "live", "node", "stage", "wall", "cost", "goal"];
+const COLUMNS = ["wait", "session", "live", "node", "stage", "wall", "cost", "goal"];
 const NOT_COUNTED = "not counted";
+const NO_VALUE = "—";
+const WAIT_MARKS = {choice: "?", permission: "!", idle: "…"};
+const NEEDS_YOU = ["choice", "permission"];
+// The server's default --interval; the page cannot know a different one.
+const CHAT_POLL_MS = 2000;
 let snapshot = null;
+let attention = {tasks: {}, sessions: []};
 let selected = null;
+let selectedKind = "task";
 let lastDetail = null;
+let chatTimer = null;
+let chatShown = null;
 
 function el(tag, text, className) {
   const node = document.createElement(tag);
@@ -130,24 +147,47 @@ function rowFor(session) {
   return Array.from(document.getElementById("tasks").children).find((row) => row.dataset.session === session) || null;
 }
 
+function waitMark(waiting) { return WAIT_MARKS[waiting] || ""; }
+
+function waitingOf(task) {
+  const overlay = attention.tasks[task.session_id];
+  return overlay ? overlay.waiting : null;
+}
+
+function sessionCells(row) {
+  return [waitMark(row.waiting), row.name || row.harness_session, "session", NO_VALUE, NO_VALUE, NO_VALUE, NO_VALUE, row.cwd || ""];
+}
+
+function tableRow(id, kind, waiting, cells) {
+  const wait = WAIT_MARKS[waiting] ? " wait-" + cssName(waiting) : "";
+  const tr = el("tr", null, "task " + (kind === "task" ? "live-" + cssName(cells[2]) : "session-row") + wait +
+    (id === selected ? " selected" : ""));
+  tr.dataset.session = id;
+  tr.setAttribute("tabindex", "0");
+  cells.forEach((text, i) => {
+    const name = COLUMNS[i];
+    tr.appendChild(el("td", text, name === "goal" ? "goal" : name === "wait" ? "wait" : name === "node" ? "node-" + cssName(text) : ""));
+  });
+  tr.addEventListener("click", () => openDetail(id, kind));
+  tr.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); openDetail(id, kind); }
+  });
+  return tr;
+}
+
 function renderTasks() {
+  if (!snapshot) return;
   const head = document.getElementById("head");
   head.replaceChildren(...COLUMNS.map((name) => el("th", name)));
   const rows = snapshot.tasks.map((task) => {
-    const tr = el("tr", null, "task live-" + cssName(task.liveness) + (task.session_id === selected ? " selected" : ""));
-    tr.dataset.session = task.session_id;
-    tr.setAttribute("tabindex", "0");
-    rowCells(task).forEach((text, i) => {
-      const name = COLUMNS[i];
-      tr.appendChild(el("td", text, name === "goal" ? "goal" : name === "node" ? "node-" + cssName(text) : ""));
-    });
-    tr.addEventListener("click", () => openDetail(task.session_id));
-    tr.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") { event.preventDefault(); openDetail(task.session_id); }
-    });
-    return tr;
+    const waiting = waitingOf(task);
+    return tableRow(task.session_id, "task", waiting, [waitMark(waiting), ...rowCells(task)]);
   });
+  attention.sessions.forEach((row) => rows.push(tableRow(row.harness_session, "session", row.waiting, sessionCells(row))));
   document.getElementById("tasks").replaceChildren(...rows);
+  const needYou = snapshot.tasks.filter((task) => NEEDS_YOU.includes(waitingOf(task))).length +
+    attention.sessions.filter((row) => NEEDS_YOU.includes(row.waiting)).length;
+  document.getElementById("waiting").textContent = "waiting: " + needYou;
   document.getElementById("status").textContent =
     snapshot.tasks.length ? snapshot.tasks.length + " task(s), updated " + new Date().toLocaleTimeString() : "no live tasks";
 }
@@ -217,23 +257,66 @@ function stagesList(stages) {
 
 function detailBody() { return document.getElementById("detail-body"); }
 
-function openDetail(session) {
+function chatUrl(id, kind) {
+  return kind === "session" ? "/api/session/" + encodeURIComponent(id) + "/chat" : "/api/task/" + encodeURIComponent(id) + "/chat";
+}
+
+function chatEntry(entry) {
+  const who = (entry.role === "user" ? "you" : entry.role) + (entry.tool ? " [" + entry.tool + "]" : "");
+  const node = el("div", null, "chat-entry chat-" + cssName(entry.role));
+  node.appendChild(el("span", who, "chat-who"));
+  node.appendChild(el("span", entry.text, "chat-text"));
+  return node;
+}
+
+function renderChat(chat) {
+  const key = JSON.stringify(chat.entries);
+  if (key === chatShown) return;
+  chatShown = key;
+  const section = document.getElementById("detail-chat");
+  section.replaceChildren(el("h2", "Chat"),
+    ...(chat.entries.length ? chat.entries.map(chatEntry) : [el("p", "no messages yet", "dim")]));
+}
+
+async function loadChat() {
+  if (!selected) return;
+  const wanted = selected;
+  try {
+    const response = await fetch(chatUrl(wanted, selectedKind));
+    if (wanted !== selected) return;
+    if (!response.ok) return;
+    const chat = await response.json();
+    if (wanted !== selected) return;
+    renderChat(chat);
+  } catch (e) { /* retry on the next tick */ }
+}
+
+function openDetail(session, kind) {
   const panel = document.getElementById("detail");
   selected = session;
+  selectedKind = kind || "task";
+  chatShown = null;
   renderTasks();
   document.getElementById("detail-title").textContent = session.slice(0, 36);
-  detailBody().replaceChildren(el("p", "loading…", "dim"));
+  detailBody().replaceChildren(selectedKind === "task" ? el("p", "loading…", "dim") : el("p", "session without a task", "dim"));
+  document.getElementById("detail-chat").replaceChildren(el("h2", "Chat"), el("p", "loading…", "dim"));
   panel.hidden = false;
   panel.focus();
   loadDetail();
+  loadChat();
+  clearInterval(chatTimer);
+  chatTimer = setInterval(loadChat, CHAT_POLL_MS);
 }
 
 function closeDetail() {
   const session = selected;
   selected = null;
   lastDetail = null;
+  clearInterval(chatTimer);
+  chatTimer = null;
   document.getElementById("detail").hidden = true;
   detailBody().replaceChildren();
+  document.getElementById("detail-chat").replaceChildren();
   renderTasks();
   const row = rowFor(session);
   if (row) row.focus();
@@ -242,7 +325,7 @@ function closeDetail() {
 async function loadDetail() {
   // The ticking timer re-renders lastDetail, so it must never outlive the task it was fetched for.
   lastDetail = null;
-  if (!selected) return;
+  if (!selected || selectedKind !== "task") return;
   const wanted = selected;
   const response = await fetch("/api/task/" + encodeURIComponent(wanted));
   if (wanted !== selected) return;
@@ -275,21 +358,33 @@ function apply(data) {
   if (selected) loadDetail();
 }
 
+function applyAttention(payload) {
+  attention = {tasks: payload.tasks || {}, sessions: payload.sessions || []};
+  renderTasks();
+}
+
+async function loadAttention() {
+  try { applyAttention(await (await fetch("/api/attention")).json()); } catch (e) { /* the next open or event retries */ }
+}
+
 let polling = null;
 function poll() {
   if (polling) return;
   polling = setInterval(async () => {
     try { apply(await (await fetch("/api/snapshot")).json()); } catch (e) { /* retry on the next tick */ }
+    loadAttention();
   }, 5000);
 }
 
 function connect() {
-  if (typeof EventSource === "undefined") { poll(); return; }
+  if (typeof EventSource === "undefined") { loadAttention(); poll(); return; }
   const source = new EventSource("/api/events");
+  source.onopen = loadAttention;
   source.addEventListener("snapshot", (event) => {
     if (polling) { clearInterval(polling); polling = null; }
     apply(JSON.parse(event.data));
   });
+  source.addEventListener("attention", (event) => applyAttention(JSON.parse(event.data)));
   source.onerror = () => { document.getElementById("status").textContent = "disconnected, retrying…"; poll(); };
 }
 

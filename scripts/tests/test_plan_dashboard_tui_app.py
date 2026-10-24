@@ -30,6 +30,7 @@ from plan_dashboard_support import (  # noqa: E402,F401
 )
 
 SIZE = (150, 40)
+PILOT_DEADLINE_S = 30
 
 
 class Clock:
@@ -62,7 +63,7 @@ def run(scenario, root, **options):
             await settle(app, pilot)
             await scenario(app, pilot)
 
-    asyncio.run(main())
+    asyncio.run(asyncio.wait_for(main(), PILOT_DEADLINE_S))
     return app
 
 

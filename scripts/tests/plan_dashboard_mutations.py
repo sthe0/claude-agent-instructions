@@ -627,6 +627,66 @@ def pytest_addoption(parser):
     parser.addoption("--plan-dashboard-mutation", default="", help=f"same as {ENV}; the variable wins")
 
 
+def _idle_counted(original):
+    def mutated(*args, **kwargs):
+        tui = importlib.import_module(TUI)
+        real = tui.NEEDS_YOU
+        tui.NEEDS_YOU = (*real, "idle")
+        try:
+            return original(*args, **kwargs)
+        finally:
+            tui.NEEDS_YOU = real
+    return mutated
+
+
+def _session_rows_gone(original):
+    def mutated(*args, **kwargs):
+        return [row for row in original(*args, **kwargs) if row["kind"] != "session"]
+    return mutated
+
+
+def _row_unstyled(original):
+    def mutated(row, *args, **kwargs):
+        return original({**row, "style": ""}, *args, **kwargs)
+    return mutated
+
+
+def _state_written_on_refresh(original):
+    def mutated(app, *args, **kwargs):
+        result = original(app, *args, **kwargs)
+        _touch_state_file(Path(app.state_root))
+        return result
+    return mutated
+
+
+TUI_MUTATIONS.update({
+    "tui-waiting-unmarked": (TUI, "wait_mark", _always("")),
+    "tui-waiting-uncounted": (TUI, "waiting_count", _always(0)),
+    "tui-waiting-idle-counted": (TUI, "waiting_count", _idle_counted),
+    "tui-session-rows-dropped": (TUI, "overview_rows", _session_rows_gone),
+    "tui-chat-ask-dropped": (ATTENTION, "question_text", _always("")),
+    "tui-app-chat-stale": (TUI_APP, "chat_if_open", _nothing),
+    "tui-app-rows-unstyled": (TUI_APP, "row_cells", _row_unstyled),
+    "tui-app-chat-keys-swallowed": (TUI_APP, "scroll_chat", _nothing),
+    "tui-app-writes-state": (TUI_APP, "refresh_if_due", _state_written_on_refresh),
+})
+
+WEB_PAGE_MUTATIONS.update({
+    "web-waiting-unmarked": (WEB, "page_bytes", _page_edit(
+        'const wait = WAIT_MARKS[waiting] ? " wait-" + cssName(waiting) : "";', 'const wait = "";')),
+    "web-chat-stale": (WEB, "page_bytes", _page_edit(
+        "chatTimer = setInterval(loadChat, CHAT_POLL_MS);", "chatTimer = null;")),
+    "web-chat-poll-never-stops": (WEB, "page_bytes", _page_edit(
+        "clearInterval(chatTimer);\n  chatTimer = null;", "chatTimer = null;")),
+    "web-attention-no-initial-fetch": (WEB, "page_bytes", _page_edit("source.onopen = loadAttention;", "")),
+    "web-waiting-idle-counted": (WEB, "page_bytes", _page_edit(
+        'const NEEDS_YOU = ["choice", "permission"];', 'const NEEDS_YOU = ["choice", "permission", "idle"];')),
+    "web-session-rows-dropped": (WEB, "page_bytes", _page_edit("attention.sessions.forEach(", "[].forEach(")),
+    "web-chat-ask-dropped": (WEB, "page_bytes", _page_edit(
+        'el("span", entry.text, "chat-text")', 'el("span", entry.tool ? "" : entry.text, "chat-text")')),
+})
+
+
 def pytest_configure(config):
     global applied
     name = os.environ.get(ENV) or config.getoption("--plan-dashboard-mutation")

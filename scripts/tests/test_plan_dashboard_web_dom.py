@@ -21,11 +21,12 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from plan_dashboard import model, web
-from plan_dashboard_support import ALPHA, BETA, NOW, console_root, isolated_home  # noqa: F401
+from plan_dashboard import attention, model, web
+from plan_dashboard_support import ALPHA, BETA, NOW, at, console_root, isolated_home, iso  # noqa: F401
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 SHIM = SCRIPTS / "tests" / "plan_dashboard_dom_shim.js"
@@ -77,22 +78,106 @@ const input = JSON.parse(fs.readFileSync(%(input)s, "utf8"));
 """
 
 
-def run_page(node, tmp_path, root, steps, *, dark=False):
+PROJECT = "-console-project"
+ASK_SESSION, PERMISSION_SESSION, FREE_SESSION = "ask-session", "permission-session", "free-session"
+QUESTION = {"questions": [{"header": "HEADER-TEXT", "question": "Which way?", "multiSelect": False, "options": [
+    {"label": "Left", "description": "DESC-LEFT"}, {"label": "Right", "description": "DESC-RIGHT"}]}]}
+
+
+@pytest.fixture(autouse=True)
+def fresh_attention_cache():
+    attention._CACHE.clear()
+    yield
+    attention._CACHE.clear()
+
+
+def write_fixture_transcript(root, session, entries):
+    path = root.transcripts_root / PROJECT / f"{session}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
+    return path
+
+
+def append_fixture_transcript(root, session, entries):
+    with open(root.transcripts_root / PROJECT / f"{session}.jsonl", "a", encoding="utf-8") as handle:
+        handle.write("".join(json.dumps(entry) + "\n" for entry in entries))
+
+
+def line(role, minutes, content, stop=None):
+    message = {"role": role, "content": content}
+    if stop:
+        message["stop_reason"] = stop
+    return {"type": role, "timestamp": iso(at(minutes=minutes)), "message": message}
+
+
+def tool_use(tool_id, name, tool_input=None):
+    return {"type": "tool_use", "id": tool_id, "name": name, "input": tool_input or {}}
+
+
+def say(text, minutes=9):
+    return line("assistant", minutes, [{"type": "text", "text": text}], "end_turn")
+
+
+ASKING = [line("user", 10, "go on"), line("assistant", 9, [tool_use("q1", "AskUserQuestion", QUESTION)], "tool_use")]
+IDLE = [line("user", 10, "go on"), say("done")]
+WORKING = [line("user", 10, "go on"), line("assistant", 9, [tool_use("t1", "Bash", {"command": "ls"})], "tool_use")]
+
+
+def attention_root(tmp_path, alpha=ASKING):
+    """ALPHA asks, BETA is idle, and three sessions no task owns: one asks, one waits on a permission
+    prompt, one is idle."""
+    root = console_root(tmp_path)
+    write_fixture_transcript(root, ALPHA, alpha)
+    write_fixture_transcript(root, BETA, IDLE)
+    write_fixture_transcript(root, ASK_SESSION, ASKING)
+    write_fixture_transcript(root, PERMISSION_SESSION, WORKING)
+    write_fixture_transcript(root, FREE_SESSION, IDLE)
+    return root
+
+
+def attention_locator():
+    sessions = [{"harness_session": ASK_SESSION, "cwd": "/work/ask", "name": "Asker"},
+                {"harness_session": PERMISSION_SESSION, "cwd": None, "name": None},
+                {"harness_session": FREE_SESSION, "cwd": "/work/free", "name": "Free"}]
+    return SimpleNamespace(NAME="fake", sessions=lambda: sessions,
+                           permission_wait=lambda harness: harness == PERMISSION_SESSION)
+
+
+def attention_routes(root, locator, task_ids):
+    """What ``/api/attention`` and the chat endpoints answer now, from the real attention reader."""
+    overlays, rows = attention.collect(task_ids, locator, root.transcripts_root)
+    routes = {"/api/attention": attention.event_payload(overlays, rows)}
+    for sid in task_ids:
+        routes[f"/api/task/{sid}/chat"] = attention.task_chat(sid, locator, root.transcripts_root)
+    for row in rows:
+        harness = row["harness_session"]
+        routes[f"/api/session/{harness}/chat"] = attention.chat_tail(harness, locator, root.transcripts_root)
+    return routes
+
+
+def run_page(node, tmp_path, root, steps, *, dark=False, locator=None, grow=None):
     """Run ``steps`` (JavaScript with win, doc, panel, rows, rowOf, pick, out and input in scope)
-    against the page the server would send now; returns the ``out`` object it filled."""
+    against the page the server would send now; returns the ``out`` object it filled. ``grow`` is
+    called once the first answers are built; the answers read after it are ``input.later``."""
     now = dt.datetime.fromtimestamp(NOW.timestamp(), dt.timezone.utc)
     snapshot = json.loads(model.to_json(model.collect(
         root.state_root, now=now, window_hours=24, include_all=False, sessions=(), cost_log=root.cost_log)))
     routes = {"/api/snapshot": snapshot}
-    for task in snapshot["tasks"]:
-        detail = model.detail(root.state_root, task["session_id"], cost_log=root.cost_log,
-                              transcripts_root=root.transcripts_root)
-        routes[f"/api/task/{task['session_id']}"] = json.loads(model.to_json(detail))
+    task_ids = [task["session_id"] for task in snapshot["tasks"]]
+    for sid in task_ids:
+        detail = model.detail(root.state_root, sid, cost_log=root.cost_log, transcripts_root=root.transcripts_root)
+        routes[f"/api/task/{sid}"] = json.loads(model.to_json(detail))
+    routes.update(attention_routes(root, locator, task_ids))
+    later = {}
+    if grow is not None:
+        grow(root)
+        later = attention_routes(root, locator, task_ids)
     work = Path(tempfile.mkdtemp(dir=tmp_path))
     page, data, script = work / "page.html", work / "input.json", work / "scenario.js"
     page.write_bytes(web.page_bytes())
-    data.write_text(json.dumps({"snapshot": snapshot, "routes": routes, "dark": dark, "alpha": ALPHA, "beta": BETA}),
-                    encoding="utf-8")
+    data.write_text(json.dumps({"snapshot": snapshot, "routes": routes, "later": later, "dark": dark,
+                                "alpha": ALPHA, "beta": BETA, "ask": ASK_SESSION, "permission": PERMISSION_SESSION,
+                                "free": FREE_SESSION}), encoding="utf-8")
     script.write_text(SCENARIO % {"shim": json.dumps(str(SHIM)), "input": json.dumps(str(data)),
                                   "page": json.dumps(str(page)), "steps": steps}, encoding="utf-8")
     done = subprocess.run([node, str(script)], capture_output=True, text=True, timeout=60, cwd=work)
@@ -197,7 +282,8 @@ def test_a_second_row_replaces_the_panel_content_and_esc_with_the_panel_closed_d
     out = run_page(node, tmp_path, console_root(tmp_path), steps)
     assert out["stillHidden"] is True
     assert BETA in out["text"] and ALPHA not in out["text"]
-    assert [r for r in out["requests"] if r.startswith("/api/task/")] == [f"/api/task/{ALPHA}", f"/api/task/{BETA}"]
+    details = [r for r in out["requests"] if r.startswith("/api/task/") and not r.endswith("/chat")]
+    assert details == [f"/api/task/{ALPHA}", f"/api/task/{BETA}"]
 
 
 def test_liveness_stays_in_the_row_text_and_each_row_takes_its_liveness_background(node, tmp_path):
@@ -225,6 +311,213 @@ def test_the_dark_theme_is_what_the_page_computes_when_the_browser_prefers_it(no
     assert dark_out["style"]["background"] == dark["--bg-panel"]
     assert light_out["style"]["background"] == light["--bg-panel"]
     assert dark_out["bodyBackground"] == dark["--bg"] and light_out["bodyBackground"] == light["--bg"]
+
+
+# ---- waiting marks, session rows and the Chat section --------------------------------------
+
+OPEN_THE_SOURCE = """
+  const open = () => { if (win.sources[0].onopen) win.sources[0].onopen({type: "open"}); };
+  const marks = () => rows().map((r) => ({id: r.dataset.session, classes: r.className.split(" "),
+    mark: r.children[0].textContent, text: r.textContent, cells: r.children.map((c) => c.textContent),
+    background: win.computed(r).background}));
+  const attentionFetches = () => win.requests.filter((u) => u === "/api/attention").length;
+  const chatEntries = () => doc.getElementById("detail-chat").children.slice(1).map((c) => c.textContent);
+"""
+LATER_BETA_ASKS = lambda root: append_fixture_transcript(root, BETA, [ASKING[1]])  # noqa: E731
+
+
+def by_id(rows):
+    return {row["id"]: row for row in rows}
+
+
+def test_a_fresh_page_asks_for_the_attention_overlay_when_its_event_source_opens_and_marks_the_waiting_rows(node, tmp_path):
+    steps = OPEN_THE_SOURCE + """
+  out.before = marks();
+  out.fetchesBefore = attentionFetches();
+  open();
+  await win.settle();
+  out.after = marks();
+  out.fetches = attentionFetches();
+  out.waiting = doc.getElementById("waiting").textContent;
+"""
+    out = run_page(node, tmp_path, attention_root(tmp_path), steps, locator=attention_locator())
+    assert out["fetchesBefore"] == 0 and out["fetches"] == 1
+    assert not [c for row in out["before"] for c in row["classes"] if c.startswith("wait-")]
+    after, light = by_id(out["after"]), theme_vars()[0]
+    expected = {ALPHA: "choice", BETA: "idle", ASK_SESSION: "choice", PERMISSION_SESSION: "permission", FREE_SESSION: "idle"}
+    marks = {"choice": "?", "permission": "!", "idle": "…"}
+    for sid, waiting in expected.items():
+        assert f"wait-{waiting}" in after[sid]["classes"], sid
+        assert after[sid]["mark"] == marks[waiting], sid
+        assert after[sid]["background"] == light[f"--bg-wait-{waiting}"], sid
+    assert after["broken"]["mark"] == "" and not [c for c in after["broken"]["classes"] if c.startswith("wait-")]
+    assert out["waiting"] == "waiting: 3"
+
+
+def test_idle_rows_are_marked_but_not_counted_among_the_waiting(node, tmp_path):
+    root = attention_root(tmp_path, alpha=IDLE)
+    write_fixture_transcript(root, ASK_SESSION, IDLE)
+    write_fixture_transcript(root, PERMISSION_SESSION, IDLE)
+    steps = OPEN_THE_SOURCE + """
+  open();
+  await win.settle();
+  out.after = marks();
+  out.waiting = doc.getElementById("waiting").textContent;
+"""
+    out = run_page(node, tmp_path, root, steps, locator=SimpleNamespace(
+        NAME="fake", sessions=attention_locator().sessions, permission_wait=lambda harness: False))
+    idle = [row for row in out["after"] if "wait-idle" in row["classes"]]
+    assert len(idle) >= 4 and all(row["mark"] == "…" for row in idle)
+    assert out["waiting"] == "waiting: 0"
+
+
+def test_a_reopened_event_source_asks_for_the_overlay_again(node, tmp_path):
+    steps = OPEN_THE_SOURCE + """
+  open();
+  await win.settle();
+  win.sources[0].fail();
+  open();
+  await win.settle();
+  out.fetches = attentionFetches();
+"""
+    out = run_page(node, tmp_path, attention_root(tmp_path), steps, locator=attention_locator())
+    assert out["fetches"] == 2
+
+
+def test_an_attention_event_marks_a_row_and_moves_the_count_without_a_request(node, tmp_path):
+    steps = OPEN_THE_SOURCE + """
+  open();
+  await win.settle();
+  const beta = () => marks().find((r) => r.id === input.beta);
+  out.beforeMark = beta().mark;
+  out.fetches = attentionFetches();
+  win.emit("attention", input.later["/api/attention"]);
+  await win.settle();
+  out.afterMark = beta().mark;
+  out.afterClasses = beta().classes;
+  out.fetchesAfter = attentionFetches();
+  out.waiting = doc.getElementById("waiting").textContent;
+"""
+    out = run_page(node, tmp_path, attention_root(tmp_path), steps, locator=attention_locator(), grow=LATER_BETA_ASKS)
+    assert out["beforeMark"] == "…" and out["afterMark"] == "?" and "wait-choice" in out["afterClasses"]
+    assert out["fetchesAfter"] == out["fetches"] == 1
+    assert out["waiting"] == "waiting: 4"
+
+
+def test_a_session_row_shows_its_name_or_id_and_dashes_and_its_click_opens_only_the_chat(node, tmp_path):
+    steps = OPEN_THE_SOURCE + """
+  open();
+  await win.settle();
+  out.rows = marks();
+  rowOf(input.ask).click();
+  await win.settle();
+  out.hidden = panel.hidden;
+  out.text = panel.textContent;
+  out.selected = rows().filter((r) => r.classList.contains("selected")).map((r) => r.dataset.session);
+  out.requests = win.requests;
+  out.entries = chatEntries();
+"""
+    out = run_page(node, tmp_path, attention_root(tmp_path), steps, locator=attention_locator())
+    rows = by_id(out["rows"])
+    named, unnamed = rows[ASK_SESSION]["cells"], rows[PERMISSION_SESSION]["cells"]
+    columns = ["wait", "session", "live", "node", "stage", "wall", "cost", "goal"]
+    assert named[columns.index("session")] == "Asker" and unnamed[columns.index("session")] == PERMISSION_SESSION
+    assert {named[columns.index(c)] for c in ("node", "stage", "wall", "cost")} == {"—"}
+    assert out["hidden"] is False and out["selected"] == [ASK_SESSION]
+    assert f"/api/session/{ASK_SESSION}/chat" in out["requests"]
+    assert not [r for r in out["requests"] if r == f"/api/task/{ASK_SESSION}"]
+    assert "Which way?" in out["text"] and "Stages" not in out["text"] and "Phases" not in out["text"]
+    assert len(out["entries"]) == 2
+
+
+def test_the_chat_shows_an_ask_calls_question_and_labels_beside_its_tool_name(node, tmp_path):
+    steps = """
+  rowOf(input.alpha).click();
+  await win.settle();
+  out.entries = doc.getElementById("detail-chat").children.slice(1).map((c) => c.children.map((x) => x.textContent));
+  out.text = panel.textContent;
+"""
+    out = run_page(node, tmp_path, attention_root(tmp_path), steps, locator=attention_locator())
+    who, text = [e for e in out["entries"] if "[AskUserQuestion]" in e[0]][0]
+    assert who == "assistant [AskUserQuestion]"
+    assert text.splitlines() == ["Which way?", "- Left", "- Right"]
+    assert out["entries"][0] == ["you", "go on"]
+    assert "HEADER-TEXT" not in out["text"] and "DESC-LEFT" not in out["text"]
+
+
+def test_chat_text_is_shown_as_text_and_never_as_markup(node, tmp_path):
+    markup = '<img src=x onerror="boom()"><b>bold</b>'
+    root = attention_root(tmp_path, alpha=[line("user", 10, markup), say("ok")])
+    steps = """
+  rowOf(input.alpha).click();
+  await win.settle();
+  out.text = panel.textContent;
+  out.images = panel.querySelectorAll("img").length;
+"""
+    out = run_page(node, tmp_path, root, steps, locator=attention_locator())
+    assert markup in out["text"] and out["images"] == 0
+
+
+def test_opening_the_panel_fetches_the_chat_and_a_poll_one_interval_later_shows_a_new_entry(node, tmp_path):
+    grow = lambda root: append_fixture_transcript(root, ALPHA, [say("NEW-ENTRY", minutes=8)])  # noqa: E731
+    steps = OPEN_THE_SOURCE + """
+  const url = "/api/task/" + input.alpha + "/chat";
+  rowOf(input.alpha).click();
+  await win.settle();
+  out.first = chatEntries().join("|");
+  out.fetchesFirst = win.requests.filter((u) => u === url).length;
+  out.timers = win.clock.live().filter((t) => t.repeat).map((t) => t.ms);
+  input.routes[url] = input.later[url];
+  win.clock.advance(2000);
+  await win.settle();
+  out.second = chatEntries().join("|");
+  out.fetchesSecond = win.requests.filter((u) => u === url).length;
+"""
+    out = run_page(node, tmp_path, attention_root(tmp_path), steps, locator=attention_locator(), grow=grow)
+    assert "NEW-ENTRY" not in out["first"] and "NEW-ENTRY" in out["second"]
+    assert out["fetchesFirst"] == 1 and out["fetchesSecond"] == 2
+    assert 2000 in out["timers"] and web.DEFAULT_INTERVAL_S * 1000 == 2000
+
+
+def test_closing_the_panel_stops_the_chat_poll(node, tmp_path):
+    steps = OPEN_THE_SOURCE + """
+  const url = "/api/task/" + input.alpha + "/chat";
+  const polls = () => win.clock.live().filter((t) => t.repeat && t.ms === 2000).length;
+  rowOf(input.alpha).click();
+  await win.settle();
+  out.pollsOpen = polls();
+  win.key("Escape");
+  await win.settle();
+  out.pollsClosed = polls();
+  const before = win.requests.filter((u) => u === url).length;
+  win.clock.advance(10000);
+  await win.settle();
+  out.requestsAfterClose = win.requests.filter((u) => u === url).length - before;
+  out.chatAfterClose = doc.getElementById("detail-chat").children.length;
+"""
+    out = run_page(node, tmp_path, attention_root(tmp_path), steps, locator=attention_locator())
+    assert out["pollsOpen"] == 1 and out["pollsClosed"] == 0
+    assert out["requestsAfterClose"] == 0 and out["chatAfterClose"] == 0
+
+
+def test_an_open_panel_survives_a_new_snapshot_event_and_a_clock_tick(node, tmp_path):
+    steps = OPEN_THE_SOURCE + """
+  rowOf(input.alpha).click();
+  await win.settle();
+  win.emit("snapshot", input.snapshot);
+  await win.settle();
+  win.clock.advance(1000);
+  await win.settle();
+  out.hidden = panel.hidden;
+  out.text = panel.textContent;
+  out.selected = rows().filter((r) => r.classList.contains("selected")).map((r) => r.dataset.session);
+  out.entries = chatEntries();
+"""
+    out = run_page(node, tmp_path, attention_root(tmp_path), steps, locator=attention_locator())
+    detail = out["routes"][f"/api/task/{ALPHA}"]
+    assert out["hidden"] is False and out["selected"] == [ALPHA]
+    assert all(stage["title"] in out["text"] for stage in detail["stages"])
+    assert any("Which way?" in entry for entry in out["entries"])
 
 
 # ---- the stylesheet ------------------------------------------------------------------------
