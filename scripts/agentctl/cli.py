@@ -4127,6 +4127,40 @@ def cmd_order_list(args, *, store: StateStore, runner: Runner | None = None) -> 
     )
 
 
+def cmd_enumerate_sidecar_list(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Read-only: list on-disk enumerate-sidecar files.
+
+    Location: <agentctl-dir>/enumerate-sidecars/<session>/<digest>.json —
+    the retired detached enumeration worker wrote its result payload here, keyed
+    by (session_id, plan content digest), so approve/replan could fold it in
+    without risking a write to an abandoned plan.  Session-end cleanup (resolve)
+    discards them.
+
+    Without --session lists every session's sidecars; with --session lists only
+    that session's.  data.root names the directory; data.sidecars is a list of
+    {session, digest} dicts."""
+    session_id = getattr(args, "session", None)
+    pairs = enumerate_sidecar.list_sidecars(session_id)
+    if not pairs:
+        msg = "no enumerate-sidecar files"
+        if session_id:
+            msg += f" for session {session_id}"
+    else:
+        msg = "\n".join(f"{s}/{d}" for s, d in pairs)
+    node = "(none)"
+    if session_id:
+        try:
+            state = store.load(session_id)
+            node = state.node
+        except Exception:
+            pass
+    return Directive(
+        True, node, "inspect", msg,
+        data={"sidecars": [{"session": s, "digest": d} for s, d in pairs],
+              "root": str(enumerate_sidecar.DEFAULT_ROOT)},
+    )
+
+
 def cmd_question_check(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Read-only: report the active premise bag's blockers via the SAME
     plugins_premise.premise_blockers the plan_approval gate uses, so check and gate
@@ -13443,6 +13477,7 @@ COMMANDS = {
     "order-raise": cmd_order_raise,
     "order-dispose": cmd_order_dispose,
     "order-list": cmd_order_list,
+    "enumerate-sidecar-list": cmd_enumerate_sidecar_list,
     "classify": cmd_classify,
     "plan": cmd_plan,
     "plan-render": cmd_plan_render,
@@ -13544,7 +13579,7 @@ _SESSION_COMMANDS = (
     "question-rebind", "question-retire", "question-list", "question-check",
     "question-enumerate", "question-enumerate-worker", "question-enumerate-escape",
     "question-candidate-dispose",
-    "order-raise", "order-dispose", "order-list", "classify", "plan",
+    "order-raise", "order-dispose", "order-list", "enumerate-sidecar-list", "classify", "plan",
     "plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
     "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
@@ -13955,6 +13990,10 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp.add_argument("--format", dest="format", default="", choices=["", "md"],
                     help="md renders the scope-coverage block the essence must carry; "
                          "default is a compact one-liner")
+
+    sp = add("enumerate-sidecar-list")
+    sp.add_argument("--session", default=None,
+                    help="filter to one session's sidecars; omit to list all sessions")
 
     sp = add("classify"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")

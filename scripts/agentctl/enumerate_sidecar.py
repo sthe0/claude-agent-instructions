@@ -106,6 +106,32 @@ def read_discarding_superseded(
     return result
 
 
+def list_sidecars(
+    session_id: str | None = None, *, root: Path | None = None
+) -> list[tuple[str, str]]:
+    """Return [(session_dir_name, content_digest), ...] for every non-tmp sidecar.
+
+    session_dir_name is the sanitized form stored on disk (identical to the
+    original session_id for normal UUID-shaped ids).  When session_id is given,
+    only that session's directory is scanned; when omitted, all session
+    directories under the sidecar root are included.  In-progress temp files
+    (``.tmp-*.json``) are always skipped."""
+    r = root if root is not None else DEFAULT_ROOT
+    if session_id is not None:
+        dirs = [_session_dir(r, session_id)]
+    else:
+        dirs = sorted(r.iterdir()) if r.is_dir() else []
+    result = []
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.json")):
+            if f.name.startswith(".tmp-"):
+                continue
+            result.append((d.name, f.stem))
+    return result
+
+
 def discard_all_for_session(session_id: str, *, root: Path | None = None) -> None:
     """Remove every sidecar (any digest) for `session_id`, INCLUDING an orphaned
     `.tmp-*.json` left by a worker killed between mkstemp and os.replace --
