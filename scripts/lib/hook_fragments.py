@@ -9,7 +9,8 @@ Contract:
 
 * ``@FRAGMENT_DIR@`` in a command expands to the real directory of the fragment file
   (symlinks resolved), so a fragment can live in another checkout and still point at
-  its own scripts.
+  its own scripts. The path is substituted unquoted: write ``"@FRAGMENT_DIR@/x.py"``
+  if the directory may contain whitespace.
 * An entry is identified by its optional string ``id`` (fragment-only, never written
   into settings.json) within its (event, matcher) group, else by its exact expanded
   command. Nothing is parsed to decide identity. Adding or removing an ``id`` on an
@@ -33,7 +34,8 @@ Contract:
 * A missing ownership record reads as empty: entries already in settings.json look
   hand-added and are left alone (identical ones block with a warning). An unparsable
   record skips the whole fragment pass, with a warning: nothing is added, removed or
-  recorded.
+  recorded, and Core's own pass then sees fragment entries as ordinary hooks (it may
+  retime one that runs a Core script name, or skip re-adding a hand-deleted Core row).
 * A broken fragment (unparsable, malformed, a dangling symlink, or naming a script
   that is missing under its own directory) is skipped with a warning and keeps the
   entries it owns.
@@ -249,7 +251,7 @@ def _present_fragments(fragment_dir):
     if os.path.isdir(fragment_dir):
         for fname in sorted(os.listdir(fragment_dir)):
             path = os.path.join(fragment_dir, fname)
-            if fname.endswith(".json") and os.path.lexists(path):
+            if fname.endswith(".json"):
                 present[fname] = path
     return present
 
@@ -277,17 +279,30 @@ class _Merge:
 
     @staticmethod
     def claim(pool, ident, event, matcher, cmd):
-        """Take the owned placeholder this entry continues: the one with its identity,
+        """Take the removed owned entry this entry continues: the one with its identity,
         else the one holding the same command (an ``id`` added or removed in place)."""
         if pool.get(ident):
             return pool[ident].pop(0)
-        for sentinels in pool.values():
-            for s in sentinels:
-                e = s[_ENTRY]
+        for removed in pool.values():
+            for r in removed:
+                e = r["entry"]
                 if (e["event"], e["matcher"], e["command"]) == (event, matcher, cmd):
-                    sentinels.remove(s)
-                    return s
+                    removed.remove(r)
+                    return r
         return None
+
+    def remove_owned(self, own):
+        """Phase 1: take every owned entry out of its group, remembering where it stood
+        (the count of foreign hooks before it) and what it was."""
+        owned_ids = {id(s) for _, _, s in own}
+        removed = []
+        for event, group, s in own:
+            before = group["hooks"][: group["hooks"].index(s)]
+            slot = sum(1 for h in before if id(h) not in owned_ids)
+            _swap(group, s, None)
+            self.touched.add((event, group.get("matcher") or None))
+            removed.append({"slot": slot, "held": s[_HELD], "entry": s[_ENTRY]})
+        return removed
 
     def warn_same_script(self, name, group, hook, where, own_hooks):
         script = hook_script_path(hook["command"])
@@ -303,12 +318,17 @@ class _Merge:
                 return
 
     def sync_fragment(self, name, entries, own):
-        """Make the fragment's owned entries equal ``entries``; returns its record rows."""
+        """Make the fragment's owned entries equal ``entries``; returns its record rows.
+
+        Two phases: every owned entry leaves its group, then the current entries go in
+        one by one, each checked only against what its group holds at that moment, so
+        no pending entry of this fragment is ever seen as a holder.
+        """
         hooks = self.hooks
         pool = {}
-        for _, _, s in own:
-            pool.setdefault(_entry_ident(s[_ENTRY]), []).append(s)
-        own_hooks, seen, owned = {id(s) for _, _, s in own}, set(), []
+        for r in self.remove_owned(own):
+            pool.setdefault(_entry_ident(r["entry"]), []).append(r)
+        own_hooks, seen, owned, placed = set(), set(), [], {}
         for event, matcher, id_, hook in entries:
             cmd = hook["command"]
             where = _where(event, matcher)
@@ -317,40 +337,35 @@ class _Merge:
                 self.warnings.append(f"{name}: {cmd} is listed twice in {where}; installed once")
                 continue
             seen.add(ident)
-            sentinel = self.claim(pool, ident, event, matcher, cmd)
+            old = self.claim(pool, ident, event, matcher, cmd)
             group = _find_group(hooks, event, matcher)
-            holder = next(
-                (h for h in (group["hooks"] if group else []) if h is not sentinel and _command(h) == cmd),
-                None,
-            )
+            holder = next((h for h in (group["hooks"] if group else []) if _command(h) == cmd), None)
             if holder is not None:
                 by = self.owner_of(holder)
-                if sentinel is None:
+                if old is None:
                     self.warnings.append(f"{name}: {cmd} not installed, already present in {where} ({by})")
                 else:
-                    self.drop(event, group, sentinel, f"{name} displaced")
+                    self.changes.append(f"- {where}: {cmd} ({name} displaced)")
                     self.warnings.append(f"{name}: {cmd} dropped, now also present in {where} ({by})")
                 continue
-            if sentinel is not None:
-                held = sentinel[_HELD]
-                if held != hook:
-                    self.changes.append(f"~ {where}: {cmd}")
-                    _swap(group, sentinel, hook)
-                else:
-                    _swap(group, sentinel, held)
-                    hook = held
+            if group is None:
+                group = _group_for(hooks.setdefault(event, []), matcher)
+            if old is not None and old["held"] == hook:
+                hook = old["held"]
             else:
-                if group is None:
-                    group = _group_for(hooks.setdefault(event, []), matcher)
-                group["hooks"].append(hook)
-                self.changes.append(f"+ {where}: {cmd} ({name})")
+                self.changes.append(f"~ {where}: {cmd}" if old is not None else f"+ {where}: {cmd} ({name})")
+            slot = None if old is None else old["slot"]
+            earlier = sum(1 for sl in placed.get(id(group), []) if slot is not None and sl <= slot)
+            at = len(group["hooks"]) if slot is None else min(slot + earlier, len(group["hooks"]))
+            group["hooks"].insert(at, hook)
+            placed.setdefault(id(group), []).append(float("inf") if slot is None else slot)
             own_hooks.add(id(hook))
             self.installed_by[id(hook)] = name
             owned.append(_entry(event, matcher, id_, cmd))
             self.warn_same_script(name, group, hook, where, own_hooks)
-        for s in [s for ss in pool.values() for s in ss]:
-            event, group = next((e, g) for e, g, x in _sentinels(hooks) if x is s)
-            self.drop(event, group, s, f"{name} edited")
+        for left in (r for removed in pool.values() for r in removed):
+            e = left["entry"]
+            self.changes.append(f"- {_where(e['event'], e['matcher'])}: {e['command']} ({name} edited)")
         return owned
 
 
