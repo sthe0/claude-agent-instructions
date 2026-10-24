@@ -398,11 +398,17 @@ def _page_edit(target, replacement, *, count=1):
     return wrap
 
 
+_THEME_PROPERTIES = ("text", "text-dim", "text-ok", "text-warn", "text-bad", "text-accent", "bg", "bg-panel",
+                     "bg-hover", "bg-selected", "bg-live-active", "bg-live-idle", "bg-live-stale", "bg-live-resolved",
+                     "bg-live-stub", "bg-wait-choice", "bg-wait-permission", "bg-wait-idle", "line")
+ONE_COLOUR_FOR_EVERY_THEME_PROPERTY = (
+    ":root, :root:root { " + " ".join(f"--{name}: #808080 !important;" for name in _THEME_PROPERTIES) + " }\n")
+
 WEB_PAGE_MUTATIONS = {
     "web-detail-offscreen": (WEB, "page_bytes", _page_edit("#detail { position: fixed;", "#detail { position: static;")),
     "web-row-click-dead": (WEB, "page_bytes", _page_edit('tr.addEventListener("click",', 'tr.addEventListener("x-click",')),
     "web-detail-no-close": (WEB, "page_bytes", _page_edit("function closeDetail() {", "function closeDetail() { return;")),
-    "web-colours-absent": (WEB, "page_bytes", _page_edit("background: var(--bg-live-", "background-image: var(--bg-live-", count=5)),
+    "web-colours-absent": (WEB, "page_bytes", _page_edit("</style>", ONE_COLOUR_FOR_EVERY_THEME_PROPERTY + "</style>")),
     "web-contrast-low": (WEB, "page_bytes", _page_edit("--text-dim: #a5b0bd", "--text-dim: #1c2330")),
     "web-detail-unscrollable": (WEB, "page_bytes", _page_edit("max-height: calc(100vh - 2rem); overflow-y: auto;", "")),
 }
