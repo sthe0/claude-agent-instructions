@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """Standing per-run check: scripts/crutch_registry.toml still matches the live
-Python tree, and no `semantic-*` entry's judge-guard was silently reverted.
+Python and prose trees, and no `semantic-*` entry's judge-guard was silently
+reverted.
 
 Difficulty removed: crutch-inventory.py (stage 1) and crutch_registry.toml
 (stage 2) are a one-time snapshot. Without a re-run wired into the normal
-verification path, three regressions can land unnoticed: a brand-new
+verification path, five regressions can land unnoticed: a brand-new
 regex-to-hard-sink site with no registry entry at all; a registry entry whose
-site was renamed/removed (stale); and — the gap
-scripts/tests/test_no_semantic_unguarded.py names explicitly as its own
-complementary check — a site the registry trusts as `semantic-*` (judge-
-guarded) losing that guard in a later edit, which a (file, scope)-keyed
-allowlist cannot see because neither its id nor its scope-level shape changes.
+site was renamed/removed (stale); a site the registry trusts as `semantic-*`
+(judge-guarded) losing that guard in a later edit; and the same two missing/
+stale conditions for prose-domain entries (which are not covered by any other
+check in this aggregator).
 
-This script re-derives each of the three conditions from the CURRENT tree on
+This script re-derives each of the five conditions from the CURRENT tree on
 every run:
-  (a) MISSING  — a site crutch-inventory.py enumerates now with no matching
-                 registry id (a new crutch landing silently).
-  (b) STALE    — a registry id whose site no longer exists in the current
-                 enumeration (the registry drifted out of date).
+  (a) MISSING  — a code site crutch-inventory.py enumerates now with no
+                 matching registry id (a new crutch landing silently).
+  (b) STALE    — a code-domain registry id whose site no longer exists in the
+                 current enumeration (the registry drifted out of date).
   (c) REVERTED — a registry entry whose `class` starts "semantic" still
                  reaches a hard-outcome sink (pretooluse_deny / stop_block /
                  exit_code_2 / hard_behaviour) in the current tree, but
@@ -25,9 +25,13 @@ every run:
                  carries a `judge_*` call any more — the guard
                  gen_crutch_registry.py's ground note relied on has been
                  removed.
+  (d) MISSING PROSE — a prose site crutch-inventory.py enumerates now with
+                 no matching registry id.
+  (e) STALE PROSE — a prose-domain registry id whose prose site no longer
+                 exists in the current enumeration.
 
-Decision procedure: AST + import-graph over Python source ONLY, via
-crutch-inventory.py's own enumerate_code_sites / enumerate_code_file_rollups
+Decision procedure for (a)–(c): AST + import-graph over Python source ONLY,
+via crutch-inventory.py's own enumerate_code_sites / enumerate_code_file_rollups
 (imported dynamically — see _load_inventory_module — the established pattern
 scripts/gen_crutch_registry.py and scripts/tests/test_no_semantic_unguarded.py
 already use for this hyphenated filename). Nothing here regex-matches prose
@@ -35,11 +39,15 @@ or classifies meaning; the CLAUDE.md-preamble anti-pattern this whole plan
 guards against is a hard block driven by a meaning-classifying regex, and a
 verifier that did the same one level up would just relocate the defect.
 
-Restricted to CODE-domain registry entries (`domain in {"code",
-"code_file_rollup"}`) — the prose domain (Domain B) is a separate concern
-with its own stage (5), and folding it in here would mean reasoning about
-prose classification from an AST-only script, which is exactly the boundary
-this script must not cross.
+Decision procedure for (d)–(e): mechanical registry completeness check over
+the prose-domain entries produced by crutch-inventory.py's own
+enumerate_prose_sites / discover_prose_paths (reused via the same dynamic
+import). No prose CLASSIFICATION happens here — the check only answers
+"is this enumerated prose site already in the registry?", the same bookkeeping
+question (a)/(b) ask for code. Whether a newly enumerated prose site is
+normative, illustrative, or not-applicable is for the author to decide after
+running gen_crutch_registry.py; this script just fails loudly before that
+decision can be skipped.
 
 Honest limits (stated as limits, not coverage — ast_purity.py's style):
   - Inherits every limit crutch-inventory.py's own module docstring states:
@@ -123,6 +131,7 @@ REGISTRY_PATH = SCRIPTS_DIR / "crutch_registry.toml"
 # do not merge them.
 _HARD_SINK_CLASSES = frozenset({"pretooluse_deny", "stop_block", "exit_code_2", "hard_behaviour"})
 _CODE_DOMAINS = frozenset({"code", "code_file_rollup"})
+_PROSE_DOMAIN = frozenset({"prose"})
 
 
 def _load_inventory_module():
@@ -172,8 +181,32 @@ def find_regressions(inv, root: Path, registry_path: Path):
     return missing, stale, reverted, all_code
 
 
-def run_check(inv, root: Path, registry_path: Path) -> int:
+def find_prose_gaps(inv, repo_root: Path, registry_path: Path):
+    """Return (missing_prose_ids, stale_prose_ids, all_prose) for the current
+    prose tree vs the registry at registry_path. all_prose is the id -> site
+    index of the current prose enumeration.
+
+    Conditions (d) and (e): purely mechanical registry completeness check over
+    prose-domain entries. No prose classification happens here."""
+    prose_paths = inv.discover_prose_paths(repo_root)
+    prose_sites = inv.enumerate_prose_sites(prose_paths)
+    all_prose = inv._index_by_id(prose_sites)
+
+    registry = inv._load_registry(registry_path)
+    prose_registry = {eid: e for eid, e in registry.items() if e.get("domain") in _PROSE_DOMAIN}
+
+    missing = sorted(set(all_prose) - set(prose_registry))
+    stale = sorted(set(prose_registry) - set(all_prose))
+
+    return missing, stale, all_prose
+
+
+def run_check(inv, root: Path, registry_path: Path, repo_root: Path | None = None) -> int:
+    if repo_root is None:
+        repo_root = SCRIPTS_DIR.parent
+
     missing, stale, reverted, all_code = find_regressions(inv, root, registry_path)
+    missing_prose, stale_prose, all_prose = find_prose_gaps(inv, repo_root, registry_path)
 
     print(f"verify-semantic-gates: {len(all_code)} code site(s) (scope + file-rollup) at {root}")
     print(f"unregistered, condition (a): {len(missing)}")
@@ -197,16 +230,31 @@ def run_check(inv, root: Path, registry_path: Path) -> int:
     if len(reverted) > 20:
         print(f"  ... and {len(reverted) - 20} more")
 
-    ok = not (missing or stale or reverted)
+    print(f"verify-semantic-gates: {len(all_prose)} prose site(s) at {repo_root}")
+    print(f"unregistered prose, condition (d): {len(missing_prose)}")
+    for eid in missing_prose[:20]:
+        site = all_prose[eid]
+        print(f"  UNREGISTERED {eid}  {site.file}")
+    if len(missing_prose) > 20:
+        print(f"  ... and {len(missing_prose) - 20} more")
+
+    print(f"stale prose registry entries, condition (e): {len(stale_prose)}")
+    for eid in stale_prose[:20]:
+        entry = registry.get(eid, {})
+        print(f"  STALE {eid}  {entry.get('file', '<unknown>')}  class={entry.get('class', '<unknown>')}")
+    if len(stale_prose) > 20:
+        print(f"  ... and {len(stale_prose) - 20} more")
+
+    ok = not (missing or stale or reverted or missing_prose or stale_prose)
     if ok:
         print("verify-semantic-gates: OK")
         return 0
 
     print("verify-semantic-gates: FAIL")
     print(
-        "\nConditions (a) and (b) are bookkeeping: the registry is generated, "
-        "so regenerate it with `python3 scripts/gen_crutch_registry.py` and "
-        "then disposition the entries that appear — never hand-edit "
+        "\nConditions (a), (b), (d), and (e) are bookkeeping: the registry is "
+        "generated, so regenerate it with `python3 scripts/gen_crutch_registry.py` "
+        "and then disposition the entries that appear — never hand-edit "
         f"{registry_path.name}. Condition (c) is NOT bookkeeping: a reverted "
         "judge guard means a site that used to route a semantic decision "
         "through a model judge now decides it structurally again. Restore the "
@@ -220,10 +268,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=SCRIPTS_DIR, help="root to scan for Python code sites (crutch-inventory.py's --root)")
     parser.add_argument("--registry", type=Path, default=REGISTRY_PATH, help="registry TOML to diff against")
     parser.add_argument("--staged", action="store_true", help="ignored; accepted for verify-all uniformity")
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=SCRIPTS_DIR.parent,
+        help="repository root for prose site discovery (default: parent of scripts/)",
+    )
     args = parser.parse_args(argv)
 
     inv = _load_inventory_module()
-    return run_check(inv, args.root, args.registry)
+    return run_check(inv, args.root, args.registry, args.repo_root)
 
 
 if __name__ == "__main__":

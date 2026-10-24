@@ -150,7 +150,7 @@ def test_unregistered_site_is_reported_missing(tmp_path):
     assert not stale
     assert not reverted
 
-    rc = vsg.run_check(inv, tmp_path, registry_path)
+    rc = vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path)
     assert rc == 1
 
 
@@ -167,7 +167,7 @@ def test_fully_registered_tree_reports_nothing_missing(tmp_path):
     assert not missing
     assert not stale
     assert not reverted
-    assert vsg.run_check(inv, tmp_path, registry_path) == 0
+    assert vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path) == 0
 
 
 # --- condition (b): stale registry entry -------------------------------------
@@ -187,7 +187,7 @@ def test_stale_registry_entry_is_reported(tmp_path):
     missing, stale, reverted, all_code = vsg.find_regressions(inv, tmp_path, registry_path)
     assert "0000000000000000" in stale
     assert not reverted
-    assert vsg.run_check(inv, tmp_path, registry_path) == 1
+    assert vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path) == 1
 
 
 # --- condition (c): judge-guard silently reverted ----------------------------
@@ -213,7 +213,7 @@ def test_semantic_guarded_site_with_judge_removed_is_reported_reverted(tmp_path)
     assert decide_site.id in reverted_ids
     assert not missing
     assert not stale
-    assert vsg.run_check(inv, tmp_path, registry_path) == 1
+    assert vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path) == 1
 
 
 def test_semantic_guarded_site_with_same_scope_judge_is_not_reverted(tmp_path):
@@ -232,7 +232,7 @@ def test_semantic_guarded_site_with_same_scope_judge_is_not_reverted(tmp_path):
 
     missing, stale, reverted, all_code = vsg.find_regressions(inv, tmp_path, registry_path)
     assert not reverted
-    assert vsg.run_check(inv, tmp_path, registry_path) == 0
+    assert vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path) == 0
 
 
 def test_semantic_guarded_site_corroborated_by_file_rollup_is_not_a_false_positive(tmp_path):
@@ -258,7 +258,7 @@ def test_semantic_guarded_site_corroborated_by_file_rollup_is_not_a_false_positi
 
     missing, stale, reverted, all_code = vsg.find_regressions(inv, tmp_path, registry_path)
     assert not reverted
-    assert vsg.run_check(inv, tmp_path, registry_path) == 0
+    assert vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path) == 0
 
 
 def test_semantic_guarded_hard_behaviour_site_with_judge_removed_is_reported_reverted(tmp_path):
@@ -285,7 +285,7 @@ def test_semantic_guarded_hard_behaviour_site_with_judge_removed_is_reported_rev
     assert route_site.id in reverted_ids
     assert not missing
     assert not stale
-    assert vsg.run_check(inv, tmp_path, registry_path) == 1
+    assert vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path) == 1
 
 
 def test_structural_site_with_no_judge_is_not_reverted(tmp_path):
@@ -307,7 +307,7 @@ def test_structural_site_with_no_judge_is_not_reverted(tmp_path):
 
     missing, stale, reverted, all_code = vsg.find_regressions(inv, tmp_path, registry_path)
     assert not reverted
-    assert vsg.run_check(inv, tmp_path, registry_path) == 0
+    assert vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path) == 0
 
 
 def test_main_exits_zero_on_clean_fixture(tmp_path):
@@ -320,7 +320,7 @@ def test_main_exits_zero_on_clean_fixture(tmp_path):
         _registry_entry_for(rollup, "structural"),
     ])
 
-    rc = vsg.main(["--root", str(tmp_path), "--registry", str(registry_path), "--staged"])
+    rc = vsg.main(["--root", str(tmp_path), "--registry", str(registry_path), "--staged", "--repo-root", str(tmp_path)])
     assert rc == 0
 
 
@@ -333,7 +333,7 @@ def test_fail_output_names_the_generator(tmp_path, capsys):
     registry_path = tmp_path / "registry.toml"
     _write_registry(registry_path, [])
 
-    assert vsg.run_check(inv, tmp_path, registry_path) == 1
+    assert vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path) == 1
     fail_out = capsys.readouterr().out
     assert "gen_crutch_registry.py" in fail_out
     assert "Restore the guard" in fail_out
@@ -344,5 +344,107 @@ def test_fail_output_names_the_generator(tmp_path, capsys):
         _registry_entry_for(decide_site, "structural"),
         _registry_entry_for(rollup, "structural"),
     ])
-    assert vsg.run_check(inv, tmp_path, registry_path) == 0
+    assert vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path) == 0
     assert "gen_crutch_registry.py" not in capsys.readouterr().out
+
+
+# --- condition (d): unregistered prose site ----------------------------------
+
+def test_unregistered_prose_site_is_reported_missing(tmp_path):
+    """RED: a new prose site (modal sentence) with no registry entry triggers
+    condition (d) — the prose analogue of condition (a)."""
+    (tmp_path / "CLAUDE.md").write_text(
+        "# Section\n\nYou must always call foo() before bar().\n",
+        encoding="utf-8",
+    )
+    registry_path = tmp_path / "registry.toml"
+    _write_registry(registry_path, [])
+
+    missing_prose, stale_prose, all_prose = vsg.find_prose_gaps(inv, tmp_path, registry_path)
+    assert missing_prose, "expected at least one unregistered prose site"
+    assert not stale_prose
+
+    rc = vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path)
+    assert rc == 1
+
+
+def test_fully_registered_prose_tree_reports_nothing_missing(tmp_path):
+    """GREEN: all enumerated prose sites present in registry — run_check passes."""
+    (tmp_path / "CLAUDE.md").write_text(
+        "# Section\n\nYou must always call foo() before bar().\n",
+        encoding="utf-8",
+    )
+    prose_paths = inv.discover_prose_paths(tmp_path)
+    prose_sites = inv.enumerate_prose_sites(prose_paths)
+    assert prose_sites, "fixture must enumerate at least one prose site"
+
+    registry_path = tmp_path / "registry.toml"
+    entries = [_registry_entry_for(s, "normative") for s in prose_sites]
+    _write_registry(registry_path, entries)
+
+    missing_prose, stale_prose, all_prose = vsg.find_prose_gaps(inv, tmp_path, registry_path)
+    assert not missing_prose
+    assert not stale_prose
+
+    rc = vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path)
+    assert rc == 0
+
+
+# --- condition (e): stale prose registry entry --------------------------------
+
+def test_stale_prose_registry_entry_is_reported(tmp_path):
+    """RED: a prose-domain registry entry whose site no longer exists triggers
+    condition (e) — the prose analogue of condition (b)."""
+    (tmp_path / "CLAUDE.md").write_text("# Section\n\nHello world.\n", encoding="utf-8")
+
+    registry_path = tmp_path / "registry.toml"
+    _write_registry(registry_path, [{
+        "id": "ffff000000000000",
+        "domain": "prose",
+        "file": "memory-global/leaves/gone.md",
+        "class": "normative",
+        "disposition": "keep",
+        "ground": "site that no longer exists",
+    }])
+
+    missing_prose, stale_prose, all_prose = vsg.find_prose_gaps(inv, tmp_path, registry_path)
+    assert "ffff000000000000" in stale_prose
+    assert not missing_prose
+
+    rc = vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path)
+    assert rc == 1
+
+
+def test_prose_fail_output_names_the_generator(tmp_path, capsys):
+    """Condition (d) failure output must name gen_crutch_registry.py, matching
+    the precedent set by conditions (a)/(b)."""
+    (tmp_path / "CLAUDE.md").write_text(
+        "# Section\n\nYou must always call foo() before bar().\n",
+        encoding="utf-8",
+    )
+    registry_path = tmp_path / "registry.toml"
+    _write_registry(registry_path, [])
+
+    assert vsg.run_check(inv, tmp_path, registry_path, repo_root=tmp_path) == 1
+    out = capsys.readouterr().out
+    assert "gen_crutch_registry.py" in out
+
+
+def test_main_with_repo_root_arg(tmp_path):
+    """--repo-root flag is accepted and used for prose discovery."""
+    (tmp_path / "CLAUDE.md").write_text(
+        "# Section\n\nYou must always call foo().\n",
+        encoding="utf-8",
+    )
+    prose_paths = inv.discover_prose_paths(tmp_path)
+    prose_sites = inv.enumerate_prose_sites(prose_paths)
+    registry_path = tmp_path / "registry.toml"
+    entries = [_registry_entry_for(s, "normative") for s in prose_sites]
+    _write_registry(registry_path, entries)
+
+    rc = vsg.main([
+        "--root", str(tmp_path),
+        "--registry", str(registry_path),
+        "--repo-root", str(tmp_path),
+    ])
+    assert rc == 0
