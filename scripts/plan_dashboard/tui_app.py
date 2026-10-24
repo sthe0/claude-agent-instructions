@@ -29,6 +29,7 @@ from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, Ta
 from plan_dashboard import locate, model, tui  # noqa: E402
 
 TICK_S = 0.5
+CHAT_LOADING = "loading chat…"
 KEYS = (
     ("up", "Up"), ("down", "Down"), ("j", "Down"), ("k", "Up"), ("enter", "Open"), ("escape", "Back"),
     ("backspace", "Back"), ("tab", "Tab"), ("a", "All/live"), ("r", "Refresh"), ("q", "Quit"),
@@ -67,6 +68,22 @@ def chat_if_open(app: "DashboardApp", view: tui.View) -> dict | None:
     return tui.read_chat(view.chat, app.locator, app.transcripts_root)
 
 
+def attempt(read) -> tuple[dict | None, Exception | None]:
+    try:
+        return read(), None
+    except Exception as exc:
+        return None, exc
+
+
+def read_overlay_and_chat(app: "DashboardApp", snapshot: dict,
+                          view: tui.View) -> tuple[dict | None, dict | None, Exception | None]:
+    """The attention overlay and the open chat, each None when its read fails, with the first error: the
+    Tasks table does not depend on either, so a failure here must not blank it."""
+    overlay, overlay_error = attempt(lambda: tui.read_attention(snapshot, app.locator, app.transcripts_root))
+    chat, chat_error = attempt(lambda: chat_if_open(app, view))
+    return overlay, chat, overlay_error if overlay_error is not None else chat_error
+
+
 def scroll_chat(scroll: VerticalScroll, key: str) -> None:
     scroll.scroll_relative(y=tui.scroll_step(key), animate=False)
 
@@ -78,6 +95,16 @@ def show_chat(scroll: VerticalScroll, body: Static, chat: dict | None) -> None:
     body.update(Text("\n".join(tui.chat_lines(chat))))
     if at_end:
         scroll.call_after_refresh(scroll.scroll_end, animate=False)
+
+
+def clear_chat(body: Static, target) -> None:
+    """Empty the Chat tab for a new ``target`` so the old one's lines are not shown under it while it loads."""
+    body.update(Text(CHAT_LOADING if target is not None else "\n".join(tui.chat_lines(None))))
+
+
+def chat_is_current(target, read_for) -> bool:
+    """Whether a chat read for ``read_for`` still belongs on the tab now showing ``target``."""
+    return target == read_for
 
 
 def tree_state_for(state: tui.TreeState, task: str | None) -> tui.TreeState:
@@ -212,13 +239,9 @@ class DashboardApp(App):
         except Exception as exc:
             self.call_from_thread(self._failed, exc)
             return
-        try:
-            overlay = tui.read_attention(snapshot, self.locator, self.transcripts_root)
-            chat = chat_if_open(self, view)
-        except Exception as exc:
-            self.call_from_thread(self._failed, exc)
-            return
-        self.call_from_thread(self._apply, snapshot, detail, now, bool(view.selected) and detail is None, overlay, chat)
+        overlay, chat, error = read_overlay_and_chat(self, snapshot, view)
+        self.call_from_thread(self._apply, snapshot, detail, now, bool(view.selected) and detail is None, overlay, chat,
+                              view.chat, error)
 
     def _finish_load(self) -> None:
         self._loading = False
@@ -231,7 +254,8 @@ class DashboardApp(App):
         self._finish_load()
 
     def _apply(self, snapshot: dict, detail: dict | None, now: dt.datetime, selection_gone: bool = False,
-               overlay: dict | None = None, chat: dict | None = None) -> None:
+               overlay: dict | None = None, chat: dict | None = None, chat_target=None,
+               error: Exception | None = None) -> None:
         rows = tui.overview_rows(snapshot, now, overlay)
         self.query_one("#overview-head", Static).update(Text(tui.overview_header(snapshot, now, overlay)))
         ids = tuple(row["session_id"] for row in rows)
@@ -242,7 +266,7 @@ class DashboardApp(App):
             table.add_row(*row_cells(row), key=row["session_id"])
         if ids:
             table.move_cursor(row=self.view.cursor)
-        if chat is not None or self.view.chat is None:
+        if chat_is_current(self.view.chat, chat_target) and (chat is not None or self.view.chat is None):
             show_chat(self.query_one("#chat-scroll", VerticalScroll), self.query_one("#chat-body", Static), chat)
         if detail is not None or selection_gone:
             nodes = tui.detail_tree(detail, now) if detail is not None else tui.missing_detail_tree()
@@ -253,6 +277,8 @@ class DashboardApp(App):
             self.tree_task = task
         scope = "all tasks" if self.view.include_all else "live tasks"
         self.sub_title = f"{len(ids)} {scope}, read {now:%H:%M:%S}"
+        if error is not None:
+            self.sub_title += f"; read failed: {error}"
         self._finish_load()
 
     def action_key(self, key: str) -> None:
@@ -272,6 +298,8 @@ class DashboardApp(App):
             return
         if self.view.tab != self.query_one(TabbedContent).active:
             self.query_one(TabbedContent).active = self.view.tab
+        if self.view.chat != previous.chat:
+            clear_chat(self.query_one("#chat-body", Static), self.view.chat)
         if self.view.cursor != previous.cursor and self.view.session_ids:
             self.query_one(DataTable).move_cursor(row=self.view.cursor)
         if self.view.refresh:

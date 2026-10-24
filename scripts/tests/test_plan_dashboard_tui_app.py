@@ -10,6 +10,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -23,7 +24,7 @@ from textual.containers import VerticalScroll  # noqa: E402
 from textual.widgets import DataTable, Static, TabbedContent, Tree  # noqa: E402
 
 from plan_dashboard import attention, model, tui  # noqa: E402
-from plan_dashboard.tui_app import DashboardApp  # noqa: E402
+from plan_dashboard.tui_app import CHAT_LOADING, DashboardApp  # noqa: E402
 from plan_dashboard_fixtures import build_fixture_root, read_only_guard  # noqa: E402
 from plan_dashboard_support import (  # noqa: E402,F401
     ALPHA, BETA, NOW, STALE, at, console_root, event, isolated_home, iso, make_state,
@@ -722,3 +723,114 @@ def test_enter_on_a_session_row_opens_its_chat(tmp_path):
 
     with guarded(root):
         run(scenario, root, locator=attention_locator())
+
+
+def gate_chat_reads(monkeypatch, held):
+    """Make ``tui.read_chat`` of the target ``held`` wait for the returned event; every target it was asked for is
+    appended to the returned list."""
+    release, reads = threading.Event(), []
+    real = tui.read_chat
+
+    def gated(target, locator, transcripts_root):
+        reads.append(target)
+        if target == held:
+            release.wait(PILOT_DEADLINE_S)
+        return real(target, locator, transcripts_root)
+
+    monkeypatch.setattr(tui, "read_chat", gated)
+    return release, reads
+
+
+async def cursor_to(app, pilot, sid):
+    target = table_ids(app).index(sid)
+    while app.view.cursor != target:
+        await pilot.press("down" if app.view.cursor < target else "up")
+
+
+def test_opening_another_task_shows_no_chat_of_the_previous_one_while_its_own_loads(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    release, _ = gate_chat_reads(monkeypatch, ("task", BETA))
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert "Which way?" in chat_text(app)
+        await pilot.press("escape")
+        await open_task(app, pilot, BETA)
+        assert "Which way?" not in chat_text(app)
+        await pilot.press("tab")
+        await pilot.pause(0.3)
+        assert "Which way?" not in chat_text(app) and CHAT_LOADING in chat_text(app)
+        release.set()
+        await settle(app, pilot)
+        assert "done" in chat_text(app) and "Which way?" not in chat_text(app) and CHAT_LOADING not in chat_text(app)
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_a_chat_read_that_returns_after_another_task_was_opened_is_dropped(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    release, _ = gate_chat_reads(monkeypatch, ("task", ALPHA))
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("tab")
+        await pilot.pause(0.3)
+        await pilot.press("escape")
+        await cursor_to(app, pilot, BETA)
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        assert app.view.chat == ("task", BETA)
+        release.set()
+        await settle(app, pilot)
+        assert "Which way?" not in chat_text(app) and CHAT_LOADING in chat_text(app)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert "done" in chat_text(app) and "Which way?" not in chat_text(app)
+
+    run(scenario, root, locator=attention_locator())
+
+
+@pytest.mark.parametrize("failing", ["read_attention", "read_chat"])
+def test_a_failing_attention_or_chat_read_keeps_the_task_table_and_names_the_error(tmp_path, monkeypatch, failing):
+    root = attention_root(tmp_path)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("locator down")
+
+    async def scenario(app, pilot):
+        if failing == "read_chat":
+            await open_task(app, pilot, ALPHA)
+            monkeypatch.setattr(tui, failing, boom)
+            await pilot.press("tab")
+            await settle(app, pilot)
+        assert ALPHA in table_ids(app)
+        assert "live tasks" in app.sub_title and "read failed: locator down" in app.sub_title
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == ("" if failing == "read_attention" else "?")
+
+    if failing == "read_attention":
+        monkeypatch.setattr(tui, failing, boom)
+    run(scenario, root, locator=attention_locator())
+
+
+def test_the_chat_is_read_only_while_the_chat_tab_is_open(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    _, reads = gate_chat_reads(monkeypatch, None)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert reads == []
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert reads and set(reads) == {("task", ALPHA)}
+        await pilot.press("escape")
+        await settle(app, pilot)
+        seen = len(reads)
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert len(reads) == seen
+
+    run(scenario, root, locator=attention_locator())

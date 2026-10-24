@@ -500,6 +500,79 @@ def test_closing_the_panel_stops_the_chat_poll(node, tmp_path):
     assert out["requestsAfterClose"] == 0 and out["chatAfterClose"] == 0
 
 
+HOLD_ONE_ANSWER = """
+  const real = win.context.fetch;
+  const hold = (path, where) => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    win.context.fetch = async (url) => {
+      const response = await real(url);
+      if (String(url).split("?")[0] !== path) return response;
+      if (where === "fetch") { await gate; return response; }
+      return {ok: response.ok, status: response.status, json: async () => { await gate; return response.json(); }};
+    };
+    return release;
+  };
+  const chatBody = () => doc.getElementById("detail-chat").textContent;
+"""
+
+
+@pytest.mark.parametrize("where", ["fetch", "json"])
+def test_a_chat_answer_that_arrives_after_another_row_was_opened_is_dropped(node, tmp_path, where):
+    steps = OPEN_THE_SOURCE + HOLD_ONE_ANSWER + """
+  const late = hold("/api/task/" + input.alpha + "/chat", %r);
+  rowOf(input.alpha).click();
+  await win.settle();
+  rowOf(input.beta).click();
+  await win.settle();
+  out.beforeRelease = chatBody();
+  late();
+  await win.settle();
+  out.afterRelease = chatBody();
+  out.shownBeta = chatEntries();
+""" % where
+    out = run_page(node, tmp_path, attention_root(tmp_path), steps, locator=attention_locator())
+    assert "Which way?" not in out["beforeRelease"] and "Which way?" not in out["afterRelease"]
+    assert any("done" in entry for entry in out["shownBeta"])
+
+
+def test_opening_another_row_clears_the_chat_and_shows_that_rows_even_when_both_chats_are_equal(node, tmp_path):
+    root = attention_root(tmp_path)
+    write_fixture_transcript(root, BETA, ASKING)
+    steps = OPEN_THE_SOURCE + HOLD_ONE_ANSWER + """
+  rowOf(input.alpha).click();
+  await win.settle();
+  out.alpha = chatBody();
+  const late = hold("/api/task/" + input.beta + "/chat", "fetch");
+  rowOf(input.beta).click();
+  await win.settle();
+  out.whileLoading = chatBody();
+  late();
+  await win.settle();
+  out.beta = chatBody();
+"""
+    out = run_page(node, tmp_path, root, steps, locator=attention_locator())
+    assert "Which way?" in out["alpha"]
+    assert "Which way?" not in out["whileLoading"] and "loading" in out["whileLoading"]
+    assert "Which way?" in out["beta"] and "loading" not in out["beta"]
+
+
+def test_a_failed_attention_fetch_leaves_the_overlay_already_shown(node, tmp_path):
+    steps = OPEN_THE_SOURCE + """
+  open();
+  await win.settle();
+  out.before = marks();
+  const real = win.context.fetch;
+  win.context.fetch = async (url) => String(url) === "/api/attention"
+    ? {ok: false, status: 500, json: async () => ({error: "boom"})} : real(url);
+  open();
+  await win.settle();
+  out.after = marks();
+"""
+    out = run_page(node, tmp_path, attention_root(tmp_path), steps, locator=attention_locator())
+    assert any(row["mark"] for row in out["before"]) and out["after"] == out["before"]
+
+
 def test_an_open_panel_survives_a_new_snapshot_event_and_a_clock_tick(node, tmp_path):
     steps = OPEN_THE_SOURCE + """
   rowOf(input.alpha).click();

@@ -402,6 +402,15 @@ def _page_edit(target, replacement, *, count=1):
     return wrap
 
 
+def _page_edits(*edits):
+    """Several ``_page_edit`` substitutions applied as one mutation."""
+    def wrap(original):
+        for target, replacement in edits:
+            original = _page_edit(target, replacement)(original)
+        return original
+    return wrap
+
+
 _THEME_PROPERTIES = ("text", "text-dim", "text-ok", "text-warn", "text-bad", "text-accent", "bg", "bg-panel",
                      "bg-hover", "bg-selected", "bg-live-active", "bg-live-idle", "bg-live-stale", "bg-live-resolved",
                      "bg-live-stub", "bg-wait-choice", "bg-wait-permission", "bg-wait-idle", "line")
@@ -651,6 +660,22 @@ def _row_unstyled(original):
     return mutated
 
 
+def _chat_read_whatever_the_tab(original):
+    def mutated(app, view):
+        if view.chat is None:
+            return None
+        return importlib.import_module(TUI).read_chat(view.chat, app.locator, app.transcripts_root)
+    return mutated
+
+
+def _read_errors_propagate(original):
+    def mutated(app, snapshot, view):
+        tui = importlib.import_module(TUI)
+        chat_if_open = importlib.import_module(TUI_APP).chat_if_open
+        return tui.read_attention(snapshot, app.locator, app.transcripts_root), chat_if_open(app, view), None
+    return mutated
+
+
 def _state_written_on_refresh(original):
     def mutated(app, *args, **kwargs):
         result = original(app, *args, **kwargs)
@@ -665,7 +690,11 @@ TUI_MUTATIONS.update({
     "tui-waiting-idle-counted": (TUI, "waiting_count", _idle_counted),
     "tui-session-rows-dropped": (TUI, "overview_rows", _session_rows_gone),
     "tui-chat-ask-dropped": (ATTENTION, "question_text", _always("")),
-    "tui-app-chat-stale": (TUI_APP, "chat_if_open", _nothing),
+    "tui-app-chat-absent": (TUI_APP, "chat_if_open", _nothing),
+    "tui-app-chat-stale": (TUI_APP, "clear_chat", _nothing),
+    "tui-app-chat-late-apply": (TUI_APP, "chat_is_current", _always(True)),
+    "tui-app-chat-read-always": (TUI_APP, "chat_if_open", _chat_read_whatever_the_tab),
+    "tui-app-attention-error-blanks": (TUI_APP, "read_overlay_and_chat", _read_errors_propagate),
     "tui-app-rows-unstyled": (TUI_APP, "row_cells", _row_unstyled),
     "tui-app-chat-keys-swallowed": (TUI_APP, "scroll_chat", _nothing),
     "tui-app-writes-state": (TUI_APP, "refresh_if_due", _state_written_on_refresh),
@@ -674,8 +703,17 @@ TUI_MUTATIONS.update({
 WEB_PAGE_MUTATIONS.update({
     "web-waiting-unmarked": (WEB, "page_bytes", _page_edit(
         'const wait = WAIT_MARKS[waiting] ? " wait-" + cssName(waiting) : "";', 'const wait = "";')),
-    "web-chat-stale": (WEB, "page_bytes", _page_edit(
+    "web-chat-poll-absent": (WEB, "page_bytes", _page_edit(
         "chatTimer = setInterval(loadChat, CHAT_POLL_MS);", "chatTimer = null;")),
+    "web-chat-stale": (WEB, "page_bytes", _page_edits(
+        ("    if (wanted !== selected) return;\n    if (!response.ok) return;\n", "    if (!response.ok) return;\n"),
+        ("const chat = await response.json();\n    if (wanted !== selected) return;\n",
+         "const chat = await response.json();\n"))),
+    "web-chat-shown-not-reset": (WEB, "page_bytes", _page_edit("  chatShown = null;\n  renderTasks();", "  renderTasks();")),
+    "web-chat-not-cleared-on-switch": (WEB, "page_bytes", _page_edit(
+        'document.getElementById("detail-chat").replaceChildren(el("h2", "Chat"), el("p", "loading…", "dim"));', "")),
+    "web-attention-error-applied": (WEB, "page_bytes", _page_edit(
+        "if (response.ok) applyAttention(await response.json());", "applyAttention(await response.json());")),
     "web-chat-poll-never-stops": (WEB, "page_bytes", _page_edit(
         "clearInterval(chatTimer);\n  chatTimer = null;", "chatTimer = null;")),
     "web-attention-no-initial-fetch": (WEB, "page_bytes", _page_edit("source.onopen = loadAttention;", "")),

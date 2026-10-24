@@ -364,7 +364,10 @@ function applyAttention(payload) {
 }
 
 async function loadAttention() {
-  try { applyAttention(await (await fetch("/api/attention")).json()); } catch (e) { /* the next open or event retries */ }
+  try {
+    const response = await fetch("/api/attention");
+    if (response.ok) applyAttention(await response.json());
+  } catch (e) { /* the next open or event retries */ }
 }
 
 let polling = null;
