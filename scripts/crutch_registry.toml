@@ -2686,23 +2686,15 @@ domain = "code"
 file = "scripts/lib/hook_script.py"
 class = "structural"
 disposition = "keep"
-ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares those script names and exact command strings inside the (event, matcher) groups of a hooks object. A misparse can only skip or double-wire a hook, which the fragment contract's warnings surface."
+ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares exact command strings and, for an advisory warning only, those script names inside the (event, matcher) groups of a hooks object. A misparse can only miss or add a warning."
 
 [[entry]]
-id = "04fd92f58d9afec1"
+id = "c3449019a496b588"
 domain = "code"
 file = "scripts/lib/hook_script.py"
 class = "structural"
 disposition = "keep"
-ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares those script names and exact command strings inside the (event, matcher) groups of a hooks object. A misparse can only skip or double-wire a hook, which the fragment contract's warnings surface."
-
-[[entry]]
-id = "19b95288c215761c"
-domain = "code"
-file = "scripts/lib/hook_script.py"
-class = "structural"
-disposition = "keep"
-ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares those script names and exact command strings inside the (event, matcher) groups of a hooks object. A misparse can only skip or double-wire a hook, which the fragment contract's warnings surface."
+ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares exact command strings and, for an advisory warning only, those script names inside the (event, matcher) groups of a hooks object. A misparse can only miss or add a warning."
 
 [[entry]]
 id = "6c7be3eda8d17d86"
@@ -8260,30 +8252,6 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "6ad0bb3835e311a5"
 domain = "code"
 file = "scripts/tests/test_hook_escalation_diagnosis_gate.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "188335489ed1c182"
-domain = "code"
-file = "scripts/tests/test_hook_fragments.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "1276c91e8e141911"
-domain = "code"
-file = "scripts/tests/test_hook_fragments.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
-
-[[entry]]
-id = "1636d04d6dd0871f"
-domain = "code"
-file = "scripts/tests/test_hook_fragments.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -18494,7 +18462,7 @@ domain = "code_file_rollup"
 file = "scripts/lib/hook_script.py"
 class = "structural"
 disposition = "keep"
-ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares those script names and exact command strings inside the (event, matcher) groups of a hooks object. A misparse can only skip or double-wire a hook, which the fragment contract's warnings surface. (file-level rollup of the file's scopes.)"
+ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares exact command strings and, for an advisory warning only, those script names inside the (event, matcher) groups of a hooks object. A misparse can only miss or add a warning. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "742822a310126b82"
@@ -19572,14 +19540,6 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "a3174c64404192ba"
 domain = "code_file_rollup"
 file = "scripts/tests/test_hook_escalation_diagnosis_gate.py"
-class = "not-a-gate"
-disposition = "keep"
-ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
-
-[[entry]]
-id = "47c326f6b3dc2620"
-domain = "code_file_rollup"
-file = "scripts/tests/test_hook_fragments.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

@@ -99,9 +99,9 @@ CODE_PARTITIONS = [
         "Shell-command and settings.json syntax, never meaning: hook_script.py "
         "tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter "
         "name set, whitespace in a token) to find the script it runs, and "
-        "hook_fragments.py compares those script names and exact command strings "
-        "inside the (event, matcher) groups of a hooks object. A misparse can only "
-        "skip or double-wire a hook, which the fragment contract's warnings surface.",
+        "hook_fragments.py compares exact command strings and, for an advisory "
+        "warning only, those script names inside the (event, matcher) groups of a "
+        "hooks object. A misparse can only miss or add a warning.",
     ),
     # Mechanics of the two judge-guarded rows below, kept OUT of the emitted ground
     # (which wants the classification reason, not the generator's implementation):

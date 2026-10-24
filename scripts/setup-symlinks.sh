@@ -113,8 +113,8 @@ PLUGIN_README
 ensure_hook_plugin_dir() {
   local dir="$CLAUDE_AGENT_HOME/hook-plugins"
   mkdir -p "$dir"
-  [[ -f "$dir/README.md" ]] && return 0
-  cat > "$dir/README.md" <<'PLUGIN_README'
+  local stub
+  stub="$(cat <<'PLUGIN_README'
 # Machine-local hook fragments
 
 Nothing here is versioned. Each `<name>.json` has the shape of settings.json's `hooks`
@@ -125,11 +125,15 @@ Core's own rows. A fragment may be a symlink into another checkout.
 |---|---|
 | `@FRAGMENT_DIR@` | In a command, the real directory of the fragment file; it keeps a fragment's scripts addressable from where the fragment lives. |
 | Ownership | `hook-plugins.installed.json` (next to `settings.json`) records what each fragment installed; a run keeps those entries equal to the fragment's current ones, and removing the fragment removes exactly them. |
-| Collision | An entry whose script (its file name, whatever interpreter launches it) already runs in the same event and matcher (a hand entry, a Core row, another fragment) is skipped with a warning; an entry already installed is dropped with a warning once another entry runs its script. |
+| Identity | An entry is identified by its optional string `id` (fragment-only, never written into `settings.json`), else by its exact expanded command; nothing is parsed to decide it. |
+| Collision | An entry whose command is already present in the same event and matcher (a hand entry, a Core row, another fragment) is skipped with a warning; an installed entry is dropped with a warning once an identical command appears. An entry whose script file name equals that of another entry of the group is still installed, with an advisory warning naming both: it may fire twice. |
 | Broken fragment | Unparsable, or naming a script that is missing under its directory: skipped with a warning, its installed entries kept. |
 
 Contract and loader: `scripts/lib/hook_fragments.py`.
 PLUGIN_README
+)"
+  [[ -f "$dir/README.md" && "$(cat "$dir/README.md")" == "$stub" ]] && return 0
+  printf '%s\n' "$stub" > "$dir/README.md"
 }
 
 prune_dangling() {

@@ -114,19 +114,14 @@ ground = "Compile the shell `VAR=value` assignment pattern; shell-command syntax
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/lib/hook_script.py::_split::pattern.match"]
+[sites."scripts/lib/hook_script.py::hook_script_path::pattern.match"]
 class = "structural"
 ground = "Match `VAR=value` shell assignment tokens in a hook command to skip them; shell-command syntax."
-hits = 1
+hits = 2
+hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
-[sites."scripts/lib/hook_script.py::_operand_script::pattern.match"]
-class = "structural"
-ground = "Match `VAR=value` shell assignment tokens among a launcher's operands to skip them; shell-command syntax."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/lib/hook_script.py::_operand_script::re.search"]
+[sites."scripts/lib/hook_script.py::hook_script_path::re.search"]
 class = "structural"
 ground = "Detects whitespace in a command token (quoted payload) to exclude it as a script path; shell-token syntax."
 hits = 1
