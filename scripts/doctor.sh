@@ -189,7 +189,7 @@ esac
 
 # 7c. Soft: every entry of a hook fragment in <root>/hook-plugins/ should be present
 #     in <root>/settings.json (hook_fragments.py --check lists the ones that are not:
-#     not yet installed, blocked by a collision, or a broken fragment). Warn-only.
+#     not yet installed or a broken fragment). Warn-only.
 _hook_out="$(python3 "$REPO/scripts/lib/hook_fragments.py" --check "$CLAUDE_AGENT_HOME" 2>&1)"
 if [[ -z "$_hook_out" ]]; then
   pass "hook fragments installed (or none defined)"

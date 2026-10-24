@@ -491,6 +491,62 @@ def test_fragment_broken_after_a_good_run_keeps_its_owned_entries(tmp_path):
     assert want not in box.entries()
 
 
+def _cmds(d):
+    return [f"python3 {d.resolve()}/scripts/{s}.py" for s in ("x", "y")]
+
+
+def test_entry_moved_to_an_earlier_sorting_fragment_lands_on_the_same_run(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org", scripts=("x.py", "y.py"))
+    x, y = _cmds(d)
+    both = ["python3 @FRAGMENT_DIR@/scripts/x.py", "python3 @FRAGMENT_DIR@/scripts/y.py"]
+    box.fragment(d, both, fname="org.json", link="org.json")
+    box.run()
+    box.fragment(d, both[:1], fname="org.json")
+    box.fragment(d, both[1:], fname="org-extra.json", link="org-extra.json")
+    proc = box.run()
+    assert box.entries().count(x) == 1 and box.entries().count(y) == 1
+    assert "not installed" not in proc.stderr
+    record = json.loads(box.record.read_text())
+    assert [e["command"] for e in record["org-extra.json"]] == [y]
+    assert [e["command"] for e in record["org.json"]] == [x]
+    box.assert_stable(box.settle())
+
+
+def test_commands_swapped_between_two_fragments_both_stay_installed(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org", scripts=("x.py", "y.py"))
+    x, y = _cmds(d)
+    cx, cy = ["python3 @FRAGMENT_DIR@/scripts/x.py"], ["python3 @FRAGMENT_DIR@/scripts/y.py"]
+    box.fragment(d, cx, fname="a.json", link="a.json")
+    box.fragment(d, cy, fname="b.json", link="b.json")
+    box.run()
+    box.fragment(d, cy, fname="a.json")
+    box.fragment(d, cx, fname="b.json")
+    proc = box.run()
+    assert box.entries().count(x) == 1 and box.entries().count(y) == 1
+    assert "not installed" not in proc.stderr
+    record = json.loads(box.record.read_text())
+    assert [e["command"] for e in record["a.json"]] == [y]
+    assert [e["command"] for e in record["b.json"]] == [x]
+    box.assert_stable(box.settle())
+
+
+def test_restored_entries_of_a_broken_fragment_block_an_identical_command(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org")
+    want = f"python3 {d.resolve()}/scripts/gate.py"
+    path = box.fragment(d, [GATE], fname="a.json", link="a.json")
+    box.run()
+    path.write_text("{ not json\n")
+    box.fragment(d, [GATE], fname="b.json", link="b.json")
+    proc = box.run()
+    assert box.entries().count(want) == 1
+    assert "b.json" in proc.stderr and "fragment a.json" in proc.stderr
+    assert list(json.loads(box.record.read_text())) == ["a.json"]
+    box.assert_stable(box.settle())
+
+
 def test_removal_drops_emptied_group_and_event(tmp_path):
     box = Box(tmp_path)
     d = box.fragment_dir("org")
