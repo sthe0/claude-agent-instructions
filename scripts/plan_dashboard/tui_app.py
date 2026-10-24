@@ -42,10 +42,84 @@ def refresh_if_due(app: "DashboardApp") -> None:
         app.reload()
 
 
+def route_key(app: "DashboardApp", action: str, parameters) -> bool:
+    """Whether a key binding is live: the priority ones step aside for the keys the Detail tab's tree
+    owns, and the tree's own bindings are live only there."""
+    owner = tui.key_owner(app.view.tab, parameters[0] if parameters else "")
+    return owner == ("tree" if action == "tree_key" else "global")
+
+
+def focus_for(app: "DashboardApp", tab: str) -> None:
+    (app.query_one(Tree) if tab == "detail" else app.query_one(DataTable)).focus()
+
+
+def tree_state_for(state: tui.TreeState, task: str | None) -> tui.TreeState:
+    return tui.state_for_task(state, task)
+
+
+def remember(tree: Tree, task: str | None) -> tui.TreeState:
+    """The nodes the user has open and the cursor, as key paths, read off the tree before it is rebuilt."""
+    expanded = set()
+
+    def walk(node):
+        for child in node.children:
+            if child.data is not None and child.is_expanded:
+                expanded.add(child.data)
+            walk(child)
+
+    walk(tree.root)
+    cursor = tree.cursor_node.data if tree.cursor_node is not None and tree.cursor_node.data is not None else ()
+    return tui.TreeState(task=task, expanded=frozenset(expanded), cursor=cursor)
+
+
+def fill_tree(tree: Tree, nodes: list[dict], expanded, cursor: tuple[str, ...]) -> None:
+    """Rebuild ``tree`` collapsed below its top level, reopening the nodes in ``expanded`` (key paths)
+    and putting the cursor back on ``cursor``, or on its nearest surviving ancestor."""
+    tree.clear()
+    tree.root.data = ()
+    tree.root.set_label(Text(nodes[0]["label"]))
+    by_path = {(): tree.root}
+
+    def add(parent, items, prefix):
+        for item in items:
+            path = prefix + (item["key"],)
+            label = Text(item["label"])
+            if item["children"]:
+                by_path[path] = add(parent.add(label, data=path, expand=path in expanded), item["children"], path)
+            else:
+                by_path[path] = parent.add_leaf(label, data=path)
+        return parent
+
+    add(tree.root, nodes[1:], ())
+    tree.root.expand()
+    tree.call_after_refresh(tree.move_cursor, by_path[tui.surviving_path(nodes[1:], tuple(cursor))])
+
+
+def apply_tree_key(tree: Tree, key: str) -> None:
+    node = tree.cursor_node
+    if node is None:
+        return
+    action = tui.tree_action(key, expandable=node.allow_expand, expanded=node.is_expanded,
+                             has_parent=node.parent is not None)
+    if action == "down":
+        tree.action_cursor_down()
+    elif action == "up":
+        tree.action_cursor_up()
+    elif action == "toggle":
+        node.toggle()
+    elif action == "expand":
+        node.expand()
+    elif action == "collapse":
+        node.collapse()
+    elif action == "parent":
+        tree.move_cursor(node.parent)
+
+
 class DashboardApp(App):
     TITLE = "plan dashboard"
     BINDINGS = [Binding(key, f"key('{key}')", label, priority=True, show=key in ("enter", "escape", "a", "r", "q"))
-                for key, label in KEYS]
+                for key, label in KEYS] + [Binding(key, f"tree_key('{key}')", show=False)
+                                           for key in ("j", "k", "space", "left", "right")]
 
     def __init__(self, *, state_root, cost_log, transcripts_root=None, window_hours=24.0, include_all=False,
                  sessions=(), interval=tui.DEFAULT_INTERVAL_S, clock=utc_now):
@@ -56,6 +130,12 @@ class DashboardApp(App):
         self.last_collect: dt.datetime | None = None
         self._loading = False
         self._again = False
+        self.tree_task: str | None = None
+
+    def check_action(self, action: str, parameters) -> bool:
+        if action in ("key", "tree_key"):
+            return route_key(self, action, parameters)
+        return True
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -123,32 +203,22 @@ class DashboardApp(App):
             table.add_row(*(Text(cell) for cell in row["cells"]), key=row["session_id"])
         if ids:
             table.move_cursor(row=self.view.cursor)
-        if detail is not None:
-            self._fill_tree(tui.detail_tree(detail, now))
-        elif selection_gone:
-            self._fill_tree(tui.missing_detail_tree())
+        if detail is not None or selection_gone:
+            nodes = tui.detail_tree(detail, now) if detail is not None else tui.missing_detail_tree()
+            task = detail["session_id"] if detail is not None else None
+            tree = self.query_one(Tree)
+            state = tree_state_for(remember(tree, self.tree_task), task)
+            fill_tree(tree, nodes, state.expanded, state.cursor)
+            self.tree_task = task
         scope = "all tasks" if self.view.include_all else "live tasks"
         self.sub_title = f"{len(ids)} {scope}, read {now:%H:%M:%S}"
         self._finish_load()
 
-    def _fill_tree(self, nodes: list[dict]) -> None:
-        tree = self.query_one(Tree)
-        tree.clear()
-        tree.root.set_label(Text(nodes[0]["label"]))
-
-        def add(parent, items):
-            for item in items:
-                label = Text(item["label"])
-                if item["children"]:
-                    add(parent.add(label, expand=True), item["children"])
-                else:
-                    parent.add_leaf(label)
-
-        add(tree.root, nodes[1:])
-        tree.root.expand()
-
     def action_key(self, key: str) -> None:
         self.dispatch_key(key)
+
+    def action_tree_key(self, key: str) -> None:
+        apply_tree_key(self.query_one(Tree), key)
 
     def dispatch_key(self, key: str) -> None:
         previous = self.view
@@ -175,6 +245,8 @@ class DashboardApp(App):
         tab = event.pane.id
         if tab in tui.TABS and tab != self.view.tab:
             self.view = dataclasses.replace(self.view, tab=tab)
+        if tab in tui.TABS:
+            self.call_after_refresh(focus_for, self, tab)
 
 
 def _load_cli():

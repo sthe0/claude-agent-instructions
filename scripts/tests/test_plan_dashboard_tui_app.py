@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import os
 
 import pytest
@@ -21,8 +22,10 @@ from textual.widgets import DataTable, TabbedContent, Tree  # noqa: E402
 
 from plan_dashboard import model, tui  # noqa: E402
 from plan_dashboard.tui_app import DashboardApp  # noqa: E402
-from plan_dashboard_fixtures import read_only_guard  # noqa: E402
-from plan_dashboard_support import ALPHA, BETA, NOW, STALE, console_root, isolated_home  # noqa: E402,F401
+from plan_dashboard_fixtures import build_fixture_root, read_only_guard  # noqa: E402
+from plan_dashboard_support import (  # noqa: E402,F401
+    ALPHA, BETA, NOW, STALE, at, console_root, event, isolated_home, make_state,
+)
 
 SIZE = (150, 40)
 
@@ -302,4 +305,224 @@ def test_the_app_writes_nothing(tmp_path):
 def test_every_key_of_the_pure_layer_is_bound():
     bound = {binding.key for binding in DashboardApp.BINDINGS}
     assert {"up", "down", "j", "k", "enter", "escape", "backspace", "tab", "a", "r", "q"} <= bound
+    assert {"j", "k", "space", "left", "right"} <= {b.key for b in DashboardApp.BINDINGS if "tree_key" in b.action}
     assert tui.TABS == ("tasks", "detail")
+
+
+# --- the Detail tree: collapsed start, keyboard navigation, state kept across a refresh -------------
+
+REVIEWED_A = "review-aaaa-0001"
+REVIEWED_B = "review-bbbb-0002"
+PHASE = ("phases", "phase:plan v1")
+ROUND = PHASE + ("phase:review round 1",)
+
+
+def reviewed_root(tmp_path):
+    """Two tasks in plan review: an open ``plan v1`` phase holding two review-round children."""
+    def reviewing(sid, minutes):
+        return make_state(sid, node="PLAN_READY", stages=("PENDING",), history=[
+            event("classify", at(minutes=minutes)), event("submit_plan", at(minutes=minutes - 10)),
+            event("plan_review", at(minutes=minutes - 15)), event("plan_review", at(minutes=minutes - 18))])
+    return build_fixture_root(tmp_path, [reviewing(REVIEWED_A, 40), reviewing(REVIEWED_B, 39)], now=NOW)
+
+
+def tree_of(app):
+    return app.query_one(Tree)
+
+
+def find(tree, path):
+    node = tree.root
+    for depth in range(1, len(path) + 1):
+        node = next(child for child in node.children if child.data == path[:depth])
+    return node
+
+
+def top_level(app):
+    return {child.data[0]: child for child in tree_of(app).root.children}
+
+
+async def open_task(app, pilot, sid):
+    target = table_ids(app).index(sid)
+    while app.view.cursor != target:
+        await pilot.press("down" if app.view.cursor < target else "up")
+    await pilot.press("enter")
+    await settle(app, pilot)
+
+
+def cursor_path(app):
+    return tree_of(app).cursor_node.data
+
+
+def test_the_detail_tree_opens_collapsed_with_focus_on_the_tree_by_enter(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        assert app.query_one(TabbedContent).active == "detail"
+        assert app.focused is tree_of(app)
+        top = top_level(app)
+        assert {"totals", "stages", "phases"} <= set(top)
+        assert top["stages"].children and not top["stages"].is_expanded
+        assert not any(node.is_expanded for node in top.values())
+
+    run(scenario, root)
+
+
+def test_tab_and_a_click_on_the_tab_focus_the_tree_and_escape_the_table(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("escape")
+        await settle(app, pilot)
+        assert app.focused is app.query_one(DataTable)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert app.focused is tree_of(app)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert app.focused is app.query_one(DataTable)
+        await pilot.click("#--content-tab-detail")
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "detail" and app.focused is tree_of(app)
+
+    run(scenario, root)
+
+
+def test_arrow_keys_move_the_tree_cursor_and_enter_and_space_toggle_a_node(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("down")
+        assert cursor_path(app) == ("totals",)
+        await pilot.press("down")
+        assert cursor_path(app) == ("stages",)
+        await pilot.press("enter")
+        assert top_level(app)["stages"].is_expanded
+        await pilot.press("down")
+        assert cursor_path(app) == ("stages", "stage:1")
+        await pilot.press("up")
+        await pilot.press("space")
+        assert not top_level(app)["stages"].is_expanded
+        await pilot.press("space")
+        assert top_level(app)["stages"].is_expanded
+
+    run(scenario, root)
+
+
+def test_j_k_right_and_left_drive_the_tree(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("j", "j")
+        assert cursor_path(app) == ("stages",)
+        await pilot.press("right")
+        assert top_level(app)["stages"].is_expanded
+        await pilot.press("j")
+        assert cursor_path(app) == ("stages", "stage:1")
+        await pilot.press("left")
+        assert cursor_path(app) == ("stages",) and top_level(app)["stages"].is_expanded
+        await pilot.press("left")
+        assert not top_level(app)["stages"].is_expanded
+        await pilot.press("k")
+        assert cursor_path(app) == ("totals",)
+
+    run(scenario, root)
+
+
+def test_escape_hands_the_arrow_keys_back_to_the_table(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("escape")
+        await settle(app, pilot)
+        before = app.query_one(DataTable).cursor_row
+        await pilot.press("down" if before == 0 else "up")
+        assert app.query_one(DataTable).cursor_row != before
+
+    run(scenario, root)
+
+
+def test_a_click_expands_a_phase_node(tmp_path):
+    root = reviewed_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, REVIEWED_A)
+        await pilot.click(Tree, offset=(6, 3))
+        assert top_level(app)["phases"].is_expanded
+        await pilot.click(Tree, offset=(6, 5))
+        assert find(tree_of(app), PHASE).is_expanded
+
+    run(scenario, root)
+
+
+def test_a_refresh_keeps_what_the_user_opened_and_the_cursor_though_the_label_changes(tmp_path):
+    root = reviewed_root(tmp_path)
+    clock = Clock()
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, REVIEWED_A)
+        await pilot.press("j", "j", "j", "right", "j", "j", "right", "j")
+        assert cursor_path(app) == ROUND
+        before = find(tree_of(app), PHASE).label.plain
+        clock.advance(120)
+        await pilot.press("r")
+        await settle(app, pilot)
+        after = find(tree_of(app), PHASE).label.plain
+        assert before != after
+        assert top_level(app)["phases"].is_expanded and find(tree_of(app), PHASE).is_expanded
+        assert not top_level(app)["stages"].is_expanded
+        assert cursor_path(app) == ROUND
+
+    run(scenario, root, clock=clock)
+
+
+def test_a_vanished_cursor_node_falls_back_to_its_nearest_surviving_ancestor(tmp_path):
+    root = reviewed_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, REVIEWED_A)
+        await pilot.press("j", "j", "j", "right", "j", "j", "right", "j")
+        assert cursor_path(app) == ROUND
+        state_file = root.state_root / f"{REVIEWED_A}.json"
+        data = json.loads(state_file.read_text(encoding="utf-8"))
+        data["history"] = [e for e in data["history"] if e.get("event") != "plan_review"]
+        state_file.write_text(json.dumps(data), encoding="utf-8")
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert cursor_path(app) == PHASE
+
+    run(scenario, root)
+
+
+def test_another_task_opens_collapsed_though_the_same_key_path_was_open_in_the_first(tmp_path):
+    root = reviewed_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, REVIEWED_A)
+        await pilot.press("j", "j", "j", "right")
+        assert top_level(app)["phases"].is_expanded
+        await pilot.press("escape")
+        await settle(app, pilot)
+        await open_task(app, pilot, REVIEWED_B)
+        assert app.view.selected == REVIEWED_B
+        assert ("phases",) in tui.key_paths(tui.detail_tree(model.detail(
+            root.state_root, REVIEWED_B, cost_log=root.cost_log), NOW))
+        assert not top_level(app)["phases"].is_expanded
+
+    run(scenario, root)
+
+
+def test_the_tree_pilot_runs_inside_the_read_only_guard(tmp_path):
+    root = reviewed_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, REVIEWED_A)
+        await pilot.press("j", "j", "j", "right", "r")
+        await settle(app, pilot)
+
+    with read_only_guard(root.home):
+        run(scenario, root)

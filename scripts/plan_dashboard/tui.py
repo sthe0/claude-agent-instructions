@@ -130,8 +130,9 @@ def overview_rows(snapshot: dict, now: dt.datetime) -> list[dict]:
     return rows
 
 
-def _node(label: str, children=()) -> dict:
-    return {"label": label, "children": list(children)}
+def _node(label: str, children=(), key: str | None = None) -> dict:
+    """``key`` names the node among its siblings; unlike the label it does not change as the task runs."""
+    return {"label": label, "children": list(children), "key": label if key is None else key}
 
 
 def _phase_node(item: dict, now: dt.datetime) -> dict:
@@ -143,11 +144,11 @@ def _phase_node(item: dict, now: dt.datetime) -> dict:
     root = fmt_value(item["root_cost_usd"], item["estimate"]["root_cost_usd"])
     attempts = f"  attempts {item['attempts']}" if "attempts" in item else ""
     label = f"{item['label']}: wall {wall}  {spawn}  root {root}{attempts}"
-    return _node(label, [_phase_node(child, now) for child in item["children"]])
+    return _node(label, [_phase_node(child, now) for child in item["children"]], key=f"phase:{item['label']}")
 
 
-def _difficulty_node(record: dict, state: str) -> dict:
-    return _node(f"{state}: {record.get('title') or '?'}")
+def _difficulty_node(record: dict, state: str, position: int) -> dict:
+    return _node(f"{state}: {record.get('title') or '?'}", key=f"difficulty:{position}")
 
 
 def detail_tree(detail: dict, now: dt.datetime) -> list[dict]:
@@ -156,16 +157,19 @@ def detail_tree(detail: dict, now: dt.datetime) -> list[dict]:
         return [_node(f"unreadable: {detail['reason']}")]
     totals = detail["totals"]
     stages = [_node(f"[{STATUS_MARKS.get(s['status'], '?')}] {s['index']}. {s['title']}"
-                    f" ({s['actor'] or '?'}, {s['criterion_type'] or '?'})") for s in detail["stages"]]
-    difficulties = ([_difficulty_node(d, "open") for d in detail["open_difficulties"]]
-                    + [_difficulty_node(d, "closed") for d in detail["closed_difficulties"]])
+                    f" ({s['actor'] or '?'}, {s['criterion_type'] or '?'})", key=f"stage:{s['index']}")
+              for s in detail["stages"]]
+    difficulties = [_difficulty_node(d, state, n) for n, (d, state) in enumerate(
+        [(d, "open") for d in detail["open_difficulties"]] + [(d, "closed") for d in detail["closed_difficulties"]])]
     children = [_node(f"{c['session_id'][:SESSION_ID_WIDTH]} {c['node'] or '?'} (stage {c['stage_index']}) "
-                      f"{one_line(c['goal'], 60)}") for c in detail["children"]]
-    history = [_node(f"{e.get('ts', '?')} {e.get('event', '?')}") for e in detail["history"]]
+                      f"{one_line(c['goal'], 60)}", key=f"child:{c['session_id']}") for c in detail["children"]]
+    history = [_node(f"{e.get('ts', '?')} {e.get('event', '?')}", key=f"event:{n}") for n, e in enumerate(detail["history"])]
     tree = [
-        _node(f"{detail['session_id'][:SESSION_ID_WIDTH]} {detail['node'] or '?'}  {one_line(detail['goal'], 100)}"),
+        _node(f"{detail['session_id'][:SESSION_ID_WIDTH]} {detail['node'] or '?'}  {one_line(detail['goal'], 100)}",
+              key="head"),
         _node(f"totals: wall {_wall(totals['wall_clock_s'], totals['estimate']['wall_clock_s'])}  "
-              f"cost {cost_text(totals)}  root {fmt_value(totals['root_cost_usd'], totals['estimate']['root_cost_usd'])}"),
+              f"cost {cost_text(totals)}  root {fmt_value(totals['root_cost_usd'], totals['estimate']['root_cost_usd'])}",
+              key="totals"),
         _node("stages", stages),
         _node("phases", [_phase_node(item, now) for item in detail["phases"]]),
     ]
@@ -186,6 +190,61 @@ def render_lines(tree: list[dict], indent: int = 0) -> list[str]:
         lines.append(" " * indent + node["label"])
         lines += render_lines(node["children"], indent + 2)
     return lines
+
+
+TREE_KEYS = frozenset({"up", "down", "j", "k", "enter", "space", "left", "right"})
+
+
+def key_owner(tab: str, key: str) -> str:
+    """``tree`` for a key the Detail tab's tree handles itself, ``global`` for one the view handles."""
+    return "tree" if tab == "detail" and key in TREE_KEYS else "global"
+
+
+def tree_action(key: str, *, expandable: bool, expanded: bool, has_parent: bool) -> str | None:
+    """What a tree key does to the node under the cursor: ``down``, ``up``, ``toggle``, ``expand``,
+    ``collapse`` or ``parent``; None when it does nothing there."""
+    if key in ("down", "j"):
+        return "down"
+    if key in ("up", "k"):
+        return "up"
+    if key in ("enter", "space"):
+        return "toggle" if expandable else None
+    if key == "right":
+        return "expand" if expandable and not expanded else None
+    if key == "left":
+        return "collapse" if expandable and expanded else "parent" if has_parent else None
+    return None
+
+
+@dataclasses.dataclass(frozen=True)
+class TreeState:
+    """What the user did to the Detail tree: the key paths of the nodes opened and the one under the
+    cursor, kept for one task. Key paths survive a rebuild; labels (live times, marks) do not."""
+    task: str | None = None
+    expanded: frozenset[tuple[str, ...]] = frozenset()
+    cursor: tuple[str, ...] = ()
+
+
+def state_for_task(state: TreeState, task: str | None) -> TreeState:
+    """``state`` while the same task stays open; a fresh, collapsed one once another task opens."""
+    return state if state.task == task else TreeState(task=task)
+
+
+def key_paths(nodes: list[dict], prefix: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
+    paths = set()
+    for node in nodes:
+        path = prefix + (node["key"],)
+        paths.add(path)
+        paths |= key_paths(node["children"], path)
+    return paths
+
+
+def surviving_path(nodes: list[dict], path: tuple[str, ...]) -> tuple[str, ...]:
+    """The longest prefix of ``path`` that is still a node of ``nodes`` (the root is the empty path)."""
+    known = key_paths(nodes)
+    while path and path not in known:
+        path = path[:-1]
+    return path
 
 
 @dataclasses.dataclass(frozen=True)
