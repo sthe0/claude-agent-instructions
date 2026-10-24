@@ -246,6 +246,24 @@ def test_replan_blocked_without_routing(store, venued_fixtures_dir):
     assert store.load("e1").node == Node.DIAGNOSING.value
 
 
+_CYRILLIC = re.compile("[Ѐ-ӿ]")
+
+
+def test_emitted_replan_block_has_no_cyrillic(store, venued_fixtures_dir):
+    plan = str(venued_fixtures_dir / "plan_two_stage.toml")
+    refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
+    _to_failed_stage1(store, "e9", plan)
+    _declare_investigate(store, "e9")
+    cli.cmd_critique(ns(session="e9", functional_ground="fg", replanning_task="rt"),
+                     store=store)
+    _renorm(store, "e9")
+    d = cli.cmd_replan(ns(session="e9", plan=refined), store=store)
+    assert d.ok is False
+    assert not _CYRILLIC.search(d.detail)
+    for blocker in d.data["blockers"]:
+        assert not _CYRILLIC.search(blocker)
+
+
 def test_routed_critique_unblocks_replan(store, venued_fixtures_dir):
     plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")

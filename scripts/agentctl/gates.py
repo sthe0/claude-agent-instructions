@@ -594,8 +594,8 @@ def failure_address_blockers(state: SessionState) -> list[str]:
     if fa is None:
         return ["difficulty closure requires routing the fault — record the critique with "
                 "--failure-address (resource: inadequate resource provision, "
-                "материал/средство | normative: inadequate normative provision, "
-                "норма/способ | not_applicable: routing does not apply)"]
+                "material/tool | normative: inadequate normative provision, "
+                "norm/method | not_applicable: routing does not apply)"]
     return []
 
 

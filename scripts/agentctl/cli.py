@@ -11914,7 +11914,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     if fablock:
         return Directive(False, state.node, "critique",
                          "replan blocked: the fault must be routed to the inadequate "
-                         "обеспечение (re-run critique with --failure-address)",
+                         "provision (re-run critique with --failure-address)",
                          data={"blockers": fablock})
 
     # plan-review gate: the corrected plan (args.plan) must carry a thinker review
@@ -14351,9 +14351,9 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp.add_argument("--failure-address", dest="failure_address", default=None,
                     choices=list(FAILURE_ADDRESS_VALUES) + list(FAILURE_ADDRESS_ALIASES),
                     metavar="{" + ",".join(FAILURE_ADDRESS_VALUES) + "}",
-                    help="route the fault to the inadequate обеспечение (R2): resource "
-                         "(resource обеспечение — материал/средство) | normative "
-                         "(normative обеспечение — норма/способ) | not_applicable (routing "
+                    help="route the fault to the inadequate provision (R2): resource "
+                         "(resource provision — material/tool) | normative "
+                         "(normative provision — norm/method) | not_applicable (routing "
                          "does not apply); the original Russian spellings are accepted as aliases; "
                          "the closure gate demands it on a difficulty-closing replan")
     sp.add_argument("--norm-target", dest="norm_targets", action="append", default=None,
