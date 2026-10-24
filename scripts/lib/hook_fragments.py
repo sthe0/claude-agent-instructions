@@ -264,6 +264,18 @@ class _Merge:
         self.changes, self.warnings = [], []
         self.touched = set()
         self.installed_by = {}
+        self.placed = {}
+        self.own_hooks = {}
+
+    def restore(self, name, new_record):
+        """A broken fragment keeps what it owns: put its hooks back and register them."""
+        kept = []
+        for _, group, s in [t for t in _sentinels(self.hooks) if t[2][_OWNER] == name]:
+            _swap(group, s, s[_HELD])
+            self.installed_by[id(s[_HELD])] = name
+            kept.append(s[_ENTRY])
+        if kept:
+            new_record[name] = kept
 
     def drop(self, event, group, sentinel, why):
         _swap(group, sentinel, None)
@@ -293,15 +305,16 @@ class _Merge:
 
     def remove_owned(self, own):
         """Phase 1: take every owned entry out of its group, remembering where it stood
-        (the count of foreign hooks before it) and what it was."""
+        (the count of foreign hooks before it) and what it was; returns the removed
+        rows as ``{fragment name: [row]}``."""
         owned_ids = {id(s) for _, _, s in own}
-        removed = []
+        removed = {}
         for event, group, s in own:
             before = group["hooks"][: group["hooks"].index(s)]
             slot = sum(1 for h in before if id(h) not in owned_ids)
             _swap(group, s, None)
             self.touched.add((event, group.get("matcher") or None))
-            removed.append({"slot": slot, "held": s[_HELD], "entry": s[_ENTRY]})
+            removed.setdefault(s[_OWNER], []).append({"slot": slot, "held": s[_HELD], "entry": s[_ENTRY]})
         return removed
 
     def warn_same_script(self, name, group, hook, where, own_hooks):
@@ -317,56 +330,64 @@ class _Merge:
                 )
                 return
 
-    def sync_fragment(self, name, entries, own):
-        """Make the fragment's owned entries equal ``entries``; returns its record rows.
-
-        Two phases: every owned entry leaves its group, then the current entries go in
-        one by one, each checked only against what its group holds at that moment, so
-        no pending entry of this fragment is ever seen as a holder.
-        """
-        hooks = self.hooks
+    def plan_fragment(self, name, entries, removed):
+        """Pair each current entry with the removed owned entry it continues (or None);
+        a repeat of an identity is reported and left out. Also returns the removed rows
+        no entry continues."""
         pool = {}
-        for r in self.remove_owned(own):
+        for r in removed:
             pool.setdefault(_entry_ident(r["entry"]), []).append(r)
-        own_hooks, seen, owned, placed = set(), set(), [], {}
+        seen, plan = set(), []
         for event, matcher, id_, hook in entries:
             cmd = hook["command"]
-            where = _where(event, matcher)
             ident = _ident(event, matcher, id_, cmd)
             if ident in seen:
-                self.warnings.append(f"{name}: {cmd} is listed twice in {where}; installed once")
+                self.warnings.append(f"{name}: {cmd} is listed twice in {_where(event, matcher)}; installed once")
                 continue
             seen.add(ident)
-            old = self.claim(pool, ident, event, matcher, cmd)
-            group = _find_group(hooks, event, matcher)
-            holder = next((h for h in (group["hooks"] if group else []) if _command(h) == cmd), None)
-            if holder is not None:
-                by = self.owner_of(holder)
-                if old is None:
-                    self.warnings.append(f"{name}: {cmd} not installed, already present in {where} ({by})")
-                else:
-                    self.changes.append(f"- {where}: {cmd} ({name} displaced)")
-                    self.warnings.append(f"{name}: {cmd} dropped, now also present in {where} ({by})")
-                continue
-            if group is None:
-                group = _group_for(hooks.setdefault(event, []), matcher)
-            if old is not None and old["held"] == hook:
-                hook = old["held"]
+            plan.append((name, event, matcher, id_, hook, self.claim(pool, ident, event, matcher, cmd)))
+        return plan, [r for rows in pool.values() for r in rows]
+
+    def install(self, item):
+        """Phase 2: put one entry in its group unless its command is already there;
+        returns its record row, or None when it was not installed."""
+        name, event, matcher, id_, hook, old = item
+        cmd, where = hook["command"], _where(event, matcher)
+        group = _find_group(self.hooks, event, matcher)
+        holder = next((h for h in (group["hooks"] if group else []) if _command(h) == cmd), None)
+        if holder is not None:
+            by = self.owner_of(holder)
+            if old is None:
+                self.warnings.append(f"{name}: {cmd} not installed, already present in {where} ({by})")
             else:
-                self.changes.append(f"~ {where}: {cmd}" if old is not None else f"+ {where}: {cmd} ({name})")
-            slot = None if old is None else old["slot"]
-            earlier = sum(1 for sl in placed.get(id(group), []) if slot is not None and sl <= slot)
-            at = len(group["hooks"]) if slot is None else min(slot + earlier, len(group["hooks"]))
-            group["hooks"].insert(at, hook)
-            placed.setdefault(id(group), []).append(float("inf") if slot is None else slot)
-            own_hooks.add(id(hook))
-            self.installed_by[id(hook)] = name
-            owned.append(_entry(event, matcher, id_, cmd))
-            self.warn_same_script(name, group, hook, where, own_hooks)
-        for left in (r for removed in pool.values() for r in removed):
+                self.changes.append(f"- {where}: {cmd} ({name} displaced)")
+                self.warnings.append(f"{name}: {cmd} dropped, now also present in {where} ({by})")
+            return None
+        if group is None:
+            group = _group_for(self.hooks.setdefault(event, []), matcher)
+        if old is not None and old["held"] == hook:
+            hook = old["held"]
+        else:
+            self.changes.append(f"~ {where}: {cmd}" if old is not None else f"+ {where}: {cmd} ({name})")
+        slot = None if old is None else old["slot"]
+        placed = self.placed.setdefault(id(group), [])
+        earlier = sum(1 for sl in placed if slot is not None and sl <= slot)
+        at = len(group["hooks"]) if slot is None else min(slot + earlier, len(group["hooks"]))
+        group["hooks"].insert(at, hook)
+        placed.append(float("inf") if slot is None else slot)
+        self.own_hooks.setdefault(name, set()).add(id(hook))
+        self.installed_by[id(hook)] = name
+        self.warn_same_script(name, group, hook, where, self.own_hooks[name])
+        return _entry(event, matcher, id_, cmd)
+
+    def report_leftovers(self, name, leftovers, owned):
+        """Owned entries no current entry continues; one whose command the fragment
+        still installs is not reported."""
+        kept = {(e["event"], e["matcher"], e["command"]) for e in owned}
+        for left in leftovers:
             e = left["entry"]
-            self.changes.append(f"- {_where(e['event'], e['matcher'])}: {e['command']} ({name} edited)")
-        return owned
+            if (e["event"], e["matcher"], e["command"]) not in kept:
+                self.changes.append(f"- {_where(e['event'], e['matcher'])}: {e['command']} ({name} edited)")
 
 
 def sync(hooks, fragment_dir, record):
@@ -374,7 +395,13 @@ def sync(hooks, fragment_dir, record):
 
     ``hooks`` must have been through ``detach(hooks, record)``. Returns ``(changes,
     warnings, new_record)``; ``changes`` describes what moved in ``hooks`` and is empty
-    when the call left it unchanged.
+    when the call left it unchanged. The run has two phases over all fragments at
+    once: every healthy fragment's owned entries leave their groups, then the entries
+    that continue an owned one go back in, then the new ones, so an entry moved
+    between fragments lands in its new fragment on the same run. Group order is not
+    maintained: a reorder inside a fragment file emits no change. Detach picks the
+    first hook with an owned command, so a hand entry placed earlier with the same
+    command is the one a removal takes.
     """
     run = _Merge(hooks)
     new_record = {}
@@ -384,19 +411,34 @@ def sync(hooks, fragment_dir, record):
         if s[_OWNER] not in present:
             run.drop(event, group, s, f"{s[_OWNER]} gone")
 
+    healthy = {}
     for name, path in present.items():
-        own = [(e, g, s) for e, g, s in _sentinels(hooks) if s[_OWNER] == name]
         entries, error = load_fragment(path)
         if error:
             run.warnings.append(f"{name}: {error}; skipped, owned entries kept")
-            for _, group, s in own:
-                _swap(group, s, s[_HELD])
-            if own:
-                new_record[name] = [s[_ENTRY] for _, _, s in own]
-            continue
-        owned = run.sync_fragment(name, entries, own)
-        if owned:
-            new_record[name] = owned
+            run.restore(name, new_record)
+        else:
+            healthy[name] = entries
+
+    own = [(e, g, s) for e, g, s in _sentinels(hooks) if s[_OWNER] in healthy]
+    removed = run.remove_owned(own)
+    plans, leftovers = [], {}
+    for name, entries in healthy.items():
+        plan, leftovers[name] = run.plan_fragment(name, entries, removed.get(name, []))
+        plans += plan
+
+    owned = {name: [] for name in healthy}
+    for continuing in (True, False):
+        for item in plans:
+            if (item[5] is not None) == continuing:
+                entry = run.install(item)
+                if entry is not None:
+                    owned[item[0]].append(entry)
+
+    for name in healthy:
+        run.report_leftovers(name, leftovers[name], owned[name])
+        if owned[name]:
+            new_record[name] = owned[name]
 
     for _, group, s in _sentinels(hooks):
         _swap(group, s, s[_HELD])
