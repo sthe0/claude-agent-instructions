@@ -343,7 +343,7 @@ agent_home = os.path.dirname(settings_path)
 record_path = os.path.join(agent_home, hook_fragments.RECORD_NAME)
 old_record, record_error = hook_fragments.load_record(record_path)
 if record_error:
-    print("install-reminder-hooks: warning: " + record_error + "; fragment pass skipped", file=sys.stderr)
+    print("install-reminder-hooks: warning: " + record_error + "; fragment pass skipped (Core's pass then sees fragment entries as ordinary hooks)", file=sys.stderr)
 else:
     hook_fragments.detach(hooks, old_record)
 changed, reconciled = add_rows(hooks, DESIRED, reconcile=True)

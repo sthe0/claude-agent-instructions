@@ -516,6 +516,35 @@ def test_personal_root_gets_no_fragments(tmp_path):
     assert str(d.resolve()) not in (personal / "settings.json").read_text()
 
 
+def test_entry_retargeted_onto_the_command_of_another_own_entry_installs_it_once(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org", scripts=("gate.py", "gate2.py"))
+    gate2 = "python3 @FRAGMENT_DIR@/scripts/gate2.py"
+    box.fragment(d, [{"id": "a", "command": GATE}, {"command": gate2}], link="org.json")
+    box.run()
+    box.fragment(d, [{"id": "a", "command": gate2}])
+    proc = box.run()
+    base = f"python3 {d.resolve()}/scripts/"
+    assert [c for c in box.entries() if c.startswith(base)] == [base + "gate2.py"]
+    assert "org.json" not in proc.stderr
+    box.assert_stable(box.settle())
+
+
+def test_ids_swapping_commands_install_both_commands(tmp_path):
+    box = Box(tmp_path)
+    d = box.fragment_dir("org", scripts=("gate.py", "gate2.py", "gate3.py"))
+    gate2 = "python3 @FRAGMENT_DIR@/scripts/gate2.py"
+    gate3 = "python3 @FRAGMENT_DIR@/scripts/gate3.py"
+    box.fragment(d, [{"id": "a", "command": GATE}, {"id": "b", "command": gate2}], link="org.json")
+    box.run()
+    box.fragment(d, [{"id": "a", "command": gate2}, {"id": "b", "command": gate3}])
+    proc = box.run()
+    base = f"python3 {d.resolve()}/scripts/"
+    assert [c for c in box.entries() if c.startswith(base)] == [base + "gate2.py", base + "gate3.py"]
+    assert "org.json" not in proc.stderr
+    box.assert_stable(box.settle())
+
+
 def test_doctor_check_lists_uninstalled_fragment_entries(tmp_path):
     box = Box(tmp_path)
     d = box.fragment_dir("org")
