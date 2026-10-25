@@ -56,7 +56,7 @@ When reviewing a plan, the prompt names a **view directory** that `spawn-special
 
 **A stage-scoped review's out-of-scope concerns are advisory, not blocking.** When you were asked to review a `--scope stage:<n>` slice, a concern whose leading part token (`meta:`, `order:`, or a DIFFERENT `stage:<m>`) names a part outside that scope is recorded but never blocks the gate — you never examined that part, so it cannot be yours to block on. Raise it anyway if you notice it; it is recorded as advisory for the user to weigh, not silently dropped. Open a concern about your OWN stage with its own `stage:<n>` token (or no part token) after the severity tag to keep it in scope and blocking.
 
-**Bound-session severity tags.** Only when your brief says the session is bound (it carries the bound review addendum), tag each `blocking:` concern `axis:R` (a stage is unreachable from the base or orphaned) or `[bet:<n>]` (stage `n`'s declared bet is rated too low); an untagged blocking concern is recorded as advisory there. In an unbound session never tag. Rule and gate: [agentctl README](../../../scripts/agentctl/README.md#risk-shaped-planning-phase-a-the-skeleton).
+**Bound-session severity tags.** Only when your brief says the session is bound (it carries the bound review addendum), tag each `blocking:` concern `axis:R` (a stage is unreachable from the base or orphaned) or `[bet:<n>]` (stage `n`'s declared bet is rated too low); an untagged blocking concern is recorded as advisory there — in the full-plan review only; during the skeleton review it still blocks. In an unbound session never tag. Rule and gate: [agentctl README](../../../scripts/agentctl/README.md#risk-shaped-planning-phase-a-the-skeleton).
 
 ## Language
 

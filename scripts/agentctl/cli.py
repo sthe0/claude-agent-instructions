@@ -8059,7 +8059,8 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     if stage is None:
         return Directive(False, state.node, "next_stage", "no active stage to dispatch")
     lazy = gates.lazy_stage_blockers(state, stage.index)
-    _log_gate(state, "lazy_stage", lazy, passed=not lazy)
+    if state.risk_planning:
+        _log_gate(state, "lazy_stage", lazy, passed=not lazy)
     if lazy:
         return Directive(False, state.node, "noop",
                          "dispatch refused: " + "; ".join(lazy), data={"blockers": lazy})
