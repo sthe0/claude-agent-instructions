@@ -2930,6 +2930,30 @@ ground = "STATE_FILE_NAME.fullmatch selects agentctl state files from a director
 hits = 1
 reviewed_by = "coordinator"
 
+[sites."scripts/reaper/builtin/pytest_basetemp.py::<module>::re.compile"]
+class = "structural"
+ground = "NUMBERED_DIR fixes the directory-name syntax of a numbered pytest run directory (pytest-<n>)."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/builtin/pytest_basetemp.py::_judge::pattern.fullmatch"]
+class = "structural"
+ground = "NUMBERED_DIR.fullmatch keeps any directory whose name is not a numbered pytest run directory."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/builtin/pytest_basetemp.py::remove::pattern.fullmatch"]
+class = "structural"
+ground = "NUMBERED_DIR.fullmatch refuses to remove a directory whose name is not a numbered pytest run directory."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/builtin/pytest_basetemp.py::scan::pattern.fullmatch"]
+class = "structural"
+ground = "NUMBERED_DIR.fullmatch selects numbered pytest run directories from a directory listing by name syntax."
+hits = 1
+reviewed_by = "coordinator"
+
 [sites."scripts/reaper/runner.py::_stamp_path::re.sub"]
 class = "structural"
 ground = "Replaces characters outside a safe file-name set when deriving a stamp file name (path sanitization)."

@@ -34,4 +34,5 @@ def test_shim_accepts_the_old_flags_and_runs_the_runner(tmp_path):
 def test_shim_dry_run_prints_only_verdict_lines_and_exits_zero(tmp_path):
     out = _run(["--dry-run"], tmp_path)
     assert out.returncode == 0
-    assert all(line.startswith(("git-worktrees REMOVE ", "git-worktrees KEEP ")) for line in out.stdout.splitlines())
+    # The shim runs every reaper, so a verdict line may come from any of them: "<reaper> REMOVE|KEEP <path> ...".
+    assert all(line.split(" ", 2)[1] in ("REMOVE", "KEEP") for line in out.stdout.splitlines())
