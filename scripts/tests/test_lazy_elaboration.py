@@ -187,3 +187,11 @@ def test_lazy_stage_gate_logged_only_when_bound(tmp_path, monkeypatch):
     sc.eng.execute(SESSION)
     assert dispatch(sc)["ok"] is True
     assert _lazy_rows(log) == []
+
+
+def test_lazy_stage_gate_logged_when_bound(sc, tmp_path, monkeypatch):
+    log = tmp_path / "gate-log.jsonl"
+    monkeypatch.setattr(cli, "GATE_LOG", log)
+    launched(sc)
+    assert dispatch(sc)["ok"] is False
+    assert [r["passed"] for r in _lazy_rows(log)] == [False]
