@@ -26,7 +26,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `principle-promotion-threshold` | `3` | Context-block count at which promote-scan flags an experience cluster for a principle leaf. |
 | `skill-description-max-chars` | `850` | Character ceiling on a SKILL.md frontmatter `description:`. |
 | `always-loaded-surface-advisory-chars` | `80000` | Advisory-only ceiling on the aggregate always-loaded surface; never fails. |
-| `memory-index-max-bytes` | `24000` | UTF-8 byte ceiling on `memory-global/MEMORY.md`, under the harness's silent 25000-byte truncation. |
+| `memory-index-max-bytes` | `24000` | UTF-8 bytes cap on `memory-global/MEMORY.md` (harness truncates at 25000); see memory-index-max-bytes-derivation.md. |
 | `phase3-due-sessions-floor` | `30` | Minimum scanned sessions before a Phase-3 firing verdict counts as evidence. |
 | `phase3-due-data-window-days` | `14` | Minimum days since the Phase-3 baseline stamp before its verdict is trusted. |
 | `effort-divergence-multiple` | `5.0` | Actual-to-estimated effort ratio at which a passing result is routed to DIAGNOSING (spend, wall-clock). |
