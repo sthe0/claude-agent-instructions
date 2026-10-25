@@ -415,27 +415,27 @@ class Confidence(str, Enum):
     LOW = "low"
 
 
-# The legal values of a Critique.failure_address (R2 — the fault-address of преодоление
-# затруднения). A затруднение is overcome by fixing its ОБЕСПЕЧЕНИЕ, and the address is one
-# of two special cases of that ONE act: inadequate resource обеспечение ('resource' —
-# материал/средство: the model of the material, or the tool, was wrong) or inadequate
-# normative обеспечение ('normative' — норма/способ: the goal, or the method to reach it,
-# was wrong). These are NOT two ontologies — «норма — тоже ресурс» (normative обеспечение
-# ⊂ обеспечение деятельности) — and both reduce reflexively to знание. This is deliberately
-# NOT an is/ought (сущее/должное) tag: the value set is its OWN, decoupled from the retired
+# The legal values of a Critique.failure_address (R2 — the fault-address of overcoming the
+# difficulty). A difficulty is overcome by fixing its PROVISION, and the address is one
+# of two special cases of that ONE act: inadequate resource provision ('resource' —
+# material/tool: the model of the material, or the tool, was wrong) or inadequate
+# normative provision ('normative' — norm/method: the goal, or the method to reach it,
+# was wrong). These are NOT two ontologies — 'a norm is a resource too' (normative provision
+# ⊂ provision of the activity) — and both reduce reflexively to knowledge. This is deliberately
+# NOT an is/ought tag: the value set is its OWN, decoupled from the retired
 # StatementKind enum a-priori-typing dropped in ADR-0004 (§R2 records the reframe). The
-# сущее/должное character of a fault is a POST-HOC product of критика, not carried here.
+# is/ought character of a fault is a POST-HOC product of critique, not carried here.
 # `not_applicable` is the one legal sentinel for an EXPLICIT opt-out (the critique states the
 # routing does not apply), kept distinct from a bare None omission so the gate can
 # discriminate the two.
 #
-# «Both reduce reflexively to знание» is a statement about the ADDRESS, not about the
-# REPAIR. Знание is a functional place of its own — upstream of both обеспечения, since it
-# is what a норма is selected against and what a ресурс is judged adequate by — so the act
-# that closes the difficulty may land on знание directly rather than on the ресурс or the
-# норма that merely carried the fault. That landing place is recorded on its own axis,
+# "Both reduce reflexively to knowledge" is a statement about the ADDRESS, not about the
+# REPAIR. Knowledge is a functional place of its own — upstream of both provisions, since it
+# is what a norm is selected against and what a resource is judged adequate by — so the act
+# that closes the difficulty may land on knowledge directly rather than on the resource or the
+# norm that merely carried the fault. That landing place is recorded on its own axis,
 # NORMALIZATION_DESTINATIONS, and is orthogonal to this two-valued address: the address
-# says which обеспечение failed, the destination says which functional place the re-norming
+# says which provision failed, the destination says which functional place the re-norming
 # repairs. A single value cannot carry both without collapsing the distinction.
 FAILURE_ADDRESS_VALUES = ("resource", "normative", "not_applicable")
 
@@ -569,13 +569,13 @@ class Critique:
     replans exactly as before.
 
     `failure_address` (schema 17, R2; values reframed schema 19 per ADR-0004 §R2) types
-    the fault-address of преодоление затруднения: the затруднение is overcome by fixing its
-    обеспечение, either inadequate resource обеспечение ('resource' — материал/средство) or
-    inadequate normative обеспечение ('normative' — норма/способ), or explicitly
-    not_applicable. Two special cases of ONE act («норма — тоже ресурс»), both reducing
-    reflexively to знание — NOT an is/ought tag. A legal value (for a NEW write) is one of
+    the fault-address of overcoming the difficulty: the difficulty is overcome by fixing its
+    provision, either inadequate resource provision ('resource' — material/tool) or
+    inadequate normative provision ('normative' — norm/method), or explicitly
+    not_applicable. Two special cases of ONE act ('a norm is a resource too'), both reducing
+    reflexively to knowledge — NOT an is/ought tag. A legal value (for a NEW write) is one of
     FAILURE_ADDRESS_VALUES; None is the untouched-legacy default (a critique recorded before
-    schema 17, or one not yet routed). A legacy record carrying an OLD сущее/должное value
+    schema 17, or one not yet routed). A legacy record carrying an OLD is/ought value
     (the rejected v3 R2 typing) also loads unchanged — the field stores any string, and the
     gate checks only non-None, so it is grandfathered, never re-blocked. gates.
     failure_address_blockers blocks difficulty closure on a bare None (omission) — an explicit
@@ -598,23 +598,31 @@ NORMALIZATION_LEVELS = ("note", "leaf", "principle")
 # orthogonal to NORMALIZATION_LEVELS. The two answer different questions and must share no
 # member: `level` asks how generally the record is written down (a payoff question about the
 # artifact), `destination` asks which place in the activity the act actually repairs (a
-# structural question about the деятельность). Conflating them is what made "principle"
+# structural question about the activity). Conflating them is what made "principle"
 # read as both the most general recording level AND the thing being changed, which quietly
-# denied that знание is a place a renorming can land on at all.
+# denied that knowledge is a place a renorming can land on at all.
 #
-# The members are the functional places обеспечение деятельности decomposes into (see the
+# The members are the functional places the provision of the activity decomposes into (see the
 # FAILURE_ADDRESS_VALUES comment above for the same decomposition on the fault-address
-# axis): resource обеспечение splits into материал and средство, normative обеспечение
-# into норма and способ, and знание stands upstream of both as the place a норма is
-# selected against and a ресурс judged adequate by. Closed because an open destination is
+# axis): resource provision splits into material and tool, normative provision
+# into norm and method, and knowledge stands upstream of both as the place a norm is
+# selected against and a resource judged adequate by. Closed because an open destination is
 # not a place — it is free text, and the axis then records nothing checkable.
-NORMALIZATION_DESTINATIONS = ("материал", "средство", "норма", "способ", "знание")
+NORMALIZATION_DESTINATIONS = ("material", "tool", "norm", "method", "knowledge")
+
+# The original Russian spellings of the destinations, still accepted on the CLI and in stored state.
+NORMALIZATION_DESTINATION_ALIASES = {"материал": "material", "средство": "tool", "норма": "norm", "способ": "method", "знание": "knowledge"}
+
+
+def canonical_normalization_destination(value: str | None) -> str | None:
+    """The English spelling of a normalization destination; an unknown value is returned unchanged."""
+    return NORMALIZATION_DESTINATION_ALIASES.get(value, value) if isinstance(value, str) else value
 
 
 @dataclass
 class Normalization:
-    """Phase 4 (closure): the renorming act (перенормирование). A difficulty is a
-    norm-failure (провал нормы = SIGNAL); because activity is constituted by
+    """Phase 4 (closure): the re-norming act. A difficulty is a
+    norm-failure (norm failure = SIGNAL); because activity is constituted by
     reproduction, a REPRODUCIBLE factor left un-normed simply re-fails — so closing a
     difficulty REQUIRES re-norming that factor (the ACT is mandatory-if-reproducible).
     `factor` names the reproducible cause; `level` (note/leaf/principle) is the payoff-
@@ -627,6 +635,9 @@ class Normalization:
     factor: str
     level: str | None = None
     destination: str | None = None
+
+    def __post_init__(self) -> None:
+        self.destination = canonical_normalization_destination(self.destination)
 
 
 PARENT_DIFFICULTY_ENV = "AGENTCTL_PARENT_DIFFICULTY"
@@ -1625,16 +1636,16 @@ class Criterion:
 class Principle:
     """The refutable principle the stage rests on (confidence is a Confidence value).
 
-    Element 7 is used AS a норма (должное) — the stage rests on it, and what a stage rests
+    Element 7 is used AS a norm (ought) — the stage rests on it, and what a stage rests
     on is not checked for truth in the course of resting on it. That is a statement about
     the FUNCTIONAL PLACE the principle occupies here, not about what the principle IS: the
-    same statement can be знание elsewhere (it has a source, a derivation, and a refutation
+    same statement can be knowledge elsewhere (it has a source, a derivation, and a refutation
     condition — the three marks of a claim about how things are), and `refutation` only
     means anything because it can be. What ADR-0004 dropped is the a-priori `statement_kind`
-    TAG, a per-statement typing that tried to settle знание-vs-норма once and for all on the
-    statement itself; the сущее-vs-должное character of a fault stays a POST-HOC product of
-    критика at difficulty closure, living in the two refutation MODES and R2's routing.
-    Nothing here denies the principle a знание reading — the stage's own знание place is
+    TAG, a per-statement typing that tried to settle knowledge-vs-norm once and for all on the
+    statement itself; the is-vs-ought character of a fault stays a POST-HOC product of
+    critique at difficulty closure, living in the two refutation MODES and R2's routing.
+    Nothing here denies the principle a knowledge reading — the stage's own knowledge place is
     `Stage.knowledge`, and a principle may well be where that knowledge came from."""
     statement: str
     source: str
@@ -2050,7 +2061,7 @@ class Stage:
     # refused — the two arrive together on purpose, so an author told to move a sentence
     # out of `conditions` always has this place to move it into.
     preconditions: str | None = None
-    # The знание the stage acts FROM: what must already be known for the declared method
+    # The knowledge the stage acts FROM: what must already be known for the declared method
     # over the declared means to reach the result image. A functional place of its own,
     # upstream of both the norm (element 7, what the stage rests on) and the selection of
     # means — not a restatement of either. Optional at load so every already-authored plan

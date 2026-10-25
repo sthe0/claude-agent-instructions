@@ -536,7 +536,7 @@ def difficulty_blockers(state: SessionState) -> list[str]:
 def normalization_blockers(state: SessionState, *, pending_factor: str | None = None) -> list[str]:
     """Precondition guardian for `replan` at DIAGNOSING closure: a difficulty is a
     norm-failure, and because activity is constituted by reproduction, closing one
-    REQUIRES re-norming the reproducible factor it exposed (перенормирование). Like
+    REQUIRES re-norming the reproducible factor it exposed (re-norming). Like
     difficulty_blockers this is an INTERNAL command precondition — deliberately absent
     from GUARDIANS so verify-agentctl requires no hook. [] == may close.
 
@@ -568,11 +568,11 @@ def normalization_blockers(state: SessionState, *, pending_factor: str | None = 
 
 
 def failure_address_blockers(state: SessionState) -> list[str]:
-    """Precondition guardian for `replan` at DIAGNOSING closure: a затруднение is overcome
-    by fixing its обеспечение, and the fault-address is ambiguous until ROUTED — inadequate
-    resource provision ('resource': материал/средство) or inadequate normative
-    provision ('normative': норма/способ), or explicitly not_applicable. Two special
-    cases of ONE act («норма — тоже ресурс»), both reducing reflexively to знание — NOT an
+    """Precondition guardian for `replan` at DIAGNOSING closure: a difficulty is overcome
+    by fixing its provision, and the fault-address is ambiguous until ROUTED — inadequate
+    resource provision ('resource': material/tool) or inadequate normative
+    provision ('normative': norm/method), or explicitly not_applicable. Two special
+    cases of ONE act ('a norm is a resource too'), both reducing reflexively to knowledge — NOT an
     is/ought tag (ADR-0004 §R2). Like difficulty_blockers/normalization_blockers it is an
     INTERNAL command precondition — deliberately absent from GUARDIANS so verify-agentctl
     requires no hook. PURE: reads only the recorded Critique; no subprocess/socket/network.
@@ -582,7 +582,7 @@ def failure_address_blockers(state: SessionState) -> list[str]:
     difficulty cycle is still incomplete (difficulty_blockers owns that case). Once the
     cycle is complete, the routing must be DECIDED — a bare None (omission) blocks, while an
     EXPLICIT not_applicable is a legal opt-out that clears. The gate checks ONLY non-None:
-    ANY recorded value clears, so a legacy record carrying an OLD сущее/должное value (the
+    ANY recorded value clears, so a legacy record carrying an OLD is/ought value (the
     rejected v3 R2 typing) is grandfathered, never re-blocked. Bogus values never reach a
     persisted record — cmd_critique and the argparse `choices` reject them at write time."""
     if state.node != Node.DIAGNOSING.value:

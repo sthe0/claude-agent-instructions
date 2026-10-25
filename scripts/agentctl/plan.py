@@ -110,7 +110,7 @@ and every stage must also carry the 8-element activity-structure fields:
                                          # transformation to go through
     preconditions = "..."                # what must already be true before the stage
                                          # may START (inherited from outside it)
-    knowledge = "..."                    # the знание the stage acts FROM
+    knowledge = "..."                    # the knowledge the stage acts FROM
     invariants = "..."
     capability_required = "..."          # required for substantive
 
@@ -538,7 +538,7 @@ def _validate_substantive_stage(s: dict, index: int) -> None:
             f"stage {index} [stage.principle] confidence {conf!r} is not one of "
             f"{sorted(c.value for c in Confidence)}"
         )
-    # Element 7 is ALWAYS a норма (должное); there is no a-priori знание-vs-норма tag to
+    # Element 7 is ALWAYS a norm (ought); there is no a-priori knowledge-vs-norm tag to
     # validate (ADR-0004 dropped it as a category error). A legacy principle block still
     # carrying the retired key parses unchanged — the extra key is simply not read, not rejected.
     # Anti-template: the cheapest degradation of a required free-text field is
@@ -1994,7 +1994,7 @@ def parse_plan(
                 preconditions=(
                     str(s["preconditions"]) if s.get("preconditions") else None
                 ),
-                # Parsed permissively on BOTH load modes — the знание requirement lives at
+                # Parsed permissively on BOTH load modes — the knowledge requirement lives at
                 # the submission seam (submission.py), never in an `if strict:` branch
                 # here, because load_plan is re-read in-session from seven call sites and a
                 # loader-side requirement is retroactive over plans already accepted.
@@ -2424,12 +2424,12 @@ def optional_stages_place(doc: PlanDoc) -> tuple:
     return (("optional_stages", marks),) if marks else ()
 
 
-# The absent form of the знание place: no local knowledge, no refs on either projection.
+# The absent form of the knowledge place: no local knowledge, no refs on either projection.
 _KNOWLEDGE_PLACE_ABSENT = (None, (), ())
 
 
 def knowledge_place(stage) -> tuple:
-    """The stage's знание place — `knowledge` plus its two ref projections — as a
+    """The stage's knowledge place — `knowledge` plus its two ref projections — as a
     contribution to a change-decision key: a ONE-element tuple holding the group, or the
     EMPTY tuple when the stage declares none of the three.
 
@@ -4008,7 +4008,7 @@ def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fals
                                    if u.element or u.artifact)),)
                if any(u.element or u.artifact for u in s.supplies) else ()),
              # Without this a knowledge-only correction — the exact edit an
-             # overcome-difficulty replan makes when the fault addressed знание —
+             # overcome-difficulty replan makes when the fault addressed knowledge —
              # diffs to 'no_change' and is silently dropped.
              *knowledge_place(s),
              # Same argument one field over: moving a stage's starting requirements out of

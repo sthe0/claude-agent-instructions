@@ -130,6 +130,7 @@ from .state import (
     Declaration,
     Difficulty,
     canonical_failure_address,
+    canonical_normalization_destination,
     EFFORT_FIRE_FINISHED_WORK,
     FAILURE_ADDRESS_ALIASES,
     FAILURE_ADDRESS_VALUES,
@@ -146,6 +147,7 @@ from .state import (
     Means,
     Node,
     Normalization,
+    NORMALIZATION_DESTINATION_ALIASES,
     NORMALIZATION_DESTINATIONS,
     NORMALIZATION_LEVELS,
     Outcome,
@@ -11251,7 +11253,8 @@ def _normalize_record_fields(factor, level, destination) -> tuple[str | None, st
     if level is not None and level not in NORMALIZATION_LEVELS:
         return (f"normalize --level must be one of {list(NORMALIZATION_LEVELS)} or "
                 f"omitted (payoff-gated by rediscovery-threshold-min), got {level!r}"), None
-    if destination is not None and destination not in NORMALIZATION_DESTINATIONS:
+    if (destination is not None
+            and canonical_normalization_destination(destination) not in NORMALIZATION_DESTINATIONS):
         return (f"normalize --destination must be one of "
                 f"{list(NORMALIZATION_DESTINATIONS)} or omitted (the functional "
                 f"place the renorming lands on), got {destination!r}"), None
@@ -11307,7 +11310,7 @@ def cmd_normalize(args, *, store: StateStore, runner: Runner | None = None) -> D
     if error:
         return Directive(False, state.node, "normalize", error)
     level = getattr(args, "level", None)
-    destination = getattr(args, "destination", None)
+    destination = canonical_normalization_destination(getattr(args, "destination", None))
     d.normalization = Normalization(factor=factor, level=level, destination=destination)
     _log_normalize_event(state, factor=factor, level=level, destination=destination, in_diagnosis=True)
     store.save(state)
@@ -11371,7 +11374,7 @@ def _cmd_normalize_outside_diagnosing(args, state: SessionState, store: StateSto
     if error:
         return Directive(False, state.node, "normalize", error)
     level = getattr(args, "level", None)
-    destination = getattr(args, "destination", None)
+    destination = canonical_normalization_destination(getattr(args, "destination", None))
     record = state.difficulty
     if (_release_reflection_open(state) and record is not None and record.declaration is not None
             and record.investigation is not None and record.critique is not None):
@@ -11939,7 +11942,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
         _log_gate(state, "normalization_blockers", nblock, passed=True)
 
     # closure precondition (R2): the fault must be ROUTED — the critique's failure_address
-    # must be recorded (resource/normative/not_applicable обеспечение), never a bare
+    # must be recorded (resource/normative/not_applicable provision), never a bare
     # omission — before the difficulty may be closed. Mirrors normalization_blockers: an
     # INTERNAL precondition (absent from GUARDIANS), [] outside the DIAGNOSING-closure
     # path, so a non-difficulty replan is unaffected. Unlike the normalization gate there
@@ -14415,9 +14418,11 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                     help="recording level (payoff-gated by rediscovery-threshold-min); omit "
                          "for an in-head note below the leaf threshold")
     sp.add_argument("--destination", dest="destination", default=None,
-                    choices=list(NORMALIZATION_DESTINATIONS),
-                    help="the functional place the renorming lands on — материал | средство "
-                         "| норма | способ | знание; ORTHOGONAL to --level (any destination "
+                    choices=list(NORMALIZATION_DESTINATIONS) + list(NORMALIZATION_DESTINATION_ALIASES),
+                    metavar="{" + ",".join(NORMALIZATION_DESTINATIONS) + "}",
+                    help="the functional place the renorming lands on — material | tool "
+                         "| norm | method | knowledge (the original Russian spellings are "
+                         "accepted as aliases); ORTHOGONAL to --level (any destination "
                          "at any level), omit when the place is not being recorded")
     sp = add("difficulty-open"); sp.add_argument("--session", required=True)
     sp.add_argument("--origin", dest="origin", default="stage",

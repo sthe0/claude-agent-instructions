@@ -1,10 +1,10 @@
-"""The знание place, the submission seam that requires it, and the destination axis.
+"""The knowledge place, the submission seam that requires it, and the destination axis.
 
 Defect 1 of the SMD act-modelling rework: the engine had no functional place for what a
 stage must already KNOW. Knowledge was reachable only as a `supplies` element with no
 element to supply, and the one place that looked like it — `Normalization.level` — was a
 scale of how generally a lesson is written down, not of what the lesson repairs, so
-"re-norm the знание" had nowhere to land except by polluting that scale.
+"re-norm the knowledge" had nowhere to land except by polluting that scale.
 
 Three claims are under test here, and each has a control that goes red if the production
 side is reverted:
@@ -21,7 +21,7 @@ side is reverted:
      `stage_carry_key`, `_apply_refined_stage_fields`, `diff_plans`' prose tuple,
      `stage_question_key`. A field added to the struct alone is invisible to the engine:
      a knowledge-only correction (exactly the edit an overcome-difficulty replan makes
-     when the fault addressed знание) would diff to "no_change" and be silently dropped.
+     when the fault addressed knowledge) would diff to "no_change" and be silently dropped.
      The identity direction matters just as much — a stage declaring NONE of the three
      must produce the byte-identical schema-23 `stage_question_key`, because that digest
      is persisted in `Question.disposed_at_key` and compared across processes.
@@ -38,6 +38,7 @@ from pathlib import Path
 import pytest
 
 from agentctl import cli, plugins, text_shape
+from agentctl import state as state_mod
 from agentctl.plan import (
     PlanError,
     diff_plans,
@@ -51,8 +52,10 @@ from agentctl.state import (
     NORMALIZATION_LEVELS,
     Actor,
     Criterion,
+    Difficulty,
     Means,
     Node,
+    Normalization,
     Stage,
     StageStatus,
     Subject,
@@ -409,7 +412,7 @@ def test_plan_digest_follows_an_in_place_edit_through_approve(tmp_path, store,
 
 def test_carry_key_moves_when_knowledge_moves():
     """`stage_carry_key` decides whether a substantive replan KEEPS a stage's PASSED
-    outcome. A stage whose знание was rewritten is no longer the stage that passed."""
+    outcome. A stage whose knowledge was rewritten is no longer the stage that passed."""
     assert stage_carry_key(_stage(knowledge="a")) != stage_carry_key(_stage(knowledge="b"))
 
 
@@ -427,7 +430,7 @@ def test_carry_key_moves_when_knowledge_refs_move():
 
 def test_question_key_moves_when_knowledge_moves():
     """`knowledge` is a legal Question.target, so a question disposed against the old
-    знание must be invalidated when it is rewritten."""
+    knowledge must be invalidated when it is rewritten."""
     assert stage_question_key(_stage(knowledge="a")) != stage_question_key(
         _stage(knowledge="b")
     )
@@ -449,7 +452,7 @@ def test_question_key_moves_when_knowledge_refs_move():
 
 
 def test_question_key_does_not_collide_across_the_three_new_fields():
-    """Why the знание place contributes as ONE grouped element rather than three
+    """Why the knowledge place contributes as ONE grouped element rather than three
     independent conditional splices: spliced field-by-field, (knowledge='x', refs empty)
     and (knowledge=None, material_refs=['x']) both flatten to ('x',) and become the same
     key."""
@@ -525,9 +528,9 @@ def test_question_key_is_byte_identical_to_schema_23_across_the_frozen_corpus(pl
 
 
 def test_diff_plans_calls_a_knowledge_only_edit_a_refinement(tmp_path):
-    """Without the знание place in `diff_plans`' prose tuple, a knowledge-only correction
-    — the exact edit an overcome-difficulty replan makes when the fault addressed знание —
-    diffs to "no_change" and the corrected знание is silently dropped."""
+    """Without the knowledge place in `diff_plans`' prose tuple, a knowledge-only correction
+    — the exact edit an overcome-difficulty replan makes when the fault addressed knowledge —
+    diffs to "no_change" and the corrected knowledge is silently dropped."""
     old = load_plan(_write_plan(tmp_path / "old.toml"))
     new = load_plan(
         _write_plan(
@@ -560,7 +563,7 @@ def test_diff_plans_calls_a_material_refs_only_edit_a_refinement(tmp_path):
 def test_refs_projection_reaches_live_state_through_the_approve_refresh(tmp_path, store):
     """The fourth change-decision function, `_apply_refined_stage_fields`: a knowledge-only
     edit made at plan-mutable PLAN_READY must reach the live stage, or dispatch runs
-    against a stage whose знание place is stale against the bytes approve attested to."""
+    against a stage whose knowledge place is stale against the bytes approve attested to."""
     plan_path = tmp_path / "plan.toml"
     _write_plan(plan_path)
     _to_plan_ready(store, "refs-live", str(plan_path))
@@ -605,7 +608,7 @@ def test_carry_key_reset_re_arms_a_passed_stage_whose_knowledge_was_rewritten(
     tmp_path, store
 ):
     """The two claims meeting: because `knowledge` is in `stage_carry_key`, a PASSED
-    stage whose знание was rewritten at PLAN_READY is reset to PENDING for
+    stage whose knowledge was rewritten at PLAN_READY is reset to PENDING for
     re-verification instead of carrying an outcome that no longer attests to it."""
     plan_path = tmp_path / "plan.toml"
     _write_plan(plan_path)
@@ -639,12 +642,12 @@ def test_destination_axis_shares_no_member_with_the_level_axis():
     assert tuple(NORMALIZATION_LEVELS) == ("note", "leaf", "principle")
 
 
-def test_destination_covers_both_halves_of_обеспечение():
-    """resource (материал / средство) and normative (норма / способ), plus знание —
-    the place upstream of both. A destination set missing знание would leave the very
+def test_destination_covers_both_halves_of_provision():
+    """resource (material / tool) and normative (norm / method), plus knowledge —
+    the place upstream of both. A destination set missing knowledge would leave the very
     re-norming this stage exists to make recordable with nowhere to land."""
     assert set(NORMALIZATION_DESTINATIONS) == {
-        "материал", "средство", "норма", "способ", "знание",
+        "material", "tool", "norm", "method", "knowledge",
     }
 
 
@@ -677,7 +680,7 @@ def test_submission_seam_b_refuses_on_the_new_side_of_replan(tmp_path, store):
     the file."""
     sid = "seam-b"
     _to_normalize_ready(store, sid, _write_plan(tmp_path / "plan.toml"))
-    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="знание"),
+    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="knowledge"),
                       store=store)
 
     corrected = _write_plan(tmp_path / "corrected.toml", knowledge_block="")
@@ -692,7 +695,7 @@ def test_plan_digest_follows_the_new_bytes_through_replan(tmp_path, store):
     sid = "dig-b"
     plan = _write_plan(tmp_path / "plan.toml")
     _to_normalize_ready(store, sid, plan)
-    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="знание"),
+    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="knowledge"),
                       store=store)
     assert store.load(sid).accepted_plan_digest == _digest(plan)
 
@@ -729,7 +732,7 @@ def test_destination_rejects_a_non_member(tmp_path, store):
     aggregate reading, which is the only reason to record it as a field at all."""
     _to_normalize_ready(store, "dest-bad", _write_plan(tmp_path / "plan.toml"))
     d = cli.cmd_normalize(
-        ns(session="dest-bad", factor="f", level=None, destination="знанне"), store=store
+        ns(session="dest-bad", factor="f", level=None, destination="knowlege"), store=store
     )
     assert d.ok is False
     assert "--destination" in d.detail
@@ -741,9 +744,9 @@ def test_destination_is_reachable_from_the_command_line():
     in-code-only validation would leave the field unreachable from the CLI the
     coordinator drives."""
     args = cli.build_parser().parse_args(
-        ["normalize", "--session", "s", "--factor", "f", "--destination", "знание"]
+        ["normalize", "--session", "s", "--factor", "f", "--destination", "knowledge"]
     )
-    assert args.destination == "знание"
+    assert args.destination == "knowledge"
     assert args.level is None  # orthogonal: neither implies the other
 
 
@@ -775,7 +778,7 @@ def test_a_refused_replan_leaves_the_accepted_digest_unchanged(tmp_path, store,
     sid = "dig-refused"
     plan = _write_plan(tmp_path / "plan.toml")
     _to_normalize_ready(store, sid, plan)
-    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="знание"),
+    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="knowledge"),
                       store=store)
     # a similarity the corrected plan does not carry -> the coverage gate refuses
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
@@ -810,7 +813,7 @@ def test_a_no_change_replan_moves_plan_path_to_the_new_file(tmp_path, store):
     sid = "no-change-path"
     plan = _write_plan(tmp_path / "plan.toml")
     _to_normalize_ready(store, sid, plan)
-    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="знание"),
+    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="knowledge"),
                       store=store)
 
     # same parsed content, different bytes and a different path: comment-only, so
@@ -835,7 +838,7 @@ def test_a_no_change_replan_backfills_a_legacy_snapshot_from_the_new_file(tmp_pa
     sid = "no-change-backfill"
     plan = _write_plan(tmp_path / "plan.toml")
     _to_normalize_ready(store, sid, plan)
-    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="знание"),
+    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="knowledge"),
                       store=store)
     legacy = store.load(sid)
     legacy.plan_snapshot_path = None      # a session that predates the snapshot field
@@ -1038,7 +1041,7 @@ def test_seam_b_threads_the_session_class_through_replan(tmp_path, store):
     that declares nothing and escape the grade at the very seam a difficulty routes through."""
     sid = "seam-b-wc"
     _to_normalize_ready(store, sid, _write_plan(tmp_path / "plan.toml"))
-    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="знание"),
+    cli.cmd_normalize(ns(session=sid, factor="f", level="note", destination="knowledge"),
                       store=store)
 
     # complete in every other way: the ONLY thing the corrected plan does not say is what
@@ -1086,3 +1089,85 @@ def test_the_session_digest_and_the_reviewer_attested_digest_stay_distinct():
          "--plan-digest", "abc"]
     )
     assert args.plan_digest == "abc"
+
+
+# --- English destination values with Cyrillic aliases --------------------------
+
+_DESTINATION_ALIASES = {
+    "материал": "material", "средство": "tool", "норма": "norm",
+    "способ": "method", "знание": "knowledge",
+}
+_AGENTCTL_PROSE_FILES = ("state.py", "gates.py", "plan.py", "cli.py")
+_ALIAS_TABLE_PREFIXES = ("FAILURE_ADDRESS_ALIASES = ", "NORMALIZATION_DESTINATION_ALIASES = ")
+
+
+def _stray_cyrillic_lines(paths):
+    return [
+        f"{p.name}:{n}: {line}"
+        for p in paths
+        for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+        if any("Ѐ" <= ch <= "ӿ" for ch in line)
+        and not line.startswith(_ALIAS_TABLE_PREFIXES)
+    ]
+
+
+def test_destination_alias_table_maps_each_cyrillic_value_to_its_english_member():
+    assert dict(state_mod.NORMALIZATION_DESTINATION_ALIASES) == _DESTINATION_ALIASES
+    assert set(_DESTINATION_ALIASES.values()) == set(NORMALIZATION_DESTINATIONS)
+
+
+@pytest.mark.parametrize("alias,english", sorted(_DESTINATION_ALIASES.items()))
+def test_destination_alias_is_accepted_on_the_cli_and_stored_english(
+        tmp_path, store, alias, english):
+    sid = f"alias-{english}"
+    _to_normalize_ready(store, sid, _write_plan(tmp_path / "plan.toml"))
+    d = cli.cmd_normalize(
+        ns(session=sid, factor="f", level="note", destination=alias), store=store
+    )
+    assert d.ok is True
+    assert store.load(sid).difficulty.normalization.destination == english
+
+
+def test_destination_alias_parses_from_the_command_line():
+    args = cli.build_parser().parse_args(
+        ["normalize", "--session", "s", "--factor", "f", "--destination", "знание"]
+    )
+    assert cli.canonical_normalization_destination(args.destination) == "knowledge"
+
+
+@pytest.mark.parametrize("alias,english", sorted(_DESTINATION_ALIASES.items()))
+def test_destination_alias_stored_cyrillic_loads_as_english(alias, english):
+    assert Normalization(factor="f", destination=alias).destination == english
+    loaded = Difficulty.from_dict(
+        {"normalization": {"factor": "f", "level": "note", "destination": alias}}
+    )
+    assert loaded.normalization.destination == english
+
+
+def test_destination_alias_leaves_an_unknown_or_absent_value_alone():
+    assert Normalization(factor="f").destination is None
+    assert Normalization(factor="f", destination="knowlege").destination == "knowlege"
+
+
+def test_destination_alias_identity_canonicalizer_is_caught(tmp_path, store, monkeypatch):
+    monkeypatch.setattr(state_mod, "canonical_normalization_destination", lambda v: v)
+    monkeypatch.setattr(cli, "canonical_normalization_destination", lambda v: v)
+    assert Normalization(factor="f", destination="знание").destination != "knowledge"
+    _to_normalize_ready(store, "alias-mut", _write_plan(tmp_path / "plan.toml"))
+    d = cli.cmd_normalize(
+        ns(session="alias-mut", factor="f", level="note", destination="знание"),
+        store=store,
+    )
+    assert d.ok is False
+
+
+def test_destination_alias_scan_finds_no_cyrillic_outside_the_alias_tables():
+    paths = [REPO_ROOT / "scripts" / "agentctl" / name for name in _AGENTCTL_PROSE_FILES]
+    assert _stray_cyrillic_lines(paths) == []
+
+
+def test_destination_alias_scan_catches_a_stray_cyrillic_line(tmp_path):
+    stray = tmp_path / "stray.py"
+    stray.write_text("x = 1\n# знание\nNORMALIZATION_DESTINATION_ALIASES = {'знание': 'knowledge'}\n",
+                     encoding="utf-8")
+    assert _stray_cyrillic_lines([stray]) == ["stray.py:2: # знание"]
