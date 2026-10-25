@@ -306,6 +306,22 @@ CODE_PARTITIONS = [
         "the link verbs, not inferred from text.",
     ),
     (
+        "scripts/lib/bash_write_targets.py",
+        lambda f: f == "scripts/lib/bash_write_targets.py",
+        "structural",
+        "keep",
+        "The canon-guard write-target walker: its patterns match shell grammar only — "
+        "assignment words (`NAME=value`), a leading `$NAME` / `${NAME}`, `${NAME:=word}` "
+        "parameter-assignment — and its verb tables name commands by their literal "
+        "operand grammar (`cp`/`mv`/`install`, `sed -i`, `tee`, `printf -v`). Nothing is "
+        "read for sentence meaning; the output is a list of candidate paths, and every "
+        "uncertainty (an unresolvable variable, an unmodeled writer) resolves to the "
+        "over-inclusive reading, which can only turn an allow into a deny for a cwd "
+        "inside a protected tree. So the `scripts/lib/**` row below, which grounds its "
+        "structural verdict on literal denylists and published-body location, "
+        "misdescribes this file.",
+    ),
+    (
         "scripts/lib/** (incl. term_ruleset.py, published_body.py)",
         lambda f: f.startswith("scripts/lib/"),
         "structural",

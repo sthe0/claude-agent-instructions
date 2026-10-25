@@ -40,6 +40,10 @@ _LEADING_VAR_RE = re.compile(r"^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-
 #: An assignment word `NAME=value`, `NAME+=value` or `NAME[i]=value`.
 _ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?(\+?)=(.*)$", re.DOTALL)
 
+#: `${NAME:=word}` / `${NAME=word}`: assignment by parameter expansion, which can run anywhere
+#: a word is expanded, so the name is untrusted for the whole command.
+_PARAMETER_ASSIGN_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?=")
+
 _BASH_SEPS = {";", "&&", "||", "|", "|&", "&"}
 
 #: Variables the hook inherits from the same harness that spawned the command's shell.
@@ -431,8 +435,12 @@ class _VarTracker:
       pipeline or background segment, `+=`, `name[i]=` , a value still holding `$` or a
       backquote — POISONS the name for the rest of the command: it is dropped and never
       trusted again, even by a later literal assignment.
-    * A builtin that assigns through an argument (`eval`, `read`, `unset`, `printf -v`,
-      `declare -n` ...) discards everything.
+    * A name assigned by parameter expansion (`${o:=x}`, `${o=x}`) anywhere in the command is
+      poisoned from the start: the expansion can fire in any word, including the one being
+      walked.
+    * A builtin that assigns through an argument (`eval`, `read`, `unset`, `printf` with any
+      option token holding `v` — `-v NAME`, glued `-vNAME`, a cluster —, `declare -n` ...)
+      discards everything.
     * When `_variable_tracking_is_safe` fails, `var_env` is `None` and nothing is expanded.
     """
 
@@ -442,7 +450,9 @@ class _VarTracker:
             {name: os.environ[name] for name in _INHERITED_VARS if name in os.environ}
             if self.enabled else {}
         )
-        self.poisoned: set[str] = set()
+        self.poisoned: set[str] = set(_PARAMETER_ASSIGN_RE.findall(command))
+        for name in self.poisoned:
+            self.env.pop(name, None)
 
     @property
     def var_env(self) -> dict[str, str] | None:
@@ -468,7 +478,7 @@ class _VarTracker:
         rest = seg[verb_at + 1:] if verb_at is not None else []
         if (
             verb in _OPAQUE_VERBS
-            or (verb == "printf" and "-v" in rest)
+            or (verb == "printf" and any(t.startswith("-") and "v" in t for t in rest))
             or (
                 verb in _ASSIGNING_BUILTINS
                 and any(t.startswith("-") and not t.startswith("--") and "n" in t for t in rest)

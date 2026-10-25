@@ -375,13 +375,13 @@ def test_heredoc_in_function_definition_still_denies(tmp_path):
 # --- 1b: the deny stays, the message explains it ---
 
 def test_unexpanded_variable_deny_names_the_cause(tmp_path):
-    """`cat > $ZZZZUNDEF_CANON_TEST_VAR/x.md` uses a variable guaranteed absent
-    from the environment. It joins under cwd=canon → deny. The message explains
-    the variable could not be resolved and encourages an absolute path."""
+    """`cat > $ZZZZUNDEF_CANON_TEST_VAR/x.md` uses a variable the hook cannot resolve
+    (not assigned in the command, not inherited). It joins under cwd=canon → deny. The
+    message explains the variable could not be resolved and encourages an absolute path."""
     core = make_core(tmp_path)
     proc = run_hook(core, "cat hi > $ZZZZUNDEF_CANON_TEST_VAR/x.md", cwd=core)
     assert _denied(proc), proc.stdout
-    assert "shell state does not persist between tool calls" in proc.stdout
+    assert "could not resolve that shell variable" in proc.stdout
     assert "absolute path" in proc.stdout
 
 

@@ -24,6 +24,7 @@
 # scripts/lib/review_block.py                                | code   | structural
 # scripts/lib/marker_extract.py                              | code   | structural
 # scripts/lib/principle_provenance.py                        | code   | structural
+# scripts/lib/bash_write_targets.py                          | code   | structural
 # scripts/lib/** (incl. term_ruleset.py, published_body.py)  | code   | structural
 # scripts/crutch-inventory.py (self)                         | code   | not-a-gate
 # scripts/gen_crutch_registry.py (self)                      | code   | not-a-gate
@@ -2677,7 +2678,15 @@ domain = "code"
 file = "scripts/lib/bash_write_targets.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "The canon-guard write-target walker: its patterns match shell grammar only — assignment words (`NAME=value`), a leading `$NAME` / `${NAME}`, `${NAME:=word}` parameter-assignment — and its verb tables name commands by their literal operand grammar (`cp`/`mv`/`install`, `sed -i`, `tee`, `printf -v`). Nothing is read for sentence meaning; the output is a list of candidate paths, and every uncertainty (an unresolvable variable, an unmodeled writer) resolves to the over-inclusive reading, which can only turn an allow into a deny for a cwd inside a protected tree. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and published-body location, misdescribes this file."
+
+[[entry]]
+id = "131465d03403a68a"
+domain = "code"
+file = "scripts/lib/bash_write_targets.py"
+class = "structural"
+disposition = "keep"
+ground = "The canon-guard write-target walker: its patterns match shell grammar only — assignment words (`NAME=value`), a leading `$NAME` / `${NAME}`, `${NAME:=word}` parameter-assignment — and its verb tables name commands by their literal operand grammar (`cp`/`mv`/`install`, `sed -i`, `tee`, `printf -v`). Nothing is read for sentence meaning; the output is a list of candidate paths, and every uncertainty (an unresolvable variable, an unmodeled writer) resolves to the over-inclusive reading, which can only turn an allow into a deny for a cwd inside a protected tree. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and published-body location, misdescribes this file."
 
 [[entry]]
 id = "47fa4ccae0ba7863"
@@ -2685,7 +2694,7 @@ domain = "code"
 file = "scripts/lib/bash_write_targets.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "The canon-guard write-target walker: its patterns match shell grammar only — assignment words (`NAME=value`), a leading `$NAME` / `${NAME}`, `${NAME:=word}` parameter-assignment — and its verb tables name commands by their literal operand grammar (`cp`/`mv`/`install`, `sed -i`, `tee`, `printf -v`). Nothing is read for sentence meaning; the output is a list of candidate paths, and every uncertainty (an unresolvable variable, an unmodeled writer) resolves to the over-inclusive reading, which can only turn an allow into a deny for a cwd inside a protected tree. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and published-body location, misdescribes this file."
 
 [[entry]]
 id = "a54296e45717a592"
@@ -2693,7 +2702,7 @@ domain = "code"
 file = "scripts/lib/bash_write_targets.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "The canon-guard write-target walker: its patterns match shell grammar only — assignment words (`NAME=value`), a leading `$NAME` / `${NAME}`, `${NAME:=word}` parameter-assignment — and its verb tables name commands by their literal operand grammar (`cp`/`mv`/`install`, `sed -i`, `tee`, `printf -v`). Nothing is read for sentence meaning; the output is a list of candidate paths, and every uncertainty (an unresolvable variable, an unmodeled writer) resolves to the over-inclusive reading, which can only turn an allow into a deny for a cwd inside a protected tree. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and published-body location, misdescribes this file."
 
 [[entry]]
 id = "7cc85112ef97cba2"
@@ -2701,7 +2710,7 @@ domain = "code"
 file = "scripts/lib/bash_write_targets.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
+ground = "The canon-guard write-target walker: its patterns match shell grammar only — assignment words (`NAME=value`), a leading `$NAME` / `${NAME}`, `${NAME:=word}` parameter-assignment — and its verb tables name commands by their literal operand grammar (`cp`/`mv`/`install`, `sed -i`, `tee`, `printf -v`). Nothing is read for sentence meaning; the output is a list of candidate paths, and every uncertainty (an unresolvable variable, an unmodeled writer) resolves to the over-inclusive reading, which can only turn an allow into a deny for a cwd inside a protected tree. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and published-body location, misdescribes this file."
 
 [[entry]]
 id = "d28723d86914623c"
@@ -18485,7 +18494,7 @@ domain = "code_file_rollup"
 file = "scripts/lib/bash_write_targets.py"
 class = "structural"
 disposition = "keep"
-ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"
+ground = "The canon-guard write-target walker: its patterns match shell grammar only — assignment words (`NAME=value`), a leading `$NAME` / `${NAME}`, `${NAME:=word}` parameter-assignment — and its verb tables name commands by their literal operand grammar (`cp`/`mv`/`install`, `sed -i`, `tee`, `printf -v`). Nothing is read for sentence meaning; the output is a list of candidate paths, and every uncertainty (an unresolvable variable, an unmodeled writer) resolves to the over-inclusive reading, which can only turn an allow into a deny for a cwd inside a protected tree. So the `scripts/lib/**` row below, which grounds its structural verdict on literal denylists and published-body location, misdescribes this file. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "8496c6df7262c500"

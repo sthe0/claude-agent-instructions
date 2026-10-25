@@ -239,6 +239,10 @@ def test_a_hash_comment_does_not_hide_a_later_write_target(command, expected):
     ("git commit -F - <(dd if=x of=y bs=1)", ["/w"]),
     ("diff <(git show HEAD:config.md) <(cat /tmp/x.md)", []),
     ("diff <(python3 gen.py) x", ["/w"]),
+    # A verb outside the table is the named residual: `chmod +x f` writes, the walker has no
+    # grammar for it and the case it must not deny is `diff <(git show ...) ...`. Adding a
+    # verb to `_UNMODELED_WRITERS` is a deliberate change of this row.
+    ("diff <(chmod +x f) x", []),
     # No process substitution: no extra candidate.
     ("git commit -F -", []),
 ])
@@ -379,6 +383,12 @@ def test_issue299_write_inside_a_process_substitution_is_still_a_candidate():
     "read o; echo > $o/f",
     "o=/tmp; eval 'o=/canon'; echo > $o/f",
     "o=/tmp; printf -v o %s /canon; echo > $o/f",
+    "o=/tmp; printf -vo %s /canon; echo > $o/f",
+    "o=/tmp; printf -qvo %s /canon; echo > $o/f",
+    # assignment by parameter expansion, from an empty value and within the walked word
+    "o=; : ${o:=/canon}; echo > $o/f",
+    "o=; echo ${o:=/canon} > $o/f",
+    "o=/tmp; : ${o=/canon}; echo > $o/f",
     "o=/tmp; declare -n o=other; echo > $o/f",
     "o=/tmp; unset o; echo > $o/f",
     # appends, subscripts and non-literal values

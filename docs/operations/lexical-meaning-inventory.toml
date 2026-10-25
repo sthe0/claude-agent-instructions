@@ -1359,9 +1359,15 @@ reviewed_by = "developer"
 
 [sites."scripts/lib/bash_write_targets.py::<module>::re.compile"]
 class = "structural"
-ground = "_LEADING_VAR_RE and _ASSIGN_RE compile shell variable syntax: a leading $NAME / ${NAME} and an assignment word NAME=value, fixed grammar of the shell."
-hits = 2
-hit_classes = ["structural", "structural"]
+ground = "_LEADING_VAR_RE, _ASSIGN_RE and _PARAMETER_ASSIGN_RE compile shell variable syntax: a leading $NAME / ${NAME}, an assignment word NAME=value and a ${NAME:=word} parameter assignment, fixed grammar of the shell."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "salvage-2026-10-23"
+
+[sites."scripts/lib/bash_write_targets.py::_VarTracker.__init__::pattern.findall"]
+class = "structural"
+ground = "_PARAMETER_ASSIGN_RE.findall lists the names a command assigns by ${NAME:=word} / ${NAME=word}, fixed shell syntax; the names are only poisoned (never expanded), so an over-match can only keep the over-inclusive cwd join."
+hits = 1
 reviewed_by = "salvage-2026-10-23"
 
 [sites."scripts/lib/bash_write_targets.py::_VarTracker.observe::pattern.match"]

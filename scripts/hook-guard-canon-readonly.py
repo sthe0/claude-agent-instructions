@@ -270,21 +270,23 @@ def _unexpanded_variable_note(target: str) -> str:
     """The extra sentence a target still carrying a `$` needs, or "".
 
     This deny is CORRECT and stays: each Bash tool call is a fresh shell, so a
-    variable assigned in an earlier call is unset here and `$S/x.md` really does
-    resolve under the cwd — which, in canon, is a canon write. What the bare
-    message lacked was the CAUSE: `<canon>/$S/x.md` reads as a bizarre literal
-    path rather than as the predictable consequence of a shell that does not
-    persist. The hook cannot tell an unset `$S` from an `$S` that would have
-    expanded to canon anyway (identical bytes reach it either way), so naming the
-    cause is the whole of the fix — nothing about what is permitted changes.
+    variable assigned in an earlier call is unknown here and `$S/x.md` is left
+    literal, joined under the cwd — which, in canon, is a canon write. The hook
+    resolves a variable only when the same command assigns it a literal value
+    (or it is `HOME`/`TMPDIR`) and nothing could have changed it since. What the
+    bare message lacked was the CAUSE: `<canon>/$S/x.md` reads as a bizarre
+    literal path rather than as a variable the hook could not resolve. The hook
+    cannot tell such an `$S` from one that would have expanded to canon anyway,
+    so naming the cause is the whole of the fix — nothing about what is
+    permitted changes.
     """
     if "$" not in target:
         return ""
     return (
-        " Note the literal `$` in that path: shell state does not persist between tool "
-        "calls, so a shell variable used in a path is always unset here and the path "
-        "lands under the current directory instead of where you meant. Write the "
-        "absolute path out literally."
+        " Note the literal `$` in that path: the hook could not resolve that shell "
+        "variable (it is not assigned earlier in the same command, or its value is not "
+        "safely known), so the path was left literal and lands under the current "
+        "directory instead of where you meant. Write the absolute path out literally."
     )
 
 
