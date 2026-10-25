@@ -16,17 +16,20 @@ refusals, never admissions.
 """
 from __future__ import annotations
 
-import contextlib
-import json
-import os
-import re
 import shutil
 import subprocess
 import tempfile
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Protocol, Sequence
+
+from . import landing_gate as shared
+from .landing_gate import (  # noqa: F401  (re-exported: callers use ``gate.<name>``)
+    ADMITTED, NOT_REQUIRED, PUSH_RIGHTS_PATTERN, REFUSED, ZERO_SHA, Decision, GateError,
+    PrePushResult, RecordError, _clean_env, _git, _git_ok, _PUSH_RIGHTS, _SHA, _utc_now,
+    changed_paths, defuse, fetch_remote_tip, git_common_dir, is_ancestor, is_valid_sha,
+    object_exists, one_line, read_record, resolve_commit, short,
+)
 
 SCHEMA = "instruction-smoke/v1"
 RECORD_DIR = "instruction-smoke"
@@ -55,53 +58,12 @@ REQUIRED_CHECKS = (
 EXEMPT_DIRS = ("docs/", "memory-global/", "scripts/tests/")
 EXEMPT_TOP_LEVEL_FILES = ("README.md",)
 
-# Must equal the no-push-rights regex of scripts/sync-instructions-repo.sh push_and_degrade
-# (a test pins the two together): text matching it makes that script report "no push rights".
-PUSH_RIGHTS_PATTERN = r"permission|denied|forbidden|403|read[ -]?only|not authorized|access rights"
-_PUSH_RIGHTS = re.compile(PUSH_RIGHTS_PATTERN, re.IGNORECASE)
-
-ZERO_SHA = re.compile(r"0+")
-_SHA = re.compile(r"[0-9a-f]{40}([0-9a-f]{24})?")
-
-NOT_REQUIRED, ADMITTED, REFUSED = "not-required", "admitted", "refused"
 RUN_COMMAND = "python3 scripts/instruction-smoke-gate.py run"
-
-
-class GateError(Exception):
-    """An environment or usage failure (exit 2), or with ``refused`` a state refusal (exit 1)."""
-
-    def __init__(self, message: str, refused: bool = False):
-        super().__init__(message)
-        self.refused = refused
-
-
-class RecordError(GateError):
-    pass
-
-
-# ── text helpers ──────────────────────────────────────────────────────────
-
-def one_line(text: object, limit: int = 300) -> str:
-    cleaned = " ".join(str(text).split())
-    return "".join(ch for ch in cleaned if ch.isprintable())[:limit]
-
-
-def defuse(text: str) -> str:
-    """Break any substring that push_and_degrade would read as a missing-push-rights failure."""
-    return _PUSH_RIGHTS.sub(lambda m: m.group(0)[0] + "·" + m.group(0)[1:], text)
-
-
-def short(sha: str) -> str:
-    return str(sha)[:12]
 
 
 def admission_line(candidate_sha: str) -> str:
     """The one line the hook prints on admitting a push; nothing else may print it."""
     return f"pre-push: instruction smoke record admitted {candidate_sha}"
-
-
-def _utc_now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 # ── surface classifier (R1) ───────────────────────────────────────────────
@@ -124,77 +86,15 @@ def touches_surface(paths: Iterable[str]) -> bool:
     return bool(surface_paths(paths))
 
 
-# ── git edges ─────────────────────────────────────────────────────────────
-
-def _git(repo: str | Path, *args: str) -> subprocess.CompletedProcess:
-    try:
-        return subprocess.run(
-            ["git", "-C", str(repo), *args],
-            capture_output=True, encoding="utf-8", errors="surrogateescape",
-        )
-    except OSError as exc:
-        raise GateError(f"cannot run git: {exc}") from exc
-
-
-def _git_ok(repo: str | Path, *args: str) -> str:
-    proc = _git(repo, *args)
-    if proc.returncode != 0:
-        tail = one_line(proc.stderr or proc.stdout, 200)
-        raise GateError(f"git {args[0]} failed (exit {proc.returncode}): {tail}")
-    return proc.stdout
-
-
-def is_valid_sha(value: object) -> bool:
-    return isinstance(value, str) and _SHA.fullmatch(value) is not None
-
-
-def resolve_commit(repo: str | Path, ref: str) -> str:
-    proc = _git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
-    sha = proc.stdout.strip()
-    if proc.returncode != 0 or not is_valid_sha(sha):
-        raise GateError(f"{ref} does not resolve to a commit in {repo}")
-    return sha
-
-
-def object_exists(repo: str | Path, sha: str) -> bool:
-    return _git(repo, "cat-file", "-e", f"{sha}^{{commit}}").returncode == 0
-
-
-def git_common_dir(repo: str | Path) -> Path:
-    out = _git_ok(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
-    return Path(out)
-
-
-def changed_paths(repo: str | Path, base: str, candidate: str) -> list[str]:
-    """Paths that differ between two commits' trees; a rename lists both its old and new path.
-
-    The two-commit plumbing form compares a merge candidate as a whole against the remote tip,
-    and ``--no-renames`` keeps a move of a surface file into an exempt directory visible.
-    """
-    out = _git_ok(repo, "diff-tree", "-r", "--no-renames", "-z", "--name-only", base, candidate)
-    return [p for p in out.split("\0") if p]
-
+# ── sandbox presence ──────────────────────────────────────────────────────
 
 def _sandbox_script_in(repo: str | Path, sha: str) -> bool:
-    return bool(_git_ok(repo, "ls-tree", "--name-only", sha, "--", SANDBOX_SCRIPT).strip())
+    return shared.path_in_tree(repo, sha, SANDBOX_SCRIPT)
 
 
 def gate_applies(repo: str | Path, remote_sha: str, candidate_sha: str) -> bool:
     """The gate binds a repository that carries the instruction sandbox in the base or the candidate."""
     return _sandbox_script_in(repo, remote_sha) or _sandbox_script_in(repo, candidate_sha)
-
-
-def fetch_remote_tip(repo: str | Path, remote: str, trunk: str) -> str:
-    tracking = f"refs/remotes/{remote}/{trunk}"
-    _git_ok(repo, "fetch", "--quiet", remote, f"+refs/heads/{trunk}:{tracking}")
-    return resolve_commit(repo, tracking)
-
-
-def is_ancestor(repo: str | Path, ancestor: str, descendant: str) -> bool:
-    proc = _git(repo, "merge-base", "--is-ancestor", ancestor, descendant)
-    if proc.returncode not in (0, 1):
-        raise GateError(f"git merge-base failed: {one_line(proc.stderr, 200)}")
-    return proc.returncode == 0
 
 
 # ── verify-output parser ──────────────────────────────────────────────────
@@ -292,10 +192,7 @@ def make_waiver(record: dict, reason: str, at: str) -> dict:
     ok, why = waiver_allowed(record)
     if not ok:
         raise GateError(f"waiver not accepted: {why}", refused=True)
-    cleaned = one_line(reason)
-    if not cleaned:
-        raise GateError("waiver needs a reason", refused=True)
-    return {"reason": cleaned, "at": at, "detail": unavailable_detail(record)}
+    return {"reason": shared.normalize_reason(reason), "at": at, "detail": unavailable_detail(record)}
 
 
 def admission_summary(record: dict) -> str:
@@ -325,20 +222,12 @@ def record_admits(record: object, candidate_sha: str, live_remote_sha: str) -> t
     """(admitted, reason). Binds the record to the candidate and to the live remote tip."""
     if not isinstance(record, dict):
         return False, "record is not a JSON object"
-    if record.get("schema") != SCHEMA:
-        return False, f"unsupported record schema {one_line(record.get('schema'), 60)!r}"
-    if record.get("candidate_sha") != candidate_sha:
-        return False, f"record is for {short(record.get('candidate_sha'))}, not {short(candidate_sha)}"
-    if record.get("sandbox_core_sha") != candidate_sha:
-        return False, (
-            f"record's sandbox was built from {short(record.get('sandbox_core_sha'))}, "
-            f"not the candidate {short(candidate_sha)}"
-        )
-    if record.get("base_sha") != live_remote_sha:
-        return False, (
-            f"record was built on {short(record.get('base_sha'))} but the remote tip is "
-            f"{short(live_remote_sha)}; merge it into the candidate and rerun the smoke"
-        )
+    bound, why_not = shared.check_binding(
+        record, schema=SCHEMA, candidate_sha=candidate_sha, live_remote_sha=live_remote_sha,
+        rerun_hint="merge it into the candidate and rerun the smoke",
+    )
+    if not bound:
+        return False, why_not
     checks, problem = _check_list(record.get("checks"))
     if problem:
         return False, problem
@@ -369,52 +258,18 @@ def record_admits(record: object, candidate_sha: str, live_remote_sha: str) -> t
 # ── record store (R4) ─────────────────────────────────────────────────────
 
 def record_path(common_dir: str | Path, candidate_sha: str) -> Path:
-    if not is_valid_sha(candidate_sha):
-        raise RecordError(f"not a full commit sha: {one_line(candidate_sha, 80)}")
-    return Path(common_dir) / RECORD_DIR / f"{candidate_sha}.json"
-
-
-def read_record(path: str | Path) -> dict:
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise RecordError(f"{Path(path).name} is unreadable: {one_line(exc, 160)}") from exc
-    if not isinstance(data, dict):
-        raise RecordError(f"{Path(path).name} is not a JSON object")
-    return data
+    return shared.record_path(common_dir, RECORD_DIR, candidate_sha)
 
 
 def load_record(common_dir: str | Path, candidate_sha: str) -> dict | None:
-    path = record_path(common_dir, candidate_sha)
-    if not path.exists():
-        return None
-    return read_record(path)
+    return shared.load_record(common_dir, RECORD_DIR, candidate_sha)
 
 
 def write_record(common_dir: str | Path, record: dict) -> Path:
-    path = record_path(common_dir, record["candidate_sha"])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".json")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(record, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
-    return path
+    return shared.write_record(common_dir, RECORD_DIR, record["candidate_sha"], record)
 
 
 # ── landing decision, shared by both enforcement points (R1) ──────────────
-
-@dataclass(frozen=True)
-class Decision:
-    allowed: bool
-    kind: str
-    reason: str
-
 
 def decide(paths: Sequence[str], gate_applies: bool, record: object | None,
            candidate_sha: str, live_remote_sha: str) -> Decision:
@@ -458,50 +313,36 @@ def evaluate_landing(repo: str | Path, candidate_sha: str, remote_sha: str,
 
 # ── pre-push hook (R1) ────────────────────────────────────────────────────
 
-@dataclass(frozen=True)
-class PrePushResult:
-    allowed: bool
-    messages: tuple[str, ...]
+class _SmokeWording:
+    def refused(self, reason: str) -> list[str]:
+        return [
+            f"pre-push: refused: {one_line(reason, 600)}",
+            f"pre-push: to land an instruction change run: {RUN_COMMAND}",
+        ]
+
+    def decision(self, local_sha: str, decision: Decision) -> list[str]:
+        if decision.kind == ADMITTED:
+            lines = [admission_line(local_sha)]
+            if decision.reason != PASS:
+                lines.append(f"pre-push: waiver in effect ({decision.reason})")
+            return lines
+        return [f"pre-push: instruction smoke not required ({decision.reason})"]
+
+    def no_remote(self, trunk: str) -> str:
+        return f"{trunk} does not exist on the remote, so no smoke record can be bound to a base"
+
+    def unknown_remote(self, trunk: str, remote_sha: str) -> str:
+        return f"remote {trunk} tip {short(remote_sha)} is not known locally; fetch it, merge it and rerun the smoke"
 
 
 def prepush_decision(lines: Iterable[str], repo: str | Path, trunk: str = DEFAULT_TRUNK,
                      common_dir: str | Path | None = None) -> PrePushResult:
     """Decide a push from git's pre-push stdin lines: ``<local-ref> <local-sha> <remote-ref> <remote-sha>``."""
-    messages: list[str] = []
-    allowed = True
-
-    def refuse(reason: str) -> None:
-        nonlocal allowed
-        allowed = False
-        messages.append(f"pre-push: refused: {one_line(reason, 600)}")
-        messages.append(f"pre-push: to land an instruction change run: {RUN_COMMAND}")
-
-    for raw in lines:
-        if not raw.strip():
-            continue
-        fields = raw.split()
-        if len(fields) != 4:
-            refuse(f"malformed pre-push input: {one_line(raw, 120)}")
-            continue
-        _, local_sha, remote_ref, remote_sha = fields
-        if remote_ref != f"refs/heads/{trunk}" or ZERO_SHA.fullmatch(local_sha):
-            continue
-        if ZERO_SHA.fullmatch(remote_sha):
-            refuse(f"{trunk} does not exist on the remote, so no smoke record can be bound to a base")
-            continue
-        if not object_exists(repo, remote_sha):
-            refuse(f"remote {trunk} tip {short(remote_sha)} is not known locally; fetch it, merge it and rerun the smoke")
-            continue
-        decision = evaluate_landing(repo, local_sha, remote_sha, common_dir)
-        if decision.kind == ADMITTED:
-            messages.append(admission_line(local_sha))
-            if decision.reason != PASS:
-                messages.append(f"pre-push: waiver in effect ({decision.reason})")
-        elif decision.kind == NOT_REQUIRED:
-            messages.append(f"pre-push: instruction smoke not required ({decision.reason})")
-        else:
-            refuse(decision.reason)
-    return PrePushResult(allowed, tuple(defuse(m) for m in messages))
+    return shared.prepush_loop(
+        lines, repo, trunk,
+        evaluate=lambda local_sha, remote_sha: evaluate_landing(repo, local_sha, remote_sha, common_dir),
+        wording=_SmokeWording(),
+    )
 
 
 # ── run: build the sandbox, verify, write the record (R2, R4) ─────────────
@@ -526,13 +367,6 @@ class RunOutcome:
     reason: str
     sandbox_root: Path | None
     waiver_note: str = ""
-
-
-def _clean_env() -> dict[str, str]:
-    env = dict(os.environ)
-    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
-        env.pop(name, None)
-    return env
 
 
 def _run_process(argv: list[str], timeout_s: int) -> subprocess.CompletedProcess:

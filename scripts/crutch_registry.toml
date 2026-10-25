@@ -2793,41 +2793,41 @@ disposition = "keep"
 ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares exact command strings and, for an advisory warning only, those script names inside the (event, matcher) groups of a hooks object. A misparse can only miss or add a warning."
 
 [[entry]]
-id = "6c7be3eda8d17d86"
+id = "fa54453b842c2d42"
 domain = "code"
-file = "scripts/lib/instruction_smoke_gate.py"
+file = "scripts/lib/landing_gate.py"
 class = "structural"
 disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
 
 [[entry]]
-id = "77fd66f915d12ec2"
+id = "9ee495b2cfefe621"
 domain = "code"
-file = "scripts/lib/instruction_smoke_gate.py"
+file = "scripts/lib/landing_gate.py"
 class = "structural"
 disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
 
 [[entry]]
-id = "cb3b8abb6e451465"
+id = "1c16b47c630c9e66"
 domain = "code"
-file = "scripts/lib/instruction_smoke_gate.py"
+file = "scripts/lib/landing_gate.py"
 class = "structural"
 disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
 
 [[entry]]
-id = "d3c0724defadca26"
+id = "d9466c9ebdd3d945"
 domain = "code"
-file = "scripts/lib/instruction_smoke_gate.py"
+file = "scripts/lib/landing_gate.py"
 class = "structural"
 disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
 
 [[entry]]
-id = "60021c9428aa2c91"
+id = "c4e33575d05111c6"
 domain = "code"
-file = "scripts/lib/instruction_smoke_gate.py"
+file = "scripts/lib/landing_gate.py"
 class = "structural"
 disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow."
@@ -9612,6 +9612,30 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "b7779e98490ff5fd"
 domain = "code"
 file = "scripts/tests/test_landed_check_migration.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "c7069bbacc970e61"
+domain = "code"
+file = "scripts/tests/test_landing_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "649c00cbe6e42943"
+domain = "code"
+file = "scripts/tests/test_landing_gate.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "a2991d7a7d22ab2d"
+domain = "code"
+file = "scripts/tests/test_landing_gate.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -18777,9 +18801,9 @@ disposition = "keep"
 ground = "Shell-command and settings.json syntax, never meaning: hook_script.py tokenizes a hook command (shlex, `VAR=val` assignments, a fixed interpreter name set, whitespace in a token) to find the script it runs, and hook_fragments.py compares exact command strings and, for an advisory warning only, those script names inside the (event, matcher) groups of a hooks object. A misparse can only miss or add a warning. (file-level rollup of the file's scopes.)"
 
 [[entry]]
-id = "742822a310126b82"
+id = "3aece9c5d25414df"
 domain = "code_file_rollup"
-file = "scripts/lib/instruction_smoke_gate.py"
+file = "scripts/lib/landing_gate.py"
 class = "structural"
 disposition = "keep"
 ground = "Fixed-vocabulary or syntactic matching, never sentence meaning: term_ruleset.py's `deny`/`exempt` patterns are a literal org-identifier denylist (the same shape as a secret scanner), matching a known TERM's occurrence; published_body.py matches command tokens, flag names, and path syntax to locate a published body, and an over-match there can only add a witness requirement or an advisory, never turn a real publication into an allow. (file-level rollup of the file's scopes.)"
@@ -20044,6 +20068,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "e33667f2cf123ccf"
 domain = "code_file_rollup"
 file = "scripts/tests/test_landed_check_migration.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "1f1ce3e284e11be6"
+domain = "code_file_rollup"
+file = "scripts/tests/test_landing_gate.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"

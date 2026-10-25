@@ -133,26 +133,26 @@ ground = "Detects whitespace in a command token (quoted payload) to exclude it a
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/lib/instruction_smoke_gate.py::<module>::re.compile"]
+[sites."scripts/lib/landing_gate.py::<module>::re.compile"]
 class = "structural"
 ground = "Compiles: the push-rights wording used only to defuse a log line, the all-zero SHA and the 40/64-hex object-id shape; none decides meaning."
 hits = 3
 hit_classes = ["structural", "structural", "structural"]
 reviewed_by = "developer"
 
-[sites."scripts/lib/instruction_smoke_gate.py::defuse::pattern.sub"]
+[sites."scripts/lib/landing_gate.py::defuse::pattern.sub"]
 class = "structural"
 ground = "_PUSH_RIGHTS.sub rewrites permission/denied wording in a gate message so a downstream log scan does not misread it as a push-rights failure; output sanitization, no verdict depends on the match."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/lib/instruction_smoke_gate.py::is_valid_sha::pattern.fullmatch"]
+[sites."scripts/lib/landing_gate.py::is_valid_sha::pattern.fullmatch"]
 class = "structural"
 ground = "_SHA.fullmatch tests the 40/64-hex object-id shape; a format check."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/lib/instruction_smoke_gate.py::prepush_decision::pattern.fullmatch"]
+[sites."scripts/lib/landing_gate.py::prepush_loop::pattern.fullmatch"]
 class = "structural"
 ground = "ZERO_SHA.fullmatch tests the all-zero SHA git's pre-push protocol sends for a created or deleted ref; a protocol syntax."
 hits = 2

@@ -98,6 +98,7 @@ class Canon:
             shutil.copy(SCRIPTS_DIR / name, scripts)
         shutil.copy(SCRIPTS_DIR / "lib" / "worktree_route.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "instruction_smoke_gate.py", scripts / "lib")
+        shutil.copy(SCRIPTS_DIR / "lib" / "landing_gate.py", scripts / "lib")
         (scripts / "lib" / "__init__.py").write_text("")
         (scripts / "README.md").write_text(SCRIPTS_REGION)
         (seed / "docs" / "components").mkdir(parents=True)
