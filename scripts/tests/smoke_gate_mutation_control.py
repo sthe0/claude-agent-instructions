@@ -255,7 +255,11 @@ def run_control() -> int:
         if early is not None:
             print(f"control: {description}", file=sys.stderr)
             return CONTROL_RED
-        return 0 if all(s == "passed" for s in description.split(",")) else CONTROL_RED
+        red = [node for node, s in zip(ids, description.split(",")) if s != "passed"]
+        if red:
+            print("control: not green on the unmutated tree: " + ", ".join(red), file=sys.stderr)
+            return CONTROL_RED
+        return 0
 
 
 def main(argv: "list[str] | None" = None) -> int:
