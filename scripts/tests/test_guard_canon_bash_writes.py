@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 HOOK_SCRIPT = SCRIPTS_DIR / "hook-guard-canon-readonly.py"
 
@@ -56,8 +58,8 @@ def make_worktree(core: Path, tmp_path: Path) -> Path:
     return wt
 
 
-def run_hook(core, command: str, cwd) -> subprocess.CompletedProcess:
-    env = {**os.environ, **GIT_ENV, "CLAUDE_INSTRUCTIONS_REPO": str(core)}
+def run_hook(core, command: str, cwd, extra_env: dict | None = None) -> subprocess.CompletedProcess:
+    env = {**os.environ, **GIT_ENV, "CLAUDE_INSTRUCTIONS_REPO": str(core), **(extra_env or {})}
     payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)}
     return subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
@@ -373,15 +375,61 @@ def test_heredoc_in_function_definition_still_denies(tmp_path):
 # --- 1b: the deny stays, the message explains it ---
 
 def test_unexpanded_variable_deny_names_the_cause(tmp_path):
-    """`cat > $S/x.md` resolves to a literal `$S` under the cwd — the deny is
-    correct (a fresh shell per tool call leaves `$S` unset, and the hook cannot
-    tell that from an `$S` that would have expanded into canon anyway). Only the
-    message changes."""
+    """`cat > $ZZZZUNDEF_CANON_TEST_VAR/x.md` uses a variable the hook cannot resolve
+    (not assigned in the command, not inherited). It joins under cwd=canon → deny. The
+    message explains the variable could not be resolved and encourages an absolute path."""
     core = make_core(tmp_path)
-    proc = run_hook(core, "cat hi > $S/x.md", cwd=core)
+    proc = run_hook(core, "cat hi > $ZZZZUNDEF_CANON_TEST_VAR/x.md", cwd=core)
     assert _denied(proc), proc.stdout
-    assert "shell state does not persist between tool calls" in proc.stdout
+    assert "could not resolve that shell variable" in proc.stdout
     assert "absolute path" in proc.stdout
+
+
+# --- issue-299: four false-positive shapes that incorrectly denied before the fix ----
+
+def test_issue299_sed_script_operand_not_a_path_allows(tmp_path):
+    """sed's inline script `'s/x/y/'` joined under cwd=canon before the fix, producing
+    a false deny when the real file operand is outside canon."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, "sed -i 's/x/y/' /tmp/output.txt", cwd=core)
+    assert _allowed(proc), proc.stdout
+
+
+def test_issue299_same_command_var_assignment_resolves_out_of_canon_allows(tmp_path):
+    """`o=/tmp/x; echo hi > $o/f.txt` — $o is assigned in a preceding segment and
+    expands to /tmp/x/f.txt, outside canon."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, "o=/tmp/x; echo hi > $o/f.txt", cwd=core)
+    assert _allowed(proc), proc.stdout
+
+
+def test_issue299_env_var_to_tmpdir_resolves_out_of_canon_allows(tmp_path):
+    """`printf x > $TMPDIR/o.txt` — the inherited $TMPDIR names a directory outside
+    canon; before the fix it joined under cwd=canon → false deny."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, "printf x > $TMPDIR/o.txt", cwd=core, extra_env={"TMPDIR": str(tmp_path / "scratch")})
+    assert _allowed(proc), proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+    "export TMPDIR={core}/scripts; printf x > $TMPDIR/o.txt",
+    "o={core}/scripts; false && o=/tmp; printf x > $o/o.txt",
+    "o=/tmp; if true; then o={core}/scripts; fi; printf x > $o/o.txt",
+    "diff <(tee {core}/scripts/o.txt) /tmp/x",
+])
+def test_issue299_a_variable_change_cannot_turn_a_canon_write_into_an_allow(tmp_path, command):
+    core = make_core(tmp_path)
+    proc = run_hook(core, command.format(core=core), cwd=core, extra_env={"TMPDIR": "/tmp"})
+    assert _denied(proc), (command, proc.stdout)
+
+
+def test_issue299_read_process_substitution_does_not_deny(tmp_path):
+    """`diff <(git show HEAD:f) <(cat /tmp/x)` — `<(` is a read substitution; the
+    outer command writes nothing. Before the fix, `<(` added cwd=canon as a candidate
+    → false deny."""
+    core = make_core(tmp_path)
+    proc = run_hook(core, "diff <(cat README.md) <(cat /tmp/x.md)", cwd=core)
+    assert _allowed(proc), proc.stdout
 
 
 def test_ordinary_deny_omits_the_variable_note(tmp_path):

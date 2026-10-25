@@ -95,12 +95,10 @@ def test_a_copy_destination_resolves_to_the_files_it_means(command, expected):
     # the other verb families expand too rather than needing four separate fixes.
     ("echo x > ~/.claude-agent/settings.json", ["/home/u/.claude-agent/settings.json"]),
     ("tee ~/.claude-agent/settings.json", ["/home/u/.claude-agent/settings.json"]),
-    # `sed -i` emits its SCRIPT token as a candidate as well, which is the over-emission this
-    # module's contract permits: `/w/s/a/b/` is a path nothing is on, so it answers nothing.
-    # Pinned rather than tidied, because a reader who does not expect it will read the second
-    # entry as the only one and mis-set their own policy.
+    # `sed -i` no longer emits its inline script as a candidate — the script token is
+    # consumed before file operands are collected, so only the real file path appears.
     ("sed -i s/a/b/ ~/.claude-agent/settings.json",
-     ["/w/s/a/b/", "/home/u/.claude-agent/settings.json"]),
+     ["/home/u/.claude-agent/settings.json"]),
     # A bare `~` resolves, and the ambiguous-token rule applies on top of it.
     ("cp s.json ~", ["/home/u", "/home/u/s.json"]),
     # `~` anywhere but the front is NOT a home reference and must not become one.
@@ -112,20 +110,28 @@ def test_a_leading_tilde_is_expanded(command, expected, monkeypatch):
 
 
 @pytest.mark.parametrize("command, expected", [
-    # `$VAR` IS NOT EXPANDED, AND THAT IS A DECISION -- pinned so it cannot drift into one by
-    # accident in either direction. THE HOOK'S ENVIRONMENT IS NOT THE COMMAND'S: a command
-    # supplies its own (`HOME=/x cp ...`) or names a variable exported in a shell this process
-    # never saw, so substituting what this process happens to hold resolves the token to a
-    # path the command may never write, and a consumer then answers confidently about the
-    # wrong file. So the token joins under the cwd like any other relative one, and each
-    # consumer names it as a residual instead. `_abs` carries the argument in full.
+    # `HOME` and `TMPDIR` are the two names expanded from the hook's own environment: the
+    # hook and the command's shell are spawned by the same harness, so they agree. This is
+    # a premise, not a proof (see `_VarTracker`); no other inherited name gets this trust.
     ("cp s.json $HOME/.claude/settings.json",
-     ["/w/$HOME/.claude/settings.json", "/w/$HOME/.claude/settings.json/s.json"]),
-    ("cp s.json ${HOME}/.claude/", ["/w/${HOME}/.claude/s.json"]),
-    ("echo x > $HOME/.claude/settings.json", ["/w/$HOME/.claude/settings.json"]),
+     ["/home/u/.claude/settings.json", "/home/u/.claude/settings.json/s.json"]),
+    ("cp s.json ${HOME}/.claude/", ["/home/u/.claude/s.json"]),
+    ("echo x > $HOME/.claude/settings.json", ["/home/u/.claude/settings.json"]),
 ])
-def test_a_variable_is_not_expanded(command, expected, monkeypatch):
+def test_a_variable_is_expanded_for_inherited_home_tmpdir(command, expected, monkeypatch):
     monkeypatch.setenv("HOME", "/home/u")
+    assert command_write_targets(command, CWD) == expected
+
+
+@pytest.mark.parametrize("command, expected", [
+    # A name outside `HOME`/`TMPDIR` is NOT expanded, set or not: the token joins under the
+    # cwd as the safe over-inclusive fallback. Each consumer names it as a residual.
+    ("cp s.json $ZZZZUNDEF_299/.claude/settings.json",
+     ["/w/$ZZZZUNDEF_299/.claude/settings.json", "/w/$ZZZZUNDEF_299/.claude/settings.json/s.json"]),
+    ("echo x > $ZZZZUNDEF_299/.claude/settings.json", ["/w/$ZZZZUNDEF_299/.claude/settings.json"]),
+])
+def test_an_unlisted_variable_is_not_expanded(command, expected, monkeypatch):
+    monkeypatch.setenv("ZZZZUNDEF_299", "/tmp/elsewhere")
     assert command_write_targets(command, CWD) == expected
 
 
@@ -160,9 +166,10 @@ def test_an_absent_home_still_resolves_to_the_invoking_users_home(monkeypatch):
     # derivable from the command line.
     ("patch -p1 -i p.patch", ["/w"]),
     ("git apply p.patch", ["/w"]),
-    # `sed` without an in-place flag writes nothing.
+    # `sed` without an in-place flag writes nothing. With `-i`, only file operands
+    # are returned — the inline script token is consumed without being added.
     ("sed s/a/b/ f.txt", []),
-    ("sed -i s/a/b/ f.txt", ["/w/s/a/b/", "/w/f.txt"]),
+    ("sed -i s/a/b/ f.txt", ["/w/f.txt"]),
     # A verb this table does not model reports nothing -- for the self-grant gate an ALLOW by
     # a route that never reached a verdict, and axis-1 member (ii) of its named residuals.
     # Pinned here so that enumeration stays honest about what is outside it.
@@ -208,39 +215,38 @@ def test_bare_newline_separated_statement_is_found_via_general_path(command, exp
     # (destination file, and destination directory receiving `a.json`) -- the same
     # ambiguity the `cp s.json d` row above already pins. Unrelated to the comment.
     ("echo hi # note\ncp a.json d/s.json\n", ["/w/d/s.json", "/w/d/s.json/a.json"]),
-    ("git log --oneline # a\nsed -i s/x/y/ d/s.json\n", ["/w/s/x/y/", "/w/d/s.json"]),
+    ("git log --oneline # a\nsed -i s/x/y/ d/s.json\n", ["/w/d/s.json"]),
 ])
 def test_a_hash_comment_does_not_hide_a_later_write_target(command, expected):
     assert command_write_targets(command, CWD) == expected
 
 
-# --- a process substitution adds the cwd as an extra, over-inclusive candidate ------
+# --- write process substitution adds cwd; read process substitution does not ----------
 
 @pytest.mark.parametrize("command, expected", [
-    # `<(dd if=x of=<surface> bs=1)` FORKS AND RUNS `dd` as a side effect of building
-    # the outer command's argument list -- neither `<` nor `>` is a bash separator, so
-    # `split_segments` never starts a new segment for it, and `_operands_until_redirect`
-    # stops scanning the outer segment's own operands at the very token that opens it.
-    # `dd`'s real write is invisible to every verb dispatch in this module, MEASURED via
-    # a real-bash transcript: without this row's candidate, `git commit -F - <(dd
-    # if=x of=y bs=1)` reports no target at all, indistinguishable from a command that
-    # writes nothing. `eff_cwd` is the same over-inclusive answer `patch`/`git apply`
-    # already give for the same reason -- the real destination is not derivable from
-    # the command line alone.
+    # `>(tee y)` is a WRITE substitution: the outer command pipes its output into `tee`,
+    # which may write anywhere — the real destination is not derivable from the command
+    # line alone. `eff_cwd` is the same over-inclusive answer `patch`/`git apply` give.
+    # The operator-exact tokenizer splits `>(tee y)` into `['>', '(', 'tee', ...]`, so
+    # `redirect_targets` skips `(` to avoid a spurious `/w/(` artifact, and the nested
+    # `tee y` is walked like any command, so its own target is named as well.
+    ("echo hi >(tee y)", ["/w", "/w/y"]),
+    # `<(cmd)` is a READ substitution: `cmd`'s stdout feeds the outer command's INPUT, so
+    # `<(` adds nothing of its own (it used to add `eff_cwd`, a false deny in a canon cwd).
+    # But the body is a command that really runs: `dd of=y` has no operand grammar here, so
+    # a body whose verb is in `_UNMODELED_WRITERS` keeps the cwd candidate (fail closed),
+    # while a body that only reads does not.
     ("git commit -F - <(dd if=x of=y bs=1)", ["/w"]),
-    # `>(...)` additionally yields an accidental extra candidate: `>` now comes back as
-    # its OWN token (the operator-exact tokenization), so the redirect's operand is read
-    # as the next token, `(`, and joined against the cwd. That is the mechanism today --
-    # NOT the older glued-redirect detection, which saw `>(tee` as one token and reported
-    # `/w/(tee`. Pinned rather than hidden, since a reader who only expects the cwd would
-    # misread the second entry; no verdict rides on it either way, because
-    # `echo hi >(tee y)` is denied by the process-substitution check regardless of what
-    # the candidate list says.
-    ("echo hi >(tee y)", ["/w", "/w/("]),
-    # No process substitution: no extra candidate, unchanged from before this row.
+    ("diff <(git show HEAD:config.md) <(cat /tmp/x.md)", []),
+    ("diff <(python3 gen.py) x", ["/w"]),
+    # A verb outside the table is the named residual: `chmod +x f` writes, the walker has no
+    # grammar for it and the case it must not deny is `diff <(git show ...) ...`. Adding a
+    # verb to `_UNMODELED_WRITERS` is a deliberate change of this row.
+    ("diff <(chmod +x f) x", []),
+    # No process substitution: no extra candidate.
     ("git commit -F -", []),
 ])
-def test_a_process_substitution_adds_the_cwd_as_an_extra_candidate(command, expected):
+def test_write_process_substitution_adds_cwd_read_does_not(command, expected):
     assert command_write_targets(command, CWD) == expected
 
 
@@ -283,6 +289,164 @@ def test_an_unrecognized_prior_statement_on_an_earlier_line_still_lets_a_later_h
     # the body was never neutralized and its `>=` read as a second, phantom write target
     # alongside the real one at `f`.
     assert command_write_targets("myunknowncmd\ncat <<'D' > f\nx >= 1\nD", CWD) == ["/w/f"]
+
+
+# --- issue-299: the four false-positive shapes that triggered false canon denials ----
+
+def test_issue299_sed_script_operand_not_treated_as_path():
+    """The inline script token (`s/a/b/`) is not a file path; only the file operand is."""
+    assert command_write_targets("sed -i 's/a/b/' /tmp/x.py", CWD) == ["/tmp/x.py"]
+
+
+def test_issue299_sed_with_ef_flag_treats_all_operands_as_files():
+    """`-e` supplies the script; every non-option token is then a file operand."""
+    assert command_write_targets("sed -i -e 's/a/b/' f.txt g.txt", CWD) == [
+        "/w/f.txt", "/w/g.txt"
+    ]
+
+
+def test_issue299_same_command_var_assignment_expands():
+    """A VAR=value assignment in a preceding segment expands $VAR in a later segment."""
+    assert command_write_targets("o=/tmp/out; echo hi > $o/f.txt", CWD) == ["/tmp/out/f.txt"]
+
+
+def test_issue299_env_variable_expands(monkeypatch):
+    """An inherited `$TMPDIR` expands rather than joining under the cwd."""
+    monkeypatch.setenv("TMPDIR", "/tmp/outdir")
+    assert command_write_targets("printf x > $TMPDIR/o.txt", CWD) == ["/tmp/outdir/o.txt"]
+
+
+def test_issue299_read_process_substitution_does_not_add_cwd():
+    """`<(cmd)` is a read substitution — the outer command writes nothing extra."""
+    assert command_write_targets("diff <(cat /tmp/a) <(cat /tmp/b)", CWD) == []
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("sed -i -f s.sed t.txt", ["/w/t.txt"]),
+    ("sed -n -i 's/a/b/' t.txt u.txt", ["/w/t.txt", "/w/u.txt"]),
+    ("sed --expression=s/a/b/ --in-place t.txt", ["/w/t.txt"]),
+    ("sed -i --expression s/a/b/ t.txt", ["/w/t.txt"]),
+    # A script option with its value glued on (`-es/x/y/`, `-fscript.sed`) consumes no
+    # following token, so the file after it is still a write target.
+    ("sed -i -es/x/y/ f", ["/w/f"]),
+    ("sed -i -e's/a/b/' canon/f", ["/w/canon/f"]),
+    ("sed -i -fscript.sed f", ["/w/f"]),
+    ("sed -i --expr=s/a/b/ f", ["/w/f"]),
+    # A cluster ending in `e`/`f` takes its value from the next token, wherever `-i` sits.
+    ("sed -ne p -i f", ["/w/f"]),
+    ("sed -i -ne p f", ["/w/f"]),
+    ("sed -i --file s.sed f", ["/w/f"]),
+    # `-ie` is in-place with suffix `e`, not a script flag: `p` is the script operand.
+    ("sed -ie p f", ["/w/f"]),
+])
+def test_issue299_sed_script_operand_forms(command, expected):
+    assert command_write_targets(command, CWD) == expected
+
+
+def test_issue299_assignments_chain_and_cross_newlines():
+    assert command_write_targets("a=/tmp/x; b=$a/y\necho > $b/f", CWD) == ["/tmp/x/y/f"]
+
+
+def test_issue299_exported_assignment_expands_and_overrides_the_inherited_value(monkeypatch):
+    monkeypatch.setenv("TMPDIR", "/tmp/inherited")
+    assert command_write_targets("export TMPDIR=/elsewhere/t; echo > $TMPDIR/f", CWD) == ["/elsewhere/t/f"]
+    assert command_write_targets("HOME=/elsewhere/h; echo > $HOME/f", CWD) == ["/elsewhere/h/f"]
+
+
+def test_issue299_write_inside_a_process_substitution_is_still_a_candidate():
+    assert "/w/canon/f" in command_write_targets("diff <(tee canon/f) y", CWD)
+    assert "/w/canon/f" in command_write_targets("echo hi >(tee canon/f)", CWD)
+
+
+# --- fail closed: a value that cannot be known for certain is never expanded ----------
+#
+# Every row below would hide a write to `/canon/...` behind `/tmp/...` if the walker
+# trusted the wrong value. The expected answer is the unexpanded cwd join, the
+# over-inclusive direction every consumer already handles.
+
+@pytest.mark.parametrize("command", [
+    # a prefix assignment is temporary: it must not replace the earlier value
+    "o=/canon; o=/tmp true; echo > $o/f",
+    # conditional, piped and backgrounded assignments may or may not have run
+    "o=/canon; false && o=/tmp; echo > $o/f",
+    "o=/canon; false || o=/tmp; echo > $o/f",
+    "o=/canon; o=/tmp | cat; echo > $o/f",
+    "o=/canon; o=/tmp & echo > $o/f",
+    # once doubtful, a name stays doubtful even after a later literal assignment
+    "o=/canon; false && o=/tmp; o=/tmp; echo > $o/f",
+    # compound commands run assignments zero, one or many times, in any textual order
+    "o=/tmp; if true; then o=/canon; fi; echo > $o/f",
+    "o=/tmp; while true; do echo > $o/f; o=/canon; done",
+    "o=/tmp; { o=/canon; }; echo > $o/f",
+    "o=/tmp; (o=/canon); echo > $o/f",
+    # builtins that assign through an operand discard everything known
+    "read o; echo > $o/f",
+    "o=/tmp; eval 'o=/canon'; echo > $o/f",
+    "o=/tmp; printf -v o %s /canon; echo > $o/f",
+    "o=/tmp; printf -vo %s /canon; echo > $o/f",
+    "o=/tmp; printf -qvo %s /canon; echo > $o/f",
+    # assignment by parameter expansion, from an empty value and within the walked word
+    "o=; : ${o:=/canon}; echo > $o/f",
+    "o=; echo ${o:=/canon} > $o/f",
+    "o=/tmp; : ${o=/canon}; echo > $o/f",
+    "o=/tmp; declare -n o=other; echo > $o/f",
+    "o=/tmp; unset o; echo > $o/f",
+    # appends, subscripts and non-literal values
+    "o=/tmp; o+=/../canon; echo > $o/f",
+    "o=$UNKNOWN_299/x; echo > $o/f",
+    "o=`pwd`; echo > $o/f",
+    # a `$` the shell leaves literal, or a parameter-expansion operator, is not a plain name
+    "o=/tmp; echo > '$o/f'",
+    "o=/tmp; echo > \\$o/f",
+    "o=/tmp; echo > $'$o'/f",
+    "o=/tmp; echo > ${o:-/canon}/f",
+])
+def test_a_variable_that_cannot_be_known_for_certain_is_not_expanded(command, monkeypatch):
+    monkeypatch.setenv("TMPDIR", "/tmp")
+    # the tokenizer drops the ANSI-C quoting, so `$'$o'/f` reaches the walker as `$$o/f`
+    unexpanded = {
+        "o=/tmp; echo > ${o:-/canon}/f": "/w/${o:-/canon}/f",
+        "o=/tmp; echo > $'$o'/f": "/w/$$o/f",
+    }.get(command, "/w/$o/f")
+    assert command_write_targets(command, CWD) == [unexpanded]
+
+
+@pytest.mark.parametrize("command, expected", [
+    # the assignment is a prefix of a verb whose operand is not an assignment word, and an
+    # opaque verb named only as an ARGUMENT discards nothing
+    ("o=/tmp; echo read o; echo > $o/f", ["/tmp/f"]),
+    ("o=/tmp; echo eval x=1; echo > $o/f", ["/tmp/f"]),
+    # an opaque verb behind a prefix assignment or a wrapper still discards everything
+    ("o=/tmp; A=1 read o; echo > $o/f", ["/w/$o/f"]),
+    ("o=/tmp; command eval 'o=/canon'; echo > $o/f", ["/w/$o/f"]),
+])
+def test_an_opaque_verb_counts_only_at_the_verb_position(command, expected):
+    assert command_write_targets(command, CWD) == expected
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("HOME=/x/h; cp s ~/f", ["/x/h/f", "/x/h/f/s"]),
+    ("HOME=/x/h; echo > ~/f", ["/x/h/f"]),
+    ("echo > ~/f", ["/home/u/f"]),
+])
+def test_a_leading_tilde_follows_a_home_assigned_in_the_command(command, expected, monkeypatch):
+    monkeypatch.setenv("HOME", "/home/u")
+    assert command_write_targets(command, CWD) == expected
+
+
+@pytest.mark.parametrize("command", [
+    "export TMPDIR=/canon; false && export TMPDIR=/tmp; echo > $TMPDIR/f",
+    "read TMPDIR; echo > $TMPDIR/f",
+    "TMPDIR=/tmp true; TMPDIR=/canon; echo > $TMPDIR/f | cat",
+])
+def test_an_inherited_variable_is_dropped_when_the_command_may_change_it(command, monkeypatch):
+    monkeypatch.setenv("TMPDIR", "/tmp")
+    assert command_write_targets(command, CWD) == ["/w/$TMPDIR/f"]
+
+
+def test_only_home_and_tmpdir_are_taken_from_the_hook_environment(monkeypatch):
+    monkeypatch.setenv("REPO_299", "/tmp/elsewhere")
+    assert command_write_targets("echo > $REPO_299/f", CWD) == ["/w/$REPO_299/f"]
 
 
 # THE OTHER CONSUMER'S BEHAVIOUR CHANGED TOO, and it has rows of its own for it.
