@@ -105,10 +105,10 @@ def _parent_session_outside_any_project(tmp_path_factory, monkeypatch):
     project that registers hooks. Pin the parent to an empty directory (outside the test's
     own tmp_path, which tests list) so no spawn test depends on whether the real
     checkout's (or its main checkout's) settings files register hooks; tests of that
-    refusal set their own parent. The session id goes too, so a test that clears
-    CLAUDE_PROJECT_DIR never falls back to the real session's transcript."""
+    refusal set their own parent. A test that clears CLAUDE_PROJECT_DIR does not fall back
+    to the real session's transcript: `_default_claude_runtime_host` replaces the session
+    id with one that names no transcript."""
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path_factory.mktemp("parent-outside-any-project")))
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
 
 @pytest.fixture(autouse=True)
