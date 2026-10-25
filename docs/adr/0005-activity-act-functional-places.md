@@ -30,6 +30,7 @@ it of every substantive stage at exactly three points bytes enter a session: `su
 `replan`'s new side, and `approve`'s in-place-edit refresh — never in the loader, which stays
 lenient over plans already accepted. `NORMALIZATION_DESTINATIONS` now names all five places a
 factor can be re-normed onto: `материал`, `средство`, `норма`, `способ`, `знание`.
+Renamed 2026-10-25: the destination values are now `material`, `tool`, `norm`, `method`, `knowledge`; the Cyrillic values remain valid aliases.
 
 ### Defect 5 — the echo-detecting judge (stage 3, toml line 195)
 
