@@ -258,6 +258,17 @@ def test_parent_project_file_that_does_not_parse_counts_as_registering(world, mo
     assert parent.hooks is True
 
 
+def test_parent_with_a_hookless_file_and_a_git_timeout_counts_as_registering(world, tmp_path, monkeypatch):
+    _write_json(world.outside / ".claude" / "settings.json", "{}")
+    stub = tmp_path / "stub-bin"
+    stub.mkdir()
+    _write_exec(stub / "git", "#!/bin/sh\nsleep 5\n")
+    monkeypatch.setenv("PATH", f"{stub}:{os.environ['PATH']}")
+    monkeypatch.setattr(MOD, "GIT_PROBE_TIMEOUT_S", 0.3)
+    parent = _parent(monkeypatch, project_dir=world.outside)
+    assert parent.files and parent.hooks is True
+
+
 # ── the decision ────────────────────────────────────────────────────────────
 
 def _state(root="/p", hooks=True):

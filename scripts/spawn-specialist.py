@@ -706,7 +706,7 @@ def parent_project(env: "dict | None" = None) -> ParentProject:
     if root is None:
         return ParentProject(None, source, session, (), True)
     files, note = project_settings_sources(root)
-    return ParentProject(root, source, session, files, registers_hook(files) or (note == "unknown" and not files))
+    return ParentProject(root, source, session, files, registers_hook(files) or note == "unknown")
 
 
 def decide_child_project(parent: ParentProject, child_files: Sequence[str]) -> "str | None":

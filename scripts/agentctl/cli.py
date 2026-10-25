@@ -2858,7 +2858,7 @@ _CHILD_OUTSIDE_PROJECT_LINE_RE = re.compile(r"^Refusal:\s*child-outside-project\
 def _is_child_outside_project_refusal(result) -> bool:
     """spawn-specialist refuses a child whose start directory loads no project settings
     while the parent runs in a project that registers hooks: exit 2 (also its generic
-    argument error) with a `Refusal: child-outside-project` first stdout line, which is
+    argument error) with a `Refusal: child-outside-project` stdout line, which is
     what tells the two apart."""
     return getattr(result, "returncode", None) == _CHILD_OUTSIDE_PROJECT_EXIT and bool(
         _CHILD_OUTSIDE_PROJECT_LINE_RE.search(getattr(result, "stdout", "") or "")
