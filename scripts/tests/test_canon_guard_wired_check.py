@@ -54,7 +54,7 @@ def _group(matcher: str, command: str) -> dict:
 
 def _env(settings_path: Path, root: Path) -> dict:
     return {
-        **os.environ,
+        **{k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"},
         "CLAUDE_CANON_GUARD_SETTINGS": str(settings_path),
         "CLAUDE_CONFIG_DIR": str(root),
     }

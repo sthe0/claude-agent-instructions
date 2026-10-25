@@ -73,9 +73,15 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/cli.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line, kind(args) resource spec, and the 'Refusal: grant-widening' and 'Handoff-sha256:' label lines, all fixed engine/markdown syntax."
-hits = 8
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Compiles: legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line, kind(args) resource spec, and the 'Refusal: grant-widening', 'Refusal: child-outside-project' and 'Handoff-sha256:' label lines, all fixed engine/markdown syntax."
+hits = 9
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_is_child_outside_project_refusal::pattern.search"]
+class = "structural"
+ground = "_CHILD_OUTSIDE_PROJECT_LINE_RE.search finds the 'Refusal: child-outside-project' label line spawn-specialist itself writes; a fixed engine label syntax."
+hits = 1
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/cli.py::_is_grant_widening_refusal::pattern.search"]

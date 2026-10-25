@@ -2851,6 +2851,20 @@ def _is_recursion_refusal(result) -> bool:
     )
 
 
+_CHILD_OUTSIDE_PROJECT_EXIT = 2
+_CHILD_OUTSIDE_PROJECT_LINE_RE = re.compile(r"^Refusal:\s*child-outside-project\s*$", re.MULTILINE)
+
+
+def _is_child_outside_project_refusal(result) -> bool:
+    """spawn-specialist refuses a child whose start directory loads no project settings
+    while the parent runs in a project that registers hooks: exit 2 (also its generic
+    argument error) with a `Refusal: child-outside-project` first stdout line, which is
+    what tells the two apart."""
+    return getattr(result, "returncode", None) == _CHILD_OUTSIDE_PROJECT_EXIT and bool(
+        _CHILD_OUTSIDE_PROJECT_LINE_RE.search(getattr(result, "stdout", "") or "")
+    )
+
+
 _GRANT_WIDENING_EXIT = 4
 _REFUSAL_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Refusal:\*{0,2}\s*grant-widening\s*$", re.MULTILINE)
 _HANDOFF_SHA_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Handoff-sha256:\*{0,2}\s*(\S+)\s*$", re.MULTILINE)
@@ -7974,6 +7988,22 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         else:
             message = f"stage {stage.index} spawn refused: recursion cap reached — escalate to the user"
         return Directive(False, state.node, "escalate", message, marker="ESCALATE", data=data)
+
+    if _is_child_outside_project_refusal(result):
+        # The delivery venue loads no project settings while this session runs in a
+        # project that registers hooks: a structural blocker fixed in the venue, so
+        # there is no override here. Park and escalate before marker routing.
+        _park_node(state)
+        state.log("dispatch_refused", stage=stage.index, reason="child-outside-project")
+        store.save(state)
+        return Directive(
+            False, state.node, "escalate",
+            f"stage {stage.index} spawn refused: its venue {child_cwd} is in no project while this "
+            "session runs in one that registers hooks, so the child would run without them — "
+            "escalate to the user; remedy: create .claude/settings.local.json ({} suffices) at the "
+            "git root of that venue (the main checkout's root for a linked worktree)",
+            marker="ESCALATE", data={"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr},
+        )
 
     # The marker wins over the returncode: a specialist may exit 0 with CLARIFY, or
     # non-zero with a valid escalation marker. spawn-specialist.py has already parsed

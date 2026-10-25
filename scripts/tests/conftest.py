@@ -100,6 +100,16 @@ def _isolate_edit_ledger(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _parent_session_outside_any_project(tmp_path_factory, monkeypatch):
+    """spawn-specialist refuses a child outside every project when its parent runs in a
+    project that registers hooks. Pin the parent to an empty directory (outside the test's
+    own tmp_path, which tests list) so no spawn test depends on whether the real
+    checkout's (or its main checkout's) settings files register hooks; tests of that
+    refusal set their own parent."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path_factory.mktemp("parent-outside-any-project")))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_task_quality_ledger(tmp_path, monkeypatch):
     """The scorecard aggregates the real ledger into degradation flags, so a
     test resolve must never append to it."""

@@ -292,6 +292,7 @@ _WRAPPER_DO_NOT_WRAP: dict[str, dict[str, str]] = {
         "session": "engine session id — an opaque store key, not prose",
         "review_topo": "a unit selector — an integer stage index or the literal 'order', not prose",
         "review_topo_history": "path to the driver-written JSON history file, not prose",
+        "allow_child_outside_project": "an audit reason the operator types, only quoted in a notice and logged; no text on it is read for meaning or fetched from a file",
     },
     "spawn-cursor-specialist.py": {
         "kind": "specialization name — an id from a fixed catalog (SKILL.md directory names), not prose",

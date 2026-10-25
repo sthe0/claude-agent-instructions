@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fnmatch
+import glob
 import json
 import math
 import os
@@ -66,12 +67,13 @@ from agentctl.render import (  # build_site_prompt is the one place a spawn's pl
     build_site_prompt,
     non_plan_brief_text,
 )
+from lib import hook_wiring  # the managed-settings path, one definition
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from agentctl import tool_contracts  # the one parser of an interpreter call's script operand
 from lib import shell_tokens
 from lib import spawn_prompt_files as _prompt_files  # the files a composed system prompt is made of, shared with the engine's ceiling check
-from lib.config_root import agent_home, plans_dir, projects_roots, skills_dir, topo_units_root  # config-root resolver (isolated system root)
+from lib.config_root import agent_home, harness_config_root, iter_transcripts, plans_dir, projects_roots, skills_dir, topo_units_root  # config-root resolver (isolated system root)
 from lib.kind_baselines import (  # re-exported below so `MOD.KIND_BASELINES` etc. keep working for importlib callers
     KIND_BASELINES,
     PLANNER_CHECK_ORDER_COVERAGE_RULE,
@@ -568,6 +570,197 @@ def log_refused(reason: str, extra: dict) -> None:
     log_cost_entry(entry)
 
 
+CHILD_OUTSIDE_PROJECT = "child-outside-project"
+GIT_PROBE_TIMEOUT_S = 10
+PROJECT_SETTINGS_DIR = ".claude"  # a project's own settings directory, not the harness config root
+_GIT_ENV_DROPPED = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+PARENT_SOURCE_PROJECT_DIR = "CLAUDE_PROJECT_DIR"
+PARENT_SOURCE_TRANSCRIPT = "transcript"
+PARENT_SOURCE_CWD = "cwd"
+PARENT_SOURCE_UNRESOLVED = "unresolved"
+
+
+class ParentProject(NamedTuple):
+    """Where the parent session runs and whether that place registers hooks."""
+    root: "str | None"
+    source: str
+    session: "str | None"
+    files: tuple
+    hooks: bool
+
+
+def _git_checkout_root(directory: str) -> "tuple[str | None, str]":
+    """(root, note): the root `.claude/settings.local.json` is read from for a start
+    directory inside a git checkout - the main checkout's root for a linked worktree.
+    root is None outside git; note is 'unknown' when git could not answer in time."""
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_ENV_DROPPED}
+    try:
+        proc = subprocess.run(
+            ["git", "-C", directory, "rev-parse", "--path-format=absolute",
+             "--git-dir", "--git-common-dir", "--show-toplevel"],
+            capture_output=True, text=True, timeout=GIT_PROBE_TIMEOUT_S, env=env,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None, "unknown"
+    lines = proc.stdout.splitlines()
+    if proc.returncode != 0 or len(lines) < 3 or not lines[2]:
+        return None, ""
+    git_dir, common_dir, toplevel = lines[0], lines[1], lines[2]
+    linked = os.path.realpath(git_dir) != os.path.realpath(common_dir)
+    if linked and os.path.basename(common_dir) == ".git":
+        return os.path.dirname(common_dir), ""
+    return toplevel, ""
+
+
+def _user_level_settings() -> "set[str]":
+    root = harness_config_root()
+    return {
+        os.path.realpath(p)
+        for p in (root / "settings.json", root / "settings.local.json", hook_wiring.managed_settings_path())
+    }
+
+
+def project_settings_sources(directory: str) -> "tuple[tuple[str, ...], str]":
+    """(files, note): the project settings files Claude Code loads for a session started
+    in `directory` - `.claude/settings.json` there, `.claude/settings.local.json` at the
+    git root (the main checkout's for a linked worktree; the directory itself outside
+    git or when that root is $HOME) and the legacy `.claude/settings.local.json` there.
+    The harness root's user-level files and the managed file never count. note is
+    'unknown' when git timed out: the local file at the git root is then not accounted
+    for."""
+    start = os.path.realpath(directory)
+    root, note = _git_checkout_root(start)
+    local_root = start if root is None or os.path.realpath(root) == os.path.realpath(Path.home()) else os.path.realpath(root)
+    candidates = [
+        os.path.join(start, PROJECT_SETTINGS_DIR, "settings.json"),
+        os.path.join(local_root, PROJECT_SETTINGS_DIR, "settings.local.json"),
+        os.path.join(start, PROJECT_SETTINGS_DIR, "settings.local.json"),
+    ]
+    user_level = _user_level_settings()
+    files = [
+        c for c in dict.fromkeys(candidates)
+        if os.path.isfile(c) and os.path.realpath(c) not in user_level
+    ]
+    return tuple(files), note
+
+
+def registers_hook(files: Sequence[str]) -> bool:
+    """True when any of `files` has a non-empty `hooks` object; a file that cannot be
+    read or parsed counts as registering (fail closed)."""
+    for f in files:
+        try:
+            data = json.loads(Path(f).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return True
+        hooks = data.get("hooks") if isinstance(data, dict) else None
+        if isinstance(hooks, dict) and hooks:
+            return True
+    return False
+
+
+def _transcript_root(session: str) -> "str | None":
+    """The start directory of `session`, from its newest transcript's first `cwd`: that cwd
+    when the transcript's project directory is named after it, else its nearest ancestor
+    that is. None when the transcript is missing, unreadable, carries no cwd or matches none."""
+    try:
+        found = iter_transcripts(f"*/{glob.escape(session)}.jsonl")
+        newest = max(found, key=lambda p: p.stat().st_mtime) if found else None
+        if newest is None:
+            return None
+        cwd = None
+        with newest.open(encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                value = record.get("cwd") if isinstance(record, dict) else None
+                if isinstance(value, str) and value:
+                    cwd = value
+                    break
+    except (OSError, UnicodeDecodeError):
+        return None
+    if cwd is None:
+        return None
+    for candidate in (Path(cwd), *Path(cwd).parents):
+        if _project_dir_name(str(candidate)) == newest.parent.name:
+            return str(candidate)
+    return None
+
+
+def parent_project(env: "dict | None" = None) -> ParentProject:
+    """The parent session's project root and whether its project settings register a hook.
+    Root order: $CLAUDE_PROJECT_DIR, else the session transcript's cwd (the Bash tool
+    exports the session id, not the project dir), else the process cwd. A session whose
+    root cannot be resolved counts as registering hooks (fail closed)."""
+    env = os.environ if env is None else env
+    session = env.get("CLAUDE_CODE_SESSION_ID", "").strip() or None
+    named = env.get(PARENT_SOURCE_PROJECT_DIR, "").strip()
+    if named:
+        root, source = named, PARENT_SOURCE_PROJECT_DIR
+    elif session:
+        root = _transcript_root(session)
+        source = PARENT_SOURCE_TRANSCRIPT if root else PARENT_SOURCE_UNRESOLVED
+    else:
+        root, source = os.getcwd(), PARENT_SOURCE_CWD
+    if root is None:
+        return ParentProject(None, source, session, (), True)
+    files, note = project_settings_sources(root)
+    return ParentProject(root, source, session, files, registers_hook(files) or (note == "unknown" and not files))
+
+
+def decide_child_project(parent: ParentProject, child_files: Sequence[str]) -> "str | None":
+    """None to let the spawn pass, else the reason to refuse it: the child loads no project
+    settings while the parent's place registers hooks (or could not be resolved)."""
+    if child_files or not parent.hooks:
+        return None
+    return "parent-unresolved" if parent.root is None else "parent-hooks"
+
+
+def _child_project_gate(args, workdir: str) -> "tuple[int | None, dict | None]":
+    """(exit code, override record): the exit code when the spawn must stop here, the
+    override record when --allow-child-outside-project let a refused spawn pass."""
+    reason = args.allow_child_outside_project
+    if reason is not None and not reason.strip():
+        print("error: --allow-child-outside-project needs a non-blank REASON", file=sys.stderr)
+        log_refused("child-outside-project-blank-override", {"kind": args.kind})
+        return 2, None
+    parent = parent_project()
+    child_files, _ = project_settings_sources(workdir)
+    verdict = decide_child_project(parent, child_files)
+    if verdict is None:
+        return None, None
+    child_dir = os.path.realpath(workdir)
+    if parent.root is None:
+        where = f"the parent session {parent.session} (its start directory could not be resolved from a readable transcript)"
+    else:
+        where = f"the parent session runs in {parent.root} ({parent.source})"
+        if parent.files:
+            where += ", whose project settings " + ", ".join(parent.files) + " register hooks"
+    if reason is not None:
+        print(
+            f"notice: --allow-child-outside-project: spawning in {child_dir}, which is in no project, "
+            f"while {where}; reason: {reason.strip()}",
+            file=sys.stderr,
+        )
+        return None, {"reason": reason.strip(), "parent_root": parent.root, "child_dir": child_dir}
+    print(f"Refusal: {CHILD_OUTSIDE_PROJECT}")
+    print(
+        f"error: the child would start in {child_dir}, which is in no project (Claude Code loads "
+        f"project settings and hooks from the start directory, and .claude/settings.local.json "
+        f"from the git root), while {where}; the child would run without those hooks. Remedy: "
+        f"pass --workdir inside a project; or create .claude/settings.local.json ({{}} suffices) "
+        f"at the git root of {child_dir} (the main checkout's root for a linked worktree); or, "
+        f"for a deliberate exception, --allow-child-outside-project REASON.",
+        file=sys.stderr,
+    )
+    log_refused(CHILD_OUTSIDE_PROJECT, {
+        "kind": args.kind, "workdir": child_dir, "parent_root": parent.root,
+        "parent_source": parent.source, "parent_session": parent.session, "verdict": verdict,
+    })
+    return 2, None
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--kind", required=True, help="specialization name (must exist at ~/.claude/skills/<kind>/SKILL.md); 'manager' is the empty specialization: a vanilla child with no role SKILL.md and no appended marker protocol, returning RESOLVED/INVESTIGATION/LOOP_DETECTED/PERMISSION-REQUEST")
@@ -671,6 +864,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="child process working directory (must already exist); defaults to "
         "this process's own cwd when unset",
+    )
+    p.add_argument(
+        "--allow-child-outside-project",
+        default=None,
+        metavar="REASON",
+        help="let a spawn pass that is refused because the child's working directory is in no "
+        "project (it would load none of the project's settings or hooks) while the parent "
+        "session runs in a project that registers hooks; REASON must be non-blank and is "
+        "recorded on the spawn's cost-log row",
     )
     p.add_argument(
         "--guard-exempt",
@@ -2682,6 +2884,11 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         log_refused("workdir-not-found", {"kind": args.kind, "workdir": str(args.workdir)})
         return 2
     workdir = str(args.workdir) if args.workdir is not None else os.getcwd()
+    child_project_override = None
+    if not prompt_only:
+        stop, child_project_override = _child_project_gate(args, workdir)
+        if stop is not None:
+            return stop
     guard_exempt_paths: list[str] = []
     for exempt in args.guard_exempt or ():
         if ".." in exempt.parts:
@@ -3269,6 +3476,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         "plan_sha256": topo_plan_sha256,
         **_spawner_session_field(args.session),
         **_spawn_tags(),
+        **({"child_outside_project_override": child_project_override} if child_project_override else {}),
     })
 
     # Soft-warn (no kill, no exit-code change): realized cost exceeding a
