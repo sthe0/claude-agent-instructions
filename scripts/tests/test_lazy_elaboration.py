@@ -7,9 +7,11 @@ neighbours-depth review. An unbound session sees none of it.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from agentctl import gates, risk
+from agentctl import cli, gates, risk
 from agentctl.config import RISK_PLANNING_ENV
 from risk_planning_scenario import SESSION, Scenario, skeleton_text
 from test_replan_autonomy_boundary import plan_text
@@ -169,3 +171,19 @@ def test_unbound_dispatch_and_replan_unchanged(tmp_path, monkeypatch):
     d = sc.eng.run("replan", session=SESSION, plan=sc.write(plan_text(revised=True)))
     assert "risk bet" not in str(d.get("data", {}).get("blockers", "")), d
     assert gates.failed_stage_indices(sc.state()) == {1}
+
+
+def _lazy_rows(log):
+    return [r for r in map(json.loads, log.read_text().splitlines()) if r["gate"] == "lazy_stage"] if log.exists() else []
+
+
+def test_lazy_stage_gate_logged_only_when_bound(tmp_path, monkeypatch):
+    log = tmp_path / "gate-log.jsonl"
+    monkeypatch.setattr(cli, "GATE_LOG", log)
+    monkeypatch.delenv(RISK_PLANNING_ENV)
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "0")
+    sc = Scenario(tmp_path)
+    sc.eng.approve_as_user(SESSION, sc.write(plan_text()))
+    sc.eng.execute(SESSION)
+    assert dispatch(sc)["ok"] is True
+    assert _lazy_rows(log) == []
