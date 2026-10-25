@@ -6,7 +6,7 @@ schema: difficulty/v1
 generality: 0
 resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-10-12
-last_verified: 2026-10-12
+last_verified: 2026-10-26
 generalized_into: [delivered-identity-is-established-by-content-or-ancestry]
 ---
 
@@ -66,6 +66,16 @@ Split out of [2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan
 ### 2026-10-10 — norm-staleness (portion 3 of the recursion repair): MOVING-SHARED-TRUNK in a read-only stage invariant
 - Where it arose: agentctl session 09321034-d4e2-43ae-8bae-bdde96759e00, stage 1 check-gap.sh at verify-final, after landing 416fc9f2
 - Working plan: Stage 1's invariant 'no commit in base..HEAD carries Stage: 1' false-failed at verify-final: after landing, HEAD is the shared trunk and base..HEAD held another task's commits (improvement-scan) with their own 'Stage: 1' trailers. Fix: scope the sweep to commits carrying 'Task: norm-staleness'; mutant (empty commit with both trailers) still goes red. Replan needed a user-reviewer override and a --coverage-waiver because the plan text did not change. Lesson: any range sweep over base..HEAD in a stage check must filter by this task's own trailer, since verify-final runs after the trunk has moved.
+
+
+### 2026-10-26 — Core simplification wave 1 (2026-10-25)
+- Where it arose: claude-agent-instructions main, ea42443e / 95e515c2
+- Working plan: /home/the0/.claude-agent/plans/core-simplification-wave1.toml
+
+## Common core & variations
+**Common:** A check pinned to a coordinate (base commit, raw bytes of a moved row) breaks when the landing legitimately rewrites that coordinate: trunk moved during approval, so the base had to be re-pinned at the rebase; a verbatim-move check compared link spellings, so a link correctly rewritten for its new directory read as lost text.
+
+**Variations:** Lessons: re-pin the base at the landing rebase, not after; a verbatim-move check resolves relative links against their own file before comparing (canon_links); price each full-suite round (~15 min) before planning re-runs; cap-run.sh needs '--' before the command; a follow-up land-branch --stage N overwrites the recorded landing range; raise the content-waiver ask at the rebase rewrite and put the waiver marker only on the consenting option; staged-mode verify-all misses cross-refs; an acceptance observation is a numbered list of commands run and their output.
 
 ## Cost
 Not costed separately: the contexts keep the cost recorded in [2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan](2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md).
