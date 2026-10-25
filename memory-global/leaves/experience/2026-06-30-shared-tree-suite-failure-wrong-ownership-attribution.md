@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user (inherited from parent 2026-06-29-org-portable-core-internal-coupling-opt-in; re-confirmed live this session)"
 refs: [2026-06-29-org-portable-core-internal-coupling-opt-in.md, 2026-06-29-resume-paused-task-isolated-worktree-pinned-sha.md]
 created: 2026-06-30
-last_verified: 2026-07-02
+last_verified: 2026-10-25
 generalized_into: [shared-resource-health-asserted-relative-to-a-pinned-base]
 ---
 
@@ -40,6 +40,10 @@ On any red full-suite/gate in a shared tree: (1) git status — list dirty + unt
 ### 2026-07-02 — Destructive sync op (reset --hard) needlessly reverted a parallel session's uncommitted tracked WIP
 - Where it arose: claude-agent-instructions shared tree — merging all remote branches into main trunk. To advance local main I ran 'git checkout main' + 'git reset --hard origin/main' before an ff-merge, while a parallel session held uncommitted WIP in the tracked scripts/hook-tracker-reminder.py (a new mount-hygiene feature).
 - Working plan: The whole local-main dance was UNNECESSARY: I was already on the rebased working branch (= origin/main + the registry commit), so a single ref-only push — 'git push origin HEAD:main' — would have advanced trunk WITHOUT touching the working tree. Instead reset --hard reverted the neighbor's tracked-file WIP to the committed version (untracked files survive reset --hard; tracked modifications do not); it only reappeared because the neighbor's editor re-saved it — recovery by luck, not design. Rule: in a KNOWN-shared tree, advance/sync a branch with REF-ONLY ops ('git push <remote> HEAD:<b>', 'git branch -f <b> <ref>', 'git update-ref'), never working-tree-touching destructive ops ('git reset --hard', 'git checkout -f', 'git clean'). If a destructive op is truly unavoidable, 'git status' for foreign dirt and 'git stash' it first.
+
+### 2026-10-25 — 2026-10-24 english-only CLAUDE.md / failure-address rename
+- Where it arose: agentctl verify-final with verify_venue_at_final=repo_root re-ran the full suite in the canonical checkout
+- Working plan: /home/the0/.claude-agent/plans/english-only-claude-md-and-failure-address.toml
 ## Common core & variations
 **Common:** A red shared-tree gate misattributed to your change; the stash-baseline re-run isolates foreign from own.
 
