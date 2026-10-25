@@ -610,6 +610,91 @@ def test_the_chat_view_owns_the_scroll_keys_only_on_its_tab(tab, key, owner):
     assert tui.key_owner(tab, key) == owner
 
 
+# --- g: jump to the session's own window ------------------------------------------------------
+
+JUMP_TARGET = {"argv": ["placeholder-no-op", "win-1"], "label": "window one", "return_hint": "use the terminal's tab keys"}
+OVERLAY = {"tasks": {"t1": {"harness_session": "h-task"}, "t2": {"harness_session": None}}, "sessions": []}
+
+
+class JumpRecorder:
+    def __init__(self, outcome=None):
+        self.calls, self.outcome = [], outcome
+
+    def __call__(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return self.outcome or subprocess.CompletedProcess(args[0], 0, "", "")
+
+
+def jump_locator(seen=None, target=JUMP_TARGET):
+    def jump_target(harness):
+        if seen is not None:
+            seen.append(harness)
+        return target
+    return SimpleNamespace(NAME="fake", jump_target=jump_target)
+
+
+def test_g_requests_a_jump_once_on_every_tab():
+    for tab in tui.TABS:
+        after = press(view(tab=tab), "g")
+        assert after.jump and after.tab == tab
+        assert not press(after, "down").jump
+
+
+def test_the_jump_subject_is_the_row_under_the_cursor_or_the_opened_row():
+    rows = view(cursor=1, harness_ids=frozenset({"b"}))
+    assert tui.jump_subject(rows) == ("session", "b")
+    assert tui.jump_subject(dataclasses.replace(rows, cursor=0)) == ("task", "a")
+    assert tui.jump_subject(tui.View()) is None
+    assert tui.jump_subject(view(tab="detail", chat=("task", "a"))) == ("task", "a")
+    assert tui.jump_subject(view(tab="chat", chat=("session", "h-1"))) == ("session", "h-1")
+    assert tui.jump_subject(view(tab="chat")) is None
+
+
+def test_a_session_row_jumps_with_its_own_harness_id_and_a_task_with_its_bound_one():
+    seen = []
+    tui.jump_to(("session", "h-row"), OVERLAY, jump_locator(seen), runner=JumpRecorder())
+    tui.jump_to(("task", "t1"), OVERLAY, jump_locator(seen), runner=JumpRecorder())
+    assert seen == ["h-row", "h-task"]
+
+
+def test_jump_runs_the_plugin_argv_without_a_shell_under_a_bound_and_names_the_way_back(monkeypatch):
+    run = JumpRecorder()
+    monkeypatch.setattr(tui.locate.subprocess, "run", run)
+    status = tui.jump_to(("task", "t1"), OVERLAY, jump_locator())
+    assert run.calls == [((["placeholder-no-op", "win-1"],),
+                          {"shell": False, "timeout": 5, "capture_output": True, "text": True})]
+    assert "window one" in status and "use the terminal's tab keys" in status
+
+
+@pytest.mark.parametrize("subject, locator, words", [
+    (None, jump_locator(), "no session selected"),
+    (("task", "t2"), jump_locator(), "no session is bound"),
+    (("task", "missing"), jump_locator(), "no session is bound"),
+    (("session", "h"), jump_locator(target=None), "no window"),
+    (("session", "h"), None, "no window"),
+])
+def test_a_jump_that_cannot_start_says_why_and_runs_nothing(monkeypatch, subject, locator, words):
+    run = JumpRecorder()
+    monkeypatch.setattr(tui.locate.subprocess, "run", run)
+    assert words in tui.jump_to(subject, OVERLAY, locator) and run.calls == []
+
+
+@pytest.mark.parametrize("failure, words", [
+    (subprocess.TimeoutExpired(["x"], 5), "exit 124"), (FileNotFoundError("no program"), "exit 127")])
+def test_a_failing_jump_is_reported_not_raised(monkeypatch, failure, words):
+    def refuse(*args, **kwargs):
+        raise failure
+    monkeypatch.setattr(tui.locate.subprocess, "run", refuse)
+    status = tui.jump_to(("session", "h"), OVERLAY, jump_locator())
+    assert words in status and "failed" in status and "tab keys" not in status
+
+
+def test_a_nonzero_exit_shows_its_first_stderr_line():
+    status = tui.jump_to(("session", "h"), OVERLAY, jump_locator(),
+                         runner=JumpRecorder(subprocess.CompletedProcess(["x"], 1, "", "no such window\nmore")))
+    assert "exit 1" in status and "no such window" in status and "more" not in status
+
+
 @pytest.mark.parametrize("key, step", [("down", 1), ("j", 1), ("up", -1), ("k", -1), ("x", 0)])
 def test_scroll_step(key, step):
     assert tui.scroll_step(key) == step

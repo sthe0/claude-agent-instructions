@@ -10,6 +10,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import subprocess
 import threading
 from types import SimpleNamespace
 
@@ -23,7 +24,7 @@ else:
 from textual.containers import VerticalScroll  # noqa: E402
 from textual.widgets import DataTable, Static, TabbedContent, Tree  # noqa: E402
 
-from plan_dashboard import attention, model, tui  # noqa: E402
+from plan_dashboard import attention, locate, model, tui  # noqa: E402
 from plan_dashboard.tui_app import CHAT_LOADING, DashboardApp  # noqa: E402
 from plan_dashboard_fixtures import build_fixture_root, read_only_guard  # noqa: E402
 from plan_dashboard_support import (  # noqa: E402,F401
@@ -834,3 +835,123 @@ def test_the_chat_is_read_only_while_the_chat_tab_is_open(tmp_path, monkeypatch)
         assert len(reads) == seen
 
     run(scenario, root, locator=attention_locator())
+
+
+# --- g: jump to the session's own window ------------------------------------------------------
+
+def jumping_locator():
+    def jump_target(harness):
+        return {"argv": ["placeholder-no-op", harness], "label": f"window of {harness}", "return_hint": "tab keys back"}
+
+    base = attention_locator()
+    return SimpleNamespace(NAME="fake", sessions=base.sessions, permission_wait=base.permission_wait,
+                           jump_target=jump_target)
+
+
+def record_jumps(monkeypatch, returncode=0, stderr=""):
+    """Replace the process runner below locate's own, so the runner the app really uses is the one tested."""
+    calls = []
+
+    def run_process(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, returncode, "", stderr)
+
+    monkeypatch.setattr(locate.subprocess, "run", run_process)
+    return calls
+
+
+def status_text(app):
+    return str(app.query_one("#status", Static).render())
+
+
+def test_g_is_bound():
+    assert "g" in {binding.key for binding in DashboardApp.BINDINGS}
+
+
+def test_g_on_the_tasks_tab_jumps_to_the_task_under_the_cursor_and_names_the_way_back(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    calls = record_jumps(monkeypatch)
+
+    async def scenario(app, pilot):
+        target = row_of(app, ALPHA)
+        while app.view.cursor != target:
+            await pilot.press("down")
+        await pilot.press("g")
+        await settle(app, pilot)
+        assert [argv for argv, _ in calls] == [["placeholder-no-op", ALPHA]]
+        assert calls[0][1]["shell"] is False and calls[0][1]["timeout"] == 5
+        assert f"window of {ALPHA}" in status_text(app) and "tab keys back" in status_text(app)
+        assert app.query_one(TabbedContent).active == "tasks"
+
+    with guarded(root):
+        run(scenario, root, locator=jumping_locator())
+
+
+@pytest.mark.parametrize("tabs", [1, 2])
+def test_g_works_from_the_detail_and_chat_tabs(tmp_path, monkeypatch, tabs):
+    root = attention_root(tmp_path)
+    calls = record_jumps(monkeypatch)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        for _ in range(tabs - 1):
+            await pilot.press("tab")
+            await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == ("detail", "chat")[tabs - 1]
+        await pilot.press("g")
+        await settle(app, pilot)
+        assert [argv for argv, _ in calls] == [["placeholder-no-op", ALPHA]]
+        assert "tab keys back" in status_text(app)
+
+    with guarded(root):
+        run(scenario, root, locator=jumping_locator())
+
+
+def test_g_on_a_session_row_uses_that_rows_own_harness_session(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    calls = record_jumps(monkeypatch)
+
+    async def scenario(app, pilot):
+        target = row_of(app, ASK_SESSION)
+        while app.view.cursor != target:
+            await pilot.press("down")
+        await pilot.press("g")
+        await settle(app, pilot)
+        assert [argv for argv, _ in calls] == [["placeholder-no-op", ASK_SESSION]]
+        await pilot.press("enter")
+        await settle(app, pilot)
+        await pilot.press("g")
+        await settle(app, pilot)
+        assert [argv for argv, _ in calls][-1] == ["placeholder-no-op", ASK_SESSION]
+
+    run(scenario, root, locator=jumping_locator())
+
+
+def test_a_failed_jump_shows_its_reason_and_the_view_goes_on(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    record_jumps(monkeypatch, returncode=1, stderr="no such window")
+
+    async def scenario(app, pilot):
+        target = row_of(app, ALPHA)
+        while app.view.cursor != target:
+            await pilot.press("down")
+        await pilot.press("g")
+        await settle(app, pilot)
+        assert "failed" in status_text(app) and "no such window" in status_text(app)
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert table_ids(app)
+
+    run(scenario, root, locator=jumping_locator())
+
+
+def test_g_without_a_locator_says_so_and_runs_nothing(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    calls = record_jumps(monkeypatch)
+
+    async def scenario(app, pilot):
+        await pilot.press("g")
+        await settle(app, pilot)
+        assert status_text(app).startswith("jump:") and calls == []
+
+    run(scenario, root)

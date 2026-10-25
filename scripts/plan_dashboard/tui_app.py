@@ -32,7 +32,8 @@ TICK_S = 0.5
 CHAT_LOADING = "loading chat…"
 KEYS = (
     ("up", "Up"), ("down", "Down"), ("j", "Down"), ("k", "Up"), ("enter", "Open"), ("escape", "Back"),
-    ("backspace", "Back"), ("tab", "Tab"), ("a", "All/live"), ("r", "Refresh"), ("q", "Quit"),
+    ("backspace", "Back"), ("tab", "Tab"), ("a", "All/live"), ("r", "Refresh"), (tui.JUMP_KEY, "Jump"),
+    ("q", "Quit"),
 )
 KEY_ACTION_OWNERS = {"key": "global", "tree_key": "tree", "chat_key": "chat"}
 
@@ -107,6 +108,18 @@ def chat_is_current(target, read_for) -> bool:
     return target == read_for
 
 
+def show_status(app: "DashboardApp", text: str) -> None:
+    app.query_one("#status", Static).update(Text(text))
+
+
+def jump_from(app: "DashboardApp") -> None:
+    """Switch to the window of the session ``g`` points at; the locator's argv runs in a worker thread
+    (it is bounded to 5 s) and its outcome lands in the status line."""
+    subject, overlay = tui.jump_subject(app.view), app.overlay
+    app.run_worker(lambda: app.call_from_thread(show_status, app, tui.jump_to(subject, overlay, app.locator)),
+                   thread=True, group="jump")
+
+
 def tree_state_for(state: tui.TreeState, task: str | None) -> tui.TreeState:
     return tui.state_for_task(state, task)
 
@@ -171,7 +184,7 @@ def apply_tree_key(tree: Tree, key: str) -> None:
 
 class DashboardApp(App):
     TITLE = "plan dashboard"
-    BINDINGS = [Binding(key, f"key('{key}')", label, priority=True, show=key in ("enter", "escape", "a", "r", "q"))
+    BINDINGS = [Binding(key, f"key('{key}')", label, priority=True, show=key in ("enter", "escape", "a", "r", "g", "q"))
                 for key, label in KEYS] + [Binding(key, f"tree_key('{key}')", show=False)
                                            for key in ("j", "k", "space", "left", "right")] + [
         Binding(key, f"chat_key('{key}')", priority=True, show=False) for key in sorted(tui.CHAT_KEYS)]
@@ -187,6 +200,7 @@ class DashboardApp(App):
         self._loading = False
         self._again = False
         self.tree_task: str | None = None
+        self.overlay: dict | None = None
 
     def check_action(self, action: str, parameters) -> bool:
         if action in KEY_ACTION_OWNERS:
@@ -204,6 +218,7 @@ class DashboardApp(App):
             with TabPane("Chat", id="chat"):
                 with VerticalScroll(id="chat-scroll"):
                     yield Static(Text("\n".join(tui.chat_lines(None))), id="chat-body")
+        yield Static("", id="status")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -256,6 +271,8 @@ class DashboardApp(App):
     def _apply(self, snapshot: dict, detail: dict | None, now: dt.datetime, selection_gone: bool = False,
                overlay: dict | None = None, chat: dict | None = None, chat_target=None,
                error: Exception | None = None) -> None:
+        if overlay is not None:
+            self.overlay = overlay
         rows = tui.overview_rows(snapshot, now, overlay)
         self.query_one("#overview-head", Static).update(Text(tui.overview_header(snapshot, now, overlay)))
         ids = tuple(row["session_id"] for row in rows)
@@ -304,6 +321,8 @@ class DashboardApp(App):
             self.query_one(DataTable).move_cursor(row=self.view.cursor)
         if self.view.refresh:
             self.reload(force=True)
+        if self.view.jump:
+            jump_from(self)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.cursor_row != self.view.cursor and event.cursor_row < len(self.view.session_ids):

@@ -11,7 +11,7 @@ import datetime as dt
 from pathlib import Path
 
 from lib import config_root
-from plan_dashboard import attention, model
+from plan_dashboard import attention, locate, model
 
 SESSION_ID_WIDTH = 8
 TASK_ID_WIDTH = 24
@@ -26,6 +26,7 @@ NO_VALUE = "—"
 WAIT_MARKS = {"choice": "?", "permission": "!", "idle": "…"}
 WAIT_STYLES = {"choice": "bold yellow", "permission": "bold red", "idle": "cyan"}
 NEEDS_YOU = ("choice", "permission")
+JUMP_KEY = "g"
 ROLE_LABELS = {"user": "you", "assistant": "assistant"}
 
 
@@ -329,7 +330,7 @@ class View:
     """What the screen is showing; ``session_ids`` are the rows of the Tasks tab in order, ``harness_ids``
     those of them that are session rows (no task). ``chat`` is what the Chat tab shows, ``("task", id)``
     or ``("session", harness id)``. ``refresh`` and ``quit`` are requests the last key made, for the
-    app to act on."""
+    app to act on (``jump`` is the request of ``g``)."""
     tab: str = "tasks"
     cursor: int = 0
     session_ids: tuple[str, ...] = ()
@@ -339,6 +340,7 @@ class View:
     quit: bool = False
     harness_ids: frozenset[str] = frozenset()
     chat: tuple[str, str] | None = None
+    jump: bool = False
 
 
 def open_row(view: View, session_id: str) -> View:
@@ -349,7 +351,7 @@ def open_row(view: View, session_id: str) -> View:
 
 
 def handle_key(view: View, key: str) -> View:
-    view = dataclasses.replace(view, refresh=False, quit=False)
+    view = dataclasses.replace(view, refresh=False, quit=False, jump=False)
     last = len(view.session_ids) - 1
     if key in ("down", "j") and view.tab == "tasks":
         return dataclasses.replace(view, cursor=min(view.cursor + 1, max(last, 0)))
@@ -369,7 +371,52 @@ def handle_key(view: View, key: str) -> View:
         return dataclasses.replace(view, refresh=True)
     if key == "q":
         return dataclasses.replace(view, quit=True)
+    if key == JUMP_KEY:
+        return dataclasses.replace(view, jump=True)
     return view
+
+
+def jump_subject(view: View) -> tuple[str, str] | None:
+    """What ``g`` acts on, as ``("task", id)`` or ``("session", harness id)``: the row under the cursor on
+    the Tasks tab, the opened row (``view.chat``) on the Detail and Chat tabs."""
+    if view.tab != "tasks":
+        return view.chat
+    if not 0 <= view.cursor < len(view.session_ids):
+        return None
+    row = view.session_ids[view.cursor]
+    return ("session", row) if row in view.harness_ids else ("task", row)
+
+
+def jump_harness(subject: tuple[str, str], attention_payload) -> str | None:
+    """The harness session to switch to: a session row's own id, a task's bound session from the overlay."""
+    kind, ident = subject
+    if kind == "session":
+        return ident
+    overlay = ((attention_payload or {}).get("tasks") or {}).get(ident)
+    return overlay.get("harness_session") if isinstance(overlay, dict) else None
+
+
+def jump_status(target: dict, result) -> str:
+    """The status line after a jump: how to come back on success, the failure otherwise."""
+    if result.returncode == 0:
+        return f"jumped to {target['label']}; return: {target['return_hint']}"
+    first_line = next(iter((result.stderr or "").strip().splitlines()), "")
+    reason = one_line(first_line, 80) or "no reason given"
+    return f"jump to {target['label']} failed (exit {result.returncode}): {reason}"
+
+
+def jump_to(subject, attention_payload, locator, runner=None) -> str:
+    """Switch to the session's own window through the locator and return the status line. Types nothing
+    into the session and writes no state; a missing piece is reported, never raised."""
+    if subject is None:
+        return "jump: no session selected"
+    harness = jump_harness(subject, attention_payload)
+    if harness is None:
+        return "jump: no session is bound to this task"
+    target = locate.jump_target(locator, harness)
+    if target is None:
+        return "jump: the locator knows no window for this session"
+    return jump_status(target, locate.jump(target, runner=runner))
 
 
 def reconcile(view: View, session_ids, harness_ids=()) -> View:

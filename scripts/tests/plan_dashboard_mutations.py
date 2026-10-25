@@ -700,6 +700,43 @@ TUI_MUTATIONS.update({
     "tui-app-writes-state": (TUI_APP, "refresh_if_due", _state_written_on_refresh),
 })
 
+def _jump_key_ignored(original):
+    def mutated(view, key):
+        return view if key == "g" else original(view, key)
+    return mutated
+
+
+def _return_hint_dropped(original):
+    def mutated(target, result):
+        return original({**target, "return_hint": ""}, result)
+    return mutated
+
+
+def _jump_runner(**options):
+    def wrap(original):
+        def mutated(argv):
+            locate = importlib.import_module(LOCATE)
+            return locate.subprocess.run(argv, **{"capture_output": True, "text": True, **options})
+        return mutated
+    return wrap
+
+
+def _jump_session_as_task(original):
+    def mutated(subject, attention_payload):
+        return original(("task", subject[1]), attention_payload)
+    return mutated
+
+
+TUI_MUTATIONS.update({
+    "tui-jump-ignored": (TUI, "handle_key", _jump_key_ignored),
+    "tui-jump-no-return-hint": (TUI, "jump_status", _return_hint_dropped),
+    "tui-jump-shell": (LOCATE, "_run", _jump_runner(shell=True, timeout=5)),
+    "tui-jump-no-timeout": (LOCATE, "_run", _jump_runner(shell=False)),
+    "tui-jump-session-ignored": (TUI, "jump_harness", _jump_session_as_task),
+    "tui-app-jump-unbound": (TUI_APP, "jump_from", _nothing),
+    "tui-jump-writes-state": (TUI_APP, "jump_from", _state_written_on_refresh),
+})
+
 WEB_PAGE_MUTATIONS.update({
     "web-waiting-unmarked": (WEB, "page_bytes", _page_edit(
         'const wait = WAIT_MARKS[waiting] ? " wait-" + cssName(waiting) : "";', 'const wait = "";')),
