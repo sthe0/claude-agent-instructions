@@ -199,6 +199,8 @@ OPEN_ALPHA = """
   await win.settle();
   out.hidden = panel.hidden;
   out.text = panel.textContent;
+  out.title = doc.getElementById("detail-title").textContent;
+  out.titleAttr = doc.getElementById("detail-title").title;
   out.active = doc.activeElement.id;
   out.selected = rows().filter((r) => r.classList.contains("selected")).map((r) => r.dataset.session);
   out.requests = win.requests;
@@ -216,10 +218,25 @@ def test_a_row_click_opens_the_hidden_panel_filled_with_that_task_focused_and_th
     assert out["selected"] == [ALPHA]
     assert f"/api/task/{ALPHA}" in out["requests"]
     detail = out["routes"][f"/api/task/{ALPHA}"]
-    assert ALPHA in out["text"] and "Phases" in out["text"] and "Stages" in out["text"]
+    assert out["title"] == ALPHA[:8] and out["titleAttr"] == ALPHA
+    assert "Phases" in out["text"] and "Stages" in out["text"]
     assert all(stage["title"] in out["text"] for stage in detail["stages"])
     assert detail["phases"] and all(phase["label"] in out["text"] for phase in detail["phases"])
     assert out["phaseRows"] >= len(detail["phases"])
+
+
+def test_a_task_row_starts_with_the_task_name_and_shows_only_the_first_eight_characters_of_the_session_id(node, tmp_path):
+    steps = """
+  out.rows = rows().map((r) => ({id: r.dataset.session, title: r.title, cells: r.children.map((c) => c.textContent)}));
+  out.head = doc.getElementById("head").children.map((c) => c.textContent);
+"""
+    out = run_page(node, tmp_path, console_root(tmp_path), steps)
+    by_id = {row["id"]: row for row in out["rows"]}
+    task = {t["session_id"]: t for t in out["snapshot"]["tasks"]}[ALPHA]
+    assert out["head"][:3] == ["task", "wait", "session"]
+    cells = by_id[ALPHA]["cells"]
+    assert cells[0] == task["task_id"] and task["task_id"]
+    assert cells[out["head"].index("session")] == ALPHA[:8] and by_id[ALPHA]["title"] == ALPHA
 
 
 def test_the_rule_for_the_panel_pins_it_to_the_viewport_and_bounds_its_height(node, tmp_path):
@@ -250,7 +267,7 @@ def test_enter_on_a_focused_row_opens_the_panel_and_another_key_does_not(node, t
     out = run_page(node, tmp_path, console_root(tmp_path), steps)
     assert out["focused"] is True and out["openedByA"] is False
     assert out["opened"] is True and out["active"] == "detail" and out["selected"] == [ALPHA]
-    assert ALPHA in out["text"]
+    assert ALPHA[:8] in out["text"]
 
 
 @pytest.mark.parametrize("how", ["esc", "close"])
@@ -281,7 +298,7 @@ def test_a_second_row_replaces_the_panel_content_and_esc_with_the_panel_closed_d
 """
     out = run_page(node, tmp_path, console_root(tmp_path), steps)
     assert out["stillHidden"] is True
-    assert BETA in out["text"] and ALPHA not in out["text"]
+    assert BETA[:8] in out["text"] and ALPHA[:8] not in out["text"]
     details = [r for r in out["requests"] if r.startswith("/api/task/") and not r.endswith("/chat")]
     assert details == [f"/api/task/{ALPHA}", f"/api/task/{BETA}"]
 
@@ -318,7 +335,7 @@ def test_the_dark_theme_is_what_the_page_computes_when_the_browser_prefers_it(no
 OPEN_THE_SOURCE = """
   const open = () => { if (win.sources[0].onopen) win.sources[0].onopen({type: "open"}); };
   const marks = () => rows().map((r) => ({id: r.dataset.session, classes: r.className.split(" "),
-    mark: r.children[0].textContent, text: r.textContent, cells: r.children.map((c) => c.textContent),
+    mark: r.children[1].textContent, text: r.textContent, cells: r.children.map((c) => c.textContent),
     background: win.computed(r).background}));
   const attentionFetches = () => win.requests.filter((u) => u === "/api/attention").length;
   const chatEntries = () => doc.getElementById("detail-chat").children.slice(1).map((c) => c.textContent);
@@ -420,7 +437,7 @@ def test_a_session_row_shows_its_name_or_id_and_dashes_and_its_click_opens_only_
     out = run_page(node, tmp_path, attention_root(tmp_path), steps, locator=attention_locator())
     rows = by_id(out["rows"])
     named, unnamed = rows[ASK_SESSION]["cells"], rows[PERMISSION_SESSION]["cells"]
-    columns = ["wait", "session", "live", "node", "stage", "wall", "cost", "goal"]
+    columns = ["task", "wait", "session", "live", "node", "stage", "wall", "cost", "goal"]
     assert named[columns.index("session")] == "Asker" and unnamed[columns.index("session")] == PERMISSION_SESSION
     assert {named[columns.index(c)] for c in ("node", "stage", "wall", "cost")} == {"—"}
     assert out["hidden"] is False and out["selected"] == [ASK_SESSION]

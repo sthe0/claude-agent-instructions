@@ -663,36 +663,36 @@ def test_jump_runs_the_plugin_argv_without_a_shell_under_a_bound_and_names_the_w
     status = tui.jump_to(("task", "t1"), OVERLAY, jump_locator())
     assert run.calls == [((["placeholder-no-op", "win-1"],),
                           {"shell": False, "timeout": 5, "capture_output": True, "text": True})]
-    assert "window one" in status and "use the terminal's tab keys" in status
+    assert status == "window one — return: use the terminal's tab keys"
 
 
 @pytest.mark.parametrize("subject, locator, words", [
-    (None, jump_locator(), "no session selected"),
-    (("task", "t2"), jump_locator(), "no session is bound"),
-    (("task", "missing"), jump_locator(), "no session is bound"),
-    (("session", "h"), jump_locator(target=None), "no window"),
-    (("session", "h"), None, "no window"),
+    (None, jump_locator(), "no jump target"),
+    (("task", "t2"), jump_locator(), "no jump target"),
+    (("task", "missing"), jump_locator(), "no jump target"),
+    (("session", "h"), jump_locator(target=None), "no jump target"),
+    (("session", "h"), None, "no jump target"),
 ])
 def test_a_jump_that_cannot_start_says_why_and_runs_nothing(monkeypatch, subject, locator, words):
     run = JumpRecorder()
     monkeypatch.setattr(tui.locate.subprocess, "run", run)
-    assert words in tui.jump_to(subject, OVERLAY, locator) and run.calls == []
+    assert tui.jump_to(subject, OVERLAY, locator) == words and run.calls == []
 
 
 @pytest.mark.parametrize("failure, words", [
-    (subprocess.TimeoutExpired(["x"], 5), "exit 124"), (FileNotFoundError("no program"), "exit 127")])
+    (subprocess.TimeoutExpired(["x"], 5), "timed out after 5 s"), (FileNotFoundError("no program"), "no program")])
 def test_a_failing_jump_is_reported_not_raised(monkeypatch, failure, words):
     def refuse(*args, **kwargs):
         raise failure
     monkeypatch.setattr(tui.locate.subprocess, "run", refuse)
     status = tui.jump_to(("session", "h"), OVERLAY, jump_locator())
-    assert words in status and "failed" in status and "tab keys" not in status
+    assert status == f"window one failed: {words}"
 
 
 def test_a_nonzero_exit_shows_its_first_stderr_line():
     status = tui.jump_to(("session", "h"), OVERLAY, jump_locator(),
                          runner=JumpRecorder(subprocess.CompletedProcess(["x"], 1, "", "no such window\nmore")))
-    assert "exit 1" in status and "no such window" in status and "more" not in status
+    assert status == "window one failed: no such window"
 
 
 @pytest.mark.parametrize("key, step", [("down", 1), ("j", 1), ("up", -1), ("k", -1), ("x", 0)])

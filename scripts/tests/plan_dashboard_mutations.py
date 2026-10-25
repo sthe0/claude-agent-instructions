@@ -420,6 +420,7 @@ ONE_COLOUR_FOR_EVERY_THEME_PROPERTY = (
 WEB_PAGE_MUTATIONS = {
     "web-detail-offscreen": (WEB, "page_bytes", _page_edit("#detail { position: fixed;", "#detail { position: static;")),
     "web-row-click-dead": (WEB, "page_bytes", _page_edit('tr.addEventListener("click",', 'tr.addEventListener("x-click",')),
+    "web-task-name-dropped": (WEB, "page_bytes", _page_edit("[task.task_id || NO_VALUE, waitMark", "[NO_VALUE, waitMark")),
     "web-detail-no-close": (WEB, "page_bytes", _page_edit("function closeDetail() {", "function closeDetail() { return;")),
     "web-colours-absent": (WEB, "page_bytes", _page_edit("</style>", ONE_COLOUR_FOR_EVERY_THEME_PROPERTY + "</style>")),
     "web-contrast-low": (WEB, "page_bytes", _page_edit("--text-dim: #a5b0bd", "--text-dim: #1c2330")),

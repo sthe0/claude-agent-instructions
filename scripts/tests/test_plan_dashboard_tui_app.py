@@ -880,7 +880,7 @@ def test_g_on_the_tasks_tab_jumps_to_the_task_under_the_cursor_and_names_the_way
         await settle(app, pilot)
         assert [argv for argv, _ in calls] == [["placeholder-no-op", ALPHA]]
         assert calls[0][1]["shell"] is False and calls[0][1]["timeout"] == 5
-        assert f"window of {ALPHA}" in status_text(app) and "tab keys back" in status_text(app)
+        assert status_text(app) == f"window of {ALPHA} — return: tab keys back"
         assert app.query_one(TabbedContent).active == "tasks"
 
     with guarded(root):
@@ -937,7 +937,7 @@ def test_a_failed_jump_shows_its_reason_and_the_view_goes_on(tmp_path, monkeypat
             await pilot.press("down")
         await pilot.press("g")
         await settle(app, pilot)
-        assert "failed" in status_text(app) and "no such window" in status_text(app)
+        assert status_text(app) == f"window of {ALPHA} failed: no such window"
         await pilot.press("r")
         await settle(app, pilot)
         assert table_ids(app)
@@ -949,9 +949,12 @@ def test_g_without_a_locator_says_so_and_runs_nothing(tmp_path, monkeypatch):
     root = attention_root(tmp_path)
     calls = record_jumps(monkeypatch)
 
+    empty_plugins = tmp_path / "empty-plugins"
+    empty_plugins.mkdir()
+
     async def scenario(app, pilot):
         await pilot.press("g")
         await settle(app, pilot)
-        assert status_text(app).startswith("jump:") and calls == []
+        assert status_text(app) == "no jump target" and calls == []
 
-    run(scenario, root)
+    run(scenario, root, locator=locate.select_or_none(empty_plugins, None))

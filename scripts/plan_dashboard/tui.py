@@ -396,26 +396,28 @@ def jump_harness(subject: tuple[str, str], attention_payload) -> str | None:
     return overlay.get("harness_session") if isinstance(overlay, dict) else None
 
 
+NO_JUMP_TARGET = "no jump target"
+
+
 def jump_status(target: dict, result) -> str:
     """The status line after a jump: how to come back on success, the failure otherwise."""
     if result.returncode == 0:
-        return f"jumped to {target['label']}; return: {target['return_hint']}"
+        return f"{target['label']} — return: {target['return_hint']}"
     first_line = next(iter((result.stderr or "").strip().splitlines()), "")
-    reason = one_line(first_line, 80) or "no reason given"
-    return f"jump to {target['label']} failed (exit {result.returncode}): {reason}"
+    return f"{target['label']} failed: {one_line(first_line, 80)}"
 
 
 def jump_to(subject, attention_payload, locator, runner=None) -> str:
     """Switch to the session's own window through the locator and return the status line. Types nothing
     into the session and writes no state; a missing piece is reported, never raised."""
     if subject is None:
-        return "jump: no session selected"
+        return NO_JUMP_TARGET
     harness = jump_harness(subject, attention_payload)
     if harness is None:
-        return "jump: no session is bound to this task"
+        return NO_JUMP_TARGET
     target = locate.jump_target(locator, harness)
     if target is None:
-        return "jump: the locator knows no window for this session"
+        return NO_JUMP_TARGET
     return jump_status(target, locate.jump(target, runner=runner))
 
 

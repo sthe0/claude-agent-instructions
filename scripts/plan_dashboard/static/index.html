@@ -81,9 +81,10 @@
 </aside>
 <script>
 "use strict";
-const COLUMNS = ["wait", "session", "live", "node", "stage", "wall", "cost", "goal"];
+const COLUMNS = ["task", "wait", "session", "live", "node", "stage", "wall", "cost", "goal"];
 const NOT_COUNTED = "not counted";
 const NO_VALUE = "—";
+const SESSION_ID_CHARS = 8;
 const WAIT_MARKS = {choice: "?", permission: "!", idle: "…"};
 const NEEDS_YOU = ["choice", "permission"];
 // The server's default --interval; the page cannot know a different one.
@@ -124,13 +125,15 @@ function wall(seconds, estimate) {
   return (seconds === null || seconds === undefined ? "" : estimateMark(estimate, false)) + duration(seconds);
 }
 
+function shortId(id) { return String(id).slice(0, SESSION_ID_CHARS); }
+
 function rowCells(task) {
   if (!task.readable) {
-    return [task.session_id.slice(0, 36), task.liveness, "?", "?/?", "-", "-", "unreadable: " + task.reason];
+    return [shortId(task.session_id), task.liveness, "?", "?/?", "-", "-", "unreadable: " + task.reason];
   }
   const totals = task.totals;
   return [
-    task.session_id.slice(0, 36), task.liveness, task.node || "?",
+    shortId(task.session_id), task.liveness, task.node || "?",
     task.stages_done + "/" + task.stages_total,
     wall(totals.wall_clock_s, totals.estimate.wall_clock_s),
     money(totals.cost_usd, totals.estimate.cost_usd, totals.partial) +
@@ -155,14 +158,15 @@ function waitingOf(task) {
 }
 
 function sessionCells(row) {
-  return [waitMark(row.waiting), row.name || row.harness_session, "session", NO_VALUE, NO_VALUE, NO_VALUE, NO_VALUE, row.cwd || ""];
+  return [NO_VALUE, waitMark(row.waiting), row.name || row.harness_session, "session", NO_VALUE, NO_VALUE, NO_VALUE, NO_VALUE, row.cwd || ""];
 }
 
 function tableRow(id, kind, waiting, cells) {
   const wait = WAIT_MARKS[waiting] ? " wait-" + cssName(waiting) : "";
-  const tr = el("tr", null, "task " + (kind === "task" ? "live-" + cssName(cells[2]) : "session-row") + wait +
+  const tr = el("tr", null, "task " + (kind === "task" ? "live-" + cssName(cells[3]) : "session-row") + wait +
     (id === selected ? " selected" : ""));
   tr.dataset.session = id;
+  tr.title = id;
   tr.setAttribute("tabindex", "0");
   cells.forEach((text, i) => {
     const name = COLUMNS[i];
@@ -181,7 +185,7 @@ function renderTasks() {
   head.replaceChildren(...COLUMNS.map((name) => el("th", name)));
   const rows = snapshot.tasks.map((task) => {
     const waiting = waitingOf(task);
-    return tableRow(task.session_id, "task", waiting, [waitMark(waiting), ...rowCells(task)]);
+    return tableRow(task.session_id, "task", waiting, [task.task_id || NO_VALUE, waitMark(waiting), ...rowCells(task)]);
   });
   attention.sessions.forEach((row) => rows.push(tableRow(row.harness_session, "session", row.waiting, sessionCells(row))));
   document.getElementById("tasks").replaceChildren(...rows);
@@ -297,7 +301,9 @@ function openDetail(session, kind) {
   selectedKind = kind || "task";
   chatShown = null;
   renderTasks();
-  document.getElementById("detail-title").textContent = session.slice(0, 36);
+  const title = document.getElementById("detail-title");
+  title.textContent = shortId(session);
+  title.title = session;
   detailBody().replaceChildren(selectedKind === "task" ? el("p", "loading…", "dim") : el("p", "session without a task", "dim"));
   document.getElementById("detail-chat").replaceChildren(el("h2", "Chat"), el("p", "loading…", "dim"));
   panel.hidden = false;
