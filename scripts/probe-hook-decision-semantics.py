@@ -59,7 +59,8 @@ Usage:
   python3 scripts/probe-hook-decision-semantics.py --only headless
   python3 scripts/probe-hook-decision-semantics.py --only interactive
   python3 scripts/probe-hook-decision-semantics.py --only add_dir
-  python3 scripts/probe-hook-decision-semantics.py           # everything
+  python3 scripts/probe-hook-decision-semantics.py --only allow   # opt-in, see "allow group"
+  python3 scripts/probe-hook-decision-semantics.py           # the original 12 cells
 
 `--dry-run` prints the planned cells and the exact command for each, without
 spawning anything. Otherwise, on completion, prints the markdown table (the
@@ -748,6 +749,396 @@ def run_add_dir_write_cell(raw_dump_dir: Path | None = None) -> CellResult:
     )
 
 
+# --- allow group: what an `allow` PreToolUse hook can and cannot widen --------
+#
+# Difficulty removed: the resource-grant hook (a later stage) answers `allow`
+# for a tool call whose resources the stage declared. Whether that answer
+# actually widens anything -- whether --settings hooks run beside the user's
+# own, whether an allow passes a call the harness would refuse, whether a
+# settings deny rule or the user-level G2 guard still win, what a hook that
+# overruns its timeout does, and which filesystem commands acceptEdits already
+# lets through without any hook -- is measured here, not read off the docs.
+# Opt-in only (`--only allow`): the default "everything" run stays the
+# original 12 cells.
+
+ALLOW_HOOK_MATCHER = "Bash|Read|Edit|Write"
+ALLOW_SCRATCH_ROOT = "/tmp"
+AMBIENT_TIMEOUT_S = 180
+AMBIENT_BUDGET_USD = "0.60"
+# Provisional: the timeout the resource-grant hook would be registered with.
+# Q5 checks what happens past it; the final value waits for the live run.
+ALLOW_HOOK_TIMEOUT_S = 10
+SLOW_HOOK_TIMEOUT_S = 2
+SLOW_HOOK_SLEEP_S = 8
+Q6_LOCATIONS = ("cwd", "add_dir", "outside")
+
+
+def _allow_hook_script(tmpdir: Path, witness_path: Path, sleep_s: float = 0) -> Path:
+    """A scratch PreToolUse hook that answers `allow` for every tool call it
+    sees, after sleeping `sleep_s`. Each call appends a JSON line with the
+    tool name and its start/end wall-clock times to `witness_path`; a call
+    killed mid-sleep leaves `t_end` absent, which is how Q5 tells a timeout
+    from a slow allow."""
+    path = tmpdir / f"hook-allow-{_marker('h')}.py"
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys, time\n"
+        "t_start = time.time()\n"
+        "try:\n"
+        "    payload = json.load(sys.stdin)\n"
+        "except Exception:\n"
+        "    payload = {}\n"
+        "tool_name = payload.get('tool_name')\n"
+        f"with open({str(witness_path)!r}, 'a', encoding='utf-8') as _w:\n"
+        "    _w.write(json.dumps({'tool_name': tool_name, 'phase': 'start', 't': t_start}) + chr(10))\n"
+        f"time.sleep({sleep_s!r})\n"
+        "print(json.dumps({'hookSpecificOutput': {\n"
+        "    'hookEventName': 'PreToolUse',\n"
+        "    'permissionDecision': 'allow',\n"
+        "    'permissionDecisionReason': 'probe-hook-decision-semantics allow hook',\n"
+        "}}))\n"
+        "sys.stdout.flush()\n"
+        f"with open({str(witness_path)!r}, 'a', encoding='utf-8') as _w:\n"
+        "    _w.write(json.dumps({'tool_name': tool_name, 'phase': 'end', 't': time.time()}) + chr(10))\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
+def _settings_with_allow_hook(hook_path: Path | None, timeout_s: int | None = None,
+                              extra_perms: dict | None = None) -> dict:
+    """Child `--settings` payload: the allow hook on every tool the grant
+    hook will cover, plus optional permission rules. `hook_path=None` is the
+    no-hook baseline -- only the permission rules, if any."""
+    settings: dict = {}
+    if hook_path is not None:
+        hook: dict = {"type": "command", "command": str(hook_path)}
+        if timeout_s is not None:
+            hook["timeout"] = timeout_s
+        settings["hooks"] = {"PreToolUse": [{"matcher": ALLOW_HOOK_MATCHER, "hooks": [hook]}]}
+    if extra_perms:
+        settings["permissions"] = extra_perms
+    return settings
+
+
+def read_witness(witness_path: Path) -> list[dict]:
+    """Every parseable line of an allow-hook witness file, in order."""
+    if not witness_path.exists():
+        return []
+    entries = []
+    for line in witness_path.read_text(encoding="utf-8").splitlines():
+        try:
+            entries.append(json.loads(line))
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return entries
+
+
+def hook_latencies(entries: list[dict]) -> tuple[list[float], int]:
+    """(durations of completed hook calls in seconds, count of calls that
+    started but never wrote an end line). Calls pair start->end in order per
+    tool name; the hook runs one call at a time per tool use."""
+    open_starts: dict = {}
+    durations: list[float] = []
+    for e in entries:
+        key = e.get("tool_name")
+        if e.get("phase") == "start":
+            open_starts.setdefault(key, []).append(e.get("t"))
+        elif e.get("phase") == "end" and open_starts.get(key):
+            durations.append(e.get("t") - open_starts[key].pop(0))
+    unfinished = sum(len(v) for v in open_starts.values())
+    return durations, unfinished
+
+
+def parse_tool_calls(raw_stdout: str) -> list[dict]:
+    """Pair every assistant `tool_use` with its `tool_result`: a list of
+    `{'name', 'input', 'is_error', 'content'}` in call order. `is_error` and
+    `content` are None for a call whose result never arrived. Needed where
+    one child makes several calls and each needs its own outcome -- and its
+    refusal text, which tells a harness refusal from a hook's."""
+    calls: list[dict] = []
+    by_id: dict = {}
+    for line in raw_stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        content = obj.get("message", {}).get("content") if isinstance(obj.get("message"), dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if obj.get("type") == "assistant" and block.get("type") == "tool_use":
+                call = {"name": block.get("name"), "input": block.get("input") or {},
+                        "is_error": None, "content": None}
+                by_id[block.get("id")] = call
+                calls.append(call)
+            elif obj.get("type") == "user" and block.get("type") == "tool_result":
+                call = by_id.get(block.get("tool_use_id"))
+                if call is not None:
+                    result = block.get("content")
+                    call["is_error"] = bool(block.get("is_error"))
+                    call["content"] = result if isinstance(result, str) else json.dumps(result)
+    return calls
+
+
+def _allow_cmd(mode: str, settings: dict, budget: str, add_dirs: tuple[str, ...] = ()) -> list[str]:
+    cmd = [
+        "claude", "-p",
+        "--output-format", "stream-json", "--verbose",
+        "--max-budget-usd", budget,
+        "--model", CHILD_MODEL, "--effort", CHILD_EFFORT,
+    ]
+    if mode != "default":
+        cmd += ["--permission-mode", mode]
+    for d in add_dirs:
+        cmd += ["--add-dir", d]
+    if settings:
+        cmd += ["--settings", json.dumps(settings)]
+    return cmd
+
+
+def _first_error_text(raw: str) -> str:
+    for call in parse_tool_calls(raw):
+        if call["is_error"]:
+            return _tail_evidence(call["content"] or "", 160)
+    return ""
+
+
+def _isolated_allow_cell(cell_id: str, *, hooked: bool, prompt: str, effect, tmpdir: Path,
+                         raw_dump_dir: Path | None, extra_perms: dict | None = None,
+                         hook_sleep_s: float = 0, hook_timeout_s: int | None = None) -> CellResult:
+    """One isolated (`isolated_run_kwargs`: no fleet hooks) acceptEdits child.
+    `effect(raw_stdout)` reports whether the requested side effect actually
+    happened -- the observable, never the child's own say-so."""
+    witness_path = tmpdir / f"witness_{_marker('w')}.log"
+    hook_path = _allow_hook_script(tmpdir, witness_path, hook_sleep_s) if hooked else None
+    timeout = hook_timeout_s if hook_timeout_s is not None else (ALLOW_HOOK_TIMEOUT_S if hooked else None)
+    settings = _settings_with_allow_hook(hook_path, timeout, extra_perms)
+    kwargs = host_llm.isolated_run_kwargs()
+    cmd = _allow_cmd("acceptEdits", settings, CHILD_BUDGET_USD)
+    started = time.time()
+    raw, timed_out = _run_child(cmd, prompt, env=kwargs["env"], cwd=kwargs["cwd"], timeout_s=HEADLESS_TIMEOUT_S * 2)
+    elapsed = time.time() - started
+    _dump_raw(raw_dump_dir, cell_id.replace(":", "-"), raw)
+    entries = read_witness(witness_path)
+    durations, unfinished = hook_latencies(entries)
+    calls = parse_tool_calls(raw)
+    if not calls:
+        return _not_observed_result(cell_id, "acceptEdits", "allow-hook" if hooked else "none (baseline)",
+                                    timed_out, f"not observed: no tool call (evidence: {_tail_evidence(raw)})")
+    happened = effect(raw)
+    notes = [f"child {elapsed:.0f}s", f"denied={permission_denied(raw)}"]
+    if hooked:
+        lat = f"max {max(durations):.3f}s" if durations else "none completed"
+        notes.append(f"hook calls={len([e for e in entries if e.get('phase') == 'start'])}, latency {lat}, "
+                     f"unfinished={unfinished}")
+    err = _first_error_text(raw)
+    if err:
+        notes.append(f"refusal: {err}")
+    return CellResult(
+        cell_id=cell_id, requested_mode="acceptEdits",
+        decision="allow-hook" if hooked else "none (baseline)",
+        effective_mode=parse_stream_json_effective_mode(raw), sentinel_ran=happened,
+        prompt_shown=False, timed_out=timed_out, notes="; ".join(notes),
+    )
+
+
+def _init_probe_repo(root: Path) -> Path:
+    repo = root / "repo"
+    repo.mkdir()
+    for args in (["init", "-q"], ["config", "user.name", "probe"], ["config", "user.email", "probe@example.invalid"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, timeout=30)
+    (repo / "f.txt").write_text("probe\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "f.txt"], check=True, timeout=30)
+    return repo
+
+
+def _repo_has_commit(repo: Path) -> bool:
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "-q", "HEAD"],
+                          capture_output=True, timeout=30).returncode == 0
+
+
+def run_allow_isolated_cells(tmpdir: Path, raw_dump_dir: Path | None = None) -> list[CellResult]:
+    """Q2, Q3, Q5: each baseline/hook pair against a target outside the
+    child's working directory, isolated from fleet hooks so only the
+    harness and the probe hook decide."""
+    results: list[CellResult] = []
+    outside = Path(tempfile.mkdtemp(prefix="probe-allow-out-", dir=ALLOW_SCRATCH_ROOT))
+    try:
+        # Q2: git -C <outside repo> commit.
+        for hooked in (False, True):
+            repo_root = Path(tempfile.mkdtemp(prefix="q2-", dir=outside))
+            repo = _init_probe_repo(repo_root)
+            prompt = (f"Use the Bash tool to run exactly this command and nothing else: "
+                      f"git -C {repo} commit -q -m probe")
+            results.append(_isolated_allow_cell(
+                f"allow:q2_git_commit_outside:{'hook' if hooked else 'baseline'}", hooked=hooked,
+                prompt=prompt, effect=lambda _raw, r=repo: _repo_has_commit(r), tmpdir=tmpdir,
+                raw_dump_dir=raw_dump_dir))
+
+        # Q3: Read and Write outside; Read under a settings deny rule.
+        def read_cell(cell_id: str, hooked: bool, deny: bool = False, sleep_s: float = 0,
+                      hook_timeout_s: int | None = None) -> CellResult:
+            # The file's content is a fresh marker that appears nowhere in the
+            # prompt, so it can only reach a tool_result through a real read.
+            d = Path(tempfile.mkdtemp(prefix="q3r-", dir=outside))
+            marker = _marker("READ_PROBE")
+            (d / "secret.txt").write_text(marker + "\n", encoding="utf-8")
+            return _isolated_allow_cell(
+                cell_id, hooked=hooked,
+                prompt=f"Use the Read tool to read the file {d / 'secret.txt'} and print its content. Do nothing else.",
+                effect=lambda raw: command_executed(raw, marker), tmpdir=tmpdir, raw_dump_dir=raw_dump_dir,
+                extra_perms={"deny": [f"Read(/{d}/**)"]} if deny else None,
+                hook_sleep_s=sleep_s, hook_timeout_s=hook_timeout_s)
+
+        results.append(read_cell("allow:q3_read_outside:baseline", hooked=False))
+        results.append(read_cell("allow:q3_read_outside:hook", hooked=True))
+        for hooked in (False, True):
+            target = Path(tempfile.mkdtemp(prefix="q3w-", dir=outside)) / "written.txt"
+            results.append(_isolated_allow_cell(
+                f"allow:q3_write_outside:{'hook' if hooked else 'baseline'}", hooked=hooked,
+                prompt=f"Use the Write tool to create the file {target} with the exact content OK. Do nothing else.",
+                effect=lambda _raw, t=target: t.exists(), tmpdir=tmpdir, raw_dump_dir=raw_dump_dir))
+        results.append(read_cell("allow:q3_read_deny_rule:hook", hooked=True, deny=True))
+        # Q5: the hook sleeps past its timeout.
+        results.append(read_cell("allow:q5_hook_timeout:hook_sleeps", hooked=True,
+                                 sleep_s=SLOW_HOOK_SLEEP_S, hook_timeout_s=SLOW_HOOK_TIMEOUT_S))
+    finally:
+        shutil.rmtree(outside, ignore_errors=True)
+    return results
+
+
+def _ambient_depth1_env() -> dict:
+    """The live settings chain (user-level hooks included) as a spawned
+    specialist sees it: ambient environment at recursion depth 1."""
+    env = dict(os.environ)
+    env["AGENT_RECURSION_DEPTH"] = "1"
+    return env
+
+
+def run_allow_g2_cell(tmpdir: Path, raw_dump_dir: Path | None = None) -> CellResult:
+    """Q4 (and Q1's evidence): an ambient depth-1 acceptEdits child with the
+    allow hook asks for a `claude` call carrying a widening flag. The user's
+    own hook-guard-permission-surface G2 denies that at depth >= 1; the probe
+    hook allows it. Both hooks firing answers Q1; which decision wins answers
+    Q4. `--version` keeps the call harmless should it run."""
+    cell_id = "allow:q4_g2_depth1:hook"
+    cwd = Path(tempfile.mkdtemp(prefix="probe-allow-g2-", dir=ALLOW_SCRATCH_ROOT))
+    witness_path = tmpdir / f"witness_{_marker('w')}.log"
+    try:
+        hook_path = _allow_hook_script(tmpdir, witness_path)
+        settings = _settings_with_allow_hook(hook_path, ALLOW_HOOK_TIMEOUT_S)
+        cmd = _allow_cmd("acceptEdits", settings, AMBIENT_BUDGET_USD)
+        prompt = ("Use the Bash tool to run exactly this command and nothing else: "
+                  "claude --permission-mode bypassPermissions --version")
+        raw, timed_out = _run_child(cmd, prompt, env=_ambient_depth1_env(), cwd=str(cwd),
+                                    timeout_s=AMBIENT_TIMEOUT_S)
+    finally:
+        shutil.rmtree(cwd, ignore_errors=True)
+    _dump_raw(raw_dump_dir, cell_id.replace(":", "-"), raw)
+    bash_calls = [c for c in parse_tool_calls(raw) if c["name"] == "Bash"]
+    probe_hook_fired = any(e.get("tool_name") == "Bash" for e in read_witness(witness_path))
+    if not bash_calls:
+        return _not_observed_result(cell_id, "acceptEdits (ambient, depth 1)", "allow-hook", timed_out,
+                                    f"not observed: no Bash call (evidence: {_tail_evidence(raw)})")
+    call = bash_calls[0]
+    ran = call["is_error"] is False and "claude code" in (call["content"] or "").lower()
+    notes = (f"probe hook fired={probe_hook_fired}; "
+             f"result: {_tail_evidence(call['content'] or '(no result)', 200)}")
+    return CellResult(
+        cell_id=cell_id, requested_mode="acceptEdits (ambient, depth 1)", decision="allow-hook",
+        effective_mode=parse_stream_json_effective_mode(raw), sentinel_ran=ran,
+        prompt_shown=False, timed_out=timed_out, notes=notes,
+    )
+
+
+def q6_commands(loc: Path) -> list[tuple[str, str]]:
+    """(name, command) for every filesystem command Q6 tries in `loc`."""
+    return [
+        ("mkdir", f"mkdir {loc}/q6_newdir"),
+        ("touch", f"touch {loc}/q6_touched"),
+        ("cp", f"cp {loc}/q6_src {loc}/q6_copy"),
+        ("mv", f"mv {loc}/q6_mv_src {loc}/q6_mv_dst"),
+        ("sed", f"sed -i s/before/after/ {loc}/q6_sed"),
+        ("rm", f"rm {loc}/q6_rm"),
+    ]
+
+
+def q6_prepare(loc: Path) -> None:
+    (loc / "q6_src").write_text("src\n", encoding="utf-8")
+    (loc / "q6_mv_src").write_text("mv\n", encoding="utf-8")
+    (loc / "q6_sed").write_text("before\n", encoding="utf-8")
+    (loc / "q6_rm").write_text("rm\n", encoding="utf-8")
+
+
+def q6_effects(loc: Path) -> dict[str, bool]:
+    """Whether each Q6 command's effect is visible on disk -- read from the
+    filesystem, not from the child's report."""
+    sed_file = loc / "q6_sed"
+    return {
+        "mkdir": (loc / "q6_newdir").is_dir(),
+        "touch": (loc / "q6_touched").exists(),
+        "cp": (loc / "q6_copy").exists(),
+        "mv": (loc / "q6_mv_dst").exists() and not (loc / "q6_mv_src").exists(),
+        "sed": sed_file.exists() and sed_file.read_text(encoding="utf-8").strip() == "after",
+        "rm": not (loc / "q6_rm").exists(),
+    }
+
+
+def run_allow_q6_cells(raw_dump_dir: Path | None = None) -> list[CellResult]:
+    """Q6: in the real child launch shape -- ambient settings chain, depth 1,
+    acceptEdits, a read-only --add-dir (an Edit deny over it, as
+    spawn-specialist.py emits for a read grant), no probe hook -- which
+    filesystem Bash commands go through in the cwd, in the add-dir and
+    outside both. One child per location, each command one Bash call."""
+    root = Path(tempfile.mkdtemp(prefix="probe-allow-q6-", dir=ALLOW_SCRATCH_ROOT))
+    results: list[CellResult] = []
+    try:
+        dirs = {name: root / name for name in Q6_LOCATIONS}
+        for d in dirs.values():
+            d.mkdir()
+        settings = {"permissions": {"deny": [f"Edit(/{dirs['add_dir']}/**)"]}}
+        cmd = _allow_cmd("acceptEdits", settings, AMBIENT_BUDGET_USD, add_dirs=(str(dirs["add_dir"]),))
+        for location in Q6_LOCATIONS:
+            loc = dirs[location]
+            q6_prepare(loc)
+            commands = q6_commands(loc)
+            listing = "\n".join(f"{i}. {c}" for i, (_, c) in enumerate(commands, 1))
+            prompt = ("Run each of the following shell commands with the Bash tool, one Bash call per "
+                      "command, in the given order, exactly as written. If a call is refused or fails, "
+                      f"continue with the next one. Do nothing else.\n{listing}")
+            cell_id = f"allow:q6_accept_edits_fs:{location}"
+            raw, timed_out = _run_child(cmd, prompt, env=_ambient_depth1_env(), cwd=str(dirs["cwd"]),
+                                        timeout_s=AMBIENT_TIMEOUT_S)
+            _dump_raw(raw_dump_dir, cell_id.replace(":", "-"), raw)
+            effects = q6_effects(loc)
+            calls = [c for c in parse_tool_calls(raw) if c["name"] == "Bash"]
+            per_cmd = []
+            for name, command in commands:
+                call = next((c for c in calls if command in str(c["input"].get("command", ""))), None)
+                if call is None:
+                    per_cmd.append(f"{name}=not attempted")
+                elif effects[name]:
+                    per_cmd.append(f"{name}=ran")
+                else:
+                    per_cmd.append(f"{name}=refused ({_tail_evidence(call['content'] or '(no result)', 90)})")
+            results.append(CellResult(
+                cell_id=cell_id, requested_mode="acceptEdits (ambient, depth 1, read add-dir)",
+                decision="none (baseline)", effective_mode=parse_stream_json_effective_mode(raw),
+                sentinel_ran=any(effects.values()), prompt_shown=False, timed_out=timed_out,
+                notes="; ".join(per_cmd),
+            ))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    return results
+
+
 def render_table(results: list[CellResult]) -> str:
     header = (
         "| Cell | Requested mode | Decision | Effective mode | Sentinel ran | Prompt shown | Timed out | Notes |\n"
@@ -770,8 +1161,9 @@ def render_table(results: list[CellResult]) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--only", choices=("headless", "interactive", "add_dir"), default=None,
-                   help="run only one group of cells; default: all groups (12 cells)")
+    p.add_argument("--only", choices=("headless", "interactive", "add_dir", "allow"), default=None,
+                   help="run only one group of cells; default: the original groups (12 cells). "
+                        "`allow` is opt-in only and never part of the default run")
     p.add_argument("--dry-run", action="store_true", help="print planned cells/commands; spawn nothing")
     p.add_argument("--raw-dump-dir", default=None,
                    help="optional dir to write each child's raw stdout/pane text for debugging "
@@ -786,10 +1178,25 @@ def _plan() -> list[str]:
     return plan
 
 
+def _allow_plan() -> list[str]:
+    plan = [f"allow:q2_git_commit_outside:{v}" for v in ("baseline", "hook")]
+    plan += [f"allow:q3_read_outside:{v}" for v in ("baseline", "hook")]
+    plan += [f"allow:q3_write_outside:{v}" for v in ("baseline", "hook")]
+    plan += ["allow:q3_read_deny_rule:hook", "allow:q5_hook_timeout:hook_sleeps", "allow:q4_g2_depth1:hook"]
+    plan += [f"allow:q6_accept_edits_fs:{loc}" for loc in Q6_LOCATIONS]
+    return plan
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.dry_run:
+        if args.only == "allow":
+            planned = _allow_plan()
+            print(f"Planned cells ({len(planned)} total):")
+            for cell_id in planned:
+                print(f"  {cell_id}")
+            return 0
         print("Planned cells (12 total):")
         for cell_id in _plan():
             if args.only and not cell_id.startswith(args.only):
@@ -816,6 +1223,13 @@ def main(argv: list[str] | None = None) -> int:
             results.append(run_add_dir_read_cell(tmpdir, raw_dump_dir))
             print("running add_dir:default_write_add_dir ...", file=sys.stderr)
             results.append(run_add_dir_write_cell(raw_dump_dir))
+        if args.only == "allow":
+            print("running allow: isolated cells (Q2, Q3, Q5) ...", file=sys.stderr)
+            results.extend(run_allow_isolated_cells(tmpdir, raw_dump_dir))
+            print("running allow:q4_g2_depth1:hook ...", file=sys.stderr)
+            results.append(run_allow_g2_cell(tmpdir, raw_dump_dir))
+            print("running allow: q6 cells ...", file=sys.stderr)
+            results.extend(run_allow_q6_cells(raw_dump_dir))
 
     print(render_table(results))
     return 0
