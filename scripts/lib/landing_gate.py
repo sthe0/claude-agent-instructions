@@ -61,7 +61,7 @@ def short(sha: str) -> str:
     return str(sha)[:12]
 
 
-def _utc_now() -> str:
+def utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
@@ -75,7 +75,7 @@ def normalize_reason(reason: object) -> str:
 
 # ── git edges ─────────────────────────────────────────────────────────────
 
-def _clean_env() -> dict[str, str]:
+def clean_env() -> dict[str, str]:
     env = dict(os.environ)
     for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
         env.pop(name, None)

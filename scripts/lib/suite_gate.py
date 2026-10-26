@@ -436,7 +436,7 @@ def sandbox_scrub_names(script: str | Path) -> list[str]:
 def suite_env(root: Path, userbase: str, failures_file: Path, scrub: Sequence[str],
               base_env: dict[str, str] | None = None) -> dict[str, str]:
     """The environment of the sandboxed pytest: scrubbed, rooted in the sandbox, same user site."""
-    env = dict(base_env if base_env is not None else shared._clean_env())
+    env = dict(base_env if base_env is not None else shared.clean_env())
     for name in list(env):
         if name in scrub or name.startswith("AGENTCTL_") or name in ("PYTEST_ADDOPTS", "PYTHONPATH"):
             del env[name]
@@ -482,7 +482,7 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
     if not (root / "sandbox.env").exists():
         code, out, timed_out = run_group(
             [str(scripts / SANDBOX_SCRIPT), "--source", str(repo), "--core-ref", sha, "--root", str(root)],
-            cwd=None, env=shared._clean_env(), timeout_s=BUILD_TIMEOUT_S,
+            cwd=None, env=shared.clean_env(), timeout_s=BUILD_TIMEOUT_S,
         )
         build_s = time.monotonic() - started
         if code != 0 or timed_out:
@@ -490,7 +490,7 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
                             detail="timed out" if timed_out else f"exit {code}: {one_line(out[-400:], 240)}")
     proc = subprocess.run(
         ["git", "-C", str(root / "core"), "rev-parse", "HEAD"], capture_output=True, text=True,
-        env=shared._clean_env(),
+        env=shared.clean_env(),
     )
     core_sha = proc.stdout.strip() if proc.returncode == 0 else ""
     (root / "plugin").mkdir(exist_ok=True)
@@ -686,7 +686,7 @@ def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner 
     repo = Path(repo)
     run = runner or default_runner
     limit = timeout_s or configured_timeout_s()
-    now = clock or shared._utc_now
+    now = clock or shared.utc_now
     sandbox_parent = sandbox_parent or SANDBOX_PARENT
     if not shared.is_ancestor(repo, tip, candidate_sha):
         raise GateError(
@@ -721,7 +721,7 @@ def waive_record(repo: str | Path, sha: str, reason: str,
         raise GateError(f"no suite record for {short(sha)}; run: {RUN_COMMAND}")
     if record.get("status") != UNAVAILABLE:
         raise GateError(f"waiver not accepted: the record is {record.get('status')}, not UNAVAILABLE", refused=True)
-    record["waiver"] = {"reason": shared.normalize_reason(reason), "at": (now or shared._utc_now)()}
+    record["waiver"] = {"reason": shared.normalize_reason(reason), "at": (now or shared.utc_now)()}
     return shared.write_record(common_dir, RECORD_DIR, sha, record), record
 
 

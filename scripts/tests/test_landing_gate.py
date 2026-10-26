@@ -277,7 +277,7 @@ def test_the_clean_env_pops_the_git_dir_family(monkeypatch):
     for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
         monkeypatch.setenv(name, "/somewhere")
     monkeypatch.setenv("KEEP_ME", "1")
-    env = shared._clean_env()
+    env = shared.clean_env()
     assert not any(name in env for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"))
     assert env["KEEP_ME"] == "1"
 
@@ -398,7 +398,7 @@ def test_normalize_reason_cleans_to_one_line_and_refuses_an_empty_one():
 
 
 def test_utc_now_is_an_iso_timestamp():
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", shared._utc_now())
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", shared.utc_now())
 
 
 # ── the layer stays gate-agnostic ─────────────────────────────────────────

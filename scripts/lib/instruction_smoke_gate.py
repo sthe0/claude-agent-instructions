@@ -26,8 +26,8 @@ from typing import Callable, Iterable, Protocol, Sequence
 from . import landing_gate as shared
 from .landing_gate import (  # noqa: F401  (re-exported: callers use ``gate.<name>``)
     ADMITTED, NOT_REQUIRED, PUSH_RIGHTS_PATTERN, REFUSED, ZERO_SHA, Decision, GateError,
-    PrePushResult, RecordError, _clean_env, _git, _git_ok, _PUSH_RIGHTS, _SHA, _utc_now,
-    changed_paths, defuse, fetch_remote_tip, git_common_dir, is_ancestor, is_valid_sha,
+    PrePushResult, RecordError, clean_env as _clean_env, _git, _git_ok, _PUSH_RIGHTS, _SHA,
+    utc_now as _utc_now, changed_paths, defuse, fetch_remote_tip, git_common_dir, is_ancestor, is_valid_sha,
     object_exists, one_line, read_record, resolve_commit, short,
 )
 

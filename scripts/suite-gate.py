@@ -113,7 +113,7 @@ def cmd_pre_push(args: argparse.Namespace) -> int:
     try:
         result = gate.prepush_decision(sys.stdin.read().splitlines(), ".", trunk=args.trunk)
     except Exception as exc:  # noqa: BLE001 — a hook that crashes must still refuse, in defused words
-        result = shared.PrePushResult(False, (gate.defuse(f"pre-push: refused: gate error: {gate.one_line(exc, 200)}"),))
+        result = gate.PrePushResult(False, (gate.defuse(f"pre-push: refused: gate error: {gate.one_line(exc, 200)}"),))
     for message in result.messages:
         print(message, file=sys.stderr)
     return 0 if result.allowed else 1
