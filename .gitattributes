@@ -5,6 +5,9 @@
 # scripts/gen_crutch_registry.py
 scripts/crutch_registry.toml linguist-generated=true
 
+# scripts/inline-size-calibrate.py
+docs/operations/inline-size-calibration.json linguist-generated=true
+
 # scripts/memory-leaf-size-calibrate.py
 docs/operations/memory-leaf-size-calibration.json linguist-generated=true
 

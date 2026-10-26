@@ -10,7 +10,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `budget-medium-usd` | `3.00` | Expected-size telemetry label for typical specialist work (default tier); not a kill-cap. |
 | `budget-large-usd` | `8.00` | Expected-size telemetry label for cross-cutting work; fallback for `spawn-runaway-ceiling-usd`. |
 | `spawn-runaway-ceiling-usd` | `25.0` | Single `--max-budget-usd` passed to every spawn; kills a runaway spawn only. |
-| `small-change-max-lines` | `20` | Changed-line bound of the small-change class (single file, no architectural decision). |
+| `small-change-max-lines` | `200` | Hand-written production-line bound of the small-change (inline) class; basis in `docs/operations/inline-size-calibration.json`. |
 | `substantive-wall-clock-min` | `30` | Expected minutes from which a task is substantive. |
 | `rediscovery-threshold-min` | `5` | Rediscovery minutes a future task must save for a resolved task to earn an experience leaf. |
 | `claude-md-max-lines` | `400` | Line ceiling on `CLAUDE.md`; extract a section to a leaf above it. |

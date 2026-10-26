@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -26,19 +25,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from agentctl import inline_class  # noqa: E402
 from agentctl.config import Thresholds  # noqa: E402
-
-
-def _git(repo: Path, argv: "list[str]", stdin: str = "") -> str:
-    done = subprocess.run(argv, cwd=repo, input=stdin, capture_output=True, text=True)
-    if done.returncode != 0:
-        raise RuntimeError(f"{' '.join(argv)}: {done.stderr.strip()}")
-    return done.stdout
-
-
-def measure_range(repo: Path, base: str, tip: str) -> inline_class.Measure:
-    changes = inline_class.parse_numstat_z(_git(repo, inline_class.numstat_argv(base, tip)))
-    attr_out = _git(repo, inline_class.check_attr_argv(), inline_class.check_attr_stdin(changes)) if changes else ""
-    return inline_class.measure(changes, inline_class.generated_from_check_attr(attr_out))
+from agentctl.inline_git import measure_range  # noqa: E402
 
 
 def main(argv: "list[str] | None" = None) -> int:
