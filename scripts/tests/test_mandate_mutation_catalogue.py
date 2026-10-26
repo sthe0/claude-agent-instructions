@@ -39,6 +39,8 @@ EXPECTED_ENTRIES = (
     "expiry-warning", "redeliver-no-record", "redeliver-record-without-send", "redeliver-not-idempotent",
     "inline-test-exclusion", "inline-generated-exclusion", "inline-bound-comparison",
     "inline-binary-failsafe", "inline-reason-source", "inline-memory-exclusion",
+    "inline-cycle-gate", "inline-cycle-trunk-attrs", "inline-constitution-fixed",
+    "inline-triage-definition",
 )
 
 

@@ -23,7 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cost, mandate as rules, mandate_store as store
+from agentctl import cost, inline_class, inline_git, mandate as rules, mandate_store as store
+from agentctl.config import Thresholds
 from agentctl.dispatch import RunResult
 from mandate_cycle import driver, notifiers
 from session_scope import registry as scopes
@@ -82,6 +83,11 @@ class World:
         self.blocks: "dict[str, str]" = {}
         self.local_branches = ""
         self.name_status = "M\tscripts/foo.py\n"
+        self.numstat = "1\t0\tscripts/foo.py\0"
+        self.generated: "set[str]" = set()
+        self.attr_cwds: "list[str | None]" = []
+        self.merge_base = "b" * 40
+        self.failing: "list[str]" = []
         self.suites = {
             "baseline.xml": (["t1", "t2"], []),
             "item.xml": (["t1", "t2", "t3"], []),
@@ -98,9 +104,11 @@ class World:
         # Files a fresh worktree holds: the junit class `scripts.tests.test_a` maps to the first.
         self.worktree_files = ["scripts/tests/test_a.py"]
 
-    def run(self, argv, cwd=None, timeout=None):
+    def run(self, argv, cwd=None, timeout=None, stdin=None):
         self.calls.append(list(argv))
         a = list(argv)
+        if any(word in a for word in self.failing):
+            return RunResult(1, stderr="fatal: boom")
         if a[:3] == ["gh", "repo", "view"]:
             return ok(json.dumps({"nameWithOwner": f"{OWNER}/repo"}))
         if a[:3] == ["gh", "issue", "list"]:
@@ -139,7 +147,18 @@ class World:
         if a[:3] == ["git", "rev-parse", "HEAD"]:
             return ok(self.head + "\n")
         if a[:2] == ["git", "diff"]:
+            if "--numstat" in a:
+                return ok(self.numstat)
             return ok(self.name_status if "--name-status" in a else "+++ b/scripts/foo.py\n+a new line\n")
+        if a[:2] == ["git", "merge-base"]:
+            return ok(self.merge_base + "\n")
+        if a[:2] == ["git", "check-attr"]:
+            self.attr_cwds.append(cwd)
+            out = "".join(
+                f"{p}\0linguist-generated\0{'true' if p in self.generated else 'unspecified'}\0"
+                for p in (stdin or "").split("\0")[:-1]
+            )
+            return ok(out)
         if a[:2] == ["git", "log"]:
             return ok("a commit message\n")
         if a[:1] == ["bash"] and a[1].endswith("cap-run.sh"):
@@ -998,11 +1017,11 @@ def test_a_gate_script_the_item_breaks_fails_it(env):
     eligible(env, 1)
     original = env.world.run
 
-    def run(argv, cwd=None, timeout=None):
+    def run(argv, cwd=None, timeout=None, **kwargs):
         if argv[:2] == [sys.executable, "scripts/lint-prose-length.py"] and not str(cwd).endswith("-baseline"):
             env.world.calls.append(list(argv))
             return RunResult(1)
-        return original(argv, cwd, timeout)
+        return original(argv, cwd, timeout, **kwargs)
 
     env.world.run = run
     env.cycle()
@@ -1061,6 +1080,240 @@ def test_a_diff_with_no_changed_file_is_declined(env):
     row = item_rows()[0]
     assert row["outcome"] == "declined"
     assert not store.load_mandate(ID).breaker_open
+
+
+# --- the inline size bound ---------------------------------------------------------------
+
+BOUND = Thresholds().small_change_max_lines
+
+
+def numstat(*entries):
+    return "".join(f"{added}\t{deleted}\t{path}\0" for added, deleted, path in entries)
+
+
+def needs_plan_item(env, number=1, entries=None, name_status="M\tscripts/foo.py\n"):
+    env.grant()
+    eligible(env, number)
+    env.world.name_status = name_status
+    env.world.numstat = numstat(*(entries or [(BOUND + 1, 0, "scripts/foo.py")]))
+    env.cycle()
+    return only_row(issue=number, outcome="declined", marker="needs-plan", pr_url=None)
+
+
+def test_a_small_production_change_with_many_test_and_generated_lines_opens_a_pull_request(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.name_status = "M\tscripts/foo.py\nM\tscripts/tests/test_foo.py\nM\tgen/out.py\n"
+    env.world.numstat = numstat(
+        (3, 0, "scripts/foo.py"), (BOUND * 5, 0, "scripts/tests/test_foo.py"), (BOUND * 5, 0, "gen/out.py"),
+    )
+    env.world.generated = {"gen/out.py"}
+    env.cycle()
+    row = item_rows()[0]
+    assert row["outcome"] == "pr-opened"
+    assert "inline" not in row
+    assert env.world.calls_with("gh", "pr", "create")
+    assert "Needs a plan" not in digest_text()
+
+
+def test_a_change_of_exactly_the_bound_is_still_opened(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.numstat = numstat((BOUND - 2, 2, "scripts/foo.py"))
+    env.cycle()
+    assert item_rows()[0]["outcome"] == "pr-opened"
+
+
+def test_a_change_over_the_bound_is_declined_as_needing_a_plan_with_no_pull_request(env):
+    row = needs_plan_item(env, entries=[(BOUND, 1, "scripts/foo.py")])
+    assert row["inline"] == {
+        "production_lines": BOUND + 1, "bound": BOUND, "counted_paths": ["scripts/foo.py"], "binary_paths": [],
+    }
+    assert env.world.calls_with("git", "push") == []
+    assert env.world.calls_with("gh", "pr", "create") == []
+    assert env.spawner.of("code-reviewer") == []
+    assert not store.load_mandate(ID).breaker_open
+    patch = next((store.cycle_dir(ID, only_cycle_id()) / "items" / "1").glob("change.patch"))
+    assert "+a new line" in patch.read_text(encoding="utf-8")
+    comment = Path(env.world.calls_with("gh", "issue", "comment", "1")[-1][-1]).read_text(encoding="utf-8")
+    assert f"a change of {BOUND + 1} hand-written production lines, over the bound {BOUND}" in comment
+    assert "needs a plan approved by a person" in comment
+    label = store.load_mandate(ID).labels["no"]
+    assert env.world.calls_with("gh", "issue", "edit", "1", "--add-label", label)
+
+
+def test_the_generated_set_is_read_in_the_drivers_own_checkout(env):
+    needs_plan_item(env)
+    assert env.world.attr_cwds == [str(env.cfg().repo)]
+
+
+def test_a_counted_binary_file_declines_the_item_even_when_its_lines_are_few(env):
+    row = needs_plan_item(env, entries=[(5, 0, "scripts/foo.py"), ("-", "-", "scripts/blob.py")])
+    assert row["inline"]["production_lines"] == 5
+    assert row["inline"]["binary_paths"] == ["scripts/blob.py"]
+    comment = Path(env.world.calls_with("gh", "issue", "comment", "1")[-1][-1]).read_text(encoding="utf-8")
+    assert "it changes binary files the size check cannot count: scripts/blob.py" in comment
+    assert "over the bound" not in comment
+    assert digest_section(digest_text(), "Items") == ["- #1: declined (needs-plan: binary files) -- $0.00"]
+    assert digest_section(digest_text(), "Needs a plan") == ["- #1: binary files"]
+
+
+def test_the_digest_lists_a_declined_item_and_the_needs_a_plan_section(env):
+    needs_plan_item(env)
+    text = digest_text()
+    reason = f"{BOUND + 1} > {BOUND} production lines"
+    assert digest_section(text, "Items") == [f"- #1: declined (needs-plan: {reason}) -- $0.00"]
+    assert digest_section(text, "Needs a plan") == [f"- #1: {reason}"]
+    assert "## Needs a plan (1)" in text
+
+
+def test_an_item_that_adds_an_attributes_file_is_stopped_by_the_constitution_before_measurement(env):
+    env.grant()
+    eligible(env, 1)
+    env.world.name_status = "M\tscripts/foo.py\nA\tscripts/x/.gitattributes\n"
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["outcome"], row["failure_kind"]) == ("failed", "constitution")
+    assert env.world.calls_with("git", "check-attr") == []
+    assert env.world.calls_with("git", "diff", "--numstat") == []
+
+
+def git(cwd, *argv):
+    done = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *argv],
+        cwd=cwd, capture_output=True, text=True, check=True,
+    )
+    return done.stdout.strip()
+
+
+def real_item(tmp_path):
+    """A trunk checkout and an item worktree whose one commit adds a 300-line `gen.py` and a
+    `.gitattributes` marking it generated. Returns the Cycle over the trunk, the worktree and its tip."""
+    repo, worktree = tmp_path / "trunk", tmp_path / "item"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    (repo / "keep.py").write_text("x = 1\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "base")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(repo, "worktree", "add", "-q", "-b", "item", str(worktree), "origin/main")
+    (worktree / ".gitattributes").write_text("gen.py linguist-generated=true\n", encoding="utf-8")
+    (worktree / "gen.py").write_text("".join(f"y = {i}\n" for i in range(300)), encoding="utf-8")
+    git(worktree, "add", "-A")
+    git(worktree, "commit", "-q", "-m", "item")
+    cycle = driver.Cycle(
+        driver.Config(repo=repo, temp_root=tmp_path / "wt"), driver.Seams(), "cycle", write=False,
+    )
+    return cycle, worktree, git(worktree, "rev-parse", "HEAD")
+
+
+def test_the_measurement_counts_a_file_the_items_own_attributes_mark_generated(env, tmp_path):
+    cycle, worktree, tip = real_item(tmp_path)
+    measured = cycle.measure_item(worktree, tip)
+    assert "gen.py" in measured.counted_paths
+    assert measured.production_lines == 300
+
+
+def test_the_measurement_reads_the_trusted_checkouts_committed_attributes_not_its_working_tree(env, tmp_path):
+    cycle, worktree, tip = real_item(tmp_path)
+    (cycle.cfg.repo / ".gitattributes").write_text("gen.py linguist-generated=true\n", encoding="utf-8")
+    measured = cycle.measure_item(worktree, tip)
+    assert measured.production_lines == 300
+
+
+def test_the_measurement_reads_the_attributes_at_trunk_not_at_the_checkouts_lagging_head(env, tmp_path):
+    cycle, worktree, tip = real_item(tmp_path)
+    repo = cycle.cfg.repo
+    lagging_head = git(repo, "rev-parse", "HEAD")
+    (repo / ".gitattributes").write_text("gen.py linguist-generated=true\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "trunk marks gen.py generated")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(repo, "reset", "-q", "--hard", lagging_head)
+    measured = cycle.measure_item(worktree, tip)
+    assert "gen.py" not in measured.counted_paths
+    assert measured.production_lines == 0
+
+
+def test_measure_range_runs_the_change_in_repo_and_the_attributes_in_attrs_repo_at_the_source(tmp_path):
+    calls = []
+
+    def runner(repo, argv, stdin):
+        calls.append((repo, argv[:3], stdin))
+        return "3\t0\ta.py\0" if "diff" in argv else "a.py\0linguist-generated\0set\0"
+
+    measured = inline_git.measure_range(
+        tmp_path / "item", "base", "tip", attrs_repo=tmp_path / "trunk", attrs_source="HEAD", runner=runner,
+    )
+    assert measured.production_lines == 0
+    assert [(c[0], c[1][1]) for c in calls] == [(tmp_path / "item", "diff"), (tmp_path / "trunk", "check-attr")]
+    assert calls[1][1][2] == "--source=HEAD" and calls[1][2] == "a.py\0"
+
+
+@pytest.mark.parametrize(
+    "failing, detail",
+    [("--numstat", "git diff: fatal: boom"), ("check-attr", "git check-attr: fatal: boom"),
+     ("merge-base", "git merge-base: fatal: boom")],
+)
+def test_a_failed_measurement_command_fails_the_item_closed_with_no_push_and_no_pull_request(env, failing, detail):
+    env.grant()
+    eligible(env, 1)
+    env.world.failing.append(failing)
+    env.cycle()
+    row = item_rows()[0]
+    assert (row["outcome"], row["failure_kind"]) == ("failed", "infra")
+    assert row["detail"] == detail
+    assert row["pr_url"] is None
+    assert env.world.calls_with("git", "push") == []
+    assert env.world.calls_with("gh", "pr", "create") == []
+    assert env.spawner.of("code-reviewer") == []
+
+
+def test_the_real_runner_passes_stdin_through_and_returns_its_output():
+    done = driver.real_run([sys.executable, "-c", "import sys; print(sys.stdin.read().upper(), end='')"], stdin="abc")
+    assert (done.returncode, done.stdout) == (0, "ABC")
+
+
+def test_the_real_runner_runs_without_stdin():
+    done = driver.real_run([sys.executable, "-c", "print('x', end='')"])
+    assert (done.returncode, done.stdout) == (0, "x")
+
+
+def test_the_real_runner_reports_a_timeout_with_or_without_stdin():
+    sleeper = [sys.executable, "-c", "import time; time.sleep(30)"]
+    for stdin in (None, ""):
+        done = driver.real_run(sleeper, timeout=0.2, stdin=stdin)
+        assert done.returncode == -1
+        assert "timed out after 0.2s" in done.stderr
+
+
+def test_the_real_runner_reports_a_missing_program():
+    done = driver.real_run(["/nonexistent/program"], stdin="x")
+    assert done.returncode == 127
+    assert "FileNotFoundError" in done.stderr
+
+
+def test_the_brief_and_constraints_state_the_bound(env):
+    env.grant()
+    eligible(env, 1)
+    env.cycle()
+    plan = Path(env.plan_of(env.spawner.of("developer")[0]["argv"]))
+    assert f"no more than {BOUND} hand-written production lines" in " ".join(plan.read_text(encoding="utf-8").split())
+    argv = env.spawner.of("developer")[0]["argv"]
+    constraints = Path(argv[argv.index("--constraints") + 1].removeprefix("@")).read_text(encoding="utf-8")
+    assert f"more than {BOUND} hand-written production lines" in constraints
+
+
+def test_the_triage_prompt_carries_the_shared_definition_and_the_bound_and_keeps_its_json_example(env):
+    env.grant()
+    env.world.issues.append(raw_issue(1, labels=("backlog",)))
+    env.cycle()
+    prompt = env.judge.prompts[0]
+    assert inline_class.INLINE_DEFINITION in prompt
+    assert f"small-change-max-lines is {BOUND}." in prompt
+    assert "only inside a checkout of this repository" in prompt
+    assert '[{"issue": <number>, "verdict": "auto-ok" | "auto-no"' in prompt
+    assert '<issue number="1">' in prompt
 
 
 # --- developer return markers -----------------------------------------------------------

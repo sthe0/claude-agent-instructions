@@ -90,8 +90,10 @@ def numstat_argv(base: str, tip: str) -> "list[str]":
     return ["git", "diff", "--numstat", "-z", "-M", base, tip]
 
 
-def check_attr_argv() -> "list[str]":
-    return ["git", "check-attr", "-z", "--stdin", GENERATED_ATTR]
+def check_attr_argv(source: "str | None" = None) -> "list[str]":
+    """`source` reads the attributes from that commit's tree instead of the working tree (git >= 2.40)."""
+    pinned = [] if source is None else [f"--source={source}"]
+    return ["git", "check-attr", *pinned, "-z", "--stdin", GENERATED_ATTR]
 
 
 def check_attr_stdin(changes: "list[Change]") -> str:

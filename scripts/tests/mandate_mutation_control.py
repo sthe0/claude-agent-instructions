@@ -682,6 +682,46 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_exclusion_reasons_are_reported",
         ),
     ),
+    "inline-cycle-gate": Mutant(
+        DRIVER,
+        "        if not inline_class.within_bound(measured, bound):\n",
+        "        if False:\n",
+        _ids(
+            T_CYCLE,
+            "test_a_change_over_the_bound_is_declined_as_needing_a_plan_with_no_pull_request",
+            "test_a_counted_binary_file_declines_the_item_even_when_its_lines_are_few",
+            "test_the_digest_lists_a_declined_item_and_the_needs_a_plan_section",
+        ),
+    ),
+    "inline-cycle-trunk-attrs": Mutant(
+        DRIVER,
+        "attrs_source=f\"{REMOTE}/{TRUNK}\"",
+        "attrs_source=None",
+        _ids(
+            T_CYCLE,
+            "test_the_measurement_reads_the_trusted_checkouts_committed_attributes_not_its_working_tree",
+            "test_the_measurement_reads_the_attributes_at_trunk_not_at_the_checkouts_lagging_head",
+        ),
+    ),
+    "inline-constitution-fixed": Mutant(
+        RULES,
+        'FIXED_CONSTITUTION = (\n    "scripts/agentctl/inline_class.py",\n',
+        'FIXED_CONSTITUTION = ()\n_REMOVED = (\n    "scripts/agentctl/inline_class.py",\n',
+        _ids(
+            T_RULES,
+            "test_the_inline_size_definition_is_protected_whatever_the_mandates_own_list_says"
+            "[scripts:agentctl:exempt_paths.py]",
+            "test_the_inline_size_definition_is_protected_whatever_the_mandates_own_list_says"
+            "[scripts:agentctl:config.py]",
+            "test_the_fixed_entries_name_every_file_the_counted_set_depends_on",
+        ),
+    ),
+    "inline-triage-definition": Mutant(
+        DRIVER,
+        "definition=inline_class.INLINE_DEFINITION",
+        'definition=""',
+        _ids(T_CYCLE, "test_the_triage_prompt_carries_the_shared_definition_and_the_bound_and_keeps_its_json_example"),
+    ),
 }
 
 
