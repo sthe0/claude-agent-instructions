@@ -10344,7 +10344,7 @@ class _FinalEntry:
 def _log_final_events(
     state: SessionState, entries: list[_FinalEntry], *, outcome: str, started: float, peak: int,
 ) -> None:
-    counts = {check_cache.HIT: 0, check_cache.DEDUP: 0, check_cache.MISS: 0}
+    counts = {check_cache.HIT: 0, check_cache.NARROWED: 0, check_cache.DEDUP: 0, check_cache.MISS: 0}
     for e in entries:
         if not e.decision:
             continue
@@ -10390,15 +10390,13 @@ def _evaluate_final_checks_in(
     entries: list[_FinalEntry] = []
     tree_ids: dict[str, str | None] = {}
 
-    def tree_id_for(cwd: str | None) -> str | None:
+    def tree_of(cwd: str | None) -> tuple[str | None, str | None]:
+        """(tree identity, raw tree sha) of a venue, computed once per venue directory."""
         venue = cwd or str(REPO_ROOT)
         if venue not in tree_ids:
             snapshots[venue] = _VenueSnapshot(keep_objects=True)
             tree_ids[venue] = _venue_tree_identity(cwd, runner, snapshots[venue])
-        return tree_ids[venue]
-
-    def tree_sha_for(cwd: str | None) -> str | None:
-        return snapshots[cwd or str(REPO_ROOT)].tree
+        return tree_ids[venue], snapshots[venue].tree
 
     def refuse(check_id: str, cwd: str | None, message: str) -> tuple[list[str], Directive]:
         entries.append(_FinalEntry(
@@ -10444,7 +10442,7 @@ def _evaluate_final_checks_in(
         cwd, refusal = _resolve_final_or_refuse(state, crit)
         if refusal:
             return refuse(check_id, cwd, f"stage {stage.index} verify_command refused: {refusal}")
-        tree_id = tree_id_for(cwd)
+        tree_id, tree_sha = tree_of(cwd)
         definition = _check_definition_digest(crit)
         identity = f"{tree_id}:{definition}" if tree_id is not None else None
         outcome = stage.outcome
@@ -10461,7 +10459,7 @@ def _evaluate_final_checks_in(
             spec=check_cache.CheckSpec(
                 check_id, crit.verify_command, crit.expected_exit, cwd or str(REPO_ROOT), tree_id,
                 cacheable=True, outcome_hit=_cached_check_hit(stage, identity),
-                reads=crit.verify_reads, tree_sha=tree_sha_for(cwd), outcome_base_tree=outcome_base,
+                reads=crit.verify_reads, tree_sha=tree_sha, outcome_base_tree=outcome_base,
             ),
         ))
     for number, fc in enumerate(state.final_check, 1):
@@ -10480,12 +10478,13 @@ def _evaluate_final_checks_in(
         cwd, refusal = _resolve_or_refuse(state, fc.venue)
         if refusal:
             return refuse(check_id, cwd, f"final_check '{fc.label or fc.command}' refused: {refusal}")
+        tree_id, tree_sha = tree_of(cwd)
         entries.append(_FinalEntry(
             check_id, cwd or str(REPO_ROOT), f"final_check '{fc.label or fc.command}'", cwd=cwd,
             spec=check_cache.CheckSpec(
-                check_id, fc.command, fc.expected_exit, cwd or str(REPO_ROOT), tree_id_for(cwd),
+                check_id, fc.command, fc.expected_exit, cwd or str(REPO_ROOT), tree_id,
                 cacheable=fc.cacheable or fc.command in stage_commands,
-                reads=fc.verify_reads, tree_sha=tree_sha_for(cwd),
+                reads=fc.verify_reads, tree_sha=tree_sha,
             ),
         ))
 
@@ -10542,6 +10541,7 @@ def _evaluate_final_checks_in(
             check_cache.store_green(
                 state.check_cache, e.spec.key, at=now, label=e.label,
                 tree=e.spec.tree_sha, definition=e.spec.definition, derived=True,
+                reads=e.spec.reads,
             )
         elif d.decision == check_cache.HIT:
             e.exit_code = None

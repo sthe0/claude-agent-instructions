@@ -48,7 +48,7 @@ Budgeting a round must not legitimize one that a cheaper discriminator would hav
 
 *Difficulty removed:* each whole-suite check re-runs at `verify-final` after any commit, so a plan with several of them multiplies the slowest step of the gate, and a docs-only commit still costs the full suite.
 
-- Declare `verify_reads` (`scripts/agentctl/README.md` § Check venue) only on a **targeted** check, one that runs named tests or a named script and reads no git history; `[]` is a valid declaration. The engine then serves it from an earlier green when the only changes since are `.md` files under `docs/` or `memory-global/` that the check neither declares nor names in its command.
+- Declare `verify_reads` (`scripts/agentctl/README.md` § Check venue) only on a **targeted** check, one that runs named tests or a named script and reads no git history and reads no `docs/` or `memory-global/` Markdown beyond what it declares (the engine cannot see such a read, and a narrowed hit would then miss the change); `[]` is a valid declaration. The engine then serves it from an earlier green when the only changes since are `.md` files under `docs/` or `memory-global/` that the check neither declares nor names in its command.
 - Keep **at most one** whole-suite check per plan (a bare `pytest` over the test root, or `verify-all.py` without `--staged`); `submit-plan` warns on a second distinct one and on a whole-suite check that declares `verify_reads`.
 - A whole-suite check that must stay discriminating after the branch lands pins its base in the command (for this repo `AGENTCTL_SLOW_BASE=<sha>`), so the slow-test selection is the same before and after landing (without a pin it falls back to the merge base with `origin/main`, which changes at landing).
 

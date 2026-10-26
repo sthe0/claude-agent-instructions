@@ -166,6 +166,24 @@ def _docs_change(*paths):
     return {(_tree(A), _tree(B)): list(paths)}
 
 
+@pytest.fixture(params=["stage", "final"])
+def kind(request):
+    """The checked command is a stage's verify_command, or a cacheable [[final_check]]."""
+    return request.param
+
+
+def _scenario(store, sid, kind, command, reads, **kw):
+    """_two_runs over a check of the given kind; returns (second runner, check id)."""
+    if kind == "stage":
+        stages, finals, check_id = [_stage(1, command, reads=reads)], [], "stage:1"
+    else:
+        stages = [_stage(1, "true", reads=reads)]
+        finals = [FinalCheck(command=command, cacheable=True, verify_reads=reads)]
+        check_id = "final_check:1"
+    _, second = _two_runs(store, sid, stages, finals, **kw)
+    return second, check_id
+
+
 # --- the narrowed hit -----------------------------------------------------------------
 
 def test_docs_only_change_outside_the_reads_is_served_narrowed(store):
@@ -262,21 +280,24 @@ def test_no_declaration_keeps_the_stage_two_reason(store):
     ["docs/a.md", "scripts/x.py"],
     ["docs/moved.md", "scripts/moved.md"],
 ], ids=lambda c: "+".join(c))
-def test_a_path_outside_the_allowlist_reruns(store, changed):
-    _, second = _two_runs(store, "n-out", [_stage(1, CMD, reads=[])], diffs=_docs_change(*changed))
-    assert _last_run(store, "n-out")["stage:1"] == ("miss", REFUSED + "path_outside_allowlist")
-    assert second.bash_calls == [CMD]
+def test_a_path_outside_the_allowlist_reruns(store, kind, changed):
+    second, cid = _scenario(store, "n-out", kind, CMD, [], diffs=_docs_change(*changed))
+    assert _last_run(store, "n-out")[cid] == ("miss", REFUSED + "path_outside_allowlist")
+    assert second.bash_calls.count(CMD) == 1
 
 
 @pytest.mark.parametrize("reads, changed", [
     (["docs/guide.md"], "docs/guide.md"),
     (["docs/*.md"], "docs/guide.md"),
+    (["docs/*.md"], "docs/deep/er/guide.md"),
+    (["*.md"], "docs/guide.md"),
     (["docs/**/*.md"], "docs/deep/er/guide.md"),
     (["memory-global/leaves/[ab].md"], "memory-global/leaves/c.md"),
 ])
-def test_a_declared_path_reruns(store, reads, changed):
-    _two_runs(store, "n-decl", [_stage(1, CMD, reads=reads)], diffs=_docs_change(changed))
-    assert _last_run(store, "n-decl")["stage:1"] == ("miss", REFUSED + "path_in_verify_reads")
+def test_a_declared_path_reruns(store, kind, reads, changed):
+    second, cid = _scenario(store, "n-decl", kind, CMD, reads, diffs=_docs_change(changed))
+    assert _last_run(store, "n-decl")[cid] == ("miss", REFUSED + "path_in_verify_reads")
+    assert second.bash_calls.count(CMD) == 1
 
 
 @pytest.mark.parametrize("command, changed", [
@@ -286,30 +307,52 @@ def test_a_declared_path_reruns(store, reads, changed):
     ("ls ./memory-global/leaves", "memory-global/leaves/x.md"),
     ("python3 check.py --root=docs/a", "docs/a/b.md"),
     ("cat 'docs/a b.md'", "docs/a b.md"),
+    ("ls /home/u/repo/docs", "docs/x.md"),
+    ("ls ~/.claude-agent/memory-global", "memory-global/leaves/x.md"),
+    ("wc -l <docs/x.md", "docs/x.md"),
+    ("python3 -c \"open('docs/x.md').read()\"", "docs/x.md"),
+    ("python3 x.py \"*.md\"", "docs/x.md"),
+    ("python3 x.py 'd*'", "docs/x.md"),
+    ("python3 x.py docs/{a,x}.md", "docs/x.md"),
+    ("python3 x.py $ROOT", "docs/x.md"),
+    ("python3 x.py ../docs", "docs/x.md"),
+    ("python3 x.py 'unterminated", "docs/x.md"),
 ])
-def test_a_path_named_in_the_command_reruns(store, command, changed):
-    _two_runs(store, "n-named", [_stage(1, command, reads=[])], diffs=_docs_change(changed))
-    assert _last_run(store, "n-named")["stage:1"] == ("miss", REFUSED + "path_named_in_command")
+def test_a_path_named_in_the_command_reruns(store, kind, command, changed):
+    second, cid = _scenario(store, "n-named", kind, command, [], diffs=_docs_change(changed))
+    assert _last_run(store, "n-named")[cid] == ("miss", REFUSED + "path_named_in_command")
+    assert second.bash_calls.count(command) == 1
 
 
-def test_a_missing_tree_object_reruns(store):
-    _, second = _two_runs(
-        store, "n-missing", [_stage(1, CMD, reads=[])], diffs=_docs_change("docs/a.md"),
-        missing=[_tree(A)],
+@pytest.mark.parametrize("command", ["python3 x.py 'e*'", "python3 x.py tests/*.py", "wc -l <src/x.md"])
+def test_a_command_that_cannot_name_the_path_still_narrows(store, kind, command):
+    second, cid = _scenario(store, "n-unnamed", kind, command, [], diffs=_docs_change("docs/x.md"))
+    assert _last_run(store, "n-unnamed")[cid][0] == "narrowed"
+    assert second.bash_calls.count(command) == 0
+
+
+def test_a_missing_tree_object_reruns(store, kind):
+    second, cid = _scenario(
+        store, "n-missing", kind, CMD, [], diffs=_docs_change("docs/a.md"), missing=[_tree(A)],
     )
-    assert _last_run(store, "n-missing")["stage:1"] == ("miss", REFUSED + "tree_object_missing")
-    assert second.bash_calls == [CMD]
+    assert _last_run(store, "n-missing")[cid] == ("miss", REFUSED + "tree_object_missing")
+    assert second.bash_calls.count(CMD) == 1
 
 
 @pytest.mark.parametrize("diffs", [{(_tree(A), _tree(B)): 128}, {}])
-def test_a_git_failure_reruns(store, diffs):
-    _, second = _two_runs(store, "n-git", [_stage(1, CMD, reads=[])], diffs=diffs)
-    assert _last_run(store, "n-git")["stage:1"] == ("miss", REFUSED + "git_failed")
-    assert second.bash_calls == [CMD]
+def test_a_git_failure_reruns(store, kind, diffs):
+    second, cid = _scenario(store, "n-git", kind, CMD, [], diffs=diffs)
+    assert _last_run(store, "n-git")[cid] == ("miss", REFUSED + "git_failed")
+    assert second.bash_calls.count(CMD) == 1
 
 
-def test_records_without_a_tree_sha_are_no_base(store):
-    _verifying(store, "n-old", [_stage(1, CMD, reads=[])])
+def test_records_without_a_tree_sha_are_no_base(store, kind):
+    stages, finals, cid = (
+        ([_stage(1, CMD, reads=[])], [], "stage:1") if kind == "stage" else
+        ([_stage(1, "true", reads=[])],
+         [FinalCheck(command=CMD, cacheable=True, verify_reads=[])], "final_check:1")
+    )
+    _verifying(store, "n-old", stages, finals)
     _verify(store, "n-old", _Runner(A))
     state = store.load("n-old")
     for entry in state.check_cache.values():
@@ -318,17 +361,22 @@ def test_records_without_a_tree_sha_are_no_base(store):
     _again(store, "n-old")
     second = _Runner(B, diffs=_docs_change("docs/a.md"))
     _verify(store, "n-old", second)
-    assert _last_run(store, "n-old")["stage:1"] == ("miss", REFUSED + "no_candidate")
-    assert second.bash_calls == [CMD]
+    assert _last_run(store, "n-old")[cid] == ("miss", REFUSED + "no_candidate")
+    assert second.bash_calls.count(CMD) == 1
 
 
-def test_a_red_run_is_never_a_base(store):
-    _verifying(store, "n-red", [_stage(1, CMD, reads=[])])
+def test_a_red_run_is_never_a_base(store, kind):
+    stages, finals, cid = (
+        ([_stage(1, CMD, reads=[])], [], "stage:1") if kind == "stage" else
+        ([_stage(1, "true", reads=[])],
+         [FinalCheck(command=CMD, cacheable=True, verify_reads=[])], "final_check:1")
+    )
+    _verifying(store, "n-red", stages, finals)
     _verify(store, "n-red", _Runner(A, exits={CMD: 1}))
     _again(store, "n-red")
     second = _Runner(B, diffs=_docs_change("docs/a.md"))
     _verify(store, "n-red", second)
-    assert _last_run(store, "n-red")["stage:1"] == ("miss", REFUSED + "no_candidate")
+    assert _last_run(store, "n-red")[cid] == ("miss", REFUSED + "no_candidate")
 
 
 def test_a_changed_command_has_no_base(store):
@@ -346,10 +394,148 @@ def test_a_narrowed_green_is_not_itself_a_base(store):
     _two_runs(store, "n-chain", [_stage(1, CMD, reads=[])], diffs=_docs_change("docs/a.md"))
     assert _last_run(store, "n-chain")["stage:1"][0] == "narrowed"
     _again(store, "n-chain")
-    third = _Runner(C, diffs={(_tree(B), _tree(C)): ["docs/b.md"]})
+    third = _Runner(C, diffs={
+        (_tree(A), _tree(C)): ["docs/b.md"],
+        (_tree(B), _tree(C)): ["scripts/x.py"],
+    })
     _verify(store, "n-chain", third)
-    assert _last_run(store, "n-chain")["stage:1"] == ("miss", REFUSED + "git_failed")
+    decision, reason = _last_run(store, "n-chain")["stage:1"]
+    assert decision == "narrowed"
+    assert reason == "narrowed: 1 docs path(s) changed since an earlier green"
+    assert third.bash_calls == []
+
+
+# --- a derived green serves only the declaration it was narrowed under ------------------
+
+def _redeclare(store, sid, reads):
+    state = store.load(sid)
+    state.stages[0].criterion.verify_reads = reads
+    store.save(state)
+
+
+def _third_run_on_the_narrowed_tree(store, sid):
+    _again(store, sid)
+    third = _Runner(B, diffs=_docs_change("docs/a.md"))
+    _verify(store, sid, third)
+    return third
+
+
+def test_a_derived_green_serves_the_same_declaration(store):
+    _two_runs(store, "n-same", [_stage(1, CMD, reads=["docs/g.md"])], diffs=_docs_change("docs/a.md"))
+    third = _third_run_on_the_narrowed_tree(store, "n-same")
+    assert _last_run(store, "n-same")["stage:1"][0] == "hit"
+    assert third.bash_calls == []
+
+
+def test_a_derived_green_does_not_serve_a_declaration_covering_the_change(store):
+    _two_runs(store, "n-redecl", [_stage(1, CMD, reads=["docs/g.md"])], diffs=_docs_change("docs/a.md"))
+    _redeclare(store, "n-redecl", ["docs/a.md"])
+    third = _third_run_on_the_narrowed_tree(store, "n-redecl")
+    assert _last_run(store, "n-redecl")["stage:1"] == ("miss", REFUSED + "path_in_verify_reads")
     assert third.bash_calls == [CMD]
+
+
+def test_a_dropped_declaration_reruns_on_the_narrowed_tree(store):
+    _two_runs(store, "n-drop", [_stage(1, CMD, reads=[])], diffs=_docs_change("docs/a.md"))
+    _redeclare(store, "n-drop", None)
+    third = _third_run_on_the_narrowed_tree(store, "n-drop")
+    assert _last_run(store, "n-drop")["stage:1"] == ("miss", "no_cached_green")
+    assert third.bash_calls == [CMD]
+
+
+def test_a_changed_declaration_is_narrowed_again_from_the_real_base(store):
+    _two_runs(store, "n-renarrow", [_stage(1, CMD, reads=[])], diffs=_docs_change("docs/a.md"))
+    _redeclare(store, "n-renarrow", ["docs/other.md"])
+    _again(store, "n-renarrow")
+    third = _Runner(B, diffs=_docs_change("docs/a.md"))
+    _verify(store, "n-renarrow", third)
+    assert _last_run(store, "n-renarrow")["stage:1"][0] == "narrowed"
+    assert third.bash_calls == []
+
+
+# --- dedup never crosses declarations ---------------------------------------------------
+
+def test_an_undeclared_check_is_not_deduplicated_with_a_declared_twin(store):
+    final = FinalCheck(command=CMD, cacheable=True)
+    _, second = _two_runs(
+        store, "n-dedup", [_stage(1, CMD, reads=[])], [final], diffs=_docs_change("docs/a.md"),
+    )
+    run = _last_run(store, "n-dedup")
+    assert run["stage:1"][0] == "narrowed"
+    assert run["final_check:1"][0] == "miss"
+    assert second.bash_calls == [CMD]
+
+
+def test_twins_with_the_same_declaration_are_still_deduplicated(store):
+    final = FinalCheck(command=CMD, cacheable=True, verify_reads=[])
+    _, second = _two_runs(
+        store, "n-dedup-same", [_stage(1, CMD, reads=[])], [final], diffs=_docs_change("docs/a.md"),
+    )
+    run = _last_run(store, "n-dedup-same")
+    assert run["stage:1"][0] == "narrowed"
+    assert run["final_check:1"][0] == "dedup"
+    assert second.bash_calls == []
+
+
+# --- against a real git repository ------------------------------------------------------
+
+def _git(repo, *args):
+    import subprocess
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(repo), *args],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+@pytest.fixture
+def real_repo(tmp_path, monkeypatch):
+    for name in [n for n in __import__("os").environ if n.startswith("GIT_")]:
+        monkeypatch.delenv(name)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    for rel in ("scripts/a.md", "docs/x.md", "docs/y.md"):
+        (repo / rel).parent.mkdir(exist_ok=True)
+        (repo / rel).write_text(f"{rel}\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    return repo, _git(repo, "rev-parse", "HEAD^{tree}")
+
+
+def _narrow_in(repo, base_tree):
+    """check_cache.narrow for a docs-declaring check whose earlier green is `base_tree`."""
+    snapshot = cli._VenueSnapshot(keep_objects=True)
+    try:
+        assert cli._venue_tree_identity(str(repo), None, snapshot) is not None
+        spec = check_cache.CheckSpec(
+            "stage:1", CMD, 0, str(repo), "id", cacheable=True, reads=[], tree_sha=snapshot.tree,
+        )
+        cache = {"k": {"at": 1.0, "tree": base_tree, "def": spec.definition}}
+        return check_cache.narrow(spec, cache, cli._GitTreeProbe(snapshot))
+    finally:
+        snapshot.close()
+
+
+def test_a_rename_out_of_the_allowlist_is_refused_in_a_real_repo(real_repo):
+    repo, base_tree = real_repo
+    _git(repo, "mv", "scripts/a.md", "docs/a.md")
+    assert _narrow_in(repo, base_tree) == (False, REFUSED + "path_outside_allowlist")
+
+
+def test_a_docs_edit_of_the_working_tree_is_narrowed_in_a_real_repo(real_repo):
+    repo, base_tree = real_repo
+    (repo / "docs" / "x.md").write_text("edited\n")
+    (repo / "docs" / "new.md").write_text("new\n")
+    narrowed, reason = _narrow_in(repo, base_tree)
+    assert narrowed, reason
+    assert reason == "narrowed: 2 docs path(s) changed since an earlier green"
+
+
+def test_a_code_edit_of_the_working_tree_is_refused_in_a_real_repo(real_repo):
+    repo, base_tree = real_repo
+    (repo / "docs" / "x.md").write_text("edited\n")
+    (repo / "scripts" / "run.py").write_text("print(1)\n")
+    assert _narrow_in(repo, base_tree) == (False, REFUSED + "path_outside_allowlist")
 
 
 # --- the pure helpers -------------------------------------------------------------------
@@ -377,7 +563,11 @@ def test_allowlist_is_closed(path, expected):
 
 @pytest.mark.parametrize("path, patterns, expected", [
     ("docs/a.md", ["docs/*.md"], True),
-    ("docs/x/a.md", ["docs/*.md"], False),
+    ("docs/x/a.md", ["docs/*.md"], True),
+    ("docs/x.md", ["*.md"], True),
+    ("memory-global/leaves/x.md", ["*"], True),
+    ("docs/x.md", ["*.txt"], False),
+    ("docs/x.md", ["scripts/*.md"], False),
     ("docs/x/a.md", ["docs/**/*.md"], True),
     ("docs/a.md", ["docs/**/*.md"], True),
     ("docs/a.md", ["docs/a.md"], True),

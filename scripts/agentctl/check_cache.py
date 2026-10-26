@@ -75,27 +75,36 @@ class Decision:
 
 def decide(specs: list[CheckSpec], cache: Mapping[str, object]) -> list[Decision]:
     """Per spec, in order: serve from a cache, repeat an earlier spec of this run, or run."""
-    first_by_key: dict[str, CheckSpec] = {}
+    first_by_group: dict[tuple, CheckSpec] = {}
     decisions: list[Decision] = []
     for spec in specs:
         key = spec.key
         if key is None:
             decisions.append(Decision(spec, MISS, "identity_unavailable"))
             continue
-        if key in first_by_key:
-            earlier = first_by_key[key]
+        group = (key, None if spec.reads is None else tuple(spec.reads))
+        if group in first_by_group:
+            earlier = first_by_group[group]
             decisions.append(Decision(spec, DEDUP, f"same_as:{earlier.id}", earlier.id))
             continue
-        first_by_key[key] = spec
+        first_by_group[group] = spec
         if spec.outcome_hit:
             decisions.append(Decision(spec, HIT, "stage_outcome"))
         elif not spec.cacheable:
             decisions.append(Decision(spec, MISS, "not_cacheable"))
-        elif key in cache:
+        elif key in cache and _serves(cache[key], spec):
             decisions.append(Decision(spec, HIT, "session_cache"))
         else:
             decisions.append(Decision(spec, MISS, "no_cached_green"))
     return decisions
+
+
+def _serves(entry: object, spec: CheckSpec) -> bool:
+    """A real green serves any check of its key; a derived (narrowed) one only a check that
+    declares the very `verify_reads` it was narrowed under."""
+    if not isinstance(entry, dict) or not entry.get("derived"):
+        return True
+    return spec.reads is not None and entry.get("reads") == spec.reads
 
 
 def definition_key(venue: str, command: str, expected_exit: int) -> str:
@@ -105,6 +114,7 @@ def definition_key(venue: str, command: str, expected_exit: int) -> str:
 def store_green(
     cache: dict, key: str, *, at: float, label: str,
     tree: str | None = None, definition: str | None = None, derived: bool = False,
+    reads: list[str] | None = None,
 ) -> None:
     entry: dict = {"at": at, "label": label}
     if tree is not None:
@@ -112,6 +122,7 @@ def store_green(
         entry["def"] = definition
     if derived:
         entry["derived"] = True
+        entry["reads"] = list(reads) if reads is not None else None
     cache[key] = entry
     if len(cache) > CACHE_MAX_ENTRIES:
         oldest = sorted(cache, key=lambda k: cache[k].get("at", 0.0))
@@ -170,14 +181,11 @@ def _glob_regex(pattern: str) -> re.Pattern:
         if pattern.startswith("**/", i):
             out.append("(?:.*/)?")
             i += 3
-        elif pattern.startswith("**", i):
-            out.append(".*")
-            i += 2
         elif ch == "*":
-            out.append("[^/]*")
+            out.append(".*")
             i += 1
         elif ch == "?":
-            out.append("[^/]")
+            out.append(".")
             i += 1
         elif ch == "[":
             end = pattern.find("]", i + 2)
@@ -197,8 +205,9 @@ def _glob_regex(pattern: str) -> re.Pattern:
 
 def reads_match(path: str, patterns: list[str]) -> bool:
     """True when `path` may be among the files the declared `patterns` name. Over-approximates:
-    a directory pattern covers everything under it, and a bracket class is matched by
-    its literal directory prefix alone."""
+    `*` matches any run of characters including `/` and `?` any one character (fnmatch
+    style), a directory pattern covers everything under it, and a bracket class is matched
+    by its literal directory prefix alone."""
     for raw in patterns:
         pattern = raw[2:] if raw.startswith("./") else raw
         if pattern in ("", ".", "./"):
@@ -217,9 +226,15 @@ def reads_match(path: str, patterns: list[str]) -> bool:
 
 
 def names_path(command: str, path: str) -> bool:
-    """True when `command` may name `path`, or a directory containing it, as an argument.
-    Any word that cannot be resolved to a repo-relative path (a variable, a `..`) counts
-    as naming it."""
+    """True when `command` may name `path`, or a directory containing it, anywhere. Any
+    ancestor prefix of `path` (`docs`, `docs/a`, `docs/a/x.md`) occurring as a substring
+    of the command, a word that is a glob matching one of those prefixes, and any word
+    that cannot be resolved to a repo-relative path (a variable, a `..`) count as naming
+    it, whatever shell form carries the name (absolute path, `~`, redirection, code)."""
+    parts = path.split("/")
+    prefixes = ["/".join(parts[:n]) for n in range(1, len(parts) + 1)]
+    if any(prefix in command for prefix in prefixes):
+        return True
     try:
         words = shlex.split(command)
     except ValueError:
@@ -227,6 +242,13 @@ def names_path(command: str, path: str) -> bool:
     for word in words:
         if any(c in word for c in "$`") or ".." in word.split("/"):
             return True
+        if any(c in word for c in "*?["):
+            glob = word[2:] if word.startswith("./") else word
+            if any(
+                _glob_regex(alt).fullmatch(prefix)
+                for alt in _expand_braces(glob) for prefix in prefixes
+            ):
+                return True
         for piece in re.split(r"[=:,]", word) + [word]:
             if not piece:
                 continue

@@ -470,7 +470,7 @@ def test_r7_pass_appends_one_check_event_per_check_and_a_run_event(store):
     run = _events(store, "r7-pass", "verify_final_run")
     assert len(run) == 1
     assert run[0]["outcome"] == "passed"
-    assert run[0]["counts"] == {"hit": 0, "dedup": 0, "miss": 2}
+    assert run[0]["counts"] == {"hit": 0, "narrowed": 0, "dedup": 0, "miss": 2}
     assert run[0]["parallelism"] == 1
     assert run[0]["duration_s"] >= 0
     assert len(_events(store, "r7-pass", "verify_final")) == 1
@@ -499,11 +499,11 @@ def test_r7_cache_hit_and_dedup_are_reported_with_counts(store):
     _verifying(store, "r7-counts", ["pytest -q", "pytest -q"], [FinalCheck(command="pytest -q")])
     _verify(store, "r7-counts", _Runner())
     run = _events(store, "r7-counts", "verify_final_run")[-1]
-    assert run["counts"] == {"hit": 0, "dedup": 2, "miss": 1}
+    assert run["counts"] == {"hit": 0, "narrowed": 0, "dedup": 2, "miss": 1}
     _again(store, "r7-counts")
     _verify(store, "r7-counts", _Runner())
     run = _events(store, "r7-counts", "verify_final_run")[-1]
-    assert run["counts"] == {"hit": 1, "dedup": 2, "miss": 0}
+    assert run["counts"] == {"hit": 1, "narrowed": 0, "dedup": 2, "miss": 0}
 
 
 def test_r7_hit_records_no_exit_and_dedup_keeps_the_copied_exit(store):

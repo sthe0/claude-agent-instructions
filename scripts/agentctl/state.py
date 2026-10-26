@@ -2662,7 +2662,7 @@ class SessionState:
     # session no engine-linked parent spawned.
     parent_link: dict | None = None
     # verify-final's green-check cache: {check_cache.check_key(...): {"at", "label"}
-    # plus, for the verify_reads narrowed lookup, "tree", "defn" and "derived"}.
+    # plus, for the verify_reads narrowed lookup, "tree", "def", "derived" and, on a derived entry, the "reads" it was narrowed under}.
     # Only green results are stored; absent in older states (defaults to {}), so the
     # schema version is unchanged.
     check_cache: dict = field(default_factory=dict)
