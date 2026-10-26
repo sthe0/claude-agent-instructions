@@ -93,6 +93,7 @@ from .plan import (
     cost_tier_floor_advisories,
     final_check_duplicate_warnings,
     verify_command_scope_warnings,
+    whole_suite_warnings,
     _derive_stage_grants,
     _venue_for,
 )
@@ -2217,7 +2218,44 @@ def _verify_command_result(stage, runner: Runner | None, cwd: str | None = None)
 _VENUE_IDENTITY_GIT_TIMEOUT_S = 30
 
 
-def _venue_tree_identity(cwd: str | None, runner: Runner | None) -> str | None:
+class _VenueSnapshot:
+    """Out-parameter of `_venue_tree_identity`: the raw tree sha it computed and, when
+    `keep_objects` is set, the throwaway object directory holding that tree, left
+    in place so `TreeProbe` can read it until `close()`."""
+
+    def __init__(self, keep_objects: bool = False):
+        self.keep_objects = keep_objects
+        self.tree: str | None = None
+        self.tmp_dir: str | None = None
+        self.env_argv: list[str] | None = None
+        self.run: Runner | None = None
+
+    def close(self) -> None:
+        tmp_dir, self.tmp_dir = self.tmp_dir, None
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+class _GitTreeProbe(check_cache.TreeProbe):
+    def __init__(self, snapshot: _VenueSnapshot):
+        self._run = snapshot.run
+        self._env_argv = snapshot.env_argv
+
+    def tree_exists(self, tree: str) -> bool:
+        return self._run(self._env_argv + ["cat-file", "-e", f"{tree}^{{tree}}"]).returncode == 0
+
+    def changed_paths(self, old: str, new: str) -> list[str] | None:
+        found = self._run(
+            self._env_argv + ["diff-tree", "-r", "-z", "--name-only", "--no-renames", old, new]
+        )
+        if found.returncode != 0:
+            return None
+        return [p for p in (found.stdout or "").split("\0") if p]
+
+
+def _venue_tree_identity(
+    cwd: str | None, runner: Runner | None, snapshot: _VenueSnapshot | None = None,
+) -> str | None:
     """Digest identifying the current state of a verify_command's venue: HEAD sha
     plus the tree sha `git write-tree` would produce from a full `git add -A` of
     the working tree — computed entirely by git itself, in a disposable INDEX
@@ -2274,6 +2312,10 @@ def _venue_tree_identity(cwd: str | None, runner: Runner | None) -> str | None:
     the temp index ends up containing a gitlink. `cwd=None` mirrors
     _verify_command_result's own default: the venue is plain repo_root.
 
+    `snapshot`, when given, receives the raw tree sha; with `keep_objects` it also
+    takes over the throwaway directory (the caller `close()`s it), which is the only
+    place a dirty tree's objects exist.
+
     One consequence of the gitlink refusal worth naming: in a checkout whose
     untracked tree itself contains linked worktrees or embedded repos (e.g. the
     canonical checkout with its `.claude/worktrees/*` subtrees), `add -A` stages
@@ -2326,8 +2368,14 @@ def _venue_tree_identity(cwd: str | None, runner: Runner | None) -> str | None:
         tree = run(env_argv + ["write-tree"])
         if tree.returncode != 0 or not tree.stdout.strip():
             return None
+        if snapshot is not None:
+            snapshot.tree = tree.stdout.strip()
+            if snapshot.keep_objects:
+                snapshot.tmp_dir, snapshot.env_argv, snapshot.run = tmp_dir, env_argv, run
+                tmp_dir = None
     finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
     digest = hashlib.sha256()
     digest.update(head.stdout.strip().encode("utf-8"))
     digest.update(b"\x00")
@@ -4829,6 +4877,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     d.data.setdefault("advisories", []).extend(
         verify_command_scope_warnings(doc.stages, doc.meta.final_check)
     )
+    d.data["advisories"].extend(whole_suite_warnings(doc.stages, doc.meta.final_check))
     # Duplicate final_check lint (issue #141) — warn when a final_check command
     # is byte-identical (whitespace-normalized) to a stage verify_command; that
     # pair makes verify-final run the command twice with no intervening state
@@ -10006,7 +10055,8 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
             # stage's own status on any carry-key change, but never touched these
             # two fields, so an unchanged tree + an edited control used to replay
             # a stale cache hit straight past the (now different) control.
-            tree_identity = _venue_tree_identity(cwd, runner) if has_check else None
+            venue_snapshot = _VenueSnapshot()
+            tree_identity = _venue_tree_identity(cwd, runner, venue_snapshot) if has_check else None
             identity = (
                 f"{tree_identity}:{_check_definition_digest(crit)}"
                 if tree_identity is not None else None
@@ -10026,6 +10076,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 stage.outcome.actual = actual
                 if identity is not None:
                     stage.outcome.checked_tree_identity = identity
+                    stage.outcome.checked_tree_sha = venue_snapshot.tree
                     stage.outcome.checked_tree_ok = False
             elif not cache_hit and has_check and crit.negative_control:
                 # The positive check just went green -- now prove it CAN go red.
@@ -10064,11 +10115,13 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                     )
                     if identity is not None:
                         stage.outcome.checked_tree_identity = identity
+                        stage.outcome.checked_tree_sha = venue_snapshot.tree
                         stage.outcome.checked_tree_ok = False
                 else:
                     state.log("negative_control_discriminates", stage=stage.index)
                     if identity is not None:
                         stage.outcome.checked_tree_identity = identity
+                        stage.outcome.checked_tree_sha = venue_snapshot.tree
                         stage.outcome.checked_tree_ok = True
             elif not cache_hit:
                 # Neither branch above fired: no negative_control to run (a
@@ -10083,6 +10136,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                     )
                 if identity is not None:
                     stage.outcome.checked_tree_identity = identity
+                    stage.outcome.checked_tree_sha = venue_snapshot.tree
                     stage.outcome.checked_tree_ok = True
 
     # Cheap-judge COGNITION + PURE gate (runs AFTER the mechanical check above, so
@@ -10294,7 +10348,7 @@ def _log_final_events(
     for e in entries:
         if not e.decision:
             continue
-        counts[e.decision] += 1
+        counts[e.decision] = counts.get(e.decision, 0) + 1
         state.log(
             "verify_final_check", check=e.check_id, venue=e.venue, decision=e.decision,
             reason=e.reason, duration_s=round(e.duration_s, 3), exit=e.exit_code,
@@ -10312,13 +10366,26 @@ def _evaluate_final_checks(
     """Evaluate every measurable stage's verify_command, then every final_check, in
     three phases. Plan: resolve venues, run landed checks, take each venue's tree
     identity once, and decide per check (check_cache.decide) whether a cache serves it,
-    an earlier check of this run covers it, or it must run. Run: the remaining checks,
-    concurrently under the cap and worker budget when the real runner is in use.
-    Record: results in check order, greens into the session cache, the
-    verify_final_check / verify_final_run events.
+    an earlier check of this run covers it, or it must run; a check that declared
+    `verify_reads` and missed the exact cache gets a narrowed lookup
+    (check_cache.narrow_misses). Run: the remaining checks, concurrently under the cap
+    and worker budget when the real runner is in use. Record: results in check order,
+    greens into the session cache, the verify_final_check / verify_final_run events.
 
     Returns (failures, None), or ([], Directive) when a venue is refused — the
     caller returns that directive as is."""
+    snapshots: dict[str, _VenueSnapshot] = {}
+    try:
+        return _evaluate_final_checks_in(state, store, runner, div, snapshots)
+    finally:
+        for snapshot in snapshots.values():
+            snapshot.close()
+
+
+def _evaluate_final_checks_in(
+    state: SessionState, store: StateStore, runner: Runner | None,
+    div: effort.Divergence | None, snapshots: dict[str, _VenueSnapshot],
+) -> tuple[list[str], Directive | None]:
     started = time.monotonic()
     entries: list[_FinalEntry] = []
     tree_ids: dict[str, str | None] = {}
@@ -10326,8 +10393,12 @@ def _evaluate_final_checks(
     def tree_id_for(cwd: str | None) -> str | None:
         venue = cwd or str(REPO_ROOT)
         if venue not in tree_ids:
-            tree_ids[venue] = _venue_tree_identity(cwd, runner)
+            snapshots[venue] = _VenueSnapshot(keep_objects=True)
+            tree_ids[venue] = _venue_tree_identity(cwd, runner, snapshots[venue])
         return tree_ids[venue]
+
+    def tree_sha_for(cwd: str | None) -> str | None:
+        return snapshots[cwd or str(REPO_ROOT)].tree
 
     def refuse(check_id: str, cwd: str | None, message: str) -> tuple[list[str], Directive]:
         entries.append(_FinalEntry(
@@ -10374,13 +10445,23 @@ def _evaluate_final_checks(
         if refusal:
             return refuse(check_id, cwd, f"stage {stage.index} verify_command refused: {refusal}")
         tree_id = tree_id_for(cwd)
-        identity = f"{tree_id}:{_check_definition_digest(crit)}" if tree_id is not None else None
+        definition = _check_definition_digest(crit)
+        identity = f"{tree_id}:{definition}" if tree_id is not None else None
+        outcome = stage.outcome
+        same_venue = cwd == state.resolve_check_venue(crit.verify_venue)
+        outcome_base = (
+            outcome.checked_tree_sha
+            if outcome.checked_tree_ok is True and same_venue
+            and (outcome.checked_tree_identity or "").endswith(f":{definition}")
+            else None
+        )
         entries.append(_FinalEntry(
             check_id, cwd or str(REPO_ROOT), f"stage {stage.index}", cwd=cwd,
             fail_tail=f"({crit.verify_command})",
             spec=check_cache.CheckSpec(
                 check_id, crit.verify_command, crit.expected_exit, cwd or str(REPO_ROOT), tree_id,
                 cacheable=True, outcome_hit=_cached_check_hit(stage, identity),
+                reads=crit.verify_reads, tree_sha=tree_sha_for(cwd), outcome_base_tree=outcome_base,
             ),
         ))
     for number, fc in enumerate(state.final_check, 1):
@@ -10404,11 +10485,19 @@ def _evaluate_final_checks(
             spec=check_cache.CheckSpec(
                 check_id, fc.command, fc.expected_exit, cwd or str(REPO_ROOT), tree_id_for(cwd),
                 cacheable=fc.cacheable or fc.command in stage_commands,
+                reads=fc.verify_reads, tree_sha=tree_sha_for(cwd),
             ),
         ))
 
-    decided = {d.spec.id: d for d in check_cache.decide(
-        [e.spec for e in entries if e.spec is not None], state.check_cache,
+    def probe_for(spec: check_cache.CheckSpec) -> check_cache.TreeProbe | None:
+        snapshot = snapshots.get(spec.venue)
+        if snapshot is None or snapshot.env_argv is None:
+            return None
+        return _GitTreeProbe(snapshot)
+
+    decided = {d.spec.id: d for d in check_cache.narrow_misses(
+        check_cache.decide([e.spec for e in entries if e.spec is not None], state.check_cache),
+        state.check_cache, probe_for,
     )}
     to_run = [e for e in entries if e.spec is not None and decided[e.spec.id].decision == check_cache.MISS]
 
@@ -10444,7 +10533,16 @@ def _evaluate_final_checks(
             if e.error:
                 e.reason = f"raised: {e.error}"
             if e.ok and e.spec.key is not None and e.spec.cacheable:
-                check_cache.store_green(state.check_cache, e.spec.key, at=now, label=e.label)
+                check_cache.store_green(
+                    state.check_cache, e.spec.key, at=now, label=e.label,
+                    tree=e.spec.tree_sha, definition=e.spec.definition,
+                )
+        elif d.decision == check_cache.NARROWED:
+            e.exit_code = None
+            check_cache.store_green(
+                state.check_cache, e.spec.key, at=now, label=e.label,
+                tree=e.spec.tree_sha, definition=e.spec.definition, derived=True,
+            )
         elif d.decision == check_cache.HIT:
             e.exit_code = None
         else:

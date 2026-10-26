@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import re
+import shlex
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
@@ -48,12 +50,19 @@ class CheckSpec:
     tree_id: str | None
     cacheable: bool
     outcome_hit: bool = False
+    reads: list[str] | None = None
+    tree_sha: str | None = None
+    outcome_base_tree: str | None = None
 
     @property
     def key(self) -> str | None:
         if self.tree_id is None:
             return None
         return check_key(self.venue, self.tree_id, self.command, self.expected_exit)
+
+    @property
+    def definition(self) -> str:
+        return definition_key(self.venue, self.command, self.expected_exit)
 
 
 @dataclass
@@ -89,12 +98,207 @@ def decide(specs: list[CheckSpec], cache: Mapping[str, object]) -> list[Decision
     return decisions
 
 
-def store_green(cache: dict, key: str, *, at: float, label: str) -> None:
-    cache[key] = {"at": at, "label": label}
+def definition_key(venue: str, command: str, expected_exit: int) -> str:
+    return check_key(venue, "", command, expected_exit)
+
+
+def store_green(
+    cache: dict, key: str, *, at: float, label: str,
+    tree: str | None = None, definition: str | None = None, derived: bool = False,
+) -> None:
+    entry: dict = {"at": at, "label": label}
+    if tree is not None:
+        entry["tree"] = tree
+        entry["def"] = definition
+    if derived:
+        entry["derived"] = True
+    cache[key] = entry
     if len(cache) > CACHE_MAX_ENTRIES:
         oldest = sorted(cache, key=lambda k: cache[k].get("at", 0.0))
         for stale in oldest[: len(cache) - CACHE_MAX_ENTRIES]:
             del cache[stale]
+
+
+NARROWED = "narrowed"
+REFUSED = "narrow_refused:"
+ALLOWLIST_ROOTS = ("docs/", "memory-global/")
+ALLOWLIST_SUFFIX = ".md"
+
+
+def allowlisted(path: str) -> bool:
+    """A path whose change a declared-`verify_reads` check is allowed to ignore: a Markdown
+    file under docs/ or memory-global/. A closed constant, not configuration."""
+    if path.startswith("/") or ".." in path.split("/"):
+        return False
+    name = path.rsplit("/", 1)[-1]
+    return path.startswith(ALLOWLIST_ROOTS) and name.endswith(ALLOWLIST_SUFFIX) and name != ALLOWLIST_SUFFIX
+
+
+def _expand_braces(pattern: str) -> list[str]:
+    start = pattern.find("{")
+    if start < 0:
+        return [pattern]
+    depth = 0
+    for i in range(start, len(pattern)):
+        if pattern[i] == "{":
+            depth += 1
+        elif pattern[i] == "}":
+            depth -= 1
+            if depth == 0:
+                parts, level, cut = [], 0, start + 1
+                for j in range(start + 1, i):
+                    if pattern[j] == "{":
+                        level += 1
+                    elif pattern[j] == "}":
+                        level -= 1
+                    elif pattern[j] == "," and level == 0:
+                        parts.append(pattern[cut:j])
+                        cut = j + 1
+                parts.append(pattern[cut:i])
+                return [
+                    expanded
+                    for part in parts
+                    for expanded in _expand_braces(pattern[:start] + part + pattern[i + 1:])
+                ]
+    return [pattern]
+
+
+def _glob_regex(pattern: str) -> re.Pattern:
+    out, i = [], 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif ch == "*":
+            out.append("[^/]*")
+            i += 1
+        elif ch == "?":
+            out.append("[^/]")
+            i += 1
+        elif ch == "[":
+            end = pattern.find("]", i + 2)
+            if end < 0:
+                out.append(re.escape(ch))
+                i += 1
+            else:
+                body = pattern[i + 1:end]
+                body = "^" + body[1:] if body[:1] in ("!", "^") else body
+                out.append("[" + body.replace("\\", "\\\\") + "]")
+                i = end + 1
+        else:
+            out.append(re.escape(ch))
+            i += 1
+    return re.compile("".join(out))
+
+
+def reads_match(path: str, patterns: list[str]) -> bool:
+    """True when `path` may be among the files the declared `patterns` name. Over-approximates:
+    a directory pattern covers everything under it, and a bracket class is matched by
+    its literal directory prefix alone."""
+    for raw in patterns:
+        pattern = raw[2:] if raw.startswith("./") else raw
+        if pattern in ("", ".", "./"):
+            return True
+        classes = [pattern.index(c) for c in "[]" if c in pattern]
+        if classes:
+            prefix = pattern[:min(classes)]
+            if path.startswith(prefix[:prefix.rfind("/") + 1]):
+                return True
+        directory = pattern.rstrip("/")
+        if path == directory or path.startswith(directory + "/"):
+            return True
+        if any(_glob_regex(alt).fullmatch(path) for alt in _expand_braces(pattern)):
+            return True
+    return False
+
+
+def names_path(command: str, path: str) -> bool:
+    """True when `command` may name `path`, or a directory containing it, as an argument.
+    Any word that cannot be resolved to a repo-relative path (a variable, a `..`) counts
+    as naming it."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return True
+    for word in words:
+        if any(c in word for c in "$`") or ".." in word.split("/"):
+            return True
+        for piece in re.split(r"[=:,]", word) + [word]:
+            if not piece:
+                continue
+            while piece.startswith("./") and len(piece) > 2:
+                piece = piece[2:]
+            if piece in (".", "./"):
+                return True
+            if reads_match(path, [piece]):
+                return True
+    return False
+
+
+class TreeProbe:
+    """What the narrowed lookup asks git: whether a tree object is readable, and which
+    paths differ between two trees (None: git failed)."""
+
+    def tree_exists(self, tree: str) -> bool:
+        raise NotImplementedError
+
+    def changed_paths(self, old: str, new: str) -> list[str] | None:
+        raise NotImplementedError
+
+
+def narrow(spec: CheckSpec, cache: Mapping[str, dict], probe: TreeProbe) -> tuple[bool, str]:
+    """Whether `spec` — which declared `verify_reads` and missed the exact cache — may be
+    served from the newest earlier green of the same command in the same venue, and why
+    not otherwise. Served only if every path changed since is allowlisted and neither
+    declared in `reads` nor named in the command; every doubt is a refusal."""
+    if spec.reads is None or spec.tree_sha is None:
+        return False, REFUSED + "no_candidate"
+    base = None
+    candidates = [
+        e for e in cache.values()
+        if e.get("def") == spec.definition and e.get("tree") and not e.get("derived")
+    ]
+    if candidates:
+        base = max(candidates, key=lambda e: e.get("at", 0.0))["tree"]
+    elif spec.outcome_base_tree:
+        base = spec.outcome_base_tree
+    if base is None:
+        return False, REFUSED + "no_candidate"
+    if not probe.tree_exists(base):
+        return False, REFUSED + "tree_object_missing"
+    changed = probe.changed_paths(base, spec.tree_sha)
+    if changed is None:
+        return False, REFUSED + "git_failed"
+    if not all(allowlisted(p) for p in changed):
+        return False, REFUSED + "path_outside_allowlist"
+    if any(reads_match(p, spec.reads) for p in changed):
+        return False, REFUSED + "path_in_verify_reads"
+    if any(names_path(spec.command, p) for p in changed):
+        return False, REFUSED + "path_named_in_command"
+    return True, f"{NARROWED}: {len(changed)} docs path(s) changed since an earlier green"
+
+
+def narrow_misses(
+    decisions: list[Decision], cache: Mapping[str, dict], probe_for: Callable[[CheckSpec], TreeProbe | None],
+) -> list[Decision]:
+    """Re-decide the exact misses of specs that declared `verify_reads`: `narrowed` when
+    `narrow` allows it, else the same miss with the refusal as its reason."""
+    out: list[Decision] = []
+    for d in decisions:
+        if d.decision != MISS or d.reason != "no_cached_green" or d.spec.reads is None:
+            out.append(d)
+            continue
+        try:
+            probe = probe_for(d.spec)
+            ok, reason = narrow(d.spec, cache, probe) if probe is not None else (False, REFUSED + "git_failed")
+        except Exception:
+            ok, reason = False, REFUSED + "git_failed"
+        out.append(Decision(d.spec, NARROWED if ok else MISS, reason))
+    return out
 
 
 def pytest_weight(command: str, cpu_count: int) -> int:

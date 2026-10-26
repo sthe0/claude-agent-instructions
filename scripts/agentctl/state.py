@@ -1620,6 +1620,10 @@ class Criterion:
     # gone green, and treats a matching exit code as the stage NOT passing.
     negative_control: str | None = None
     negative_control_waiver: str | None = None
+    # Opt-in narrowed lookup in the verify-final check cache: the repo paths/globs
+    # this check reads ([] for none), declaring that it reads no git history. None
+    # (the default) opts out. See check_cache.narrow.
+    verify_reads: list[str] | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Criterion":
@@ -1710,6 +1714,8 @@ class FinalCheck:
     # flag extends it to any other command the author vouches is a pure function of
     # the venue tree.
     cacheable: bool = False
+    # see Criterion.verify_reads.
+    verify_reads: list[str] | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "FinalCheck":
@@ -2010,6 +2016,9 @@ class Outcome:
     # load unchanged.
     checked_tree_identity: str | None = None
     checked_tree_ok: bool | None = None
+    # The raw git tree sha behind `checked_tree_identity` (which hashes it with HEAD),
+    # the base a verify_reads narrowed lookup diffs against. None on older records.
+    checked_tree_sha: str | None = None
     # Unconditional per-stage attempt counter: incremented on every
     # record-result call regardless of outcome, so a diagnosing session can see every
     # attempt made against this stage, including ones a gate blocked before any
@@ -2652,7 +2661,8 @@ class SessionState:
     # stage_index, kind, norm_digest, norm, grants, depth, norm_lineage}. None for a
     # session no engine-linked parent spawned.
     parent_link: dict | None = None
-    # verify-final's green-check cache: {check_cache.check_key(...): {"at", "label"}}.
+    # verify-final's green-check cache: {check_cache.check_key(...): {"at", "label"}
+    # plus, for the verify_reads narrowed lookup, "tree", "defn" and "derived"}.
     # Only green results are stored; absent in older states (defaults to {}), so the
     # schema version is unchanged.
     check_cache: dict = field(default_factory=dict)

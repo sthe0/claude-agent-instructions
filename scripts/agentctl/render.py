@@ -142,6 +142,12 @@ def _negative_control_lines(crit) -> list[str]:
     return []
 
 
+def _verify_reads_lines(crit) -> list[str]:
+    if crit.verify_reads is None:
+        return []
+    return [f"- **Verify reads:** {', '.join(f'`{p}`' for p in crit.verify_reads) or 'none'}"]
+
+
 def render_meta_md(doc: PlanDoc) -> list[str]:
     """The plan-level header block (task id / weight class / done criterion /
     criterion type / repo root / external research), as raw lines — factored
@@ -231,6 +237,8 @@ def render_final_checks_md(doc: PlanDoc) -> list[str]:
                 )
             else:
                 cached = ", cacheable" if fc.cacheable else ""
+                if fc.verify_reads is not None:
+                    cached += f", verify_reads: {', '.join(fc.verify_reads) or 'none'}"
                 lines.append(f"- {label}`{fc.command}` (expected exit {fc.expected_exit}{cached})")
         lines.append("")
     return lines
@@ -293,6 +301,7 @@ def render_plan_md(doc: PlanDoc) -> str:
                     f"{s.criterion.verify_venue_at_final}"
                 )
             lines.extend(_negative_control_lines(s.criterion))
+            lines.extend(_verify_reads_lines(s.criterion))
         if s.depends_on:
             lines.append(f"- **Depends on:** {', '.join(str(d) for d in sorted(s.depends_on))}")
         if s.principle is not None:
@@ -493,6 +502,7 @@ def _stage_field_lines(
                 f"{s.criterion.verify_venue_at_final}"
             )
         lines.extend(_negative_control_lines(s.criterion))
+        lines.extend(_verify_reads_lines(s.criterion))
     if s.criterion.observation:
         lines.append(f"- **Prior observation:** {s.criterion.observation}")
     if s.output_artifacts:

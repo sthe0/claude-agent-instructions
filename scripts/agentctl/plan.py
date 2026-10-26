@@ -283,6 +283,22 @@ def _parse_check_venue(raw: object, context: str) -> str:
     return value
 
 
+def _parse_verify_reads(table: dict, context: str) -> list[str] | None:
+    """The optional `verify_reads` of a stage or final_check: absent is None (no
+    narrowed lookup); present must be a list of non-empty repo-relative path globs."""
+    if "verify_reads" not in table:
+        return None
+    raw = table["verify_reads"]
+    if not isinstance(raw, list) or not all(isinstance(p, str) and p for p in raw):
+        raise PlanError(f"{context} verify_reads must be a list of non-empty path strings")
+    for pattern in raw:
+        if pattern.startswith("/") or ".." in pattern.split("/"):
+            raise PlanError(
+                f"{context} verify_reads entry {pattern!r} must be repo-relative, without '..'"
+            )
+    return list(raw)
+
+
 def _parse_verify_venue_at_final(raw: object, context: str) -> str | None:
     """Validate a stage's optional `verify_venue_at_final` against the same
     CheckVenue vocabulary as `verify_venue` (schema 24). Unlike
@@ -983,9 +999,9 @@ _TIER_RANK = {"small": 0, "medium": 1, "large": 2}
 _CAP_RUN_WRAPPER = "cap-run.sh"
 
 
-def pytest_segments(cmd: str) -> list[list[str]]:
-    """The pytest invocations in `cmd`, one token list per segment, with launch
-    wrappers (env, cap-run.sh) stripped. [] when it runs no pytest or cannot be tokenized."""
+def _program_segments(cmd: str) -> list[list[str]]:
+    """The command segments of `cmd` with launch wrappers (env, cap-run.sh) stripped.
+    [] when it cannot be tokenized."""
     try:
         tokens = _shell_tokens.separator_exact_split(cmd)
     except Exception:
@@ -999,13 +1015,108 @@ def pytest_segments(cmd: str) -> list[list[str]]:
             if "--" not in rest:
                 continue
             seg = _widening_targets.strip_wrappers(rest[rest.index("--") + 1:])
-        if not seg:
-            continue
+        if seg:
+            found.append(seg)
+    return found
+
+
+def pytest_segments(cmd: str) -> list[list[str]]:
+    """The pytest invocations in `cmd`, one token list per segment, with launch
+    wrappers (env, cap-run.sh) stripped. [] when it runs no pytest or cannot be tokenized."""
+    found: list[list[str]] = []
+    for seg in _program_segments(cmd):
         prog = _widening_targets.program_name(seg[0]).casefold()
         if prog in ("pytest", "py.test") or (
                 prog.startswith("python") and seg[1:3] == ["-m", "pytest"]):
             found.append(seg)
     return found
+
+
+# --- whole-suite advisory (WARN only) -----------------------------------------
+# Difficulty removed: several whole-suite checks in one plan each re-run the entire
+# suite at verify-final (only a check that declares verify_reads can be served from a
+# narrowed cache), and verify_reads declared on a whole-suite check asserts that a
+# check reading everything reads nothing outside the listed paths. The rule part --
+# does a segment run the whole suite -- is decided from each segment's program and
+# arguments, never from free text; whether a whole-suite run is justified stays the
+# plan author's judgement, so this is an advisory with no blocker twin.
+MARK_WHOLE_SUITE = "whole-suite"
+_PYTEST_VALUE_OPTIONS = frozenset({
+    "-n", "-p", "-c", "-o", "-W", "--numprocesses", "--maxfail", "--rootdir", "--ignore",
+    "--ignore-glob", "--deselect", "--durations", "--durations-min", "--basetemp",
+    "--confcutdir", "--import-mode", "-r",
+})
+_SUITE_ROOT_NAMES = frozenset({"", ".", "tests", "test"})
+
+
+def _pytest_runs_whole_suite(seg: list[str]) -> bool:
+    start = 3 if seg[0] != "pytest" and seg[0] != "py.test" and seg[1:3] == ["-m", "pytest"] else 1
+    args = seg[start:]
+    skip = False
+    for tok in args:
+        if skip:
+            skip = False
+            continue
+        if tok in ("-k", "-m"):
+            return False
+        if tok.startswith(("-k", "-m")) and not tok.startswith("--"):
+            return False
+        if tok in _PYTEST_VALUE_OPTIONS:
+            skip = True
+            continue
+        if tok.startswith("-"):
+            continue
+        if "::" in tok or tok.endswith(".py"):
+            return False
+        if tok.rstrip("/").rsplit("/", 1)[-1] not in _SUITE_ROOT_NAMES:
+            return False
+    return True
+
+
+def _segment_runs_whole_suite(seg: list[str]) -> bool:
+    prog = _widening_targets.program_name(seg[0]).casefold()
+    if prog in ("pytest", "py.test") or (prog.startswith("python") and seg[1:3] == ["-m", "pytest"]):
+        return _pytest_runs_whole_suite(seg)
+    script = seg[1] if prog.startswith("python") and len(seg) > 1 else seg[0]
+    if _widening_targets.program_name(script) == _VERIFY_ALL_MARKER + ".py":
+        return "--staged" not in seg
+    return False
+
+
+def runs_whole_suite(cmd: str) -> bool:
+    return any(_segment_runs_whole_suite(seg) for seg in _program_segments(cmd))
+
+
+def whole_suite_warnings(stages, final_check=None) -> list[str]:
+    """Warn (never block) when a plan runs the whole test suite in more than one distinct
+    check, or declares `verify_reads` on a whole-suite check."""
+    checks: list[tuple[str, str, bool]] = []
+    for s in stages:
+        cmd = s.criterion.verify_command
+        if cmd and runs_whole_suite(cmd):
+            checks.append((f"stage {s.index}", cmd, s.criterion.verify_reads is not None))
+    for fi, fc in enumerate(final_check or [], 1):
+        if fc.command and runs_whole_suite(fc.command):
+            checks.append((f"final_check {fi}", fc.command, fc.verify_reads is not None))
+    warnings: list[str] = []
+    distinct: dict[str, str] = {}
+    for where, cmd, _ in checks:
+        distinct.setdefault(" ".join(cmd.split()), where)
+    if len(distinct) > 1:
+        warnings.append(
+            f"{MARK_WHOLE_SUITE}: {len(distinct)} distinct checks run the whole suite "
+            f"({', '.join(distinct.values())}); keep at most one whole-suite check per "
+            f"plan and scope the rest to the change's own tests, so verify-final does "
+            f"not repeat the entire suite."
+        )
+    for where, _, has_reads in checks:
+        if has_reads:
+            warnings.append(
+                f"{MARK_WHOLE_SUITE}: {where} declares verify_reads on a whole-suite "
+                f"check; verify_reads is meant for targeted checks, since a check that "
+                f"reads the whole repository is not narrowed by a path list."
+            )
+    return warnings
 
 
 def _runs_test_runner(cmd: str) -> bool:
@@ -1785,10 +1896,14 @@ def parse_plan(
             raise PlanError(f"{fc_ctx} cacheable must be a boolean")
         if cacheable and fc_kind == CheckKind.LANDED.value:
             raise PlanError(f"{fc_ctx}: kind = \"landed\" must not carry 'cacheable' — it is never cached")
+        verify_reads = _parse_verify_reads(fc, fc_ctx)
+        if verify_reads is not None and fc_kind == CheckKind.LANDED.value:
+            raise PlanError(f"{fc_ctx}: kind = \"landed\" must not carry 'verify_reads' — it is never cached")
         final_checks.append(
             FinalCheck(
                 command=cmd, expected_exit=xc, label=str(fc.get("label", "")),
                 venue=venue, kind=fc_kind, landed=fc_landed, cacheable=cacheable,
+                verify_reads=verify_reads,
             )
         )
 
@@ -1996,6 +2111,7 @@ def parse_plan(
                     verify_venue_at_final=verify_venue_at_final,
                     negative_control=negative_control,
                     negative_control_waiver=negative_control_waiver,
+                    verify_reads=_parse_verify_reads(s, stage_ctx),
                 ),
                 principle=principle,
                 conditions=str(s["conditions"]) if s.get("conditions") else None,
@@ -2391,7 +2507,8 @@ def order_extra_digest(meta: PlanMeta) -> str:
     payload = repr((
         tuple(
             (fc.command, fc.expected_exit, fc.label, fc.venue, fc.kind,
-             *((("cacheable", True),) if fc.cacheable else ()))
+             *((("cacheable", True),) if fc.cacheable else ()),
+             *((("verify_reads", tuple(fc.verify_reads)),) if fc.verify_reads is not None else ()))
             for fc in meta.final_check
         ),
         meta.external_research,
@@ -2582,9 +2699,10 @@ _NEGATIVE_CONTROL_PLACE_ABSENT = (None, None)
 
 
 def negative_control_place(stage) -> tuple:
-    """The stage's negative-control place — `criterion.negative_control` plus its
-    waiver — as a contribution to a change-decision key: a ONE-element tuple holding
-    the pair, or the EMPTY tuple when the stage declares neither.
+    """The stage's check-definition place — `criterion.negative_control` plus its
+    waiver, and a declared `criterion.verify_reads` — as a contribution to a
+    change-decision key: the pair as one element, then the tagged `verify_reads`, each
+    present only when declared; the EMPTY tuple when the stage declares none.
 
     Grouped rather than spliced field-by-field for the same collision `knowledge_place`
     guards against: (negative_control='x', waiver=None) and (negative_control=None,
@@ -2597,7 +2715,11 @@ def negative_control_place(stage) -> tuple:
     would flip every disposed question, and every already-PASSED stage, of every live
     session that predates the field."""
     place = (stage.criterion.negative_control, stage.criterion.negative_control_waiver)
-    return () if place == _NEGATIVE_CONTROL_PLACE_ABSENT else (place,)
+    reads = stage.criterion.verify_reads
+    return (
+        *(() if place == _NEGATIVE_CONTROL_PLACE_ABSENT else (place,)),
+        *(() if reads is None else (("verify_reads", tuple(reads)),)),
+    )
 
 
 def delivery_place(stage) -> tuple:
@@ -2701,7 +2823,8 @@ _ELEMENT_FIELDS: dict[str, tuple[str, ...] | None] = {
                   "criterion.landed.target", "criterion.landed.delivered_stage",
                   "criterion.landed.remote", "criterion.landed.provider",
                   "criterion.verify_venue_at_final",
-                  "criterion.negative_control", "criterion.negative_control_waiver"),
+                  "criterion.negative_control", "criterion.negative_control_waiver",
+                  "criterion.verify_reads"),
     "done_criterion": ("criterion.done_criterion",),
     "principle": ("principle.statement", "principle.source", "principle.derivation",
                   "principle.confidence", "principle.refutation"),
@@ -3481,7 +3604,8 @@ def _final_check_place(doc: PlanDoc) -> list:
     return [
         (fc.command, fc.expected_exit, fc.label,
          _normalize_string(fc.venue), _normalize_string(fc.kind), fc.landed,
-         *((("cacheable", True),) if fc.cacheable else ()))
+         *((("cacheable", True),) if fc.cacheable else ()),
+         *((("verify_reads", tuple(fc.verify_reads)),) if fc.verify_reads is not None else ()))
         for fc in doc.meta.final_check
     ]
 
@@ -4125,6 +4249,7 @@ STAGE_LEAF_CLASS: dict[str, str] = {
     "criterion.verify_venue_at_final": "F",
     "criterion.negative_control": "C",
     "criterion.negative_control_waiver": "C",
+    "criterion.verify_reads": "C",
     "principle.statement": "O",
     "principle.source": "O",
     "principle.derivation": "O",
