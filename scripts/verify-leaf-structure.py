@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Verify non-experience memory leaves have the required structure.
 
-This verifier also guards the `schema: principle/v1` leaf (grandfathered below,
+This verifier also guards the `schema: regularity/v1` leaf (under `regularities/`,
+the knowledge layer), which must carry non-empty `## Regularity`, `## Generality`,
+`## Refutation` and `## Induced from` sections.
+
+It also guards the `schema: principle/v1` leaf (grandfathered below,
 under `principles/`), which is the **generality>=1 profile** of a single
 difficulty-record model. Its **generality-0 profile** is the
 `schema: difficulty/v1` experience leaf guarded by the sibling
@@ -68,6 +72,18 @@ SECTION_RE = re.compile(r"^##\s", re.MULTILINE)
 DEVELOPED_MIN_LINES = 10
 
 
+REGULARITY_SECTIONS = ("Regularity", "Generality", "Refutation", "Induced from")
+
+
+def _section_text(body: str, name: str) -> str | None:
+    m = re.search(rf"^##[ \t]+{re.escape(name)}[ \t]*$", body, re.MULTILINE)
+    if m is None:
+        return None
+    rest = body[m.end():]
+    nxt = SECTION_RE.search(rest)
+    return rest[:nxt.start()] if nxt else rest
+
+
 def is_leaf(path: str) -> bool:
     """True if path falls in scope for this verifier."""
     if not path.endswith(".md"):
@@ -108,6 +124,14 @@ def check_content(content: str, path: str = "") -> str | None:
         if missing:
             return ("schema:leaf/v1 leaf missing required section(s): "
                     + ", ".join(missing))
+        return None
+
+    if "regularity/v1" in schema:
+        missing = [name for name in REGULARITY_SECTIONS
+                   if not (_section_text(body, name) or "").strip()]
+        if missing:
+            return ("schema:regularity/v1 leaf missing or empty section(s): "
+                    + ", ".join(f"## {n}" for n in missing))
         return None
 
     # Grandfathered — no schema: leaf/v1

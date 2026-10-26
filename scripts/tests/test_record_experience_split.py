@@ -28,17 +28,31 @@ SCRIPT = SCRIPTS_DIR / "record-experience.py"
 SOURCE = "leaves/experience/2026-01-05-sample-venue-difficulty.md"
 DRIFT = "leaves/experience/2026-01-05-sample-venue-drift.md"
 HANG = "leaves/experience/2026-02-15-sample-fetch-hang.md"
+REGULARITY = "leaves/regularities/sample-venue-regularity.md"
 PRINCIPLE = "leaves/principles/sample-venue-principle.md"
 DATE = "2026-10-12"
 MISSING_LINE = re.compile(r"^missing: [0-9]+:[0-9a-f]{12}$")
 
 PROMOTE_ARGS = [
-    "--slug", "sample-venue-principle",
+    "--slug", "sample-venue-regularity",
     "--name", "A control is run where its subject lives",
-    "--description", "A sample principle for the split fixture — run a control in the "
+    "--description", "A sample regularity for the split fixture — run a control in the "
                      "venue that holds the commits it judges",
     "--generality", "1",
     "--induced-from", "2026-01-05-sample-venue-drift",
+    "--statement", "A control run in a checkout that lacks the commits it judges records a "
+                   "genuinely green stage as failed.",
+    "--date", DATE,
+]
+
+PRINCIPLE_ARGS = [
+    "--principle",
+    "--slug", "sample-venue-principle",
+    "--name", "Run a control where its subject lives",
+    "--description", "A sample principle for the split fixture — run a control in the "
+                     "venue that holds the commits it judges",
+    "--generality", "1",
+    "--grounded-in", "sample-venue-regularity",
     "--statement", "Execute a control in the checkout that holds the commits it judges, "
                    "so a green stage is not recorded as failed.",
     "--date", DATE,
@@ -96,12 +110,17 @@ def fresh_work(tmp_path, name="work"):
         "(2026-01-05-sample-venue-difficulty.md) — a check runs where the commits are "
         "not and a fetch hangs the engine\n", encoding="utf-8")
     shutil.copyfile(FIXTURES / "good/MEMORY.md", root / "MEMORY.md")
+    (root / "leaves/regularities").mkdir()
+    (root / "leaves/regularities/MEMORY.md").write_text(
+        "# Regularities\n\nRegularities of the split fixture, grouped by generality level.\n",
+        encoding="utf-8")
     (root / "leaves/principles").mkdir()
     (root / "leaves/principles/MEMORY.md").write_text(
         "# Principles\n\nPrinciples of the split fixture, grouped by generality level.\n",
         encoding="utf-8")
     manifest = json.loads((FIXTURES / "good.json").read_text(encoding="utf-8"))
     manifest["root"] = str(root)
+    manifest["regularities"] = []
     manifest["principles"] = []
     path = tmp_path / f"{name}.json"
     path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -209,6 +228,7 @@ def test_split_apply_moves_produce_the_committed_fixture_bytes(env, tmp_path):
     root, manifest_path, _ = fresh_work(tmp_path)
     assert run(env, "split-apply", "--manifest", manifest_path, "--date", DATE).returncode == 0
     assert run(env, "promote", "--manifest", manifest_path, *PROMOTE_ARGS).returncode == 0
+    assert run(env, "promote", "--manifest", manifest_path, *PRINCIPLE_ARGS).returncode == 0
     produced = tree(root)
     produced.pop("base.md")
     committed = tree(FIXTURES / "good")
@@ -294,7 +314,7 @@ def test_split_apply_rejects_inconsistent_manifest_existing_cluster_leaf(env, tm
 
 def test_split_apply_rejects_inconsistent_manifest_listed_principle_missing(env, tmp_path):
     root, manifest_path, manifest = fresh_work(tmp_path)
-    manifest["principles"] = ["no-such-principle"]
+    manifest["regularities"] = ["no-such-regularity"]
     write_manifest(manifest_path, manifest)
     original = tree(root)
     done = run(env, "split-apply", "--manifest", manifest_path, "--date", DATE)
@@ -309,6 +329,7 @@ def test_split_apply_refuses_canon_checkout(env, tmp_path):
     shutil.copyfile(FIXTURES / "good/base.md", root / "base.md")
     manifest = json.loads((FIXTURES / "good.json").read_text(encoding="utf-8"))
     manifest["root"] = str(root)
+    manifest["regularities"] = []
     manifest["principles"] = []
     manifest_path = write_manifest(tmp_path / "canon.json", manifest)
     original = tree(root)
@@ -327,6 +348,7 @@ def test_split_apply_moves_in_linked_worktree_and_commits_nothing(env, tmp_path)
     shutil.copyfile(FIXTURES / "good/base.md", root / "base.md")
     manifest = json.loads((FIXTURES / "good.json").read_text(encoding="utf-8"))
     manifest["root"] = str(root)
+    manifest["regularities"] = []
     manifest["principles"] = []
     manifest_path = write_manifest(tmp_path / "linked.json", manifest)
     head = git(linked, "rev-parse", "HEAD").stdout
@@ -344,7 +366,24 @@ def _split_then_promote(env, tmp_path):
     assert run(env, "split-apply", "--manifest", manifest_path, "--date", DATE).returncode == 0
     done = run(env, "promote", "--manifest", manifest_path, *PROMOTE_ARGS)
     assert done.returncode == 0, done.stderr
+    done = run(env, "promote", "--manifest", manifest_path, *PRINCIPLE_ARGS)
+    assert done.returncode == 0, done.stderr
     return root, manifest_path
+
+
+def test_promote_schema_matches_regularity_v1_and_passes_the_structure_verifier(env, tmp_path):
+    root, _ = _split_then_promote(env, tmp_path)
+    text = (root / REGULARITY).read_text(encoding="utf-8")
+    front = re_mod.frontmatter_values(text)
+    assert front["schema"] == "regularity/v1"
+    assert front["generality"] == "1"
+    assert front["name"] == "sample-venue-regularity"
+    for section in ("## Regularity", "## Generality", "## Induced from", "## Refutation"):
+        assert section in text
+    verified = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "verify-leaf-structure.py"), str(root / REGULARITY)],
+        capture_output=True, text=True)
+    assert verified.returncode == 0, verified.stdout + verified.stderr
 
 
 def test_promote_schema_matches_principle_v1_and_passes_the_structure_verifier(env, tmp_path):
@@ -352,10 +391,10 @@ def test_promote_schema_matches_principle_v1_and_passes_the_structure_verifier(e
     text = (root / PRINCIPLE).read_text(encoding="utf-8")
     front = re_mod.frontmatter_values(text)
     assert front["schema"] == "principle/v1"
-    assert front["generality"] == "1"
     assert front["name"] == "sample-venue-principle"
-    for section in ("## Principle", "## Generality", "## Induced from",
-                    "## Refutation", "## See also"):
+    assert front["grounded_in"] == "[regularity:sample-venue-regularity]"
+    assert "induced_from" not in front
+    for section in ("## Principle", "## Goal class", "## Grounded in", "## Refutation"):
         assert section in text
     verified = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "verify-leaf-structure.py"), str(root / PRINCIPLE)],
@@ -365,9 +404,9 @@ def test_promote_schema_matches_principle_v1_and_passes_the_structure_verifier(e
 
 def test_promote_schema_indexes_under_its_generality_level(env, tmp_path):
     root, _ = _split_then_promote(env, tmp_path)
-    index = (root / "leaves/principles/MEMORY.md").read_text(encoding="utf-8")
+    index = (root / "leaves/regularities/MEMORY.md").read_text(encoding="utf-8")
     level = index.index("## Level 1")
-    assert index.index("(sample-venue-principle.md)") > level
+    assert index.index("(sample-venue-regularity.md)") > level
 
 
 def test_promote_schema_refuses_unknown_generality(env, tmp_path):
@@ -376,7 +415,7 @@ def test_promote_schema_refuses_unknown_generality(env, tmp_path):
     args[args.index("--generality") + 1] = "7"
     done = run(env, "promote", "--root", root, *args)
     assert done.returncode == 2
-    assert not (root / PRINCIPLE).exists()
+    assert not (root / REGULARITY).exists()
 
 
 def test_promote_writes_induced_from_every_named_source(env, tmp_path):
@@ -386,12 +425,12 @@ def test_promote_writes_induced_from_every_named_source(env, tmp_path):
     args += ["--induced-from", "2026-02-15-sample-fetch-hang"]
     done = run(env, "promote", "--root", root, *args)
     assert done.returncode == 0, done.stderr
-    text = (root / PRINCIPLE).read_text(encoding="utf-8")
+    text = (root / REGULARITY).read_text(encoding="utf-8")
     front = re_mod.frontmatter_values(text)
     assert front["induced_from"] == "[2026-01-05-sample-venue-drift, 2026-02-15-sample-fetch-hang]"
     assert "[[2026-01-05-sample-venue-drift]]" in text
     assert "[[2026-02-15-sample-fetch-hang]]" in text
-    index = (root / "leaves/principles/MEMORY.md").read_text(encoding="utf-8")
+    index = (root / "leaves/regularities/MEMORY.md").read_text(encoding="utf-8")
     assert "`2026-01-05-sample-venue-drift`" in index and "`2026-02-15-sample-fetch-hang`" in index
 
 
@@ -402,31 +441,33 @@ def test_promote_writes_induced_from_only_leaves_that_exist(env, tmp_path):
     done = run(env, "promote", "--root", root, *args)
     assert done.returncode == 2
     assert "never-written" in done.stderr
-    assert not (root / PRINCIPLE).exists()
+    assert not (root / REGULARITY).exists()
 
 
 def test_promote_writes_induced_from_into_manifest_and_source_pointer_list(env, tmp_path):
     root, manifest_path = _split_then_promote(env, tmp_path)
-    assert json.loads(manifest_path.read_text(encoding="utf-8"))["principles"] == [
-        "sample-venue-principle"]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["regularities"] == ["sample-venue-regularity"]
+    assert manifest["principles"] == ["sample-venue-principle"]
     source = (root / SOURCE).read_text(encoding="utf-8")
+    assert "regularity: [sample-venue-regularity](../regularities/sample-venue-regularity.md)" in source
     assert "principle: [sample-venue-principle](../principles/sample-venue-principle.md)" in source
 
 
 def test_promote_schema_adds_a_second_principle_to_its_own_level_section(env, tmp_path):
     root, _ = _split_then_promote(env, tmp_path)
-    same_level = [("second-principle" if a == "sample-venue-principle" else a)
+    same_level = [("second-regularity" if a == "sample-venue-regularity" else a)
                   for a in PROMOTE_ARGS]
     assert run(env, "promote", "--root", root, *same_level).returncode == 0
-    higher = [("third-principle" if a == "sample-venue-principle" else a) for a in PROMOTE_ARGS]
+    higher = [("third-regularity" if a == "sample-venue-regularity" else a) for a in PROMOTE_ARGS]
     higher[higher.index("--generality") + 1] = "2"
     assert run(env, "promote", "--root", root, *higher).returncode == 0
-    index = (root / "leaves/principles/MEMORY.md").read_text(encoding="utf-8")
+    index = (root / "leaves/regularities/MEMORY.md").read_text(encoding="utf-8")
     level1, level2 = index.index("## Level 1"), index.index("## Level 2")
     assert index.count("## Level 1") == 1
-    assert level1 < index.index("(sample-venue-principle.md)") < level2
-    assert level1 < index.index("(second-principle.md)") < level2
-    assert index.index("(third-principle.md)") > level2
+    assert level1 < index.index("(sample-venue-regularity.md)") < level2
+    assert level1 < index.index("(second-regularity.md)") < level2
+    assert index.index("(third-regularity.md)") > level2
 
 
 def test_promote_refuses_existing_principle(env, tmp_path):

@@ -72,6 +72,7 @@ class World:
         self.repo = tmp / "acme-widgets"
         self.project = self.repo / ".claude" / "agent-memory"
         for d in (self.leaves / "experience", self.leaves / "principles" / "cases",
+                  self.leaves / "regularities",
                   self.project / "experience", self.project / "principles"):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -96,19 +97,22 @@ class World:
 
     def principle(self, slug, induced=(), tier="global", rule_derived=None,
                   pointer=None) -> Path:
-        base = self._base(tier) / "principles"
+        """The induced-from leaf of the tier: a global regularity, a (grandfathered) project principle."""
+        is_global = tier == "global"
+        base = self._base(tier) / ("regularities" if is_global else "principles")
         path = base / f"{slug}.md"
+        schema, section = ("regularity/v1", "Regularity") if is_global else ("principle/v1", "Principle")
         path.write_text(_fm({
             "name": slug, "description": "a sample principle", "type": "reference",
-            "schema": "principle/v1", "generality": 1, pp.INDUCED: pp.format_list(induced),
+            "schema": schema, "generality": 1, pp.INDUCED: pp.format_list(induced),
             pp.RULE_DERIVED: json.dumps(rule_derived) if rule_derived else None,
             "created": DATE, "last_verified": DATE,
-        }) + "\n# A principle\n\n## Principle\n\nRun a check where its subject lives.\n",
+        }) + f"\n# A principle\n\n## {section}\n\nRun a check where its subject lives.\n",
             encoding="utf-8")
         listed = induced if pointer is None else pointer
         index = base / pp.INDEX
         text = index.read_text(encoding="utf-8") if index.exists() else (
-            "# Principles\n\n## Level 1 — sibling-context rules\n\n")
+            f"# {'Regularities' if is_global else 'Principles'}\n\n## Level 1 — sibling-context rules\n\n")
         index.write_text(text + f"- [A principle]({slug}.md) — a sample principle "
                          + pp.ARROW + ", ".join(f"`{s}`" for s in listed) + ".\n",
                          encoding="utf-8")
@@ -392,7 +396,7 @@ def test_case_add_writes_body_digest(tmp_path):
     case = (w.leaves / pp.CASES_DIR / "sample-case.md").read_text(encoding="utf-8")
     assert pp.field_value(case, pp.SOURCE_DIGEST) == body_sha(leaf_bytes.decode())
     assert leaf.read_bytes() == leaf_bytes
-    assert "sample-case" in induced_of(w.leaves / "principles" / "sample-principle.md")
+    assert "sample-case" in induced_of(w.leaves / "regularities" / "sample-principle.md")
 
 
 def test_case_add_refuses_non_project_source(tmp_path, capsys):
@@ -432,7 +436,7 @@ def test_case_add_output_passes_memory_index(tmp_path):
     (w.leaves / "experience" / "MEMORY.md").write_text(
         "- [Sample](2026-01-01-sample.md) — a sample leaf\n", encoding="utf-8")
     (w.mem / "MEMORY.md").write_text(
-        "# Global\n\n- [Principles](leaves/principles/MEMORY.md) — index\n", encoding="utf-8")
+        "# Global\n\n- [Regularities](leaves/regularities/MEMORY.md) — index\n", encoding="utf-8")
     assert w.cli("case-add", "--spec", _case_spec(w, leaf)) == 0
     assert (w.leaves / pp.CASES_DIR / "sample-case.md").is_file()
     assert _run(VMI, ["--root", root]) == 0
@@ -572,14 +576,14 @@ def test_promote_project_principle(tmp_path):
     assert _promote(w, "--induced-from", leaf.stem, "--project-dir", w.repo) == 0
     assert induced_of(w.project / "principles" / "new-principle.md") == [leaf.stem]
     assert status_of(leaf) == ["new-principle"]
-    assert not (w.leaves / "principles" / "new-principle.md").exists()
+    assert not (w.leaves / "regularities" / "new-principle.md").exists()
 
 
 def test_promote_requires_experience_or_mark(tmp_path):
     w = World(tmp_path)
     w.rule("sample-rule")
     assert _promote(w, "--induced-from", "sample-rule") == 2
-    assert not (w.leaves / "principles" / "new-principle.md").exists()
+    assert not (w.leaves / "regularities" / "new-principle.md").exists()
 
 
 def _split_world(tmp_path):
@@ -592,12 +596,12 @@ def _split_world(tmp_path):
                                                       encoding="utf-8")
     w = World(tmp_path)
     w.leaves = root / "leaves"
-    (w.leaves / "principles").mkdir()
+    (w.leaves / "regularities").mkdir()
     w.rule("sample-rule")
     principle = w.principle("venue-principle", induced=["sample-rule"],
                             rule_derived="written from rules")
     manifest = json.loads((FIXTURES / "good.json").read_text(encoding="utf-8"))
-    manifest.update(root=str(root), principles=[])
+    manifest.update(root=str(root), regularities=[], principles=[])
     manifest["clusters"][0]["existing_principle"] = "venue-principle"
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -626,10 +630,11 @@ def test_case_files_exempt_from_index(tmp_path):
     w = World(tmp_path)
     w.leaves = root / "memory-global/leaves"
     (w.leaves / pp.CASES_DIR).mkdir(parents=True)
+    (w.leaves / "regularities").mkdir(parents=True)
     w.case("sample-case", status=["sample-principle"])
     w.principle("sample-principle", induced=["sample-case"])
     (root / "memory-global/MEMORY.md").write_text(
-        "# Global\n\n- [Principles](leaves/principles/MEMORY.md) — index\n", encoding="utf-8")
+        "# Global\n\n- [Regularities](leaves/regularities/MEMORY.md) — index\n", encoding="utf-8")
     assert _run(VMI, ["--root", root]) == 0
 
 
@@ -661,6 +666,7 @@ def _verifier_world(tmp_path):
     w.leaves = root / pp.LEAVES_REL
     (w.leaves / "experience").mkdir(parents=True)
     (w.leaves / "principles").mkdir(parents=True)
+    (w.leaves / "regularities").mkdir(parents=True)
     return root, w
 
 

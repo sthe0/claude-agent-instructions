@@ -1,16 +1,23 @@
-"""The provenance link between experience and the principles that generalize it.
+"""The provenance link between experience and the regularities that generalize it.
 
 An experience leaf (difficulty/v1, either tier) carries `generalized_into: [...]`
-naming the principles that state its general aspect; `[]` is the explicit
-"not generalized yet". A principle (principle/v1) carries `induced_from: [...]`
-naming its sources; a principle with no experience source carries a
-`rule_derived:` reason instead. The two sides mirror each other, and the
-principle's `principles/MEMORY.md` pointer lists the same sources after its `← `.
+naming the regularities that state its general aspect; `[]` is the explicit
+"not generalized yet". A regularity (regularity/v1, under `regularities/`, the
+knowledge layer) carries `induced_from: [...]` naming its sources; a regularity
+with no experience source carries a `rule_derived:` reason instead. The two
+sides mirror each other, and the regularity's `regularities/MEMORY.md` pointer
+lists the same sources after its `← `.
 
-A project leaf never names a global principle directly: its general aspect
+A global principle (principle/v1, the norm layer) is not induced: it carries
+`grounded_in: [regularity:<slug>, ...]` naming the regularities it rests on and
+no `induced_from`; its `principles/MEMORY.md` pointer lists the same slugs, the
+`regularity:` prefix dropped, after its `← `.
+
+A project leaf never names a global regularity directly: its general aspect
 reaches Core as a sanitized case (case/v1, under `principles/cases/`) that is
-linked two-sided with its global principles and cited one way by the project
-leaf. Project-only generalizations live in the project's own `principles/`.
+linked two-sided with its global regularities and cited one way by the project
+leaf. Project-only generalizations live in the project's own `principles/`,
+which keep `induced_from` (the project tier is grandfathered).
 
 Every rule is a module-level function, called by its global name at call time,
 so each can be replaced in-process by a test of the rule it decides. Callers
@@ -27,6 +34,10 @@ from pathlib import Path
 
 FIELD = "generalized_into"
 INDUCED = "induced_from"
+GROUNDED = "grounded_in"
+REGULARITY_PREFIX = "regularity:"
+REGULARITY_SCHEMA = "regularity/v1"
+REGULARITY_SECTIONS = ("Regularity", "Generality", "Refutation", "Induced from")
 RULE_DERIVED = "rule_derived"
 SOURCE_DIGEST = "source_digest"
 ORIGIN_TIER_FIELD = "origin_tier"
@@ -38,7 +49,8 @@ LEAVES_REL = Path("memory-global/leaves")
 CASES_DIR = Path("principles/cases")
 INDEX = "MEMORY.md"
 EXPERIENCE_SOURCE_KINDS = ("experience", "case")
-STAGED_SCOPES = ("memory-global/leaves/experience/", "memory-global/leaves/principles/")
+STAGED_SCOPES = ("memory-global/leaves/experience/", "memory-global/leaves/regularities/",
+                 "memory-global/leaves/principles/")
 GENERIC_DIR_NAMES = frozenset({"/", ".claude", "agent-memory"})
 MIN_IDENTIFIER_LEN = 6
 
@@ -58,6 +70,9 @@ PROJECT_DIRECT_GLOBAL = "project_direct_global"
 STALE_CASE = "stale_case"
 ORPHAN_CASE = "orphan_case"
 CASE_LEAK = "case_leak"
+UNGROUNDED_PRINCIPLE = "ungrounded_principle"
+UNKNOWN_REGULARITY = "unknown_regularity"
+PRINCIPLE_INDUCED = "principle_induced_from"
 
 FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 DIGEST_RE = re.compile(re.escape(DIGEST_PREFIX) + r"[0-9a-f]{64}")
@@ -70,7 +85,7 @@ class Leaf:
     slug: str
     path: Path
     tier: str  # 'global' | 'project'
-    area: str  # 'experience' | 'principle' | 'case' | 'other'
+    area: str  # 'experience' | 'regularity' | 'principle' | 'case' | 'other'
     text: str
 
 
@@ -78,7 +93,7 @@ class Leaf:
 class Change:
     path: Path
     new_text: str
-    role: str  # 'leaf' | 'principle' | 'index' | 'case'
+    role: str  # 'leaf' | 'principle' | 'index' | 'case'; 'principle' also covers a regularity
 
 
 @dataclass(frozen=True)
@@ -88,7 +103,7 @@ class Finding:
     detail: str
 
 
-_AREA_PRIORITY = ("experience", "case", "principle", "other")
+_AREA_PRIORITY = ("experience", "case", "regularity", "principle", "other")
 
 
 @dataclass
@@ -132,6 +147,8 @@ def _area(rel: Path, tier: str) -> str:
         return "experience"
     if tier == "global" and len(parts) == 3 and parts[:2] == CASES_DIR.parts:
         return "case"
+    if tier == "global" and len(parts) == 2 and parts[0] == "regularities":
+        return "regularity"
     if len(parts) == 2 and parts[0] == "principles":
         return "principle"
     return "other"
@@ -238,6 +255,18 @@ def read_induced(text: str) -> list[str]:
     return [] if value is None else parse_list(value)
 
 
+def read_grounded(text: str) -> list[str]:
+    value = field_value(text, GROUNDED)
+    return [] if value is None else parse_list(value)
+
+
+def _grounded_or_empty(text: str) -> list[str]:
+    try:
+        return read_grounded(text)
+    except ValueError:
+        return []
+
+
 def _induced_or_empty(text: str) -> list[str]:
     try:
         return read_induced(text)
@@ -284,19 +313,19 @@ def clear_rule_mark(text: str) -> str:
 # relation rules
 # --------------------------------------------------------------------------
 def target_of(slug: str, corpus: Corpus, tier: str = "global") -> Leaf | None:
-    """What a leaf of `tier` names: a global leaf a global principle; a project leaf
-    a project principle, a case, or (refused later) a global principle."""
+    """What a leaf of `tier` names: a global leaf a global regularity; a project leaf
+    a project principle, a case, or (refused later) a global regularity or principle."""
     if tier == "project":
         for leaf in corpus.items:
             if leaf.slug == slug and leaf.tier == "project" and leaf.area == "principle":
                 return leaf
-        for area in ("case", "principle"):
+        for area in ("case", "regularity", "principle"):
             for leaf in corpus.items:
                 if leaf.slug == slug and leaf.tier == "global" and leaf.area == area:
                     return leaf
         return None
     for leaf in corpus.items:
-        if leaf.slug == slug and leaf.tier == "global" and leaf.area == "principle":
+        if leaf.slug == slug and leaf.tier == "global" and leaf.area == "regularity":
             return leaf
     return None
 
@@ -342,7 +371,27 @@ def promote_sources_ok(kinds, rule_derived) -> bool:
 
 
 def target_allowed(leaf_tier: str, target: Leaf) -> bool:
-    return not (leaf_tier == "project" and target.tier == "global" and target.area == "principle")
+    return not (leaf_tier == "project" and target.tier == "global"
+                and target.area in ("regularity", "principle"))
+
+
+def induced_leaves(corpus: Corpus) -> list[Leaf]:
+    """The leaves that carry `induced_from`: every regularity and each project principle."""
+    return [l for l in corpus.items
+            if l.area == "regularity" or (l.area == "principle" and l.tier == "project")]
+
+
+def grounded_regularities(principle: Leaf) -> list[str]:
+    """The regularity slugs a global principle's `grounded_in` names (prefix dropped)."""
+    return [s[len(REGULARITY_PREFIX):] for s in _grounded_or_empty(principle.text)
+            if s.startswith(REGULARITY_PREFIX)]
+
+
+def pointer_expected(leaf: Leaf) -> list[str]:
+    """What the leaf's index pointer lists after its arrow."""
+    if leaf.area == "principle" and leaf.tier == "global":
+        return grounded_regularities(leaf)
+    return _induced_or_empty(leaf.text)
 
 
 def is_cross_tier(leaf: Leaf, target: Leaf) -> bool:
@@ -395,16 +444,16 @@ def index_sync(index_text: str, slug: str, sources) -> str:
 
 def index_mismatches(corpus: Corpus) -> list[Leaf]:
     out = []
-    for principle in corpus.of("principle"):
-        text = corpus.read(index_path(principle))
+    for leaf in corpus.of("regularity") + corpus.of("principle"):
+        text = corpus.read(index_path(leaf))
         if text is None:
             continue
         lines = text.split("\n")
-        i = _pointer_index(lines, principle.slug)
+        i = _pointer_index(lines, leaf.slug)
         if i is None:
             continue
-        if set(pointer_sources(lines[i]) or []) != set(_induced_or_empty(principle.text)):
-            out.append(principle)
+        if set(pointer_sources(lines[i]) or []) != set(pointer_expected(leaf)):
+            out.append(leaf)
     return out
 
 
@@ -450,7 +499,7 @@ def case_section_error(text: str) -> str | None:
 
 
 def case_cited(case: Leaf, corpus: Corpus) -> bool:
-    return any(case.slug in _induced_or_empty(p.text) for p in corpus.of("principle", "global"))
+    return any(case.slug in _induced_or_empty(r.text) for r in corpus.of("regularity", "global"))
 
 
 def _citing_project_leaves(case: Leaf, corpus: Corpus) -> list[Leaf]:
@@ -487,9 +536,16 @@ def leaks(text: str, identifiers) -> list[str]:
 # queries
 # --------------------------------------------------------------------------
 def experiences_of(principle: Leaf, corpus: Corpus) -> list[Leaf]:
-    """Every leaf a revision of `principle` must consult: its experience and case
-    sources and, through each case, the project leaves that cite it."""
+    """Every leaf a revision of `principle` (a regularity, a project principle, or a
+    global principle through the regularities it is grounded in) must consult: its
+    experience and case sources and, through each case, the project leaves that cite it."""
     out: list[Leaf] = []
+    if principle.area == "principle" and principle.tier == "global":
+        for slug in grounded_regularities(principle):
+            for reg in corpus.of("regularity", "global"):
+                if reg.slug == slug:
+                    out += [l for l in experiences_of(reg, corpus) if l not in out]
+        return out
     for slug in _induced_or_empty(principle.text):
         leaf = corpus.find(slug, principle.tier)
         if leaf is None or leaf.area not in EXPERIENCE_SOURCE_KINDS:
@@ -517,21 +573,22 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
             continue
         for slug in status:
             if not principle_exists(slug, corpus, leaf.tier):
-                report(UNKNOWN_PRINCIPLE, leaf, f"names unknown principle {slug!r}")
+                noun = "principle" if leaf.tier == "project" else "regularity"
+                report(UNKNOWN_PRINCIPLE, leaf, f"names unknown {noun} {slug!r}")
                 continue
             target = target_of(slug, corpus, leaf.tier)
             if target is None:
                 continue
             if not target_allowed(leaf.tier, target):
                 report(PROJECT_DIRECT_GLOBAL, leaf,
-                       f"a project leaf names global principle {slug!r}; cite a case instead")
+                       f"a project leaf names global {target.area} {slug!r}; cite a case instead")
                 continue
             if is_cross_tier(leaf, target):
                 continue
             if not symmetric(leaf, target, corpus):
                 report(ASYMMETRIC, leaf, f"names {slug!r}, whose `{INDUCED}` omits it")
 
-    for principle in corpus.of("principle"):
+    for principle in induced_leaves(corpus):
         try:
             induced = read_induced(principle.text)
         except ValueError as exc:
@@ -553,8 +610,29 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
         elif state == "stale":
             report(STALE_MARK, principle, f"has an experience source and a stale `{RULE_DERIVED}`")
 
-    for principle in index_mismatches(corpus):
-        report(INDEX_MISMATCH, principle, f"its {INDEX} pointer lists other sources than `{INDUCED}`")
+    regularity_slugs = {r.slug for r in corpus.of("regularity", "global")}
+    for principle in corpus.of("principle", "global"):
+        if field_value(principle.text, INDUCED) is not None:
+            report(PRINCIPLE_INDUCED, principle,
+                   f"a principle names its regularities in `{GROUNDED}`, not `{INDUCED}`")
+        try:
+            grounded = read_grounded(principle.text)
+        except ValueError as exc:
+            report(BAD_STATUS, principle, str(exc))
+            continue
+        if not grounded:
+            report(UNGROUNDED_PRINCIPLE, principle,
+                   f"no `{GROUNDED}: [{REGULARITY_PREFIX}<slug>, ...]` naming a regularity")
+        for item in grounded:
+            if not (item.startswith(REGULARITY_PREFIX)
+                    and item[len(REGULARITY_PREFIX):] in regularity_slugs):
+                report(UNKNOWN_REGULARITY, principle,
+                       f"`{GROUNDED}` item {item!r} is not `{REGULARITY_PREFIX}<slug>` of an "
+                       "existing regularity")
+
+    for leaf in index_mismatches(corpus):
+        field_name = GROUNDED if leaf.area == "principle" and leaf.tier == "global" else INDUCED
+        report(INDEX_MISMATCH, leaf, f"its {INDEX} pointer lists other sources than `{field_name}`")
 
     cross = cross_tier_enabled(corpus.project_root)
     identifiers = project_identifiers(corpus) if cross else []
@@ -567,7 +645,7 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
         if not origin_tier_ok(field_value(case.text, ORIGIN_TIER_FIELD)):
             report(CASE_ORIGIN_TIER, case, f"`{ORIGIN_TIER_FIELD}` is not {ORIGIN_TIER}")
         if not case_cited(case, corpus):
-            report(UNCITED_CASE, case, "no principle lists this case")
+            report(UNCITED_CASE, case, "no regularity lists this case")
         if not cross:
             continue
         if orphaned(case, corpus):
@@ -624,15 +702,16 @@ def unlink_changes(source: Leaf, target: Leaf, corpus: Corpus) -> list[Change]:
 
 
 def backfill_status(corpus: Corpus, rule_derived: dict[str, str] | None = None) -> list[Change]:
-    """Stamp `[]` on every leaf and case without the field, mirror every principle's
-    sources onto them, set the given rule_derived reasons and sync the index pointers."""
+    """Stamp `[]` on every leaf and case without the field, mirror every regularity's (and
+    project principle's) sources onto them, set the given rule_derived reasons on global
+    regularities and sync the index pointers."""
     texts: dict[Path, tuple[str, str]] = {}
 
     def current(path: Path) -> str:
         return texts[path][0] if path in texts else corpus.read(path)
 
     mirrored: dict[Path, list[str]] = {}
-    for principle in corpus.of("principle"):
+    for principle in induced_leaves(corpus):
         for slug in _induced_or_empty(principle.text):
             leaf = corpus.find(slug, principle.tier)
             if leaf is not None and leaf.area in EXPERIENCE_SOURCE_KINDS:
@@ -646,17 +725,17 @@ def backfill_status(corpus: Corpus, rule_derived: dict[str, str] | None = None) 
         if status != new:
             texts[leaf.path] = (set_field(leaf.text, FIELD, format_list(new)), "leaf")
     for slug, reason in (rule_derived or {}).items():
-        principle = next((p for p in corpus.of("principle", "global") if p.slug == slug), None)
-        if principle is None:
-            raise ValueError(f"no global principle {slug!r} to mark rule-derived")
-        texts[principle.path] = (set_field(current(principle.path), RULE_DERIVED, reason),
-                                 "principle")
-    for principle in corpus.of("principle"):
+        regularity = next((p for p in corpus.of("regularity", "global") if p.slug == slug), None)
+        if regularity is None:
+            raise ValueError(f"no global regularity {slug!r} to mark rule-derived")
+        texts[regularity.path] = (set_field(current(regularity.path), RULE_DERIVED, reason),
+                                  "principle")
+    for principle in corpus.of("regularity") + corpus.of("principle"):
         path = index_path(principle)
         text = current(path)
         if text is None:
             continue
-        new = index_sync(text, principle.slug, _induced_or_empty(principle.text))
+        new = index_sync(text, principle.slug, pointer_expected(principle))
         if new != text:
             texts[path] = (new, "index")
     return [Change(path, text, role) for path, (text, role) in texts.items()

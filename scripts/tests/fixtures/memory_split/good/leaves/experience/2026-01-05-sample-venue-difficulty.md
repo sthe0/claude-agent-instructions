@@ -27,6 +27,7 @@ Moved by memory-curator split on 2026-10-12:
 
 - [A control runs where the commits are not](2026-01-05-sample-venue-drift.md) — 2 contexts
 - [A network call in a control hangs the engine](2026-02-15-sample-fetch-hang.md) — 2 contexts
+- regularity: [sample-venue-regularity](../regularities/sample-venue-regularity.md)
 - principle: [sample-venue-principle](../principles/sample-venue-principle.md)
 
 ### 2026-01-10 — first sighting

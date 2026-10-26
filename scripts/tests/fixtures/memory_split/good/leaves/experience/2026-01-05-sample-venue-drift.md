@@ -4,7 +4,7 @@ description: A sample cluster for the split fixture — the verification venue d
 type: reference
 schema: difficulty/v1
 generality: 0
-generalized_into: [sample-venue-principle]
+generalized_into: [sample-venue-regularity]
 resolution_confirmed_by_user: "fixture (AskUserQuestion: 'Yes — resolved')"
 created: 2026-10-12
 last_verified: 2026-10-12

@@ -1,4 +1,5 @@
 # Split fixture memory
 
 - [Experience](leaves/experience/MEMORY.md) — difficulty-centric experience leaves.
-- [Principles](leaves/principles/MEMORY.md) — principles induced from them.
+- [Regularities](leaves/regularities/MEMORY.md) — regularities induced from them.
+- [Principles](leaves/principles/MEMORY.md) — principles grounded in those regularities.

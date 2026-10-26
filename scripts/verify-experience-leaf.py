@@ -25,7 +25,7 @@ Rule (CLAUDE.md § On task resolution):
   relying on prose recall.
 
   A difficulty/v1 leaf must also carry `generalized_into: [...]` — the
-  principles that generalize it, `[]` when none does yet; the link's other
+  regularities that generalize it, `[]` when none does yet; the link's other
   side is checked by verify-principle-provenance.py.
 
 Invocation modes:

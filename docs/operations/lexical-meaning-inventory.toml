@@ -2575,6 +2575,18 @@ hits = 6
 hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
+[sites."scripts/verify-leaf-structure.py::_section_text::pattern.search"]
+class = "structural"
+ground = "SECTION_RE finds the next markdown '## ' heading to delimit a named section's body (fixed heading syntax)."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/verify-leaf-structure.py::_section_text::re.search"]
+class = "structural"
+ground = "Locates the '## <name>' heading line of a required section by its fixed heading syntax; the name is a schema constant, not free text."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/verify-leaf-structure.py::is_sk_leaf::pattern.search"]
 class = "structural"
 ground = "SK_PATH_RE matches the system-knowledge/<name>.md path shape."

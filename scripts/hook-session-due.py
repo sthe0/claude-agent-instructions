@@ -328,8 +328,8 @@ def report_promote(scan: dict) -> None:
     if not flagged:
         return
     err(
-        f"promote-scan: {len(flagged)} principle-induction candidate(s) at or above "
-        "principle-promotion-threshold — lift each into a principle/v1 leaf via "
+        f"promote-scan: {len(flagged)} regularity-induction candidate(s) at or above "
+        "principle-promotion-threshold — lift each into a regularity/v1 leaf via "
         "`scripts/record-experience.py promote-scan` (config.md § principle-promotion-threshold)."
     )
     for cluster in flagged[:MAX_PRINTED_LINES]:

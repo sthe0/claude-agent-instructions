@@ -18,7 +18,9 @@ Subcommands:
                       durable system fact before authoring a plan that
                       touches that system (same difficulty-led ranking,
                       read-before-designing rather than extend-before-
-                      recording). --tier principles: the generality>=1 tier.
+                      recording). --tier regularities: the knowledge layer a
+                      recurring cluster is lifted into; --tier principles: the
+                      norm layer that names regularities.
   new                 Write a fresh standalone leaf (first occurrence).
   extend              Append a new `### context` to an existing leaf; once it
                       holds >=2 contexts, scaffold `## Common core & variations`.
@@ -35,23 +37,25 @@ Subcommands:
                       exactly once across source and cluster leaves, and the
                       memory verifiers pass. Prints `missing:` / `duplicate:` /
                       `unexpected:` / `misplaced:` / `verifier:` lines.
-  promote             Write a principle/v1 skeleton, its principles/MEMORY.md
-                      pointer, and record it in a --manifest; stamps the new
-                      principle into each source leaf's `generalized_into`.
-                      --rule-derived REASON for a principle with no experience
-                      source; --project-dir D writes the project's own
-                      principles/ (D is the repo dir, as for every verb; a
-                      memory dir holding experience/ or principles/ is also
-                      accepted).
-  link / unlink       Write / remove every side of a leaf -> principle (or
+  promote             Write a regularity/v1 skeleton (the knowledge layer), its
+                      regularities/MEMORY.md pointer, and record it in a
+                      --manifest; stamps the new regularity into each source
+                      leaf's `generalized_into`. --rule-derived REASON for a
+                      regularity with no experience source. --principle
+                      --grounded-in REG[,REG] writes a principle/v1 skeleton
+                      (the norm layer) naming existing regularities instead.
+                      --project-dir D writes the project's own principles/
+                      (D is the repo dir, as for every verb; a memory dir
+                      holding experience/ or principles/ is also accepted).
+  link / unlink       Write / remove every side of a leaf -> regularity (or
                       project leaf -> case) link: the leaf's
-                      `generalized_into`, the principle's `induced_from` and
+                      `generalized_into`, the regularity's `induced_from` and
                       its index pointer, atomically (lib/principle_provenance.py).
   case-add            Write sanitized case/v1 leaves of project leaves under
-                      principles/cases/ and link them to global principles;
+                      principles/cases/ and link them to global regularities;
                       refuses a case carrying a project identifier.
   backfill            Stamp `generalized_into` on every leaf from the
-                      principles' `induced_from`; idempotent.
+                      regularities' `induced_from`; idempotent.
   provenance          Read-only: --check lists unaccounted links (exit 1 on
                       any); --of SLUG lists every leaf a revision must consult.
 
@@ -136,14 +140,17 @@ def project_memory(project_dir: str | None) -> Path | None:
 # term-counting ranking itself is identical across all three tiers.
 TIER_SECTION = {
     "experience": "Difficulty",
+    "regularities": "Regularity",
     "principles": "Principle",
     "system-knowledge": "Difficulty",
 }
 
 
 def search_root(scope: str, project_dir: str | None, tier: str) -> Path:
-    # principles are a global-only tier (ADR-0001 generality gradient); experience
-    # and system-knowledge keep the same global/project split.
+    # regularities and principles are global-only tiers (ADR-0001 generality
+    # gradient); experience and system-knowledge keep the same global/project split.
+    if tier == "regularities":
+        return REPO_ROOT / "memory-global/leaves/regularities"
     if tier == "principles":
         return REPO_ROOT / "memory-global/leaves/principles"
     if tier == "system-knowledge":
@@ -410,16 +417,14 @@ def cmd_search(a) -> int:
         if score:
             scored.append((score, leaf, desc.strip()))
     scored.sort(key=lambda x: -x[0])
-    noun = {"principles": "principle", "system-knowledge": "system-knowledge leaf"}.get(
-        tier, "experience leaf"
-    )
+    noun = {"regularities": "regularity", "principles": "principle",
+            "system-knowledge": "system-knowledge leaf"}.get(tier, "experience leaf")
     ledger_record("search", a, a.keywords, [leaf.resolve() for _, leaf, _ in scored[:3]])
     if not scored:
         print(f"no analogous {noun} found — record a NEW leaf")
         return 0
-    verb = {"principles": "ground a stage in", "system-knowledge": "read before designing"}.get(
-        tier, "extend"
-    )
+    verb = {"regularities": "cite", "principles": "ground a stage in",
+            "system-knowledge": "read before designing"}.get(tier, "extend")
     print(f"analogous {noun}s ({verb} one instead of duplicating):")
     for score, leaf, desc in scored[:8]:
         print(f"  [{score:>3}] {leaf.name}\n        {desc}")
@@ -507,7 +512,7 @@ def cmd_promote_scan(a) -> int:
     for c in clusters:
         print(f"[{c['occurrences_total']} occurrence(s)] {', '.join(c['members'])}")
         if c["flagged"]:
-            print(f"  → candidate: lift into a principle/v1 leaf "
+            print(f"  → candidate: lift into a regularity/v1 leaf "
                   f"(induced_from = {c['members']})")
         if c["fragmented"]:
             print(f"  → fragmented across {len(c['members'])} leaves "
@@ -660,6 +665,7 @@ SPLIT_MARKER = "Moved by memory-curator split on"
 SPLIT_MARKER_LINE = re.compile(rf"{SPLIT_MARKER} \d{{4}}-\d{{2}}-\d{{2}}:")
 CLUSTER_TEXT_KEYS = ("slug", "name", "description", "functional_ground", "difficulty")
 CLUSTER_OPTIONAL_KEYS = ("existing_principle", "no_principle_reason")
+PROMOTED_KEYS = (("regularities", "regularity"), ("principles", "principle"))
 CARRIED_KEYS = ("type", "schema", "generality", "tier")
 LEVEL_LABELS = {1: "sibling-context rules", 2: "task-class rules", 3: "cross-domain invariants"}
 SUBPROCESS_TIMEOUT_S = 120
@@ -844,10 +850,11 @@ def manifest_problems(manifest: dict) -> list[str]:
         for key in CLUSTER_OPTIONAL_KEYS:
             if key in cluster and not isinstance(cluster[key], str):
                 out.append(f"{where} '{key}' must be a string")
-    principles = manifest.get("principles", [])
-    if not isinstance(principles, list) or not all(
-            isinstance(p, str) and SLUG.fullmatch(p) for p in principles):
-        out.append("manifest 'principles' must be a list of principle slugs")
+    for key, noun in PROMOTED_KEYS:
+        listed = manifest.get(key, [])
+        if not isinstance(listed, list) or not all(
+                isinstance(p, str) and SLUG.fullmatch(p) for p in listed):
+            out.append(f"manifest '{key}' must be a list of {noun} slugs")
     out += rewrite_shape_problems(manifest.get("rewrites", []))
     return out
 
@@ -957,8 +964,14 @@ def pointer_bullet(target: Path, source: Path, label: str, suffix: str = "") -> 
     return f"- {label}({os.path.relpath(target, source.parent)}){suffix}"
 
 
+def promoted_leaves(manifest: dict, root: Path) -> list[tuple[str, str, Path]]:
+    """(kind, slug, path) of every regularity and principle the manifest lists."""
+    return [(noun, slug, root / f"leaves/{key}/{slug}.md")
+            for key, noun in PROMOTED_KEYS for slug in manifest.get(key, [])]
+
+
 def split_pointer_list(source: Path, root: Path, clusters: list[dict],
-                       principles: list[str], date: str) -> str:
+                       promoted: list[tuple[str, str, Path]], date: str) -> str:
     experience = root / "leaves/experience"
     lines = [f"{SPLIT_MARKER} {date}:", ""]
     for cluster in clusters:
@@ -966,9 +979,8 @@ def split_pointer_list(source: Path, root: Path, clusters: list[dict],
         lines.append(pointer_bullet(
             experience / f"{cluster['slug']}.md", source, f"[{one_line(cluster['name'])}]",
             f" — {n} context{'s' if n != 1 else ''}"))
-    for slug in principles:
-        lines.append(pointer_bullet(
-            root / f"leaves/principles/{slug}.md", source, f"principle: [{slug}]"))
+    for noun, slug, path in promoted:
+        lines.append(pointer_bullet(path, source, f"{noun}: [{slug}]"))
     return "\n".join(lines) + "\n"
 
 
@@ -1040,15 +1052,16 @@ def cmd_split_contexts(a) -> int:
 
 def cluster_principle_links(leaves_dir: Path, clusters: list[dict], leaves: dict[str, Path],
                             writes: dict[Path, str]) -> dict[Path, str]:
-    """Both sides of the link from each cluster leaf to its `existing_principle`."""
+    """Both sides of the link from each cluster leaf to its `existing_principle`, when
+    that names a regularity (a principle is grounded, not induced, so it takes no link)."""
     corpus = pp.load_corpus(leaves_dir).apply(
         pp.Change(path, text, "leaf") for path, text in writes.items())
     out: dict[Path, str] = {}
     for cluster in clusters:
-        principle = corpus.find(cluster.get("existing_principle") or "", "global")
-        if principle is None or principle.area != "principle":
+        regularity = pp.target_of(cluster.get("existing_principle") or "", corpus)
+        if regularity is None:
             continue
-        changes = pp.link_changes(corpus.find(cluster["slug"]), principle, corpus)
+        changes = pp.link_changes(corpus.find(cluster["slug"]), regularity, corpus)
         corpus = corpus.apply(changes)
         out.update({ch.path: ch.new_text for ch in changes})
     return out
@@ -1076,13 +1089,13 @@ def cmd_split_apply(a) -> int:
     leaves = {c["slug"]: experience / f"{c['slug']}.md" for c in manifest["clusters"]}
     problems += [f"cluster leaf already exists: {p}" for p in leaves.values()
                  if p.exists() or p.resolve() == source]
-    principles = manifest.get("principles", [])
-    problems += [f"principle {s} is listed but {root / 'leaves/principles' / (s + '.md')} "
-                 f"does not exist" for s in principles
-                 if not (root / "leaves/principles" / f"{s}.md").is_file()]
+    promoted = promoted_leaves(manifest, root)
+    problems += [f"{noun} {slug} is listed but {path} does not exist"
+                 for noun, slug, path in promoted if not path.is_file()]
     problems += [f"cluster {c['slug']}: existing_principle {c['existing_principle']} does not "
                  f"exist" for c in manifest["clusters"] if c.get("existing_principle")
-                 and not (root / "leaves/principles" / f"{c['existing_principle']}.md").is_file()]
+                 and not any((root / f"leaves/{key}/{c['existing_principle']}.md").is_file()
+                             for key, _ in PROMOTED_KEYS)]
     carried = frontmatter_values(text)
     if not carried.get("resolution_confirmed_by_user"):
         problems.append("source has no resolution_confirmed_by_user to carry over")
@@ -1091,7 +1104,7 @@ def cmd_split_apply(a) -> int:
     if problems:
         refuse(*problems)
 
-    pointers = split_pointer_list(source, root, manifest["clusters"], principles, a.date)
+    pointers = split_pointer_list(source, root, manifest["clusters"], promoted, a.date)
     # blocks keep the source's own order, not the order the manifest lists them in
     kept = set(manifest["keep"])
     writes = {source: rewritten_source(
@@ -1143,34 +1156,92 @@ def cmd_promote(a) -> int:
     project = project_memory(a.project_dir)
     tier = "project" if project else "global"
     corpus = pp.load_corpus(leaves, project)
+    induced = a.induced_from or []
+    grounded = [s for item in (a.grounded_in or []) for s in item.split(",") if s]
     kinds = []
-    for slug in a.induced_from:
-        found = corpus.find(slug, tier) if SLUG.fullmatch(slug) else None
-        if found is None or (project and found.tier != "project"):
-            problems.append(f"induced-from leaf {slug!r} not found under {project or leaves}")
-        else:
-            kinds.append(pp.classify(slug, corpus, tier))
-    if not problems and not pp.promote_sources_ok(kinds, a.rule_derived):
-        problems.append("no induced-from leaf is an experience leaf or a case; name one, "
-                        "or give --rule-derived REASON for a principle written from rules")
-    if a.rule_derived and any(k in pp.EXPERIENCE_SOURCE_KINDS for k in kinds):
-        problems.append("--rule-derived is for a principle with no experience source, "
-                        "but an induced-from leaf is an experience leaf or a case")
-    principles_dir = (project / "principles") if project else (leaves / "principles")
-    path = principles_dir / f"{a.slug}.md"
+    if a.principle:
+        if project:
+            problems.append("--principle writes a global principle; the project tier keeps "
+                            "its principles induced from leaves (omit --principle)")
+        if induced or a.rule_derived:
+            problems.append("a principle names the regularities it rests on with "
+                            "--grounded-in; --induced-from and --rule-derived belong to a "
+                            "regularity")
+        if not grounded:
+            problems.append("--principle needs --grounded-in REG[,REG]: the existing "
+                            "regularities the principle rests on")
+        known = {r.slug for r in corpus.of("regularity", "global")}
+        problems += [f"grounded-in regularity {slug!r} not found under {leaves / 'regularities'}"
+                     for slug in grounded if slug not in known]
+    else:
+        if grounded:
+            problems.append("--grounded-in belongs to --principle")
+        if not induced:
+            problems.append("promote needs --induced-from SLUG (repeatable), or --principle "
+                            "--grounded-in REG[,REG] for a principle")
+        for slug in induced:
+            found = corpus.find(slug, tier) if SLUG.fullmatch(slug) else None
+            if found is None or (project and found.tier != "project"):
+                problems.append(f"induced-from leaf {slug!r} not found under {project or leaves}")
+            else:
+                kinds.append(pp.classify(slug, corpus, tier))
+        if induced and not problems and not pp.promote_sources_ok(kinds, a.rule_derived):
+            problems.append("no induced-from leaf is an experience leaf or a case; name one, "
+                            "or give --rule-derived REASON for a regularity written from rules")
+        if a.rule_derived and any(k in pp.EXPERIENCE_SOURCE_KINDS for k in kinds):
+            problems.append("--rule-derived is for a regularity with no experience source, "
+                            "but an induced-from leaf is an experience leaf or a case")
+    area = "regularity" if tier == "global" and not a.principle else "principle"
+    dest_dir = (project / "principles") if project else (
+        leaves / ("regularities" if area == "regularity" else "principles"))
+    path = dest_dir / f"{a.slug}.md"
     if path.exists():
-        problems.append(f"principle already exists: {path}")
+        problems.append(f"{area} already exists: {path}")
     if problems:
         refuse(*problems)
 
+    source_links = grounded if a.principle else induced
+    schema = "principle/v1" if area == "principle" else "regularity/v1"
+    if a.principle:
+        link_line = f"grounded_in: [{', '.join(pp.REGULARITY_PREFIX + s for s in grounded)}]\n"
+        body = (
+            f"## Principle\n\n{a.statement.strip()}\n\n"
+            "## Goal class\n\n"
+            f"Level {a.generality} — TODO (curator): name the goal this norm serves and the "
+            "class of tasks it ranges over.\n\n"
+            "## Grounded in\n\n"
+            + "".join(f"- [[{s}]] — TODO (curator): what this regularity contributes.\n"
+                      for s in grounded)
+            + "\n## Refutation\n\n"
+            "TODO (curator): the observation that would refute this principle or force a "
+            "broader form.\n"
+        )
+    else:
+        link_line = f"induced_from: [{', '.join(induced)}]\n"
+        statement_heading = "Regularity" if area == "regularity" else "Principle"
+        body = (
+            f"## {statement_heading}\n\n{a.statement.strip()}\n\n"
+            "## Generality\n\n"
+            f"Level {a.generality} — TODO (curator): name the class of tasks this statement "
+            "ranges over and what it is deliberately not claimed for.\n\n"
+            "## Induced from\n\n"
+            + "".join(f"- [[{s}]] — TODO (curator): what this source contributes.\n"
+                      for s in induced)
+            + "\n## Refutation\n\n"
+            f"TODO (curator): the observation that would refute this {area} or force a "
+            "broader form.\n"
+            + ("" if area == "regularity" else
+               "\n## See also\n\n"
+               "- TODO (curator): sibling principles and the leaves that apply this one.\n")
+        )
     text = (
         "---\n"
         f"name: {a.slug}\n"
         f"description: {one_line(a.description)}\n"
         "type: reference\n"
-        "schema: principle/v1\n"
+        f"schema: {schema}\n"
         f"generality: {a.generality}\n"
-        f"induced_from: [{', '.join(a.induced_from)}]\n"
+        + link_line
         + (f"{pp.RULE_DERIVED}: {json.dumps(one_line(a.rule_derived))}\n"
            if a.rule_derived else "")
         + (f"domain: {a.domain}\n" if a.domain else "")
@@ -1178,52 +1249,45 @@ def cmd_promote(a) -> int:
         f"last_verified: {a.date}\n"
         "---\n\n"
         f"# {one_line(a.name)}\n\n"
-        f"## Principle\n\n{a.statement.strip()}\n\n"
-        "## Generality\n\n"
-        f"Level {a.generality} — TODO (curator): name the class of tasks this statement "
-        "ranges over and what it is deliberately not claimed for.\n\n"
-        "## Induced from\n\n"
-        + "".join(f"- [[{s}]] — TODO (curator): what this source contributes.\n"
-                  for s in a.induced_from)
-        + "\n## Refutation\n\n"
-        "TODO (curator): the observation that would refute this principle or force a "
-        "broader form.\n\n"
-        "## See also\n\n"
-        "- TODO (curator): sibling principles and the leaves that apply this one.\n"
+        + body
     )
-    index = principles_dir / "MEMORY.md"
+    index = dest_dir / "MEMORY.md"
     pointer = (f"- [{one_line(a.name)}]({a.slug}.md) — {one_line(a.description)} "
-               f"← {', '.join(f'`{s}`' for s in a.induced_from)}.\n")
-    index_text = read_text_exact(index) if index.exists() else (
-        "# Principles\n\nGenerality-graded, provenance-rooted, refutable principles "
-        "(schema: ../principle-leaf-schema.md).\n")
+               f"← {', '.join(f'`{s}`' for s in source_links)}.\n")
+    title, blurb = (("Regularities", "Refutable claims about how things are, induced from "
+                     "experience and grouped by generality level (schema: regularity/v1).")
+                    if area == "regularity" else
+                    ("Principles", "Generality-graded, provenance-rooted, refutable principles "
+                     "(schema: ../principle-leaf-schema.md)."))
+    index_text = read_text_exact(index) if index.exists() else f"# {title}\n\n{blurb}\n"
     heading = re.search(rf"^## Level {a.generality}\b.*$", index_text, re.MULTILINE)
     if heading:
         nxt = H2.search(index_text, heading.end())
         end = nxt.start() if nxt else len(index_text)
-        body = index_text[heading.end():end].rstrip("\n")
-        index_text = (index_text[:heading.end()] + (body or "\n") + "\n" + pointer
+        listed_pointers = index_text[heading.end():end].rstrip("\n")
+        index_text = (index_text[:heading.end()] + (listed_pointers or "\n") + "\n" + pointer
                       + ("\n" if nxt else "") + index_text[end:])
     else:
         index_text = (index_text.rstrip("\n") + f"\n\n## Level {a.generality} — "
                       f"{LEVEL_LABELS[a.generality]}\n\n{pointer}")
 
     writes = {path: text, index: index_text}
-    principle = pp.Leaf(a.slug, path, tier, "principle", text)
-    for slug in a.induced_from:
+    promoted = pp.Leaf(a.slug, path, tier, area, text)
+    for slug in induced:
         source = corpus.find(slug, tier)
         if source.area in pp.EXPERIENCE_SOURCE_KINDS:
-            writes.update({ch.path: ch.new_text for ch in pp.link_changes(source, principle, corpus)
+            writes.update({ch.path: ch.new_text for ch in pp.link_changes(source, promoted, corpus)
                            if ch.role == "leaf"})
     if manifest is not None:
-        principles = list(manifest.get("principles", []))
-        if a.slug not in principles:
-            principles.append(a.slug)
-        manifest["principles"] = principles
+        manifest_key = "regularities" if area == "regularity" else "principles"
+        listed = list(manifest.get(manifest_key, []))
+        if a.slug not in listed:
+            listed.append(a.slug)
+        manifest[manifest_key] = listed
         writes[manifest_path] = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
         source = (root / manifest["source"]).resolve()
         if source.is_file():
-            bullet = pointer_bullet(path, source, f"principle: [{a.slug}]")
+            bullet = pointer_bullet(path, source, f"{area}: [{a.slug}]")
             updated = add_pointer_to_split_list(read_text_exact(source), bullet)
             if updated is not None:
                 writes[source] = updated
@@ -1291,7 +1355,8 @@ def resolve_pair(corpus: pp.Corpus, tier: str, source_slug: str, target_slug: st
         refuse(f"{source_slug!r} is not an experience leaf or a case")
     target = pp.target_of(target_slug, corpus, source.tier)
     if target is None:
-        refuse(f"{target_slug!r} is not a principle or a case this leaf may name")
+        refuse(f"{target_slug!r} is not a regularity (a project principle or case for a "
+               "project leaf) this leaf may name")
     return source, target
 
 
@@ -1302,7 +1367,7 @@ def cmd_link(a) -> int:
     for source_slug, target_slug in link_pairs(a):
         source, target = resolve_pair(corpus, tier, source_slug, target_slug)
         if not pp.target_allowed(source.tier, target):
-            refuse(f"project leaf {source_slug} may not name global principle {target_slug}; "
+            refuse(f"project leaf {source_slug} may not name global {target.area} {target_slug}; "
                    "write a case with case-add and link the leaf to the case")
         step = pp.link_changes(source, target, corpus)
         corpus = corpus.apply(step)
@@ -1383,7 +1448,7 @@ def cmd_case_add(a) -> int:
             problems.append(f"case {slug}: source {source} is not an experience leaf of the project")
             continue
         if not isinstance(spec["into"], list) or not spec["into"]:
-            problems.append(f"case {slug}: `into` names no principle")
+            problems.append(f"case {slug}: `into` names no regularity")
             continue
         source_text = project_leaves[source].text
         path = cases_dir / f"{slug}.md"
@@ -1399,7 +1464,7 @@ def cmd_case_add(a) -> int:
         if leaked:
             problems.append(f"case {slug} carries project identifier(s): {', '.join(leaked)}")
         targets = [pp.target_of(p, corpus, "global") for p in spec["into"]]
-        problems += [f"case {slug}: unknown principle {p!r}"
+        problems += [f"case {slug}: unknown regularity {p!r}"
                      for p, t in zip(spec["into"], targets) if t is None]
         if problems:
             continue
@@ -1435,10 +1500,10 @@ def cmd_backfill(a) -> int:
 def cmd_provenance(a) -> int:
     corpus = provenance_corpus(a)
     if a.of:
-        principle = corpus.find(a.of, provenance_tier(a))
-        if principle is None or principle.area != "principle":
-            refuse(f"{a.of!r} is not a principle")
-        for leaf in pp.experiences_of(principle, corpus):
+        subject = corpus.find(a.of, provenance_tier(a))
+        if subject is None or subject.area not in ("regularity", "principle"):
+            refuse(f"{a.of!r} is not a regularity or a principle")
+        for leaf in pp.experiences_of(subject, corpus):
             print(f"{leaf.tier}\t{leaf.slug}\t{leaf.path}")
     if a.of and not a.check:
         return 0
@@ -1541,8 +1606,7 @@ def cmd_split_verify(a) -> int:
                 else:
                     failures.append(f"misplaced: {n}:{sha} in {leaf}")
 
-    checked = list(expected) + [root / "leaves/principles" / f"{s}.md"
-                                for s in manifest.get("principles", [])]
+    checked = list(expected) + [path for _noun, _slug, path in promoted_leaves(manifest, root)]
     for leaf in checked:
         if not leaf.is_file():
             failures.append(f"verifier: {leaf}: file not found")
@@ -1579,12 +1643,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_scope(s)
     s.add_argument(
         "--tier",
-        choices=["experience", "principles", "system-knowledge"],
+        choices=["experience", "regularities", "principles", "system-knowledge"],
         default="experience",
         help=(
-            "which leaf tier to search: experience (default), the principles "
-            "generality tier, or system-knowledge (durable non-obvious facts, "
-            "ranked on the same difficulty-led basis as experience)"
+            "which leaf tier to search: experience (default), the regularities "
+            "(knowledge layer), the principles (norm layer), or system-knowledge "
+            "(durable non-obvious facts, ranked on the same difficulty-led basis "
+            "as experience)"
         ),
     )
     s.add_argument(
@@ -1668,7 +1733,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ps = sub.add_parser("promote-scan",
                         help="cluster experience leaves by functional ground and flag "
-                             "principle-induction candidates")
+                             "regularity-induction candidates")
     add_scope(ps)
     ps.add_argument(
         "--threshold", type=int, default=None,
@@ -1705,8 +1770,9 @@ def build_parser() -> argparse.ArgumentParser:
     sv.set_defaults(func=cmd_split_verify)
 
     pr = sub.add_parser("promote",
-                        help="write a principle/v1 skeleton and its principles/MEMORY.md "
-                             "pointer (refuses the canonical checkout)")
+                        help="write a regularity/v1 skeleton and its regularities/MEMORY.md "
+                             "pointer, or with --principle --grounded-in a principle/v1 "
+                             "skeleton (refuses the canonical checkout)")
     pr.add_argument("--root", help="memory root (default: <repo>/memory-global, or the "
                                    "manifest's root when --manifest is given)")
     add_manifest(pr, required=False)
@@ -1714,15 +1780,21 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--name", required=True)
     pr.add_argument("--description", required=True)
     pr.add_argument("--generality", type=int, choices=[1, 2, 3], required=True)
-    pr.add_argument("--induced-from", action="append", required=True, dest="induced_from",
-                    metavar="SLUG", help="a leaf slug this principle generalizes; repeatable")
+    pr.add_argument("--induced-from", action="append", dest="induced_from", metavar="SLUG",
+                    help="a leaf slug this regularity generalizes; repeatable")
+    pr.add_argument("--principle", action="store_true",
+                    help="write a principle/v1 skeleton (the norm layer) instead of a "
+                         "regularity; needs --grounded-in")
+    pr.add_argument("--grounded-in", action="append", dest="grounded_in", metavar="REG",
+                    help="with --principle: an existing regularity slug the principle rests "
+                         "on; repeatable or comma-separated")
     pr.add_argument("--statement", required=True)
     pr.add_argument("--domain")
     pr.add_argument("--date", default=today())
     pr.add_argument("--session", default=None,
                     help="ledger session_id for the edit-ledger stamp of this write")
     pr.add_argument("--rule-derived", metavar="REASON",
-                    help="why a principle with no experience or case source exists")
+                    help="why a regularity with no experience or case source exists")
     pr.add_argument("--project-dir", metavar="D",
                     help="project repo dir (a memory dir holding experience/ or principles/ is "
                          "also accepted): write the project's principles/<slug>.md from its leaves")
@@ -1740,14 +1812,14 @@ def build_parser() -> argparse.ArgumentParser:
         return sp
 
     for name, func, verb in (("link", cmd_link, "write"), ("unlink", cmd_unlink, "remove")):
-        lk = provenance_parser(name, f"{verb} every side of a leaf -> principle/case link",
+        lk = provenance_parser(name, f"{verb} every side of a leaf -> regularity/case link",
                                func)
         lk.add_argument("source", nargs="?", metavar="SOURCE")
         lk.add_argument("target", nargs="?", metavar="TARGET")
         lk.add_argument("--pairs", metavar="FILE", help="one 'source<TAB>target' line each")
 
     ca = provenance_parser("case-add", "write sanitized cases of project leaves and link "
-                                       "them to global principles", cmd_case_add)
+                                       "them to global regularities", cmd_case_add)
     ca.add_argument("--spec", required=True, metavar="FILE",
                     help="JSON list of {" + ", ".join(CASE_SPEC_KEYS) + "} of one project; the "
                          "identifier check is a literal substring match, a paraphrase of a "
@@ -1755,13 +1827,14 @@ def build_parser() -> argparse.ArgumentParser:
     ca.add_argument("--date", default=today())
 
     bf = provenance_parser("backfill", "stamp generalized_into on every leaf from the "
-                                       "principles' induced_from", cmd_backfill)
+                                       "regularities' induced_from", cmd_backfill)
     bf.add_argument("--rule-derived", action="append", metavar="SLUG=REASON")
 
     pv = provenance_parser("provenance", "report provenance links (read-only)",
                            cmd_provenance)
     pv.add_argument("--check", action="store_true", help="list unaccounted items; exit 1 on any")
-    pv.add_argument("--of", metavar="SLUG", help="every leaf a revision of SLUG must consult")
+    pv.add_argument("--of", metavar="SLUG",
+                    help="every leaf a revision of the regularity or principle SLUG must consult")
     return p
 
 

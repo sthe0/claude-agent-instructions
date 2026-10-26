@@ -209,7 +209,7 @@ CASES = [
     Case("self-diagnose", "check_self_diagnose", "claude-self-diagnose.stamp",
          _setup_self_diagnose, "self-diagnose: 1 self-friction item(s)", True),
     Case("promote-scan", "check_promote_scan", "claude-promote-scan.stamp",
-         _setup_promote, "promote-scan: 1 principle-induction candidate(s)", True),
+         _setup_promote, "promote-scan: 1 regularity-induction candidate(s)", True),
 ]
 CASE_PARAMS = [pytest.param(c, id=c.id) for c in CASES]
 
