@@ -47,6 +47,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `root-silent-max-min` | `25` | Longest stretch the root stays silent to the user while specialists are in flight. |
 | `fanout-cap-extra-tasks` | `512` | Extra threads/processes a fan-out trial under `scripts/cap-run.sh` may add to the user's task count. |
 | `fanout-cap-timeout-s` | `3600` | Wall-clock limit in seconds for one capped fan-out trial. |
+| `suite-gate-timeout-s` | `1800` | Wall-clock limit in seconds for one full-suite run of the pre-land suite gate (the candidate's, or the tip baseline's). |
 | `memory-leaf-max-bytes` | `74000` | Byte size above which `self-diagnose.py` flags a difficulty/v1 leaf `oversized-leaf`. |
 | `memory-leaf-max-contexts-multiple` | `27` | Multiple of `principle-promotion-threshold` in `### ` contexts above which the same flag fires. |
 | `plan-stage-max-chars` | `70000` | Largest rendered size of one plan node; over it blocks `submit-plan` and topological review. |

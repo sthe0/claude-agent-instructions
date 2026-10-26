@@ -410,7 +410,52 @@ def _resolve_instruction_smoke_gate(argv: list[str], venue_real: str):
     return Resolution("resolved", resources=out)
 
 
+def _resolve_suite_gate(argv: list[str], venue_real: str):
+    """The reviewed grammar of `suite-gate.py`: one subcommand, then its flags.
+
+    `run` fetches the remote tip and writes the record, baseline and logs under the git common
+    dir; `waive` rewrites a record there; `check` without `--remote-sha` fetches (a tracking-ref
+    write in the common dir). `show`, `pre-push` and `check` with an explicit `--remote-sha` read
+    local state only. The suite runs in a throwaway sandbox under the temp dir and makes no
+    external call, so no service resource is named. A subcommand or flag outside this grammar
+    leaves the command unresolved."""
+    from .tool_contracts import Resolution  # deferred: see module docstring
+
+    who = "suite-gate.py"
+    if not argv or argv[0] not in {"run", "check", "show", "waive", "pre-push"}:
+        return Resolution(
+            "unresolved", reason_class="contract-unresolved",
+            reason=f"{who}: first argument is not a reviewed subcommand",
+        )
+    command, rest = argv[0], argv[1:]
+    value_flags, max_positionals = {
+        "run": ({"-C", "--remote", "--trunk", "--ref", "--remote-sha", "--timeout", "--waiver"}, 0),
+        "check": ({"-C", "--remote", "--trunk", "--sha", "--remote-sha", "--record"}, 0),
+        "show": ({"-C", "--sha"}, 0),
+        "waive": ({"-C", "--remote", "--trunk", "--sha", "--reason"}, 0),
+        "pre-push": ({"--trunk"}, 2),
+    }[command]
+    parsed = _parse_flags(rest, set(), value_flags, f"{who} {command}", max_positionals=max_positionals)
+    if isinstance(parsed, Resolution):
+        return parsed
+    values, _, _ = parsed
+
+    if command == "pre-push":
+        return Resolution("resolved", resources=[])
+    mismatch = _venue_mismatch(values.get("-C"), venue_real, who)
+    if mismatch is not None:
+        return mismatch
+    if command == "show" or (command == "check" and "--remote-sha" in values):
+        return Resolution("resolved", resources=[])
+
+    common_write, problem = _common_dir_write(venue_real, who)
+    if problem is not None:
+        return problem
+    return Resolution("resolved", resources=[common_write])
+
+
 _RESOLVERS = {
     "land_branch": _resolve_land_branch,
     "instruction_smoke_gate": _resolve_instruction_smoke_gate,
+    "suite_gate": _resolve_suite_gate,
 }

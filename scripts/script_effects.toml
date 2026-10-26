@@ -21,3 +21,8 @@ resolver = "land_branch"
 path = "scripts/instruction-smoke-gate.py"
 sha256 = "e8905bebf9e3f1af494ca4ea2f175bdad0f92286e3e3f87ba6f4aa99cdc1faf7"
 resolver = "instruction_smoke_gate"
+
+[[script]]
+path = "scripts/suite-gate.py"
+sha256 = "0c8e27064be5ee7c224003e46ceb5b8713d29f11fe202baee0a1b5f1e2d04f13"
+resolver = "suite_gate"

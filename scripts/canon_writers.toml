@@ -64,6 +64,7 @@
 
 # --- not-canon: writes only outside the repo, or names a write primitive without using it ---
 "scripts/lib/instruction_smoke_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes smoke records under the git common dir and a throwaway sandbox under the temp dir; no tracked file" }
+"scripts/lib/suite_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes suite records and baselines under the git common dir and a throwaway sandbox under the temp dir; no tracked file" }
 "scripts/lib/landing_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes gate records under the git common dir, temp file then rename; no tracked file" }
 "scripts/lib/engine_session_binding.py" = { disposition = "not-canon", category = "not-canon", reason = "harness-to-engine session binding records under the agentctl state dir, temp file then rename; no tracked file" }
 "scripts/hook-memory-retrieval.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session surfaced-leaf dedupe state under the agent state dir; reads the memory corpus, writes no tracked file" }
