@@ -12,6 +12,7 @@ import datetime as dt
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -268,6 +269,17 @@ def test_estimates_are_marked_and_missing_root_cost_is_not_counted(tmp_path):
     uncounted = tree_text(tui.detail_tree(detail(root, BETA), NOW))
     assert "root not counted" in uncounted
     assert "root $0.00" not in uncounted and "root ~$0.00" not in uncounted
+
+
+def totals_line(tree):
+    return next(line for line in tree.splitlines() if line.lstrip().startswith("totals:"))
+
+
+def test_the_totals_line_marks_a_root_priced_from_a_transcript_and_says_not_counted_without_one(tmp_path):
+    root = console_root(tmp_path)
+    priced = totals_line(tree_text(tui.detail_tree(detail(root, ALPHA), NOW)))
+    assert re.search(r"root ~\$\d+\.\d\d$", priced)
+    assert totals_line(tree_text(tui.detail_tree(detail(root, BETA), NOW))).endswith("root not counted")
 
 
 def test_nested_spawn_cost_is_not_attributed():

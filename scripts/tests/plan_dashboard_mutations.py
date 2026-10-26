@@ -662,18 +662,46 @@ def _row_unstyled(original):
 
 
 def _chat_read_whatever_the_tab(original):
-    def mutated(app, view):
-        if view.chat is None:
-            return None
-        return importlib.import_module(TUI).read_chat(view.chat, app.locator, app.transcripts_root)
+    def mutated(app):
+        tui_app = importlib.import_module(TUI_APP)
+        if app.view.chat is not None:
+            app.run_worker(tui_app.read_chat_for(app, app.view.chat), group="chat", exclusive=True)
     return mutated
 
 
 def _read_errors_propagate(original):
-    def mutated(app, snapshot, view):
-        tui = importlib.import_module(TUI)
-        chat_if_open = importlib.import_module(TUI_APP).chat_if_open
-        return tui.read_attention(snapshot, app.locator, app.transcripts_root), chat_if_open(app, view), None
+    def mutated(app, snapshot):
+        return importlib.import_module(TUI).read_attention(snapshot, app.locator, app.transcripts_root), None
+    return mutated
+
+
+def _quit_waits_for_the_load(original):
+    async def mutated(work):
+        return await importlib.import_module("asyncio").get_running_loop().run_in_executor(None, work)
+    return mutated
+
+
+def _delivery_unguarded(original):
+    def mutated(loop, future, outcome):
+        ok, value = outcome
+        loop.call_soon_threadsafe(future.set_result if ok else future.set_exception, value)
+    return mutated
+
+
+def _chat_reads_not_exclusive(original):
+    def mutated(app):
+        tui_app = importlib.import_module(TUI_APP)
+        if app.view.tab == "chat" and app.view.chat is not None:
+            app.last_chat_read = app.clock()
+            app.run_worker(tui_app.read_chat_for(app, app.view.chat), group="chat")
+    return mutated
+
+
+def _root_estimate_dropped(original):
+    def mutated(detail, now):
+        estimate = {**detail["totals"]["estimate"], "root_cost_usd": False}
+        return original({**detail, "totals": {**detail["totals"], "estimate": estimate}} if detail["readable"] else detail,
+                        now)
     return mutated
 
 
@@ -691,11 +719,11 @@ TUI_MUTATIONS.update({
     "tui-waiting-idle-counted": (TUI, "waiting_count", _idle_counted),
     "tui-session-rows-dropped": (TUI, "overview_rows", _session_rows_gone),
     "tui-chat-ask-dropped": (ATTENTION, "question_text", _always("")),
-    "tui-app-chat-absent": (TUI_APP, "chat_if_open", _nothing),
+    "tui-app-chat-absent": (TUI_APP, "read_chat_of", _always((None, None))),
     "tui-app-chat-stale": (TUI_APP, "clear_chat", _nothing),
     "tui-app-chat-late-apply": (TUI_APP, "chat_is_current", _always(True)),
-    "tui-app-chat-read-always": (TUI_APP, "chat_if_open", _chat_read_whatever_the_tab),
-    "tui-app-attention-error-blanks": (TUI_APP, "read_overlay_and_chat", _read_errors_propagate),
+    "tui-app-chat-read-always": (TUI_APP, "start_chat_read", _chat_read_whatever_the_tab),
+    "tui-app-attention-error-blanks": (TUI_APP, "read_overlay", _read_errors_propagate),
     "tui-app-rows-unstyled": (TUI_APP, "row_cells", _row_unstyled),
     "tui-app-chat-keys-swallowed": (TUI_APP, "scroll_chat", _nothing),
     "tui-app-writes-state": (TUI_APP, "refresh_if_due", _state_written_on_refresh),
@@ -728,11 +756,12 @@ def _jump_session_as_task(original):
     return mutated
 
 
-def _task_column_last_but_two(original):
+def _task_column_third(original):
     return ("wait", "session", "task", *original[3:])
 
 
 def _css_dropped(original):
+    # a class attribute, not a function: the mutation edits the class in place
     original.CSS = ""
     return original
 
@@ -744,7 +773,7 @@ def _mode_dropped(original):
 
 
 TUI_MUTATIONS.update({
-    "tui-columns-task-not-first": (TUI, "OVERVIEW_COLUMNS", _task_column_last_but_two),
+    "tui-columns-task-not-first": (TUI, "OVERVIEW_COLUMNS", _task_column_third),
     "tui-app-screen-scrolls": (TUI_APP, "DashboardApp", _css_dropped),
     "tui-app-chat-waits-reload": (TUI_APP, "start_chat_read", _nothing),
     "tui-app-all-no-feedback": (TUI_APP, "announce_loading", _nothing),
@@ -756,6 +785,11 @@ TUI_MUTATIONS.update({
     "tui-jump-session-ignored": (TUI, "jump_harness", _jump_session_as_task),
     "tui-app-jump-unbound": (TUI_APP, "jump_from", _nothing),
     "tui-jump-writes-state": (TUI_APP, "jump_from", _state_written_on_refresh),
+    "tui-root-transcript-unmarked": (TUI, "detail_tree", _root_estimate_dropped),
+    "tui-app-quit-waits-load": (TUI_APP, "in_daemon_thread", _quit_waits_for_the_load),
+    "tui-app-callback-after-exit": (TUI_APP, "deliver", _delivery_unguarded),
+    "tui-app-chat-out-of-order": (TUI_APP, "start_chat_read", _chat_reads_not_exclusive),
+    "tui-app-loading-title-overwritten": (TUI_APP, "title_is_current", _always(True)),
 })
 
 WEB_PAGE_MUTATIONS.update({

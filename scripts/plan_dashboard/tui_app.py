@@ -10,10 +10,12 @@ Core file that imports textual; every row, label and key decision comes from ``t
 from __future__ import annotations
 
 import argparse
+import asyncio
 import dataclasses
 import datetime as dt
 import importlib.util
 import sys
+import threading
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -62,13 +64,6 @@ def row_cells(row: dict) -> list[Text]:
     return [Text(cell, style=row["style"]) for cell in row["cells"]]
 
 
-def chat_if_open(app: "DashboardApp", view: tui.View) -> dict | None:
-    """The chat tail to show, read only while the Chat tab is open on something."""
-    if view.tab != "chat" or view.chat is None:
-        return None
-    return tui.read_chat(view.chat, app.locator, app.transcripts_root)
-
-
 def attempt(read) -> tuple[dict | None, Exception | None]:
     try:
         return read(), None
@@ -76,13 +71,46 @@ def attempt(read) -> tuple[dict | None, Exception | None]:
         return None, exc
 
 
-def read_overlay_and_chat(app: "DashboardApp", snapshot: dict,
-                          view: tui.View) -> tuple[dict | None, dict | None, Exception | None]:
-    """The attention overlay and the open chat, each None when its read fails, with the first error: the
-    Tasks table does not depend on either, so a failure here must not blank it."""
-    overlay, overlay_error = attempt(lambda: tui.read_attention(snapshot, app.locator, app.transcripts_root))
-    chat, chat_error = attempt(lambda: chat_if_open(app, view))
-    return overlay, chat, overlay_error if overlay_error is not None else chat_error
+def read_overlay(app: "DashboardApp", snapshot: dict) -> tuple[dict | None, Exception | None]:
+    """The attention overlay, None when its read fails, with the error: the Tasks table does not depend
+    on it, so a failure here must not blank it."""
+    return attempt(lambda: tui.read_attention(snapshot, app.locator, app.transcripts_root))
+
+
+def read_chat_of(app: "DashboardApp", target) -> tuple[dict | None, Exception | None]:
+    return attempt(lambda: tui.read_chat(target, app.locator, app.transcripts_root))
+
+
+def deliver(loop: asyncio.AbstractEventLoop, future: asyncio.Future, outcome: tuple[bool, object]) -> None:
+    """Hand a thread's outcome to the loop; once the loop is closed (the app has exited) nobody is waiting."""
+    ok, value = outcome
+
+    def settle() -> None:
+        if not future.done():
+            future.set_result(value) if ok else future.set_exception(value)
+
+    try:
+        loop.call_soon_threadsafe(settle)
+    except RuntimeError:
+        if not loop.is_closed():
+            raise
+
+
+async def in_daemon_thread(work):
+    """Run ``work()`` in a daemon thread and await its result. Not the loop's default executor: asyncio
+    joins that on shutdown, so a read still running would hold the shell back after ``q``."""
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+
+    def run() -> None:
+        try:
+            outcome = (True, work())
+        except Exception as exc:
+            outcome = (False, exc)
+        deliver(loop, future, outcome)
+
+    threading.Thread(target=run, daemon=True, name="plan-dashboard-read").start()
+    return await future
 
 
 def scroll_chat(scroll: VerticalScroll, key: str) -> None:
@@ -124,22 +152,23 @@ def announce_loading(app: "DashboardApp", include_all: bool) -> None:
 
 def start_chat_read(app: "DashboardApp") -> None:
     """Read the open chat in its own exclusive worker group, apart from the reload whose cost grows with
-    the number of tasks; a newer chat read cancels only an older chat read."""
+    the number of tasks; a newer chat read cancels the older one, so an older read never lands after it."""
     view = app.view
     if view.tab != "chat" or view.chat is None:
         return
     app.last_chat_read = app.clock()
-    app.run_worker(lambda: read_chat_for(app, view.chat), thread=True, group="chat", exclusive=True)
+    app.run_worker(read_chat_for(app, view.chat), group="chat", exclusive=True)
 
 
-def read_chat_for(app: "DashboardApp", target) -> None:
-    chat, error = attempt(lambda: tui.read_chat(target, app.locator, app.transcripts_root))
-    app.call_from_thread(chat_ready, app, target, chat, error)
+async def read_chat_for(app: "DashboardApp", target) -> None:
+    chat, error = await in_daemon_thread(lambda: read_chat_of(app, target))
+    chat_ready(app, target, chat, error)
 
 
 def chat_ready(app: "DashboardApp", target, chat: dict | None, error: Exception | None) -> None:
     if not chat_is_current(app.view.chat, target) or app.view.tab != "chat":
         return
+    app.chat_error = error
     if chat is not None:
         show_chat(app.query_one("#chat-scroll", VerticalScroll), app.query_one("#chat-body", Static), chat)
     elif error is not None:
@@ -150,8 +179,17 @@ def jump_from(app: "DashboardApp") -> None:
     """Switch to the window of the session ``g`` points at; the locator's argv runs in a worker thread
     (it is bounded to 5 s) and its outcome lands in the status line."""
     subject, overlay = tui.jump_subject(app.view), app.overlay
-    app.run_worker(lambda: app.call_from_thread(show_status, app, tui.jump_to(subject, overlay, app.locator)),
-                   thread=True, group="jump")
+    app.run_worker(jump_task(app, subject, overlay), group="jump")
+
+
+async def jump_task(app: "DashboardApp", subject, overlay) -> None:
+    show_status(app, await in_daemon_thread(lambda: tui.jump_to(subject, overlay, app.locator)))
+
+
+def title_is_current(app: "DashboardApp", issued_all: bool) -> bool:
+    """Whether a reload issued under ``issued_all`` may still set the sub-title: after a toggle the older
+    reload's mode and count would replace the loading text of the newer one."""
+    return issued_all == app.view.include_all
 
 
 def tree_state_for(state: tui.TreeState, task: str | None) -> tui.TreeState:
@@ -240,6 +278,7 @@ class DashboardApp(App):
         self.tree_task: str | None = None
         self.overlay: dict | None = None
         self.last_chat_read: dt.datetime | None = None
+        self.chat_error: Exception | None = None
 
     def check_action(self, action: str, parameters) -> bool:
         if action in KEY_ACTION_OWNERS:
@@ -278,26 +317,29 @@ class DashboardApp(App):
             return
         self._loading = True
         self.last_collect = self.clock()
-        self.run_worker(self._load, thread=True, group="collect")
+        self.run_worker(self._load(), group="collect")
 
-    def _load(self) -> None:
+    async def _load(self) -> None:
         now, view = self.last_collect, self.view
         try:
-            snapshot = model.collect(self.state_root, now=now, window_hours=self.window_hours,
-                                     include_all=view.include_all, sessions=self.sessions, cost_log=self.cost_log)
-            detail = None
-            if view.selected:
-                children = model.child_index(self.state_root)
-                detail = model.detail(self.state_root, view.selected, cost_log=self.cost_log,
-                                      transcripts_root=self.transcripts_root, children=children)
-        except model.UnknownSession:
-            detail = None
+            snapshot, detail = await in_daemon_thread(lambda: self._read_tasks(now, view))
         except Exception as exc:
-            self.call_from_thread(self._failed, exc)
+            self._failed(exc)
             return
-        overlay, chat, error = read_overlay_and_chat(self, snapshot, view)
-        self.call_from_thread(self._apply, snapshot, detail, now, bool(view.selected) and detail is None, overlay, chat,
-                              view.chat, error)
+        overlay, error = await in_daemon_thread(lambda: read_overlay(self, snapshot))
+        self._apply(snapshot, detail, now, bool(view.selected) and detail is None, overlay, view.include_all, error)
+
+    def _read_tasks(self, now: dt.datetime, view: tui.View) -> tuple[dict, dict | None]:
+        snapshot = model.collect(self.state_root, now=now, window_hours=self.window_hours,
+                                 include_all=view.include_all, sessions=self.sessions, cost_log=self.cost_log)
+        if not view.selected:
+            return snapshot, None
+        try:
+            return snapshot, model.detail(self.state_root, view.selected, cost_log=self.cost_log,
+                                          transcripts_root=self.transcripts_root,
+                                          children=model.child_index(self.state_root))
+        except model.UnknownSession:
+            return snapshot, None
 
     def _finish_load(self) -> None:
         self._loading = False
@@ -310,8 +352,7 @@ class DashboardApp(App):
         self._finish_load()
 
     def _apply(self, snapshot: dict, detail: dict | None, now: dt.datetime, selection_gone: bool = False,
-               overlay: dict | None = None, chat: dict | None = None, chat_target=None,
-               error: Exception | None = None) -> None:
+               overlay: dict | None = None, issued_all: bool = False, error: Exception | None = None) -> None:
         if overlay is not None:
             self.overlay = overlay
         rows = tui.overview_rows(snapshot, now, overlay)
@@ -324,8 +365,6 @@ class DashboardApp(App):
             table.add_row(*row_cells(row), key=row["session_id"])
         if ids:
             table.move_cursor(row=self.view.cursor)
-        if chat_is_current(self.view.chat, chat_target) and (chat is not None or self.view.chat is None):
-            show_chat(self.query_one("#chat-scroll", VerticalScroll), self.query_one("#chat-body", Static), chat)
         if detail is not None or selection_gone:
             nodes = tui.detail_tree(detail, now) if detail is not None else tui.missing_detail_tree()
             task = detail["session_id"] if detail is not None else None
@@ -333,9 +372,10 @@ class DashboardApp(App):
             state = tree_state_for(remember(tree, self.tree_task), task)
             fill_tree(tree, nodes, state.expanded, state.cursor)
             self.tree_task = task
-        self.sub_title = f"{mode_title(self.view.include_all, len(ids))}, read {now:%H:%M:%S}"
-        if error is not None:
-            self.sub_title += f"; read failed: {error}"
+        if title_is_current(self, issued_all):
+            self.sub_title = f"{mode_title(self.view.include_all, len(ids))}, read {now:%H:%M:%S}"
+            if (error or self.chat_error) is not None:
+                self.sub_title += f"; read failed: {error or self.chat_error}"
         self._finish_load()
 
     def action_key(self, key: str) -> None:

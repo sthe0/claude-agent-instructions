@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +26,7 @@ from textual.containers import VerticalScroll  # noqa: E402
 from textual.widgets import DataTable, Header, Static, TabbedContent, Tabs, Tree  # noqa: E402
 
 from plan_dashboard import attention, locate, model, tui  # noqa: E402
+from plan_dashboard import tui_app  # noqa: E402
 from plan_dashboard.tui_app import CHAT_LOADING, DashboardApp  # noqa: E402
 from plan_dashboard_fixtures import build_fixture_root, read_only_guard  # noqa: E402
 from plan_dashboard_support import (  # noqa: E402,F401
@@ -1079,5 +1081,115 @@ def test_a_toggle_names_the_load_at_once_and_then_the_mode_and_count(tmp_path, m
             release.set()
         await settle(app, pilot)
         assert app.sub_title.startswith(f"live: {len(table_ids(app))} tasks")
+
+    run(scenario, root)
+
+
+# --- q returns at once, and no read applies out of order -------------------------------------
+
+QUIT_DEADLINE_S = 2
+
+
+def test_q_returns_to_the_shell_within_two_seconds_while_a_reload_is_still_running(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+    release = hold_reloads(monkeypatch)
+    pressed, finished = [], []
+
+    class Quitting(DashboardApp):
+        def on_mount(self):
+            super().on_mount()
+            self.set_timer(0.5, self.quit_now)
+
+        def quit_now(self):
+            pressed.append(time.monotonic())
+            self.dispatch_key("q")
+
+    app = Quitting(state_root=root.state_root, cost_log=root.cost_log, transcripts_root=root.transcripts_root,
+                   clock=Clock(), interval=3600.0)
+
+    def run_as_the_shell_does():
+        asyncio.run(app.run_async(headless=True, size=SIZE))
+        finished.append(time.monotonic())
+
+    thread = threading.Thread(target=run_as_the_shell_does, daemon=True)
+    thread.start()
+    try:
+        thread.join(QUIT_DEADLINE_S + 3)
+        assert pressed and finished and finished[0] - pressed[0] < QUIT_DEADLINE_S
+    finally:
+        release.set()
+
+
+def test_a_read_that_ends_after_the_app_exited_raises_nothing(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+    release = hold_reloads(monkeypatch)
+    raised = []
+    monkeypatch.setattr(threading, "excepthook", raised.append)
+    app = make_app(root)
+
+    async def main():
+        async with app.run_test(size=SIZE) as pilot:
+            await pilot.pause(0.3)
+            await pilot.press("q")
+            await pilot.pause(0.2)
+
+    asyncio.run(asyncio.wait_for(main(), PILOT_DEADLINE_S))
+    release.set()
+    for thread in threading.enumerate():
+        if thread.name == "plan-dashboard-read":
+            thread.join(PILOT_DEADLINE_S)
+    assert raised == []
+
+
+def test_a_chat_read_that_ends_after_a_newer_one_is_dropped(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    older, slow = threading.Event(), [True]
+
+    def read(target, locator, transcripts_root):
+        if slow[0]:
+            older.wait(PILOT_DEADLINE_S)
+            return {"harness_session": "x", "entries": [{"role": "user", "text": "OLDER"}]}
+        return {"harness_session": "x", "entries": [{"role": "user", "text": "NEWER"}]}
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        monkeypatch.setattr(tui, "read_chat", read)
+        await pilot.press("tab")
+        await pilot.pause(0.3)
+        slow[0] = False
+        tui_app.start_chat_read(app)
+        await pilot.pause(0.5)
+        assert "NEWER" in chat_text(app)
+        older.set()
+        await pilot.pause(0.5)
+        assert "NEWER" in chat_text(app) and "OLDER" not in chat_text(app)
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_the_loading_title_survives_a_reload_issued_before_the_toggle(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+    first, later, calls, real = threading.Event(), threading.Event(), [], model.collect
+
+    def slow(*args, **kwargs):
+        calls.append(1)
+        (first if len(calls) == 1 else later).wait(PILOT_DEADLINE_S)
+        return real(*args, **kwargs)
+
+    async def scenario(app, pilot):
+        monkeypatch.setattr(model, "collect", slow)
+        try:
+            await pilot.press("r")
+            await pilot.pause(0.2)
+            await pilot.press("a")
+            await pilot.pause(0.2)
+            first.set()
+            await pilot.pause(0.5)
+            assert app.sub_title == "loading all tasks…"
+        finally:
+            first.set()
+            later.set()
+        await settle(app, pilot)
+        assert app.sub_title.startswith(f"all: {len(table_ids(app))} tasks")
 
     run(scenario, root)
