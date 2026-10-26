@@ -39,6 +39,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `effort-absolute-interactions` | `43` | User-interaction count recorded (record-only, never gating) as an effort crossing. |
 | `review-pairwise-min-edges` | `2` | Reliance edges below which a multi-stage plan gets one whole-plan review instead of pairwise review. |
 | `review-parallel-max` | `6` | Cap on concurrent pair-reviewer spawns within one topological-review level. |
+| `verify-final-parallel-max` | `2` | Cap on checks `verify-final` runs at once (1 = serial); also bounded by the free-CPU worker budget. |
 | `review-cycle-acts` | `20` | Counted review acts in one pre-approval cycle at which PLAN_READY routes into DIAGNOSING. |
 | `review-cycle-active-minutes` | `77` | Active minutes in one pre-approval review cycle at which PLAN_READY routes into DIAGNOSING. |
 | `review-stage-nonpass-streak` | `3` | Consecutive non-passing stage-scoped reviews of one stage at which PLAN_READY routes into DIAGNOSING. |

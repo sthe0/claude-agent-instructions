@@ -230,7 +230,8 @@ def render_final_checks_md(doc: PlanDoc) -> list[str]:
                     f"delivered commit must be contained in {ls.refs_phrase()}"
                 )
             else:
-                lines.append(f"- {label}`{fc.command}` (expected exit {fc.expected_exit})")
+                cached = ", cacheable" if fc.cacheable else ""
+                lines.append(f"- {label}`{fc.command}` (expected exit {fc.expected_exit}{cached})")
         lines.append("")
     return lines
 

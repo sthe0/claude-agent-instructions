@@ -199,6 +199,11 @@ class Thresholds:
         """Cap on concurrent pair-reviewer spawns within one topological level."""
         return self._int("review-parallel-max")
 
+    def verify_final_parallel_max(self) -> int:
+        """Cap on checks `verify-final` runs at once; a missing or unreadable row reads
+        as 1 (serial), the behaviour before the cap existed."""
+        return max(self._optional_int("verify-final-parallel-max") or 1, 1)
+
     @property
     def plan_stage_max_chars(self) -> int:
         """Largest rendered size, in characters, of a stage or of the plan-level node.

@@ -983,11 +983,14 @@ _TIER_RANK = {"small": 0, "medium": 1, "large": 2}
 _CAP_RUN_WRAPPER = "cap-run.sh"
 
 
-def _runs_test_runner(cmd: str) -> bool:
+def pytest_segments(cmd: str) -> list[list[str]]:
+    """The pytest invocations in `cmd`, one token list per segment, with launch
+    wrappers (env, cap-run.sh) stripped. [] when it runs no pytest or cannot be tokenized."""
     try:
         tokens = _shell_tokens.separator_exact_split(cmd)
     except Exception:
-        return False
+        return []
+    found: list[list[str]] = []
     for seg in _bash_write_targets.split_segments(tokens):
         seg = _widening_targets.strip_wrappers(seg)
         if (len(seg) > 1 and _widening_targets.program_name(seg[0]) in ("bash", "sh")
@@ -1001,8 +1004,12 @@ def _runs_test_runner(cmd: str) -> bool:
         prog = _widening_targets.program_name(seg[0]).casefold()
         if prog in ("pytest", "py.test") or (
                 prog.startswith("python") and seg[1:3] == ["-m", "pytest"]):
-            return True
-    return False
+            found.append(seg)
+    return found
+
+
+def _runs_test_runner(cmd: str) -> bool:
+    return bool(pytest_segments(cmd))
 
 
 def cost_tier_floor_advisories(stages) -> list[str]:
@@ -1773,10 +1780,15 @@ def parse_plan(
             if not isinstance(xc, int):
                 raise PlanError(f"{fc_ctx} expected_exit must be an int")
             venue = _parse_check_venue(fc.get("venue"), fc_ctx)
+        cacheable = fc.get("cacheable", False)
+        if not isinstance(cacheable, bool):
+            raise PlanError(f"{fc_ctx} cacheable must be a boolean")
+        if cacheable and fc_kind == CheckKind.LANDED.value:
+            raise PlanError(f"{fc_ctx}: kind = \"landed\" must not carry 'cacheable' — it is never cached")
         final_checks.append(
             FinalCheck(
                 command=cmd, expected_exit=xc, label=str(fc.get("label", "")),
-                venue=venue, kind=fc_kind, landed=fc_landed,
+                venue=venue, kind=fc_kind, landed=fc_landed, cacheable=cacheable,
             )
         )
 
@@ -2378,7 +2390,8 @@ def order_extra_digest(meta: PlanMeta) -> str:
     key (`_pair_node_key`) moves when any of them is edited."""
     payload = repr((
         tuple(
-            (fc.command, fc.expected_exit, fc.label, fc.venue, fc.kind)
+            (fc.command, fc.expected_exit, fc.label, fc.venue, fc.kind,
+             *((("cacheable", True),) if fc.cacheable else ()))
             for fc in meta.final_check
         ),
         meta.external_research,
@@ -3467,7 +3480,8 @@ def stage_norm_keys(stage) -> dict[str, str]:
 def _final_check_place(doc: PlanDoc) -> list:
     return [
         (fc.command, fc.expected_exit, fc.label,
-         _normalize_string(fc.venue), _normalize_string(fc.kind), fc.landed)
+         _normalize_string(fc.venue), _normalize_string(fc.kind), fc.landed,
+         *((("cacheable", True),) if fc.cacheable else ()))
         for fc in doc.meta.final_check
     ]
 

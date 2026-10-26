@@ -29,7 +29,7 @@ from pathlib import Path
 
 from lib import argv_text, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, carry_forward, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from . import config as agentctl_config
@@ -10261,6 +10261,193 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     )
 
 
+@dataclass
+class _FinalEntry:
+    """One check of a verify-final run, from planning to its recorded result."""
+    check_id: str
+    venue: str
+    fail_head: str
+    spec: check_cache.CheckSpec | None = None
+    cwd: str | None = None
+    fail_tail: str = ""
+    landed_failure: str = ""
+    decision: str = ""
+    reason: str = ""
+    duration_s: float = 0.0
+    exit_code: int | None = None
+    ok: bool = True
+
+    def failure(self) -> str:
+        if self.spec is None:
+            return self.landed_failure
+        tail = f" {self.fail_tail}" if self.fail_tail else ""
+        return f"{self.fail_head}: exit {self.exit_code} != {self.spec.expected_exit}{tail}"
+
+
+def _log_final_events(
+    state: SessionState, entries: list[_FinalEntry], *, outcome: str, started: float, peak: int,
+) -> None:
+    counts = {check_cache.HIT: 0, check_cache.DEDUP: 0, check_cache.MISS: 0}
+    for e in entries:
+        if not e.decision:
+            continue
+        counts[e.decision] += 1
+        state.log(
+            "verify_final_check", check=e.check_id, venue=e.venue, decision=e.decision,
+            reason=e.reason, duration_s=round(e.duration_s, 3), exit=e.exit_code,
+        )
+    state.log(
+        "verify_final_run", outcome=outcome, duration_s=round(time.monotonic() - started, 3),
+        counts=counts, parallelism=peak,
+    )
+
+
+def _evaluate_final_checks(
+    state: SessionState, store: StateStore, runner: Runner | None,
+    div: effort.Divergence | None,
+) -> tuple[list[str], Directive | None]:
+    """Evaluate every measurable stage's verify_command, then every final_check, in
+    three phases. Plan: resolve venues, run landed checks, take each venue's tree
+    identity once, and decide per check (check_cache.decide) whether a cache serves it,
+    an earlier check of this run covers it, or it must run. Run: the remaining checks,
+    concurrently under the cap and worker budget when the real runner is in use.
+    Record: results in check order, greens into the session cache, the
+    verify_final_check / verify_final_run events.
+
+    Returns (failures, None), or ([], Directive) when a venue is refused — the
+    caller returns that directive as is."""
+    started = time.monotonic()
+    entries: list[_FinalEntry] = []
+    tree_ids: dict[str | None, str | None] = {}
+
+    def tree_id_for(cwd: str | None) -> str | None:
+        if cwd not in tree_ids:
+            tree_ids[cwd] = _venue_tree_identity(cwd, runner)
+        return tree_ids[cwd]
+
+    def refuse(check_id: str, cwd: str | None, message: str) -> tuple[list[str], Directive]:
+        entries.append(_FinalEntry(
+            check_id, cwd or str(REPO_ROOT), "", decision=check_cache.MISS, reason="refused",
+        ))
+        _log_final_events(state, entries, outcome="refused", started=started, peak=0)
+        return [], _diagnose_venue_refusal(state, store, message, div)
+
+    def landed_entry(check_id: str, spec, failure: str) -> tuple[_FinalEntry | None, str | None]:
+        # No re-freeze for a stage's landed check: verify-final re-checks the
+        # delivered_head its own record-result already froze, never a live re-derive.
+        t0 = time.monotonic()
+        ok, refusal, result = _landed_check_result(state, spec, runner)
+        if refusal:
+            return None, refusal
+        return _FinalEntry(
+            check_id, str(REPO_ROOT), "", decision=check_cache.MISS, reason="landed",
+            duration_s=time.monotonic() - t0, exit_code=result.returncode, ok=ok,
+            landed_failure=failure,
+        ), None
+
+    stage_commands = {
+        s.criterion.verify_command for s in state.stages
+        if not is_skipped(s) and plan_resources.runs_verify_command(s.criterion)
+    }
+    for stage in state.stages:
+        if is_skipped(stage):
+            continue
+        crit = stage.criterion
+        check_id = f"stage:{stage.index}"
+        if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
+            entry, refusal = landed_entry(check_id, crit.landed, (
+                f"stage {stage.index}: landed check — delivered commit not "
+                f"contained in {crit.landed.target!r} (or "
+                f"{crit.landed.remote}/{crit.landed.target})"
+            ))
+            if refusal:
+                return refuse(check_id, None, f"stage {stage.index} landed check refused: {refusal}")
+            entries.append(entry)
+            continue
+        if not plan_resources.runs_verify_command(crit):
+            continue
+        cwd, refusal = _resolve_final_or_refuse(state, crit)
+        if refusal:
+            return refuse(check_id, cwd, f"stage {stage.index} verify_command refused: {refusal}")
+        tree_id = tree_id_for(cwd)
+        identity = f"{tree_id}:{_check_definition_digest(crit)}" if tree_id is not None else None
+        entries.append(_FinalEntry(
+            check_id, cwd or str(REPO_ROOT), f"stage {stage.index}", cwd=cwd,
+            fail_tail=f"({crit.verify_command})",
+            spec=check_cache.CheckSpec(
+                check_id, crit.verify_command, crit.expected_exit, tree_id,
+                cacheable=True, outcome_hit=_cached_check_hit(stage, identity),
+            ),
+        ))
+    for number, fc in enumerate(state.final_check, 1):
+        check_id = f"final_check:{number}"
+        if fc.kind == CheckKind.LANDED.value:
+            label = fc.label or fc.landed.target
+            entry, refusal = landed_entry(check_id, fc.landed, (
+                f"final_check '{label}': landed check — delivered commit not "
+                f"contained in {fc.landed.target!r} (or "
+                f"{fc.landed.remote}/{fc.landed.target})"
+            ))
+            if refusal:
+                return refuse(check_id, None, f"final_check '{label}' refused: {refusal}")
+            entries.append(entry)
+            continue
+        cwd, refusal = _resolve_or_refuse(state, fc.venue)
+        if refusal:
+            return refuse(check_id, cwd, f"final_check '{fc.label or fc.command}' refused: {refusal}")
+        entries.append(_FinalEntry(
+            check_id, cwd or str(REPO_ROOT), f"final_check '{fc.label or fc.command}'", cwd=cwd,
+            spec=check_cache.CheckSpec(
+                check_id, fc.command, fc.expected_exit, tree_id_for(cwd),
+                cacheable=fc.cacheable or fc.command in stage_commands,
+            ),
+        ))
+
+    decided = {d.spec.id: d for d in check_cache.decide(
+        [e.spec for e in entries if e.spec is not None], state.check_cache,
+    )}
+    to_run = [e for e in entries if e.spec is not None and decided[e.spec.id].decision == check_cache.MISS]
+
+    def run_one(e: _FinalEntry):
+        t0 = time.monotonic()
+        ok, result = _run_check(e.spec.command, e.spec.expected_exit, runner, cwd=e.cwd)
+        return ok, result.returncode, time.monotonic() - t0
+
+    cap, budget, cpus = 1, 0, 1
+    if runner is None and len(to_run) > 1:
+        cap = check_cache.resolve_cap(Thresholds().verify_final_parallel_max())
+        if cap > 1:
+            cpus, load1 = check_cache.system_probe()
+            budget = check_cache.resolve_budget(cpus, load1)
+    results, peak = check_cache.run_bounded(
+        [check_cache.Job(check_cache.pytest_weight(e.spec.command, cpus), (lambda e=e: run_one(e))) for e in to_run],
+        cap=cap, budget=budget,
+    )
+    ran = {e.check_id: r for e, r in zip(to_run, results)}
+
+    by_id = {e.check_id: e for e in entries}
+    now = time.time()
+    for e in entries:
+        if e.spec is None:
+            continue
+        d = decided[e.spec.id]
+        e.decision, e.reason = d.decision, d.reason
+        if d.decision == check_cache.MISS:
+            e.ok, e.exit_code, e.duration_s = ran[e.check_id]
+            if e.ok and e.spec.key is not None:
+                check_cache.store_green(state.check_cache, e.spec.key, at=now, label=e.fail_head)
+        elif d.decision == check_cache.HIT:
+            e.exit_code = e.spec.expected_exit
+        else:
+            earlier = by_id[d.same_as]
+            e.ok, e.exit_code = earlier.ok, earlier.exit_code
+    failures = [e.failure() for e in entries if not e.ok]
+    _log_final_events(
+        state, entries, outcome="failed" if failures else "passed", started=started, peak=peak,
+    )
+    return failures, None
+
+
 def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     # Idempotency guard (must precede the node-agnostic resolution gate below):
@@ -10342,72 +10529,9 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     # non-skipped stage; a re-run is skipped only when the tree identity proves the
     # tree and the check definition haven't moved since the cached green result.
     # Any non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
-    failures: list[str] = []
-    for stage in state.stages:
-        if is_skipped(stage):
-            continue
-        crit = stage.criterion
-        if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
-            # No re-freeze here: verify-final re-checks the delivered_head each
-            # stage's own record-result already froze, never a live re-derive.
-            ok, refusal, result = _landed_check_result(state, crit.landed, runner)
-            if refusal:
-                return _diagnose_venue_refusal(
-                    state, store, f"stage {stage.index} landed check refused: {refusal}", div,
-                )
-            if not ok:
-                failures.append(
-                    f"stage {stage.index}: landed check — delivered commit not "
-                    f"contained in {crit.landed.target!r} (or "
-                    f"{crit.landed.remote}/{crit.landed.target})"
-                )
-            continue
-        cwd = None
-        if crit.verify_command and crit.criterion_type == CriterionType.MEASURABLE.value:
-            cwd, refusal = _resolve_final_or_refuse(state, crit)
-            if refusal:
-                return _diagnose_venue_refusal(
-                    state, store, f"stage {stage.index} verify_command refused: {refusal}", div,
-                )
-            tree_id = _venue_tree_identity(cwd, runner)
-            identity = (
-                f"{tree_id}:{_check_definition_digest(crit)}"
-                if tree_id is not None else None
-            )
-            if _cached_check_hit(stage, identity):
-                continue
-        ok, result = _verify_command_result(stage, runner, cwd=cwd)
-        if not ok:
-            failures.append(
-                f"stage {stage.index}: exit {result.returncode} != "
-                f"{stage.criterion.expected_exit} ({stage.criterion.verify_command})"
-            )
-    for fc in state.final_check:
-        if fc.kind == CheckKind.LANDED.value:
-            ok, refusal, result = _landed_check_result(state, fc.landed, runner)
-            if refusal:
-                return _diagnose_venue_refusal(
-                    state, store, f"final_check '{fc.label or fc.landed.target}' refused: {refusal}", div,
-                )
-            if not ok:
-                label = fc.label or fc.landed.target
-                failures.append(
-                    f"final_check '{label}': landed check — delivered commit not "
-                    f"contained in {fc.landed.target!r} (or "
-                    f"{fc.landed.remote}/{fc.landed.target})"
-                )
-            continue
-        cwd, refusal = _resolve_or_refuse(state, fc.venue)
-        if refusal:
-            return _diagnose_venue_refusal(
-                state, store, f"final_check '{fc.label or fc.command}' refused: {refusal}", div,
-            )
-        ok, result = _run_check(fc.command, fc.expected_exit, runner, cwd=cwd)
-        if not ok:
-            label = fc.label or fc.command
-            failures.append(
-                f"final_check '{label}': exit {result.returncode} != {fc.expected_exit}"
-            )
+    failures, refusal_directive = _evaluate_final_checks(state, store, runner, div)
+    if refusal_directive is not None:
+        return refusal_directive
     if failures:
         # A failing final_check is a difficulty (actual result diverges from the
         # plan's declared image) exactly like a failed stage — route into the same

@@ -1705,6 +1705,11 @@ class FinalCheck:
     # the engine synthesizes the check rather than running an author command.
     kind: str = "shell"
     landed: "LandedSpec | None" = None
+    # verify-final may serve this check from the session green-check cache. Always
+    # true in effect for a command byte-identical to a stage verify_command; this
+    # flag extends it to any other command the author vouches is a pure function of
+    # the venue tree.
+    cacheable: bool = False
 
     @classmethod
     def from_dict(cls, d: dict) -> "FinalCheck":
@@ -2647,6 +2652,10 @@ class SessionState:
     # stage_index, kind, norm_digest, norm, grants, depth, norm_lineage}. None for a
     # session no engine-linked parent spawned.
     parent_link: dict | None = None
+    # verify-final's green-check cache: {check_cache.check_key(...): {"at", "label"}}.
+    # Only green results are stored; absent in older states (defaults to {}), so the
+    # schema version is unchanged.
+    check_cache: dict = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
     # Not a dataclass field (ClassVar): the number of history events that were already
     # present when this object was built — what store.stamp_new_history uses to tell a
@@ -3076,5 +3085,5 @@ SESSION_SCOPED_FIELDS = frozenset({
     "review_trigger_spent", "renegotiations", "runtime_host", "reattest_stash",
     "declined_issues", "planning_misses", "materialization_defects",
     "settings_drift", "cwd_drift", "pending_renorms", "difficulty_stack", "parent_difficulty",
-    "closed_difficulties", "parent_link", "schema_version", "plan_conversions",
+    "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",
 })
