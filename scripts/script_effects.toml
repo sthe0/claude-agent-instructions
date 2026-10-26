@@ -24,5 +24,5 @@ resolver = "instruction_smoke_gate"
 
 [[script]]
 path = "scripts/suite-gate.py"
-sha256 = "0c8e27064be5ee7c224003e46ceb5b8713d29f11fe202baee0a1b5f1e2d04f13"
+sha256 = "52a4617e0c28efbb16cbadcad832408bbebabd176e85afdd044eecbcf8120383"
 resolver = "suite_gate"

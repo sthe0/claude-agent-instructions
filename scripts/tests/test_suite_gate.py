@@ -790,9 +790,7 @@ def test_evaluate_landing_runs_when_the_stored_record_is_stale(world):
     cand = world.code_commit()
     world.store(make_record(cand, SHA_B))
     runner = FakeRunner({cand: ()})
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(gate, "SANDBOX_PARENT", str(world.sandbox))
-        decision = gate.evaluate_landing(world.work, cand, world.base, runner=runner)
+    decision = gate.evaluate_landing(world.work, cand, world.base, runner=runner, sandbox_parent=str(world.sandbox))
     assert decision.admitted and runner.shas() == [cand]
 
 
@@ -1107,6 +1105,40 @@ def test_a_config_without_the_row_falls_back(tmp_path):
     assert gate.configured_timeout_s(config) == gate.DEFAULT_TIMEOUT_S
 
 
+def test_the_plugin_reads_the_env_var_the_runner_sets():
+    assert f'os.environ.get("{gate.FAILURES_ENV}")' in gate.PLUGIN_SOURCE
+
+
+def _execution(**over):
+    fields = dict(root=Path("/sb"), candidate_run=None, candidate_ids=(FAILED_A,), reason="",
+                  baseline={"status": gate.COMPLETE, "failures": []}, baseline_cache="built",
+                  new=(FAILED_A,), confirmation=([FAILED_A], [], ""))
+    return gate.Execution(**{**fields, **over})
+
+
+def test_judge_counts_a_confirmed_new_failure():
+    verdict = gate._judge(_execution())
+    assert verdict.new_failures == (FAILED_A,) and verdict.reason == "" and verdict.baseline_cache == "built"
+
+
+def test_judge_makes_an_unconfirmed_failure_unavailable():
+    verdict = gate._judge(_execution(confirmation=([], [FAILED_A], "")))
+    assert verdict.new_failures == () and verdict.unconfirmed == (FAILED_A,)
+    assert "did not fail again on rerun" in verdict.reason
+
+
+def test_judge_reports_an_unavailable_baseline():
+    baseline = {"status": gate.UNAVAILABLE, "unavailable_reason": "pytest exited 4", "failures": []}
+    verdict = gate._judge(_execution(baseline=baseline, new=(), confirmation=None))
+    assert "the tip's baseline is unavailable: pytest exited 4" in verdict.reason and verdict.new_failures == ()
+
+
+def test_judge_keeps_the_candidate_runs_own_unavailable_reason():
+    verdict = gate._judge(_execution(reason="pytest exited 4", baseline=None, baseline_cache="none",
+                                     new=(), confirmation=None))
+    assert verdict.reason == "pytest exited 4" and verdict.baseline_failures == ()
+
+
 # ── command line ──────────────────────────────────────────────────────────
 
 def _cli():
@@ -1116,53 +1148,62 @@ def _cli():
     return module
 
 
-def test_cli_run_admits_a_clean_candidate_and_ends_with_the_record(world, monkeypatch, capsys):
+def test_cli_run_admits_a_clean_candidate_and_ends_with_the_record(world, capsys):
     cli = _cli()
     cand = world.code_commit()
-    monkeypatch.setattr(gate, "SANDBOX_PARENT", str(world.sandbox))
-    monkeypatch.setattr(gate, "default_runner", FakeRunner({cand: ()}))
-    assert cli.main(["run", "-C", str(world.work), "--remote-sha", world.base]) == 0
+    seams = dict(runner=FakeRunner({cand: ()}), sandbox_parent=str(world.sandbox))
+    assert cli.main(["run", "-C", str(world.work), "--remote-sha", world.base], **seams) == 0
     lines = capsys.readouterr().out.splitlines()
     assert any(line.startswith("SUITE: ADMITTED") for line in lines)
     assert lines[-1] == f"RECORD: {shared.record_path(world.common, gate.RECORD_DIR, cand)}"
 
 
-def test_cli_run_refuses_a_new_failure_and_names_it(world, monkeypatch, capsys):
+def test_cli_run_refuses_a_new_failure_and_names_it(world, capsys):
     cli = _cli()
     cand = world.code_commit()
-    monkeypatch.setattr(gate, "SANDBOX_PARENT", str(world.sandbox))
-    monkeypatch.setattr(gate, "default_runner", FakeRunner({cand: (FAILED_A,), world.base: ()}))
-    assert cli.main(["run", "-C", str(world.work), "--remote-sha", world.base]) == 1
+    seams = dict(runner=FakeRunner({cand: (FAILED_A,), world.base: ()}), sandbox_parent=str(world.sandbox))
+    assert cli.main(["run", "-C", str(world.work), "--remote-sha", world.base], **seams) == 1
     out = capsys.readouterr().out
     assert f"NEW FAILURE {FAILED_A}" in out and "SUITE: REFUSED" in out
 
 
-def test_cli_run_on_a_docs_only_landing_is_exempt_and_writes_no_record(world, monkeypatch, capsys):
+def test_cli_run_on_a_docs_only_landing_is_exempt_and_writes_no_record(world, capsys):
     cli = _cli()
     world.docs_commit()
-    monkeypatch.setattr(gate, "default_runner", FakeRunner({}))
-    assert cli.main(["run", "-C", str(world.work), "--remote-sha", world.base]) == 0
+    runner = FakeRunner({})
+    assert cli.main(["run", "-C", str(world.work), "--remote-sha", world.base], runner=runner) == 0
     out = capsys.readouterr().out
     assert "SUITE: exempt" in out and "docs/a.md" in out and "RECORD:" not in out
+    assert runner.calls == []
 
 
-def test_cli_run_on_a_non_descendant_exits_refused(world, monkeypatch, capsys):
+def test_cli_run_on_a_non_descendant_exits_refused(world, capsys):
     cli = _cli()
     world.code_commit()
     tip = world.advance_remote()
-    monkeypatch.setattr(gate, "default_runner", FakeRunner({}))
-    assert cli.main(["run", "-C", str(world.work), "--remote-sha", tip]) == 1
+    runner = FakeRunner({})
+    assert cli.main(["run", "-C", str(world.work), "--remote-sha", tip], runner=runner) == 1
+    assert runner.calls == []
 
 
-def test_cli_check_reads_the_record_and_never_runs(world, monkeypatch, capsys):
+def test_cli_check_reads_the_record_and_never_runs(world, capsys):
     cli = _cli()
     cand = world.code_commit()
-    monkeypatch.setattr(gate, "default_runner", FakeRunner({}))
+    runner = FakeRunner({})
     args = ["check", "-C", str(world.work), "--remote-sha", world.base]
-    assert cli.main(args) == 1
+    assert cli.main(args, runner=runner) == 1
     world.store(make_record(cand, world.base))
-    assert cli.main(args) == 0
+    assert cli.main(args, runner=runner) == 0
     assert "SUITE: ADMITTED" in capsys.readouterr().out
+    assert runner.calls == []
+
+
+def test_cli_run_stamps_the_record_with_the_injected_clock(world):
+    cli = _cli()
+    cand = world.code_commit()
+    seams = dict(runner=FakeRunner({cand: ()}), sandbox_parent=str(world.sandbox), clock=lambda: "2026-01-02T03:04:05Z")
+    assert cli.main(["run", "-C", str(world.work), "--remote-sha", world.base], **seams) == 0
+    assert world.stored(cand)["ran_at"] == "2026-01-02T03:04:05Z"
 
 
 def test_cli_check_evaluates_an_explicit_record_file(world, tmp_path, capsys):

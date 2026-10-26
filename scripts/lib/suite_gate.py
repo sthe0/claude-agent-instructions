@@ -95,10 +95,10 @@ class _Recorder:
 
 
 def pytest_configure(config):
-    path = os.environ.get(FAILURES_ENV)
+    path = os.environ.get("SUITE_GATE_FAILURES")
     if path and not hasattr(config, "workerinput"):
         config.pluginmanager.register(_Recorder(path), "suite-gate-recorder")
-'''.replace("FAILURES_ENV", repr(FAILURES_ENV))
+'''
 
 GIT_IDENTITY = {
     "GIT_AUTHOR_NAME": "suite-gate", "GIT_AUTHOR_EMAIL": "suite-gate@localhost",
@@ -324,16 +324,24 @@ def _decision(admitted: bool, kind: str, reason: str, record: Path | None = None
     return LandingDecision(admitted, kind, defuse(line), record, reason)
 
 
+def _scope_decision(repo: str | Path, tip: str, candidate_sha: str) -> LandingDecision | None:
+    """The admitting decision of a landing that needs no suite run, or None when the suite is required."""
+    kind, files = landing_scope(repo, tip, candidate_sha)
+    if kind == NOT_REQUIRED:
+        return _decision(True, NOT_REQUIRED, "repository has no suite gate")
+    if kind == EXEMPT:
+        return _decision(True, EXEMPT, exempt_files(files))
+    return None
+
+
 def landing_decision(repo: str | Path, candidate_sha: str, tip: str,
                      common_dir: str | Path | None = None,
                      record_file: str | Path | None = None) -> LandingDecision:
     """Read the edges (trees, diff, record) and decide; never runs the suite; any error refuses."""
     try:
-        kind, files = landing_scope(repo, tip, candidate_sha)
-        if kind == NOT_REQUIRED:
-            return _decision(True, NOT_REQUIRED, "repository has no suite gate")
-        if kind == EXEMPT:
-            return _decision(True, EXEMPT, exempt_files(files))
+        scoped = _scope_decision(repo, tip, candidate_sha)
+        if scoped is not None:
+            return scoped
         store = Path(common_dir) if common_dir else shared.git_common_dir(repo)
         path = Path(record_file) if record_file else shared.record_path(store, RECORD_DIR, candidate_sha)
         if not path.exists():
@@ -576,6 +584,96 @@ def _confirmed(repo: Path, candidate: str, root: Path, new: list[str], runner: R
     return [i for i in new if i in ids], [i for i in new if i not in ids], ""
 
 
+@dataclass(frozen=True)
+class Execution:
+    """What the sandboxed runs observed; ``_judge`` turns it into a verdict."""
+    root: Path
+    candidate_run: SuiteRun
+    candidate_ids: tuple[str, ...]
+    reason: str
+    baseline: dict | None
+    baseline_cache: str
+    new: tuple[str, ...]
+    confirmation: tuple[list[str], list[str], str] | None
+
+
+@dataclass(frozen=True)
+class Verdict:
+    reason: str
+    new_failures: tuple[str, ...]
+    unconfirmed: tuple[str, ...]
+    baseline_failures: tuple[str, ...]
+    baseline_cache: str
+
+
+def _execute(repo: Path, candidate_sha: str, tip: str, common_dir: Path, run: Runner, limit: int,
+             now: Callable[[], str], sandbox_parent: str | Path) -> Execution:
+    """Run the candidate, then the tip's baseline and the rerun of its new failures when they are needed."""
+    root = _new_root(sandbox_parent)
+    try:
+        candidate_run = run(repo, candidate_sha, root, select=(), timeout_s=limit)
+        candidate_ids, reason = classify(candidate_run, candidate_sha)
+        baseline, baseline_cache = None, "none"
+        new: list[str] = []
+        confirmation = None
+        if not reason and candidate_ids:
+            baseline, baseline_cache = _baseline(repo, tip, common_dir, run, limit, now, sandbox_parent)
+            if baseline.get("status") == COMPLETE:
+                new = subtract(candidate_ids, baseline["failures"])
+                if new:
+                    confirmation = _confirmed(repo, candidate_sha, root, new, run, limit)
+        return Execution(root, candidate_run, candidate_ids, reason, baseline, baseline_cache,
+                         tuple(new), confirmation)
+    finally:
+        remove_sandbox(root, sandbox_parent)
+
+
+def _judge(execution: Execution) -> Verdict:
+    """Pure: the failures that count and the reason a run is unavailable, from what the runs observed."""
+    reason = execution.reason
+    baseline = execution.baseline
+    new_failures: list[str] = []
+    unconfirmed: list[str] = []
+    baseline_failures: list[str] = []
+    if baseline is not None:
+        if baseline.get("status") != COMPLETE:
+            reason = f"the tip's baseline is unavailable: {one_line(baseline.get('unavailable_reason'), 240)}"
+        else:
+            baseline_failures = list(baseline["failures"])
+            if execution.confirmation is not None:
+                new_failures, unconfirmed, reason = execution.confirmation
+            if unconfirmed and not new_failures and not reason:
+                reason = f"{len(unconfirmed)} new failure(s) did not fail again on rerun: " + ", ".join(
+                    one_line(i, 120) for i in unconfirmed[:5])
+    return Verdict(reason, tuple(new_failures), tuple(unconfirmed), tuple(baseline_failures),
+                   execution.baseline_cache)
+
+
+def _build_record(execution: Execution, verdict: Verdict, candidate_sha: str, tip: str,
+                  now: Callable[[], str], log: str) -> dict:
+    run = execution.candidate_run
+    return {
+        "schema": SCHEMA,
+        "candidate_sha": candidate_sha,
+        "base_sha": tip,
+        "sandbox_core_sha": run.sandbox_core_sha,
+        "sandbox_root": str(execution.root),
+        "ran_at": now(),
+        "build_s": round(run.build_s, 1),
+        "duration_s": round(run.duration_s, 1),
+        "pytest_exit": run.pytest_exit,
+        "status": derive_status(verdict.new_failures, verdict.reason),
+        "candidate_failures": list(execution.candidate_ids),
+        "baseline_failures": list(verdict.baseline_failures),
+        "baseline_cache": verdict.baseline_cache,
+        "new_failures": list(verdict.new_failures),
+        "unconfirmed": list(verdict.unconfirmed),
+        "unavailable_reason": verdict.reason,
+        "waiver": None,
+        "log": log,
+    }
+
+
 def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner | None = None,
               timeout_s: int | None = None, waiver: str | None = None, reuse: bool = False,
               clock: Callable[[], str] | None = None,
@@ -603,50 +701,11 @@ def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner 
             if stored is not None and record_admits(stored, candidate_sha, tip)[0]:
                 path = shared.record_path(common_dir, RECORD_DIR, candidate_sha)
                 return SuiteOutcome(stored, path, _decision(True, ADMITTED, admission_summary(stored), path))
-        root = _new_root(sandbox_parent)
-        try:
-            candidate_run = run(repo, candidate_sha, root, select=(), timeout_s=limit)
-            candidate_ids, reason = classify(candidate_run, candidate_sha)
-            baseline_failures: list[str] = []
-            baseline_cache = "none"
-            new_failures: list[str] = []
-            unconfirmed: list[str] = []
-            if not reason and candidate_ids:
-                baseline, baseline_cache = _baseline(repo, tip, common_dir, run, limit, now, sandbox_parent)
-                if baseline.get("status") != COMPLETE:
-                    reason = f"the tip's baseline is unavailable: {one_line(baseline.get('unavailable_reason'), 240)}"
-                else:
-                    baseline_failures = list(baseline["failures"])
-                    new = subtract(candidate_ids, baseline_failures)
-                    if new:
-                        new_failures, unconfirmed, reason = _confirmed(repo, candidate_sha, root, new, run, limit)
-                    if unconfirmed and not new_failures and not reason:
-                        reason = f"{len(unconfirmed)} new failure(s) did not fail again on rerun: " + ", ".join(
-                            one_line(i, 120) for i in unconfirmed[:5])
-        finally:
-            remove_sandbox(root, sandbox_parent)
-    status = derive_status(new_failures, reason)
-    record = {
-        "schema": SCHEMA,
-        "candidate_sha": candidate_sha,
-        "base_sha": tip,
-        "sandbox_core_sha": candidate_run.sandbox_core_sha,
-        "sandbox_root": str(root),
-        "ran_at": now(),
-        "build_s": round(candidate_run.build_s, 1),
-        "duration_s": round(candidate_run.duration_s, 1),
-        "pytest_exit": candidate_run.pytest_exit,
-        "status": status,
-        "candidate_failures": list(candidate_ids),
-        "baseline_failures": baseline_failures,
-        "baseline_cache": baseline_cache,
-        "new_failures": new_failures,
-        "unconfirmed": unconfirmed,
-        "unavailable_reason": reason,
-        "waiver": None,
-        "log": _write_log(common_dir, RECORD_DIR, candidate_sha, candidate_run.log_tail),
-    }
-    if waiver is not None and status == UNAVAILABLE:
+        execution = _execute(repo, candidate_sha, tip, common_dir, run, limit, now, sandbox_parent)
+    verdict = _judge(execution)
+    record = _build_record(execution, verdict, candidate_sha, tip, now,
+                           _write_log(common_dir, RECORD_DIR, candidate_sha, execution.candidate_run.log_tail))
+    if waiver is not None and record["status"] == UNAVAILABLE:
         record["waiver"] = {"reason": shared.normalize_reason(waiver), "at": now()}
     path = shared.write_record(common_dir, RECORD_DIR, candidate_sha, record)
     ok, why = record_admits(record, candidate_sha, tip)
@@ -667,16 +726,15 @@ def waive_record(repo: str | Path, sha: str, reason: str,
 
 
 def evaluate_landing(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner | None = None,
-                     timeout_s: int | None = None, waiver: str | None = None,
-                     reuse: bool = True) -> LandingDecision:
+                     timeout_s: int | None = None, waiver: str | None = None, reuse: bool = True,
+                     clock: Callable[[], str] | None = None,
+                     sandbox_parent: str | Path | None = None) -> LandingDecision:
     """The landing decision for the candidate: reuse a bound admitting record, else run the suite."""
     try:
-        kind, files = landing_scope(repo, tip, candidate_sha)
-        if kind == NOT_REQUIRED:
-            return _decision(True, NOT_REQUIRED, "repository has no suite gate")
-        if kind == EXEMPT:
-            return _decision(True, EXEMPT, exempt_files(files))
+        scoped = _scope_decision(repo, tip, candidate_sha)
+        if scoped is not None:
+            return scoped
         return run_suite(repo, candidate_sha, tip, runner=runner, timeout_s=timeout_s, waiver=waiver,
-                         reuse=reuse).decision
+                         reuse=reuse, clock=clock, sandbox_parent=sandbox_parent).decision
     except GateError as exc:
         return _decision(False, REFUSED, f"cannot decide: {exc}")

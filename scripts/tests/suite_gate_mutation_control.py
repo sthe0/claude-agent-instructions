@@ -132,8 +132,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "suite-unconfirmed-not-admitted": Mutant(
         LIB,
-        "                    if unconfirmed and not new_failures and not reason:",
-        "                    if False:",
+        "            if unconfirmed and not new_failures and not reason:",
+        "            if False:",
         _ids("test_a_new_failure_that_passes_on_rerun_is_unavailable_not_admitted"),
     ),
     "suite-baseline-keyed-by-tip": Mutant(

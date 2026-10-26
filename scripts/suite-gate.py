@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -70,6 +71,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     candidate = shared.resolve_commit(repo, args.ref)
     decision = gate.evaluate_landing(
         repo, candidate, _tip(args, repo), timeout_s=args.timeout, waiver=args.waiver, reuse=False,
+        runner=args.runner, clock=args.clock, sandbox_parent=args.sandbox_parent,
     )
     if decision.record_path is not None:
         _print_record(shared.read_record(decision.record_path))
@@ -165,8 +167,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, runner: gate.Runner | None = None,
+         sandbox_parent: str | Path | None = None, clock: Callable[[], str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    args.runner, args.sandbox_parent, args.clock = runner, sandbox_parent, clock
     try:
         return args.func(args)
     except shared.GateError as exc:
