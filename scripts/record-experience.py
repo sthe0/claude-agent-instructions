@@ -1136,6 +1136,42 @@ def cmd_split_apply(a) -> int:
     return 0
 
 
+def promote_skeleton(a, area: str, induced: list[str], grounded: list[str]) -> tuple[str, str]:
+    """The provenance frontmatter line and the section skeleton of a promoted leaf:
+    a grounded global principle, an induced regularity, or an induced project principle."""
+    statement = a.statement.strip()
+    refutation = ("\n## Refutation\n\nTODO (curator): the observation that would refute this "
+                  f"{area} or force a broader form.\n")
+    if a.principle:
+        link_line = f"grounded_in: [{', '.join(pp.REGULARITY_PREFIX + s for s in grounded)}]\n"
+        body = (
+            f"## Principle\n\n{statement}\n\n"
+            "## Goal class\n\n"
+            f"Level {a.generality} — TODO (curator): name the goal this norm serves and the "
+            "class of tasks it ranges over.\n\n"
+            "## Grounded in\n\n"
+            + "".join(f"- [[{s}]] — TODO (curator): what this regularity contributes.\n"
+                      for s in grounded)
+            + refutation
+        )
+        return link_line, body
+    heading = "Regularity" if area == "regularity" else "Principle"
+    body = (
+        f"## {heading}\n\n{statement}\n\n"
+        "## Generality\n\n"
+        f"Level {a.generality} — TODO (curator): name the class of tasks this statement "
+        "ranges over and what it is deliberately not claimed for.\n\n"
+        "## Induced from\n\n"
+        + "".join(f"- [[{s}]] — TODO (curator): what this source contributes.\n"
+                  for s in induced)
+        + refutation
+        + ("" if area == "regularity" else
+           "\n## See also\n\n"
+           "- TODO (curator): sibling principles and the leaves that apply this one.\n")
+    )
+    return f"induced_from: [{', '.join(induced)}]\n", body
+
+
 def cmd_promote(a) -> int:
     manifest = manifest_path = None
     if a.manifest:
@@ -1202,38 +1238,7 @@ def cmd_promote(a) -> int:
 
     source_links = grounded if a.principle else induced
     schema = "principle/v1" if area == "principle" else "regularity/v1"
-    if a.principle:
-        link_line = f"grounded_in: [{', '.join(pp.REGULARITY_PREFIX + s for s in grounded)}]\n"
-        body = (
-            f"## Principle\n\n{a.statement.strip()}\n\n"
-            "## Goal class\n\n"
-            f"Level {a.generality} — TODO (curator): name the goal this norm serves and the "
-            "class of tasks it ranges over.\n\n"
-            "## Grounded in\n\n"
-            + "".join(f"- [[{s}]] — TODO (curator): what this regularity contributes.\n"
-                      for s in grounded)
-            + "\n## Refutation\n\n"
-            "TODO (curator): the observation that would refute this principle or force a "
-            "broader form.\n"
-        )
-    else:
-        link_line = f"induced_from: [{', '.join(induced)}]\n"
-        statement_heading = "Regularity" if area == "regularity" else "Principle"
-        body = (
-            f"## {statement_heading}\n\n{a.statement.strip()}\n\n"
-            "## Generality\n\n"
-            f"Level {a.generality} — TODO (curator): name the class of tasks this statement "
-            "ranges over and what it is deliberately not claimed for.\n\n"
-            "## Induced from\n\n"
-            + "".join(f"- [[{s}]] — TODO (curator): what this source contributes.\n"
-                      for s in induced)
-            + "\n## Refutation\n\n"
-            f"TODO (curator): the observation that would refute this {area} or force a "
-            "broader form.\n"
-            + ("" if area == "regularity" else
-               "\n## See also\n\n"
-               "- TODO (curator): sibling principles and the leaves that apply this one.\n")
-        )
+    link_line, body = promote_skeleton(a, area, induced, grounded)
     text = (
         "---\n"
         f"name: {a.slug}\n"
