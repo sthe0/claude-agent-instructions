@@ -31,6 +31,7 @@
 "scripts/memory-retrieval-calibrate.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "re-calibration rewrites docs/operations/memory-retrieval-calibration.json, aggregates only; a deliberate maintainer action, reviewed in the diff" }
 "scripts/plan-size-calibrate.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "re-calibration rewrites docs/operations/plan-size-calibration.json, aggregates only; a deliberate maintainer action, reviewed in the diff" }
 "scripts/lib/principle_provenance.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "applies a link change set atomically to leaf paths its caller passes; its only writing caller, record-experience.py, refuses the canonical checkout before calling it" }
+"scripts/bench-verify-final.py" = { disposition = "not-canon", category = "not-canon", reason = "builds its fixture repo and engine copies under a temp dir; the only other write is the report at the path the caller names with --json-out" }
 "scripts/plan-fit-report.py" = { disposition = "not-canon", category = "not-canon", reason = "writes one report file at the path the caller names with --out; reads a plan, launches nothing" }
 
 # --- exempt-landing: the sync / landing path itself ---

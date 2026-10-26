@@ -44,6 +44,14 @@ The trigger is **not** "this stage's own check is unmechanized". Concrete exampl
 
 Budgeting a round must not legitimize one that a cheaper discriminator would have removed. [[2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer]] § Self-critique carries the paired obligation: three rounds each justified by a genuine blocker were still an effort signal, and two of them would have collapsed into one had the runtime axis been exercised **before** the first review. Budget the round; spend the cheapest discriminator first anyway.
 
+## Verify-final check shape
+
+*Difficulty removed:* each whole-suite check re-runs at `verify-final` after any commit, so a plan with several of them multiplies the slowest step of the gate, and a docs-only commit still costs the full suite.
+
+- Declare `verify_reads` (`scripts/agentctl/README.md` § Check venue) only on a **targeted** check, one that runs named tests or a named script and reads no git history; `[]` is a valid declaration. The engine then serves it from an earlier green when the only changes since are `.md` files under `docs/` or `memory-global/` that the check neither declares nor names in its command.
+- Keep **at most one** whole-suite check per plan (a bare `pytest` over the test root, or `verify-all.py` without `--staged`); `submit-plan` warns on a second distinct one and on a whole-suite check that declares `verify_reads`.
+- A whole-suite check that must stay discriminating after the branch lands pins its base in the command (for this repo `AGENTCTL_SLOW_BASE=<sha>`), so the slow-test selection is the same before and after landing (without a pin it falls back to the merge base with `origin/main`, which changes at landing).
+
 ## Submission-seam fields
 
 `submission.py`'s `_SUBSTANTIVE_SUBMISSION_FIELDS` refuses a substantive plan at the submit-plan seam when a stage omits one of these — each fills a distinct functional place the plan-activity ontology names, not a restatement of a field already required elsewhere:
