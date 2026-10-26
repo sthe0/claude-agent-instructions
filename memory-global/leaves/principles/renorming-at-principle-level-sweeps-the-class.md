@@ -49,6 +49,11 @@ decision) has no class to sweep, and the note level is the right record there.
 
 - [[a-fix-at-the-failing-site-leaves-siblings-of-the-same-form]] — When a defect is the instance of a form (a control asserting a shared resource absolutely, a spawn passing an ungranted flag), fixing the site where it failed leaves the other sites carrying the same form in place, and they fail later on their own.
 
+Observed in the 2026-08 advisor-timeout delivery: the shared-resource-control form
+([[shared-resource-health-asserted-relative-to-a-pinned-base]]) was corrected three times at three
+separate sites across four replans, because each correction addressed the failing control rather
+than enumerating the form.
+
 ## Refutation
 
 The principle fails its goal if, after a plan executed the sweep, a site of the same form that the sweep should have enumerated still fails later.

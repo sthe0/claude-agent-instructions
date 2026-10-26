@@ -15,6 +15,7 @@ last_verified: 2026-10-12
 ## Principle
 
 Because a non-hermetic read fails independently of the artifact ([[a-non-hermetic-read-fails-independently-of-the-artifact]]) and a two-valued judge absorbs "could not look" ([[a-two-valued-judge-absorbs-could-not-look]]), for the goal of controls whose red can be acted on, give every control that reads a non-hermetic input three outcomes, pass, fail and could-not-read; resolve the read by a pinned key under a timeout with bounded attempts, let could-not-read assert nothing about the artifact, and digest the failure by its observed cause so a repeat can be told from a new failure.
+
 ## Goal class
 
 Controls over non-hermetic inputs whose red result can be acted on as a defect of the artifact, and whose repeated failures can be told apart as the same cause or a new one.

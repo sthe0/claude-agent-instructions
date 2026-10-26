@@ -14,6 +14,7 @@ last_verified: 2026-10-21
 ## Principle
 
 Because a value emitted to an external channel persists beyond recall ([[a-value-emitted-to-an-external-channel-persists-beyond-recall]]), for the goal of keeping secrets and non-public identifiers out of copies the writer cannot reach, emit a value into any external channel only after it has been reduced to what the channel may carry (feed secrets through a stream, not an argument; neutralize identifiers before they reach public history); treat the sink's gate as a backstop, keep the sibling fields the gate did not object to, and rotate any secret already logged.
+
 ## Goal class
 
 No secret or non-public identifier reaching a copy outside the writer's control through an external channel.

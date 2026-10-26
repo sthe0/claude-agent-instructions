@@ -14,6 +14,7 @@ last_verified: 2026-10-21
 ## Principle
 
 Because a generic failure message names a surface shared by many causes ([[a-generic-failure-message-names-a-surface-shared-by-many-causes]]), for the goal of a first remedy that removes the failure, before acting on a generic failure message, state at least two causes on different axes (working directory, version, credential channel, process lifetime), find the observation that separates them without changing state, and choose the least destructive remedy that addresses the confirmed one; a remedy that makes the symptom worse is a signal that the cause was misjudged.
+
 ## Goal class
 
 Remedies for generic failures that remove the failure on the first applied remedy, without a destructive step aimed at the wrong cause.

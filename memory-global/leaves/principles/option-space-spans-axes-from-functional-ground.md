@@ -14,6 +14,7 @@ last_verified: 2026-06-26
 ## Principle
 
 Because options recalled from known mechanisms cluster on known axes ([[options-recalled-from-known-mechanisms-cluster-on-known-axes]]), for the goal of an option set that contains the right choice, **span orthogonal axes** — passive-mechanism vs active-agent, batch-accumulation vs per-item, mechanical-precedence vs synthesized-invariant — and **generate the options from the difficulty's functional ground**, not by reciting the mechanisms you already know. Then ask whether an **induced invariant subsumes** the competing options (dialectical synthesis) rather than leaving a flat catalogue. The system's functional-ground ontology is itself an option-*generator*, not merely a justification check.
+
 ## Goal class
 
 Presenting a decision-maker with an option set for a design or architecture question that contains the option they would choose with full knowledge, so the choice is made among real alternatives rather than within one familiar region.

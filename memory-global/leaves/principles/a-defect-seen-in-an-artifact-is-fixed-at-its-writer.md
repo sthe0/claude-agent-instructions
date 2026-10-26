@@ -14,6 +14,7 @@ last_verified: 2026-10-21
 ## Principle
 
 Because a generated artifact is overwritten by its writer ([[a-generated-artifact-is-overwritten-by-its-writer]]), for the goal of a fix that stays fixed, on finding a defect in a config file, settings value or emitted field, first locate the writer (generator, installer, emitter) and decide whether the defect lives there; fix the writer and, where the writer is additive or lossy, make it prune or pin the invariant, then add a guard so the next edit cannot reintroduce the drift. A hand edit of the artifact is only a stopgap and is named as one.
+
 ## Goal class
 
 A defect found in a written artifact that stays fixed across later runs of the artifact's writer.

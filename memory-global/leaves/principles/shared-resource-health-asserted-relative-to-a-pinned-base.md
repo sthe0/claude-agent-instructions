@@ -53,6 +53,10 @@ property.
 
 - [[a-shared-resource-moves-under-others-action]] — A resource other sessions or tasks also act on — a working tree, a trunk branch, a test suite's population, a session-state schema — changes between two observations by one task for reasons unrelated to that task.
 
+Third occurrence inside one task (2026-08, the advisor-timeout delivery): stage 1's merge-base
+control, the stage-8 control caught in review, and stage 9's suite conjunct all carried the absolute
+form — which is the `principle-promotion-threshold` recurrence that lifted it here.
+
 ## Refutation
 
 The principle fails its goal if base-relative controls still attribute to the delivery a breakage present at the base, or pass a delivery whose own change broke the resource.

@@ -14,6 +14,7 @@ last_verified: 2026-10-21
 ## Principle
 
 Because a format varies while the property it stands for holds ([[a-format-varies-while-the-property-it-stands-for-holds]]), for the goal of a gate that admits exactly the work with the property it guards, when a gate tests format as a proxy for a property, either test the property, or normalize the drift classes that do not change it and say which are tolerated; the work around a false rejection (manual re-verify, unblock) is a cost to count when choosing the gate.
+
 ## Goal class
 
 Gates that admit exactly the work that has the property they guard, without false rejections whose manual workaround costs more than the gate saves.

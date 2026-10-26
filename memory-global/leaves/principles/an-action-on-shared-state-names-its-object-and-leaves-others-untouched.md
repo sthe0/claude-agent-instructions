@@ -14,6 +14,7 @@ last_verified: 2026-10-21
 ## Principle
 
 Because a name from position or an empty variable designates a foreign object ([[a-name-from-position-or-an-empty-variable-designates-a-foreign-object]]) and a shared resource moves under others' action ([[a-shared-resource-moves-under-others-action]]), for the goal of acting on exactly the intended object, before a mutating act on a resource other sessions or tasks may share (a stash, a working tree, a branch, a directory built from a variable), name the exact object by identity, guard the conditions under which the name is empty or foreign, and prefer an offer to a user over a silent background mutation; recover by isolating onto a pinned clean base rather than editing in place.
+
 ## Goal class
 
 Mutating actions on shared resources that change exactly their intended object and leave every other session's or task's objects untouched.

@@ -14,6 +14,7 @@ last_verified: 2026-10-21
 ## Principle
 
 Because a process boundary carries only what is passed across it ([[a-process-boundary-carries-only-what-is-passed-across-it]]), for the goal of spawned actors that spend their budget on their task, treat every spawn as a fresh actor: before launching it, list what the child needs that the parent holds implicitly (execution state, the files and material its stage names, the worktree of the prior stage, the target's own permissions) and what it must not touch (live data paths, destructive actions), and pass both explicitly in the brief or the spawn settings; a child that discovers the wall by hitting it spends its budget on denials.
+
 ## Goal class
 
 Spawned actors that spend their budget on their task rather than on discovering missing state, files, worktrees or permissions, and that never touch what they must not.

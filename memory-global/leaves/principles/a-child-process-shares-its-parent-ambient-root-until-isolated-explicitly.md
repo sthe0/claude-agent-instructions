@@ -14,6 +14,7 @@ last_verified: 2026-10-21
 ## Principle
 
 Because a child process reads its parent's ambient root ([[a-child-process-reads-its-parents-ambient-root]]), for the goal of children that neither recurse nor clobber and keep their login, when a process is launched by an agent or installed beside a personal setup, decide its root explicitly: relocate it with the tool's own root variable from one single-source seam, then enumerate what the old root held in files and re-supply it; otherwise the unisolated child recurses or clobbers, and the isolated one silently loses its login. Pair the isolation with an alarm, because a caller that tolerates failure shows neither outcome.
+
 ## Goal class
 
 Child processes and side-by-side installations that neither recurse into nor clobber their parent's setup and keep the credentials they need, with any failure of either kind visible.

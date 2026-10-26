@@ -15,6 +15,7 @@ last_verified: 2026-10-12
 ## Principle
 
 Because a stage control is re-evaluated after its world has changed ([[a-stage-control-is-re-evaluated-after-its-world-has-changed]]), for the goal of controls whose verdict does not depend on the phase they run in, before freezing a control, name the phase of the plan in which each clause is true and ask whether it is still true after the commit, after landing and after every later stage that extends or reverses its subject; assert membership not equality, post-conditions not pre-action probes, and the durable end state in the stage that reaches it.
+
 ## Goal class
 
 Re-runnable controls whose verdict on a correct delivery does not depend on the plan phase in which they are evaluated.

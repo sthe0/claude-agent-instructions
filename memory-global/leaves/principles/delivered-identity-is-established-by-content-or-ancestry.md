@@ -15,6 +15,7 @@ last_verified: 2026-10-12
 ## Principle
 
 Because a coordinate shifts while the content it addressed stays ([[a-coordinate-shifts-while-the-content-it-addressed-stays]]) and a shared resource moves under others' action ([[a-shared-resource-moves-under-others-action]]), for the goal of deciding landed-ness and identity correctly, express landed-ness as monotone containment of the delivered head in the target, express artifact identity by a content anchor, and scope any sweep over a moving history to this task's own marker; never assert equality of, or position within, a coordinate that unrelated movement of the shared resource can change.
+
 ## Goal class
 
 Checks that decide "did this delivery land" or "is this the artifact I named" correctly against a shared, moving resource — no false red on intact content, no false green on changed content.

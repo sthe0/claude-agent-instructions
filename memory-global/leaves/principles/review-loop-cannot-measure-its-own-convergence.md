@@ -22,6 +22,30 @@ finding text per round) is therefore a precondition to any hypothesis about WHY 
 converging — without the record you cannot distinguish "volume problem" from "iatrogenic floor" from
 "unanswerable study" from "artifact-machinery gap".
 
+## Mechanisms
+
+Four mechanisms, each individually sufficient to defeat termination:
+
+1. **Unanswerable hypothesis** — if the record retains round identity but not finding count text
+   or plan bytes, any volume-law hypothesis is unanswerable, not refuted. The loop cannot tell you
+   whether it is converging; only external instrumentation can. Instrument before theorizing.
+
+2. **No verb for "study cannot be done"** — when the review vocabulary admits only *covered/cut*
+   for orders and *revise/pass/override* for verdicts, a premise-invalidating finding (the study
+   itself cannot proceed as specified) and an ordinary plan defect are indistinguishable: both
+   arrive as BLOCKING and route to revise-and-re-review. A finding raised in round 2 was
+   re-litigated for eight more rounds before being recorded as a cut.
+
+3. **Iatrogenic floor** — repair is an authoring act at the density where authoring introduces
+   defects. The finding count falls to a NON-ZERO FLOOR (measured: 79% of breakers from round 4
+   onward were introduced by the immediately preceding round's own fix). A pass-required gate with
+   a non-zero floor has no reachable exit. Remedy: freeze finished parts, not shrink the artifact.
+
+4. **Artifact-to-machinery gap** — review reads the artifact; execution reads the machinery.
+   Defects that exist only in the fit between them (a stage whose commit the pre-commit spine would
+   refuse, a guard watching a constant rather than the live array) are invisible to review at any
+   number of rounds; they surface only on first execution.
+
 ## Goal class
 
 A plan-review, enumeration or publication loop that ends in a recorded decision at bounded cost, rather than cycling until someone abandons it.
@@ -46,7 +70,7 @@ The principle fails its goal if loops with a structural bound still end without 
 ## See also
 
 - [[2026-08-11-review-loop-cannot-measure-its-own-convergence]] — the generality-0 experience leaf
-  this principle is induced from (four contexts, occurrence count ≥ `principle-promotion-threshold`).
+  among the precedents this principle is grounded in (four contexts, occurrence count ≥ `principle-promotion-threshold`).
 - [effort-divergence-trigger.md](../effort-divergence-trigger.md) — the companion overrun detector;
   fires on PASSING stages when cost overruns the estimate, not on BLOCKING stages in a review loop.
   The review-round scale was explicitly cut at closure; this principle records what that cut costs.

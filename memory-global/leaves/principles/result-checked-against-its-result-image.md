@@ -14,6 +14,7 @@ last_verified: 2026-06-26
 ## Principle
 
 Because a step that ran is not thereby a step that worked ([[a-step-that-ran-is-not-thereby-a-step-that-worked]]), for the goal of knowing that a step removed its difficulty, **compare the actual result to the `Expected result image` the plan declared, before accepting it or advancing**. This is the **critique** primitive of ADR-0001 — extract the *difference* between expected and actual — applied to a single stage: zero difference ⇒ pass; any difference ⇒ a difficulty, route to `overcome-difficulty`. A skipped comparison is itself a difficulty, because the observable that would prove success was never read.
+
 ## Goal class
 
 Knowing, before accepting a step or advancing past it, that the step removed the difficulty it was planned against — for any plan stage, specialist delivery or fix whose success is a change of state in its material.

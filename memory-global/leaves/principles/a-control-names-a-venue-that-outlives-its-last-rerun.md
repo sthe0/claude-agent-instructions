@@ -15,6 +15,7 @@ last_verified: 2026-10-12
 ## Principle
 
 Because a stage control is re-evaluated after its world has changed ([[a-stage-control-is-re-evaluated-after-its-world-has-changed]]), for the goal of controls that pass again at every re-run of a correct delivery, declare, for every control, the venue it observes and how long that venue lives; if the delivery's own landing, cleanup or a later stage can remove or restore it, name a surviving venue for the re-run instead of repairing the venue to make the old address true.
+
 ## Goal class
 
 Stage controls that pass again at every re-run of a correct delivery — final verification after landing and cleanup included — without rewriting a venue to make an old address true.

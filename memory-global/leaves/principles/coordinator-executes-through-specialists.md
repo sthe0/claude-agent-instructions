@@ -16,6 +16,7 @@ rule_derived: "Seed principle lifted from a coordinator-pitfalls row (ADR-0001 S
 ## Principle
 
 Because root-direct edits accumulate context and skip review ([[root-direct-edits-accumulate-context-and-skip-review]]), for the goal of a lean, controllable and verifiable main thread, achieve production change by **dispatching the work to a specialist** (inline or spawned) rather than editing directly from the root. Root-issued `Bash`/`Edit`/`Write` on substantive production work is a difficulty signal — the exceptions (small change ≤ `small-change-max-lines`; gated repo writes that a spawn would be denied) are named carve-outs, not the default.
+
 ## Goal class
 
 A root coordinator thread that stays lean, controllable and verifiable across a long task: low per-turn context cost and every production change reviewed and checkable through a return marker.

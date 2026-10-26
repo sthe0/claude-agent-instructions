@@ -14,6 +14,7 @@ last_verified: 2026-10-21
 ## Principle
 
 Because an unkeyed or unweighted total misranks the decision it feeds ([[an-unkeyed-or-unweighted-total-misranks-the-decision-it-feeds]]), for the goal of measurements that rank and attribute correctly, before building or trusting a measurement, name the decision it feeds and check that its unit is the decision's unit (cost, not raw tokens), that each event is counted once, and that each observation is keyed to the thing the decision is about (stage, plan, revision); a metric with no such key cannot be attributed, however accurate its totals.
+
 ## Goal class
 
 Measurements that rank the alternatives of the decision they feed the way the decision's real unit ranks them, and attribute their totals to those alternatives.

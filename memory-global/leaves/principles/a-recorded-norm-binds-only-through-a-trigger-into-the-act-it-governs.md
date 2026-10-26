@@ -15,6 +15,7 @@ last_verified: 2026-10-12
 ## Principle
 
 Because a recorded remedy is absent at the act it governs unless something places it there ([[a-recorded-remedy-is-absent-at-the-act-it-governs]]), for the goal of norms that change the acts they govern, treat a norm as binding only where something places it in front of the author at the act it governs: mechanize the decidable part as a gate at that act, name the residual perception explicitly, and count a defect that recurs against a recorded remedy as a retrieval failure, not as evidence the norm is wrong.
+
 ## Goal class
 
 Recorded norms that actually change the acts they govern — a defect with a recorded remedy does not recur at the next occurrence of its act.

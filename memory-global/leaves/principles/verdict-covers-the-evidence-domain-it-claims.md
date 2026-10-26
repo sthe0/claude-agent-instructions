@@ -1,6 +1,6 @@
 ---
 name: verdict-covers-the-evidence-domain-it-claims
-description: Anything that issues a verdict — a gate, a checker, or an agent's own investigation — must actually cover the evidence domain its verdict claims, and where it cannot, say so instead of answering. A gate demanding proof whose prover is absent, a checker enumerating from one source while reading another, and and an agent's claim about a mechanism it never ran — its absence, its cause, or its next move — are the same fault; where the mechanism ships a dry run, not spending it before the claim is the whole failure. Escape hatches must stay reachable, diagnosed, typed and counted.
+description: Anything that issues a verdict — a gate, a checker, or an agent's own investigation — must actually cover the evidence domain its verdict claims, and where it cannot, say so instead of answering. A gate demanding proof whose prover is absent, a checker enumerating from one source while reading another, and an agent's claim about a mechanism it never ran — its absence, its cause, or its next move — are the same fault; where the mechanism ships a dry run, not spending it before the claim is the whole failure. Escape hatches must stay reachable, diagnosed, typed and counted.
 type: reference
 schema: principle/v1
 generality: 3

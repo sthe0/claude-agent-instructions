@@ -14,6 +14,7 @@ last_verified: 2026-10-21
 ## Principle
 
 Because a mechanism green in isolation can lack consumers and population ([[a-mechanism-green-in-isolation-can-lack-consumers-and-population]]), for the goal of mechanisms that work in production on ship, before calling a new or tightened mechanism done, enumerate its consumers (a production caller, an entry point, onboarding, the configuration seam), the population it applies to (the whole corpus, not the file changed), and the behavior it replaces (a richer prose superset, a manual capture); run the new check corpus-wide before shipping it and grandfather legacy violations by mode rather than by surprise.
+
 ## Goal class
 
 New or tightened mechanisms that work in production on ship — reached by their callers, applied across their whole population, at least as capable as what they replace.
