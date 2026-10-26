@@ -142,6 +142,7 @@ def test_review_passes_survive_the_arm_plan_being_gone(arms):
     for arm in pcr.ARMS:
         Path(json.loads((arms / arm / "state.json").read_text(encoding="utf-8"))["plan_path"]).unlink()
     state = json.loads((arms / "risk" / "state.json").read_text(encoding="utf-8"))
+    assert state["plan_stage_reviews"]["stage:1"]["plan_path"] == state["plan_path"]
     state["plan_stage_reviews"]["stage:1"]["plan_sha256"] = "0" * 64
     (arms / "risk" / "state.json").write_text(json.dumps(state), encoding="utf-8")
     doc = trial(arms)
@@ -152,8 +153,8 @@ def test_review_passes_survive_the_arm_plan_being_gone(arms):
 
 def test_spawn_row_without_spawner_session_counts_by_session_id(arms):
     row = {k: v for k, v in spawn_row(CONTROL_SESSION, EARLY, 1.0).items() if k != "spawner_session"}
-    (arms / "control" / "ledger.jsonl").write_text(json.dumps(dict(row, session_id=CONTROL_SESSION)) + "\n",
-                                                   encoding="utf-8")
+    rows = [dict(row, session_id=CONTROL_SESSION), dict(row, session_id="foreign")]
+    (arms / "control" / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     assert trial(arms)["arms"]["control"]["thinker_spawn_h_total"] == 1.0
 
 
