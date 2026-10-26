@@ -1106,6 +1106,7 @@ def test_apply_refined_copies_all_criterion_fields_except_engine_written():
             verify_venue_at_final=f"final-{tag}" if tag == "src" else None,
             negative_control=f"neg-{tag}" if tag == "src" else None,
             negative_control_waiver=f"waiver-{tag}" if tag != "src" else None,
+            verify_reads=[f"reads-{tag}"] if tag == "src" else None,
         )
 
     cur = Stage(

@@ -904,6 +904,10 @@ def test_every_allowlist_entry_states_a_reason():
 # declined stage written FAILED/PENDING/ACTIVE is dispatched again, which no read-side
 # net can see.
 ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
+    ("bench-verify-final.py", "_build_state"): (
+        "n/a: builds the benchmark's own three-stage fixture state, none of it optional, so "
+        "no SKIPPED stage can reach the write"
+    ),
     ("agentctl/cli.py", "cmd_approve"): (
         "n/a: the ONLY writer of SKIPPED, and only for stages the plan declares optional "
         "and the customer named in --skip-optional"

@@ -104,7 +104,8 @@ def _says(directive):
 _BOOKKEEPING = {"actor.cost_tier", "amendments.date", "amendments.text", "amendments.reason"}
 _FINAL_VENUE = {"criterion.verify_venue_at_final"}
 _CHECK_ONLY = {"criterion.verify_command", "criterion.expected_exit", "criterion.verify_venue",
-               "criterion.negative_control", "criterion.negative_control_waiver"}
+               "criterion.negative_control", "criterion.negative_control_waiver",
+               "criterion.verify_reads"}
 
 
 def test_stage_field_classification_is_total():

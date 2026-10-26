@@ -232,6 +232,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         verify_venue="VERIFY_VENUE_V",
         verify_venue_at_final="VERIFY_VENUE_AT_FINAL_V",
         negative_control="NEGATIVE_CONTROL_V",
+        verify_reads=["VERIFY_READS_V"],
     )
     stage = Stage(
         index=1,
@@ -277,7 +278,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         "TITLE_V", "MATERIAL_V", "RESULT_V", "INVARIANTS_V", "MEANS_V", "METHOD_V",
         "EXECUTOR_V", "CAPABILITY_V", "COST_TIER_V", "CRITERION_TYPE_V",
         "DONE_CRITERION_V", "VERIFY_COMMAND_V", "42", "OBSERVATION_V",
-        "VERIFY_VENUE_V", "VERIFY_VENUE_AT_FINAL_V", "NEGATIVE_CONTROL_V", "STATEMENT_V", "SOURCE_V",
+        "VERIFY_VENUE_V", "VERIFY_VENUE_AT_FINAL_V", "NEGATIVE_CONTROL_V", "VERIFY_READS_V", "STATEMENT_V", "SOURCE_V",
         "DERIVATION_V", "CONFIDENCE_V", "REFUTATION_V", "CONDITIONS_V",
         "MATERIAL_REF_V", "KNOWLEDGE_V", "KNOWLEDGE_REF_V", "PROCEDURE_V", "PRECONDITIONS_V",
         "OUTPUT_ARTIFACT_V", "EPHEMERAL_ARTIFACTS_WAIVER_V", "CONTROL_V", "on stage 7", "ELEMENT_V", "ARTIFACT_V", "delivery: report",
@@ -324,6 +325,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Criterion, "landed"),  # excluded here: covered by the landed-check test below instead
         (Criterion, "verify_venue_at_final"), (Criterion, "negative_control"),
         (Criterion, "negative_control_waiver"),  # excluded: rendered only when no negative_control is set
+        (Criterion, "verify_reads"),
         (Principle, "statement"), (Principle, "source"), (Principle, "derivation"),
         (Principle, "confidence"), (Principle, "refutation"),
         (Supply, "on"), (Supply, "element"), (Supply, "artifact"), (Supply, "delivery"),
@@ -347,6 +349,8 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (FinalCheck, "venue"),  # excluded: labels-only method
         (FinalCheck, "kind"),  # excluded except as the unlabelled-check fallback (see label test)
         (FinalCheck, "landed"),  # excluded: labels-only method
+        (FinalCheck, "cacheable"),  # excluded: labels-only method
+        (FinalCheck, "verify_reads"),  # excluded: labels-only method
         # LandedSpec is reachable only through Criterion.landed and FinalCheck.landed,
         # both excluded above. It is walked anyway: otherwise a field added to
         # LandedSpec escapes both this drift check and the dedicated landed-check

@@ -2904,3 +2904,28 @@ ground = "Applies the write-primitive syntax patterns line by line to list which
 hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "coordinator"
+
+[sites."scripts/agentctl/check_cache.py::_glob_regex::re.compile"]
+class = "structural"
+ground = "Compiles a verify_reads path glob into a regex; glob syntax over repo-relative paths, no free-text meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/check_cache.py::reads_match::pattern.fullmatch"]
+class = "structural"
+ground = "Matches a changed repo path against a declared verify_reads glob; path syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/check_cache.py::names_path::pattern.fullmatch"]
+class = "structural"
+ground = "Matches words of a check command against the changed-path globs to see whether the command names a path; path syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/check_cache.py::names_path::re.split"]
+class = "structural"
+ground = "Splits a shell word on fixed shell punctuation into path candidates; tokenization, not meaning."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"

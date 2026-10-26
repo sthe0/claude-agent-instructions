@@ -2841,6 +2841,7 @@ _ELEMENT_FIELDS: dict[str, tuple[str, ...] | None] = {
 # existed — the declared-only rule the whole-stage payload follows.
 _ELIDED_WHEN_DEFAULT: dict[str, tuple[tuple, ...]] = {
     "criterion.landed.provider": ((None,), ("git",)),
+    "criterion.verify_reads": ((None,),),
 }
 
 
@@ -4277,6 +4278,7 @@ STAGE_LEAF_CLASS: dict[str, str] = {
     "outcome.landed_head": "I",
     "outcome.landed_base": "I",
     "outcome.landed_content_waiver": "I",
+    "outcome.checked_tree_sha": "I",
     "outcome.checked_tree_identity": "I",
     "outcome.checked_tree_ok": "I",
     "outcome.record_attempts": "I",

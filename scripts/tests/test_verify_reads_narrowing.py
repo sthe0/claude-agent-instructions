@@ -678,3 +678,12 @@ def test_declaration_survives_the_state_round_trip(store):
     assert state.stages[0].criterion.verify_reads == []
     assert state.final_check[0].verify_reads == []
     assert json.loads(json.dumps(asdict(state.stages[0].criterion)))["verify_reads"] == []
+
+
+def test_declaring_verify_reads_moves_the_criterion_key():
+    from agentctl.plan import stage_question_key
+
+    undeclared = stage_question_key(_stage(1, CMD), "criterion")
+    declared = stage_question_key(_stage(1, CMD, reads=["docs/a.md"]), "criterion")
+    empty = stage_question_key(_stage(1, CMD, reads=[]), "criterion")
+    assert len({undeclared, declared, empty}) == 3
