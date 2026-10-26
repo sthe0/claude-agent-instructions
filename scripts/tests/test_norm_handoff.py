@@ -118,7 +118,7 @@ class _Launched(Exception):
         self.env = env
 
 
-def _spawn(monkeypatch, tmp_path, venued_fixtures_dir, session, *, stage_index=None):
+def _spawn(monkeypatch, tmp_path, venued_fixtures_dir, session, *, stage_index=None, kind="thinker"):
     """Drive `spawn-specialist.py main` up to the child launch. Returns `(rc, env)`:
     `env` is the environment the child `claude -p` would get (None when the wrapper
     refused or stopped before launching), `rc` the wrapper's return code in that case."""
@@ -129,7 +129,7 @@ def _spawn(monkeypatch, tmp_path, venued_fixtures_dir, session, *, stage_index=N
 
     monkeypatch.setattr(SPAWN.proc_tree, "launch_supervised", launch)
     argv = [
-        "--kind", "thinker", "--plan", str(venued_fixtures_dir / "plan_two_stage.toml"),
+        "--kind", kind, "--plan", str(venued_fixtures_dir / "plan_two_stage.toml"),
         "--done-criterion", "a verdict", "--criterion-type", "measurable",
         "--complexity", "medium", "--effort", "medium",
         "--session", session, "--state-root", str(tmp_path / "state"),
@@ -178,6 +178,15 @@ def test_spawn_exports_norm_handoff(store, venued_fixtures_dir, tmp_path, monkey
     assert record.get("norm_digest") == expected.norm_digest()
     assert record.get("depth") == 1 and env["AGENT_RECURSION_DEPTH"] == "1"
     assert path.is_absolute() and path.parent.name == "handoffs"
+
+
+def test_spawn_call_site_hands_the_stage_resource_set_to_the_record(store, venued_fixtures_dir, tmp_path, monkeypatch):
+    _executing(store, "w2r", venued_fixtures_dir)
+    _, env = _spawn(monkeypatch, tmp_path, venued_fixtures_dir, "w2r", stage_index=1, kind="developer")
+    _, _, _, record = _read_exported(env[HANDOFF_ENV])
+    assert {"kind": "specialist", "role": "developer"} in record["resources"]
+    assert {"kind": "file", "path": str(tmp_path), "mode": "write"} in record["resources"]
+    assert record["rule_patterns"] == ["Bash(python3 mod.py:*)"]
 
 
 def test_record_carries_exactly_the_documented_fields(store, venued_fixtures_dir, tmp_path, monkeypatch):
