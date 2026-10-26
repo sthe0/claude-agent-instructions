@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "fedor.solovyev@gmail.com"
 refs: [/home/the0/.claude-agent/plans/lang-agnostic-judge-and-baseline-diff.toml, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]
 created: 2026-07-20
-last_verified: 2026-07-20
+last_verified: 2026-10-26
 generalized_into: [a-judging-artefact-is-executed-before-it-judges]
 ---
 
@@ -26,6 +26,16 @@ Deliver a language-agnostic semantic judge (partition A, stages 1-2) + a reusabl
 ### 2026-07-20 — initial
 - Where it arose: claude-agent-instructions engine-driven substantive plan (lang-agnostic-judge-and-baseline-diff.toml); worktree /home/the0/cai-wt-judge, repo_root pinned there per the stages' worktree-authoring mandate.
 - Working plan: Ran the full overcome-difficulty cycle (declare/investigate with 3 hypotheses/critique failure-address=normative/normalize) + mandatory thinker review (pass) + refinement replan that widened stage 1 verify_command (&& verify-readme) and stage 2 verify_command (+test_hook_escalation_diagnosis_gate.py +test_hook_self_improvement_reminder.py); then fixed the 3 stale tests by adding an HTTP-503/unreachable protocol token to the shared ESC_BODY (preserving the deny-matrix intent, NOT flipping to allow, because the gate is prefilter-only by design) and registered semantic_judge.py in scripts/README.md (which shifted a line-pinned config-root-refs-allowlist entry 106->107, a small coupled fix).
+
+
+### 2026-10-26 — verify-final-speedup (2026-10-26): new plan-schema fields silently moved every plan's digest
+- Where it arose: agentctl session 4e2d6f6e, plan verify-final-speedup-r2.toml, branch verify-final-speedup landed as 69dd8e22
+- Working plan: Stages 2-3 added Criterion/FinalCheck fields (verify_reads, cacheable, checked_tree_sha) and were each verified by their own test files only. The default suite, run once before the measurement stage, showed 10 failures: the unset new fields changed the plan digest and question keys (so live sessions would have lost answered questions and approvals on landing), and several totality registries (STAGE_LEAF_CLASS, question-key scope, change-tier classes, stage-brief field walk, status-write allowlist, lexical-meaning inventory) did not list them. Fix: an inserted stage elides default-valued new fields from the digest (_ELIDED_WHEN_DEFAULT), proven by golden-digest files kept byte-identical, plus the registry entries. Rule for this vector: a stage that adds a field to a persisted/hashed schema runs the repo-wide invariant tests (golden digests + totality registries) in its own verify_command, not just the feature's tests.
+
+## Common core & variations
+**Common:** TODO — shared solution across contexts
+
+**Variations:** TODO — what differs per context
 
 ## Cost
 Developer work ran in an isolated worktree (`/home/the0/cai-wt-judge`); ≥1 thinker spawn for the mandatory refinement-replan review, plus the overcome-difficulty cycle. Under a flat-Max subscription the token spend is list-price telemetry, not real money (≈$0). The real cost was wall-clock: the two completeness gaps surfaced only at `verify-final` — a stage `verify_command` narrower than the plan's `final_check` gave two false-green PASSED records and forced a late overcome-difficulty + refinement-replan cycle at landing instead of at record-result time.
