@@ -676,6 +676,7 @@ _STAGE_RESIDUAL_COVERAGE = {
     "outcome.landed_content_waiver": "outside: the mutable execution RECORD, same reason",
     "outcome.checked_tree_identity": "outside: the mutable execution RECORD, same reason",
     "outcome.checked_tree_ok": "outside: the mutable execution RECORD, same reason",
+    "outcome.checked_tree_sha": "outside: the mutable execution RECORD, same reason",
     "outcome.record_attempts": "outside: the mutable execution RECORD, same reason",
     "outcome.declined": "outside: the mutable execution RECORD, same reason — the "
                         "customer's decline already recorded, not the stage's definition",
@@ -719,6 +720,7 @@ _STAGE_RESIDUAL_COVERAGE = {
     "criterion.verify_venue_at_final": "stage_question_key",
     "criterion.negative_control": "stage_question_key, via negative_control_place",
     "criterion.negative_control_waiver": "stage_question_key, via negative_control_place",
+    "criterion.verify_reads": "stage_question_key, via negative_control_place",
     "criterion.observation": "outside: what a reviewer actually SAW — an execution "
                              "record, and the one this path most exists to preserve",
     "principle.statement": "stage_question_key",
