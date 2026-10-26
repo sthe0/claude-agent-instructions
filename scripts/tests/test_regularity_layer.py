@@ -3,8 +3,8 @@
 The corpus keeps two global layers: regularities (`regularities/`, schema regularity/v1, the
 knowledge layer, induced from experience or cases) and principles (`principles/`, schema
 principle/v1, the norm layer, `grounded_in: [regularity:<slug>]`). Each test builds a small
-corpus under tmp_path and runs a script as a subprocess, so the tests import none of the
-stage's new symbols. Nothing outside tmp_path is read or written.
+corpus under tmp_path and runs a script as a subprocess, except `search`, which runs
+in-process against a repo root patched to tmp_path. Nothing outside tmp_path is read or written.
 """
 from __future__ import annotations
 
@@ -129,7 +129,7 @@ def _finding(done, kind: str, suffix: str) -> bool:
                for line in done.stdout.splitlines())
 
 
-def _load_record(env):
+def _load_record():
     spec = importlib.util.spec_from_file_location("record_experience_layer", RECORD)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -334,12 +334,36 @@ def test_promote_scan_targets_regularity(tmp_path, env):
     assert "principle/v1" not in done.stdout
 
 
-def test_search_tier_regularities(tmp_path, env):
-    module = _load_record(env)
-    root = module.search_root("global", None, "regularities")
-    assert root == SCRIPTS_DIR.parent / "memory-global/leaves/regularities"
-    assert module.TIER_SECTION["regularities"] == "Regularity"
-    assert module.TIER_SECTION["principles"] == "Principle"
+def _search(tmp_path, monkeypatch, capsys, *args) -> str:
+    module = _load_record()
+    monkeypatch.setattr(module, "REPO_ROOT", tmp_path / "repo")
+    assert module.main(["search", *args]) == 0
+    return capsys.readouterr().out
+
+
+def test_search_tier_regularities(tmp_path, env, monkeypatch, capsys):
+    monkeypatch.setenv("CLAUDE_MEMORY_RETRIEVAL_LEDGER", env["CLAUDE_MEMORY_RETRIEVAL_LEDGER"])
+    c = Corpus(tmp_path).good()
+    out = _search(tmp_path, monkeypatch, capsys, "--tier", "regularities", "subject lives")
+    assert out.startswith("analogous regularities (")
+    assert "r1.md" in out and "p1.md" not in out
+
+
+def test_search_regularities_domain_filter(tmp_path, env, monkeypatch, capsys):
+    monkeypatch.setenv("CLAUDE_MEMORY_RETRIEVAL_LEDGER", env["CLAUDE_MEMORY_RETRIEVAL_LEDGER"])
+    c = Corpus(tmp_path).good()
+    other = c.regularity("r2", induced=("e1",))
+    other.write_text(other.read_text(encoding="utf-8").replace(
+        "schema: regularity/v1\n", "schema: regularity/v1\ndomain: other\n"), encoding="utf-8")
+    c.regularity("r1", induced=("e1",))
+    tagged = c.leaves / "regularities" / "r1.md"
+    tagged.write_text(tagged.read_text(encoding="utf-8").replace(
+        "schema: regularity/v1\n", "schema: regularity/v1\ndomain: wanted\n"), encoding="utf-8")
+    both = _search(tmp_path, monkeypatch, capsys, "--tier", "regularities", "subject lives")
+    assert "r1.md" in both and "r2.md" in both
+    filtered = _search(tmp_path, monkeypatch, capsys, "--tier", "regularities",
+                       "--domain", "wanted", "subject lives")
+    assert "r1.md" in filtered and "r2.md" not in filtered
 
 
 def test_link_targets_regularity(tmp_path, env):

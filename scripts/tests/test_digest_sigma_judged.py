@@ -92,6 +92,7 @@ def _write_leaf(d: Path, name: str, desc: str, difficulty: str, tier: int | None
 
 def _corpus(tmp_path, sigma):
     sigma.PRINCIPLES_DIR = tmp_path / "no-principles"
+    sigma.REGULARITIES_DIR = tmp_path / "no-regularities"
     exp = tmp_path / ".claude" / "agent-memory" / "experience"
     _write_leaf(exp, "e1.md", "coordinator edits directly", "gate denies a legitimate memory write during session")
     _write_leaf(exp, "e2.md", "coordinator edits directly", "gate denies a legitimate memory write during sessions")

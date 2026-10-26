@@ -7,7 +7,8 @@ observable without building σ. It:
 
   - **measures condition (A)** — re-refutation of an *already-promoted* principle: a
     `tier: 1` experience leaf (a tier-1 difficulty, the σ-fuel) whose functional ground
-    matches a principle already lifted into `memory-global/leaves/principles/`. ≥
+    matches a regularity or principle already lifted into `memory-global/leaves/regularities/`
+    or `memory-global/leaves/principles/`. ≥
     `principle-promotion-threshold` (Rule-of-Three) re-refutations of one promoted
     principle FLAGS — the manual path has sprung a leak;
   - **reports the cheap (C) proxy** — corpus size + near-duplicate density — as plain
@@ -35,6 +36,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPTS_DIR.parent
 PRINCIPLES_DIR = REPO_ROOT / "memory-global/leaves/principles"
+REGULARITIES_DIR = REPO_ROOT / "memory-global/leaves/regularities"
 
 # Reuse record-experience.py's ranking + clustering primitives (hyphenated module → load
 # by path). No new similarity measure, no new threshold — same engine as promote-scan.
@@ -87,6 +89,17 @@ def _load_dir(directory: Path, section: str) -> list[Leaf]:
         for p in sorted(directory.glob("*.md"))
         if p.name != "MEMORY.md"
     ]
+
+
+def _load_promoted() -> list[Leaf]:
+    """Regularities and principles already lifted; the directory prefix keeps a regularity and
+    a principle of the same filename apart in the per-target tallies."""
+    promoted = []
+    for directory, section in ((REGULARITIES_DIR, "Regularity"), (PRINCIPLES_DIR, "Principle")):
+        for leaf in _load_dir(directory, section):
+            leaf.name = f"{directory.name}/{leaf.name}"
+            promoted.append(leaf)
+    return promoted
 
 
 # --------------------------------------------------------------------------
@@ -196,7 +209,7 @@ def build_digest(scope: str, project_dir: str | None, threshold: int | None) -> 
         "principle-promotion-threshold", DEFAULT_PRINCIPLE_PROMOTION_THRESHOLD
     )
     experience = _load_dir(experience_dir(scope, project_dir), "Difficulty")
-    principles = _load_dir(PRINCIPLES_DIR, "Principle")
+    principles = _load_promoted()
     budget = semantic_join.env_budget()
     a_hits = measure_condition_a(experience, principles, thr, budget=budget)
     cheap_c = measure_cheap_c(experience, budget=budget)

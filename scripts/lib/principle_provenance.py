@@ -91,7 +91,7 @@ class Leaf:
 class Change:
     path: Path
     new_text: str
-    role: str  # 'leaf' | 'principle' | 'index' | 'case'; 'principle' also covers a regularity
+    role: str  # 'leaf' | 'regularity' | 'principle' | 'index' | 'case'
 
 
 @dataclass(frozen=True)
@@ -332,12 +332,12 @@ def principle_exists(slug: str, corpus: Corpus, tier: str = "global") -> bool:
     return target_of(slug, corpus, tier) is not None
 
 
-def symmetric(source: Leaf, principle: Leaf, corpus: Corpus) -> bool:
+def symmetric(source: Leaf, target: Leaf, corpus: Corpus) -> bool:
     try:
         status = read_status(source.text) or []
     except ValueError:
         status = []
-    return principle.slug in status and source.slug in _induced_or_empty(principle.text)
+    return target.slug in status and source.slug in _induced_or_empty(target.text)
 
 
 def classify(slug: str, corpus: Corpus, tier: str = "global") -> str:
@@ -353,10 +353,10 @@ def resolve_source(slug: str, corpus: Corpus, tier: str = "global") -> str | Non
     return classify(slug, corpus, tier)
 
 
-def rule_mark_state(principle: Leaf, corpus: Corpus) -> str:
-    kinds = [resolve_source(s, corpus, principle.tier) for s in _induced_or_empty(principle.text)]
+def rule_mark_state(target: Leaf, corpus: Corpus) -> str:
+    kinds = [resolve_source(s, corpus, target.tier) for s in _induced_or_empty(target.text)]
     has_experience = any(k in EXPERIENCE_SOURCE_KINDS for k in kinds)
-    marked = bool(field_value(principle.text, RULE_DERIVED))
+    marked = bool(field_value(target.text, RULE_DERIVED))
     if has_experience and marked:
         return "stale"
     if not has_experience and not marked:
@@ -411,8 +411,8 @@ def index_exempt(relpath) -> bool:
 # --------------------------------------------------------------------------
 # principles/MEMORY.md pointers
 # --------------------------------------------------------------------------
-def index_path(principle: Leaf) -> Path:
-    return principle.path.parent / INDEX
+def index_path(leaf: Leaf) -> Path:
+    return leaf.path.parent / INDEX
 
 
 def pointer_sources(line: str) -> list[str] | None:
@@ -455,12 +455,12 @@ def index_mismatches(corpus: Corpus) -> list[Leaf]:
     return out
 
 
-def _index_change(corpus: Corpus, principle: Leaf, sources) -> Change | None:
-    path = index_path(principle)
+def _index_change(corpus: Corpus, leaf: Leaf, sources) -> Change | None:
+    path = index_path(leaf)
     text = corpus.read(path)
     if text is None:
         return None
-    new = index_sync(text, principle.slug, sources)
+    new = index_sync(text, leaf.slug, sources)
     return Change(path, new, "index") if new != text else None
 
 
@@ -533,19 +533,19 @@ def leaks(text: str, identifiers) -> list[str]:
 # --------------------------------------------------------------------------
 # queries
 # --------------------------------------------------------------------------
-def experiences_of(principle: Leaf, corpus: Corpus) -> list[Leaf]:
-    """Every leaf a revision of `principle` (a regularity, a project principle, or a
+def experiences_of(target: Leaf, corpus: Corpus) -> list[Leaf]:
+    """Every leaf a revision of `target` (a regularity, a project principle, or a
     global principle through the regularities it is grounded in) must consult: its
     experience and case sources and, through each case, the project leaves that cite it."""
     out: list[Leaf] = []
-    if principle.area == "principle" and principle.tier == "global":
-        for slug in grounded_regularities(principle):
+    if target.area == "principle" and target.tier == "global":
+        for slug in grounded_regularities(target):
             for reg in corpus.of("regularity", "global"):
                 if reg.slug == slug:
                     out += [l for l in experiences_of(reg, corpus) if l not in out]
         return out
-    for slug in _induced_or_empty(principle.text):
-        leaf = corpus.find(slug, principle.tier)
+    for slug in _induced_or_empty(target.text):
+        leaf = corpus.find(slug, target.tier)
         if leaf is None or leaf.area not in EXPERIENCE_SOURCE_KINDS:
             continue
         out.append(leaf)
@@ -586,27 +586,27 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
             if not symmetric(leaf, target, corpus):
                 report(ASYMMETRIC, leaf, f"names {slug!r}, whose `{INDUCED}` omits it")
 
-    for principle in induced_leaves(corpus):
+    for target in induced_leaves(corpus):
         try:
-            induced = read_induced(principle.text)
+            induced = read_induced(target.text)
         except ValueError as exc:
-            report(BAD_STATUS, principle, str(exc))
+            report(BAD_STATUS, target, str(exc))
             continue
         for slug in induced:
-            kind = resolve_source(slug, corpus, principle.tier)
+            kind = resolve_source(slug, corpus, target.tier)
             if kind is None:
-                report(DANGLING, principle, f"`{INDUCED}` names missing leaf {slug!r}")
+                report(DANGLING, target, f"`{INDUCED}` names missing leaf {slug!r}")
                 continue
             if kind in EXPERIENCE_SOURCE_KINDS:
-                source = corpus.find(slug, principle.tier)
-                if source is not None and not symmetric(source, principle, corpus):
-                    report(ASYMMETRIC, principle, f"lists {slug!r}, whose `{FIELD}` omits it")
-        state = rule_mark_state(principle, corpus)
+                source = corpus.find(slug, target.tier)
+                if source is not None and not symmetric(source, target, corpus):
+                    report(ASYMMETRIC, target, f"lists {slug!r}, whose `{FIELD}` omits it")
+        state = rule_mark_state(target, corpus)
         if state == "missing":
-            report(NO_SOURCE, principle,
+            report(NO_SOURCE, target,
                    f"no experience or case source and no `{RULE_DERIVED}` reason")
         elif state == "stale":
-            report(STALE_MARK, principle, f"has an experience source and a stale `{RULE_DERIVED}`")
+            report(STALE_MARK, target, f"has an experience source and a stale `{RULE_DERIVED}`")
 
     regularity_slugs = {r.slug for r in corpus.of("regularity", "global")}
     for principle in corpus.of("principle", "global"):
@@ -661,7 +661,7 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
 # --------------------------------------------------------------------------
 def link_changes(source: Leaf, target: Leaf, corpus: Corpus) -> list[Change]:
     """Every side of the link source -> target: the source's status, and, unless the
-    link is a project leaf citing a case, the principle's sources and its index pointer."""
+    link is a project leaf citing a case, the target's sources and its index pointer."""
     changes = []
     status = read_status(source.text)
     new_status = merge_status(status or [], [target.slug])
@@ -673,7 +673,7 @@ def link_changes(source: Leaf, target: Leaf, corpus: Corpus) -> list[Change]:
     induced = merge_status(read_induced(target.text), [source.slug])
     text = clear_rule_mark(set_field(target.text, INDUCED, format_list(induced)))
     if text != target.text:
-        changes.append(Change(target.path, text, "principle"))
+        changes.append(Change(target.path, text, target.area))
     index = _index_change(corpus, target, induced)
     if index is not None:
         changes.append(index)
@@ -692,7 +692,7 @@ def unlink_changes(source: Leaf, target: Leaf, corpus: Corpus) -> list[Change]:
     if source.slug in induced:
         kept = [s for s in induced if s != source.slug]
         changes.append(Change(target.path, set_field(target.text, INDUCED, format_list(kept)),
-                              "principle"))
+                              target.area))
         index = _index_change(corpus, target, kept)
         if index is not None:
             changes.append(index)
@@ -709,11 +709,11 @@ def backfill_status(corpus: Corpus, rule_derived: dict[str, str] | None = None) 
         return texts[path][0] if path in texts else corpus.read(path)
 
     mirrored: dict[Path, list[str]] = {}
-    for principle in induced_leaves(corpus):
-        for slug in _induced_or_empty(principle.text):
-            leaf = corpus.find(slug, principle.tier)
+    for target in induced_leaves(corpus):
+        for slug in _induced_or_empty(target.text):
+            leaf = corpus.find(slug, target.tier)
             if leaf is not None and leaf.area in EXPERIENCE_SOURCE_KINDS:
-                mirrored.setdefault(leaf.path, []).append(principle.slug)
+                mirrored.setdefault(leaf.path, []).append(target.slug)
     for leaf in corpus.of("experience") + corpus.of("case"):
         try:
             status = read_status(leaf.text)
@@ -727,13 +727,13 @@ def backfill_status(corpus: Corpus, rule_derived: dict[str, str] | None = None) 
         if regularity is None:
             raise ValueError(f"no global regularity {slug!r} to mark rule-derived")
         texts[regularity.path] = (set_field(current(regularity.path), RULE_DERIVED, reason),
-                                  "principle")
-    for principle in corpus.of("regularity") + corpus.of("principle"):
-        path = index_path(principle)
+                                  "regularity")
+    for leaf in corpus.of("regularity") + corpus.of("principle"):
+        path = index_path(leaf)
         text = current(path)
         if text is None:
             continue
-        new = index_sync(text, principle.slug, pointer_expected(principle))
+        new = index_sync(text, leaf.slug, pointer_expected(leaf))
         if new != text:
             texts[path] = (new, "index")
     return [Change(path, text, role) for path, (text, role) in texts.items()
