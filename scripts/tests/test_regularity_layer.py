@@ -221,6 +221,10 @@ def test_regularity_index_mismatch_reported(tmp_path, env):
     done = c.verify(env)
     assert done.returncode == 1
     assert _finding(done, "index_mismatch", "regularities/r1.md")
+    c._index("regularities", "r1", ("e1",))
+    done = c.verify(env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not _finding(done, "index_mismatch", "regularities/r1.md")
 
 
 def test_principle_index_mismatch_reported(tmp_path, env):
@@ -231,6 +235,10 @@ def test_principle_index_mismatch_reported(tmp_path, env):
     done = c.verify(env)
     assert done.returncode == 1
     assert _finding(done, "index_mismatch", "principles/p1.md")
+    c._index("principles", "p1", ("r1",))
+    done = c.verify(env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not _finding(done, "index_mismatch", "principles/p1.md")
 
 
 def test_staged_regularity_triggers(tmp_path, env):
