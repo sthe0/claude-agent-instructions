@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "Принять — всё выполнено (Recommended)"
 created: 2026-08-26
 last_verified: 2026-08-28
-generalized_into: [a-gate-on-form-is-checked-against-the-property-it-stands-for]
+generalized_into: [a-format-varies-while-the-property-it-stands-for-holds]
 ---
 
 # Plan-delivery gate needs byte-exact essence text -- markdown decoration breaks it

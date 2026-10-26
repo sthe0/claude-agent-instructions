@@ -9,7 +9,7 @@ refs: [review-loop-cannot-measure-its-own-convergence, no-circuit-breaker-on-ver
 plan_file: /Users/the0/.claude-agent/plans/smd-act-defects-8.toml
 created: 2026-08-17
 last_verified: 2026-09-14
-generalized_into: [review-loop-cannot-measure-its-own-convergence]
+generalized_into: [incremental-repair-review-has-a-nonzero-finding-floor]
 ---
 
 # The effort-divergence cycle has no exit that renegotiates the order with its customer

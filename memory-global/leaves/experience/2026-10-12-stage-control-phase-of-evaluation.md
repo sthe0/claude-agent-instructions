@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-10-12
 last_verified: 2026-10-12
-generalized_into: [a-rerunnable-control-asserts-a-phase-independent-property]
+generalized_into: [a-stage-control-is-re-evaluated-after-its-world-has-changed]
 ---
 
 # A stage control describes the state of one phase but is evaluated in another

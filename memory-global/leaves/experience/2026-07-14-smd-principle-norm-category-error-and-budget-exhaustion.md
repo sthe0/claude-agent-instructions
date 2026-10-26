@@ -9,7 +9,7 @@ tier: 1
 refs: [docs/adr/0004-principle-is-always-a-norm.md, scripts/agentctl/state.py, scripts/agentctl/gates.py]
 created: 2026-07-14
 last_verified: 2026-07-14
-generalized_into: [reflexive-exit-is-base-activity-figure]
+generalized_into: [a-norm-is-transformed-by-the-same-activity-figure-as-any-material]
 ---
 
 # SMD-fidelity correction: principle is always a норма; drop a-priori statement_kind; reframe failure_address to обеспечение <!-- Language exception: SMD source-ontology terms preserved verbatim for traceability. -->

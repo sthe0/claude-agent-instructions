@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev@gmail.com"
 refs: [/home/the0/.claude-agent/plans/lang-agnostic-judge-and-baseline-diff.toml, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]
 created: 2026-07-20
 last_verified: 2026-10-26
-generalized_into: [a-judging-artefact-is-executed-before-it-judges]
+generalized_into: [a-controls-defects-surface-only-when-it-is-executed]
 ---
 
 # A stage verify_command narrower than the plan's final_check lets a PASSED stage hide a red

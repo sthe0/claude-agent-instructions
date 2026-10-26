@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev@gmail.com"
 refs: [https://github.com/sthe0/claude-agent-instructions/commit/378b7d1]
 created: 2026-07-16
 last_verified: 2026-07-16
-generalized_into: [a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs, renorming-at-principle-level-sweeps-the-class]
+generalized_into: [a-recorded-remedy-is-absent-at-the-act-it-governs, a-fix-at-the-failing-site-leaves-siblings-of-the-same-form]
 ---
 
 # Onboarding drift after a cross-cutting refactor needs a mechanical guard, not just a doc fix

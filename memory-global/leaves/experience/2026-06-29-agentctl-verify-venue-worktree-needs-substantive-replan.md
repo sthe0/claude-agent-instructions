@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-06-29
 last_verified: 2026-10-11
 instance_count: 26
-generalized_into: [a-control-names-a-venue-that-outlives-its-last-rerun, a-control-over-a-non-hermetic-read-separates-unreadable-from-failed, a-judging-artefact-is-executed-before-it-judges, a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs, a-rerunnable-control-asserts-a-phase-independent-property, delivered-identity-is-established-by-content-or-ancestry, renorming-at-principle-level-sweeps-the-class, shared-resource-health-asserted-relative-to-a-pinned-base, verdict-covers-the-evidence-domain-it-claims]
+generalized_into: [a-stage-control-is-re-evaluated-after-its-world-has-changed, a-non-hermetic-read-fails-independently-of-the-artifact, a-controls-defects-surface-only-when-it-is-executed, a-recorded-remedy-is-absent-at-the-act-it-governs, a-coordinate-shifts-while-the-content-it-addressed-stays, a-shared-resource-moves-under-others-action, a-fix-at-the-failing-site-leaves-siblings-of-the-same-form, a-probe-observes-only-the-domain-it-reads]
 ---
 
 # agentctl verifies a stage in repo_root, not the worktree it ran in; only a substantive replan can move the venue

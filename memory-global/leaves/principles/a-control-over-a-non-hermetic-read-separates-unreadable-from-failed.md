@@ -4,7 +4,7 @@ description: A stage control that consumes a network read, a live API or a flaky
 type: reference
 schema: principle/v1
 generality: 1
-induced_from: [2026-10-12-stage-control-liveness-nondeterminism, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-16-benchmark-measurement-contamination-env-resource-artifact, 2026-08-18-fail-open-gate-exit-zero-and-underfetched-listing]
+grounded_in: [regularity:a-non-hermetic-read-fails-independently-of-the-artifact, regularity:a-two-valued-judge-absorbs-could-not-look]
 domain: development
 created: 2026-10-12
 last_verified: 2026-10-12
@@ -14,20 +14,23 @@ last_verified: 2026-10-12
 
 ## Principle
 
-Give every control that reads a non-hermetic input three outcomes, pass, fail and could-not-read; resolve the read by a pinned key under a timeout with bounded attempts, let could-not-read assert nothing about the artifact, and digest the failure by its observed cause so a repeat can be told from a new failure.
+Because a non-hermetic read fails independently of the artifact ([[a-non-hermetic-read-fails-independently-of-the-artifact]]) and a two-valued judge absorbs "could not look" ([[a-two-valued-judge-absorbs-could-not-look]]), for the goal of controls whose red can be acted on, give every control that reads a non-hermetic input three outcomes, pass, fail and could-not-read; resolve the read by a pinned key under a timeout with bounded attempts, let could-not-read assert nothing about the artifact, and digest the failure by its observed cause so a repeat can be told from a new failure.
+## Goal class
+
+Controls over non-hermetic inputs whose red result can be acted on as a defect of the artifact, and whose repeated failures can be told apart as the same cause or a new one.
 
 ## Generality
 
 Level 1 — a candidate principle induced from three contexts across two environments (a remote-service read and a local long-running suite); it ranges over machine-evaluated checks whose input is not reproducible from the repository alone: network reads, live service state, long suites with ambient-load sensitivity. It is deliberately not claimed for hermetic controls (a grep over a committed file), where a non-zero exit is always a finding, and the three-outcome shape is not yet shown to be right for cases where "could not read" must itself block (a security-relevant check that may not be skipped).
 
-## Induced from
+## Grounded in
 
-- [[2026-10-12-stage-control-liveness-nondeterminism]] — three contexts: a network read whose failure was scored as an absent artifact (repaired by a pinned-key read, bounded attempts and a distinct unreadable outcome), a single non-reproducing exit from a live-API final check that every manual re-run contradicted, and a local suite block that exited non-zero once and cleanly five times after, together with the finding that the loop guard digests the command's static text and so cannot tell a repeat from a new failure.
-- [[2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]] — the original difficulty whose re-run-everything-at-verify-final design is what exposes a non-hermetic control to a second, unscheduled read.
+- [[a-non-hermetic-read-fails-independently-of-the-artifact]] — A control that reads an input it does not hold — a network service, a shared tree, a nested process, a moving branch — can fail because the read failed while the artifact under judgement is fine; the read's failure and the artifact's defect are independent events.
+- [[a-two-valued-judge-absorbs-could-not-look]] — A judge that can only answer pass or fail still meets cases where it could not observe; those cases do not disappear but are silently reported as one of the two answers, so an unrun check reads as passed or a lost signal reads as failed.
 
 ## Refutation
 
-A population of non-hermetic controls in which a typed could-not-read outcome was routinely abused (read as a pass that hid real defects) at a rate exceeding the transient failures it removed would refute the shape for that population and push toward bounded retries without a third outcome. Because generality is 1, a single further context where a non-hermetic control's transient failure was correctly treated as a finding, with retries masking a real intermittent defect, would also force a narrower form: separate infrastructure unreadability from a nondeterministic defect in the artifact itself.
+The principle fails its goal if three-outcome controls still produce fail verdicts on correct artifacts, or if their cause digests fail to tell a repeated read failure from a new one.
 
 ## See also
 

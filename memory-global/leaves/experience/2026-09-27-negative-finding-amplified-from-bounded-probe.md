@@ -9,7 +9,7 @@ tier: 1
 refs: [verdict-covers-the-evidence-domain-it-claims, delegatable-work-patterns, coordinator-pitfalls, verify-right-axis-report-honestly]
 created: 2026-09-27
 last_verified: 2026-09-27
-generalized_into: [verdict-covers-the-evidence-domain-it-claims]
+generalized_into: [a-probe-observes-only-the-domain-it-reads]
 ---
 
 # A negative finding was amplified into a confident conclusion from a probe that could not have found the mechanism

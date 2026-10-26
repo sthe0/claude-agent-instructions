@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor (AskUserQuestion, after asking 'Так а �
 refs: ["PR 14483695", "PR 14483719"]
 created: 2026-07-17
 last_verified: 2026-07-17
-generalized_into: [verdict-covers-the-evidence-domain-it-claims]
+generalized_into: [a-probe-observes-only-the-domain-it-reads]
 ---
 
 # A reviewer's claim is evidence to check, not a fact to act on — especially when acting means touching shared state

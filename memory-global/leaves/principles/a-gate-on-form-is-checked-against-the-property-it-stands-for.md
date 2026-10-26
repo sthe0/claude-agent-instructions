@@ -4,7 +4,7 @@ description: A gate that matches the form of an output (marker on the first line
 type: reference
 schema: principle/v1
 generality: 1
-induced_from: [2026-06-24-developer-marker-not-on-line-1-false-block, 2026-08-26-plan-delivery-gate-exact-content-match]
+grounded_in: [regularity:a-format-varies-while-the-property-it-stands-for-holds]
 created: 2026-10-21
 last_verified: 2026-10-21
 ---
@@ -13,17 +13,19 @@ last_verified: 2026-10-21
 
 ## Principle
 
-When a gate tests format as a proxy for a property, either test the property, or normalize the drift classes that do not change it and say which are tolerated; the work around a false rejection (manual re-verify, unblock) is a cost to count when choosing the gate.
+Because a format varies while the property it stands for holds ([[a-format-varies-while-the-property-it-stands-for-holds]]), for the goal of a gate that admits exactly the work with the property it guards, when a gate tests format as a proxy for a property, either test the property, or normalize the drift classes that do not change it and say which are tolerated; the work around a false rejection (manual re-verify, unblock) is a cost to count when choosing the gate.
+## Goal class
+
+Gates that admit exactly the work that has the property they guard, without false rejections whose manual workaround costs more than the gate saves.
 
 ## Generality
 
 Level 1 - holds for gates over agent output with a recoverable proxy; two instances only.
 
-## Induced from
+## Grounded in
 
-- [[2026-06-24-developer-marker-not-on-line-1-false-block]] - a correct specialist result was blocked because the marker was not on the first line; the fix extracted the marker with a closed-set model pass.
-- [[2026-08-26-plan-delivery-gate-exact-content-match]] - a hand-retyped plan message with added backticks failed the exact-content gate and denied the approval ask.
+- [[a-format-varies-while-the-property-it-stands-for-holds]] — The format a gate tests as a proxy for a property drifts — a marker moves off line 1, whitespace or rendering bytes change — while the property the format stands for stays intact, so a format test rejects work that satisfies the property.
 
 ## Refutation
 
-Refuted by a form gate that never rejected correct work over a sample of cases, or by cases where normalizing the form admitted incorrect work that the strict gate had caught.
+The principle fails its goal if gates built on the property or on normalized form keep falsely rejecting work that has the property, or start admitting work that lacks it.

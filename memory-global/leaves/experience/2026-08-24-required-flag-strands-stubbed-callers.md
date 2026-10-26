@@ -9,7 +9,7 @@ refs: [https://github.com/sthe0/claude-agent-instructions/commit/6a86058, https:
 plan_file: /home/the0/.claude-agent/plans/cost-estimate-in-record.toml
 created: 2026-08-24
 last_verified: 2026-08-24
-generalized_into: [verdict-covers-the-evidence-domain-it-claims]
+generalized_into: [a-probe-observes-only-the-domain-it-reads]
 ---
 
 # A newly-required CLI flag strands the in-repo callers whose tests stub that CLI

@@ -6,7 +6,7 @@ schema: difficulty/v1
 resolution_confirmed_by_user: "Push и закрыть (Recommended)"
 created: 2026-06-11
 last_verified: 2026-06-11
-generalized_into: [a-generic-failure-symptom-is-traced-to-its-cause-before-a-remedy-is-applied]
+generalized_into: [a-generic-failure-message-names-a-surface-shared-by-many-causes]
 ---
 
 # Logical-pwd self-locating script footgun (ELOOP)

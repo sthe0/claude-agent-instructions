@@ -4,7 +4,7 @@ description: A secret or internal identifier that leaves the agent through an ar
 type: reference
 schema: principle/v1
 generality: 2
-induced_from: [2026-07-08-secret-on-argv-curl-config-stdin, 2026-07-28-agent-emitted-value-leaks-org-key-into-public-history]
+grounded_in: [regularity:a-value-emitted-to-an-external-channel-persists-beyond-recall]
 created: 2026-10-21
 last_verified: 2026-10-21
 ---
@@ -13,17 +13,19 @@ last_verified: 2026-10-21
 
 ## Principle
 
-Emit a value into any external channel only after it has been reduced to what the channel may carry (feed secrets through a stream, not an argument; neutralize identifiers before they reach public history); treat the sink's gate as a backstop, keep the sibling fields the gate did not object to, and rotate any secret already logged.
+Because a value emitted to an external channel persists beyond recall ([[a-value-emitted-to-an-external-channel-persists-beyond-recall]]), for the goal of keeping secrets and non-public identifiers out of copies the writer cannot reach, emit a value into any external channel only after it has been reduced to what the channel may carry (feed secrets through a stream, not an argument; neutralize identifiers before they reach public history); treat the sink's gate as a backstop, keep the sibling fields the gate did not object to, and rotate any secret already logged.
+## Goal class
+
+No secret or non-public identifier reaching a copy outside the writer's control through an external channel.
 
 ## Generality
 
 Level 2 - a rule for every value an agent writes outside its own session.
 
-## Induced from
+## Grounded in
 
-- [[2026-07-08-secret-on-argv-curl-config-stdin]] - a token on a command line landed in endpoint logs and a ticket; the emitter was hardened, and the already-logged token needed rotation.
-- [[2026-07-28-agent-emitted-value-leaks-org-key-into-public-history]] - a trailer carried an internal key toward public history; the gate blocked it and the old workaround dropped a harmless sibling value.
+- [[a-value-emitted-to-an-external-channel-persists-beyond-recall]] — A value written to an external channel — a process argument list, a public commit history, a published ticket — is copied, logged or indexed beyond the writer's reach as it lands; later removal at the sink does not recall the copies.
 
 ## Refutation
 
-Refuted by a channel whose later cleanup (hardening or redaction downstream) removed a leaked value completely with no rotation or loss, or by a sink gate that reliably preserved the clean fields. Two sources only.
+The principle fails its goal if values cleaned at emission still turn up, in their uncleaned form, in a log, an argv trace or public history.

@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev"
 refs: [solved-by-007-marker-and-usage-stats, agent-usage-telemetry, 2026-07-09-landed-not-deployed-checkout-parked-on-feature-branch, 2026-06-29-org-portable-core-internal-coupling-opt-in, 2026-08-11-sync-stash-identity-not-position]
 created: 2026-07-17
 last_verified: 2026-08-20
-generalized_into: [an-action-on-shared-state-names-its-object-and-leaves-others-untouched]
+generalized_into: [a-name-from-position-or-an-empty-variable-designates-a-foreign-object]
 ---
 
 # Landing a Core PR with a fine-grained PAT: SSH ff-push, not the API merge button; and the wrong-stash-pop trap

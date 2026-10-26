@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [SECALERTS-1123779, mirror-working-caller-before-bypass, verify-load-bearing-axis]
 created: 2026-07-08
 last_verified: 2026-07-08
-generalized_into: [a-value-written-to-an-external-channel-is-cleaned-at-emission]
+generalized_into: [a-value-emitted-to-an-external-channel-persists-beyond-recall]
 ---
 
 # Secret on curl argv leaks to osquery/Splunk — feed it via a --config stdin stream, and rotate the already-logged value

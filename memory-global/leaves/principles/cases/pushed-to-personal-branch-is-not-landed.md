@@ -5,7 +5,7 @@ type: reference
 schema: case/v1
 origin_tier: project
 source_digest: sha256:49babd80936c02509c98a3d541494042d81e174e72092ae403a92df4ad5c4895
-generalized_into: [delivered-identity-is-established-by-content-or-ancestry]
+generalized_into: [a-coordinate-shifts-while-the-content-it-addressed-stays]
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

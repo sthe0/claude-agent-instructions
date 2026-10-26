@@ -4,7 +4,7 @@ description: A stage check's venue (worktree, repo_root, settings file, scaffold
 type: reference
 schema: principle/v1
 generality: 2
-induced_from: [2026-10-12-stage-control-venue-lifetime, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]
+grounded_in: [regularity:a-stage-control-is-re-evaluated-after-its-world-has-changed]
 domain: development
 created: 2026-10-12
 last_verified: 2026-10-12
@@ -14,20 +14,22 @@ last_verified: 2026-10-12
 
 ## Principle
 
-Declare, for every control, the venue it observes and how long that venue lives; if the delivery's own landing, cleanup or a later stage can remove or restore it, name a surviving venue for the re-run instead of repairing the venue to make the old address true.
+Because a stage control is re-evaluated after its world has changed ([[a-stage-control-is-re-evaluated-after-its-world-has-changed]]), for the goal of controls that pass again at every re-run of a correct delivery, declare, for every control, the venue it observes and how long that venue lives; if the delivery's own landing, cleanup or a later stage can remove or restore it, name a surviving venue for the re-run instead of repairing the venue to make the old address true.
+## Goal class
+
+Stage controls that pass again at every re-run of a correct delivery — final verification after landing and cleanup included — without rewriting a venue to make an old address true.
 
 ## Generality
 
 Level 2 — ranges over any check that is authored once and executed again later by a mechanism the author does not drive: stage verify commands and final checks re-run after landing, scheduled or CI re-validations, acceptance scripts replayed from a recorded plan. The class is "a re-runnable check whose observed place is created or destroyed by the work it certifies". It is not claimed for one-shot checks run by hand in the moment, nor for venues the delivery neither creates nor can alter (a read-only external system), where the lifetime question has a trivial answer.
 
-## Induced from
+## Grounded in
 
-- [[2026-10-12-stage-control-venue-lifetime]] — fourteen contexts in which a control addressed a delivery worktree, a repo root pinned to it, a scaffold or a settings file that landing, cleanup or a later restoring stage had removed or replaced by the time verify-final re-ran it, so the check short-circuited or went green over the pre-change baseline; the venue's lifetime was a property no one had stated and the engine could not read from a `cd <path>` in command text.
-- [[2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]] — the original difficulty that fixed the engine side (a declared check venue, refusal to resolve an unresolvable one, a landed-state check kind, a final-time venue) and that supplies the kept contexts showing why repairing the venue to match the old address is the wrong repair.
+- [[a-stage-control-is-re-evaluated-after-its-world-has-changed]] — A stage's control is run again at final verification and after replans, by which time landing, cleanup and later stages have removed its venue or changed the state it was written against.
 
 ## Refutation
 
-An observation of a re-run control that is both correct and cheaper when it is pinned to a venue whose lifetime was never declared, across a delivery whose landing and cleanup did destroy that venue, would show the declaration is not what carries the correctness (and the real driver is something else, such as the check's content). A venue that must be preserved for the re-run to be meaningful, where naming a distinct surviving venue is impossible (the artifact exists only in the destroyed place), would force a broader form: keep the venue alive as part of the plan rather than re-point the check.
+The principle fails its goal if controls with a declared surviving venue still refuse or false-fail at final verification of a correct delivery because their venue was gone.
 
 ## See also
 

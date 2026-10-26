@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 domain: planning
-induced_from: [2026-07-20-agentctl-premise-gate-blocks-venue-refinement-replan, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-16-onboarding-drift-after-crosscutting-refactor-needs-mechanical-guard, 2026-08-27-self-attested-identity-field-needs-declared-principal-check]
+grounded_in: [regularity:a-fix-at-the-failing-site-leaves-siblings-of-the-same-form]
 created: 2026-08-11
 last_verified: 2026-08-11
 ---
@@ -14,11 +14,7 @@ last_verified: 2026-08-11
 
 ## Principle
 
-To make a re-norming actually hold, **discharge it at the generality it was recorded at**: when a
-critique names a *form* rather than a *site* — "a control asserting a property of a shared resource
-absolutely", "a spawn passing a permission flag it was not granted" — the corrected plan must
-**enumerate every site carrying that form** and either fix it or state why it is exempt, and that
-enumeration must be an **executed step inside the plan**, not a claim made in the critique text.
+Because a fix at the failing site leaves siblings of the same form ([[a-fix-at-the-failing-site-leaves-siblings-of-the-same-form]]), for the goal of a re-norming that holds, **discharge it at the generality it was recorded at**: when a critique names a *form* rather than a *site* — "a control asserting a property of a shared resource absolutely", "a spawn passing a permission flag it was not granted" — the corrected plan must **enumerate every site carrying that form** and either fix it or state why it is exempt, and that enumeration must be an **executed step inside the plan**, not a claim made in the critique text.
 
 The level a re-norming is recorded at is a promise about its scope. `--level note` promises this
 site; `--level principle` promises the class. Fixing the one instance that happened to fail while
@@ -37,6 +33,10 @@ checks that the **siblings** of the named difference were swept, because it cann
 semantic property of the artefact, not a field on the record. The sweep is the coordinator's
 cognition, and its determinized half is the enumeration step you put in the plan.
 
+## Goal class
+
+A re-norming that holds: once a form-level defect is corrected, no sibling site of the same form fails later as a fresh difficulty.
+
 ## Generality
 
 Level 2 — a class of tasks: any correction to a repeated artefact, where the fault was diagnosed as
@@ -45,29 +45,13 @@ fixtures, and instruction prose. It is not claimed at level 3: the statement pre
 artefact with *enumerable* sites; a fault in a genuinely singular object (one config value, one
 decision) has no class to sweep, and the note level is the right record there.
 
-## Induced from
+## Grounded in
 
-- [[2026-07-20-agentctl-premise-gate-blocks-venue-refinement-replan]] — the replan-cycle mechanics
-  this principle constrains: what a refinement carries, what the gates check, and what they let
-  through.
-- [[2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]] — the canonical instance:
-  a catalogue of control-scoping vectors that grew one vector at a time, each discovered because the
-  previous correction fixed only the site that failed.
-
-Observed in the 2026-08 advisor-timeout delivery: the shared-resource-control form
-([[shared-resource-health-asserted-relative-to-a-pinned-base]]) was corrected three times at three
-separate sites across four replans, because each correction addressed the failing control rather
-than enumerating the form.
+- [[a-fix-at-the-failing-site-leaves-siblings-of-the-same-form]] — When a defect is the instance of a form (a control asserting a shared resource absolutely, a spawn passing an ungranted flag), fixing the site where it failed leaves the other sites carrying the same form in place, and they fail later on their own.
 
 ## Refutation
 
-The principle is refuted, or driven to a broader form, by a class whose enumeration is not
-decidable cheaply enough to be a plan step — where finding every site carrying the form costs more
-than the expected damage from the un-swept siblings. At that point the requirement must widen from
-"sweep the class now" to "sweep the class **or** install a standing detector for the form", and the
-detector (a verifier, a lint rule, a registry) becomes the discharge. That widening is already the
-better answer whenever the form can recur in code not yet written, so the refutation is likely to
-arrive as a strengthening rather than a defeat.
+The principle fails its goal if, after a plan executed the sweep, a site of the same form that the sweep should have enumerated still fails later.
 
 ## See also
 

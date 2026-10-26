@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [2026-05-26-agent-system-plan-vs-reality-drift.md, macos-shell-portability-gotchas.md]
 created: 2026-07-01
 last_verified: 2026-07-06
-generalized_into: [a-judging-artefact-is-executed-before-it-judges, verdict-covers-the-evidence-domain-it-claims]
+generalized_into: [a-controls-defects-surface-only-when-it-is-executed, a-two-valued-judge-absorbs-could-not-look]
 ---
 
 # A watchdog that silently crashes defeats every check — verify the monitor's OWN run, not just its presence

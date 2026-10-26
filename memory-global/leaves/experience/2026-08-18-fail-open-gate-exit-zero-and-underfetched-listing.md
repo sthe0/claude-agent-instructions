@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user, 2026-08-18, AskUserQuestion: accepted R6 an
 refs: [https://github.com/sthe0/claude-agent-instructions/issues/101, https://github.com/sthe0/claude-agent-instructions/issues/102, https://github.com/sthe0/claude-agent-instructions/issues/103]
 created: 2026-08-18
 last_verified: 2026-08-18
-generalized_into: [a-control-over-a-non-hermetic-read-separates-unreadable-from-failed, verdict-covers-the-evidence-domain-it-claims]
+generalized_into: [a-two-valued-judge-absorbs-could-not-look, a-probe-observes-only-the-domain-it-reads]
 ---
 
 # A fail-open gate's exit 0 and a silently under-fetched listing both report success while proving nothing

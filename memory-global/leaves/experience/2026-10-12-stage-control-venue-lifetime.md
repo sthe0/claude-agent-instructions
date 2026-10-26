@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-10-12
 last_verified: 2026-10-12
-generalized_into: [a-control-names-a-venue-that-outlives-its-last-rerun]
+generalized_into: [a-stage-control-is-re-evaluated-after-its-world-has-changed]
 ---
 
 # A stage control addresses a venue the delivery's own later steps delete, restore or never populated

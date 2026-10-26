@@ -4,7 +4,7 @@ description: The reflexive exit (self-improvement / overcome-difficulty / proact
 type: reference
 schema: principle/v1
 generality: 3
-induced_from: [2026-07-14-smd-principle-norm-category-error-and-budget-exhaustion, function-place-difficulty]
+grounded_in: [regularity:a-norm-is-transformed-by-the-same-activity-figure-as-any-material]
 created: 2026-07-14
 last_verified: 2026-07-14
 ---
@@ -13,10 +13,7 @@ last_verified: 2026-07-14
 
 ## Principle
 
-To keep the whole self-model expressible through the single activity/difficulty apparatus — adding no
-parallel machinery — treat every **reflexive** operation (self-improvement, overcoming a difficulty,
-proactive self-diagnosis) as the **base activity figure** (the [[plan-activity-ontology]] elements)
-applied with **material = the norm itself**. The four load-bearing elements map element-for-element:
+Because a norm is transformed by the same activity figure as any material ([[a-norm-is-transformed-by-the-same-activity-figure-as-any-material]]), for the goal of keeping the whole self-model expressible through the single activity/difficulty apparatus — adding no parallel machinery — treat every **reflexive** operation (self-improvement, overcoming a difficulty, proactive self-diagnosis) as the **base activity figure** (the [[plan-activity-ontology]] elements) applied with **material = the norm itself**. The four load-bearing elements map element-for-element:
 
 <!-- Language exception: норма/перенормирование/заказ/знание are the settled SMD source-ontology terms this principle types; preserved verbatim for traceability. -->
 - **material** = the норма (the rule / principle / plan / instruction under revision) — not an object in the world;
@@ -40,6 +37,10 @@ space is the agent's memory. So organizing memory well (a navigable decompositio
 [[memory-hierarchy]]) is *instrumental to reflexion*, not housekeeping: it lowers the cost of every
 future self-improvement / overcome-difficulty search.
 
+## Goal class
+
+Keeping the agent system's whole self-model expressible through the single activity/difficulty apparatus, adding no parallel machinery for reflexive operations.
+
 ## Generality
 
 Level 3 — a cross-domain invariant. It ranges over every reflexive operation the agent performs on its
@@ -47,22 +48,13 @@ own functional elements: self-improvement (editing instructions / skills / confi
 (repairing a broken plan or norm mid-task), and proactive self-diagnosis (surfacing difficulties in its
 own norms before the user reports them). One figure, one difficulty primitive, three applications.
 
-## Induced from
+## Grounded in
 
-<!-- Language exception: норма/знание are the settled SMD source-ontology terms; preserved verbatim. -->
-- [[2026-07-14-smd-principle-norm-category-error-and-budget-exhaustion]] — the correction that a
-  principle is a норма (not a знание judged true/false); "material = the norm" is that framing generalized.
-- [[function-place-difficulty]] — a difficulty is a symptom whose cause is a broken functional place;
-  the reflexive exit reconstructs that place on the norm layer.
+- [[a-norm-is-transformed-by-the-same-activity-figure-as-any-material]] — Every reflexive operation of the agent system — self-improvement, overcoming a difficulty, self-diagnosis — decomposes without remainder into the elements of the base activity figure, with the norm itself in the place of the material.
 
 ## Refutation
 
-<!-- Language exception: норма is the settled SMD source-ontology term; preserved verbatim. -->
-As a норма (not a truth-claim), this is refuted by **inadequacy, not falsity**
-(`docs/adr/0004-principle-is-always-a-norm.md`): it fails if some reflexive operation **cannot** be
-expressed as the base figure over a norm — i.e. applying the four-element mapping blocks the reflexive
-goal and forces a parallel mechanism with its own vocabulary. None has appeared; the mapping stays
-goal-adequate and the "no new machinery" constraint holds.
+The principle fails its goal if, following it, a reflexive operation still needs a mechanism the base figure does not provide — parallel machinery is added after all because the mapping left something unexpressed.
 
 ## See also
 

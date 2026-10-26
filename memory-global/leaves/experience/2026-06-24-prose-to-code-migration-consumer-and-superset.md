@@ -7,7 +7,7 @@ resolution_confirmed_by_user: "Принять и запушить"
 refs: [2026-05-26-agent-system-plan-vs-reality-drift]
 created: 2026-06-24
 last_verified: 2026-07-03
-generalized_into: [a-mechanism-is-done-when-its-consumers-and-its-population-are-covered]
+generalized_into: [a-mechanism-green-in-isolation-can-lack-consumers-and-population]
 ---
 
 # Porting a prose process to code: secure a real consumer, don't collapse a prose superset

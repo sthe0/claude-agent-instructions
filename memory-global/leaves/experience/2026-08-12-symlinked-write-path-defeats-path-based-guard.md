@@ -9,7 +9,7 @@ tier: 1
 refs: [two review requests in the internal monorepo, both landed to trunk (ids in project memory)]
 created: 2026-08-12
 last_verified: 2026-08-12
-generalized_into: [verdict-covers-the-evidence-domain-it-claims]
+generalized_into: [a-probe-observes-only-the-domain-it-reads]
 ---
 
 # A path-based read-only guard is defeated by a symlink: judge the RESOLVED path, and give editable state its own writable checkout

@@ -9,7 +9,7 @@ refs: [2026-06-24-gate-exemption-is-category-error-for-result-images.md, 2026-06
 plan_file: /home/the0/.claude-agent/plans/ask-delivery-determinism.toml
 created: 2026-07-04
 last_verified: 2026-07-20
-generalized_into: [verdict-covers-the-evidence-domain-it-claims]
+generalized_into: [a-two-valued-judge-absorbs-could-not-look]
 ---
 
 # When the failure-carrying signal is structurally invisible to the gate, gate the topology, not the content

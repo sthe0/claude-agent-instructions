@@ -7,7 +7,7 @@ resolution_confirmed_by_user: "Решена (Recommended)"
 refs: [2026-06-24-prose-to-code-migration-consumer-and-superset, 2026-05-26-agent-system-plan-vs-reality-drift]
 created: 2026-06-24
 last_verified: 2026-06-24
-generalized_into: [result-checked-against-its-result-image]
+generalized_into: [a-step-that-ran-is-not-thereby-a-step-that-worked]
 ---
 
 # A process-gate exemption is suspect when the exempted artifact is itself a gated result-image

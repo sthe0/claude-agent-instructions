@@ -10,7 +10,7 @@ refs: [memory-global/leaves/capability-before-offload.md, memory-global/leaves/r
 plan_file: /home/the0/.claude-agent/plans/gc-criterion-and-defer-gate.toml
 created: 2026-08-05
 last_verified: 2026-09-28
-generalized_into: [a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs, verdict-covers-the-evidence-domain-it-claims]
+generalized_into: [a-recorded-remedy-is-absent-at-the-act-it-governs, a-probe-observes-only-the-domain-it-reads]
 ---
 
 # A menu in which no option does the work, and the timeout layer that made its gate inert

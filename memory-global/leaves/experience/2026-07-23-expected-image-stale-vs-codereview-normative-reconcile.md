@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev"
 refs: [arc-land-dispatch-determinize.toml, merge-commit 11ba9400, r20430905]
 created: 2026-07-23
 last_verified: 2026-07-23
-generalized_into: [result-checked-against-its-result-image]
+generalized_into: [a-step-that-ran-is-not-thereby-a-step-that-worked]
 ---
 
 # Stale expected-image vs a code-review decision: reconcile as an invariants-only normative replan

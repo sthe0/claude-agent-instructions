@@ -4,7 +4,7 @@ description: A remedy that lives in memory or in a warn-only advisory does not r
 type: reference
 schema: principle/v1
 generality: 2
-induced_from: [2026-10-12-stage-control-recorded-norm-not-mobilized, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-05-25-resolution-gate-confirm-before-record, 2026-05-26-agent-system-plan-vs-reality-drift, 2026-06-04-org-specific-vs-global-placement, 2026-06-27-critique-output-must-be-code-verified-into-downstream-artifact, 2026-06-30-mechanize-subdifficulty-extraction-and-audit, 2026-06-30-policy-as-code-split-judgment-defer-blocked-layer, 2026-07-14-determinize-memory-org-principle-in-code, 2026-07-16-onboarding-drift-after-crosscutting-refactor-needs-mechanical-guard, 2026-07-18-plan-presentation-two-act-delivery-gate, 2026-07-29-crutch-registry-standing-prevention, 2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer, 2026-09-18-precedent-retrieval-gap-missing-system-knowledge-search-tier, 2026-10-12-stage-control-authoring-interface-mismatch]
+grounded_in: [regularity:a-recorded-remedy-is-absent-at-the-act-it-governs]
 domain: development
 created: 2026-10-12
 last_verified: 2026-10-12
@@ -14,20 +14,22 @@ last_verified: 2026-10-12
 
 ## Principle
 
-Treat a norm as binding only where something places it in front of the author at the act it governs: mechanize the decidable part as a gate at that act, name the residual perception explicitly, and count a defect that recurs against a recorded remedy as a retrieval failure, not as evidence the norm is wrong.
+Because a recorded remedy is absent at the act it governs unless something places it there ([[a-recorded-remedy-is-absent-at-the-act-it-governs]]), for the goal of norms that change the acts they govern, treat a norm as binding only where something places it in front of the author at the act it governs: mechanize the decidable part as a gate at that act, name the residual perception explicitly, and count a defect that recurs against a recorded remedy as a retrieval failure, not as evidence the norm is wrong.
+## Goal class
+
+Recorded norms that actually change the acts they govern — a defect with a recorded remedy does not recur at the next occurrence of its act.
 
 ## Generality
 
 Level 2 — ranges over any recurring authoring defect for which a remedy is already recorded (a memory leaf, a checklist, a warn-only advisory) and the author acts in a fresh plan or session without re-reading it: plan control authoring, commit and review hygiene, configuration changes. The class is "the remedy exists but is not at the point of use". It is not claimed for first occurrences (no remedy exists yet), nor for defects whose recurrence comes from the remedy being wrong, which the diagnosis must separate by checking that the recorded remedy, applied, would have prevented the new instance.
 
-## Induced from
+## Grounded in
 
-- [[2026-10-12-stage-control-recorded-norm-not-mobilized]] — five contexts in which a catalogue of control-authoring vectors was recorded and the next plan still wrote the same control, and in which an engine advisory for a suite-scope assertion fired at submit-plan and was dismissed as intentional; the advisory is non-blocking and the baseline-green attestation stays a residual perception, so the same judgement that failed decided again.
-- [[2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]] — the original difficulty and its kept contexts, which supply the recorded vector catalogue and the mechanized advisory whose non-effect is the evidence here.
+- [[a-recorded-remedy-is-absent-at-the-act-it-governs]] — A remedy recorded in prose or memory is not in front of the author at the moment of the act it governs unless some trigger puts it there; the same defect recurs against a remedy that was recorded, read once and never re-surfaced.
 
 ## Refutation
 
-A population of recurrences in which the author demonstrably had the recorded norm in front of them at the authoring act, through a gate or a surfaced retrieval, and still repeated the defect would show that the trigger is not the binding constraint (the norm is unclear, or the defect is not under the author's control) and would move the failure address from retrieval to the norm itself. A recorded norm that binds with no trigger (an advisory that is always read and followed) in a setting with a comparable author would show the principle is about attention budget, not about triggers, and force a broader form.
+The principle fails its goal if a norm given a gate or trigger at its act still sees its defect recur there — the trigger placed it in front of the author and the act did not change, so the norm itself, not its retrieval, is at fault.
 
 ## See also
 

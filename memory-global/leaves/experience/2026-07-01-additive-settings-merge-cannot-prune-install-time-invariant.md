@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev@gmail.com (AskUserQuestion: Да, 
 refs: [scripts/apply-settings.sh, scripts/set-context-cap.sh, scripts/lint-settings-base.py, scripts/tests/test_apply_settings_autocompact.py, settings/base.json, memory-global/leaves/autocompact-threshold-policy.md]
 created: 2026-07-01
 last_verified: 2026-07-02
-generalized_into: [a-defect-seen-in-an-artifact-is-fixed-at-its-writer]
+generalized_into: [a-generated-artifact-is-overwritten-by-its-writer]
 ---
 
 # Making a config value a structural install-time invariant when the installer merge is additive
