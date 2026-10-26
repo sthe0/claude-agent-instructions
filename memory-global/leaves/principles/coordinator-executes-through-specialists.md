@@ -18,7 +18,7 @@ rule_derived: "Seed principle lifted from a coordinator-pitfalls row (ADR-0001 S
 To keep the main thread lean, controllable, and verifiable, achieve production change by
 **dispatching the work to a specialist** (inline or spawned) rather than editing directly from the
 root. Root-issued `Bash`/`Edit`/`Write` on substantive production work is a difficulty signal — the
-exceptions (small change ≤ `small-change-max-lines`; gated repo writes that a spawn would be denied)
+exceptions (small change, see [inline-class.md](../inline-class.md); gated repo writes that a spawn would be denied)
 are named carve-outs, not the default.
 
 ## Generality

@@ -128,7 +128,7 @@ Deciding what to do in your own head is **not** an approved plan, and not a self
 
 ## In-context carve-out — manager implements substantive work in-thread
 
-Referenced from CLAUDE.md § Classify task weight ("Carve-out for in-context substantive plans"). A substantive task whose individual implementation steps each fit the *small change* row (≤ `small-change-max-lines` per step, single file each, no irreversible action) may be executed by the manager in-thread, **after the plan is approved**. Rationale: the plan/approval gate already protects against scope drift; the `developer` spawn primarily protects against context drift, which does not apply when the manager has explored the affected files this session. Default to spawning if any step exceeds those bounds, or if the manager has not read the target files in this session.
+Referenced from CLAUDE.md § Classify task weight ("Carve-out for in-context substantive plans"). A substantive task whose individual implementation steps each fit the *small change* row (one cohesive change each, ≤ `small-change-max-lines` hand-written production lines per step, no irreversible action; definition in [inline-class.md](inline-class.md)) may be executed by the manager in-thread, **after the plan is approved**. Rationale: the plan/approval gate already protects against scope drift; the `developer` spawn primarily protects against context drift, which does not apply when the manager has explored the affected files this session. Default to spawning if any step exceeds those bounds, or if the manager has not read the target files in this session.
 
 ### Exception — infrastructure-as-code (spawn anyway)
 

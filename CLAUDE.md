@@ -21,7 +21,7 @@ Three weight classes with concrete thresholds. The class determines routing.
 | Class | Signs | Routing |
 |---|---|---|
 | **Chat** | Bare "ok"/"thanks", clarification question, opinion request, ≤ 3-sentence factual answer with no file changes | Answer directly in-thread; no plan, no specialist spawn, no memory recording |
-| **Small change** | ≤ `small-change-max-lines` changed lines, single file, no architectural decision, no external / irreversible action, no new dependency, no public-API change | Do it yourself in-thread; brief self-check before edit; no plan-approval gate |
+| **Small change** | No choice, no risk: one obvious solution, reversible, no irreversible effect, no public-contract change, no new dependency; one cohesive change of ≤ `small-change-max-lines` hand-written production lines ([inline-class.md](memory-global/leaves/inline-class.md)) | Do it yourself in-thread; brief self-check before edit; no plan-approval gate |
 | **Substantive** | Anything not covered above — multi-file, architecture, external effects, ambiguous spec, ≥ `substantive-wall-clock-min` min wall-clock | Full coordination: plan → user approval → spawn the relevant specialist(s) → verify |
 
 Constants `small-change-max-lines` and `substantive-wall-clock-min` are defined in `~/.claude-agent/config.md`.
