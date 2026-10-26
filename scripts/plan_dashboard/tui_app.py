@@ -395,6 +395,8 @@ class DashboardApp(App):
             return
         if self.view.tab != self.query_one(TabbedContent).active:
             self.query_one(TabbedContent).active = self.view.tab
+        if (self.view.chat, self.view.tab) != (previous.chat, previous.tab):
+            self.chat_error = None  # a read failure belongs to the chat it was read for, not to later reloads
         if self.view.chat != previous.chat:
             clear_chat(self.query_one("#chat-body", Static), self.view.chat)
             start_chat_read(self)

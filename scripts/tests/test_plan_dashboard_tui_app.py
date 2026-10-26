@@ -811,6 +811,11 @@ def test_a_failing_attention_or_chat_read_keeps_the_task_table_and_names_the_err
         assert ALPHA in table_ids(app)
         assert "live: " in app.sub_title and "read failed: locator down" in app.sub_title
         assert table_cells(app, row_of(app, ALPHA))["wait"] == ("" if failing == "read_attention" else "?")
+        if failing == "read_chat":
+            await pilot.press("tab")
+            await pilot.press("r")
+            await settle(app, pilot)
+            assert "live: " in app.sub_title and "read failed" not in app.sub_title
 
     if failing == "read_attention":
         monkeypatch.setattr(tui, failing, boom)
@@ -1097,7 +1102,7 @@ def test_q_returns_to_the_shell_within_two_seconds_while_a_reload_is_still_runni
 
     class Quitting(DashboardApp):
         def on_mount(self):
-            super().on_mount()
+            # textual already calls DashboardApp.on_mount itself: it dispatches a handler on every class in the MRO
             self.set_timer(0.5, self.quit_now)
 
         def quit_now(self):
