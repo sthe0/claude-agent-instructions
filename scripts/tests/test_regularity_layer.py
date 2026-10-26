@@ -227,7 +227,7 @@ def test_principle_index_mismatch_reported(tmp_path, env):
     c = Corpus(tmp_path)
     c.exp()
     c.regularity()
-    c.principle(index=("r9",))
+    c.principle(index=())
     done = c.verify(env)
     assert done.returncode == 1
     assert _finding(done, "index_mismatch", "principles/p1.md")
