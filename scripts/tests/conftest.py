@@ -19,6 +19,7 @@ if TESTS_DIR not in sys.path:
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import host_llm, judge_ledger  # noqa: E402
 from _xdist_auto import pytest_configure, pytest_terminal_summary  # noqa: E402,F401
+from slow_selection import pytest_addoption, pytest_collection_modifyitems  # noqa: E402,F401
 
 # The plan-level places a SUBSTANTIVE plan owes the submission seam, as TOML an author
 # would write. Every fixture plan in the suite that expects to SUBMIT CLEAN splices these

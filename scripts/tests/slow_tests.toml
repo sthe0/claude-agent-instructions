@@ -1,0 +1,113 @@
+# Slow tests and the paths they guard. scripts/tests/slow_selection.py reads this file;
+# conftest.py marks every listed test `slow` and decides at collection whether it runs.
+#
+# When the slow set runs:
+#   - by default, a slow test runs only if one of its `guards` globs matches a changed
+#     path: `git diff` against the base (committed, staged and unstaged) plus untracked,
+#     non-ignored files. Otherwise it is skipped (a skip, never a deselect), and the
+#     skip reason names this rule.
+#   - the base is AGENTCTL_SLOW_BASE when set, else the merge base of HEAD with
+#     origin/main. When that merge base cannot be computed (no origin/main, a git error,
+#     a timeout) or equals HEAD (e.g. right after landing), every slow test runs.
+#     An explicit AGENTCTL_SLOW_BASE is taken as given: AGENTCTL_SLOW_BASE=HEAD on a
+#     clean tree skips them all.
+#   - `pytest --run-slow` or AGENTCTL_SLOW_TESTS=all runs every slow test.
+#   - a plan check that must stay discriminating after its branch lands pins
+#     AGENTCTL_SLOW_BASE to the commit it was planned against, because the implicit
+#     merge base then equals HEAD and the check would no longer see its own change.
+#
+# Preview the decision: python3 scripts/tests/slow_selection.py [--base REF | --changed FILE]
+#
+# Each [[slow]] group lists node ids (a prefix also matches its parametrized ids) sharing
+# one guard set. A mutation catalogue declares `catalogue_targets`: the control module
+# whose catalogue names the files its mutants are applied to and the tests that catch
+# them; test_slow_selection.py checks that each of those paths matches a guard glob.
+# Paths and globs are relative to the repo root; `*` also matches across `/`.
+
+[[slow]]
+nodes = ["scripts/tests/test_review_exhaustion_reflection.py::test_rx_mutation_catalogue_kills_every_mutant"]
+guards = [
+    "scripts/agentctl/gates.py",
+    "scripts/agentctl/cli.py",
+    "scripts/agentctl/task_accumulator.py",
+    "scripts/tests/test_review_exhaustion_reflection.py",
+    "scripts/tests/rx_mutation_control.py",
+    "config.md",
+    "docs/operations/review-backstop-arming.json",
+]
+catalogue_targets = { module = "scripts/tests/rx_mutation_control.py", kind = "mutants", relpath_root = "scripts", ids_root = "scripts" }
+
+[[slow]]
+nodes = ["scripts/tests/test_reaper_runner.py::test_every_catalogue_mutant_is_killed_and_the_control_is_green"]
+guards = [
+    "scripts/reaper/*.py",
+    "scripts/session_scope/registry.py",
+    "scripts/hook-branch-backup.py",
+    "scripts/tests/test_reaper_*.py",
+    "scripts/tests/test_hook_branch_backup.py",
+    "scripts/tests/reaper_mutation_control.py",
+]
+catalogue_targets = { module = "scripts/tests/reaper_mutation_control.py", kind = "mutants", relpath_root = "scripts", ids_root = "scripts" }
+
+[[slow]]
+nodes = ["scripts/tests/test_spawn_specialist_grants.py::test_mutation_control_is_collected_and_discriminates"]
+guards = [
+    "scripts/spawn-specialist.py",
+    "scripts/tests/sweep_grant_surface.sh",
+    "scripts/tests/test_spawn_specialist_grants.py",
+    "scripts/tests/test_sweep_grant_surface.py",
+    "scripts/tests/gc_mutation_control.py",
+]
+catalogue_targets = { module = "scripts/tests/gc_mutation_control.py", kind = "gc", case_root = "scripts/tests" }
+
+[[slow]]
+nodes = ["scripts/tests/test_instruction_smoke_gate.py::test_every_catalogue_mutant_is_killed_and_the_control_is_green"]
+guards = [
+    "scripts/lib/instruction_smoke_gate.py",
+    "githooks/pre-push",
+    "scripts/land-branch.py",
+    "scripts/tests/test_instruction_smoke_gate.py",
+    "scripts/tests/test_land_branch_smoke_gate.py",
+    "scripts/tests/smoke_gate_mutation_control.py",
+]
+catalogue_targets = { module = "scripts/tests/smoke_gate_mutation_control.py", kind = "mutants", relpath_root = "", ids_root = "scripts" }
+
+[[slow]]
+nodes = [
+    "scripts/tests/test_mandate_mutation_catalogue.py::test_the_control_is_green_on_the_unmutated_copy",
+    "scripts/tests/test_mandate_mutation_catalogue.py::test_mutant_is_killed",
+]
+guards = [
+    "scripts/agentctl/mandate.py",
+    "scripts/agentctl/mandate_store.py",
+    "scripts/agentctl/state.py",
+    "scripts/agentctl/plan.py",
+    "scripts/agentctl/cli.py",
+    "scripts/agentctl/gates.py",
+    "scripts/lib/widening_targets.py",
+    "scripts/mandate_cycle/*.py",
+    "scripts/tests/test_mandate_*.py",
+    "scripts/tests/test_optional_stages.py",
+    "scripts/tests/mandate_mutation_control.py",
+    "config.md",
+]
+catalogue_targets = { module = "scripts/tests/mandate_mutation_control.py", kind = "mutants", relpath_root = "scripts", ids_root = "scripts" }
+
+[[slow]]
+nodes = [
+    "scripts/tests/test_phase3_trigger.py::test_check_due_exits_zero_when_the_surface_source_is_broken",
+    "scripts/tests/test_phase3_trigger.py::test_check_due_against_the_real_repo_exits_zero",
+    "scripts/tests/test_phase3_trigger.py::test_surface_breakdown_total_is_the_number_the_report_prints",
+]
+guards = [
+    "scripts/rule-salience-report.py",
+    "scripts/lint-prose-length.py",
+    "scripts/cost-report.py",
+    "scripts/lib/config_root.py",
+    "scripts/rule-registry.toml",
+    "CLAUDE.md",
+    "config.md",
+    "memory-global/MEMORY.md",
+    "skills/*/SKILL.md",
+    "scripts/tests/test_phase3_trigger.py",
+]
