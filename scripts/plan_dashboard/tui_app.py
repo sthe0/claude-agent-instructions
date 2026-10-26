@@ -112,6 +112,40 @@ def show_status(app: "DashboardApp", text: str) -> None:
     app.query_one("#status", Static).update(Text(text))
 
 
+def mode_title(include_all: bool, count: int) -> str:
+    """The persistent mode and row count of the sub-title, e.g. ``all: 12 tasks``."""
+    return f"{'all' if include_all else 'live'}: {count} tasks"
+
+
+def announce_loading(app: "DashboardApp", include_all: bool) -> None:
+    """Say at once that the list is being read again: listing every task takes seconds."""
+    app.sub_title = f"loading {'all' if include_all else 'live'} tasks…"
+
+
+def start_chat_read(app: "DashboardApp") -> None:
+    """Read the open chat in its own exclusive worker group, apart from the reload whose cost grows with
+    the number of tasks; a newer chat read cancels only an older chat read."""
+    view = app.view
+    if view.tab != "chat" or view.chat is None:
+        return
+    app.last_chat_read = app.clock()
+    app.run_worker(lambda: read_chat_for(app, view.chat), thread=True, group="chat", exclusive=True)
+
+
+def read_chat_for(app: "DashboardApp", target) -> None:
+    chat, error = attempt(lambda: tui.read_chat(target, app.locator, app.transcripts_root))
+    app.call_from_thread(chat_ready, app, target, chat, error)
+
+
+def chat_ready(app: "DashboardApp", target, chat: dict | None, error: Exception | None) -> None:
+    if not chat_is_current(app.view.chat, target) or app.view.tab != "chat":
+        return
+    if chat is not None:
+        show_chat(app.query_one("#chat-scroll", VerticalScroll), app.query_one("#chat-body", Static), chat)
+    elif error is not None:
+        app.sub_title = f"{app.sub_title.split('; read failed')[0]}; read failed: {error}"
+
+
 def jump_from(app: "DashboardApp") -> None:
     """Switch to the window of the session ``g`` points at; the locator's argv runs in a worker thread
     (it is bounded to 5 s) and its outcome lands in the status line."""
@@ -184,6 +218,10 @@ def apply_tree_key(tree: Tree, key: str) -> None:
 
 class DashboardApp(App):
     TITLE = "plan dashboard"
+    CSS = """
+    TabbedContent, TabPane { height: 1fr; }
+    Tree, #chat-scroll { height: 1fr; }
+    """
     BINDINGS = [Binding(key, f"key('{key}')", label, priority=True, show=key in ("enter", "escape", "a", "r", "g", "q"))
                 for key, label in KEYS] + [Binding(key, f"tree_key('{key}')", show=False)
                                            for key in ("j", "k", "space", "left", "right")] + [
@@ -201,6 +239,7 @@ class DashboardApp(App):
         self._again = False
         self.tree_task: str | None = None
         self.overlay: dict | None = None
+        self.last_chat_read: dt.datetime | None = None
 
     def check_action(self, action: str, parameters) -> bool:
         if action in KEY_ACTION_OWNERS:
@@ -230,6 +269,8 @@ class DashboardApp(App):
 
     def _tick(self) -> None:
         refresh_if_due(self)
+        if self.view.tab == "chat" and tui.due(self.clock(), self.last_chat_read, self.interval):
+            start_chat_read(self)
 
     def reload(self, force: bool = False) -> None:
         if self._loading:
@@ -292,8 +333,7 @@ class DashboardApp(App):
             state = tree_state_for(remember(tree, self.tree_task), task)
             fill_tree(tree, nodes, state.expanded, state.cursor)
             self.tree_task = task
-        scope = "all tasks" if self.view.include_all else "live tasks"
-        self.sub_title = f"{len(ids)} {scope}, read {now:%H:%M:%S}"
+        self.sub_title = f"{mode_title(self.view.include_all, len(ids))}, read {now:%H:%M:%S}"
         if error is not None:
             self.sub_title += f"; read failed: {error}"
         self._finish_load()
@@ -317,6 +357,9 @@ class DashboardApp(App):
             self.query_one(TabbedContent).active = self.view.tab
         if self.view.chat != previous.chat:
             clear_chat(self.query_one("#chat-body", Static), self.view.chat)
+            start_chat_read(self)
+        if self.view.include_all != previous.include_all:
+            announce_loading(self, self.view.include_all)
         if self.view.cursor != previous.cursor and self.view.session_ids:
             self.query_one(DataTable).move_cursor(row=self.view.cursor)
         if self.view.refresh:
@@ -338,6 +381,8 @@ class DashboardApp(App):
             self.view = dataclasses.replace(self.view, tab=tab)
         if tab in tui.TABS:
             self.call_after_refresh(focus_for, self, tab)
+        if tab == "chat":
+            start_chat_read(self)
 
 
 def _load_cli():

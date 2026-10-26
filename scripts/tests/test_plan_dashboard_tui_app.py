@@ -22,7 +22,7 @@ else:
     pytest.importorskip("textual", exc_type=ImportError)
 
 from textual.containers import VerticalScroll  # noqa: E402
-from textual.widgets import DataTable, Static, TabbedContent, Tree  # noqa: E402
+from textual.widgets import DataTable, Header, Static, TabbedContent, Tabs, Tree  # noqa: E402
 
 from plan_dashboard import attention, locate, model, tui  # noqa: E402
 from plan_dashboard.tui_app import CHAT_LOADING, DashboardApp  # noqa: E402
@@ -110,7 +110,7 @@ def test_tasks_tab_lists_the_live_tasks(tmp_path):
         assert alpha["cost"] == "≥$1.50"
         assert alpha["goal"] == "Build the thing [with brackets]"
         assert table_cells(app, by_id["broken"])["stage"] == "stage ?/?"
-        assert "3 live tasks" in app.sub_title
+        assert "live: 3 tasks" in app.sub_title
         head = str(app.query_one("#overview-head").render())
         assert head.endswith("3 active  0 idle  3 total  waiting: 0") and "2026-10-22 12:00:00 UTC" in head
 
@@ -176,10 +176,10 @@ def test_a_toggles_between_live_and_all_tasks(tmp_path):
         assert STALE not in table_ids(app)
         await pilot.press("a")
         await settle(app, pilot)
-        assert STALE in table_ids(app) and "all tasks" in app.sub_title
+        assert STALE in table_ids(app) and f"all: {len(table_ids(app))} tasks" in app.sub_title
         await pilot.press("a")
         await settle(app, pilot)
-        assert STALE not in table_ids(app) and "live tasks" in app.sub_title
+        assert STALE not in table_ids(app) and f"live: {len(table_ids(app))} tasks" in app.sub_title
 
     run(scenario, root)
 
@@ -807,7 +807,7 @@ def test_a_failing_attention_or_chat_read_keeps_the_task_table_and_names_the_err
             await pilot.press("tab")
             await settle(app, pilot)
         assert ALPHA in table_ids(app)
-        assert "live tasks" in app.sub_title and "read failed: locator down" in app.sub_title
+        assert "live: " in app.sub_title and "read failed: locator down" in app.sub_title
         assert table_cells(app, row_of(app, ALPHA))["wait"] == ("" if failing == "read_attention" else "?")
 
     if failing == "read_attention":
@@ -958,3 +958,126 @@ def test_g_without_a_locator_says_so_and_runs_nothing(tmp_path, monkeypatch):
         assert status_text(app) == "no jump target" and calls == []
 
     run(scenario, root, locator=locate.select_or_none(empty_plugins, None))
+
+
+# --- what the user perceives: order, geometry, time to content, feedback while waiting ------------
+
+def test_the_overview_columns_open_with_the_task_in_the_order_of_the_web_page():
+    assert tui.OVERVIEW_COLUMNS == ("task", "wait", "session", "live", "node", "stage", "diff", "replans", "age",
+                                    "wall", "cost", "goal")
+
+
+def test_the_table_shows_the_task_column_first(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        table = app.query_one(DataTable)
+        assert [str(column.label) for column in table.columns.values()][:3] == ["task", "wait", "session"]
+        assert table.get_row_at(table_ids(app).index(ALPHA))[0].plain == f"task-{ALPHA}"
+
+    run(scenario, root)
+
+
+def hold_reloads(monkeypatch):
+    """Make every ``model.collect`` from now on wait for the returned event, as a reload over thousands of tasks would."""
+    release, real = threading.Event(), model.collect
+
+    def slow(*args, **kwargs):
+        release.wait(PILOT_DEADLINE_S)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(model, "collect", slow)
+    return release
+
+
+@pytest.mark.parametrize("size", [(150, 40), (80, 24)])
+@pytest.mark.parametrize("tab", ["tasks", "detail", "chat"])
+def test_no_tab_scrolls_the_screen_and_the_tabs_row_sits_below_the_header(tmp_path, size, tab):
+    root = attention_root(tmp_path)
+    long_chat = [line("user", 10, "go on")] + [
+        line("assistant", 9, [{"type": "text", "text": f"reply number {n}"}], "end_turn") for n in range(80)]
+    write_fixture_transcript(root, ALPHA, long_chat)
+    app = make_app(root, locator=attention_locator())
+
+    async def main():
+        async with app.run_test(size=size) as pilot:
+            await settle(app, pilot)
+            await open_task(app, pilot, ALPHA)
+            if tab == "tasks":
+                await pilot.press("escape")
+            elif tab == "chat":
+                await pilot.press("tab")
+            await settle(app, pilot)
+            assert app.query_one(TabbedContent).active == tab
+            header, tabs = app.query_one(Header).region, app.query_one(Tabs).region
+            assert tabs.y >= header.y + header.height
+            assert app.screen.max_scroll_y == 0
+
+    asyncio.run(asyncio.wait_for(main(), PILOT_DEADLINE_S))
+
+
+def test_the_chat_shows_within_two_seconds_though_the_reload_is_still_running(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        release = hold_reloads(monkeypatch)
+        try:
+            await pilot.press("tab")
+            for _ in range(20):
+                await pilot.pause(0.1)
+                if "Which way?" in chat_text(app):
+                    break
+            assert "Which way?" in chat_text(app)
+            assert app._loading and not release.is_set()
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert not app._loading and "Which way?" in chat_text(app)
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_a_chat_read_does_not_cancel_the_reload_that_is_running(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        release = hold_reloads(monkeypatch)
+        try:
+            await pilot.press("tab")
+            await pilot.pause(0.5)
+            reload_workers = [w for w in app.workers if w.group == "collect"]
+            assert reload_workers and all(w.is_running for w in reload_workers)
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert not app._loading
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_a_toggle_names_the_load_at_once_and_then_the_mode_and_count(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        release = hold_reloads(monkeypatch)
+        try:
+            await pilot.press("a")
+            await pilot.pause(0.3)
+            assert app.sub_title == "loading all tasks…"
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert app.sub_title.startswith(f"all: {len(table_ids(app))} tasks")
+        release = hold_reloads(monkeypatch)
+        try:
+            await pilot.press("a")
+            await pilot.pause(0.3)
+            assert app.sub_title == "loading live tasks…"
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert app.sub_title.startswith(f"live: {len(table_ids(app))} tasks")
+
+    run(scenario, root)

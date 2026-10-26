@@ -17,7 +17,7 @@ SESSION_ID_WIDTH = 8
 TASK_ID_WIDTH = 24
 BAR_WIDTH = 8
 DEFAULT_INTERVAL_S = 2.0
-OVERVIEW_COLUMNS = ("wait", "session", "task", "live", "node", "stage", "diff", "replans", "age", "wall", "cost",
+OVERVIEW_COLUMNS = ("task", "wait", "session", "live", "node", "stage", "diff", "replans", "age", "wall", "cost",
                     "goal")
 STATUS_MARKS = {"PASSED": "done", "ACTIVE": "active", "FAILED": "failed", "SKIPPED": "skipped", "PENDING": "pending"}
 NOT_COUNTED = "not counted"
@@ -159,11 +159,11 @@ def overview_rows(snapshot: dict, now: dt.datetime, attention_payload=None) -> l
         since = _since(now, task["last_activity"])
         age = "?" if since is None else f"{since} ago"
         if not task["readable"]:
-            cells = (mark, sid[:SESSION_ID_WIDTH], "-", task["liveness"], "?", "stage ?/?", "-", "-", age, "-", "-",
+            cells = ("-", mark, sid[:SESSION_ID_WIDTH], task["liveness"], "?", "stage ?/?", "-", "-", age, "-", "-",
                      f"unreadable: {task['reason']}")
         else:
             totals = task["totals"]
-            cells = (mark, sid[:SESSION_ID_WIDTH], one_line(task["task_id"], TASK_ID_WIDTH) or "-", task["liveness"],
+            cells = (one_line(task["task_id"], TASK_ID_WIDTH) or "-", mark, sid[:SESSION_ID_WIDTH], task["liveness"],
                      task["node"] or "?", _stage_progress(task["stages_done"], task["stages_total"]),
                      _difficulty(task), str(task["replans"]), age,
                      _wall(totals["wall_clock_s"], totals["estimate"]["wall_clock_s"]), cost_text(totals),
@@ -173,7 +173,7 @@ def overview_rows(snapshot: dict, now: dt.datetime, attention_payload=None) -> l
     for entry in _session_rows(attention_payload):
         harness, waiting = entry["harness_session"], entry.get("waiting")
         since = _since(now, entry.get("since"))
-        cells = (wait_mark(waiting), entry.get("name") or harness, NO_VALUE, NO_VALUE, NO_VALUE, NO_VALUE, NO_VALUE,
+        cells = (NO_VALUE, wait_mark(waiting), entry.get("name") or harness, NO_VALUE, NO_VALUE, NO_VALUE, NO_VALUE,
                  NO_VALUE, NO_VALUE if since is None else f"{since} ago", NO_VALUE, NO_VALUE,
                  one_line(entry.get("cwd")))
         rows.append({"session_id": harness, "cells": cells, "kind": "session", "waiting": waiting,

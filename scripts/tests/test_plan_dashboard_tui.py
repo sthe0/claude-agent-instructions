@@ -81,7 +81,7 @@ def tree_text(nodes):
 def test_overview_row_cells(tmp_path):
     rows = tui.overview_rows(snapshot(console_root(tmp_path)), NOW)
     assert row_for(rows, ALPHA)["cells"] == (
-        "", "alpha-00", f"task-{ALPHA}", "active", "EXECUTING", "stage 1/3 [###-----]", "0", "0", "10m00s ago", "1h50m",
+        f"task-{ALPHA}", "", "alpha-00", "active", "EXECUTING", "stage 1/3 [###-----]", "0", "0", "10m00s ago", "1h50m",
         "≥$1.50", "Build the thing [with brackets]")
     beta = cells_of(rows, BETA)
     assert (beta["session"], beta["task"], beta["node"], beta["stage"], beta["age"]) == (
@@ -107,6 +107,16 @@ def test_the_header_opens_the_plain_view_and_the_table_follows(tmp_path):
     lines = once(console_root(tmp_path)).splitlines()
     assert lines[0].endswith("3 active  0 idle  3 total  waiting: 0")
     assert lines[1].split() == list(tui.OVERVIEW_COLUMNS)
+
+
+def test_the_columns_open_with_the_task_as_the_web_page_does():
+    assert tui.OVERVIEW_COLUMNS[:4] == ("task", "wait", "session", "live") and tui.OVERVIEW_COLUMNS[-1] == "goal"
+
+
+def test_the_first_cell_of_a_task_row_is_its_task_and_the_third_its_session(tmp_path):
+    rows = tui.overview_rows(snapshot(console_root(tmp_path)), NOW)
+    assert row_for(rows, ALPHA)["cells"][0] == f"task-{ALPHA}" and row_for(rows, ALPHA)["cells"][2] == "alpha-00"
+    assert row_for(rows, "broken")["cells"][0] == "-"
 
 
 @pytest.mark.parametrize("done, total, expected", [
@@ -575,7 +585,7 @@ def test_a_row_carries_its_style(tmp_path):
 
 def test_without_an_overlay_the_rows_are_unmarked_and_have_no_session_rows(tmp_path):
     rows = tui.overview_rows(snapshot(console_root(tmp_path)), NOW)
-    assert {r["kind"] for r in rows} == {"task"} and {r["cells"][0] for r in rows} == {""}
+    assert {r["kind"] for r in rows} == {"task"} and {r["cells"][1] for r in rows} == {""}
 
 
 def test_chat_lines_show_a_tool_name_and_an_asked_question_with_its_options(tmp_path):
@@ -768,9 +778,10 @@ def test_once_prints_each_mark_the_session_rows_and_the_count(tmp_path):
     lines = plain.splitlines()
     assert lines[0].endswith("  waiting: 3")
     by_name = {name: next(l for l in lines[2:] if name in l) for name in ("alpha-00", "beta-111", "Asker", "Free")}
-    assert by_name["alpha-00"].startswith("?") and by_name["beta-111"].startswith("…")
-    assert by_name["Asker"].startswith("?") and by_name["Free"].startswith("…")
-    assert any(l.startswith("!") and PERMISSION_SESSION in l for l in lines)
+    at_wait = lines[1].index("wait")
+    assert by_name["alpha-00"][at_wait] == "?" and by_name["beta-111"][at_wait] == "…"
+    assert by_name["Asker"][at_wait] == "?" and by_name["Free"][at_wait] == "…"
+    assert any(l[at_wait] == "!" and PERMISSION_SESSION in l for l in lines[2:])
     assert "—" in by_name["Asker"]
 
 

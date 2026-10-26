@@ -728,7 +728,27 @@ def _jump_session_as_task(original):
     return mutated
 
 
+def _task_column_last_but_two(original):
+    return ("wait", "session", "task", *original[3:])
+
+
+def _css_dropped(original):
+    original.CSS = ""
+    return original
+
+
+def _mode_dropped(original):
+    def mutated(include_all, count):
+        return f"{count} tasks"
+    return mutated
+
+
 TUI_MUTATIONS.update({
+    "tui-columns-task-not-first": (TUI, "OVERVIEW_COLUMNS", _task_column_last_but_two),
+    "tui-app-screen-scrolls": (TUI_APP, "DashboardApp", _css_dropped),
+    "tui-app-chat-waits-reload": (TUI_APP, "start_chat_read", _nothing),
+    "tui-app-all-no-feedback": (TUI_APP, "announce_loading", _nothing),
+    "tui-app-mode-unshown": (TUI_APP, "mode_title", _mode_dropped),
     "tui-jump-ignored": (TUI, "handle_key", _jump_key_ignored),
     "tui-jump-no-return-hint": (TUI, "jump_status", _return_hint_dropped),
     "tui-jump-shell": (LOCATE, "_run", _jump_runner(shell=True, timeout=5)),
