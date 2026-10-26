@@ -10,13 +10,14 @@ R7  every admitted verify-final appends verify_final_check + verify_final_run ev
 """
 from __future__ import annotations
 
+import importlib
 import threading
 import time
 from argparse import Namespace
 
 import pytest
 
-from agentctl import check_cache, cli
+from agentctl import cli
 from agentctl.dispatch import RunResult
 from agentctl.plan import parse_plan
 from agentctl.state import (
@@ -36,6 +37,16 @@ from agentctl.state import (
     Subject,
     WeightClass,
 )
+
+class _LazyCheckCache:
+    """agentctl.check_cache, imported on first use, so that against a tree without it
+    each test fails on its own assertion instead of the module failing to collect."""
+
+    def __getattr__(self, name):
+        return getattr(importlib.import_module("agentctl.check_cache"), name)
+
+
+check_cache = _LazyCheckCache()
 
 HEAD = "deadbeef12345678"
 
@@ -258,7 +269,7 @@ def test_r1_older_final_check_without_cacheable_loads_as_false():
 def _real_runner(monkeypatch, runner, *, parallel, budget):
     """Route the engine's own (runner=None) subprocess path through `runner`."""
     monkeypatch.setattr(cli, "subprocess_runner", runner)
-    monkeypatch.setattr(check_cache, "system_probe", lambda: (12, 0.0))
+    monkeypatch.setattr("agentctl.check_cache.system_probe", lambda: (12, 0.0))
     monkeypatch.setenv(check_cache.PARALLEL_ENV, str(parallel))
     monkeypatch.setenv(check_cache.CPU_BUDGET_ENV, str(budget))
 
