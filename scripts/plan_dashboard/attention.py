@@ -200,10 +200,8 @@ def read_tail(path) -> Tail | None:
 def transcript_index(transcripts_root) -> dict[str, list[Path]]:
     """Every main-session transcript by session id, from one listing: a reader of many tasks lists the
     transcript roots once rather than once per candidate session."""
-    if transcripts_root is not None:
-        paths = sorted(Path(transcripts_root).glob("*/*.jsonl"))
-    else:
-        paths = config_root.iter_transcripts("*/*.jsonl")
+    roots = [Path(transcripts_root)] if transcripts_root is not None else config_root.projects_roots()
+    paths = sorted((path for root in roots for path in root.glob("*/*.jsonl")), key=str)
     index: dict[str, list[Path]] = {}
     for path in paths:
         index.setdefault(path.stem, []).append(path)

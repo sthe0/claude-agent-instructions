@@ -86,17 +86,14 @@ def harness_sessions_driving(engine_session: str) -> list[str]:
     if not engine_session:
         return []
     engine = config_root.sanitize_session_id(engine_session)
-    try:
-        paths = sorted(_bindings_dir().glob("*.json"))
-    except OSError:
-        return []
-    return [p.stem for p in paths if any(e["session"] == engine for e in _read(p))]
+    return [p.stem for p in binding_paths() if any(e["session"] == engine for e in _read(p))]
 
 
 def binding_paths() -> list[Path]:
-    """Every binding file, sorted."""
+    """Every binding file, sorted by name: the files share one directory, so this is path order
+    without comparing thousands of path objects."""
     try:
-        return sorted(_bindings_dir().glob("*.json"))
+        return sorted(_bindings_dir().glob("*.json"), key=lambda path: path.name)
     except OSError:
         return []
 
