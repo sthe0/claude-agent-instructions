@@ -10546,8 +10546,11 @@ def _evaluate_final_checks_in(
         elif d.decision == check_cache.HIT:
             e.exit_code = None
         else:
-            earlier = by_id[d.same_as]
-            e.ok, e.exit_code, e.error = earlier.ok, earlier.exit_code, earlier.error
+            if d.same_as in ran:
+                e.ok, e.exit_code, _, e.error = ran[d.same_as]
+            else:
+                earlier = by_id[d.same_as]
+                e.ok, e.exit_code, e.error = earlier.ok, earlier.exit_code, earlier.error
     failures = [e.failure() for e in entries if not e.ok]
     _log_final_events(
         state, entries, outcome="failed" if failures else "passed", started=started, peak=peak,

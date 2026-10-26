@@ -151,13 +151,13 @@ def _last_run(store, sid):
     return found
 
 
-def _two_runs(store, sid, stages, final_checks=(), *, diffs=None, missing=(), second_head=B):
+def _two_runs(store, sid, stages, final_checks=(), *, diffs=None, missing=(), second_head=B, exits=None):
     """verify-final on tree A (everything runs and is cached), then on a moved tree."""
     _verifying(store, sid, stages, final_checks)
     first = _Runner(A)
     _verify(store, sid, first)
     _again(store, sid)
-    second = _Runner(second_head, diffs=diffs, missing=missing)
+    second = _Runner(second_head, diffs=diffs, missing=missing, exits=exits)
     _verify(store, sid, second)
     return first, second
 
@@ -317,6 +317,10 @@ def test_a_declared_path_reruns(store, kind, reads, changed):
     ("python3 x.py $ROOT", "docs/x.md"),
     ("python3 x.py ../docs", "docs/x.md"),
     ("python3 x.py 'unterminated", "docs/x.md"),
+    ("cat Docs/x.md", "docs/x.md"),
+    ("ls DOCS", "docs/x.md"),
+    ("python3 -c \"import glob; glob.glob('d*/x.md')\"", "docs/x.md"),
+    ("ls d{o,}cs", "docs/x.md"),
 ])
 def test_a_path_named_in_the_command_reruns(store, kind, command, changed):
     second, cid = _scenario(store, "n-named", kind, command, [], diffs=_docs_change(changed))
@@ -461,9 +465,30 @@ def test_an_undeclared_check_is_not_deduplicated_with_a_declared_twin(store):
         store, "n-dedup", [_stage(1, CMD, reads=[])], [final], diffs=_docs_change("docs/a.md"),
     )
     run = _last_run(store, "n-dedup")
-    assert run["stage:1"][0] == "narrowed"
+    assert run["stage:1"] == ("dedup", "same_as:final_check:1")
     assert run["final_check:1"][0] == "miss"
     assert second.bash_calls == [CMD]
+
+
+def test_a_red_undeclared_twin_takes_the_declaring_check_down_with_it(store):
+    final = FinalCheck(command=CMD, cacheable=True)
+    _two_runs(
+        store, "n-red-twin", [_stage(1, CMD, reads=[])], [final],
+        diffs=_docs_change("docs/a.md"), exits={CMD: 1},
+    )
+    run = _last_run(store, "n-red-twin")
+    assert run["stage:1"] == ("dedup", "same_as:final_check:1")
+    assert run["final_check:1"][0] == "miss"
+    state = store.load("n-red-twin")
+    assert state.node != Node.RESOLUTION.value
+    assert not any(e.get("derived") for e in state.check_cache.values())
+
+
+def test_a_derived_green_never_replaces_a_real_one():
+    cache = {}
+    check_cache.store_green(cache, "k", at=1.0, label="real", tree="t", definition="d")
+    check_cache.store_green(cache, "k", at=2.0, label="derived", tree="t", definition="d", derived=True, reads=[])
+    assert cache["k"]["label"] == "real" and "derived" not in cache["k"]
 
 
 def test_twins_with_the_same_declaration_are_still_deduplicated(store):

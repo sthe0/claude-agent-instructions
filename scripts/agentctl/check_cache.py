@@ -116,6 +116,9 @@ def store_green(
     tree: str | None = None, definition: str | None = None, derived: bool = False,
     reads: list[str] | None = None,
 ) -> None:
+    held = cache.get(key)
+    if derived and isinstance(held, dict) and not held.get("derived"):
+        return
     entry: dict = {"at": at, "label": label}
     if tree is not None:
         entry["tree"] = tree
@@ -228,12 +231,15 @@ def reads_match(path: str, patterns: list[str]) -> bool:
 def names_path(command: str, path: str) -> bool:
     """True when `command` may name `path`, or a directory containing it, anywhere. Any
     ancestor prefix of `path` (`docs`, `docs/a`, `docs/a/x.md`) occurring as a substring
-    of the command, a word that is a glob matching one of those prefixes, and any word
-    that cannot be resolved to a repo-relative path (a variable, a `..`) count as naming
-    it, whatever shell form carries the name (absolute path, `~`, redirection, code)."""
+    of the command (case-insensitive, after brace expansion), a word or a fragment of a
+    word (split at quotes, brackets, `;`, `,`) that is a glob matching one of those
+    prefixes, and any word that cannot be resolved to a repo-relative path (a variable,
+    a `..`) count as naming it, whatever shell form carries the name (absolute path, `~`,
+    redirection, code). A backstop: the `verify_reads` declaration carries the guarantee."""
     parts = path.split("/")
     prefixes = ["/".join(parts[:n]) for n in range(1, len(parts) + 1)]
-    if any(prefix in command for prefix in prefixes):
+    lowered = [prefix.lower() for prefix in prefixes]
+    if any(prefix in alt for alt in _expand_braces(command.lower()) for prefix in lowered):
         return True
     try:
         words = shlex.split(command)
@@ -242,8 +248,10 @@ def names_path(command: str, path: str) -> bool:
     for word in words:
         if any(c in word for c in "$`") or ".." in word.split("/"):
             return True
-        if any(c in word for c in "*?["):
-            glob = word[2:] if word.startswith("./") else word
+        for candidate in [word, *re.split(r"""[\s'"()\[\]{};,<>|&=:]+""", word)]:
+            if not any(c in candidate for c in "*?["):
+                continue
+            glob = candidate[2:] if candidate.startswith("./") else candidate
             if any(
                 _glob_regex(alt).fullmatch(prefix)
                 for alt in _expand_braces(glob) for prefix in prefixes
@@ -320,7 +328,12 @@ def narrow_misses(
         except Exception:
             ok, reason = False, REFUSED + "git_failed"
         out.append(Decision(d.spec, NARROWED if ok else MISS, reason))
-    return out
+    running = {d.spec.key: d.spec.id for d in out if d.decision == MISS and d.spec.key is not None}
+    return [
+        Decision(d.spec, DEDUP, f"same_as:{running[d.spec.key]}", running[d.spec.key])
+        if d.decision == NARROWED and d.spec.key in running else d
+        for d in out
+    ]
 
 
 def pytest_weight(command: str, cpu_count: int) -> int:
