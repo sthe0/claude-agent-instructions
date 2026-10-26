@@ -167,6 +167,65 @@ def compute_plan_resources(doc: PlanDoc, *, venue: str | None = None) -> list[St
     return [compute_stage_resources(s, v) for s in doc.stages]
 
 
+#: Kinds whose spawn runs in acceptEdits mode (`spawn-specialist._ACCEPT_EDITS_TRUSTED_KINDS`),
+#: with the mode of the FileResource over their workdir that mode already auto-allows.
+KIND_RESOURCE_BASELINES = {"developer": "write", "tech-writer": "write"}
+
+
+@dataclass
+class StageResourceSet:
+    """The typed resources a child spawned for a stage may change, plus the wildcard-tail
+    Bash rules kept as text: their argv is unbounded, so only a call-time match against
+    the concrete call can decide them. A non-wildcard rule that does not resolve is in
+    neither list -- nothing sanctions it, so the call-time check falls through to asking."""
+    resources: list = field(default_factory=list)
+    rule_patterns: list = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "resources": [_resource_to_dict(r) for r in self.resources],
+            "rule_patterns": list(self.rule_patterns),
+        }
+
+
+def resource_set_from_entries(
+    entries: "list[dict] | None", stage: Stage, venue: str | None, *,
+    workdir: str | None, kind: str | None,
+) -> StageResourceSet:
+    """`stage_resource_set` over grant entries the caller already holds in the
+    `agentctl stage-grants` shape (`{"rule", ...}` or `{"path", "mode", ...}`), so the
+    spawn's engine grants -- runtime ones included -- and the stage-grants report build
+    the set through one computation."""
+    out = StageResourceSet()
+    for entry in entries or []:
+        if "rule" in entry:
+            res = resolve_rule_grant(entry["rule"], venue)
+            if res.status == "resolved":
+                out.resources.extend(res.resources)
+            elif res.reason_class == "wildcard-tail":
+                out.rule_patterns.append(entry["rule"])
+        elif "path" in entry and "mode" in entry:
+            out.resources.extend(resolve_add_dir_grant(entry["path"], entry["mode"]).resources)
+    out.resources.extend(_stage_spawn_resources(stage))
+    out.resources.extend(_stage_landed_resources(stage))
+    baseline_mode = KIND_RESOURCE_BASELINES.get(kind or "")
+    if baseline_mode is not None and workdir:
+        out.resources.append(_resources.FileResource(workdir, baseline_mode))
+    out.resources = list(dict.fromkeys(out.resources))
+    out.rule_patterns = list(dict.fromkeys(out.rule_patterns))
+    return out
+
+
+def stage_resource_set(
+    stage: Stage, venue: str | None, *, workdir: str | None, kind: str | None,
+) -> StageResourceSet:
+    """The set for a stage's declared + derived grants (what the plan alone sanctions;
+    runtime grants arrive through `resource_set_from_entries`)."""
+    effective = _effective_grants_for_stage(stage, venue)
+    entries = [rg.to_dict() for rg in effective.allow] + [ad.to_dict() for ad in effective.add_dirs]
+    return resource_set_from_entries(entries, stage, venue, workdir=workdir, kind=kind)
+
+
 #: Elements whose text the engine itself executes verbatim; an unresolved command
 #: sourced from one of them is a fixed text a reviewer can vouch for once.
 ENGINE_EXECUTED_ORIGINS = frozenset({"verify_command", "negative_control", "final_check"})
@@ -261,6 +320,26 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
 
 def _resource_to_dict(res: _resources.Resource) -> dict:
     return dataclasses.asdict(res)
+
+
+_RESOURCE_CLASSES = {
+    cls.kind: cls for cls in (
+        _resources.FileResource, _resources.VcsRefResource, _resources.SpecialistResource,
+        _resources.ServiceResource, _resources.DatasetResource,
+    )
+}
+
+
+def resource_from_dict(data: dict) -> _resources.Resource:
+    """The inverse of `_resource_to_dict`: rebuild the typed resource a record carries.
+    Raises `ValueError` on an unknown kind or a field the class does not have."""
+    cls = _RESOURCE_CLASSES.get(data.get("kind"))
+    if cls is None:
+        raise ValueError(f"unknown resource kind {data.get('kind')!r}")
+    try:
+        return cls(**data)
+    except TypeError as exc:
+        raise ValueError(f"malformed {data.get('kind')} resource: {exc}") from exc
 
 
 def _resolution_to_dict(res: Resolution, *, label: str, label_key: str = "rule") -> dict:

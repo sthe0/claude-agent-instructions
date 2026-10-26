@@ -2186,12 +2186,17 @@ def norm_handoff_record(
     engine_grants: "list[dict] | None",
     *,
     store,
+    workdir: "str | None" = None,
 ) -> "dict | None":
     """The handoff record for the stage this spawn works for, or `None` when the
     session, its plan or the stage is unavailable (the spawn is then not linked).
     Writes nothing: the caller writes the record (`norm_handoff.write_record`) once the
     brief has assembled. Same in-process engine seam as
-    `load_engine_stage_grants`; never touches the parent session's state file."""
+    `load_engine_stage_grants`; never touches the parent session's state file.
+    `workdir` is where the child runs: the kind baseline's FileResource is rooted there."""
+    from agentctl import plan_resources
+    from agentctl.state import CheckVenue
+
     state = store.load(session_id)
     if state is None:
         return None
@@ -2203,6 +2208,10 @@ def norm_handoff_record(
         closure = stage_closure_digest(doc, stage_index)
     except PlanError:
         closure = None
+    resource_set = plan_resources.resource_set_from_entries(
+        engine_grants, state.stage(stage_index), state.resolve_check_venue(CheckVenue.DELIVERY.value),
+        workdir=workdir, kind=kind,
+    ).to_dict()
     return norm_handoff.build_record(
         parent_session=session_id,
         stage_index=stage_index,
@@ -2212,6 +2221,8 @@ def norm_handoff_record(
         depth=depth,
         parent_lineage=(state.parent_link or {}).get("norm_lineage"),
         closure_digest=closure,
+        resources=resource_set["resources"],
+        rule_patterns=resource_set["rule_patterns"],
     )
 
 
@@ -3054,7 +3065,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         try:
             handoff_record = norm_handoff_record(
                 args.session, args.stage_index, args.kind, depth_next, engine_grants,
-                store=handoff_store,
+                store=handoff_store, workdir=workdir,
             )
         except Exception as exc:
             print(f"warning: norm handoff unavailable, spawning unlinked: {exc}", file=sys.stderr)

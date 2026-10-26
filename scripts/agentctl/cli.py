@@ -9551,10 +9551,17 @@ def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -
     # "what kind of grant is this" and invites them to drift apart.
     all_entries = declared_entries + derived_entries + runtime_entries
 
+    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+    resource_set = plan_resources.resource_set_from_entries(
+        all_entries, stage, venue, workdir=venue,
+        kind=stage.spawn_kind() if stage.is_spawn() else None,
+    ).to_dict()
     data = {
         "stage": stage_index,
         "executor": stage.actor.executor,
         "grants": all_entries,
+        "resources": resource_set["resources"],
+        "rule_patterns": resource_set["rule_patterns"],
         "dropped": dropped,
         "error": error,
         "note": note,
