@@ -11,7 +11,7 @@ A change can pass review and its own tests and still break a test far from the f
 
 ## What the rule is
 
-The suite runs twice at most. The candidate runs in an isolated root built by `scripts/instruction-sandbox.sh` (a private clone, a fake HOME, a scrubbed environment: no `AGENTCTL_*`, no `PYTEST_ADDOPTS`, no `PYTHONPATH`). Only when it fails something does the remote tip run in a second root; that baseline is cached per tip sha. Failed test ids are subtracted:
+The suite runs three times at most: the candidate, the remote tip as a baseline, and a rerun of the new failures only. The candidate runs in an isolated root built by `scripts/instruction-sandbox.sh` (a private clone, a fake HOME, a scrubbed environment: no `AGENTCTL_*`, no `PYTEST_ADDOPTS`, no `PYTHONPATH`). Only when it fails something does the remote tip run in a second root; that baseline is cached per tip sha. Failed test ids are subtracted:
 
 - a failure the tip's baseline also has is **absorbed**: it is not this candidate's doing and does not block;
 - a failure the baseline lacks is rerun once on its own and blocks when it fails again; one that passes on the rerun makes the run UNAVAILABLE (flaky), not admitted.
@@ -36,7 +36,7 @@ A landing that changes only `.md` files under `memory-global/` or `docs/` is exe
 
 ## Cost
 
-A landing that needs the suite pays its wall-clock inside the `land-branch.py` call, with a second run when the candidate has failures to compare with the tip. Callers that wrap the landing with a short timeout must expect that, or run `suite-gate.py run` first and land the recorded commit.
+A landing that needs the suite pays its wall-clock inside the `land-branch.py` call: one run when the candidate is clean; when it has failures, also a baseline run on the tip (skipped when that tip's baseline is cached) and a rerun of the failures the baseline lacks, so up to three runs. Callers that wrap the landing with a short timeout must expect that, or run `suite-gate.py run` first and land the recorded commit.
 
 ## Not covered
 
