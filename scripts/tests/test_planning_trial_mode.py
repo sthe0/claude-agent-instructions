@@ -136,6 +136,27 @@ def test_rows_describe_what_the_engine_wrote(arms):
     assert pcr.check_trial(doc, arms) == []
 
 
+def test_review_passes_survive_the_arm_plan_being_gone(arms):
+    """A stage pass the engine carried forward from an earlier version at the arm's own path still counts
+    against the copied plan, after the arm's plan file is gone."""
+    for arm in pcr.ARMS:
+        Path(json.loads((arms / arm / "state.json").read_text(encoding="utf-8"))["plan_path"]).unlink()
+    state = json.loads((arms / "risk" / "state.json").read_text(encoding="utf-8"))
+    state["plan_stage_reviews"]["stage:1"]["plan_sha256"] = "0" * 64
+    (arms / "risk" / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    doc = trial(arms)
+    control, risk = doc["arms"]["control"], doc["arms"]["risk"]
+    assert (control["stop_reason"], risk["stop_reason"]) == ("admissible", "elaborated")
+    assert control["blockers"] == [] and risk["blockers"] == [] and risk["lazy_pending"] == []
+
+
+def test_spawn_row_without_spawner_session_counts_by_session_id(arms):
+    row = {k: v for k, v in spawn_row(CONTROL_SESSION, EARLY, 1.0).items() if k != "spawner_session"}
+    (arms / "control" / "ledger.jsonl").write_text(json.dumps(dict(row, session_id=CONTROL_SESSION)) + "\n",
+                                                   encoding="utf-8")
+    assert trial(arms)["arms"]["control"]["thinker_spawn_h_total"] == 1.0
+
+
 def test_unelaborated_risk_arm_stops_at_cap(arms):
     sc_state = json.loads((arms / "risk" / "state.json").read_text(encoding="utf-8"))
     sc_state["plan_stage_reviews"] = {}

@@ -372,7 +372,7 @@ TRIAL_FORMULA = {
                    "arm reached its condition (cap is the review-act budget the run was given)",
     "review_acts": "counted acts (lib.review_cycles.is_act) before the first approve event are to_admissible, "
                    "after it deferred; an arm that never approved has no deferred acts",
-    "thinker_spawn_h": "spawn-cost ledger rows of kind thinker whose spawner_session is the arm's session, "
+    "thinker_spawn_h": "spawn-cost ledger rows of kind thinker whose spawner_session (else session_id) is the arm's session, "
                        "duration_ms / 3.6e6, split at the ts of the first approve event",
     "late_r": "concerns the classifier put on axis R that were raised after the first approve event",
     "judge_r_v": "defects of axes R and V the blind judge found in the plan rendered by judge-view",
@@ -433,6 +433,11 @@ def gate_facts(state_text: str, plan: Path) -> tuple[bool, list[str], list[int],
     import os
     from agentctl import gates
     from agentctl.state import SessionState
+    # Review records bind to the plan path the arm wrote; rebound to the copy here, or a recorded pass
+    # reads as missing once the arm's own plan file is gone.
+    recorded = json.loads(state_text).get("plan_path")
+    if recorded:
+        state_text = state_text.replace(json.dumps(recorded)[1:-1], json.dumps(str(plan))[1:-1])
     state = SessionState.from_json(state_text)
     state.plan_path = str(plan)
     saved = os.environ.get("AGENTCTL_PLAN_REVIEW")
@@ -484,7 +489,10 @@ def arm_row(arm: str, arm_dir: Path) -> list:
     deferred_acts = sum(1 for i, _ in acts if cut is not None and i > cut)
     hours = [0.0, 0.0]
     for item in ledger:
-        if item.get("event") != "spawn" or item.get("kind") != "thinker" or item.get("spawner_session") != session:
+        # A spawn made without --session outside a linked contour has no spawner_session; its session_id
+        # is then the harness session that ran spawn-specialist, the arm's root.
+        spawner = item.get("spawner_session") or item.get("session_id")
+        if item.get("event") != "spawn" or item.get("kind") != "thinker" or spawner != session:
             continue
         ts = parse_ts(item.get("ts"))
         late = cut_ts is not None and ts is not None and ts > cut_ts
