@@ -119,3 +119,14 @@ def test_is_plan_file_true(path):
 )
 def test_is_plan_file_false(path):
     assert is_plan_file(path) is False
+
+
+def test_is_plan_file_under_config_dir_home_of_any_name(tmp_path, monkeypatch):
+    # a home set by CLAUDE_CONFIG_DIR keeps its plans/ a plan directory even when the home
+    # is named neither .claude nor .claude-agent; a sibling of plans/ stays an ordinary file
+    home = tmp_path / "arm-home"
+    (home / "plans").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    assert is_plan_file(str(home / "plans" / "task" / "plan.toml")) is True
+    assert is_plan_file(str(home / "plans-old" / "plan.toml")) is False
+    assert is_plan_file(str(home / "notes" / "plan.toml")) is False

@@ -18,7 +18,8 @@ Changing a plan during execution is a *difficulty* to be overcome reflexively
 not an in-place edit. That node-aware rule lives in hook-state-gate.py;
 ``is_plan_file`` below just identifies a plan path so the gate can apply it —
 it recognizes both the legacy and isolated-root plan directories so a plan is
-gated correctly on either layout, including mid-migration.
+gated correctly on either layout, including mid-migration, and the resolved
+config root's plans_dir() for a home of any other name.
 
 Memory-substring precision (the subtle part): the three memory scopes live at
 distinct path fragments, and ``/memory/`` does NOT match the other two — so all
@@ -162,9 +163,13 @@ def is_plan_file(path: str) -> bool:
     the isolated-root ~/.claude-agent/plans/, or a linked child's own plan (the
     canonical path only — see is_own_plan_file). Such files are gated, but the gate
     applies a node-aware rule (writable only at a planning-position node) instead
-    of the standard EXECUTING-only rule."""
+    of the standard EXECUTING-only rule. The resolved config root's own plans_dir()
+    counts too, so a home set by CLAUDE_CONFIG_DIR / CLAUDE_AGENT_HOME that is named
+    neither .claude nor .claude-agent keeps a writable plan directory."""
     p = path or ""
-    return any(seg in p for seg in _PLAN_SUBSTRINGS) or is_own_plan_file(p) is not None
+    if any(seg in p for seg in _PLAN_SUBSTRINGS) or is_own_plan_file(p) is not None:
+        return True
+    return bool(p) and _under(os.path.realpath(p), os.path.realpath(config_root.plans_dir()))
 
 
 def is_gated_path(path: str) -> bool:
