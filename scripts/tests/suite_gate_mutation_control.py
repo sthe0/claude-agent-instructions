@@ -45,7 +45,13 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 GITHOOKS_DIR = SCRIPTS_DIR.parent / "githooks"
 LIB = "scripts/lib/suite_gate.py"
 SHARED = "scripts/lib/landing_gate.py"
+HOOK = "githooks/pre-push"
+LAND = "scripts/land-branch.py"
 TESTS = "tests/test_suite_gate.py"
+LAND_TESTS = "tests/test_land_branch_suite_gate.py"
+SMOKE_LAND_TESTS = "tests/test_land_branch_smoke_gate.py"
+SUITE_HOOK_LINE = 'printf \'%s\\n\' "$STDIN" | python3 "$HERE/../scripts/suite-gate.py" pre-push "$@" || suite=$?'
+HOOK_VERDICT = '[ "$smoke" -eq 0 ] && [ "$suite" -eq 0 ]'
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
 CONTROL_RED = 7
@@ -62,8 +68,8 @@ class Mutant:
     ids: "tuple[str, ...]"
 
 
-def _ids(*names: str) -> "tuple[str, ...]":
-    return tuple(f"{TESTS}::{name}" for name in names)
+def _ids(*names: str, module: str = TESTS) -> "tuple[str, ...]":
+    return tuple(f"{module}::{name}" for name in names)
 
 
 CATALOGUE: "dict[str, Mutant]" = {
@@ -284,6 +290,104 @@ CATALOGUE: "dict[str, Mutant]" = {
         "        if decision.kind == EXEMPT:",
         "        if False:",
         _ids("test_pre_push_lets_a_docs_only_landing_through_and_names_the_files"),
+    ),
+    "suite-land-runs-gate": Mutant(
+        LAND,
+        "        refusal, suite_line = _suite_gate(repo_root, assessment, remote_tip, suite_timeout, suite_waiver, suite_runner)",
+        '        refusal, suite_line = None, "SUITE: not required (repository has no suite gate)"',
+        _ids(
+            "test_a_code_diff_runs_the_suite_and_lands_on_pass",
+            "test_a_new_failure_refuses_names_it_and_pushes_nothing",
+            module=LAND_TESTS,
+        ),
+    ),
+    "suite-land-refusal-stops": Mutant(
+        LAND,
+        "    if not decision.admitted:\n        return f\"suite gate: {decision.line.removeprefix('SUITE: ')}\", None",
+        "    if False:\n        return f\"suite gate: {decision.line.removeprefix('SUITE: ')}\", None",
+        _ids(
+            "test_a_new_failure_refuses_names_it_and_pushes_nothing",
+            "test_a_refused_suite_stops_before_the_smoke_launch",
+            module=LAND_TESTS,
+        ),
+    ),
+    "suite-land-error-refuses": Mutant(
+        LAND,
+        '        return f"suite gate: {gate.one_line(exc, 400)}", None',
+        '        return None, "SUITE: not required (repository has no suite gate)"',
+        _ids(
+            "test_a_gate_crash_refuses_and_pushes_nothing",
+            "test_a_runner_crash_refuses_and_pushes_nothing",
+            module=LAND_TESTS,
+        ),
+    ),
+    "suite-land-waiver-wired": Mutant(
+        LAND,
+        "runner=runner, timeout_s=timeout_s, waiver=waiver,",
+        "runner=runner, timeout_s=timeout_s, waiver=None,",
+        _ids("test_an_unavailable_suite_needs_a_waiver_to_land", module=LAND_TESTS),
+    ),
+    "suite-land-timeout-wired": Mutant(
+        LAND,
+        "runner=runner, timeout_s=timeout_s, waiver=waiver,",
+        "runner=runner, timeout_s=None, waiver=waiver,",
+        _ids("test_the_suite_timeout_reaches_the_runner", module=LAND_TESTS),
+    ),
+    "suite-land-tip-wired": Mutant(
+        LAND,
+        "repo_root, assessment.branch_sha, tip, runner=runner,",
+        "repo_root, assessment.branch_sha, assessment.branch_sha, runner=runner,",
+        _ids("test_suite_gate_gets_the_fetched_remote_tip", module=LAND_TESTS),
+    ),
+    "suite-land-ancestry-refuses": Mutant(
+        LAND,
+        "        if not gate.is_ancestor(repo_root, tip, sha):",
+        "        if False:",
+        (
+            *_ids("test_a_remote_tip_the_branch_lacks_is_refused_before_any_suite_run", module=LAND_TESTS),
+            *_ids(
+                "test_a_remote_tip_the_branch_lacks_is_refused_before_any_launch",
+                module=SMOKE_LAND_TESTS,
+            ),
+        ),
+    ),
+    "suite-hook-runs-suite-gate": Mutant(
+        HOOK,
+        SUITE_HOOK_LINE,
+        "suite=0",
+        _ids("test_the_hook_refuses_a_push_without_a_suite_record_and_admits_one_with_it", module=LAND_TESTS),
+    ),
+    "suite-hook-runs-both-gates": Mutant(
+        HOOK,
+        'printf \'%s\\n\' "$STDIN" | python3 "$HERE/../scripts/instruction-smoke-gate.py" pre-push "$@" || smoke=$?',
+        'exec python3 "$HERE/../scripts/instruction-smoke-gate.py" pre-push "$@"',
+        _ids(
+            "test_the_hook_names_both_gates_and_never_execs_one_of_them",
+            "test_the_hook_reports_both_refusals_of_one_push",
+            module=LAND_TESTS,
+        ),
+    ),
+    "suite-hook-keeps-smoke-refusal": Mutant(
+        HOOK,
+        HOOK_VERDICT,
+        '[ "$suite" -eq 0 ]',
+        _ids("test_the_hook_refuses_when_only_the_smoke_gate_refuses", module=LAND_TESTS),
+    ),
+    "suite-hook-keeps-suite-refusal": Mutant(
+        HOOK,
+        HOOK_VERDICT,
+        '[ "$smoke" -eq 0 ]',
+        _ids("test_the_hook_refuses_a_push_without_a_suite_record_and_admits_one_with_it", module=LAND_TESTS),
+    ),
+    "suite-hook-stdin-shared": Mutant(
+        HOOK,
+        SUITE_HOOK_LINE,
+        'python3 "$HERE/../scripts/suite-gate.py" pre-push "$@" || suite=$?',
+        _ids(
+            "test_the_hook_refuses_a_push_without_a_suite_record_and_admits_one_with_it",
+            "test_the_hook_reports_both_refusals_of_one_push",
+            module=LAND_TESTS,
+        ),
     ),
 }
 

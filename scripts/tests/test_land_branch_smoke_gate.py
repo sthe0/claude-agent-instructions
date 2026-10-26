@@ -259,7 +259,7 @@ def test_a_remote_tip_the_branch_lacks_is_refused_before_any_launch(world, capsy
     runner = Counting()
     code, _, err = land(world, capsys, runner=runner)
     assert code == 2 and runner.calls == 0
-    assert "not an ancestor" in err
+    assert "is not an ancestor of 'feature'" in err
     assert remote_main(world) == tip
 
 

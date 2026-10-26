@@ -303,13 +303,16 @@ def _resolve_land_branch(argv: list[str], venue_real: str):
     `<remote> <trunk>` (a tracking-ref write), writes the smoke record under
     the git common dir (so the common-dir write holds even with
     `--remote-only`), and may run one live `claude -p` launch (a `spend`
-    service). All three are named below."""
+    service). All three are named below; the suite gate adds no resource of
+    its own: its records live in the same common dir and its run is a local
+    subprocess."""
     from .tool_contracts import Resolution  # deferred: see module docstring
 
     parsed = _parse_flags(
         argv,
         {"--check", "--remote-only", "--keep-branch"},
-        {"-C", "--branch", "--trunk", "--remote", "--smoke-waiver", "--smoke-timeout", "--smoke-model"},
+        {"-C", "--branch", "--trunk", "--remote", "--smoke-waiver", "--smoke-timeout", "--smoke-model",
+         "--suite-waiver", "--suite-timeout"},
         "land-branch.py",
     )
     if isinstance(parsed, Resolution):

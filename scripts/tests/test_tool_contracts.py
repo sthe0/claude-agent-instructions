@@ -485,6 +485,17 @@ def test_land_branch_dash_c_resolved_against_venue_not_engine_cwd(tmp_path, monk
     assert "different checkout" in (r.reason or ""), r.reason
 
 
+def test_land_branch_resolver_knows_the_suite_gate_flags(tmp_path):
+    tc = _tool_contracts_module()
+    venue = _land_branch_registry_venue(tmp_path)
+    cmd = ("python3 scripts/land-branch.py --branch feature --keep-branch "
+           "--suite-waiver 'runner down' --suite-timeout 60")
+
+    res = tc.resolve_command(cmd, str(venue.resolve()))
+
+    assert res.status == "resolved", res
+
+
 def _suite_gate_registry_venue(tmp_path):
     """A venue with `scripts/suite-gate.py` copied verbatim, so its sha256 matches the pinned entry."""
     venue = tmp_path / "venue"
