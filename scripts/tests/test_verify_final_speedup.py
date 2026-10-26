@@ -300,9 +300,11 @@ def test_r1_older_final_check_without_cacheable_loads_as_false():
 def _real_runner(monkeypatch, runner, *, parallel, budget):
     """Route the engine's own (runner=None) subprocess path through `runner`."""
     monkeypatch.setattr(cli, "subprocess_runner", runner)
-    monkeypatch.setattr("agentctl.check_cache.system_probe", lambda: (12, 0.0))
-    monkeypatch.setenv(check_cache.PARALLEL_ENV, str(parallel))
-    monkeypatch.setenv(check_cache.CPU_BUDGET_ENV, str(budget))
+    # Literal env names, no check_cache attribute: a behaviour test must reach the
+    # engine only through the CLI, so at a tree without check_cache it fails on its
+    # own assertion. The budget override makes the machine's load irrelevant.
+    monkeypatch.setenv("AGENTCTL_VERIFY_FINAL_PARALLEL", str(parallel))
+    monkeypatch.setenv("AGENTCTL_VERIFY_FINAL_CPU_BUDGET", str(budget))
 
 
 def _two_checks(store, sid, cmd_a="make a", cmd_b="make b"):
@@ -329,7 +331,7 @@ def test_r5_parallel_one_is_serial(store, monkeypatch):
 
 def test_r5_injected_runner_is_always_serial(store, monkeypatch):
     _two_checks(store, "r5-inject")
-    monkeypatch.setenv(check_cache.PARALLEL_ENV, "4")
+    monkeypatch.setenv("AGENTCTL_VERIFY_FINAL_PARALLEL", "4")
     runner = _Runner(delay=0.1)
     assert _verify(store, "r5-inject", runner).ok is True
     assert runner.peak == 1
