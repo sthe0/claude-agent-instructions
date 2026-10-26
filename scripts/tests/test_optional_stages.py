@@ -1441,7 +1441,7 @@ def test_a_reset_session_on_the_same_order_cannot_self_approve_the_declined_stag
                     force=True)
     assert reset["ok"] is True, reset
     assert eng.state("u1").declined_issues == []
-    eng.run("classify", session="u1", architectural=True, files=5, changed_lines=200,
+    eng.run("classify", session="u1", architectural=True, changed_lines=200,
             wall_clock_min=60)
     eng.run("plan", session="u1")
     assert eng.run("submit_plan", session="u1", plan=plan)["marker"] == "PLAN-READY"
@@ -1543,7 +1543,7 @@ def test_a_reset_session_cannot_self_approve_a_declined_stage_that_became_requir
     required = _required_variant(eng)
     assert eng.run("reset", session="u1", task="task-u1-again", goal="g", done_criterion="dc",
                    force=True)["ok"] is True
-    eng.run("classify", session="u1", architectural=True, files=5, changed_lines=200,
+    eng.run("classify", session="u1", architectural=True, changed_lines=200,
             wall_clock_min=60)
     eng.run("plan", session="u1")
     assert eng.run("submit_plan", session="u1", plan=required)["marker"] == "PLAN-READY"
@@ -1560,7 +1560,7 @@ def _submit_in_fresh_session(eng, sid, plan, *, reset, tag):
         return eng.open(sid, plan)
     assert eng.run("reset", session=sid, task=f"task-{sid}-{tag}", goal="g",
                    done_criterion="dc", force=True)["ok"] is True
-    eng.run("classify", session=sid, architectural=True, files=5, changed_lines=200,
+    eng.run("classify", session=sid, architectural=True, changed_lines=200,
             wall_clock_min=60)
     eng.run("plan", session=sid)
     return eng.run("submit_plan", session=sid, plan=plan)

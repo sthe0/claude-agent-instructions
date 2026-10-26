@@ -29,8 +29,8 @@ _inject = _cli._inject_default_session
 
 
 def test_injects_when_absent():
-    out = _inject(["classify", "--files", "4"], "harness-xyz")
-    assert out == ["classify", "--files", "4", "--session", "harness-xyz"]
+    out = _inject(["classify", "--changed-lines", "4"], "harness-xyz")
+    assert out == ["classify", "--changed-lines", "4", "--session", "harness-xyz"]
 
 
 def test_noop_when_session_space_form_present():
@@ -44,13 +44,13 @@ def test_noop_when_session_equals_form_present():
 
 
 def test_noop_when_harness_empty():
-    argv = ["classify", "--files", "4"]
+    argv = ["classify", "--changed-lines", "4"]
     assert _inject(argv, "") == argv
     assert _inject(argv, None) == argv
 
 
 def test_returns_a_copy_not_the_same_list():
-    argv = ["classify", "--files", "4"]
+    argv = ["classify", "--changed-lines", "4"]
     out = _inject(argv, "harness-xyz")
     assert out is not argv
     # no-op branches must also return a fresh list, never the caller's object
@@ -58,12 +58,12 @@ def test_returns_a_copy_not_the_same_list():
 
 
 def test_parse_args_over_injected_argv_yields_harness_session():
-    raw = _inject(["classify", "--files", "4", "--changed-lines", "35"], "harness-xyz")
+    raw = _inject(["classify", "--changed-lines", "35"], "harness-xyz")
     args = _cli.build_parser().parse_args(raw)
     assert args.session == "harness-xyz"
 
 
 def test_parse_args_keeps_explicit_session_over_harness():
-    raw = _inject(["classify", "--files", "4", "--session", "chosen-id"], "harness-xyz")
+    raw = _inject(["classify", "--changed-lines", "4", "--session", "chosen-id"], "harness-xyz")
     args = _cli.build_parser().parse_args(raw)
     assert args.session == "chosen-id"

@@ -50,6 +50,11 @@ PLAN = "agentctl/plan.py"
 CLI = "agentctl/cli.py"
 GATES = "agentctl/gates.py"
 T_OPTIONAL = "tests/test_optional_stages.py"
+INLINE = "agentctl/inline_class.py"
+CLASSIFY = "agentctl/classify.py"
+T_INLINE = "tests/test_inline_class.py"
+T_INLINE_MEASURE = "tests/test_inline_measure.py"
+T_CLASSIFY = "tests/test_classify.py"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
 CONTROL_RED = 7
@@ -627,6 +632,55 @@ CATALOGUE: "dict[str, Mutant]" = {
         "            if rules.digest_counts_as_delivered(store.read_digests(mid).get(cycle_id)):\n",
         "            if False:\n",
         _ids(T_NOTIFIER, "test_redeliver_digest_is_idempotent_for_a_delivered_digest"),
+    ),
+    "inline-test-exclusion": Mutant(
+        INLINE,
+        "        and not _matches_any(path, TEST_PATTERNS)\n",
+        "",
+        _ids(
+            T_INLINE,
+            "test_a_test_file_is_excluded",
+            "test_a_scripts_tests_helper_is_excluded",
+            "test_exclusion_reasons_are_reported",
+        )
+        + _ids(T_INLINE_MEASURE, "test_json_counts_only_hand_written_production_lines"),
+    ),
+    "inline-generated-exclusion": Mutant(
+        INLINE,
+        "        and path not in generated\n",
+        "",
+        _ids(T_INLINE, "test_a_generated_path_is_excluded", "test_exclusion_reasons_are_reported")
+        + _ids(T_INLINE_MEASURE, "test_json_counts_only_hand_written_production_lines"),
+    ),
+    "inline-bound-comparison": Mutant(
+        INLINE,
+        "    return lines <= bound",
+        "    return lines < bound",
+        _ids(T_INLINE, "test_equality_at_the_bound_is_within_and_one_over_is_not")
+        + _ids(T_CLASSIFY, "test_changed_lines_at_the_bound_is_a_small_change"),
+    ),
+    "inline-binary-failsafe": Mutant(
+        INLINE,
+        "    if measured.binary_paths:\n        return False\n",
+        "    if False:\n        return False\n",
+        _ids(T_INLINE, "test_a_counted_binary_file_is_never_within_the_bound"),
+    ),
+    "inline-reason-source": Mutant(
+        CLASSIFY,
+        "reasons.append(inline_class.small_change_reason(thr.small_change_max_lines))",
+        'reasons.append("small change")',
+        _ids(T_CLASSIFY, "test_the_small_change_reason_carries_the_definition_and_the_bound"),
+    ),
+    "inline-memory-exclusion": Mutant(
+        INLINE,
+        "        and not _matches_any(path, MEMORY_PATTERNS)\n",
+        "",
+        _ids(
+            T_INLINE,
+            "test_a_memory_leaf_excluded",
+            "test_an_experience_leaf_is_excluded",
+            "test_exclusion_reasons_are_reported",
+        ),
     ),
 }
 

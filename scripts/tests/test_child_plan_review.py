@@ -412,7 +412,7 @@ def _covered(command: list[str]) -> bool:
 
 def _own_up_to_review(contour) -> None:
     for step in (
-        ("classify", "--architectural", "--files", "5", "--changed-lines", "200",
+        ("classify", "--architectural", "--changed-lines", "200",
          "--wall-clock-min", "60"),
         ("plan",),
         ("submit-plan", "--plan", contour.plan),

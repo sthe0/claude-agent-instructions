@@ -104,7 +104,7 @@ def _two_changed_commands(eng, venue, *, first_review: str = "pass"):
     fast = approved_order(eng, _two_cmd_plan(venue, "frobnicate --fast", "grind --fast"))
     assert thinker_review(eng, "u1", fast)["ok"] is True
     eng.run("start", session="t1", task="task-t1", goal="g", done_criterion="dc")
-    eng.run("classify", session="t1", architectural=True, files=5, changed_lines=200, wall_clock_min=60)
+    eng.run("classify", session="t1", architectural=True, changed_lines=200, wall_clock_min=60)
     eng.run("plan", session="t1")
     eng.run("submit_plan", session="t1", plan=fast)
     assert thinker_review(eng, "t1", fast, first_review)["ok"] is True

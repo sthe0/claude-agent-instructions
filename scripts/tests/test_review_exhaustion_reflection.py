@@ -501,7 +501,7 @@ def test_backstop_crossing_is_disclosed_after_the_session_is_reset_and_a_user_de
     reset = eng.run("reset", session="a1", task="task-a1", goal="g", done_criterion="dc", force=True)
     assert reset["ok"] is True, reset
     assert not crossings(eng, "a1")
-    eng.run("classify", session="a1", architectural=True, files=5, changed_lines=200,
+    eng.run("classify", session="a1", architectural=True, changed_lines=200,
             wall_clock_min=60)
     eng.run("plan", session="a1")
     assert action(eng.run("submit_plan", session="a1", plan=plan)) == "self_approve"

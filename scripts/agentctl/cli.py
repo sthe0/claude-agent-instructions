@@ -4611,7 +4611,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     sig = Signals(
         is_chat=bool(getattr(args, "chat", False)),
         changed_lines=int(getattr(args, "changed_lines", 0) or 0),
-        files=int(getattr(args, "files", 1) or 1),
+        cohesive=not bool(getattr(args, "not_cohesive", False)),
         wall_clock_min=int(getattr(args, "wall_clock_min", 0) or 0),
         tracker_key=getattr(args, "tracker_key", None),
         architectural=bool(getattr(args, "architectural", False)),
@@ -14224,11 +14224,16 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
 
     sp = add("classify"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")
-    sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0)
-    sp.add_argument("--files", type=int, default=1)
+    sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0,
+                    help="hand-written production lines of the change (tests, generated files and "
+                         "memory leaves excluded); measure with scripts/inline-measure.py")
+    sp.add_argument("--not-cohesive", dest="not_cohesive", action="store_true",
+                    help="the change is not one cohesive change (a module and its tests)")
     sp.add_argument("--wall-clock-min", dest="wall_clock_min", type=int, default=0)
     sp.add_argument("--tracker-key", dest="tracker_key", default=None)
-    sp.add_argument("--architectural", action="store_true")
+    sp.add_argument("--architectural", action="store_true",
+                    help="a design decision (more than one reasonable solution) or an "
+                         "architectural change")
     sp.add_argument("--external-effect", dest="external_effect", action="store_true")
     sp.add_argument("--new-dependency", dest="new_dependency", action="store_true")
     sp.add_argument("--public-api-change", dest="public_api_change", action="store_true")
@@ -14764,11 +14769,16 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     # --approved-by (the gate-cross token) + the M1–M4 partition markers.
     sp = add("drive"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")
-    sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0)
-    sp.add_argument("--files", type=int, default=1)
+    sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0,
+                    help="hand-written production lines of the change (tests, generated files and "
+                         "memory leaves excluded); measure with scripts/inline-measure.py")
+    sp.add_argument("--not-cohesive", dest="not_cohesive", action="store_true",
+                    help="the change is not one cohesive change (a module and its tests)")
     sp.add_argument("--wall-clock-min", dest="wall_clock_min", type=int, default=0)
     sp.add_argument("--tracker-key", dest="tracker_key", default=None)
-    sp.add_argument("--architectural", action="store_true")
+    sp.add_argument("--architectural", action="store_true",
+                    help="a design decision (more than one reasonable solution) or an "
+                         "architectural change")
     sp.add_argument("--external-effect", dest="external_effect", action="store_true")
     sp.add_argument("--new-dependency", dest="new_dependency", action="store_true")
     sp.add_argument("--public-api-change", dest="public_api_change", action="store_true")

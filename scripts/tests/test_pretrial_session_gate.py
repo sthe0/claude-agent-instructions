@@ -75,7 +75,7 @@ def _drive_engine_to_executing(home: Path) -> None:
     """Engine session E reaches EXECUTING through verbs run by harness session H."""
     for argv in (
         ("start", "--session", ENGINE, "--task", "driven", "--goal", "goal"),
-        ("classify", "--session", ENGINE, "--files", "1", "--changed-lines", "5"),
+        ("classify", "--session", ENGINE, "--changed-lines", "5"),
         ("next-stage", "--session", ENGINE),
     ):
         proc = _agentctl(home, *argv)
@@ -109,7 +109,7 @@ def test_i427_no_session_mismatch_warning_for_bound_session(tmp_path):
     first = _agentctl(tmp_path, "start", "--session", ENGINE, "--task", "driven", "--goal", "goal")
     assert first.returncode == 0, f"setup: start failed: {first.stdout[-300:]}"
 
-    second = _agentctl(tmp_path, "classify", "--session", ENGINE, "--files", "1", "--changed-lines", "5")
+    second = _agentctl(tmp_path, "classify", "--session", ENGINE, "--changed-lines", "5")
 
     assert second.returncode == 0, f"setup: classify failed: {second.stdout[-300:]}"
     warnings = _session_mismatch_warnings(second.stderr)
@@ -133,7 +133,7 @@ def _drive_to_executing(home: Path, session: str | None, harness: str | None = H
     target = ("--session", session) if session else ()
     for argv in (
         ("start", *target, "--task", "driven", "--goal", "goal"),
-        ("classify", *target, "--files", "1", "--changed-lines", "5"),
+        ("classify", *target, "--changed-lines", "5"),
         ("next-stage", *target),
     ):
         proc = _agentctl(home, *argv, harness=harness)
@@ -185,7 +185,7 @@ def test_driven_sessions_lists_every_bound_session_most_recent_first(tmp_path, m
     for session in ("engine-a", "engine-b", "engine-c"):
         started = _agentctl(tmp_path, "start", "--session", session, "--task", "t", "--goal", "g")
         assert started.returncode == 0, f"setup: start failed: {started.stdout[-300:]}"
-    classified = _agentctl(tmp_path, "classify", "--session", "engine-a", "--files", "1", "--changed-lines", "5")
+    classified = _agentctl(tmp_path, "classify", "--session", "engine-a", "--changed-lines", "5")
     assert classified.returncode == 0, f"setup: classify failed: {classified.stdout[-300:]}"
     _state_file(tmp_path, "engine-b").unlink()
     _use_home(monkeypatch, tmp_path)
@@ -198,7 +198,7 @@ def test_driven_sessions_lists_every_bound_session_most_recent_first(tmp_path, m
 def test_pending_substantive_session_blocks_release_via_side_session(tmp_path):
     started = _agentctl(tmp_path, "start", "--session", "engine-plan", "--task", "t", "--goal", "g")
     assert started.returncode == 0, f"setup: start failed: {started.stdout[-300:]}"
-    classified = _agentctl(tmp_path, "classify", "--session", "engine-plan", "--files", "9",
+    classified = _agentctl(tmp_path, "classify", "--session", "engine-plan",
                            "--changed-lines", "900")
     assert classified.returncode == 0, f"setup: classify failed: {classified.stdout[-300:]}"
     plan_file = _state_file(tmp_path, "engine-plan")
@@ -233,7 +233,7 @@ def test_own_substantive_session_blocks_release_via_side_session(tmp_path):
     # exception: here H is bound to itself by the verbs it runs through the CLI.
     for argv in (
         ("start", "--task", "t", "--goal", "g"),
-        ("classify", "--files", "9", "--changed-lines", "900"),
+        ("classify", "--changed-lines", "900"),
     ):
         proc = _agentctl(tmp_path, *argv)
         assert proc.returncode == 0, f"setup: {argv[0]} failed: {proc.stdout[-300:]}"
@@ -260,7 +260,7 @@ def _pending_session_then_side_executing(home: Path, pending_node: str) -> Path:
     `engine-side` session at EXECUTING. Returns the pending session's state file."""
     for argv in (
         ("start", "--session", "engine-plan", "--task", "t", "--goal", "g"),
-        ("classify", "--session", "engine-plan", "--files", "9", "--changed-lines", "900"),
+        ("classify", "--session", "engine-plan", "--changed-lines", "900"),
     ):
         proc = _agentctl(home, *argv)
         assert proc.returncode == 0, f"setup: {argv[0]} failed: {proc.stdout[-300:]}"

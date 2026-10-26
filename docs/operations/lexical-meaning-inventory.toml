@@ -433,6 +433,31 @@ ground = "re.sub escapes every run of three or more double quotes inside a multi
 hits = 1
 reviewed_by = "coordinator"
 
+[sites."scripts/agentctl/inline_class.py::_glob_re::re.compile"]
+class = "structural"
+ground = "Compiles a path glob (*, **, ?) from the fixed TEST_PATTERNS and MEMORY_PATTERNS lists into an anchored regex, a path-syntax match with no free-text meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/inline_class.py::_matches_any::pattern.match"]
+class = "structural"
+ground = "Matches a changed file's path against the fixed path-glob lists that mark test and memory-leaf files, a path-syntax match."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/inline_class.py::_token_re::re.compile"]
+class = "structural"
+ground = "Compiles a word-bounded literal match of one fixed criterion token (CRITERIA) in a surface's text, a token-presence check."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/inline_class.py::missing_criteria::pattern.search"]
+class = "structural"
+ground = "Checks that each fixed criterion token from CRITERIA appears literally in a prose surface; it reports a missing token and decides no meaning."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/landed_providers.py::<module>::re.compile"]
 class = "structural"
 ground = "PROVIDER_NAME_RE compiles the plain-identifier syntax of a landed provider name (it becomes a plugin file name)."

@@ -136,7 +136,7 @@ class Eng:
 
     def open(self, sid: str, plan: str, *, task: str | None = None):
         self.run("start", session=sid, task=task or f"task-{sid}", goal="g", done_criterion="dc")
-        self.run("classify", session=sid, architectural=True, files=5, changed_lines=200,
+        self.run("classify", session=sid, architectural=True, changed_lines=200,
                  wall_clock_min=60)
         self.run("plan", session=sid)
         return self.run("submit_plan", session=sid, plan=plan)
@@ -1019,7 +1019,7 @@ def test_e2e_agent_replan_cycle_without_user(eng):
     for step in ("start", "classify", "plan", "submit_plan"):
         flags = {
             "start": dict(task="task-e2e", goal="g", done_criterion="dc"),
-            "classify": dict(architectural=True, files=5, changed_lines=200, wall_clock_min=60),
+            "classify": dict(architectural=True, changed_lines=200, wall_clock_min=60),
             "plan": {},
             "submit_plan": dict(plan=plan),
         }[step]

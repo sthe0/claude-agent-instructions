@@ -37,6 +37,8 @@ EXPECTED_ENTRIES = (
     "refusal-notice-sent", "refusal-notice-throttle", "refusal-notice-file-only-suppresses",
     "refusal-notice-not-a-digest", "blocked-since-breaker-trip", "unblock-command-per-reason",
     "expiry-warning", "redeliver-no-record", "redeliver-record-without-send", "redeliver-not-idempotent",
+    "inline-test-exclusion", "inline-generated-exclusion", "inline-bound-comparison",
+    "inline-binary-failsafe", "inline-reason-source", "inline-memory-exclusion",
 )
 
 
