@@ -37,8 +37,9 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, plugins, text_shape
+from agentctl import checkrun, cli, plugins, text_shape
 from agentctl import state as state_mod
+from agentctl.dispatch import RunResult
 from agentctl.plan import (
     PlanError,
     diff_plans,
@@ -72,6 +73,14 @@ NO_KNOWLEDGE_PLAN = FIXTURES / "submission" / "stage_without_knowledge.toml"
 
 def ns(**kw):
     return Namespace(**kw)
+
+
+@pytest.fixture(autouse=True)
+def _stage_checks_observed_without_running(monkeypatch):
+    """`_PLAN` points repo_root at this repo with `verify_command = "pytest -q"`, so
+    submit-plan's check-run observation would otherwise run the real suite until
+    checkrun's timeout kills it. No test here asserts on that observation."""
+    monkeypatch.setattr(checkrun, "_default_runner", lambda timeout_s: lambda argv: RunResult(0, "", ""))
 
 
 # A minimal SUBSTANTIVE plan that passes today's submission grade. `knowledge_block` is
