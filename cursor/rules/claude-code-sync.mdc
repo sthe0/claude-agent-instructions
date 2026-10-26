@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Claude Code parity (global rule)
 
-**Canonical source:** `~/.claude-agent/CLAUDE.md` (symlink → `~/claude-agent-instructions/CLAUDE.md`). On any conflict — `~/.claude-agent/CLAUDE.md` wins. Read it at the start of a non-trivial conversation. This rule is a thin mirror for the parts Cursor must always see; full text lives in the canonical file and in the linked skills/memory.
+**Canonical source:** `~/.claude-agent/CLAUDE.md` (symlink → `~/claude-agent-instructions/CLAUDE.md`). On any conflict — `~/.claude-agent/CLAUDE.md` wins. Read it at the start of a non-trivial conversation. This rule is a thin mirror for the parts Cursor must always see; full text lives in the canonical file and in the linked skills/memory (shortened CLAUDE.md paragraphs keep their full originals in `memory-global/leaves/claude-md-elaboration.md`).
 
 Edit policy in `~/claude-agent-instructions/`; never patch this rule in isolation.
 

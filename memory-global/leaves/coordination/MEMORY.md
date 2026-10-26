@@ -2,6 +2,7 @@
 
 Pointers to the leaves that govern how the root coordinator reasons, plans, delegates and verifies. The first group is also named inline in `CLAUDE.md`; the second group (reasoning and engineering practices) is read on demand and is not named there. This sub-index exists to keep `memory-global/MEMORY.md` under its byte ceiling and the always-loaded surface small; the root index holds one pointer here. Membership: a leaf belongs here if it states a coordination or reasoning practice rather than a tool or machine fact.
 
+- [CLAUDE.md elaboration](../claude-md-elaboration.md) — the full original wording of CLAUDE.md rule paragraphs whose elaboration was moved out to keep the always-loaded file short; read it when a rule's one-line directive is not enough.
 - [Coordinator objective](../coordinator-objective.md) — what to minimize (cost / tokens / user time and attention / clicks / resolution time) and maximize (autonomy / reliability / controllability / verifiability); how to resolve trade-offs between conflicting axes.
 - [Reasoning and task solving](../reasoning-and-task-solving.md) — understand before acting, plan and approval, when stuck, memory vs prompts, self-check before first production edit.
 - [Workflow debug investigation](../workflow-debug-investigation.md) — ordered checklist for orchestrated pipeline failures: reference baseline, topology/causality, code delta, then infra logs; hypothesis portfolio.
