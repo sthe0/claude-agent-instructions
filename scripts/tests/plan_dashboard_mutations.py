@@ -485,11 +485,11 @@ def _idle_never(original):
 
 
 def _bind_first_found(original):
-    def mutated(engine_session, locator, transcripts_root):
+    def mutated(engine_session, locator, transcripts_root, index=None, transcripts=None):
         attention = importlib.import_module(ATTENTION)
         bound = importlib.import_module("lib.engine_session_binding").harness_sessions_driving(engine_session)
         for candidate in dict.fromkeys([engine_session, *bound]):
-            path = attention.find_transcript(candidate, locator, transcripts_root)
+            path = attention.find_transcript(candidate, locator, transcripts_root, transcripts)
             if path is not None:
                 return candidate, path, bound
         return (max(bound) if bound else None), None, bound
@@ -531,13 +531,31 @@ def _digest_moves(original):
 
 
 def _outside_root_opened(original):
-    def mutated(harness_session, locator, transcripts_root):
-        found = original(harness_session, locator, transcripts_root)
+    def mutated(harness_session, locator, transcripts_root, transcripts=None):
+        found = original(harness_session, locator, transcripts_root, transcripts)
         if found is None and transcripts_root is not None:
             config_root = importlib.import_module("lib.config_root")
             name = config_root.sanitize_session_id(harness_session)
             return next(iter(config_root.iter_transcripts(f"*/{name}.jsonl")), None)
         return found
+    return mutated
+
+
+def _binding_rescan_per_task(original):
+    def mutated(engine_session, locator, transcripts_root, index=None, transcripts=None):
+        return original(engine_session, locator, transcripts_root, None, transcripts)
+    return mutated
+
+
+def _transcript_glob_per_task(original):
+    def mutated(engine_session, locator, transcripts_root, index=None, transcripts=None):
+        return original(engine_session, locator, transcripts_root, index, None)
+    return mutated
+
+
+def _permission_every_tail(original):
+    def mutated(tail):
+        return tail is not None
     return mutated
 
 
@@ -623,13 +641,17 @@ ATTENTION_MUTATIONS = {
     "attention-choice-ignored": (ATTENTION, "waiting_state", _tail_without_pending),
     "attention-no-transcript-reads-none": (ATTENTION, "waiting_state", _missing_transcript_reads_none),
     "attention-idle-never": (ATTENTION, "waiting_state", _idle_never),
-    "attention-bindings-ignored": ("lib.engine_session_binding", "harness_sessions_driving", _always([])),
+    "attention-bindings-ignored": ("lib.engine_session_binding", "harness_index", _always({})),
     "attention-bind-first-found": (ATTENTION, "bind_session", _bind_first_found),
     "attention-chat-never-cut": (ATTENTION, "chat_entry", _chat_never_cut),
     "attention-chat-leaks-input": (ATTENTION, "question_text", _question_is_whole_input),
     "attention-digest-moves": (ATTENTION, "attention_digest", _digest_moves),
     "attention-outside-root-opened": (ATTENTION, "find_transcript", _outside_root_opened),
     "locate-jump-through-shell": (LOCATE, "_run", _jump_through_shell),
+    "attention-binding-rescan": (ATTENTION, "bind_session", _binding_rescan_per_task),
+    "attention-transcript-glob-per-task": (ATTENTION, "bind_session", _transcript_glob_per_task),
+    "attention-permission-every-task": (ATTENTION, "permission_needed", _permission_every_tail),
+    "bench-over-ignored": ("plan_dashboard.bench", "verdict", _always("ok")),
 }
 
 
@@ -790,6 +812,54 @@ TUI_MUTATIONS.update({
     "tui-app-callback-after-exit": (TUI_APP, "deliver", _delivery_unguarded),
     "tui-app-chat-out-of-order": (TUI_APP, "start_chat_read", _chat_reads_not_exclusive),
     "tui-app-loading-title-overwritten": (TUI_APP, "title_is_current", _always(True)),
+})
+
+
+def _table_waits_for_the_overlay(original):
+    async def _load(self):
+        tui_app, model = importlib.import_module(TUI_APP), importlib.import_module("plan_dashboard.model")
+        now, include_all = self.last_collect, self.view.include_all
+        snapshot = await tui_app.in_daemon_thread(lambda: model.collect(
+            self.state_root, now=now, window_hours=self.window_hours, include_all=include_all,
+            sessions=self.sessions, cost_log=self.cost_log))
+        overlay, _ = await tui_app.in_daemon_thread(lambda: tui_app.read_overlay(self, snapshot))
+        self.overlay = overlay if overlay is not None else self.overlay
+        self.snapshot, self.read_at = snapshot, now
+        tui_app.show_table(self, snapshot, now, include_all)
+        self._finish_load()
+
+    original._load = _load
+    return original
+
+
+def _tree_waits_for_the_reload(original):
+    def mutated(app):
+        async def after_the_reload():
+            while app._loading:
+                await importlib.import_module("asyncio").sleep(0.05)
+            original(app)
+
+        app.run_worker(after_the_reload(), group="detail-after-reload")
+    return mutated
+
+
+def _detail_reads_not_exclusive(original):
+    def mutated(app):
+        tui_app = importlib.import_module(TUI_APP)
+        if app.view.tab == "detail" and app.view.selected:
+            if app.view.selected != app.tree_read_for:
+                tui_app.show_tree_loading(app)
+            app.last_detail_read = app.clock()
+            app.run_worker(tui_app.read_detail_for(app, app.view.selected, app.clock()), group="detail")
+    return mutated
+
+
+TUI_MUTATIONS.update({
+    "tui-app-table-waits-overlay": (TUI_APP, "DashboardApp", _table_waits_for_the_overlay),
+    "tui-app-tree-waits-reload": (TUI_APP, "start_detail_read", _tree_waits_for_the_reload),
+    "tui-app-tree-no-placeholder": (TUI_APP, "show_tree_loading", _nothing),
+    "tui-app-detail-out-of-order": (TUI_APP, "start_detail_read", _detail_reads_not_exclusive),
+    "tui-app-tick-cancels-read": (TUI_APP, "read_in_flight", _always(False)),
 })
 
 WEB_PAGE_MUTATIONS.update({

@@ -1198,3 +1198,151 @@ def test_the_loading_title_survives_a_reload_issued_before_the_toggle(tmp_path, 
         assert app.sub_title.startswith(f"all: {len(table_ids(app))} tasks")
 
     run(scenario, root)
+
+
+# --- each read on its own: the table before the marks, the tree apart from the reload ---------
+
+def hold(monkeypatch, module, name, tag=None):
+    """Make every ``module.name`` call from now on wait for the returned event; ``calls`` counts them and,
+    with ``tag``, the n-th call's result passes through ``tag(result, n)``."""
+    release, calls, real = threading.Event(), [], getattr(module, name)
+
+    def slow(*args, **kwargs):
+        calls.append(1)
+        n = len(calls)
+        release.wait(PILOT_DEADLINE_S)
+        result = real(*args, **kwargs)
+        return tag(result, n) if tag else result
+
+    monkeypatch.setattr(module, name, slow)
+    return release, calls
+
+
+async def until(pilot, condition, seconds=2.0):
+    for _ in range(int(seconds / 0.1)):
+        if condition():
+            return True
+        await pilot.pause(0.1)
+    return condition()
+
+
+def test_the_table_and_its_title_show_before_the_waiting_marks_are_read(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        release, calls = hold(monkeypatch, tui, "read_attention")
+        try:
+            await pilot.press("a")
+            assert await until(pilot, lambda: app.sub_title.startswith("all: "))
+            assert calls and not release.is_set()
+            assert ALPHA in table_ids(app)
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "?"
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_the_detail_tree_fills_while_the_reload_is_still_running(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        release = hold_reloads(monkeypatch)
+        try:
+            for _ in range(table_ids(app).index(ALPHA)):
+                await pilot.press("down")
+            await pilot.press("enter")
+            assert await until(pilot, lambda: "Stage 2" in tree_text(app))
+            assert app._loading and not release.is_set()
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert "Stage 2" in tree_text(app)
+
+    run(scenario, root)
+
+
+def test_another_task_shows_loading_in_the_tree_at_once_and_none_of_the_previous_one(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        assert "Stage 2" in tree_text(app)
+        await pilot.press("escape")
+        release, _ = hold(monkeypatch, model, "detail")
+        try:
+            await open_task_unsettled(app, pilot, BETA)
+            await pilot.pause(0.3)
+            assert tree_text(app) == tui_app.TREE_LOADING
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert "beta-111" in tree_text(app) and "alpha-00" not in tree_text(app)
+
+    run(scenario, root)
+
+
+async def open_task_unsettled(app, pilot, sid):
+    target = table_ids(app).index(sid)
+    while app.view.cursor != target:
+        await pilot.press("down" if app.view.cursor < target else "up")
+    await pilot.press("enter")
+
+
+def test_a_detail_read_that_ends_after_a_newer_one_is_dropped(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        older, real = threading.Event(), model.detail
+
+        def read(*args, **kwargs):
+            detail = real(*args, **kwargs)
+            if not older.is_set() and not read.newer:
+                read.newer = True
+                older.wait(PILOT_DEADLINE_S)
+                return {**detail, "goal": "OLDER"}
+            return {**detail, "goal": "NEWER"}
+
+        read.newer = False
+        monkeypatch.setattr(model, "detail", read)
+        try:
+            tui_app.start_detail_read(app)
+            await pilot.pause(0.3)
+            tui_app.start_detail_read(app)
+            assert await until(pilot, lambda: "NEWER" in tree_text(app))
+        finally:
+            older.set()
+        await pilot.pause(0.5)
+        assert "NEWER" in tree_text(app) and "OLDER" not in tree_text(app)
+
+    run(scenario, root)
+
+
+def test_ticks_leave_the_reads_in_flight_alone_and_each_lands_once_released(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    clock = Clock()
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        details, detail_calls = hold(monkeypatch, model, "detail")
+        marks, mark_calls = hold(monkeypatch, tui, "read_attention")
+        reloads = count_collects(monkeypatch)
+        try:
+            await pilot.press("r")
+            await pilot.pause(0.3)
+            for _ in range(4):
+                clock.advance(10)
+                await pilot.pause(0.7)
+            assert len(reloads) >= 3, "the tick goes on reloading the table"
+            assert (len(detail_calls), len(mark_calls)) == (1, 1)
+        finally:
+            details.set()
+            marks.set()
+        await settle(app, pilot)
+        assert "Stage 2" in tree_text(app)
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "?"
+        assert app.overlay is not None and not app._loading
+
+    run(scenario, root, clock=clock, interval=5.0, locator=attention_locator())

@@ -24,7 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lib import config_root
+from lib import config_root, engine_session_binding
 from plan_dashboard import attention, locate, model, web
 from plan_dashboard_fixtures import build_fixture_root, read_only_guard, set_mtime
 from plan_dashboard_support import ALPHA, BETA, NOW, at, event, iso, isolated_home, make_state  # noqa: F401
@@ -184,6 +184,59 @@ def test_the_engine_session_id_is_a_candidate_too(tmp_path):
     put(root, H_A, IDLE, age_minutes=9)
     put(root, ALPHA, ASKING, age_minutes=1)
     assert overlay(root)["harness_session"] == ALPHA
+
+
+def many_bindings(tasks: int = 12, harnesses: int = 30) -> dict[str, list[str]]:
+    """``harnesses`` binding files over ``tasks`` engine ids: some drive several tasks, some repeat one."""
+    engines = [ALPHA, BETA] + [f"task-{n:02d}" for n in range(tasks - 2)]
+    return {f"harness-{n:02d}": [engines[n % tasks], engines[(n * 7) % tasks], engines[n % tasks]]
+            for n in range(harnesses)}
+
+
+def test_the_binding_index_equals_harness_sessions_driving_for_every_engine(tmp_path):
+    bindings = many_bindings()
+    make_root(tmp_path, bindings=bindings)
+    index = engine_session_binding.harness_index()
+    engines = {engine for driven in bindings.values() for engine in driven}
+    assert set(index) == engines
+    for engine in engines | {"never-bound"}:
+        assert index.get(engine, []) == engine_session_binding.harness_sessions_driving(engine)
+    assert len(engine_session_binding.binding_paths()) == len(bindings)
+
+
+def test_one_collect_reads_each_binding_file_once_and_lists_the_transcripts_once(tmp_path, monkeypatch):
+    bindings = many_bindings()
+    root = make_root(tmp_path, bindings=bindings)
+    for harness in list(bindings)[::3]:
+        put(root, harness, IDLE, age_minutes=4)
+    engines = sorted({engine for driven in bindings.values() for engine in driven})
+    reads, listings = [], []
+    real_read, real_glob = engine_session_binding._read, Path.glob
+    monkeypatch.setattr(engine_session_binding, "_read", lambda path: reads.append(path.name) or real_read(path))
+
+    def counting_glob(self, pattern, *args, **kwargs):
+        if self == root.transcripts_root:
+            listings.append(pattern)
+        return real_glob(self, pattern, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "glob", counting_glob)
+    overlays, _ = attention.collect(engines, None, root.transcripts_root)
+    assert sorted(reads) == sorted(f"{harness}.json" for harness in bindings)
+    assert listings == ["*/*.jsonl"]
+    assert {engine for engine, row in overlays.items() if row["waiting"] == "idle"}
+    for engine in engines:
+        assert overlays[engine] == overlay(root, engine=engine)
+
+
+def test_the_locator_is_asked_about_permission_only_for_tails_without_a_pending_choice(tmp_path):
+    root = make_root(tmp_path, bindings={H_A: [ALPHA], H_B: [BETA]})
+    put(root, H_A, ASKING)
+    put(root, H_B, WORKING)
+    asked = []
+    locator = fake(permission_wait=lambda h: asked.append(h) or True)
+    overlays, _ = attention.collect([ALPHA, BETA], locator, root.transcripts_root)
+    assert asked == [H_B]
+    assert overlays[ALPHA]["waiting"] == "choice" and overlays[BETA]["waiting"] == "permission"
 
 
 def test_never_asks_the_model_for_detail(tmp_path, monkeypatch):

@@ -93,6 +93,24 @@ def harness_sessions_driving(engine_session: str) -> list[str]:
     return [p.stem for p in paths if any(e["session"] == engine for e in _read(p))]
 
 
+def binding_paths() -> list[Path]:
+    """Every binding file, sorted."""
+    try:
+        return sorted(_bindings_dir().glob("*.json"))
+    except OSError:
+        return []
+
+
+def harness_index() -> dict[str, list[str]]:
+    """``harness_sessions_driving`` for every engine session at once, from one pass over the
+    binding files: a reader of many tasks scans the store once rather than once per task."""
+    index: dict[str, list[str]] = {}
+    for path in binding_paths():
+        for engine in dict.fromkeys(e["session"] for e in _read(path)):
+            index.setdefault(engine, []).append(path.stem)
+    return index
+
+
 def _is_linked_child(session: str) -> bool:
     path = config_root.resolve_agentctl_state_file(session)
     if path is None:

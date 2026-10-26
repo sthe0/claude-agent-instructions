@@ -197,12 +197,29 @@ def read_tail(path) -> Tail | None:
         return tail
 
 
-def find_transcript(harness_session: str, locator, transcripts_root) -> Path | None:
+def transcript_index(transcripts_root) -> dict[str, list[Path]]:
+    """Every main-session transcript by session id, from one listing: a reader of many tasks lists the
+    transcript roots once rather than once per candidate session."""
+    if transcripts_root is not None:
+        paths = sorted(Path(transcripts_root).glob("*/*.jsonl"))
+    else:
+        paths = config_root.iter_transcripts("*/*.jsonl")
+    index: dict[str, list[Path]] = {}
+    for path in paths:
+        index.setdefault(path.stem, []).append(path)
+    return index
+
+
+def find_transcript(harness_session: str, locator, transcripts_root, transcripts=None) -> Path | None:
+    """The newest transcript of ``harness_session``: the locator's path first, else a match under the
+    roots, looked up in ``transcripts`` (a ``transcript_index``) when given."""
     path = locate.transcript_path(locator, harness_session)
     if path is not None:
         return path
     name = config_root.sanitize_session_id(harness_session)
-    if transcripts_root is not None:
+    if transcripts is not None:
+        matches = transcripts.get(name, [])
+    elif transcripts_root is not None:
         matches = sorted(Path(transcripts_root).glob(f"*/{name}.jsonl"))
     else:
         matches = config_root.iter_transcripts(f"*/{name}.jsonl")
@@ -217,12 +234,16 @@ def find_transcript(harness_session: str, locator, transcripts_root) -> Path | N
     return best[1] if best else None
 
 
-def bind_session(engine_session: str, locator, transcripts_root) -> tuple[str | None, Path | None, list[str]]:
-    """``(harness session, its transcript, every session recorded as driving the task)``."""
-    bound = engine_session_binding.harness_sessions_driving(engine_session)
+def bind_session(engine_session: str, locator, transcripts_root, index=None,
+                 transcripts=None) -> tuple[str | None, Path | None, list[str]]:
+    """``(harness session, its transcript, every session recorded as driving the task)``; ``index`` is a
+    ``harness_index`` and ``transcripts`` a ``transcript_index`` shared by a read of many tasks."""
+    if index is None:
+        index = engine_session_binding.harness_index()
+    bound = list(index.get(config_root.sanitize_session_id(engine_session), [])) if engine_session else []
     best = None
     for candidate in dict.fromkeys([engine_session, *bound]):
-        path = find_transcript(candidate, locator, transcripts_root)
+        path = find_transcript(candidate, locator, transcripts_root, transcripts)
         if path is None:
             continue
         try:
@@ -249,9 +270,15 @@ def waiting_state(tail: Tail | None, permission: bool | None) -> tuple[str | Non
     return "none", tail.state_ts
 
 
+def permission_needed(tail: Tail | None) -> bool:
+    """Whether the locator's permission signal can change ``waiting_state``: only for a tail with no
+    pending choice, since a pending choice wins over it."""
+    return tail is not None and not tail.pending
+
+
 def _attend(harness_session: str | None, path: Path | None, locator) -> tuple[dict, Tail | None]:
     tail = read_tail(path) if path is not None else None
-    permission = locate.permission_wait(locator, harness_session) if tail is not None else None
+    permission = locate.permission_wait(locator, harness_session) if permission_needed(tail) else None
     waiting, since = waiting_state(tail, permission)
     return {"waiting": waiting, "harness_session": harness_session, "since": since}, tail
 
@@ -261,21 +288,23 @@ def task_overlay(engine_session: str, locator, transcripts_root) -> dict:
     return _attend(harness, path, locator)[0]
 
 
-def session_row(entry: dict, locator, transcripts_root) -> dict:
+def session_row(entry: dict, locator, transcripts_root, transcripts=None) -> dict:
     harness = entry["harness_session"]
-    overlay, _ = _attend(harness, find_transcript(harness, locator, transcripts_root), locator)
+    overlay, _ = _attend(harness, find_transcript(harness, locator, transcripts_root, transcripts), locator)
     return {"harness_session": harness, "cwd": entry["cwd"], "name": entry["name"],
             "waiting": overlay["waiting"], "since": overlay["since"]}
 
 
 def collect(engine_sessions, locator, transcripts_root) -> tuple[dict, list[dict]]:
-    """``(overlays by task id, session rows)`` for the listed tasks."""
+    """``(overlays by task id, session rows)`` for the listed tasks, from one scan of the binding files
+    and one listing of the transcripts."""
+    index, transcripts = engine_session_binding.harness_index(), transcript_index(transcripts_root)
     overlays, represented = {}, set()
     for engine in engine_sessions:
-        harness, path, bound = bind_session(engine, locator, transcripts_root)
+        harness, path, bound = bind_session(engine, locator, transcripts_root, index, transcripts)
         overlays[engine] = _attend(harness, path, locator)[0]
         represented.update([engine, *bound])
-    rows = [session_row(entry, locator, transcripts_root)
+    rows = [session_row(entry, locator, transcripts_root, transcripts)
             for entry in sorted(locate.sessions(locator), key=lambda e: e["harness_session"])
             if entry["harness_session"] not in represented]
     return overlays, rows

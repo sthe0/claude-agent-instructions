@@ -14,7 +14,9 @@ text with ``--once``. Subcommand ``web`` serves the read-only page on the loopba
 Subcommand ``publish`` keeps one status message per machine up to date through the
 machine-local publisher plugin: ``--dry-run`` prints the digest, ``--check-publisher`` runs the
 plugin's local health check, ``--once`` and ``--watch`` send (exit 6: no usable plugin; exit 1:
-a failed send, repeated failures in ``--watch``, a busy lock or an unsavable state). The shared
+a failed send, repeated failures in ``--watch``, a busy lock or an unsavable state). Subcommand
+``bench`` times the console's reads on the live state against budgets (``--budget-live-table`` and
+the like; exit 1 when any read is over, 2 for a ``--session`` it cannot find). The shared
 options (state root, window, selection, ledger, transcripts) come from one parent parser so
 later views reuse them. Exit code 3: a ``--session`` that names no state file, in ``snapshot``,
 ``tui --once`` and ``publish`` (the interactive ``tui`` opens with an empty list instead).
@@ -32,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from agentctl import cost  # noqa: E402
 from lib import config_root  # noqa: E402
-from plan_dashboard import attention, locate, model, publish, tui, web  # noqa: E402
+from plan_dashboard import attention, bench, locate, model, publish, tui, web  # noqa: E402
 
 EXIT_NO_SUCH_SESSION = 3
 EXIT_NO_LOCATOR = 3
@@ -88,6 +90,9 @@ def build_parser() -> argparse.ArgumentParser:
     pub.add_argument("--publish-state", type=Path, default=None)
     pub.add_argument("--interval", type=float, default=publish.DEFAULT_INTERVAL_S)
     pub.add_argument("--min-interval", type=float, default=publish.MIN_INTERVAL_S)
+    timing = sub.add_parser("bench", parents=[shared_parser(), locator_parser()])
+    for name, budget in bench.BUDGETS.items():
+        timing.add_argument(bench.budget_flag(name), type=float, default=budget, dest=bench.budget_dest(name))
     return parser
 
 
@@ -280,8 +285,19 @@ def run_publish(args) -> int:
     return 0
 
 
+def run_bench(args) -> int:
+    return bench.run(
+        args.state_root, session=args.sessions[-1] if args.sessions else None, window_hours=args.window_hours,
+        cost_log=args.cost_log, transcripts_root=args.transcripts_root,
+        locator=locate.select_or_none(args.plugin_dir, args.locator),
+        budgets={name: getattr(args, bench.budget_dest(name)) for name in bench.BUDGETS},
+    )
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "bench":
+        return run_bench(args)
     if args.command == "tui":
         return run_tui(args)
     if args.command == "web":

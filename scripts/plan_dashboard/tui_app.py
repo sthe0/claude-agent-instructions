@@ -32,6 +32,7 @@ from plan_dashboard import locate, model, tui  # noqa: E402
 
 TICK_S = 0.5
 CHAT_LOADING = "loading chat…"
+TREE_LOADING = "loading…"
 KEYS = (
     ("up", "Up"), ("down", "Down"), ("j", "Down"), ("k", "Up"), ("enter", "Open"), ("escape", "Back"),
     ("backspace", "Back"), ("tab", "Tab"), ("a", "All/live"), ("r", "Refresh"), (tui.JUMP_KEY, "Jump"),
@@ -44,9 +45,23 @@ def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+def read_in_flight(app: "DashboardApp", group: str) -> bool:
+    """Whether a read of kind ``group`` is still running: the tick leaves such a read alone rather than
+    start, restart or cancel it, or a read slower than the interval would never land."""
+    if group == "collect":
+        return app._loading
+    return any(worker.group == group and not worker.is_finished for worker in app.workers)
+
+
 def refresh_if_due(app: "DashboardApp") -> None:
-    if tui.due(app.clock(), app.last_collect, app.interval):
+    if tui.due(app.clock(), app.last_collect, app.interval) and not read_in_flight(app, "collect"):
         app.reload()
+    if app.view.tab == "detail" and tui.due(app.clock(), app.last_detail_read, app.interval) \
+            and not read_in_flight(app, "detail"):
+        start_detail_read(app)
+    if app.view.tab == "chat" and tui.due(app.clock(), app.last_chat_read, app.interval) \
+            and not read_in_flight(app, "chat"):
+        start_chat_read(app)
 
 
 def route_key(app: "DashboardApp", action: str, parameters) -> bool:
@@ -175,6 +190,103 @@ def chat_ready(app: "DashboardApp", target, chat: dict | None, error: Exception 
         app.sub_title = f"{app.sub_title.split('; read failed')[0]}; read failed: {error}"
 
 
+def start_overlay_read(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
+    """Read the waiting marks after the table is shown; while one such read runs, a newer table waits for
+    the next one instead of cancelling it."""
+    if read_in_flight(app, "overlay"):
+        return
+    app.run_worker(read_overlay_for(app, snapshot, issued_all), group="overlay", exclusive=True)
+
+
+async def read_overlay_for(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
+    overlay, error = await in_daemon_thread(lambda: read_overlay(app, snapshot))
+    overlay_ready(app, overlay, error, issued_all)
+
+
+def overlay_ready(app: "DashboardApp", overlay: dict | None, error: Exception | None, issued_all: bool) -> None:
+    if overlay is not None:
+        app.overlay = overlay
+    if app.snapshot is not None:
+        show_table(app, app.snapshot, app.read_at, issued_all)
+    if error is not None and title_is_current(app, issued_all):
+        app.sub_title = f"{app.sub_title.split('; read failed')[0]}; read failed: {error}"
+
+
+def show_table(app: "DashboardApp", snapshot: dict, now: dt.datetime, issued_all: bool) -> None:
+    """Rows, header and sub-title of ``snapshot`` with the overlay as last read: the table does not wait for
+    the waiting marks, whose read grows with the number of tasks."""
+    rows = tui.overview_rows(snapshot, now, app.overlay)
+    app.query_one("#overview-head", Static).update(Text(tui.overview_header(snapshot, now, app.overlay)))
+    ids = tuple(row["session_id"] for row in rows)
+    app.view = tui.reconcile(app.view, ids, (row["session_id"] for row in rows if row["kind"] == "session"))
+    table = app.query_one(DataTable)
+    table.clear()
+    for row in rows:
+        table.add_row(*row_cells(row), key=row["session_id"])
+    if ids:
+        table.move_cursor(row=app.view.cursor)
+    if title_is_current(app, issued_all):
+        app.sub_title = f"{mode_title(app.view.include_all, len(ids))}, read {now:%H:%M:%S}"
+        if app.chat_error is not None:
+            app.sub_title += f"; read failed: {app.chat_error}"
+
+
+def show_tree_loading(app: "DashboardApp") -> None:
+    """Say at once that another task's tree is being read, so the previous task's tree is not shown under it."""
+    tree = app.query_one(Tree)
+    tree.clear()
+    tree.root.set_label(Text(TREE_LOADING))
+    app.tree_task = app.tree_read_for = None
+
+
+def start_detail_read(app: "DashboardApp") -> None:
+    """Read the selected task's Detail tree in its own exclusive worker group, apart from the reload: a
+    newer read cancels the older one, so an older read never lands after it."""
+    view = app.view
+    if view.tab != "detail" or not view.selected:
+        return
+    if view.selected != app.tree_read_for:
+        show_tree_loading(app)
+    app.last_detail_read = app.clock()
+    app.run_worker(read_detail_for(app, view.selected, app.clock()), group="detail", exclusive=True)
+
+
+async def read_detail_for(app: "DashboardApp", task: str, now: dt.datetime) -> None:
+    detail, error = await in_daemon_thread(lambda: attempt(lambda: read_detail(app, task)))
+    detail_ready(app, task, detail, error, now)
+
+
+def read_detail(app: "DashboardApp", task: str) -> dict | None:
+    try:
+        return model.detail(app.state_root, task, cost_log=app.cost_log, transcripts_root=app.transcripts_root,
+                            children=child_index_for(app))
+    except model.UnknownSession:
+        return None
+
+
+def child_index_for(app: "DashboardApp") -> dict:
+    """The parent-to-children index, built at most once per reload and shared by the Detail reads after it."""
+    with app.child_lock:
+        if app.child_index is None or app.child_index[0] != app.reloads:
+            app.child_index = (app.reloads, model.child_index(app.state_root))
+        return app.child_index[1]
+
+
+def detail_ready(app: "DashboardApp", task: str, detail: dict | None, error: Exception | None,
+                 now: dt.datetime) -> None:
+    if app.view.selected != task:
+        return
+    if error is not None:
+        app.sub_title = f"{app.sub_title.split('; read failed')[0]}; read failed: {error}"
+        return
+    nodes = tui.detail_tree(detail, now) if detail is not None else tui.missing_detail_tree()
+    shown = task if detail is not None else None
+    tree = app.query_one(Tree)
+    state = tree_state_for(remember(tree, app.tree_task), shown)
+    fill_tree(tree, nodes, state.expanded, state.cursor)
+    app.tree_task, app.tree_read_for = shown, task
+
+
 def jump_from(app: "DashboardApp") -> None:
     """Switch to the window of the session ``g`` points at; the locator's argv runs in a worker thread
     (it is bounded to 5 s) and its outcome lands in the status line."""
@@ -279,6 +391,13 @@ class DashboardApp(App):
         self.overlay: dict | None = None
         self.last_chat_read: dt.datetime | None = None
         self.chat_error: Exception | None = None
+        self.snapshot: dict | None = None
+        self.read_at: dt.datetime | None = None
+        self.last_detail_read: dt.datetime | None = None
+        self.tree_read_for: str | None = None
+        self.reloads = 0
+        self.child_index: tuple[int, dict] | None = None
+        self.child_lock = threading.Lock()
 
     def check_action(self, action: str, parameters) -> bool:
         if action in KEY_ACTION_OWNERS:
@@ -308,38 +427,29 @@ class DashboardApp(App):
 
     def _tick(self) -> None:
         refresh_if_due(self)
-        if self.view.tab == "chat" and tui.due(self.clock(), self.last_chat_read, self.interval):
-            start_chat_read(self)
 
     def reload(self, force: bool = False) -> None:
         if self._loading:
             self._again = self._again or force
             return
         self._loading = True
+        self.reloads += 1
         self.last_collect = self.clock()
         self.run_worker(self._load(), group="collect")
 
     async def _load(self) -> None:
-        now, view = self.last_collect, self.view
+        now, include_all = self.last_collect, self.view.include_all
         try:
-            snapshot, detail = await in_daemon_thread(lambda: self._read_tasks(now, view))
+            snapshot = await in_daemon_thread(lambda: model.collect(
+                self.state_root, now=now, window_hours=self.window_hours, include_all=include_all,
+                sessions=self.sessions, cost_log=self.cost_log))
         except Exception as exc:
             self._failed(exc)
             return
-        overlay, error = await in_daemon_thread(lambda: read_overlay(self, snapshot))
-        self._apply(snapshot, detail, now, bool(view.selected) and detail is None, overlay, view.include_all, error)
-
-    def _read_tasks(self, now: dt.datetime, view: tui.View) -> tuple[dict, dict | None]:
-        snapshot = model.collect(self.state_root, now=now, window_hours=self.window_hours,
-                                 include_all=view.include_all, sessions=self.sessions, cost_log=self.cost_log)
-        if not view.selected:
-            return snapshot, None
-        try:
-            return snapshot, model.detail(self.state_root, view.selected, cost_log=self.cost_log,
-                                          transcripts_root=self.transcripts_root,
-                                          children=model.child_index(self.state_root))
-        except model.UnknownSession:
-            return snapshot, None
+        self.snapshot, self.read_at = snapshot, now
+        show_table(self, snapshot, now, include_all)
+        self._finish_load()
+        start_overlay_read(self, snapshot, include_all)
 
     def _finish_load(self) -> None:
         self._loading = False
@@ -349,33 +459,6 @@ class DashboardApp(App):
 
     def _failed(self, exc: Exception) -> None:
         self.sub_title = f"read failed: {exc}"
-        self._finish_load()
-
-    def _apply(self, snapshot: dict, detail: dict | None, now: dt.datetime, selection_gone: bool = False,
-               overlay: dict | None = None, issued_all: bool = False, error: Exception | None = None) -> None:
-        if overlay is not None:
-            self.overlay = overlay
-        rows = tui.overview_rows(snapshot, now, overlay)
-        self.query_one("#overview-head", Static).update(Text(tui.overview_header(snapshot, now, overlay)))
-        ids = tuple(row["session_id"] for row in rows)
-        self.view = tui.reconcile(self.view, ids, (row["session_id"] for row in rows if row["kind"] == "session"))
-        table = self.query_one(DataTable)
-        table.clear()
-        for row in rows:
-            table.add_row(*row_cells(row), key=row["session_id"])
-        if ids:
-            table.move_cursor(row=self.view.cursor)
-        if detail is not None or selection_gone:
-            nodes = tui.detail_tree(detail, now) if detail is not None else tui.missing_detail_tree()
-            task = detail["session_id"] if detail is not None else None
-            tree = self.query_one(Tree)
-            state = tree_state_for(remember(tree, self.tree_task), task)
-            fill_tree(tree, nodes, state.expanded, state.cursor)
-            self.tree_task = task
-        if title_is_current(self, issued_all):
-            self.sub_title = f"{mode_title(self.view.include_all, len(ids))}, read {now:%H:%M:%S}"
-            if (error or self.chat_error) is not None:
-                self.sub_title += f"; read failed: {error or self.chat_error}"
         self._finish_load()
 
     def action_key(self, key: str) -> None:
@@ -406,6 +489,9 @@ class DashboardApp(App):
             self.query_one(DataTable).move_cursor(row=self.view.cursor)
         if self.view.refresh:
             self.reload(force=True)
+        if self.view.tab == "detail" and (self.view.refresh or (self.view.selected, self.view.tab) != (
+                previous.selected, previous.tab)):
+            start_detail_read(self)
         if self.view.jump:
             jump_from(self)
 
@@ -421,6 +507,8 @@ class DashboardApp(App):
         tab = event.pane.id
         if tab in tui.TABS and tab != self.view.tab:
             self.view = dataclasses.replace(self.view, tab=tab)
+            if tab == "detail":
+                start_detail_read(self)
         if tab in tui.TABS:
             self.call_after_refresh(focus_for, self, tab)
         if tab == "chat":
