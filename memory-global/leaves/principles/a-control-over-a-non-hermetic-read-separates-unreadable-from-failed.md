@@ -22,7 +22,7 @@ Controls over non-hermetic inputs whose red result can be acted on as a defect o
 
 ## Generality
 
-Level 1 — a candidate principle induced from three contexts across two environments (a remote-service read and a local long-running suite); it ranges over machine-evaluated checks whose input is not reproducible from the repository alone: network reads, live service state, long suites with ambient-load sensitivity. It is deliberately not claimed for hermetic controls (a grep over a committed file), where a non-zero exit is always a finding, and the three-outcome shape is not yet shown to be right for cases where "could not read" must itself block (a security-relevant check that may not be skipped).
+Level 1 — a candidate principle grounded in three contexts across two environments (a remote-service read and a local long-running suite); it ranges over machine-evaluated checks whose input is not reproducible from the repository alone: network reads, live service state, long suites with ambient-load sensitivity. It is deliberately not claimed for hermetic controls (a grep over a committed file), where a non-zero exit is always a finding, and the three-outcome shape is not yet shown to be right for cases where "could not read" must itself block (a security-relevant check that may not be skipped).
 
 ## Grounded in
 
