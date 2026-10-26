@@ -27,9 +27,9 @@ DEDUP = "dedup"
 MISS = "miss"
 
 
-def check_key(tree_identity: str, command: str, expected_exit: int) -> str:
+def check_key(venue: str, tree_identity: str, command: str, expected_exit: int) -> str:
     digest = hashlib.sha256()
-    for part in (tree_identity, command, str(expected_exit)):
+    for part in (venue, tree_identity, command, str(expected_exit)):
         digest.update(part.encode("utf-8"))
         digest.update(b"\x00")
     return digest.hexdigest()
@@ -37,12 +37,14 @@ def check_key(tree_identity: str, command: str, expected_exit: int) -> str:
 
 @dataclass
 class CheckSpec:
-    """One shell check of a verify-final run. `tree_id` is the venue tree identity
-    (None: unidentifiable); `cacheable` says the session cache may serve it;
-    `outcome_hit` says the stage's own recorded outcome already proves it green."""
+    """One shell check of a verify-final run. `venue` is the directory it runs in and
+    `tree_id` that directory's tree identity (None: unidentifiable); `cacheable` says
+    the session cache may serve it; `outcome_hit` says the stage's own recorded
+    outcome already proves it green."""
     id: str
     command: str
     expected_exit: int
+    venue: str
     tree_id: str | None
     cacheable: bool
     outcome_hit: bool = False
@@ -51,7 +53,7 @@ class CheckSpec:
     def key(self) -> str | None:
         if self.tree_id is None:
             return None
-        return check_key(self.tree_id, self.command, self.expected_exit)
+        return check_key(self.venue, self.tree_id, self.command, self.expected_exit)
 
 
 @dataclass
@@ -116,10 +118,11 @@ def pytest_weight(command: str, cpu_count: int) -> int:
 
 
 def _env_int(name: str, env: Mapping[str, str], minimum: int) -> int | None:
-    raw = env.get(name, "").strip()
-    if raw.lstrip("-").isdigit() and int(raw) >= minimum:
-        return int(raw)
-    return None
+    try:
+        value = int(env.get(name, "").strip())
+    except ValueError:
+        return None
+    return value if value >= minimum else None
 
 
 def resolve_cap(configured: int, env: Mapping[str, str] | None = None) -> int:
@@ -150,14 +153,27 @@ class Job:
     run: Callable[[], object]
 
 
-def run_bounded(jobs: list[Job], *, cap: int, budget: int) -> tuple[list[object], int]:
+def run_bounded(
+    jobs: list[Job], *, cap: int, budget: int,
+    on_error: Callable[[Exception], object] | None = None,
+) -> tuple[list[object], int]:
     """Run `jobs` in order of submission, at most `cap` at once and never more than
     `budget` weight at once — except that a job always starts when none is running.
-    Returns (results in job order, peak number running at once)."""
+    A job that raises yields `on_error(exc)` as its result, or propagates without
+    `on_error`. Returns (results in job order, peak number running at once)."""
     if not jobs:
         return [], 0
+
+    def call(job: Job) -> object:
+        try:
+            return job.run()
+        except Exception as exc:
+            if on_error is None:
+                raise
+            return on_error(exc)
+
     if cap <= 1 or len(jobs) == 1:
-        return [job.run() for job in jobs], 1
+        return [call(job) for job in jobs], 1
     results: list[object] = [None] * len(jobs)
     pending = deque(range(len(jobs)))
     running: dict = {}
@@ -170,7 +186,7 @@ def run_bounded(jobs: list[Job], *, cap: int, budget: int) -> tuple[list[object]
                 and (not running or weight_running + jobs[pending[0]].weight <= budget)
             ):
                 i = pending.popleft()
-                running[pool.submit(jobs[i].run)] = i
+                running[pool.submit(call, jobs[i])] = i
                 weight_running += jobs[i].weight
                 peak = max(peak, len(running))
             done, _ = wait(running, return_when=FIRST_COMPLETED)

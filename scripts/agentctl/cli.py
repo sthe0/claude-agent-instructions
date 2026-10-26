@@ -10266,7 +10266,7 @@ class _FinalEntry:
     """One check of a verify-final run, from planning to its recorded result."""
     check_id: str
     venue: str
-    fail_head: str
+    label: str
     spec: check_cache.CheckSpec | None = None
     cwd: str | None = None
     fail_tail: str = ""
@@ -10276,12 +10276,15 @@ class _FinalEntry:
     duration_s: float = 0.0
     exit_code: int | None = None
     ok: bool = True
+    error: str = ""
 
     def failure(self) -> str:
         if self.spec is None:
             return self.landed_failure
         tail = f" {self.fail_tail}" if self.fail_tail else ""
-        return f"{self.fail_head}: exit {self.exit_code} != {self.spec.expected_exit}{tail}"
+        if self.error:
+            return f"{self.label}: raised {self.error}{tail}"
+        return f"{self.label}: exit {self.exit_code} != {self.spec.expected_exit}{tail}"
 
 
 def _log_final_events(
@@ -10318,12 +10321,13 @@ def _evaluate_final_checks(
     caller returns that directive as is."""
     started = time.monotonic()
     entries: list[_FinalEntry] = []
-    tree_ids: dict[str | None, str | None] = {}
+    tree_ids: dict[str, str | None] = {}
 
     def tree_id_for(cwd: str | None) -> str | None:
-        if cwd not in tree_ids:
-            tree_ids[cwd] = _venue_tree_identity(cwd, runner)
-        return tree_ids[cwd]
+        venue = cwd or str(REPO_ROOT)
+        if venue not in tree_ids:
+            tree_ids[venue] = _venue_tree_identity(cwd, runner)
+        return tree_ids[venue]
 
     def refuse(check_id: str, cwd: str | None, message: str) -> tuple[list[str], Directive]:
         entries.append(_FinalEntry(
@@ -10375,7 +10379,7 @@ def _evaluate_final_checks(
             check_id, cwd or str(REPO_ROOT), f"stage {stage.index}", cwd=cwd,
             fail_tail=f"({crit.verify_command})",
             spec=check_cache.CheckSpec(
-                check_id, crit.verify_command, crit.expected_exit, tree_id,
+                check_id, crit.verify_command, crit.expected_exit, cwd or str(REPO_ROOT), tree_id,
                 cacheable=True, outcome_hit=_cached_check_hit(stage, identity),
             ),
         ))
@@ -10398,7 +10402,7 @@ def _evaluate_final_checks(
         entries.append(_FinalEntry(
             check_id, cwd or str(REPO_ROOT), f"final_check '{fc.label or fc.command}'", cwd=cwd,
             spec=check_cache.CheckSpec(
-                check_id, fc.command, fc.expected_exit, tree_id_for(cwd),
+                check_id, fc.command, fc.expected_exit, cwd or str(REPO_ROOT), tree_id_for(cwd),
                 cacheable=fc.cacheable or fc.command in stage_commands,
             ),
         ))
@@ -10411,7 +10415,10 @@ def _evaluate_final_checks(
     def run_one(e: _FinalEntry):
         t0 = time.monotonic()
         ok, result = _run_check(e.spec.command, e.spec.expected_exit, runner, cwd=e.cwd)
-        return ok, result.returncode, time.monotonic() - t0
+        return ok, result.returncode, time.monotonic() - t0, ""
+
+    def raised(exc: Exception):
+        return False, None, 0.0, f"{type(exc).__name__}: {exc}"
 
     cap, budget, cpus = 1, 0, 1
     if runner is None and len(to_run) > 1:
@@ -10421,7 +10428,7 @@ def _evaluate_final_checks(
             budget = check_cache.resolve_budget(cpus, load1)
     results, peak = check_cache.run_bounded(
         [check_cache.Job(check_cache.pytest_weight(e.spec.command, cpus), (lambda e=e: run_one(e))) for e in to_run],
-        cap=cap, budget=budget,
+        cap=cap, budget=budget, on_error=raised,
     )
     ran = {e.check_id: r for e, r in zip(to_run, results)}
 
@@ -10433,14 +10440,16 @@ def _evaluate_final_checks(
         d = decided[e.spec.id]
         e.decision, e.reason = d.decision, d.reason
         if d.decision == check_cache.MISS:
-            e.ok, e.exit_code, e.duration_s = ran[e.check_id]
-            if e.ok and e.spec.key is not None:
-                check_cache.store_green(state.check_cache, e.spec.key, at=now, label=e.fail_head)
+            e.ok, e.exit_code, e.duration_s, e.error = ran[e.check_id]
+            if e.error:
+                e.reason = f"raised: {e.error}"
+            if e.ok and e.spec.key is not None and e.spec.cacheable:
+                check_cache.store_green(state.check_cache, e.spec.key, at=now, label=e.label)
         elif d.decision == check_cache.HIT:
-            e.exit_code = e.spec.expected_exit
+            e.exit_code = None
         else:
             earlier = by_id[d.same_as]
-            e.ok, e.exit_code = earlier.ok, earlier.exit_code
+            e.ok, e.exit_code, e.error = earlier.ok, earlier.exit_code, earlier.error
     failures = [e.failure() for e in entries if not e.ok]
     _log_final_events(
         state, entries, outcome="failed" if failures else "passed", started=started, peak=peak,
@@ -10522,13 +10531,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
                     state, _ro_scale, actual=_ro_delta[_ro_scale],
                     estimate=_ro_comparand[_ro_scale], now=_utcnow(),
                 )
-    # Final-gate execution (defense in depth): re-run every measurable stage's
-    # verify_command unless the venue tree is unchanged since the stage last passed
-    # (same checked_tree_identity — the same cache record-result maintains). A later
-    # stage may have regressed an earlier one, so the loop still runs for every
-    # non-skipped stage; a re-run is skipped only when the tree identity proves the
-    # tree and the check definition haven't moved since the cached green result.
-    # Any non-match refuses RESOLUTION rather than trusting the recorded PASSED flags.
+    # Final-gate execution: see _evaluate_final_checks.
     failures, refusal_directive = _evaluate_final_checks(state, store, runner, div)
     if refusal_directive is not None:
         return refusal_directive

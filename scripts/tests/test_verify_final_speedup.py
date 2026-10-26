@@ -239,6 +239,37 @@ def test_r1_tree_identity_is_taken_once_per_venue_directory(store):
     assert runner.head_probes == 1
 
 
+def test_r1_same_command_in_two_venues_runs_in_both(store, tmp_path):
+    delivery, root = tmp_path / "delivery", tmp_path / "root"
+    delivery.mkdir()
+    root.mkdir()
+    _verifying(
+        store, "r1-venues", ["pytest -q"], [FinalCheck(command="pytest -q", venue="repo_root")],
+        delivery_worktree=str(delivery), repo_root=str(root),
+    )
+    runner = _Runner()
+    assert _verify(store, "r1-venues", runner).ok is True
+    assert runner.ran("pytest -q") == 2
+    assert [e["decision"] for e in _events(store, "r1-venues", "verify_final_check")] == ["miss", "miss"]
+    assert len(store.load("r1-venues").check_cache) == 2
+
+    _again(store, "r1-venues")
+    second = _Runner()
+    assert _verify(store, "r1-venues", second).ok is True
+    assert second.bash_calls == []
+
+
+def test_r1_check_key_depends_on_the_venue():
+    assert check_cache.check_key("/a", "t", "pytest -q", 0) != check_cache.check_key("/b", "t", "pytest -q", 0)
+
+
+def test_r1_non_cacheable_green_is_not_stored(store):
+    _verifying(store, "r1-nostore", ["pytest -q"], [FinalCheck(command="make smoke")])
+    _verify(store, "r1-nostore", _Runner())
+    labels = {entry["label"] for entry in store.load("r1-nostore").check_cache.values()}
+    assert labels == {"stage 1"}
+
+
 def test_r1_final_check_cacheable_loads_from_a_plan():
     data = {
         "meta": {"task_id": "t", "goal": "g", "done_criterion": "d", "criterion_type": "measurable"},
@@ -338,6 +369,40 @@ def test_r5_run_bounded_starts_a_job_heavier_than_the_budget_when_none_runs():
     assert peak == 1
 
 
+@pytest.mark.parametrize("cap", [1, 2])
+def test_r5_run_bounded_turns_a_raising_job_into_its_error_result(cap):
+    def boom():
+        raise RuntimeError("kaput")
+
+    jobs = [check_cache.Job(1, boom), check_cache.Job(1, lambda: "fine")]
+    results, _ = check_cache.run_bounded(jobs, cap=cap, budget=4, on_error=lambda exc: f"err:{exc}")
+    assert results == ["err:kaput", "fine"]
+    with pytest.raises(RuntimeError):
+        check_cache.run_bounded(jobs, cap=cap, budget=4)
+
+
+@pytest.mark.parametrize("parallel", [1, 2])
+def test_r5_raising_check_fails_the_run_and_still_logs_it(store, monkeypatch, parallel):
+    class _Raising(_Runner):
+        def __call__(self, argv, **kw):
+            if argv[:2] == ["bash", "-c"] and argv[2].endswith("make a"):
+                raise OSError("spawn failed")
+            return super().__call__(argv, **kw)
+
+    _two_checks(store, f"r5-raise-{parallel}")
+    runner = _Raising()
+    _real_runner(monkeypatch, runner, parallel=parallel, budget=8)
+    d = _verify(store, f"r5-raise-{parallel}", None)
+    assert d.ok is False
+    assert d.data["failures"] == ["stage 1: raised OSError: spawn failed (make a)"]
+    run = _events(store, f"r5-raise-{parallel}", "verify_final_run")
+    assert [r["outcome"] for r in run] == ["failed"]
+    first = _events(store, f"r5-raise-{parallel}", "verify_final_check")[0]
+    assert first["exit"] is None
+    assert "spawn failed" in first["reason"]
+    assert store.load(f"r5-raise-{parallel}").check_cache == {}
+
+
 def test_r5_failures_keep_check_order_when_completion_order_differs(store, monkeypatch):
     class _SlowFirst(_Runner):
         def __call__(self, argv, **kw):
@@ -375,6 +440,8 @@ def test_r5_cap_and_budget_resolution():
     assert check_cache.resolve_cap(2, {check_cache.PARALLEL_ENV: "1"}) == 1
     assert check_cache.resolve_cap(2, {check_cache.PARALLEL_ENV: "junk"}) == 2
     assert check_cache.resolve_cap(0, {}) == 1
+    assert check_cache.resolve_cap(2, {check_cache.PARALLEL_ENV: "--5"}) == 2
+    assert check_cache.resolve_budget(12, 3.5, {check_cache.CPU_BUDGET_ENV: "²"}) == 8
     assert check_cache.resolve_budget(12, 3.5, {}) == 8
     assert check_cache.resolve_budget(12, 40.0, {}) == 0
     assert check_cache.resolve_budget(12, 3.5, {check_cache.CPU_BUDGET_ENV: "5"}) == 5
@@ -435,6 +502,23 @@ def test_r7_cache_hit_and_dedup_are_reported_with_counts(store):
     _verify(store, "r7-counts", _Runner())
     run = _events(store, "r7-counts", "verify_final_run")[-1]
     assert run["counts"] == {"hit": 1, "dedup": 2, "miss": 0}
+
+
+def test_r7_hit_records_no_exit_and_dedup_keeps_the_copied_exit(store):
+    _verifying(store, "r7-exit", ["pytest -q"], [FinalCheck(command="pytest -q")])
+    _verify(store, "r7-exit", _Runner())
+    assert [c["exit"] for c in _events(store, "r7-exit", "verify_final_check")] == [0, 0]
+    _again(store, "r7-exit")
+    _verify(store, "r7-exit", _Runner())
+    hit, dedup = _events(store, "r7-exit", "verify_final_check")[-2:]
+    assert (hit["decision"], hit["exit"]) == ("hit", None)
+    assert (dedup["decision"], dedup["exit"]) == ("dedup", None)
+
+
+def test_r7_dedup_of_a_failing_check_keeps_its_real_exit(store):
+    _verifying(store, "r7-dupexit", ["pytest -q"], [FinalCheck(command="pytest -q")])
+    _verify(store, "r7-dupexit", _Runner(exits={"pytest -q": 4}))
+    assert [c["exit"] for c in _events(store, "r7-dupexit", "verify_final_check")] == [4, 4]
 
 
 def test_r7_gate_blocked_call_writes_no_verify_final_events(store):
