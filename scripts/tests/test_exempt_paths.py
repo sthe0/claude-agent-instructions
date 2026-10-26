@@ -130,3 +130,5 @@ def test_is_plan_file_under_config_dir_home_of_any_name(tmp_path, monkeypatch):
     assert is_plan_file(str(home / "plans" / "task" / "plan.toml")) is True
     assert is_plan_file(str(home / "plans-old" / "plan.toml")) is False
     assert is_plan_file(str(home / "notes" / "plan.toml")) is False
+    # own-plans/ is a sibling of plans/: only its canonical <sid>/plan.toml is a plan
+    assert is_plan_file(str(home / "own-plans" / "sid" / "notes.toml")) is False

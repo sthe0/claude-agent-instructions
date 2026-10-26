@@ -433,13 +433,23 @@ def gate_facts(state_text: str, plan: Path) -> tuple[bool, list[str], list[int],
     import os
     from agentctl import gates
     from agentctl.state import SessionState
-    # Review records bind to the plan path the arm wrote; rebound to the copy here, or a recorded pass
-    # reads as missing once the arm's own plan file is gone.
-    recorded = json.loads(state_text).get("plan_path")
-    if recorded:
-        state_text = state_text.replace(json.dumps(recorded)[1:-1], json.dumps(str(plan))[1:-1])
-    state = SessionState.from_json(state_text)
-    state.plan_path = str(plan)
+    # Review records bind to the plan path the arm wrote, as a value or as a key (effort_spend_seen);
+    # every exact occurrence is rebound to the copy, or a recorded pass reads as missing once the arm's
+    # own plan file is gone.
+    raw = json.loads(state_text)
+    if not isinstance(raw, dict):
+        raise Malformed("state.json is not a JSON object")
+    recorded, copy = raw.get("plan_path"), str(plan)
+
+    def rebind(node):
+        if isinstance(node, dict):
+            return {(copy if k == recorded else k): rebind(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [rebind(v) for v in node]
+        return copy if node == recorded else node
+
+    state = SessionState.from_json(json.dumps(rebind(raw) if recorded else raw, ensure_ascii=False))
+    state.plan_path = copy
     saved = os.environ.get("AGENTCTL_PLAN_REVIEW")
     os.environ["AGENTCTL_PLAN_REVIEW"] = "1"
     try:
