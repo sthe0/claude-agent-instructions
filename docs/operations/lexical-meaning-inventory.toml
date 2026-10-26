@@ -1930,9 +1930,16 @@ reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::cmd_promote::pattern.fullmatch"]
 class = "structural"
-ground = "Checks the principle slug and each induced-from slug against the fixed slug charset."
-hits = 2
-hit_classes = ["structural", "structural"]
+ground = "Checks the promoted leaf slug against the fixed slug charset."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/record-experience.py::promote_problems::pattern.fullmatch"]
+class = "structural"
+ground = "Checks each named source slug against the fixed slug charset before looking it up in the corpus."
+hits = 1
+hit_classes = ["structural"]
 reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::cmd_promote::pattern.search"]
