@@ -1281,7 +1281,7 @@ def test_the_suite_library_uses_the_shared_layer_and_not_the_smoke_gate():
 def test_the_catalogue_control_is_green_and_every_anchor_matches_once():
     import suite_gate_mutation_control as control
 
-    assert len(control.CATALOGUE) == 38
+    assert len(control.CATALOGUE) == 39
     for name, mutant in control.CATALOGUE.items():
         source = (control.SCRIPTS_DIR.parent / mutant.relpath).read_text(encoding="utf-8")
         assert source.count(mutant.anchor) == 1, name

@@ -325,6 +325,12 @@ CATALOGUE: "dict[str, Mutant]" = {
         LAND,
         "runner=runner, timeout_s=timeout_s, waiver=waiver,",
         "runner=runner, timeout_s=timeout_s, waiver=None,",
+        _ids("test_a_waiver_given_with_the_first_run_admits_an_unavailable_suite", module=LAND_TESTS),
+    ),
+    "suite-land-waives-stored-record": Mutant(
+        LAND,
+        "suite_gate.waive_record(repo_root, sha, waiver)",
+        "pass",
         _ids("test_an_unavailable_suite_needs_a_waiver_to_land", module=LAND_TESTS),
     ),
     "suite-land-timeout-wired": Mutant(

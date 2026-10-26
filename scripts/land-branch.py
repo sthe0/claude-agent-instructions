@@ -316,15 +316,37 @@ def _suite_gate(repo_root, assessment: Assessment, tip, timeout_s, waiver, runne
     """The pre-land suite gate. Returns (None, line) when landing may proceed, else (reason, None).
 
     Any exception refuses: a gate that crashed must not admit a landing."""
+    sha = assessment.branch_sha
     try:
-        decision = suite_gate.evaluate_landing(
-            repo_root, assessment.branch_sha, tip, runner=runner, timeout_s=timeout_s, waiver=waiver,
-        )
+        if waiver is not None and _waivable_suite_record(repo_root, sha, tip):
+            suite_gate.waive_record(repo_root, sha, waiver)
+            decision = suite_gate.landing_decision(repo_root, sha, tip)
+        else:
+            decision = suite_gate.evaluate_landing(
+                repo_root, assessment.branch_sha, tip, runner=runner, timeout_s=timeout_s, waiver=waiver,
+            )
     except Exception as exc:  # noqa: BLE001 — a crashed gate refuses rather than admits
         return f"suite gate: {gate.one_line(exc, 400)}", None
     if not decision.admitted:
         return f"suite gate: {decision.line.removeprefix('SUITE: ')}", None
     return None, decision.line
+
+
+def _waivable_suite_record(repo_root, sha, tip):
+    """A stored UNAVAILABLE suite record, unwaived, of this candidate on the live tip, for a
+    landing that needs the suite: waive it in place instead of rerunning a suite that already
+    could not run."""
+    if suite_gate.landing_scope(repo_root, tip, sha)[0] != suite_gate.REQUIRED:
+        return False
+    stored = suite_gate.candidate_record(gate.git_common_dir(repo_root), sha)
+    return (
+        isinstance(stored, dict)
+        and stored.get("status") == suite_gate.UNAVAILABLE
+        and stored.get("waiver") is None
+        and stored.get("candidate_sha") == sha
+        and stored.get("sandbox_core_sha") == sha
+        and stored.get("base_sha") == tip
+    )
 
 
 def _admitted_line(sha, record, how, record_path=None):

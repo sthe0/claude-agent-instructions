@@ -216,7 +216,17 @@ def test_an_unavailable_suite_needs_a_waiver_to_land(world, capsys):
     assert code == 0
     assert lines_with(out, "SUITE: ")[0].startswith("SUITE: ADMITTED (UNAVAILABLE, waived: runner down")
     assert world.stored(sha)["waiver"]["reason"] == "runner down"
+    assert len(runner.calls) == 1
     assert remote_main(world) == sha
+
+
+def test_a_waiver_given_with_the_first_run_admits_an_unavailable_suite(world, capsys):
+    sha = feature(world, CODE)
+    runner = FakeRunner({sha: unavailable_run(sha)})
+    code, out, _ = land(world, capsys, "--suite-waiver", "runner down", suite_runner=runner)
+    assert code == 0
+    assert lines_with(out, "SUITE: ")[0].startswith("SUITE: ADMITTED (UNAVAILABLE, waived: runner down")
+    assert len(runner.calls) == 1 and remote_main(world) == sha
 
 
 def test_a_waiver_never_admits_a_failing_suite(world, capsys):
