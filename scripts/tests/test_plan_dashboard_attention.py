@@ -446,6 +446,19 @@ def test_a_shrunk_or_replaced_transcript_is_read_again_from_the_start(tmp_path):
     assert [e["text"][0] for e in attention.read_tail(path).chat] == ["y", "z"]
 
 
+def test_a_transcript_truncated_in_place_and_regrown_reads_like_a_fresh_one(tmp_path):
+    path = tmp_path / "t.jsonl"
+    path.write_bytes(lines_of([user(5, "a" * 40), user(4, "b" * 40)]))
+    attention.read_tail(path)
+    with path.open("r+b") as handle:
+        handle.truncate(0)
+        handle.write(lines_of([user(3, "c")]))
+    attention.read_tail(path)
+    with path.open("ab") as handle:
+        handle.write(lines_of([user(2, "d" * 80)]))
+    assert [e["text"][0] for e in attention.read_tail(path).chat] == ["c", "d"]
+
+
 def test_an_unreadable_path_has_no_tail(tmp_path):
     assert attention.read_tail(tmp_path / "missing.jsonl") is None
 

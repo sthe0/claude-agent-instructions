@@ -199,7 +199,7 @@ def read_tail(path) -> Tail | None:
         return None
     key = str(path)
     with _LOCK:
-        cached = _CACHE.get(key)
+        cached = seen = _CACHE.get(key)
     if cached is not None and (cached.inode != stat.st_ino or stat.st_size < cached.offset):
         cached = None
     if cached is not None and stat.st_size == cached.offset:
@@ -218,8 +218,10 @@ def read_tail(path) -> Tail | None:
         return None
     _consume(tail, data)
     with _LOCK:
+        # the entry read above is replaced even by a shorter tail (a file truncated in place); one another
+        # thread published meanwhile is replaced only by a tail that read at least as far
         current = _CACHE.get(key)
-        if current is None or current.inode != tail.inode or current.offset <= tail.offset:
+        if current is seen or current.inode != tail.inode or current.offset <= tail.offset:
             _CACHE[key] = tail
     return tail
 
