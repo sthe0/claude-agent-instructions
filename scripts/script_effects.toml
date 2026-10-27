@@ -14,10 +14,15 @@
 
 [[script]]
 path = "scripts/land-branch.py"
-sha256 = "6ed41f071f807e6e1988d9b7a9a28ad0951c01307f06c5791cbe2aa873910da7"
+sha256 = "9c9d4aad30628a37945092230538410529de6350e7cb17cf9e9b74ed0a39bba6"
 resolver = "land_branch"
 
 [[script]]
 path = "scripts/instruction-smoke-gate.py"
 sha256 = "e8905bebf9e3f1af494ca4ea2f175bdad0f92286e3e3f87ba6f4aa99cdc1faf7"
 resolver = "instruction_smoke_gate"
+
+[[script]]
+path = "scripts/suite-gate.py"
+sha256 = "8f6f7cbb8dd6a7c6a56cc001674468ed79db1a85c4f0d1cb2dffa575a22f3f50"
+resolver = "suite_gate"
