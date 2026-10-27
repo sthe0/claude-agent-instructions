@@ -580,6 +580,13 @@ def _child_link(path: Path) -> tuple[str, dict] | None:
         "node": state.get("node"), "goal": state.get("goal")}
 
 
+def _prune_children(state_root: Path, present: set) -> None:
+    """Drop the cached links of ``state_root``'s state files that are gone."""
+    with CACHE_LOCK:
+        for path in [p for p in _CHILDREN if p.parent == state_root and p not in present]:
+            del _CHILDREN[path]
+
+
 def child_index(state_root, *, since: float | None = None) -> dict[str, list[dict]]:
     """Parent session id → its linked children. Each state file's link is cached by path,
     mtime and size, so a call re-reads only changed or new files. With ``since`` (epoch
@@ -587,7 +594,9 @@ def child_index(state_root, *, since: float | None = None) -> dict[str, list[dic
     state file is created after its parent starts and later saves only raise its mtime."""
     floor = None if since is None else since - 60
     index: dict[str, list[dict]] = {}
-    for path in sorted(Path(state_root).glob("*.json")):
+    paths = sorted(Path(state_root).glob("*.json"))
+    _prune_children(Path(state_root), set(paths))
+    for path in paths:
         try:
             st = path.stat()
         except OSError:

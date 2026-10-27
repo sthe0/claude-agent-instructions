@@ -844,6 +844,24 @@ def test_the_child_index_since_skips_older_uncached_files_and_widens_lazily(tmp_
     assert sorted(state_reads) == ["parent", "sibling"]
 
 
+def test_the_child_index_since_reads_a_file_exactly_at_the_floor_and_skips_one_just_below(tmp_path, state_reads):
+    root = conversation_root(tmp_path)
+    since = (NOW - dt.timedelta(hours=2)).timestamp()
+    set_mtime(root.state_root / "child.json", dt.datetime.fromtimestamp(since - 60, tz=dt.timezone.utc))
+    set_mtime(root.state_root / "sibling.json", dt.datetime.fromtimestamp(since - 61, tz=dt.timezone.utc))
+    set_mtime(root.state_root / "parent.json", NOW - dt.timedelta(hours=5))
+    model.child_index(root.state_root, since=since)
+    assert state_reads == ["child"]
+
+
+def test_the_child_index_forgets_a_deleted_state_file(tmp_path):
+    root = conversation_root(tmp_path)
+    model.child_index(root.state_root)
+    (root.state_root / "child.json").unlink()
+    assert model.child_index(root.state_root) == {}
+    assert sorted(p.stem for p in model._CHILDREN if p.parent == root.state_root) == ["parent", "sibling"]
+
+
 def test_the_child_index_without_a_bound_reads_every_state_file(tmp_path, state_reads):
     root = conversation_root(tmp_path)
     for name in ("parent", "child", "sibling"):
