@@ -234,11 +234,13 @@ def overview_rows(snapshot: dict, now: dt.datetime, attention_payload=None, acti
     """One row per task, newest last activity first (``last_activity``), then one per session the locator
     knows that no task owns, newest transcript first. A row is its ``session_id`` (a session row's harness
     id), the ``cells`` of ``OVERVIEW_COLUMNS``, its ``kind`` (``task`` or ``session``), ``waiting`` and
-    ``style``."""
+    ``style``. A session whose harness id is a listed task's id is that task's row, never a second one: all
+    mode draws its first table before it knows which tasks represent the live overlay's sessions."""
     activity = activity or {}
     rows = [task_row(task, now, attention_payload) for task in activity_order(snapshot["tasks"], activity)]
-    sessions = sorted(_session_rows(attention_payload), key=lambda e: activity.get(e["harness_session"], float("-inf")),
-                      reverse=True)
+    listed = {row["session_id"] for row in rows}
+    sessions = sorted((e for e in _session_rows(attention_payload) if e["harness_session"] not in listed),
+                      key=lambda e: activity.get(e["harness_session"], float("-inf")), reverse=True)
     for entry in sessions:
         harness, waiting = entry["harness_session"], entry.get("waiting")
         since = _since(now, entry.get("since"))

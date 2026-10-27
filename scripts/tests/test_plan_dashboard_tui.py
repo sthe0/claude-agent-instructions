@@ -201,6 +201,13 @@ def test_session_rows_are_sorted_by_their_transcripts_mtime():
     assert [r["session_id"] for r in rows] == ["b", "c", "a"]
 
 
+def test_a_session_row_whose_id_is_a_listed_task_is_not_drawn_twice():
+    payload = {"tasks": {}, "sessions": [
+        {"harness_session": name, "cwd": None, "name": name, "waiting": "none", "since": None} for name in ("a", "b")]}
+    rows = tui.overview_rows(listing(summary("a")), NOW, payload)
+    assert [(r["kind"], r["session_id"]) for r in rows] == [("task", "a"), ("session", "b")]
+
+
 def test_overview_hides_stale_unless_asked(tmp_path):
     root = console_root(tmp_path)
     assert STALE not in [r["session_id"] for r in tui.overview_rows(snapshot(root), NOW)]
