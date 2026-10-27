@@ -591,7 +591,7 @@ hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
-[sites."scripts/mandate_cycle/driver.py::Cycle._work_item::pattern.findall"]
+[sites."scripts/mandate_cycle/driver.py::Cycle.review_item::pattern.findall"]
 class = "structural"
 ground = "VERDICT_RE.findall reads the reviewer's `VERDICT: accept|reject` marker, a fixed tag the review brief requires; the accept/reject judgement itself is the reviewer model's."
 hits = 1
@@ -600,6 +600,12 @@ reviewed_by = "developer"
 [sites."scripts/mandate_cycle/driver.py::Cycle._work_item::pattern.fullmatch"]
 class = "structural"
 ground = "SHA_RE.fullmatch validates `git rev-parse HEAD` output as a 40-hex commit id."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/mandate_cycle/driver.py::item_tree::pattern.fullmatch"]
+class = "structural"
+ground = "SHA_RE.fullmatch validates `git write-tree` output as a 40-hex tree id."
 hits = 1
 reviewed_by = "developer"
 

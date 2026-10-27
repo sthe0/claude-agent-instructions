@@ -44,6 +44,7 @@ T_CLI = "tests/test_mandate_cli.py"
 DRIVER = "mandate_cycle/driver.py"
 NOTIFIERS = "mandate_cycle/notifiers.py"
 T_CYCLE = "tests/test_mandate_cycle.py"
+T_BASIS = "tests/test_agentctl_mandate_basis.py"
 T_NOTIFIER = "tests/test_mandate_notifier.py"
 STATE = "agentctl/state.py"
 PLAN = "agentctl/plan.py"
@@ -177,20 +178,20 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "baseline-relative-tests": Mutant(
         DRIVER,
-        "            baseline.passed, baseline.seen, item_suite.passed, item_suite.seen, rules.diff_path_groups(lines),\n"
-        "        )\n"
-        '        row["excused_tests"] = excused[:DIGEST_EXCUSED_IDS]\n'
-        '        row["excused_count"] = len(excused)\n'
-        "        if failing:\n"
-        '            rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))\n'
-        "            green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed, excused)\n",
-        "            baseline.seen, baseline.seen, item_suite.passed, item_suite.seen, rules.diff_path_groups(lines),\n"
-        "        )\n"
-        '        row["excused_tests"] = excused[:DIGEST_EXCUSED_IDS]\n'
-        '        row["excused_count"] = len(excused)\n'
-        "        if failing:\n"
-        '            rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))\n'
-        "            green = rules.passes_after_rerun(baseline.seen, item_suite.passed, rerun.passed, excused)\n",
+        "        baseline.passed, baseline.seen, result.passed, result.seen, rules.diff_path_groups(verdict.diff_lines),\n"
+        "    )\n"
+        "    verdict.excused, verdict.excused_count, verdict.failing = excused[:DIGEST_EXCUSED_IDS], len(excused), list(failing)\n"
+        "    green = True\n"
+        "    if failing:\n"
+        "        rerun = suite_run(sh, suite, worktree, item_dir / \"rerun.xml\", timeout_s, files=rerun_targets(failing, worktree))\n"
+        "        green = rules.passes_after_rerun(baseline.passed,",
+        "        baseline.seen, baseline.seen, result.passed, result.seen, rules.diff_path_groups(verdict.diff_lines),\n"
+        "    )\n"
+        "    verdict.excused, verdict.excused_count, verdict.failing = excused[:DIGEST_EXCUSED_IDS], len(excused), list(failing)\n"
+        "    green = True\n"
+        "    if failing:\n"
+        "        rerun = suite_run(sh, suite, worktree, item_dir / \"rerun.xml\", timeout_s, files=rerun_targets(failing, worktree))\n"
+        "        green = rules.passes_after_rerun(baseline.seen,",
         _ids(T_CYCLE, "test_a_test_failing_on_the_baseline_does_not_count_against_the_item"),
     ),
     "no-trunk-push": Mutant(
@@ -217,7 +218,7 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "head-pinned-before-review": Mutant(
         DRIVER,
-        "if pinned[0] != checked:",
+        "if run.judged_tree and item_tree(self.sh, worktree, checked)[0] != run.judged_tree:",
         "if False:",
         _ids(T_CYCLE, "test_a_commit_made_while_the_suite_runs_is_never_pushed"),
     ),
@@ -682,27 +683,6 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_exclusion_reasons_are_reported",
         ),
     ),
-    "inline-cycle-gate": Mutant(
-        DRIVER,
-        "        if not inline_class.within_bound(measured, bound):\n",
-        "        if False:\n",
-        _ids(
-            T_CYCLE,
-            "test_a_change_over_the_bound_is_declined_as_needing_a_plan_with_no_pull_request",
-            "test_a_counted_binary_file_declines_the_item_even_when_its_lines_are_few",
-            "test_the_digest_lists_a_declined_item_and_the_needs_a_plan_section",
-        ),
-    ),
-    "inline-cycle-trunk-attrs": Mutant(
-        DRIVER,
-        "attrs_source=f\"{REMOTE}/{TRUNK}\"",
-        "attrs_source=None",
-        _ids(
-            T_CYCLE,
-            "test_the_measurement_reads_the_trusted_checkouts_committed_attributes_not_its_working_tree",
-            "test_the_measurement_reads_the_attributes_at_trunk_not_at_the_checkouts_lagging_head",
-        ),
-    ),
     "inline-constitution-fixed": Mutant(
         RULES,
         'FIXED_CONSTITUTION = (\n    "scripts/agentctl/inline_class.py",\n',
@@ -716,11 +696,104 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_the_fixed_entries_name_every_file_the_counted_set_depends_on",
         ),
     ),
-    "inline-triage-definition": Mutant(
+    "triage-admits-any-size": Mutant(
         DRIVER,
-        "definition=inline_class.INLINE_DEFINITION",
-        'definition=""',
-        _ids(T_CYCLE, "test_the_triage_prompt_carries_the_shared_definition_and_the_bound_and_keeps_its_json_example"),
+        'Size is not a reason for "auto-no": a larger item is planned by the developer under a standing norm;',
+        'Larger items are "auto-no": too big to fix unattended;',
+        _ids(T_CYCLE, "test_the_triage_prompt_admits_an_in_repo_item_of_any_size_and_keeps_its_json_example"),
+    ),
+    "basis-skips-only-under-mandate": Mutant(
+        CLI,
+        "    if not by_agent and not mandate_approver_id:\n        blockers = (\n",
+        "    if False:\n        blockers = (\n",
+        _ids(T_BASIS, "test_a_non_mandate_approval_still_requires_presentation_and_grants_approval"),
+    ),
+    "basis-exact-norm": Mutant(
+        CLI,
+        "    return problems + mandate_rules.mandate_approval_problems(plan_text, inputs, mandate, gate_result)\n",
+        "    return problems\n",
+        _ids(T_BASIS, "test_a_mandate_approval_of_an_edited_norm_is_refused"),
+    ),
+    "basis-keeps-since-user": Mutant(
+        CLI,
+        "    if not mandate_approver_id:\n        _clear_since_user_decision(state, args.by)\n",
+        "    if True:\n        _clear_since_user_decision(state, args.by)\n",
+        _ids(T_BASIS, "test_a_mandate_approval_does_not_clear_the_since_user_counters_or_stamp_the_order_ledger"),
+    ),
+    "basis-binds-taken-item": Mutant(
+        CLI,
+        '    if not taken:\n        problems.append("the cycle recorded no item taken',
+        '    if False:\n        problems.append("the cycle recorded no item taken',
+        _ids(T_BASIS, "test_a_mandate_approval_of_a_norm_for_no_taken_item_is_refused"),
+    ),
+    "reject-records-actor": Mutant(
+        CLI,
+        'state.log("reject", reason=reason, stages=idxs, **({"by": rejecter} if rejecter else {}))',
+        'state.log("reject", reason=reason, stages=idxs)',
+        _ids(T_BASIS, "test_reject_by_mandate_moves_the_child_to_diagnosing_and_records_the_actor"),
+    ),
+    "child-is-linked": Mutant(
+        DRIVER,
+        'argv += ["--session", session, "--stage-index", str(STAGE_INDEX)]',
+        "pass",
+        _ids(T_CYCLE, "test_an_item_runs_as_a_linked_child_of_a_mandate_approved_parent_session"),
+    ),
+    "settled-is-mandates": Mutant(
+        DRIVER,
+        '"mandate-answer", {"issue": run.number, "kind": kind, "answer": verdict.answer, "round": run.rounds},\n'
+        "                by=rules.mandate_approver(self.mid),",
+        '"mandate-answer", {"issue": run.number, "kind": kind, "answer": verdict.answer, "round": run.rounds},\n'
+        '                by="user",',
+        _ids(T_CYCLE, "test_every_settled_answer_is_recorded_as_the_mandates_never_the_users"),
+    ),
+    "stop-keeps-breaker-closed": Mutant(
+        DRIVER,
+        'row.update(outcome="overrun", overrun_reasons=list(detail), cost_usd=self.item_cost(run.item_dir)[0])',
+        'row.update(outcome="failed", failure_kind=KIND_INFRA, overrun_reasons=list(detail), '
+        "cost_usd=self.item_cost(run.item_dir)[0])",
+        _ids(T_CYCLE, "test_a_spend_fire_stops_the_item_as_overrun_without_the_breaker"),
+    ),
+    "check-item-bound": Mutant(
+        DRIVER,
+        'verdict.over_bound = not inline_class.within_bound(measured, int(inputs["bound"]))',
+        "verdict.over_bound = False",
+        _ids(T_CYCLE, "test_check_item_judges_constitution_org_neutral_suite_gates_and_bound[_bound-failed5]"),
+    ),
+    "check-item-empty-diff": Mutant(
+        DRIVER,
+        "    if not verdict.diff_lines:\n",
+        "    if False:\n",
+        _ids(T_CYCLE, "test_check_item_is_red_on_an_unchanged_tree"),
+    ),
+    "covered-denials-counted": Mutant(
+        DRIVER,
+        'denials = sum(1 for a in run.asks if a["kind"] == "permission-covered")',
+        "denials = 0",
+        _ids(T_CYCLE, "test_a_repeated_covered_denial_stops_the_item_as_exceeds_mandate"),
+    ),
+    "nested-cost-charged": Mutant(
+        DRIVER,
+        "for nested in nested_spawn_rows(rows, self._child):",
+        "for nested in []:",
+        _ids(T_CYCLE, "test_nested_spawn_spend_is_charged_to_the_item_and_the_mandate_windows"),
+    ),
+    "salvage-kept": Mutant(
+        DRIVER,
+        'if row["outcome"] != "pr-opened" and self._item_base:',
+        "if False:",
+        _ids(T_CYCLE, "test_every_stopped_item_with_a_diff_keeps_its_patch[garbage-True-M\\tscripts/foo.py\\n]"),
+    ),
+    "salvage-fail-open": Mutant(
+        DRIVER,
+        '        except (DriverError, OSError) as exc:\n            self.event("salvage-failed"',
+        '        except ZeroDivisionError as exc:\n            self.event("salvage-failed"',
+        _ids(T_CYCLE, "test_a_salvage_error_is_an_event_and_keeps_the_outcome"),
+    ),
+    "account-limit-graceful": Mutant(
+        DRIVER,
+        "    if status != STATUS_ACCOUNT_LIMIT and gate.may_start:\n",
+        "    if gate.may_start:\n",
+        _ids(T_CYCLE, "test_an_account_limit_on_a_spawn_stops_the_cycle_without_the_breaker[developer]"),
     ),
     "ask-unknown-exceeds": Mutant(
         RULES, 'return exceeds("unclassified")', 'return settled("unclassified")',
