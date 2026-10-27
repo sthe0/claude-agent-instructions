@@ -47,6 +47,11 @@ EXPECTED_ENTRIES = (
     "approval-exact-norm", "approval-open-gate", "item-norm-grants", "account-limit-precedence",
     "account-limit-error-kind", "account-limit-last-record", "account-limit-api-flag",
     "account-limit-infra-marker", "nested-cost-counted", "item-norm-escape",
+    "ask-self-approval-settled", "ask-over-bound-parent-norm", "ask-check-green",
+    "ask-landing-waiver", "ask-resolution-node", "ask-acceptance-active",
+    "ask-wall-clock-exceeds", "ask-wall-clock-scale", "stop-limit-mapping",
+    "stop-declined-fallback", "item-norm-title-cut", "item-norm-body-cut",
+    "item-norm-body-cut-length", "mandate-id-compared",
 )
 
 

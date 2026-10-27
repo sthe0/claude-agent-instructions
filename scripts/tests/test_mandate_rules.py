@@ -1110,6 +1110,11 @@ def test_a_missing_or_disagreeing_observed_key_exceeds():
     assert m.stop_disposition(limit) == ("declined", "exceeds-mandate")
     assert ask("effort-fire-spend", {"fire_scale": "replans"}).reason == "observation:fire_scale"
     assert ask("landing", {"landing_waiver": 1}).cls == m.ASK_EXCEEDS
+    assert ask("landing", {"landing_waiver": False}).cls == m.ASK_EXCEEDS
+    assert ask("resolution", {"child_node": "EXECUTING"}).cls == m.ASK_EXCEEDS
+    assert ask("acceptance", {"acceptance_active": True}).cls == m.ASK_EXCEEDS
+    assert ask("over-bound-inline", {"over_bound": True, "child_basis": "parent_norm"}).cls == m.ASK_EXCEEDS
+    assert ask("effort-fire-wall-clock", {"fire_scale": "spend"}).reason == "observation:fire_scale"
 
 
 def test_a_repeated_covered_denial_exceeds():

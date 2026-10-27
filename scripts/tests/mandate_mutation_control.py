@@ -826,6 +826,64 @@ CATALOGUE: "dict[str, Mutant]" = {
         RULES, r'out.append("\\\\")', r'out.append("\\")',
         _ids(T_RULES, "test_hostile_issue_text_cannot_change_the_item_norm_structure"),
     ),
+    "ask-self-approval-settled": Mutant(
+        RULES, 'return settled("parent-norm")', 'return exceeds("parent-norm")',
+        _ids(T_RULES, "test_check_review_bound_and_covered_permission_are_settled_until_the_rounds_limit"),
+    ),
+    "ask-over-bound-parent-norm": Mutant(
+        RULES, 'if basis is absent or basis == "parent_norm":', "if basis is absent:",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-check-green": Mutant(
+        RULES, 'if get("check_green", bool) is not False:', "if False:",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-landing-waiver": Mutant(
+        RULES, 'if get("landing_waiver", bool) is True else', "if True else",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-resolution-node": Mutant(
+        RULES, 'if get("child_node", str) == "RESOLUTION" else', "if True else",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-acceptance-active": Mutant(
+        RULES, 'if get("acceptance_active", bool) is False else', "if True else",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-wall-clock-exceeds": Mutant(
+        RULES,
+        'return exceeds("effort-wall-clock" if get("fire_scale", str) == "wall-clock" else "observation:fire_scale")',
+        'return settled("effort-wall-clock")',
+        _ids(T_RULES, "test_effort_fires_backstops_and_ceiling_exceed_the_mandate"),
+    ),
+    "ask-wall-clock-scale": Mutant(
+        RULES, 'get("fire_scale", str) == "wall-clock"', 'get("fire_scale", str) != absent',
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "stop-limit-mapping": Mutant(
+        RULES, "if reason == ACCOUNT_LIMIT_REASON:", "if False:",
+        _ids(T_RULES, "test_stop_disposition_retries_resource_stops_and_declines_authority_stops"),
+    ),
+    "stop-declined-fallback": Mutant(
+        RULES, 'return "declined", "exceeds-mandate"', 'return "overrun", [reason]',
+        _ids(T_RULES, "test_stop_disposition_retries_resource_stops_and_declines_authority_stops"),
+    ),
+    "item-norm-title-cut": Mutant(
+        RULES, "title = str(title)[:200]", "title = str(title)",
+        _ids(T_RULES, "test_hostile_issue_text_cannot_change_the_item_norm_structure"),
+    ),
+    "item-norm-body-cut": Mutant(
+        RULES, "if len(body) > 2000:", "if False:",
+        _ids(T_RULES, "test_the_item_norm_cuts_a_long_body_below_the_inline_field_limit"),
+    ),
+    "item-norm-body-cut-length": Mutant(
+        RULES, "body = body[:2000] +", "body = body[:2500] +",
+        _ids(T_RULES, "test_hostile_issue_text_cannot_change_the_item_norm_structure"),
+    ),
+    "mandate-id-compared": Mutant(
+        RULES, 'if rest.pop("mandate_id", None) != mandate.id:', 'if rest.pop("mandate_id", None) is None and False:',
+        _ids(T_RULES, "test_mandate_approval_reads_and_strips_the_mandate_id_key"),
+    ),
 }
 
 
