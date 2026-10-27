@@ -1015,18 +1015,6 @@ ground = "re.sub decodes octal `\\NNN` escapes in a /proc/self/mounts mount-poin
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/hook-prewrite-plan-check.py::main::pattern.search"]
-class = "structural"
-ground = "PLAN_PATH_RE.search tests whether the edited file path lies under a `.claude[-agent]/plans/` directory (file path syntax)."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/hook-prewrite-plan-check.py::<module>::re.compile"]
-class = "structural"
-ground = "PLAN_PATH_RE compiles the `.claude(-agent)/plans/` path-component pattern."
-hits = 1
-reviewed_by = "developer"
-
 [sites."scripts/hook-prompt-reminders.py::<module>::re.compile"]
 class = "structural"
 ground = "CYRILLIC_RE (U+0400-U+04FF) and LATIN_RE ([A-Za-z]) are script character classes and TICKET_KEY_RE matches the ABC-123 ticket-key shape; all three are determinate from the characters themselves."

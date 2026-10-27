@@ -26,7 +26,6 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
-from lib import dispatch_witness_snapshot  # noqa: E402
 from lib import hook_wiring  # noqa: E402
 
 HOOK = "hook-plan-delivery-gate.py"
@@ -208,10 +207,7 @@ def test_a_project_level_timeout_is_no_longer_invisible(root, monkeypatch, tmp_p
 
     w = hook_wiring.probe(HOOK, root)
     assert sorted(r.timeout for r in w.registrations) == [5, 45]
-    # And through the one function that spends the number: the recorded limit a
-    # witness must outlive is the project entry's 45s, not the 5s the old
-    # user-level-only chain would have handed it.
-    assert dispatch_witness_snapshot.old_timeout(w) == 45
+    assert max(r.timeout for r in w.registrations) == 45
 
 
 def test_scope_coverage_is_read_off_what_the_probe_reached(root, monkeypatch, tmp_path):
@@ -271,10 +267,9 @@ def test_an_unmodelled_project_member_does_not_pass_for_covered_under_wired(
     outcome from `result.events` without ever consulting the `modelled` flag — so
     the UNKNOWN degradation the case above relies on is not available here.
     Nothing but the coverage predicate stands between an unread project member
-    and a snapshot entry claiming full scope: `scope_qualified: false` makes
-    check-dispatch-witness.py skip `qualified_scope_verdict()` and certify a
-    recorded call against the 5s it could see, when the entry it skipped says
-    60s and a 6s call proves nothing at all."""
+    and a claim of full scope: `scope_fully_covered` True would let a caller
+    certify a recorded call against the 5s it could see, when the entry it
+    skipped says 60s and a 6s call proves nothing at all."""
     _write(root / "settings.json", {"Stop": [_timed_group(str(SCRIPTS / HOOK), 5)]})
     project = tmp_path / "proj"
     (project / ".claude").mkdir(parents=True)
@@ -291,11 +286,10 @@ def test_an_unmodelled_project_member_does_not_pass_for_covered_under_wired(
     assert w.status == hook_wiring.WIRED
     assert project / ".claude" / "settings.json" in w.members_unmodelled
     assert not w.project_scope_covered
-    entry = dispatch_witness_snapshot.entry_for(w)
-    assert entry["scope_qualified"]
-    # The 60s registration was skipped, so the recorded limit is the 5s one —
-    # which is exactly why the entry must not be spent unqualified.
-    assert entry["timeout"] == 5
+    assert not w.scope_fully_covered
+    # The 60s registration was skipped, so the largest limit seen is the 5s one —
+    # which is exactly why it must not be spent unqualified.
+    assert max(r.timeout for r in w.registrations) == 5
 
 
 def test_the_chain_does_not_list_one_member_twice(tmp_path, monkeypatch):
@@ -338,8 +332,7 @@ def test_an_unmodelled_user_level_member_qualifies_the_entry_too(
     as wide as it can and `project_scope_covered` is rightly True. But a
     USER-LEVEL member parsed and then carried a shape the scanner does not
     model, hiding a 60s registration. A predicate about the project scope calls
-    that a fact; check-dispatch-witness.py then skips `qualified_scope_verdict()`
-    and certifies a 6s call against the 5s it could see."""
+    that a fact, and a 6s call would be certified against the 5s it could see."""
     _write(root / "settings.json", {"Stop": [_timed_group(str(SCRIPTS / HOOK), 5)]})
     # Valid JSON, and "Stop" is a dict where a list of groups belongs.
     (root / "settings.local.json").write_text(
@@ -359,10 +352,8 @@ def test_an_unmodelled_user_level_member_qualifies_the_entry_too(
     assert w.project_scope_covered
     assert not w.scope_fully_covered
 
-    entry = dispatch_witness_snapshot.entry_for(w)
-    assert entry["scope_qualified"]
-    # The 60s registration was skipped, so the recorded limit is the 5s one.
-    assert entry["timeout"] == 5
+    # The 60s registration was skipped, so the largest limit seen is the 5s one.
+    assert max(r.timeout for r in w.registrations) == 5
 
 
 def test_an_unreadable_user_level_member_qualifies_the_entry_too(
@@ -383,7 +374,6 @@ def test_an_unreadable_user_level_member_qualifies_the_entry_too(
     assert w.members_unreadable == [root / "settings.json"]
     assert w.project_scope_covered
     assert not w.scope_fully_covered
-    assert dispatch_witness_snapshot.entry_for(w)["scope_qualified"]
 
 
 def test_an_unsearchable_chain_member_is_unaccounted_for_not_absent(
@@ -423,7 +413,6 @@ def test_an_unsearchable_chain_member_is_unaccounted_for_not_absent(
     assert w.status == hook_wiring.UNKNOWN
     assert w.project_scope_covered
     assert not w.scope_fully_covered
-    assert dispatch_witness_snapshot.entry_for(w)["scope_qualified"]
 
 
 def test_a_looping_symlink_does_not_take_the_whole_chain_down(root, monkeypatch, tmp_path):

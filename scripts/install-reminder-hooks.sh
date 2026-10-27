@@ -75,7 +75,6 @@ DESIRED = [
     # hook's registrations even though only the other one calls the judge.
     ("UserPromptSubmit", None,    "hook-resolution-reminder.py",     22),
     ("PreToolUse",       "Edit|Write", "hook-memory-consistency.py",         5),
-    ("PreToolUse",       "Edit|Write", "hook-prewrite-plan-check.py", 5),
     ("PreToolUse",       "Edit|Write", "hook-state-gate.py",          5),
     # Advisory (never blocks): warn when a Write/Edit would introduce a hit
     # against a discovered term ruleset (C1 org-neutrality mechanism).

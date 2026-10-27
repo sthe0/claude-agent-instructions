@@ -98,7 +98,6 @@
 "scripts/hook-guard-canon-readonly.py" = { disposition = "not-canon", category = "not-canon", reason = "the read-only guard: names `git commit`/`sed -i` as patterns to deny, writes no file" }
 "scripts/hook-guard-permission-surface.py" = { disposition = "not-canon", category = "not-canon", reason = "fire log under ~/.local/log/claude-permission-guard.jsonl" }
 "scripts/hook-long-job-arm.py" = { disposition = "not-canon", category = "not-canon", reason = "arm marker under the hook state dir" }
-"scripts/hook-prewrite-plan-check.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session check markers and logs under the hook state dir" }
 "scripts/hook-prompt-reminders.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session language-reminder stamp and the instructions-refresh stamp under the hook state dir" }
 "scripts/hook-retry-detector.py" = { disposition = "not-canon", category = "not-canon", reason = "retry counter state under the hook state dir" }
 "scripts/hook-review-mergeable-guardian.py" = { disposition = "not-canon", category = "not-canon", reason = "guardian state under the hook state dir" }
@@ -116,7 +115,6 @@
 "scripts/lib/band_throttle.py" = { disposition = "not-canon", category = "not-canon", reason = "throttle band files under the hook state dir" }
 "scripts/lib/bash_write_targets.py" = { disposition = "not-canon", category = "not-canon", reason = "parser that recognises `sed -i`/`git apply` in a command string; writes no file" }
 "scripts/lib/config-root.sh" = { disposition = "not-canon", category = "not-canon", reason = "resolves the config root; writes no file" }
-"scripts/lib/dispatch_witness_snapshot.py" = { disposition = "not-canon", category = "not-canon", reason = "witness snapshot in the agentctl state dir" }
 "scripts/lib/git_cwd.py" = { disposition = "not-canon", category = "not-canon", reason = "parses the directory a `git commit` targets; writes no file" }
 "scripts/lib/hook_fragments.py" = { disposition = "exempt", category = "exempt-config-root", reason = "writes the fragment ownership record into the config root, next to the settings file install-reminder-hooks.sh edits" }
 "scripts/lib/hook_wiring.py" = { disposition = "not-canon", category = "not-canon", reason = "hook wiring table; names `git commit`/`sed -i` as deny patterns in text" }

@@ -14,7 +14,7 @@
 #     per-file agents/*, per-dir skills/* symlinks),
 #   - the purely system-managed plain file agent-identity.local, and
 #   - the coordination engine's state: ~/.claude/agentctl/{state,scopes,
-#     gate-log.jsonl,prewrite-fallback.jsonl} and ~/.claude/plans (the latter is
+#     gate-log.jsonl} and ~/.claude/plans (the latter is
 #     replaced by a compat symlink so stored absolute plan paths keep resolving),
 #   - the machine-local project registry ~/.claude/projects.d (per-record
 #     agent-project.json files, moved preserving their directory keys).
@@ -151,7 +151,7 @@ if [[ -d "$SRC/agentctl" && ! -L "$SRC/agentctl" ]]; then
       ENGINE_STATE_FILES+=("agentctl/$_sub/$(basename "$_entry")")
     done < <(find "$_dir" -maxdepth 1 -mindepth 1 -type f -print0 2>/dev/null)
   done
-  for _name in gate-log.jsonl prewrite-fallback.jsonl; do
+  for _name in gate-log.jsonl; do
     _p="$SRC/agentctl/$_name"
     [[ -f "$_p" && ! -L "$_p" ]] && ENGINE_MERGE_FILES+=("agentctl/$_name")
   done

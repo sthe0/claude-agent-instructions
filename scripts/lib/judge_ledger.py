@@ -69,9 +69,7 @@ _state: dict = {"invocation_id": None, "source": None, "hook": None, "judge": No
 # is keyed by script basename. A reader that has to cross from one keying to
 # the other needs the translation, and this module owns the ``hook``
 # vocabulary, so the translation lives here once instead of as an inline copy
-# inside each reader. tests/test_dispatch_witness.py asserts the key set still
-# equals HOOK_CALL_SEQUENCE's, so a seventh judge-calling hook cannot be added
-# to one table and forgotten in the other.
+# inside each reader.
 HOOK_NAME_BY_BASENAME: "dict[str, str]" = {
     "hook-escalation-diagnosis-gate.py": "escalation_diagnosis",
     "hook-deferring-disposition-gate.py": "deferring_disposition",

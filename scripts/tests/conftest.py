@@ -497,7 +497,7 @@ def _no_ambient_project_dir(monkeypatch):
     test_canon_guard_wired_check's strict-mode expectations from a fixture the
     test wrote to a file the machine happens to have. Same accommodation as
     `_no_ambient_recursion_depth` above — the tests that own the predicate
-    (test_hook_wiring, test_dispatch_witness) set the variable themselves,
+    (test_hook_wiring) set the variable themselves,
     which overrides this."""
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 

@@ -1100,7 +1100,6 @@ SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
     "hook-prompt-reminders.py": "reader",
     "install-reminder-hooks.sh": "writer",
     "lib/config_root.py": "mention",
-    "lib/dispatch_witness_snapshot.py": "mention",
     "lib/hook_fragments.py": "reader",
     "lib/hook_wiring.py": "writer",
     "lib/host_llm.py": "reader",

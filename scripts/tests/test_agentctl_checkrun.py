@@ -89,11 +89,11 @@ def test_motivating_case_with_project_dir_set_clears_the_refusal(monkeypatch):
     assert "named no project root" not in obs.head
 
 
-# --- case 3: defect-S1 fixture — a real witness invoked bare ------------------
+# --- case 3: defect-S1 fixture — a real checker invoked bare ------------------
 
-def test_bare_dispatch_witness_is_red_with_argparse_usage(monkeypatch):
+def test_bare_required_args_checker_is_red_with_argparse_usage(monkeypatch):
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-    stage = _stage("python3 scripts/check-dispatch-witness.py", expected_exit=0)
+    stage = _stage("python3 scripts/plan-fit-report.py", expected_exit=0)
     [obs] = observe_stage_checks([stage], _resolve_repo_root, head_chars=10000)
     assert obs.label == RED
     assert obs.returncode == 2
