@@ -17,7 +17,11 @@ Execute a control in the checkout that holds the commits it judges, so a green s
 
 ## Goal class
 
-Level 1 — TODO (curator): name the goal this norm serves and the class of tasks it ranges over.
+TODO (curator): name the goal this norm serves.
+
+## Generality
+
+Level 1 — TODO (curator): name the class of tasks this norm ranges over and what it is deliberately not claimed for.
 
 ## Grounded in
 
