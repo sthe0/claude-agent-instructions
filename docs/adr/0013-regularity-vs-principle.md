@@ -53,7 +53,7 @@ The global principle leaves were migrated in one change into approved regulariti
 ## Consequences
 
 - A retrieved leaf is self-describing: a regularity is knowledge to rely on and to test against new observations; a principle is a norm to follow for a goal class.
-- Induction has a single target, the regularity. `promote-scan`, the `memory-curator` split and the recording procedure all lift recurring experience into regularities, and a principle is written afterwards for a goal, grounded in the regularities that justify it.
+- Induction has a single target, the regularity. `promote-scan`, the `curator` split and the recording procedure all lift recurring experience into regularities, and a principle is written afterwards for a goal, grounded in the regularities that justify it.
 - The planner still retrieves principles at element 7 (`search --tier principles`); `search --tier regularities` retrieves the knowledge those principles rest on.
 - A refutation of a regularity propagates: every principle grounded in it is reviewed, which is what the reflexive reconstruction of ADR-0004 asks for.
 - The cost is one more leaf kind and one more index. Every consumer that named `principle/v1` as the induction target had to be reworded.
