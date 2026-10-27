@@ -551,9 +551,9 @@ QUESTION = {"questions": [{"header": "HEADER-TEXT", "question": "Which way?", "m
 
 @pytest.fixture(autouse=True)
 def fresh_attention_cache():
-    attention._CACHE.clear()
+    attention.clear_cache()
     yield
-    attention._CACHE.clear()
+    attention.clear_cache()
 
 
 def write_fixture_transcript(root, session, entries):

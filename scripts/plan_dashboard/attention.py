@@ -27,6 +27,9 @@ transcripts root (the newest by mtime), else, only when no root was given, the r
 Transcripts are read incrementally: the first read takes the last ``FIRST_READ_BYTES`` aligned to a
 line start, later reads only the appended bytes (plus a kept partial line), and a shrunk or replaced
 file is read again from the start. The cache is per process, keyed by path, under ``_LOCK``.
+Marks are cached too (``_MARKS``), keyed by the transcript's path, mtime and size and by the
+locator's ``inputs_stamp``; both locks guard only their dict, never a read, so ``marks`` reads a
+batch of transcripts concurrently.
 """
 from __future__ import annotations
 
@@ -35,6 +38,7 @@ import hashlib
 import json
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from lib import config_root, engine_session_binding
@@ -47,8 +51,20 @@ FIRST_READ_BYTES = 1 << 20
 CHOICE_TOOLS = frozenset({"AskUserQuestion", "ExitPlanMode"})
 QUESTION_TOOL = "AskUserQuestion"
 
+POOL_WORKERS = 8
+
 _LOCK = threading.Lock()
 _CACHE: dict[str, "Tail"] = {}
+_MARKS_LOCK = threading.Lock()
+_MARKS: dict[str, "_Mark"] = {}
+_Mark = collections.namedtuple("_Mark", "key tail stamp permission")
+
+
+def clear_cache() -> None:
+    with _LOCK:
+        _CACHE.clear()
+    with _MARKS_LOCK:
+        _MARKS.clear()
 
 
 class Tail:
@@ -164,8 +180,19 @@ def _first_read(handle, size: int) -> bytes:
     return data[newline + 1:] if newline >= 0 else b""
 
 
+def _copy(tail: Tail) -> Tail:
+    copy = Tail(tail.inode)
+    copy.offset, copy.partial = tail.offset, tail.partial
+    copy.chat = collections.deque(tail.chat, maxlen=CHAT_MAX_ENTRIES)
+    copy.pending = dict(tail.pending)
+    copy.state, copy.state_ts, copy.last_ts = tail.state, tail.state_ts, tail.last_ts
+    return copy
+
+
 def read_tail(path) -> Tail | None:
-    """The cached state of the transcript at ``path``, brought up to date; None when unreadable."""
+    """The cached state of the transcript at ``path``, brought up to date; None when unreadable.
+    A published Tail is never changed again: an update reads into a copy outside the lock, so
+    readers of other transcripts never wait on this one's I/O."""
     path = Path(path)
     try:
         stat = os.stat(path)
@@ -173,28 +200,29 @@ def read_tail(path) -> Tail | None:
         return None
     key = str(path)
     with _LOCK:
-        tail = _CACHE.get(key)
-        if tail is not None and (tail.inode != stat.st_ino or stat.st_size < tail.offset):
-            tail = None
-        if tail is not None and stat.st_size == tail.offset:
-            return tail
-        fresh = tail is None
-        if fresh:
-            tail = Tail(stat.st_ino)
-        try:
-            with open(path, "rb") as handle:
-                if fresh:
-                    data = _first_read(handle, stat.st_size)
-                    tail.offset = stat.st_size
-                else:
-                    handle.seek(tail.offset)
-                    data = handle.read(stat.st_size - tail.offset)
-                    tail.offset += len(data)
-        except OSError:
-            return None
-        _consume(tail, data)
-        _CACHE[key] = tail
-        return tail
+        cached = _CACHE.get(key)
+    if cached is not None and (cached.inode != stat.st_ino or stat.st_size < cached.offset):
+        cached = None
+    if cached is not None and stat.st_size == cached.offset:
+        return cached
+    tail = Tail(stat.st_ino) if cached is None else _copy(cached)
+    try:
+        with open(path, "rb") as handle:
+            if cached is None:
+                data = _first_read(handle, stat.st_size)
+                tail.offset = stat.st_size
+            else:
+                handle.seek(tail.offset)
+                data = handle.read(stat.st_size - tail.offset)
+                tail.offset += len(data)
+    except OSError:
+        return None
+    _consume(tail, data)
+    with _LOCK:
+        current = _CACHE.get(key)
+        if current is None or current.inode != tail.inode or current.offset <= tail.offset:
+            _CACHE[key] = tail
+    return tail
 
 
 def transcript_index(transcripts_root) -> dict[str, list[Path]]:
@@ -274,37 +302,82 @@ def permission_needed(tail: Tail | None) -> bool:
     return tail is not None and not tail.pending
 
 
-def _attend(harness_session: str | None, path: Path | None, locator) -> tuple[dict, Tail | None]:
-    tail = read_tail(path) if path is not None else None
-    permission = locate.permission_wait(locator, harness_session) if permission_needed(tail) else None
+def _mark_key(harness_session: str | None, path: Path) -> tuple | None:
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size, harness_session)
+
+
+def _attend(harness_session: str | None, path: Path | None, locator, stamp=None) -> tuple[dict, Tail | None]:
+    """A transcript's mark, from ``_MARKS`` while its mtime, size and session hold. The locator's
+    answer is reused only while its ``stamp`` (an ``inputs_stamp`` read before the mark) holds too;
+    with no stamp the transcript-decided part is reused and the locator is asked again."""
+    key = _mark_key(harness_session, path) if path is not None else None
+    with _MARKS_LOCK:
+        entry = _MARKS.get(str(path)) if key is not None else None
+    if entry is not None and entry.key == key:
+        tail = entry.tail
+    else:
+        tail = read_tail(path) if key is not None else None
+        entry = None
+    permission = None
+    if permission_needed(tail):
+        if entry is not None and stamp is not None and entry.stamp == stamp:
+            permission = entry.permission
+        else:
+            permission = locate.permission_wait(locator, harness_session)
+    if key is not None and tail is not None:
+        with _MARKS_LOCK:
+            _MARKS[str(path)] = _Mark(key, tail, stamp, permission)
     waiting, since = waiting_state(tail, permission)
     return {"waiting": waiting, "harness_session": harness_session, "since": since}, tail
 
 
+def marks(targets, locator, stamp=None) -> list[dict]:
+    """The overlay of each ``(harness session, transcript path)``, read on a pool of ``POOL_WORKERS``:
+    a mark is a tail read plus at most one locator call, so a batch's reads overlap."""
+    targets = list(targets)
+    if len(targets) <= 1:
+        return [_attend(harness, path, locator, stamp)[0] for harness, path in targets]
+    with ThreadPoolExecutor(max_workers=min(POOL_WORKERS, len(targets))) as pool:
+        return list(pool.map(lambda target: _attend(*target, locator, stamp)[0], targets))
+
+
 def task_overlay(engine_session: str, locator, transcripts_root) -> dict:
     harness, path, _ = bind_session(engine_session, locator, transcripts_root)
-    return _attend(harness, path, locator)[0]
+    return _attend(harness, path, locator, locate.inputs_stamp(locator))[0]
+
+
+def _session_fields(entry: dict, overlay: dict) -> dict:
+    return {"harness_session": entry["harness_session"], "cwd": entry["cwd"], "name": entry["name"],
+            "waiting": overlay["waiting"], "since": overlay["since"]}
 
 
 def session_row(entry: dict, locator, transcripts_root, transcripts=None) -> dict:
     harness = entry["harness_session"]
     overlay, _ = _attend(harness, find_transcript(harness, locator, transcripts_root, transcripts), locator)
-    return {"harness_session": harness, "cwd": entry["cwd"], "name": entry["name"],
-            "waiting": overlay["waiting"], "since": overlay["since"]}
+    return _session_fields(entry, overlay)
 
 
 def collect(engine_sessions, locator, transcripts_root) -> tuple[dict, list[dict]]:
     """``(overlays by task id, session rows)`` for the listed tasks, from one scan of the binding files
-    and one listing of the transcripts."""
+    and one listing of the transcripts, with the marks read by ``marks``."""
+    stamp = locate.inputs_stamp(locator)
     index, transcripts = engine_session_binding.harness_index(), transcript_index(transcripts_root)
-    overlays, represented = {}, set()
+    targets, represented = {}, set()
     for engine in engine_sessions:
         harness, path, bound = bind_session(engine, locator, transcripts_root, index, transcripts)
-        overlays[engine] = _attend(harness, path, locator)[0]
+        targets[engine] = (harness, path)
         represented.update([engine, *bound])
-    rows = [session_row(entry, locator, transcripts_root, transcripts)
-            for entry in sorted(locate.sessions(locator), key=lambda e: e["harness_session"])
-            if entry["harness_session"] not in represented]
+    entries = [entry for entry in sorted(locate.sessions(locator), key=lambda e: e["harness_session"])
+               if entry["harness_session"] not in represented]
+    session_targets = [(e["harness_session"], find_transcript(e["harness_session"], locator, transcripts_root,
+                                                              transcripts)) for e in entries]
+    computed = marks([*targets.values(), *session_targets], locator, stamp)
+    overlays = dict(zip(targets, computed))
+    rows = [_session_fields(entry, overlay) for entry, overlay in zip(entries, computed[len(targets):])]
     return overlays, rows
 
 

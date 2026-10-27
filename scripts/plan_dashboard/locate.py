@@ -4,12 +4,14 @@ Core names no bridge, multiplexer or terminal; a machine-local plugin
 ``<plugin dir>/locators/<name>.py`` supplies that knowledge. It exposes ``NAME`` and
 ``health() -> bool | (bool, detail)``, which must stay local (it runs with the network and process
 spawning stubbed to raise; touching a stub makes it unhealthy), and any of these optional hooks,
-each called with a harness session id except ``sessions``:
+each called with a harness session id except ``sessions`` and ``inputs_stamp``:
 
 - ``transcript_path(id) -> str | None``: the session's transcript file;
 - ``permission_wait(id) -> bool | None``: a permission prompt is pending, newer than the transcript;
 - ``jump_target(id) -> {"argv": [str, ...], "label": str, "return_hint": str} | None``;
-- ``sessions() -> [{"harness_session": str, "cwd": str | None, "name": str | None}]``.
+- ``sessions() -> [{"harness_session": str, "cwd": str | None, "name": str | None}]``;
+- ``inputs_stamp() -> int | str | [int | str, ...]``: changes whenever ``permission_wait``'s inputs
+  change, so a waiting mark cached with it can be reused while it holds.
 
 A hook that raises or returns a malformed value counts as absent. Exactly one locator is used per
 run; ``jump`` runs a target's argv without a shell and never raises.
@@ -26,7 +28,7 @@ from lib import plugin_dir as plugin_dirs
 from plan_dashboard import publish
 
 LOCATOR_SUBDIR = "locators"
-HOOKS = ("transcript_path", "permission_wait", "jump_target", "sessions")
+HOOKS = ("transcript_path", "permission_wait", "jump_target", "sessions", "inputs_stamp")
 JUMP_TIMEOUT_S = 5
 TIMEOUT_RETURNCODE = 124
 NOT_FOUND_RETURNCODE = 127
@@ -139,6 +141,21 @@ def transcript_path(locator, harness_session: str) -> Path | None:
 def permission_wait(locator, harness_session: str) -> bool | None:
     value = _call(locator, "permission_wait", harness_session)
     return value if isinstance(value, bool) else None
+
+
+def _stamp_part(value) -> bool:
+    return isinstance(value, (int, str)) and not isinstance(value, bool)
+
+
+def inputs_stamp(locator) -> tuple | None:
+    """A hashable value that changes whenever the locator's own inputs change, so a mark cached
+    with it is stale once it differs; None when the hook is absent or malformed."""
+    value = _call(locator, "inputs_stamp")
+    if _stamp_part(value):
+        return (value,)
+    if isinstance(value, (list, tuple)) and value and all(_stamp_part(v) for v in value):
+        return tuple(value)
+    return None
 
 
 def jump_target(locator, harness_session: str) -> dict | None:

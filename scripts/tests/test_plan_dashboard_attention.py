@@ -19,6 +19,7 @@ import socket
 import subprocess
 import textwrap
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -47,9 +48,9 @@ QUESTION = {"questions": [{"header": "HEADER-TEXT", "question": "Which way?", "m
 
 @pytest.fixture(autouse=True)
 def fresh_cache():
-    attention._CACHE.clear()
+    attention.clear_cache()
     yield
-    attention._CACHE.clear()
+    attention.clear_cache()
 
 
 # --- transcript builders ---------------------------------------------------------------------
@@ -237,6 +238,59 @@ def test_the_locator_is_asked_about_permission_only_for_tails_without_a_pending_
     overlays, _ = attention.collect([ALPHA, BETA], locator, root.transcripts_root)
     assert asked == [H_B]
     assert overlays[ALPHA]["waiting"] == "choice" and overlays[BETA]["waiting"] == "permission"
+
+
+def test_a_batch_of_marks_is_read_on_a_pool(tmp_path, monkeypatch):
+    paths = [put(SimpleNamespace(transcripts_root=tmp_path), f"h-{n}", IDLE) for n in range(16)]
+    real, pause = attention.read_tail, 0.1
+
+    def slow(path):
+        time.sleep(pause)
+        return real(path)
+    monkeypatch.setattr(attention, "read_tail", slow)
+    started = time.monotonic()
+    computed = attention.marks([(p.stem, p) for p in paths], None)
+    assert time.monotonic() - started < 16 * pause / 3
+    assert [m["waiting"] for m in computed] == ["idle"] * 16
+
+
+def counting_reads(monkeypatch) -> list:
+    reads, real = [], attention.read_tail
+    monkeypatch.setattr(attention, "read_tail", lambda path: reads.append(Path(path).stem) or real(path))
+    return reads
+
+
+def test_a_permission_event_with_the_transcript_unchanged_turns_a_cached_idle_mark_into_permission(
+        tmp_path, monkeypatch):
+    path = put(SimpleNamespace(transcripts_root=tmp_path), H_A, IDLE)
+    events = {"stamp": [1, 100], "pending": False}
+    asked = []
+    locator = fake(inputs_stamp=lambda: events["stamp"],
+                   permission_wait=lambda h: asked.append(h) or events["pending"])
+    reads = counting_reads(monkeypatch)
+    batch = [(H_A, path)]
+    assert attention.marks(batch, locator, locate.inputs_stamp(locator))[0]["waiting"] == "idle"
+    assert attention.marks(batch, locator, locate.inputs_stamp(locator))[0]["waiting"] == "idle"
+    assert reads == [H_A] and asked == [H_A]
+    events.update(stamp=[2, 180], pending=True)
+    assert attention.marks(batch, locator, locate.inputs_stamp(locator))[0]["waiting"] == "permission"
+    assert reads == [H_A] and asked == [H_A, H_A]
+
+
+def test_without_an_inputs_stamp_only_the_transcript_part_is_cached(tmp_path, monkeypatch):
+    path = put(SimpleNamespace(transcripts_root=tmp_path), H_A, IDLE)
+    answer = {"pending": False}
+    locator = fake(permission_wait=lambda h: answer["pending"])
+    reads = counting_reads(monkeypatch)
+    assert attention.marks([(H_A, path)], locator)[0]["waiting"] == "idle"
+    answer["pending"] = True
+    assert attention.marks([(H_A, path)], locator)[0]["waiting"] == "permission"
+    assert reads == [H_A]
+    answer["pending"] = False
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(user(2, "next")) + "\n")
+    assert attention.marks([(H_A, path)], locator)[0]["waiting"] == "none"
+    assert reads == [H_A, H_A]
 
 
 def test_never_asks_the_model_for_detail(tmp_path, monkeypatch):
