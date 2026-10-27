@@ -8610,6 +8610,23 @@ def _self_grant_resources_for_rule(
     return res.resources, None
 
 
+def stage_branch_resources(state: SessionState, stage_index: int) -> "list | None":
+    """DR-P's commit/push resources for one stage as frozen at approve beside the grant
+    entries (`plan.materialized_grant_entries`), so a spawn and `stage-grants` hand out
+    what the approval derived. None when nothing readable was frozen (a session bound
+    before they were stored, or entries failing their hash): the caller derives live."""
+    stored = state.approved_grant_entries
+    if stored is None or entries_grants_sha256(stored) != state.approved_grants_sha256:
+        return None
+    frozen = (stored.get(str(stage_index)) or {}).get("branch")
+    if not isinstance(frozen, dict):
+        return None
+    try:
+        return [_resources.resource_from_dict(d) for d in frozen.get("resources") or []]
+    except ValueError:
+        return None
+
+
 def _stage_grant_entries(
     state: SessionState, stage_index: int,
 ) -> tuple[list[dict], list[dict], list[dict], str | None, str | None]:
@@ -9561,7 +9578,8 @@ def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -
     all_entries = declared_entries + derived_entries + runtime_entries
 
     venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
-    resource_set = plan_resources.resource_set_from_entries(all_entries, stage, venue).to_dict()
+    resource_set = plan_resources.resource_set_from_entries(
+        all_entries, stage, venue, stage_branch_resources(state, stage_index)).to_dict()
     data = {
         "stage": stage_index,
         "executor": stage.actor.executor,

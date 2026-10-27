@@ -961,6 +961,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
+id = "3c11d3f423e8018f"
+domain = "code"
+file = "scripts/agentctl/grants.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "7084a9203d06a220"
 domain = "code"
 file = "scripts/agentctl/grants.py"
@@ -1114,6 +1122,14 @@ ground = "The deterministic engine. Its regexes parse the engine's own structure
 
 [[entry]]
 id = "1ef4c649dc566ae9"
+domain = "code"
+file = "scripts/agentctl/plan.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "2acd98c8e1025a7c"
 domain = "code"
 file = "scripts/agentctl/plan.py"
 class = "structural"
@@ -17018,6 +17034,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "242974969467a48b"
+domain = "code"
+file = "scripts/tests/test_stage_grants.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "7ccf42c1b0586dd7"
 domain = "code"
 file = "scripts/tests/test_stage_grants.py"
 class = "not-a-gate"
@@ -37492,6 +37516,14 @@ ground = "Policy files elaborate the judgment procedure a specialization follows
 
 [[entry]]
 id = "0fd123e4673718f8"
+domain = "prose"
+file = "skills/specializations/planner/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
+id = "96b562e6fed08b13"
 domain = "prose"
 file = "skills/specializations/planner/policy.md"
 class = "perception"

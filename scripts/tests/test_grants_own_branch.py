@@ -41,7 +41,8 @@ def test_own_branch_derives_exact_commit_and_push(remote_head):
     assert resources == [COMMIT, PUSH] and dropped == []
 
 
-@pytest.mark.parametrize("branch", ["main", "master", "trunk", "release-1.2"])
+@pytest.mark.parametrize("branch", [
+    "main", "master", "trunk", "release-1.2", "release/1.2", "Main", "TRUNK"])
 def test_trunk_and_release_branches_are_refused(remote_head, branch):
     resources, dropped = grants.derive_branch_resources(_stage(branch=branch), venue="/v")
     assert resources == [] and "trunk or shared" in dropped[0]["reason"]
@@ -51,6 +52,27 @@ def test_remote_head_branch_is_refused(remote_head):
     remote_head("stable")
     resources, dropped = grants.derive_branch_resources(_stage(branch="stable"), venue="/v")
     assert resources == [] and len(dropped) == 1
+    assert "trunk or shared" in dropped[0]["reason"]
+
+
+def test_remote_head_comparison_ignores_case(remote_head):
+    remote_head("Stable")
+    resources, dropped = grants.derive_branch_resources(_stage(branch="stable"), venue="/v")
+    assert resources == [] and "trunk or shared" in dropped[0]["reason"]
+
+
+def test_frozen_remote_head_overrides_the_live_one(remote_head):
+    remote_head("main")
+    resources, dropped = grants.derive_branch_resources(_stage(), venue="/v", remote_head=OWN)
+    assert resources == [] and "trunk or shared" in dropped[0]["reason"]
+    resources, _ = grants.derive_branch_resources(_stage(), venue="/v", remote_head="stable")
+    assert resources == [COMMIT, PUSH]
+
+
+def test_dropped_entries_carry_the_dr_p_tag(remote_head):
+    for branch in (None, "x..y", "main"):
+        _, dropped = grants.derive_branch_resources(_stage(branch=branch), venue="/v")
+        assert [d["rule"] for d in dropped] == ["DR-P"]
 
 
 def test_unset_remote_head_refuses_the_push_but_keeps_the_local_commit(remote_head):
@@ -65,8 +87,10 @@ def test_no_declared_branch_derives_nothing_and_reports(remote_head):
     assert resources == [] and "declares no `branch`" in dropped[0]["reason"]
 
 
-@pytest.mark.parametrize("branch", ["-x", "a b", "a:b", "+a", "a..b", "a*"])
-def test_malformed_branch_names_are_refused(remote_head, branch):
+@pytest.mark.parametrize("branch", [
+    "-x", "a b", "a:b", "+a", "a..b", "a*", "HEAD", "head", "refs/heads/main", "heads/main",
+    "origin/main", "remotes/origin/main", "./main", "a/", "x.lock", "a//b"])
+def test_malformed_and_ref_form_branch_names_are_refused(remote_head, branch):
     resources, dropped = grants.derive_branch_resources(_stage(branch=branch), venue="/v")
     assert resources == [] and "plain branch name" in dropped[0]["reason"]
 

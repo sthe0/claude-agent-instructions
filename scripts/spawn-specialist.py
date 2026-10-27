@@ -2196,6 +2196,7 @@ def norm_handoff_record(
     `load_engine_stage_grants`; never touches the parent session's state file.
     `workdir` and `permission_mode` are where the child runs and the mode it was given:
     only `acceptEdits` makes the whole workdir writable, so only then is it in the set."""
+    from agentctl import cli as agentctl_cli
     from agentctl import plan_resources
     from agentctl import resources as agentctl_resources
     from agentctl.state import CheckVenue
@@ -2213,6 +2214,7 @@ def norm_handoff_record(
         closure = None
     resource_set = plan_resources.resource_set_from_entries(
         engine_grants, state.stage(stage_index), state.resolve_check_venue(CheckVenue.DELIVERY.value),
+        agentctl_cli.stage_branch_resources(state, stage_index),
     )
     if workdir and workdir_baseline_applies(kind, permission_mode, engine_grants):
         baseline = agentctl_resources.FileResource(workdir, "write")

@@ -555,6 +555,44 @@ def test_cmd_stage_grants_reports_declared_grant_through_full_submit_approve_flo
     assert declared[0]["provenance"] == "declared"
 
 
+def test_stage_grants_push_resource_is_frozen_at_approve_not_read_at_spawn(
+    store, fixtures_dir, tmp_path,
+):
+    """DR-P reads `origin/HEAD` once, at approve, and `stage-grants` reports what that read
+    derived: moving the remote HEAD onto the plan's branch afterwards neither strips the
+    push the approval showed nor lets spawn derive a different set."""
+    import subprocess
+
+    from agentctl import resources as R
+
+    venue = store.root.parent
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(venue), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                       check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("commit", "-q", "--allow-empty", "-m", "c")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    text = (fixtures_dir / "plan_two_stage.toml").read_text().replace(
+        "[meta]\n", '[meta]\nbranch = "own-branch"\n', 1)
+    plan_path = tmp_path / "plan_with_branch.toml"
+    plan_path.write_text(text)
+    sid = "stage-grants-dr-p-frozen"
+    _to_executing(store, sid, fixtures_dir, plan_path=str(plan_path))
+    push = R.resource_to_dict(R.VcsRefResource("origin", "own-branch", "push"))
+    commit = R.resource_to_dict(R.VcsRefResource(".", "own-branch", "commit"))
+
+    before = cli.cmd_stage_grants(ns(session=sid, stage=1, json=True), store=store)
+    assert push in before.data["resources"] and commit in before.data["resources"]
+
+    git("update-ref", "refs/remotes/origin/own-branch", "HEAD")
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/own-branch")
+    after = cli.cmd_stage_grants(ns(session=sid, stage=1, json=True), store=store)
+    assert after.data["resources"] == before.data["resources"]
+
+
 def test_cmd_stage_grants_unaffected_by_live_plan_path_edit_after_approval(store, fixtures_dir, tmp_path):
     """(#7) `cmd_stage_grants` reads declared/derived entries from the
     hash-verified snapshot taken at approval time, never the live

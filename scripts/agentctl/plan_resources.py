@@ -126,10 +126,6 @@ def _stage_landed_resources(stage: Stage) -> list:
     return [_resources.VcsRefResource(crit.landed.remote, crit.landed.target, "land")]
 
 
-def _stage_branch_resources(stage: Stage, venue: str | None) -> list:
-    return _grants.derive_branch_resources(stage, venue=venue)[0]
-
-
 @dataclass
 class StageResources:
     stage_index: int
@@ -158,7 +154,7 @@ def compute_stage_resources(stage: Stage, venue: str | None) -> StageResources:
         out_resources.extend(res.resources)
     out_resources.extend(_stage_spawn_resources(stage))
     out_resources.extend(_stage_landed_resources(stage))
-    out_resources.extend(_stage_branch_resources(stage, venue))
+    out_resources.extend(_grants.derive_branch_resources(stage, venue=venue)[0])
     return StageResources(
         stage_index=stage.index,
         resources=out_resources,
@@ -192,11 +188,16 @@ class StageResourceSet:
 
 def resource_set_from_entries(
     entries: "list[dict] | None", stage: Stage, venue: str | None,
+    branch_resources: "list | None" = None,
 ) -> StageResourceSet:
     """The set over grant entries in the `agentctl stage-grants` shape (`{"rule", ...}` or
     `{"path", "mode", ...}`) plus the stage's own spawn/landed resources. Both callers hand
     it the entries they already hold -- the stage-grants report and the spawn's engine
-    grants, runtime ones included -- so the set is one computation."""
+    grants, runtime ones included -- so the set is one computation.
+
+    `branch_resources` are DR-P's commit/push resources as frozen at approve
+    (`plan.materialized_grant_entries`); None (a session bound before they were stored)
+    derives them from the repository as it is now."""
     out = StageResourceSet()
     for entry in entries or []:
         if "rule" in entry:
@@ -209,7 +210,8 @@ def resource_set_from_entries(
             out.resources.extend(resolve_add_dir_grant(entry["path"], entry["mode"]).resources)
     out.resources.extend(_stage_spawn_resources(stage))
     out.resources.extend(_stage_landed_resources(stage))
-    out.resources.extend(_stage_branch_resources(stage, venue))
+    out.resources.extend(
+        _grants.derive_branch_resources(stage, venue=venue)[0] if branch_resources is None else branch_resources)
     out.resources = list(dict.fromkeys(out.resources))
     out.rule_patterns = list(dict.fromkeys(out.rule_patterns))
     return out

@@ -34,6 +34,7 @@ from agentctl import grants as GRANTS
 from agentctl.grants import GrantValidationError
 from agentctl.grants import derive_stage_grants
 from agentctl.state import Actor, Criterion, Means, Stage, Subject
+from dr_p_dropped import validator_refusals
 from test_stage_grants import _to_executing, _write_declared_grants_plan, ns
 
 SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
@@ -356,7 +357,7 @@ def test_gc7_real_producer_via_derive_stage_grants(tmp_path):
     outside_dir.mkdir()
     artifact = str(outside_dir / "report.md")
     derived, dropped = derive_stage_grants(_stage_with_output_artifact(artifact), venue="/repo")
-    assert not [d for d in dropped if not d["entry"].startswith(("commit and push of", "push of"))]
+    assert not validator_refusals(dropped)
     assert [d.mode for d in derived.add_dirs] == ["read"]
     assert derived.add_dirs[0].path == str(outside_dir)
 
@@ -500,7 +501,7 @@ def test_gc15_derived_read_under_runtime_write_is_covered(tmp_path):
     derived, dropped = derive_stage_grants(
         _stage_with_output_artifact(str(reports_dir / "report.md")), venue="/repo"
     )
-    assert not [d for d in dropped if not d["entry"].startswith(("commit and push of", "push of"))]
+    assert not validator_refusals(dropped)
     assert [(d.path, d.mode) for d in derived.add_dirs] == [(str(reports_dir), "read")]
 
     runtime_entries = [{"path": str(out_dir), "mode": "write", "provenance": "runtime"}]

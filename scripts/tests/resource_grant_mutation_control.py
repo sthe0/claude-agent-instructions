@@ -117,9 +117,26 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "push-trunk-refused": Mutant(
         GRANTS,
-        'if branch in _TRUNK_BRANCHES or branch.startswith("release-") or branch == head:',
-        "if False:",
+        '    if (folded in _TRUNK_BRANCHES or folded.startswith(("release-", "release/"))\n'
+        "            or (head is not None and folded == head.casefold())):",
+        "    if False:",
         "trunk, release-* and the remote HEAD branch are no longer refused",
+    ),
+    "ref-form-trunk-refused": Mutant(
+        GRANTS,
+        "    if not _is_plain_branch_name(branch):",
+        "    if False:",
+        "HEAD and ref-path spellings of trunk (refs/heads/main, origin/main) derive a push",
+    ),
+    "branch-frozen-at-approve": Mutant(
+        CLI,
+        "    if stored is None or entries_grants_sha256(stored) != state.approved_grants_sha256:\n"
+        "        return None\n"
+        '    frozen = (stored.get(str(stage_index)) or {}).get("branch")',
+        "    if True:\n"
+        "        return None\n"
+        '    frozen = (stored.get(str(stage_index)) or {}).get("branch")',
+        "spawn and stage-grants re-derive DR-P from the repository as it is now",
     ),
     "dropped-surfaced": Mutant(
         CLI,

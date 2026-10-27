@@ -160,6 +160,7 @@ from lib import shell_tokens as _shell_tokens
 from lib import widening_targets as _widening_targets
 
 from . import grants as _grants
+from . import resources as _resources
 from .grants import AddDirGrant, RuleGrant, StageGrants
 from .landed_providers import PROVIDER_NAME_RE
 from .script_effects import StageEffectDeclaration
@@ -270,6 +271,11 @@ class PlanError(Exception):
 
 
 _CHECK_VENUE_VALUES = {v.value for v in CheckVenue}
+
+
+def _opt_str(value: object) -> str | None:
+    """`str(value).strip()`, or None when `value` is falsy or blank."""
+    return (str(value).strip() or None) if value else None
 
 
 def _parse_check_venue(raw: object, context: str) -> str:
@@ -1932,7 +1938,7 @@ def parse_plan(
         repo_root=str(m["repo_root"]) if m.get("repo_root") else None,
         delivery_worktree=str(m["delivery_worktree"]) if m.get("delivery_worktree") else None,
         landing_waiver=str(m["landing_waiver"]) if m.get("landing_waiver") else None,
-        branch=str(m["branch"]).strip() or None if m.get("branch") else None,
+        branch=_opt_str(m.get("branch")),
         final_check=final_checks,
         order=order,
         assumptions=_parse_assumptions(m.get("assumption")),
@@ -2141,7 +2147,7 @@ def parse_plan(
                 optional=raw_optional,
                 backlog_issue=raw_backlog_issue,
                 amendments=_parse_amendments(s.get("amendments"), stage_ctx),
-                branch=(str(s["branch"]).strip() or None if s.get("branch") else None) or meta.branch,
+                branch=_opt_str(s.get("branch")) or meta.branch,
             )
         )
 
@@ -3835,14 +3841,15 @@ def venue_declaration_blockers(doc: PlanDoc) -> list[str]:
     ]
 
 
-def _derive_stage_grants(stage, venue: str | None):
+def _derive_stage_grants(stage, venue: str | None, remote_head=_grants.LIVE_REMOTE_HEAD):
     """`grants.derive_stage_grants` for a venue that may be undeclared. With no venue
     every relative `output_artifacts` / `material_refs` entry has nothing to be
     resolved against, so DR-O and DR-E (which need it) derive nothing; DR-V and DR-R
     read no venue and stay. Filtering the relative entries before the call, with a
-    root venue no absolute path is ever in, keeps `grants.py` untouched."""
+    root venue no absolute path is ever in, keeps `grants.py` untouched. `remote_head` is
+    DR-P's frozen `origin/HEAD` branch (see `grants.derive_branch_resources`)."""
     if venue is not None:
-        return _grants.derive_stage_grants(stage, venue=venue)
+        return _grants.derive_stage_grants(stage, venue=venue, remote_head=remote_head)
     anchored = dataclasses.replace(
         stage,
         output_artifacts=[a for a in stage.output_artifacts if os.path.isabs(a)],
@@ -3851,7 +3858,7 @@ def _derive_stage_grants(stage, venue: str | None):
             material_refs=[r for r in stage.subject.material_refs if os.path.isabs(r)],
         ),
     )
-    return _grants.derive_stage_grants(anchored, venue="/")
+    return _grants.derive_stage_grants(anchored, venue="/", remote_head=remote_head)
 
 
 def _stage_declared_and_derived_grants(s, venue: str | None):
@@ -3973,21 +3980,30 @@ def grants_sha256(doc: PlanDoc) -> str:
 
 
 def materialized_grant_entries(doc: PlanDoc, *, venue: str | None = None) -> dict[str, dict]:
-    """`{str(stage index): {"declared", "derived", "dropped"}}` -- the entry dicts a
-    dispatch hands a child, derived once against `doc`'s venue. Bound next to
+    """`{str(stage index): {"declared", "derived", "dropped", "branch"}}` -- the entry dicts
+    a dispatch hands a child, derived once against `doc`'s venue. Bound next to
     `grants_sha256` so the set the hash covers is the set dispatch reads, instead of a
-    re-derivation that depends on the engine code and venue filesystem of the moment."""
+    re-derivation that depends on the engine code and venue filesystem of the moment.
+
+    `branch` freezes DR-P: the `origin/HEAD` branch read once for the whole call
+    (`remote_head`) and the commit/push resources derived from it (`resources`), so a spawn
+    hands the child what the approval derived, even if the repository's HEAD moves between.
+    It is not part of `grants_sha256`, which covers only the rule and add_dir entries."""
     venue = venue if venue is not None else _venue_for(doc)
+    head = _grants.remote_head_branch(venue) if any(s.is_spawn() for s in doc.stages) else None
     entries: dict[str, dict] = {}
     for stage in doc.stages:
         declared = stage.grants if getattr(stage, "grants", None) else StageGrants()
-        derived, dropped = _derive_stage_grants(stage, venue)
+        derived, dropped = _derive_stage_grants(stage, venue, head)
+        branch_resources = _grants.derive_branch_resources(stage, venue=venue, remote_head=head)[0]
         entries[str(stage.index)] = {
             "declared": [r.to_dict() for r in declared.allow]
             + [a.to_dict() for a in declared.add_dirs],
             "derived": [r.to_dict() for r in derived.allow]
             + [a.to_dict() for a in derived.add_dirs],
             "dropped": list(dropped),
+            "branch": {"remote_head": head,
+                       "resources": [_resources.resource_to_dict(r) for r in branch_resources]},
         }
     return entries
 
@@ -3996,11 +4012,10 @@ def dropped_grants_report(doc: PlanDoc, *, venue: str | None = None) -> list[dic
     """`[{"stage", "entry", "reason"}]` for every derivation the validator or DR-P refused,
     in stage order. Advisory data: a dropped derived entry is not a plan defect by itself,
     but the author otherwise sees only the grants that survived."""
-    venue = venue if venue is not None else _venue_for(doc)
     return [
-        {"stage": stage.index, "entry": d["entry"], "reason": d["reason"]}
-        for stage in doc.stages
-        for d in _derive_stage_grants(stage, venue)[1]
+        {"stage": int(idx), "entry": d["entry"], "reason": d["reason"]}
+        for idx, stage_entries in materialized_grant_entries(doc, venue=venue).items()
+        for d in stage_entries["dropped"]
     ]
 
 

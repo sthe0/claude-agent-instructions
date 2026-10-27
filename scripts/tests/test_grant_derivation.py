@@ -13,6 +13,7 @@ from pathlib import Path
 from agentctl import plan as plan_mod
 from agentctl.grants import derive_stage_grants
 from agentctl.state import Actor, Criterion, Means, Stage, Subject
+from dr_p_dropped import validator_refusals
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "grant_plans"
 
@@ -45,10 +46,7 @@ def _stage(
     )
 
 
-def _refusals(dropped: list[dict]) -> list[dict]:
-    """The validator's refusals: DR-P's (a stage with no declared branch) are covered in
-    test_grants_own_branch."""
-    return [d for d in dropped if not d["entry"].startswith(("commit and push of", "push of"))]
+_refusals = validator_refusals
 
 
 def _rules(grants) -> set[str]:
