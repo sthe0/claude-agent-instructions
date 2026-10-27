@@ -128,6 +128,14 @@ class World:
         return FileStateStore(self.root).load(session)
 
 
+@pytest.fixture(autouse=True)
+def _claude_runtime_host(_isolated_env, monkeypatch):
+    """Restore the in-process host signal _isolated_env drops (conftest's default), so classify
+    does not fall back to detecting a Cursor CLI that only some machines have; the channel's
+    subprocess env still strips it."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "agentctl-test-session")
+
+
 @pytest.fixture
 def world(tmp_path, monkeypatch):
     built = World(tmp_path, monkeypatch)
