@@ -9452,6 +9452,12 @@ def evidence_dir_for(session_id: str, stage_index: int) -> Path:
     files are keyed by — so an adversarial session id cannot escape the
     evidence tree. Raises EvidenceDirError instead of falling back to another
     root when the resolved path is unusable — see the class docstring."""
+    return _evidence_session_dir(session_id, f"stage-{int(stage_index)}")
+
+
+def _evidence_session_dir(session_id: str, leaf: str) -> Path:
+    """`<evidence root>/<session>/<leaf>/` under the root and refusals evidence_dir_for
+    documents; shared with the verify-final failure logs."""
     override = os.environ.get(EVIDENCE_ROOT_ENV)
     if override:
         root = Path(override)
@@ -9463,7 +9469,7 @@ def evidence_dir_for(session_id: str, stage_index: int) -> Path:
         else:
             root = Path.home() / ".local" / "state" / "agentctl-evidence"
         skip_scratch_check = False
-    path = root / _safe_session_id(session_id) / f"stage-{int(stage_index)}"
+    path = root / _safe_session_id(session_id) / leaf
     if not skip_scratch_check and exempt_paths.under_scratch_root(str(path)):
         raise EvidenceDirError(
             f"evidence directory {path} resolves under an OS-temp scratch root — "
@@ -10343,6 +10349,7 @@ class _FinalEntry:
     exit_code: int | None = None
     ok: bool = True
     error: str = ""
+    log_note: str = ""
 
     def failure(self) -> str:
         if self.spec is None:
@@ -10350,7 +10357,34 @@ class _FinalEntry:
         tail = f" {self.fail_tail}" if self.fail_tail else ""
         if self.error:
             return f"{self.label}: raised {self.error}{tail}"
-        return f"{self.label}: exit {self.exit_code} != {self.spec.expected_exit}{tail}"
+        return f"{self.label}: exit {self.exit_code} != {self.spec.expected_exit}{tail}{self.log_note}"
+
+
+FAIL_LOG_TAIL_LINES = 20
+FAIL_LOG_LINE_CHARS = 300
+
+
+def _output_tail(stdout: str, stderr: str) -> str:
+    """Last lines of stderr, then of stdout — stdout last, so pytest's FAILED summary
+    is not pushed out by a noisy stderr."""
+    lines = stderr.splitlines()[-FAIL_LOG_TAIL_LINES:] + stdout.splitlines()[-FAIL_LOG_TAIL_LINES:]
+    return "".join(f"\n    {line[:FAIL_LOG_LINE_CHARS]}" for line in lines)
+
+
+def _write_fail_log(session_id: str, e: _FinalEntry, stdout: str, stderr: str) -> str:
+    """Save a failed check's full output and return the note its failure text ends with."""
+    try:
+        log_dir = _evidence_session_dir(session_id, "verify-final")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        path = log_dir / f"{e.check_id.replace(':', '-')}.log"
+        path.write_text(
+            f"command: {e.spec.command}\nvenue: {e.venue}\nexit: {e.exit_code}\n"
+            f"--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n",
+            encoding="utf-8",
+        )
+    except (OSError, EvidenceDirError) as exc:
+        return f"; log not written: {exc}"
+    return f"; log: {path}{_output_tail(stdout, stderr)}"
 
 
 def _log_final_events(
@@ -10515,10 +10549,10 @@ def _evaluate_final_checks_in(
     def run_one(e: _FinalEntry):
         t0 = time.monotonic()
         ok, result = _run_check(e.spec.command, e.spec.expected_exit, runner, cwd=e.cwd)
-        return ok, result.returncode, time.monotonic() - t0, ""
+        return ok, result.returncode, time.monotonic() - t0, "", result.stdout, result.stderr
 
     def raised(exc: Exception):
-        return False, None, 0.0, f"{type(exc).__name__}: {exc}"
+        return False, None, 0.0, f"{type(exc).__name__}: {exc}", "", ""
 
     cap, budget, cpus = 1, 0, 1
     if runner is None and len(to_run) > 1:
@@ -10540,9 +10574,11 @@ def _evaluate_final_checks_in(
         d = decided[e.spec.id]
         e.decision, e.reason = d.decision, d.reason
         if d.decision == check_cache.MISS:
-            e.ok, e.exit_code, e.duration_s, e.error = ran[e.check_id]
+            e.ok, e.exit_code, e.duration_s, e.error, stdout, stderr = ran[e.check_id]
             if e.error:
                 e.reason = f"raised: {e.error}"
+            elif not e.ok and (stdout or stderr):
+                e.log_note = _write_fail_log(state.session_id, e, stdout, stderr)
             if e.ok and e.spec.key is not None and e.spec.cacheable:
                 check_cache.store_green(
                     state.check_cache, e.spec.key, at=now, label=e.label,
@@ -10558,11 +10594,12 @@ def _evaluate_final_checks_in(
         elif d.decision == check_cache.HIT:
             e.exit_code = None
         else:
+            earlier = by_id[d.same_as]
             if d.same_as in ran:
-                e.ok, e.exit_code, _, e.error = ran[d.same_as]
+                e.ok, e.exit_code, _, e.error, _, _ = ran[d.same_as]
             else:
-                earlier = by_id[d.same_as]
                 e.ok, e.exit_code, e.error = earlier.ok, earlier.exit_code, earlier.error
+            e.log_note = earlier.log_note
     failures = [e.failure() for e in entries if not e.ok]
     _log_final_events(
         state, entries, outcome="failed" if failures else "passed", started=started, peak=peak,
