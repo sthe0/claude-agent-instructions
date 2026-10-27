@@ -16,7 +16,7 @@ Nothing is stored: the standing check computes from the live tree on every run. 
 
 ## The two domains
 
-**Domain A — code sites.** `crutch-inventory.py` AST-walks `scripts/**/*.py` and records every scope that builds or reuses a regex, together with the highest-priority hard outcome it reaches (a PreToolUse deny, a Stop block, `sys.exit(2)`, or a hard *behaviour* — a routed/dispatched/suppressed/recorded decision, the deliberate widening past the three enforcement contracts the original hand audit used) and whether a `judge_*` call guards the same scope.
+**Domain A — code sites.** `crutch-inventory.py` AST-walks `scripts/**/*.py` except the repo's own `scripts/tests/` (test code guards no production behaviour) and records every scope that builds or reuses a regex, together with the highest-priority hard outcome it reaches (a PreToolUse deny, a Stop block, `sys.exit(2)`, or a hard *behaviour* — a routed/dispatched/suppressed/recorded decision, the deliberate widening past the three enforcement contracts the original hand audit used) and whether a `judge_*` call guards the same scope.
 
 **Domain B — prose sites.** The same script extracts every normative statement (a sentence carrying an obligation modal) from `CLAUDE.md`, `skills/**/SKILL.md`, `skills/**/policy.md`, and `memory-global/leaves/**`, by heading structure — never by topic, since filtering by topic would itself be a regex deciding meaning.
 
