@@ -87,8 +87,10 @@ _SOURCE_ENCODINGS = ("utf-8", "utf-8-sig")
 _IMPORTABLE = frozenset({
     "__future__", "os", "sys", "pathlib", "shutil", "json", "re", "io", "tempfile", "glob", "fnmatch",
     "datetime", "time", "collections", "itertools", "functools", "string", "textwrap", "math", "hashlib",
-    "base64", "csv", "argparse", "subprocess", "typing", "dataclasses", "enum", "tomllib",
+    "base64", "csv", "argparse", "subprocess", "enum", "tomllib",
 })
+# `typing` and `dataclasses` are left out on purpose: `typing.get_type_hints` evaluates a `ForwardRef`
+# built from run-time text, so either module can run code that was never read here.
 #: Names (plain or attribute) that run text built at run time, reach modules or attributes by string, or
 #: move the cwd the `-c` / stdin import entry is relative to.
 _DYNAMIC_NAMES = frozenset({

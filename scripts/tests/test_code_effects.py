@@ -270,11 +270,23 @@ def test_allow_listed_standard_library_modules_need_no_text(repo):
 @pytest.mark.parametrize("module", [
     "operator", "pickle", "marshal", "shelve", "code", "codeop", "ctypes", "types", "pydoc", "multiprocessing",
     "importlib", "runpy", "builtins", "pytest", "yaml", "inspect", "socket", "urllib.request", "ast",
+    "typing", "dataclasses",
 ])
 def test_a_module_off_the_allow_list_is_undeterminable(module, repo):
     """Round-2 probes 6/7: `operator.methodcaller('system', 'true')(os)` and `pickle.loads(...)` collected
     when the module check was a deny-list. Off the allow-list is refused, not judged."""
     assert "allow-list" in undeterminable(f"python3 -c 'import {module}'", repo).reason
+
+
+def test_the_import_allow_list_is_the_reviewed_set():
+    """Widening the allow-list is a reviewed change, never a one-line edit: every module added must be one whose
+    file and git effects the judge can name from source alone (`typing` failed this: `get_type_hints` evaluates a
+    `ForwardRef` built from run-time text)."""
+    assert code_effects._IMPORTABLE == frozenset({
+        "__future__", "os", "sys", "pathlib", "shutil", "json", "re", "io", "tempfile", "glob", "fnmatch",
+        "datetime", "time", "collections", "itertools", "functools", "string", "textwrap", "math", "hashlib",
+        "base64", "csv", "argparse", "subprocess", "enum", "tomllib",
+    })
 
 
 def test_a_star_import_is_undeterminable(repo):
