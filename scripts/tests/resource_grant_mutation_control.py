@@ -63,6 +63,8 @@ SPAWN = "scripts/spawn-specialist.py"
 GRANTS = "scripts/agentctl/grants.py"
 CLI = "scripts/agentctl/cli.py"
 SEGMENT_RESOLVER = "scripts/agentctl/segment_resolver.py"
+ADVISOR = "scripts/agentctl/advisor.py"
+CODE_EFFECTS = "scripts/agentctl/code_effects.py"
 
 
 @dataclass(frozen=True)
@@ -487,6 +489,36 @@ CATALOGUE: "dict[str, Mutant]" = {
         '_NONLITERAL = "residual-syntax"\n',
         '_NONLITERAL = "contract-unresolved"\n',
         "a non-literal operand is reported under the class of an unreviewed form",
+    ),
+    "judge-fail-closed": Mutant(
+        ADVISOR,
+        'verdict, malformed = _ce_undeterminable("the code-effects judge timed out"), False',
+        'verdict, malformed = CodeEffectsVerdict((), "the code-effects judge timed out", True), False',
+        "a code-effects judge that times out answers with an empty effect list instead of UNDETERMINABLE",
+    ),
+    "judge-schema-validated": Mutant(
+        ADVISOR,
+        "    if set(obj) != _CE_ANSWER_KEYS:\n",
+        "    if False:\n",
+        "a code-effects answer with an extra field passes the schema check",
+    ),
+    "judge-cache-key": Mutant(
+        CODE_EFFECTS,
+        '"\\0".join([advisor.CODE_EFFECTS_PROMPT_SHA256, advisor.CODE_EFFECTS_MODEL, venue, code_sha256])',
+        '"\\0".join([advisor.CODE_EFFECTS_PROMPT_SHA256, code_sha256])',
+        "the code-effects cache key forgets the venue and the model the verdict was made for",
+    ),
+    "import-closure-collected": Mutant(
+        CODE_EFFECTS,
+        "    while pending:\n",
+        "    while False:\n",
+        "the judge reads the entry text only: the local modules it imports are not collected",
+    ),
+    "closure-file-cap": Mutant(
+        CODE_EFFECTS,
+        "        if len(self.files) >= MAX_FILES:\n",
+        "        if False:\n",
+        "the import closure is read without a file-count cap",
     ),
 }
 

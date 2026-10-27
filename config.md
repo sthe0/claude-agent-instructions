@@ -52,5 +52,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `plan-stage-max-chars` | `70000` | Largest rendered size of one plan node; over it blocks `submit-plan` and topological review. |
 | `plan-field-inline-max-chars` | `3000` | Longest prose field a plan prints inline; longer ones are externalized (advisory). |
 | `reaper-pressure-free-percent` | `10` | Free-space percent below which `hook-reaper.py --on-pressure` runs a reaper before its 24-hour throttle. |
+| `resource-grant-hook-timeout-s` | `10` | Seconds the harness gives the resource-grant PreToolUse hook before it kills it and falls through. |
+| `resource-grant-judge-timeout-s` | `5` | Seconds the opaque-code judge may run; at most `resource-grant-hook-timeout-s` minus 5. |
 
 Per-machine values live uncommitted beside this file (`agent-identity.local`, `term-rulesets/*.toml`); see `docs/operations/config-rationale.md` and `docs/operations/org-portability.md`.

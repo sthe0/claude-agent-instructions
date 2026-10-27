@@ -34,6 +34,8 @@
 "scripts/lib/principle_provenance.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "applies a link change set atomically to leaf paths its caller passes; its only writing caller, record-experience.py, refuses the canonical checkout before calling it" }
 "scripts/bench-verify-final.py" = { disposition = "not-canon", category = "not-canon", reason = "builds its fixture repo and engine copies under a temp dir; the only other write is the report at the path the caller names with --json-out" }
 "scripts/plan-fit-report.py" = { disposition = "not-canon", category = "not-canon", reason = "writes one report file at the path the caller names with --out; reads a plan, launches nothing" }
+"scripts/agentctl/code_effects.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only verdict cache files under the agentctl state dir (code-effects-cache); never a tracked file" }
+"scripts/code_effects_live_probe.py" = { disposition = "not-canon", category = "not-canon", reason = "runs in a temporary directory it creates and removes; writes nothing in the repo" }
 
 # --- exempt-landing: the sync / landing path itself ---
 "scripts/land-branch.py" = { disposition = "exempt", category = "exempt-landing", reason = "advances main from a branch; the route calls it, so it cannot be routed through itself" }

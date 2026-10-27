@@ -66,6 +66,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
+id = "65f90557b6ba8bce"
+domain = "code"
+file = "scripts/agentctl/advisor.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "621e1327da874bb0"
 domain = "code"
 file = "scripts/agentctl/advisor.py"
@@ -477,6 +485,30 @@ ground = "The deterministic engine. Its regexes parse the engine's own structure
 id = "e8815ef7cace1d5e"
 domain = "code"
 file = "scripts/agentctl/cli.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "8a380b4af3f83a61"
+domain = "code"
+file = "scripts/agentctl/code_effects.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "61d487a21c4c2b08"
+domain = "code"
+file = "scripts/agentctl/code_effects.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "6956b5567baee437"
+domain = "code"
+file = "scripts/agentctl/code_effects.py"
 class = "structural"
 disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
@@ -18365,6 +18397,14 @@ ground = "The deterministic engine. Its regexes parse the engine's own structure
 id = "c07b3b8fc75fdc5e"
 domain = "code_file_rollup"
 file = "scripts/agentctl/cli.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "839126a80ac5acec"
+domain = "code_file_rollup"
+file = "scripts/agentctl/code_effects.py"
 class = "structural"
 disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
