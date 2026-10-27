@@ -245,13 +245,18 @@ def _unresolved_item(identity, origin: str, source: str, stage: "int | None" = N
     return item
 
 
-def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None = None) -> BoundaryView:
+def compute_boundary_view(
+    doc: PlanDoc, order_sha256: str, *, venue: str | None = None,
+    branch_resources: "dict[int, list] | None" = None,
+) -> BoundaryView:
     """`compute_plan_resources`' resources plus the engine-executed fixed texts
     (verify_command, negative_control, final_check commands) resolved directly as whole
     texts, with every unresolved identity carrying its origin. The DR-V rules derived
     from a verify_command are skipped: derivation drops segments it cannot read off
     the text, so only the direct resolution sees them. Each resolved resource is also
-    recorded in `resource_origins` with the plan element and text that produced it."""
+    recorded in `resource_origins` with the plan element and text that produced it.
+    `branch_resources` ({stage index: resources}) replaces the live DR-P derivation with
+    the ones a caller already froze, so the view cannot disagree with them."""
     v = venue if venue is not None else _venue_for(doc)
     view = BoundaryView(order_sha256=order_sha256)
 
@@ -283,7 +288,8 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
             add(resolve_add_dir_grant(add_dir.path, add_dir.mode).resources, "add_dir", add_dir.path)
         add(_stage_spawn_resources(stage), "spawn", "")
         add(_stage_landed_resources(stage), "landed", "")
-        add(effective.resources, "branch", stage.branch or "")
+        add(effective.resources if branch_resources is None
+            else branch_resources.get(stage.index, []), "branch", stage.branch or "")
         if runs_verify_command(stage.criterion):
             verify = stage.criterion.verify_command
             take(resolve_text(verify, v), "verify_command", verify, ("verify-command", verify),

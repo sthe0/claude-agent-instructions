@@ -1330,6 +1330,12 @@ def _record_customer_stage_grants(state: SessionState, by: str, scope: str, entr
     venue = _venue_for(doc)
     key = order_digest(doc)
     for entry in entries:
+        if "resource" in entry:
+            order_approvals.record_customer_grant(
+                key, resource=_resources.resource_from_dict(entry["resource"]), by=by,
+                at=dt.datetime.now(dt.timezone.utc).isoformat(),
+            )
+            continue
         if "rule" in entry:
             resolution = plan_resources.resolve_rule_grant(entry["rule"], venue)
         else:
@@ -2971,6 +2977,26 @@ def _parse_rule_lines(body: str) -> list[str]:
         if m and m.group(1).strip():
             rules.append(m.group(1).strip().strip("`").strip())
     return rules
+
+
+_REFUSAL_VCS_RESOURCE_RE = re.compile(
+    LABEL_DECORATION + r"Resource:\*{0,2}\s*`?vcs_ref\s+(commit|push|land)\s+([^\s:`]+):(\S+?)`?\s*$")
+
+
+def _refusal_vcs_resources(body: str) -> list:
+    """The `Resource: vcs_ref <op> <remote>:<ref>` lines of a grant-widening refusal: the
+    DR-P entries no `Rule:` line can name, which the user's answer must grant as resources."""
+    if not _REFUSAL_LINE_RE.search(body or ""):
+        return []
+    out = []
+    for line in body.splitlines():
+        m = _REFUSAL_VCS_RESOURCE_RE.match(line.strip())
+        if m:
+            try:
+                out.append(_resources.VcsRefResource(m.group(2), m.group(3), m.group(1)))
+            except ValueError:
+                continue
+    return out
 
 
 def _require(store: StateStore, session_id: str) -> SessionState:
@@ -4929,7 +4955,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     if dropped:
         d.data["dropped_grants"] = dropped
         d.data["advisories"].append(
-            "dropped grants (derived entries the validator refused; advisory):\n"
+            "dropped grants (derived entries refused by the validator or DR-P; advisory):\n"
             + "\n".join(f"- stage {x['stage']}: {x['entry']} — {x['reason']}" for x in dropped)
         )
     d.data.setdefault("advisories", []).extend(cost_tier_floor_advisories(doc.stages))
@@ -7503,7 +7529,13 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         customer_id = order.customer_id if order is not None else ""
         if customer_id and args.by.strip().casefold() == customer_id.casefold():
             order_key = order_digest(_approved_doc)
-            view = plan_resources.compute_boundary_view(_approved_doc, order_key)
+            view = plan_resources.compute_boundary_view(
+                _approved_doc, order_key,
+                branch_resources={
+                    int(idx): [_resources.resource_from_dict(d)
+                               for d in entry["branch"]["resources"]]
+                    for idx, entry in (_approved_entries or {}).items()
+                })
             all_resources = view.resources
             all_unresolved = [item["identity"] for item in view.unresolved]
             all_stage_effects: list = []
@@ -8149,6 +8181,9 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
         # own say-so), no DIAGNOSING. `project`/`global` are not offered: they
         # cannot materialize the per-rule runtime grant the re-delegation counts.
         rules = _parse_rule_lines(result.stdout)
+        rules += [
+            f"vcs_ref {r.op} {r.remote}:{r.ref}" for r in _refusal_vcs_resources(result.stdout)
+        ]
         sha_match = _HANDOFF_SHA_LINE_RE.search(result.stdout)
         action = (
             f"grant-widening refusal on stage {stage.index}: delegation holds "
@@ -8622,32 +8657,32 @@ def _self_grant_resources_for_rule(
     for add_dir in coverage.add_dirs:
         eff = plan_resources.resolve_add_dir_grant(add_dir.path, add_dir.mode)
         approved.extend(eff.resources)
+    approved.extend(coverage.resources)
     for requested in res.resources:
         if not any(_covers_resource(appr, requested, protected) for appr in approved):
             return [], "not-approved"
     return res.resources, None
 
 
-def stage_branch_resources(state: SessionState, stage_index: int) -> "list | None":
+def stage_branch_resources(state: SessionState, stage_index: int) -> list:
     """DR-P's commit/push resources for one stage as frozen at approve beside the grant
     entries (`plan.materialized_grant_entries`), so a spawn and `stage-grants` hand out
-    what the approval derived. None when nothing was frozen (a session bound before they
-    were stored): the caller derives live. Entries failing their hash yield nothing --
-    drift may under-grant, never over-grant."""
+    what the approval derived. Never derived live: a session that bound nothing, entries
+    failing their hash, a stage without a frozen block (a session bound before DR-P, whose
+    plan could not declare `branch`) and a malformed block all yield [] -- drift may
+    under-grant, never over-grant."""
     stored = state.approved_grant_entries
     if stored is None:
-        return None
+        return []
     if entries_grants_sha256(stored) != state.approved_grants_sha256:
         return []
     frozen = (stored.get(str(stage_index)) or {}).get("branch")
     if not isinstance(frozen, dict):
-        # A session bound before DR-P: its plan could not declare `branch`, so the live
-        # derivation the caller falls back to can never grant anything.
-        return None
+        return []
     try:
         return [_resources.resource_from_dict(d) for d in frozen.get("resources") or []]
     except ValueError:
-        return None
+        return []
 
 
 def _stage_grant_entries(
@@ -8864,7 +8899,8 @@ def _effective_stage_grants(state: SessionState, stage_index: int) -> _grants.St
         # drifted from the state fields `_sync_venue_from_plan` keeps current.
         venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
         allow.extend(_kind_baseline_rule_grants(stage.spawn_kind(), workdir=venue))
-    return _grants.StageGrants(allow=allow, add_dirs=add_dirs)
+    return _grants.StageGrants(
+        allow=allow, add_dirs=add_dirs, resources=stage_branch_resources(state, stage_index))
 
 
 def _effective_stage_grants_for_self_grant(state: SessionState, stage_index: int) -> _grants.StageGrants:
@@ -8909,7 +8945,8 @@ def _effective_stage_grants_for_self_grant(state: SessionState, stage_index: int
     if stage.is_spawn():
         venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
         allow.extend(_kind_baseline_rule_grants(stage.spawn_kind(), workdir=venue))
-    return _grants.StageGrants(allow=allow, add_dirs=add_dirs)
+    return _grants.StageGrants(
+        allow=allow, add_dirs=add_dirs, resources=stage_branch_resources(state, stage_index))
 
 
 def _consume_once_grants(state: SessionState, stage_index: int) -> None:
@@ -9373,6 +9410,7 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
             for add_dir in self_coverage.add_dirs:
                 eff = plan_resources.resolve_add_dir_grant(add_dir.path, add_dir.mode)
                 self_approved.extend(eff.resources)
+            self_approved.extend(self_coverage.resources)
         self_protected = _resources.protected_permission_surfaces(
             repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
             ledger_dir=str(order_approvals._root(None)),
@@ -9446,6 +9484,13 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
                 "path": path, "mode": mode, "provenance": "runtime", "consumed": False,
                 "stage_title": stage.title, "scope": scope, "granted_by": by,
             })
+        if by.casefold() != AGENT_ACTOR:
+            for resource in _refusal_vcs_resources(req.raw):
+                new_entries.append({
+                    "resource": _resources.resource_to_dict(resource), "provenance": "runtime",
+                    "consumed": False, "stage_title": stage.title, "scope": scope,
+                    "granted_by": by,
+                })
     if args.decision == "granted":
         cont = continuations.permission_granted(req.action, scope)
         detail = f"permission granted for {req.action}; re-spawn the stage"

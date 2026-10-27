@@ -32,7 +32,7 @@ from pathlib import Path
 from lib import kind_baselines
 from lib.spawn_ceiling import dispatch_prompt_ceiling_chars
 
-from . import plan_refs, plan_store, protected_actions
+from . import grants as _grants, plan_refs, plan_store, protected_actions
 from .config import PlanLimitError, plan_field_inline_limit, plan_size_limits
 from .directive import Directive
 from .plan import (
@@ -110,7 +110,7 @@ def _grants_lines(s, venue: str | None) -> list[str]:
     derived_rules = [r.rule for r in derived_grants.allow]
     derived_dirs = [f"{a.path}:{a.mode}" for a in derived_grants.add_dirs]
     own_branch = _branch_lines(derived_grants)
-    branch_refused = [d for d in dropped if d.get("rule") == "DR-P"] if s.branch else []
+    branch_refused = [d for d in dropped if d.get("rule") == _grants.DR_P_RULE] if s.branch else []
     note = _no_venue_note(s, venue)
     if not (declared_rules or declared_dirs or derived_rules or derived_dirs or note
             or own_branch or branch_refused):

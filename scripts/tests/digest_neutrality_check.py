@@ -63,6 +63,8 @@ def _describe(doc) -> dict:
         "plan_meta_digest": P.plan_meta_digest(doc),
         "order_digest": P.order_digest(doc),
         "parts": P.part_digest_map(doc),
+        "grants_sha256": P.grants_sha256(doc),
+        "entries_grants_sha256": P.entries_grants_sha256(P.materialized_grant_entries(doc)),
         "reviewed_stage_keys": {str(s.index): P._reviewed_stage_keys(s) for s in doc.stages},
         "stage_closure_digests": {str(s.index): _closure_digest(P, doc, s.index) for s in doc.stages},
         "premise_keys": {

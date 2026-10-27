@@ -131,7 +131,7 @@ CATALOGUE: "dict[str, Mutant]" = {
     "branch-frozen-at-approve": Mutant(
         CLI,
         "    if stored is None:\n"
-        "        return None\n"
+        "        return []\n"
         "    if entries_grants_sha256(stored) != state.approved_grants_sha256:\n"
         "        return []\n"
         '    frozen = (stored.get(str(stage_index)) or {}).get("branch")',
@@ -139,6 +139,44 @@ CATALOGUE: "dict[str, Mutant]" = {
         "        return None\n"
         '    frozen = (stored.get(str(stage_index)) or {}).get("branch")',
         "spawn and stage-grants re-derive DR-P from the repository as it is now",
+    ),
+    "runtime-merge-carries-resources": Mutant(
+        CLI,
+        "        allow=allow, add_dirs=add_dirs, resources=stage_branch_resources(state, stage_index))\n\n\n"
+        "def _effective_stage_grants_for_self_grant",
+        "        allow=allow, add_dirs=add_dirs)\n\n\ndef _effective_stage_grants_for_self_grant",
+        "the dispatch coverage drops the stage's DR-P resources",
+    ),
+    "self-grant-merge-carries-resources": Mutant(
+        CLI,
+        "        allow=allow, add_dirs=add_dirs, resources=stage_branch_resources(state, stage_index))\n\n\n"
+        "def _consume_once_grants",
+        "        allow=allow, add_dirs=add_dirs)\n\n\ndef _consume_once_grants",
+        "the agent self-grant coverage drops the stage's DR-P resources",
+    ),
+    "self-grant-counts-resources": Mutant(
+        CLI,
+        "    approved.extend(coverage.resources)\n",
+        "",
+        "an own-branch push the plan approved becomes a question to the user",
+    ),
+    "uncovered-grants-dr-p-loop": Mutant(
+        SPAWN,
+        "    for want in _stage_branch_resources(state, stage_index):\n",
+        "    for want in []:\n",
+        "a child may be handed a branch push its parent never held",
+    ),
+    "refusal-resources-materialized": Mutant(
+        CLI,
+        "            for resource in _refusal_vcs_resources(req.raw):\n",
+        "            for resource in []:\n",
+        "the user's answer to a resource-only refusal grants nothing",
+    ),
+    "granted-resources-cover": Mutant(
+        SPAWN,
+        '            covering_resources.append(agentctl_resources.resource_from_dict(entry["resource"]))\n',
+        "            pass\n",
+        "a user-granted resource does not count towards the delegation's coverage",
     ),
     "dropped-surfaced": Mutant(
         CLI,
@@ -160,7 +198,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "boundary-view-sees-branch": Mutant(
         "scripts/agentctl/plan_resources.py",
-        '        add(effective.resources, "branch", stage.branch or "")\n',
+        '        add(effective.resources if branch_resources is None\n'
+        '            else branch_resources.get(stage.index, []), "branch", stage.branch or "")\n',
         "",
         "the autonomy boundary cannot see a replan that moves the stage's branch",
     ),

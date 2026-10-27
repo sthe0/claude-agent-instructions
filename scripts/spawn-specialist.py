@@ -2127,6 +2127,8 @@ def uncovered_grants(linked, stage_index: int, engine_grants: "list[dict]") -> "
         e for e in state.runtime_grants.get(str(stage_index), [])
         if not e.get("consumed") and (e.get("granted_by") or "").strip().casefold() != AGENT_ACTOR
     ]
+    granted_resources = [e for e in covering if "resource" in e]
+    covering = [e for e in covering if "resource" not in e]
     covering_keys = {_grant_key(e) for e in covering}
     venue = _venue_for(doc)
     protected = agentctl_resources.protected_permission_surfaces(
@@ -2157,6 +2159,11 @@ def uncovered_grants(linked, stage_index: int, engine_grants: "list[dict]") -> "
             continue
         out.append(entry)
     covering_resources += agentctl_cli.handoff_vcs_resources(state.parent_link)
+    for entry in granted_resources:
+        try:
+            covering_resources.append(agentctl_resources.resource_from_dict(entry["resource"]))
+        except ValueError:
+            continue
     for want in _stage_branch_resources(state, stage_index):
         if not any(agentctl_cli._covers_resource(held, want, protected) for held in covering_resources):
             out.append({"resource": agentctl_resources.resource_to_dict(want)})
@@ -2164,8 +2171,8 @@ def uncovered_grants(linked, stage_index: int, engine_grants: "list[dict]") -> "
 
 
 def _stage_branch_resources(state, stage_index: int) -> list:
-    """DR-P's commit/push resources of the stage the delegation hands a child: as frozen at
-    approve when the session holds them, else derived from the plan as it is now."""
+    """DR-P's commit/push resources of the stage the delegation hands a child, exactly as
+    frozen at approve; a session that froze none hands out none."""
     from agentctl import cli as agentctl_cli
     from agentctl import plan_resources
     from agentctl import resources as agentctl_resources

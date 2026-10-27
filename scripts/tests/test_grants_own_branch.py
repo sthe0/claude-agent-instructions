@@ -2,7 +2,7 @@
 
 Ownership is positive (only the declared branch is derived), trunk/shared names and the
 remote's HEAD branch are refused into `dropped`, and the same resources reach the set the
-child's handoff carries — computed from the plan alone, so approve time equals spawn time.
+child's handoff carries — frozen at approve, so a spawn serves what the approval derived.
 """
 from __future__ import annotations
 
