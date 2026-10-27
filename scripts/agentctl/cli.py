@@ -29,7 +29,7 @@ from pathlib import Path
 
 from lib import argv_text, ask_evidence, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, delivery_channel, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from . import config as agentctl_config
@@ -4959,6 +4959,28 @@ def _present_plan_transcript(session_id: str) -> Path | None:
     return engine_session_binding.transcript_for_session(session_id)
 
 
+def _deliver_presentation_via_channel(state: SessionState, presentation, raw: bytes) -> None:
+    """With a headless customer channel configured, hand the rendering to it and,
+    when it answers, write the `channel` delivery stamp for essence/replan_diff
+    (`full` is delivered and logged but backs no gate). No channel: nothing."""
+    result = delivery_channel.deliver(presentation.kind, raw)
+    if result is None:
+        return
+    delivery_channel.log_delivery(state, result, plan_sha256=presentation.plan_sha256)
+    if not result.answered or presentation.kind == PLAN_PRESENTATION_KIND_FULL:
+        return
+    state_file = config_root.resolve_agentctl_state_file(state.session_id)
+    if state_file is None:
+        return
+    delivery.write_stamp(state_file, delivery.DeliveryStamp(
+        plan_path=presentation.plan_path,
+        plan_sha256=presentation.plan_sha256,
+        rendering_sha256=presentation.rendering_sha256,
+        verified_ts=time.time(),
+        source=delivery.SOURCE_CHANNEL,
+    ))
+
+
 def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Stamp a PlanPresentation receipt: proof the coordinator rendered the plan
     for the user, bound to the exact plan version (plan_sha256) and the exact
@@ -5231,6 +5253,7 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
     state.log("present_plan", plan=target, kind=kind,
               rendering_sha256=presentation.rendering_sha256,
               rejection_text=getattr(args, "rejection_text", None))
+    _deliver_presentation_via_channel(state, presentation, raw)
     store.save(state)
 
     if kind == PLAN_PRESENTATION_KIND_ESSENCE:
@@ -5361,10 +5384,10 @@ def cmd_confirm_delivery(args, *, store: StateStore, runner: Runner | None = Non
             f"{', '.join(delivery.DELIVERY_ESCAPE_REASONS)} — an untyped reason "
             "is exactly what makes escapes uncountable",
         )
-    if by.lower() == delivery.SOURCE_HOOK:
+    if by.lower() in (delivery.SOURCE_HOOK, delivery.SOURCE_CHANNEL):
         return Directive(
             False, state.node, "noop",
-            "--by hook is reserved for the automated delivery hook; a human "
+            f"--by {by.lower()} is reserved for the automated delivery source; a human "
             "override must name an actual person",
         )
     state_file = config_root.resolve_agentctl_state_file(state.session_id)
@@ -10948,6 +10971,16 @@ def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
         return [prefix + "no precise verify-final stamp is recorded for this session — "
                          "re-run verify-final, then ask the resolution question; "
                          + RESOLUTION_ASK_RULE_HINT], record
+    channel_text = (f"{RESOLUTION_ASK_MARKER} Resolve task {state.task_id!r} with quality "
+                    f"{getattr(args, 'quality', None)}?\n").encode("utf-8")
+    channel_result = delivery_channel.deliver("resolution_ask", channel_text)
+    if channel_result is not None:
+        delivery_channel.log_delivery(state, channel_result, plan_sha256=None)
+        if channel_result.answered:
+            record["channel"] = channel_result.sha256
+            return [], record
+        return [prefix + "the resolution question was delivered through the headless "
+                         "channel but it gave no `confirm` answer"], record
     path = _present_plan_transcript(state.session_id)
     scan = ask_evidence.ask_after_event(path, RESOLUTION_ASK_MARKER, verified_at)
     given = getattr(args, "resolution_ask_unverifiable", None)
