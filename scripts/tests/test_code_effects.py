@@ -6,10 +6,12 @@ The judge runner is always a stub here -- no test makes a real `claude -p` call.
 What is pinned, by the failure each test guards:
   * collect is fed from `resolve_segments` over the replay fixture's opaque cases, not from hand-built
     segments, and returns the exact text the judge will read (or why it cannot be read);
-  * the import closure -- python-c and stdin-body included -- is part of that text, capped, and anything
-    unseen (a module that cannot be located, import machinery, exec/eval, sys.path, an unmodelled
-    interpreter option, a file outside the venue) is UNDETERMINABLE: the reader is an allow-list;
-  * `effects_of(segment, line_segments)` refuses when another segment of the line may rewrite the text read;
+  * only the code itself is read, never an imported file: an import outside the stdlib allow-list, a
+    standard-library name a file of the search directory would shadow, import machinery, exec/eval,
+    sys.path, an unmodelled interpreter option or source encoding, a file outside the venue is
+    UNDETERMINABLE: the reader is an allow-list (the round-2 reviewer probes are pinned below);
+  * `effects_of(segment, line_segments)` refuses when another segment of the line, or a write the code
+    itself makes, may change the text read or what an import resolves to;
   * every judge failure (timeout, exit code, no JSON, schema violation, a raise) is UNDETERMINABLE, never an
     empty effect list;
   * the cache key covers every byte the judge saw, and only an answered verdict is cached;
@@ -18,6 +20,7 @@ What is pinned, by the failure each test guards:
 import hashlib
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -123,7 +126,7 @@ WRITE_OUT = {"kind": "file", "path": "out.txt", "op": "write"}
 
 #: fixture opaque case -> True when its code is fully readable in the synthetic world, else a reason fragment
 FIXTURE_EXPECTATION = {
-    "python-c-01": "sys.path",
+    "python-c-01": "pytest",
     "python-stdin-01": True,
     "python-stdin-03": True,
     "python-stdin-04": True,
@@ -169,14 +172,13 @@ def test_python_c_text_is_the_code_operand(repo):
     assert 'open("a.txt", "w").write("x")' in got.code
 
 
-def test_script_file_closure_follows_local_imports_transitively(repo):
-    write(repo, "tool.py", "import helper\nhelper.go()\n")
-    write(repo, "helper.py", "import pkg.deep\n")
-    write(repo, "pkg/__init__.py", "")
-    write(repo, "pkg/deep.py", "OUT = 'x'\n")
+def test_a_script_shows_its_own_text_and_no_imported_file(repo):
+    write(repo, "tool.py", "import json\nprint(json.dumps(1))\n")
+    write(repo, "helper.py", "NEVER_SHOWN = 1\n")
     got = collected("python3 tool.py", repo)
-    for name in ("tool.py", "helper.py", os.path.join("pkg", "deep.py")):
-        assert f"=== {name} ===" in got.code
+    assert got.code == "import json\nprint(json.dumps(1))\n"
+    assert got.files == (str(repo / "tool.py"),) and got.imports == ("json",)
+    assert got.search_dir == str(repo)
 
 
 @pytest.mark.parametrize("command", [
@@ -184,29 +186,62 @@ def test_script_file_closure_follows_local_imports_transitively(repo):
     "python3 - <<'E'\nimport helper\nE",
     "python3 <<'E'\nfrom helper import go\nE",
 ])
-def test_closure_applies_to_python_c_and_stdin_bodies(command, repo):
+def test_a_local_module_is_never_read_so_importing_one_is_undeterminable(command, repo):
     write(repo, "helper.py", "SENTINEL_BYTES = 1\n")
-    assert "SENTINEL_BYTES" in collected(command, repo).code
+    got = undeterminable(command, repo)
+    assert "helper" in got.reason and "allow-list" in got.reason
 
 
-def test_editing_an_imported_module_changes_the_hash(repo):
-    write(repo, "helper.py", "A = 1\n")
-    first = collected("python3 -c 'import helper'", repo)
-    write(repo, "helper.py", "A = 2\n")
-    second = collected("python3 -c 'import helper'", repo)
-    assert first.sha256 != second.sha256
+@pytest.mark.parametrize("command", [
+    "python3 -c 'from . import sibling'",
+    "python3 - <<'E'\nfrom .sibling import X\nE",
+])
+def test_a_relative_import_is_undeterminable(command, repo):
+    assert "relative import" in undeterminable(command, repo).reason
 
 
-def test_a_local_module_shadows_the_standard_library(repo):
-    write(repo, "json.py", "SHADOW = 1\n")
-    assert "SHADOW" in collected("python3 -c 'import json'", repo).code
-
-
-def test_relative_imports_inside_a_package_are_followed(repo):
+def test_a_relative_import_in_a_script_is_undeterminable(repo):
     write(repo, "pkg/__init__.py", "")
-    write(repo, "pkg/main.py", "from . import sibling\nfrom .sibling import X\n")
+    write(repo, "pkg/main.py", "from . import sibling\n")
     write(repo, "pkg/sibling.py", "X = 'RELATIVE'\n")
-    assert "RELATIVE" in collected("python3 pkg/main.py", repo).code
+    assert "relative import" in undeterminable("python3 pkg/main.py", repo).reason
+
+
+@pytest.mark.parametrize("module", ["os", "json", "re", "time", "io", "string", "collections", "codecs", "operator", "stat"])
+def test_a_local_file_named_like_a_stdlib_module_is_undeterminable(module, repo):
+    """Round-2 probe 3: a local os.py / time.py / io.py is NOT what `import os` runs (the builtin, frozen or
+    already loaded module wins), yet the reader used to show the local text. No local text is shown now."""
+    write(repo, f"{module}.py", "def system(cmd): return 0\n")
+    got = undeterminable("python3 -c 'import json'", repo)
+    assert f"{module}.py" in got.reason and "standard-library" in got.reason
+
+
+def test_a_local_directory_or_compiled_file_named_like_a_stdlib_module_is_undeterminable(repo):
+    """The library's own imports are shadowed too, not only the code's: json imports re, decoder ..."""
+    for sibling in ("re/__init__.py", "random.pyc", "os.cpython-312-x86_64-linux-gnu.so", "__pycache__/re.cpython-312.pyc"):
+        write(repo, sibling, "")
+        assert "standard-library" in undeterminable("python3 -c 'import json'", repo).reason
+        (repo / sibling).unlink()
+        shutil.rmtree(repo / "re", ignore_errors=True)
+        shutil.rmtree(repo / "__pycache__", ignore_errors=True)
+
+
+def test_a_stdlib_named_file_matters_only_when_the_code_imports(repo):
+    write(repo, "code.py", "X = 1\n")
+    collected("python3 -c 'print(1)'", repo)
+
+
+def test_a_non_stdlib_named_file_in_the_search_directory_is_harmless(repo):
+    write(repo, "helper.py", "X = 1\n")
+    write(repo, "notes.txt", "")
+    collected("python3 -c 'import json'", repo)
+
+
+def test_the_scripts_own_stdlib_looking_name_is_not_a_shadow_unless_imported(repo):
+    write(repo, "test.py", "import json\n")
+    collected("python3 test.py", repo)
+    write(repo, "string.py", "import string\n")
+    assert "string.py" in undeterminable("python3 string.py", repo).reason
 
 
 @pytest.mark.parametrize("code", [
@@ -227,9 +262,44 @@ def test_sys_argv_and_exit_are_allowed(repo):
     collected("python3 -c 'import sys; print(sys.argv); sys.exit(0)'", repo)
 
 
-def test_standard_library_and_installed_packages_need_no_text(repo):
-    got = collected("python3 -c 'import os, json, pytest'", repo)
-    assert got.code.startswith("THIRD-PARTY MODULES (text not shown): pytest\n")
+def test_allow_listed_standard_library_modules_need_no_text(repo):
+    got = collected("python3 -c 'import os.path, json; from pathlib import Path; import subprocess as sp'", repo)
+    assert got.imports == ("json", "os", "pathlib", "subprocess")
+
+
+@pytest.mark.parametrize("module", [
+    "operator", "pickle", "marshal", "shelve", "code", "codeop", "ctypes", "types", "pydoc", "multiprocessing",
+    "importlib", "runpy", "builtins", "pytest", "yaml", "inspect", "socket", "urllib.request", "ast",
+])
+def test_a_module_off_the_allow_list_is_undeterminable(module, repo):
+    """Round-2 probes 6/7: `operator.methodcaller('system', 'true')(os)` and `pickle.loads(...)` collected
+    when the module check was a deny-list. Off the allow-list is refused, not judged."""
+    assert "allow-list" in undeterminable(f"python3 -c 'import {module}'", repo).reason
+
+
+def test_a_star_import_is_undeterminable(repo):
+    """Round-2 probe 1: `from pkg import *` runs every submodule named in pkg's __all__."""
+    write(repo, "pkg/__init__.py", "__all__ = ['evil']\n")
+    write(repo, "pkg/evil.py", "print('EVIL RAN')\n")
+    assert "allow-list" in undeterminable("python3 -c 'from pkg import *'", repo).reason
+    assert "star-imports" in undeterminable("python3 -c 'from os import *'", repo).reason
+
+
+@pytest.mark.parametrize("code", [
+    "().__class__.__bases__[0].__subclasses__()",
+    "import os; os.__dict__",
+    "import os; os._exit(0)",
+    "import argparse; argparse._sys.path.insert(0, 'x')",
+    "import os; os.sys",
+    "x = __builtins__",
+    "breakpoint()",
+])
+def test_dunder_private_and_sys_reaching_references_are_undeterminable(code, repo):
+    undeterminable(f"python3 -c \"{code}\"", repo)
+
+
+def test_the_name_dunder_and_init_are_allowed(repo):
+    collected("python3 - <<'E'\nimport sys\nclass A:\n    def __init__(self):\n        super().__init__()\nif __name__ == '__main__':\n    sys.exit(0)\nE", repo)
 
 
 @pytest.mark.parametrize("code", [
@@ -251,6 +321,7 @@ def test_standard_library_and_installed_packages_need_no_text(repo):
     "f = __builtins__.__dict__['ex' + 'ec']",
     "x = getattr(__import__, 'x')",
     "import os; os.chdir('/')",
+    "from os import chdir",
     "import site",
     "f = compile",
     "print(vars())",
@@ -264,25 +335,26 @@ def test_a_reference_to_exec_without_a_call_is_undeterminable(repo):
     assert "exec" in got.reason
 
 
-def test_an_import_outside_the_venue_is_undeterminable(repo, tmp_path):
+def test_a_script_outside_the_venue_is_undeterminable(repo, tmp_path):
     write(tmp_path, "elsewhere/ext.py", "X = 1\n")
     (repo / "ext.py").symlink_to(tmp_path / "elsewhere" / "ext.py")
-    got = undeterminable("python3 -c 'import ext'", repo)
-    assert "outside the venue" in got.reason
+    assert "outside the venue" in undeterminable("python3 ext.py", repo).reason
 
 
-# --- collect: the interpreter's import search path (B3) -------------------------------------------------
+# --- collect: the interpreter's options and import search path ----------------------------------------
 
-@pytest.mark.parametrize("flag", ["-I", "-P", "-E", "-S", "-s", "-x", "-i", "-d", "-v", "-b", "-W error", "-X dev", "-Isu"])
+@pytest.mark.parametrize("flag", [
+    "-I", "-P", "-E", "-S", "-s", "-x", "-i", "-d", "-v", "-b", "-W error", "-X dev", "-Isu", "-O", "-OO", "-uO",
+])
 def test_an_unmodelled_interpreter_option_is_undeterminable(flag, repo):
-    write(repo, "helper2.py", "X = 1\n")
-    undeterminable(f"python3 {flag} -c 'import helper2'", repo)
+    """`-O` is here too (round-2 finding 5): it makes `__debug__` False, so `if not __debug__: ...` runs code
+    the judge reads as dead, and the flags are in neither the prompt nor the cache key."""
+    assert "not modelled" in undeterminable(f"python3 {flag} -c 'print(1)'", repo).reason
 
 
-@pytest.mark.parametrize("flag", ["-u", "-B", "-O", "-q", "-uB", "-OO"])
+@pytest.mark.parametrize("flag", ["-u", "-B", "-q", "-uB", "-uBq"])
 def test_the_modelled_interpreter_options_are_accepted(flag, repo):
-    write(repo, "helper2.py", "X = 1\n")
-    assert "=== helper2.py ===" in collected(f"python3 {flag} -c 'import helper2'", repo).code
+    assert collected(f"python3 {flag} -c 'print(1)'", repo).code == "print(1)"
 
 
 def test_a_long_interpreter_option_is_undeterminable(repo):
@@ -296,42 +368,27 @@ def test_a_path_variable_in_the_environment_is_undeterminable(name, repo, monkey
     assert name in got.reason
 
 
-def test_a_bare_directory_is_a_namespace_package_and_is_undeterminable(repo):
-    (repo / "yaml").mkdir()
-    got = undeterminable("python3 -c 'import yaml'", repo)
-    assert "namespace" in got.reason
-
-
-@pytest.mark.parametrize("sibling", ["helper2.so", "helper2.pyc", "helper2.cpython-312-x86_64-linux-gnu.so", "helper2.abi3.so"])
-def test_a_compiled_or_bytecode_sibling_is_undeterminable(sibling, repo):
-    write(repo, "helper2.py", "X = 1\n")
+@pytest.mark.parametrize("sibling", ["os.py", "json/__init__.py", "re.cpython-312-x86_64-linux-gnu.so", "string.pyc"])
+def test_a_script_search_directory_is_the_script_directory_not_the_cwd(sibling, repo):
+    """`sys.path[0]` of a script is the script's directory: a stdlib-named entry there shadows the library
+    module, one in the cwd does not."""
+    write(repo, "sub/tool.py", "import json\n")
     write(repo, sibling, "")
-    got = undeterminable("python3 -c 'import helper2'", repo)
-    assert "compiled or bytecode" in got.reason
+    assert collected("python3 sub/tool.py", repo).search_dir == str(repo / "sub")
+    write(repo, f"sub/{sibling}", "")
+    assert "would be imported instead" in undeterminable("python3 sub/tool.py", repo).reason
 
 
-def test_a_package_wins_over_a_module_of_the_same_name_and_both_are_not_a_conflict(repo):
-    write(repo, "thing/__init__.py", "FROM = 'package'\n")
-    write(repo, "thing.py", "FROM = 'module'\n")
-    got = collected("python3 -c 'import thing'", repo)
-    assert "FROM = 'package'" in got.code and "FROM = 'module'" not in got.code
+def test_the_search_directory_of_c_and_stdin_code_is_the_cwd(repo):
+    assert collected("python3 -c 'import json'", repo).search_dir == str(repo)
+    assert collected("python3 - <<'E'\nimport json\nE", repo).search_dir == str(repo)
 
 
-def test_a_script_search_directory_is_the_script_directory_not_the_cwd(repo):
-    write(repo, "sub/tool.py", "import near\n")
-    write(repo, "sub/near.py", "NEAR = 'sub'\n")
-    write(repo, "near.py", "NEAR = 'cwd'\n")
-    got = collected("python3 sub/tool.py", repo)
-    assert "NEAR = 'sub'" in got.code and "NEAR = 'cwd'" not in got.code
-
-
-def test_collected_names_every_file_read_and_every_path_probed(repo):
-    write(repo, "tool.py", "import helper\n")
-    write(repo, "helper.py", "X = 1\n")
+def test_collected_names_the_script_read_and_the_modules_imported(repo):
+    write(repo, "tool.py", "import json\nfrom os import path\n")
     got = collected("python3 tool.py", repo)
-    assert got.files == (str(repo / "tool.py"), str(repo / "helper.py"))
-    for name in ("helper", "helper.py", "helper.so"):
-        assert str(repo / name) in got.probed
+    assert got.files == (str(repo / "tool.py"),) and got.imports == ("json", "os")
+    assert collected("python3 -c 'print(1)'", repo).files == ()
 
 
 def test_collected_carries_the_current_branch(repo):
@@ -348,24 +405,9 @@ def test_a_missing_script_is_undeterminable(repo):
     undeterminable("python3 nothing_here.py", repo)
 
 
-def test_file_count_cap(repo):
-    for n in range(code_effects.MAX_FILES + 1):
-        write(repo, f"m{n}.py", f"import m{n + 1}\n" if n < code_effects.MAX_FILES else "")
-    got = undeterminable("python3 -c 'import m0'", repo)
-    assert "more than" in got.reason
-
-
-def test_the_closure_up_to_the_file_cap_is_collected(repo):
-    last = code_effects.MAX_FILES - 1
-    for n in range(code_effects.MAX_FILES):
-        write(repo, f"m{n}.py", f"import m{n + 1}\n" if n < last else "")
-    assert f"=== m{last}.py ===" in collected("python3 -c 'import m0'", repo).code
-
-
-def test_byte_cap_on_the_closure(repo):
+def test_byte_cap_on_a_script_file(repo):
     write(repo, "big.py", "X = '" + "a" * code_effects.MAX_TOTAL_BYTES + "'\n")
-    got = undeterminable("python3 -c 'import big'", repo)
-    assert "bytes" in got.reason
+    assert "bytes" in undeterminable("python3 big.py", repo).reason
 
 
 def test_byte_cap_on_the_entry_text(repo):
@@ -658,34 +700,41 @@ def test_an_unreadable_segment_never_reaches_the_judge(repo, cache_dir):
     assert not stub.calls
 
 
-def test_editing_an_imported_module_misses_the_cache(repo, cache_dir):
-    write(repo, "helper.py", "A = 1\n")
-    segment = opaque_segment("python3 -c 'import helper'", repo)
+def test_editing_the_script_misses_the_cache(repo, cache_dir):
+    write(repo, "tool.py", "A = 1\n")
+    segment = opaque_segment("python3 tool.py", repo)
     stub = Stub(answer([]))
     code_effects.effects_of(segment, runner=stub, cache_dir=cache_dir)
-    write(repo, "helper.py", "A = 2\nopen('new.txt', 'w')\n")
+    write(repo, "tool.py", "A = 2\nopen('new.txt', 'w')\n")
     code_effects.effects_of(segment, runner=stub, cache_dir=cache_dir)
     assert len(stub.calls) == 2 and len(list(cache_dir.glob("*.json"))) == 2
 
 
-def test_the_judge_was_shown_the_closure_the_key_covers(repo, cache_dir):
-    write(repo, "helper.py", "SEEN_BY_THE_JUDGE = 1\n")
+def test_the_judge_was_shown_exactly_the_code_the_key_covers(repo, cache_dir):
+    write(repo, "tool.py", "import json\nSEEN_BY_THE_JUDGE = json.dumps(1)\n")
+    write(repo, "json_helper.py", "NEVER_SHOWN = 1\n")
     stub = Stub(answer([]))
-    got = code_effects.effects_of(opaque_segment("python3 -c 'import helper'", repo), runner=stub, cache_dir=cache_dir)
-    assert "SEEN_BY_THE_JUDGE" in stub.calls[0]["stdin"]
-    assert got.code_sha256 == hashlib.sha256(
-        collected("python3 -c 'import helper'", repo).code.encode()).hexdigest()
+    got = code_effects.effects_of(opaque_segment("python3 tool.py", repo), runner=stub, cache_dir=cache_dir)
+    shown = stub.calls[0]["stdin"]
+    assert "SEEN_BY_THE_JUDGE" in shown and "NEVER_SHOWN" not in shown
+    assert got.code_sha256 == hashlib.sha256(collected("python3 tool.py", repo).code.encode()).hexdigest()
 
 
-def test_the_key_covers_code_venue_model_and_prompt(monkeypatch):
-    base = code_effects.cache_key("a" * 64, "/v")
-    assert code_effects.cache_key("b" * 64, "/v") != base
-    assert code_effects.cache_key("a" * 64, "/w") != base
+def test_the_key_covers_code_venue_branch_model_and_prompt(monkeypatch):
+    base = code_effects.cache_key("a" * 64, "/v", "main")
+    assert code_effects.cache_key("b" * 64, "/v", "main") != base
+    assert code_effects.cache_key("a" * 64, "/w", "main") != base
+    assert code_effects.cache_key("a" * 64, "/v", "other") != base
     monkeypatch.setattr(advisor, "CODE_EFFECTS_MODEL", "another-model")
-    assert code_effects.cache_key("a" * 64, "/v") != base
+    assert code_effects.cache_key("a" * 64, "/v", "main") != base
     monkeypatch.undo()
     monkeypatch.setattr(advisor, "CODE_EFFECTS_PROMPT_SHA256", "0" * 64)
-    assert code_effects.cache_key("a" * 64, "/v") != base
+    assert code_effects.cache_key("a" * 64, "/v", "main") != base
+
+
+def test_the_cache_key_requires_a_branch():
+    with pytest.raises(TypeError):
+        code_effects.cache_key("a" * 64, "/v")
 
 
 def test_the_same_code_in_two_venues_has_two_cache_entries(tmp_path, cache_dir):
@@ -800,12 +849,36 @@ def effects_on_line(text, venue, cache_dir, stub=None):
     return code_effects.effects_of(segment, segments, runner=stub, cache_dir=cache_dir), stub
 
 
-def test_a_sibling_heredoc_that_rewrites_an_imported_module_is_undeterminable(repo, cache_dir):
-    """Reviewer probe 1: the judge would read the old helper.py while the line replaces it first."""
+def test_a_sibling_heredoc_that_rewrites_a_local_module_is_undeterminable(repo, cache_dir):
+    """Round-1 probe 1: a local module is never read, so the import is refused before the line is looked at."""
     write(repo, "helper.py", "OLD = 1\n")
     got, stub = effects_on_line("cat > helper.py <<'E'\nNEW = 2\nopen('boom', 'w')\nE\npython3 -c 'import helper'", repo, cache_dir)
-    assert isinstance(got, code_effects.Undeterminable) and "helper.py" in got.reason
+    assert isinstance(got, code_effects.Undeterminable) and "allow-list" in got.reason
     assert not stub.calls
+
+
+@pytest.mark.parametrize("sibling", ["touch os.py", "echo x > json.py", "mkdir -p __pycache__", "touch __pycache__/x.pyc"])
+def test_a_sibling_that_creates_a_stdlib_named_file_is_undeterminable_when_the_code_imports(sibling, repo, cache_dir):
+    if "__pycache__/" in sibling:
+        (repo / "__pycache__").mkdir()
+    got, stub = effects_on_line(f"{sibling}\npython3 -c 'import json'", repo, cache_dir)
+    assert isinstance(got, code_effects.Undeterminable) and not stub.calls
+    assert "instead of a standard-library module" in got.reason
+
+
+def test_a_sibling_that_creates_a_stdlib_named_file_is_harmless_to_code_that_imports_nothing(repo, cache_dir):
+    got, stub = effects_on_line("touch os.py\npython3 -c 'print(1)'", repo, cache_dir)
+    assert isinstance(got, code_effects.Effects) and len(stub.calls) == 1
+
+
+def test_write_hit_over_the_search_directory_and_its_ancestors(repo):
+    importing = collected("python3 -c 'import json'", repo)
+    plain = collected("python3 -c 'print(1)'", repo)
+    for path in (str(repo), str(repo.parent), "/"):
+        assert "imports are looked up" in code_effects.write_hit(path, importing)
+        assert code_effects.write_hit(path, plain) is None
+    assert code_effects.write_hit(str(repo / "notes.txt"), importing) is None
+    assert code_effects.write_hit(str(repo / "sub" / "os.py"), importing) is None
 
 
 def test_a_sibling_that_writes_the_script_before_it_runs_is_undeterminable(repo, cache_dir):
@@ -823,16 +896,9 @@ def test_the_opaque_segments_own_redirection_onto_its_module_is_undeterminable(r
 
 
 def test_a_sibling_write_to_a_directory_holding_a_read_file_is_undeterminable(repo, cache_dir):
-    write(repo, "libdir/helper.py", "X = 1\n")
-    write(repo, "libdir/tool.py", "import helper\n")
+    write(repo, "libdir/tool.py", "import json\n")
     got, stub = effects_on_line("mkdir -p libdir\npython3 libdir/tool.py", repo, cache_dir)
     assert isinstance(got, code_effects.Undeterminable) and "libdir" in got.reason and not stub.calls
-
-
-def test_a_sibling_that_creates_a_probed_path_is_undeterminable(repo, cache_dir):
-    write(repo, "helper.py", "X = 1\n")
-    got, stub = effects_on_line("touch helper.so\npython3 -c 'import helper'", repo, cache_dir)
-    assert isinstance(got, code_effects.Undeterminable) and "helper.so" in got.reason and not stub.calls
 
 
 def test_an_unresolved_sibling_makes_the_code_undeterminable(repo, cache_dir):
@@ -854,8 +920,7 @@ def test_a_second_opaque_segment_on_the_line_makes_both_undeterminable(repo, cac
 
 
 def test_an_unrelated_sibling_write_does_not_block_the_read(repo, cache_dir):
-    write(repo, "helper.py", "X = 1\n")
-    got, stub = effects_on_line("echo hi > notes.txt\npython3 -c 'import helper'", repo, cache_dir)
+    got, stub = effects_on_line("echo hi > notes.txt\npython3 -c 'import json'", repo, cache_dir)
     assert isinstance(got, code_effects.Effects) and len(stub.calls) == 1
 
 
@@ -891,6 +956,121 @@ def test_a_commit_is_undeterminable_when_a_sibling_may_switch_the_branch(repo, c
 def test_a_commit_stands_when_no_sibling_touches_the_worktree(repo, cache_dir):
     got, _ = effects_on_line("echo hi\npython3 -c 'print(1)'", repo, cache_dir, Stub(answer([COMMIT_OUT])))
     assert isinstance(got, code_effects.Effects) and got.resources == (resources.VcsRefResource(".", "feature", "commit"),)
+
+
+# --- collect: the source encoding (round-2 finding 4) -------------------------------------------------
+
+UTF7_COOKIE = "# -*- coding: utf-7 -*-\n# +AAo-print('HIDDEN RAN')\n"
+
+
+def test_a_script_with_a_non_utf8_coding_cookie_is_undeterminable(repo):
+    """The interpreter decodes by the cookie: `+AAo-` is a newline in utf-7, so the 'comment' is code."""
+    (repo / "tool.py").write_bytes(UTF7_COOKIE.encode("ascii"))
+    assert "utf-7" in undeterminable("python3 tool.py", repo).reason
+
+
+def test_a_stdin_body_with_a_non_utf8_coding_cookie_is_undeterminable(repo):
+    assert "utf-7" in undeterminable(f"python3 - <<'E'\n{UTF7_COOKIE}E", repo).reason
+
+
+def test_c_text_with_a_non_utf8_coding_cookie_is_undeterminable(repo):
+    assert "utf-7" in undeterminable("python3 -c '# coding: utf-7\nprint(1)'", repo).reason
+
+
+@pytest.mark.parametrize("cookie", ["# coding: latin-1", "# vim: set fileencoding=cp1252 :", "# -*- coding: utf-16 -*-"])
+def test_any_other_declared_encoding_is_undeterminable(cookie, repo):
+    write(repo, "tool.py", f"{cookie}\nprint(1)\n")
+    undeterminable("python3 tool.py", repo)
+
+
+@pytest.mark.parametrize("cookie", ["# -*- coding: utf-8 -*-", "# coding=utf8", "# vim: set fileencoding=UTF-8 :"])
+def test_a_utf8_coding_cookie_is_read(cookie, repo):
+    write(repo, "tool.py", f"{cookie}\nprint(1)\n")
+    assert "print(1)" in collected("python3 tool.py", repo).code
+
+
+def test_a_script_with_a_bom_is_read_and_one_with_invalid_utf8_is_not(repo):
+    (repo / "bom.py").write_bytes(b"\xef\xbb\xbfprint(1)\n")
+    assert "print(1)" in collected("python3 bom.py", repo).code
+    (repo / "bad.py").write_bytes(b"print('\xff')\n")
+    undeterminable("python3 bad.py", repo)
+
+
+# --- effects_of: the code's own writes (round-2 finding 6) ---------------------------------------------
+
+def test_the_judge_naming_a_write_to_the_script_is_undeterminable(repo, cache_dir):
+    write(repo, "tool.py", "import json\nopen('tool.py', 'w').write('x')\n")
+    stub = Stub(answer([{"kind": "file", "path": "tool.py", "op": "write"}]))
+    got = code_effects.effects_of(opaque_segment("python3 tool.py", repo), runner=stub, cache_dir=cache_dir)
+    assert isinstance(got, code_effects.Undeterminable) and "the script" in got.reason and len(stub.calls) == 1
+
+
+def test_the_judge_naming_a_stdlib_named_file_in_the_search_directory_is_undeterminable(repo, cache_dir):
+    stub = Stub(answer([{"kind": "file", "path": "os.py", "op": "write"}]))
+    segment = opaque_segment("python3 -c \"import json; open('os.py', 'w').write(json.dumps(1))\"", repo)
+    got = code_effects.effects_of(segment, runner=stub, cache_dir=cache_dir)
+    assert isinstance(got, code_effects.Undeterminable) and "instead of a standard-library module" in got.reason
+
+
+def test_a_write_to_a_stdlib_named_file_by_code_that_imports_nothing_is_an_ordinary_effect(repo, cache_dir):
+    stub = Stub(answer([{"kind": "file", "path": "os.py", "op": "write"}]))
+    got = code_effects.effects_of(opaque_segment("python3 -c \"open('os.py', 'w')\"", repo), runner=stub, cache_dir=cache_dir)
+    assert isinstance(got, code_effects.Effects)
+
+
+def test_an_ordinary_write_by_a_script_is_an_effect(repo, cache_dir):
+    write(repo, "tool.py", "import json\nopen('out.txt', 'w').write(json.dumps(1))\n")
+    got = code_effects.effects_of(
+        opaque_segment("python3 tool.py", repo), runner=Stub(answer([WRITE_OUT])), cache_dir=cache_dir)
+    assert isinstance(got, code_effects.Effects) and got.resources == (resources.FileResource(str(repo / "out.txt"), "write"),)
+
+
+# --- the six round-2 probes: each must be Undeterminable with no judge call --------------------------------
+
+def _probe(text, repo, cache_dir):
+    stub = Stub(answer([]))
+    got = code_effects.effects_of(opaque_segment(text, repo), runner=stub, cache_dir=cache_dir)
+    assert isinstance(got, code_effects.Undeterminable), got
+    assert not stub.calls, "the judge must not be asked"
+    return got.reason
+
+
+def test_probe_1_a_star_import_of_a_local_package(repo, cache_dir):
+    write(repo, "pkg/__init__.py", "__all__ = ['evil']\n")
+    write(repo, "pkg/evil.py", "print('EVIL RAN')\n")
+    assert "allow-list" in _probe("python3 -c 'from pkg import *'", repo, cache_dir)
+
+
+def test_probe_2_a_compiled_package_init_next_to_a_module(repo, cache_dir):
+    write(repo, "two.py", "print('two module')\n")
+    write(repo, "two/__init__.pyc", "")
+    assert "allow-list" in _probe("python3 -c 'import two'", repo, cache_dir)
+
+
+def test_probe_3_a_local_file_shadowing_a_builtin_stdlib_module(repo, cache_dir):
+    write(repo, "os.py", "def system(cmd): return 0\n")
+    assert "instead of the standard-library module" in _probe("python3 -c 'import os; os.system(\"true\")'", repo, cache_dir)
+
+
+def test_probe_4_a_utf7_coding_cookie(repo, cache_dir):
+    (repo / "tool.py").write_bytes(UTF7_COOKIE.encode("ascii"))
+    assert "utf-7" in _probe("python3 tool.py", repo, cache_dir)
+
+
+def test_probe_5_the_optimize_flag_and_dunder_debug(repo, cache_dir):
+    assert "not modelled" in _probe("python3 -O -c 'print(1)'", repo, cache_dir)
+    assert "__debug__" in _probe("python3 -c 'if not __debug__: open(\"p\", \"w\")'", repo, cache_dir)
+
+
+def test_probe_6_the_code_copies_a_payload_over_a_module_it_then_imports(repo, cache_dir):
+    write(repo, "helper.py", "OLD = 1\n")
+    assert "allow-list" in _probe(
+        "python3 -c 'import shutil; shutil.copy(\"/tmp/payload.py\", \"helper.py\"); import helper'", repo, cache_dir)
+
+
+def test_probe_6b_operator_and_pickle_gadgets(repo, cache_dir):
+    assert "allow-list" in _probe("python3 -c 'import os, operator; operator.methodcaller(\"system\", \"true\")(os)'", repo, cache_dir)
+    assert "allow-list" in _probe("python3 -c 'import pickle; pickle.loads(open(\"x\", \"rb\").read())'", repo, cache_dir)
 
 
 # --- config: the two timeouts ----------------------------------------------------------------------

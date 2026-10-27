@@ -6,7 +6,10 @@ takes against `resource-grant-judge-timeout-s`, or that it refuses code it canno
 Run this after a change to the judge prompt or the timeouts, and when measuring the live latency the hook
 budget rests on.
 
-    python3 scripts/code_effects_live_probe.py
+    env -u PYTHONPATH python3 scripts/code_effects_live_probe.py
+
+With PYTHONPATH, PYTHONHOME or PYTHONSAFEPATH set `code_effects` refuses every case before the judge is asked,
+so the probe stops with exit code 2 instead of printing refusals that prove nothing.
 
 Each case makes one `claude -p` call (low tier) and prints the verdict and its wall-clock latency:
   1. `python3 -c` that writes a file in a scratch git repository -> expected: one file write effect;
@@ -18,6 +21,7 @@ Nothing is written outside a temporary directory; the verdict cache lives there 
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -37,9 +41,14 @@ def _timed(label: str, call):
     started = time.monotonic()
     result = call()
     print(f"{label}\n   ({time.monotonic() - started:.2f}s, judge timeout {advisor.code_effects_judge_timeout_s()}s): {result}")
+    return result
 
 
 def main() -> int:
+    inert = [name for name in code_effects._PATH_ENV_VARS if os.environ.get(name)]
+    if inert:
+        print(f"{', '.join(inert)} is set: code_effects refuses everything before the judge. Run under `env -u PYTHONPATH`.")
+        return 2
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp).resolve() / "repo"
         repo.mkdir()

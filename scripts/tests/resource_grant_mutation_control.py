@@ -508,23 +508,59 @@ CATALOGUE: "dict[str, Mutant]" = {
         'advisor.CODE_EFFECTS_PROMPT_SHA256, code_sha256]',
         "the code-effects cache key forgets the venue, the branch and the model the verdict was made for",
     ),
-    "import-closure-collected": Mutant(
+    "module-allowlist-widened": Mutant(
         CODE_EFFECTS,
-        "    while pending:\n",
-        "    while False:\n",
-        "the judge reads the entry text only: the local modules it imports are not collected",
+        "    if top not in _IMPORTABLE:\n",
+        "    if False:\n",
+        "a local or third-party module (or operator, pickle, importlib ...) is imported although its text is never shown to the judge",
     ),
-    "closure-file-cap": Mutant(
+    "stdlib-shadow-ignored": Mutant(
         CODE_EFFECTS,
-        "        if len(self.files) >= MAX_FILES:\n",
-        "        if False:\n",
-        "the import closure is read without a file-count cap",
+        "            shadow = _shadowing_entry(search_dir, imported, script)\n",
+        "            shadow = None\n",
+        "a local os.py / json.py / __pycache__ entry that would be imported instead of the library module is not noticed",
+    ),
+    "star-import-allowed": Mutant(
+        CODE_EFFECTS,
+        '                if alias.name == "*":\n',
+        "                if False:\n",
+        "`from pkg import *` is accepted, so the names bound (and the submodules run) are hidden from the judge",
+    ),
+    "private-attribute-allowed": Mutant(
+        CODE_EFFECTS,
+        '            if node.attr.startswith("_") and node.attr not in _DUNDER_SAFE:\n',
+        "            if False:\n",
+        "`os._exit` / `argparse._sys` style private attributes, which reach modules the judge cannot see, are accepted",
+    ),
+    "dunder-allowed": Mutant(
+        CODE_EFFECTS,
+        '    return name.startswith("__") and name.endswith("__") and name not in _DUNDER_SAFE\n',
+        "    return False\n",
+        "`__builtins__` and the other dunder names are accepted, so run-time lookups are hidden from the judge",
+    ),
+    "encoding-cookie-ignored": Mutant(
+        CODE_EFFECTS,
+        "    if encoding not in _SOURCE_ENCODINGS:\n",
+        "    if False:\n",
+        "a PEP 263 cookie for utf-7 or latin-1 is ignored, so the judge reads a comment where the interpreter runs code",
     ),
     "sibling-write-ignored": Mutant(
         CODE_EFFECTS,
-        "            hit = next((w for w in watched if _overlap(path, w)), None)\n",
+        "            hit = write_hit(path, collected)\n",
         "            hit = None\n",
-        "a sibling segment that rewrites an imported module or the script is not noticed: the judge reads the old text",
+        "a sibling segment that rewrites the script or plants a stdlib-named file is not noticed: the judge reads the old text",
+    ),
+    "stdlib-named-write-ignored": Mutant(
+        CODE_EFFECTS,
+        "    if collected.imports:\n",
+        "    if False:\n",
+        "a write that creates os.py / json.py / __pycache__ in the search directory is not noticed by code that imports",
+    ),
+    "own-write-to-source-ignored": Mutant(
+        CODE_EFFECTS,
+        "            own = write_hit(resource.path, collected)\n",
+        "            own = None\n",
+        "the code's own judge-named write to its script or to a stdlib-named file in its search directory is accepted",
     ),
     "sibling-unresolved-ignored": Mutant(
         CODE_EFFECTS,
@@ -546,9 +582,15 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "interpreter-flag-allowlist-widened": Mutant(
         CODE_EFFECTS,
-        '_SAFE_FLAG_LETTERS = frozenset("uBOq")',
-        '_SAFE_FLAG_LETTERS = frozenset("uBOqIPESsxidvbWX")',
+        '_SAFE_FLAG_LETTERS = frozenset("uBq")',
+        '_SAFE_FLAG_LETTERS = frozenset("uBqIPESsxidvbWX")',
         "-I -P -E -S -s and the other options that move the import path or the code are read as harmless",
+    ),
+    "optimize-flag-allowed": Mutant(
+        CODE_EFFECTS,
+        '_SAFE_FLAG_LETTERS = frozenset("uBq")',
+        '_SAFE_FLAG_LETTERS = frozenset("uBOq")',
+        "-O is read as harmless although it makes __debug__ False and the flags are in neither the prompt nor the cache key",
     ),
     "path-env-ignored": Mutant(
         CODE_EFFECTS,
@@ -562,28 +604,10 @@ CATALOGUE: "dict[str, Mutant]" = {
         "                if False:\n",
         "code that edits sys.path or sys.modules is read as if the import path were unchanged",
     ),
-    "import-machinery-allowed": Mutant(
-        CODE_EFFECTS,
-        '                if alias.name.split(".")[0] in _DYNAMIC_MODULES:\n',
-        "                if False:\n",
-        "`import importlib` / `import builtins` / `import runpy` is accepted, so code loaded by name is never read",
-    ),
-    "namespace-directory-matched": Mutant(
-        CODE_EFFECTS,
-        "        if (directory / name).is_dir():\n",
-        "        if False:\n",
-        "a bare directory is read as a namespace package although an installed package of that name wins",
-    ),
-    "compiled-sibling-ignored": Mutant(
-        CODE_EFFECTS,
-        '        if any((directory / f"{name}{suffix}").exists() for suffix in _OTHER_MODULE_SUFFIXES):\n',
-        "        if False:\n",
-        "a .so or .pyc beside a module is ignored, so the text shown is not what the interpreter imports",
-    ),
     "script-dir-not-search-path": Mutant(
         CODE_EFFECTS,
-        "blob = closure.run(closure.relative(script), None, script, script.parent)",
-        "blob = closure.run(closure.relative(script), None, script, cwd)",
+        "            search_dir = script.parent\n",
+        "            search_dir = cwd\n",
         "a script's imports are looked for in the working directory instead of the script's directory",
     ),
     "tilde-path-accepted": Mutant(
