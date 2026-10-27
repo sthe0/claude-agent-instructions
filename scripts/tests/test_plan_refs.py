@@ -698,6 +698,20 @@ def test_field_tables_separate_string_fields_from_structured_ones():
     assert "requirements" in plan_refs.NON_STRING_FIELDS["order"]
 
 
+@pytest.mark.parametrize("where", ["stage", "meta"])
+def test_a_branch_declared_as_a_reference_is_refused_by_position(tmp_path, where):
+    ref = _ref(tmp_path, "m.md", "feat-a\n")
+    if where == "stage":
+        index = _plan(tmp_path, _meta(), _stage(1, branch=ref))
+    else:
+        index = _plan(tmp_path, _meta(branch=ref), _stage(1))
+
+    err = _refusal(index)
+
+    assert err.ref_kind == "position"
+    assert "m.md" in str(err)
+
+
 def _keys_read_by_parse_plan(variable: str) -> set[str]:
     import ast
 

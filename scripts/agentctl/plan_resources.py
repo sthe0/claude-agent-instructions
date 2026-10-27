@@ -142,8 +142,7 @@ def compute_stage_resources(
     [[stage.effects]] (echoed through unresolved -- resolving a
     StageEffectDeclaration against a concrete call is `cli.py`'s job, since
     it needs the actual argv, not just the declaration)."""
-    branch_derivation = _grants.derive_branch_resources(stage, venue=venue, remote_head=remote_head)
-    effective = _effective_grants_for_stage(stage, venue, remote_head, branch_derivation)
+    effective = _effective_grants_for_stage(stage, venue, remote_head)
     out_resources: list = []
     out_unresolved: list = []
     for rule_grant in effective.allow:
@@ -157,7 +156,7 @@ def compute_stage_resources(
         out_resources.extend(res.resources)
     out_resources.extend(_stage_spawn_resources(stage))
     out_resources.extend(_stage_landed_resources(stage))
-    out_resources.extend(branch_derivation[0])
+    out_resources.extend(effective.resources)
     return StageResources(
         stage_index=stage.index,
         resources=out_resources,
@@ -215,7 +214,8 @@ def resource_set_from_entries(
     out.resources.extend(_stage_spawn_resources(stage))
     out.resources.extend(_stage_landed_resources(stage))
     out.resources.extend(
-        _grants.derive_branch_resources(stage, venue=venue)[0] if branch_resources is None else branch_resources)
+        _effective_grants_for_stage(stage, venue).resources if branch_resources is None
+        else branch_resources)
     out.resources = list(dict.fromkeys(out.resources))
     out.rule_patterns = list(dict.fromkeys(out.rule_patterns))
     return out
@@ -267,8 +267,9 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
             view.unresolved.append(
                 _unresolved_item(res.identity or fallback, origin, source, stage))
 
+    head = _grants.remote_head_branch(v) if any(s.is_spawn() for s in doc.stages) else None
     for stage in doc.stages:
-        effective = _effective_grants_for_stage(stage, v)
+        effective = _effective_grants_for_stage(stage, v, head)
         for rule_grant in effective.allow:
             provenance = rule_grant.provenance
             if provenance == "derived:DR-V":
@@ -282,6 +283,7 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
             add(resolve_add_dir_grant(add_dir.path, add_dir.mode).resources, "add_dir", add_dir.path)
         add(_stage_spawn_resources(stage), "spawn", "")
         add(_stage_landed_resources(stage), "landed", "")
+        add(effective.resources, "branch", stage.branch or "")
         if runs_verify_command(stage.criterion):
             verify = stage.criterion.verify_command
             take(resolve_text(verify, v), "verify_command", verify, ("verify-command", verify),
@@ -343,6 +345,7 @@ def _plan_resources_json(doc: PlanDoc, venue: str | None) -> dict:
             "add_dirs": add_dirs,
             "spawn": [_resources.resource_to_dict(r) for r in _stage_spawn_resources(s)],
             "landed": [_resources.resource_to_dict(r) for r in _stage_landed_resources(s)],
+            "branch": [_resources.resource_to_dict(r) for r in effective.resources],
             "stage_effects": [dataclasses.asdict(e) for e in (getattr(s, "effects", []) or [])],
         }
     return {"stages": stages}
@@ -362,6 +365,8 @@ def _render_plan_resources_text(data: dict) -> str:
             lines.append(f"- spawn -> specialist:{r['role']}")
         for r in stage["landed"]:
             lines.append(f"- landed -> vcs_ref:{r['remote']}/{r['ref']}/{r['op']}")
+        for r in stage.get("branch", []):
+            lines.append(f"- own branch -> vcs_ref:{r['remote']}/{r['ref']}/{r['op']}")
     return "\n".join(lines) + "\n"
 
 

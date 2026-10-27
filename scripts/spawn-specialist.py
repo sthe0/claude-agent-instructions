@@ -2093,6 +2093,8 @@ def _grant_key(entry: dict) -> tuple:
 
 
 def _grant_text(entry: dict) -> str:
+    if "resource" in entry:
+        return "vcs_ref {op} {remote}:{ref}".format(**entry["resource"])
     return entry["rule"] if entry.get("rule") else f"--add-dir {entry.get('path')}:{entry.get('mode')}"
 
 
@@ -2154,7 +2156,26 @@ def uncovered_grants(linked, stage_index: int, engine_grants: "list[dict]") -> "
         ):
             continue
         out.append(entry)
+    covering_resources += agentctl_cli.handoff_vcs_resources(state.parent_link)
+    for want in _stage_branch_resources(state, stage_index):
+        if not any(agentctl_cli._covers_resource(held, want, protected) for held in covering_resources):
+            out.append({"resource": agentctl_resources.resource_to_dict(want)})
     return out
+
+
+def _stage_branch_resources(state, stage_index: int) -> list:
+    """DR-P's commit/push resources of the stage the delegation hands a child: as frozen at
+    approve when the session holds them, else derived from the plan as it is now."""
+    from agentctl import cli as agentctl_cli
+    from agentctl import plan_resources
+    from agentctl import resources as agentctl_resources
+    from agentctl.state import CheckVenue
+
+    resource_set = plan_resources.resource_set_from_entries(
+        [], state.stage(stage_index), state.resolve_check_venue(CheckVenue.DELIVERY.value),
+        agentctl_cli.stage_branch_resources(state, stage_index))
+    return [r for r in resource_set.resources
+            if isinstance(r, agentctl_resources.VcsRefResource) and r.op in ("commit", "push")]
 
 
 def grant_widening_refusal(linked, stage_index: int, kind: str, uncovered: "list[dict]") -> str:
@@ -2174,7 +2195,11 @@ def grant_widening_refusal(linked, stage_index: int, kind: str, uncovered: "list
         f"Session: {state.session_id}",
         f"Handoff-sha256: {state.parent_link.get('sha256')}",
     ]
-    lines += [f"Rule: {_grant_text(e)}" for e in uncovered]
+    lines += [f"Rule: {_grant_text(e)}" for e in uncovered if "resource" not in e]
+    lines += [
+        "Resource: vcs_ref {op} {remote}:{ref}".format(**e["resource"])
+        for e in uncovered if "resource" in e
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -3036,8 +3061,8 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         engine_grants = load_engine_stage_grants(
             args.session, args.stage_index, args.kind, state_root=args.state_root
         )
-        if linked is not None and engine_grants:
-            uncovered = uncovered_grants(linked, args.stage_index, engine_grants)
+        if linked is not None:
+            uncovered = uncovered_grants(linked, args.stage_index, engine_grants or [])
             if uncovered:
                 print(grant_widening_refusal(linked, args.stage_index, args.kind, uncovered), end="")
                 log_refused(

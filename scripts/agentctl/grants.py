@@ -81,9 +81,16 @@ class StageGrants:
     materializes."""
     allow: list[RuleGrant] = field(default_factory=list)
     add_dirs: list[AddDirGrant] = field(default_factory=list)
+    #: Typed resources the grant lists cannot carry (DR-P's commit/push of the plan-declared
+    #: branch). Filled by `derive_stage_grants`; part of the stage's effective grants for every
+    #: consumer, but kept out of `effective_tuple`/`to_dict` so plans without any keep their digests.
+    resources: list = field(default_factory=list)
 
     def is_empty(self) -> bool:
-        return not self.allow and not self.add_dirs
+        return not self.allow and not self.add_dirs and not self.resources
+
+    def effective_resources(self) -> frozenset:
+        return frozenset(self.resources)
 
     def effective_tuple(self) -> tuple:
         """A hashable, order-independent projection used to compare two
@@ -923,7 +930,7 @@ def _dr_p_dropped(entry: str, reason: str) -> dict:
     return {"entry": entry, "reason": reason, "rule": DR_P_RULE}
 
 
-def derive_branch_resources(
+def _derive_branch_resources(
     stage, *, venue: str | None, remote_head=LIVE_REMOTE_HEAD,
 ) -> tuple[list, list[dict]]:
     """DR-P: the typed commit/push resources of the branch the PLAN declares for the stage
@@ -975,7 +982,7 @@ def derive_branch_resources(
 
 
 def derive_stage_grants(
-    stage, *, venue: str, remote_head=LIVE_REMOTE_HEAD, branch_derivation=None,
+    stage, *, venue: str, remote_head=LIVE_REMOTE_HEAD,
 ) -> tuple[StageGrants, list[dict]]:
     """The function from a stage's declared elements to a derived
     grant set: DR-V (one `Bash(<segment>:*)` per top-level verify_command
@@ -986,9 +993,10 @@ def derive_stage_grants(
     output_artifact/material_ref becomes `Edit(//<abs>)`), DR-R (each
     outside-venue absolute path in material_refs/knowledge_refs/
     output_artifacts becomes a READ add_dir on its directory). DR-P (the
-    plan-declared branch's commit/push resources, see `derive_branch_resources`)
-    yields typed resources the grant lists cannot carry, so here it only
-    contributes its refusals to `dropped`; `remote_head` is handed to it.
+    plan-declared branch's commit/push resources, see `_derive_branch_resources`)
+    fills `StageGrants.resources` and contributes its refusals to `dropped`;
+    `remote_head` is handed to it. This is the only derivation of DR-P: every
+    consumer reads the resources off the returned object.
 
     Every proposed entry passes through the same validator entries pass
     through when declared; a refused entry is dropped, not raised — this
@@ -1058,11 +1066,11 @@ def derive_stage_grants(
         seen_dirs.add(directory)
         _try_add_dir(directory, "read", "derived:DR-R")
 
-    if branch_derivation is None:
-        branch_derivation = derive_branch_resources(stage, venue=venue, remote_head=remote_head)
-    dropped.extend(branch_derivation[1])
+    branch_resources, branch_dropped = _derive_branch_resources(
+        stage, venue=venue, remote_head=remote_head)
+    dropped.extend(branch_dropped)
 
-    return StageGrants(allow=allow, add_dirs=add_dirs), dropped
+    return StageGrants(allow=allow, add_dirs=add_dirs, resources=branch_resources), dropped
 
 
 # --- coverage -------------------------------------------------------------

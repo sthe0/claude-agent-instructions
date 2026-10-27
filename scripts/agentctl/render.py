@@ -50,7 +50,7 @@ from .plan import (
     PlanDoc,
     PlanError,
     _build_supplies,
-    _branch_derivations,
+    _effective_by_stage,
     _remote_head_for,
     _stage_declared_and_derived_grants,
     _venue_for,
@@ -92,6 +92,11 @@ def _no_venue_note(s, venue: str | None) -> str | None:
     return NO_VENUE_GRANTS_NOTE if relative else None
 
 
+def _branch_lines(grants) -> list[str]:
+    """DR-P's `op remote:ref` texts off a stage's grants object."""
+    return [f"{r.op} {r.remote}:{r.ref}" for r in grants.resources]
+
+
 def _grants_lines(s, venue: str | None) -> list[str]:
     """The `- **Grants (file-access scope):**` block for one stage, or `[]`
     when the stage has neither a declared nor a derived grant to show —
@@ -99,13 +104,16 @@ def _grants_lines(s, venue: str | None) -> list[str]:
     the whole-plan view can no longer omit the one detail (a stage's actual
     file-access scope) that a plan reviewer needs to audit without opening
     the single-stage brief for every stage in turn."""
-    declared_grants, derived_grants, _dropped = _stage_declared_and_derived_grants(s, venue)
+    declared_grants, derived_grants, dropped = _stage_declared_and_derived_grants(s, venue)
     declared_rules = [r.rule for r in declared_grants.allow]
     declared_dirs = [f"{a.path}:{a.mode}" for a in declared_grants.add_dirs]
     derived_rules = [r.rule for r in derived_grants.allow]
     derived_dirs = [f"{a.path}:{a.mode}" for a in derived_grants.add_dirs]
+    own_branch = _branch_lines(derived_grants)
+    branch_refused = [d for d in dropped if d.get("rule") == "DR-P"] if s.branch else []
     note = _no_venue_note(s, venue)
-    if not (declared_rules or declared_dirs or derived_rules or derived_dirs or note):
+    if not (declared_rules or declared_dirs or derived_rules or derived_dirs or note
+            or own_branch or branch_refused):
         return []
     out = ["- **Grants (file-access scope):**"]
     if note:
@@ -118,6 +126,10 @@ def _grants_lines(s, venue: str | None) -> list[str]:
         out.append(f"  - derived allow: {', '.join(derived_rules)}")
     if derived_dirs:
         out.append(f"  - derived add_dirs: {', '.join(derived_dirs)}")
+    if own_branch:
+        out.append(f"  - own branch (DR-P): {', '.join(own_branch)}")
+    for d in branch_refused:
+        out.append(f"  - own branch (DR-P) refused: {d['entry']} ({d['reason']})")
     return out
 
 
@@ -1795,12 +1807,9 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
     venue = _venue_for(doc)
     lines: list[str] = []
     head = _remote_head_for(doc, venue=venue)
-    derivations = _branch_derivations(doc, venue, head)
-    branch_by_stage = plan_branch_resources(doc, derivations=derivations)
     for s in doc.stages:
-        declared, derived, dropped = _stage_declared_and_derived_grants(
-            s, venue, head, derivations.get(s.index))
-        dr_p = [f"{d['op']} {d['remote']}:{d['ref']}" for d in branch_by_stage.get(s.index, [])]
+        declared, derived, dropped = _stage_declared_and_derived_grants(s, venue, head)
+        dr_p = _branch_lines(derived)
         declared_rules = [r.rule for r in declared.allow]
         declared_dirs = [f"{a.path}:{a.mode}" for a in declared.add_dirs]
         dr_v = [r.rule for r in derived.allow if r.provenance == "derived:DR-V"]
@@ -1888,11 +1897,10 @@ def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
         venue = _venue_for(doc)
         stages = {}
         head = _remote_head_for(doc, venue=venue)
-        derivations = _branch_derivations(doc, venue, head)
-        branch_by_stage = plan_branch_resources(doc, derivations=derivations)
+        effective = _effective_by_stage(doc, venue=venue, head=head)
+        branch_by_stage = plan_branch_resources(doc, effective=effective)
         for s in doc.stages:
-            declared, derived, dropped = _stage_declared_and_derived_grants(
-                s, venue, head, derivations.get(s.index))
+            declared, derived, dropped = _stage_declared_and_derived_grants(s, venue, head)
             stages[str(s.index)] = {
                 "declared": declared.to_dict(),
                 "derived": derived.to_dict(),
@@ -1900,7 +1908,7 @@ def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
                 "branch_resources": branch_by_stage.get(s.index, []),
             }
         data = {
-            "grants_sha256": grants_sha256(doc, derivations=derivations),
+            "grants_sha256": grants_sha256(doc, effective=effective),
             "stages": stages,
             "shadow_problems": problems,
             "advisories": advisories,

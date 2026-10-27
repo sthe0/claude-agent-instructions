@@ -148,13 +148,31 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "branch-only-plan-counts-as-granting": Mutant(
         PLAN,
-        "    return any(d[0] for d in derivations.values()) or any(",
-        "    return any(",
+        "    return any(not g.is_empty() for g in _effective_by_stage(doc, venue=venue, head=head).values())",
+        "    return any(g.allow or g.add_dirs for g in _effective_by_stage(doc, venue=venue, head=head).values())",
         "a plan whose only grant is the own-branch push is treated as granting nothing",
+    ),
+    "resources-slot-empty": Mutant(
+        GRANTS,
+        "StageGrants(allow=allow, add_dirs=add_dirs, resources=branch_resources), dropped",
+        "StageGrants(allow=allow, add_dirs=add_dirs, resources=[]), dropped",
+        "the typed-resources slot of every stage's grants stays empty: no consumer sees DR-P",
+    ),
+    "boundary-view-sees-branch": Mutant(
+        "scripts/agentctl/plan_resources.py",
+        '        add(effective.resources, "branch", stage.branch or "")\n',
+        "",
+        "the autonomy boundary cannot see a replan that moves the stage's branch",
+    ),
+    "handoff-held-sees-vcs-resources": Mutant(
+        CLI,
+        "    held: list = handoff_vcs_resources(parent_link)\n",
+        "    held: list = []\n",
+        "a child's self-approval compares against a parent that holds no push",
     ),
     "branch-change-is-grant-growth": Mutant(
         PLAN,
-        "        if set(new_branch[stage.index]) - set(old_branch.get(stage.index, [])):\n"
+        "        if new_eff[stage.index].effective_resources() - old_g.effective_resources():\n"
         "            return True",
         "        if False:\n"
         "            return True",

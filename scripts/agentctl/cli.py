@@ -566,7 +566,7 @@ def _approved_snapshot_doc(state: SessionState):
         return None
 
 
-def _bind_approved_grants(state: SessionState, doc) -> None:
+def _bind_approved_grants(state: SessionState, doc, entries: dict | None = None) -> None:
     """Bind the effective grant set of `doc` to the session at approval: the entries
     materialized once, and the hash of those entries. Dispatch reads the stored entries
     (`_stage_grant_entries`) after re-checking them against the hash; re-deriving them
@@ -577,7 +577,8 @@ def _bind_approved_grants(state: SessionState, doc) -> None:
         state.approved_grants_sha256 = None
         state.approved_grant_entries = None
         return
-    entries = materialized_grant_entries(doc)
+    if entries is None:
+        entries = materialized_grant_entries(doc)
     state.approved_grant_entries = entries
     state.approved_grants_sha256 = entries_grants_sha256(entries)
 
@@ -1231,11 +1232,27 @@ def _agent_renegotiation_refusal(
     return None, crossing
 
 
+def handoff_vcs_resources(parent_link: dict | None) -> list:
+    """The `vcs_ref` resources (DR-P's commit/push) the adopted handoff carries in its
+    `resources`: the one resource kind the parent's grant entries cannot express, so the
+    parent's holdings and the child's coverage both read them from here. Malformed
+    entries are skipped (under-holding, never over-holding)."""
+    out: list = []
+    for item in (parent_link or {}).get("resources") or []:
+        if not isinstance(item, dict) or item.get("kind") != "vcs_ref":
+            continue
+        try:
+            out.append(_resources.resource_from_dict(item))
+        except ValueError:
+            continue
+    return out
+
+
 def _handoff_held(parent_link: dict | None, venue: str) -> tuple[list, list]:
     """What the adopted handoff's grant entries hold: the typed resources they resolve to,
     and the identities of the entries the engine cannot resolve (a wildcard-tail rule),
     which cover only an identical unresolved item of the child's plan."""
-    held: list = []
+    held: list = handoff_vcs_resources(parent_link)
     held_unresolved: list = []
     for entry in (parent_link or {}).get("grants") or []:
         if entry.get("rule"):
@@ -7271,6 +7288,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             _approved_doc, _approved_data, _approved_digest = load_plan_with_digest(state.plan_path)
         except (OSError, PlanError):
             _approved_doc = None
+    _approved_entries = materialized_grant_entries(_approved_doc) if _approved_doc is not None else None
     skip_optional = sorted(set(getattr(args, "skip_optional", None) or []))
     by_agent = bool(args.by and args.by.strip().casefold() == AGENT_ACTOR)
     if skip_optional:
@@ -7300,7 +7318,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         blockers = (
             blockers
             + gates.plan_presentation_blockers(state, state.plan_path)
-            + gates.grants_approval_blockers(state, state.plan_path)
+            + gates.grants_approval_blockers(state, state.plan_path, entries=_approved_entries)
         )
     agent_autonomy: dict | None = None
     if not args.by or not args.by.strip():
@@ -7431,7 +7449,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     # receives without a fresh approve. None (rather than a stale prior digest) on
     # a plan that failed to load or grants nothing, matching grants_approval_
     # blockers' own fail-open reading of the same two conditions.
-    _bind_approved_grants(state, _approved_doc)
+    _bind_approved_grants(state, _approved_doc, _approved_entries)
     if _approved_doc is not None:
         _rekey_runtime_grants(state, _approved_doc)
     # Terminal-pass custody: a fresh approval cycle starts with no pass on

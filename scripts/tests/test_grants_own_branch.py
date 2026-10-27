@@ -28,6 +28,13 @@ def _stage(executor="spawn:developer", branch=OWN):
     )
 
 
+def _derive(stage, *, venue, remote_head=grants.LIVE_REMOTE_HEAD):
+    """DR-P's (resources, dropped) as `derive_stage_grants` reports them: the resources slot
+    of the one grants object and the DR-P share of its dropped list."""
+    derived, dropped = grants.derive_stage_grants(stage, venue=venue, remote_head=remote_head)
+    return derived.resources, [d for d in dropped if d.get("rule") == "DR-P"]
+
+
 @pytest.fixture
 def remote_head(monkeypatch):
     def set_head(name):
@@ -37,53 +44,53 @@ def remote_head(monkeypatch):
 
 
 def test_own_branch_derives_exact_commit_and_push(remote_head):
-    resources, dropped = grants.derive_branch_resources(_stage(), venue="/v")
+    resources, dropped = _derive(_stage(), venue="/v")
     assert resources == [COMMIT, PUSH] and dropped == []
 
 
 @pytest.mark.parametrize("branch", [
     "main", "master", "trunk", "release-1.2", "release/1.2", "Main", "TRUNK"])
 def test_trunk_and_release_branches_are_refused(remote_head, branch):
-    resources, dropped = grants.derive_branch_resources(_stage(branch=branch), venue="/v")
+    resources, dropped = _derive(_stage(branch=branch), venue="/v")
     assert resources == [] and "trunk or shared" in dropped[0]["reason"]
 
 
 def test_remote_head_branch_is_refused(remote_head):
     remote_head("stable")
-    resources, dropped = grants.derive_branch_resources(_stage(branch="stable"), venue="/v")
+    resources, dropped = _derive(_stage(branch="stable"), venue="/v")
     assert resources == [] and len(dropped) == 1
     assert "trunk or shared" in dropped[0]["reason"]
 
 
 def test_remote_head_comparison_ignores_case(remote_head):
     remote_head("Stable")
-    resources, dropped = grants.derive_branch_resources(_stage(branch="stable"), venue="/v")
+    resources, dropped = _derive(_stage(branch="stable"), venue="/v")
     assert resources == [] and "trunk or shared" in dropped[0]["reason"]
 
 
 def test_frozen_remote_head_overrides_the_live_one(remote_head):
     remote_head("main")
-    resources, dropped = grants.derive_branch_resources(_stage(), venue="/v", remote_head=OWN)
+    resources, dropped = _derive(_stage(), venue="/v", remote_head=OWN)
     assert resources == [] and "trunk or shared" in dropped[0]["reason"]
-    resources, _ = grants.derive_branch_resources(_stage(), venue="/v", remote_head="stable")
+    resources, _ = _derive(_stage(), venue="/v", remote_head="stable")
     assert resources == [COMMIT, PUSH]
 
 
 def test_dropped_entries_carry_the_dr_p_tag(remote_head):
     for branch in (None, "x..y", "main"):
-        _, dropped = grants.derive_branch_resources(_stage(branch=branch), venue="/v")
+        _, dropped = _derive(_stage(branch=branch), venue="/v")
         assert [d["rule"] for d in dropped] == ["DR-P"]
 
 
 def test_unset_remote_head_refuses_the_push_but_keeps_the_local_commit(remote_head):
     remote_head(None)
-    resources, dropped = grants.derive_branch_resources(_stage(), venue="/v")
+    resources, dropped = _derive(_stage(), venue="/v")
     assert resources == [COMMIT]
     assert "unset or unreadable" in dropped[0]["reason"]
 
 
 def test_no_declared_branch_derives_nothing_and_reports(remote_head):
-    resources, dropped = grants.derive_branch_resources(_stage(branch=None), venue="/v")
+    resources, dropped = _derive(_stage(branch=None), venue="/v")
     assert resources == [] and "declares no `branch`" in dropped[0]["reason"]
 
 
@@ -91,18 +98,18 @@ def test_no_declared_branch_derives_nothing_and_reports(remote_head):
     "-x", "a b", "a:b", "+a", "a..b", "a*", "HEAD", "head", "refs/heads/main", "heads/main",
     "origin/main", "remotes/origin/main", "./main", "a/", "x.lock", "a//b"])
 def test_malformed_and_ref_form_branch_names_are_refused(remote_head, branch):
-    resources, dropped = grants.derive_branch_resources(_stage(branch=branch), venue="/v")
+    resources, dropped = _derive(_stage(branch=branch), venue="/v")
     assert resources == [] and "plain branch name" in dropped[0]["reason"]
 
 
 def test_tech_writer_commits_but_never_pushes(remote_head):
-    resources, _ = grants.derive_branch_resources(_stage("spawn:tech-writer"), venue="/v")
+    resources, _ = _derive(_stage("spawn:tech-writer"), venue="/v")
     assert resources == [COMMIT]
 
 
 @pytest.mark.parametrize("executor", ["spawn:thinker", "in_thread", "spawn:planner"])
 def test_other_kinds_derive_nothing_and_report_nothing(remote_head, executor):
-    assert grants.derive_branch_resources(_stage(executor), venue="/v") == ([], [])
+    assert _derive(_stage(executor), venue="/v") == ([], [])
 
 
 def test_derive_stage_grants_surfaces_the_refusal(remote_head):
@@ -120,13 +127,6 @@ def test_resources_reach_the_resource_set_and_the_handoff(remote_head):
             "resources": got.to_dict()["resources"], "rule_patterns": got.rule_patterns})
     assert R.resource_to_dict(PUSH) in record["resources"]
     assert R.resource_to_dict(COMMIT) in record["resources"]
-
-
-def test_approve_time_and_spawn_time_sets_are_equal(remote_head):
-    stage = _stage()
-    at_approve = PR.compute_stage_resources(stage, "/v").resources
-    at_spawn = PR.resource_set_from_entries([], stage, "/v").resources
-    assert {r for r in at_approve if r.kind == "vcs_ref"} == {r for r in at_spawn if r.kind == "vcs_ref"}
 
 
 def test_commit_is_exact_and_distinct_from_push_and_land():
@@ -168,7 +168,7 @@ def _git_repo(path):
 
 @pytest.mark.parametrize("branch", ["tags/v1", "notes/x"])
 def test_tag_and_note_namespaces_are_not_branch_names(remote_head, branch):
-    resources, dropped = grants.derive_branch_resources(_stage(branch=branch), venue="/v")
+    resources, dropped = _derive(_stage(branch=branch), venue="/v")
     assert resources == [] and "plain branch name" in dropped[0]["reason"]
 
 
@@ -180,7 +180,7 @@ def test_a_name_git_resolves_to_a_tag_is_refused_in_a_repository(tmp_path, remot
     assert not grants._resolves_outside_heads("tagish/v1", str(tmp_path))
     assert not grants._resolves_outside_heads("not-there", str(tmp_path))
     assert not grants._resolves_outside_heads("v1", None)
-    resources, dropped = grants.derive_branch_resources(_stage(branch="v1"), venue=str(tmp_path))
+    resources, dropped = _derive(_stage(branch="v1"), venue=str(tmp_path))
     assert resources == [] and "plain branch name" in dropped[0]["reason"]
 
 

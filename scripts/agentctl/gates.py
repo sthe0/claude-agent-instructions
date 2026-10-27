@@ -58,6 +58,7 @@ from .plan import (
     changed_parts,
     consumers,
     effects_place,
+    entries_grants_sha256,
     grants_place,
     grants_sha256,
     load_plan,
@@ -2730,7 +2731,9 @@ def plan_presentation_blockers(
     return _delivery_stamp_blocker(state, receipt, probe)
 
 
-def grants_approval_blockers(state: SessionState, target_plan: str | None) -> list[str]:
+def grants_approval_blockers(
+    state: SessionState, target_plan: str | None, *, entries: dict | None = None,
+) -> list[str]:
     """Precondition guardian for `approve`: when the target plan grants ANYTHING
     (plan_has_any_grants), the essence presentation receipt that plan_presentation_
     blockers already required must ALSO carry a grants_sha256 matching the plan's
@@ -2743,7 +2746,11 @@ def grants_approval_blockers(state: SessionState, target_plan: str | None) -> li
     []) whenever that receipt is missing or already stale, trusting the sibling
     guardian to report it. Fails OPEN on a plan that does not load and on a plan
     that grants nothing at all (a grants_sha256 comparison is meaningless with no
-    grants to bind). [] == may pass."""
+    grants to bind). [] == may pass.
+
+    `entries` are the materialized grant entries the caller will bind: the receipt is
+    checked against their hash, so the set checked is the set bound even if the
+    repository's `origin/HEAD` moves between two reads."""
     if not plan_presentation_active(state):
         return []
     if not target_plan:
@@ -2759,7 +2766,7 @@ def grants_approval_blockers(state: SessionState, target_plan: str | None) -> li
         return []  # plan_presentation_blockers already names this
     if _receipt_binding_blocker(receipt, target_plan, "plan presentation", state) is not None:
         return []  # ditto -- stale receipt already blocked elsewhere
-    current = grants_sha256(doc)
+    current = entries_grants_sha256(entries) if entries is not None else grants_sha256(doc)
     if getattr(receipt, "grants_sha256", None) != current:
         return [
             "the plan's grant set changed since it was presented (or the "
