@@ -60,7 +60,7 @@ The principle fails its goal if, after a plan executed the sweep, a site of the 
 
 ## See also
 
-- [[reflexive-exit-is-base-activity-figure]] — the figure this sits inside: re-norming as the base
+- [[a-norm-is-transformed-by-the-same-activity-figure-as-any-material]] — the figure this sits inside: re-norming as the base
   activity whose material is the norm. This principle constrains the *scope* of the resulting norm.
 - [[result-checked-against-its-result-image]] — the sweep's own control: the enumeration step needs a
   declared result-image (the site list) like any other step.

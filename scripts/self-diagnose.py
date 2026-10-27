@@ -7,7 +7,7 @@ self-friction, at what threshold — that used to live only as a forgettable
 "notice when..." directive. This script determinizes that rule part; the
 PERCEPTION part (is a flagged item worth re-norming, and how) stays the
 model's, surfaced as a normal difficulty declaration once this scanner's
-worklist reaches a session (see reflexive-exit-is-base-activity-figure.md —
+worklist reaches a session (see plan-activity-ontology.md —
 material = the norm; this scanner supplies the "actual" half of that
 material/result comparison).
 

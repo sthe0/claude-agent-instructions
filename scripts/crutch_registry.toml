@@ -22995,6 +22995,14 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "34177a788660a0c2"
+domain = "prose"
+file = "memory-global/leaves/coordination/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "6b4b3ac08f29185c"
 domain = "prose"
 file = "memory-global/leaves/coordination/MEMORY.md"
@@ -23867,6 +23875,14 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
+id = "36436875bad50e65"
+domain = "prose"
+file = "memory-global/leaves/experience-leaf-schema.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
 id = "6d3e8a0a56f5ccd2"
 domain = "prose"
 file = "memory-global/leaves/experience-leaf-schema.md"
@@ -23875,15 +23891,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "a1c085902cf9f5ea"
-domain = "prose"
-file = "memory-global/leaves/experience-leaf-schema.md"
-class = "perception"
-disposition = "keep"
-ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
-
-[[entry]]
-id = "ae2e3c870315cd31"
+id = "a0900dbf5fe65cee"
 domain = "prose"
 file = "memory-global/leaves/experience-leaf-schema.md"
 class = "perception"
@@ -23923,7 +23931,7 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "4f90586b5bb0248a"
+id = "1f6db2dfd4db16ab"
 domain = "prose"
 file = "memory-global/leaves/experience-leaf-schema.md"
 class = "already-mechanized"
@@ -23931,7 +23939,7 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "d33c699c4bfcc20d"
+id = "b9b61e7f1d04c13a"
 domain = "prose"
 file = "memory-global/leaves/experience-leaf-schema.md"
 class = "perception"
@@ -26787,14 +26795,6 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
-id = "8ecf8de40f638aa4"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
 id = "4d2867c8d5463d92"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-08-04-no-circuit-breaker-on-verification-effort.md"
@@ -26947,14 +26947,6 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
-id = "a1011d810a23c87a"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-08-11-review-loop-cannot-measure-its-own-convergence.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
 id = "80dfe586998c4ed3"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-08-11-review-loop-cannot-measure-its-own-convergence.md"
@@ -27020,14 +27012,6 @@ ground = "Experience leaves (difficulty/v1) are historical narrative records of 
 
 [[entry]]
 id = "d84b5a41ceed0d1d"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-08-17-diagnosing-has-no-exit-to-the-customer.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "8d20297d234ffd88"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-08-17-diagnosing-has-no-exit-to-the-customer.md"
 class = "not-normative"
@@ -27443,14 +27427,6 @@ disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
 
 [[entry]]
-id = "699dea882fc324de"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-09-03-published-text-writer-gate-effort-divergence-deadlock.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
 id = "e66923663e485996"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-09-03-published-text-writer-gate-effort-divergence-deadlock.md"
@@ -27646,14 +27622,6 @@ ground = "The statement's own text names a concrete enforcing artifact (a script
 id = "ea76685096fc3517"
 domain = "prose"
 file = "memory-global/leaves/experience/2026-09-29-tracker-publish-gate-missed-per-stage-artifacts.md"
-class = "not-normative"
-disposition = "keep"
-ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
-
-[[entry]]
-id = "ed537b161bb53d78"
-domain = "prose"
-file = "memory-global/leaves/experience/2026-10-06-season2-metric-instruction-tuning.md"
 class = "not-normative"
 disposition = "keep"
 ground = "Experience leaves (difficulty/v1) are historical narrative records of a RESOLVED past difficulty; a modal keyword inside one narrates what was true or required at that past moment, or quotes/cites a rule whose structural home (if any) lives elsewhere — the leaf itself is not a standing command to mechanize."
@@ -29723,6 +29691,14 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "e446fdf5b2c61bc3"
+domain = "prose"
+file = "memory-global/leaves/landing-discipline.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "c955384f7ae0b592"
 domain = "prose"
 file = "memory-global/leaves/landing-discipline.md"
@@ -30099,7 +30075,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "786da0e8fb4d6ad7"
+id = "eeaf6a835ae747ae"
 domain = "prose"
 file = "memory-global/leaves/memory-hierarchy.md"
 class = "perception"
@@ -30235,7 +30211,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "54a793db9ba24cfa"
+id = "698966c83ae0a49b"
 domain = "prose"
 file = "memory-global/leaves/memory-temporal-frontmatter.md"
 class = "perception"
@@ -30355,7 +30331,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "8c82572444d71790"
+id = "e9378c0fb43bfab4"
 domain = "prose"
 file = "memory-global/leaves/memory-usage.md"
 class = "perception"
@@ -31379,7 +31355,31 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "935967912a10ab70"
+id = "331016a4dd4c712c"
+domain = "prose"
+file = "memory-global/leaves/pr-size-proportional-to-task.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "ce4eec851b334988"
+domain = "prose"
+file = "memory-global/leaves/pr-size-proportional-to-task.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "aea1fce519e60be8"
+domain = "prose"
+file = "memory-global/leaves/pr-size-proportional-to-task.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "224fac288805f2ba"
 domain = "prose"
 file = "memory-global/leaves/principle-leaf-schema.md"
 class = "perception"
@@ -31387,7 +31387,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "dc38810d1080bb8c"
+id = "a87b3a247489af4e"
 domain = "prose"
 file = "memory-global/leaves/principle-leaf-schema.md"
 class = "perception"
@@ -31395,7 +31395,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "71e173a30c5b287d"
+id = "c28aa08e211d080f"
 domain = "prose"
 file = "memory-global/leaves/principle-leaf-schema.md"
 class = "perception"
@@ -31403,7 +31403,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "c01c03ad6eb03487"
+id = "2fa5886b5f6e7269"
 domain = "prose"
 file = "memory-global/leaves/principle-leaf-schema.md"
 class = "perception"
@@ -31411,7 +31411,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "39b01b4f1de065c8"
+id = "b477de6d72137045"
 domain = "prose"
 file = "memory-global/leaves/principle-leaf-schema.md"
 class = "perception"
@@ -31419,7 +31419,15 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "1d3e1b56b84a0726"
+id = "db778036dc98cb5b"
+domain = "prose"
+file = "memory-global/leaves/principle-leaf-schema.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "e7656b6cc1ee1e38"
 domain = "prose"
 file = "memory-global/leaves/principle-leaf-schema.md"
 class = "perception"
@@ -31427,7 +31435,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "1573f02c40bfed2d"
+id = "a32f9436b665e20c"
 domain = "prose"
 file = "memory-global/leaves/principle-leaf-schema.md"
 class = "perception"
@@ -31435,7 +31443,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "07644d0dfb3fe6d2"
+id = "aef900a00d5688dd"
 domain = "prose"
 file = "memory-global/leaves/principle-leaf-schema.md"
 class = "perception"
@@ -31451,12 +31459,20 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "be6fcd0e9ff8b488"
+id = "c0dc8758baa29754"
 domain = "prose"
 file = "memory-global/leaves/principle-leaf-schema.md"
 class = "perception"
 disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "1fccfd16a6fc460b"
+domain = "prose"
+file = "memory-global/leaves/principles/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
 id = "21906a3343608bfd"
@@ -31467,14 +31483,6 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "2a2fde67b2b50a6a"
-domain = "prose"
-file = "memory-global/leaves/principles/MEMORY.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
 id = "b55e0551022faa6d"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
@@ -31483,7 +31491,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "d959552932b82764"
+id = "b695ef28f4540446"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -31491,7 +31499,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "92a7af254fec5c51"
+id = "fd1b23d5d0858d61"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -31499,7 +31507,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "17bb8d43a3eacf01"
+id = "bbd0f3a7d8aa14ad"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -31507,7 +31515,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "84e0a2ca38cd87ea"
+id = "255a1408f8f821f0"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -31515,7 +31523,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "1112fbebda749071"
+id = "71a85aaa38338b1b"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -31523,7 +31531,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "f659111f50d4728d"
+id = "577e4e3b289214e3"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -31531,7 +31539,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "c047c468bea00aae"
+id = "0d59ee5268466ef0"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -31539,7 +31547,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "2d6f07d89ec8baea"
+id = "3e908d7454c9500a"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -31547,39 +31555,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "bd18fa7ccdb17c41"
-domain = "prose"
-file = "memory-global/leaves/principles/MEMORY.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "fc852661f0a5a793"
-domain = "prose"
-file = "memory-global/leaves/principles/MEMORY.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "89c7039b8e062b61"
-domain = "prose"
-file = "memory-global/leaves/principles/MEMORY.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "4dbf1e39c6856bdc"
-domain = "prose"
-file = "memory-global/leaves/principles/MEMORY.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "8e2b40c1d8368e98"
+id = "792f60ef401c12ce"
 domain = "prose"
 file = "memory-global/leaves/principles/MEMORY.md"
 class = "perception"
@@ -31595,22 +31571,6 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "269ffade82cd7939"
-domain = "prose"
-file = "memory-global/leaves/principles/a-control-names-a-venue-that-outlives-its-last-rerun.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "505b20af5d5634d3"
-domain = "prose"
-file = "memory-global/leaves/principles/a-control-names-a-venue-that-outlives-its-last-rerun.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
 id = "2e1ded2977622d96"
 domain = "prose"
 file = "memory-global/leaves/principles/a-control-over-a-non-hermetic-read-separates-unreadable-from-failed.md"
@@ -31619,7 +31579,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "b804164c3bce02e9"
+id = "23593ea6a3170c12"
 domain = "prose"
 file = "memory-global/leaves/principles/a-control-over-a-non-hermetic-read-separates-unreadable-from-failed.md"
 class = "perception"
@@ -31643,7 +31603,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "a8855b60ede39363"
+id = "5e4483b360a62cd2"
 domain = "prose"
 file = "memory-global/leaves/principles/a-defect-seen-in-an-artifact-is-fixed-at-its-writer.md"
 class = "perception"
@@ -31651,57 +31611,9 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "f84fa5e08078869d"
-domain = "prose"
-file = "memory-global/leaves/principles/a-defect-seen-in-an-artifact-is-fixed-at-its-writer.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "745c8fcac780e239"
-domain = "prose"
-file = "memory-global/leaves/principles/a-defect-seen-in-an-artifact-is-fixed-at-its-writer.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "82a46d443411d8a1"
-domain = "prose"
-file = "memory-global/leaves/principles/a-defect-seen-in-an-artifact-is-fixed-at-its-writer.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "02218eb2621a505c"
-domain = "prose"
-file = "memory-global/leaves/principles/a-defect-seen-in-an-artifact-is-fixed-at-its-writer.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "e4d395d4ad1ed6e1"
+id = "3ff4ba296b35a873"
 domain = "prose"
 file = "memory-global/leaves/principles/a-gate-on-form-is-checked-against-the-property-it-stands-for.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "a6406cd24d13bcf9"
-domain = "prose"
-file = "memory-global/leaves/principles/a-gate-on-form-is-checked-against-the-property-it-stands-for.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "13c33332b3773335"
-domain = "prose"
-file = "memory-global/leaves/principles/a-judging-artefact-is-executed-before-it-judges.md"
 class = "perception"
 disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
@@ -31715,23 +31627,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "c52787967d765bb8"
-domain = "prose"
-file = "memory-global/leaves/principles/a-judging-artefact-is-executed-before-it-judges.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "ff0cc531eeff0078"
-domain = "prose"
-file = "memory-global/leaves/principles/a-judging-artefact-is-executed-before-it-judges.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "3d91270784435f06"
+id = "b9a413dd1de99f0e"
 domain = "prose"
 file = "memory-global/leaves/principles/a-judging-artefact-is-executed-before-it-judges.md"
 class = "perception"
@@ -31763,7 +31659,15 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "601fc5e04a9b0dd0"
+id = "c8e47502602c6127"
+domain = "prose"
+file = "memory-global/leaves/principles/a-mechanism-is-done-when-its-consumers-and-its-population-are-covered.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "a10cfb0c0e970220"
 domain = "prose"
 file = "memory-global/leaves/principles/a-metric-is-keyed-and-weighted-to-the-decision-it-informs.md"
 class = "perception"
@@ -31771,15 +31675,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "4618dcddd6554ed6"
-domain = "prose"
-file = "memory-global/leaves/principles/a-metric-is-keyed-and-weighted-to-the-decision-it-informs.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "8b4d21bb468614d8"
+id = "1c3c8b6a42eb7674"
 domain = "prose"
 file = "memory-global/leaves/principles/a-metric-is-keyed-and-weighted-to-the-decision-it-informs.md"
 class = "perception"
@@ -31795,14 +31691,6 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "734458541f78a2e2"
-domain = "prose"
-file = "memory-global/leaves/principles/a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
 id = "aaff6184f01cdfbf"
 domain = "prose"
 file = "memory-global/leaves/principles/a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs.md"
@@ -31811,7 +31699,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "8cdecef7ab11b312"
+id = "0e467208a6551f0b"
 domain = "prose"
 file = "memory-global/leaves/principles/a-recorded-norm-binds-only-through-a-trigger-into-the-act-it-governs.md"
 class = "perception"
@@ -31827,15 +31715,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "da9b741161fb968f"
-domain = "prose"
-file = "memory-global/leaves/principles/a-rerunnable-control-asserts-a-phase-independent-property.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "3aadab099fecf1bc"
+id = "eac4aefccf07b86d"
 domain = "prose"
 file = "memory-global/leaves/principles/a-spawned-child-inherits-nothing-the-brief-does-not-name.md"
 class = "perception"
@@ -31843,7 +31723,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "de1ad131299ac6cb"
+id = "efd8ce94e4094af5"
 domain = "prose"
 file = "memory-global/leaves/principles/a-spawned-child-inherits-nothing-the-brief-does-not-name.md"
 class = "perception"
@@ -31851,9 +31731,9 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "03b8eb691f56aee5"
+id = "5450394bdeaa9dbe"
 domain = "prose"
-file = "memory-global/leaves/principles/a-spawned-child-inherits-nothing-the-brief-does-not-name.md"
+file = "memory-global/leaves/principles/a-value-written-to-an-external-channel-is-cleaned-at-emission.md"
 class = "perception"
 disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
@@ -31883,33 +31763,9 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "c343a9b2fdabe7f9"
-domain = "prose"
-file = "memory-global/leaves/principles/cases/review-loop-shifting-grounds-never-converges.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
 id = "2cac7f6ce99d086a"
 domain = "prose"
 file = "memory-global/leaves/principles/cases/static-checks-green-live-run-fails.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "7e283b86d387b03a"
-domain = "prose"
-file = "memory-global/leaves/principles/coordinator-executes-through-specialists.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "df3ba2f70a893580"
-domain = "prose"
-file = "memory-global/leaves/principles/coordinator-executes-through-specialists.md"
 class = "perception"
 disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
@@ -31923,7 +31779,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "86b6589e79504829"
+id = "908621296a1569f1"
 domain = "prose"
 file = "memory-global/leaves/principles/delivered-identity-is-established-by-content-or-ancestry.md"
 class = "perception"
@@ -31947,79 +31803,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "b8b6ba22b11a8581"
-domain = "prose"
-file = "memory-global/leaves/principles/delivered-identity-is-established-by-content-or-ancestry.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "c6445244c957ae11"
-domain = "prose"
-file = "memory-global/leaves/principles/option-space-spans-axes-from-functional-ground.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "d024efd6c75eb2f7"
-domain = "prose"
-file = "memory-global/leaves/principles/option-space-spans-axes-from-functional-ground.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "8b7df255a585b78f"
-domain = "prose"
-file = "memory-global/leaves/principles/reflexive-exit-is-base-activity-figure.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "b13dd179b6130f3e"
-domain = "prose"
-file = "memory-global/leaves/principles/reflexive-exit-is-base-activity-figure.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "4e3fb05fbc128c5f"
-domain = "prose"
-file = "memory-global/leaves/principles/reflexive-exit-is-base-activity-figure.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "292f2ff6c5671bd2"
-domain = "prose"
-file = "memory-global/leaves/principles/reflexive-exit-is-base-activity-figure.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "9952dfce75c10121"
-domain = "prose"
-file = "memory-global/leaves/principles/reflexive-exit-is-base-activity-figure.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "76fe2b4b3d100ffc"
-domain = "prose"
-file = "memory-global/leaves/principles/renorming-at-principle-level-sweeps-the-class.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "8d54b70e5414a059"
+id = "c9ad89a03feedb89"
 domain = "prose"
 file = "memory-global/leaves/principles/renorming-at-principle-level-sweeps-the-class.md"
 class = "perception"
@@ -32051,7 +31835,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "5e08b72d0c884abf"
+id = "21ea59a2dd4c598a"
 domain = "prose"
 file = "memory-global/leaves/principles/renorming-at-principle-level-sweeps-the-class.md"
 class = "perception"
@@ -32059,7 +31843,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "2937d8bc5faa9aa2"
+id = "ea5291a23aa3b5b2"
 domain = "prose"
 file = "memory-global/leaves/principles/result-checked-against-its-result-image.md"
 class = "perception"
@@ -32067,23 +31851,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "76b321aa0cf67217"
-domain = "prose"
-file = "memory-global/leaves/principles/result-checked-against-its-result-image.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "65d8168db0a37ba9"
-domain = "prose"
-file = "memory-global/leaves/principles/result-checked-against-its-result-image.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "b68e52c7a8079e95"
+id = "777431920ce8c36d"
 domain = "prose"
 file = "memory-global/leaves/principles/result-checked-against-its-result-image.md"
 class = "perception"
@@ -32107,15 +31875,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "fb696e74858713d7"
-domain = "prose"
-file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "d950c599bca03d36"
+id = "555372168f3d6ca3"
 domain = "prose"
 file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
 class = "perception"
@@ -32131,63 +31891,39 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
+id = "22d5ec77a5016d44"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "a09523c6a2572581"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "3eebdce10d035000"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
+id = "963155f601248b49"
+domain = "prose"
+file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
+class = "perception"
+disposition = "keep"
+ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
+
+[[entry]]
 id = "f181c523ad261d75"
-domain = "prose"
-file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "4e5423ed82745bc2"
-domain = "prose"
-file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "6084e9343c177b52"
-domain = "prose"
-file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "b9c9802aac11f928"
-domain = "prose"
-file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "22188891b33476b5"
-domain = "prose"
-file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "033b489c41cc6096"
-domain = "prose"
-file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "6f4f0136d59b3392"
-domain = "prose"
-file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "5d8df0cf68ddc284"
 domain = "prose"
 file = "memory-global/leaves/principles/review-loop-cannot-measure-its-own-convergence.md"
 class = "perception"
@@ -32211,7 +31947,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "2060be2c17de2b8d"
+id = "1f7bfe93de16003e"
 domain = "prose"
 file = "memory-global/leaves/principles/shared-resource-health-asserted-relative-to-a-pinned-base.md"
 class = "perception"
@@ -32243,14 +31979,6 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "10c72cfd0cd25a3b"
-domain = "prose"
-file = "memory-global/leaves/principles/shared-resource-health-asserted-relative-to-a-pinned-base.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
 id = "a3a777af825489c7"
 domain = "prose"
 file = "memory-global/leaves/principles/shared-resource-health-asserted-relative-to-a-pinned-base.md"
@@ -32259,7 +31987,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "a5903364d6e835dc"
+id = "0b5d03a4f89577d8"
 domain = "prose"
 file = "memory-global/leaves/principles/specialist-behavior-determinization-recipe.md"
 class = "perception"
@@ -32275,7 +32003,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "bb1795407b6327c9"
+id = "0681a87b9ff3b6a5"
 domain = "prose"
 file = "memory-global/leaves/principles/specialist-behavior-determinization-recipe.md"
 class = "perception"
@@ -32283,7 +32011,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "0681a87b9ff3b6a5"
+id = "2ab1c827b767d385"
 domain = "prose"
 file = "memory-global/leaves/principles/specialist-behavior-determinization-recipe.md"
 class = "perception"
@@ -32307,7 +32035,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "570bd845ccd0cbcc"
+id = "602769bfd8dc3d5d"
 domain = "prose"
 file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
 class = "perception"
@@ -32315,7 +32043,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "602769bfd8dc3d5d"
+id = "6e8d4338e505ceb3"
 domain = "prose"
 file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
 class = "perception"
@@ -32331,15 +32059,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "0157a7067e5a8550"
-domain = "prose"
-file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
-class = "already-mechanized"
-disposition = "keep"
-ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
-
-[[entry]]
-id = "db594443f6bb2e7e"
+id = "d459c472641ec304"
 domain = "prose"
 file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
 class = "perception"
@@ -32451,71 +32171,7 @@ disposition = "keep"
 ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
 
 [[entry]]
-id = "b7f7df654a93fd87"
-domain = "prose"
-file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "a52fd4ea14804fb8"
-domain = "prose"
-file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "ab1256f772fdbca5"
-domain = "prose"
-file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "375455e053247d7e"
-domain = "prose"
-file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "ed0b824eea0a240e"
-domain = "prose"
-file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "13d0f908afa6664c"
-domain = "prose"
-file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "6e37026cb07118db"
-domain = "prose"
-file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "63a9fe6d5d02d5ea"
-domain = "prose"
-file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
-class = "perception"
-disposition = "keep"
-ground = "Principle leaves (principle/v1) are deliberately generality-graded prose retrieved by the planner as judgment input at a plan's refutable-principle element (retrieval-augmented planning) — the schema's own design keeps these as prose, not compiled rules."
-
-[[entry]]
-id = "2fb3d1e7cd9c4d2c"
+id = "fec5169bf5ba528f"
 domain = "prose"
 file = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
 class = "perception"
@@ -33507,6 +33163,542 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "b2f036a61ac1a9e8"
+domain = "prose"
+file = "memory-global/leaves/regularities/MEMORY.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "5d1e22f03964cdb2"
+domain = "prose"
+file = "memory-global/leaves/regularities/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "b0f66f1ccdf39de3"
+domain = "prose"
+file = "memory-global/leaves/regularities/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "2228b3e9cceb838d"
+domain = "prose"
+file = "memory-global/leaves/regularities/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "25457b4d4f27c20a"
+domain = "prose"
+file = "memory-global/leaves/regularities/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "2aed529dc428ab37"
+domain = "prose"
+file = "memory-global/leaves/regularities/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "da43f6a413c1c4e7"
+domain = "prose"
+file = "memory-global/leaves/regularities/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "581800266160b474"
+domain = "prose"
+file = "memory-global/leaves/regularities/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "2272d88c6d2741cb"
+domain = "prose"
+file = "memory-global/leaves/regularities/MEMORY.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "97bd646668b2eda9"
+domain = "prose"
+file = "memory-global/leaves/regularities/MEMORY.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "08684268910e52d3"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-child-process-reads-its-parents-ambient-root.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "9d99d3cb3d7ec7c2"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-controls-defects-surface-only-when-it-is-executed.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "292e440508243216"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-controls-defects-surface-only-when-it-is-executed.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "b4295ccde848f381"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-controls-defects-surface-only-when-it-is-executed.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "8c1f1ee99c73f77d"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-controls-defects-surface-only-when-it-is-executed.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "a002579a1ab29ef2"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-controls-defects-surface-only-when-it-is-executed.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "547e8060a31af3ad"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-coordinate-shifts-while-the-content-it-addressed-stays.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "f8fc9ff5d46e9c82"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-coordinate-shifts-while-the-content-it-addressed-stays.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "3c15bb1e08f2a045"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-fix-at-the-failing-site-leaves-siblings-of-the-same-form.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "6b8f4915d8002ee2"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-generated-artifact-is-overwritten-by-its-writer.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "4e5be956a7a6953b"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-generated-artifact-is-overwritten-by-its-writer.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "c907fd38df2d9627"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-generated-artifact-is-overwritten-by-its-writer.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "661c6703e033f222"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-generated-artifact-is-overwritten-by-its-writer.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "9d588c05c097b12c"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-generated-artifact-is-overwritten-by-its-writer.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "432f68d7e2a9096b"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-generic-failure-message-names-a-surface-shared-by-many-causes.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "36ca2361b5d49bcc"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-judgement-call-contains-a-decidable-sub-decision.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "68e93cf3df1c22c6"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-judgement-call-contains-a-decidable-sub-decision.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "bc0f0daa1cb2a5c7"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-judgement-call-contains-a-decidable-sub-decision.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "b337ab679b706eae"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-mechanism-green-in-isolation-can-lack-consumers-and-population.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "70c4819d0d04d755"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-mechanism-green-in-isolation-can-lack-consumers-and-population.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "78d130af48d4fd7f"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-mechanism-green-in-isolation-can-lack-consumers-and-population.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "7b1b0ef3a74d03a5"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-name-from-position-or-an-empty-variable-designates-a-foreign-object.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "ea17c9da7ed97647"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-name-from-position-or-an-empty-variable-designates-a-foreign-object.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "20753c9cfcf551c7"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-non-hermetic-read-fails-independently-of-the-artifact.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "6fe11df3dd3f1f57"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-non-hermetic-read-fails-independently-of-the-artifact.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "575ea3f333af45ef"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-probe-observes-only-the-domain-it-reads.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "b774b4e27ff581c0"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-probe-observes-only-the-domain-it-reads.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "2e31fd183e0974a1"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-probe-observes-only-the-domain-it-reads.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "b54688fd600cf14a"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-process-boundary-carries-only-what-is-passed-across-it.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "7704122e37e2c751"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-process-boundary-carries-only-what-is-passed-across-it.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "4cc98ba07ea601ec"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-process-boundary-carries-only-what-is-passed-across-it.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "e7afca5e469f9e13"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-process-boundary-carries-only-what-is-passed-across-it.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "d864b36ab4aab464"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-recorded-remedy-is-absent-at-the-act-it-governs.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "6bbde46f7767e6dc"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-recorded-remedy-is-absent-at-the-act-it-governs.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "80943a2fcc6d08a9"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-recorded-remedy-is-absent-at-the-act-it-governs.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "9c3b80b236338c58"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-shared-resource-moves-under-others-action.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "cb7becf829013efd"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-shared-resource-moves-under-others-action.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "24cbf6d1cced4b08"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-shared-resource-moves-under-others-action.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "3866afa7d16f1dd4"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-tool-relies-on-facilities-its-authors-host-supplies-unasked.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "6fc3ee2d03e8f213"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-two-valued-judge-absorbs-could-not-look.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "d603aaecb8c6ae0d"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-two-valued-judge-absorbs-could-not-look.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "9239a33fcf3a6a0b"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-two-valued-judge-absorbs-could-not-look.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "cb2f4c4d0567d950"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-two-valued-judge-absorbs-could-not-look.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "7e43f04561f61edf"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-two-valued-judge-absorbs-could-not-look.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "84b7a26b71e015f1"
+domain = "prose"
+file = "memory-global/leaves/regularities/a-two-valued-judge-absorbs-could-not-look.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "2c74acce14f5b7ff"
+domain = "prose"
+file = "memory-global/leaves/regularities/an-unkeyed-or-unweighted-total-misranks-the-decision-it-feeds.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "f2528d8f81522495"
+domain = "prose"
+file = "memory-global/leaves/regularities/an-unkeyed-or-unweighted-total-misranks-the-decision-it-feeds.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "6794fcdd7221910b"
+domain = "prose"
+file = "memory-global/leaves/regularities/an-unkeyed-or-unweighted-total-misranks-the-decision-it-feeds.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "90537ac9fc7e0576"
+domain = "prose"
+file = "memory-global/leaves/regularities/incremental-repair-review-has-a-nonzero-finding-floor.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "b59d0c22a8fb3555"
+domain = "prose"
+file = "memory-global/leaves/regularities/incremental-repair-review-has-a-nonzero-finding-floor.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "18cbb52a92564fc9"
+domain = "prose"
+file = "memory-global/leaves/regularities/incremental-repair-review-has-a-nonzero-finding-floor.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "2677b63b5e7e5cb6"
+domain = "prose"
+file = "memory-global/leaves/regularities/options-recalled-from-known-mechanisms-cluster-on-known-axes.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "dc910f11eb248810"
+domain = "prose"
+file = "memory-global/leaves/regularities/root-direct-edits-accumulate-context-and-skip-review.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "6f94e30cf5840281"
+domain = "prose"
+file = "memory-global/leaves/regularity-leaf-schema.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "18954e5f3954e513"
+domain = "prose"
+file = "memory-global/leaves/regularity-leaf-schema.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
+id = "8ed3a5d116675dfb"
+domain = "prose"
+file = "memory-global/leaves/regularity-leaf-schema.md"
+class = "already-mechanized"
+disposition = "keep"
+ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
+
+[[entry]]
+id = "9067ef7cb3163a66"
+domain = "prose"
+file = "memory-global/leaves/regularity-leaf-schema.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "8b7c28b77f8f46dd"
 domain = "prose"
 file = "memory-global/leaves/remote-sudo-access-paths.md"
@@ -33659,7 +33851,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "609e3b9691019254"
+id = "62a583955a678edb"
 domain = "prose"
 file = "memory-global/leaves/review-object-requirements-contract.md"
 class = "perception"
@@ -33667,7 +33859,7 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
-id = "62a583955a678edb"
+id = "82c4621fedc226fb"
 domain = "prose"
 file = "memory-global/leaves/review-object-requirements-contract.md"
 class = "perception"
@@ -35355,6 +35547,14 @@ disposition = "keep"
 ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
 
 [[entry]]
+id = "bb0de02b650b6598"
+domain = "prose"
+file = "memory-global/leaves/verify-right-axis-report-honestly.md"
+class = "perception"
+disposition = "keep"
+ground = "leaf/v1 reference/feedback leaves record guidance for a future agent's judgment (leaf-schema.md's `## Guidance` section); many describe a mechanism that already exists elsewhere, but distinguishing precisely which — statement by statement, across 377 sites — is out of this partition-level pass's budget (see the already-mechanized override below and stage 5's published scope limit)."
+
+[[entry]]
 id = "c03e1f401e856033"
 domain = "prose"
 file = "memory-global/leaves/workflow-debug-investigation.md"
@@ -35883,7 +36083,7 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
-id = "3ba42012927bbd06"
+id = "747dec9c4e40cdf5"
 domain = "prose"
 file = "skills/self-improvement/SKILL.md"
 class = "perception"
@@ -36283,6 +36483,14 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
+id = "d5954514a20ee3c0"
+domain = "prose"
+file = "skills/self-improvement/policy.md"
+class = "perception"
+disposition = "keep"
+ground = "Policy files elaborate the judgment procedure a specialization follows at each step; distinguishing, statement-by-statement, which already point at an existing enforced gate is out of this partition-level pass's budget (stated as a scope limit, not silently sampled) — see the already-mechanized override below for the subset whose own text names a concrete enforcing artifact."
+
+[[entry]]
 id = "aba3c8cea931a497"
 domain = "prose"
 file = "skills/self-improvement/policy.md"
@@ -36347,6 +36555,14 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
+id = "36b16962c8ba8fe4"
+domain = "prose"
+file = "skills/specializations/code-reviewer/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
 id = "86c9c5422000856b"
 domain = "prose"
 file = "skills/specializations/code-reviewer/SKILL.md"
@@ -36355,7 +36571,7 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
-id = "c1f8edc122998905"
+id = "94acc470814444d8"
 domain = "prose"
 file = "skills/specializations/code-reviewer/SKILL.md"
 class = "perception"
@@ -36723,7 +36939,7 @@ disposition = "keep"
 ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
 
 [[entry]]
-id = "4a23e558739d747d"
+id = "2cf1a9e0243254a1"
 domain = "prose"
 file = "skills/specializations/memory-curator/SKILL.md"
 class = "already-mechanized"
@@ -36995,7 +37211,7 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
-id = "dff2b383bc585a0f"
+id = "5cd3d7f30b31144c"
 domain = "prose"
 file = "skills/specializations/planner/SKILL.md"
 class = "already-mechanized"
@@ -38139,6 +38355,14 @@ disposition = "keep"
 ground = "The statement's own text names a concrete enforcing artifact (a script filename, a `hook-*` name, or the `agentctl` engine) — a self-describing pointer to an existing mechanism. Verified only that the pattern matched the text; NOT verified that the named artifact fully implements the exact stated rule (an honest limit of this one-time authoring heuristic, stated in the module docstring and in stage 5's published scope)."
 
 [[entry]]
+id = "1c116ffdb2bd7304"
+domain = "prose"
+file = "skills/tracker-management/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
 id = "2306d9456b2e5ea9"
 domain = "prose"
 file = "skills/tracker-management/SKILL.md"
@@ -38180,6 +38404,14 @@ ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the s
 
 [[entry]]
 id = "88339db8bbe1fe4e"
+domain = "prose"
+file = "skills/tracker-management/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "17866c7b4a5f1095"
 domain = "prose"
 file = "skills/tracker-management/SKILL.md"
 class = "perception"

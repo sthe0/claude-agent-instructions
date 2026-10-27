@@ -101,7 +101,7 @@ So documentation currency is the same element-5 discipline as any preserved inva
 ### Reflexive use — the same 8 elements over a norm
 
 <!-- Language exception: перенормирование is the settled SMD source-ontology term; preserved verbatim. -->
-When the material is a **norm** (a rule / plan / instruction under revision), these same 8 elements describe every reflexive operation — self-improvement, overcome-difficulty, proactive self-diagnosis — with material=the norm, transformation=re-norming (перенормирование), control=achievability of the norm's result, result=a norm adequate to the order. The reflexive material is sought in **knowledge space (= memory)** rather than an object space. See [[reflexive-exit-is-base-activity-figure]].
+When the material is a **norm** (a rule / plan / instruction under revision), these same 8 elements describe every reflexive operation — self-improvement, overcome-difficulty, proactive self-diagnosis — with material=the norm, transformation=re-norming (перенормирование), control=achievability of the norm's result, result=a norm adequate to the order. The reflexive material is sought in **knowledge space (= memory)** rather than an object space. See [[a-norm-is-transformed-by-the-same-activity-figure-as-any-material]].
 
 ### Recursive sub-ordering — the genesis of composite plans
 

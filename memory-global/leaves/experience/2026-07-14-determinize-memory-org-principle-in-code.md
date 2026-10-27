@@ -5,7 +5,7 @@ type: reference
 schema: difficulty/v1
 generality: 0
 resolution_confirmed_by_user: "fedor.solovyev@gmail.com"
-refs: [memory-hierarchy.md reflexive-exit-is-base-activity-figure.md self-diagnose.py]
+refs: [memory-hierarchy.md a-norm-is-transformed-by-the-same-activity-figure-as-any-material.md self-diagnose.py]
 created: 2026-07-14
 last_verified: 2026-07-14
 generalized_into: [a-recorded-remedy-is-absent-at-the-act-it-governs, a-judgement-call-contains-a-decidable-sub-decision]
