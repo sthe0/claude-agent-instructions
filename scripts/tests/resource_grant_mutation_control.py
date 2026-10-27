@@ -167,6 +167,13 @@ CATALOGUE: "dict[str, Mutant]" = {
         '        "resources": list(now["branch"]["resources"]),',
         "a refinement hands the child whatever the new plan derives, admitted or not",
     ),
+    "refined-branch-frozen-only": Mutant(
+        PLAN,
+        '    admitted = {tuple(sorted(d.items())) for d in frozen.get("resources") or []}\n    return {',
+        '    admitted = {tuple(sorted(d.items())) for d in frozen.get("resources") or []}\n'
+        '    admitted |= {tuple(sorted(d.items())) for d in now["branch"]["resources"]}\n    return {',
+        "a refinement re-admits what a live read of origin/HEAD or the refs now derives",
+    ),
 }
 
 

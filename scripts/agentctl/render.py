@@ -60,6 +60,7 @@ from .plan import (
     parse_pair,
     parse_plan,
     parse_unit,
+    plan_branch_resources,
     plan_coverage_entries,
     reliance_set,
     review_pairs,
@@ -1791,8 +1792,10 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
     here — `cmd_plan_grants` builds that directly from `StageGrants.to_dict()`."""
     venue = _venue_for(doc)
     lines: list[str] = []
+    branch_by_stage = plan_branch_resources(doc)
     for s in doc.stages:
         declared, derived, dropped = _stage_declared_and_derived_grants(s, venue)
+        dr_p = [f"{d['op']} {d['remote']}:{d['ref']}" for d in branch_by_stage.get(s.index, [])]
         declared_rules = [r.rule for r in declared.allow]
         declared_dirs = [f"{a.path}:{a.mode}" for a in declared.add_dirs]
         dr_v = [r.rule for r in derived.allow if r.provenance == "derived:DR-V"]
@@ -1816,13 +1819,15 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
                 lines.append(f"  DR-E (in-venue edit): {', '.join(dr_e)}")
             if dr_r:
                 lines.append(f"  DR-R (outside-venue read): {', '.join(dr_r)}")
+            if dr_p:
+                lines.append(f"  DR-P (own branch): {', '.join(dr_p)}")
             for d in dropped:
                 lines.append(f"  dropped: {d['entry']} ({d['reason']})")
             for text in protected:
                 lines.append(f"  {text}")
             if note:
                 lines.append(f"  {note}")
-            if not (declared_rules or declared_dirs or dr_v or dr_o or dr_e or dr_r):
+            if not (declared_rules or declared_dirs or dr_v or dr_o or dr_e or dr_r or dr_p):
                 lines.append("  (no grants)")
         else:
             parts = [f"Stage {s.index} ({s.title}):"]
@@ -1834,6 +1839,8 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
                 parts.append("DR-O=[" + ", ".join(dr_o) + "]")
             if dr_r:
                 parts.append("DR-R=[" + ", ".join(dr_r) + "]")
+            if dr_p:
+                parts.append("DR-P=[" + ", ".join(dr_p) + "]")
             if dr_v:
                 parts.append(f"DR-V={len(dr_v)} derived")
             if dr_e:
@@ -1875,12 +1882,14 @@ def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
     if fmt == "json":
         venue = _venue_for(doc)
         stages = {}
+        branch_by_stage = plan_branch_resources(doc)
         for s in doc.stages:
             declared, derived, dropped = _stage_declared_and_derived_grants(s, venue)
             stages[str(s.index)] = {
                 "declared": declared.to_dict(),
                 "derived": derived.to_dict(),
                 "dropped": dropped,
+                "branch_resources": branch_by_stage.get(s.index, []),
             }
         data = {
             "grants_sha256": grants_sha256(doc),

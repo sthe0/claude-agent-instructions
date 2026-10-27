@@ -8623,6 +8623,8 @@ def stage_branch_resources(state: SessionState, stage_index: int) -> "list | Non
         return []
     frozen = (stored.get(str(stage_index)) or {}).get("branch")
     if not isinstance(frozen, dict):
+        # A session bound before DR-P: its plan could not declare `branch`, so the live
+        # derivation the caller falls back to can never grant anything.
         return None
     try:
         return [_resources.resource_from_dict(d) for d in frozen.get("resources") or []]

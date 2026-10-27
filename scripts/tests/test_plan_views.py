@@ -565,6 +565,7 @@ def test_the_stage_brief_and_the_handoff_record_carry_the_closure_digest(plan, t
     digest = plan_module.stage_closure_digest(doc, 2)
     state = SimpleNamespace(
         plan_path=str(plan), plan_snapshot_path=None, parent_link=None,
+        approved_grant_entries=None, approved_grants_sha256=None,
         stage=lambda index: next(s for s in doc.stages if s.index == index),
         resolve_check_venue=lambda venue: str(tmp_path),
     )

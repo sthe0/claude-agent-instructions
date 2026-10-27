@@ -134,13 +134,16 @@ class StageResources:
     stage_effects: list = field(default_factory=list)
 
 
-def compute_stage_resources(stage: Stage, venue: str | None) -> StageResources:
+def compute_stage_resources(
+    stage: Stage, venue: str | None, remote_head=_grants.LIVE_REMOTE_HEAD,
+) -> StageResources:
     """Compute the union of a stage's typed resources: effective (declared +
     derived) grants, its own spawn/landed shape, and its declared
     [[stage.effects]] (echoed through unresolved -- resolving a
     StageEffectDeclaration against a concrete call is `cli.py`'s job, since
     it needs the actual argv, not just the declaration)."""
-    effective = _effective_grants_for_stage(stage, venue)
+    branch_derivation = _grants.derive_branch_resources(stage, venue=venue, remote_head=remote_head)
+    effective = _effective_grants_for_stage(stage, venue, remote_head, branch_derivation)
     out_resources: list = []
     out_unresolved: list = []
     for rule_grant in effective.allow:
@@ -154,7 +157,7 @@ def compute_stage_resources(stage: Stage, venue: str | None) -> StageResources:
         out_resources.extend(res.resources)
     out_resources.extend(_stage_spawn_resources(stage))
     out_resources.extend(_stage_landed_resources(stage))
-    out_resources.extend(_grants.derive_branch_resources(stage, venue=venue)[0])
+    out_resources.extend(branch_derivation[0])
     return StageResources(
         stage_index=stage.index,
         resources=out_resources,
@@ -165,7 +168,8 @@ def compute_stage_resources(stage: Stage, venue: str | None) -> StageResources:
 
 def compute_plan_resources(doc: PlanDoc, *, venue: str | None = None) -> list[StageResources]:
     v = venue if venue is not None else _venue_for(doc)
-    return [compute_stage_resources(s, v) for s in doc.stages]
+    head = _grants.remote_head_branch(v) if any(s.is_spawn() for s in doc.stages) else None
+    return [compute_stage_resources(s, v, head) for s in doc.stages]
 
 
 @dataclass

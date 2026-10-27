@@ -196,7 +196,7 @@ criterion_type = "measurable"
 index = 1
 title = "S"
 executor = "spawn:developer"
-expected_result_image = "e"
+expected_result_image = "{image}"
 criterion_type = "measurable"
 done_criterion = "d"
 depends_on = []
@@ -205,11 +205,12 @@ output_artifacts = ["mod.py"]
 """
 
 
-def _plan_doc(tmp_path, branch):
+def _plan_doc(tmp_path, branch, image="e"):
     from agentctl import plan as plan_mod
 
-    path = tmp_path / f"plan-{branch or 'none'}.toml"
-    path.write_text(_PLAN.format(venue=tmp_path, branch=f'branch = "{branch}"' if branch else ""))
+    path = tmp_path / f"plan-{branch or 'none'}-{image}.toml"
+    path.write_text(_PLAN.format(
+        venue=tmp_path, image=image, branch=f'branch = "{branch}"' if branch else ""))
     return plan_mod.load_plan(path, strict=False)
 
 
@@ -256,6 +257,38 @@ def test_refinement_keeps_only_admitted_branch_resources(tmp_path):
     assert unreadable["1"]["branch"]["resources"] == []
     dropped, _ = plan_mod.refined_grant_entries(stored, feat_a, _plan_doc(tmp_path, None))
     assert dropped["1"]["branch"]["resources"] == []
+
+
+def test_refinement_never_regrants_a_push_the_approval_refused(tmp_path):
+    from agentctl import plan as plan_mod
+
+    git = _git_repo(tmp_path)
+    git("symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+    old = _plan_doc(tmp_path, "feat-a")
+    stored = plan_mod.materialized_grant_entries(old)
+    assert [d["op"] for d in stored["1"]["branch"]["resources"]] == ["commit"]
+
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    new = _plan_doc(tmp_path, "feat-a", image="a tighter image")
+    assert plan_mod.diff_plans(old, new) == "refinement"
+    refined, _ = plan_mod.refined_grant_entries(stored, old, new)
+    assert [d["op"] for d in refined["1"]["branch"]["resources"]] == ["commit"]
+    assert refined["1"]["branch"]["remote_head"] == stored["1"]["branch"]["remote_head"]
+
+
+def test_grants_renderings_list_the_branch_resources(tmp_path):
+    from agentctl import plan as plan_mod
+    from agentctl import render
+
+    _git_repo(tmp_path)
+    doc = _plan_doc(tmp_path, "feat-a")
+    assert plan_mod.plan_branch_resources(doc) == {
+        1: [R.resource_to_dict(R.VcsRefResource(".", "feat-a", "commit")),
+            R.resource_to_dict(R.VcsRefResource("origin", "feat-a", "push"))]}
+    for fmt in ("compact", "full"):
+        text = render.render_plan_grants(doc, fmt=fmt)
+        assert "commit .:feat-a" in text and "push origin:feat-a" in text
+    assert "DR-P" not in render.render_plan_grants(_plan_doc(tmp_path, None))
 
 
 def test_dropped_report_carries_the_dr_p_tag(tmp_path):
