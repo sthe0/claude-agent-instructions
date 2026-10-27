@@ -30,7 +30,7 @@ Exit codes:
   --list                    0.
 
 While CMD runs, RESOURCE_GRANT_ACTIVE_MUTANT=<name> is exported; the catalogue test, whose
-anchors are already replaced inside a mutated copy, skips itself when it sees it.
+anchor tests would fail inside a mutated copy, skips those tests when it sees it.
 """
 from __future__ import annotations
 

@@ -1,8 +1,9 @@
 """The resource-grant mutation tool: every anchor applies, and a broken control never reads as a kill.
 
 Inside a mutated copy the anchors are already replaced, so the anchor test would fail there for
-the wrong reason; the tool exports RESOURCE_GRANT_ACTIVE_MUTANT while it runs a command and this
-module skips itself when it sees it.
+the wrong reason; the tool exports RESOURCE_GRANT_ACTIVE_MUTANT while it runs a command and the
+anchor tests skip themselves when they see it. The behaviour tests stay, so the module never
+collects zero tests (pytest exit 5) in a mutated copy.
 """
 from __future__ import annotations
 
@@ -20,10 +21,11 @@ CONTROL = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = CONTROL
 spec.loader.exec_module(CONTROL)
 
-if os.environ.get(CONTROL.ACTIVE_MUTANT_ENV):
-    pytest.skip("running inside a mutated scratch copy", allow_module_level=True)
+in_mutated_copy = pytest.mark.skipif(
+    bool(os.environ.get(CONTROL.ACTIVE_MUTANT_ENV)), reason="running inside a mutated scratch copy")
 
 
+@in_mutated_copy
 @pytest.mark.parametrize("name", sorted(CONTROL.CATALOGUE))
 def test_every_anchor_occurs_exactly_once_in_the_working_tree(name):
     mutant = CONTROL.CATALOGUE[name]
@@ -32,6 +34,7 @@ def test_every_anchor_occurs_exactly_once_in_the_working_tree(name):
     assert mutant.anchor != mutant.replacement
 
 
+@in_mutated_copy
 def test_the_stage_four_mutants_are_catalogued():
     assert {"handoff-resources-carried", "workdir-write-baseline", "wildcard-kept-as-pattern",
             "digest-check-detects-change"} <= set(CONTROL.CATALOGUE)
