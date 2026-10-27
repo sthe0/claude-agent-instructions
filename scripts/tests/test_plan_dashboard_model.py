@@ -804,6 +804,54 @@ def test_the_children_index_is_built_once_and_matches_the_per_call_lookup(tmp_pa
     assert detail(root, "parent", children=index)["children"] == detail(root, "parent")["children"] == index["parent"]
 
 
+@pytest.fixture
+def state_reads(monkeypatch):
+    reads: list[str] = []
+    real = Path.read_text
+
+    def counting(self, *args, **kwargs):
+        if self.suffix == ".json":
+            reads.append(self.stem)
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", counting)
+    return reads
+
+
+def test_the_child_index_rereads_only_a_changed_state_file(tmp_path, state_reads):
+    root = conversation_root(tmp_path)
+    first = model.child_index(root.state_root)
+    assert sorted(state_reads) == ["child", "parent", "sibling"]
+    state_reads.clear()
+    assert model.child_index(root.state_root) == first
+    assert state_reads == []
+    path = root.state_root / "child.json"
+    path.write_text(path.read_text(encoding="utf-8").replace("goal of child", "a new goal"), encoding="utf-8")
+    state_reads.clear()
+    assert model.child_index(root.state_root)["parent"][0]["goal"] == "a new goal"
+    assert state_reads == ["child"]
+
+
+def test_the_child_index_since_skips_older_uncached_files_and_widens_lazily(tmp_path, state_reads):
+    root = conversation_root(tmp_path)
+    for name, age in (("parent", 3), ("child", 1), ("sibling", 5)):
+        set_mtime(root.state_root / f"{name}.json", NOW - dt.timedelta(hours=age))
+    since = (NOW - dt.timedelta(hours=2)).timestamp()
+    assert model.child_index(root.state_root, since=since) == {"parent": [
+        {"session_id": "child", "stage_index": 1, "node": "EXECUTING", "goal": "goal of child"}]}
+    assert state_reads == ["child"]
+    state_reads.clear()
+    model.child_index(root.state_root, since=since - 4 * 3600)
+    assert sorted(state_reads) == ["parent", "sibling"]
+
+
+def test_the_child_index_without_a_bound_reads_every_state_file(tmp_path, state_reads):
+    root = conversation_root(tmp_path)
+    for name in ("parent", "child", "sibling"):
+        set_mtime(root.state_root / f"{name}.json", NOW - dt.timedelta(days=30))
+    model.child_index(root.state_root, since=None)
+    assert sorted(set(state_reads)) == ["child", "parent", "sibling"]
+
+
 # --- read-only guarantee -------------------------------------------------------------------
 
 def linked_root(tmp_path):
