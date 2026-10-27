@@ -270,6 +270,80 @@ CATALOGUE: "dict[str, Mutant]" = {
         '            elif c in "&|<>()":\n',
         "`;` stops being a separator, so the segments on both sides run together",
     ),
+    "git-allowlist-widened": Mutant(
+        SEGMENT_RESOLVER,
+        '    "reset": GitForm(frozenset({"-q", "--quiet", "--mixed"})),\n',
+        '    "reset": GitForm(frozenset({"-q", "--quiet", "--mixed"})),\n'
+        '    "stash": GitForm(frozenset()),\n',
+        "the git write allow-list gains `stash`, a ref-moving write nobody named",
+    ),
+    "git-commitish-reset-resolved": Mutant(
+        SEGMENT_RESOLVER,
+        '        if not (head_only if seen_dd else (head_only or before[0] == "HEAD")):\n',
+        '        if False:\n',
+        "`git reset <commit-ish>` resolves although it moves the current branch ref",
+    ),
+    "git-foreign-repo-resolved": Mutant(
+        SEGMENT_RESOLVER,
+        '    if ctx.venue_common is None or _common_dir(root) != ctx.venue_common:\n',
+        '    if False:\n',
+        "git in a repository other than the venue's resolves against that repository's refs",
+    ),
+    "branch-hazard-ignored": Mutant(
+        SEGMENT_RESOLVER,
+        '        if any(others):\n',
+        '        if False:\n',
+        "a commit is attributed to the current branch although another segment may switch it",
+    ),
+    "or-cd-known": Mutant(
+        SEGMENT_RESOLVER,
+        '        conditional = in_pipeline or self.or_seen or op_before == "&" or next_op == "&"\n',
+        '        conditional = in_pipeline or op_before == "&" or next_op == "&"\n',
+        "a cd reached through `||` is taken as having run",
+    ),
+    "unresolved-keeps-cwd": Mutant(
+        SEGMENT_RESOLVER,
+        '            self.out = None\n            self.moved = True\n            return\n',
+        '            self.out = cwd\n            return\n',
+        "an unreadable segment is assumed not to have moved the working directory",
+    ),
+    "opaque-without-known-cwd": Mutant(
+        SEGMENT_RESOLVER,
+        '    if cwd is None:\n        return _unres("contract-unresolved", _CWD_UNCERTAIN)\n'
+        '    operands = [t.text for t in toks[1:]]\n    is_python',
+        '    operands = [t.text for t in toks[1:]]\n    is_python',
+        "an interpreter segment is called opaque although its working directory is unknown",
+    ),
+    "ansi-c-quote-skipped": Mutant(
+        SEGMENT_RESOLVER,
+        '            raise _ScanError("ANSI-C quoting $\'...\' is not parsed: its escapes decide where the quote ends")\n',
+        '            self.i += 1\n',
+        "`$'..'` is read as a plain single-quoted string, so an escaped quote ends it early",
+    ),
+    "heredoc-substitution-ignored": Mutant(
+        SEGMENT_RESOLVER,
+        '            if not delimiter_quoted and ("$(" in body or "`" in body):\n',
+        '            if False:\n',
+        "a command substitution in an unquoted heredoc body is treated as inert text",
+    ),
+    "symlink-dotdot-trusted": Mutant(
+        SEGMENT_RESOLVER,
+        '    return real if os.path.realpath(os.path.normpath(path)) == real else None\n',
+        '    return real\n',
+        "`cd link/..` is taken to land where the physical path resolves",
+    ),
+    "push-ref-unnormalised": Mutant(
+        SEGMENT_RESOLVER,
+        '        ref = r.ref[len("refs/heads/") :] if r.ref.startswith("refs/heads/") else r.ref\n',
+        '        ref = r.ref\n',
+        "a push to `refs/heads/<b>` or `HEAD` is listed under that spelling, not as the branch it names",
+    ),
+    "none-effect-nonliteral-operand": Mutant(
+        SEGMENT_RESOLVER,
+        '                    return _unres("residual-syntax", f"{prog!r} operand {tok.text!r} is non-literal: it may expand into a flag outside the safe set")\n',
+        '                    continue\n',
+        "an unreadable operand of a program with a closed flag set is assumed to be harmless",
+    ),
 }
 
 

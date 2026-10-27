@@ -1,48 +1,79 @@
 """Per-segment resolver (`tool_contracts.resolve_segments`): every operator, git-write form, `cd`
-re-basing rule and redirect, replayed against the denial fixture's decidable cases.
+re-basing rule and redirect, replayed against the denial fixture (`denials.jsonl`) and against a
+table of probe lines that each pin one fail-closed decision.
 
-Run with `-s` to print what the resolver returns for a representative set of commands.
+The resolver must under-resolve rather than over-resolve: an unresolved segment costs one prompt,
+an over-resolved one silently auto-allows. So the tests pin both directions -- what resolves, with
+exactly which resources, and what stays unresolved.
+
+To see what the resolver returns for every probe line:
+    PYTHONPATH=scripts python3 scripts/tests/test_tool_contracts_segments.py
 """
-import importlib.util
 import json
 import os
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
-assert importlib.util.find_spec("agentctl.tool_contracts") is not None, "agentctl.tool_contracts must exist"
-assert importlib.util.find_spec("agentctl.segment_resolver") is not None, "agentctl.segment_resolver must exist"
-
-from agentctl import resources, tool_contracts
+from agentctl import resources, segment_resolver, tool_contracts
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "resource_grant_replay" / "denials.jsonl"
 
+#: Fixture cases whose command targets a repository other than the venue's. Segment mode no longer
+#: resolves them (another repository has its own refs, hooks and config), so the hook falls through
+#: to the user prompt instead of denying; stage 8's replay must expect `fall-through` for these.
+_FALLS_THROUGH = {"uncovered-write-07"}
 
-def _cases():
-    return [json.loads(line) for line in FIXTURE.read_text().splitlines() if line.strip()]
+
+def _git(path, *args):
+    subprocess.run(
+        ["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+        check=True, capture_output=True,
+    )
 
 
-def _make_repo(path: Path, branch: str = "feature") -> Path:
-    (path / ".git").mkdir(parents=True)
-    (path / ".git" / "HEAD").write_text(f"ref: refs/heads/{branch}\n")
+def _init_repo(path: Path, branch: str) -> Path:
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", branch, str(path)], check=True, capture_output=True)
+    _git(path, "commit", "-q", "--allow-empty", "-m", "init")
     return path
 
 
-@pytest.fixture
-def world(tmp_path):
-    venue = _make_repo(tmp_path / "venue")
-    outside = tmp_path / "outside"
-    _make_repo(outside / "canonical-checkout", "main")
-    scratch = tmp_path / "scratch"
+def build_world(tmp: Path) -> dict:
+    tmp = tmp.resolve()
+    venue = _init_repo(tmp / "venue", "feature")
+    (venue / "sub" / "deep").mkdir(parents=True)
+    (tmp / "elsewhere" / "x" / "y").mkdir(parents=True)
+    (venue / "lnk").symlink_to(tmp / "elsewhere" / "x" / "y")
+    _git(venue, "worktree", "add", "-q", "-b", "linked", str(tmp / "wt"))
+    outside = tmp / "outside"
+    other = _init_repo(outside / "canonical-checkout", "main")
+    scratch = tmp / "scratch"
     scratch.mkdir()
-    (venue / "sub").mkdir()
-    return {"venue": venue, "outside": outside, "scratch": scratch, "tmp": tmp_path}
+    return {"venue": venue, "outside": outside, "other": other, "scratch": scratch, "wt": tmp / "wt", "tmp": tmp}
+
+
+@pytest.fixture(scope="module")
+def _shared_world(tmp_path_factory):
+    return build_world(tmp_path_factory.mktemp("segments"))
+
+
+@pytest.fixture
+def world(_shared_world):
+    """The shared repositories; a test that moves HEAD is undone afterwards."""
+    yield _shared_world
+    _git(_shared_world["venue"], "checkout", "-q", "-B", "feature")
 
 
 def _subst(text, world):
     return (
         text.replace("{VENUE}", str(world["venue"]))
         .replace("{OUTSIDE}", str(world["outside"]))
+        .replace("{OTHER}", str(world["other"]))
+        .replace("{WT}", str(world["wt"]))
         .replace("{SCRATCH}", str(world["scratch"]))
     )
 
@@ -65,43 +96,341 @@ def _statuses(result):
     return [s.status for s in result.segments]
 
 
+def _cases():
+    return [json.loads(line) for line in FIXTURE.read_text().splitlines() if line.strip()]
+
+
 _BASH_CASES = [c for c in _cases() if c["tool"] == "Bash"]
 _DECIDABLE = [c for c in _BASH_CASES if not c["opaque"]]
 _OPAQUE = [c for c in _BASH_CASES if c["opaque"]]
 
 
+def _checkout_branch(world, case):
+    _git(world["venue"], "branch", "-M", case["branch"])
+
+
 @pytest.mark.parametrize("case", _DECIDABLE, ids=lambda c: c["id"])
 def test_fixture_case_resolves_to_its_expected_effects(case, world):
-    _make_repo_for_case(case, world)
+    _checkout_branch(world, case)
     result = _seg(_subst(case["command"], world), world["venue"])
-    assert all(s.status == "resolved" for s in result.segments), [(s.text, s.status, s.reason) for s in result.segments]
+    if case["id"] in _FALLS_THROUGH:
+        assert _statuses(result) == ["unresolved"]
+        assert result.resources == []
+        return
+    assert set(_statuses(result)) == {"resolved"}, [(s.text, s.status, s.reason) for s in result.segments]
     expected = {_res({**e, "path": _subst(e["path"], world)} if "path" in e else e) for e in case["expected_effects"]}
     assert set(result.resources) == expected
 
 
-def _make_repo_for_case(case, world):
-    head = world["venue"] / ".git" / "HEAD"
-    head.write_text(f"ref: refs/heads/{case['branch']}\n")
-
-
 @pytest.mark.parametrize("case", _OPAQUE, ids=lambda c: c["id"])
 def test_fixture_opaque_case_is_opaque_with_its_kind(case, world):
-    _make_repo_for_case(case, world)
+    _checkout_branch(world, case)
     result = _seg(_subst(case["command"], world), world["venue"])
     assert [s.opaque_kind for s in result.segments if s.status == "opaque"] == [case["opaque_kind"]]
-    assert not [s for s in result.segments if s.status == "unresolved"]
+    assert set(_statuses(result)) <= {"resolved", "opaque"}
 
 
-def test_every_fixture_bash_case_is_covered_by_a_test():
-    assert len(_DECIDABLE) + len(_OPAQUE) == len(_BASH_CASES) > 0
+def test_every_fixture_bash_case_is_replayed_by_exactly_one_test():
+    replayed = {c["id"] for c in _DECIDABLE} | {c["id"] for c in _OPAQUE}
+    assert replayed == {c["id"] for c in _cases() if c["tool"] == "Bash"}
+    assert _FALLS_THROUGH <= {c["id"] for c in _DECIDABLE}
+
+
+# --- probe lines: one pinned decision each -----------------------------------------------------
+
+def W(path):
+    return ("file", path)
+
+
+def C(branch="feature"):
+    return ("vcs", ".", branch, "commit")
+
+
+def P(remote, ref):
+    return ("vcs", remote, ref, "push")
+
+
+def R(*res):
+    return ("resolved", set(res))
+
+
+U = ("unresolved", None)
+
+
+def O(kind):
+    return ("opaque", kind)
+
+
+V = "{VENUE}"
+
+#: (probe id, command, expected [(status, resources | opaque kind)] per segment)
+PROBES = [
+    # B1 stash is a ref-moving write nobody named
+    ("B1-stash", "git stash", [U]),
+    ("B1-stash-push", "git stash push -m wip", [U]),
+    ("B1-stash-pop-commit", "git stash pop && git commit -q -m x", [U, U]),
+    ("B1-stash-list", "git stash list", [U]),
+    # B2 a checkout/switch that creates, resets or forces a branch ref
+    ("B2-checkout-B", "git checkout -B topic", [U]),
+    ("B2-checkout-b", "git checkout -b topic", [U]),
+    ("B2-switch-C", "git switch -C topic", [U]),
+    ("B2-switch-c", "git switch -c topic", [U]),
+    ("B2-switch-force-create", "git switch --force-create topic", [U]),
+    ("B2-checkout-orphan", "git checkout --orphan topic", [U]),
+    ("B2-checkout-force", "git checkout -f topic", [U]),
+    ("B2-checkout-detach", "git checkout --detach", [U]),
+    # B3 a commit-ish reset moves the current branch ref
+    ("B3-reset-soft", "git reset --soft HEAD~1", [U]),
+    ("B3-reset-commitish", "git reset HEAD~3", [U]),
+    ("B3-reset-hard", "git reset --hard", [U]),
+    ("B3-reset-merge", "git reset --merge", [U]),
+    ("B3-reset-path", "git reset HEAD a", [R(W(V))]),
+    ("B3-reset-bare", "git reset", [R(W(V))]),
+    # B4 a cd reached through || is conditional
+    ("B4-or-cd-and", "ls || cd /etc && touch f", [R(), R(), U]),
+    ("B4-cd-or-cd-and", "cd /x || cd /y && touch f", [R(), R(), U]),
+    ("B4-cd-or", "cd sub || touch f", [R(), U]),
+    # B5 a branch switch concurrent with, or before, a commit
+    ("B5-commit-async-checkout", "git commit -q -m x & git checkout topic", [U, R(W(V))]),
+    ("B5-commit-pipe-checkout", "git commit -q -m x | git checkout topic", [U, R(W(V))]),
+    ("B5-checkout-then-commit", "git checkout topic && git commit -q -m x", [R(W(V)), U]),
+    ("B5-commit-then-checkout", "git commit -q -m x && git checkout topic", [R(W(V), C()), R(W(V))]),
+    ("B5-file-checkout-keeps-branch", "git checkout -- a && git commit -q -m x", [R(W(V)), R(W(V), C())]),
+    ("B5-push-head-async-checkout", "git push origin HEAD & git checkout topic", [U, R(W(V))]),
+    # B6 a command substitution in an unquoted heredoc body runs
+    ("B6-heredoc-subst", "cat <<EOF > out\n$(id)\nEOF", [U]),
+    ("B6-heredoc-backtick", "cat <<EOF\n`touch /tmp/pwn`\nEOF", [U]),
+    ("B6-heredoc-arith", "cat <<EOF\n$((1+1))\nEOF", [U]),
+    ("B6-quoted-heredoc-inert", "cat <<'EOF' > out\n$(id)\nEOF", [R(W(V + "/out"))]),
+    ("B6-unquoted-heredoc-plain-var", "cat <<EOF > out\nhello $HOME\nEOF", [R(W(V + "/out"))]),
+    # B7 $'..' escapes decide where the quote ends
+    ("B7-ansi-c-quote", "echo $'\\'' ; touch /etc/zz #'", [U]),
+    # B8 `..` after a symlink
+    ("B8-symlink-dotdot", "cd lnk/.. && touch f", [R(), U]),
+    ("B8-plain-dotdot", "cd sub/.. && touch f", [R(), R(W(V + "/f"))]),
+    # B9 / S5 another repository
+    ("B9-dash-C-foreign-push", "git -C {OTHER} push origin feature", [U]),
+    ("B9-cd-foreign-push", "cd {OTHER} && git push origin feature", [R(), U]),
+    ("S5-foreign-readonly", "git -C {OTHER} status", [U]),
+    ("S5-own-subdir-readonly", "git -C {VENUE}/sub status", [R()]),
+    ("S5-linked-worktree-commit", "git -C {WT} commit -q -m x", [R(W("{WT}"), C("linked"))]),
+    # S1 anything unreadable before a commit makes the branch unknowable
+    ("S1-rebase-commit", "git rebase main && git commit -q -m x", [U, U]),
+    ("S1-config-flag-checkout-commit", "git -c x=y checkout topic && git commit -q -m x", [U, U]),
+    ("S1-opaque-before-commit", "python3 s.py && git commit -q -m x", [O("script-file"), U]),
+    ("S1-unknown-before-commit", "frobnicate; git commit -q -m x", [U, U]),
+    # S2 an opaque segment needs a known cwd
+    ("S2-opaque-c-after-unreadable-cd", "cd $HOME && python3 -c 'print(1)'", [R(), U]),
+    ("S2-opaque-script-after-unreadable-cd", "cd $HOME && python3 s.py", [R(), U]),
+    ("S2-opaque-stdin-after-semicolon-cd", "cd sub; python3 - <<'E'\nprint(1)\nE", [R(), U]),
+    ("S2-opaque-in-known-cwd", "cd sub && python3 -c 'print(1)'", [R(), O("python-c")]),
+    # S3 per-operator cd behaviour
+    ("S3-and", "cd sub && touch f", [R(), R(W(V + "/sub/f"))]),
+    ("S3-semicolon", "cd sub; touch f", [R(), U]),
+    ("S3-async", "cd sub & touch f", [R(), U]),
+    ("S3-newline", "cd sub\ntouch f", [R(), U]),
+    ("S3-pipe", "cd sub | cat && touch f", [R(), R(), U]),
+    ("S3-brace-group", "{ cd sub; } && touch f", [U, U, U]),
+    ("S3-subshell", "( cd sub ) && touch f", [U, U]),
+    ("S3-bash-c", "bash -c 'cd sub' && touch f", [U, U]),
+    # S4 an unreadable operand of a program with a closed flag set
+    ("S4-rg-var-operand", "rg $X pat", [U]),
+    ("S4-rg-literal", "rg pat file", [R()]),
+    ("S4-grep-any-flag-table", "grep $X pat", [R()]),
+    # S6 interpreter flag parsing
+    ("S6-python-Ic", "python3 -Ic 'code'", [O("python-c")]),
+    ("S6-python-W-value-then-c", "python3 -W ignore -c 'code'", [O("python-c")]),
+    ("S6-python-Im", "python3 -Im http.server", [U]),
+    ("S6-bash-o-value", "bash -o pipefail run.sh", [O("script-file")]),
+    ("S6-bash-c", "bash -c ls", [U]),
+    # S7 shell keywords and cwd-changing helpers
+    ("S7-time-cd", "time cd /x && touch f", [U, U]),
+    ("S7-z", "z foo && touch f", [U, U]),
+    # S11 push targets are normalised to the branch they name
+    ("S11-push-full-ref", "git push origin refs/heads/feature", [R(P("origin", "feature"))]),
+    ("S11-push-head", "git push origin HEAD", [R(P("origin", "feature"))]),
+    ("S11-push-head-colon", "git push origin HEAD:main", [R(P("origin", "main"))]),
+    ("S11-push-src-colon-full-ref", "git push origin feature:refs/heads/main", [R(P("origin", "main"))]),
+    ("S11-push-force", "git push --force origin feature", [U]),
+    ("S11-push-delete", "git push origin :feature", [U]),
+    # nits
+    ("N-commit-unquoted-message-var", "git commit -m $MSG", [U]),
+    ("N-commit-quoted-message-var", 'git commit -q -m "fix $THING"', [R(W(V), C())]),
+    ("N-commit-message-substitution", 'git commit -m "$(date)"', [U]),
+    ("N-merge-abort", "git merge --abort", [U]),
+    ("N-merge-branch", "git merge topic", [R(W(V), C())]),
+    ("N-git-dir-without-work-tree", "git --git-dir={VENUE}/.git add -A", [U]),
+    ("N-git-dir-and-work-tree", "git --git-dir={VENUE}/.git --work-tree={VENUE} add -A", [U]),
+    ("N-mkdir-p-nested", "mkdir -p a/b", [R(W(V + "/a/b"))]),
+    ("N-commit-plain", "git commit -q -m x", [R(W(V), C())]),
+    ("N-commit-combined-flags", "git commit -am x", [R(W(V), C())]),
+    ("N-add-all", "git add -A", [R(W(V))]),
+    ("N-heredoc-message-commit", "git commit -q -F - <<'EOF'\nmsg $(not run)\nEOF", [R(W(V), C())]),
+]
+
+
+def _norm(resource):
+    if isinstance(resource, resources.FileResource):
+        return ("file", resource.path)
+    return ("vcs", resource.remote, resource.ref, resource.op)
+
+
+def _expected_resources(expected, world):
+    out = set()
+    for entry in expected:
+        out.add(tuple(_subst(part, world) for part in entry))
+    return out
+
+
+@pytest.mark.parametrize("probe", PROBES, ids=lambda p: p[0])
+def test_probe_line(probe, world):
+    _, template, expected = probe
+    result = _seg(_subst(template, world), world["venue"])
+    got = [(s.status, s.opaque_kind) for s in result.segments]
+    assert [e[0] for e in expected] == [g[0] for g in got], [(s.text, s.status, s.reason) for s in result.segments]
+    for seg, (status, detail) in zip(result.segments, expected):
+        if status == "opaque":
+            assert seg.opaque_kind == detail
+        elif status == "resolved":
+            assert {_norm(r) for r in seg.resources} == _expected_resources(detail, world), seg.text
+
+
+def test_probe_ids_are_unique():
+    ids = [p[0] for p in PROBES]
+    assert len(ids) == len(set(ids))
+
+
+def test_heredoc_body_stays_in_its_segment_text(world):
+    result = _seg("cat <<'EOF' > out\n$(id) && rm -rf /\nEOF\necho done", world["venue"])
+    assert len(result.segments) == 2
+    assert "$(id) && rm -rf /" in result.segments[0].text
+    assert result.segments[1].text == "echo done"
+
+
+def test_an_opaque_segment_with_unknown_cwd_is_never_opaque(world):
+    for text in ["cd $HOME && python3 -c 'x'", "cd $HOME && python3 s.py", "cd sub; python3 - <<'E'\nx\nE"]:
+        seg = _seg(text, world["venue"]).segments[1]
+        assert seg.status == "unresolved" and seg.opaque_kind is None, text
+
+
+def test_an_unresolved_segment_has_no_venue(world):
+    result = _seg("frobnicate x && cd sub && touch f", world["venue"])
+    assert [(s.status, s.venue) for s in result.segments] == [
+        ("unresolved", None),
+        ("resolved", None),
+        ("unresolved", None),
+    ]
+
+
+def test_resolved_segment_carries_the_cwd_it_ran_in(world):
+    result = _seg("cd sub && touch f", world["venue"])
+    assert [s.venue for s in result.segments] == [str(world["venue"]), str(world["venue"] / "sub")]
+
+
+def test_detached_head_commit_is_unresolved(world):
+    _git(world["venue"], "checkout", "-q", "--detach")
+    assert _statuses(_seg("git commit -m x", world["venue"])) == ["unresolved"]
+    assert _statuses(_seg("git push origin HEAD", world["venue"])) == ["unresolved"]
+
+
+def test_outside_any_worktree_is_unresolved(world, tmp_path_factory):
+    bare = tmp_path_factory.mktemp("bare")
+    assert _statuses(_seg(f"git -C {bare} add -A", world["venue"])) == ["unresolved"]
+
+
+def test_venue_that_is_not_a_repository_resolves_no_git_write(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert _statuses(_seg("git add -A", plain)) == ["unresolved"]
+    assert _statuses(_seg("touch f", plain)) == ["resolved"]
+
+
+class TestGitAllowList:
+    """Only the listed (subcommand, flag-shape) pairs resolve; the pin stops a widening from going unnoticed."""
+
+    def test_the_allow_list_is_exactly_this(self):
+        assert set(segment_resolver.GIT_WRITE_FORMS) == {
+            "add", "commit", "restore", "rm", "mv", "merge", "checkout", "switch", "reset",
+        }
+
+    @pytest.mark.parametrize(
+        "form",
+        [
+            "add a b", "add -A", "add -- a", "commit -q -m msg", "commit -a -m msg", "commit --message=msg",
+            "commit -q -F -", "restore a", "restore --staged a", "rm a", "rm -r --cached a", "mv a b",
+            "merge topic", "merge --no-ff -m msg topic", "checkout topic", "checkout -- a", "checkout HEAD -- a",
+            "switch topic", "reset", "reset HEAD", "reset HEAD a", "reset -- a", "reset --mixed",
+        ],
+    )
+    def test_listed_forms_resolve(self, form, world):
+        assert _statuses(_seg(f"git {form}", world["venue"])) == ["resolved"], form
+
+    @pytest.mark.parametrize(
+        "form",
+        [
+            "stash", "stash push", "stash pop", "stash drop", "stash list", "stash apply",
+            "rebase main", "rebase -i HEAD~3", "pull", "pull origin main", "am x.patch", "cherry-pick abc", "revert abc",
+            "checkout -b t", "checkout -B t", "checkout -c t", "checkout -C t", "checkout --orphan t",
+            "checkout --force t", "checkout --detach", "checkout --track origin/x", "checkout t u", "checkout",
+            "switch -c t", "switch -C t", "switch --create t", "switch --force-create t", "switch --orphan t",
+            "switch --detach t", "switch",
+            "reset --soft HEAD~1", "reset --hard", "reset --hard HEAD~1", "reset --keep", "reset --merge",
+            "reset HEAD~3", "reset abc123", "reset a",
+            "commit --amend", "commit --amend -m x", "commit -m x --no-edit --amend", "commit --fixup abc",
+            "commit -C abc", "commit -c abc", "commit --reuse-message=abc", "commit --template t",
+            "add -p", "add -i", "add -e", "add --chmod=+x a", "add -f ignored",
+            "rm -f a", "rm --force a", "rm", "mv a", "mv -f a b", "restore", "restore --source=abc a", "restore -p",
+            "clean -fd", "clean -fdx", "gc", "prune", "reflog expire --all", "update-ref -d refs/heads/x",
+            "symbolic-ref HEAD refs/heads/x", "branch -D x", "branch -m x y", "branch x", "tag x", "tag -d x",
+            "config user.name x", "remote add o u", "remote set-url o u", "fetch", "fetch origin x:y", "clone u d",
+            "init", "worktree add ../w", "worktree remove w", "apply p.patch", "filter-branch", "notes add",
+            "merge --abort", "merge --continue", "merge", "submodule update", "bisect start", "format-patch HEAD~1",
+            "push --force origin t", "push origin +t", "push origin :t", "push --delete origin t", "push",
+            "push origin", "push origin --mirror", "push -u origin t", "push --tags origin t",
+        ],
+    )
+    def test_forms_outside_the_list_are_unresolved(self, form, world):
+        assert _statuses(_seg(f"git {form}", world["venue"])) == ["unresolved"], form
+
+    @pytest.mark.parametrize("flag", ["-c x=y", "--exec-path=/x", "--namespace=n", "-p"])
+    def test_unreviewed_global_flags_are_unresolved(self, flag, world):
+        assert _statuses(_seg(f"git {flag} add -A", world["venue"])) == ["unresolved"], flag
+
+    @pytest.mark.parametrize("sub", ["add $F", "add *.py", "add a/*", "add ~", "restore {a,b}", "rm $(ls)"])
+    def test_non_literal_operands_are_unresolved(self, sub, world):
+        assert _statuses(_seg(f"git {sub}", world["venue"])) == ["unresolved"], sub
+
+    def test_read_only_git_has_no_effect(self, world):
+        for text in ["git status --porcelain", "git log --oneline -5", "git diff a.py", "git rev-parse --short HEAD"]:
+            result = _seg(text, world["venue"])
+            assert _statuses(result) == ["resolved"] and result.resources == [], text
+
+    def test_push_literal_resolves_to_a_push_resource(self, world):
+        assert _seg("git push origin topic", world["venue"]).resources == [resources.VcsRefResource("origin", "topic", "push")]
+        assert _seg("git push -q origin HEAD:main", world["venue"]).resources == [resources.VcsRefResource("origin", "main", "push")]
+
+    def test_dash_c_inside_the_venue_equals_no_dash_c(self, world):
+        venue = world["venue"]
+        assert _seg(f"git -C {venue} add -A", venue).resources == _seg("git add -A", venue).resources
+        assert _seg(f"git -C {venue}/sub add x", venue).resources == [_file(venue)]
+        assert _seg("git -C sub add x", venue).resources == [_file(venue)]
+
+    def test_git_follows_a_rebased_cwd_inside_the_repo(self, world):
+        result = _seg("cd sub && git commit -q -m x", world["venue"])
+        assert set(result.segments[1].resources) == {_file(world["venue"]), resources.VcsRefResource(".", "feature", "commit")}
 
 
 class TestOperators:
-    @pytest.mark.parametrize("op", ["&&", ";", "|", "||", "&", "\n"])
+    @pytest.mark.parametrize("op", ["&&", ";", "|", "||", "&", "\n", "|&"])
     def test_each_operator_splits_into_two_segments(self, op, world):
         result = _seg(f"echo a {op} echo b", world["venue"])
         assert [s.text for s in result.segments] == ["echo a", "echo b"]
         assert _statuses(result) == ["resolved", "resolved"]
+
+    def test_the_separators_are_not_part_of_the_segment_text(self, world):
+        result = _seg("touch /a ; touch /b && touch /c", world["venue"])
+        assert [s.text for s in result.segments] == ["touch /a", "touch /b", "touch /c"]
+        assert [r.path for s in result.segments for r in s.resources] == ["/a", "/b", "/c"]
 
     def test_operators_inside_quotes_do_not_split(self, world):
         result = _seg('echo "a && b; c | d" \'x ; y\'', world["venue"])
@@ -115,13 +444,15 @@ class TestOperators:
     def test_heredoc_before_a_pipe_still_attaches_its_body(self, world):
         result = _seg("cat <<EOF | tail -1\nx; y\nEOF\necho done", world["venue"])
         assert _statuses(result) == ["resolved", "resolved", "resolved"]
+        assert result.segments[2].text == "echo done"
 
     @pytest.mark.parametrize("text", ["echo $(date)", "echo `date`", "(cd /; ls)", "for i in 1; do ls; done", "echo <(ls)"])
     def test_nested_execution_is_unresolved(self, text, world):
         assert "unresolved" in _statuses(_seg(text, world["venue"]))
 
-    def test_unterminated_quote_is_one_unresolved_segment(self, world):
-        result = _seg('echo "oops && ls', world["venue"])
+    @pytest.mark.parametrize("text", ['echo "oops && ls', "echo 'oops", "echo `oops", "echo $(oops"])
+    def test_unterminated_construct_is_one_unresolved_segment(self, text, world):
+        result = _seg(text, world["venue"])
         assert _statuses(result) == ["unresolved"]
         assert result.segments[0].reason_class == "residual-syntax"
 
@@ -131,18 +462,16 @@ class TestOperators:
         assert result.segments[0].resources == [_file(world["venue"] / "a.txt")]
         assert result.segments[1].reason_class == "unknown-program"
 
-    def test_unknown_program_and_assignment_and_wrapper_are_unresolved(self, world):
-        for text, cls in [("frobnicate x", "unknown-program"), ("FOO=1 ls", "contract-unresolved"), ("env ls", "contract-unresolved")]:
-            seg = _seg(text, world["venue"]).segments[0]
-            assert (seg.status, seg.reason_class) == ("unresolved", cls), text
+    @pytest.mark.parametrize(
+        "text, cls",
+        [("frobnicate x", "unknown-program"), ("FOO=1 ls", "contract-unresolved"), ("env ls", "contract-unresolved"), ("/bin/ls", "contract-unresolved")],
+    )
+    def test_unknown_program_assignment_wrapper_and_path_are_unresolved(self, text, cls, world):
+        seg = _seg(text, world["venue"]).segments[0]
+        assert (seg.status, seg.reason_class) == ("unresolved", cls), text
 
 
 class TestCd:
-    def test_cd_rebases_an_and_chained_successor(self, world):
-        result = _seg("cd sub && touch f", world["venue"])
-        assert result.segments[1].resources == [_file(world["venue"] / "sub" / "f")]
-        assert result.segments[1].venue == str(world["venue"] / "sub")
-
     def test_cd_chain_accumulates(self, world):
         result = _seg("cd sub && cd .. && touch f", world["venue"])
         assert result.segments[2].resources == [_file(world["venue"] / "f")]
@@ -150,11 +479,6 @@ class TestCd:
     def test_absolute_cd_then_relative_write(self, world):
         result = _seg(f"cd {world['outside']} && touch r", world["venue"])
         assert result.segments[1].resources == [_file(world["outside"] / "r")]
-
-    def test_relative_segment_after_semicolon_following_a_cd_is_unresolved(self, world):
-        result = _seg("cd sub; touch f", world["venue"])
-        assert _statuses(result) == ["resolved", "unresolved"]
-        assert result.segments[1].reason_class == "contract-unresolved"
 
     def test_absolute_segment_after_semicolon_following_a_cd_still_resolves(self, world):
         result = _seg(f"cd sub; touch {world['outside']}/abs", world["venue"])
@@ -164,32 +488,21 @@ class TestCd:
         result = _seg("touch a; touch b", world["venue"])
         assert result.segments[1].resources == [_file(world["venue"] / "b")]
 
-    def test_or_after_a_cd_is_unresolved_for_relative_segments(self, world):
-        result = _seg("cd sub && touch a || touch b", world["venue"])
-        assert result.segments[1].resources == [_file(world["venue"] / "sub" / "a")]
-        assert result.segments[2].status == "unresolved"
+    def test_cd_after_a_pipeline_member_only_moves_the_subshell(self, world):
+        result = _seg("cd sub && cat f | touch g", world["venue"])
+        assert result.segments[2].resources == [_file(world["venue"] / "sub" / "g")]
 
-    def test_cd_inside_a_pipeline_moves_nothing_for_sure(self, world):
-        result = _seg("cd sub | cat && touch f", world["venue"])
-        assert result.segments[-1].status == "unresolved"
-
-    @pytest.mark.parametrize("cd", ["cd $HOME", "cd -", "cd", "cd ~", "cd sub/*"])
+    @pytest.mark.parametrize("cd", ["cd $HOME", "cd -", "cd", "cd ~", "cd sub/*", "cd -P sub", "cd -L sub"])
     def test_unreadable_cd_target_makes_later_relative_segments_unresolved(self, cd, world):
-        result = _seg(f"{cd} && touch f", world["venue"])
-        assert result.segments[-1].status == "unresolved"
+        assert _seg(f"{cd} && touch f", world["venue"]).segments[-1].status == "unresolved", cd
 
-    def test_a_residual_syntax_segment_poisons_the_cwd(self, world):
-        result = _seg("echo $(date) && touch f", world["venue"])
-        assert result.segments[-1].status == "unresolved"
+    @pytest.mark.parametrize("text", ["echo $(date) && touch f", "pushd sub && touch f", "frobnicate && touch f", "FOO=1 ls && touch f"])
+    def test_an_unreadable_segment_poisons_the_cwd(self, text, world):
+        assert _seg(text, world["venue"]).segments[-1].status == "unresolved", text
 
-    def test_pushd_poisons_the_cwd(self, world):
-        result = _seg("pushd sub && touch f", world["venue"])
-        assert result.segments[-1].status == "unresolved"
-
-    def test_git_without_dash_c_follows_the_rebased_cwd(self, world):
-        other = _make_repo(world["tmp"] / "other", "topic")
-        result = _seg(f"cd {other} && git commit -q -m x", world["venue"])
-        assert set(result.segments[1].resources) == {_file(other), resources.VcsRefResource(".", "topic", "commit")}
+    def test_an_unreadable_segment_poisons_the_cwd_across_semicolons(self, world):
+        assert _seg("frobnicate; touch f", world["venue"]).segments[-1].status == "unresolved"
+        assert _seg("frobnicate; touch /abs", world["venue"]).segments[-1].status == "resolved"
 
 
 class TestRedirects:
@@ -234,91 +547,6 @@ class TestRedirects:
         assert result.segments[1].resources == [_file(world["outside"] / "f")]
 
 
-class TestGitWrites:
-    @pytest.mark.parametrize(
-        "sub",
-        ["add -A", "add a b", "stash", "stash push -m wip", "restore a", "rm a", "mv a b", "reset --soft HEAD~1", "reset --mixed", "reset HEAD a", "checkout -- a", "switch -c topic"],
-    )
-    def test_write_subcommand_writes_the_worktree_root(self, sub, world):
-        result = _seg(f"git {sub}", world["venue"])
-        assert result.resources == [_file(world["venue"])], sub
-
-    @pytest.mark.parametrize("sub", ["commit -q -m msg", "merge topic", "commit -am msg"])
-    def test_commit_and_merge_add_the_current_branch(self, sub, world):
-        result = _seg(f"git {sub}", world["venue"])
-        assert set(result.resources) == {_file(world["venue"]), resources.VcsRefResource(".", "feature", "commit")}
-
-    def test_dash_c_resolves_against_that_directory(self, world):
-        result = _seg(f"git -C {world['outside']}/canonical-checkout commit -q -m x", world["venue"])
-        assert set(result.resources) == {
-            _file(world["outside"] / "canonical-checkout"),
-            resources.VcsRefResource(".", "main", "commit"),
-        }
-
-    def test_dash_c_to_the_venue_is_equivalent_to_no_dash_c(self, world):
-        assert _seg(f"git -C {world['venue']} add -A", world["venue"]).resources == _seg("git add -A", world["venue"]).resources
-
-    def test_dash_c_relative_follows_cwd(self, world):
-        assert _seg("git -C sub add -A", world["venue"]).resources == [_file(world["venue"])]
-
-    def test_subdirectory_resolves_to_the_worktree_root(self, world):
-        assert _seg(f"git -C {world['venue']}/sub add x", world["venue"]).resources == [_file(world["venue"])]
-
-    def test_linked_worktree_reads_branch_from_its_gitdir(self, world):
-        gitdir = world["tmp"] / "main-repo" / ".git" / "worktrees" / "wt"
-        gitdir.mkdir(parents=True)
-        (gitdir / "HEAD").write_text("ref: refs/heads/linked\n")
-        wt = world["tmp"] / "wt"
-        wt.mkdir()
-        (wt / ".git").write_text(f"gitdir: {gitdir}\n")
-        result = _seg(f"git -C {wt} commit -m x", world["venue"])
-        assert set(result.resources) == {_file(wt), resources.VcsRefResource(".", "linked", "commit")}
-
-    def test_detached_head_commit_is_unresolved(self, world):
-        (world["venue"] / ".git" / "HEAD").write_text("0123456789abcdef0123456789abcdef01234567\n")
-        assert _seg("git commit -m x", world["venue"]).segments[0].status == "unresolved"
-
-    def test_outside_any_worktree_is_unresolved(self, world, tmp_path_factory):
-        bare = tmp_path_factory.mktemp("bare")
-        assert _seg(f"git -C {bare} add -A", world["venue"]).segments[0].status == "unresolved"
-
-    def test_commit_after_a_branch_switch_in_the_same_line_is_unresolved(self, world):
-        result = _seg("git checkout topic && git commit -m x", world["venue"])
-        assert _statuses(result) == ["resolved", "unresolved"]
-
-    def test_file_checkout_does_not_stale_the_branch(self, world):
-        result = _seg("git checkout -- a && git commit -m x", world["venue"])
-        assert _statuses(result) == ["resolved", "resolved"]
-
-    @pytest.mark.parametrize("sub", ["reset --hard", "reset --hard HEAD~1", "reset --merge", "add $F", "add *.py", "add a/*"])
-    def test_destructive_or_non_literal_forms_are_unresolved(self, sub, world):
-        assert _seg(f"git {sub}", world["venue"]).segments[0].status == "unresolved", sub
-
-    def test_non_literal_message_does_not_matter(self, world):
-        result = _seg('git commit -q -m "fix $THING"', world["venue"])
-        assert result.segments[0].status == "resolved"
-
-    def test_command_substitution_in_the_message_is_unresolved(self, world):
-        assert _seg('git commit -m "$(date)"', world["venue"]).segments[0].status == "unresolved"
-
-    @pytest.mark.parametrize("flag", ["--git-dir=/x", "--work-tree=/x", "-c", "--exec-path=/x"])
-    def test_other_global_flags_are_unresolved(self, flag, world):
-        assert _seg(f"git {flag} add -A", world["venue"]).segments[0].status == "unresolved"
-
-    def test_push_literal_resolves_to_a_push_resource(self, world):
-        assert _seg("git push origin topic", world["venue"]).resources == [resources.VcsRefResource("origin", "topic", "push")]
-        assert _seg("git push -q origin HEAD:main", world["venue"]).resources == [resources.VcsRefResource("origin", "main", "push")]
-
-    @pytest.mark.parametrize("push", ["git push --force origin topic", "git push origin +topic", "git push origin :topic", "git push origin --delete topic", "git push"])
-    def test_push_force_delete_and_bare_are_unresolved(self, push, world):
-        assert _seg(push, world["venue"]).segments[0].status == "unresolved"
-
-    def test_read_only_git_has_no_effect(self, world):
-        for text in ["git status --porcelain", "git log --oneline -5", "git diff a.py", "git rev-parse --short HEAD"]:
-            result = _seg(text, world["venue"])
-            assert _statuses(result) == ["resolved"] and result.resources == [], text
-
-
 class TestOtherPrograms:
     def test_mkdir_and_touch_write_each_operand(self, world):
         assert _seg("mkdir -p a/b c", world["venue"]).resources == [_file(world["venue"] / "a/b"), _file(world["venue"] / "c")]
@@ -330,7 +558,7 @@ class TestOtherPrograms:
 
     @pytest.mark.parametrize("text", ["mv -t dir a", "cp --target-directory=d a", "mv a", "touch -r ref f", "mkdir -m 777 d", "mv a $B"])
     def test_unreviewed_flags_and_shapes_are_unresolved(self, text, world):
-        assert _seg(text, world["venue"]).segments[0].status == "unresolved", text
+        assert _statuses(_seg(text, world["venue"])) == ["unresolved"], text
 
     def test_awk_print_program_has_no_effect(self, world):
         result = _seg("awk -F'\\t' '{print $1,$3}' data.tsv", world["venue"])
@@ -338,7 +566,7 @@ class TestOtherPrograms:
 
     @pytest.mark.parametrize("prog", ["{print > \"x\"}", "{print | \"sh\"}", "BEGIN{system(\"ls\")}", "{\"ls\" | getline}"])
     def test_awk_program_that_redirects_or_executes_is_unresolved(self, prog, world):
-        assert _seg(f"awk '{prog}' f", world["venue"]).segments[0].status == "unresolved", prog
+        assert _statuses(_seg(f"awk '{prog}' f", world["venue"])) == ["unresolved"], prog
 
     @pytest.mark.parametrize(
         "text, kind",
@@ -357,13 +585,13 @@ class TestOtherPrograms:
         seg = _seg(text, world["venue"]).segments[0]
         assert (seg.status, seg.opaque_kind) == ("opaque", kind)
 
-    @pytest.mark.parametrize("text", ["bash -c 'ls'", "sh -ec 'ls'", "node -e 'x'", "perl -e 'x'", "python3 -m http.server"])
+    @pytest.mark.parametrize("text", ["bash -c 'ls'", "sh -ec 'ls'", "bash -lc ls", "node -e 'x'", "perl -e 'x'", "python3 -m http.server"])
     def test_inline_code_other_than_python_c_is_unresolved(self, text, world):
-        assert _seg(text, world["venue"]).segments[0].status == "unresolved", text
+        assert _statuses(_seg(text, world["venue"])) == ["unresolved"], text
 
     def test_python_m_pytest_goes_through_the_registry_resolver(self, world):
         seg = _seg("python3 -m pytest -q scripts/tests/test_x.py", world["venue"]).segments[0]
-        assert seg.status == tool_contracts.resolve_command("python3 -m pytest -q scripts/tests/test_x.py", str(world["venue"])).status
+        assert seg.status == "resolved" and seg.resources == [_file(world["venue"])]
 
     def test_table_unresolved_program_stays_unresolved(self, world):
         seg = _seg("rm -rf x", world["venue"]).segments[0]
@@ -371,11 +599,7 @@ class TestOtherPrograms:
 
     def test_none_effect_program_with_unreviewed_flag_is_unresolved(self, world):
         table = tool_contracts.load_contract_table()
-        rg = _seg("rg --pre sh pattern", world["venue"], contract_table=table).segments[0]
-        assert rg.status == "unresolved"
-
-    def test_path_qualified_program_is_unresolved(self, world):
-        assert _seg("/bin/ls", world["venue"]).segments[0].status == "unresolved"
+        assert _seg("rg --pre sh pattern", world["venue"], contract_table=table).segments[0].status == "unresolved"
 
 
 class TestResolveCommandIsUnchanged:
@@ -402,28 +626,29 @@ class TestResolveCommandIsUnchanged:
     def test_read_only_forms_stay_resolved_there(self, text, world):
         assert tool_contracts.resolve_command(text, str(world["venue"])).status == "resolved", text
 
+    def test_the_same_line_resolves_in_segment_mode_only(self, world):
+        text = f"git -C {world['venue']} add -A && echo hi > out.txt"
+        assert tool_contracts.resolve_command(text, str(world["venue"])).status == "unresolved"
+        assert _statuses(_seg(text, world["venue"])) == ["resolved", "resolved"]
 
-def test_behaviour_printout(world):
-    venue, outside = world["venue"], world["outside"]
-    commands = [
-        "git add -A && git commit -q -m x; git push -q origin feature 2>&1 | tail -2; git rev-parse --short HEAD",
-        f"git -C {outside}/canonical-checkout commit -q -m x",
-        "git checkout topic && git commit -m y",
-        "git stash; git restore a; git reset --soft HEAD~1",
-        "cd sub && touch f",
-        "cd sub; touch f",
-        "cd sub | cat && touch f",
-        "echo hi > out.txt && echo no > /dev/null 2>&1",
-        "echo hi | tee -a a.txt",
-        "python3 -c 'print(1)' > o.txt",
-        "python3 - <<'EOF'\nopen('x','w')\nEOF",
-        "python3 tool.py",
-        "echo $(date)",
-        "rm -rf x",
-    ]
-    for cmd in commands:
-        result = _seg(cmd, venue)
-        print(f"\n$ {cmd!r}")
-        for seg in result.segments:
-            shown = [f"{type(r).__name__}({os.path.relpath(getattr(r, 'path', ''), str(venue.parent)) if hasattr(r, 'path') else (r.remote, r.ref, r.op)})" for r in seg.resources]
-            print(f"  [{seg.status}] {seg.text!r} resources={shown} opaque_kind={seg.opaque_kind} reason_class={seg.reason_class}")
+    def test_segment_mode_leaves_resolve_command_results_identical(self, world):
+        before = {t: tool_contracts.resolve_command(t, str(world["venue"])) for t in ["git status", "git push origin x", "cat a | head"]}
+        for t in before:
+            _seg(t, world["venue"])
+        assert before == {t: tool_contracts.resolve_command(t, str(world["venue"])) for t in before}
+
+
+def print_probes() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        world = build_world(Path(tmp))
+        for probe_id, template, _ in PROBES:
+            command = _subst(template, world)
+            result = _seg(command, world["venue"])
+            print(f"\n[{probe_id}] {command!r}")
+            for seg in result.segments:
+                shown = [_norm(r) for r in seg.resources]
+                print(f"  [{seg.status}] {seg.text!r} resources={shown} opaque_kind={seg.opaque_kind} reason_class={seg.reason_class}")
+
+
+if __name__ == "__main__":
+    print_probes()

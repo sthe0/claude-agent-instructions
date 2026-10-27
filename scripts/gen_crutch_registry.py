@@ -165,6 +165,17 @@ CODE_PARTITIONS = [
         "them: the guarded decision drives a REFUSAL, not a warning.",
     ),
     (
+        "scripts/agentctl/segment_resolver.py (shell-command syntax)",
+        lambda f: f == "scripts/agentctl/segment_resolver.py",
+        "structural",
+        "keep",
+        "Shell-command syntax, never meaning: it splits a Bash line on the shell's own "
+        "operators and quoting, then resolves each segment against a closed allow-list "
+        "of (git subcommand, flag-shape) pairs and the contract table. Every miss "
+        "fails closed to `unresolved`, which costs one prompt and widens nothing, so a "
+        "token it fails to recognise can only under-resolve.",
+    ),
+    (
         "scripts/agentctl/**",
         lambda f: f.startswith("scripts/agentctl/"),
         "structural",

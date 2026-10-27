@@ -95,11 +95,11 @@ class Segment:
     (the segment runs code that cannot be read; `opaque_kind` is
     `"python-c"`, `"stdin-body"` or `"script-file"`, and `resources` holds
     only its redirect targets) or `"unresolved"` (`reason_class` is one of
-    the canonical tags). `venue` is the cwd the segment was resolved against
-    -- the original venue when the cwd had become uncertain."""
+    the canonical tags). `venue` is the cwd the segment ran in, or `None`
+    when that cwd was unknown (always for an unresolved segment)."""
 
     text: str
-    venue: str
+    venue: str | None
     status: str
     resources: list[resources.Resource] = field(default_factory=list)
     opaque_kind: str | None = None
@@ -1035,6 +1035,17 @@ def resolve_command(
         )
 
     return Resolution("resolved", resources=all_resources)
+
+
+#: Public names for the pieces `segment_resolver` reuses, so it does not import private ones.
+SCRIPT_INTERPRETERS = _SCRIPT_INTERPRETERS
+SHELL_RESERVED_WORDS = _SHELL_RESERVED_WORDS
+BARE_ASSIGNMENT_RE = _BARE_ASSIGNMENT_RE
+FORBIDDEN_WRAPPER_TOKENS = _FORBIDDEN_WRAPPER_TOKENS
+realpath = _realpath
+is_non_literal = _is_non_literal
+find_git_subcommand = _find_git_subcommand
+resolve_git = _resolve_git
 
 
 def resolve_segments(

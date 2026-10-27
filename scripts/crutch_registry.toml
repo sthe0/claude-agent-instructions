@@ -13,6 +13,7 @@
 # scripts/agentctl/result_image.py (judge-guarded)           | code   | semantic-guarded
 # scripts/agentctl/conditions.py (judge-guarded)             | code   | semantic-guarded
 # scripts/agentctl/procedure.py (judge-guarded)              | code   | semantic-guarded
+# scripts/agentctl/segment_resolver.py (shell-command syntax) | code   | structural
 # scripts/agentctl/**                                        | code   | structural
 # scripts/hook-escalation-diagnosis-gate.py (judge-guarded)  | code   | semantic-guarded
 # scripts/hook-deferring-disposition-gate.py (judge-guarded) | code   | semantic-guarded
@@ -1502,7 +1503,7 @@ domain = "code"
 file = "scripts/agentctl/segment_resolver.py"
 class = "structural"
 disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+ground = "Shell-command syntax, never meaning: it splits a Bash line on the shell's own operators and quoting, then resolves each segment against a closed allow-list of (git subcommand, flag-shape) pairs and the contract table. Every miss fails closed to `unresolved`, which costs one prompt and widens nothing, so a token it fails to recognise can only under-resolve."
 
 [[entry]]
 id = "dc5a7ecdeb209ec2"
@@ -1510,7 +1511,7 @@ domain = "code"
 file = "scripts/agentctl/segment_resolver.py"
 class = "structural"
 disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+ground = "Shell-command syntax, never meaning: it splits a Bash line on the shell's own operators and quoting, then resolves each segment against a closed allow-list of (git subcommand, flag-shape) pairs and the contract table. Every miss fails closed to `unresolved`, which costs one prompt and widens nothing, so a token it fails to recognise can only under-resolve."
 
 [[entry]]
 id = "93d4450094b81d56"
@@ -1518,7 +1519,7 @@ domain = "code"
 file = "scripts/agentctl/segment_resolver.py"
 class = "structural"
 disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+ground = "Shell-command syntax, never meaning: it splits a Bash line on the shell's own operators and quoting, then resolves each segment against a closed allow-list of (git subcommand, flag-shape) pairs and the contract table. Every miss fails closed to `unresolved`, which costs one prompt and widens nothing, so a token it fails to recognise can only under-resolve."
 
 [[entry]]
 id = "4ecd307a0bb156ea"
@@ -1526,15 +1527,7 @@ domain = "code"
 file = "scripts/agentctl/segment_resolver.py"
 class = "structural"
 disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
-
-[[entry]]
-id = "feec3491b8b23dbd"
-domain = "code"
-file = "scripts/agentctl/segment_resolver.py"
-class = "structural"
-disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+ground = "Shell-command syntax, never meaning: it splits a Bash line on the shell's own operators and quoting, then resolves each segment against a closed allow-list of (git subcommand, flag-shape) pairs and the contract table. Every miss fails closed to `unresolved`, which costs one prompt and widens nothing, so a token it fails to recognise can only under-resolve."
 
 [[entry]]
 id = "2115d7fb919a4671"
@@ -18582,7 +18575,7 @@ domain = "code_file_rollup"
 file = "scripts/agentctl/segment_resolver.py"
 class = "structural"
 disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
+ground = "Shell-command syntax, never meaning: it splits a Bash line on the shell's own operators and quoting, then resolves each segment against a closed allow-list of (git subcommand, flag-shape) pairs and the contract table. Every miss fails closed to `unresolved`, which costs one prompt and widens nothing, so a token it fails to recognise can only under-resolve. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "1dd077dca93648cf"
