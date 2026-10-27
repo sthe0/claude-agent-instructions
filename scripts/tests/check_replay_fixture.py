@@ -43,7 +43,7 @@ FIELD_TYPES = {
     "opaque": bool,
     "source": str,
 }
-OPTIONAL_FIELDS = {"command", "path", "opaque_kind", "allowed_by"}
+OPTIONAL_FIELDS = {"command", "path", "opaque_kind", "allowed_by", "resolver"}
 
 TOOLS = {"Bash", "Read", "Edit", "Write"}
 KINDS = {"developer", "tech-writer", "thinker", "planner", "code-reviewer"}
@@ -207,6 +207,9 @@ def check_case(c: object, n: int) -> dict:
         raise Fail("allowed-by-iff", f"{where}: allowed_by present iff class is allowed-today")
     if "allowed_by" in c and c["allowed_by"] not in ALLOWED_BY:
         raise Fail("allowed-by-unknown", f"{where}: allowed_by {c['allowed_by']!r} not in {sorted(ALLOWED_BY)}")
+
+    if "resolver" in c and (c["resolver"] != "fall-through" or c["tool"] != "Bash" or c["opaque"]):
+        raise Fail("resolver-unknown", f"{where}: resolver may only be 'fall-through' on a non-opaque Bash case")
 
     for i, e in enumerate(c["expected_effects"]):
         check_effect(e, f"{where} effect {i}")

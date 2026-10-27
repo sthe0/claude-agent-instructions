@@ -47,6 +47,7 @@ One JSON object per line, written with `json.dumps` default separators.
 | `opaque` | bool | True when the effect cannot be read from the command text. |
 | `opaque_kind` | str | `python-c`, `stdin-body` or `script-file`; present iff `opaque`. |
 | `allowed_by` | str | `allow-entry` or `mode`; present iff class is `allowed-today`. |
+| `resolver` | str | `fall-through`, on a non-opaque Bash case only: the per-segment resolver deliberately leaves the command unresolved (here, git in a repository other than the venue's), so the hook falls through to the user prompt instead of acting. `expect` still states what the answer key says the effect is; the hook-level replay expects `none` for these cases. |
 | `source` | str | Where the case came from. |
 
 Path placeholders: `{VENUE}` is the stage's worktree root, `{SCRATCH}` is the
@@ -111,7 +112,10 @@ The scan has no observed denial for these. Their `source` says so.
 
 - `uncovered-write-05`: push to `main`.
 - `uncovered-write-06`: push to another plan's branch.
-- `uncovered-write-07`: `git -C` commit in the canonical checkout.
+- `uncovered-write-07`: `git -C` commit in the canonical checkout. Its
+  `resolver` is `fall-through`: the per-segment resolver never resolves git in
+  another repository (its refs, hooks and config are not the venue's), so the
+  hook shows the user prompt instead of denying. Accepted at plan level.
 - `allowed-today-01..04`: calls the harness allows today, not denials. Two come
   from ambient allow entries (git status, git log). Two come from the
   acceptEdits behaviour recorded in

@@ -1514,6 +1514,14 @@ disposition = "keep"
 ground = "Shell-command syntax, never meaning: it splits a Bash line on the shell's own operators and quoting, then resolves each segment against a closed allow-list of (git subcommand, flag-shape) pairs and the contract table. Every miss fails closed to `unresolved`, which costs one prompt and widens nothing, so a token it fails to recognise can only under-resolve."
 
 [[entry]]
+id = "d8f1a42ee2951172"
+domain = "code"
+file = "scripts/agentctl/segment_resolver.py"
+class = "structural"
+disposition = "keep"
+ground = "Shell-command syntax, never meaning: it splits a Bash line on the shell's own operators and quoting, then resolves each segment against a closed allow-list of (git subcommand, flag-shape) pairs and the contract table. Every miss fails closed to `unresolved`, which costs one prompt and widens nothing, so a token it fails to recognise can only under-resolve."
+
+[[entry]]
 id = "93d4450094b81d56"
 domain = "code"
 file = "scripts/agentctl/segment_resolver.py"

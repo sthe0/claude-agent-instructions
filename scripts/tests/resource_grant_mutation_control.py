@@ -264,7 +264,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         '            pass\n',
         "a redirect target is no longer listed as a write",
     ),
-    "unsplit-separator-unresolved": Mutant(
+    "semicolon-not-a-separator": Mutant(
         SEGMENT_RESOLVER,
         '            elif c in ";&|<>()":\n',
         '            elif c in "&|<>()":\n',
@@ -326,11 +326,11 @@ CATALOGUE: "dict[str, Mutant]" = {
         '            if False:\n',
         "a command substitution in an unquoted heredoc body is treated as inert text",
     ),
-    "symlink-dotdot-trusted": Mutant(
+    "cd-symlink-tracked-physically": Mutant(
         SEGMENT_RESOLVER,
-        '    return real if os.path.realpath(os.path.normpath(path)) == real else None\n',
-        '    return real\n',
-        "`cd link/..` is taken to land where the physical path resolves",
+        '    if real != os.path.normpath(path):\n        return None\n',
+        '    if False:\n        return None\n',
+        "`cd link` is tracked as the link's target, so a later `..` is read from the wrong directory",
     ),
     "push-ref-unnormalised": Mutant(
         SEGMENT_RESOLVER,
@@ -343,6 +343,78 @@ CATALOGUE: "dict[str, Mutant]" = {
         '                    return _unres("residual-syntax", f"{prog!r} operand {tok.text!r} is non-literal: it may expand into a flag outside the safe set")\n',
         '                    continue\n',
         "an unreadable operand of a program with a closed flag set is assumed to be harmless",
+    ),
+    "branch-exists-not-required": Mutant(
+        SEGMENT_RESOLVER,
+        'not seen_dd and not _local_branch_exists(root, before[0]):\n',
+        'not seen_dd and False:\n',
+        "`git checkout <name>` resolves although only a remote-tracking branch exists and git would create one",
+    ),
+    "packed-refs-ignored": Mutant(
+        SEGMENT_RESOLVER,
+        '            return any(line.rstrip("\\n").endswith(f" refs/heads/{name}") for line in fh)\n',
+        '            return False\n',
+        "a local branch stored only in packed-refs is taken as missing",
+    ),
+    "backgrounded-list-ignored": Mutant(
+        SEGMENT_RESOLVER,
+        ' or _list_is_backgrounded(raws, k)\n',
+        '\n',
+        "a commit is attributed to the current branch although the list it is in runs in the background beside a checkout",
+    ),
+    "awk-nonliteral-program-read": Mutant(
+        SEGMENT_RESOLVER,
+        '    if any(t.nonlit for t in toks[1:]):\n        return _unres("residual-syntax", "an awk operand',
+        '    if False:\n        return _unres("residual-syntax", "an awk operand',
+        "an awk program held in a variable or positional is read as the quoted text and called harmless",
+    ),
+    "push-head-destination-mapped": Mutant(
+        SEGMENT_RESOLVER,
+        '    if _push_destination_is_head(rest):\n',
+        '    if False:\n',
+        "`git push origin <b>:HEAD` is listed as a push of `<b>` although git creates a remote ref named HEAD",
+    ),
+    "mkdir-p-leaf-only": Mutant(
+        SEGMENT_RESOLVER,
+        '        paths = tops\n',
+        '        pass\n',
+        "`mkdir -p a/b/c` lists only the leaf, not the topmost directory it creates",
+    ),
+    "nonliteral-code-opaque": Mutant(
+        SEGMENT_RESOLVER,
+        '                        if code is None or code.nonlit:\n',
+        '                        if code is None:\n',
+        "`python3 -c \"$CODE\"` is labelled opaque, so a later reader goes looking for the code in the wrong text",
+    ),
+    "script-operand-nonliteral": Mutant(
+        SEGMENT_RESOLVER,
+        '    if toks[1 + i].nonlit:\n',
+        '    if False:\n',
+        "an interpreter whose script operand is a variable is labelled a script-file",
+    ),
+    "combined-eval-flag-missed": Mutant(
+        SEGMENT_RESOLVER,
+        '    return any(ch in _EVAL_LETTERS.get(prog, "") for ch in flag[1:])\n',
+        '    return len(flag) == 2 and flag[1] in _EVAL_LETTERS.get(prog, "")\n',
+        "`perl -ne` and `node -pe` are not seen as inline code, only the bare `-e`",
+    ),
+    "stdin-body-without-body": Mutant(
+        SEGMENT_RESOLVER,
+        '    if not has_body:\n',
+        '    if False:\n',
+        "`echo x | python3` and `python3 < s.py` are labelled stdin-body although the code is not in the segment",
+    ),
+    "cdpath-search-ignored": Mutant(
+        SEGMENT_RESOLVER,
+        '    if os.environ.get("CDPATH") and not _CDPATH_SAFE_RE.match(operands[0].text):\n',
+        '    if False:\n',
+        "`cd sub` is read as the working-directory entry although CDPATH may land it elsewhere",
+    ),
+    "refusal-class-swapped": Mutant(
+        SEGMENT_RESOLVER,
+        '_NONLITERAL = "residual-syntax"\n',
+        '_NONLITERAL = "contract-unresolved"\n',
+        "a non-literal operand is reported under the class of an unreviewed form",
     ),
 }
 

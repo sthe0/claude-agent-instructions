@@ -96,7 +96,6 @@ class _RawSegment:
 
 
 _PIPE_OPS = frozenset({"|", "|&"})
-_ASYNC_OPS = frozenset({"&", "|", "|&"})
 _CONTINUATION_OPS = frozenset({"&&", "||", "|", "|&"})
 _WRITE_REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>"})
 _HEREDOC_OPS = frozenset({"<<", "<<-"})
@@ -575,6 +574,10 @@ class GitForm:
 #: the only flags each accepts. Anything else -- stash in any form, rebase, pull, am, cherry-pick,
 #: reset to a commit-ish, checkout/switch -b/-B/-c/-C/--orphan/--detach/--force, commit --amend --
 #: is unresolved. Widening an entry widens what the hook may auto-allow: it needs a reviewed reason.
+#: `FileResource(worktree root, write)` stands for the worktree plus its own per-worktree admin dir
+#: (index, HEAD, ORIG_HEAD, reflog; for a linked worktree `<common>/worktrees/<name>/`), so
+#: `checkout -- .` and `restore .`, which discard uncommitted work, are covered by a plain write grant
+#: on the venue. Refs and config in the shared common dir are never covered by it.
 GIT_WRITE_FORMS: dict[str, GitForm] = {
     "add": GitForm(frozenset({"-A", "--all", "-u", "--update", "-v", "--verbose", "-n", "--dry-run"})),
     "commit": GitForm(
@@ -601,8 +604,14 @@ def _git_literal(tok: _Tok) -> bool:
     return not (tok.nonlit or tool_contracts.is_non_literal(tok.text))
 
 
-def _parse_git_args(rest_toks: list[_Tok], form: GitForm) -> tuple[list[str], list[str], bool, str | None]:
-    """`(positionals before --, positionals after --, saw --, refusal reason)`. A value taken by a
+_NONLITERAL = "residual-syntax"
+_OUTSIDE_LIST = "contract-unresolved"
+#: `(reason_class, message)`: why a git form is not on the allow-list
+_Refusal = tuple[str, str]
+
+
+def _parse_git_args(rest_toks: list[_Tok], form: GitForm) -> tuple[list[str], list[str], bool, _Refusal | None]:
+    """`(positionals before --, positionals after --, saw --, refusal)`. A value taken by a
     value-flag (a commit message, a message file) is exempt from the literal check unless it holds an
     expansion or glob outside double quotes, which could word-split into extra arguments."""
     before: list[str] = []
@@ -615,7 +624,7 @@ def _parse_git_args(rest_toks: list[_Tok], form: GitForm) -> tuple[list[str], li
         text = tok.text
         if seen_dd:
             if not _git_literal(tok):
-                return [], [], False, f"path {text!r} is non-literal"
+                return [], [], False, (_NONLITERAL, f"path {text!r} is non-literal")
             after.append(text)
             i += 1
             continue
@@ -628,13 +637,13 @@ def _parse_git_args(rest_toks: list[_Tok], form: GitForm) -> tuple[list[str], li
             if key in form.value_flags:
                 value_tok = tok if eq else (rest_toks[i + 1] if i + 1 < n else None)
                 if value_tok is None or value_tok.bare_nonlit:
-                    return [], [], False, f"value of {key} is missing or holds an unquoted expansion"
+                    return [], [], False, (_NONLITERAL, f"value of {key} is missing or holds an unquoted expansion")
                 i += 1 if eq else 2
                 continue
             if key in form.flags and not eq and _git_literal(tok):
                 i += 1
                 continue
-            return [], [], False, f"flag {text!r} is outside the allow-listed shape"
+            return [], [], False, (_OUTSIDE_LIST, f"flag {text!r} is outside the allow-listed shape")
         if text.startswith("-") and len(text) > 1:
             letters = text[1:]
             consumed_next = False
@@ -643,48 +652,80 @@ def _parse_git_args(rest_toks: list[_Tok], form: GitForm) -> tuple[list[str], li
                 if flag in form.value_flags:
                     if pos + 1 < len(letters):
                         if tok.bare_nonlit:
-                            return [], [], False, f"value glued to {flag} holds an unquoted expansion"
+                            return [], [], False, (_NONLITERAL, f"value glued to {flag} holds an unquoted expansion")
                     else:
                         value_tok = rest_toks[i + 1] if i + 1 < n else None
                         if value_tok is None or value_tok.bare_nonlit:
-                            return [], [], False, f"value of {flag} is missing or holds an unquoted expansion"
+                            return [], [], False, (_NONLITERAL, f"value of {flag} is missing or holds an unquoted expansion")
                         consumed_next = True
                     break
                 if flag not in form.flags:
-                    return [], [], False, f"flag {text!r} is outside the allow-listed shape"
+                    return [], [], False, (_OUTSIDE_LIST, f"flag {text!r} is outside the allow-listed shape")
             i += 2 if consumed_next else 1
             continue
         if not _git_literal(tok):
-            return [], [], False, f"argument {text!r} is non-literal"
+            return [], [], False, (_NONLITERAL, f"argument {text!r} is non-literal")
         before.append(text)
         i += 1
     return before, after, seen_dd, None
 
 
-def _git_write_shape(sub: str, form: GitForm, before: list[str], after: list[str], seen_dd: bool) -> str | None:
-    """A refusal reason, or `None` when the positionals have the shape this subcommand's allow-list names."""
+def _git_write_shape(sub: str, form: GitForm, before: list[str], after: list[str], seen_dd: bool) -> _Refusal | None:
+    """A refusal, or `None` when the positionals have the shape this subcommand's allow-list names."""
     if len(before) + len(after) < form.min_positionals:
-        return f"git {sub} needs at least {form.min_positionals} operand(s)"
+        return _OUTSIDE_LIST, f"git {sub} needs at least {form.min_positionals} operand(s)"
     if sub == "reset":
         head_only = before in ([], ["HEAD"])
         if not (head_only if seen_dd else (head_only or before[0] == "HEAD")):
-            return "git reset to a commit-ish moves the branch ref; only the path form is resolved"
+            return _OUTSIDE_LIST, "git reset to a commit-ish moves the branch ref; only the path form is resolved"
     elif sub == "checkout":
         if seen_dd:
             if not after or len(before) > 1:
-                return "git checkout -- needs paths and at most one source"
+                return _OUTSIDE_LIST, "git checkout -- needs paths and at most one source"
         elif len(before) != 1:
-            return "git checkout is resolved only as `checkout <branch>` or `checkout [<ref>] -- <paths>`"
+            return _OUTSIDE_LIST, "git checkout is resolved only as `checkout <branch>` or `checkout [<ref>] -- <paths>`"
     elif sub == "switch" and len(before) != 1:
-        return "git switch is resolved only as `switch <branch>`"
+        return _OUTSIDE_LIST, "git switch is resolved only as `switch <branch>`"
     return None
 
 
-def _normalised_push(res: tool_contracts.Resolution, root: str) -> _Verdict:
+def _local_branch_exists(root: str, name: str) -> bool:
+    """Whether `refs/heads/<name>` exists, loose or packed. `git checkout/switch <name>` with no such
+    branch but a same-named remote-tracking one silently creates the branch and writes `branch.<name>.*`
+    into the shared config, so only an existing local branch is a plain HEAD move."""
+    common = _common_dir(root)
+    parts = name.split("/")
+    if common is None or any(p in ("", ".", "..") for p in parts) or name.startswith("-"):
+        return False
+    if os.path.isfile(os.path.join(common, "refs", "heads", *parts)):
+        return True
+    try:
+        with open(os.path.join(common, "packed-refs"), encoding="utf-8") as fh:
+            return any(line.rstrip("\n").endswith(f" refs/heads/{name}") for line in fh)
+    except OSError:
+        return False
+
+
+def _push_destination_is_head(rest: list[str]) -> bool:
+    for text in rest:
+        if text.startswith("-") or ":" not in text:
+            continue
+        if text.split(":", 1)[1] in ("HEAD", "refs/heads/HEAD"):
+            return True
+    return False
+
+
+def _normalised_push(res: tool_contracts.Resolution, root: str, rest: list[str]) -> _Verdict:
+    """`HEAD` names the current branch only as the SOURCE of a colon-less refspec; as a destination
+    (`feature:HEAD`) git creates a remote ref literally called HEAD."""
     out: list = []
     branch_dependent = False
+    if _push_destination_is_head(rest):
+        return _unres("contract-unresolved", "a push destination of HEAD creates a remote ref named HEAD")
     for r in res.resources:
         ref = r.ref[len("refs/heads/") :] if r.ref.startswith("refs/heads/") else r.ref
+        if ref == "HEAD" and r.ref != "HEAD":
+            return _unres("contract-unresolved", "a push to refs/heads/HEAD creates a remote ref named HEAD")
         if ref == "HEAD":
             branch = _head_branch(root)
             if branch is None:
@@ -723,7 +764,7 @@ def _git(toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
     if form is None:
         if sub == "push":
             res = tool_contracts.resolve_git(["push", *rest], repo_dir)
-            return _normalised_push(res, root) if res.status == "resolved" else _from_resolution(res)
+            return _normalised_push(res, root, rest) if res.status == "resolved" else _from_resolution(res)
         if sub == "log":
             rest = [t for t in rest if not _COUNT_FLAG_RE.match(t)]
         return _from_resolution(tool_contracts.resolve_git([sub, *rest], repo_dir))
@@ -732,7 +773,9 @@ def _git(toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
     if bad is None:
         bad = _git_write_shape(sub, form, before, after, seen_dd)
     if bad is not None:
-        return _unres("residual-syntax" if "non-literal" in bad or "expansion" in bad else "contract-unresolved", f"git {sub}: {bad}")
+        return _unres(bad[0], f"git {sub}: {bad[1]}")
+    if sub in ("checkout", "switch") and not seen_dd and not _local_branch_exists(root, before[0]):
+        return _unres("contract-unresolved", f"git {sub} {before[0]!r}: no such local branch (a remote-tracking match would create one)")
     out: list = [_file_write(root)]
     if sub in _GIT_BRANCH_DEPENDENT:
         branch = _head_branch(root)
@@ -746,12 +789,17 @@ def _git(toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
 
 
 def _logical_cd_target(path: str) -> str | None:
-    """The cwd after `cd <path>` (path already absolute), or `None` when bash's logical `..` handling
-    could land somewhere other than the physical resolution."""
+    """The cwd after `cd <path>` (path already absolute), or `None` unless the physical and the logical
+    path agree. The tracked cwd must equal its own realpath: bash keeps the logical path, so after
+    `cd link` a later `..` leaves the link's parent, not the target's."""
     real = os.path.realpath(path)
-    if ".." not in path.split(os.sep):
-        return real
-    return real if os.path.realpath(os.path.normpath(path)) == real else None
+    if real != os.path.normpath(path):
+        return None
+    return real
+
+
+#: With CDPATH set, `cd sub` may land in `$CDPATH/sub`; only these operand shapes skip the search.
+_CDPATH_SAFE_RE = re.compile(r"^(/|\./|\.\./|\.$|\.\.$)")
 
 
 def _cd(toks: list[_Tok], cwd: str | None) -> _Verdict:
@@ -764,6 +812,8 @@ def _cd(toks: list[_Tok], cwd: str | None) -> _Verdict:
         if tok.text != "--":
             operands.append(tok)
     if len(operands) != 1 or operands[0].text == "-":
+        return verdict
+    if os.environ.get("CDPATH") and not _CDPATH_SAFE_RE.match(operands[0].text):
         return verdict
     path, bad = _resolve_path(operands[0], cwd)
     if bad is None and path is not None:
@@ -803,13 +853,32 @@ def _writer(prog: str, toks: list[_Tok], cwd: str | None) -> _Verdict:
         return bad
     if prog == "cp":
         paths = paths[-1:] if operands else []
+    if prog == "mkdir" and any(t.text in ("-p", "--parents") for t in toks[1:]):
+        tops = [_topmost_new_dir(p) for p in paths]
+        if None in tops:
+            return _unres("contract-unresolved", "mkdir -p through a `..` component: the ancestors it creates are not read")
+        paths = tops
     return _ok([_file_write(p) for p in paths])
+
+
+def _topmost_new_dir(path: str) -> str | None:
+    """`mkdir -p` creates every missing ancestor, so the outermost write is the topmost one that does not exist yet."""
+    if ".." in path.split(os.sep):
+        return None
+    top = os.path.normpath(path)
+    while True:
+        parent = os.path.dirname(top)
+        if parent == top or os.path.lexists(parent):
+            return top
+        top = parent
 
 
 _AWK_UNSAFE_RE = re.compile(r"[>|]|\b(?:system|getline)\b")
 
 
 def _awk(toks: list[_Tok]) -> _Verdict:
+    if any(t.nonlit for t in toks[1:]):
+        return _unres("residual-syntax", "an awk operand holds an expansion: the program that runs is not the text read here")
     operands = [t.text for t in toks[1:]]
     i = 0
     while i < len(operands) and operands[i].startswith("-") and operands[i] != "-":
@@ -831,11 +900,26 @@ def _awk(toks: list[_Tok]) -> _Verdict:
 
 
 _SHELL_INTERPRETERS = frozenset({"bash", "sh", "zsh", "dash"})
-_EVAL_FLAGS = {"node": frozenset({"-e", "-p", "--eval", "--print"}), "ruby": frozenset({"-e"}), "perl": frozenset({"-e", "-E"})}
+#: single-dash letters (anywhere in a combined group) that make the interpreter run inline code or preload a module
+_EVAL_LETTERS = {"node": "epr", "ruby": "e", "perl": "eE"}
+_EVAL_LONG_FLAGS = {"node": frozenset({"--eval", "--print", "--require", "--import", "--loader", "--experimental-loader"})}
 _PYTHON_VALUE_LETTERS = "WX"
 _PYTHON_VALUE_FLAGS = frozenset({"--check-hash-based-pycs"})
 _SHELL_VALUE_FLAGS = frozenset({"-o", "-O", "--rcfile", "--init-file"})
 _SHELL_C_FLAG_RE = re.compile(r"-[A-Za-z]*c[A-Za-z]*")
+_SHELL_S_FLAG_RE = re.compile(r"-[A-Za-z]*s[A-Za-z]*")
+
+
+def _runs_inline_code(prog: str, flag: str) -> bool:
+    if flag.startswith("--"):
+        return flag.partition("=")[0] in _EVAL_LONG_FLAGS.get(prog, ())
+    return any(ch in _EVAL_LETTERS.get(prog, "") for ch in flag[1:])
+
+
+def _stdin_body(has_body: bool) -> _Verdict:
+    if not has_body:
+        return _unres("contract-unresolved", "the interpreter reads its code from stdin, but no heredoc or here-string of this segment carries it")
+    return _opaque("stdin-body")
 
 
 def _delegate(toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
@@ -845,7 +929,8 @@ def _delegate(toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
     return _from_resolution(tool_contracts.resolve_command(text, cwd, contract_table=ctx.table))
 
 
-def _interpreter(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
+def _interpreter(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context", has_body: bool) -> _Verdict:
+    """`has_body`: this segment carries a heredoc or here-string, the only stdin code a later reader can see."""
     if cwd is None:
         return _unres("contract-unresolved", _CWD_UNCERTAIN)
     operands = [t.text for t in toks[1:]]
@@ -863,6 +948,9 @@ def _interpreter(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context") 
                 letters = flag[1:]
                 for pos, ch in enumerate(letters):
                     if ch == "c":
+                        code = toks[1 + i] if pos + 1 < len(letters) else (toks[2 + i] if 2 + i < len(toks) else None)
+                        if code is None or code.nonlit:
+                            return _unres("residual-syntax", "the python -c code is missing or holds an expansion: the code that runs is not the text read here")
                         return _opaque("python-c")
                     if ch == "m":
                         return _delegate(toks, cwd, ctx)
@@ -874,11 +962,15 @@ def _interpreter(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context") 
                 i += 1
             elif _SHELL_C_FLAG_RE.fullmatch(flag):
                 return _unres("adhoc-undeclared", f"{prog} -c runs inline code, never resolved by this table")
-        elif flag in _EVAL_FLAGS.get(prog, ()):
+            elif _SHELL_S_FLAG_RE.fullmatch(flag):
+                return _stdin_body(has_body)
+        elif _runs_inline_code(prog, flag):
             return _unres("adhoc-undeclared", f"{prog} {flag} runs inline code, never resolved by this table")
         i += 1
     if i >= len(operands) or operands[i] == "-":
-        return _opaque("stdin-body")
+        return _stdin_body(has_body)
+    if toks[1 + i].nonlit:
+        return _unres("residual-syntax", "the script operand holds an expansion: the file that runs is not the text read here")
     if is_python:
         delegated = _delegate(toks, cwd, ctx)
         if delegated.status == "resolved":
@@ -886,7 +978,7 @@ def _interpreter(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context") 
     return _opaque("script-file")
 
 
-def _program(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
+def _program(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context", has_body: bool) -> _Verdict:
     if prog == "cd":
         return _cd(toks, cwd)
     if prog == "git":
@@ -896,7 +988,7 @@ def _program(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _
     if prog == "awk":
         return _awk(toks)
     if prog in tool_contracts.SCRIPT_INTERPRETERS or widening_targets.INTERPRETER_RE.match(prog):
-        return _interpreter(prog, toks, cwd, ctx)
+        return _interpreter(prog, toks, cwd, ctx, has_body)
     entry = ctx.table.get(prog)
     if entry is None:
         return _unres("unknown-program", f"{prog!r} has no tool_contracts.toml entry")
@@ -920,6 +1012,16 @@ class _Context:
     venue_common: str | None = None
 
 
+def _carries_stdin_body(raw: _RawSegment) -> bool:
+    """A heredoc or a literal here-string feeds stdin from text inside this segment; a pipe or `< file` does not."""
+    for red in raw.redirects:
+        if red.fd not in (None, "0") or red.target is None:
+            continue
+        if red.op in _HEREDOC_OPS or (red.op == "<<<" and not red.target.nonlit):
+            return True
+    return False
+
+
 def _resolve_one(raw: _RawSegment, cwd: str | None, ctx: _Context) -> _Verdict:
     if raw.nested:
         verdict = _unres("residual-syntax", f"{raw.nested} hides nested work")
@@ -937,7 +1039,7 @@ def _resolve_one(raw: _RawSegment, cwd: str | None, ctx: _Context) -> _Verdict:
         elif prog in tool_contracts.FORBIDDEN_WRAPPER_TOKENS:
             verdict = _unres("contract-unresolved", f"wrapper token {prog!r} is never in the reviewed closed set")
         else:
-            verdict = _program(prog, raw.words, cwd, ctx)
+            verdict = _program(prog, raw.words, cwd, ctx, _carries_stdin_body(raw))
     if verdict.status == "unresolved":
         return verdict
     red_resources, bad = _redirect_resources(raw.redirects, cwd)
@@ -945,6 +1047,15 @@ def _resolve_one(raw: _RawSegment, cwd: str | None, ctx: _Context) -> _Verdict:
         return bad
     verdict.resources = list(dict.fromkeys([*verdict.resources, *red_resources]))
     return verdict
+
+
+def _list_is_backgrounded(raws: list[_RawSegment], k: int) -> bool:
+    """Segment `k` belongs to an and-or list (`&&`, `||`, `|`) that ends in `&`: bash runs the WHOLE
+    list in the background, so everything after it races with `k`, not just the next segment."""
+    j = k + 1
+    while j < len(raws) and raws[j].op_before in _CONTINUATION_OPS:
+        j += 1
+    return j < len(raws) and raws[j].op_before == "&"
 
 
 def _demote_branch_dependent(raws: list[_RawSegment], verdicts: list[_Verdict]) -> None:
@@ -955,7 +1066,7 @@ def _demote_branch_dependent(raws: list[_RawSegment], verdicts: list[_Verdict]) 
     for k, verdict in enumerate(verdicts):
         if not verdict.branch_dependent or verdict.status != "resolved":
             continue
-        concurrent_after = k + 1 < len(raws) and raws[k + 1].op_before in _ASYNC_OPS
+        concurrent_after = (k + 1 < len(raws) and raws[k + 1].op_before in _PIPE_OPS) or _list_is_backgrounded(raws, k)
         others = hazards[:k] + (hazards[k + 1 :] if concurrent_after else [])
         if any(others):
             verdicts[k] = _unres("contract-unresolved", "the current branch is uncertain here: another segment of the line may switch it")

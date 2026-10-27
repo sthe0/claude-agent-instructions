@@ -22,10 +22,13 @@ from agentctl import resources, segment_resolver, tool_contracts
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "resource_grant_replay" / "denials.jsonl"
 
-#: Fixture cases whose command targets a repository other than the venue's. Segment mode no longer
-#: resolves them (another repository has its own refs, hooks and config), so the hook falls through
-#: to the user prompt instead of denying; stage 8's replay must expect `fall-through` for these.
-_FALLS_THROUGH = {"uncovered-write-07"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import check_replay_fixture  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_cdpath(monkeypatch):
+    monkeypatch.delenv("CDPATH", raising=False)
 
 
 def _git(path, *args):
@@ -46,11 +49,15 @@ def build_world(tmp: Path) -> dict:
     tmp = tmp.resolve()
     venue = _init_repo(tmp / "venue", "feature")
     (venue / "sub" / "deep").mkdir(parents=True)
+    (venue / "scripts" / "tests" / "fixtures").mkdir(parents=True)
     (tmp / "elsewhere" / "x" / "y").mkdir(parents=True)
     (venue / "lnk").symlink_to(tmp / "elsewhere" / "x" / "y")
     _git(venue, "worktree", "add", "-q", "-b", "linked", str(tmp / "wt"))
     outside = tmp / "outside"
     other = _init_repo(outside / "canonical-checkout", "main")
+    _git(venue, "branch", "topic")
+    _git(venue, "remote", "add", "origin", str(other))
+    _git(venue, "update-ref", "refs/remotes/origin/remote-only", "HEAD")
     scratch = tmp / "scratch"
     scratch.mkdir()
     return {"venue": venue, "outside": outside, "other": other, "scratch": scratch, "wt": tmp / "wt", "tmp": tmp}
@@ -113,7 +120,7 @@ def _checkout_branch(world, case):
 def test_fixture_case_resolves_to_its_expected_effects(case, world):
     _checkout_branch(world, case)
     result = _seg(_subst(case["command"], world), world["venue"])
-    if case["id"] in _FALLS_THROUGH:
+    if case.get("resolver") == "fall-through":
         assert _statuses(result) == ["unresolved"]
         assert result.resources == []
         return
@@ -130,10 +137,13 @@ def test_fixture_opaque_case_is_opaque_with_its_kind(case, world):
     assert set(_statuses(result)) <= {"resolved", "opaque"}
 
 
-def test_every_fixture_bash_case_is_replayed_by_exactly_one_test():
-    replayed = {c["id"] for c in _DECIDABLE} | {c["id"] for c in _OPAQUE}
-    assert replayed == {c["id"] for c in _cases() if c["tool"] == "Bash"}
-    assert _FALLS_THROUGH <= {c["id"] for c in _DECIDABLE}
+def test_fixture_passes_its_own_checker():
+    readme = FIXTURE.with_name("README.md")
+    check_replay_fixture.check(FIXTURE.read_text().splitlines(keepends=True), readme.read_text(), str(readme))
+
+
+def test_the_only_fall_through_case_is_the_foreign_repository_commit():
+    assert [c["id"] for c in _DECIDABLE if c.get("resolver") == "fall-through"] == ["uncovered-write-07"]
 
 
 # --- probe lines: one pinned decision each -----------------------------------------------------
@@ -253,6 +263,64 @@ PROBES = [
     ("S11-push-src-colon-full-ref", "git push origin feature:refs/heads/main", [R(P("origin", "main"))]),
     ("S11-push-force", "git push --force origin feature", [U]),
     ("S11-push-delete", "git push origin :feature", [U]),
+    # round 2 / N1 a bare checkout/switch of a name with only a remote-tracking match creates the branch
+    ("R2-N1-checkout-remote-only", "git checkout remote-only", [U]),
+    ("R2-N1-switch-remote-only", "git switch remote-only", [U]),
+    ("R2-N1-checkout-no-such-branch", "git checkout nosuchbranch", [U]),
+    ("R2-N1-switch-no-such-branch", "git switch nosuchbranch", [U]),
+    ("R2-N1-checkout-existing-branch", "git checkout topic", [R(W(V))]),
+    ("R2-N1-switch-existing-branch", "git switch topic", [R(W(V))]),
+    ("R2-N1-checkout-ref-then-paths", "git checkout remote-only -- a", [R(W(V))]),
+    ("R2-N1-checkout-traversal-name", "git checkout ../topic", [U]),
+    # round 2 / N2 an and-or list that ends in & is backgrounded as a whole
+    ("R2-N2-commit-and-ls-bg-checkout", "git commit -q -m x && ls & git checkout topic", [U, R(), R(W(V))]),
+    ("R2-N2-push-head-and-ls-bg-checkout", "git push origin HEAD && ls & git checkout topic", [U, R(), R(W(V))]),
+    ("R2-N2-commit-bg-then-semicolon-checkout", "git commit -q -m x && ls & ls; git checkout topic", [U, R(), R(), R(W(V))]),
+    ("R2-N2-commit-or-bg-checkout", "git commit -q -m x || ls & git checkout topic", [U, R(), R(W(V))]),
+    ("R2-N2-sequential-commit-then-checkout", "git commit -q -m x && ls; git checkout topic", [R(W(V), C()), R(), R(W(V))]),
+    # round 2 / N3 a symlinked cd target never becomes the tracked cwd: a later `..` is logical in bash
+    ("R2-N3-symlink-then-dotdot", "cd lnk && cd .. && touch f", [R(), R(), U]),
+    ("R2-N3-symlink-then-two-dotdot", "cd lnk && cd ../.. && touch f", [R(), R(), U]),
+    ("R2-N3-symlink-then-relative", "cd lnk && touch f", [R(), U]),
+    # round 2 / N4 an awk program that is not literal text
+    ("R2-N4-awk-set-positional", "set -- 'BEGIN{system(\"touch /x\")}'; awk \"$1\"", [R(), U]),
+    ("R2-N4-awk-bare-var", "awk $P f", [U]),
+    ("R2-N4-awk-quoted-var", 'awk "$P" f', [U]),
+    ("R2-N4-awk-var-flag-value", "awk -v $V '{print}' f", [U]),
+    ("R2-N4-awk-single-quoted-dollar", "awk '{print $1}' f", [R()]),
+    # round 2 / N5 HEAD as a push destination creates a remote ref literally called HEAD
+    ("R2-N5-push-head-destination", "git push origin feature:HEAD", [U]),
+    ("R2-N5-push-full-ref-head-destination", "git push origin feature:refs/heads/HEAD", [U]),
+    ("R2-N5-push-refs-heads-HEAD-source", "git push origin refs/heads/HEAD", [U]),
+    ("R2-N5-push-head-source-kept", "git push origin HEAD:topic", [R(P("origin", "topic"))]),
+    # round 2 / N6 mkdir -p creates the missing ancestors
+    ("R2-N6-mkdir-p-topmost-new", "mkdir -p {SCRATCH}/new/a/b", [R(W("{SCRATCH}/new"))]),
+    ("R2-N6-mkdir-p-existing-parent", "mkdir -p sub/new", [R(W(V + "/sub/new"))]),
+    ("R2-N6-mkdir-p-existing-leaf", "mkdir -p sub/deep", [R(W(V + "/sub/deep"))]),
+    ("R2-N6-mkdir-p-dotdot", "mkdir -p a/../b/c", [U]),
+    ("R2-N6-mkdir-without-p", "mkdir a", [R(W(V + "/a"))]),
+    # round 2 / S-a code or script operand that is not literal text is not opaque
+    ("R2-Sa-python-c-var", 'python3 -c "$CODE"', [U]),
+    ("R2-Sa-python-c-positional", "set -- 'x'; python3 -c \"$1\"", [R(), U]),
+    ("R2-Sa-python-script-var", "python3 $S", [U]),
+    ("R2-Sa-bash-script-var", "bash $S", [U]),
+    ("R2-Sa-python-c-literal", 'python3 -c "print(1)"', [O("python-c")]),
+    # round 2 / S-b combined and long-form flags
+    ("R2-Sb-perl-ne", "perl -ne 'print' f", [U]),
+    ("R2-Sb-ruby-ne", "ruby -ne 'x' f", [U]),
+    ("R2-Sb-node-eval-eq", "node --eval=x", [U]),
+    ("R2-Sb-node-print-eq", "node --print=x", [U]),
+    ("R2-Sb-node-require", "node -r x run.js", [U]),
+    ("R2-Sb-node-script", "node run.js", [O("script-file")]),
+    ("R2-Sb-perl-script", "perl run.pl", [O("script-file")]),
+    ("R2-Sb-bash-s-with-body", "bash -s arg <<'E'\nls\nE", [O("stdin-body")]),
+    ("R2-Sb-bash-s-no-body", "bash -s arg", [U]),
+    # round 2 / S-c stdin code must be inside the segment to be read
+    ("R2-Sc-pipe-into-python", "echo x | python3", [R(), U]),
+    ("R2-Sc-pipe-into-python-dash", "echo x | python3 -", [R(), U]),
+    ("R2-Sc-file-into-python", "python3 < s.py", [U]),
+    ("R2-Sc-here-string", "python3 - <<< 'print(1)'", [O("stdin-body")]),
+    ("R2-Sc-here-string-var", 'python3 - <<< "$X"', [U]),
     # nits
     ("N-commit-unquoted-message-var", "git commit -m $MSG", [U]),
     ("N-commit-quoted-message-var", 'git commit -q -m "fix $THING"', [R(W(V), C())]),
@@ -261,7 +329,7 @@ PROBES = [
     ("N-merge-branch", "git merge topic", [R(W(V), C())]),
     ("N-git-dir-without-work-tree", "git --git-dir={VENUE}/.git add -A", [U]),
     ("N-git-dir-and-work-tree", "git --git-dir={VENUE}/.git --work-tree={VENUE} add -A", [U]),
-    ("N-mkdir-p-nested", "mkdir -p a/b", [R(W(V + "/a/b"))]),
+    ("N-mkdir-p-nested", "mkdir -p a/b", [R(W(V + "/a"))]),
     ("N-commit-plain", "git commit -q -m x", [R(W(V), C())]),
     ("N-commit-combined-flags", "git commit -am x", [R(W(V), C())]),
     ("N-add-all", "git add -A", [R(W(V))]),
@@ -400,6 +468,30 @@ class TestGitAllowList:
     def test_non_literal_operands_are_unresolved(self, sub, world):
         assert _statuses(_seg(f"git {sub}", world["venue"])) == ["unresolved"], sub
 
+    def test_a_branch_that_exists_only_in_packed_refs_counts_as_local(self, world):
+        venue = world["venue"]
+        _git(venue, "branch", "packed-only")
+        _git(venue, "pack-refs", "--all")
+        try:
+            assert not (venue / ".git" / "refs" / "heads" / "packed-only").exists()
+            assert _seg("git checkout packed-only", venue).resources == [_file(venue)]
+        finally:
+            _git(venue, "branch", "-q", "-D", "packed-only")
+
+    @pytest.mark.parametrize(
+        "text, cls",
+        [
+            ("git checkout nosuchbranch", "contract-unresolved"),
+            ("git push origin feature:HEAD", "contract-unresolved"),
+            ("git reset --hard", "contract-unresolved"),
+            ("git add $F", "residual-syntax"),
+            ("git clean -fd", "contract-unresolved"),
+        ],
+    )
+    def test_git_refusals_carry_the_class_chosen_for_them(self, text, cls, world):
+        seg = _seg(text, world["venue"]).segments[0]
+        assert (seg.status, seg.reason_class) == ("unresolved", cls), text
+
     def test_read_only_git_has_no_effect(self, world):
         for text in ["git status --porcelain", "git log --oneline -5", "git diff a.py", "git rev-parse --short HEAD"]:
             result = _seg(text, world["venue"])
@@ -504,6 +596,24 @@ class TestCd:
         assert _seg("frobnicate; touch f", world["venue"]).segments[-1].status == "unresolved"
         assert _seg("frobnicate; touch /abs", world["venue"]).segments[-1].status == "resolved"
 
+    @pytest.mark.parametrize("operand", ["sub", "sub/deep", "lnk"])
+    def test_cdpath_makes_a_bare_operand_unresolvable(self, operand, world, monkeypatch):
+        monkeypatch.setenv("CDPATH", "/somewhere")
+        assert _seg(f"cd {operand} && touch f", world["venue"]).segments[-1].status == "unresolved", operand
+
+    @pytest.mark.parametrize("operand", ["./sub", "../venue/sub", ".", ".."])
+    def test_cdpath_does_not_apply_to_explicitly_relative_operands(self, operand, world, monkeypatch):
+        monkeypatch.setenv("CDPATH", "/somewhere")
+        assert _seg(f"cd {operand} && touch f", world["venue"]).segments[-1].status == "resolved", operand
+
+    def test_cdpath_does_not_apply_to_an_absolute_operand(self, world, monkeypatch):
+        monkeypatch.setenv("CDPATH", "/somewhere")
+        assert _seg(f"cd {world['venue']}/sub && touch f", world["venue"]).segments[-1].resources == [_file(world["venue"] / "sub" / "f")]
+
+    def test_an_empty_cdpath_is_no_cdpath(self, world, monkeypatch):
+        monkeypatch.setenv("CDPATH", "")
+        assert _seg("cd sub && touch f", world["venue"]).segments[-1].resources == [_file(world["venue"] / "sub" / "f")]
+
 
 class TestRedirects:
     def test_redirect_target_is_a_write(self, world):
@@ -549,7 +659,7 @@ class TestRedirects:
 
 class TestOtherPrograms:
     def test_mkdir_and_touch_write_each_operand(self, world):
-        assert _seg("mkdir -p a/b c", world["venue"]).resources == [_file(world["venue"] / "a/b"), _file(world["venue"] / "c")]
+        assert _seg("mkdir -p a/b c", world["venue"]).resources == [_file(world["venue"] / "a"), _file(world["venue"] / "c")]
         assert _seg("touch x y", world["venue"]).resources == [_file(world["venue"] / "x"), _file(world["venue"] / "y")]
 
     def test_mv_writes_all_operands_and_cp_only_the_destination(self, world):
@@ -576,7 +686,7 @@ class TestOtherPrograms:
             ("python3 - <<'EOF'\nprint(1)\nEOF", "stdin-body"),
             ("python3 <<'EOF'\nprint(1)\nEOF", "stdin-body"),
             ("bash <<'EOF'\nls\nEOF", "stdin-body"),
-            ("sh -", "stdin-body"),
+            ("sh -s <<'EOF'\nls\nEOF", "stdin-body"),
             ("python3 some_script.py", "script-file"),
             ("bash run.sh", "script-file"),
         ],
@@ -600,6 +710,20 @@ class TestOtherPrograms:
     def test_none_effect_program_with_unreviewed_flag_is_unresolved(self, world):
         table = tool_contracts.load_contract_table()
         assert _seg("rg --pre sh pattern", world["venue"], contract_table=table).segments[0].status == "unresolved"
+
+
+class TestNonLiteralCode:
+    @pytest.mark.parametrize(
+        "text",
+        ["awk \"$P\" f", 'python3 -c "$CODE"', "python3 $S", "bash $S", "node --eval=x", "perl -ne 'print' f", "echo x | python3"],
+    )
+    def test_code_the_resolver_cannot_read_is_unresolved_not_opaque(self, text, world):
+        seg = _seg(text, world["venue"]).segments[-1]
+        assert seg.status == "unresolved" and seg.opaque_kind is None, text
+
+    @pytest.mark.parametrize("text", ["awk \"$P\" f", 'python3 -c "$CODE"', "python3 $S"])
+    def test_nonliteral_operands_are_classed_as_residual_syntax(self, text, world):
+        assert _seg(text, world["venue"]).segments[0].reason_class == "residual-syntax", text
 
 
 class TestResolveCommandIsUnchanged:
