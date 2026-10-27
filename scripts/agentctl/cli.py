@@ -9847,6 +9847,14 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     stage = state.active_stage()
     if stage is None:
         return Directive(False, state.node, "next_stage", "no active stage to record")
+    # A replan re-arms the stage as PENDING at VERIFYING; recording then would log an
+    # attempt and only fail at the EXECUTING -> VERIFYING transition, with no way out named.
+    if state.node != Node.EXECUTING.value or stage.outcome.status != StageStatus.ACTIVE.value:
+        return Directive(
+            False, state.node, "next_stage",
+            f"stage {stage.index} is {stage.outcome.status} at node={state.node}; "
+            "run `agentctl next-stage` first, then record-result",
+        )
     # Before any mutation: a refused PASS leaves the state file exactly as it was, so
     # the obligation is read from the files' bytes on the retry as on this call.
     if args.status == "passed":
