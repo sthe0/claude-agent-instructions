@@ -24,7 +24,8 @@ inside the enumerator, which is the exact defect being audited (CLAUDE.md
 preamble, "Separate rule from perception; determinize the rule at its proper
 structural level").
 
-Domain A — CODE SITES (enumerate_code_sites): AST-walk scripts/**/*.py. A "scope"
+Domain A — CODE SITES (enumerate_code_sites): AST-walk scripts/**/*.py except
+scripts/tests/ (test code guards no production behaviour). A "scope"
 is a module or a function/method body, EXCLUDING nested function bodies (each
 nested def is its own scope). A scope becomes a candidate site iff it locally
 constructs a regex (`re.compile`/`search`/`match`/`fullmatch`/`findall`/
@@ -136,6 +137,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
+# Test code exercises the gates under synthetic inputs and guards no production
+# behaviour, so it is outside the enumeration domain (the same exclusion
+# verify-canon-writers.py makes). Enumerating it only turned every test whose
+# name carries a hard-behaviour token (`..._spawn_...`, `..._select_...`) into
+# a registry entry whose verdict was fixed by path, not by judgment.
+TESTS_DIR = SCRIPTS_DIR / "tests"
 
 
 def _clean_git_env() -> dict[str, str]:
@@ -189,11 +196,14 @@ def _list_py_files(root: Path) -> list[Path]:
     """The *.py files under `root`, restricted to the git-tracked set when
     `root` is inside a git checkout so an untracked working-tree file (e.g.
     another session's WIP) never enters the enumeration domain; falls back
-    to a recursive walk when git is unavailable."""
+    to a recursive walk when git is unavailable. This repo's own test tree
+    (TESTS_DIR) is never part of the domain."""
     tracked = _tracked_files(root)
     if tracked is None:
-        return sorted(root.rglob("*.py"))
-    return sorted(p for p in tracked if p.suffix == ".py" and p.is_relative_to(root))
+        files = root.rglob("*.py")
+    else:
+        files = (p for p in tracked if p.suffix == ".py" and p.is_relative_to(root))
+    return sorted(p for p in files if not p.is_relative_to(TESTS_DIR))
 
 
 # --- Domain A: code sites ---------------------------------------------------
@@ -689,7 +699,7 @@ def discover_prose_paths(repo_root: Path) -> list[Path]:
 
 def find_untracked_relevant_files(repo_root: Path) -> list[Path]:
     """Untracked (unstaged, not committed) files under `repo_root` that fall
-    within the enumeration domains: scripts/*.py, CLAUDE.md,
+    within the enumeration domains: scripts/**/*.py except scripts/tests/, CLAUDE.md,
     skills/**/SKILL.md, skills/**/policy.md, memory-global/leaves/**/*.md.
 
     Used by gen_crutch_registry.py to detect the ordering trap: an author
@@ -711,6 +721,7 @@ def find_untracked_relevant_files(repo_root: Path) -> list[Path]:
         return []
 
     scripts_dir = repo_root / "scripts"
+    tests_dir = scripts_dir / "tests"
     skills_dir = repo_root / "skills"
     leaves_dir = repo_root / "memory-global" / "leaves"
     claude_md = repo_root / "CLAUDE.md"
@@ -722,7 +733,7 @@ def find_untracked_relevant_files(repo_root: Path) -> list[Path]:
         p = repo_root / entry
         if p == claude_md:
             result.append(p)
-        elif p.is_relative_to(scripts_dir) and p.suffix == ".py":
+        elif p.is_relative_to(scripts_dir) and p.suffix == ".py" and not p.is_relative_to(tests_dir):
             result.append(p)
         elif p.is_relative_to(skills_dir) and p.name in ("SKILL.md", "policy.md"):
             result.append(p)
