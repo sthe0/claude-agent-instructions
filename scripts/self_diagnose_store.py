@@ -170,8 +170,8 @@ REMEDIATION = {
     "backlog-item": "see the item's recommended_next_step (self-improvement | planner | file-difficulty) in the improvement-scan report",
     "telemetry-pattern": "see the pattern's recommended_next_step (self-improvement | planner | file-difficulty) in the improvement-scan report",
     "external-idea": "read the idea in the improvement-scan report; act on it only through an issue or commit that cites its store key",
-    "crutch-defer-overdue": "re-run scripts/gen_crutch_registry.py and re-disposition the entry (keep it deferred with an updated ground, or remediate it)",
-    "crutch-registry-drift": "run scripts/verify-semantic-gates.py to see the newly-unregistered sites, then re-run scripts/gen_crutch_registry.py to classify and register them",
+    "crutch-defer-overdue": "review the entry in scripts/gen_crutch_registry.py's CLAUDE_MD_OVERRIDES (keep it deferred with an updated ground and deferred_since, or remediate it)",
+    "crutch-registry-drift": "run scripts/verify-semantic-gates.py to see the semantic-unguarded hard sinks, then guard each with a judge_* call or, for a false pairing, add it to scripts/lib/unguarded_sink_allowlist.py",
     "writer-gate-unresolved": "read the sink's `shape` breakdown: a route the seam does not declare goes into ~/.claude-agent/publication-tools.local; a declared route whose body shape lib/published_body.py cannot read needs a new shape resolver there",
 }
 

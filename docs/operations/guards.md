@@ -25,7 +25,7 @@ bash scripts/verify-layout-contract.sh # layout check — run separately (not in
 | [scripts/verify-experience-leaf.py](../../scripts/verify-experience-leaf.py) | Experience leaves (`difficulty/v1`) have required frontmatter fields including `resolution_confirmed_by_user`. | Yes |
 | [scripts/verify-language.py](../../scripts/verify-language.py) | Files in the repo that must stay English do not contain significant Russian text (and vice-versa for user-facing reply surfaces). | Yes |
 | [scripts/verify-terms.py](../../scripts/verify-terms.py) | Every tracked file (content and path) is scanned against the discovered term ruleset(s) (see [org-portability.md](org-portability.md) § Term neutrality). Zero rulesets installed → reported no-op, not a silent pass. | Yes |
-| [scripts/verify-semantic-gates.py](../../scripts/verify-semantic-gates.py) | `scripts/crutch_registry.toml` still matches the live tree: no new unregistered regex-driven hard-outcome site, no stale registry entry, no `semantic-*` entry whose fail-open judge guard was silently removed. See [the crutch registry](crutch-registry.md). | Yes |
+| [scripts/verify-semantic-gates.py](../../scripts/verify-semantic-gates.py) | Computed from the live tree (no stored file): no regex-driven hard-outcome site (deny / block / exit 2) lacks a fail-open `judge_*` guard in its scope or file unless individually allowlisted in `scripts/lib/unguarded_sink_allowlist.py`. See [the crutch registry](crutch-registry.md). | Yes |
 | [scripts/lint-prose-length.py](../../scripts/lint-prose-length.py) | Governed prose files (`CLAUDE.md`, `cursor/rules/claude-code-sync.mdc`, skill `SKILL.md`/`policy.md`, `README.md`) stay within their line/byte ceilings defined in `config.md`. | Yes |
 | [scripts/lint-permissions.py](../../scripts/lint-permissions.py) | `permissions/global.json` and any project permission files are valid JSON and match the expected schema. | Yes |
 | [scripts/lint-settings-base.py](../../scripts/lint-settings-base.py) | `settings/base.json` is valid and the action taxonomy is consistent. | Yes |
@@ -54,4 +54,4 @@ The gap this closes recurs: `fdbc543` and `767e0df` each deleted a hook script a
 - [guards.md](guards.md) (this file) — the guard inventory.
 - [setup.md](setup.md) — running the guards after initial setup.
 - [scripts/README.md](../../scripts/README.md) — the machine-checked inventory of all scripts and hooks.
-- [The crutch registry](crutch-registry.md) — the enumerator/registry/verifier mechanism behind `verify-semantic-gates.py`, how to add a site, and its honest limits.
+- [The crutch registry](crutch-registry.md) — the enumerator/verifier mechanism behind `verify-semantic-gates.py`, how to handle a flagged site, and its honest limits.

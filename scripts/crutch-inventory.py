@@ -18,7 +18,7 @@ This script CLASSIFIES NOTHING. It emits candidates and mechanical attributes
 only — domain membership and a same-scope structural signal, never a verdict on
 whether a site is a legitimate structural check or an unguarded semantic one, and
 never a verdict on whether a prose statement is genuine perception or should be
-mechanized. That judgment is scripts/crutch_registry.toml (stage 2), a SEPARATE
+mechanized. That judgment is scripts/gen_crutch_registry.py's partitions, a SEPARATE
 pass over this script's own output — fusing the two would let the judgment hide
 inside the enumerator, which is the exact defect being audited (CLAUDE.md
 preamble, "Separate rule from perception; determinize the rule at its proper
@@ -117,8 +117,8 @@ Honest limits (stated so no one over-trusts this):
 
 Usage:
     crutch-inventory.py                 # print the JSONL inventory to stdout
-    crutch-inventory.py --check         # exit 1 if any site lacks a registry
-                                         # disposition, or the registry is stale
+    crutch-inventory.py --check         # exit 1 if two sites share a stable id
+                                         # (live enumeration; no stored file)
 """
 from __future__ import annotations
 
@@ -131,13 +131,11 @@ import os
 import re
 import subprocess
 import sys
-import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
-REGISTRY_PATH = SCRIPTS_DIR / "crutch_registry.toml"
 
 
 def _clean_git_env() -> dict[str, str]:
@@ -736,15 +734,6 @@ def find_untracked_relevant_files(repo_root: Path) -> list[Path]:
 # --- Registry check ----------------------------------------------------------
 
 
-def _load_registry(path: Path) -> dict[str, dict]:
-    if not path.exists():
-        return {}
-    with path.open("rb") as fh:
-        data = tomllib.load(fh)
-    entries = data.get("entry", [])
-    return {e["id"]: e for e in entries if isinstance(e, dict) and "id" in e}
-
-
 def _index_by_id(records: list) -> dict[str, object]:
     """Key records by their stable id, failing LOUD on a collision instead of
     silently keeping whichever record happened to be last — a silent collapse
@@ -762,43 +751,24 @@ def _index_by_id(records: list) -> dict[str, object]:
     return index
 
 
-def run_check(root: Path, registry_path: Path) -> int:
+def run_check(root: Path) -> int:
+    """Live self-consistency of the enumeration: every site of both domains
+    gets a distinct stable id. Nothing is compared against a stored file."""
     code_sites = enumerate_code_sites(root)
     file_rollups = enumerate_code_file_rollups(root)
     prose_sites = enumerate_prose_sites(discover_prose_paths(REPO_ROOT))
-    all_sites = _index_by_id([*code_sites, *file_rollups, *prose_sites])
-    registry = _load_registry(registry_path)
-
-    missing = sorted(set(all_sites) - set(registry))
-    stale = sorted(set(registry) - set(all_sites))
-    undispositioned = sorted(
-        eid for eid, e in registry.items()
-        if eid in all_sites and not e.get("disposition")
-    )
-    bad_defer = sorted(
-        eid for eid, e in registry.items()
-        if e.get("disposition") == "defer" and not e.get("reason")
-    )
-
     print(
         f"crutch-inventory --check: {len(code_sites)} code site(s), "
         f"{len(file_rollups)} file-rollup(s), {len(prose_sites)} prose site(s)"
     )
-    print(f"registry: {len(registry)} entrie(s) at {registry_path}")
-    print(f"missing from registry: {len(missing)}")
-    for eid in missing[:20]:
-        print(f"  MISSING {eid}  {all_sites[eid].file}")
-    if len(missing) > 20:
-        print(f"  ... and {len(missing) - 20} more")
-    print(f"stale registry entries (site no longer exists): {len(stale)}")
-    for eid in stale[:20]:
-        print(f"  STALE {eid}")
-    print(f"undispositioned registry entries: {len(undispositioned)}")
-    print(f"defer entries missing a reason: {len(bad_defer)}")
-
-    ok = not (missing or stale or undispositioned or bad_defer)
-    print("crutch-inventory --check: OK" if ok else "crutch-inventory --check: FAIL")
-    return 0 if ok else 1
+    try:
+        _index_by_id([*code_sites, *file_rollups, *prose_sites])
+    except ValueError as exc:
+        print(f"id collision: {exc}")
+        print("crutch-inventory --check: FAIL")
+        return 1
+    print("crutch-inventory --check: OK")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -819,7 +789,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.check:
-        return run_check(args.root, REGISTRY_PATH)
+        return run_check(args.root)
 
     code_sites = enumerate_code_sites(args.root)
     file_rollups = enumerate_code_file_rollups(args.root)

@@ -19,7 +19,7 @@
 # --- routed: write tracked files, reach the repo through worktree_route ---
 "scripts/record-experience.py" = { disposition = "routed", category = "routed", reason = "creates and extends experience leaves and MEMORY.md indexes under memory-global/" }
 "scripts/stamp-memory-dates.py" = { disposition = "routed", category = "routed", reason = "rewrites created/last_verified frontmatter of memory leaves" }
-"scripts/gen_crutch_registry.py" = { disposition = "routed", category = "routed", reason = "regenerates scripts/crutch_registry.toml and the crutch docs" }
+"scripts/gen_crutch_registry.py" = { disposition = "routed", category = "routed", reason = "regenerates the git-ignored local scripts/crutch_registry.toml classification report and the crutch docs; no check reads the file" }
 "scripts/permissions-cli.py" = { disposition = "routed", category = "routed", reason = "edits permissions/*.json grant files" }
 "scripts/verify-readme.py" = { disposition = "routed", category = "routed", reason = "--fix rewrites the README inventory tables" }
 
