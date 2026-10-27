@@ -3,9 +3,10 @@
 
 The unit of experience is a recurring difficulty (see
 memory-global/leaves/experience-leaf-schema.md). This tool guarantees the
-`schema: difficulty/v1` structure (the generality-0 profile of the unified
-difficulty-record model — it stamps `generality: 0` on newly created leaves;
-the generality>=1 profile is the principle/v1 leaf), auto-dates filenames,
+`schema: difficulty/v1` structure (experience, generality 0 — it stamps
+`generality: 0` on newly created leaves; induction lifts it into a
+regularity/v1 leaf, and a principle/v1 norm is grounded in regularities via
+`grounded_in`), auto-dates filenames,
 maintains the `experience/MEMORY.md` sub-index, and implements the
 search-before-record / extend-with-a-new-context flow that lets one difficulty
 accumulate several contexts.
@@ -218,9 +219,9 @@ def frontmatter(name: str, description: str, confirmed_by: str,
         "type: reference",
         "schema: difficulty/v1",
         # Emitted on newly created leaves only; existing leaves are left
-        # untouched (absence implies 0). An experience leaf is the generality-0
-        # profile of the unified difficulty-record model whose generality>=1
-        # profile is the principle/v1 leaf — see experience-leaf-schema.md.
+        # untouched (absence implies 0). Chain: experience (generality 0) ->
+        # regularity/v1 (induced from experience) -> principle/v1 (norm grounded
+        # in regularities) — see experience-leaf-schema.md.
         "generality: 0",
         *birth_lines(),
         f'resolution_confirmed_by_user: "{confirmed_by}"',
@@ -1157,9 +1158,10 @@ def promote_skeleton(a, area: str, induced: list[str], grounded: list[str]) -> t
         link_line = f"grounded_in: [{', '.join(pp.REGULARITY_PREFIX + s for s in grounded)}]\n"
         body = (
             f"## Principle\n\n{statement}\n\n"
-            "## Goal class\n\n"
-            f"Level {a.generality} — TODO (curator): name the goal this norm serves and the "
-            "class of tasks it ranges over.\n\n"
+            "## Goal class\n\nTODO (curator): name the goal this norm serves.\n\n"
+            "## Generality\n\n"
+            f"Level {a.generality} — TODO (curator): name the class of tasks this norm ranges "
+            "over and what it is deliberately not claimed for.\n\n"
             "## Grounded in\n\n"
             + "".join(f"- [[{s}]] — TODO (curator): what this regularity contributes.\n"
                       for s in grounded)

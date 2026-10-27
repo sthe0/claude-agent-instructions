@@ -394,7 +394,8 @@ def test_promote_schema_matches_principle_v1_and_passes_the_structure_verifier(e
     assert front["name"] == "sample-venue-principle"
     assert front["grounded_in"] == "[regularity:sample-venue-regularity]"
     assert "induced_from" not in front
-    for section in ("## Principle", "## Goal class", "## Grounded in", "## Refutation"):
+    for section in ("## Principle", "## Goal class", "## Generality", "## Grounded in",
+                    "## Refutation"):
         assert section in text
     verified = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "verify-leaf-structure.py"), str(root / PRINCIPLE)],

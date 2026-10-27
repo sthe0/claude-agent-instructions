@@ -5,14 +5,13 @@ This verifier also guards the `schema: regularity/v1` leaf (under `regularities/
 the knowledge layer), which must carry non-empty `## Regularity`, `## Generality`,
 `## Refutation` and `## Induced from` sections.
 
-It also guards the `schema: principle/v1` leaf (grandfathered below,
-under `principles/`), which is the **generality>=1 profile** of a single
-difficulty-record model. Its **generality-0 profile** is the
-`schema: difficulty/v1` experience leaf guarded by the sibling
-`verify-experience-leaf.py` — the two schemas are two faces of one continuum
-keyed by the `generality` field, not unrelated types. The `leaf/v1` shape this
-verifier enforces for ordinary reference/feedback leaves is SEPARATE from that
-continuum (an unrelated ordinary-leaf structure), not a point on it.
+It also guards the `schema: principle/v1` leaf (grandfathered below, under
+`principles/`), the norm layer grounded in regularities via `grounded_in`. The
+chain is experience (`schema: difficulty/v1`, generality 0, guarded by the
+sibling `verify-experience-leaf.py`) -> regularity (`regularity/v1`, induced
+from experience) -> principle. The `leaf/v1` shape this verifier enforces for
+ordinary reference/feedback leaves is SEPARATE from that chain (an unrelated
+ordinary-leaf structure).
 
 Rules:
   1. Leaves with `schema: leaf/v1` in frontmatter must contain all three

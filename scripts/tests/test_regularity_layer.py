@@ -322,7 +322,8 @@ def test_promote_principle_writes_grounded_skeleton(tmp_path, env):
     text = (c.leaves / "principles" / "p1.md").read_text(encoding="utf-8")
     assert "schema: principle/v1" in text and "grounded_in: [regularity:r1]" in text
     assert "induced_from" not in text
-    for heading in ("## Principle", "## Goal class", "## Grounded in", "## Refutation"):
+    for heading in ("## Principle", "## Goal class", "## Generality", "## Grounded in",
+                    "## Refutation"):
         assert heading in text
 
 

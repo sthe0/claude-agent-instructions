@@ -1,6 +1,7 @@
 # ADR-0001 — Consensus architecture for a distributed agent system
 
 - **Status:** Accepted (2026-06-26) — implemented in slices S1–S4; open questions #2/#3 resolved.
+- **Refined by:** [ADR-0013](0013-regularity-vs-principle.md) — induction now lands in a regularity; a global principle is grounded in regularities (`grounded_in`) rather than induced from experience.
 - **Deciders:** system authors (commit-rights holders to this repo)
 - **Difficulty removed:** when the agent system is handed to several developers, edits to its instructions (`CLAUDE.md`, `skills/`, `memory-*`, `config.md`) from different people conflict, and there is no systematic way to reach consensus.
 

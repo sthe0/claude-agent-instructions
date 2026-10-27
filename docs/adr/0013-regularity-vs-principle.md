@@ -1,6 +1,6 @@
 # ADR-0013 — A regularity is knowledge, a principle is a norm grounded in regularities
 
-- **Status:** Accepted (2026-10-27) — implemented in `scripts/lib/principle_provenance.py` (the provenance rules), `scripts/record-experience.py` (`promote`, `promote-scan`, `search --tier regularities`, `link`), `scripts/verify-leaf-structure.py` and `scripts/verify-principle-provenance.py`; the global principle corpus is migrated; the schema is [regularity-leaf-schema.md](../../memory-global/leaves/regularity-leaf-schema.md). Builds on [ADR-0001](0001-consensus-architecture.md) (the generality gradient) and does not change [ADR-0004](0004-principle-is-always-a-norm.md) (a principle is always a norm).
+- **Status:** Accepted (2026-10-27) — implemented in `scripts/lib/principle_provenance.py` (the provenance rules), `scripts/record-experience.py` (`promote`, `promote-scan`, `search --tier regularities`, `link`), `scripts/verify-leaf-structure.py` and `scripts/verify-principle-provenance.py`; the global principle corpus is migrated; the schema is [regularity-leaf-schema.md](../../memory-global/leaves/regularity-leaf-schema.md). Refines [ADR-0001](0001-consensus-architecture.md) (the generality gradient now runs experience → regularity → principle) and keeps [ADR-0004](0004-principle-is-always-a-norm.md) unchanged (a principle is always a norm).
 - **Deciders:** system authors (commit-rights holders to this repo)
 - **Difficulty removed:** one leaf kind, `principle/v1`, filled two roles. As a **claim about how things are** it was meant to be refuted by a contradicting observation; as a **norm** ("to achieve X, do Y") it can only be shown adequate or not to a goal. Because both roles shared one leaf and one `induced_from` field, an author could not tell what would refute a given principle, the planner could not tell whether a retrieved leaf was a fact to rely on or a rule to follow, and induction from experience had no honest target: a norm is not induced from observations, only the knowledge a norm rests on is.
 
@@ -32,7 +32,7 @@ The chain is: experience leaf (`difficulty/v1`, generality 0) → **regularity**
 
 ### 2. Rules the tooling enforces
 
-`scripts/lib/principle_provenance.py` classifies the leaf areas and reports these finding kinds:
+`scripts/lib/principle_provenance.py` classifies the leaf areas and adds these finding kinds:
 
 - `ungrounded_principle` — a global principle without a `grounded_in` naming a regularity;
 - `unknown_regularity` — a `grounded_in` item that is not `regularity:<slug>` of an existing regularity;
@@ -56,7 +56,8 @@ The global principle leaves were migrated in one change into approved regulariti
 - Induction has a single target, the regularity. `promote-scan`, the `memory-curator` split and the recording procedure all lift recurring experience into regularities, and a principle is written afterwards for a goal, grounded in the regularities that justify it.
 - The planner still retrieves principles at element 7 (`search --tier principles`); `search --tier regularities` retrieves the knowledge those principles rest on.
 - A refutation of a regularity propagates: every principle grounded in it is reviewed, which is what the reflexive reconstruction of ADR-0004 asks for.
-- The cost is one more leaf kind and one more index. Every consumer that named `principle/v1` as the induction target had to be reworded; the consumer inventory of the migration lists them.
+- The cost is one more leaf kind and one more index. Every consumer that named `principle/v1` as the induction target had to be reworded.
+- ADR-0002's revision rule (a principle's `induced_from` points at a recurring cluster or a refuted predecessor) now applies to regularities; a global principle is revised through the regularities in its `grounded_in`.
 - A principle's `generality` field still ranks how widely it applies, but a principle has no `## Induced from` section: its provenance is the regularities in `## Grounded in`.
 
 ## Alternatives considered
