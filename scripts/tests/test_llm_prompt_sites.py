@@ -525,7 +525,6 @@ STRUCTURAL_ONLY = {
     "scripts/agentctl/cli.py:_venue_tree_identity.run": "a git command line",
     "scripts/agentctl/mandate.py:<module>": "a table of script names",
     "scripts/gen_crutch_registry.py:<module>": "a table key",
-    "scripts/mandate_cycle/driver.py:real_run": "the cycle's own commands",
     "scripts/measure-marker-extractor-latency.py:_one_call": "a fixed synthetic message",
     "scripts/probe-hook-decision-semantics.py:run_add_dir_read_cell": "a fixed probe prompt",
     "scripts/probe-hook-decision-semantics.py:run_add_dir_write_cell": "a fixed probe prompt",
