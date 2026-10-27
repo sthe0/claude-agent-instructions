@@ -10090,6 +10090,12 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                     f"verify_command exit {result.returncode} != expected "
                     f"{stage.criterion.expected_exit}: {stage.criterion.verify_command}"
                 )
+                if result.stdout or result.stderr:
+                    note += _write_check_log(
+                        state.session_id, f"stage-{int(stage.index)}", "verify_command",
+                        crit.verify_command, cwd or os.getcwd(), result.returncode,
+                        result.stdout, result.stderr,
+                    )
                 actual = (actual + "\n" + note) if actual else note
                 stage.outcome.actual = actual
                 if identity is not None:
@@ -10371,20 +10377,31 @@ def _output_tail(stdout: str, stderr: str) -> str:
     return "".join(f"\n    {line[:FAIL_LOG_LINE_CHARS]}" for line in lines)
 
 
-def _write_fail_log(session_id: str, e: _FinalEntry, stdout: str, stderr: str) -> str:
-    """Save a failed check's full output and return the note its failure text ends with."""
+def _write_check_log(
+    session_id: str, leaf: str, name: str, command: str, venue: str, exit_code: int,
+    stdout: str, stderr: str,
+) -> str:
+    """Save a failed check's full output to `<evidence>/<session>/<leaf>/<name>.log` and
+    return the note its failure text ends with."""
     try:
-        log_dir = _evidence_session_dir(session_id, "verify-final")
+        log_dir = _evidence_session_dir(session_id, leaf)
         log_dir.mkdir(parents=True, exist_ok=True)
-        path = log_dir / f"{e.check_id.replace(':', '-')}.log"
+        path = log_dir / f"{name}.log"
         path.write_text(
-            f"command: {e.spec.command}\nvenue: {e.venue}\nexit: {e.exit_code}\n"
+            f"command: {command}\nvenue: {venue}\nexit: {exit_code}\n"
             f"--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n",
             encoding="utf-8",
         )
     except (OSError, EvidenceDirError) as exc:
         return f"; log not written: {exc}"
     return f"; log: {path}{_output_tail(stdout, stderr)}"
+
+
+def _write_fail_log(session_id: str, e: _FinalEntry, stdout: str, stderr: str) -> str:
+    return _write_check_log(
+        session_id, "verify-final", e.check_id.replace(":", "-"),
+        e.spec.command, e.venue, e.exit_code, stdout, stderr,
+    )
 
 
 def _log_final_events(
