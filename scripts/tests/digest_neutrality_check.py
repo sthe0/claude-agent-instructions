@@ -19,8 +19,8 @@ How it works: `git archive <base> scripts` is extracted into a temp dir; every `
 under the plans dir is then loaded by the base tree's `agentctl.plan` and by the working
 tree's, each in its OWN `python3 -I` subprocess with cwd and sys.path set to that tree, so
 both runs can never import the same module. Per plan the worker reports `plan_content_digest`,
-`plan_meta_digest`, `order_digest`, the per-part digest map, `_reviewed_stage_keys` of every
-stage, and the premise keys (`plan_meta_element_keys` and every stage's
+`plan_meta_digest`, `order_digest`, the per-part digest map, `_reviewed_stage_keys` and
+`stage_closure_digest` of every stage, and the premise keys (`plan_meta_element_keys` and every stage's
 `stage_element_keys`, which includes the `stage_question_key` whole-stage entry).
 
 Outcome per plan: loads in both trees with equal values (compared); loads in both with a
@@ -48,6 +48,13 @@ DEFAULT_BASE_FILE = HERE / "fixtures" / "digest_neutrality_base.txt"
 DEFAULT_PLANS_DIR = HERE / "fixtures"
 
 
+def _closure_digest(P, doc, index: int) -> str:
+    try:
+        return P.stage_closure_digest(doc, index)
+    except P.PlanError as exc:
+        return f"PlanError: {exc}"
+
+
 def _describe(doc) -> dict:
     from agentctl import plan as P
 
@@ -57,6 +64,7 @@ def _describe(doc) -> dict:
         "order_digest": P.order_digest(doc),
         "parts": P.part_digest_map(doc),
         "reviewed_stage_keys": {str(s.index): P._reviewed_stage_keys(s) for s in doc.stages},
+        "stage_closure_digests": {str(s.index): _closure_digest(P, doc, s.index) for s in doc.stages},
         "premise_keys": {
             "plan": P.plan_meta_element_keys(doc),
             "stages": {str(s.index): P.stage_element_keys(s) for s in doc.stages},

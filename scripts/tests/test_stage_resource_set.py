@@ -1,13 +1,13 @@
-"""The typed resource set a spawned child may change (`plan_resources.stage_resource_set`),
+"""The typed resource set the plan sanctions a child to change (`plan_resources.resource_set_from_entries`),
 and its two carriers: `agentctl stage-grants` data and the norm handoff record.
 
-Resolved declared+derived rules, add_dirs with their mode, the stage's spawn/landed
-resources and the acceptEdits kind baseline are typed resources; a wildcard-tail Bash rule
-is kept as text in `rule_patterns` because its argv is unbounded.
+Resolved declared+derived rules, add_dirs with their mode and the stage's spawn/landed resources
+are typed resources; a wildcard-tail Bash rule is kept as text in `rule_patterns` because its argv
+is unbounded. What the permission mode adds (the workdir under acceptEdits) is the spawn's, tested
+in test_norm_handoff.
 """
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,7 +22,6 @@ from agentctl.stage_norm import StageNorm
 from agentctl.state import CheckKind
 from test_stage_grants import _to_executing, _write_plan_with_grants_block, ns
 
-SPAWN_SCRIPT = Path(__file__).resolve().parent.parent / "spawn-specialist.py"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 GRANTS_TOML = (
@@ -48,100 +47,97 @@ def _bare_stage():
     return _stage_1(FIXTURES / "plan_two_stage.toml")
 
 
+def _plan_set(stage, venue):
+    """The set over the stage's declared + derived grants, as `stage-grants` hands them over."""
+    effective = PR._effective_grants_for_stage(stage, venue)
+    entries = [rg.to_dict() for rg in effective.allow] + [ad.to_dict() for ad in effective.add_dirs]
+    return PR.resource_set_from_entries(entries, stage, venue)
+
+
 def test_declared_edit_and_read_rules_become_file_resources(fixtures_dir, tmp_path):
     stage, _ = _stage_with_grants(fixtures_dir, tmp_path)
-    got = PR.stage_resource_set(stage, str(tmp_path), workdir=None, kind="thinker")
+    got = _plan_set(stage, str(tmp_path))
     assert R.FileResource("/work/venue/mod.py", "write") in got.resources
     assert R.FileResource("/work/venue/notes.md", "read") in got.resources
 
 
 def test_add_dir_keeps_its_mode(fixtures_dir, tmp_path):
     stage, _ = _stage_with_grants(fixtures_dir, tmp_path)
-    got = PR.stage_resource_set(stage, str(tmp_path), workdir=None, kind="thinker")
+    got = _plan_set(stage, str(tmp_path))
     assert R.FileResource("/work/scratch", "read") in got.resources
     assert R.FileResource("/work/scratch", "write") not in got.resources
 
 
 def test_wildcard_tail_rule_is_kept_as_pattern_not_as_resource(fixtures_dir, tmp_path):
     stage, _ = _stage_with_grants(fixtures_dir, tmp_path)
-    got = PR.stage_resource_set(stage, str(tmp_path), workdir=None, kind="thinker")
+    got = _plan_set(stage, str(tmp_path))
     assert "Bash(git status:*)" in got.rule_patterns
     assert all(r.kind != "file" or "git status" not in r.path for r in got.resources)
 
 
 def test_unresolved_non_wildcard_rule_is_in_neither_list():
     entries = [{"rule": "WebFetch(domain:code.claude.com)"}, {"rule": "not a rule"}]
-    got = PR.resource_set_from_entries(entries, _bare_stage(), "/v", workdir=None, kind=None)
+    got = PR.resource_set_from_entries(entries, _bare_stage(), "/v")
     assert got.rule_patterns == []
     assert not any(r.kind == "file" for r in got.resources)
 
 
 def test_spawn_resource_of_the_stage_is_included(fixtures_dir, tmp_path):
     stage, _ = _stage_with_grants(fixtures_dir, tmp_path)
-    got = PR.stage_resource_set(stage, str(tmp_path), workdir=None, kind="thinker")
+    got = _plan_set(stage, str(tmp_path))
     assert R.SpecialistResource("developer") in got.resources
 
 
-@pytest.mark.parametrize("kind", ["developer", "tech-writer"])
-def test_edit_capable_kinds_get_workdir_write_baseline(fixtures_dir, tmp_path, kind):
-    stage, _ = _stage_with_grants(fixtures_dir, tmp_path)
-    got = PR.stage_resource_set(stage, str(tmp_path), workdir="/work/wt", kind=kind)
-    assert R.FileResource("/work/wt", "write") in got.resources
-
-
-@pytest.mark.parametrize("kind", ["thinker", "planner", "code-reviewer", None])
-def test_other_kinds_get_no_baseline(fixtures_dir, tmp_path, kind):
-    stage, _ = _stage_with_grants(fixtures_dir, tmp_path)
-    got = PR.stage_resource_set(stage, str(tmp_path), workdir="/work/wt", kind=kind)
-    assert not any(r.kind == "file" and r.path == "/work/wt" for r in got.resources)
-
-
-def test_baseline_needs_a_workdir():
-    got = PR.resource_set_from_entries([], _bare_stage(), "/v", workdir=None, kind="developer")
+def test_the_set_holds_only_what_the_plan_sanctions_no_workdir_baseline():
+    got = PR.resource_set_from_entries([], _bare_stage(), "/v")
     assert not any(r.kind == "file" for r in got.resources)
 
 
 def test_duplicates_are_collapsed():
     entries = [{"path": "/w", "mode": "write"}, {"rule": "Edit(//w)"}, {"path": "/w", "mode": "write"}]
-    got = PR.resource_set_from_entries(entries, _bare_stage(), "/v", workdir="/w", kind="developer")
+    got = PR.resource_set_from_entries(entries, _bare_stage(), "/v")
     assert got.resources.count(R.FileResource("/w", "write")) == 1
-
-
-def test_baseline_kinds_match_the_acceptedits_trusted_kinds():
-    spec = importlib.util.spec_from_file_location("spawn_specialist_resource_set", SPAWN_SCRIPT)
-    spawn = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(spawn)
-    assert set(PR.KIND_RESOURCE_BASELINES) == set(spawn._ACCEPT_EDITS_TRUSTED_KINDS)
 
 
 def test_landed_stage_contributes_its_vcs_ref():
     stage = _bare_stage()
     stage.criterion.verify_kind = CheckKind.LANDED.value
     stage.criterion.landed = SimpleNamespace(provider="git", remote="origin", target="main")
-    got = PR.resource_set_from_entries([], stage, "/v", workdir=None, kind=None)
+    got = PR.resource_set_from_entries([], stage, "/v")
     assert R.VcsRefResource("origin", "main", "land") in got.resources
 
 
-# --- resource_from_dict: the inverse of _resource_to_dict ----------------------------------
+# --- resources.resource_from_dict: the strict inverse of resource_to_dict --------------------
 
 @pytest.mark.parametrize("resource", [
     R.FileResource("/a/b", "write"),
     R.FileResource("/a/b", "read"),
     R.VcsRefResource("origin", "main", "land"),
     R.SpecialistResource("developer"),
+    R.ServiceResource("svc", "read"),
+    R.DatasetResource("sys", "tbl"),
 ])
 def test_resource_from_dict_round_trips(resource):
-    assert PR.resource_from_dict(PR._resource_to_dict(resource)) == resource
+    assert R.resource_from_dict(R.resource_to_dict(resource)) == resource
 
 
 def test_resource_from_dict_refuses_unknown_kind():
     with pytest.raises(ValueError, match="unknown resource kind"):
-        PR.resource_from_dict({"kind": "teleporter"})
+        R.resource_from_dict({"kind": "teleporter"})
 
 
 def test_resource_from_dict_refuses_foreign_fields():
     with pytest.raises(ValueError, match="malformed"):
-        PR.resource_from_dict({"kind": "file", "path": "/x", "mode": "write", "bogus": 1})
+        R.resource_from_dict({"kind": "file", "path": "/x", "mode": "write", "bogus": 1})
+
+
+def test_the_tolerant_ledger_reader_wraps_the_strict_one_and_returns_none():
+    from agentctl import order_approvals as oa
+
+    assert oa.resource_from_dict(R.resource_to_dict(R.SpecialistResource("developer"))) == R.SpecialistResource("developer")
+    assert oa.resource_from_dict({"kind": "teleporter"}) is None
+    assert oa.resource_from_dict({"kind": "file", "path": "/x"}) is None
+    assert oa.resource_from_dict("not a dict") is None
 
 
 # --- carriers -------------------------------------------------------------------------------
@@ -156,7 +152,7 @@ def test_stage_grants_data_carries_resources_and_rule_patterns(store, fixtures_d
     resources = directive.data["resources"]
     assert {"kind": "file", "path": "/work/venue/mod.py", "mode": "write"} in resources
     assert {"kind": "specialist", "role": "developer"} in resources
-    assert all(PR.resource_from_dict(d) for d in resources)
+    assert all(R.resource_from_dict(d) for d in resources)
 
 
 def _norm():

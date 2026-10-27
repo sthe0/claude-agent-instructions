@@ -118,7 +118,8 @@ class _Launched(Exception):
         self.env = env
 
 
-def _spawn(monkeypatch, tmp_path, venued_fixtures_dir, session, *, stage_index=None, kind="thinker"):
+def _spawn(monkeypatch, tmp_path, venued_fixtures_dir, session, *, stage_index=None, kind="thinker",
+           extra_argv=()):
     """Drive `spawn-specialist.py main` up to the child launch. Returns `(rc, env)`:
     `env` is the environment the child `claude -p` would get (None when the wrapper
     refused or stopped before launching), `rc` the wrapper's return code in that case."""
@@ -137,6 +138,7 @@ def _spawn(monkeypatch, tmp_path, venued_fixtures_dir, session, *, stage_index=N
     ]
     if stage_index is not None:
         argv += ["--stage-index", str(stage_index)]
+    argv += list(extra_argv)
     try:
         return SPAWN.main(argv), None
     except _Launched as launched:
@@ -187,6 +189,32 @@ def test_spawn_call_site_hands_the_stage_resource_set_to_the_record(store, venue
     assert {"kind": "specialist", "role": "developer"} in record["resources"]
     assert {"kind": "file", "path": str(tmp_path), "mode": "write"} in record["resources"]
     assert record["rule_patterns"] == ["Bash(python3 mod.py:*)"]
+
+
+@pytest.mark.parametrize("mode", ["plan", "default"])
+def test_workdir_baseline_follows_the_resolved_permission_mode(store, venued_fixtures_dir, tmp_path, monkeypatch, mode):
+    """A developer spawned under a mode narrower than acceptEdits may not write its workdir,
+    so the record must not say it may."""
+    _executing(store, f"w2m-{mode}", venued_fixtures_dir)
+    _, env = _spawn(monkeypatch, tmp_path, venued_fixtures_dir, f"w2m-{mode}", stage_index=1,
+                    kind="developer", extra_argv=["--permission-mode", mode])
+    _, _, _, record = _read_exported(env[HANDOFF_ENV])
+    assert {"kind": "specialist", "role": "developer"} in record["resources"]
+    assert not any(r["kind"] == "file" and r["path"] == str(tmp_path) for r in record["resources"])
+
+
+def test_a_kind_forced_into_accept_edits_by_a_write_grant_gets_no_workdir_baseline(store, venued_fixtures_dir, tmp_path):
+    """write_grant_cwd_deny_rules denies Edit over the whole cwd for such a kind, so the
+    workdir is not writable for it even though the mode is acceptEdits."""
+    _executing(store, "w2f", venued_fixtures_dir)
+    forced = [{"path": "/elsewhere", "mode": "write"}]
+    thinker = SPAWN.norm_handoff_record("w2f", 1, "thinker", 1, forced, store=store,
+                                        workdir=str(tmp_path), permission_mode="acceptEdits")
+    developer = SPAWN.norm_handoff_record("w2f", 1, "developer", 1, forced, store=store,
+                                          workdir=str(tmp_path), permission_mode="acceptEdits")
+    workdir_entry = {"kind": "file", "path": str(tmp_path), "mode": "write"}
+    assert workdir_entry not in thinker["resources"]
+    assert workdir_entry in developer["resources"]
 
 
 def test_record_carries_exactly_the_documented_fields(store, venued_fixtures_dir, tmp_path, monkeypatch):

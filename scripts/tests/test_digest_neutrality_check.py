@@ -87,6 +87,15 @@ def test_a_changed_stage_question_key_is_detected(base_tree, work_tree):
     assert "premise_keys" in report["changed"][0]
 
 
+def test_a_changed_stage_closure_digest_is_detected(base_tree, work_tree):
+    _edit(work_tree, "agentctl/plan.py", "tuple((d, memo[d]) for d in deps),",
+          "tuple((d, memo[d]) for d in deps), 'x',")
+    report = _compare(base_tree, work_tree)
+    assert CHECKER.verdict(report) == 1
+    assert "stage_closure_digests" in report["changed"][0]
+    assert "plan_digest" not in report["changed"][0]
+
+
 def test_zero_compared_plans_fail(base_tree, work_tree):
     report = _compare(base_tree, work_tree, plans=[])
     assert report["compared"] == 0

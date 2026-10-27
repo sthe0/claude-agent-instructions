@@ -64,7 +64,6 @@ lock on a sibling `.lock` file spanning the read-modify-write) and its atomic
 """
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import json
 import os
@@ -120,37 +119,18 @@ def first_thinker_verdict_key(plan_sha256: str, changed_identities: list[tuple])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def resource_to_dict(resource: _resources.Resource) -> dict:
-    """A JSON-safe dict for any `resources.Resource` subclass — every kind is
-    a frozen dataclass whose fields (besides `kind`, already present) are all
-    JSON-native strings, so a generic field walk is sufficient; no per-kind
-    special-casing is needed and none is added, so a new kind added to
-    resources.py serializes here without an order_approvals.py change."""
-    return dataclasses.asdict(resource)
+resource_to_dict = _resources.resource_to_dict
 
 
 def resource_from_dict(raw: dict) -> _resources.Resource | None:
-    """The inverse of `resource_to_dict`, or `None` for an unrecognized/
-    malformed entry — tolerant, matching `task_accumulator._coerce`'s bias:
-    a ledger file from a future kind this code does not know about degrades
-    to "that one entry is unreadable", not to the whole file being foreign."""
-    if not isinstance(raw, dict):
-        return None
-    kind = raw.get("kind")
+    """`resources.resource_from_dict`, or `None` for an unrecognized/malformed
+    entry — tolerant, matching `task_accumulator._coerce`'s bias: a ledger file
+    from a future kind this code does not know about degrades to "that one entry
+    is unreadable", not to the whole file being foreign."""
     try:
-        if kind == "file":
-            return _resources.FileResource(path=raw["path"], mode=raw["mode"])
-        if kind == "vcs_ref":
-            return _resources.VcsRefResource(remote=raw["remote"], ref=raw["ref"], op=raw["op"])
-        if kind == "specialist":
-            return _resources.SpecialistResource(role=raw["role"])
-        if kind == "service":
-            return _resources.ServiceResource(name=raw["name"], op_class=raw["op_class"])
-        if kind == "dataset":
-            return _resources.DatasetResource(system=raw["system"], locator=raw["locator"])
-    except (KeyError, ValueError, TypeError):
+        return _resources.resource_from_dict(raw)
+    except ValueError:
         return None
-    return None
 
 
 def _coerce(raw: str, order_sha256: str) -> dict:

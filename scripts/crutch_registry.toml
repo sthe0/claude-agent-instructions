@@ -457,14 +457,6 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
-id = "260fb676fe02df73"
-domain = "code"
-file = "scripts/agentctl/cli.py"
-class = "structural"
-disposition = "keep"
-ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
-
-[[entry]]
 id = "e81b5f35b04f2784"
 domain = "code"
 file = "scripts/agentctl/cli.py"
@@ -10450,6 +10442,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "eee75ececa724115"
+domain = "code"
+file = "scripts/tests/test_norm_handoff.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "82f6f2e43a32f5ad"
 domain = "code"
 file = "scripts/tests/test_norm_handoff.py"
 class = "not-a-gate"

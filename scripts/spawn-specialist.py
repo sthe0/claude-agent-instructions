@@ -2187,14 +2187,17 @@ def norm_handoff_record(
     *,
     store,
     workdir: "str | None" = None,
+    permission_mode: "str | None" = None,
 ) -> "dict | None":
     """The handoff record for the stage this spawn works for, or `None` when the
     session, its plan or the stage is unavailable (the spawn is then not linked).
     Writes nothing: the caller writes the record (`norm_handoff.write_record`) once the
     brief has assembled. Same in-process engine seam as
     `load_engine_stage_grants`; never touches the parent session's state file.
-    `workdir` is where the child runs: the kind baseline's FileResource is rooted there."""
+    `workdir` and `permission_mode` are where the child runs and the mode it was given:
+    only `acceptEdits` makes the whole workdir writable, so only then is it in the set."""
     from agentctl import plan_resources
+    from agentctl import resources as agentctl_resources
     from agentctl.state import CheckVenue
 
     state = store.load(session_id)
@@ -2210,8 +2213,12 @@ def norm_handoff_record(
         closure = None
     resource_set = plan_resources.resource_set_from_entries(
         engine_grants, state.stage(stage_index), state.resolve_check_venue(CheckVenue.DELIVERY.value),
-        workdir=workdir, kind=kind,
-    ).to_dict()
+    )
+    if workdir and permission_mode == "acceptEdits" and not write_grant_forces_accept_edits(kind, engine_grants):
+        baseline = agentctl_resources.FileResource(workdir, "write")
+        if baseline not in resource_set.resources:
+            resource_set.resources.append(baseline)
+    resource_set = resource_set.to_dict()
     return norm_handoff.build_record(
         parent_session=session_id,
         stage_index=stage_index,
@@ -3044,6 +3051,8 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
             log_refused("evidence-dir-refused", {"kind": args.kind, "stage_index": args.stage_index})
             return 2
 
+    permission_mode = resolve_permission_mode(args, engine_grants)
+
     # A spawn is linked when the engine can name the stage it works for: the child then
     # gets a norm handoff and a pre-assigned session id its own-contour channel is pinned
     # to. The record is only decided here and written once the brief assembles, so the
@@ -3065,7 +3074,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         try:
             handoff_record = norm_handoff_record(
                 args.session, args.stage_index, args.kind, depth_next, engine_grants,
-                store=handoff_store, workdir=workdir,
+                store=handoff_store, workdir=workdir, permission_mode=permission_mode,
             )
         except Exception as exc:
             print(f"warning: norm handoff unavailable, spawning unlinked: {exc}", file=sys.stderr)
@@ -3108,8 +3117,6 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
     head_add_dir_argv = add_dir_argv
     add_dir_argv = head_add_dir_argv + own_plan_add_dir_argv + grant_add_dir_argv
     add_dir_paths = _paths_from_add_dir_argv(add_dir_argv)
-
-    permission_mode = resolve_permission_mode(args, engine_grants)
 
     perms = permissions_digest(args.project_permissions)
     topo_bundle: "str | None" = None

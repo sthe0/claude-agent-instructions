@@ -167,35 +167,31 @@ def compute_plan_resources(doc: PlanDoc, *, venue: str | None = None) -> list[St
     return [compute_stage_resources(s, v) for s in doc.stages]
 
 
-#: Kinds whose spawn runs in acceptEdits mode (`spawn-specialist._ACCEPT_EDITS_TRUSTED_KINDS`),
-#: with the mode of the FileResource over their workdir that mode already auto-allows.
-KIND_RESOURCE_BASELINES = {"developer": "write", "tech-writer": "write"}
-
-
 @dataclass
 class StageResourceSet:
-    """The typed resources a child spawned for a stage may change, plus the wildcard-tail
-    Bash rules kept as text: their argv is unbounded, so only a call-time match against
-    the concrete call can decide them. A non-wildcard rule that does not resolve is in
-    neither list -- nothing sanctions it, so the call-time check falls through to asking."""
+    """The typed resources the plan sanctions a child of a stage to change, plus the
+    wildcard-tail Bash rules kept as text: their argv is unbounded, so only a call-time
+    match against the concrete call can decide them. A non-wildcard rule that does not
+    resolve is in neither list -- nothing sanctions it, so the call-time check falls
+    through to asking. What the child's permission mode adds on top (the workdir under
+    acceptEdits) is the spawn's to append, not the plan's."""
     resources: list = field(default_factory=list)
     rule_patterns: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
-            "resources": [_resource_to_dict(r) for r in self.resources],
+            "resources": [_resources.resource_to_dict(r) for r in self.resources],
             "rule_patterns": list(self.rule_patterns),
         }
 
 
 def resource_set_from_entries(
-    entries: "list[dict] | None", stage: Stage, venue: str | None, *,
-    workdir: str | None, kind: str | None,
+    entries: "list[dict] | None", stage: Stage, venue: str | None,
 ) -> StageResourceSet:
-    """`stage_resource_set` over grant entries the caller already holds in the
-    `agentctl stage-grants` shape (`{"rule", ...}` or `{"path", "mode", ...}`), so the
-    spawn's engine grants -- runtime ones included -- and the stage-grants report build
-    the set through one computation."""
+    """The set over grant entries in the `agentctl stage-grants` shape (`{"rule", ...}` or
+    `{"path", "mode", ...}`) plus the stage's own spawn/landed resources. Both callers hand
+    it the entries they already hold -- the stage-grants report and the spawn's engine
+    grants, runtime ones included -- so the set is one computation."""
     out = StageResourceSet()
     for entry in entries or []:
         if "rule" in entry:
@@ -208,22 +204,9 @@ def resource_set_from_entries(
             out.resources.extend(resolve_add_dir_grant(entry["path"], entry["mode"]).resources)
     out.resources.extend(_stage_spawn_resources(stage))
     out.resources.extend(_stage_landed_resources(stage))
-    baseline_mode = KIND_RESOURCE_BASELINES.get(kind or "")
-    if baseline_mode is not None and workdir:
-        out.resources.append(_resources.FileResource(workdir, baseline_mode))
     out.resources = list(dict.fromkeys(out.resources))
     out.rule_patterns = list(dict.fromkeys(out.rule_patterns))
     return out
-
-
-def stage_resource_set(
-    stage: Stage, venue: str | None, *, workdir: str | None, kind: str | None,
-) -> StageResourceSet:
-    """The set for a stage's declared + derived grants (what the plan alone sanctions;
-    runtime grants arrive through `resource_set_from_entries`)."""
-    effective = _effective_grants_for_stage(stage, venue)
-    entries = [rg.to_dict() for rg in effective.allow] + [ad.to_dict() for ad in effective.add_dirs]
-    return resource_set_from_entries(entries, stage, venue, workdir=workdir, kind=kind)
 
 
 #: Elements whose text the engine itself executes verbatim; an unresolved command
@@ -318,35 +301,11 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
 # command reached this module via a plan's declared grant or via a corpus scan.
 
 
-def _resource_to_dict(res: _resources.Resource) -> dict:
-    return dataclasses.asdict(res)
-
-
-_RESOURCE_CLASSES = {
-    cls.kind: cls for cls in (
-        _resources.FileResource, _resources.VcsRefResource, _resources.SpecialistResource,
-        _resources.ServiceResource, _resources.DatasetResource,
-    )
-}
-
-
-def resource_from_dict(data: dict) -> _resources.Resource:
-    """The inverse of `_resource_to_dict`: rebuild the typed resource a record carries.
-    Raises `ValueError` on an unknown kind or a field the class does not have."""
-    cls = _RESOURCE_CLASSES.get(data.get("kind"))
-    if cls is None:
-        raise ValueError(f"unknown resource kind {data.get('kind')!r}")
-    try:
-        return cls(**data)
-    except TypeError as exc:
-        raise ValueError(f"malformed {data.get('kind')} resource: {exc}") from exc
-
-
 def _resolution_to_dict(res: Resolution, *, label: str, label_key: str = "rule") -> dict:
     return {
         label_key: label,
         "status": res.status,
-        "resources": [_resource_to_dict(r) for r in res.resources],
+        "resources": [_resources.resource_to_dict(r) for r in res.resources],
         "reason_class": res.reason_class,
         "reason": res.reason,
         "identity": list(res.identity) if res.identity is not None else None,
@@ -370,8 +329,8 @@ def _plan_resources_json(doc: PlanDoc, venue: str | None) -> dict:
         stages[str(s.index)] = {
             "rules": rules,
             "add_dirs": add_dirs,
-            "spawn": [_resource_to_dict(r) for r in _stage_spawn_resources(s)],
-            "landed": [_resource_to_dict(r) for r in _stage_landed_resources(s)],
+            "spawn": [_resources.resource_to_dict(r) for r in _stage_spawn_resources(s)],
+            "landed": [_resources.resource_to_dict(r) for r in _stage_landed_resources(s)],
             "stage_effects": [dataclasses.asdict(e) for e in (getattr(s, "effects", []) or [])],
         }
     return {"stages": stages}

@@ -15,14 +15,21 @@ The scratch copy is a `git clone --local --quiet` of this repository at HEAD wit
 uncommitted changes (modified, staged, deleted AND untracked files) copied over, so it holds
 what the working tree holds. Nothing is written to the source tree.
 
+CMD is ONE argv command split with shlex and run without a shell: `&&`, `;`, pipes and `$VAR`
+are not interpreted. Wrap a compound check in a script and pass the script.
+
 Exit codes:
-  --mutant NAME --run CMD   CMD's own exit code inside the mutated copy. 1 means CMD failed
-                            (a kill for a verify command); 0 means CMD passed on the wrong
-                            code (survived). pytest's 2/4/5 (collection error, usage, nothing
-                            collected) pass through unchanged, so they never read as a kill.
+  --mutant NAME --run CMD   CMD is run twice: first on the unmutated copy, which must exit 0
+                            (otherwise nothing is mutated and the tool exits 0, since a red
+                            run on the mutant would prove nothing), then on the mutated copy,
+                            whose exit code is the tool's. 1 means CMD failed (a kill for a
+                            verify command); 0 means CMD passed on the wrong code (survived).
+                            pytest's 2/4/5 (collection error, usage, nothing collected) pass
+                            through unchanged, so they never read as a kill.
                             EXCEPT: exit 0 when the anchor does not match exactly once, the
-                            copy fails, or this tool itself raises -- a broken control must
-                            never read as a kill (a crash under --control is 7, never green).
+                            copy fails, the unmutated run is not green, or this tool itself
+                            raises -- a broken control must never read as a kill (a crash
+                            under --control is 7, never green).
   --mutant NAME             0 when the mutant applies; no command is run.
   --control [--run CMD]     no mutation. Without --run: 0 when every anchor of the catalogue
                             applies exactly once in the copy, 7 otherwise. With --run: CMD's
@@ -52,6 +59,7 @@ CONTROL_RED = 7
 PLAN_RESOURCES = "scripts/agentctl/plan_resources.py"
 NORM_HANDOFF = "scripts/agentctl/norm_handoff.py"
 PLAN = "scripts/agentctl/plan.py"
+SPAWN = "scripts/spawn-specialist.py"
 
 
 @dataclass(frozen=True)
@@ -70,10 +78,16 @@ CATALOGUE: "dict[str, Mutant]" = {
         "the handoff record drops the stage's typed resources",
     ),
     "workdir-write-baseline": Mutant(
-        PLAN_RESOURCES,
-        "out.resources.append(_resources.FileResource(workdir, baseline_mode))",
-        'out.resources.append(_resources.FileResource(workdir, "read"))',
-        "the edit-capable kinds' workdir baseline is read, not write",
+        SPAWN,
+        'baseline = agentctl_resources.FileResource(workdir, "write")',
+        'baseline = agentctl_resources.FileResource(workdir, "read")',
+        "the acceptEdits workdir baseline is read, not write",
+    ),
+    "workdir-baseline-needs-accept-edits": Mutant(
+        SPAWN,
+        'if workdir and permission_mode == "acceptEdits" and not write_grant_forces_accept_edits(kind, engine_grants):',
+        "if workdir and not write_grant_forces_accept_edits(kind, engine_grants):",
+        "the workdir baseline no longer depends on the resolved permission mode",
     ),
     "wildcard-kept-as-pattern": Mutant(
         PLAN_RESOURCES,
@@ -133,30 +147,27 @@ def make_scratch(repo: Path, dest: Path) -> Path:
     return clone
 
 
+def _anchor_count(root: Path, mutant: Mutant) -> int:
+    """How many times the anchor occurs in the mutant's file under `root` (0 if unreadable)."""
+    try:
+        return (root / mutant.relpath).read_text(encoding="utf-8").count(mutant.anchor)
+    except OSError:
+        return 0
+
+
 def apply_mutant(root: Path, mutant: Mutant) -> bool:
     """Substitute the anchor in `root`; False (nothing written) unless it occurs exactly once."""
+    if _anchor_count(root, mutant) != 1:
+        return False
     target = root / mutant.relpath
-    try:
-        text = target.read_text(encoding="utf-8")
-    except OSError:
-        return False
-    if text.count(mutant.anchor) != 1:
-        return False
-    target.write_text(text.replace(mutant.anchor, mutant.replacement), encoding="utf-8")
+    target.write_text(target.read_text(encoding="utf-8").replace(mutant.anchor, mutant.replacement),
+                      encoding="utf-8")
     return True
 
 
 def anchors_apply_once(root: Path, catalogue: "dict[str, Mutant]") -> "list[str]":
     """The names of catalogue entries whose anchor does not occur exactly once under `root`."""
-    missing = []
-    for name, mutant in catalogue.items():
-        try:
-            count = (root / mutant.relpath).read_text(encoding="utf-8").count(mutant.anchor)
-        except OSError:
-            count = 0
-        if count != 1:
-            missing.append(name)
-    return missing
+    return [name for name, mutant in catalogue.items() if _anchor_count(root, mutant) != 1]
 
 
 def run_command(cmd: str, cwd: Path, env_extra: "dict[str, str] | None" = None) -> int:
@@ -179,10 +190,18 @@ def run_mutant(
         except ScratchError as exc:
             print(f"resource-grant-mutation: scratch copy failed, no mutation applied: {exc}", file=sys.stderr)
             return 0
-        if not apply_mutant(clone, mutant):
+        if _anchor_count(clone, mutant) != 1:
             print(f"resource-grant-mutation: anchor of {name} does not match exactly once in "
                   f"{mutant.relpath}; nothing was mutated", file=sys.stderr)
             return 0
+        if run is not None:
+            baseline = run_command(run, clone)
+            if baseline != 0:
+                print(f"resource-grant-mutation: the command already exits {baseline} on the unmutated "
+                      f"copy, so a red run on the mutant would prove nothing; no mutation applied",
+                      file=sys.stderr)
+                return 0
+        apply_mutant(clone, mutant)
         print(f"resource-grant-mutation: applied {name} ({mutant.description})")
         if run is None:
             return 0
@@ -216,7 +235,7 @@ def main(argv: "list[str] | None" = None) -> int:
     mode.add_argument("--list", action="store_true")
     mode.add_argument("--control", action="store_true")
     mode.add_argument("--mutant", metavar="NAME")
-    ap.add_argument("--run", metavar="CMD", help="command to run in the scratch copy")
+    ap.add_argument("--run", metavar="CMD", help="one argv command (shlex-split, no shell) to run in the scratch copy")
     args = ap.parse_args(argv)
     try:
         if args.list:

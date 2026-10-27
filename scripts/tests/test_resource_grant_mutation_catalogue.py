@@ -34,12 +34,6 @@ def test_every_anchor_occurs_exactly_once_in_the_working_tree(name):
     assert mutant.anchor != mutant.replacement
 
 
-@in_mutated_copy
-def test_the_stage_four_mutants_are_catalogued():
-    assert {"handoff-resources-carried", "workdir-write-baseline", "wildcard-kept-as-pattern",
-            "digest-check-detects-change"} <= set(CONTROL.CATALOGUE)
-
-
 # --- behaviour on a tiny repository ---------------------------------------------------------
 
 MINI = {"m": CONTROL.Mutant("mod.py", "VALUE = 1", "VALUE = 2", "mini mutant")}
@@ -92,16 +86,33 @@ def test_a_surviving_mutant_exits_zero(repo):
     assert CONTROL.run_mutant("m", "true", repo=repo, catalogue=MINI) == 0
 
 
-def test_the_active_mutant_marker_is_exported_to_the_command(repo):
+def test_the_active_mutant_marker_is_exported_to_the_command_on_the_mutant_only(repo):
     check = (f"{sys.executable} -c \"import os, sys; "
-             f"sys.exit(0 if os.environ.get('{CONTROL.ACTIVE_MUTANT_ENV}') == 'm' else 9)\"")
-    assert CONTROL.run_mutant("m", check, repo=repo, catalogue=MINI) == 0
+             f"sys.exit(3 if os.environ.get('{CONTROL.ACTIVE_MUTANT_ENV}') == 'm' else 0)\"")
+    assert CONTROL.run_mutant("m", check, repo=repo, catalogue=MINI) == 3
 
 
-def test_a_collection_error_is_not_the_kill_exit_code(repo):
-    rc = CONTROL.run_mutant("m", f"{sys.executable} -m pytest does_not_exist.py -q", repo=repo, catalogue=MINI)
-    assert rc in (2, 4, 5)
+@pytest.mark.parametrize("code", [2, 4, 5])
+def test_a_collection_error_on_the_mutant_is_not_the_kill_exit_code(repo, code):
+    check = f"{sys.executable} -c \"import sys; sys.exit({code} if 'VALUE = 2' in open('mod.py').read() else 0)\""
+    rc = CONTROL.run_mutant("m", check, repo=repo, catalogue=MINI)
+    assert rc == code
     assert rc != 1
+
+
+def test_a_command_red_on_the_unmutated_copy_is_not_a_kill(repo, capsys):
+    """CMD=false is red on both copies; that must not read as the mutant being killed."""
+    rc = CONTROL.run_mutant("m", "false", repo=repo, catalogue=MINI)
+    assert rc != 1
+    assert "unmutated" in capsys.readouterr().err
+
+
+def test_a_command_red_on_the_unmutated_copy_gets_no_second_run(repo):
+    count = repo / "runs"
+    count.write_text("", encoding="utf-8")
+    script = (f"{sys.executable} -c \"open({str(count)!r}, 'a').write('x'); raise SystemExit(1)\"")
+    CONTROL.run_mutant("m", script, repo=repo, catalogue=MINI)
+    assert count.read_text(encoding="utf-8") == "x"
 
 
 def test_anchor_miss_exits_zero_and_runs_nothing(repo, capsys):

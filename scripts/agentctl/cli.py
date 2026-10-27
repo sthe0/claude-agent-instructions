@@ -8283,7 +8283,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             resource_disagreement = (
                 f"specialist-reported Resource: {resource_line!r} disagrees with the "
                 f"engine's own resolution of Rule: {rule_line!r} to "
-                f"{[plan_resources._resource_to_dict(r) for r in self_grant_resources]!r} "
+                f"{[_resources.resource_to_dict(r) for r in self_grant_resources]!r} "
                 "-- asking the user rather than trusting either alone"
             )
         if self_grant_resources and resource_disagreement is None:
@@ -8298,7 +8298,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
             )
             state.log(
                 "permission_self_grant", stage=stage.index, action=action, rule=rule_line,
-                resources=[plan_resources._resource_to_dict(r) for r in self_grant_resources],
+                resources=[_resources.resource_to_dict(r) for r in self_grant_resources],
             )
             store.save(state)
             return Directive(
@@ -8310,7 +8310,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                 marker="PERMISSION-REQUEST",
                 data={
                     **data_base, "action": action, "rule": rule_line,
-                    "resources": [plan_resources._resource_to_dict(r) for r in self_grant_resources],
+                    "resources": [_resources.resource_to_dict(r) for r in self_grant_resources],
                 },
             )
         state.permission_request = PermissionRequest(
@@ -9552,10 +9552,7 @@ def cmd_stage_grants(args, *, store: StateStore, runner: Runner | None = None) -
     all_entries = declared_entries + derived_entries + runtime_entries
 
     venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
-    resource_set = plan_resources.resource_set_from_entries(
-        all_entries, stage, venue, workdir=venue,
-        kind=stage.spawn_kind() if stage.is_spawn() else None,
-    ).to_dict()
+    resource_set = plan_resources.resource_set_from_entries(all_entries, stage, venue).to_dict()
     data = {
         "stage": stage_index,
         "executor": stage.actor.executor,
