@@ -657,13 +657,14 @@ def cmd_ticket(a) -> int:
 
 # --------------------------------------------------------------------------
 # split flow: the curator writes a manifest (judgement), code applies and
-# checks it (rule) — see skills/specializations/memory-curator/SKILL.md
+# checks it (rule) — see skills/specializations/curator/SKILL.md
 # --------------------------------------------------------------------------
 CONTEXT_ID = re.compile(r"[0-9]+:[0-9a-f]{12}")
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
 REVISION = re.compile(r"[0-9A-Za-z._/~^@{}-]+")
 CONTEXTS_HEADING = re.compile(r"## Contexts(\s.*)?")
 SPLIT_MARKER = "Moved by memory-curator split on"
+LEGACY_SPLIT_NOTE = "split by memory-curator"  # legacy name, as in "Moved by memory-curator split on"
 SPLIT_MARKER_LINE = re.compile(rf"{SPLIT_MARKER} \d{{4}}-\d{{2}}-\d{{2}}:")
 CLUSTER_TEXT_KEYS = ("slug", "name", "description", "functional_ground", "difficulty")
 CLUSTER_OPTIONAL_KEYS = ("existing_regularity", "existing_principle", "no_principle_reason")
@@ -947,14 +948,14 @@ def note_split_in_description(head: str, date: str) -> str:
     m = FRONTMATTER.match(head)
     if not m:
         return head
-    note = f" (contexts split by memory-curator on {date})"
+    note = f" (contexts split by curator on {date})"
     fm_lines = m.group(1).split("\n")
     for i, line in enumerate(fm_lines):
         if not line.startswith("description:"):
             continue
         value = line[len("description:"):].strip()
         continuation = i + 1 < len(fm_lines) and fm_lines[i + 1][:1] in (" ", "\t")
-        if not value or value[0] in ">|" or continuation or "split by memory-curator" in value:
+        if not value or value[0] in ">|" or continuation or LEGACY_SPLIT_NOTE in value or "split by curator" in value:
             return head
         if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'":
             value = value[:-1] + note + value[-1]
@@ -1032,7 +1033,7 @@ def cluster_leaf_text(cluster: dict, blocks: list[str], carried: dict[str, str],
         + f"\n## Difficulty\n{cluster['difficulty'].strip()}\n"
         + f"\n**Functional ground:** {one_line(cluster['functional_ground'])}\n"
         + "\n## Order & criterion\n"
-        + f"Split out of [{source.stem}]({origin}) by memory-curator split on {date}: "
+        + f"Split out of [{source.stem}]({origin}) by curator split on {date}: "
         + "the contexts below arose under that leaf's difficulty and cluster here by the "
         + "functional ground named above. The order and acceptance check of the original "
         + "stay in the source leaf.\n"

@@ -1,6 +1,6 @@
 ---
 name: 2026-01-05-sample-venue-difficulty
-description: A sample difficulty used as a split fixture — a check runs where the commits are not and a fetch hangs the engine (contexts split by memory-curator on 2026-10-12)
+description: A sample difficulty used as a split fixture — a check runs where the commits are not and a fetch hangs the engine (contexts split by curator on 2026-10-12)
 type: reference
 schema: difficulty/v1
 generality: 0

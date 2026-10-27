@@ -42,7 +42,7 @@ Read-only, mechanical scans over the agent's OWN functional elements:
                         context-count cap, both derived from the corpus's own
                         log-scale far-out fence (docs/operations/
                         memory-leaf-size-calibration.json); the action it names
-                        is the memory-curator split.
+                        is the curator split (memory mode).
   crutch-defer-overdue  a gen_crutch_registry.py CLAUDE_MD_OVERRIDES entry
                         disposed "defer" that has gone unreviewed past a
                         horizon, keyed to that entry's own deferred_since date
@@ -115,7 +115,7 @@ WRITER_GATE_ADVISORY_WINDOW_DAYS = 7
 OVERSIZED_LEAF_DEFAULT_MAX_BYTES = 74000
 OVERSIZED_LEAF_DEFAULT_CONTEXTS_MULTIPLE = 27
 PRINCIPLE_PROMOTION_DEFAULT = 3
-OVERSIZED_LEAF_ACTION = "action: memory-curator split"
+OVERSIZED_LEAF_ACTION = "action: curator split"
 
 _LINK_RE = re.compile(r"\]\(([^)]+)\)")
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")

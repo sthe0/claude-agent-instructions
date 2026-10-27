@@ -115,7 +115,7 @@ ADVISORY_KINDS = frozenset(
         "near-duplicate",
         "dangling-pointer",
         "oversized-index",
-        # Advice to run the memory-curator specialist, not a broken state.
+        # Advice to run the curator specialist (memory mode), not a broken state.
         "oversized-leaf",
         "no-root-index",
         "crutch-defer-overdue",
@@ -160,10 +160,10 @@ REMEDIATION = {
     "broken-hook-registration": "re-run scripts/install-reminder-hooks.sh (it now prunes dangling managed registrations), or remove the entry by hand",
     "orphan-leaf": "add a pointer line in the owning MEMORY.md index, or delete the leaf",
     "orphan-index": "link the sub-index from its parent MEMORY.md, or delete it",
-    "ceiling-proximity": "invoke the instruction-grooming skill for that file",
+    "ceiling-proximity": "invoke the curator skill (instructions mode) for that file",
     "near-duplicate": "generalize and group the two leaves, or record why they stay separate",
     "dangling-pointer": "fix the link target, or drop the pointer line",
-    "oversized-leaf": "spawn the memory-curator specialist: memory-curator split proposes a split, nothing lands until the user accepts it",
+    "oversized-leaf": "spawn the curator specialist (memory mode): curator split proposes a split, nothing lands until the user accepts it",
     "oversized-index": "spin off a sub-index (memory-hierarchy.md)",
     "no-root-index": "create the root MEMORY.md for that memory root",
     "policy-flag": "invoke `self-improvement` to adjust the policy, then record the adjustment and the observed metric movement in memory-global/leaves/policy-effectiveness-tracking.md",

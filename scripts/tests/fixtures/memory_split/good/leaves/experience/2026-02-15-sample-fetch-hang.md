@@ -18,7 +18,7 @@ A network call placed in an engine-run check never returns, and the engine, whic
 **Functional ground:** an auto-run check has no timeout, so any blocking call in it blocks the engine instead of failing
 
 ## Order & criterion
-Split out of [2026-01-05-sample-venue-difficulty](2026-01-05-sample-venue-difficulty.md) by memory-curator split on 2026-10-12: the contexts below arose under that leaf's difficulty and cluster here by the functional ground named above. The order and acceptance check of the original stay in the source leaf.
+Split out of [2026-01-05-sample-venue-difficulty](2026-01-05-sample-venue-difficulty.md) by curator split on 2026-10-12: the contexts below arose under that leaf's difficulty and cluster here by the functional ground named above. The order and acceptance check of the original stay in the source leaf.
 
 ## Contexts
 

@@ -18,7 +18,7 @@ A stage's control is executed in a checkout that lacks the commits it judges, so
 **Functional ground:** the venue a control runs in is chosen once and silently diverges from where the judged commits live
 
 ## Order & criterion
-Split out of [2026-01-05-sample-venue-difficulty](2026-01-05-sample-venue-difficulty.md) by memory-curator split on 2026-10-12: the contexts below arose under that leaf's difficulty and cluster here by the functional ground named above. The order and acceptance check of the original stay in the source leaf.
+Split out of [2026-01-05-sample-venue-difficulty](2026-01-05-sample-venue-difficulty.md) by curator split on 2026-10-12: the contexts below arose under that leaf's difficulty and cluster here by the functional ground named above. The order and acceptance check of the original stay in the source leaf.
 
 ## Contexts
 

@@ -792,7 +792,7 @@ def test_oversized_leaf_ignores_non_difficulty_(tmp_path):
 def test_oversized_leaf_detail_names_split_(tmp_path):
     root = _root_with(tmp_path, _dleaf(filler=5000))
     f = sd.scan_oversized_leaves(root, max_bytes=100, max_contexts=50)
-    assert f[0].detail.endswith("action: memory-curator split")
+    assert f[0].detail.endswith("action: curator split")
 
 
 def test_measure_leaf_counts_only_contexts_section_headings():

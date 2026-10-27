@@ -113,13 +113,13 @@ Editing the agent's own config / instructions / skills is **state-changing produ
 
 When triggered → read `~/.claude-agent/skills/tracker-management/SKILL.md` and layer tracker publication on top of normal coordination: load ticket context, publish the plan, post key progress updates, post the final result. Tracker-agnostic — project-specific conventions live in `<project_cwd>/.claude/agent-memory/`.
 
-### `instruction-grooming`
+### Instructions mode of the curator specialization
 
 **TRIGGER:** an instruction file crosses `lint-prose-length.py`'s 90% WARN threshold (`CLAUDE.md`, `README.md`, the cursor mirror, any `SKILL.md`/`policy.md`) — flagged directly by the linter or via the `hook-session-due.py` OFFER — or the user asks to slim / groom / consolidate / deduplicate a bloated instruction file.
 
 **SKIP** when the file is comfortably under 90% of its ceiling and no user request references grooming.
 
-When triggered → read `~/.claude-agent/skills/instruction-grooming/SKILL.md` and work through measure → survey → verify consumers → plan; the actual edit still rides the standard plan-approval spine like any other production change to instructions.
+When triggered → read `~/.claude-agent/skills/specializations/curator/SKILL.md` (Instructions mode) and work through measure → survey → verify consumers → plan; the actual edit still rides the standard plan-approval spine like any other production change to instructions.
 
 ### `improvement-scan`
 
@@ -171,7 +171,7 @@ In Claude Code a general `Agent` (exploration/polling only) told to read a SKILL
 | `thinker` | Reasoning check on a non-trivial chain (note: no fresh-context isolation available in Cursor) | `~/.claude-agent/skills/thinker/SKILL.md` |
 | `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations | `~/.claude-agent/skills/yandex-cloud-expert/SKILL.md` |
 | `tech-writer` | README / docs authoring and polishing a plan rendering, a long reply/comment or a file-report for the user, in the language of the dialogue (clear, concise prose, no calques/jargon) | `~/.claude-agent/skills/tech-writer/SKILL.md` |
-| `memory-curator` | A `self-diagnose` `oversized-leaf` finding: split a grown experience leaf by functional ground (memory-only edits, never commits) | `~/.claude-agent/skills/memory-curator/SKILL.md` |
+| `curator` | A `self-diagnose` `oversized-leaf` finding: split a grown experience leaf by functional ground (Memory mode: memory-only edits, never commits) | `~/.claude-agent/skills/specializations/curator/SKILL.md` |
 
 The SKILL.md bodies are written for the spawned-process model ("you have been spawned as a fresh manager"). In Cursor, treat that framing as the **role** to adopt and the **working principles** to follow, not literal instructions about a separate process. Return markers (`COMPLETED:` / `PLAN-READY:` / `INCOMPLETE:` / `CLARIFY:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`) are **internal phase markers** in your in-thread work — they tell you when to pause and check with the user. Two behave specially in-thread: `PLAN-READY:` is a hard gate (stop and get explicit user approval before executing the first step); `CLARIFY:` means ask the user for the one small specific fact and resume on the answer. You lose the fresh-context property of spawning, but you stay entirely within Cursor and never invoke `claude`.
 

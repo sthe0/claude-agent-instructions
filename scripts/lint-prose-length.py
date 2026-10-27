@@ -594,6 +594,9 @@ def main(argv: list[str] | None = None) -> int:
 
     for w in warnings:
         print(f"lint-prose-length: WARN — {w}")
+    if warnings:
+        print("lint-prose-length: WARN — to recover headroom run the curator skill, instructions mode "
+              "(skills/specializations/curator/SKILL.md)")
 
     if failures:
         print(f"lint-prose-length: FAIL — {len(failures)} issue(s)")
