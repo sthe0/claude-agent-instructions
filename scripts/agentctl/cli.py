@@ -27,7 +27,7 @@ import tomllib
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
-from lib import argv_text, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
+from lib import argv_text, ask_evidence, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
 from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
@@ -2750,49 +2750,6 @@ def _chose_waiver_option(tool_input: dict, answers) -> bool:
     return False
 
 
-def _content_waiver_asks(path: Path) -> list[tuple[float | None, bool, bool]] | None:
-    """(ask time, answered, consented) for every AskUserQuestion with an option carrying
-    CONTENT_WAIVER_ASK_MARKER, in file order. The chosen labels are read from the
-    harness's `toolUseResult.answers` ({question text: chosen label}) on the user entry
-    holding the ask's one non-error tool_result; an entry holding several results, or
-    no readable answers, records an answer without consent (fail-closed). None iff the
-    transcript cannot be read."""
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except Exception:
-        return None
-    asks: dict[str, list] = {}
-    for line in lines:
-        try:
-            entry = json.loads(line)
-        except Exception:
-            continue
-        message = entry.get("message") if isinstance(entry, dict) else None
-        if not isinstance(message, dict):
-            continue
-        blocks = [b for b in transcript_turns._content_items(message) if isinstance(b, dict)]
-        results = [b for b in blocks if b.get("type") == "tool_result" and not b.get("is_error")]
-        for block in blocks:
-            call_id = block.get("id")
-            if (block.get("type") == "tool_use" and block.get("name") == "AskUserQuestion"
-                    and isinstance(call_id, str) and isinstance(block.get("input"), dict)
-                    and transcript_turns.has_marker_option(block["input"], CONTENT_WAIVER_ASK_MARKER)):
-                ts = entry.get("timestamp")
-                epoch = transcript_turns.iso_to_epoch(ts) if isinstance(ts, str) else None
-                seen = asks.setdefault(call_id, [block["input"], epoch, False, False])
-                if seen[1] is None:
-                    seen[1] = epoch
-        for block in results:
-            seen = asks.get(block.get("tool_use_id"))
-            if seen is None:
-                continue
-            seen[2] = True
-            tool_result = entry.get("toolUseResult")
-            answers = tool_result.get("answers") if isinstance(tool_result, dict) else None
-            seen[3] = seen[3] or (len(results) == 1 and _chose_waiver_option(seen[0], answers))
-    return [(ts, answered, consented) for _, ts, answered, consented in asks.values()]
-
-
 def _content_waiver_blocker(state: SessionState, stage_index: int) -> str | None:
     """Why `--accept-content-loss` is refused for `stage_index`, else None. The stage
     must have an earlier `record_landing` event (the waiver follows a recorded red), and
@@ -2809,12 +2766,12 @@ def _content_waiver_blocker(state: SessionState, stage_index: int) -> str | None
         return ("the latest record_landing event is not stamped: run record-landing "
                 "without --accept-content-loss again, then ask the user")
     path = _present_plan_transcript(state.session_id)
-    asks = _content_waiver_asks(path) if path is not None else None
-    if asks is None:
+    scan = ask_evidence.ask_after_event(path, CONTENT_WAIVER_ASK_MARKER, anchor)
+    if scan is None:
         return (f"cannot locate or read the transcript of session {state.session_id!r}, so "
                 f"the {CONTENT_WAIVER_ASK_MARKER!r} answer cannot be verified")
-    after = [consented for ts, answered, consented in asks
-             if answered and ts is not None and ts > anchor]
+    after = [any(_chose_waiver_option(ask.tool_input, answers) for answers in ask.sole_answers)
+             for ask in scan.after if ask.answered]
     if not after:
         return (f"no answered AskUserQuestion carrying {CONTENT_WAIVER_ASK_MARKER!r} in an "
                 "option label or description was asked after the latest record_landing "
@@ -10906,9 +10863,9 @@ def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
                          "re-run verify-final, then ask the resolution question; "
                          + RESOLUTION_ASK_RULE_HINT], record
     path = _present_plan_transcript(state.session_id)
-    calls = transcript_turns.ask_user_question_calls(path) if path is not None else None
+    scan = ask_evidence.ask_after_event(path, RESOLUTION_ASK_MARKER, verified_at)
     given = getattr(args, "resolution_ask_unverifiable", None)
-    if calls is None:
+    if scan is None:
         reason = (given or "").strip()
         if reason:
             record["unverifiable"] = reason
@@ -10917,8 +10874,7 @@ def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
                          "so the resolution ask cannot be verified"
                          + (" — --resolution-ask-unverifiable must be non-empty" if given is not None
                             else " — pass --resolution-ask-unverifiable '<why the transcript is unavailable>'")], record
-    marked = [(ts, answered) for tool_input, ts, answered in calls
-              if transcript_turns.has_marker_option(tool_input, RESOLUTION_ASK_MARKER)]
+    marked = scan.marked
     escape_note = ("" if given is None else
                    " (--resolution-ask-unverifiable is refused: the transcript is readable)")
     if not marked:
@@ -10926,15 +10882,15 @@ def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
                          "option label or description was found in this session's transcript — "
                          "ask the resolution question (with the 1-5 rating) after verify-final"
                          + escape_note], record
-    after = [answered for ts, answered in marked if ts is not None and ts > verified_at]
-    if not after and any(ts is None for ts, _ in marked):
+    after = [ask.answered for ask in scan.after]
+    if not after and any(ask.ts is None for ask in marked):
         return [prefix + f"a {RESOLUTION_ASK_MARKER!r} ask has a missing or unparsable timestamp "
                          "in the transcript, so its order against verify-final cannot be "
                          "established — ask the resolution question again; "
                          + RESOLUTION_ASK_RULE_HINT + escape_note], record
     if not after:
         misplaced_after = [
-            inp for inp, ts, _ in calls
+            inp for inp, ts, _ in transcript_turns.ask_user_question_calls(path)
             if ts is not None and ts > verified_at
             and not transcript_turns.has_marker_option(inp, RESOLUTION_ASK_MARKER)
             and transcript_turns.has_marker_in_question_text(inp, RESOLUTION_ASK_MARKER)
