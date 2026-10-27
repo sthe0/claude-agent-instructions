@@ -34,6 +34,7 @@ REVIEW_EVENTS = frozenset({"plan_review", "plan_pair_review", "plan_review_compo
 CACHE_LOCK = threading.Lock()
 _LEDGER: dict = {}
 _TRANSCRIPTS: dict = {}
+_CHILDREN: dict = {}
 
 
 class UnknownSession(KeyError):
@@ -44,6 +45,7 @@ def clear_cache() -> None:
     with CACHE_LOCK:
         _LEDGER.clear()
         _TRANSCRIPTS.clear()
+        _CHILDREN.clear()
 
 
 def _dict(value) -> dict:
@@ -558,24 +560,51 @@ _DETAIL_KEYS = (
 )
 
 
-def child_index(state_root) -> dict[str, list[dict]]:
-    """Parent session id → its linked children, from one pass over the state directory.
-    ``detail`` builds it per call unless the caller passes one in, so a loop over many tasks
-    builds it once."""
+def _child_link(path: Path) -> tuple[str, dict] | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if '"parent_link"' not in text:
+        return None
+    try:
+        state = json.loads(text)
+    except ValueError:
+        state, _ = _read_state(path)
+    state = _dict(state)
+    link = _dict(state.get("parent_link"))
+    if not link.get("parent_session"):
+        return None
+    return link["parent_session"], {
+        "session_id": state.get("session_id") or path.stem, "stage_index": link.get("stage_index"),
+        "node": state.get("node"), "goal": state.get("goal")}
+
+
+def child_index(state_root, *, since: float | None = None) -> dict[str, list[dict]]:
+    """Parent session id → its linked children. Each state file's link is cached by path,
+    mtime and size, so a call re-reads only changed or new files. With ``since`` (epoch
+    seconds) an uncached file older than ``since`` minus a minute is skipped: a linked child's
+    state file is created after its parent starts and later saves only raise its mtime."""
+    floor = None if since is None else since - 60
     index: dict[str, list[dict]] = {}
     for path in sorted(Path(state_root).glob("*.json")):
         try:
-            if '"parent_link"' not in path.read_text(encoding="utf-8"):
-                continue
+            st = path.stat()
         except OSError:
             continue
-        state, _ = _read_state(path)
-        state = _dict(state)
-        link = _dict(state.get("parent_link"))
-        if link.get("parent_session"):
-            index.setdefault(link["parent_session"], []).append({
-                "session_id": state.get("session_id") or path.stem, "stage_index": link.get("stage_index"),
-                "node": state.get("node"), "goal": state.get("goal")})
+        key = (st.st_mtime_ns, st.st_size)
+        with CACHE_LOCK:
+            cached = _CHILDREN.get(path)
+        if cached is not None and cached[0] == key:
+            link = cached[1]
+        elif cached is None and floor is not None and st.st_mtime < floor:
+            continue
+        else:
+            link = _child_link(path)
+            with CACHE_LOCK:
+                _CHILDREN[path] = (key, link)
+        if link is not None:
+            index.setdefault(link[0], []).append(dict(link[1]))
     return index
 
 
