@@ -126,6 +126,10 @@ def _stage_landed_resources(stage: Stage) -> list:
     return [_resources.VcsRefResource(crit.landed.remote, crit.landed.target, "land")]
 
 
+def _stage_branch_resources(stage: Stage, venue: str | None) -> list:
+    return _grants.derive_branch_resources(stage, venue=venue)[0]
+
+
 @dataclass
 class StageResources:
     stage_index: int
@@ -154,6 +158,7 @@ def compute_stage_resources(stage: Stage, venue: str | None) -> StageResources:
         out_resources.extend(res.resources)
     out_resources.extend(_stage_spawn_resources(stage))
     out_resources.extend(_stage_landed_resources(stage))
+    out_resources.extend(_stage_branch_resources(stage, venue))
     return StageResources(
         stage_index=stage.index,
         resources=out_resources,
@@ -204,6 +209,7 @@ def resource_set_from_entries(
             out.resources.extend(resolve_add_dir_grant(entry["path"], entry["mode"]).resources)
     out.resources.extend(_stage_spawn_resources(stage))
     out.resources.extend(_stage_landed_resources(stage))
+    out.resources.extend(_stage_branch_resources(stage, venue))
     out.resources = list(dict.fromkeys(out.resources))
     out.rule_patterns = list(dict.fromkeys(out.rule_patterns))
     return out

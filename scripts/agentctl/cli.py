@@ -65,6 +65,7 @@ from .plan import (
     load_plan,
     load_plan_with_digest,
     materialized_grant_entries,
+    dropped_grants_report,
     is_unit_id,
     order_digest,
     pair_binding,
@@ -1851,6 +1852,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.supplies = list(refined.supplies)
     cur.optional = refined.optional
     cur.backlog_issue = refined.backlog_issue
+    cur.branch = refined.branch
     cur.amendments = list(refined.amendments)
     if is_skipped(cur) and not cur.optional:
         cur.outcome.status = StageStatus.PENDING.value
@@ -4906,6 +4908,13 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         check_venue_warnings(doc.stages, doc.meta.final_check, doc.meta.repo_root, doc.meta.delivery_worktree)
     )
     d.data.setdefault("advisories", []).extend(grant_shadow.mixed_spelling_advisories(doc))
+    dropped = dropped_grants_report(doc)
+    if dropped:
+        d.data["dropped_grants"] = dropped
+        d.data["advisories"].append(
+            "dropped grants (derived entries the validator refused; advisory):\n"
+            + "\n".join(f"- stage {x['stage']}: {x['entry']} — {x['reason']}" for x in dropped)
+        )
     d.data.setdefault("advisories", []).extend(cost_tier_floor_advisories(doc.stages))
     # Submission seam (a)'s advice channel: a stage whose expected_result_image merely
     # restates its own check. Warn-only at all three seams — see submission.submission_advice.

@@ -2214,7 +2214,7 @@ def norm_handoff_record(
     resource_set = plan_resources.resource_set_from_entries(
         engine_grants, state.stage(stage_index), state.resolve_check_venue(CheckVenue.DELIVERY.value),
     )
-    if workdir and permission_mode == "acceptEdits" and not write_grant_forces_accept_edits(kind, engine_grants):
+    if workdir and workdir_baseline_applies(kind, permission_mode, engine_grants):
         baseline = agentctl_resources.FileResource(workdir, "write")
         if baseline not in resource_set.resources:
             resource_set.resources.append(baseline)
@@ -2595,6 +2595,13 @@ def write_grant_forces_accept_edits(kind: str, engine_grants: "list[dict] | None
     if kind in _ACCEPT_EDITS_TRUSTED_KINDS:
         return False
     return bool(engine_grants) and any(e.get("mode") == "write" for e in engine_grants)
+
+
+def workdir_baseline_applies(kind: str, permission_mode: str, engine_grants: "list[dict] | None") -> bool:
+    """True when the child can write its workdir by the resolved mode alone: `acceptEdits`
+    that no `mode="write"` grant forced (a forced one is narrowed back by
+    `write_grant_cwd_deny_rules`, so the workdir is not writable there)."""
+    return permission_mode == "acceptEdits" and not write_grant_forces_accept_edits(kind, engine_grants)
 
 
 def write_grant_cwd_deny_rules(

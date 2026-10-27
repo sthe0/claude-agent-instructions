@@ -745,6 +745,7 @@ def _populated_stage():
         control="control",
         optional=True,
         backlog_issue="backlog-issue",
+        branch="own-branch",
     )
 
 

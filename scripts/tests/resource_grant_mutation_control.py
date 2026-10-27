@@ -60,6 +60,8 @@ PLAN_RESOURCES = "scripts/agentctl/plan_resources.py"
 NORM_HANDOFF = "scripts/agentctl/norm_handoff.py"
 PLAN = "scripts/agentctl/plan.py"
 SPAWN = "scripts/spawn-specialist.py"
+GRANTS = "scripts/agentctl/grants.py"
+CLI = "scripts/agentctl/cli.py"
 
 
 @dataclass(frozen=True)
@@ -85,8 +87,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "workdir-baseline-needs-accept-edits": Mutant(
         SPAWN,
-        'if workdir and permission_mode == "acceptEdits" and not write_grant_forces_accept_edits(kind, engine_grants):',
-        "if workdir and not write_grant_forces_accept_edits(kind, engine_grants):",
+        'return permission_mode == "acceptEdits" and not write_grant_forces_accept_edits(kind, engine_grants)',
+        "return not write_grant_forces_accept_edits(kind, engine_grants)",
         "the workdir baseline no longer depends on the resolved permission mode",
     ),
     "wildcard-kept-as-pattern": Mutant(
@@ -106,6 +108,24 @@ CATALOGUE: "dict[str, Mutant]" = {
         "payload = repr((element, value))",
         "payload = repr((element, value, 'mutant'))",
         "only a plan-level premise key moves; digest_neutrality_check.py must exit 1",
+    ),
+    "push-own-branch-only": Mutant(
+        GRANTS,
+        'resources_.append(_resources.VcsRefResource(BRANCH_REMOTE, branch, "push"))',
+        'resources_.append(_resources.VcsRefResource(BRANCH_REMOTE, "main", "push"))',
+        "the derived push names trunk instead of the plan-declared branch",
+    ),
+    "push-trunk-refused": Mutant(
+        GRANTS,
+        'if branch in _TRUNK_BRANCHES or branch.startswith("release-") or branch == head:',
+        "if False:",
+        "trunk, release-* and the remote HEAD branch are no longer refused",
+    ),
+    "dropped-surfaced": Mutant(
+        CLI,
+        '    if dropped:\n        d.data["dropped_grants"] = dropped',
+        '    if False:\n        d.data["dropped_grants"] = dropped',
+        "submit-plan no longer reports the dropped grants",
     ),
 }
 
@@ -171,7 +191,7 @@ def anchors_apply_once(root: Path, catalogue: "dict[str, Mutant]") -> "list[str]
 
 
 def run_command(cmd: str, cwd: Path, env_extra: "dict[str, str] | None" = None) -> int:
-    env = {**os.environ, **(env_extra or {})}
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env_extra or {})}
     code = subprocess.run(shlex.split(cmd), cwd=cwd, env=env, check=False).returncode
     return 128 - code if code < 0 else code
 
@@ -201,7 +221,9 @@ def run_mutant(
                       f"copy, so a red run on the mutant would prove nothing; no mutation applied",
                       file=sys.stderr)
                 return 0
-        apply_mutant(clone, mutant)
+        if not apply_mutant(clone, mutant):
+            print(f"resource-grant-mutation: {name} did not apply; nothing was mutated", file=sys.stderr)
+            return 0
         print(f"resource-grant-mutation: applied {name} ({mutant.description})")
         if run is None:
             return 0

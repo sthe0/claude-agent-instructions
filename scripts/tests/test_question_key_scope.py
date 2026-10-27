@@ -139,6 +139,8 @@ _UNCLAIMED_STAGE_LEAVES = {
                 "covered instead by gates._renorm_stage_residual",
     "backlog_issue": "the backlog issue an optional stage traces to in place of an "
                      "order requirement, same exclusion as its sibling `optional`",
+    "branch": "the branch a developer stage commits and pushes (DR-P): a grant "
+              "derivation input no target names; covered by gates._renorm_stage_residual",
 }
 
 _BARE_STAGE = {

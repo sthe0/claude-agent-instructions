@@ -77,7 +77,7 @@ These almost always need `PERMISSION-REQUEST:` before execution unless the grant
 
 ## Commit & push cadence
 
-On a **personal ticket / working branch** (anything not main / master / release-*), commit in small increments and **push after each commit**. Frequent pushed commits make rollback cheap and keep the manager's PR current — never withhold ticket-branch pushes waiting for the coordinator to "handle the PR". Pushing to an **open PR's branch is safe**: on VCSs with draft PRs the pushed commits land as a **draft** update and are not shown to reviewers until an explicit publish. Only **shared-branch** pushes (§ When the plan step involves external / irreversible actions) need `PERMISSION-REQUEST:`.
+On **your own stage / ticket branch** (the branch the plan declares — never main / master / trunk / release-* or another person's branch), commit in small increments and **push after each commit**. Frequent pushed commits make rollback cheap and keep the manager's PR current — never withhold ticket-branch pushes waiting for the coordinator to "handle the PR". Pushing to an **open PR's branch is safe**: on VCSs with draft PRs the pushed commits land as a **draft** update and are not shown to reviewers until an explicit publish. Only **shared-branch** pushes (§ When the plan step involves external / irreversible actions) need `PERMISSION-REQUEST:`.
 
 In Core worktrees the git-worktrees reaper pushes committed non-trunk branches at turn end, so there commit and never land; the push-after-commit rule above applies to other repos.
 

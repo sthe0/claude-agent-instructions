@@ -684,6 +684,8 @@ _STAGE_RESIDUAL_COVERAGE = {
                 "Question.target names it, inside here because flipping a required stage "
                 "to declinable changes what the stage IS to the customer",
     "backlog_issue": "the residual's own splice, same reason as its sibling `optional`",
+    "branch": "the residual's own splice — re-declaring the branch moves which VcsRef "
+              "commit/push resources the stage derives (DR-P), so it is not a re-sequencing",
     "control": "outside: the control attestation record-result stamps, same reason",
     "amendments.date": "outside: retrospective bookkeeping no change decision reads "
                        "(plan.STAGE_LEAF_CLASS class B)",

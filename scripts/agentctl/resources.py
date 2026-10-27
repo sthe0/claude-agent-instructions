@@ -260,10 +260,11 @@ class FileResource(Resource):
 
 @dataclass(frozen=True)
 class VcsRefResource(Resource):
-    """A version-control ref at a given `op` — `"push"` or `"land"`. `op`
-    is part of the identity: an approved `land` never covers a `push`
-    request and vice versa (revision 6, R1) — landing and force/plain
-    pushing are different real-world effects even against the same ref."""
+    """A version-control ref at a given `op` — `"push"`, `"land"` or `"commit"`
+    (a commit to the local repository, `remote` `"."`). `op` is part of the
+    identity: an approved `land` never covers a `push` request and vice versa
+    (revision 6, R1) — landing and force/plain pushing are different real-world
+    effects even against the same ref; a `commit` never covers either."""
 
     remote: str
     ref: str
@@ -342,7 +343,8 @@ def resource_to_dict(resource: Resource) -> dict:
 def resource_from_dict(data: dict) -> Resource:
     """The inverse of `resource_to_dict`. Raises `ValueError` on an unknown kind, a missing or
     foreign field, or a value the class refuses; tolerant readers wrap this."""
-    cls = _RESOURCE_CLASSES.get(data.get("kind")) if isinstance(data, dict) else None
+    kind = data.get("kind") if isinstance(data, dict) else None
+    cls = _RESOURCE_CLASSES.get(kind) if isinstance(kind, str) else None
     if cls is None:
         raise ValueError(f"unknown resource kind {data.get('kind') if isinstance(data, dict) else data!r}")
     try:

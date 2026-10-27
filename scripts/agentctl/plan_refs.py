@@ -51,11 +51,11 @@ EXTERNALIZABLE_FIELDS: dict[str, frozenset[str]] = {
         "criterion_type", "verify_command", "verify_venue", "verify_kind",
         "verify_venue_at_final", "negative_control", "negative_control_waiver",
         "ephemeral_artifacts_waiver", "conditions", "preconditions", "knowledge",
-        "backlog_issue",
+        "backlog_issue", "branch",
     }),
     "meta": frozenset({
         "task_id", "goal", "done_criterion", "criterion_type", "weight_class",
-        "external_research", "repo_root", "delivery_worktree", "landing_waiver",
+        "external_research", "repo_root", "delivery_worktree", "landing_waiver", "branch",
     }),
     "order": frozenset({"customer_id", "customer", "functional_place", "parent_norm"}),
 }

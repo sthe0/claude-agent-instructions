@@ -49,6 +49,7 @@ from lib.spawn_prompt_files import composed_prompt_files, skill_path
 from . import advisor as _advisor
 from . import delivery
 from . import effort
+from . import resources as _resources
 from .config import Thresholds
 from .plan import (
     PlanError,
@@ -3761,6 +3762,7 @@ def _renorm_stage_residual(stage) -> tuple:
         stage.ephemeral_artifacts_waiver,
         stage.optional,
         stage.backlog_issue,
+        stage.branch,
         tuple(stage.renorms),
     )
 
@@ -3800,6 +3802,7 @@ def _meta_place(meta) -> tuple:
         meta.repo_root,
         meta.delivery_worktree,
         meta.landing_waiver,
+        meta.branch,
         _final_check_surface(meta),
         order_place(meta),
         tuple((a.id, a.text, a.basis, a.risk, a.stage) for a in meta.assumptions),
@@ -3935,7 +3938,7 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
     for requested in resolved_plan.resources:
         if any(a.covers(requested, protected=protected) for a in approved):
             continue
-        data = _oa.resource_to_dict(requested)
+        data = _resources.resource_to_dict(requested)
         name = _resource_name(data)
         if name in seen:
             continue
@@ -4116,7 +4119,7 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
 
         seen: set[str] = set()
         for requested in resources:
-            data = _oa.resource_to_dict(requested)
+            data = _resources.resource_to_dict(requested)
             if data["kind"] == "specialist":
                 continue
             if any(held.covers(requested, protected=protected) for held in held_resources):

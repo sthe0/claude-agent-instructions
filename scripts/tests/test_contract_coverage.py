@@ -742,6 +742,7 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "ephemeral_artifacts_waiver": frozenset({"apply_refined", "diff_plans"}),
     "optional": frozenset({"apply_refined", "diff_plans"}),
     "backlog_issue": frozenset({"apply_refined"}),
+    "branch": frozenset({"apply_refined", "diff_plans"}),
     "amendments.date": frozenset({"apply_refined"}),
     "amendments.text": frozenset({"apply_refined"}),
     "amendments.reason": frozenset({"apply_refined"}),

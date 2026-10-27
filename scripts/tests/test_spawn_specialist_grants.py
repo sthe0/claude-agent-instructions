@@ -356,7 +356,7 @@ def test_gc7_real_producer_via_derive_stage_grants(tmp_path):
     outside_dir.mkdir()
     artifact = str(outside_dir / "report.md")
     derived, dropped = derive_stage_grants(_stage_with_output_artifact(artifact), venue="/repo")
-    assert not dropped
+    assert not [d for d in dropped if not d["entry"].startswith(("commit and push of", "push of"))]
     assert [d.mode for d in derived.add_dirs] == ["read"]
     assert derived.add_dirs[0].path == str(outside_dir)
 
@@ -500,7 +500,7 @@ def test_gc15_derived_read_under_runtime_write_is_covered(tmp_path):
     derived, dropped = derive_stage_grants(
         _stage_with_output_artifact(str(reports_dir / "report.md")), venue="/repo"
     )
-    assert not dropped
+    assert not [d for d in dropped if not d["entry"].startswith(("commit and push of", "push of"))]
     assert [(d.path, d.mode) for d in derived.add_dirs] == [(str(reports_dir), "read")]
 
     runtime_entries = [{"path": str(out_dir), "mode": "write", "provenance": "runtime"}]

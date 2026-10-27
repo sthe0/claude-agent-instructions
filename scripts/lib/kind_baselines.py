@@ -152,7 +152,8 @@ KIND_BASELINES: dict[str, list[str]] = {
             "verify-all.py", "verify-agentctl.py", "gen_crutch_registry.py",
             "agentctl-cli.py classify", "agentctl-cli.py status",
         ),
-        # recording work on the assigned branch — never `git push`
+        # recording work on the assigned branch; pushing that branch is not a
+        # baseline entry but the plan-declared DR-P resource (grants.derive_branch_resources)
         "Bash(git add:*)", "Bash(git commit:*)",
         # integrating trunk INTO the assigned branch — the same defect one step
         # later. Observed 2026-08-10: a stage whose whole material was "merge
@@ -161,8 +162,8 @@ KIND_BASELINES: dict[str, list[str]] = {
         # mutating verb it needed was refused across five command shapes.
         # Reading trunk's own baseline needs the detached checkout; resolving a
         # conflict needs checkout/restore on a path; ff-vs-true-merge needs
-        # merge-base and rev-list. Landing stays absent: `git push` is the
-        # coordinator's.
+        # merge-base and rev-list. Landing and pushing trunk or shared branches
+        # stay absent: they are the coordinator's.
         #
         # `git fetch` is narrowed to two EXACT (non-wildcard) invocations
         # (round 3: even `Bash(git fetch origin:*)`, narrowed to the `origin`

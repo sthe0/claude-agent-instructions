@@ -330,7 +330,14 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/grants.py::<module>::re.compile"]
 class = "structural"
-ground = "_REDIRECT_MERGE_RE compiles the shell stream-merge redirect token pattern."
+ground = "_REDIRECT_MERGE_RE compiles the shell stream-merge redirect token pattern; _BRANCH_NAME_RE compiles the plain-git-branch-name character class."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/grants.py::derive_branch_resources::pattern.match"]
+class = "structural"
+ground = "_BRANCH_NAME_RE.match checks a plan-declared branch name is a plain ref-name token (no option-like or glob characters) before it becomes a VcsRef resource; syntax, not meaning."
 hits = 1
 reviewed_by = "developer"
 

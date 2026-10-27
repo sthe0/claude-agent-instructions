@@ -34,12 +34,14 @@ import os
 import posixpath
 import re
 import shlex
+import subprocess
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from lib import bash_write_targets, shell_tokens, widening_targets
 
+from . import resources as _resources
 from . import script_effects, tool_contracts
 
 # --- data shapes -------------------------------------------------------------
@@ -847,6 +849,70 @@ def _is_library_module(artifact: str, venue: str) -> bool:
     return os.path.isfile(init_path)
 
 
+#: Branches no stage may commit to or push through DR-P, besides `release-*` and the
+#: remote's HEAD branch.
+_TRUNK_BRANCHES = frozenset({"main", "master", "trunk"})
+BRANCH_REMOTE = "origin"
+BRANCH_LOCAL_REMOTE = "."
+_BRANCH_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
+
+
+def remote_head_branch(venue: str | None) -> str | None:
+    """The branch `origin/HEAD` points at in `venue`'s repository (`main` for
+    `refs/remotes/origin/HEAD -> origin/main`), or None when it is unset or unreadable."""
+    if not venue:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", venue, "symbolic-ref", "--short", f"refs/remotes/{BRANCH_REMOTE}/HEAD"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = proc.stdout.strip()
+    prefix = f"{BRANCH_REMOTE}/"
+    if proc.returncode != 0 or not out.startswith(prefix):
+        return None
+    return out[len(prefix):] or None
+
+
+def derive_branch_resources(stage, *, venue: str | None) -> tuple[list, list[dict]]:
+    """DR-P: the typed commit/push resources of the branch the PLAN declares for the stage
+    (`Stage.branch`). `spawn:developer` and `spawn:tech-writer` may commit it
+    (`VcsRefResource(".", branch, "commit")`); only `spawn:developer` may also push it
+    (`VcsRefResource("origin", branch, "push")`). Both are exact refs, never a pattern.
+
+    Ownership is positive: only the declared branch is derived, so another person's branch
+    is excluded by construction, whatever is checked out. Refused into the returned dropped
+    list, with a reason: no declared branch, a malformed name, `main`/`master`/`trunk`/
+    `release-*`, and the remote's HEAD branch; a push is also refused when `origin/HEAD`
+    cannot be read, since then trunk cannot be told from an own branch."""
+    kind = stage.spawn_kind() if stage.is_spawn() else None
+    if kind not in ("developer", "tech-writer"):
+        return [], []
+    branch = stage.branch
+    if not branch:
+        return [], [{"entry": "commit and push of the stage branch",
+                     "reason": "the plan declares no `branch` for the stage or in [meta]"}]
+    if not _BRANCH_NAME_RE.match(branch) or ".." in branch:
+        return [], [{"entry": f"commit and push of {branch!r}",
+                     "reason": f"{branch!r} is not a plain branch name"}]
+    head = remote_head_branch(venue)
+    if branch in _TRUNK_BRANCHES or branch.startswith("release-") or branch == head:
+        return [], [{"entry": f"commit and push of {branch!r}",
+                     "reason": f"{branch!r} is a trunk or shared branch"}]
+    resources_ = [_resources.VcsRefResource(BRANCH_LOCAL_REMOTE, branch, "commit")]
+    dropped: list[dict] = []
+    if kind == "developer":
+        if head is None:
+            dropped.append({"entry": f"push of {branch!r} to {BRANCH_REMOTE}",
+                            "reason": f"{BRANCH_REMOTE}/HEAD is unset or unreadable, so trunk cannot be told "
+                                      f"from {branch!r}"})
+        else:
+            resources_.append(_resources.VcsRefResource(BRANCH_REMOTE, branch, "push"))
+    return resources_, dropped
+
+
 def derive_stage_grants(stage, *, venue: str) -> tuple[StageGrants, list[dict]]:
     """The pure function from a stage's declared elements to a derived
     grant set: DR-V (one `Bash(<segment>:*)` per top-level verify_command
@@ -856,7 +922,10 @@ def derive_stage_grants(stage, *, venue: str) -> tuple[StageGrants, list[dict]]:
     DR-E (spawn:developer/spawn:tech-writer only: each in-venue
     output_artifact/material_ref becomes `Edit(//<abs>)`), DR-R (each
     outside-venue absolute path in material_refs/knowledge_refs/
-    output_artifacts becomes a READ add_dir on its directory).
+    output_artifacts becomes a READ add_dir on its directory). DR-P (the
+    plan-declared branch's commit/push resources, see `derive_branch_resources`)
+    yields typed resources the grant lists cannot carry, so here it only
+    contributes its refusals to `dropped`.
 
     Every proposed entry passes through the same validator entries pass
     through when declared; a refused entry is dropped, not raised — this
@@ -925,6 +994,8 @@ def derive_stage_grants(stage, *, venue: str) -> tuple[StageGrants, list[dict]]:
             continue
         seen_dirs.add(directory)
         _try_add_dir(directory, "read", "derived:DR-R")
+
+    dropped.extend(derive_branch_resources(stage, venue=venue)[1])
 
     return StageGrants(allow=allow, add_dirs=add_dirs), dropped
 

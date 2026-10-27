@@ -2127,6 +2127,11 @@ class Stage:
     # `[[stage.amendments]]`: retrospective notes (see Amendment). Empty on every plan
     # authored before this field.
     amendments: list[Amendment] = field(default_factory=list)
+    # The branch a spawn:developer / spawn:tech-writer stage commits on (and a developer
+    # pushes): the stage's own `branch`, else `[meta] branch`, resolved once at plan load.
+    # None derives no commit/push resource and reports a dropped entry; None on every plan
+    # authored before this field.
+    branch: str | None = None
 
     @property
     def depends_on(self) -> list[int]:
@@ -2182,6 +2187,7 @@ class Stage:
                 optional=bool(d.get("optional", False)),
                 backlog_issue=d.get("backlog_issue"),
                 amendments=[Amendment(**a) for a in d.get("amendments", [])],
+                branch=d.get("branch"),
             )
         # legacy FLAT shape -> nested groups (migration shim)
         return cls(

@@ -222,6 +222,9 @@ class PlanMeta:
     # so "this change lands nothing" is a decision the approved plan carries, not one the
     # resolving actor makes after the outcome is known. None = no waiver.
     landing_waiver: str | None = None
+    # The branch the plan's spawn:developer / spawn:tech-writer stages commit on, inherited
+    # by every stage that declares no `branch` of its own (Stage.branch). None = undeclared.
+    branch: str | None = None
     # Optional typed end-to-end checks run by verify-final after per-stage re-runs.
     # Absent => [] (back-compat). Parsed from top-level [[final_check]] tables.
     final_check: list[FinalCheck] = field(default_factory=list)
@@ -1929,6 +1932,7 @@ def parse_plan(
         repo_root=str(m["repo_root"]) if m.get("repo_root") else None,
         delivery_worktree=str(m["delivery_worktree"]) if m.get("delivery_worktree") else None,
         landing_waiver=str(m["landing_waiver"]) if m.get("landing_waiver") else None,
+        branch=str(m["branch"]).strip() or None if m.get("branch") else None,
         final_check=final_checks,
         order=order,
         assumptions=_parse_assumptions(m.get("assumption")),
@@ -2137,6 +2141,7 @@ def parse_plan(
                 optional=raw_optional,
                 backlog_issue=raw_backlog_issue,
                 amendments=_parse_amendments(s.get("amendments"), stage_ctx),
+                branch=(str(s["branch"]).strip() or None if s.get("branch") else None) or meta.branch,
             )
         )
 
@@ -2515,6 +2520,7 @@ def order_extra_digest(meta: PlanMeta) -> str:
         meta.task_id,
         meta.delivery_worktree,
         *((("landing_waiver", meta.landing_waiver),) if meta.landing_waiver else ()),
+        *((("branch", meta.branch),) if meta.branch else ()),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -3986,6 +3992,18 @@ def materialized_grant_entries(doc: PlanDoc, *, venue: str | None = None) -> dic
     return entries
 
 
+def dropped_grants_report(doc: PlanDoc, *, venue: str | None = None) -> list[dict]:
+    """`[{"stage", "entry", "reason"}]` for every derivation the validator or DR-P refused,
+    in stage order. Advisory data: a dropped derived entry is not a plan defect by itself,
+    but the author otherwise sees only the grants that survived."""
+    venue = venue if venue is not None else _venue_for(doc)
+    return [
+        {"stage": stage.index, "entry": d["entry"], "reason": d["reason"]}
+        for stage in doc.stages
+        for d in _derive_stage_grants(stage, venue)[1]
+    ]
+
+
 def _entry_key(entry: dict) -> tuple:
     """Identity of one stored grant entry, provenance label ignored (as
     `StageGrants.effective_tuple` ignores it)."""
@@ -4135,6 +4153,9 @@ def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fals
              # Same footing again: a stage's `renorms` is the consequence a normative
              # critique is bound to, so an edit of it must not diff as 'no_change'.
              *((("renorms", tuple(s.renorms)),) if s.renorms else ()),
+             # The branch DR-P derives the stage's commit/push resources from: an edit of it
+             # changes what the child may do, so it must not diff as 'no_change'.
+             *((("branch", s.branch),) if s.branch else ()),
              # The two cells the change-tier table found outside every change-decision
              # key (Core #74): `capability_required` is in neither `_structural_signature`
              # nor `stage_carry_key`, and a supply's `element`/`artifact` is read by no key
@@ -4266,6 +4287,7 @@ STAGE_LEAF_CLASS: dict[str, str] = {
     "output_artifacts": "I",
     "ephemeral_artifacts_waiver": "I",
     "renorms": "O",
+    "branch": "I",
     "outcome.status": "I",
     "outcome.declined": "I",
     "outcome.actual": "I",

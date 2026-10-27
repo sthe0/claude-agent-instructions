@@ -969,6 +969,14 @@ disposition = "keep"
 ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
 
 [[entry]]
+id = "32c812f6162e5399"
+domain = "code"
+file = "scripts/agentctl/grants.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "3c08865a3cd2578e"
 domain = "code"
 file = "scripts/agentctl/grants.py"
@@ -8300,6 +8308,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "3f8ca32fa4fec74d"
 domain = "code"
 file = "scripts/tests/test_grants_guard_disjoint.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "cc2437eda8998e8e"
+domain = "code"
+file = "scripts/tests/test_grants_own_branch.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
@@ -17081,6 +17097,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
 
 [[entry]]
+id = "66e84a53995f5976"
+domain = "code"
+file = "scripts/tests/test_submit_plan_dropped.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
 id = "4bdcd6442162ccc4"
 domain = "code"
 file = "scripts/tests/test_sweep_grant_surface.py"
@@ -19905,6 +19929,14 @@ disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
 
 [[entry]]
+id = "8cc22fc4ab3de6f5"
+domain = "code_file_rollup"
+file = "scripts/tests/test_grants_own_branch.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
 id = "dd56909e009c8024"
 domain = "code_file_rollup"
 file = "scripts/tests/test_guard_canon_bash_writes.py"
@@ -21100,6 +21132,14 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 id = "812528d7b305784c"
 domain = "code_file_rollup"
 file = "scripts/tests/test_state_roundtrip.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "8032bab5dffb439e"
+domain = "code_file_rollup"
+file = "scripts/tests/test_submit_plan_dropped.py"
 class = "not-a-gate"
 disposition = "keep"
 ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour. (file-level rollup of the file's scopes.)"
@@ -36500,6 +36540,14 @@ ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the s
 
 [[entry]]
 id = "141e278a5e1cf494"
+domain = "prose"
+file = "skills/specializations/developer/SKILL.md"
+class = "perception"
+disposition = "keep"
+ground = "A specialization's TRIGGER/SKIP criteria are judgment calls over the shape of a request (does this task fit this specialization's scope) — the shared marker-protocol design deliberately keeps this as a model-read contract, not a set of machine-checkable predicates."
+
+[[entry]]
+id = "6e35df5641a9e64c"
 domain = "prose"
 file = "skills/specializations/developer/SKILL.md"
 class = "perception"

@@ -119,7 +119,6 @@ def first_thinker_verdict_key(plan_sha256: str, changed_identities: list[tuple])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-resource_to_dict = _resources.resource_to_dict
 
 
 def resource_from_dict(raw: dict) -> _resources.Resource | None:
@@ -271,7 +270,7 @@ def record_approval(
         raise ValueError("order_approvals.record_approval refuses an empty plan_sha256")
     record = {
         "plan_sha256": plan_sha256,
-        "resources": [resource_to_dict(r) for r in resources],
+        "resources": [_resources.resource_to_dict(r) for r in resources],
         "unresolved_identities": [list(identity) for identity in unresolved_identities],
         "stage_effects": stage_effects,
         "declined_issues": sorted({str(i) for i in (declined_issues or [])}),
@@ -306,7 +305,7 @@ def record_customer_grant(
         raise ValueError(f"order_approvals.record_customer_grant refuses by={AGENT_ACTOR!r}")
     record = {
         "plan_sha256": None,
-        "resources": [resource_to_dict(resource)],
+        "resources": [_resources.resource_to_dict(resource)],
         "unresolved_identities": [],
         "stage_effects": [],
         "declined_issues": [],
