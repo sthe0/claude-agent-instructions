@@ -1497,6 +1497,46 @@ disposition = "keep"
 ground = "The one file in the engine whose subject IS free-text meaning: it decides whether a stage's expected_result_image restates the check that judges it. Its regexes are `echo_prefilter`, a high-recall structural PREFILTER whose every consumer (`submission.submission_advice`) gates it behind `judge_echo` before anything is said — the prefilter alone produces no output at all. So the `scripts/agentctl/**` row below, which grounds its structural verdict on the engine's regexes reading the engine's own syntax rather than free-text meaning, states the opposite of what is true here."
 
 [[entry]]
+id = "e920ae3e19d92c86"
+domain = "code"
+file = "scripts/agentctl/segment_resolver.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "dc5a7ecdeb209ec2"
+domain = "code"
+file = "scripts/agentctl/segment_resolver.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "93d4450094b81d56"
+domain = "code"
+file = "scripts/agentctl/segment_resolver.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "4ecd307a0bb156ea"
+domain = "code"
+file = "scripts/agentctl/segment_resolver.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
+id = "feec3491b8b23dbd"
+domain = "code"
+file = "scripts/agentctl/segment_resolver.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning."
+
+[[entry]]
 id = "2115d7fb919a4671"
 domain = "code"
 file = "scripts/agentctl/solved_marker.py"
@@ -18535,6 +18575,14 @@ file = "scripts/agentctl/result_image.py"
 class = "semantic-guarded"
 disposition = "keep"
 ground = "The one file in the engine whose subject IS free-text meaning: it decides whether a stage's expected_result_image restates the check that judges it. Its regexes are `echo_prefilter`, a high-recall structural PREFILTER whose every consumer (`submission.submission_advice`) gates it behind `judge_echo` before anything is said — the prefilter alone produces no output at all. So the `scripts/agentctl/**` row below, which grounds its structural verdict on the engine's regexes reading the engine's own syntax rather than free-text meaning, states the opposite of what is true here. (file-level rollup of the file's scopes.)"
+
+[[entry]]
+id = "07a63b65a15b4198"
+domain = "code_file_rollup"
+file = "scripts/agentctl/segment_resolver.py"
+class = "structural"
+disposition = "keep"
+ground = "The deterministic engine. Its regexes parse the engine's own structured syntax (`[stage N]` markers, return-marker prefixes, path/venue tokens, landed-check identifiers); its hard-behaviour sinks are the engine's own command dispatch — the mechanism CLAUDE.md instructs everything else to route through, not a semantic classifier of free-text meaning. (file-level rollup of the file's scopes.)"
 
 [[entry]]
 id = "1dd077dca93648cf"

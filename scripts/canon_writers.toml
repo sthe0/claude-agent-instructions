@@ -81,6 +81,7 @@
 "scripts/agentctl/plan_store.py" = { disposition = "not-canon", category = "not-canon", reason = "content-addressed plan objects under objects/ in the plans directory of the config root (or AGENTCTL_PLAN_OBJECTS_DIR), written to a partial file then swapped" }
 "scripts/agentctl/plan_resources.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only the caller-supplied --dump-commands / --report-json paths; callers pass scratch paths, and no caller points them into the repo" }
 "scripts/agentctl/render.py" = { disposition = "not-canon", category = "not-canon", reason = "plan render directory in the agentctl state dir, built in a temp dir then swapped" }
+"scripts/agentctl/segment_resolver.py" = { disposition = "not-canon", category = "not-canon", reason = "parser that classifies the effect of a command string, naming git write subcommands as data; writes no file" }
 "scripts/agentctl/store.py" = { disposition = "not-canon", category = "not-canon", reason = "session state JSON in the agentctl state dir" }
 "scripts/agentctl/task_accumulator.py" = { disposition = "not-canon", category = "not-canon", reason = "per-task accumulator files in the agentctl state dir" }
 "scripts/agentctl/workspace_cleanup.py" = { disposition = "not-canon", category = "not-canon", reason = "registry records in the agentctl state dir; removes only registered, clean, landed linked worktrees, mounts and scratch, never a protected root (the canonical checkout included)" }

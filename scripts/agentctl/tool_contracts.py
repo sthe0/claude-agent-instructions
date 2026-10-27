@@ -87,6 +87,36 @@ class Resolution:
     identity: tuple | None = None
 
 
+@dataclass
+class Segment:
+    """One `&&` / `;` / `|` piece of a command line, resolved on its own.
+
+    `status` is `"resolved"` (`resources` lists every effect), `"opaque"`
+    (the segment runs code that cannot be read; `opaque_kind` is
+    `"python-c"`, `"stdin-body"` or `"script-file"`, and `resources` holds
+    only its redirect targets) or `"unresolved"` (`reason_class` is one of
+    the canonical tags). `venue` is the cwd the segment was resolved against
+    -- the original venue when the cwd had become uncertain."""
+
+    text: str
+    venue: str
+    status: str
+    resources: list[resources.Resource] = field(default_factory=list)
+    opaque_kind: str | None = None
+    reason_class: str | None = None
+    reason: str | None = None
+
+
+@dataclass
+class SegmentedResolution:
+    segments: list[Segment] = field(default_factory=list)
+
+    @property
+    def resources(self) -> list[resources.Resource]:
+        """Every segment's effects, de-duplicated, in order."""
+        return list(dict.fromkeys(r for seg in self.segments for r in seg.resources))
+
+
 @dataclass(frozen=True)
 class ContractEntry:
     name: str
@@ -1005,3 +1035,14 @@ def resolve_command(
         )
 
     return Resolution("resolved", resources=all_resources)
+
+
+def resolve_segments(
+    text: str, venue: str, *, contract_table: dict[str, ContractEntry] | None = None
+) -> SegmentedResolution:
+    """Resolve each `&&` / `;` / `|` segment of `text` on its own (see
+    `segment_resolver`); `resolve_command` stays the closed, all-or-nothing
+    resolver every existing caller relies on."""
+    from . import segment_resolver
+
+    return segment_resolver.resolve_segments(text, venue, contract_table=contract_table)

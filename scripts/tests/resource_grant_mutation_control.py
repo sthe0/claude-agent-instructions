@@ -62,6 +62,7 @@ PLAN = "scripts/agentctl/plan.py"
 SPAWN = "scripts/spawn-specialist.py"
 GRANTS = "scripts/agentctl/grants.py"
 CLI = "scripts/agentctl/cli.py"
+SEGMENT_RESOLVER = "scripts/agentctl/segment_resolver.py"
 
 
 @dataclass(frozen=True)
@@ -236,6 +237,38 @@ CATALOGUE: "dict[str, Mutant]" = {
         '    admitted = {tuple(sorted(d.items())) for d in frozen.get("resources") or []}\n'
         '    admitted |= {tuple(sorted(d.items())) for d in now["branch"]["resources"]}\n    return {',
         "a refinement re-admits what a live read of origin/HEAD or the refs now derives",
+    ),
+    "git-C-venue": Mutant(
+        SEGMENT_RESOLVER,
+        '    c_value = global_values.get("-C")\n',
+        '    c_value = global_values.get("-C")\n'
+        '    if c_value is not None:\n'
+        '        return _unres("contract-unresolved", "git -C is outside the venue")\n',
+        "segment mode refuses `git -C <dir>` again, as the all-or-nothing resolver does",
+    ),
+    "git-commit-resource": Mutant(
+        SEGMENT_RESOLVER,
+        '        out.append(resources.VcsRefResource(".", branch, "commit"))\n',
+        '        pass\n',
+        "a git commit/merge no longer lists the commit on the current branch",
+    ),
+    "cd-after-semicolon-unresolved": Mutant(
+        SEGMENT_RESOLVER,
+        '            cwd = None if self.moved else self.out\n',
+        '            cwd = self.out\n',
+        "a segment after `;`/`||` is resolved against the cwd an earlier cd may not have reached",
+    ),
+    "redirect-write": Mutant(
+        SEGMENT_RESOLVER,
+        '            out.append(_file_write(target_path))\n',
+        '            pass\n',
+        "a redirect target is no longer listed as a write",
+    ),
+    "unsplit-separator-unresolved": Mutant(
+        SEGMENT_RESOLVER,
+        '            elif c in ";&|<>()":\n',
+        '            elif c in "&|<>()":\n',
+        "`;` stops being a separator, so the segments on both sides run together",
     ),
 }
 
