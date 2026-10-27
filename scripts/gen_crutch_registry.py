@@ -73,15 +73,6 @@ inv = _load_inventory_module()
 
 CODE_PARTITIONS = [
     (
-        "scripts/tests/**",
-        lambda f: f.startswith("scripts/tests/"),
-        "not-a-gate",
-        "keep",
-        "Synthetic gate-input fixtures: these exercise the real detectors/gates under "
-        "controlled inputs (including deliberately adversarial ones) but are not "
-        "themselves gates guarding production behaviour.",
-    ),
-    (
         "scripts/lib/writer_rules.py (candidate generation)",
         lambda f: f == "scripts/lib/writer_rules.py",
         "semantic-guarded",
