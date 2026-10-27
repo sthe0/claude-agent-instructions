@@ -65,6 +65,7 @@ CLI = "scripts/agentctl/cli.py"
 SEGMENT_RESOLVER = "scripts/agentctl/segment_resolver.py"
 ADVISOR = "scripts/agentctl/advisor.py"
 CODE_EFFECTS = "scripts/agentctl/code_effects.py"
+HOOK = "scripts/hook-resource-grant-check.py"
 
 
 @dataclass(frozen=True)
@@ -627,6 +628,150 @@ CATALOGUE: "dict[str, Mutant]" = {
         "str(path) if stored and path is not None else None",
         "str(path) if path is not None else None",
         "cache_path is reported although the record could not be written",
+    ),
+    "hook-denies-uncovered-write": Mutant(
+        HOOK,
+        "    if denied:\n",
+        "    if False:\n",
+        "the hook never denies: an uncovered write falls through to the harness prompt",
+    ),
+    "hook-allows-uncovered-write": Mutant(
+        HOOK,
+        "    uncovered = [r for r in changes if not covered_by(approved, r)]\n",
+        "    uncovered = []\n",
+        "a write outside the record's resources reads as covered and is allowed",
+    ),
+    "hook-active-at-root": Mutant(
+        HOOK,
+        "    if _depth(env) < 1:\n",
+        "    if False:\n",
+        "the hook decides at recursion depth 0, so the root coordinator is bound by a child's record",
+    ),
+    "hook-kill-switch-ignored": Mutant(
+        HOOK,
+        "    if not agentctl_config.resource_grant_hook_enabled(env, constants):\n",
+        "    if False:\n",
+        "the kill switch no longer stops the hook",
+    ),
+    "hook-error-allows": Mutant(
+        HOOK,
+        '        return Verdict(NONE, "error", message=',
+        '        return Verdict(ALLOW, "error", message=',
+        "a hook error is rendered as an allow",
+    ),
+    "hook-undeterminable-allows": Mutant(
+        HOOK,
+        "    return Verdict(NONE, UNDETERMINABLE, **base)\n",
+        '    return Verdict(ALLOW, "covered", **base)\n',
+        "a Bash call with an unresolved or undeterminable segment is allowed",
+    ),
+    "hook-unresolved-segment-resolved": Mutant(
+        HOOK,
+        '    if segment.status == "unresolved":\n',
+        "    if False:\n",
+        "an unresolved segment is read as one that changes nothing",
+    ),
+    "hook-opaque-code-unread": Mutant(
+        HOOK,
+        "    if opaque:\n        found = ",
+        "    if False:\n        found = ",
+        "an opaque segment's code is not sent to the code reader, so its writes are never seen",
+    ),
+    "hook-edit-denies": Mutant(
+        HOOK,
+        '    return Verdict(NONE, "uncovered-write", resources=shown, venue=approved.cwd)\n',
+        '    return Verdict(DENY, "uncovered-write", resources=shown, venue=approved.cwd)\n',
+        "an Edit or Write outside the record is denied instead of left to the harness",
+    ),
+    "hook-edit-allows-all": Mutant(
+        HOOK,
+        "    if covered_by(approved, resource):\n        return Verdict(ALLOW",
+        "    if True:\n        return Verdict(ALLOW",
+        "an Edit or Write is allowed whatever file it names",
+    ),
+    "hook-read-allows-all": Mutant(
+        HOOK,
+        "    kind = readable(approved, target)\n    if kind is None:\n",
+        "    kind = readable(approved, target)\n    if False:\n",
+        "a Read is allowed whatever file it names",
+    ),
+    "hook-scratchpad-of-any-session": Mutant(
+        HOOK,
+        'parts[i] == parent_session and parts[i + 1] == "scratchpad"',
+        'parts[i + 1] == "scratchpad"',
+        "any session's scratchpad is readable, not only the parent's",
+    ),
+    "hook-scratchpad-outside-temp-root": Mutant(
+        HOOK,
+        "    if not any(_under(real, root) for root in roots):\n        return False\n",
+        "    if False:\n        return False\n",
+        "a directory named <parent session>/scratchpad anywhere on disk counts as the scratchpad",
+    ),
+    "hook-allow-entry-ignored": Mutant(
+        HOOK,
+        "    if entry is not None:\n        return SegmentVerdict(text, HARNESS",
+        "    if False:\n        return SegmentVerdict(text, HARNESS",
+        "an entry of the child's permissions.allow no longer shelters a write from a deny",
+    ),
+    "hook-rule-match-ignores-redirect": Mutant(
+        HOOK,
+        "    if any(ch in RULE_UNSAFE_CHARS for ch in text):\n        return False\n",
+        "",
+        "a rule matches a segment carrying a redirect or substitution its text does not name",
+    ),
+    "hook-rule-prefix-without-word-boundary": Mutant(
+        HOOK,
+        '        return operand == prefix or operand.startswith(prefix + " ")\n',
+        "        return operand.startswith(prefix)\n",
+        "a prefix rule matches a longer word (`git add:*` matches `git addition`)",
+    ),
+    "hook-accept-edits-in-any-mode": Mutant(
+        HOOK,
+        "    if approved.mode != ACCEPT_EDITS or not changed:\n",
+        "    if not changed:\n",
+        "the acceptEdits auto-run is assumed in every permission mode, so no deny is made",
+    ),
+    "hook-accept-edits-may-run-in-any-mode": Mutant(
+        HOOK,
+        "    return approved.mode == ACCEPT_EDITS and _all_files_in_cwd(approved, uncovered)\n",
+        "    return _all_files_in_cwd(approved, uncovered)\n",
+        "an uncovered write in the cwd is never denied, whatever the permission mode",
+    ),
+    "hook-reads-unconfined": Mutant(
+        HOOK,
+        "    if not confined:\n",
+        "    if False:\n",
+        "a read-only program naming a path outside the approved resources is allowed",
+    ),
+    "hook-writes-no-log": Mutant(
+        HOOK,
+        "    if state_root is not None:\n        append_row(",
+        "    if False:\n        append_row(",
+        "no decision-log row is appended",
+    ),
+    "spawn-hook-unregistered": Mutant(
+        SPAWN,
+        "    if child_linked and resource_grant_hook_enabled(constants=constants):\n",
+        "    if False:\n",
+        "a linked child's --settings carries no resource-grant hook",
+    ),
+    "spawn-hook-registered-for-unlinked": Mutant(
+        SPAWN,
+        "    if child_linked and resource_grant_hook_enabled(constants=constants):\n",
+        "    if resource_grant_hook_enabled(constants=constants):\n",
+        "an unlinked child, which has no record to check against, is given the hook",
+    ),
+    "spawn-hook-ignores-kill-switch": Mutant(
+        SPAWN,
+        "    if child_linked and resource_grant_hook_enabled(constants=constants):\n",
+        "    if child_linked:\n",
+        "the hook is registered although the kill switch is off",
+    ),
+    "spawn-hook-timeout-hardcoded": Mutant(
+        SPAWN,
+        "register_resource_grant_hook(child_settings, resource_grant_hook_timeout_s(constants))",
+        "register_resource_grant_hook(child_settings, 60)",
+        "the hook's timeout in the child's settings ignores resource-grant-hook-timeout-s",
     ),
 }
 

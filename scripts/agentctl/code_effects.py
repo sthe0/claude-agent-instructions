@@ -45,8 +45,8 @@ Residual risk, stated plainly. The prefilter is a static allow-list; the judge p
 that follows an instruction hidden in the code can still emit a valid but too narrow effects list, and a
 call the judge misreads (a `subprocess`, `os.system` or `os.exec*` of a program it takes for harmless) is
 not caught by anything here. Not modelled either: the interpreter's own implicit imports of a code with no
-import statement, and a PYTHONPATH exported by the Bash shell's rc file (invisible to the hook; stage 8 reads
-it from the shell snapshot).
+import statement, and a PYTHONPATH exported by the Bash shell's rc file (invisible to the hook, which does not
+read the shell snapshot; docs/operations/resource-grant-hook.md).
 """
 from __future__ import annotations
 

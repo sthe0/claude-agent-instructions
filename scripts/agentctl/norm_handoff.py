@@ -60,6 +60,7 @@ def build_record(
     closure_digest: str | None = None,
     resources: list[dict] | None = None,
     rule_patterns: list[str] | None = None,
+    permissions_allow: list[str] | None = None,
 ) -> dict:
     """The handoff record. `parent_lineage` is the parent session's own
     `parent_link.norm_lineage` (None for a session nobody linked); the record's lineage
@@ -67,7 +68,9 @@ def build_record(
     stage this child was spawned for. `closure_digest` is the stage's
     `plan.stage_closure_digest`: the plan content the stage's brief was built from.
     `resources` and `rule_patterns` are the stage's `plan_resources.StageResourceSet.to_dict()`
-    halves: the typed resources the child may change and the wildcard-tail rules kept as text."""
+    halves: the typed resources the child may change and the wildcard-tail rules kept as text.
+    `permissions_allow` is the child's final `permissions.allow` (kind baselines included): the
+    resource-grant hook reads it to leave alone a call the harness already allows."""
     record = {
         "schema": HANDOFF_SCHEMA,
         "parent_session": parent_session,
@@ -78,6 +81,7 @@ def build_record(
         "grants": list(grants or []),
         "resources": list(resources or []),
         "rule_patterns": list(rule_patterns or []),
+        "permissions_allow": list(permissions_allow or []),
         "depth": depth,
         "norm_lineage": [*(parent_lineage or []), lineage_entry(parent_session, stage_index, norm)],
         "created_at": created_at or dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -169,6 +173,7 @@ def verify_env_value(raw: str) -> tuple[dict | None, str | None]:
         "grants": record.get("grants") or [],
         "resources": record.get("resources") or [],
         "rule_patterns": record.get("rule_patterns") or [],
+        "permissions_allow": record.get("permissions_allow") or [],
         "depth": depth,
         "norm_lineage": lineage,
     }, None

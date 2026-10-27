@@ -55,6 +55,46 @@ def child_contour_linking_enabled(
     return constants.get(CHILD_CONTOUR_LINKING_KEY) == "on"
 
 
+RESOURCE_GRANT_HOOK_KEY = "resource-grant-hook"
+RESOURCE_GRANT_HOOK_ENV = "AGENTCTL_RESOURCE_HOOK"
+RESOURCE_GRANT_HOOK_TIMEOUT_KEY = "resource-grant-hook-timeout-s"
+RESOURCE_GRANT_HOOK_TIMEOUT_FALLBACK_S = 20
+
+
+def resource_grant_hook_enabled(
+    env: Mapping[str, str] | None = None,
+    constants: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether the resource-grant PreToolUse hook is registered for a spawn and acts in a child.
+
+    AGENTCTL_RESOURCE_HOOK `1` / `0` wins in both directions; otherwise config.md's
+    `resource-grant-hook` row decides, and only exactly `on` enables it. Anything else -- another
+    value, a missing row, an unreadable config.md -- is the safe state: no hook, so the harness's
+    own permission flow applies unchanged."""
+    environ = os.environ if env is None else env
+    forced = environ.get(RESOURCE_GRANT_HOOK_ENV)
+    if forced == "1":
+        return True
+    if forced == "0":
+        return False
+    if constants is None:
+        try:
+            constants = parse_config_md()
+        except (OSError, UnicodeDecodeError):
+            return False
+    return constants.get(RESOURCE_GRANT_HOOK_KEY) == "on"
+
+
+def resource_grant_hook_timeout_s(constants: Mapping[str, str] | None = None) -> int:
+    """Seconds the harness gives the hook before killing it; a missing or unreadable row reads as
+    the calibrated value in `RESOURCE_GRANT_HOOK_TIMEOUT_FALLBACK_S`."""
+    try:
+        values = parse_config_md() if constants is None else constants
+        return int(values[RESOURCE_GRANT_HOOK_TIMEOUT_KEY])
+    except (KeyError, ValueError, OSError, UnicodeDecodeError):
+        return RESOURCE_GRANT_HOOK_TIMEOUT_FALLBACK_S
+
+
 # The calibrated plan-field-inline-max-chars (docs/operations/plan-size-calibration.json, F),
 # used when the config.md row is missing or unparsable; a test keeps it equal to the row.
 PLAN_FIELD_INLINE_FALLBACK_CHARS = 3000

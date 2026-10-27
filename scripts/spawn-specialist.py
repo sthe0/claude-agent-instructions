@@ -45,6 +45,8 @@ from agentctl.config import (  # the one definition of the child-contour kill sw
     CHILD_CONTOUR_LINKING_ENV,
     CHILD_CONTOUR_LINKING_KEY,
     child_contour_linking_enabled,
+    resource_grant_hook_enabled,
+    resource_grant_hook_timeout_s,
 )
 from agentctl.dispatch import parse_marker  # the one function the parent routes a spawn's stdout with
 from agentctl import norm_handoff  # the one definition of the handoff record the child engine adopts
@@ -2297,6 +2299,23 @@ def own_contour_review_rule() -> str:
     return f"Bash({own_contour_review_command()}:*)"
 
 
+RESOURCE_GRANT_HOOK_MATCHER = "Bash|Edit|Write|MultiEdit|NotebookEdit|Read"
+
+
+def resource_grant_hook_command() -> str:
+    return f"python3 {Path(SCRIPTS_DIR) / 'hook-resource-grant-check.py'}"
+
+
+def register_resource_grant_hook(settings: dict, timeout_s: int) -> None:
+    """Add the resource-grant PreToolUse hook to a linked child's `--settings`. The harness
+    kills a hook after `timeout_s` and falls through, so the hook's own judge budget is
+    derived from the same number."""
+    settings.setdefault("hooks", {}).setdefault("PreToolUse", []).append({
+        "matcher": RESOURCE_GRANT_HOOK_MATCHER,
+        "hooks": [{"type": "command", "command": resource_grant_hook_command(), "timeout": timeout_s}],
+    })
+
+
 def load_or_create_evidence_dir(
     session_id: str,
     stage_index: int,
@@ -3192,6 +3211,57 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         return 2
     if prompt_only:
         return prompt
+
+    # The plan view directory the prompt names and, for --review-topo (whose
+    # plans-directory grant was withheld above), the directories of the plan's check
+    # scripts: Read allow + Edit deny, the same directional pair plans_permission_rules
+    # uses for its own read kinds.
+    read_dirs = [Path(d) for d in site.add_dirs] + topo_check_dirs
+
+    def settings_for(linked: bool) -> "dict | None":
+        """The child's `--settings` payload, or None after a refusal was logged. Built
+        before the handoff record is written: the record carries its `permissions.allow`."""
+        try:
+            settings = build_child_settings(
+                args.kind,
+                None if topo_pair is not None else plans_directory,
+                args.project_settings,
+                engine_grants,
+                workdir=workdir,
+                evidence_dir=evidence_dir,
+                guard_exempt_paths=guard_exempt_paths,
+            )
+        except GrantShadowError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
+            return None
+        permissions = settings.setdefault("permissions", {})
+        for read_dir in read_dirs:
+            read_allow, read_deny = review_topo_view_permission_rules(read_dir)
+            permissions.setdefault("allow", []).extend(read_allow)
+            permissions.setdefault("deny", []).extend(read_deny)
+        if linked:
+            own_plan_rule = own_plan_allow_rule(own_session)
+            denies = permissions.get("deny", [])
+            try:
+                _check_no_allow_fully_denied(
+                    [own_plan_rule], denies, {own_plan_rule: "own_plan_allow_rule"},
+                    {rule: "child settings" for rule in denies},
+                )
+            except GrantShadowError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
+                return None
+            permissions.setdefault("allow", []).extend(
+                [own_contour_allow_rule(), own_contour_review_rule(), own_plan_rule]
+            )
+        return settings
+
+    child_settings = settings_for(child_linked)
+    if child_settings is None:
+        return 2
+    if handoff_record is not None:
+        handoff_record["permissions_allow"] = list(child_settings["permissions"].get("allow", []))
     handoff_env_value: "str | None" = None
     norm_fixed = (
         resumed is not None and resumed_state is not None and resumed_state.parent_link is not None
@@ -3214,6 +3284,9 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
             add_dir_argv = head_add_dir_argv + grant_add_dir_argv
             add_dir_paths = _paths_from_add_dir_argv(add_dir_argv)
             prompt = brief(False)
+            child_settings = settings_for(False)
+            if child_settings is None:
+                return 2
     if child_linked and not args.dry_run:
         try:
             norm_handoff.write_child_session(
@@ -3258,48 +3331,8 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         )
         return 5
 
-    try:
-        child_settings = build_child_settings(
-            args.kind,
-            None if topo_pair is not None else plans_directory,
-            args.project_settings,
-            engine_grants,
-            workdir=workdir,
-            evidence_dir=evidence_dir,
-            guard_exempt_paths=guard_exempt_paths,
-        )
-    except GrantShadowError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
-        return 2
-
-    # The plan view directory the prompt names and, for --review-topo (whose
-    # plans-directory grant was withheld above), the directories of the plan's check
-    # scripts: Read allow + Edit deny, the same directional pair plans_permission_rules
-    # uses for its own read kinds.
-    read_dirs = [Path(d) for d in site.add_dirs] + topo_check_dirs
-    for read_dir in read_dirs:
-        read_allow, read_deny = review_topo_view_permission_rules(read_dir)
-        child_permissions = child_settings.setdefault("permissions", {})
-        child_permissions.setdefault("allow", []).extend(read_allow)
-        child_permissions.setdefault("deny", []).extend(read_deny)
-
-    if child_linked:
-        own_plan_rule = own_plan_allow_rule(own_session)
-        child_permissions = child_settings.setdefault("permissions", {})
-        child_denies = child_permissions.get("deny", [])
-        try:
-            _check_no_allow_fully_denied(
-                [own_plan_rule], child_denies, {own_plan_rule: "own_plan_allow_rule"},
-                {rule: "child settings" for rule in child_denies},
-            )
-        except GrantShadowError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
-            return 2
-        child_permissions.setdefault("allow", []).extend(
-            [own_contour_allow_rule(), own_contour_review_rule(), own_plan_rule]
-        )
+    if child_linked and resource_grant_hook_enabled(constants=constants):
+        register_resource_grant_hook(child_settings, resource_grant_hook_timeout_s(constants))
 
     cmd = [
         "claude",
