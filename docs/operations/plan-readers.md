@@ -25,6 +25,7 @@ to be exactly that set.
 
 | Reader | Disposition | Why |
 |---|---|---|
+| `scripts/agentctl/cli.py`:`_mandate_basis_problems` | index-only | Compares the index bytes `cmd_approve` read with the item norm re-rendered from its inputs; a rendered item norm holds no references, so a plan that does is refused rather than resolved. |
 | `scripts/agentctl/cli.py`:`_plan_file_sha256` | index-only | The attested plan digest is the sha256 of the index bytes; callers that need the references checked call `_plan_refs_problem` next to it. |
 | `scripts/agentctl/cli.py`:`_plan_from_snapshot` | resolves | Parses a stored plan version for the change tier and the row diff: the index bytes come from `_read_plan_version_snapshot`, and its references are resolved against the registered plan path through the object store, so a split plan is read as the plan it stands for. |
 | `scripts/agentctl/cli.py`:`_read_plan_version_snapshot` | index-only | Returns the stored index bytes of a plan version by their digest, checking the hash; its one consumer, `_plan_from_snapshot`, resolves the references. |

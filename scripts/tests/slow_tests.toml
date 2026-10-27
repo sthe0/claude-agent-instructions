@@ -90,6 +90,7 @@ guards = [
     "scripts/lib/widening_targets.py",
     "scripts/mandate_cycle/*.py",
     "scripts/tests/test_mandate_*.py",
+    "scripts/tests/test_agentctl_mandate_basis.py",
     "scripts/tests/test_optional_stages.py",
     "scripts/tests/test_classify.py",
     "scripts/tests/test_inline_class.py",
