@@ -549,6 +549,50 @@ def test_grants_approval_blockers_missing_digest_blocks_fail_closed(fixtures_dir
     assert blockers and "grant set changed" in blockers[0]
 
 
+_DR_P_ONLY_PLAN = """[meta]
+repo_root = "{venue}"
+weight_class = "small_change"
+task_id = "t"
+goal = "g"
+done_criterion = "d"
+criterion_type = "acceptance-review"
+branch = "feat-a"
+
+[[stage]]
+index = 1
+title = "S"
+executor = "spawn:developer"
+expected_result_image = "e"
+criterion_type = "acceptance-review"
+done_criterion = "d"
+depends_on = []
+"""
+
+
+def test_a_plan_whose_only_grant_is_the_own_branch_push_is_bound_like_any_grant(
+        tmp_path, gate_on):
+    """DR-P derives no rule and no add_dir, so the grants-present predicate must count its
+    commit/push resources too -- otherwise present-plan skips the grants block and approve
+    skips the receipt digest check for a plan that grants a push."""
+    from test_grants_own_branch import _git_repo
+
+    _git_repo(tmp_path)
+    plan = tmp_path / "plan.toml"
+    plan.write_text(_DR_P_ONLY_PLAN.format(venue=tmp_path))
+    doc = load_plan(str(plan), strict=True)
+    assert plan_has_any_grants(doc)
+    assert "push origin:feat-a" in render_plan_grants(doc, fmt="compact")
+    pp = PlanPresentation(
+        plan_path=str(plan), kind="essence", plan_sha256=_sha256_file(str(plan)),
+        rendering_sha256="r", rendering_text="t", presented_ts=1.0,
+        grants_sha256="stale-digest-does-not-match",
+    )
+    blockers = gates.grants_approval_blockers(_subst(plan_presentations=[pp]), str(plan))
+    assert blockers and "grant set changed" in blockers[0]
+    pp.grants_sha256 = grants_sha256(doc)
+    assert gates.grants_approval_blockers(_subst(plan_presentations=[pp]), str(plan)) == []
+
+
 def test_grants_approval_blockers_matching_digest_passes(fixtures_dir, gate_on):
     plan = str(fixtures_dir / "plan_two_stage.toml")
     doc = load_plan(plan)

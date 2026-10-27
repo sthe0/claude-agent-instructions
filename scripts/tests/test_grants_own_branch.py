@@ -271,9 +271,11 @@ def test_refinement_never_regrants_a_push_the_approval_refused(tmp_path):
     git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
     new = _plan_doc(tmp_path, "feat-a", image="a tighter image")
     assert plan_mod.diff_plans(old, new) == "refinement"
-    refined, _ = plan_mod.refined_grant_entries(stored, old, new)
+    assert "push" in [d["op"] for d in plan_mod.materialized_grant_entries(new)["1"]["branch"]["resources"]]
+    refined, withheld = plan_mod.refined_grant_entries(stored, old, new)
     assert [d["op"] for d in refined["1"]["branch"]["resources"]] == ["commit"]
     assert refined["1"]["branch"]["remote_head"] == stored["1"]["branch"]["remote_head"]
+    assert withheld == {"1": ["push origin:feat-a (DR-P)"]}
 
 
 def test_grants_renderings_list_the_branch_resources(tmp_path):

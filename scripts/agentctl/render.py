@@ -50,6 +50,8 @@ from .plan import (
     PlanDoc,
     PlanError,
     _build_supplies,
+    _branch_derivations,
+    _remote_head_for,
     _stage_declared_and_derived_grants,
     _venue_for,
     consumers,
@@ -1792,9 +1794,12 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
     here — `cmd_plan_grants` builds that directly from `StageGrants.to_dict()`."""
     venue = _venue_for(doc)
     lines: list[str] = []
-    branch_by_stage = plan_branch_resources(doc)
+    head = _remote_head_for(doc, venue=venue)
+    derivations = _branch_derivations(doc, venue, head)
+    branch_by_stage = plan_branch_resources(doc, derivations=derivations)
     for s in doc.stages:
-        declared, derived, dropped = _stage_declared_and_derived_grants(s, venue)
+        declared, derived, dropped = _stage_declared_and_derived_grants(
+            s, venue, head, derivations.get(s.index))
         dr_p = [f"{d['op']} {d['remote']}:{d['ref']}" for d in branch_by_stage.get(s.index, [])]
         declared_rules = [r.rule for r in declared.allow]
         declared_dirs = [f"{a.path}:{a.mode}" for a in declared.add_dirs]
@@ -1882,9 +1887,12 @@ def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
     if fmt == "json":
         venue = _venue_for(doc)
         stages = {}
-        branch_by_stage = plan_branch_resources(doc)
+        head = _remote_head_for(doc, venue=venue)
+        derivations = _branch_derivations(doc, venue, head)
+        branch_by_stage = plan_branch_resources(doc, derivations=derivations)
         for s in doc.stages:
-            declared, derived, dropped = _stage_declared_and_derived_grants(s, venue)
+            declared, derived, dropped = _stage_declared_and_derived_grants(
+                s, venue, head, derivations.get(s.index))
             stages[str(s.index)] = {
                 "declared": declared.to_dict(),
                 "derived": derived.to_dict(),
@@ -1892,7 +1900,7 @@ def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
                 "branch_resources": branch_by_stage.get(s.index, []),
             }
         data = {
-            "grants_sha256": grants_sha256(doc),
+            "grants_sha256": grants_sha256(doc, derivations=derivations),
             "stages": stages,
             "shadow_problems": problems,
             "advisories": advisories,

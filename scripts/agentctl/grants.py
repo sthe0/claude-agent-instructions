@@ -941,8 +941,10 @@ def derive_branch_resources(
     branch.
 
     `remote_head` is the frozen `origin/HEAD` branch (None = unreadable); at its default it
-    is read now. Approve freezes it beside the grant entries so spawn derives from the same
-    value, not from whatever the repository says later."""
+    is read now. Approve derives from one such read and stores the resulting resources in the
+    entries' frozen `branch` block, which spawn hands the child; the stored `remote_head` is
+    an audit record of what that derivation saw -- nothing reads it back and the grants
+    digest does not cover it."""
     kind = stage.spawn_kind() if stage.is_spawn() else None
     if kind not in ("developer", "tech-writer"):
         return [], []

@@ -146,6 +146,12 @@ CATALOGUE: "dict[str, Mutant]" = {
         '    if False:\n        d.data["dropped_grants"] = dropped',
         "submit-plan no longer reports the dropped grants",
     ),
+    "branch-only-plan-counts-as-granting": Mutant(
+        PLAN,
+        "    return any(d[0] for d in derivations.values()) or any(",
+        "    return any(",
+        "a plan whose only grant is the own-branch push is treated as granting nothing",
+    ),
     "branch-change-is-grant-growth": Mutant(
         PLAN,
         "        if set(new_branch[stage.index]) - set(old_branch.get(stage.index, [])):\n"

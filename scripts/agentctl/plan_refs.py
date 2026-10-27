@@ -32,6 +32,8 @@ MAX_DEPTH = 8
 
 _SHA_RE = re.compile(r"[0-9a-f]{64}")
 
+# `branch` is a string but listed here on purpose: it is an input to the DR-P push grant, so
+# it must be spelled in the index the user approves, never behind a hash-pinned reference.
 NON_STRING_FIELDS: dict[str, frozenset[str]] = {
     "stage": frozenset({
         "index", "depends_on", "material_refs", "knowledge_refs", "guard_exempt_paths",

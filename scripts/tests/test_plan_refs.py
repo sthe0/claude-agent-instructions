@@ -693,6 +693,7 @@ def test_field_tables_separate_string_fields_from_structured_ones():
     assert {"index", "depends_on", "supplies", "grants", "output_artifacts"} <= plan_refs.NON_STRING_FIELDS["stage"]
     assert {"goal", "done_criterion"} <= plan_refs.EXTERNALIZABLE_FIELDS["meta"]
     assert "order" in plan_refs.NON_STRING_FIELDS["meta"]
+    assert all("branch" in plan_refs.NON_STRING_FIELDS[k] for k in ("stage", "meta"))
     assert {"functional_place", "customer"} <= plan_refs.EXTERNALIZABLE_FIELDS["order"]
     assert "requirements" in plan_refs.NON_STRING_FIELDS["order"]
 

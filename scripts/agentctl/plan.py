@@ -3865,7 +3865,9 @@ def _derive_stage_grants(
         anchored, venue="/", remote_head=remote_head, branch_derivation=branch_derivation)
 
 
-def _stage_declared_and_derived_grants(s, venue: str | None):
+def _stage_declared_and_derived_grants(
+    s, venue: str | None, remote_head=_grants.LIVE_REMOTE_HEAD, branch_derivation=None,
+):
     """A stage's declared grants (an empty `StageGrants` when the stage
     authors none) plus its derived grants and dropped-entry list — the one
     place that pairs a stage with the venue-scoped derivation (`_derive_stage_grants`,
@@ -3874,7 +3876,7 @@ def _stage_declared_and_derived_grants(s, venue: str | None):
     so no projection can drift from another on how a stage's effective grant set is
     computed."""
     declared = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
-    derived, dropped = _derive_stage_grants(s, venue)
+    derived, dropped = _derive_stage_grants(s, venue, remote_head, branch_derivation)
     return declared, derived, dropped
 
 
@@ -3998,24 +4000,32 @@ def _derived_verify_rules(stage, venue: str | None) -> list:
 
 
 def plan_has_any_grants(doc: PlanDoc) -> bool:
-    """Whether ANY stage's effective (declared+derived) grant set is non-empty —
-    shared by the present-plan grants-block containment check and the approve
-    grants_sha256 binding check (both only fire on a plan that actually grants
-    something; a plan with zero grants anywhere needs neither)."""
-    return any(rules or dirs for rules, dirs in _grants_effective_map(doc).values())
+    """Whether ANY stage's effective grant set is non-empty -- a declared or derived rule
+    or add_dir, or a DR-P commit/push resource -- shared by the present-plan grants-block
+    containment check and the approve grants_sha256 binding check (both only fire on a
+    plan that actually grants something; a plan with zero grants anywhere needs neither).
+    A plan whose only grant is DR-P's push must show and bind it like one with rules."""
+    venue = _venue_for(doc)
+    head = _remote_head_for(doc, venue=venue)
+    derivations = _branch_derivations(doc, venue, head)
+    return any(d[0] for d in derivations.values()) or any(
+        rules or dirs for rules, dirs in _grants_effective_map(
+            doc, venue=venue, head=head, derivations=derivations).values())
 
 
-def plan_branch_resources(doc: PlanDoc) -> dict[int, list[dict]]:
+def plan_branch_resources(doc: PlanDoc, *, derivations: dict | None = None) -> dict[int, list[dict]]:
     """`{stage index: DR-P's commit/push resource dicts}` for the stages that derive any,
     against the same `origin/HEAD` read `grants_sha256` hashes -- what the grants
-    renderings list so the approved digest's push content is visible."""
-    venue = _venue_for(doc)
-    derivations = _branch_derivations(doc, venue, _remote_head_for(doc, venue=venue))
+    renderings list so the approved digest's push content is visible. A caller holding
+    the `_branch_derivations` result passes it instead of re-reading the repository."""
+    if derivations is None:
+        venue = _venue_for(doc)
+        derivations = _branch_derivations(doc, venue, _remote_head_for(doc, venue=venue))
     return {i: [_resources.resource_to_dict(r) for r in d[0]]
             for i, d in derivations.items() if d[0]}
 
 
-def grants_sha256(doc: PlanDoc) -> str:
+def grants_sha256(doc: PlanDoc, *, derivations: dict | None = None) -> str:
     """Stable sha256 hex digest of the plan's EFFECTIVE (declared+derived) grant set,
     one entry per stage index. `present-plan` stamps this onto the receipt and
     `approve` re-derives and compares it, so a materialization-layer change
@@ -4024,17 +4034,18 @@ def grants_sha256(doc: PlanDoc) -> str:
     `repr(...)`-then-sha256 style as the other digests in this module; the map is
     sorted by stage index and each stage's rule/add_dir tuples are themselves
     sorted (via `effective_tuple()`) so the digest never depends on iteration or
-    declaration order."""
+    declaration order. `derivations` (`_branch_derivations` against the head read for
+    `doc`) lets a caller that already derived DR-P share it."""
     venue = _venue_for(doc)
     head = _remote_head_for(doc, venue=venue)
-    derivations = _branch_derivations(doc, venue, head)
+    if derivations is None:
+        derivations = _branch_derivations(doc, venue, head)
     payload = repr(tuple(
         (idx, tuple(sorted(rules)), tuple(sorted(dirs)))
         for idx, (rules, dirs) in sorted(
             _grants_effective_map(doc, venue=venue, head=head, derivations=derivations).items())
     ))
-    payload += _branch_hash_part(
-        {i: [_resources.resource_to_dict(r) for r in d[0]] for i, d in derivations.items()})
+    payload += _branch_hash_part(plan_branch_resources(doc, derivations=derivations))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -4172,6 +4183,11 @@ def refined_grant_entries(
             out[idx] = n
             continue
         branch = _refined_branch(s, n)
+        kept = {tuple(sorted(d.items())) for d in branch["resources"]}
+        held_branch = [f"{d['op']} {d['remote']}:{d['ref']} (DR-P)"
+                       for d in n["branch"]["resources"] if tuple(sorted(d.items())) not in kept]
+        if held_branch:
+            withheld.setdefault(idx, []).extend(held_branch)
         if o is not None and _effective_entry_keys(o) == _effective_entry_keys(n):
             out[idx] = {**s, "branch": branch}
             continue
@@ -4187,7 +4203,7 @@ def refined_grant_entries(
         held = [e.get("rule") or f"{e['path']} ({e['mode']})" for e in n["derived"]
                 if _entry_key(e) not in admitted]
         if held:
-            withheld[idx] = held
+            withheld.setdefault(idx, []).extend(held)
     return out, withheld
 
 
