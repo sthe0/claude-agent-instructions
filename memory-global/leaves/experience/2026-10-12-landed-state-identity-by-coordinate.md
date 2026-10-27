@@ -6,7 +6,7 @@ schema: difficulty/v1
 generality: 0
 resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-10-12
-last_verified: 2026-10-26
+last_verified: 2026-10-27
 generalized_into: [a-coordinate-shifts-while-the-content-it-addressed-stays]
 ---
 
@@ -72,6 +72,10 @@ Split out of [2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan
 - Where it arose: claude-agent-instructions main, ea42443e / 95e515c2
 - Working plan: /home/the0/.claude-agent/plans/core-simplification-wave1.toml
 
+
+### 2026-10-27 — Core simplification wave 2 (2026-10-27)
+- Where it arose: claude-agent-instructions main, a2db3594 + bc665ae2
+- Working plan: /home/the0/.claude-agent/plans/core-simplification-wave2.r12b.toml
 ## Common core & variations
 **Common:** A check pinned to a coordinate (base commit, raw bytes of a moved row) breaks when the landing legitimately rewrites that coordinate: trunk moved during approval, so the base had to be re-pinned at the rebase; a verbatim-move check compared link spellings, so a link correctly rewritten for its new directory read as lost text.
 
