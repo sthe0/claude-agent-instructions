@@ -106,7 +106,7 @@ semantic property it purports to enforce.
 
 Every instruction here is a step in the plan for removing an arbitrary difficulty (`CLAUDE.md` head). When you write or edit one, name the difficulty it removes — its functional ground.
 
-- **Teleological form when the *why* is non-obvious.** Prefer "to achieve X, do Y" over a bare "do Y" wherever X is not self-evident from the rule itself — the agent applies and generalizes a rule far better when it holds the X. Where X is obvious, the bare imperative is fine; an explicit X there is noise (and tokens in the cached prefix).
+- **Teleological form when the *why* is non-obvious.** Prefer "to achieve X, do Y" over a bare "do Y" wherever X is not self-evident from the rule itself — the agent applies and generalizes a rule far better when it holds the X (the goal class; the Y rests on a regularity, the knowledge layer — ADR-0013). Where X is obvious, the bare imperative is fine; an explicit X there is noise (and tokens in the cached prefix).
 - **No nameable difficulty → prune candidate.** If you cannot state the difficulty a rule removes, treat that as the signal it is noise: cut or merge it, do not preserve it "just in case."
 - This is the instruction-side mirror of the experience-leaf schema (difficulty as the unit) and the `system-knowledge/` rule (lead with the difficulty the component removes).
 

@@ -1,10 +1,12 @@
 # Principles
 
-Generality-graded, provenance-rooted, **refutable** principles induced from recurring difficulties
-(ADR-0001 § *Principle as a concept with a generality gradient*). Each leaf carries `schema:
-principle/v1` — a statement at its generality level (0 trivial → 3 cross-domain invariant), an
-`induced_from` link **down** to the difficulties it generalizes, and a refutation condition
-(refutation ≡ generalization). Schema: [principle-leaf-schema.md](../principle-leaf-schema.md).
+The norm layer of the memory: generality-graded principles, each a norm ("to achieve X, do Y", where X
+is its goal class) that follows from the regularities it rests on (ADR-0013; ADR-0001 § *Principle as
+a concept with a generality gradient*). Each leaf carries `schema: principle/v1` — a statement at its
+generality level (0 trivial → 3 cross-domain invariant), a goal class, a `grounded_in` link to the
+regularities it rests on ([regularities/MEMORY.md](../regularities/MEMORY.md)), and a refutation
+condition: a principle fails by not reaching its goal class, whereas a regularity is refuted by a
+contradicting observation. Schema: [principle-leaf-schema.md](../principle-leaf-schema.md).
 
 Sub-index of `memory-global/leaves/principles/`. Pointed at from `memory-global/MEMORY.md`. Not
 auto-loaded by the harness. **Consumption:** at a plan's `refutable principle` element the planner
@@ -13,9 +15,9 @@ carry an optional `domain:` tag (e.g. `domain: coordination`) consumed by
 `record-experience.py search --domain`; untagged leaves match any domain filter (orthogonal to the
 Level grouping below).
 
-These principle leaves are the **generality≥1 profile** of one difficulty-record model whose
-**generality-0 profile** is the `difficulty/v1` experience leaf ([experience/MEMORY.md](../experience/MEMORY.md));
-the two sub-indexes stay physically separate but record two profiles of the same model.
+The chain is: experience leaf (`difficulty/v1`, generality 0) → regularity (`regularity/v1`,
+knowledge) → principle (`principle/v1`, norm). The three sub-indexes stay physically separate; each
+principle pointer below lists, after `←`, the regularities in its `grounded_in`.
 
 ## Level 3 — cross-domain invariants
 
