@@ -156,6 +156,12 @@ def test_permission_ranks_below_choice_and_above_idle(tmp_path, entries, permiss
     assert overlay(root, fake(permission_wait=lambda h: permission))["waiting"] == waiting
 
 
+def test_waiting_state_ranks_a_pending_choice_above_a_permission_signal(tmp_path):
+    # overlay() never asks the locator for a tail with a pending choice, so the rank is checked here
+    tail = attention.read_tail(put(make_root(tmp_path), ALPHA, ASKING))
+    assert attention.waiting_state(tail, True)[0] == "choice"
+
+
 def test_no_transcript_means_no_waiting_value_whatever_the_locator_says(tmp_path):
     root = make_root(tmp_path)
     asked = []
