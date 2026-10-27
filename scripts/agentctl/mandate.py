@@ -241,7 +241,7 @@ class SpendWindows:
     week_usd: float = 0.0
 
 
-EVENT_COST_KINDS = ("judge-cost", "overrun-charge")
+EVENT_COST_KINDS = ("judge-cost", "overrun-charge", "nested-spawn-cost")
 
 
 def _under(path: str, directory: str) -> bool:
@@ -757,6 +757,288 @@ def failed_attempts(item_rows: Iterable[Mapping], events: Iterable[Mapping]) -> 
         issue: row for issue, row in latest.items()
         if _is_item_local_failure(row) and allowed.get(issue, floor) <= (parse_ts(row.get("ts")) or floor)
     }
+
+
+# --- the ask points of a linked child ----------------------------------------------------
+
+ASK_SETTLED = "settled"
+ASK_EXCEEDS = "exceeds"
+ASK_KINDS = (
+    "child-self-approval", "child-plan-outside-norm", "check-failed", "over-bound-inline",
+    "review-reject", "permission-covered", "permission-outside", "effort-fire-spend",
+    "effort-fire-wall-clock", "effort-fire-replans", "since-user-backstop", "replan-ceiling",
+    "review-backstop", "question-for-user", "norm-mismatch", "incomplete", "user-only-verb",
+    "loop-detected", "landing", "resolution", "acceptance", "account-limit",
+)
+
+
+@dataclass(frozen=True)
+class AskVerdict:
+    kind: str
+    cls: str
+    answer: str = ""
+    reason: str = ""
+
+
+def classify_ask(kind, observed, mandate, *, rounds, rounds_limit) -> AskVerdict:
+    """Does the mandate settle this engine ask, or does it exceed the mandate?
+
+    `kind` selects the branch; the class comes only from the observed keys the branch reads
+    and from `rounds < rounds_limit`. A key that is missing, wrongly typed or contradicts the
+    kind gives `observation:<key>`, and an unknown kind is `unclassified`: stop, never go on.
+    """
+    under_limit = rounds < rounds_limit
+    absent = object()
+
+    def get(key, *types):
+        value = observed.get(key, absent) if isinstance(observed, Mapping) else absent
+        if type(value) is bool and bool not in types:
+            return absent
+        return value if isinstance(value, types) else absent
+
+    def settled(answer):
+        return AskVerdict(kind, ASK_SETTLED, answer=answer)
+
+    def exceeds(reason):
+        return AskVerdict(kind, ASK_EXCEEDS, reason=reason)
+
+    if kind not in ASK_KINDS:
+        return exceeds("unclassified")
+    if kind == "child-self-approval":
+        basis, codes = get("child_basis", str, type(None)), get("norm_reasons", list)
+        if basis is absent:
+            return exceeds("observation:child_basis")
+        if codes is absent:
+            return exceeds("observation:norm_reasons")
+        if codes:
+            return exceeds("plan-outside-mandate:" + ",".join(str(code) for code in codes))
+        if basis != "parent_norm":
+            return exceeds("observation:child_basis")
+        return settled("parent-norm")
+    if kind == "child-plan-outside-norm":
+        codes = get("norm_reasons", list)
+        if codes is absent:
+            return exceeds("observation:norm_reasons")
+        return exceeds("plan-outside-mandate:" + ",".join(str(code) for code in codes))
+    if kind == "check-failed":
+        if get("check_green", bool) is not False:
+            return exceeds("observation:check_green")
+        return settled("reject") if under_limit else exceeds("rounds")
+    if kind == "over-bound-inline":
+        over_bound, basis = get("over_bound", bool), get("child_basis", str, type(None))
+        if over_bound is not True:
+            return exceeds("observation:over_bound")
+        if basis is absent or basis == "parent_norm":
+            return exceeds("observation:child_basis")
+        return settled("reject") if under_limit else exceeds("rounds")
+    if kind == "review-reject":
+        if get("review_verdict", str) != "reject":
+            return exceeds("observation:review_verdict")
+        return settled("reject") if under_limit else exceeds("rounds")
+    if kind == "permission-covered":
+        covered, denials = get("covered", bool), get("covered_denials", int)
+        if covered is absent:
+            return exceeds("observation:covered")
+        if denials is absent or denials < 0:
+            return exceeds("observation:covered_denials")
+        if not covered:
+            return exceeds("permission-outside-mandate")
+        if denials >= 1:
+            return exceeds("materialization-defect")
+        return settled("resume") if under_limit else exceeds("rounds")
+    if kind == "permission-outside":
+        return exceeds("permission-outside-mandate")
+    if kind == "effort-fire-spend":
+        return exceeds("effort-spend" if get("fire_scale", str) == "spend" else "observation:fire_scale")
+    if kind == "effort-fire-wall-clock":
+        return exceeds("effort-wall-clock" if get("fire_scale", str) == "wall-clock" else "observation:fire_scale")
+    if kind == "effort-fire-replans":
+        return exceeds("effort-replans" if get("fire_scale", str) == "replans" else "observation:fire_scale")
+    if kind == "since-user-backstop":
+        return exceeds("backstop")
+    if kind == "replan-ceiling":
+        return exceeds("replan-ceiling")
+    if kind == "review-backstop":
+        return exceeds("review-rounds")
+    if kind == "question-for-user":
+        return exceeds("question-for-user" if get("fire_scale", str, type(None)) is None else "observation:fire_scale")
+    if kind == "norm-mismatch":
+        return exceeds("norm-mismatch")
+    if kind == "incomplete":
+        return exceeds("incomplete" if get("fire_scale", str, type(None)) is None else "observation:fire_scale")
+    if kind == "user-only-verb":
+        verb = get("user_verb", str)
+        return exceeds("observation:user_verb" if verb is absent else "needs-user:" + verb)
+    if kind == "loop-detected":
+        return exceeds("loop-detected")
+    if kind == "landing":
+        return settled("landing-waiver") if get("landing_waiver", bool) is True else exceeds("observation:landing_waiver")
+    if kind == "resolution":
+        return settled("no-resolve") if get("child_node", str) == "RESOLUTION" else exceeds("observation:child_node")
+    if kind == "acceptance":
+        return settled("inactive") if get("acceptance_active", bool) is False else exceeds("observation:acceptance_active")
+    return exceeds("account-limit" if get("account_limited", bool) is True else "observation:account_limited")
+
+
+ACCOUNT_LIMIT_REASON = "account-limit"
+ACCOUNT_LIMIT_ERROR = "rate_limit"
+ACCOUNT_LIMIT_STATUS = 429
+
+
+def stop_disposition(verdict: AskVerdict) -> "tuple[str, object]":
+    """Map an exceeds verdict onto today's outcomes: resource stops are overrun (retried by the
+    ordinary rules), the account limit is limit, and every authority stop is declined. None of
+    them opens the breaker or grows the failure streak."""
+    if verdict.cls != ASK_EXCEEDS:
+        raise ValueError(f"a {verdict.cls} verdict has no stop disposition")
+    reason = verdict.reason
+    if reason in ("effort-spend", "effort-wall-clock"):
+        return "overrun", [reason]
+    if reason == ACCOUNT_LIMIT_REASON:
+        return "limit", [ACCOUNT_LIMIT_REASON]
+    return "declined", "exceeds-mandate"
+
+
+def account_limited(marker, transcript_records: Iterable[Mapping]) -> bool:
+    """Did the account's rate limit, not the child's work, end this spawn? Only the last
+    assistant record of the transcript speaks, and only when no genuine marker was returned."""
+    if marker not in (None, "MALFORMED", "CHILD_INFRA_FAILURE"):
+        return False
+    last = None
+    for record in transcript_records:
+        if isinstance(record, Mapping) and record.get("type") == "assistant":
+            last = record
+    if last is None:
+        return False
+    if last.get("isApiErrorMessage") is not True:
+        return False
+    return last.get("error") == ACCOUNT_LIMIT_ERROR or last.get("apiErrorStatus") == ACCOUNT_LIMIT_STATUS
+
+
+# --- the item norm and its approval -----------------------------------------------------
+
+MANDATE_BASIS = "mandate"
+
+
+def mandate_approver(mandate_id: str) -> str:
+    return f"{MANDATE_BASIS}:{mandate_id}"
+
+
+def item_norm_toml(*, mandate, issue, title, body, cycle_id, base_sha, bound, worktree, repo, item_dir) -> str:
+    """The deterministic one-stage norm a cycle item runs under. The issue title and body are
+    data: cut, then written as TOML basic strings, so no text of theirs can open a table."""
+
+    def q(text) -> str:
+        out = ['"']
+        for ch in str(text):
+            if ch == "\\":
+                out.append("\\\\")
+            elif ch == '"':
+                out.append('\\"')
+            elif ch == "\n":
+                out.append("\\n")
+            elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+                out.append("\\u%04x" % ord(ch))
+            else:
+                out.append(ch)
+        out.append('"')
+        return "".join(out)
+
+    def field(key, value) -> str:
+        return f"{key} = {q(value)}"
+
+    title = str(title)[:200]
+    body = str(body)
+    if len(body) > 2000:
+        body = body[:2000] + f"\n(cut; full text: issue #{issue})"
+    check = f"python3 {repo}/scripts/mandate-cycle.py check-item --item-dir {item_dir}"
+    control = f"{check} --head {base_sha}"
+    thinker = f"Bash(python3 {repo}/scripts/spawn-specialist.py --kind thinker:*)"
+    lines = [
+        "[meta]",
+        f"task_id = {q(f'mandate-{cycle_id}-{issue}')}",
+        'weight_class = "substantive"',
+        f"repo_root = {q(worktree)}",
+        field("goal", f"(I1) Core issue #{issue} is resolved in the item worktree {worktree}, and the cycle's check-item passes on it, ready for the pull request the cycle opens."),
+        field("done_criterion", f"(I1) check-item for issue #{issue} of cycle {cycle_id} exits 0 on the item worktree's uncommitted tree."),
+        field("external_research", "Not warranted for the norm: the issue body states the defect and the repository holds the fix. The child's own plan decides its own research."),
+        field("landing_waiver", "delivered as a pull request opened by the cycle; a person reviews and lands it"),
+        "",
+        "[meta.order]",
+        field("customer_id", mandate_approver(mandate.id)),
+        field("customer", f"The standing mandate {mandate.id}, granted by the user (ADR-0008). Cycle {cycle_id} took Core issue #{issue} from the mandate's debt queue."),
+        field("functional_place", f"Core issue #{issue}: {title}. The issue body states what is wrong now:\n{body}"),
+        "requires_traceability = true",
+        "",
+        "[[meta.order.requirements]]",
+        'id = "I1"',
+        field("text", f"Resolve issue #{issue} as its body states, inside the item worktree, so that check-item passes: constitution, org-neutral, the full suite with no regression against the cycle baseline, the gate scripts, and the bound rule. Delivery is a pull request opened by the cycle."),
+        field("derivation", f"The mandate's triage selected #{issue}; check-item is the cycle's acceptance."),
+        "",
+        "[meta.order.coverage]",
+        'I1 = ["stage 1 verify_command"]',
+        "",
+        "[[final_check]]",
+        'label = "item check"',
+        field("command", check),
+        "expected_exit = 0",
+        "",
+        "[[stage]]",
+        "index = 1",
+        "depends_on = []",
+        field("title", f"Resolve issue #{issue} in the item worktree"),
+        'executor = "spawn:developer"',
+        'criterion_type = "measurable"',
+        field("verify_command", check),
+        field("negative_control", control),
+        "expected_negative_exit = 1",
+        field("expected_result_image", f"(I1) The item worktree's uncommitted tree resolves issue #{issue} as its body states, check-item exits 0 on it, and nothing is committed."),
+        'done_criterion = "(I1) The verify_command exits 0 and the negative_control exits 1."',
+        field("material", f"(I1) The item worktree {worktree} at base {base_sha}: the files issue #{issue} concerns."),
+        'material_refs = ["."]',
+        'knowledge = "(I1) The issue as the order states it; the repository\'s own instructions and tests; what check-item judges: constitution, org-neutral, the full suite against the cycle baseline, the gate scripts and the bound rule."',
+        'knowledge_refs = ["."]',
+        'means = "(I1) The repository\'s code, tests and tools inside the worktree; pytest; a thinker review through the granted spawn command."',
+        field("method", f"(I1) Change only what the issue requires, only inside the worktree, and leave the change uncommitted: the cycle commits after its own check. A change over {bound} production lines is made under the child's own plan, approved on the parent norm, whose final check is this stage's verify_command."),
+        field("procedure", f"1. Read the issue and the code it names. 2. Classify the change; write a plan when it is over {bound} lines. 3. Edit and test inside the worktree. 4. Run the item check and fix until it is green. 5. Return COMPLETED."),
+        field("preconditions", f"(I1) The cycle created the worktree at {base_sha} and stored the suite baseline of cycle {cycle_id}."),
+        field("conditions", f"(I1) Work only inside {worktree}; no commit, no push, no git grant; the mandate's caps bound spend and time."),
+        'invariants = "(I1) Files outside the worktree stay unchanged; the suite shows no regression against the cycle baseline; repo text stays English-only."',
+        'capability_required = "(I1) Development in this repository\'s languages and test framework."',
+        "",
+        "[stage.grants]",
+        f'allow = ["Bash(python3 -m pytest:*)", {q(thinker)}]',
+        f'add_dirs = [{{ path = {q(worktree)}, mode = "write" }}]',
+        "",
+        "[stage.principle]",
+        'statement = "(I1) A debt issue is resolved when the repository\'s acceptance checks pass on the change, judged by a checker the resolver cannot edit."',
+        'source = "The mandate\'s acceptance rule (check-item, docs/operations/background-mandate.md § One cycle); ADR-0008."',
+        'derivation = "check-item runs the live repo\'s checker by absolute path against the worktree\'s tree, so a green verdict is not the resolver\'s own claim, and the issue body names what must change; the two together fix the result."',
+        'confidence = "medium"',
+        'refutation = "An item whose check-item is green while a person reviewing the pull request finds the issue not resolved."',
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def mandate_approval_problems(plan_text, inputs, mandate, gate_result) -> "list[str]":
+    """Why the mandate may not approve this plan, empty when it may: its gate admits a start and
+    the plan is byte-for-byte the norm re-rendered from the recorded inputs. Never raises."""
+    problems = []
+    if not getattr(gate_result, "may_start", False):
+        problems.append("gate: " + ",".join(getattr(gate_result, "reasons", ())))
+    if not isinstance(inputs, Mapping):
+        return problems + ["inputs: not an object"]
+    rest = dict(inputs)
+    if rest.pop("mandate_id", None) != mandate.id:
+        problems.append("inputs: mandate_id does not name this mandate")
+    try:
+        rendered = item_norm_toml(**rest, mandate=mandate)
+    except (TypeError, ValueError, AttributeError, KeyError) as error:
+        return problems + [f"inputs: cannot render the item norm ({type(error).__name__})"]
+    if plan_text != rendered:
+        problems.append("plan: not the item norm rendered from the recorded inputs")
+    return problems
 
 
 # --- the constitution classifier ------------------------------------------------------

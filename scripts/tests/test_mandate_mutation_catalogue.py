@@ -41,6 +41,12 @@ EXPECTED_ENTRIES = (
     "inline-binary-failsafe", "inline-reason-source", "inline-memory-exclusion",
     "inline-cycle-gate", "inline-cycle-trunk-attrs", "inline-constitution-fixed",
     "inline-triage-definition",
+    "ask-unknown-exceeds", "ask-fire-exceeds", "ask-permission-covered", "ask-missing-field",
+    "ask-repeat-denial", "ask-fire-replans", "ask-since-user-backstop", "ask-question-for-user",
+    "ask-user-only-verb", "ask-loop-detected", "ask-rounds-limit", "stop-resource-retried",
+    "approval-exact-norm", "approval-open-gate", "item-norm-grants", "account-limit-precedence",
+    "account-limit-error-kind", "account-limit-last-record", "account-limit-api-flag",
+    "account-limit-infra-marker", "nested-cost-counted", "item-norm-escape",
 )
 
 

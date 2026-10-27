@@ -722,6 +722,110 @@ CATALOGUE: "dict[str, Mutant]" = {
         'definition=""',
         _ids(T_CYCLE, "test_the_triage_prompt_carries_the_shared_definition_and_the_bound_and_keeps_its_json_example"),
     ),
+    "ask-unknown-exceeds": Mutant(
+        RULES, 'return exceeds("unclassified")', 'return settled("unclassified")',
+        _ids(T_RULES, "test_every_ask_kind_has_a_class_and_an_unknown_kind_exceeds"),
+    ),
+    "ask-fire-exceeds": Mutant(
+        RULES,
+        'return exceeds("effort-spend" if get("fire_scale", str) == "spend" else "observation:fire_scale")',
+        'return settled("effort-spend")',
+        _ids(T_RULES, "test_effort_fires_backstops_and_ceiling_exceed_the_mandate"),
+    ),
+    "ask-permission-covered": Mutant(
+        RULES, "if not covered:", "if False:",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-missing-field": Mutant(
+        RULES, "if covered is absent:", "if False:",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-repeat-denial": Mutant(
+        RULES, "if denials >= 1:", "if False:",
+        _ids(T_RULES, "test_a_repeated_covered_denial_exceeds"),
+    ),
+    "ask-fire-replans": Mutant(
+        RULES,
+        'return exceeds("effort-replans" if get("fire_scale", str) == "replans" else "observation:fire_scale")',
+        'return settled("effort-replans")',
+        _ids(T_RULES, "test_effort_fires_backstops_and_ceiling_exceed_the_mandate"),
+    ),
+    "ask-since-user-backstop": Mutant(
+        RULES, 'return exceeds("backstop")', 'return settled("backstop")',
+        _ids(T_RULES, "test_effort_fires_backstops_and_ceiling_exceed_the_mandate"),
+    ),
+    "ask-question-for-user": Mutant(
+        RULES,
+        'return exceeds("question-for-user" if get("fire_scale", str, type(None)) is None else "observation:fire_scale")',
+        'return settled("question-for-user")',
+        _ids(T_RULES, "test_questions_norm_mismatch_incomplete_and_user_only_verbs_exceed_the_mandate"),
+    ),
+    "ask-user-only-verb": Mutant(
+        RULES,
+        'return exceeds("observation:user_verb" if verb is absent else "needs-user:" + verb)',
+        'return settled("needs-user")',
+        _ids(T_RULES, "test_questions_norm_mismatch_incomplete_and_user_only_verbs_exceed_the_mandate"),
+    ),
+    "ask-loop-detected": Mutant(
+        RULES, 'return exceeds("loop-detected")', 'return settled("loop-detected")',
+        _ids(T_RULES, "test_questions_norm_mismatch_incomplete_and_user_only_verbs_exceed_the_mandate"),
+    ),
+    "ask-rounds-limit": Mutant(
+        RULES, "under_limit = rounds < rounds_limit", "under_limit = rounds <= rounds_limit",
+        _ids(T_RULES, "test_check_review_bound_and_covered_permission_are_settled_until_the_rounds_limit"),
+    ),
+    "stop-resource-retried": Mutant(
+        RULES,
+        'if reason in ("effort-spend", "effort-wall-clock"):',
+        'if reason in ("effort-wall-clock",):',
+        _ids(T_RULES, "test_stop_disposition_retries_resource_stops_and_declines_authority_stops"),
+    ),
+    "approval-exact-norm": Mutant(
+        RULES, "if plan_text != rendered:", "if False:",
+        _ids(T_RULES, "test_mandate_approval_requires_the_exact_item_norm_and_an_open_gate"),
+    ),
+    "approval-open-gate": Mutant(
+        RULES, 'if not getattr(gate_result, "may_start", False):', "if False:",
+        _ids(T_RULES, "test_mandate_approval_requires_the_exact_item_norm_and_an_open_gate"),
+    ),
+    "item-norm-grants": Mutant(
+        RULES,
+        "f'allow = [\"Bash(python3 -m pytest:*)\", {q(thinker)}]',",
+        "f'allow = [\"Bash(python3 -m pytest:*)\", {q(thinker)}, \"Bash(git push:*)\"]',",
+        _ids(T_RULES, "test_the_item_norm_grants_are_the_fixed_literal"),
+    ),
+    "account-limit-precedence": Mutant(
+        RULES, 'if marker not in (None, "MALFORMED", "CHILD_INFRA_FAILURE"):', "if False:",
+        _ids(T_RULES, "test_a_genuine_marker_outranks_a_rate_limit_record"),
+    ),
+    "account-limit-error-kind": Mutant(
+        RULES,
+        'return last.get("error") == ACCOUNT_LIMIT_ERROR or last.get("apiErrorStatus") == ACCOUNT_LIMIT_STATUS',
+        "return True",
+        _ids(T_RULES, "test_other_api_errors_and_model_text_are_not_an_account_limit"),
+    ),
+    "account-limit-last-record": Mutant(
+        RULES, "last = record", "last = last or record",
+        _ids(T_RULES, "test_other_api_errors_and_model_text_are_not_an_account_limit"),
+    ),
+    "account-limit-api-flag": Mutant(
+        RULES, 'if last.get("isApiErrorMessage") is not True:', "if False:",
+        _ids(T_RULES, "test_other_api_errors_and_model_text_are_not_an_account_limit"),
+    ),
+    "account-limit-infra-marker": Mutant(
+        RULES, '(None, "MALFORMED", "CHILD_INFRA_FAILURE")', '(None, "MALFORMED")',
+        _ids(T_RULES, "test_a_synthetic_rate_limit_record_is_an_account_limit"),
+    ),
+    "nested-cost-counted": Mutant(
+        RULES,
+        'EVENT_COST_KINDS = ("judge-cost", "overrun-charge", "nested-spawn-cost")',
+        'EVENT_COST_KINDS = ("judge-cost", "overrun-charge")',
+        _ids(T_RULES, "test_a_nested_spawn_cost_event_counts_toward_the_mandate_windows"),
+    ),
+    "item-norm-escape": Mutant(
+        RULES, r'out.append("\\\\")', r'out.append("\\")',
+        _ids(T_RULES, "test_hostile_issue_text_cannot_change_the_item_norm_structure"),
+    ),
 }
 
 
