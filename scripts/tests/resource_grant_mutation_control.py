@@ -434,6 +434,30 @@ CATALOGUE: "dict[str, Mutant]" = {
         '    elif False:\n',
         "`python3 <<A <<B` is labelled stdin-body although the segment text carries a body bash never reads",
     ),
+    "push-config-mapping-ignored": Mutant(
+        SEGMENT_RESOLVER,
+        '    if mapped:\n        return f"remote.{remote}.push maps',
+        '    if False:\n        return f"remote.{remote}.push maps',
+        "`git push origin topic` is listed as a push of `topic` although `remote.origin.push` sends it to another branch",
+    ),
+    "push-default-upstream-ignored": Mutant(
+        SEGMENT_RESOLVER,
+        "        if default and default[-1] not in _PUSH_DEFAULT_SAFE:\n",
+        "        if False:\n",
+        "`git push origin topic` is listed as a push of `topic` although `push.default=upstream` sends it to the branch's upstream",
+    ),
+    "push-config-unreadable-resolved": Mutant(
+        SEGMENT_RESOLVER,
+        '    if mapped is None:\n        return f"cannot read remote',
+        '    if False:\n        return f"cannot read remote',
+        "a push is listed as resolved although the git config could not be read, so a mapping may exist",
+    ),
+    "stdin-body-count-fd0-only": Mutant(
+        SEGMENT_RESOLVER,
+        '    return sum(1 for red in raw.redirects if red.op in _HEREDOC_OPS or red.op == "<<<")\n',
+        '    return sum(1 for red in raw.redirects if (red.fd == "0" or red.fd is None) and (red.op in _HEREDOC_OPS or red.op == "<<<"))\n',
+        "`python3 3<<B <<A` is labelled stdin-body although the first body in the text is the one on fd 3",
+    ),
     "stdin-first-redirect-decides": Mutant(
         SEGMENT_RESOLVER,
         '            last = red\n',

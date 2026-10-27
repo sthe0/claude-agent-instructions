@@ -19,7 +19,9 @@ the contract table for everything else); every other form is unresolved:
     only in the venue's own repository (same git common dir: another repository
     has its own refs, hooks and config). Stash, rebase, pull, am, cherry-pick,
     commit-ish reset, branch-creating or ref-forcing checkout/switch flags stay
-    unresolved.
+    unresolved. A push also reads the venue's effective git config (`git config`, the one
+    subprocess in this module): `remote.<remote>.push` entries or a `push.default` that can
+    remap a colon-less branch name leave it unresolved (`_push_config_blocker`).
   * a commit/merge (or a push of `HEAD`) is attributed to the current branch only
     when no other segment of the line -- before it, or running concurrently with
     it under `&` or `|` -- is a branch switch, unresolved or opaque.
@@ -58,6 +60,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import subprocess
 from dataclasses import dataclass, field
 
 from lib import widening_targets
@@ -742,9 +745,55 @@ def _push_source_branch(root: str, src: str) -> str | None:
     return src
 
 
+_GIT_CONFIG_TIMEOUT_S = 5
+#: `push.default` values under which a colon-less `git push <remote> <branch>` pushes to `<branch>`;
+#: `upstream`/`tracking` send it to the branch's upstream, and an unknown value is not trusted
+_PUSH_DEFAULT_SAFE = frozenset({"simple", "current", "matching", "nothing"})
+
+
+def _git_config_values(root: str, *args: str) -> list[str] | None:
+    """Values `git -C <root> config <args>` prints; `[]` when the key is simply unset (exit 1, silent);
+    `None` on any other outcome (git missing, a timeout, an invalid key, a read error)."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", root, "config", *args],
+            capture_output=True, text=True, timeout=_GIT_CONFIG_TIMEOUT_S, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode == 0:
+        return proc.stdout.splitlines()
+    if proc.returncode == 1 and not proc.stdout and not proc.stderr.strip():
+        return []
+    return None
+
+
+def _push_config_blocker(root: str, remote: str, colonless_branch_source: bool) -> str | None:
+    """Why stored git config could send a push elsewhere than its words say, or `None` when it cannot.
+    `remote.<remote>.push` maps refspecs before git pushes them (builtin/push.c `set_refspecs` →
+    `refspec_append_mapped`); it is checked for every resolved form, `HEAD` included, so no answer rests
+    on a form being immune. `push.default=upstream` (alias `tracking`) sends a colon-less branch name to
+    its upstream branch; `HEAD`, `@` and any `<src>:<dst>` refspec are not remapped by it, so it is read
+    only when `colonless_branch_source`. Allow-list: only an unset or listed-safe `push.default` and no
+    configured push refspec pass, and an unreadable config does not."""
+    mapped = _git_config_values(root, "--get-all", f"remote.{remote}.push")
+    if mapped is None:
+        return f"cannot read remote.{remote}.push from the git config"
+    if mapped:
+        return f"remote.{remote}.push maps refspecs before they are pushed"
+    if colonless_branch_source:
+        default = _git_config_values(root, "--get", "push.default")
+        if default is None:
+            return "cannot read push.default from the git config"
+        if default and default[-1] not in _PUSH_DEFAULT_SAFE:
+            return f"push.default={default[-1]!r} can send a colon-less branch name to another branch"
+    return None
+
+
 def _normalised_push(res: tool_contracts.Resolution, root: str, rest: list[str]) -> _Verdict:
     """Each refspec is `[<src>:]<dst>` with a branch source (`_push_source_branch`). Without a colon git
-    pushes to the source's full name. With a colon the destination resolves only when spelled
+    pushes to the source's full name, unless stored config remaps it (`_push_config_blocker`: then the
+    push is unresolved). With a colon the destination resolves only when spelled
     `refs/heads/<b>`: a bare one is first matched by suffix against the remote's existing refs (an
     existing `refs/remotes/<dst>` wins over a new branch), which this offline parse cannot see. `HEAD`
     names the current branch only as a source; as a destination (`feature:HEAD`) git creates a remote ref
@@ -754,11 +803,18 @@ def _normalised_push(res: tool_contracts.Resolution, root: str, rest: list[str])
     if len(refspecs) != len(res.resources):
         return _unres(_OUTSIDE_LIST, "the push refspecs and the resolved refs disagree")
     out: list = []
+    checked: set[tuple[str, bool]] = set()
     for spec, r in zip(refspecs, res.resources):
         src, colon, dst = spec.partition(":")
         branch = _push_source_branch(root, src)
         if branch is None:
             return _unres(_OUTSIDE_LIST, f"push source {src!r} is not certainly a local branch: git would take a bare destination into its namespace")
+        config_key = (r.remote, not colon and src not in ("HEAD", "@"))
+        if config_key not in checked:
+            why = _push_config_blocker(root, *config_key)
+            if why is not None:
+                return _unres(_OUTSIDE_LIST, why)
+            checked.add(config_key)
         if not colon:
             ref = branch
         elif dst.startswith("refs/heads/"):
@@ -1064,13 +1120,10 @@ def _carries_stdin_body(raw: _RawSegment) -> bool:
 
 
 def _stdin_body_count(raw: _RawSegment) -> int:
-    """How many heredocs / here-strings feed fd 0. The segment text carries every body but bash reads
-    only the last one, so a second body leaves the code a consumer would read ambiguous."""
-    return sum(
-        1
-        for red in raw.redirects
-        if (red.fd == "0" or (red.fd is None and red.op in _STDIN_OPS)) and (red.op in _HEREDOC_OPS or red.op == "<<<")
-    )
+    """How many heredocs / here-strings the segment holds, on ANY fd. The segment text carries every body
+    in order, but bash feeds a program only the last one on fd 0 (`3<<B <<A` feeds A while B comes first
+    in the text), so a second body leaves the code a consumer would read ambiguous."""
+    return sum(1 for red in raw.redirects if red.op in _HEREDOC_OPS or red.op == "<<<")
 
 
 def _resolve_one(raw: _RawSegment, cwd: str | None, ctx: _Context) -> _Verdict:

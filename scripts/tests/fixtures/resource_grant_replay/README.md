@@ -112,7 +112,9 @@ another branch, and a `git -C` commit in a foreign checkout.
 `resolver` is `fall-through`: after a colon git matches a bare destination
 against the remote's existing refs first (an existing `refs/remotes/x` is
 updated instead of a branch), which cannot be seen offline, so the per-segment
-resolver resolves only `x:refs/heads/x` and the colon-less `git push origin x`.
+resolver resolves only `x:refs/heads/x` and the colon-less `git push origin x`
+(the latter only while no `remote.<r>.push` entry exists and `push.default` is
+not `upstream`/`tracking`).
 The hook shows the user prompt for the `x:x` spelling.
 
 ## Cases constructed by analogy

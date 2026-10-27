@@ -31,6 +31,14 @@ def _no_cdpath(monkeypatch):
     monkeypatch.delenv("CDPATH", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _clean_user_git_config(monkeypatch):
+    """The resolver reads the effective git config for a push; the tester's own `push.default` or
+    `remote.<r>.push` must not decide a test."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
 def _git(path, *args):
     subprocess.run(
         ["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
@@ -65,6 +73,26 @@ def build_world(tmp: Path) -> dict:
     scratch = tmp / "scratch"
     scratch.mkdir()
     return {"venue": venue, "outside": outside, "other": other, "scratch": scratch, "wt": tmp / "wt", "tmp": tmp}
+
+
+def _remote_refs(bare: Path) -> list[str]:
+    out = subprocess.run(["git", "-C", str(bare), "for-each-ref", "--format=%(refname)"], check=True, capture_output=True, text=True)
+    return out.stdout.split()
+
+
+def _push_repo(tmp_path: Path) -> tuple[Path, Path]:
+    """A private repository on branch `feature` with a local branch `topic` that tracks `origin/main`,
+    and a bare `origin` that already holds `refs/heads/main`; it is not the shared world, so a test may
+    push, commit and rewrite its config freely."""
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True)
+    venue = _init_repo(tmp_path / "private", "feature")
+    _git(venue, "remote", "add", "origin", str(bare))
+    _git(venue, "push", "-q", "origin", "feature:refs/heads/main")
+    _git(venue, "branch", "topic")
+    _git(venue, "config", "branch.topic.remote", "origin")
+    _git(venue, "config", "branch.topic.merge", "refs/heads/main")
+    return venue, bare
 
 
 @pytest.fixture(scope="module")
@@ -329,8 +357,19 @@ PROBES = [
     ("R4-S1-two-heredocs", "python3 <<A <<B\nprint(1)\nA\nprint(2)\nB", [U]),
     ("R4-S1-here-string-then-heredoc", "python3 <<< 'print(1)' <<B\nprint(2)\nB", [U]),
     ("R4-S1-two-here-strings", "python3 - <<< 'print(1)' <<< 'print(2)'", [U]),
-    ("R4-S1-heredoc-on-other-fd", "python3 <<A 3<<B\nprint(1)\nA\nprint(2)\nB", [O("stdin-body")]),
+    ("R4-S1-heredoc-on-other-fd", "python3 <<A 3<<B\nprint(1)\nA\nprint(2)\nB", [U]),
     ("R4-S1-one-heredoc-stays-opaque", "python3 <<A\nprint(1)\nA", [O("stdin-body")]),
+    # round 5 / S-R5-1 a body on any fd counts: bash feeds stdin the last fd-0 one, which may not come first in the text
+    ("R5-S1-other-fd-first", "python3 3<<B <<A\nprint(2)\nB\nprint(1)\nA", [U]),
+    ("R5-S1-other-fd-last", "python3 <<A 3<<B\nprint(1)\nA\nprint(2)\nB", [U]),
+    ("R5-S1-here-string-other-fd", "python3 3<<< 'print(2)' <<< 'print(1)'", [U]),
+    ("R5-S1-two-other-fd-bodies", "python3 -c 'print(0)' 3<<A 4<<B\nx\nA\ny\nB", [U]),
+    ("R5-S1-single-other-fd-body-stays-opaque", "python3 -c 'print(0)' 3<<A\nx\nA", [O("python-c")]),
+    # round 5 / B-R5-1 a colon-less push stays resolved under clean config (config-driven refusals: TestPushConfig)
+    ("R5-B1-colonless-clean-config", "git push origin topic", [R(P("origin", "topic"))]),
+    ("R5-B1-full-ref-clean-config", "git push origin refs/heads/topic", [R(P("origin", "topic"))]),
+    ("R5-B1-head-clean-config", "git push origin HEAD", [R(P("origin", "feature"))]),
+    ("R5-B1-explicit-refspec-clean-config", "git push origin topic:refs/heads/topic", [R(P("origin", "topic"))]),
     ("R3-B1-branch-source-moved-by-checkout", "git checkout topic && git push origin HEAD", [R(W(V)), U]),
     # round 3 / S-R3-1 only the last fd-0 redirection decides whether the segment carries its stdin
     ("R3-S1-heredoc-then-file", "python3 <<'E' < s.py\nprint(1)\nE", [U]),
@@ -561,22 +600,14 @@ class TestGitAllowList:
         assert _seg("git push origin topic", world["venue"]).resources == [resources.VcsRefResource("origin", "topic", "push")]
         assert _seg("git push -q origin HEAD:refs/heads/main", world["venue"]).resources == [resources.VcsRefResource("origin", "main", "push")]
 
-    def test_a_bare_push_destination_can_be_an_existing_non_branch_ref_on_the_remote(self, world, tmp_path):
-        venue = world["venue"]
-        bare = tmp_path / "bare.git"
-        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True)
-        _git(venue, "remote", "add", "holder", str(bare))
-        try:
-            _git(venue, "push", "-q", "holder", "topic:refs/remotes/other")
-            _git(venue, "commit", "-q", "--allow-empty", "-m", "newer")
-            _git(venue, "push", "-q", "holder", "feature:other")
-            remote_refs = subprocess.run(["git", "-C", str(bare), "for-each-ref", "--format=%(refname)"], check=True, capture_output=True, text=True).stdout.split()
-            assert remote_refs == ["refs/remotes/other"], remote_refs
-            assert _statuses(_seg("git push holder feature:other", venue)) == ["unresolved"]
-            assert _seg("git push holder feature:refs/heads/other", venue).resources == [resources.VcsRefResource("holder", "other", "push")]
-        finally:
-            _git(venue, "remote", "remove", "holder")
-            _git(venue, "reset", "-q", "--hard", "HEAD~1")
+    def test_a_bare_push_destination_can_be_an_existing_non_branch_ref_on_the_remote(self, tmp_path):
+        venue, bare = _push_repo(tmp_path)
+        _git(venue, "push", "-q", "origin", "topic:refs/remotes/other")
+        _git(venue, "commit", "-q", "--allow-empty", "-m", "newer")
+        _git(venue, "push", "-q", "origin", "feature:other")
+        assert _remote_refs(bare) == ["refs/heads/main", "refs/remotes/other"], _remote_refs(bare)
+        assert _statuses(_seg("git push origin feature:other", venue)) == ["unresolved"]
+        assert _seg("git push origin feature:refs/heads/other", venue).resources == [resources.VcsRefResource("origin", "other", "push")]
 
     def test_dash_c_inside_the_venue_equals_no_dash_c(self, world):
         venue = world["venue"]
@@ -587,6 +618,84 @@ class TestGitAllowList:
     def test_git_follows_a_rebased_cwd_inside_the_repo(self, world):
         result = _seg("cd sub && git commit -q -m x", world["venue"])
         assert set(result.segments[1].resources) == {_file(world["venue"]), resources.VcsRefResource(".", "feature", "commit")}
+
+
+class TestPushConfig:
+    """Stored git config can send a colon-less `git push <remote> <branch>` somewhere else: the resolver
+    reads it and resolves only under an allow-list. Each case runs in a private repository with a real
+    bare remote so the claim about git's behaviour is checked against git itself."""
+
+    COLONLESS = ["git push origin topic", "git push origin refs/heads/topic"]
+
+    def test_git_itself_follows_push_default_upstream_for_a_colonless_branch(self, tmp_path):
+        venue, bare = _push_repo(tmp_path)
+        _git(venue, "config", "push.default", "upstream")
+        _git(venue, "push", "-q", "origin", "topic")
+        assert _remote_refs(bare) == ["refs/heads/main"], "the push went to the upstream branch, no topic was created"
+
+    def test_git_itself_follows_a_configured_push_refspec_for_a_colonless_branch(self, tmp_path):
+        venue, bare = _push_repo(tmp_path)
+        _git(venue, "config", "remote.origin.push", "refs/heads/topic:refs/heads/elsewhere")
+        _git(venue, "push", "-q", "origin", "topic")
+        assert _remote_refs(bare) == ["refs/heads/elsewhere", "refs/heads/main"]
+
+    def test_git_itself_never_remaps_head_under_push_default_upstream(self, tmp_path):
+        venue, bare = _push_repo(tmp_path)
+        _git(venue, "config", "push.default", "upstream")
+        _git(venue, "push", "-q", "origin", "HEAD")
+        assert _remote_refs(bare) == ["refs/heads/feature", "refs/heads/main"]
+
+    def test_clean_config_keeps_every_form_resolved(self, tmp_path):
+        venue, _ = _push_repo(tmp_path)
+        for text in [*self.COLONLESS, "git push origin HEAD", "git push origin topic:refs/heads/topic"]:
+            assert _statuses(_seg(text, venue)) == ["resolved"], text
+
+    @pytest.mark.parametrize("value", ["simple", "current", "matching", "nothing"])
+    def test_listed_push_default_values_keep_the_colonless_form_resolved(self, value, tmp_path):
+        venue, _ = _push_repo(tmp_path)
+        _git(venue, "config", "push.default", value)
+        for text in self.COLONLESS:
+            assert _seg(text, venue).resources == [resources.VcsRefResource("origin", "topic", "push")], (value, text)
+
+    @pytest.mark.parametrize("value", ["upstream", "tracking", "UPSTREAM", "bogus", ""])
+    def test_any_other_push_default_leaves_a_colonless_branch_unresolved(self, value, tmp_path):
+        venue, _ = _push_repo(tmp_path)
+        _git(venue, "config", "push.default", value)
+        for text in self.COLONLESS:
+            assert _statuses(_seg(text, venue)) == ["unresolved"], (value, text)
+
+    def test_push_default_upstream_leaves_head_and_explicit_refspecs_resolved(self, tmp_path):
+        venue, _ = _push_repo(tmp_path)
+        _git(venue, "config", "push.default", "upstream")
+        assert _seg("git push origin HEAD", venue).resources == [resources.VcsRefResource("origin", "feature", "push")]
+        assert _seg("git push origin topic:refs/heads/topic", venue).resources == [resources.VcsRefResource("origin", "topic", "push")]
+
+    def test_a_configured_push_refspec_leaves_every_form_for_that_remote_unresolved(self, tmp_path):
+        venue, bare = _push_repo(tmp_path)
+        _git(venue, "remote", "add", "other", str(bare))
+        _git(venue, "config", "remote.origin.push", "refs/heads/topic:refs/heads/elsewhere")
+        for text in [*self.COLONLESS, "git push origin HEAD", "git push origin topic:refs/heads/topic", "git push origin HEAD topic"]:
+            assert _statuses(_seg(text, venue)) == ["unresolved"], text
+        assert _seg("git push other topic", venue).resources == [resources.VcsRefResource("other", "topic", "push")]
+
+    def test_one_remote_with_a_mapping_makes_a_multi_remote_chain_partly_unresolved(self, tmp_path):
+        venue, bare = _push_repo(tmp_path)
+        _git(venue, "remote", "add", "other", str(bare))
+        _git(venue, "config", "remote.other.push", "refs/heads/a:refs/heads/b")
+        result = _seg("git push origin topic && git push other topic", venue)
+        assert _statuses(result) == ["resolved", "unresolved"]
+
+    def test_an_unreadable_config_leaves_the_push_unresolved(self, tmp_path):
+        venue, _ = _push_repo(tmp_path)
+        with open(venue / ".git" / "config", "a", encoding="utf-8") as fh:
+            fh.write("[broken\n")
+        for text in [*self.COLONLESS, "git push origin HEAD"]:
+            assert _statuses(_seg(text, venue)) == ["unresolved"], text
+
+    def test_a_missing_git_executable_leaves_the_push_unresolved(self, tmp_path, monkeypatch):
+        venue, _ = _push_repo(tmp_path)
+        monkeypatch.setenv("PATH", str(tmp_path / "no-bin"))
+        assert _statuses(_seg("git push origin HEAD", venue)) == ["unresolved"]
 
 
 class TestOperators:
