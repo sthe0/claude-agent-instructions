@@ -263,7 +263,7 @@ adversarial testing; two nits:
    frozen-reference role and as public API. **Disposition: no action.** This is deliberate retained
    API surface, already documented in this record's "Questions answered" § API split, not an
    oversight or dead code left behind by the migration.
-2. **nit — `scripts/crutch_registry.toml` (reusability)** — this diff carries auto-generated registry
+2. **nit — the crutch registry, then tracked as scripts/crutch_registry.toml (reusability)** — this diff carries auto-generated registry
    churn (re-hashed ids for pre-existing entries, new synthetic-fixture entries for the new test file,
    entries for unrelated experience leaves re-scanned). **Disposition: no action.** This is the
    crutch-scanner's ordinary incidental output on any commit touching these files, not evidence of a

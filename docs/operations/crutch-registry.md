@@ -12,7 +12,7 @@ Nothing is stored: the standing check computes from the live tree on every run. 
 |---|---|
 | [scripts/crutch-inventory.py](../../scripts/crutch-inventory.py) | **Enumerates.** Walks the repo and lists every candidate site in both domains. Classifies nothing; `--check` fails only when two sites share a stable id. |
 | [scripts/verify-semantic-gates.py](../../scripts/verify-semantic-gates.py) | **Checks on every run.** Enumerates the code sites live and fails, naming each, on a hard-sink site (deny / block / exit 2) with no `judge_*` call in its scope or file whose id is not in the shared allowlist [scripts/lib/unguarded_sink_allowlist.py](../../scripts/lib/unguarded_sink_allowlist.py) (also pinned by `scripts/tests/test_no_semantic_unguarded.py`). Wired into `verify-all.py`; its advisory twin, `scan_crutch_regressions` in `scripts/self-diagnose.py`, flags `defer` overrides past the 90-day horizon and a rising unguarded count. |
-| [scripts/gen_crutch_registry.py](../../scripts/gen_crutch_registry.py) | **Local classification report (optional).** Assigns each enumerated site a class, disposition and ground via named partitions and individually-grounded overrides, and writes `scripts/crutch_registry.toml`. That file is generated, git-ignored and read by no check; delete or regenerate it freely. Its `CLAUDE_MD_OVERRIDES` table is the live source of the `defer` dispositions and their `deferred_since` dates. |
+| [scripts/gen_crutch_registry.py](../../scripts/gen_crutch_registry.py) | **Local classification report (optional).** Assigns each enumerated site a class, disposition and ground via named partitions and individually-grounded overrides, and writes the registry file crutch_registry.toml next to itself. That file is generated, git-ignored and read by no check; delete or regenerate it freely. Its `CLAUDE_MD_OVERRIDES` table is the live source of the `defer` dispositions and their `deferred_since` dates. |
 
 ## The two domains
 
@@ -41,7 +41,7 @@ Every entry also carries a **disposition** — `keep` (the class is correct and 
 
 A new hard-sink code site needs no registration: `python3 scripts/verify-semantic-gates.py` either passes (a `judge_*` guard is present) or names it. Fix it with a fail-open judge guard, or — for a genuine false pairing, where the regex reads unrelated structural syntax — add its id to `KNOWN_UNGUARDED_HARD_SINKS` in `scripts/lib/unguarded_sink_allowlist.py` with a ground that names *why* it is safe.
 
-A prose statement with a distinct fate (a `defer`, say) gets an entry in `gen_crutch_registry.py`'s `CLAUDE_MD_OVERRIDES` (or `CODE_ID_OVERRIDES` for a code site) with a ground that names *why*, not just *what*. To see the full classification locally, run `python3 scripts/gen_crutch_registry.py`; it writes the git-ignored `scripts/crutch_registry.toml` (through `scripts/lib/worktree_route.py` when run from the canonical checkout) and lists only git-tracked files, so `git add` a new script before regenerating.
+A prose statement with a distinct fate (a `defer`, say) gets an entry in `gen_crutch_registry.py`'s `CLAUDE_MD_OVERRIDES` (or `CODE_ID_OVERRIDES` for a code site) with a ground that names *why*, not just *what*. To see the full classification locally, run `python3 scripts/gen_crutch_registry.py`; it writes the git-ignored registry file crutch_registry.toml under scripts/ (through `scripts/lib/worktree_route.py` when run from the canonical checkout) and lists only git-tracked files, so `git add` a new script before regenerating.
 
 ## Justifying a `keep` versus reviewing a `defer`
 
