@@ -4,7 +4,7 @@ description: Static checks (imports/tests/build-diff) never substitute for runti
 type: reference
 schema: leaf/v1
 created: 2026-09-15
-last_verified: 2026-09-15
+last_verified: 2026-10-26
 ---
 
 ## Difficulty
@@ -21,6 +21,7 @@ Treat each of the following as its own verification axis. Passing one does not l
 - **Durable-store coverage is a done-axis.** When capturing worked-out artifacts into a durable store (tracker, backlog, doc), report captured-vs-the-full-set and flag any local-only residue at capture time. A partial capture left to read as complete is the durable-store twin of "posted" ≠ "published" — and the residue's durability then rests on an undisclosed local machine.
 - **Universally-quantified criteria need mechanical enumeration.** A done criterion like "all X", "no Y remains" is never established by checking the instances you happened to touch — it needs a mechanical enumeration of the domain plus a negative end-state check of the property itself. See planner `SKILL.md` § Understand the problem first.
 - **Provenance for reasoning/research deliverables.** For a reasoning/research deliverable, the right axis is *provenance*, not tests-green: arm `classify --deliverable-kind reasoning` so the `ledger` plugin gates resolution on claim-provenance closure. Ladder + the L3-refusal criterion: [formalization-ladder-l1-l3.md](formalization-ladder-l1-l3.md).
+- **Outcome, not proxy, for an improvement trial.** A trial of an agent-system change measures the outcome the order names — the task resolved, and total wall-clock, tokens and user attention to resolution — not the cost of one phase (e.g. planning up to an admissible plan). If the subject cannot be executed safely (a prod order), pick one that can (a past task with tests, replayed in isolation); otherwise the plan's essence states plainly that the outcome axis is unmeasured and the result cannot license landing. *(2026-10-26: a two-arm trial measured planning cost only; the user expected end-to-end resolution cost and the result could not answer "should we land this".)*
 - **Conformance is a verification axis too.** Verify your ACTUAL behavior followed the instructions and the plan's expected actions — including an implicit precondition of one — at each step boundary AND at resolution. A divergence is a difficulty to register immediately, not only at delivery. Full rule + the mechanized obligations-ledger slice: [behavioral-conformance-control.md](behavioral-conformance-control.md).
 
 This leaf is the elaboration of a `CLAUDE.md` bullet, extracted 2026-09-15 to keep `CLAUDE.md` under `claude-md-max-chars` while landing the [subagent-destructive-guard](experience/2026-09-15-subagent-self-authorized-destructive-action.md) plan's rule (B).

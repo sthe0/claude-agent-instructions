@@ -54,6 +54,19 @@ DEFAULT_CONSTITUTION = (
     "scripts/hook-*.py",
 )
 SETTINGS_GLOB = "settings*.json"
+# Like SETTINGS_GLOB, applied whatever a mandate record's own list says: the files that define the
+# inline size bound and which lines count towards it, so a cycle item cannot reclassify its own lines.
+ATTRIBUTES_BASENAME = ".gitattributes"
+FIXED_CONSTITUTION = (
+    "scripts/agentctl/inline_class.py",
+    "scripts/agentctl/inline_git.py",
+    "scripts/inline-measure.py",
+    "scripts/inline-size-calibrate.py",
+    "docs/operations/inline-size-calibration.json",
+    "scripts/agentctl/exempt_paths.py",
+    "scripts/agentctl/config.py",
+    "config.md",
+)
 
 OUTCOMES = ("pr-opened", "failed", "overrun", "declined", "limit")
 FAILURE_KINDS = (
@@ -815,7 +828,8 @@ def _entry_matches(path: str, entry: str) -> bool:
 
 def classify_diff(name_status_lines: Iterable[str], constitution: Iterable[str]) -> ConstitutionVerdict:
     """Reject a diff that touches a constitution path on either side of a rename or copy,
-    or any file named settings*.json. The settings rule is not part of the removable list."""
+    or any file named settings*.json or .gitattributes, or one of FIXED_CONSTITUTION. These fixed
+    rules are not part of the removable list."""
     entries = list(constitution)
     offending: "list[tuple[str, str]]" = []
     for line in name_status_lines:
@@ -826,6 +840,10 @@ def classify_diff(name_status_lines: Iterable[str], constitution: Iterable[str])
             hit = next((e for e in entries if _entry_matches(path, e)), None)
             if hit is None and fnmatch.fnmatchcase(posixpath.basename(path), SETTINGS_GLOB):
                 hit = SETTINGS_GLOB
+            if hit is None and posixpath.basename(path) == ATTRIBUTES_BASENAME:
+                hit = ATTRIBUTES_BASENAME
+            if hit is None:
+                hit = next((e for e in FIXED_CONSTITUTION if path == e), None)
             if hit is not None:
                 offending.append((raw, hit))
     return ConstitutionVerdict(bool(offending), tuple(offending))

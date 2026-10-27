@@ -1,0 +1,239 @@
+{
+  "bound_value": 200,
+  "decided_on": "2026-10-26",
+  "decision": "user",
+  "deduplicated_b_rows": 0,
+  "formula": "p90 = sorted(v)[min(n-1, round(0.9*(n-1)))]; candidate = ceil(p90); n >= min_n else user_decision",
+  "inputs_sha256": "5268e56734050f0a081778a64dc340407f6edbc9a945f0d9512e8e03fd974cc8",
+  "min_n": 20,
+  "n": 14,
+  "option": 4,
+  "populations": {
+    "A": {
+      "n": 14,
+      "p90": 58
+    },
+    "B": {
+      "n": 0,
+      "p90": null
+    },
+    "P": {
+      "n": 14,
+      "p90": 58
+    }
+  },
+  "rows": [
+    {
+      "base": "5ee48f6a27e1aae530e8b8c085fabb46d6b271f7",
+      "id": 404,
+      "production_lines": 29,
+      "source": "A",
+      "tip": "113064a9ae928b84b6d31b3b47ec799ba5e00b55"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 497,
+      "production_lines": 12,
+      "source": "A",
+      "tip": "df80fd8f713befcafc2817cdb8085a628033f77e"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 498,
+      "production_lines": 58,
+      "source": "A",
+      "tip": "74eab91f76fcb2152dbf1b8b9155e3169c8352ba"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 499,
+      "production_lines": 7,
+      "source": "A",
+      "tip": "72c4b2eaafb16188039c1fbb6404d1d8606048d1"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 500,
+      "production_lines": 45,
+      "source": "A",
+      "tip": "6dc40100ec7e78309358ef7c3eeaa889ef1f869b"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 501,
+      "production_lines": 5,
+      "source": "A",
+      "tip": "fb687e875dd60f2344a473c2d76bc4fa0ded019a"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 502,
+      "production_lines": 3,
+      "source": "A",
+      "tip": "4ce4f4e12d521266b37d85ae599db3e3461ffd4d"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 503,
+      "production_lines": 9,
+      "source": "A",
+      "tip": "a040a996b1929670d38ea2295f037afa54ec922b"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 504,
+      "production_lines": 92,
+      "source": "A",
+      "tip": "08eb40638a06acf5b4dc166a0113e3cc9d750bc8"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 505,
+      "production_lines": 3,
+      "source": "A",
+      "tip": "46df7c41c7756dc012c67330298204760c1beb70"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 506,
+      "production_lines": 48,
+      "source": "A",
+      "tip": "da58ad6b892a3eb2fd9bce2dd8213513d9c8804a"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 507,
+      "production_lines": 47,
+      "source": "A",
+      "tip": "1acc0abd6f44544528cb835c01f05d78e4132f0e"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 508,
+      "production_lines": 54,
+      "source": "A",
+      "tip": "3b498c623b120790e7bd67b64258bcb2f7c485d0"
+    },
+    {
+      "base": "7524dca8badf712229e0ae509aba6f1485745197",
+      "id": 509,
+      "production_lines": 15,
+      "source": "A",
+      "tip": "e239a34ae447f0c9c47ecc50e6c084119c3b5c85"
+    }
+  ],
+  "rule": "p90_ceil_min_n",
+  "sensitivity": {
+    "largest_source_share": 1.0,
+    "open_rows": {
+      "rows": [
+        {
+          "base": "7524dca8badf712229e0ae509aba6f1485745197",
+          "id": 494,
+          "production_lines": 49,
+          "source": "open",
+          "tip": "db0abcec10f2f46be83f843387086e16b6f92ec6"
+        },
+        {
+          "base": "56ba4521af3dc66c383be3a0bccadbf9700f4a12",
+          "id": 517,
+          "production_lines": 118,
+          "source": "open",
+          "tip": "2fdb69d14e0e446bf947a2a61ba6a61fffeb0631"
+        },
+        {
+          "base": "56ba4521af3dc66c383be3a0bccadbf9700f4a12",
+          "id": 518,
+          "production_lines": 23,
+          "source": "open",
+          "tip": "4716275ef5c8cdd7de33f0ae0ad79840c8ed9235"
+        },
+        {
+          "base": "56ba4521af3dc66c383be3a0bccadbf9700f4a12",
+          "id": 519,
+          "production_lines": 48,
+          "source": "open",
+          "tip": "55e01059b8562da7b0f49dac9d2142dc95d28b5c"
+        },
+        {
+          "base": "48402c6440da55bfb6742203aba2c8516a17548a",
+          "id": 521,
+          "production_lines": 102,
+          "source": "open",
+          "tip": "8a7207f2984df36a52a04536f1d25151f5c5b7a9"
+        },
+        {
+          "base": "99da87e8b81a8dc5d7d11e4c881f079c50a35611",
+          "id": 524,
+          "production_lines": 104,
+          "source": "open",
+          "tip": "4fbb7c6e27f98c0178d2b9b533931990993777a4"
+        },
+        {
+          "base": "99da87e8b81a8dc5d7d11e4c881f079c50a35611",
+          "id": 525,
+          "production_lines": 70,
+          "source": "open",
+          "tip": "1db4d44b0aa25e1a10dc3d6cc660a67043595d0d"
+        },
+        {
+          "base": "99da87e8b81a8dc5d7d11e4c881f079c50a35611",
+          "id": 526,
+          "production_lines": 3,
+          "source": "open",
+          "tip": "067f314aecd8b0b3201297c1487362c3a1a1db1b"
+        },
+        {
+          "base": "99da87e8b81a8dc5d7d11e4c881f079c50a35611",
+          "id": 527,
+          "production_lines": 45,
+          "source": "open",
+          "tip": "695509d076bdb26eaaae24e3c9f61ae84ed644e7"
+        },
+        {
+          "base": "95e515c20808b52fa681cbca3c458ccf76bcd280",
+          "id": 528,
+          "production_lines": 471,
+          "source": "open",
+          "tip": "528378380b1aa10cf5f014994d492400242da932"
+        },
+        {
+          "base": "00267dd6f038d47f4e5f70c917df17b25038881b",
+          "id": 530,
+          "production_lines": 9,
+          "source": "open",
+          "tip": "f8f78ef6431a7941dd0bf5688b9ea2a468a0d69d"
+        },
+        {
+          "base": "00267dd6f038d47f4e5f70c917df17b25038881b",
+          "id": 531,
+          "production_lines": 3,
+          "source": "open",
+          "tip": "2d28d60b8010d2ce70abb5e77a8a7888b5a04303"
+        }
+      ],
+      "sha256": "d42be3d21558e13f5972598803f26d4096ba3455c773f41d295871042830d6dd"
+    },
+    "outside_reference": {
+      "lines_usually_reasonable": 100,
+      "source": "Google engineering-practices guide, small CLs",
+      "use": "outside reference only; the bound comes from this repository's own history"
+    },
+    "p90_A": 58,
+    "p90_A_plus_open_rows": 102,
+    "p90_B": null
+  },
+  "skipped": {
+    "A": {
+      "count": 2,
+      "reasons": {
+        "no counted lines": 2
+      }
+    },
+    "B": {
+      "count": 0,
+      "reasons": {}
+    }
+  },
+  "user_value": 200
+}

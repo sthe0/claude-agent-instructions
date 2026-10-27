@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from . import inline_class
 from .config import Thresholds
 from .state import Route, WeightClass
 
@@ -23,7 +24,7 @@ TRACKER_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]+-\d+$")
 class Signals:
     is_chat: bool = False
     changed_lines: int = 0
-    files: int = 1
+    cohesive: bool = True
     wall_clock_min: int = 0
     tracker_key: str | None = None
     architectural: bool = False
@@ -131,12 +132,10 @@ def classify(sig: Signals, thr: Thresholds) -> Classification:
         substantive_signals.append("new dependency")
     if sig.public_api_change:
         substantive_signals.append("public-API change")
-    if sig.files > 1:
-        substantive_signals.append(f"{sig.files} files (>1)")
-    if sig.changed_lines > thr.small_change_max_lines:
-        substantive_signals.append(
-            f"{sig.changed_lines} changed lines (> small-change-max-lines={thr.small_change_max_lines})"
-        )
+    if not sig.cohesive:
+        substantive_signals.append("not one cohesive change")
+    if not inline_class.lines_within_bound(sig.changed_lines, thr.small_change_max_lines):
+        substantive_signals.append(inline_class.size_signal(sig.changed_lines, thr.small_change_max_lines))
     if sig.wall_clock_min >= thr.substantive_wall_clock_min:
         substantive_signals.append(
             f"{sig.wall_clock_min}min (>= substantive-wall-clock-min={thr.substantive_wall_clock_min})"
@@ -146,9 +145,7 @@ def classify(sig: Signals, thr: Thresholds) -> Classification:
         reasons.extend(substantive_signals)
         weight = WeightClass.SUBSTANTIVE.value
     else:
-        reasons.append(
-            f"<= {thr.small_change_max_lines} lines, single file, no architectural/external -> small change"
-        )
+        reasons.append(inline_class.small_change_reason(thr.small_change_max_lines))
         weight = WeightClass.SMALL_CHANGE.value
 
     return Classification(weight, ROUTE_BY_WEIGHT[weight], reasons)

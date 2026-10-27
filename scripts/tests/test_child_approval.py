@@ -152,7 +152,7 @@ class Child:
     def submit(self, plan: str, sid: str = "child-1") -> dict:
         """Start, classify and plan a substantive session and submit `plan`."""
         self.run("start", session=sid, task=f"task-{sid}", goal="g", done_criterion="dc")
-        self.run("classify", session=sid, architectural=True, files=5, changed_lines=200,
+        self.run("classify", session=sid, architectural=True, changed_lines=200,
                  wall_clock_min=60)
         self.run("plan", session=sid)
         return self.run("submit_plan", session=sid, plan=plan)

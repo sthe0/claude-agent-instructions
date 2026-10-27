@@ -622,3 +622,98 @@ def test_hook_silent_when_tracker_inactive_or_complete():
     assert mod.unpublished_phases(None) == []
     full = {"published_phases": {"plan": True, "result": True, "status": True}}
     assert mod.unpublished_phases(full) == []
+
+
+# --- rolling status comment ----------------------------------------------------
+# A per-stage progress entry can be satisfied by editing ONE rolling status
+# comment in place; `plugin-record --comment <ref>` remembers that comment.
+
+def _progress_directive_text(bag, *, journaled):
+    from types import SimpleNamespace
+    stage = SimpleNamespace(index=3, output_artifacts=["a.py"] if journaled else [],
+                            ephemeral_artifacts_waiver="")
+    state = SimpleNamespace(node=Node.VERIFYING.value, stages=[stage],
+                            history=[{"event": "record_result", "status": "passed", "stage": 3}])
+    return tp._observe_record_result(state, bag)[0].detail
+
+
+def _record_progress(capsys, root, sid, *extra, stage="1"):
+    return _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+                "--phase", "progress", "--stage", stage, *extra)
+
+
+def _bag(root, sid):
+    raw = json.loads((Path(root) / f"{sid}.json").read_text(encoding="utf-8"))
+    return raw["plugins"]["tracker"]
+
+
+def test_rolling_comment_record_sets_and_newest_ref_replaces(capsys, tmp_path, venued_fixtures_dir):
+    root = str(tmp_path / "state")
+    sid = "tk-rolling-a"
+    _drive_to_resolution(capsys, root, sid, str(venued_fixtures_dir / "plan_two_stage.toml"),
+                         activate_tracker=True)
+    rc, _ = _record_progress(capsys, root, sid, "--comment", "c-1")
+    assert rc == 0
+    bag = _bag(root, sid)
+    assert bag["published_phases"]["progress:1"] == {"comment": "c-1"}
+    assert bag["rolling_comment"] == "c-1"
+    _record_progress(capsys, root, sid, "--comment", "c-2", stage="2")
+    assert _bag(root, sid)["rolling_comment"] == "c-2"
+
+
+def test_rolling_comment_gate_fails_until_progress_recorded_with_comment(capsys, tmp_path, venued_fixtures_dir):
+    root = str(tmp_path / "state")
+    sid = "tk-rolling-gate"
+    _drive_to_resolution(capsys, root, sid, str(venued_fixtures_dir / "plan_two_stage.toml"),
+                         activate_tracker=True)
+    rec = ("plugin-record", "--session", sid, "--plugin", "tracker")
+    _run(capsys, root, *rec, "--phase", "plan", "--attachment", "att-1")
+    _run(capsys, root, *rec, "--phase", "result")
+    _run(capsys, root, *rec, "--phase", "status")
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user")
+    assert rc == 1 and any("stage(s)" in b for b in d["data"]["blockers"])
+    _record_progress(capsys, root, sid, "--comment", "c-1", stage="1")
+    _record_progress(capsys, root, sid, "--comment", "c-1", stage="2")
+    rc, d = _run(capsys, root, "resolve", "--session", sid, "--by", "user", "--quality", "4")
+    assert rc == 0 and d["node"] == Node.RESOLVED.value
+
+
+def test_rolling_comment_refused_outside_tracker_progress(capsys, tmp_path, venued_fixtures_dir):
+    root = str(tmp_path / "state")
+    sid = "tk-rolling-refuse"
+    _drive_to_resolution(capsys, root, sid, str(venued_fixtures_dir / "plan_two_stage.toml"),
+                         activate_tracker=True)
+    rc, d = _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "tracker",
+                 "--phase", "result", "--comment", "c-1")
+    assert rc == 1 and "--comment" in d["detail"]
+    rc, _ = _run(capsys, root, "plugin-record", "--session", sid, "--plugin", "experience",
+                 "--phase", "searched", "--comment", "c-1")
+    assert rc == 1
+    assert "rolling_comment" not in _bag(root, sid)
+
+
+def test_rolling_comment_refused_with_skipped(capsys, tmp_path, venued_fixtures_dir):
+    root = str(tmp_path / "state")
+    sid = "tk-rolling-skip"
+    _drive_to_resolution(capsys, root, sid, str(venued_fixtures_dir / "plan_two_stage.toml"),
+                         activate_tracker=True)
+    rc, d = _record_progress(capsys, root, sid, "--comment", "c-1", "--skipped", "--note", "why")
+    assert rc == 1 and "--skipped" in d["detail"]
+    assert "progress:1" not in _bag(root, sid)["published_phases"]
+
+
+@pytest.mark.parametrize("journaled", [True, False])
+def test_rolling_directive_edits_the_remembered_comment(journaled):
+    detail = _progress_directive_text({"tracker_key": "K", "rolling_comment": "c-7"},
+                                      journaled=journaled)
+    assert "EDIT the rolling status comment c-7" in detail
+    assert "--comment c-7" in detail
+    assert "{% cut %}" in detail
+
+
+def test_rolling_directive_without_ref_asks_for_one_status_comment_or_fold():
+    journaled = _progress_directive_text({"tracker_key": "K"}, journaled=True)
+    assert "ONE status comment" in journaled and "--comment <its id|url>" in journaled
+    assert "requires this exact per-stage entry" in journaled
+    light = _progress_directive_text({"tracker_key": "K"}, journaled=False)
+    assert "fold it into the next entry" in light and "--comment" not in light

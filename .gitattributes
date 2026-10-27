@@ -1,0 +1,21 @@
+# Files written by a generator script. `linguist-generated` is what scripts/agentctl/inline_class.py
+# (via `git check-attr`) reads to leave them out of the hand-written production-line count; GitHub
+# also collapses them in PR diffs. Each pattern line is preceded by the script that produces the file.
+
+# scripts/gen_crutch_registry.py
+scripts/crutch_registry.toml linguist-generated=true
+
+# scripts/inline-size-calibrate.py
+docs/operations/inline-size-calibration.json linguist-generated=true
+
+# scripts/memory-leaf-size-calibrate.py
+docs/operations/memory-leaf-size-calibration.json linguist-generated=true
+
+# scripts/memory-retrieval-calibrate.py
+docs/operations/memory-retrieval-calibration.json linguist-generated=true
+
+# scripts/plan-size-calibrate.py
+docs/operations/plan-size-calibration.json linguist-generated=true
+
+# scripts/review-cost-calibrate.py
+docs/operations/review-cost-calibration.json linguist-generated=true

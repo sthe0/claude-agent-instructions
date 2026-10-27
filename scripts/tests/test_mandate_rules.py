@@ -769,6 +769,35 @@ def test_every_constitution_entry_rejects_a_diff_touching_it(entry):
     assert verdict.reject and verdict.offending[0][1] == entry
 
 
+SIZE_DEFINITION_FILES = (
+    "scripts/agentctl/inline_class.py", "scripts/agentctl/inline_git.py", "scripts/inline-measure.py",
+    "scripts/inline-size-calibrate.py", "docs/operations/inline-size-calibration.json",
+    "scripts/agentctl/exempt_paths.py", "scripts/agentctl/config.py", "config.md",
+)
+
+
+@pytest.mark.parametrize("path", (
+    *SIZE_DEFINITION_FILES, ".gitattributes", "a/b/.gitattributes", "scripts/x/.gitattributes",
+), ids=lambda path: path.replace("/", ":"))
+def test_the_inline_size_definition_is_protected_whatever_the_mandates_own_list_says(path):
+    verdict = reject(f"M\t{path}", constitution=())
+    assert verdict.reject, path
+    assert verdict.offending[0][0] == path
+
+
+def test_the_fixed_entries_name_every_file_the_counted_set_depends_on():
+    assert set(SIZE_DEFINITION_FILES) <= set(m.FIXED_CONSTITUTION)
+
+
+def test_a_rename_of_an_attributes_file_is_rejected_on_either_side():
+    assert reject("R100\tdocs/a.txt\tpkg/.gitattributes", constitution=()).reject
+    assert reject("R100\tpkg/.gitattributes\tdocs/a.txt", constitution=()).reject
+
+
+def test_a_file_that_only_resembles_an_attributes_file_is_accepted():
+    assert not reject("M\tscripts/x/gitattributes.md", "M\tdocs/config.md", constitution=()).reject
+
+
 def test_a_diff_of_unlisted_paths_is_accepted():
     verdict = reject("M\tdocs/readme.md", "A\tscripts/agentctl/cli.py", "D\tscripts/tests/test_other.py")
     assert not verdict.reject and verdict.offending == ()

@@ -152,23 +152,44 @@ def _observe_record_result(state, bag) -> list[PluginDirective]:
         and (stage.output_artifacts or [])
         and not (stage.ephemeral_artifacts_waiver or "").strip()
     )
+    stage_flag = f" --stage {stage_index}" if stage_index is not None else ""
+    record = f"`plugin-record --plugin tracker --phase progress{stage_flag}"
+    rolling = bag.get("rolling_comment")
     if journaled:
-        detail = (
-            "this stage declared output_artifacts: post a SUBSTANTIVE progress "
-            "comment (figures, caveats, every artifact this stage produced — not "
+        what = (
+            "this stage declared output_artifacts: write a SUBSTANTIVE progress "
+            "entry (figures, caveats, every artifact this stage produced — not "
             "a one-liner, and never under an internal stage-number heading like "
             "\"### Стадия N\" — tech-writer rule 3: name the result in plain "
-            "words, write the thread's next beat, not a status report), then "
-            "`plugin-record --plugin tracker --phase progress "
-            f"--stage {stage_index}` — the resolution gate requires this exact "
-            "per-stage entry before the task can resolve"
+            "words, write the thread's next beat, not a status report)"
         )
     else:
-        stage_flag = f" --stage {stage_index}" if stage_index is not None else ""
-        detail = (
-            "post a one-line progress note + artifact link (or, in PR-stage work, "
-            "update the PR instead — the skill routes transport), then "
-            f"`plugin-record --plugin tracker --phase progress{stage_flag}`"
+        what = (
+            "write a one-line progress note + artifact link (or, in PR-stage work, "
+            "update the PR instead — the skill routes transport)"
+        )
+    if rolling:
+        where = (
+            f"EDIT the rolling status comment {rolling} in place — add only this "
+            "stage's new result, detail over ~3k chars under a YFM {% cut %} — then "
+            f"{record} --comment {rolling}`; if the transport cannot edit a comment, "
+            "post a new one and record its ref with --comment instead"
+        )
+    elif journaled:
+        where = (
+            "post it as ONE status comment that later stages will update in place, "
+            f"then {record} --comment <its id|url>`"
+        )
+    else:
+        where = (
+            "post it, or fold it into the next entry since a light stage needs no "
+            f"comment of its own, then {record}`"
+        )
+    detail = f"{what}; {where}"
+    if journaled:
+        detail += (
+            " — the resolution gate requires this exact per-stage entry before "
+            "the task can resolve"
         )
     return [PluginDirective(
         "tracker", "publish_progress", detail,

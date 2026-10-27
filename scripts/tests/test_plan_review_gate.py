@@ -577,10 +577,10 @@ def _classify_plan_submit(root, sid, plan, *, small=False):
     _run(root, "start", "--session", sid, "--task", "t", "--goal", "g",
          "--done-criterion", "dc", "--criterion-type", "measurable")
     if small:
-        _run(root, "classify", "--session", sid, "--changed-lines", "5", "--files", "1")
+        _run(root, "classify", "--session", sid, "--changed-lines", "5")
     else:
         _run(root, "classify", "--session", sid, "--changed-lines", "200",
-             "--files", "5", "--architectural")
+             "--architectural")
     _run(root, "plan", "--session", sid)
     _run(root, "submit-plan", "--session", sid, "--plan", plan)
 
@@ -656,5 +656,5 @@ def test_spine_walk_scope_off_small_change_unaffected(tmp_path):
 
     run("start", "--session", "s1", "--task", "t", "--goal", "g",
         "--done-criterion", "dc", "--criterion-type", "measurable")
-    c = run("classify", "--session", "s1", "--changed-lines", "5", "--files", "1")
+    c = run("classify", "--session", "s1", "--changed-lines", "5")
     assert "small change" in c.stdout and "execute_in_thread" in c.stdout

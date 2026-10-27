@@ -297,7 +297,7 @@ class Contour:
         self.store = FileStateStore(self.root)
         parent_plan = _parent_plan(tmp_path)
         _cli(self.root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc")
-        _cli(self.root, "classify", session=PARENT, architectural=True, files=5,
+        _cli(self.root, "classify", session=PARENT, architectural=True,
              changed_lines=200, wall_clock_min=60)
         _cli(self.root, "plan", session=PARENT)
         _cli(self.root, "submit-plan", session=PARENT, plan=parent_plan)
@@ -330,7 +330,7 @@ class Contour:
         env = {"AGENTCTL_PLAN_REVIEW": "1"}
         digest = hashlib.sha256(Path(self.plan).read_bytes()).hexdigest()
         steps = [
-            ("classify", "--architectural", "--files", "5", "--changed-lines", "200",
+            ("classify", "--architectural", "--changed-lines", "200",
              "--wall-clock-min", "60"),
             ("plan",),
             ("submit-plan", "--plan", self.plan),
@@ -375,7 +375,7 @@ def test_own_channel_refuses_missing_env(contour):
 def test_own_channel_refuses_unlinked_session(contour):
     _cli(contour.root, "start", session="unlinked-s", task="u", goal="g", done_criterion="dc")
     before = contour.state_bytes("unlinked-s")
-    for argv in (("status",), ("classify", "--changed-lines", "1", "--files", "1")):
+    for argv in (("status",), ("classify", "--changed-lines", "1")):
         proc = contour.own(*argv, session="unlinked-s")
         assert proc.returncode == 2, (argv, proc.stdout, proc.stderr)
         assert REFUSED in proc.stderr and "parent_link" in proc.stderr
@@ -454,7 +454,7 @@ def test_own_channel_reaches_own_session(contour):
     )
     assert result["node"] != "EXECUTING"
     classified = _expect_ok(
-        contour.own("classify", "--architectural", "--files", "5", "--changed-lines", "200",
+        contour.own("classify", "--architectural", "--changed-lines", "200",
                     "--wall-clock-min", "60"),
         "own channel `classify`",
     )
@@ -553,7 +553,7 @@ def _parent_session(home: Path) -> FileStateStore:
     directory under `home` (the one a spawned child's engine and hooks resolve)."""
     root = _state_dir(home)
     _cli(root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc")
-    _cli(root, "classify", session=PARENT, architectural=True, files=5, changed_lines=200,
+    _cli(root, "classify", session=PARENT, architectural=True, changed_lines=200,
          wall_clock_min=60)
     _cli(root, "plan", session=PARENT)
     _cli(root, "submit-plan", session=PARENT, plan=str(FIXTURE_PLAN))

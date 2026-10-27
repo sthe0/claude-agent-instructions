@@ -95,7 +95,7 @@ class Scene:
         plan.write_text(_with_stage_grant(plan.read_text(encoding="utf-8"), PYTEST_WILDCARD),
                         encoding="utf-8")
         _cli(self.root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc")
-        _cli(self.root, "classify", session=PARENT, architectural=True, files=5,
+        _cli(self.root, "classify", session=PARENT, architectural=True,
              changed_lines=200, wall_clock_min=60)
         _cli(self.root, "plan", session=PARENT)
         _cli(self.root, "submit-plan", session=PARENT, plan=str(plan))
@@ -161,7 +161,7 @@ class Scene:
         return declare_venue(_with_stage_verify(head + final_checks, stage_check), self.venue)
 
     def to_planning(self) -> None:
-        _expect_ok(self.channel("classify", "--architectural", "--files", "5", "--changed-lines", "200",
+        _expect_ok(self.channel("classify", "--architectural", "--changed-lines", "200",
                                 "--wall-clock-min", "60"), "own channel `classify`")
         _expect_ok(self.channel("plan"), "own channel `plan`")
 

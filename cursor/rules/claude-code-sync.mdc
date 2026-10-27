@@ -24,7 +24,7 @@ Coordinate every substantive task yourself; a spawned specialist is a depth n+1 
 | Class | Signs | Routing |
 |---|---|---|
 | **Chat** | Bare "ok"/"thanks", clarification question, opinion, ≤ 3-sentence factual answer with no file changes | Answer directly; no plan, no specialization read, no memory record |
-| **Small change** | ≤ `small-change-max-lines` changed lines, single file, no architectural decision, no external / irreversible action, no new dependency, no public-API change | Do it yourself; optionally consult a specialization SKILL.md inline; no plan-approval gate |
+| **Small change** | No choice, no risk: one obvious solution, reversible, no irreversible effect, no public-contract change, no new dependency; one cohesive change of ≤ `small-change-max-lines` hand-written production lines ([inline-class.md](../../memory-global/leaves/inline-class.md)) | Do it yourself; optionally consult a specialization SKILL.md inline; no plan-approval gate |
 | **Substantive** | Anything not covered above | Full coordination via `agentctl` (classify → TOML plan → plan-review → present/approve → execute → verify-final); markdown hand-walk only if engine unavailable |
 
 When in doubt — pick the heavier class once, downgrade if reality fits a lighter one. Do not silently upgrade (scope creep without approval).

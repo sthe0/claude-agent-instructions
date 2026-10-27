@@ -3458,6 +3458,11 @@ def cmd_plugin_record(args, *, store: StateStore, runner: Runner | None = None) 
     key = f"{phase}:{stage}" if stage is not None else phase
     note = getattr(args, "note", None)
     skipped = bool(getattr(args, "skipped", False))
+    comment = (getattr(args, "comment", None) or "").strip()
+    if comment and (args.plugin != "tracker" or phase != "progress" or skipped):
+        return Directive(False, state.node, "noop",
+                         "--comment names the tracker's rolling status comment: it goes only "
+                         "with --plugin tracker --phase progress, and never with --skipped")
     if skipped:
         # An HONEST degrade: the transport for this phase was unavailable (e.g. the
         # tracker backend defines no tracker_publish_plan). Store a SKIP MARKER under
@@ -3486,7 +3491,14 @@ def cmd_plugin_record(args, *, store: StateStore, runner: Runner | None = None) 
                          "pass --attachment <id|url>, or --skipped --note <why> if the "
                          "backend cannot attach")
     published = bag.setdefault("published_phases", {})
-    published[key] = {"attachment": attachment} if needs_attachment else True
+    if needs_attachment:
+        published[key] = {"attachment": attachment}
+    elif comment:
+        # newest ref wins: a fallback new comment becomes the rolling one
+        published[key] = {"comment": comment}
+        bag["rolling_comment"] = comment
+    else:
+        published[key] = True
     # top-level bool-flag convention: a plugin whose bag seeds a bool keyed by the
     # phase name (e.g. experience: searched/recorded/skipped) reads those flags in
     # its gate; flip it true. Tracker's bag has no such keys, so it is untouched.
@@ -4611,7 +4623,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     sig = Signals(
         is_chat=bool(getattr(args, "chat", False)),
         changed_lines=int(getattr(args, "changed_lines", 0) or 0),
-        files=int(getattr(args, "files", 1) or 1),
+        cohesive=not bool(getattr(args, "not_cohesive", False)),
         wall_clock_min=int(getattr(args, "wall_clock_min", 0) or 0),
         tracker_key=getattr(args, "tracker_key", None),
         architectural=bool(getattr(args, "architectural", False)),
@@ -13883,6 +13895,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("plugin", ("plugin-activate", "plugin-deactivate", "plugin-record"), "plugin registry name"),
     ("phase", ("plugin-record",), "plugin phase name from a fixed vocabulary"),
     ("attachment", ("plugin-record",), "ticket attachment id or URL, not a file to read"),
+    ("comment", ("plugin-record",), "ticket comment id or URL, not a file to read"),
     ("tracker_key", ("plugin-activate", "classify", "drive"), "tracker issue key (ABC-123)"),
     ("id", ("ledger-add", "ledger-candidate", "ledger-dispose", "question-raise",
             "question-research", "question-dispose", "question-rebind", "question-retire",
@@ -14074,6 +14087,9 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp.add_argument("--attachment", default=None,
                     help="id or URL of the ticket attachment carrying the plan TOML; "
                          "required for --plugin tracker --phase plan (unless --skipped)")
+    sp.add_argument("--comment", default=None,
+                    help="id or URL of the tracker's rolling status comment; only for "
+                         "--plugin tracker --phase progress (not with --skipped)")
     sp.add_argument("--skipped", action="store_true",
                     help="record the phase as an honest SKIP (transport unavailable): "
                          "stores a marker+reason under the phase key so the gate is "
@@ -14224,11 +14240,16 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
 
     sp = add("classify"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")
-    sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0)
-    sp.add_argument("--files", type=int, default=1)
+    sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0,
+                    help="hand-written production lines of the change (tests, generated files and "
+                         "memory leaves excluded); measure with scripts/inline-measure.py")
+    sp.add_argument("--not-cohesive", dest="not_cohesive", action="store_true",
+                    help="the change is not one cohesive change (a module and its tests)")
     sp.add_argument("--wall-clock-min", dest="wall_clock_min", type=int, default=0)
     sp.add_argument("--tracker-key", dest="tracker_key", default=None)
-    sp.add_argument("--architectural", action="store_true")
+    sp.add_argument("--architectural", action="store_true",
+                    help="a design decision (more than one reasonable solution) or an "
+                         "architectural change")
     sp.add_argument("--external-effect", dest="external_effect", action="store_true")
     sp.add_argument("--new-dependency", dest="new_dependency", action="store_true")
     sp.add_argument("--public-api-change", dest="public_api_change", action="store_true")
@@ -14764,11 +14785,16 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     # --approved-by (the gate-cross token) + the M1–M4 partition markers.
     sp = add("drive"); sp.add_argument("--session", required=True)
     sp.add_argument("--chat", action="store_true")
-    sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0)
-    sp.add_argument("--files", type=int, default=1)
+    sp.add_argument("--changed-lines", dest="changed_lines", type=int, default=0,
+                    help="hand-written production lines of the change (tests, generated files and "
+                         "memory leaves excluded); measure with scripts/inline-measure.py")
+    sp.add_argument("--not-cohesive", dest="not_cohesive", action="store_true",
+                    help="the change is not one cohesive change (a module and its tests)")
     sp.add_argument("--wall-clock-min", dest="wall_clock_min", type=int, default=0)
     sp.add_argument("--tracker-key", dest="tracker_key", default=None)
-    sp.add_argument("--architectural", action="store_true")
+    sp.add_argument("--architectural", action="store_true",
+                    help="a design decision (more than one reasonable solution) or an "
+                         "architectural change")
     sp.add_argument("--external-effect", dest="external_effect", action="store_true")
     sp.add_argument("--new-dependency", dest="new_dependency", action="store_true")
     sp.add_argument("--public-api-change", dest="public_api_change", action="store_true")

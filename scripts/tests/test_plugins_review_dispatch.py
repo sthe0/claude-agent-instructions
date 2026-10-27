@@ -198,7 +198,7 @@ def test_submit_plan_silent_for_small_change_session(capsys, tmp_path, venued_fi
     _run(capsys, root, "start", "--session", sid, "--task", "t",
          "--goal", "g", "--done-criterion", "dc", "--criterion-type", "measurable")
     _run(capsys, root, "classify", "--session", sid, "--changed-lines", "5",
-         "--files", "1", "--wall-clock-min", "5")
+         "--wall-clock-min", "5")
     rc, d = _run(capsys, root, "submit-plan", "--session", sid, "--plan", plan)
     assert "plugin_directives" not in d["data"] or not any(
         p["plugin"] == "review_dispatch" for p in d["data"].get("plugin_directives", [])

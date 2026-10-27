@@ -37,7 +37,7 @@ A move without checking who reads the exact text breaks silently. Before extract
 
 ## 4. Plan and execute on the normal spine
 
-Grooming edits are production changes to the agent's own instructions — they do **not** bypass the plan-approval gate. Turn the survey into an edit plan (per-file: what moves where, what pointer replaces it) and route it through `planner` -> user approval -> `developer` like any other substantive change; a *small change* (single file, <= `small-change-max-lines`) may run in-thread per the usual carve-out.
+Grooming edits are production changes to the agent's own instructions — they do **not** bypass the plan-approval gate. Turn the survey into an edit plan (per-file: what moves where, what pointer replaces it) and route it through `planner` -> user approval -> `developer` like any other substantive change; a *small change* (one cohesive change, <= `small-change-max-lines`; see `memory-global/leaves/inline-class.md`) may run in-thread per the usual carve-out.
 
 Two invariants the plan must preserve:
 
