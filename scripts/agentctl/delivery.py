@@ -40,7 +40,20 @@ from pathlib import Path
 # re-typing the literal strings.
 SOURCE_HOOK = "hook"
 SOURCE_OVERRIDE = "override"
-DELIVERY_STAMP_SOURCES = (SOURCE_HOOK, SOURCE_OVERRIDE)
+SOURCE_CHANNEL = "channel"
+DELIVERY_STAMP_SOURCES = (SOURCE_HOOK, SOURCE_OVERRIDE, SOURCE_CHANNEL)
+CHANNEL_EVENT = "channel_delivery"
+
+
+def has_answered_channel_delivery(history, *, kind: str, sha256: str, plan_sha256: str | None) -> bool:
+    """Whether the engine's own history records an answered channel delivery of
+    exactly these bytes — the only thing that makes a `channel` stamp valid."""
+    return any(
+        h.get("event") == CHANNEL_EVENT and h.get("source") == SOURCE_CHANNEL
+        and h.get("answered") is True and h.get("kind") == kind
+        and h.get("sha256") == sha256 and h.get("plan_sha256") == plan_sha256
+        for h in history
+    )
 
 # The closed set of reasons a HUMAN may give for taking the override escape.
 # Typed rather than left to `note` because a free-text note is not aggregable:
