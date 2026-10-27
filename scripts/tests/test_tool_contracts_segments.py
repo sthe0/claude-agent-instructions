@@ -370,6 +370,11 @@ PROBES = [
     ("R5-B1-full-ref-clean-config", "git push origin refs/heads/topic", [R(P("origin", "topic"))]),
     ("R5-B1-head-clean-config", "git push origin HEAD", [R(P("origin", "feature"))]),
     ("R5-B1-explicit-refspec-clean-config", "git push origin topic:refs/heads/topic", [R(P("origin", "topic"))]),
+    # round 6 / B-R6-1, S-R6-2 the push config is a key allow-list and the remote needs a configured url (key-driven refusals: TestPushConfig)
+    ("R6-B1-configured-remote-resolves", "git push origin refs/heads/topic", [R(P("origin", "topic"))]),
+    ("R6-S2-remote-without-url", "git push nowhere topic", [U]),
+    ("R6-S2-url-operand", "git push https://example.invalid/r.git topic", [U]),
+    ("R6-B1-other-remote-in-chain-without-url", "git push origin topic && git push nowhere topic", [R(P("origin", "topic")), U]),
     ("R3-B1-branch-source-moved-by-checkout", "git checkout topic && git push origin HEAD", [R(W(V)), U]),
     # round 3 / S-R3-1 only the last fd-0 redirection decides whether the segment carries its stdin
     ("R3-S1-heredoc-then-file", "python3 <<'E' < s.py\nprint(1)\nE", [U]),
@@ -696,6 +701,90 @@ class TestPushConfig:
         venue, _ = _push_repo(tmp_path)
         monkeypatch.setenv("PATH", str(tmp_path / "no-bin"))
         assert _statuses(_seg("git push origin HEAD", venue)) == ["unresolved"]
+
+    def test_git_itself_pushes_a_tag_ref_under_push_follow_tags(self, tmp_path):
+        venue, bare = _push_repo(tmp_path)
+        _git(venue, "checkout", "-q", "topic")
+        _git(venue, "commit", "-q", "--allow-empty", "-m", "newer")
+        _git(venue, "tag", "-a", "v1", "-m", "release")
+        _git(venue, "config", "push.followTags", "true")
+        _git(venue, "push", "-q", "origin", "topic")
+        assert _remote_refs(bare) == ["refs/heads/main", "refs/heads/topic", "refs/tags/v1"]
+        assert _statuses(_seg("git push origin topic", venue)) == ["unresolved"]
+
+    # the key allow-list: each of these leaves every push form (colon-less, HEAD, refspec) unresolved
+    BLOCKING = [
+        ("push.followTags", "true"),
+        ("push.recurseSubmodules", "on-demand"),
+        ("push.gpgSign", "true"),
+        ("push.pushOption", "ci.skip"),
+        ("remote.origin.mirror", "true"),
+        ("remote.origin.receivepack", "git-receive-pack"),
+        ("remote.origin.push", "refs/heads/a:refs/heads/b"),
+        ("remote.origin.vcs", "svn"),
+        ("submodule.recurse", "true"),
+        ("submodule.recurse", "on-demand"),
+        ("submodule.recurse", ""),
+    ]
+    ALLOWED = [
+        ("push.default", "simple"),
+        ("push.autoSetupRemote", "true"),
+        ("push.autoSetupRemote", "false"),
+        ("remote.origin.pushurl", "/nowhere/else.git"),
+        ("remote.origin.tagopt", "--no-tags"),
+        ("remote.origin.prune", "true"),
+        ("remote.other.mirror", "true"),
+        ("remote.other.push", "refs/heads/a:refs/heads/b"),
+        ("submodule.recurse", "false"),
+        ("submodule.recurse", "Off"),
+        ("submodule.sub.url", "/nowhere/sub.git"),
+    ]
+    EVERY_FORM = ["git push origin topic", "git push origin HEAD", "git push origin topic:refs/heads/topic"]
+
+    @pytest.mark.parametrize("key,value", BLOCKING, ids=lambda v: v)
+    def test_a_key_outside_the_allow_list_leaves_every_push_form_unresolved(self, key, value, tmp_path):
+        venue, _ = _push_repo(tmp_path)
+        _git(venue, "remote", "add", "other", str(tmp_path / "origin.git"))
+        _git(venue, "config", key, value)
+        for text in self.EVERY_FORM:
+            assert _statuses(_seg(text, venue)) == ["unresolved"], (key, value, text)
+
+    @pytest.mark.parametrize("key,value", ALLOWED, ids=lambda v: v)
+    def test_a_key_on_the_allow_list_keeps_the_push_resolved(self, key, value, tmp_path):
+        venue, _ = _push_repo(tmp_path)
+        _git(venue, "remote", "add", "other", str(tmp_path / "origin.git"))
+        _git(venue, "config", key, value)
+        assert _seg("git push origin topic", venue).resources == [resources.VcsRefResource("origin", "topic", "push")], (key, value)
+        assert _statuses(_seg("git push origin HEAD", venue)) == ["resolved"], (key, value)
+
+    def test_a_key_name_is_case_insensitive(self, tmp_path):
+        venue, _ = _push_repo(tmp_path)
+        _git(venue, "config", "Push.FollowTags", "true")
+        assert _statuses(_seg("git push origin topic", venue)) == ["unresolved"]
+
+    def test_a_remote_without_a_url_entry_leaves_the_push_unresolved(self, tmp_path):
+        venue, _ = _push_repo(tmp_path)
+        _git(venue, "config", "--unset", "remote.origin.url")
+        _git(venue, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")
+        for text in self.EVERY_FORM:
+            assert _statuses(_seg(text, venue)) == ["unresolved"], text
+
+    def test_a_legacy_remotes_file_is_not_a_url_entry(self, tmp_path):
+        venue, bare = _push_repo(tmp_path)
+        _git(venue, "config", "--remove-section", "remote.origin")
+        (venue / ".git" / "remotes").mkdir()
+        (venue / ".git" / "remotes" / "legacy").write_text(f"URL: {bare}\nPush: refs/heads/topic:refs/heads/elsewhere\n")
+        assert _statuses(_seg("git push legacy topic", venue)) == ["unresolved"]
+
+    def test_a_url_operand_is_not_a_configured_remote(self, tmp_path):
+        venue, bare = _push_repo(tmp_path)
+        assert _statuses(_seg(f"git push {bare} topic", venue)) == ["unresolved"]
+
+    def test_an_unreadable_push_default_leaves_a_colonless_branch_unresolved(self, tmp_path):
+        venue, _ = _push_repo(tmp_path)
+        with open(venue / ".git" / "config", "a", encoding="utf-8") as fh:
+            fh.write("[push]\n\tdefault = upstream\n[broken\n")
+        assert _statuses(_seg("git push origin topic", venue)) == ["unresolved"]
 
 
 class TestOperators:

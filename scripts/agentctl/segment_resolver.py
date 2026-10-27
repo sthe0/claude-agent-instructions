@@ -20,8 +20,9 @@ the contract table for everything else); every other form is unresolved:
     has its own refs, hooks and config). Stash, rebase, pull, am, cherry-pick,
     commit-ish reset, branch-creating or ref-forcing checkout/switch flags stay
     unresolved. A push also reads the venue's effective git config (`git config`, the one
-    subprocess in this module): `remote.<remote>.push` entries or a `push.default` that can
-    remap a colon-less branch name leave it unresolved (`_push_config_blocker`).
+    subprocess in this module) and resolves only under a key allow-list (`push.*`,
+    `remote.<remote>.*`, `submodule.recurse`) plus a `push.default` value allow-list
+    (`_push_config_blocker`).
   * a commit/merge (or a push of `HEAD`) is attributed to the current branch only
     when no other segment of the line -- before it, or running concurrently with
     it under `&` or `|` -- is a branch switch, unresolved or opaque.
@@ -751,42 +752,79 @@ _GIT_CONFIG_TIMEOUT_S = 5
 _PUSH_DEFAULT_SAFE = frozenset({"simple", "current", "matching", "nothing"})
 
 
-def _git_config_values(root: str, *args: str) -> list[str] | None:
-    """Values `git -C <root> config <args>` prints; `[]` when the key is simply unset (exit 1, silent);
-    `None` on any other outcome (git missing, a timeout, an invalid key, a read error)."""
+#: `push.*` variables a push may run under; any other (`followTags`, `recurseSubmodules`, `gpgSign`, ...)
+#: can add refs, push submodules or change how refs are sent
+_PUSH_VARIABLES_ALLOWED = frozenset({"default", "autosetupremote"})
+#: `remote.<pushed remote>.*` variables a push may run under: where the remote lives and fetch-side
+#: options; `push`, `mirror`, `receivepack`, ... change what is sent
+_REMOTE_VARIABLES_ALLOWED = frozenset({"url", "fetch", "pushurl", "tagopt", "prune"})
+_BOOL_FALSE = frozenset({"false", "no", "off", "0"})
+
+
+def _git_config_entries(root: str) -> list[tuple[str, str | None]] | None:
+    """The `push.*`, `remote.*` and `submodule.*` entries of the effective git config of `root` as
+    `(key, value)` (git lower-cases the section and variable and keeps a subsection; `value` is `None`
+    for a valueless key); `[]` when none is set; `None` on any other outcome (git missing, a timeout, an
+    invalid config, a read error)."""
     try:
         proc = subprocess.run(
-            ["git", "-C", root, "config", *args],
+            ["git", "-C", root, "config", "--null", "--get-regexp", r"^(push|remote|submodule)\."],
             capture_output=True, text=True, timeout=_GIT_CONFIG_TIMEOUT_S, check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    if proc.returncode == 0:
-        return proc.stdout.splitlines()
     if proc.returncode == 1 and not proc.stdout and not proc.stderr.strip():
         return []
-    return None
+    if proc.returncode != 0:
+        return None
+    entries: list[tuple[str, str | None]] = []
+    for chunk in proc.stdout.split("\0"):
+        if chunk:
+            key, newline, value = chunk.partition("\n")
+            entries.append((key, value if newline else None))
+    return entries
 
 
 def _push_config_blocker(root: str, remote: str, colonless_branch_source: bool) -> str | None:
-    """Why stored git config could send a push elsewhere than its words say, or `None` when it cannot.
-    `remote.<remote>.push` maps refspecs before git pushes them (builtin/push.c `set_refspecs` →
-    `refspec_append_mapped`); it is checked for every resolved form, `HEAD` included, so no answer rests
-    on a form being immune. `push.default=upstream` (alias `tracking`) sends a colon-less branch name to
-    its upstream branch; `HEAD`, `@` and any `<src>:<dst>` refspec are not remapped by it, so it is read
-    only when `colonless_branch_source`. Allow-list: only an unset or listed-safe `push.default` and no
-    configured push refspec pass, and an unreadable config does not."""
-    mapped = _git_config_values(root, "--get-all", f"remote.{remote}.push")
-    if mapped is None:
-        return f"cannot read remote.{remote}.push from the git config"
-    if mapped:
-        return f"remote.{remote}.push maps refspecs before they are pushed"
-    if colonless_branch_source:
-        default = _git_config_values(root, "--get", "push.default")
-        if default is None:
-            return "cannot read push.default from the git config"
-        if default and default[-1] not in _PUSH_DEFAULT_SAFE:
-            return f"push.default={default[-1]!r} can send a colon-less branch name to another branch"
+    """Why stored git config could make a push do something other than its words say, or `None` when it
+    cannot. A KEY allow-list plus a `push.default` VALUE allow-list, read once and applied to every
+    resolved push form, `HEAD` included; whatever is not listed, and an unreadable config, leaves the push
+    unresolved. `push.*` may only be `push.default` or `push.autoSetupRemote`; `remote.<remote>.*` may
+    only be `url`, `fetch`, `pushurl`, `tagopt` or `prune` (so no `push` mapping, `mirror`, ...), and
+    `remote.<remote>.url` must exist (a legacy `.git/remotes/<r>` file, a `branches` file or a URL
+    operand is not read); `submodule.recurse` may not be on; keys of other remotes are ignored.
+    `push.default` is read only for a colon-less branch name (`upstream`/`tracking` send it to the
+    branch's upstream; `HEAD`, `@` and any `<src>:<dst>` refspec are not remapped by it) and must be
+    unset or in `_PUSH_DEFAULT_SAFE`. Residuals: `remote.<r>.pushurl` and `url.<base>.insteadOf` change
+    the URL, which the resource model does not describe; the read uses the resolver process's
+    environment (`GIT_*`, `HOME`, `XDG_CONFIG_HOME`), so stage 8 must pass the Bash tool shell's."""
+    entries = _git_config_entries(root)
+    if entries is None:
+        return "cannot read the git config"
+    default: str | None = None
+    has_url = False
+    for key, value in entries:
+        section, _, rest = key.lower().partition(".")
+        if section == "push":
+            if rest == "default":
+                default = value or ""
+            elif rest not in _PUSH_VARIABLES_ALLOWED:
+                return f"{key} changes what a push sends"
+        elif section == "remote":
+            name, _, variable = key.partition(".")[2].rpartition(".")
+            if name != remote:
+                continue
+            variable = variable.lower()
+            if variable == "url":
+                has_url = True
+            elif variable not in _REMOTE_VARIABLES_ALLOWED:
+                return f"remote.{remote}.{variable} changes what a push sends"
+        elif section == "submodule" and rest == "recurse" and (value or "").lower() not in _BOOL_FALSE:
+            return "submodule.recurse pushes submodules too"
+    if not has_url:
+        return f"remote.{remote}.url is not set: the remote comes from elsewhere"
+    if colonless_branch_source and default is not None and default not in _PUSH_DEFAULT_SAFE:
+        return f"push.default={default!r} can send a colon-less branch name to another branch"
     return None
 
 
