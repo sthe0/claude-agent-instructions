@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, delivery, delivery_channel
+from agentctl import cli, delivery
 from agentctl.render import render_plan_grants
 from agentctl.plan import load_plan
 from agentctl.state import Node
@@ -66,7 +66,14 @@ def root(tmp_path, monkeypatch) -> Path:
     home.mkdir()
     monkeypatch.setenv("CLAUDE_AGENT_HOME", str(home))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
-    monkeypatch.setattr(delivery_channel, "CONFIG_NAME", "delivery-channel.toml")
+    # Imported here, not at module level, so the module still collects on a tree
+    # without delivery_channel (the stage's negative control runs it there).
+    try:
+        from agentctl import delivery_channel
+    except ImportError:
+        delivery_channel = None
+    if delivery_channel is not None:
+        monkeypatch.setattr(delivery_channel, "CONFIG_NAME", "delivery-channel.toml")
     return home
 
 
@@ -309,5 +316,7 @@ def test_resolve_with_invalid_quality_does_not_call_channel(store, channel, tmp_
 
 
 def test_unknown_kind_is_rejected(channel):
+    from agentctl import delivery_channel
+
     with pytest.raises(ValueError):
         delivery_channel.deliver("bogus", b"x")
