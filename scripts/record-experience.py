@@ -42,7 +42,7 @@ Subcommands:
                       --manifest; stamps the new regularity into each source
                       leaf's `generalized_into`. --rule-derived REASON for a
                       regularity with no experience source. --principle
-                      --grounded-in REG[,REG] writes a principle/v1 skeleton
+                      --grounded-in REG[,REG] writes a principle skeleton
                       (the norm layer) naming existing regularities instead.
                       --project-dir D writes the project's own principles/
                       (D is the repo dir, as for every verb; a memory dir
@@ -1809,7 +1809,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--induced-from", action="append", dest="induced_from", metavar="SLUG",
                     help="a leaf slug this regularity generalizes; repeatable")
     pr.add_argument("--principle", action="store_true",
-                    help="write a principle/v1 skeleton (the norm layer) instead of a "
+                    help="write a principle skeleton (the norm layer) instead of a "
                          "regularity; needs --grounded-in")
     pr.add_argument("--grounded-in", action="append", dest="grounded_in", metavar="REG",
                     help="with --principle: an existing regularity slug the principle rests "

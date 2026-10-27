@@ -15,7 +15,7 @@ A memory leaf with no temporal metadata cannot be reasoned about over time: you 
 
 ## Guidance
 
-Every memory leaf — across all three scopes (global engineering, project, personal auto-memory) and all schemas (`leaf/v1`, `difficulty/v1`, `principle/v1`, and the bare auto-memory shape) — carries two required date fields in its YAML frontmatter. Both use ISO `YYYY-MM-DD` (day granularity, no time-of-day — this bounds churn).
+Every memory leaf — across all three scopes (global engineering, project, personal auto-memory) and all schemas (`leaf/v1`, `difficulty/v1`, `regularity/v1`, `principle/v1`, and the bare auto-memory shape) — carries two required date fields in its YAML frontmatter. Both use ISO `YYYY-MM-DD` (day granularity, no time-of-day — this bounds churn).
 
 | Field | Required | Written by | Meaning |
 |---|---|---|---|
@@ -55,5 +55,6 @@ last_verified: 2026-06-29
 
 - [[leaf-schema]] — the `leaf/v1` ordinary-leaf schema (these fields sit alongside its `name`/`description`/`type`/`schema`).
 - [[experience-leaf-schema]] — the `difficulty/v1` experience-leaf schema.
+- [[regularity-leaf-schema]] — the `regularity/v1` knowledge-leaf schema.
 - [[principle-leaf-schema]] — the `principle/v1` principle-leaf schema.
 - [[memory-usage]] — when to read / verify / write memory (the hygiene rules these dates instrument).

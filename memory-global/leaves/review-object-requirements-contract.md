@@ -15,7 +15,7 @@ Today, what makes a reviewed object "adequate" is left to per-invocation prose j
 
 ## Guidance
 
-This leaf is a **SEED**, not a finished contract. It states a starter set of properties any reviewed object should satisfy, explicitly meant to be refined incrementally — via `self-improvement`/`overcome-difficulty` — as concrete review difficulties on other object types (code review, documentation review, other future review targets) are recorded. Individual items may later graduate into their own `principle/v1` leaves once enough accumulated difficulties satisfy that schema's `induced_from` requirement ([[principle-leaf-schema]] — "a principle is never rootless"). Until then, this leaf carries the seed as a `leaf/v1` reference, which carries no induction requirement.
+This leaf is a **SEED**, not a finished contract. It states a starter set of properties any reviewed object should satisfy, explicitly meant to be refined incrementally — via `self-improvement`/`overcome-difficulty` — as concrete review difficulties on other object types (code review, documentation review, other future review targets) are recorded. Individual items may later graduate into their own `principle/v1` leaves once enough accumulated difficulties are induced into the regularities they are `grounded_in` ([[principle-leaf-schema]] — "a principle is never rootless"; [[regularity-leaf-schema]]). Until then, this leaf carries the seed as a `leaf/v1` reference, which carries no induction requirement.
 
 The starter checklist:
 

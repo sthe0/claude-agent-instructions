@@ -33,7 +33,7 @@ The three memory scopes (personal / global / project) say *where* a fact goes bu
 
 *Difficulty removed: a leaf that keeps gaining contexts outgrows reading and retrieval, and nobody owns splitting it.*
 
-When `self-diagnose` reports an `oversized-leaf` finding (action: memory-curator split), the root spawns `memory-curator` (`spawn-specialist.py --kind memory-curator`, `--workdir` a linked worktree brought to the intended base) with the leaf named. The curator clusters the leaf's contexts by functional ground, moves each cluster into its own leaf, writes principle candidates, and stops with an uncommitted diff — it never commits. The root shows that diff to the user and commits it only on an explicit accept; a rejected diff is discarded with the worktree. See `skills/specializations/memory-curator/SKILL.md`.
+When `self-diagnose` reports an `oversized-leaf` finding (action: memory-curator split), the root spawns `memory-curator` (`spawn-specialist.py --kind memory-curator`, `--workdir` a linked worktree brought to the intended base) with the leaf named. The curator clusters the leaf's contexts by functional ground, moves each cluster into its own leaf, writes regularity candidates, and stops with an uncommitted diff — it never commits. The root shows that diff to the user and commits it only on an explicit accept; a rejected diff is discarded with the worktree. See `skills/specializations/memory-curator/SKILL.md`.
 
 ## See also
 

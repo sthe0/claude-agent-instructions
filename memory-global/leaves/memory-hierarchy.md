@@ -38,7 +38,7 @@ The two axes compose: carve the whole into parts (part-whole), then within a par
 Before (or instead of) splitting, look for **recurring and similar** entries and **generalize-and-group** them:
 
 - **Group** near-duplicate leaves that answer the same question under one entry — merge the content, keep the union of specifics, delete the duplicates.
-- **Generalize** a cluster of same-shaped difficulties by lifting their commonality into a **parent** (a `principle/v1` leaf at the right generality level — see [[principle-leaf-schema]]) and pointing the specifics at it. This is the memory-side face of principle induction (`record-experience.py promote-scan` flags the cluster at `principle-promotion-threshold`).
+- **Generalize** a cluster of same-shaped difficulties by lifting their commonality into a **parent** (a `regularity/v1` leaf at the right generality level — see [[regularity-leaf-schema]]; a `principle/v1` norm then cites it, see [[principle-leaf-schema]]) and pointing the specifics at it. This is the memory-side face of induction (`record-experience.py promote-scan` flags the cluster at `principle-promotion-threshold`).
 
 Grouping shrinks the set *before* you decide how deep to cut, so the two-axis decomposition operates on generalized units rather than scattered near-duplicates.
 
