@@ -1049,11 +1049,14 @@ resolve_git = _resolve_git
 
 
 def resolve_segments(
-    text: str, venue: str, *, contract_table: dict[str, ContractEntry] | None = None
+    text: str, venue: str, *, contract_table: dict[str, ContractEntry] | None = None,
+    cdpath_unverified: bool = False,
 ) -> SegmentedResolution:
     """Resolve each `&&` / `;` / `|` segment of `text` on its own (see
     `segment_resolver`); `resolve_command` stays the closed, all-or-nothing
-    resolver every existing caller relies on."""
+    resolver every existing caller relies on. `cdpath_unverified`: the caller cannot see the
+    Bash shell's CDPATH, so a `cd` to a relative operand leaves the cwd unknown."""
     from . import segment_resolver
 
-    return segment_resolver.resolve_segments(text, venue, contract_table=contract_table)
+    return segment_resolver.resolve_segments(
+        text, venue, contract_table=contract_table, cdpath_unverified=cdpath_unverified)

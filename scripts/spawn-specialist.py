@@ -2303,7 +2303,56 @@ RESOURCE_GRANT_HOOK_MATCHER = "Bash|Edit|Write|MultiEdit|NotebookEdit|Read"
 
 
 def resource_grant_hook_command() -> str:
-    return f"python3 {Path(SCRIPTS_DIR) / 'hook-resource-grant-check.py'}"
+    """`-I` keeps the hook off `PYTHONPATH`, the user site and the working directory: the hook runs
+    inside the child's cwd, where a planted module would otherwise shadow a stdlib import."""
+    return f"python3 -I {Path(SCRIPTS_DIR) / 'hook-resource-grant-check.py'}"
+
+
+def child_permission_settings(
+    kind: str,
+    plans_directory: "str | None",
+    project_settings: "str | None",
+    engine_grants: "list[dict] | None",
+    *,
+    workdir: "str | None",
+    evidence_dir: "str | None",
+    guard_exempt_paths,
+    read_dirs: "list[Path]",
+    own_session: "str | None",
+) -> dict:
+    """The child's `--settings` payload before the hook is registered: the kind baseline, the
+    stage grants, the read-only view directories and, for a linked child (`own_session` set), the
+    own-contour rules. Raises `GrantShadowError` when a rule is shadowed by a deny. One builder
+    for the spawn and for the test support that rebuilds a child, so the record's
+    `permissions_allow` cannot drift from the settings the child really gets."""
+    settings = build_child_settings(
+        kind, plans_directory, project_settings, engine_grants,
+        workdir=workdir, evidence_dir=evidence_dir, guard_exempt_paths=guard_exempt_paths,
+    )
+    permissions = settings.setdefault("permissions", {})
+    for read_dir in read_dirs:
+        read_allow, read_deny = review_topo_view_permission_rules(read_dir)
+        permissions.setdefault("allow", []).extend(read_allow)
+        permissions.setdefault("deny", []).extend(read_deny)
+    if own_session is not None:
+        own_plan_rule = own_plan_allow_rule(own_session)
+        denies = permissions.get("deny", [])
+        _check_no_allow_fully_denied(
+            [own_plan_rule], denies, {own_plan_rule: "own_plan_allow_rule"},
+            {rule: "child settings" for rule in denies},
+        )
+        permissions.setdefault("allow", []).extend(
+            [own_contour_allow_rule(), own_contour_review_rule(), own_plan_rule]
+        )
+    return settings
+
+
+def attach_child_permission_surface(record: dict, settings: dict, add_dir_paths: "list[str]") -> None:
+    """Put on the handoff record what the harness will decide with: the child's final
+    `permissions.allow` and the directories it is started with. The resource-grant hook denies
+    only on a record that carries both."""
+    record["permissions_allow"] = list(settings.get("permissions", {}).get("allow", []))
+    record["add_dirs"] = list(add_dir_paths)
 
 
 def register_resource_grant_hook(settings: dict, timeout_s: int) -> None:
@@ -2422,18 +2471,25 @@ _APPROVED_NODES = frozenset({
 })
 
 
-def refresh_resumed_child_link(store, state, env_value: str) -> None:
-    """Replace the `parent_link` of a child resumed after the parent fixed the norm it
-    escalated with the handoff `env_value` now names, and require the child's plan to be
-    approved again: its approval covered the old norm. The node an approved session had
-    reached (or was parked from) returns to PLAN_READY. Runs before the child starts, so
-    the engine's own adoption (which keeps a link it holds) sees the renewed one."""
+def refresh_resumed_child_link(store, state, env_value: str, *, keep_approval: bool = False) -> None:
+    """Replace the `parent_link` of a resumed child with the handoff `env_value` now names.
+    After the parent fixed the norm the child escalated, the child's plan must be approved
+    again (its approval covered the old norm): the node an approved session had reached (or
+    was parked from) returns to PLAN_READY. With `keep_approval` (the norm is unchanged, only
+    the record's settings are renewed) the approval and the node stay. Runs before the child
+    starts, so the engine's own adoption (which keeps a link it holds) sees the renewed one."""
     adopted, reason = norm_handoff.verify_env_value(env_value)
     if adopted is None:
         raise ValueError(f"fresh handoff does not verify: {reason}")
     old = state.parent_link or {}
     state.parent_link = adopted
     state.recursion_depth = adopted["depth"]
+    if keep_approval:
+        state.log("norm_handoff_refreshed", parent_session=adopted["parent_session"],
+                  stage_index=adopted["stage_index"], old_norm_digest=old.get("norm_digest"),
+                  norm_digest=adopted["norm_digest"])
+        store.save(state)
+        return
     state.approval = GateRecord(state.approval.name)
     if state.node in _APPROVED_NODES:
         state.node = Node.PLAN_READY.value
@@ -2445,16 +2501,6 @@ def refresh_resumed_child_link(store, state, env_value: str) -> None:
               stage_index=adopted["stage_index"], old_norm_digest=old.get("norm_digest"),
               norm_digest=adopted["norm_digest"])
     store.save(state)
-
-
-def adopted_handoff_env_value(state) -> "str | None":
-    """The handoff value a resumed child's engine session adopted, or None when it holds
-    none yet. Exporting that value rather than a freshly written record keeps the env the
-    child reads equal to its own `parent_link`, which the engine never replaces."""
-    link = (state.parent_link if state is not None else None) or {}
-    if not (link.get("handoff") and link.get("sha256")):
-        return None
-    return norm_handoff.format_env_value(link["handoff"], link["sha256"])
 
 
 def _snapshot_transcripts(workdir: str) -> set[Path]:
@@ -3148,6 +3194,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         if child_linked else None
     )
     resumed_transcript: "Path | None" = None
+    resumed_state = None
     if resumed is not None:
         own_session, resumed_transcript, resumed_state = resumed
     else:
@@ -3222,7 +3269,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         """The child's `--settings` payload, or None after a refusal was logged. Built
         before the handoff record is written: the record carries its `permissions.allow`."""
         try:
-            settings = build_child_settings(
+            return child_permission_settings(
                 args.kind,
                 None if topo_pair is not None else plans_directory,
                 args.project_settings,
@@ -3230,53 +3277,36 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
                 workdir=workdir,
                 evidence_dir=evidence_dir,
                 guard_exempt_paths=guard_exempt_paths,
+                read_dirs=read_dirs,
+                own_session=own_session if linked else None,
             )
         except GrantShadowError as exc:
             print(f"error: {exc}", file=sys.stderr)
             log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
             return None
-        permissions = settings.setdefault("permissions", {})
-        for read_dir in read_dirs:
-            read_allow, read_deny = review_topo_view_permission_rules(read_dir)
-            permissions.setdefault("allow", []).extend(read_allow)
-            permissions.setdefault("deny", []).extend(read_deny)
-        if linked:
-            own_plan_rule = own_plan_allow_rule(own_session)
-            denies = permissions.get("deny", [])
-            try:
-                _check_no_allow_fully_denied(
-                    [own_plan_rule], denies, {own_plan_rule: "own_plan_allow_rule"},
-                    {rule: "child settings" for rule in denies},
-                )
-            except GrantShadowError as exc:
-                print(f"error: {exc}", file=sys.stderr)
-                log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
-                return None
-            permissions.setdefault("allow", []).extend(
-                [own_contour_allow_rule(), own_contour_review_rule(), own_plan_rule]
-            )
-        return settings
 
     child_settings = settings_for(child_linked)
     if child_settings is None:
         return 2
     if handoff_record is not None:
-        handoff_record["permissions_allow"] = list(child_settings["permissions"].get("allow", []))
+        attach_child_permission_surface(handoff_record, child_settings, add_dir_paths)
     handoff_env_value: "str | None" = None
     norm_fixed = (
         resumed is not None and resumed_state is not None and resumed_state.parent_link is not None
         and resumed_state.parent_link.get("norm_digest") != handoff_record["norm_digest"]
     )
-    if resumed is not None and not norm_fixed and not args.dry_run:
-        handoff_env_value = adopted_handoff_env_value(resumed_state)
-    if handoff_record is not None and handoff_env_value is None and not args.dry_run:
+    # A resume under the same norm also gets a fresh record: the adopted one was written for
+    # an earlier spawn and may carry other settings than this child is started with.
+    if handoff_record is not None and not args.dry_run:
         # Written only now: a brief that cannot be assembled leaves no record behind. A
         # record that cannot be written makes the spawn unlinked -- brief included.
         try:
             path, sha = norm_handoff.write_record(handoff_store.root, handoff_record)
             handoff_env_value = norm_handoff.format_env_value(path, sha)
-            if norm_fixed:
-                refresh_resumed_child_link(handoff_store, resumed_state, handoff_env_value)
+            if resumed_state is not None and resumed_state.parent_link is not None:
+                refresh_resumed_child_link(
+                    handoff_store, resumed_state, handoff_env_value, keep_approval=not norm_fixed,
+                )
         except Exception as exc:
             print(f"warning: norm handoff not written, spawning unlinked: {exc}", file=sys.stderr)
             handoff_record, child_linked, own_session, resumed_transcript = None, False, None, None
@@ -3384,6 +3414,9 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         # verbatim and note the stdin payload size separately.
         print(" ".join(repr(c) if " " in c else c for c in cmd))
         print(f"# stdin: <prompt {len(prompt)} chars>")
+        if handoff_record is not None:
+            print("\n=== norm handoff record (not written) ===")
+            print(json.dumps(handoff_record, sort_keys=True))
         return 0
 
     if shutil.which("claude") is None:

@@ -2418,6 +2418,14 @@ disposition = "keep"
 ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
 
 [[entry]]
+id = "0ee395a35d6fa526"
+domain = "code"
+file = "scripts/hook-resource-grant-check.py"
+class = "structural"
+disposition = "keep"
+ground = "PreToolUse/Stop guardians whose regex (where present) reads shell-command shape, path/variable syntax, or `/proc/self/mounts` table syntax — never natural-language meaning; the deny/block decision is driven by path containment, token flags, or engine state, not by the regex's semantic content."
+
+[[entry]]
 id = "2f5311ca430d6f29"
 domain = "code"
 file = "scripts/hook-retry-detector.py"
@@ -9027,6 +9035,46 @@ ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates
 
 [[entry]]
 id = "19c69d8500162d3d"
+domain = "code"
+file = "scripts/tests/test_hook_resource_grant_check.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "e46e415ed636f04b"
+domain = "code"
+file = "scripts/tests/test_hook_resource_grant_check.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "79f2cbb87ece6f6c"
+domain = "code"
+file = "scripts/tests/test_hook_resource_grant_check.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "3c9f5eb5a522e797"
+domain = "code"
+file = "scripts/tests/test_hook_resource_grant_check.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "152316c63702cbbc"
+domain = "code"
+file = "scripts/tests/test_hook_resource_grant_check.py"
+class = "not-a-gate"
+disposition = "keep"
+ground = "Synthetic gate-input fixtures: these exercise the real detectors/gates under controlled inputs (including deliberately adversarial ones) but are not themselves gates guarding production behaviour."
+
+[[entry]]
+id = "73d0590c0cf5bc80"
 domain = "code"
 file = "scripts/tests/test_hook_resource_grant_check.py"
 class = "not-a-gate"

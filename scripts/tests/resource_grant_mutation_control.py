@@ -409,7 +409,7 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "cdpath-search-ignored": Mutant(
         SEGMENT_RESOLVER,
-        '    if os.environ.get("CDPATH") and not _CDPATH_SAFE_RE.match(operands[0].text):\n',
+        '    if (ctx.cdpath_unverified or os.environ.get("CDPATH")) and not _CDPATH_SAFE_RE.match(operands[0].text):\n',
         '    if False:\n',
         "`cd sub` is read as the working-directory entry although CDPATH may land it elsewhere",
     ),
@@ -631,8 +631,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "hook-denies-uncovered-write": Mutant(
         HOOK,
-        "    if denied:\n",
-        "    if False:\n",
+        "        if denied and may_deny(approved, command):\n",
+        "        if False:\n",
         "the hook never denies: an uncovered write falls through to the harness prompt",
     ),
     "hook-allows-uncovered-write": Mutant(
@@ -673,8 +673,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "hook-opaque-code-unread": Mutant(
         HOOK,
-        "    if opaque:\n        found = ",
-        "    if False:\n        found = ",
+        "    if opaque:\n        timeout = budget.next_timeout()\n",
+        "    if False:\n        timeout = budget.next_timeout()\n",
         "an opaque segment's code is not sent to the code reader, so its writes are never seen",
     ),
     "hook-edit-denies": Mutant(
@@ -731,11 +731,89 @@ CATALOGUE: "dict[str, Mutant]" = {
         "    if not changed:\n",
         "the acceptEdits auto-run is assumed in every permission mode, so no deny is made",
     ),
-    "hook-accept-edits-may-run-in-any-mode": Mutant(
+    "hook-deny-in-any-mode": Mutant(
         HOOK,
-        "    return approved.mode == ACCEPT_EDITS and _all_files_in_cwd(approved, uncovered)\n",
-        "    return _all_files_in_cwd(approved, uncovered)\n",
-        "an uncovered write in the cwd is never denied, whatever the permission mode",
+        "        approved.mode == ACCEPT_EDITS\n        and approved.allow_entries is not None\n",
+        "        approved.allow_entries is not None\n",
+        "an uncovered write is denied in every permission mode, not only the one probe Q6 measured",
+    ),
+    "hook-deny-without-explicit-lists": Mutant(
+        HOOK,
+        "        and approved.allow_entries is not None\n        and approved.add_dirs is not None\n",
+        "",
+        "a record without permissions_allow / add_dirs (a resumed child's old record) is read as empty lists and denies",
+    ),
+    "hook-strict-entry-suppresses-deny": Mutant(
+        HOOK,
+        "        and lenient_allow_entry(approved, command) is None\n",
+        "        and segment_allow_entry(approved, command) is None\n",
+        "the strict rule match decides whether an allow entry stops a deny, so a `$` or `2>&1` call the harness allows is denied",
+    ),
+    "hook-deny-inside-add-dirs": Mutant(
+        HOOK,
+        "    return not any(_under(path, _real(root)) for root in [approved.cwd, *(approved.add_dirs or [])])\n",
+        "    return not any(_under(path, _real(root)) for root in [approved.cwd])\n",
+        "a write into a directory the child was started with (the evidence or own-plan directory) is denied",
+    ),
+    "hook-plan-mode-decides": Mutant(
+        HOOK,
+        '    if str(payload.get("permission_mode") or "") == PLAN_MODE:\n',
+        "    if False:\n",
+        "plan mode, which the probe did not measure, gets an allow or a deny",
+    ),
+    "hook-cdpath-trusted": Mutant(
+        HOOK,
+        "tool_contracts.resolve_segments(command, approved.cwd, cdpath_unverified=True)",
+        "tool_contracts.resolve_segments(command, approved.cwd, cdpath_unverified=False)",
+        "`cd sub` is read as the working-directory entry although the Bash shell's CDPATH cannot be read from the hook",
+    ),
+    "hook-env-blocker-ignored": Mutant(
+        HOOK,
+        "    variable = env_blocker(approved, text)\n",
+        "    variable = None\n",
+        "a GIT_DIR / PYTHONPATH exported in the hook's environment does not make a git or python segment undeterminable",
+    ),
+    "hook-git-hooks-ignored": Mutant(
+        HOOK,
+        "        why = git_hooks_blocker(approved, verdict, verdicts[:index] + verdicts[index + 1:])\n",
+        "        why = None\n",
+        "a commit whose effective hooks directory the stage may write, and holds a hook, is allowed",
+    ),
+    "hook-allow-entry-matches-whole-call": Mutant(
+        HOOK,
+        "    entry = segment_allow_entry(approved, text)\n",
+        '    entry = segment_allow_entry(approved, " ".join(s.text for s in line))\n',
+        "an allow entry for the first segment is matched against the whole line, so it shelters an uncovered tail",
+    ),
+    "hook-rule-pattern-matches-whole-call": Mutant(
+        HOOK,
+        "    pattern = _first_rule(approved.rule_patterns, text)\n",
+        '    pattern = _first_rule(approved.rule_patterns, " ".join(s.text for s in line))\n',
+        "a wildcard-tail rule pattern is matched against the whole line, so it covers an uncovered tail",
+    ),
+    "hook-judge-timeout-unbounded": Mutant(
+        HOOK,
+        "            budget = JudgeBudget(total, advisor.code_effects_judge_timeout_s())\n",
+        "            budget = JudgeBudget(total, total)\n",
+        "each judge call may take the hook's whole timeout instead of the judge's own",
+    ),
+    "hook-opaque-reads-unconfined": Mutant(
+        HOOK,
+        "    if opaque and not changes:\n",
+        "    if False:\n",
+        "opaque code that writes nothing is allowed although what it reads is not confined",
+    ),
+    "spawn-record-drops-permissions-allow": Mutant(
+        SPAWN,
+        '    record["permissions_allow"] = list(settings.get("permissions", {}).get("allow", []))\n',
+        "    pass\n",
+        "the handoff record the spawn writes carries no permissions_allow, so the hook can never deny",
+    ),
+    "spawn-record-allow-before-baselines": Mutant(
+        SPAWN,
+        '    record["permissions_allow"] = list(settings.get("permissions", {}).get("allow", []))\n',
+        '    record["permissions_allow"] = [e for e in settings.get("permissions", {}).get("allow", []) if e.startswith("Bash(")]\n',
+        "the record's permissions_allow differs from the child's final permissions.allow",
     ),
     "hook-reads-unconfined": Mutant(
         HOOK,

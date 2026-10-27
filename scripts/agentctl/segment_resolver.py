@@ -930,13 +930,13 @@ def _logical_cd_target(path: str) -> str | None:
 
 
 #: With CDPATH set, `cd sub` may land in `$CDPATH/sub`; only these operand shapes skip the search.
-#: Residual: CDPATH is read from THIS process's environment, so a variable the Bash tool's shell sets
-#: itself (a profile or rc file, not exported to the caller) is invisible here; the hook (stage 8) must
-#: read it from the shell snapshot.
+#: CDPATH is read from THIS process's environment, so a variable the Bash tool's shell sets itself (a
+#: profile or rc file, not exported to the caller) is invisible here; a caller that cannot see that shell
+#: passes `cdpath_unverified` and every other operand shape then leaves the cwd unknown.
 _CDPATH_SAFE_RE = re.compile(r"^(/|\./|\.\./|\.$|\.\.$)")
 
 
-def _cd(toks: list[_Tok], cwd: str | None) -> _Verdict:
+def _cd(toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
     verdict = _ok()
     verdict.new_cwd = None
     operands = []
@@ -947,7 +947,7 @@ def _cd(toks: list[_Tok], cwd: str | None) -> _Verdict:
             operands.append(tok)
     if len(operands) != 1 or operands[0].text == "-":
         return verdict
-    if os.environ.get("CDPATH") and not _CDPATH_SAFE_RE.match(operands[0].text):
+    if (ctx.cdpath_unverified or os.environ.get("CDPATH")) and not _CDPATH_SAFE_RE.match(operands[0].text):
         return verdict
     path, bad = _resolve_path(operands[0], cwd)
     if bad is None and path is not None:
@@ -1156,7 +1156,7 @@ def _python(toks: list[_Tok], cwd: str, ctx: "_Context", has_body: bool) -> _Ver
 
 def _program(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context", has_body: bool) -> _Verdict:
     if prog == "cd":
-        return _cd(toks, cwd)
+        return _cd(toks, cwd, ctx)
     if prog == "git":
         return _git(toks, cwd, ctx)
     if prog in ("mkdir", "touch", "tee", "mv", "cp"):
@@ -1186,6 +1186,7 @@ def _program(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context", has_
 class _Context:
     table: dict
     venue_common: str | None = None
+    cdpath_unverified: bool = False
 
 
 def _stdin_redirect(raw: _RawSegment) -> _Redirect | None:
@@ -1265,7 +1266,7 @@ def _demote_branch_dependent(raws: list[_RawSegment], verdicts: list[_Verdict]) 
 
 
 def resolve_segments(
-    text: str, venue: str, *, contract_table: dict | None = None
+    text: str, venue: str, *, contract_table: dict | None = None, cdpath_unverified: bool = False
 ) -> tool_contracts.SegmentedResolution:
     venue_real = tool_contracts.realpath(venue)
     try:
@@ -1278,6 +1279,7 @@ def resolve_segments(
     ctx = _Context(
         contract_table if contract_table is not None else tool_contracts.load_contract_table(),
         _common_dir(venue_root) if venue_root is not None else None,
+        cdpath_unverified,
     )
     cwd_state = _Cwd(venue_real)
     verdicts: list[_Verdict] = []

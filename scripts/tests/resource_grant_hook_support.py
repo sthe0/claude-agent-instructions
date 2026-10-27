@@ -28,6 +28,7 @@ from agentctl.state import Actor, Criterion, Means, Stage, Subject  # noqa: E402
 HOOK_FILE = SCRIPTS / "hook-resource-grant-check.py"
 SPAWN_FILE = SCRIPTS / "spawn-specialist.py"
 PARENT_SESSION = "parent-session-0001"
+OWN_SESSION = "child-session-0001"
 STAGE_INDEX = 1
 
 
@@ -79,13 +80,17 @@ class LinkedChild:
 def link_child(
     spawn, state_root: Path, venue, *, kind: str = "developer", branch: "str | None" = None,
     rules=(), mode: "str | None" = None, extra_resources=(), extra_patterns=(), allow=None,
-    remote_head: str = "main",
+    remote_head: str = "main", evidence_dir: "str | None" = None, add_dirs=(),
 ) -> LinkedChild:
     """Write the handoff record `spawn-specialist.py` would write for a stage of `kind` running in
     `venue` under `rules` and return the environment of the child it spawns.
 
-    `allow` overrides the child's `permissions.allow` (default: what `build_child_settings` yields
-    for these grants, kind baselines included); `extra_resources` / `extra_patterns` add to the set."""
+    The child's settings come from spawn's own `child_permission_settings` (kind baselines, the evidence
+    directory, the own-contour rules) and the record is completed by spawn's own
+    `attach_child_permission_surface`, so `permissions_allow` and `add_dirs` cannot differ from what the
+    spawn writes. `allow` replaces `permissions_allow` afterwards (the replay's era lists);
+    `extra_resources` / `extra_patterns` add to the set; `add_dirs` are added to the child's directories
+    (the evidence directory and the own-plan directory are always among them)."""
     venue = str(venue)
     entries = [{"rule": rule} for rule in rules]
     stage = stage_for(kind, branch)
@@ -96,18 +101,22 @@ def link_child(
         resource_set.resources.append(R.FileResource(venue, "write"))
     resource_set.resources.extend(extra_resources)
     resource_set.rule_patterns.extend(extra_patterns)
-    if allow is None:
-        # `Read(<dir>/**)` grants of the replay fixture are refused as glob paths by today's validator.
-        accepted = [e for e in entries if not e["rule"].startswith("Read(")]
-        settings = spawn.build_child_settings(kind, None, None, accepted, workdir=venue)
-        allow = settings.get("permissions", {}).get("allow", [])
+    # `Read(<dir>/**)` grants of the replay fixture are refused as glob paths by today's validator.
+    accepted = [e for e in entries if not e["rule"].startswith("Read(")]
+    settings = spawn.child_permission_settings(
+        kind, None, None, accepted, workdir=venue, evidence_dir=evidence_dir, guard_exempt_paths=(),
+        read_dirs=[], own_session=OWN_SESSION,
+    )
+    child_dirs = [str(spawn.own_plan_path(OWN_SESSION).parent), *([evidence_dir] if evidence_dir else []), *map(str, add_dirs)]
     packed = resource_set.to_dict()
     record = norm_handoff.build_record(
         parent_session=PARENT_SESSION, stage_index=STAGE_INDEX, kind=kind,
         norm=StageNorm.from_stage(stage), grants=entries, depth=1, parent_lineage=None,
         resources=packed["resources"], rule_patterns=packed["rule_patterns"],
-        permissions_allow=list(allow),
     )
+    spawn.attach_child_permission_surface(record, settings, child_dirs)
+    if allow is not None:
+        record["permissions_allow"] = list(allow)
     path, sha = norm_handoff.write_record(state_root, record)
     env = {"AGENT_RECURSION_DEPTH": "1", norm_handoff.NORM_HANDOFF_ENV: norm_handoff.format_env_value(path, sha)}
     return LinkedChild(env=env, mode=resolved_mode, cwd=venue, record=record, state_root=Path(state_root))

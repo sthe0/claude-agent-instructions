@@ -21,7 +21,7 @@ from lib import config_root
 from test_resource_grant_replay import JudgeStub
 
 CONSTANTS = {"resource-grant-hook": "on", "resource-grant-hook-timeout-s": "20", "resource-grant-judge-timeout-s": "15"}
-ROW_FIELDS = {"ts", "tool", "segment_sha", "decision", "reason_class", "resources", "venue", "matched"}
+ROW_FIELDS = {"ts", "tool", "call_sha", "decision", "reason_class", "resources", "venue", "matched"}
 
 
 @pytest.fixture(autouse=True)
@@ -168,43 +168,104 @@ def test_allow_entry_matching_the_segment_leaves_it_to_the_harness(rig):
 
 
 def test_only_a_kind_baseline_entry_matches_a_write_the_record_lacks(rig):
-    todays = support.link_child(rig.spawn, rig.tmp / "state-1", rig.venue, branch=None, mode="default")
+    todays = support.link_child(rig.spawn, rig.tmp / "state-1", rig.venue, branch=None, mode="acceptEdits")
     command = "git commit -q -m x"
     decision, row, _ = rig.bash(todays, command)
     assert (decision, row["reason_class"], row["matched"]) == ("none", "harness-allowed", ["Bash(git commit:*)"])
-    bare = support.link_child(rig.spawn, rig.tmp / "state-2", rig.venue, branch=None, mode="default", allow=[])
+    bare = support.link_child(rig.spawn, rig.tmp / "state-2", rig.venue, branch=None, mode="acceptEdits", allow=[])
     decision, row, _ = rig.bash(bare, command)
     assert (decision, row["reason_class"]) == ("deny", "uncovered-write")
 
 
 def test_a_commit_on_a_branch_the_record_does_not_declare_is_denied(rig):
-    venue_write = support.R.FileResource(str(rig.venue), "write")
-    child = rig.child(branch="other", allow=[], mode="default", extra_resources=[venue_write])
+    child = rig.child(branch="other", allow=[])
     decision, row, _ = rig.bash(child, "git commit -q -m x")
     assert (decision, row["reason_class"]) == ("deny", "uncovered-write")
     assert {"kind": "vcs_ref", "op": "commit", "ref": "feat", "remote": "."} in row["resources"]
 
 
-@pytest.mark.parametrize("joiner",["&&", "||", ";", "|", "\n"])
-def test_an_allow_entry_for_the_prefix_does_not_shelter_an_uncovered_tail(rig, joiner):
+@pytest.mark.parametrize("joiner", ["&&", "||", ";", "|", "\n"])
+def test_an_allow_entry_for_the_prefix_leaves_the_tail_to_the_harness(rig, joiner):
     child = rig.child(allow=["Bash(git status:*)"])
+    decision, row, answer = rig.bash(child, f"git status {joiner} touch {rig.outside}/f")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "uncovered-write")
+
+
+@pytest.mark.parametrize("joiner", ["&&", "||", ";", "|"])
+def test_an_entry_matching_no_part_of_the_call_does_not_stop_the_deny(rig, joiner):
+    child = rig.child(allow=["Bash(git log:*)"])
     decision, row, _ = rig.bash(child, f"git status {joiner} touch {rig.outside}/f")
     assert (decision, row["reason_class"]) == ("deny", "uncovered-write")
 
 
-def test_an_allow_entry_does_not_match_a_segment_with_a_redirect(rig):
+def test_an_allow_entry_matching_a_segment_with_a_redirect_leaves_it_to_the_harness(rig):
     child = rig.child(allow=["Bash(git status:*)"])
     decision, row, _ = rig.bash(child, f"git status > {rig.outside}/f")
-    assert (decision, row["reason_class"]) == ("deny", "uncovered-write")
+    assert (decision, row["reason_class"]) == ("none", "uncovered-write")
+
+
+def test_b2_a_dollar_and_a_stderr_redirect_do_not_turn_an_allowed_call_into_a_deny(rig):
+    entry = "Bash(git commit:*)"
+    child = rig.child(allow=[entry], branch="other")
+    command = f"git commit -q -m 'cost $5' 2>&1 && touch {rig.outside}/f"
+    decision, row, answer = rig.bash(child, command)
+    assert (decision, answer, row["reason_class"]) == ("none", "", "uncovered-write")
+    bare = rig.child(allow=[], branch="other")
+    assert rig.bash(bare, command)[0] == "deny"
+
+
+def test_deny_needs_the_accept_edits_mode(rig):
+    child = rig.child(mode="default")
+    decision, row, answer = rig.bash(child, f"touch {rig.outside}/f")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "uncovered-write")
+    child.mode = "acceptEdits"
+    assert rig.bash(child, f"touch {rig.outside}/f")[0] == "deny"
+
+
+def test_s1_plan_mode_makes_no_decision(rig):
+    child = rig.child()
+    child.mode = "plan"
+    decision, row, answer = rig.bash(child, f"touch {rig.outside}/f")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "plan-mode")
 
 
 def test_mode_that_already_runs_the_write_suppresses_the_deny(rig):
-    child = rig.child(mode="default")
-    assert rig.bash(child, "touch f")[0] == "deny"
-    child.mode = "acceptEdits"
+    child = rig.child()
     decision, row, _ = rig.bash(child, "touch f")
     assert (decision, row["reason_class"], row["matched"]) == ("none", "harness-allowed", ["mode:acceptEdits"])
     assert rig.bash(child, f"touch {rig.outside}/f")[0] == "deny"
+
+
+def test_b1_a_write_into_a_directory_the_child_was_started_with_is_not_denied(rig):
+    evidence = rig.tmp / "evidence"
+    evidence.mkdir()
+    child = rig.child(evidence_dir=str(evidence))
+    assert str(evidence) in child.record["add_dirs"]
+    decision, row, answer = rig.bash(child, f"touch {evidence}/note.txt")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "uncovered-write")
+    assert rig.bash(child, f"touch {rig.outside}/f")[0] == "deny"
+    plan_dir = child.record["add_dirs"][0]
+    assert rig.bash(child, f"touch {plan_dir}/own.toml")[0] == "none"
+
+
+def test_b3_a_record_without_the_explicit_lists_never_denies(rig):
+    child = rig.child()
+    assert rig.bash(child, f"touch {rig.outside}/f")[0] == "deny"
+    for key in ("permissions_allow", "add_dirs"):
+        old = rig.child()
+        path, _digest = old.env["AGENTCTL_NORM_HANDOFF"].rsplit(":", 1)
+        record = json.loads(Path(path).read_text())
+        record.pop(key)
+        stale = support.norm_handoff.write_record(rig.tmp / f"state-without-{key}", record)
+        old.env["AGENTCTL_NORM_HANDOFF"] = support.norm_handoff.format_env_value(*stale)
+        decision, row, answer = rig.bash(old, f"touch {rig.outside}/f")
+        assert (decision, answer, row["reason_class"]) == ("none", "", "uncovered-write"), key
+
+
+def test_b3_the_state_root_comes_from_the_handoff_path(rig):
+    child = rig.child()
+    path, _digest = child.env["AGENTCTL_NORM_HANDOFF"].rsplit(":", 1)
+    assert support.norm_handoff.state_root_of(path) == child.state_root
 
 
 def test_rule_pattern_covers_the_segment_it_matches(rig):
@@ -272,9 +333,40 @@ STDIN_CODE = "python3 - <<'E'\nimport json\nprint(json.dumps({}))\nE"
 
 
 def test_opaque_code_whose_judged_effects_are_covered_is_allowed(rig):
-    judge = JudgeStub([])
+    judge = JudgeStub([{"kind": "file", "op": "write", "path": f"{rig.venue}/out.txt"}])
     decision, row, _ = rig.bash(rig.child(), STDIN_CODE, judge=judge)
     assert (decision, row["reason_class"]) == ("allow", "opaque-judged") and judge.calls == 1
+
+
+def test_s3_opaque_code_that_writes_nothing_is_not_allowed_on_its_reads(rig):
+    judge = JudgeStub([])
+    decision, row, answer = rig.bash(rig.child(), STDIN_CODE, judge=judge)
+    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable") and judge.calls == 1
+
+
+def test_s2_the_judge_gets_the_judge_timeout_and_one_deadline_for_the_whole_call(rig, hook, monkeypatch):
+    seen = []
+
+    def judge(argv, *, timeout, stdin=""):
+        seen.append(timeout)
+        return RunResult(0, json.dumps({"effects": [{"kind": "file", "op": "write", "path": f"{rig.venue}/o"}],
+                                        "undeterminable": False, "reason": "x"}), "", timed_out=False)
+
+    monkeypatch.setattr(hook.advisor, "code_effects_judge_timeout_s", lambda: 7)
+    rig.bash(rig.child(), STDIN_CODE, judge=judge, constants={**CONSTANTS, "resource-grant-hook-timeout-s": "20"})
+    assert seen == [7]
+    rig.bash(rig.child(), STDIN_CODE.replace("json", "csv"), judge=judge,
+             constants={**CONSTANTS, "resource-grant-hook-timeout-s": "8"})
+    assert seen[-1] == 2
+    assert hook.JudgeBudget(total_s=3, judge_s=15).next_timeout() <= 3
+    assert hook.JudgeBudget(total_s=0, judge_s=15).next_timeout() < 1
+
+
+def test_s2_a_spent_deadline_makes_the_next_opaque_segment_undeterminable(rig, hook, monkeypatch):
+    calls = []
+    monkeypatch.setattr(hook.JudgeBudget, "next_timeout", lambda self: 0)
+    decision, row, _ = rig.bash(rig.child(), STDIN_CODE, judge=lambda *a, **k: calls.append(1))
+    assert (decision, row["reason_class"], calls) == ("none", "undeterminable", [])
 
 
 def test_opaque_code_whose_judged_effect_is_uncovered_is_denied(rig):
@@ -297,6 +389,61 @@ def test_python_environment_in_the_hook_process_makes_opaque_code_undeterminable
     judge = JudgeStub([])
     decision, row, _ = rig.bash(rig.child(), STDIN_CODE, judge=judge)
     assert (decision, row["reason_class"]) == ("none", "undeterminable") and judge.calls == 0
+
+
+# --- B4: variables and hooks the hook cannot verify -------------------------------------------------
+
+def test_b4_a_cd_into_a_relative_directory_is_undeterminable_because_cdpath_is_unknown(rig):
+    (rig.venue / "sub").mkdir()
+    decision, row, answer = rig.bash(rig.child(), "cd sub && touch f")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
+    decision, row, _ = rig.bash(rig.child(), f"cd {rig.venue}/sub && touch f")
+    assert (decision, row["reason_class"]) == ("allow", "covered")
+
+
+@pytest.mark.parametrize("name", ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"])
+def test_b4_a_git_variable_in_the_environment_makes_a_git_segment_undeterminable(rig, name):
+    child = rig.child()
+    decision, row, _ = rig.bash(child, "git push origin feat")
+    assert (decision, row["reason_class"]) == ("allow", "covered")
+    decision, row, answer = rig.bash(child, "git push origin feat", env={**child.env, name: str(rig.outside)})
+    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
+
+
+def test_b4_a_python_variable_in_the_environment_makes_a_python_segment_undeterminable(rig):
+    child = rig.child()
+    command = f"python3 {rig.venue}/tool.py"
+    (rig.venue / "tool.py").write_text("print(1)\n")
+    judge = JudgeStub([{"kind": "file", "op": "write", "path": f"{rig.venue}/o"}])
+    assert rig.bash(child, command, judge=judge)[0] == "allow"
+    decision, row, _ = rig.bash(child, command, env={**child.env, "PYTHONSTARTUP": str(rig.outside / "s.py")}, judge=judge)
+    assert (decision, row["reason_class"]) == ("none", "undeterminable")
+    decision, row, _ = rig.bash(child, command, env={**child.env, "PYTHONUNBUFFERED": "1"}, judge=judge)
+    assert decision == "allow"
+
+
+def test_b4_a_commit_whose_hooks_directory_the_stage_may_write_is_not_covered(rig):
+    seg_tests._git(rig.venue, "config", "core.hooksPath", "githooks")
+    hooks = rig.venue / "githooks"
+    hooks.mkdir()
+    child = rig.child()
+    decision, row, _ = rig.bash(child, "git commit -q -m x")
+    assert (decision, row["reason_class"]) == ("allow", "covered")
+    (hooks / "pre-commit").write_text("#!/bin/sh\ntouch /tmp/x\n")
+    decision, row, answer = rig.bash(child, "git commit -q -m x")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
+    (hooks / "pre-commit").unlink()
+    decision, row, _ = rig.bash(child, f"printf x > {hooks}/pre-commit && git commit -q -m x")
+    assert (decision, row["reason_class"]) == ("none", "undeterminable")
+
+
+def test_b4_a_hooks_directory_outside_the_writable_resources_does_not_block(rig):
+    elsewhere = rig.outside / "hooks"
+    elsewhere.mkdir()
+    (elsewhere / "pre-commit").write_text("#!/bin/sh\n")
+    seg_tests._git(rig.venue, "config", "core.hooksPath", str(elsewhere))
+    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
+    assert (decision, row["reason_class"]) == ("allow", "covered")
 
 
 # --- Edit, Write, Read ----------------------------------------------------------------------------
@@ -338,7 +485,7 @@ def test_every_call_appends_one_complete_row_per_reason_class(rig):
     rig.bash(child, f"git -C {rig.venue} commit -q -m x")
     rig.bash(child, f"touch {rig.outside}/f")
     rig.bash(child, 'echo "$(date)"')
-    rig.bash(child, STDIN_CODE)
+    rig.bash(child, STDIN_CODE, judge=JudgeStub([{"kind": "file", "op": "write", "path": f"{rig.venue}/o"}]))
     rig.bash(child, "git status", env=child.env, constants={**CONSTANTS, "resource-grant-hook": "off"})
     harness = rig.child(allow=["Bash(git status:*)"])
     rig.bash(harness, "git status")
@@ -346,7 +493,7 @@ def test_every_call_appends_one_complete_row_per_reason_class(rig):
     assert {r["reason_class"] for r in rows} == {"covered", "uncovered-write", "undeterminable", "opaque-judged",
                                                  "kill-switch", "harness-allowed"}
     assert all(set(r) == ROW_FIELDS for r in rows)
-    assert all(len(r["segment_sha"]) == 64 for r in rows)
+    assert all(len(r["call_sha"]) == 64 for r in rows)
 
 
 def test_a_hook_error_is_logged_and_never_an_allow(rig, hook, monkeypatch):
@@ -440,12 +587,22 @@ def test_dry_run_registers_the_hook_with_the_configured_timeout(spawn, store, ve
     [entry] = group["hooks"]
     assert group["matcher"] == spawn.RESOURCE_GRANT_HOOK_MATCHER
     assert entry["timeout"] == agentctl_config.resource_grant_hook_timeout_s()
-    assert str(support.HOOK_FILE) in entry["command"]
+    assert entry["command"].split()[:2] == ["python3", "-I"] and str(support.HOOK_FILE) in entry["command"]
     assert "Bash(git status:*)" in settings["permissions"]["allow"]
     add_dirs = re.findall(r"--add-dir (\S+)", command_line)
     assert add_dirs
     print("child payload:", json.dumps({"hook": group, "allow": settings["permissions"]["allow"],
                                          "add_dirs": add_dirs}, sort_keys=True))
+
+
+def test_b5_the_record_the_spawn_writes_carries_the_childs_final_allow_list_and_directories(
+        spawn, store, venued_fixtures_dir, tmp_path, monkeypatch, capsys):
+    out = engine_dry_run(spawn, store, venued_fixtures_dir, tmp_path, monkeypatch, capsys, "hook-record")
+    command_line = _dry_run_command_line(out)
+    settings = json.loads(_printed_argument(command_line, "--settings"))
+    record = json.loads(out.split("=== norm handoff record (not written) ===", 1)[1].strip().splitlines()[0])
+    assert record["permissions_allow"] == settings["permissions"]["allow"] and record["permissions_allow"]
+    assert record["add_dirs"] == re.findall(r"--add-dir (\S+)", command_line)
 
 
 def test_dry_run_of_an_unlinked_spawn_registers_no_hook(spawn, venued_fixtures_dir, tmp_path, monkeypatch, capsys):
