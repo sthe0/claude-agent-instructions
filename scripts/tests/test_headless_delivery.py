@@ -266,6 +266,7 @@ def test_session_reachable_channel_config_ignored(store, channel, tmp_path, root
     assert present(store, tmp_path, "essence", plan, "Essence.").ok is True
     assert saved(channel) == []
     assert channel_events(store) == []
+    assert delivery.read_stamp(store.path(SID)) is None
 
 
 def test_wrong_first_line_is_not_an_answer(store, channel, tmp_path, root):
