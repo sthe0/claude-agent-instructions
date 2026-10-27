@@ -7152,22 +7152,24 @@ def _stranded_dependency_problems(
     return problems
 
 
-def _mandate_basis_problems(plan_path, approver: str) -> list[str]:
+def _mandate_basis_problems(plan_path, plan_data: bytes | None, approver: str) -> list[str]:
     """Why the `mandate:<id>` approver may not approve the plan at `plan_path`, empty when it may.
 
-    The approval is the mandate's, for one item its running cycle took: the plan is the item
-    norm re-rendered from the inputs beside it, the cycle lock is held, the cycle's start event
-    and the item's taken event name this plan's issue and directory, the item's worktree lies
-    under the cycle's worktree root in the cycle's repo, and the mandate's gate is open.
-    Never raises."""
+    The approval is the mandate's, for one item its running cycle took: `plan_data` -- the bytes
+    `cmd_approve` read once and snapshots -- is the item norm re-rendered from the inputs beside
+    the plan, the cycle lock is held, the cycle's start event and the item's taken event name this
+    plan's issue, directory and worktree, the worktree lies under the cycle's worktree root, the
+    cycle's repo is the repo this engine runs from, and the mandate's gate is open. Never raises."""
     inputs_file, item_event, cycle_event = "norm.inputs.json", "item-taken", "cycle-start"
     mandate_id = approver[len(mandate_rules.mandate_approver("")):]
     mandate = mandate_store.load_mandate(mandate_id) if mandate_id else None
     if mandate is None:
         return [f"no mandate {mandate_id!r}"]
     plan = Path(plan_path or "")
+    if plan_data is None:
+        return [f"the plan and {inputs_file} cannot be read beside it"]
     try:
-        plan_text = plan.read_bytes().decode("utf-8")
+        plan_text = plan_data.decode("utf-8")
         inputs = json.loads((plan.parent / inputs_file).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return [f"the plan and {inputs_file} cannot be read beside it"]
@@ -7188,6 +7190,8 @@ def _mandate_basis_problems(plan_path, approver: str) -> list[str]:
         problems.append("the inputs name a cycle that is not the running one")
     if not detail.get("repo") or inputs.get("repo") != detail.get("repo"):
         problems.append("the inputs' repo is not the cycle's repo")
+    elif os.path.realpath(detail["repo"]) != os.path.realpath(REPO_ROOT):
+        problems.append("the cycle's repo is not the repo this engine runs from")
     root = detail.get("worktree_root")
     worktree = inputs.get("worktree")
     try:
@@ -7204,9 +7208,10 @@ def _mandate_basis_problems(plan_path, approver: str) -> list[str]:
         and (e.get("detail") or {}).get("cycle_id") == cycle_id
         and (e.get("detail") or {}).get("issue") == inputs.get("issue")
         and (e.get("detail") or {}).get("item_dir") == str(plan.parent)
+        and (e.get("detail") or {}).get("worktree") == worktree
     ]
     if not taken:
-        problems.append("the cycle recorded no item taken for this issue and directory")
+        problems.append("the cycle recorded no item taken for this issue, directory and worktree")
     now = mandate_store.utcnow()
     started_at = mandate_rules.parse_ts(start.get("ts"))
     elapsed = max(0.0, (now - started_at).total_seconds() / 60.0) if started_at else 0.0
@@ -7299,16 +7304,16 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                              "stage and would never become ready (edit the plan and re-run "
                              "approve)",
                              data={"problems": stranded_problems})
-    mandate_approver_id = (args.by or "").strip() \
+    mandate_basis = (args.by or "").strip() \
         if (args.by or "").strip().startswith(mandate_rules.MANDATE_BASIS + ":") else ""
-    review_blockers = [] if mandate_approver_id else gates.plan_review_blockers(state, state.plan_path)
+    review_blockers = [] if mandate_basis else gates.plan_review_blockers(state, state.plan_path)
     blockers = (
         gates.blockers(state, "plan_approval")
         + plugins.plugin_gate_blockers(state, "plan_approval")
         + review_blockers
         + gates.protected_grant_blockers(state, state.plan_path)
     )
-    if not by_agent and not mandate_approver_id:
+    if not by_agent and not mandate_basis:
         blockers = (
             blockers
             + gates.plan_presentation_blockers(state, state.plan_path)
@@ -7317,10 +7322,10 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     agent_autonomy: dict | None = None
     if not args.by or not args.by.strip():
         blockers = blockers + ["empty approver: --by must name who approved"]
-    elif mandate_approver_id:
+    elif mandate_basis:
         blockers = blockers + [
             f"--by {args.by!r} refused: {problem}"
-            for problem in _mandate_basis_problems(state.plan_path, mandate_approver_id)
+            for problem in _mandate_basis_problems(state.plan_path, _approved_data, mandate_basis)
         ]
     elif by_agent:
         # A stage the customer declined and that has since changed, been renumbered or
@@ -7401,7 +7406,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         order_approvals.latest_user_approved_record(order_digest(_approved_doc))
         if _approved_doc is not None and _approved_doc.meta.order is not None else None
     )
-    if not by_agent and not mandate_approver_id:
+    if not by_agent and not mandate_basis:
         # The customer's own choice, made again: a stage left live is no longer declined; the
         # issues of stages no longer in the plan stay, so re-adding one is still the
         # customer's call. "Stay" includes the declines this session never saw: they are
@@ -7487,11 +7492,11 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 if os.environ.get(name)
             ],
         )
-    elif mandate_approver_id:
+    elif mandate_basis:
         state.log("approve", by=args.by, basis=mandate_rules.MANDATE_BASIS)
     else:
         state.log("approve", by=args.by)
-    if not mandate_approver_id:
+    if not mandate_basis:
         _clear_since_user_decision(state, args.by)
     # REQ4: stamp the order-approvals ledger for the CUSTOMER only -- never
     # AGENT_ACTOR (refused above, before this point is ever reached) and
@@ -7503,7 +7508,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if _approved_doc is not None:
         order = _approved_doc.meta.order
         customer_id = order.customer_id if order is not None else ""
-        if (customer_id and not mandate_approver_id
+        if (customer_id and not mandate_basis
                 and args.by.strip().casefold() == customer_id.casefold()):
             order_key = order_digest(_approved_doc)
             view = plan_resources.compute_boundary_view(_approved_doc, order_key)

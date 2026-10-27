@@ -704,9 +704,9 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "basis-skips-only-under-mandate": Mutant(
         CLI,
-        "    if not by_agent and not mandate_approver_id:\n        blockers = (\n",
+        "    if not by_agent and not mandate_basis:\n        blockers = (\n",
         "    if False:\n        blockers = (\n",
-        _ids(T_BASIS, "test_a_non_mandate_approval_still_requires_presentation_and_grants_approval"),
+        _ids(T_BASIS, "test_a_non_mandate_approval_still_requires_presentation_and_grants_approval[user]"),
     ),
     "basis-exact-norm": Mutant(
         CLI,
@@ -716,7 +716,7 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "basis-keeps-since-user": Mutant(
         CLI,
-        "    if not mandate_approver_id:\n        _clear_since_user_decision(state, args.by)\n",
+        "    if not mandate_basis:\n        _clear_since_user_decision(state, args.by)\n",
         "    if True:\n        _clear_since_user_decision(state, args.by)\n",
         _ids(T_BASIS, "test_a_mandate_approval_does_not_clear_the_since_user_counters_or_stamp_the_order_ledger"),
     ),
@@ -894,6 +894,29 @@ CATALOGUE: "dict[str, Mutant]" = {
         'EVENT_COST_KINDS = ("judge-cost", "overrun-charge", "nested-spawn-cost")',
         'EVENT_COST_KINDS = ("judge-cost", "overrun-charge")',
         _ids(T_RULES, "test_a_nested_spawn_cost_event_counts_toward_the_mandate_windows"),
+    ),
+    "basis-binds-taken-worktree": Mutant(
+        CLI,
+        '        and (e.get("detail") or {}).get("worktree") == worktree\n',
+        "        and True\n",
+        _ids(T_BASIS, "test_a_mandate_approval_of_a_norm_for_no_taken_item_is_refused"),
+    ),
+    "basis-binds-engine-repo": Mutant(
+        CLI,
+        '    elif os.path.realpath(detail["repo"]) != os.path.realpath(REPO_ROOT):\n',
+        "    elif False:\n",
+        _ids(T_BASIS, "test_a_mandate_approval_outside_the_running_cycles_binding_is_refused[not-engine-repo]"),
+    ),
+    "review-crash-fails-item": Mutant(
+        DRIVER,
+        '            else:\n                row.update(outcome="failed", failure_kind=KIND_SPAWN_ERROR, '
+        'detail=tail(review.stderr or review.stdout))\n            return ""\n        verdicts =',
+        '            else:\n                pass\n            return ""\n        verdicts =',
+        _ids(
+            T_CYCLE,
+            "test_a_reviewer_that_crashed_fails_the_item_and_opens_the_breaker[exit-code]",
+            "test_a_reviewer_that_crashed_fails_the_item_and_opens_the_breaker[no-marker]",
+        ),
     ),
     "item-norm-escape": Mutant(
         RULES, r'out.append("\\\\")', r'out.append("\\")',

@@ -2694,7 +2694,8 @@ def test_a_childs_since_user_backstop_is_read_from_the_task_accumulator(env, axi
     assert driver.real_child_state("child-x")["since_user_backstop"] is True
 
 
-@pytest.mark.parametrize("returncode, stdout, stderr", [(1, "", "boom"), (0, "no marker, no verdict", "")])
+@pytest.mark.parametrize("returncode, stdout, stderr", [(1, "", "boom"), (0, "no marker, no verdict", "")],
+                         ids=["exit-code", "no-marker"])
 def test_a_reviewer_that_crashed_fails_the_item_and_opens_the_breaker(env, returncode, stdout, stderr):
     env.grant()
     eligible(env, 1)
@@ -2895,8 +2896,38 @@ def test_a_reviewer_account_limit_on_the_real_seam_ends_the_item_as_limit(env, m
 
 # --- the commands the norm renders, run on a real worktree -------------------------------------
 
-def test_the_rendered_check_item_commands_judge_a_real_worktree(env, monkeypatch):
-    env.grant()
+CHECK_RUNNER = '''\
+"""Runs `mandate-cycle.py <argv>` in this process with the suite, org-neutral and gate runs
+stubbed: argv[1] is the junit file the stubbed suite writes."""
+import sys
+from pathlib import Path
+
+from agentctl.dispatch import RunResult
+from mandate_cycle import driver
+
+real = driver.real_run
+suite = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+
+def run(argv, cwd=None, timeout=None, stdin=None):
+    a = list(argv)
+    if a[0] == "bash" and a[1].endswith("cap-run.sh"):
+        target = next(x for x in a if x.startswith("--junitxml="))[len("--junitxml="):]
+        Path(target).write_text(suite, encoding="utf-8")
+        return RunResult(0)
+    if a[0] == sys.executable and (a[1].endswith("check-org-neutral.py") or a[1] in driver.GATE_SCRIPTS):
+        return RunResult(0)
+    return real(argv, cwd=cwd, timeout=timeout, stdin=stdin)
+
+
+driver.real_run = run
+sys.exit(driver.main(sys.argv[2:]))
+'''
+
+
+def real_check_tree(env, *, edited: bool):
+    """A trunk checkout, an item worktree on `origin/main` (with one uncommitted new file when
+    `edited`) and the item directory holding the inputs and the cycle's baselines."""
     repo, worktree = env.tmp / "trunk", env.tmp / "item"
     repo.mkdir()
     git(repo, "init", "-q")
@@ -2906,7 +2937,8 @@ def test_the_rendered_check_item_commands_judge_a_real_worktree(env, monkeypatch
     git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     base = git(repo, "rev-parse", "HEAD")
     git(repo, "worktree", "add", "-q", "-b", "item", str(worktree), "origin/main")
-    (worktree / "foo.py").write_text("y = 1\nz = 2\n", encoding="utf-8")
+    if edited:
+        (worktree / "foo.py").write_text("y = 1\nz = 2\n", encoding="utf-8")
 
     item_dir = store.cycle_dir(ID, "cyc") / "items" / "1"
     item_dir.mkdir(parents=True)
@@ -2918,20 +2950,25 @@ def test_the_rendered_check_item_commands_judge_a_real_worktree(env, monkeypatch
     cycle_dir = store.cycle_dir(ID, "cyc")
     (cycle_dir / driver.BASELINE_XML).write_text(junit(["t1", "t2"]), encoding="utf-8")
     (cycle_dir / driver.BASELINE_GATES).write_text(json.dumps({s: 0 for s in driver.GATE_SCRIPTS}), encoding="utf-8")
+    runner = env.tmp / "check_runner.py"
+    runner.write_text(CHECK_RUNNER, encoding="utf-8")
+    (env.tmp / "suite.xml").write_text(junit(["t1", "t2", "t3"]), encoding="utf-8")
+    return repo, worktree, base, item_dir
 
-    real = driver.real_run
 
-    def run(argv, cwd=None, timeout=None, stdin=None):
-        a = list(argv)
-        if a[0] == "bash" and a[1].endswith("cap-run.sh"):
-            target = next(x for x in a if x.startswith("--junitxml="))[len("--junitxml="):]
-            Path(target).write_text(junit(["t1", "t2", "t3"]), encoding="utf-8")
-            return ok()
-        if a[0] == sys.executable and (a[1].endswith("check-org-neutral.py") or a[1] in driver.GATE_SCRIPTS):
-            return RunResult(0)
-        return real(argv, cwd=cwd, timeout=timeout, stdin=stdin)
+def run_check_item(env, worktree, argv):
+    """`mandate-cycle.py <argv>` as its own process started in the worktree."""
+    done = subprocess.run(
+        [sys.executable, str(env.tmp / "check_runner.py"), str(env.tmp / "suite.xml"), *argv],
+        capture_output=True, text=True, cwd=str(worktree),
+        env={**os.environ, "PYTHONPATH": str(Path(driver.__file__).parent.parent)},
+    )
+    return done.returncode, done.stdout
 
-    monkeypatch.setattr(driver, "real_run", run)
+
+def test_the_rendered_check_item_commands_judge_a_real_worktree(env):
+    env.grant()
+    repo, worktree, base, item_dir = real_check_tree(env, edited=True)
     norm = rules.item_norm_toml(
         mandate=store.load_mandate(ID), issue=1, title="t", body="b", cycle_id="cyc", base_sha=base,
         bound=BOUND, worktree=str(worktree), repo=str(repo), item_dir=str(item_dir),
@@ -2944,9 +2981,22 @@ def test_the_rendered_check_item_commands_judge_a_real_worktree(env, monkeypatch
     def command(text):
         words = shlex.split(text)
         assert words[:2] == ["python3", str(repo / "scripts" / "mandate-cycle.py")]
-        rc = driver.main(words[2:])
-        return rc, env.capsys.readouterr().out
+        return run_check_item(env, worktree, words[2:])
 
+    def repository_state():
+        return git(worktree, "rev-parse", "HEAD"), git(worktree, "diff", "--cached")
+
+    before = repository_state()
     assert command(verify) == (0, "check-item: green\n")
+    assert repository_state() == before
     rc, out = command(control)
     assert rc == 1 and out.startswith("check-item: red") and "no change against the base" in out
+    assert repository_state() == before
+
+
+def test_check_item_is_red_on_an_unchanged_real_worktree(env):
+    env.grant()
+    _, worktree, base, item_dir = real_check_tree(env, edited=False)
+    rc, out = run_check_item(env, worktree, ["check-item", "--item-dir", str(item_dir)])
+    assert rc == 1 and out.startswith("check-item: red") and "no change against the base" in out, out
+    assert git(worktree, "rev-parse", "HEAD") == base and git(worktree, "diff", "--cached") == ""

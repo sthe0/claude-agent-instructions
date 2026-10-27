@@ -17,6 +17,7 @@ through the real `mandate_store` under `AGENTCTL_MANDATE_DIR`, and a linked chil
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 from argparse import Namespace
 from dataclasses import replace
@@ -28,7 +29,7 @@ import pytest
 from agentctl import cli, mandate as rules, mandate_store as store, order_approvals, protected_actions, task_accumulator
 from agentctl.plan import load_plan, order_digest
 from agentctl.stage_norm import StageNorm
-from agentctl.state import Node
+from agentctl.state import Node, PlanPresentation
 from agentctl.store import FileStateStore
 from conftest import declare_venue
 from mandate_cycle import driver
@@ -50,7 +51,8 @@ class World:
     """A mandate, a running cycle (its lock held) that took one item, and the item directory
     holding the norm and its inputs, exactly as the driver writes them."""
 
-    def __init__(self, tmp_path: Path, monkeypatch, *, take_item: bool = True, record_cycle: bool = True):
+    def __init__(self, tmp_path: Path, monkeypatch, *, take_item: bool = True, record_cycle: bool = True,
+                 repo_is_engine: bool = False):
         self.tmp = tmp_path
         self.home = tmp_path / "home"
         self.agent_home = self.home / ".claude"
@@ -62,11 +64,15 @@ class World:
         monkeypatch.setenv("AGENTCTL_PLAN_PRESENTATION", "1")
         self.monkeypatch = monkeypatch
         self.root = _state_dir(self.home)
-        self.repo = str(tmp_path / "repo")
+        if repo_is_engine:
+            self.repo = str(cli.REPO_ROOT)
+        else:
+            self.repo = str(tmp_path / "repo")
+            (tmp_path / "repo").mkdir()
+            monkeypatch.setattr(cli, "REPO_ROOT", Path(self.repo))
         self.worktree_root = tmp_path / "worktrees"
         self.worktree = self.worktree_root / f"{CYCLE_ID}-{ISSUE}"
         self.worktree.mkdir(parents=True)
-        (tmp_path / "repo").mkdir()
         self.item_dir = tmp_path / "cycles" / CYCLE_ID / "items" / str(ISSUE)
         self.item_dir.mkdir(parents=True)
         self.now = store.utcnow()
@@ -85,9 +91,10 @@ class World:
     def close(self) -> None:
         self.stack.close()
 
-    def take(self, *, issue: int = ISSUE, item_dir: Path | None = None) -> None:
+    def take(self, *, issue: int = ISSUE, item_dir: Path | None = None, worktree: Path | None = None) -> None:
         store.append_event(MANDATE_ID, "item-taken", {
-            "cycle_id": CYCLE_ID, "issue": issue, "item_dir": str(item_dir or self.item_dir)})
+            "cycle_id": CYCLE_ID, "issue": issue, "item_dir": str(item_dir or self.item_dir),
+            "worktree": str(worktree or self.worktree)})
 
     def default_inputs(self) -> dict:
         return {
@@ -124,6 +131,14 @@ class World:
 @pytest.fixture
 def world(tmp_path, monkeypatch):
     built = World(tmp_path, monkeypatch)
+    yield built
+    built.close()
+
+
+@pytest.fixture
+def engine_world(tmp_path, monkeypatch):
+    """A world whose cycle repo is the repo the real engine subprocess runs from."""
+    built = World(tmp_path, monkeypatch, repo_is_engine=True)
     yield built
     built.close()
 
@@ -220,15 +235,69 @@ def test_a_mandate_approval_of_a_norm_for_no_taken_item_is_refused(tmp_path, mon
         _refused(world.approve(), world, "no item taken")
         world.take(item_dir=world.tmp / "elsewhere")
         _refused(world.approve(), world, "no item taken")
+        world.take(worktree=world.worktree_root / "a-sibling-item")
+        _refused(world.approve(), world, "no item taken")
         world.take()
         _approved_by_mandate(world)
     finally:
         world.close()
 
 
-def test_a_non_mandate_approval_still_requires_presentation_and_grants_approval(world):
+def _unbound_world(tmp_path, monkeypatch, name, *, record_cycle=True, inputs=None, engine_repo=None, release_lock=False):
+    world = World(tmp_path / name, monkeypatch, record_cycle=record_cycle)
+    if inputs:
+        world.inputs = {**world.inputs, **inputs}
+        world.write_norm()
+    if engine_repo:
+        monkeypatch.setattr(cli, "REPO_ROOT", Path(engine_repo))
     world.parent_to_plan_ready()
-    _refused(world.approve(by="user"), world, "no plan presentation recorded")
+    if release_lock:
+        world.close()
+    return world
+
+
+@pytest.mark.parametrize("name, needle, setup", [
+    ("no-start", "recorded no start", {"record_cycle": False}),
+    ("no-lock", "no cycle holds the mandate's lock", {"release_lock": True}),
+    ("stale-cycle", "not the running one", {"inputs": {"cycle_id": "20200101T000000Z"}}),
+    ("outside-root", "not under the cycle's worktree root", {"inputs": {"worktree": "/outside/root/item"}}),
+    ("other-repo", "not the cycle's repo", {"inputs": {"repo": "/another/repo"}}),
+    ("not-engine-repo", "not the repo this engine runs from", {"engine_repo": "/another/repo"}),
+])
+def test_a_mandate_approval_outside_the_running_cycles_binding_is_refused(tmp_path, monkeypatch, name, needle, setup):
+    world = _unbound_world(tmp_path, monkeypatch, name, **setup)
+    try:
+        _refused(world.approve(), world, needle)
+    finally:
+        world.close()
+
+
+def _review_passed_and_presented_with_stale_grants(world: World) -> None:
+    """The plan review passed, and a presentation receipt bound to the plan's current bytes
+    carries a grants digest that is not the plan's own -- so the only blockers left are the
+    presentation family's two, each with its own message."""
+    plan = world.item_dir / "norm.toml"
+    digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+    _cli(world.root, "plan-review", session=PARENT, verdict="pass", reviewer="thinker",
+         target=str(plan), plan_digest=digest)
+    state = world.parent()
+    state.plan_presentations.append(PlanPresentation(
+        plan_path=state.plan_path, kind="essence", plan_sha256=digest, rendering_sha256="r" * 64,
+        rendering_text="essence", presented_ts=store.utcnow().timestamp(), grants_sha256="0" * 64))
+    FileStateStore(world.root).save(state)
+
+
+@pytest.mark.parametrize("by", ["user", "agent"])
+def test_a_non_mandate_approval_still_requires_presentation_and_grants_approval(world, by):
+    world.parent_to_plan_ready()
+    _review_passed_and_presented_with_stale_grants(world)
+    result = world.approve(by=by)
+    text = " | ".join((result.get("data") or {}).get("blockers") or [])
+    assert "plan review" not in text, text
+    if by == "agent":
+        assert "delivery proof" not in text and "grant set changed" not in text, text
+        return
+    _refused(result, world, "delivery", "the plan's grant set changed since it was presented")
 
 
 class MandateScene(Scene):
@@ -307,7 +376,8 @@ def test_reject_by_mandate_moves_the_child_to_diagnosing_and_records_the_actor(s
     assert rows and rows[-1].get("by") == APPROVER and rows[-1].get("reason") == "check-item red: 2 failures", rows
 
 
-def test_the_driver_parent_session_reaches_stage_one_executing_on_the_real_engine(world):
+def test_the_driver_parent_session_reaches_stage_one_executing_on_the_real_engine(engine_world):
+    world = engine_world
     cycle = driver.Cycle(driver.Config(mandate_id=MANDATE_ID, repo=Path(world.repo)), driver.Seams(), CYCLE_ID, write=False)
     session = cycle.open_parent_session(ISSUE, world.item_dir / "norm.toml", world.worktree)
     state = world.parent(session)
