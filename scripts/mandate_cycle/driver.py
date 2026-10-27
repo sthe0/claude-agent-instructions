@@ -161,6 +161,7 @@ def real_child_state(session: str) -> "dict | None":
     node, the basis of its last approval, the scale of an unacknowledged effort fire and the
     reason codes that keep its plan outside the parent's norm. Nothing is written."""
     from agentctl import cli as engine
+    from agentctl import gates, task_accumulator
     from agentctl.plan import load_plan
     from agentctl.store import FileStateStore
     try:
@@ -175,15 +176,30 @@ def real_child_state(session: str) -> "dict | None":
     reasons: "list[str] | None" = None
     if state.plan_path:
         try:
-            verdict = engine._autonomy_for(state, load_plan(state.plan_path))
-            reasons = [] if verdict.get("eligible") else [str(r) for r in verdict.get("reasons") or []]
+            doc = load_plan(state.plan_path)
+            order = doc.meta.order
+            if order is None or not order.parent_norm:
+                reasons = [gates.PARENT_NORM_DIGEST_MISMATCH]
+            else:
+                verdict = engine._autonomy_for(state, doc)
+                reasons = [] if verdict.get("eligible") else [str(r) for r in verdict.get("reasons") or []]
         except Exception:
             reasons = None
+    live = [d for d in (state.difficulty, *reversed(state.difficulty_stack)) if d is not None]
+    escalated = any(d.escalated_to and any(t.get("target") == "parent" for t in d.norm_targets) for d in live)
+    totals = task_accumulator.get(state.task_id)["per_axis_totals"]
+    limits = Thresholds()
+    backstop = (
+        totals.get("replans_since_user_decision", 0) >= limits.effort_replan_backstop()
+        or totals.get("review_rounds_since_user_decision", 0) >= limits.review_round_backstop()
+    )
     return {
         "node": str(getattr(state.node, "value", state.node)),
         "approval_basis": approvals[-1].get("basis") if approvals else None,
         "fire_scale": fire.get("scale") if fire else None,
         "norm_reasons": reasons,
+        "norm_mismatch": escalated,
+        "since_user_backstop": backstop,
     }
 
 
@@ -1017,13 +1033,19 @@ class Cycle:
     def tampered(self, before: str) -> bool:
         return store.state_fingerprint(self.mid) != before
 
-    def spawn_checked(self, row, mandate, item_dir, started, argv, worktree) -> "SpawnResult | None":
+    def spawn_checked(
+        self, row, mandate, item_dir, started, argv, worktree, run: "ItemRun | None" = None,
+    ) -> "SpawnResult | None":
         """Run one specialist; None when its result must not be used because it touched the
-        mandate state or the item has overrun (the row then already says so)."""
-        before = store.state_fingerprint(self.mid)
+        mandate state or the item has overrun (the row then already says so). `run` names the
+        linked child's item: its session is learned before the cost is read, so the child's own
+        nested spawns are charged in the same round."""
         rows_before = self.item_cost(item_dir)[1]
+        before = store.state_fingerprint(self.mid)
         seconds, bound_by = self.time_bound(started, mandate)
         result = self.spawn(argv, worktree, seconds)
+        if run is not None:
+            self.learn_child(run)
         if self.tampered(before):
             row.update(outcome="failed", failure_kind="state-tampered")
             return None
@@ -1255,9 +1277,6 @@ class Cycle:
     def observe(self, run: "ItemRun", marker, text: str, state: dict) -> "tuple[str | None, dict]":
         """The engine ask a child's return poses and the typed facts the classifier reads; None when
         the child is done at RESOLUTION and the driver's own check decides."""
-        override = state.get("ask")
-        if isinstance(override, dict):
-            return override["kind"], dict(override.get("observed") or {})
         if marker == "PERMISSION-REQUEST":
             denials = sum(1 for a in run.asks if a["kind"] == "permission-covered")
             return "permission-covered", {"covered": self.rule_covered(run, text), "covered_denials": denials}
@@ -1266,6 +1285,10 @@ class Cycle:
         if marker == "COMPLETED" and state.get("node") == "RESOLUTION":
             return None, {}
         fire, reasons = state.get("fire_scale"), state.get("norm_reasons")
+        if state.get("norm_mismatch"):
+            return "norm-mismatch", {}
+        if state.get("since_user_backstop"):
+            return "since-user-backstop", {}
         if fire is not None:
             return FIRE_KINDS.get(fire, "incomplete"), {"fire_scale": fire}
         if marker in ("INCOMPLETE", "ESCALATE", "CLARIFY", "REPLAN") and reasons:
@@ -1314,10 +1337,9 @@ class Cycle:
         row, limit = run.row, Thresholds().effort_replan_absolute()
         while True:
             rows_before, since = len(cost.read_rows(cost.COST_LOG)), self.now().timestamp()
-            result = self.spawn_checked(row, run.mandate, run.item_dir, run.started, argv, run.worktree)
+            result = self.spawn_checked(row, run.mandate, run.item_dir, run.started, argv, run.worktree, run)
             if result is None:
                 return None
-            self.learn_child(run)
             marker, _ = dispatch.parse_marker(result.stdout)
             summary = result.stdout.strip()[:SUMMARY_CHARS]
             if marker in (None, "MALFORMED", "CHILD_INFRA_FAILURE"):
@@ -1386,7 +1408,9 @@ class Cycle:
             records = self.spawn_records(run, since, rows_before, str(review_brief), None)
             if rules.account_limited(marker, records):
                 self.stop_item(run, self.ask(run, "account-limit", {"account_limited": True}, limit))
-                return ""
+            else:
+                row.update(outcome="failed", failure_kind=KIND_SPAWN_ERROR, detail=tail(review.stderr or review.stdout))
+            return ""
         verdicts = VERDICT_RE.findall(review.stdout or "")
         accepted = bool(verdicts) and verdicts[-1].lower() == "accept"
         row["review"] = "accept" if accepted else "reject"

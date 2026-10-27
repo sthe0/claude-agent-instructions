@@ -26,9 +26,10 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cost, inline_class, inline_git, mandate as rules, mandate_store as store, norm_handoff
+from agentctl import cost, inline_class, inline_git, mandate as rules, mandate_store as store, norm_handoff, state as state_module, task_accumulator
 from agentctl.config import Thresholds, parse_config_md
 from agentctl.dispatch import RunResult
+from agentctl.store import FileStateStore
 from lib import config_root
 from mandate_cycle import driver, notifiers
 from session_scope import registry as scopes
@@ -234,7 +235,7 @@ class Spawner:
         self.calls: "list[dict]" = []
         self.live_scopes: "list[list[str]]" = []
         self.developer = lambda argv, cwd: driver.SpawnResult(0, "COMPLETED:\nFixed the issue.\n")
-        self.reviewer = lambda argv, cwd: driver.SpawnResult(0, "No blocking findings.\nVERDICT: accept\n")
+        self.reviewer = lambda argv, cwd: driver.SpawnResult(0, "COMPLETED:\nNo blocking findings.\nVERDICT: accept\n")
 
     def __call__(self, argv, cwd, seconds):
         kind = argv[argv.index("--kind") + 1]
@@ -597,7 +598,7 @@ def test_a_commit_made_during_the_review_is_never_pushed(env):
 
     def reviewer(argv, cwd):
         env.world.head = MOVED
-        return driver.SpawnResult(0, "No blocking findings.\nVERDICT: accept\n")
+        return driver.SpawnResult(0, "COMPLETED:\nNo blocking findings.\nVERDICT: accept\n")
 
     env.spawner.reviewer = reviewer
     env.cycle()
@@ -613,7 +614,7 @@ def test_a_file_changed_during_the_review_is_never_pushed(env):
 
     def reviewer(argv, cwd):
         env.world.status = " M scripts/foo.py"
-        return driver.SpawnResult(0, "No blocking findings.\nVERDICT: accept\n")
+        return driver.SpawnResult(0, "COMPLETED:\nNo blocking findings.\nVERDICT: accept\n")
 
     env.spawner.reviewer = reviewer
     env.cycle()
@@ -1119,7 +1120,7 @@ def test_published_text_that_fails_the_org_neutral_check_is_not_pushed(env):
 def test_a_review_without_an_accept_verdict_is_not_pushed(env):
     env.grant()
     eligible(env, 1)
-    env.spawner.reviewer = lambda argv, cwd: driver.SpawnResult(0, "Blocking: x.\nVERDICT: reject\n")
+    env.spawner.reviewer = lambda argv, cwd: driver.SpawnResult(0, "COMPLETED:\nBlocking: x.\nVERDICT: reject\n")
     env.cycle()
     row = item_rows()[0]
     assert (row["outcome"], row["stop_reason"], row["review"]) == ("declined", "rounds", "reject")
@@ -1129,7 +1130,7 @@ def test_a_review_without_an_accept_verdict_is_not_pushed(env):
 def test_a_review_that_never_states_a_verdict_is_a_rejection(env):
     env.grant()
     eligible(env, 1)
-    env.spawner.reviewer = lambda argv, cwd: driver.SpawnResult(0, "Looks good to me.\n")
+    env.spawner.reviewer = lambda argv, cwd: driver.SpawnResult(0, "COMPLETED:\nLooks good to me.\n")
     env.cycle()
     row = item_rows()[0]
     assert (row["review"], row["stop_reason"]) == ("reject", "rounds")
@@ -2254,7 +2255,7 @@ def test_a_failed_check_item_is_rejected_by_the_mandate_and_the_child_resumed(en
 def test_a_review_reject_is_rejected_by_the_mandate_and_reviewed_again(env):
     env.grant()
     eligible(env, 1)
-    replies = ["Not good.\nVERDICT: reject\n", "Fine now.\nVERDICT: accept\n"]
+    replies = ["COMPLETED:\nNot good.\nVERDICT: reject\n", "COMPLETED:\nFine now.\nVERDICT: accept\n"]
     env.spawner.reviewer = lambda argv, cwd: driver.SpawnResult(0, replies.pop(0))
     env.cycle()
     row = only_row(outcome="pr-opened", rounds=1, review="accept")
@@ -2400,6 +2401,48 @@ def test_nested_spawn_spend_is_charged_to_the_item_and_the_mandate_windows(env):
     assert sorted(c["detail"]["cost_usd"] for c in charged) == [0.4, 0.7]
     spend = store.spend_now(ID, env.clock())
     assert (spend.day_usd, spend.week_usd) == (pytest.approx(1.1), pytest.approx(1.1))
+
+
+def write_nested_row(env, argv, cost_usd, child_session_id):
+    row = {
+        "ts": rules.format_ts(env.clock()), "transcript_path": None, "plan_path": "/elsewhere/sub-plan.md",
+        "spawner_session": f"child-{flag(argv, '--session')}", "child_session_id": child_session_id, "cost_usd": cost_usd,
+    }
+    with (env.tmp / "costs.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+
+
+def test_nested_spend_of_the_first_round_is_charged_before_the_check_and_is_no_tampering(env):
+    env.grant(item_usd_cap=5.0)
+    eligible(env, 1)
+    red_checks(env, 1)
+    calls = []
+
+    def developer(argv, cwd):
+        calls.append(argv)
+        if len(calls) == 1:
+            write_nested_row(env, argv, 0.7, "nested-1")
+        return driver.SpawnResult(0, DONE)
+
+    env.spawner.developer = developer
+    env.cycle()
+    row = only_row(outcome="pr-opened", rounds=1)
+    assert row["cost_usd"] == pytest.approx(0.7)
+    names = [e["event"] for e in events()]
+    assert names.index("nested-spawn-cost") < names.index("mandate-answer")
+    assert [e["detail"]["cost_usd"] for e in events("nested-spawn-cost")] == [0.7]
+    assert events("breaker-open") == [] and not store.load_mandate(ID).breaker_open
+
+
+def test_nested_spend_over_the_item_cap_ends_the_item_in_the_round_that_spent_it(env):
+    env.grant(item_usd_cap=1.0)
+    eligible(env, 1)
+    red_checks(env, 1)
+    env.spawner.developer = lambda argv, cwd: (write_nested_row(env, argv, 1.4, "nested-1"), driver.SpawnResult(0, DONE))[1]
+    env.cycle()
+    row = only_row(outcome="overrun")
+    assert row["cost_usd"] == pytest.approx(1.4) and row["rounds"] == 0
+    assert len(env.spawner.of("developer")) == 1 and env.world.calls_with("git", "push") == []
 
 
 def limit_ledger_row(env, plan_path, session, child):
@@ -2575,12 +2618,14 @@ def _wall_clock(env):
     return "ESCALATE:\nTook long.\n"
 
 
-def _ask(kind):
-    def setup(env):
-        env.child["ask"] = {"kind": kind, "observed": {}}
-        return "ESCALATE:\nAsked.\n"
+def _norm_mismatch(env):
+    env.child["norm_mismatch"] = True
+    return "REPLAN:\nThe stage's norm cannot be met as written.\n"
 
-    return setup
+
+def _backstop(env):
+    env.child["since_user_backstop"] = True
+    return "ESCALATE:\nThe agent's budget of decisions is spent.\n"
 
 
 def _loop(env):
@@ -2594,8 +2639,8 @@ def _incomplete(env):
 
 @pytest.mark.parametrize("setup, outcome, reason", [
     (_wall_clock, "overrun", "effort-wall-clock"),
-    (_ask("norm-mismatch"), "declined", "norm-mismatch"),
-    (_ask("since-user-backstop"), "declined", "backstop"),
+    (_norm_mismatch, "declined", "norm-mismatch"),
+    (_backstop, "declined", "backstop"),
     (_loop, "declined", "loop-detected"),
     (_incomplete, "declined", "incomplete"),
 ])
@@ -2610,6 +2655,55 @@ def test_every_exceeds_kind_stops_the_item_without_the_breaker(env, setup, outco
     assert env.world.calls_with("git", "push") == []
     if outcome == "declined":
         assert {r["marker"] for r in item_rows()} == {driver.EXCEEDS_MARKER}
+
+
+def child_difficulty(*, escalated, target="parent"):
+    return state_module.Difficulty(
+        norm_targets=[{"target": target, "kind": "stage", "baseline": "d", "source": "critique"}],
+        escalated_to={"parent_session": "p", "stage_index": 1, "norm_digest": "d"} if escalated else {},
+    )
+
+
+def save_child(**fields):
+    state = state_module.SessionState(session_id="child-x", task_id="task-x", **fields)
+    FileStateStore(config_root.agentctl_state_dir()).save(state)
+
+
+@pytest.mark.parametrize("difficulty, stacked, expected", [
+    (child_difficulty(escalated=True), False, True),
+    (child_difficulty(escalated=True, target="file"), False, False),
+    (child_difficulty(escalated=False), False, False),
+    (None, True, True),
+])
+def test_a_childs_norm_mismatch_is_read_from_its_difficulty_records(env, difficulty, stacked, expected):
+    live = {"difficulty_stack": [child_difficulty(escalated=True)], "difficulty": state_module.Difficulty()} if stacked else {"difficulty": difficulty}
+    save_child(**live)
+    assert driver.real_child_state("child-x")["norm_mismatch"] is expected
+
+
+@pytest.mark.parametrize("axis, backstop", [
+    ("replans_since_user_decision", Thresholds().effort_replan_backstop()),
+    ("review_rounds_since_user_decision", Thresholds().review_round_backstop()),
+])
+def test_a_childs_since_user_backstop_is_read_from_the_task_accumulator(env, axis, backstop):
+    save_child()
+    assert driver.real_child_state("child-x")["since_user_backstop"] is False
+    task_accumulator.add("task-x", axis, backstop - 1)
+    assert driver.real_child_state("child-x")["since_user_backstop"] is False
+    task_accumulator.add("task-x", axis, 1)
+    assert driver.real_child_state("child-x")["since_user_backstop"] is True
+
+
+@pytest.mark.parametrize("returncode, stdout, stderr", [(1, "", "boom"), (0, "no marker, no verdict", "")])
+def test_a_reviewer_that_crashed_fails_the_item_and_opens_the_breaker(env, returncode, stdout, stderr):
+    env.grant()
+    eligible(env, 1)
+    env.spawner.reviewer = lambda argv, cwd: driver.SpawnResult(returncode, stdout, stderr)
+    env.cycle()
+    row = only_row(outcome="failed", failure_kind="spawn-error")
+    assert row["review"] == "not-run"
+    assert env.world.calls_with("git", "push") == []
+    assert store.load_mandate(ID).breaker_open
 
 
 # --- the one check an item is judged by ----------------------------------------------------
