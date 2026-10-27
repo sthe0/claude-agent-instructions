@@ -68,6 +68,7 @@ asserts that no token of a node the row does not show reaches the captured argv 
 | `scripts/gen_crutch_registry.py`:`<module>` | none | no plan content | a table key, no call |
 | `scripts/mandate_cycle/driver.py`:`real_run` | none | no plan content | a runner for the cycle's own commands |
 | `scripts/measure-marker-extractor-latency.py`:`_one_call` | none | no plan content | a fixed synthetic message |
+| `scripts/probe-hook-decision-semantics.py`:`_allow_cmd` | none | no plan content | a fixed probe prompt |
 | `scripts/probe-hook-decision-semantics.py`:`run_add_dir_read_cell` | none | no plan content | a fixed probe prompt |
 | `scripts/probe-hook-decision-semantics.py`:`run_add_dir_write_cell` | none | no plan content | a fixed probe prompt |
 | `scripts/probe-hook-decision-semantics.py`:`run_headless_cell` | none | no plan content | a fixed probe prompt |
