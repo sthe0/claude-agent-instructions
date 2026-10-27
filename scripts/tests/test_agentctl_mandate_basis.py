@@ -263,7 +263,7 @@ def _unbound_world(tmp_path, monkeypatch, name, *, record_cycle=True, inputs=Non
     ("outside-root", "not under the cycle's worktree root", {"inputs": {"worktree": "/outside/root/item"}}),
     ("other-repo", "not the cycle's repo", {"inputs": {"repo": "/another/repo"}}),
     ("not-engine-repo", "not the repo this engine runs from", {"engine_repo": "/another/repo"}),
-])
+], ids=["no-start", "no-lock", "stale-cycle", "outside-root", "other-repo", "not-engine-repo"])
 def test_a_mandate_approval_outside_the_running_cycles_binding_is_refused(tmp_path, monkeypatch, name, needle, setup):
     world = _unbound_world(tmp_path, monkeypatch, name, **setup)
     try:
