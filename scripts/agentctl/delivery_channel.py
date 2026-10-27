@@ -30,13 +30,13 @@ from .delivery import CHANNEL_EVENT as EVENT
 from .delivery import SOURCE_CHANNEL
 
 CONFIG_NAME = "delivery-channel.toml"
-KINDS = ("essence", "full", "replan_diff", "resolution_ask")
 EXPECTED_ANSWER = {
     "essence": "approve",
     "full": "approve",
     "replan_diff": "approve",
     "resolution_ask": "confirm",
 }
+KINDS = tuple(EXPECTED_ANSWER)
 TIMEOUT_S = 600
 
 
@@ -68,8 +68,10 @@ def load_command() -> list[str] | None:
 def deliver(kind: str, payload: bytes) -> Delivery | None:
     """Hand `payload` to the channel command. None when no channel is configured;
     otherwise a Delivery whose `answered` is True only on the expected answer."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown delivery kind {kind!r}; expected one of {KINDS}")
     command = load_command()
-    if command is None or kind not in KINDS:
+    if command is None:
         return None
     digest = hashlib.sha256(payload).hexdigest()
     try:

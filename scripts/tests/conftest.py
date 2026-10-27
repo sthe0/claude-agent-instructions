@@ -86,6 +86,16 @@ expected_exit = 0
 
 
 @pytest.fixture(autouse=True)
+def _isolate_delivery_channel(monkeypatch):
+    """No test may run a delivery-channel command configured in the real
+    ~/.claude-agent. The config-root environment stays real (many tests depend on
+    it), so only the channel's config file name is pointed at a name nothing
+    holds; test_headless_delivery restores it for its own tmp root."""
+    from agentctl import delivery_channel
+    monkeypatch.setattr(delivery_channel, "CONFIG_NAME", "no-such-delivery-channel.toml")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_edit_ledger(tmp_path, monkeypatch):
     """Redirect the durable edit ledger to tmp for the suite at large.
 

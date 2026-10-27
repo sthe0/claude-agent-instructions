@@ -144,6 +144,8 @@ def format_usage(counts: "dict[str, dict[str, int]]", total: int,
                 label = reason
             elif source == delivery.SOURCE_HOOK:
                 label = "(not an escape — automated verification)"
+            elif source == delivery.SOURCE_CHANNEL:
+                label = "(not an escape — headless channel delivery)"
             else:
                 label = "(no reason recorded — predates --escape-reason)"
             lines.append(f"    {label}: {counts[source][reason]}")
