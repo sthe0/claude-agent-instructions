@@ -334,7 +334,7 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "push-ref-unnormalised": Mutant(
         SEGMENT_RESOLVER,
-        '            ref = dst[len("refs/heads/") :] if dst.startswith("refs/heads/") else ""\n',
+        '            ref = dst[len("refs/heads/") :]\n',
         '            ref = dst\n',
         "a push to `refs/heads/<b>` or `HEAD` is listed under that spelling, not as the branch it names",
     ),
@@ -370,8 +370,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "push-head-destination-mapped": Mutant(
         SEGMENT_RESOLVER,
-        '        if not ref or ref == "HEAD" or ref.split("/", 1)[0] in _PUSH_DST_NAMESPACE_LEADS:\n',
-        '        if not ref or ref.split("/", 1)[0] in _PUSH_DST_NAMESPACE_LEADS:\n',
+        '        if not ref or ref == "HEAD":\n',
+        '        if not ref:\n',
         "`git push origin <b>:HEAD` is listed as a push of `<b>` although git creates a remote ref named HEAD",
     ),
     "mkdir-p-leaf-only": Mutant(
@@ -422,11 +422,17 @@ CATALOGUE: "dict[str, Mutant]" = {
         '    if False:\n',
         "a name that is both a branch and a tag is taken as the branch, although git prefers the tag",
     ),
-    "push-destination-namespace-lead-allowed": Mutant(
+    "push-bare-destination-assumed-branch": Mutant(
         SEGMENT_RESOLVER,
-        '        if not ref or ref == "HEAD" or ref.split("/", 1)[0] in _PUSH_DST_NAMESPACE_LEADS:\n',
-        '        if not ref or ref == "HEAD":\n',
-        "`git push origin b:tags/x` is listed as a branch push although git matches `tags/x` against the remote's refs",
+        '        elif dst.startswith("refs/heads/"):\n            ref = dst[len("refs/heads/") :]\n',
+        '        elif True:\n            ref = dst.removeprefix("refs/heads/")\n',
+        "`git push origin b:other` is listed as a push of branch `other` although git updates an existing remote `refs/remotes/other` first",
+    ),
+    "multiple-stdin-bodies-resolved": Mutant(
+        SEGMENT_RESOLVER,
+        '    elif _stdin_body_count(raw) > 1:\n',
+        '    elif False:\n',
+        "`python3 <<A <<B` is labelled stdin-body although the segment text carries a body bash never reads",
     ),
     "stdin-first-redirect-decides": Mutant(
         SEGMENT_RESOLVER,

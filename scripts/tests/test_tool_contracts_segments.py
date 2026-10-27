@@ -146,8 +146,10 @@ def test_fixture_passes_its_own_checker():
     check_replay_fixture.check(FIXTURE.read_text().splitlines(keepends=True), readme.read_text(), str(readme))
 
 
-def test_the_only_fall_through_case_is_the_foreign_repository_commit():
-    assert [c["id"] for c in _DECIDABLE if c.get("resolver") == "fall-through"] == ["uncovered-write-07"]
+def test_the_fall_through_cases_are_the_foreign_commit_and_the_bare_push_destinations():
+    assert [c["id"] for c in _DECIDABLE if c.get("resolver") == "fall-through"] == [
+        "prefix-mismatch-02", "prefix-mismatch-03", "prefix-mismatch-04", "uncovered-write-07",
+    ]
 
 
 # --- probe lines: one pinned decision each -----------------------------------------------------
@@ -263,7 +265,7 @@ PROBES = [
     # S11 push targets are normalised to the branch they name
     ("S11-push-full-ref", "git push origin refs/heads/feature", [R(P("origin", "feature"))]),
     ("S11-push-head", "git push origin HEAD", [R(P("origin", "feature"))]),
-    ("S11-push-head-colon", "git push origin HEAD:main", [R(P("origin", "main"))]),
+    ("S11-push-head-colon", "git push origin HEAD:refs/heads/main", [R(P("origin", "main"))]),
     ("S11-push-src-colon-full-ref", "git push origin feature:refs/heads/main", [R(P("origin", "main"))]),
     ("S11-push-force", "git push --force origin feature", [U]),
     ("S11-push-delete", "git push origin :feature", [U]),
@@ -296,14 +298,14 @@ PROBES = [
     ("R2-N5-push-head-destination", "git push origin feature:HEAD", [U]),
     ("R2-N5-push-full-ref-head-destination", "git push origin feature:refs/heads/HEAD", [U]),
     ("R2-N5-push-refs-heads-HEAD-source", "git push origin refs/heads/HEAD", [U]),
-    ("R2-N5-push-head-source-kept", "git push origin HEAD:topic", [R(P("origin", "topic"))]),
+    ("R2-N5-push-head-source-kept", "git push origin HEAD:refs/heads/topic", [R(P("origin", "topic"))]),
     # round 3 / B-R3-1 a bare push destination takes the namespace of the source
     ("R3-B1-tag-source-bare-destination", "git push origin v1:topic", [U]),
     ("R3-B1-colonless-tag", "git push origin agent/x", [U]),
     ("R3-B1-tag-source-full-destination", "git push origin v1:refs/heads/topic", [U]),
     ("R3-B1-branch-and-tag-same-name", "git push origin both:topic", [U]),
     ("R3-B1-branch-and-tag-colonless", "git push origin both", [U]),
-    ("R3-B1-at-sign-source", "git push origin @:topic", [R(P("origin", "topic"))]),
+    ("R3-B1-at-sign-source", "git push origin @:refs/heads/topic", [R(P("origin", "topic"))]),
     ("R3-B1-at-sign-colonless", "git push origin @", [R(P("origin", "feature"))]),
     ("R3-B1-heads-prefixed-source", "git push origin heads/topic", [U]),
     ("R3-B1-heads-prefixed-destination", "git push origin topic:heads/x", [U]),
@@ -313,9 +315,22 @@ PROBES = [
     ("R3-B1-commitish-source", "git push origin HEAD~1:topic", [U]),
     ("R3-B1-full-tag-ref-source", "git push origin refs/tags/v1:topic", [U]),
     ("R3-B1-tag-destination-full-ref", "git push origin topic:refs/tags/x", [U]),
-    ("R3-B1-existing-branch-source", "git push origin topic:other", [R(P("origin", "other"))]),
+    ("R3-B1-existing-branch-source", "git push origin topic:refs/heads/other", [R(P("origin", "other"))]),
     ("R3-B1-existing-branch-colonless", "git push origin topic", [R(P("origin", "topic"))]),
-    ("R3-B1-full-ref-source-bare-destination", "git push origin refs/heads/topic:other", [R(P("origin", "other"))]),
+    ("R3-B1-full-ref-source-full-destination", "git push origin refs/heads/topic:refs/heads/other", [R(P("origin", "other"))]),
+    # round 4 / B-R4-1 a bare destination after a colon is matched against the remote's existing refs first
+    ("R4-B1-bare-destination", "git push origin topic:other", [U]),
+    ("R4-B1-head-bare-destination", "git push origin HEAD:main", [U]),
+    ("R4-B1-at-sign-bare-destination", "git push origin @:topic", [U]),
+    ("R4-B1-full-ref-source-bare-destination", "git push origin refs/heads/topic:other", [U]),
+    ("R4-B1-bare-destination-in-second-refspec", "git push origin topic topic:other", [U]),
+    ("R4-B1-colonless-keeps-resolving", "git push origin topic", [R(P("origin", "topic"))]),
+    # round 4 / S-R4-1 more than one heredoc or here-string on fd 0 leaves the body that runs ambiguous
+    ("R4-S1-two-heredocs", "python3 <<A <<B\nprint(1)\nA\nprint(2)\nB", [U]),
+    ("R4-S1-here-string-then-heredoc", "python3 <<< 'print(1)' <<B\nprint(2)\nB", [U]),
+    ("R4-S1-two-here-strings", "python3 - <<< 'print(1)' <<< 'print(2)'", [U]),
+    ("R4-S1-heredoc-on-other-fd", "python3 <<A 3<<B\nprint(1)\nA\nprint(2)\nB", [O("stdin-body")]),
+    ("R4-S1-one-heredoc-stays-opaque", "python3 <<A\nprint(1)\nA", [O("stdin-body")]),
     ("R3-B1-branch-source-moved-by-checkout", "git checkout topic && git push origin HEAD", [R(W(V)), U]),
     # round 3 / S-R3-1 only the last fd-0 redirection decides whether the segment carries its stdin
     ("R3-S1-heredoc-then-file", "python3 <<'E' < s.py\nprint(1)\nE", [U]),
@@ -544,7 +559,24 @@ class TestGitAllowList:
 
     def test_push_literal_resolves_to_a_push_resource(self, world):
         assert _seg("git push origin topic", world["venue"]).resources == [resources.VcsRefResource("origin", "topic", "push")]
-        assert _seg("git push -q origin HEAD:main", world["venue"]).resources == [resources.VcsRefResource("origin", "main", "push")]
+        assert _seg("git push -q origin HEAD:refs/heads/main", world["venue"]).resources == [resources.VcsRefResource("origin", "main", "push")]
+
+    def test_a_bare_push_destination_can_be_an_existing_non_branch_ref_on_the_remote(self, world, tmp_path):
+        venue = world["venue"]
+        bare = tmp_path / "bare.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True)
+        _git(venue, "remote", "add", "holder", str(bare))
+        try:
+            _git(venue, "push", "-q", "holder", "topic:refs/remotes/other")
+            _git(venue, "commit", "-q", "--allow-empty", "-m", "newer")
+            _git(venue, "push", "-q", "holder", "feature:other")
+            remote_refs = subprocess.run(["git", "-C", str(bare), "for-each-ref", "--format=%(refname)"], check=True, capture_output=True, text=True).stdout.split()
+            assert remote_refs == ["refs/remotes/other"], remote_refs
+            assert _statuses(_seg("git push holder feature:other", venue)) == ["unresolved"]
+            assert _seg("git push holder feature:refs/heads/other", venue).resources == [resources.VcsRefResource("holder", "other", "push")]
+        finally:
+            _git(venue, "remote", "remove", "holder")
+            _git(venue, "reset", "-q", "--hard", "HEAD~1")
 
     def test_dash_c_inside_the_venue_equals_no_dash_c(self, world):
         venue = world["venue"]

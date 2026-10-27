@@ -106,6 +106,15 @@ The deny set must include all of these: a redirect outside the venue, an
 opaque `python3 -c` writing outside, a push to a protected branch, a push to
 another branch, and a `git -C` commit in a foreign checkout.
 
+## Observed cases that fall through
+
+`prefix-mismatch-02..04` are observed denials of `git push origin x:x`. Their
+`resolver` is `fall-through`: after a colon git matches a bare destination
+against the remote's existing refs first (an existing `refs/remotes/x` is
+updated instead of a branch), which cannot be seen offline, so the per-segment
+resolver resolves only `x:refs/heads/x` and the colon-less `git push origin x`.
+The hook shows the user prompt for the `x:x` spelling.
+
 ## Cases constructed by analogy
 
 The scan has no observed denial for these. Their `source` says so.
@@ -116,6 +125,8 @@ The scan has no observed denial for these. Their `source` says so.
   `resolver` is `fall-through`: the per-segment resolver never resolves git in
   another repository (its refs, hooks and config are not the venue's), so the
   hook shows the user prompt instead of denying. Accepted at plan level.
+- `uncovered-write-05` pushes with the full destination `refs/heads/main`: a bare
+  `HEAD:main` is not resolved (see `prefix-mismatch-02..04`).
 - `allowed-today-01..04`: calls the harness allows today, not denials. Two come
   from ambient allow entries (git status, git log). Two come from the
   acceptEdits behaviour recorded in

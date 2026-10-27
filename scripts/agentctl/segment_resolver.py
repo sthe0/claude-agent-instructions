@@ -742,14 +742,14 @@ def _push_source_branch(root: str, src: str) -> str | None:
     return src
 
 
-#: A bare push destination `tags/x` or `heads/x` is matched by suffix against the remote's existing refs.
-_PUSH_DST_NAMESPACE_LEADS = frozenset({"heads", "tags", "remotes", "notes"})
-
-
 def _normalised_push(res: tool_contracts.Resolution, root: str, rest: list[str]) -> _Verdict:
-    """Each refspec is `[<src>:]<dst>` with a branch source (`_push_source_branch`). `HEAD` names the
-    current branch only as a source; as a destination (`feature:HEAD`) git creates a remote ref literally
-    called HEAD. A destination outside `refs/heads/` or one that looks like a namespaced name is refused."""
+    """Each refspec is `[<src>:]<dst>` with a branch source (`_push_source_branch`). Without a colon git
+    pushes to the source's full name. With a colon the destination resolves only when spelled
+    `refs/heads/<b>`: a bare one is first matched by suffix against the remote's existing refs (an
+    existing `refs/remotes/<dst>` wins over a new branch), which this offline parse cannot see. `HEAD`
+    names the current branch only as a source; as a destination (`feature:HEAD`) git creates a remote ref
+    literally called HEAD. Every push is marked branch-dependent, conservatively: only the `HEAD`/`@` and
+    colon-less forms read the current branch."""
     refspecs = [t for t in rest if not t.startswith("-")][1:]
     if len(refspecs) != len(res.resources):
         return _unres(_OUTSIDE_LIST, "the push refspecs and the resolved refs disagree")
@@ -761,12 +761,12 @@ def _normalised_push(res: tool_contracts.Resolution, root: str, rest: list[str])
             return _unres(_OUTSIDE_LIST, f"push source {src!r} is not certainly a local branch: git would take a bare destination into its namespace")
         if not colon:
             ref = branch
-        elif dst.startswith("refs/"):
-            ref = dst[len("refs/heads/") :] if dst.startswith("refs/heads/") else ""
+        elif dst.startswith("refs/heads/"):
+            ref = dst[len("refs/heads/") :]
         else:
-            ref = dst
-        if not ref or ref == "HEAD" or ref.split("/", 1)[0] in _PUSH_DST_NAMESPACE_LEADS:
-            return _unres(_OUTSIDE_LIST, f"push destination {dst or src!r} is HEAD, outside refs/heads/ or a namespaced name matched against the remote's refs")
+            return _unres(_OUTSIDE_LIST, f"push destination {dst!r} is not spelled refs/heads/<branch>: a bare one is matched against the remote's existing refs")
+        if not ref or ref == "HEAD":
+            return _unres(_OUTSIDE_LIST, f"push destination {dst or src!r} is empty or HEAD")
         out.append(resources.VcsRefResource(r.remote, ref, "push"))
     verdict = _ok(out)
     verdict.branch_dependent = True
@@ -1063,9 +1063,21 @@ def _carries_stdin_body(raw: _RawSegment) -> bool:
     return last.op in _HEREDOC_OPS or (last.op == "<<<" and not last.target.nonlit)
 
 
+def _stdin_body_count(raw: _RawSegment) -> int:
+    """How many heredocs / here-strings feed fd 0. The segment text carries every body but bash reads
+    only the last one, so a second body leaves the code a consumer would read ambiguous."""
+    return sum(
+        1
+        for red in raw.redirects
+        if (red.fd == "0" or (red.fd is None and red.op in _STDIN_OPS)) and (red.op in _HEREDOC_OPS or red.op == "<<<")
+    )
+
+
 def _resolve_one(raw: _RawSegment, cwd: str | None, ctx: _Context) -> _Verdict:
     if raw.nested:
         verdict = _unres(_NONLITERAL, f"{raw.nested} hides nested work")
+    elif _stdin_body_count(raw) > 1:
+        verdict = _unres(_OUTSIDE_LIST, "more than one heredoc or here-string feeds stdin: the segment text carries bodies bash never reads")
     elif not raw.words:
         verdict = _ok()
     else:
