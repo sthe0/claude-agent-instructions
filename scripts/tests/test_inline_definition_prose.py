@@ -13,7 +13,7 @@ CRITERION_SURFACES = (
     "CLAUDE.md",
     "cursor/rules/claude-code-sync.mdc",
     "memory-global/leaves/acting-without-asking.md",
-    "skills/instruction-grooming/SKILL.md",
+    "skills/specializations/curator/SKILL.md",
     "memory-global/leaves/principles/coordinator-executes-through-specialists.md",
     "docs/concepts/task.md",
 )
