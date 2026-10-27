@@ -2628,6 +2628,17 @@ def _backstop(env):
     return "ESCALATE:\nThe agent's budget of decisions is spent.\n"
 
 
+def _wall_clock_with_backstop(env):
+    env.child["since_user_backstop"] = True
+    return _wall_clock(env)
+
+
+def _spend_with_norm_mismatch(env):
+    env.child["norm_mismatch"] = True
+    env.child["fire_scale"] = "spend"
+    return "REPLAN:\nOver budget and off the norm.\n"
+
+
 def _loop(env):
     return "LOOP_DETECTED:\nThe same step again.\n"
 
@@ -2639,6 +2650,8 @@ def _incomplete(env):
 
 @pytest.mark.parametrize("setup, outcome, reason", [
     (_wall_clock, "overrun", "effort-wall-clock"),
+    (_wall_clock_with_backstop, "overrun", "effort-wall-clock"),
+    (_spend_with_norm_mismatch, "overrun", "effort-spend"),
     (_norm_mismatch, "declined", "norm-mismatch"),
     (_backstop, "declined", "backstop"),
     (_loop, "declined", "loop-detected"),

@@ -1285,6 +1285,10 @@ class Cycle:
         if marker == "COMPLETED" and state.get("node") == "RESOLUTION":
             return None, {}
         fire, reasons = state.get("fire_scale"), state.get("norm_reasons")
+        # A spend or wall-clock fire is a resource stop (overrun, retried) and the user's call ahead of
+        # any authority fact; letting norm-mismatch or the backstop win would decline the item instead.
+        if fire in ("spend", "wall-clock"):
+            return FIRE_KINDS[fire], {"fire_scale": fire}
         if state.get("norm_mismatch"):
             return "norm-mismatch", {}
         if state.get("since_user_backstop"):
