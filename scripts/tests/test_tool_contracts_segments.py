@@ -56,6 +56,10 @@ def build_world(tmp: Path) -> dict:
     outside = tmp / "outside"
     other = _init_repo(outside / "canonical-checkout", "main")
     _git(venue, "branch", "topic")
+    _git(venue, "tag", "v1")
+    _git(venue, "tag", "agent/x")
+    _git(venue, "branch", "both")
+    _git(venue, "tag", "both")
     _git(venue, "remote", "add", "origin", str(other))
     _git(venue, "update-ref", "refs/remotes/origin/remote-only", "HEAD")
     scratch = tmp / "scratch"
@@ -293,6 +297,34 @@ PROBES = [
     ("R2-N5-push-full-ref-head-destination", "git push origin feature:refs/heads/HEAD", [U]),
     ("R2-N5-push-refs-heads-HEAD-source", "git push origin refs/heads/HEAD", [U]),
     ("R2-N5-push-head-source-kept", "git push origin HEAD:topic", [R(P("origin", "topic"))]),
+    # round 3 / B-R3-1 a bare push destination takes the namespace of the source
+    ("R3-B1-tag-source-bare-destination", "git push origin v1:topic", [U]),
+    ("R3-B1-colonless-tag", "git push origin agent/x", [U]),
+    ("R3-B1-tag-source-full-destination", "git push origin v1:refs/heads/topic", [U]),
+    ("R3-B1-branch-and-tag-same-name", "git push origin both:topic", [U]),
+    ("R3-B1-branch-and-tag-colonless", "git push origin both", [U]),
+    ("R3-B1-at-sign-source", "git push origin @:topic", [R(P("origin", "topic"))]),
+    ("R3-B1-at-sign-colonless", "git push origin @", [R(P("origin", "feature"))]),
+    ("R3-B1-heads-prefixed-source", "git push origin heads/topic", [U]),
+    ("R3-B1-heads-prefixed-destination", "git push origin topic:heads/x", [U]),
+    ("R3-B1-tags-prefixed-destination", "git push origin topic:tags/x", [U]),
+    ("R3-B1-remote-tracking-source", "git push origin origin/remote-only:topic", [U]),
+    ("R3-B1-unknown-name-source", "git push origin nosuchbranch:topic", [U]),
+    ("R3-B1-commitish-source", "git push origin HEAD~1:topic", [U]),
+    ("R3-B1-full-tag-ref-source", "git push origin refs/tags/v1:topic", [U]),
+    ("R3-B1-tag-destination-full-ref", "git push origin topic:refs/tags/x", [U]),
+    ("R3-B1-existing-branch-source", "git push origin topic:other", [R(P("origin", "other"))]),
+    ("R3-B1-existing-branch-colonless", "git push origin topic", [R(P("origin", "topic"))]),
+    ("R3-B1-full-ref-source-bare-destination", "git push origin refs/heads/topic:other", [R(P("origin", "other"))]),
+    ("R3-B1-branch-source-moved-by-checkout", "git checkout topic && git push origin HEAD", [R(W(V)), U]),
+    # round 3 / S-R3-1 only the last fd-0 redirection decides whether the segment carries its stdin
+    ("R3-S1-heredoc-then-file", "python3 <<'E' < s.py\nprint(1)\nE", [U]),
+    ("R3-S1-here-string-then-file", "python3 - <<< 'print(1)' 0< s.py", [U]),
+    ("R3-S1-heredoc-then-fd-dup", "python3 <<'E' 0<&3\nprint(1)\nE", [U]),
+    ("R3-S1-file-then-heredoc", "python3 < s.py <<'E'\nprint(1)\nE", [O("stdin-body")]),
+    ("R3-S1-explicit-fd-zero-heredoc", "python3 0<<'E'\nprint(1)\nE", [O("stdin-body")]),
+    ("R3-S1-heredoc-then-output-redirect", "python3 <<'E' > {SCRATCH}/o\nprint(1)\nE", [O("stdin-body")]),
+    ("R3-S1-heredoc-then-fd-zero-output", "python3 <<'E' 0>{SCRATCH}/o\nprint(1)\nE", [U]),
     # round 2 / N6 mkdir -p creates the missing ancestors
     ("R2-N6-mkdir-p-topmost-new", "mkdir -p {SCRATCH}/new/a/b", [R(W("{SCRATCH}/new"))]),
     ("R2-N6-mkdir-p-existing-parent", "mkdir -p sub/new", [R(W(V + "/sub/new"))]),
@@ -478,9 +510,22 @@ class TestGitAllowList:
         finally:
             _git(venue, "branch", "-q", "-D", "packed-only")
 
+    def test_a_tag_that_exists_only_in_packed_refs_blocks_a_branch_push_source(self, world):
+        venue = world["venue"]
+        _git(venue, "branch", "packed-both")
+        _git(venue, "tag", "packed-both")
+        _git(venue, "pack-refs", "--all")
+        try:
+            assert not (venue / ".git" / "refs" / "tags" / "packed-both").exists()
+            assert _statuses(_seg("git push origin packed-both:topic", venue)) == ["unresolved"]
+        finally:
+            _git(venue, "tag", "-d", "packed-both")
+            _git(venue, "branch", "-q", "-D", "packed-both")
+
     @pytest.mark.parametrize(
         "text, cls",
         [
+            ("git push origin v1:topic", "contract-unresolved"),
             ("git checkout nosuchbranch", "contract-unresolved"),
             ("git push origin feature:HEAD", "contract-unresolved"),
             ("git reset --hard", "contract-unresolved"),

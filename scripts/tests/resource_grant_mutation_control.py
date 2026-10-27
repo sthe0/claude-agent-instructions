@@ -309,7 +309,7 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "opaque-without-known-cwd": Mutant(
         SEGMENT_RESOLVER,
-        '    if cwd is None:\n        return _unres("contract-unresolved", _CWD_UNCERTAIN)\n'
+        '    if cwd is None:\n        return _unres(_OUTSIDE_LIST, _CWD_UNCERTAIN)\n'
         '    operands = [t.text for t in toks[1:]]\n    is_python',
         '    operands = [t.text for t in toks[1:]]\n    is_python',
         "an interpreter segment is called opaque although its working directory is unknown",
@@ -334,13 +334,13 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "push-ref-unnormalised": Mutant(
         SEGMENT_RESOLVER,
-        '        ref = r.ref[len("refs/heads/") :] if r.ref.startswith("refs/heads/") else r.ref\n',
-        '        ref = r.ref\n',
+        '            ref = dst[len("refs/heads/") :] if dst.startswith("refs/heads/") else ""\n',
+        '            ref = dst\n',
         "a push to `refs/heads/<b>` or `HEAD` is listed under that spelling, not as the branch it names",
     ),
     "none-effect-nonliteral-operand": Mutant(
         SEGMENT_RESOLVER,
-        '                    return _unres("residual-syntax", f"{prog!r} operand {tok.text!r} is non-literal: it may expand into a flag outside the safe set")\n',
+        '                    return _unres(_NONLITERAL, f"{prog!r} operand {tok.text!r} is non-literal: it may expand into a flag outside the safe set")\n',
         '                    continue\n',
         "an unreadable operand of a program with a closed flag set is assumed to be harmless",
     ),
@@ -364,14 +364,14 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "awk-nonliteral-program-read": Mutant(
         SEGMENT_RESOLVER,
-        '    if any(t.nonlit for t in toks[1:]):\n        return _unres("residual-syntax", "an awk operand',
-        '    if False:\n        return _unres("residual-syntax", "an awk operand',
+        '    if any(t.nonlit for t in toks[1:]):\n        return _unres(_NONLITERAL, "an awk operand',
+        '    if False:\n        return _unres(_NONLITERAL, "an awk operand',
         "an awk program held in a variable or positional is read as the quoted text and called harmless",
     ),
     "push-head-destination-mapped": Mutant(
         SEGMENT_RESOLVER,
-        '    if _push_destination_is_head(rest):\n',
-        '    if False:\n',
+        '        if not ref or ref == "HEAD" or ref.split("/", 1)[0] in _PUSH_DST_NAMESPACE_LEADS:\n',
+        '        if not ref or ref.split("/", 1)[0] in _PUSH_DST_NAMESPACE_LEADS:\n',
         "`git push origin <b>:HEAD` is listed as a push of `<b>` although git creates a remote ref named HEAD",
     ),
     "mkdir-p-leaf-only": Mutant(
@@ -409,6 +409,30 @@ CATALOGUE: "dict[str, Mutant]" = {
         '    if os.environ.get("CDPATH") and not _CDPATH_SAFE_RE.match(operands[0].text):\n',
         '    if False:\n',
         "`cd sub` is read as the working-directory entry although CDPATH may land it elsewhere",
+    ),
+    "push-source-namespace-ignored": Mutant(
+        SEGMENT_RESOLVER,
+        '        branch = _push_source_branch(root, src)\n',
+        '        branch = _push_source_branch(root, src) or src\n',
+        "`git push origin v1:topic` is listed as a push of branch `topic` although git creates `refs/tags/topic`",
+    ),
+    "push-source-tag-not-checked": Mutant(
+        SEGMENT_RESOLVER,
+        '    if _ref_exists(common, f"refs/tags/{src}") or _ref_exists(common, f"refs/{src}"):\n',
+        '    if False:\n',
+        "a name that is both a branch and a tag is taken as the branch, although git prefers the tag",
+    ),
+    "push-destination-namespace-lead-allowed": Mutant(
+        SEGMENT_RESOLVER,
+        '        if not ref or ref == "HEAD" or ref.split("/", 1)[0] in _PUSH_DST_NAMESPACE_LEADS:\n',
+        '        if not ref or ref == "HEAD":\n',
+        "`git push origin b:tags/x` is listed as a branch push although git matches `tags/x` against the remote's refs",
+    ),
+    "stdin-first-redirect-decides": Mutant(
+        SEGMENT_RESOLVER,
+        '            last = red\n',
+        '            last = last or red\n',
+        "`python3 <<'E' < s.py` is labelled stdin-body although the later redirection feeds the script file",
     ),
     "refusal-class-swapped": Mutant(
         SEGMENT_RESOLVER,

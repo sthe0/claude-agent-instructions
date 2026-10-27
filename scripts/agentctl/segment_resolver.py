@@ -99,6 +99,7 @@ _PIPE_OPS = frozenset({"|", "|&"})
 _CONTINUATION_OPS = frozenset({"&&", "||", "|", "|&"})
 _WRITE_REDIRECTS = frozenset({">", ">>", ">|", "&>", "&>>", "<>"})
 _HEREDOC_OPS = frozenset({"<<", "<<-"})
+_STDIN_OPS = frozenset({"<", "<<", "<<-", "<<<", "<&", "<>"})
 _NO_EFFECT_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"})
 
 
@@ -444,6 +445,11 @@ def _ok(res: list | None = None) -> _Verdict:
     return _Verdict("resolved", list(res or []))
 
 
+#: reason classes of a refusal: a non-literal operand, or a form outside the reviewed allow-list
+_NONLITERAL = "residual-syntax"
+_OUTSIDE_LIST = "contract-unresolved"
+
+
 def _unres(reason_class: str, reason: str) -> _Verdict:
     return _Verdict("unresolved", reason_class=reason_class, reason=reason)
 
@@ -459,7 +465,7 @@ def _file_write(path: str) -> resources.FileResource:
 def _from_resolution(res: tool_contracts.Resolution) -> _Verdict:
     if res.status == "resolved":
         return _ok(res.resources)
-    return _unres(res.reason_class or "contract-unresolved", res.reason or "")
+    return _unres(res.reason_class or _OUTSIDE_LIST, res.reason or "")
 
 
 _CWD_UNCERTAIN = "the working directory is uncertain here (an earlier cd, pipeline or unreadable command may have moved it)"
@@ -468,13 +474,13 @@ _CWD_UNCERTAIN = "the working directory is uncertain here (an earlier cd, pipeli
 def _resolve_path(tok: _Tok, cwd: str | None) -> tuple[str | None, _Verdict | None]:
     """`(absolute path, None)`, `(None, None)` for a no-effect device, or `(None, verdict)` when undecidable."""
     if tok.nonlit or tool_contracts.is_non_literal(tok.text):
-        return None, _unres("residual-syntax", f"path {tok.text!r} is non-literal")
+        return None, _unres(_NONLITERAL, f"path {tok.text!r} is non-literal")
     if tok.text in _NO_EFFECT_DEVICES:
         return None, None
     if os.path.isabs(tok.text):
         return tok.text, None
     if cwd is None:
-        return None, _unres("contract-unresolved", _CWD_UNCERTAIN)
+        return None, _unres(_OUTSIDE_LIST, _CWD_UNCERTAIN)
     return os.path.join(cwd, tok.text), None
 
 
@@ -498,7 +504,7 @@ def _redirect_resources(redirects: list[_Redirect], cwd: str | None) -> tuple[li
         if not writes:
             continue
         if red.target is None:
-            return [], _unres("residual-syntax", "redirection without a target")
+            return [], _unres(_NONLITERAL, "redirection without a target")
         target_path, bad = _resolve_path(red.target, cwd)
         if bad is not None:
             return [], bad
@@ -604,8 +610,6 @@ def _git_literal(tok: _Tok) -> bool:
     return not (tok.nonlit or tool_contracts.is_non_literal(tok.text))
 
 
-_NONLITERAL = "residual-syntax"
-_OUTSIDE_LIST = "contract-unresolved"
 #: `(reason_class, message)`: why a git form is not on the allow-list
 _Refusal = tuple[str, str]
 
@@ -706,34 +710,66 @@ def _local_branch_exists(root: str, name: str) -> bool:
         return False
 
 
-def _push_destination_is_head(rest: list[str]) -> bool:
-    for text in rest:
-        if text.startswith("-") or ":" not in text:
-            continue
-        if text.split(":", 1)[1] in ("HEAD", "refs/heads/HEAD"):
-            return True
-    return False
+def _ref_exists(common: str, full: str) -> bool:
+    """Whether the full ref name exists in the shared git directory, loose or packed."""
+    parts = full.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return False
+    if os.path.isfile(os.path.join(common, *parts)):
+        return True
+    try:
+        with open(os.path.join(common, "packed-refs"), encoding="utf-8") as fh:
+            return any(line.rstrip("\n").endswith(f" {full}") for line in fh)
+    except OSError:
+        return False
+
+
+def _push_source_branch(root: str, src: str) -> str | None:
+    """The local branch a push refspec's SOURCE names, or `None` when it names anything else. Git takes
+    a bare destination into the namespace of the source (`v1:topic` creates `refs/tags/topic`), so a
+    source is trusted only when it is certainly a branch: `HEAD`/`@` on a branch, `refs/heads/<b>`, or
+    a bare name that is an existing local branch and neither a tag nor a `refs/<name>` ref."""
+    if src in ("HEAD", "@"):
+        return _head_branch(root)
+    if src.startswith("refs/"):
+        name = src[len("refs/heads/") :] if src.startswith("refs/heads/") else ""
+        return name if name and name != "HEAD" else None
+    common = _common_dir(root)
+    if common is None or not _local_branch_exists(root, src):
+        return None
+    if _ref_exists(common, f"refs/tags/{src}") or _ref_exists(common, f"refs/{src}"):
+        return None
+    return src
+
+
+#: A bare push destination `tags/x` or `heads/x` is matched by suffix against the remote's existing refs.
+_PUSH_DST_NAMESPACE_LEADS = frozenset({"heads", "tags", "remotes", "notes"})
 
 
 def _normalised_push(res: tool_contracts.Resolution, root: str, rest: list[str]) -> _Verdict:
-    """`HEAD` names the current branch only as the SOURCE of a colon-less refspec; as a destination
-    (`feature:HEAD`) git creates a remote ref literally called HEAD."""
+    """Each refspec is `[<src>:]<dst>` with a branch source (`_push_source_branch`). `HEAD` names the
+    current branch only as a source; as a destination (`feature:HEAD`) git creates a remote ref literally
+    called HEAD. A destination outside `refs/heads/` or one that looks like a namespaced name is refused."""
+    refspecs = [t for t in rest if not t.startswith("-")][1:]
+    if len(refspecs) != len(res.resources):
+        return _unres(_OUTSIDE_LIST, "the push refspecs and the resolved refs disagree")
     out: list = []
-    branch_dependent = False
-    if _push_destination_is_head(rest):
-        return _unres("contract-unresolved", "a push destination of HEAD creates a remote ref named HEAD")
-    for r in res.resources:
-        ref = r.ref[len("refs/heads/") :] if r.ref.startswith("refs/heads/") else r.ref
-        if ref == "HEAD" and r.ref != "HEAD":
-            return _unres("contract-unresolved", "a push to refs/heads/HEAD creates a remote ref named HEAD")
-        if ref == "HEAD":
-            branch = _head_branch(root)
-            if branch is None:
-                return _unres("contract-unresolved", "HEAD is detached or unreadable: no branch to push")
-            ref, branch_dependent = branch, True
+    for spec, r in zip(refspecs, res.resources):
+        src, colon, dst = spec.partition(":")
+        branch = _push_source_branch(root, src)
+        if branch is None:
+            return _unres(_OUTSIDE_LIST, f"push source {src!r} is not certainly a local branch: git would take a bare destination into its namespace")
+        if not colon:
+            ref = branch
+        elif dst.startswith("refs/"):
+            ref = dst[len("refs/heads/") :] if dst.startswith("refs/heads/") else ""
+        else:
+            ref = dst
+        if not ref or ref == "HEAD" or ref.split("/", 1)[0] in _PUSH_DST_NAMESPACE_LEADS:
+            return _unres(_OUTSIDE_LIST, f"push destination {dst or src!r} is HEAD, outside refs/heads/ or a namespaced name matched against the remote's refs")
         out.append(resources.VcsRefResource(r.remote, ref, "push"))
     verdict = _ok(out)
-    verdict.branch_dependent = branch_dependent
+    verdict.branch_dependent = True
     return verdict
 
 
@@ -741,24 +777,24 @@ def _git(toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
     operands = [t.text for t in toks[1:]]
     sub, rest, global_values, reason = tool_contracts.find_git_subcommand(operands)
     if reason is not None:
-        return _unres("contract-unresolved", reason)
+        return _unres(_OUTSIDE_LIST, reason)
     if sub is None:
-        return _unres("contract-unresolved", "bare `git` with no subcommand")
+        return _unres(_OUTSIDE_LIST, "bare `git` with no subcommand")
     for flag in ("--git-dir", "--work-tree"):
         if flag in global_values:
-            return _unres("contract-unresolved", f"git {flag} is not resolved in segment mode")
+            return _unres(_OUTSIDE_LIST, f"git {flag} is not resolved in segment mode")
     c_value = global_values.get("-C")
     if c_value is not None and tool_contracts.is_non_literal(c_value):
-        return _unres("residual-syntax", f"git -C {c_value!r} is non-literal")
+        return _unres(_NONLITERAL, f"git -C {c_value!r} is non-literal")
     repo_dir_arg = c_value if c_value is not None else "."
     if not os.path.isabs(repo_dir_arg) and cwd is None:
-        return _unres("contract-unresolved", _CWD_UNCERTAIN)
+        return _unres(_OUTSIDE_LIST, _CWD_UNCERTAIN)
     repo_dir = os.path.realpath(os.path.join(cwd or "/", repo_dir_arg))
     root = _worktree_root(repo_dir)
     if root is None:
-        return _unres("contract-unresolved", f"{repo_dir!r} is not inside a git worktree")
+        return _unres(_OUTSIDE_LIST, f"{repo_dir!r} is not inside a git worktree")
     if ctx.venue_common is None or _common_dir(root) != ctx.venue_common:
-        return _unres("contract-unresolved", f"{root!r} is not the venue's own repository: its refs, hooks and config are not the venue's")
+        return _unres(_OUTSIDE_LIST, f"{root!r} is not the venue's own repository: its refs, hooks and config are not the venue's")
 
     form = GIT_WRITE_FORMS.get(sub)
     if form is None:
@@ -775,12 +811,12 @@ def _git(toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
     if bad is not None:
         return _unres(bad[0], f"git {sub}: {bad[1]}")
     if sub in ("checkout", "switch") and not seen_dd and not _local_branch_exists(root, before[0]):
-        return _unres("contract-unresolved", f"git {sub} {before[0]!r}: no such local branch (a remote-tracking match would create one)")
+        return _unres(_OUTSIDE_LIST, f"git {sub} {before[0]!r}: no such local branch (a remote-tracking match would create one)")
     out: list = [_file_write(root)]
     if sub in _GIT_BRANCH_DEPENDENT:
         branch = _head_branch(root)
         if branch is None:
-            return _unres("contract-unresolved", "HEAD is detached or unreadable: no branch to commit to")
+            return _unres(_OUTSIDE_LIST, "HEAD is detached or unreadable: no branch to commit to")
         out.append(resources.VcsRefResource(".", branch, "commit"))
     verdict = _ok(out)
     verdict.branch_dependent = sub in _GIT_BRANCH_DEPENDENT
@@ -799,6 +835,9 @@ def _logical_cd_target(path: str) -> str | None:
 
 
 #: With CDPATH set, `cd sub` may land in `$CDPATH/sub`; only these operand shapes skip the search.
+#: Residual: CDPATH is read from THIS process's environment, so a variable the Bash tool's shell sets
+#: itself (a profile or rc file, not exported to the caller) is invisible here; the hook (stage 8) must
+#: read it from the shell snapshot.
 _CDPATH_SAFE_RE = re.compile(r"^(/|\./|\.\./|\.$|\.\.$)")
 
 
@@ -835,7 +874,7 @@ def _split_operands(prog: str, toks: list[_Tok], allowed_flags: frozenset) -> tu
             continue
         if tok.text.startswith("-") and tok.text != "-":
             if tok.text not in allowed_flags:
-                return [], _unres("contract-unresolved", f"{prog} flag {tok.text!r} is outside the reviewed closed set")
+                return [], _unres(_OUTSIDE_LIST, f"{prog} flag {tok.text!r} is outside the reviewed closed set")
             continue
         operands.append(tok)
     return operands, None
@@ -847,7 +886,7 @@ def _writer(prog: str, toks: list[_Tok], cwd: str | None) -> _Verdict:
     if bad is not None:
         return bad
     if prog in ("mv", "cp") and len(operands) < 2:
-        return _unres("contract-unresolved", f"{prog} needs a source and a destination")
+        return _unres(_OUTSIDE_LIST, f"{prog} needs a source and a destination")
     paths, bad = _targets(operands, cwd)
     if bad is not None:
         return bad
@@ -856,7 +895,7 @@ def _writer(prog: str, toks: list[_Tok], cwd: str | None) -> _Verdict:
     if prog == "mkdir" and any(t.text in ("-p", "--parents") for t in toks[1:]):
         tops = [_topmost_new_dir(p) for p in paths]
         if None in tops:
-            return _unres("contract-unresolved", "mkdir -p through a `..` component: the ancestors it creates are not read")
+            return _unres(_OUTSIDE_LIST, "mkdir -p through a `..` component: the ancestors it creates are not read")
         paths = tops
     return _ok([_file_write(p) for p in paths])
 
@@ -878,7 +917,7 @@ _AWK_UNSAFE_RE = re.compile(r"[>|]|\b(?:system|getline)\b")
 
 def _awk(toks: list[_Tok]) -> _Verdict:
     if any(t.nonlit for t in toks[1:]):
-        return _unres("residual-syntax", "an awk operand holds an expansion: the program that runs is not the text read here")
+        return _unres(_NONLITERAL, "an awk operand holds an expansion: the program that runs is not the text read here")
     operands = [t.text for t in toks[1:]]
     i = 0
     while i < len(operands) and operands[i].startswith("-") and operands[i] != "-":
@@ -891,11 +930,11 @@ def _awk(toks: list[_Tok]) -> _Verdict:
         elif flag.startswith(("-F", "-v")):
             i += 1
         else:
-            return _unres("contract-unresolved", f"awk flag {flag!r} is outside the reviewed closed set")
+            return _unres(_OUTSIDE_LIST, f"awk flag {flag!r} is outside the reviewed closed set")
     if i >= len(operands):
-        return _unres("contract-unresolved", "awk with no program operand")
+        return _unres(_OUTSIDE_LIST, "awk with no program operand")
     if _AWK_UNSAFE_RE.search(operands[i]):
-        return _unres("contract-unresolved", "the awk program redirects, pipes or runs a command (`>`, `|`, system, getline)")
+        return _unres(_OUTSIDE_LIST, "the awk program redirects, pipes or runs a command (`>`, `|`, system, getline)")
     return _ok()
 
 
@@ -918,13 +957,13 @@ def _runs_inline_code(prog: str, flag: str) -> bool:
 
 def _stdin_body(has_body: bool) -> _Verdict:
     if not has_body:
-        return _unres("contract-unresolved", "the interpreter reads its code from stdin, but no heredoc or here-string of this segment carries it")
+        return _unres(_OUTSIDE_LIST, "the interpreter reads its code from stdin, but no heredoc or here-string of this segment carries it")
     return _opaque("stdin-body")
 
 
 def _delegate(toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
     if cwd is None:
-        return _unres("contract-unresolved", _CWD_UNCERTAIN)
+        return _unres(_OUTSIDE_LIST, _CWD_UNCERTAIN)
     text = " ".join(shlex.quote(t.text) for t in toks)
     return _from_resolution(tool_contracts.resolve_command(text, cwd, contract_table=ctx.table))
 
@@ -932,7 +971,7 @@ def _delegate(toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
 def _interpreter(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context", has_body: bool) -> _Verdict:
     """`has_body`: this segment carries a heredoc or here-string, the only stdin code a later reader can see."""
     if cwd is None:
-        return _unres("contract-unresolved", _CWD_UNCERTAIN)
+        return _unres(_OUTSIDE_LIST, _CWD_UNCERTAIN)
     operands = [t.text for t in toks[1:]]
     is_python = bool(widening_targets.INTERPRETER_RE.match(prog))
     i = 0
@@ -950,7 +989,7 @@ def _interpreter(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context", 
                     if ch == "c":
                         code = toks[1 + i] if pos + 1 < len(letters) else (toks[2 + i] if 2 + i < len(toks) else None)
                         if code is None or code.nonlit:
-                            return _unres("residual-syntax", "the python -c code is missing or holds an expansion: the code that runs is not the text read here")
+                            return _unres(_NONLITERAL, "the python -c code is missing or holds an expansion: the code that runs is not the text read here")
                         return _opaque("python-c")
                     if ch == "m":
                         return _delegate(toks, cwd, ctx)
@@ -970,7 +1009,7 @@ def _interpreter(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context", 
     if i >= len(operands) or operands[i] == "-":
         return _stdin_body(has_body)
     if toks[1 + i].nonlit:
-        return _unres("residual-syntax", "the script operand holds an expansion: the file that runs is not the text read here")
+        return _unres(_NONLITERAL, "the script operand holds an expansion: the file that runs is not the text read here")
     if is_python:
         delegated = _delegate(toks, cwd, ctx)
         if delegated.status == "resolved":
@@ -993,15 +1032,15 @@ def _program(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context", has_
     if entry is None:
         return _unres("unknown-program", f"{prog!r} has no tool_contracts.toml entry")
     if entry.effect == "unresolved":
-        return _unres("contract-unresolved", entry.reason or "")
+        return _unres(_OUTSIDE_LIST, entry.reason or "")
     if entry.effect == "none":
         assert entry.safe_flags is not None
         if "*" not in entry.safe_flags:
             for tok in toks[1:]:
                 if tok.nonlit or tool_contracts.is_non_literal(tok.text):
-                    return _unres("residual-syntax", f"{prog!r} operand {tok.text!r} is non-literal: it may expand into a flag outside the safe set")
+                    return _unres(_NONLITERAL, f"{prog!r} operand {tok.text!r} is non-literal: it may expand into a flag outside the safe set")
                 if tok.text.startswith("-") and tok.text != "-" and tok.text.split("=", 1)[0] not in entry.safe_flags:
-                    return _unres("contract-unresolved", f"{prog!r} flag {tok.text!r} is outside the reviewed safe-flag set")
+                    return _unres(_OUTSIDE_LIST, f"{prog!r} flag {tok.text!r} is outside the reviewed safe-flag set")
         return _ok()
     return _delegate(toks, cwd, ctx)
 
@@ -1013,31 +1052,33 @@ class _Context:
 
 
 def _carries_stdin_body(raw: _RawSegment) -> bool:
-    """A heredoc or a literal here-string feeds stdin from text inside this segment; a pipe or `< file` does not."""
+    """A heredoc or a literal here-string feeds stdin from text inside this segment; a pipe or `< file` does not.
+    Redirections apply left to right, so only the LAST one that touches fd 0 decides what the program reads."""
+    last: _Redirect | None = None
     for red in raw.redirects:
-        if red.fd not in (None, "0") or red.target is None:
-            continue
-        if red.op in _HEREDOC_OPS or (red.op == "<<<" and not red.target.nonlit):
-            return True
-    return False
+        if red.fd == "0" or (red.fd is None and red.op in _STDIN_OPS):
+            last = red
+    if last is None or last.target is None:
+        return False
+    return last.op in _HEREDOC_OPS or (last.op == "<<<" and not last.target.nonlit)
 
 
 def _resolve_one(raw: _RawSegment, cwd: str | None, ctx: _Context) -> _Verdict:
     if raw.nested:
-        verdict = _unres("residual-syntax", f"{raw.nested} hides nested work")
+        verdict = _unres(_NONLITERAL, f"{raw.nested} hides nested work")
     elif not raw.words:
         verdict = _ok()
     else:
         first = raw.words[0]
         prog = first.text
         if prog in tool_contracts.SHELL_RESERVED_WORDS or first.nonlit:
-            verdict = _unres("residual-syntax", f"{prog!r} is a shell keyword or a non-literal program word")
+            verdict = _unres(_NONLITERAL, f"{prog!r} is a shell keyword or a non-literal program word")
         elif tool_contracts.BARE_ASSIGNMENT_RE.match(prog):
-            verdict = _unres("contract-unresolved", f"leading environment assignment {prog!r} is never in the reviewed closed set")
+            verdict = _unres(_OUTSIDE_LIST, f"leading environment assignment {prog!r} is never in the reviewed closed set")
         elif "/" in prog:
-            verdict = _unres("contract-unresolved", f"program token {prog!r} is path-qualified, never in the reviewed closed set")
+            verdict = _unres(_OUTSIDE_LIST, f"program token {prog!r} is path-qualified, never in the reviewed closed set")
         elif prog in tool_contracts.FORBIDDEN_WRAPPER_TOKENS:
-            verdict = _unres("contract-unresolved", f"wrapper token {prog!r} is never in the reviewed closed set")
+            verdict = _unres(_OUTSIDE_LIST, f"wrapper token {prog!r} is never in the reviewed closed set")
         else:
             verdict = _program(prog, raw.words, cwd, ctx, _carries_stdin_body(raw))
     if verdict.status == "unresolved":
@@ -1069,7 +1110,7 @@ def _demote_branch_dependent(raws: list[_RawSegment], verdicts: list[_Verdict]) 
         concurrent_after = (k + 1 < len(raws) and raws[k + 1].op_before in _PIPE_OPS) or _list_is_backgrounded(raws, k)
         others = hazards[:k] + (hazards[k + 1 :] if concurrent_after else [])
         if any(others):
-            verdicts[k] = _unres("contract-unresolved", "the current branch is uncertain here: another segment of the line may switch it")
+            verdicts[k] = _unres(_OUTSIDE_LIST, "the current branch is uncertain here: another segment of the line may switch it")
 
 
 def resolve_segments(
@@ -1080,7 +1121,7 @@ def resolve_segments(
         raws = _Scanner(text).run()
     except _ScanError as exc:
         return tool_contracts.SegmentedResolution([
-            tool_contracts.Segment(text.strip(), None, "unresolved", [], None, "residual-syntax", str(exc))
+            tool_contracts.Segment(text.strip(), None, "unresolved", [], None, _NONLITERAL, str(exc))
         ])
     venue_root = _worktree_root(venue_real)
     ctx = _Context(
