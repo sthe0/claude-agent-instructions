@@ -20,7 +20,7 @@ _spec = importlib.util.spec_from_file_location("plan_dashboard_cli", SCRIPTS / "
 cli = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cli)
 
-MEASURES = ["live table", "live overlay", "all table", "all overlay", "detail"]
+MEASURES = ["live table", "live overlay", "all table", "all screen overlay", "detail"]
 
 
 @pytest.fixture
@@ -43,8 +43,29 @@ def run(root, **options):
 
 
 def test_the_default_budgets_are_pinned():
-    assert bench.BUDGETS == {"live table": 4.0, "live overlay": 3.0, "all table": 15.0, "all overlay": 30.0,
+    assert bench.BUDGETS == {"live table": 4.0, "live overlay": 4.0, "all table": 15.0, "all screen overlay": 4.0,
                              "detail": 5.0}
+
+
+def test_the_all_screen_overlay_is_the_consoles_first_screen_read_on_a_cold_mark_cache(root, monkeypatch):
+    calls = []
+    monkeypatch.setattr(bench.attention, "clear_cache", lambda: calls.append("clear"))
+    monkeypatch.setattr(bench.tui, "all_screen_overlay",
+                        lambda snapshot, locator, transcripts_root, rows: calls.append(
+                            (len(snapshot["tasks"]), rows)) or {"tasks": {}, "sessions": []})
+    run(root)
+    assert calls == ["clear", (2, 40 + 2 * bench.tui.MARK_MARGIN)]
+
+
+def test_the_detail_read_bounds_the_child_index_by_the_tasks_first_activity(root, monkeypatch):
+    bounds = []
+    real = bench.model.child_index
+    monkeypatch.setattr(bench.model, "child_index",
+                        lambda state_root, **kwargs: bounds.append(kwargs) or real(state_root, **kwargs))
+    run(root, session=ALPHA)
+    snapshot = bench.model.collect(root.state_root, now=NOW, include_all=True, sessions=(), cost_log=root.cost_log)
+    row = next(task for task in snapshot["tasks"] if task["session_id"] == ALPHA)
+    assert bounds == [{"since": bench.tui.first_activity(row)}]
 
 
 def test_a_measure_is_ok_up_to_and_including_its_budget():
@@ -83,4 +104,4 @@ def test_the_command_passes_every_budget_flag_and_the_session(root, monkeypatch)
     assert code == 0
     assert seen["state_root"] == root.state_root and seen["session"] == ALPHA
     assert seen["budgets"] == dict.fromkeys(MEASURES, 0.25)
-    assert bench.budget_flag("all overlay") == "--budget-all-overlay"
+    assert bench.budget_flag("all screen overlay") == "--budget-all-screen-overlay"

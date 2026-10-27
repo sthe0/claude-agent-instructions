@@ -10,7 +10,7 @@ import dataclasses
 import datetime as dt
 from pathlib import Path
 
-from lib import config_root
+from lib import config_root, engine_session_binding
 from plan_dashboard import attention, locate, model
 
 SESSION_ID_WIDTH = 8
@@ -23,7 +23,9 @@ STATUS_MARKS = {"PASSED": "done", "ACTIVE": "active", "FAILED": "failed", "SKIPP
 NOT_COUNTED = "not counted"
 TABS = ("tasks", "detail", "chat")
 NO_VALUE = "—"
-WAIT_MARKS = {"choice": "?", "permission": "!", "idle": "…"}
+UNREAD = "unread"
+MARK_MARGIN = 20
+WAIT_MARKS = {"choice": "Q", "permission": "!", "idle": "…", UNREAD: "?"}
 WAIT_STYLES = {"choice": "bold yellow", "permission": "bold red", "idle": "cyan"}
 NEEDS_YOU = ("choice", "permission")
 JUMP_KEY = "g"
@@ -102,13 +104,65 @@ def _difficulty(task) -> str:
     return f"!{count}" if counts["open"] else str(count)
 
 
-def by_recency_live_first(tasks) -> list[dict]:
-    recent = sorted(tasks, key=lambda t: (t["last_activity"] or "", t["session_id"]), reverse=True)
-    return sorted(recent, key=lambda t: t["liveness"] != "active")
+def _epoch(moment) -> float | None:
+    parsed = _parse(moment)
+    return None if parsed is None else parsed.timestamp()
+
+
+def last_activity(task, activity) -> float:
+    """The later of model's last activity and the newest bound transcript's mtime (``activity``, epoch
+    seconds by session id): a session still chatting moves its task up although the engine state is idle."""
+    stamps = [s for s in (_epoch(task["last_activity"]), activity.get(task["session_id"])) if s is not None]
+    return max(stamps, default=float("-inf"))
+
+
+def activity_order(tasks, activity) -> list[dict]:
+    """Newest last activity first, ties by session id."""
+    by_id = sorted(tasks, key=lambda t: t["session_id"], reverse=True)
+    return sorted(by_id, key=lambda t: last_activity(t, activity), reverse=True)
+
+
+def first_activity(task) -> float | None:
+    """When the task's history starts, epoch seconds; None without a history (the span is then unknown)."""
+    totals = (task or {}).get("totals") or {}
+    span, last = totals.get("wall_clock_s"), _epoch((task or {}).get("last_activity"))
+    if span is None or last is None or (totals.get("estimate") or {}).get("wall_clock_s"):
+        return None
+    return last - span
+
+
+def oldest_first_activity(tasks) -> float | None:
+    """The earliest ``first_activity`` of ``tasks``; None when any of them is unknown, so no task is cut off."""
+    starts = [first_activity(task) for task in tasks]
+    return None if not starts or None in starts else min(starts)
+
+
+def is_live(task, pinned) -> bool:
+    """Whether a task belongs to the live set, the rows live mode lists."""
+    return task["liveness"] in ("active", "idle") or task["session_id"] in pinned
+
+
+def live_snapshot(snapshot: dict, sessions) -> dict:
+    pinned = {config_root.sanitize_session_id(s) for s in sessions or ()}
+    return {**snapshot, "tasks": [t for t in snapshot["tasks"] if is_live(t, pinned)]}
+
+
+def rows_in_view(ids, top: int, height: int, margin: int = MARK_MARGIN) -> list[str]:
+    """The rows of the viewport starting at row ``top``, plus ``margin`` rows each side."""
+    return list(ids[max(top - margin, 0):max(top + height + margin, 0)])
+
+
+def shown_payload(live, computed, represented) -> dict:
+    """All mode's marks: each mark computed for a row in view, the live overlay's winning for the live set,
+    and the live overlay's session rows less those a listed task represents (their chat shows under it)."""
+    tasks = {**(computed or {}), **((live or {}).get("tasks") or {})}
+    sessions = [row for row in _session_rows(live) if row["harness_session"] not in represented]
+    return {"tasks": tasks, "sessions": sessions}
 
 
 def wait_mark(waiting) -> str:
-    """The one-character mark of a waiting value; blank for ``none`` and for ``None`` (no transcript)."""
+    """The one-character mark of a waiting value; ``?`` until read, blank for ``none`` and for ``None``
+    (no transcript)."""
     return WAIT_MARKS.get(waiting, "")
 
 
@@ -123,7 +177,7 @@ def row_style(waiting, liveness) -> str:
 
 def _waiting_of(attention_payload, task_id) -> str | None:
     overlay = ((attention_payload or {}).get("tasks") or {}).get(task_id)
-    return overlay.get("waiting") if isinstance(overlay, dict) else None
+    return overlay.get("waiting") if isinstance(overlay, dict) else UNREAD
 
 
 def _session_rows(attention_payload) -> list[dict]:
@@ -137,22 +191,26 @@ def waiting_count(snapshot: dict, attention_payload) -> int:
     return tasks + sum(1 for row in _session_rows(attention_payload) if row.get("waiting") in NEEDS_YOU)
 
 
-def overview_header(snapshot: dict, now: dt.datetime, attention_payload=None) -> str:
+def overview_header(snapshot: dict, now: dt.datetime, attention_payload=None, counted=None) -> str:
     """The line above the table: host, time, how many listed tasks are active, idle, in all, and
-    how many rows wait for the user."""
+    how many rows wait for the user, counted from ``counted`` when given (all mode counts the live
+    overlay, not the marks it shows)."""
     tasks = snapshot["tasks"]
     counts = {band: sum(1 for t in tasks if t["liveness"] == band) for band in ("active", "idle")}
     clock = f"{now:%Y-%m-%d %H:%M:%S %Z}".strip()
+    waiting = waiting_count(snapshot, attention_payload if counted is None else counted)
     return (f"{snapshot['hostname']}  {clock}  {counts['active']} active  {counts['idle']} idle  {len(tasks)} total"
-            f"  waiting: {waiting_count(snapshot, attention_payload)}")
+            f"  waiting: {waiting}")
 
 
-def overview_rows(snapshot: dict, now: dt.datetime, attention_payload=None) -> list[dict]:
-    """One row per task, active first and then the most recent, then one per session the locator knows
-    that no task owns. A row is its ``session_id`` (a session row's harness id), the ``cells`` of
-    ``OVERVIEW_COLUMNS``, its ``kind`` (``task`` or ``session``), ``waiting`` and ``style``."""
+def overview_rows(snapshot: dict, now: dt.datetime, attention_payload=None, activity=None) -> list[dict]:
+    """One row per task, newest last activity first (``last_activity``), then one per session the locator
+    knows that no task owns, newest transcript first. A row is its ``session_id`` (a session row's harness
+    id), the ``cells`` of ``OVERVIEW_COLUMNS``, its ``kind`` (``task`` or ``session``), ``waiting`` and
+    ``style``."""
+    activity = activity or {}
     rows = []
-    for task in by_recency_live_first(snapshot["tasks"]):
+    for task in activity_order(snapshot["tasks"], activity):
         sid = task["session_id"]
         waiting = _waiting_of(attention_payload, sid)
         mark = wait_mark(waiting)
@@ -170,7 +228,9 @@ def overview_rows(snapshot: dict, now: dt.datetime, attention_payload=None) -> l
                      one_line(task["goal"]))
         rows.append({"session_id": sid, "cells": cells, "kind": "task", "waiting": waiting,
                      "style": row_style(waiting, task["liveness"])})
-    for entry in _session_rows(attention_payload):
+    sessions = sorted(_session_rows(attention_payload), key=lambda e: activity.get(e["harness_session"], float("-inf")),
+                      reverse=True)
+    for entry in sessions:
         harness, waiting = entry["harness_session"], entry.get("waiting")
         since = _since(now, entry.get("since"))
         cells = (NO_VALUE, wait_mark(waiting), entry.get("name") or harness, NO_VALUE, NO_VALUE, NO_VALUE, NO_VALUE,
@@ -430,6 +490,13 @@ def reconcile(view: View, session_ids, harness_ids=()) -> View:
     return dataclasses.replace(view, session_ids=ids, cursor=cursor, harness_ids=frozenset(harness_ids))
 
 
+def unanchored(view: View) -> View:
+    """``view`` with its cursor on no task, so the next ``reconcile`` puts it on the first row: until the user
+    moves the cursor, the re-sort keeps it on the top row rather than on whichever task the provisional order
+    put there."""
+    return dataclasses.replace(view, session_ids=(), cursor=0)
+
+
 def due(now: dt.datetime, last_collect: dt.datetime | None, interval: float) -> bool:
     return last_collect is None or (now - last_collect).total_seconds() >= interval
 
@@ -449,6 +516,65 @@ def read_attention(snapshot: dict, locator, transcripts_root) -> dict:
     """The attention overlay payload for the listed tasks: what the Tasks tab marks and counts."""
     return attention.event_payload(*attention.collect([t["session_id"] for t in snapshot["tasks"]], locator,
                                                       transcripts_root))
+
+
+@dataclasses.dataclass(frozen=True)
+class Order:
+    """One index read of a reload: each task's newest bound transcript mtime (``activity``), the binding and
+    transcript indexes the marks reuse, and every session id a listed task represents."""
+    activity: dict
+    index: dict
+    transcripts: dict
+    represented: frozenset
+
+
+def _mtime(path) -> float | None:
+    try:
+        return path.stat().st_mtime if path is not None else None
+    except OSError:
+        return None
+
+
+def read_order(snapshot: dict, transcripts_root) -> Order:
+    """The ordering key's inputs for ``snapshot``'s tasks: one binding scan, one transcript listing and a
+    stat per bound transcript; no transcript content and no locator call."""
+    index, transcripts = engine_session_binding.harness_index(), attention.transcript_index(transcripts_root)
+    activity, represented = {}, set()
+    for task in snapshot["tasks"]:
+        sid = task["session_id"]
+        _, path, bound = attention.bind_session(sid, None, transcripts_root, index, transcripts)
+        represented.update([sid, *bound])
+        if (mtime := _mtime(path)) is not None:
+            activity[sid] = mtime
+    return Order(activity, index, transcripts, frozenset(represented))
+
+
+def session_activity(attention_payload, order: Order) -> dict:
+    """Each session row's transcript mtime, the key the session rows are sorted by."""
+    activity = {}
+    for row in _session_rows(attention_payload):
+        harness = row["harness_session"]
+        mtime = _mtime(attention.find_transcript(harness, None, None, order.transcripts))
+        if mtime is not None:
+            activity[harness] = mtime
+    return activity
+
+
+def read_marks(ids, order: Order, locator, transcripts_root) -> dict:
+    """The overlay of each task in ``ids``, through attention's mark cache."""
+    ids = list(ids)
+    stamp = locate.inputs_stamp(locator)
+    targets = [attention.bind_session(sid, locator, transcripts_root, order.index, order.transcripts)[:2]
+               for sid in ids]
+    return dict(zip(ids, attention.marks(targets, locator, stamp)))
+
+
+def all_screen_overlay(snapshot: dict, locator, transcripts_root, rows: int) -> dict:
+    """What all mode reads for its first screen after collect: the index read, the re-sort and the marks of
+    the first ``rows`` rows."""
+    order = read_order(snapshot, transcripts_root)
+    ids = [t["session_id"] for t in activity_order(snapshot["tasks"], order.activity)[:rows]]
+    return read_marks(ids, order, locator, transcripts_root)
 
 
 def read_chat(target, locator, transcripts_root) -> dict | None:

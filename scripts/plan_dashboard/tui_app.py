@@ -62,6 +62,7 @@ def refresh_if_due(app: "DashboardApp") -> None:
     if app.view.tab == "chat" and tui.due(app.clock(), app.last_chat_read, app.interval) \
             and not read_in_flight(app, "chat"):
         start_chat_read(app)
+    start_marks_read(app)
 
 
 def route_key(app: "DashboardApp", action: str, parameters) -> bool:
@@ -87,9 +88,24 @@ def attempt(read) -> tuple[dict | None, Exception | None]:
 
 
 def read_overlay(app: "DashboardApp", snapshot: dict) -> tuple[dict | None, Exception | None]:
-    """The attention overlay, None when its read fails, with the error: the Tasks table does not depend
-    on it, so a failure here must not blank it."""
-    return attempt(lambda: tui.read_attention(snapshot, app.locator, app.transcripts_root))
+    """The attention overlay of the live set, None when its read fails, with the error: the Tasks table
+    does not depend on it, so a failure here must not blank it."""
+    return attempt(lambda: tui.read_attention(tui.live_snapshot(snapshot, app.sessions), app.locator,
+                                              app.transcripts_root))
+
+
+def counted_marks(app: "DashboardApp") -> dict | None:
+    """What the header's waiting counter counts: the live overlay, in all mode too."""
+    return app.overlay
+
+
+def shown_marks(app: "DashboardApp") -> dict | None:
+    """The marks the rows show: the live overlay in live mode; in all mode the marks read for rows in view
+    with the live overlay winning for the live set."""
+    if not app.view.include_all:
+        return app.overlay
+    represented = app.order.represented if app.order is not None else frozenset()
+    return tui.shown_payload(app.overlay, app.marks, represented)
 
 
 def read_chat_of(app: "DashboardApp", target) -> tuple[dict | None, Exception | None]:
@@ -199,7 +215,14 @@ def start_overlay_read(app: "DashboardApp", snapshot: dict, issued_all: bool) ->
 
 
 async def read_overlay_for(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
-    overlay, error = await in_daemon_thread(lambda: read_overlay(app, snapshot))
+    order = app.order
+
+    def read():
+        overlay, error = read_overlay(app, snapshot)
+        return overlay, error, tui.session_activity(overlay, order) if order is not None else {}
+
+    overlay, error, sessions = await in_daemon_thread(read)
+    app.activity.update(sessions)
     overlay_ready(app, overlay, error, issued_all)
 
 
@@ -209,14 +232,107 @@ def overlay_ready(app: "DashboardApp", overlay: dict | None, error: Exception | 
     if app.snapshot is not None:
         show_table(app, app.snapshot, app.read_at, issued_all)
     if error is not None and title_is_current(app, issued_all):
-        app.sub_title = f"{app.sub_title.split('; read failed')[0]}; read failed: {error}"
+        show_read_error(app, error)
+
+
+def show_read_error(app: "DashboardApp", error: Exception) -> None:
+    app.sub_title = f"{app.sub_title.split('; read failed')[0]}; read failed: {error}"
+
+
+def start_order_read(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
+    """After the table is shown: the index read and stat behind the ordering key, then the re-sort, then the
+    marks. A newer table's read replaces an older one's, whose order would sort rows that are gone."""
+    app.run_worker(read_order_for(app, snapshot, issued_all), group="order", exclusive=True)
+    app.run_worker(in_daemon_thread(lambda: warm_child_index(app, snapshot)), group="children", exclusive=True)
+
+
+def warm_child_index(app: "DashboardApp", snapshot: dict) -> None:
+    """Cache the child index back to the oldest listed task's first activity, so a Detail read after the
+    reload stats the state files instead of reading them."""
+    model.child_index(app.state_root, since=tui.oldest_first_activity(snapshot["tasks"]))
+
+
+async def read_order_for(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
+    order, error = await in_daemon_thread(lambda: attempt(lambda: tui.read_order(snapshot, app.transcripts_root)))
+    order_ready(app, snapshot, order, error, issued_all)
+
+
+def order_ready(app: "DashboardApp", snapshot: dict, order, error: Exception | None, issued_all: bool) -> None:
+    if snapshot is not app.snapshot:
+        return
+    if order is not None:
+        app.order, app.activity, app.marked = order, dict(order.activity), set()
+        if not app.cursor_chosen:
+            app.view = tui.unanchored(app.view)
+        show_table(app, snapshot, app.read_at, issued_all)
+    elif title_is_current(app, issued_all):
+        show_read_error(app, error)
+    start_overlay_read(app, snapshot, issued_all)
+    start_marks_read(app)
+
+
+def visible_ids(app: "DashboardApp") -> list[str]:
+    """The rows of the table's viewport plus ``tui.MARK_MARGIN`` each side."""
+    table = app.query_one(DataTable)
+    return tui.rows_in_view(app.view.session_ids, round(table.scroll_offset.y), table.size.height)
+
+
+def marks_due(app: "DashboardApp") -> list[str]:
+    """The task rows in view whose marks this reload has not read yet; only all mode reads marks by row,
+    and a live-set row has its mark from the live overlay."""
+    if not app.view.include_all or app.order is None:
+        return []
+    live = (app.overlay or {}).get("tasks") or {}
+    return [sid for sid in visible_ids(app)
+            if sid not in app.marked and sid not in app.view.harness_ids and sid not in live]
+
+
+def start_marks_read(app: "DashboardApp") -> None:
+    """Read the marks of the rows scrolling or a reload brought into view, on their own exclusive worker;
+    rows read since the last reload are not read again until the next one."""
+    if read_in_flight(app, "marks"):
+        return
+    ids = marks_due(app)
+    if not ids:
+        return
+    app.run_worker(read_marks_for(app, ids, app.order), group="marks", exclusive=True)
+
+
+def read_marks_of(app: "DashboardApp", ids: list[str], order) -> dict:
+    return tui.read_marks(ids, order, app.locator, app.transcripts_root)
+
+
+async def read_marks_for(app: "DashboardApp", ids: list[str], order) -> None:
+    computed, error = await in_daemon_thread(lambda: attempt(lambda: read_marks_of(app, ids, order)))
+    if order is not app.order:
+        return
+    app.marked.update(ids)
+    if computed is not None:
+        app.marks.update(computed)
+        show_marks(app, ids)
+    elif title_is_current(app, app.view.include_all):
+        show_read_error(app, error)
+
+
+def show_marks(app: "DashboardApp", ids) -> None:
+    """Restyle the rows of ``ids`` with their new marks in place, without rebuilding the table."""
+    table, wanted = app.query_one(DataTable), set(ids)
+    present = {key.value for key in table.rows}
+    subset = {**app.snapshot, "tasks": [t for t in app.snapshot["tasks"]
+                                        if t["session_id"] in wanted and t["session_id"] in present]}
+    for row in tui.overview_rows(subset, app.read_at, shown_marks(app)):
+        if row["kind"] == "task":
+            for column, cell in zip(tui.OVERVIEW_COLUMNS, row_cells(row)):
+                table.update_cell(row["session_id"], column, cell)
 
 
 def show_table(app: "DashboardApp", snapshot: dict, now: dt.datetime, issued_all: bool) -> None:
-    """Rows, header and sub-title of ``snapshot`` with the overlay as last read: the table does not wait for
-    the waiting marks, whose read grows with the number of tasks."""
-    rows = tui.overview_rows(snapshot, now, app.overlay)
-    app.query_one("#overview-head", Static).update(Text(tui.overview_header(snapshot, now, app.overlay)))
+    """Rows, header and sub-title of ``snapshot`` with the marks as last read, sorted by the activity as
+    last read: the table waits for neither."""
+    marks = shown_marks(app)
+    rows = tui.overview_rows(snapshot, now, marks, app.activity)
+    app.query_one("#overview-head", Static).update(Text(tui.overview_header(snapshot, now, marks,
+                                                                            counted_marks(app))))
     ids = tuple(row["session_id"] for row in rows)
     app.view = tui.reconcile(app.view, ids, (row["session_id"] for row in rows if row["kind"] == "session"))
     table = app.query_one(DataTable)
@@ -257,19 +373,14 @@ async def read_detail_for(app: "DashboardApp", task: str, now: dt.datetime) -> N
 
 
 def read_detail(app: "DashboardApp", task: str) -> dict | None:
+    """The Detail tree's data; its children come from the child index bounded by the task's first activity,
+    since a linked child's state file is created after its parent starts."""
+    row = next((t for t in (app.snapshot or {}).get("tasks", ()) if t["session_id"] == task), None)
     try:
         return model.detail(app.state_root, task, cost_log=app.cost_log, transcripts_root=app.transcripts_root,
-                            children=child_index_for(app))
+                            children=model.child_index(app.state_root, since=tui.first_activity(row)))
     except model.UnknownSession:
         return None
-
-
-def child_index_for(app: "DashboardApp") -> dict:
-    """The parent-to-children index, built at most once per reload and shared by the Detail reads after it."""
-    with app.child_lock:
-        if app.child_index is None or app.child_index[0] != app.reloads:
-            app.child_index = (app.reloads, model.child_index(app.state_root))
-        return app.child_index[1]
 
 
 def detail_ready(app: "DashboardApp", task: str, detail: dict | None, error: Exception | None,
@@ -290,7 +401,7 @@ def detail_ready(app: "DashboardApp", task: str, detail: dict | None, error: Exc
 def jump_from(app: "DashboardApp") -> None:
     """Switch to the window of the session ``g`` points at; the locator's argv runs in a worker thread
     (it is bounded to 5 s) and its outcome lands in the status line."""
-    subject, overlay = tui.jump_subject(app.view), app.overlay
+    subject, overlay = tui.jump_subject(app.view), shown_marks(app)
     app.run_worker(jump_task(app, subject, overlay), group="jump")
 
 
@@ -395,9 +506,11 @@ class DashboardApp(App):
         self.read_at: dt.datetime | None = None
         self.last_detail_read: dt.datetime | None = None
         self.tree_read_for: str | None = None
-        self.reloads = 0
-        self.child_index: tuple[int, dict] | None = None
-        self.child_lock = threading.Lock()
+        self.order: tui.Order | None = None
+        self.activity: dict = {}
+        self.marks: dict = {}
+        self.marked: set = set()
+        self.cursor_chosen = False
 
     def check_action(self, action: str, parameters) -> bool:
         if action in KEY_ACTION_OWNERS:
@@ -433,7 +546,6 @@ class DashboardApp(App):
             self._again = self._again or force
             return
         self._loading = True
-        self.reloads += 1
         self.last_collect = self.clock()
         self.run_worker(self._load(), group="collect")
 
@@ -449,7 +561,7 @@ class DashboardApp(App):
         self.snapshot, self.read_at = snapshot, now
         show_table(self, snapshot, now, include_all)
         self._finish_load()
-        start_overlay_read(self, snapshot, include_all)
+        start_order_read(self, snapshot, include_all)
 
     def _finish_load(self) -> None:
         self._loading = False
@@ -487,6 +599,7 @@ class DashboardApp(App):
             announce_loading(self, self.view.include_all)
         if self.view.cursor != previous.cursor and self.view.session_ids:
             self.query_one(DataTable).move_cursor(row=self.view.cursor)
+            self.cursor_chosen = True
         if self.view.refresh:
             self.reload(force=True)
         if self.view.tab == "detail" and (self.view.refresh or (self.view.selected, self.view.tab) != (
@@ -496,11 +609,15 @@ class DashboardApp(App):
             jump_from(self)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        if event.cursor_row != self.view.cursor and event.cursor_row < len(self.view.session_ids):
+        stale = event.cursor_row != self.query_one(DataTable).cursor_row
+        if not stale and event.cursor_row != self.view.cursor and event.cursor_row < len(self.view.session_ids):
             self.view = dataclasses.replace(self.view, cursor=event.cursor_row)
+            self.cursor_chosen = True
+        start_marks_read(self)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self.view = dataclasses.replace(self.view, cursor=event.cursor_row)
+        self.cursor_chosen = True
         self.dispatch_key("enter")
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:

@@ -82,7 +82,7 @@ def tree_text(nodes):
 def test_overview_row_cells(tmp_path):
     rows = tui.overview_rows(snapshot(console_root(tmp_path)), NOW)
     assert row_for(rows, ALPHA)["cells"] == (
-        f"task-{ALPHA}", "", "alpha-00", "active", "EXECUTING", "stage 1/3 [###-----]", "0", "0", "10m00s ago", "1h50m",
+        f"task-{ALPHA}", "?", "alpha-00", "active", "EXECUTING", "stage 1/3 [###-----]", "0", "0", "10m00s ago", "1h50m",
         "≥$1.50", "Build the thing [with brackets]")
     beta = cells_of(rows, BETA)
     assert (beta["session"], beta["task"], beta["node"], beta["stage"], beta["age"]) == (
@@ -164,13 +164,41 @@ def test_long_task_ids_are_cut():
     assert len(task) == tui.TASK_ID_WIDTH and task.endswith("…")
 
 
-def test_active_tasks_come_first_then_the_most_recent():
+def test_the_most_recent_task_comes_first_whatever_its_liveness():
     snap = listing(
         summary("idle-new", liveness="idle", last_activity="2026-10-22T11:59:00+00:00"),
         summary("active-old", last_activity="2026-10-22T11:30:00+00:00"),
         summary("active-new", last_activity="2026-10-22T11:50:00+00:00"),
         summary("idle-old", liveness="idle", last_activity="2026-10-22T10:00:00+00:00"))
-    assert [r["session_id"] for r in tui.overview_rows(snap, NOW)] == ["active-new", "active-old", "idle-new", "idle-old"]
+    assert [r["session_id"] for r in tui.overview_rows(snap, NOW)] == ["idle-new", "active-new", "active-old", "idle-old"]
+
+
+def test_a_fresh_transcript_moves_a_task_with_an_old_last_activity_above_a_newer_one():
+    snap = listing(summary("newer", last_activity="2026-10-22T11:50:00+00:00"),
+                   summary("chatting", liveness="idle", last_activity="2026-10-22T09:00:00+00:00"))
+    fresh = dt.datetime.fromisoformat("2026-10-22T11:55:00+00:00").timestamp()
+    assert [r["session_id"] for r in tui.overview_rows(snap, NOW)] == ["newer", "chatting"]
+    assert [r["session_id"] for r in tui.overview_rows(snap, NOW, activity={"chatting": fresh})] == ["chatting", "newer"]
+
+
+def test_the_ordering_key_reads_the_bound_transcripts_mtime(tmp_path):
+    root = attention_root(tmp_path)
+    snap = snapshot(root, include_all=True)
+    path = root.transcripts_root / PROJECT / f"{STALE}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(line("user", 1, "still here")) + "\n", encoding="utf-8")
+    newest = max(p.stat().st_mtime for p in root.transcripts_root.glob("*/*.jsonl")) + 60
+    os.utime(path, (newest, newest))
+    order = tui.read_order(snap, root.transcripts_root)
+    assert order.activity[STALE] == newest
+    assert [r["session_id"] for r in tui.overview_rows(snap, NOW, activity=order.activity)][0] == STALE
+
+
+def test_session_rows_are_sorted_by_their_transcripts_mtime():
+    payload = {"tasks": {}, "sessions": [
+        {"harness_session": name, "cwd": None, "name": name, "waiting": "none", "since": None} for name in "abc"]}
+    rows = tui.overview_rows(listing(), NOW, payload, activity={"a": 1.0, "b": 3.0, "c": 2.0})
+    assert [r["session_id"] for r in rows] == ["b", "c", "a"]
 
 
 def test_overview_hides_stale_unless_asked(tmp_path):
@@ -529,7 +557,7 @@ def overlay_of(root, snap=None, where=None):
 
 
 @pytest.mark.parametrize("waiting, mark", [
-    ("choice", "?"), ("permission", "!"), ("idle", "…"), ("none", ""), (None, ""),
+    ("choice", "Q"), ("permission", "!"), ("idle", "…"), ("none", ""), (None, ""), (tui.UNREAD, "?"),
 ])
 def test_wait_mark(waiting, mark):
     assert tui.wait_mark(waiting) == mark
@@ -538,7 +566,7 @@ def test_wait_mark(waiting, mark):
 def test_a_task_row_carries_the_mark_of_its_waiting_value(tmp_path):
     root = attention_root(tmp_path)
     rows = tui.overview_rows(snapshot(root), NOW, overlay_of(root))
-    assert (cells_of(rows, ALPHA)["wait"], cells_of(rows, BETA)["wait"]) == ("?", "…")
+    assert (cells_of(rows, ALPHA)["wait"], cells_of(rows, BETA)["wait"]) == ("Q", "…")
     assert row_for(rows, ALPHA)["waiting"] == "choice"
     assert cells_of(rows, "broken")["wait"] == ""
 
@@ -552,7 +580,7 @@ def test_session_rows_follow_the_tasks_and_show_a_dash_in_the_task_columns(tmp_p
     assert [(r["kind"], r["session_id"]) for r in sessions] == [
         ("session", ASK_SESSION), ("session", FREE_SESSION), ("session", PERMISSION_SESSION)]
     asker = dict(zip(tui.OVERVIEW_COLUMNS, sessions[0]["cells"]))
-    assert asker["wait"] == "?" and asker["session"] == "Asker" and asker["goal"] == "/work/ask"
+    assert asker["wait"] == "Q" and asker["session"] == "Asker" and asker["goal"] == "/work/ask"
     for column in ("task", "live", "node", "stage", "diff", "replans", "wall", "cost"):
         assert asker[column] == "—", column
     nameless = dict(zip(tui.OVERVIEW_COLUMNS, sessions[2]["cells"]))
@@ -595,9 +623,18 @@ def test_a_row_carries_its_style(tmp_path):
     assert "bold" not in row_for(rows, BETA)["style"] and "bold" not in row_for(rows, FREE_SESSION)["style"]
 
 
-def test_without_an_overlay_the_rows_are_unmarked_and_have_no_session_rows(tmp_path):
+def test_without_an_overlay_the_rows_read_unread_and_have_no_session_rows(tmp_path):
     rows = tui.overview_rows(snapshot(console_root(tmp_path)), NOW)
-    assert {r["kind"] for r in rows} == {"task"} and {r["cells"][1] for r in rows} == {""}
+    assert {r["kind"] for r in rows} == {"task"} and {r["cells"][1] for r in rows} == {"?"}
+
+
+def test_a_task_the_overlay_has_not_read_is_marked_unread_and_not_counted(tmp_path):
+    snap = snapshot(console_root(tmp_path))
+    payload = {"tasks": {ALPHA: {"waiting": "choice", "harness_session": ALPHA, "since": None}}, "sessions": []}
+    marks = {r["session_id"]: r["cells"][1] for r in tui.overview_rows(snap, NOW, payload)}
+    assert marks[ALPHA] == "Q" and marks[BETA] == "?"
+    assert tui.waiting_count(snap, payload) == 1
+    assert tui.WAIT_MARKS[tui.UNREAD] not in {tui.WAIT_MARKS[w] for w in ("choice", "permission", "idle")}
 
 
 def test_chat_lines_show_a_tool_name_and_an_asked_question_with_its_options(tmp_path):
@@ -791,8 +828,8 @@ def test_once_prints_each_mark_the_session_rows_and_the_count(tmp_path):
     assert lines[0].endswith("  waiting: 3")
     by_name = {name: next(l for l in lines[2:] if name in l) for name in ("alpha-00", "beta-111", "Asker", "Free")}
     at_wait = lines[1].index("wait")
-    assert by_name["alpha-00"][at_wait] == "?" and by_name["beta-111"][at_wait] == "…"
-    assert by_name["Asker"][at_wait] == "?" and by_name["Free"][at_wait] == "…"
+    assert by_name["alpha-00"][at_wait] == "Q" and by_name["beta-111"][at_wait] == "…"
+    assert by_name["Asker"][at_wait] == "Q" and by_name["Free"][at_wait] == "…"
     assert any(l[at_wait] == "!" and PERMISSION_SESSION in l for l in lines[2:])
     assert "—" in by_name["Asker"]
 

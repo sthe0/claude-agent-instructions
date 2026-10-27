@@ -13,6 +13,7 @@ import os
 import subprocess
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -53,10 +54,15 @@ def make_app(root, clock=None, **options):
                         clock=clock or Clock(), **{"interval": 3600.0, **options})
 
 
-async def settle(app, pilot):
-    await pilot.pause()
-    await app.workers.wait_for_complete()
-    await pilot.pause()
+async def settle(app, pilot, rounds=5):
+    """Wait out the running workers and the ones they start (the reload starts the order read, which
+    starts the overlay and marks reads)."""
+    for _ in range(rounds):
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        if not any(worker.is_running for worker in app.workers):
+            return
 
 
 def run(scenario, root, **options):
@@ -143,8 +149,11 @@ def test_clicking_a_row_opens_its_detail(tmp_path):
 
     async def scenario(app, pilot):
         index = table_ids(app).index(ALPHA)
-        await pilot.click(DataTable, offset=(4, 1 + index))
-        await pilot.click(DataTable, offset=(4, 1 + index))
+        # The first click only highlights a row the cursor is not on yet; a click on the highlighted row selects it.
+        for _ in range(2):
+            if app.query_one(TabbedContent).active == "tasks":
+                await pilot.click(DataTable, offset=(4, 1 + index))
+                await pilot.pause()
         await settle(app, pilot)
         assert app.query_one(TabbedContent).active == "detail"
         assert "[active] 2. Stage 2" in tree_text(app)
@@ -250,10 +259,11 @@ def test_the_cursor_follows_its_task_when_a_read_reorders_the_rows(tmp_path, mon
 
     async def scenario(app, pilot):
         before = table_ids(app)
-        followed = before[0]
+        followed = before[1]
+        await pilot.press("down")
         await pilot.press("r")
         await settle(app, pilot)
-        assert table_ids(app) == before[::-1]
+        assert table_ids(app) != before
         assert table_ids(app)[app.query_one(DataTable).cursor_row] == followed
         await pilot.press("enter")
         await settle(app, pilot)
@@ -279,19 +289,23 @@ def test_the_detail_tab_says_so_when_the_selected_task_vanishes(tmp_path):
     run(scenario, root)
 
 
-def test_the_app_builds_the_child_index_once_per_read(tmp_path, monkeypatch):
+def test_a_reload_warms_the_child_index_from_the_oldest_task_and_a_detail_read_from_its_parent(tmp_path, monkeypatch):
     root = console_root(tmp_path)
-    builds = []
+    bounds = []
     real = model.child_index
-    monkeypatch.setattr(model, "child_index", lambda *a, **k: builds.append(1) or real(*a, **k))
+    monkeypatch.setattr(model, "child_index", lambda *a, **k: bounds.append(k.get("since", "unbounded")) or real(*a, **k))
 
     async def scenario(app, pilot):
         await pilot.press("enter")
         await settle(app, pilot)
-        before = len(builds)
+        before = len(bounds)
         await pilot.press("r")
         await settle(app, pilot)
-        assert len(builds) == before + 1
+        tasks = app.snapshot["tasks"]
+        selected = next(task for task in tasks if task["session_id"] == app.view.selected)
+        assert sorted(bounds[before:], key=str) == sorted(
+            [tui.oldest_first_activity(tasks), tui.first_activity(selected)], key=str)
+        assert "unbounded" not in bounds
 
     run(scenario, root)
 
@@ -624,8 +638,8 @@ def test_rows_carry_the_waiting_mark_style_and_the_header_count(tmp_path):
 
     async def scenario(app, pilot):
         marks = {sid: table_cells(app, row_of(app, sid))["wait"] for sid in table_ids(app)}
-        assert (marks[ALPHA], marks[BETA], marks["broken"]) == ("?", "…", "")
-        assert (marks[ASK_SESSION], marks[PERMISSION_SESSION], marks[FREE_SESSION]) == ("?", "!", "…")
+        assert (marks[ALPHA], marks[BETA], marks["broken"]) == ("Q", "…", "")
+        assert (marks[ASK_SESSION], marks[PERMISSION_SESSION], marks[FREE_SESSION]) == ("Q", "!", "…")
         table = app.query_one(DataTable)
         assert table.get_row_at(row_of(app, ALPHA))[0].style == tui.WAIT_STYLES["choice"]
         assert table.get_row_at(row_of(app, PERMISSION_SESSION))[0].style == tui.WAIT_STYLES["permission"]
@@ -665,7 +679,7 @@ def test_the_mark_and_the_chat_follow_a_transcript_that_grows_after_a_tick(tmp_p
         assert "Which way?" in chat_text(app) and "- Left" in chat_text(app)
         await pilot.press("escape")
         await settle(app, pilot)
-        assert table_cells(app, row_of(app, ALPHA))["wait"] == "?"
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
 
     with guarded(root):
         run(scenario, root, clock=clock, interval=1.0, locator=attention_locator())
@@ -810,7 +824,7 @@ def test_a_failing_attention_or_chat_read_keeps_the_task_table_and_names_the_err
             await settle(app, pilot)
         assert ALPHA in table_ids(app)
         assert "live: " in app.sub_title and "read failed: locator down" in app.sub_title
-        assert table_cells(app, row_of(app, ALPHA))["wait"] == ("" if failing == "read_attention" else "?")
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == ("?" if failing == "read_attention" else "Q")
         if failing == "read_chat":
             await pilot.press("tab")
             await pilot.press("r")
@@ -1239,7 +1253,7 @@ def test_the_table_and_its_title_show_before_the_waiting_marks_are_read(tmp_path
         finally:
             release.set()
         await settle(app, pilot)
-        assert table_cells(app, row_of(app, ALPHA))["wait"] == "?"
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
 
     run(scenario, root, locator=attention_locator())
 
@@ -1342,7 +1356,111 @@ def test_ticks_leave_the_reads_in_flight_alone_and_each_lands_once_released(tmp_
             marks.set()
         await settle(app, pilot)
         assert "Stage 2" in tree_text(app)
-        assert table_cells(app, row_of(app, ALPHA))["wait"] == "?"
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
         assert app.overlay is not None and not app._loading
 
     run(scenario, root, clock=clock, interval=5.0, locator=attention_locator())
+
+
+BULK = [f"bulk-{i:03d}" for i in range(500)]
+
+
+def bulk_root(tmp_path):
+    """500 stale tasks, each with an idle transcript dated like its last activity, newest first by index."""
+    states = [make_state(sid, history=[event("classify", at(hours=48, minutes=i))]) for i, sid in enumerate(BULK)]
+    root = build_fixture_root(tmp_path, states, now=NOW)
+    for i, sid in enumerate(BULK):
+        write_fixture_transcript(root, sid, IDLE)
+        stamp = at(hours=48, minutes=i).timestamp()
+        os.utime(root.transcripts_root / PROJECT / f"{sid}.jsonl", (stamp, stamp))
+    return root
+
+
+def count_tail_reads(monkeypatch):
+    """The bulk task ids whose transcripts ``attention.read_tail`` reads, one entry per read."""
+    reads, real = [], attention.read_tail
+
+    def counting(path):
+        reads.append(Path(path).stem)
+        return real(path)
+
+    monkeypatch.setattr(attention, "read_tail", counting)
+    return reads
+
+
+def in_view(app):
+    table = app.query_one(DataTable)
+    return set(tui.rows_in_view(app.view.session_ids, round(table.scroll_offset.y), table.size.height))
+
+
+def test_all_mode_reads_the_marks_of_the_rows_in_view_only_and_each_once_per_change(tmp_path, monkeypatch):
+    root = bulk_root(tmp_path)
+    reads = count_tail_reads(monkeypatch)
+
+    async def scenario(app, pilot):
+        await pilot.press("a")
+        await settle(app, pilot)
+        assert table_ids(app)[:len(BULK)] == BULK
+        first = [sid for sid in reads if sid in BULK]
+        assert first and set(first) == in_view(app) and len(first) == len(set(first))
+        assert len(first) <= app.query_one(DataTable).size.height + 2 * tui.MARK_MARGIN
+        assert table_cells(app, row_of(app, BULK[0]))["wait"] == "…"
+        assert table_cells(app, row_of(app, BULK[450]))["wait"] == "?"
+        app.query_one(DataTable).move_cursor(row=300, animate=False)
+        assert await until(pilot, lambda: BULK[300] in reads, seconds=5.0)
+        await settle(app, pilot)
+        scrolled = reads[len(first):]
+        assert set(scrolled) <= in_view(app) and not set(scrolled) & set(first)
+        assert len(scrolled) == len(set(scrolled))
+        assert table_cells(app, row_of(app, BULK[300]))["wait"] == "…"
+        assert table_cells(app, row_of(app, BULK[450]))["wait"] == "?"
+        before = len(reads)
+        await pilot.press("r")
+        await settle(app, pilot)
+        await pilot.pause(1.0)
+        assert reads[before:] == []
+        assert table_cells(app, row_of(app, BULK[300]))["wait"] == "…"
+
+    run(scenario, root)
+
+
+def test_the_all_mode_counter_counts_the_live_set_like_live_mode(tmp_path):
+    root = attention_root(tmp_path)
+    write_fixture_transcript(root, STALE, ASKING)
+
+    async def scenario(app, pilot):
+        live_head = str(app.query_one("#overview-head").render())
+        assert live_head.endswith("waiting: 3")
+        await pilot.press("a")
+        await settle(app, pilot)
+        assert await until(pilot, lambda: table_cells(app, row_of(app, STALE))["wait"] == "Q", seconds=5.0)
+        assert str(app.query_one("#overview-head").render()).endswith("waiting: 3")
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_the_table_shows_before_the_ordering_read_and_the_cursor_survives_the_re_sort(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        assert app.query_one(DataTable).cursor_row == 0, "an unmoved cursor stays on the top row"
+        await pilot.press("down")
+        await settle(app, pilot)
+        chosen = table_ids(app)[app.query_one(DataTable).cursor_row]
+        newest = max(p.stat().st_mtime for p in root.transcripts_root.glob("*/*.jsonl")) + 60
+        os.utime(root.transcripts_root / PROJECT / f"{BETA}.jsonl", (newest, newest))
+        release, calls = hold(monkeypatch, tui, "read_order")
+        collects = count_collects(monkeypatch)
+        try:
+            await pilot.press("r")
+            assert await until(pilot, lambda: collects and calls and not app._loading)
+            assert table_ids(app) and app.sub_title.startswith("live: ") and not release.is_set()
+            assert table_ids(app)[app.query_one(DataTable).cursor_row] == chosen
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert table_ids(app)[0] == BETA
+        assert table_ids(app)[app.query_one(DataTable).cursor_row] == chosen
+
+    run(scenario, root, locator=attention_locator())

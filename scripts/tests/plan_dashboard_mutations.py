@@ -862,6 +862,73 @@ TUI_MUTATIONS.update({
     "tui-app-tick-cancels-read": (TUI_APP, "read_in_flight", _always(False)),
 })
 
+def _order_without_transcripts(original):
+    def mutated(tasks, activity):
+        return original(tasks, {})
+    return mutated
+
+
+def _child_cache_dropped(original):
+    def mutated(state_root, **kwargs):
+        model = importlib.import_module(MODEL)
+        with model.CACHE_LOCK:
+            model._CHILDREN.clear()
+        return original(state_root, **kwargs)
+    return mutated
+
+
+def _child_index_unbounded(original):
+    def mutated(state_root, **kwargs):
+        kwargs.pop("since", None)
+        return original(state_root, **kwargs)
+    return mutated
+
+
+def _every_row_in_view(original):
+    def mutated(app):
+        return list(app.view.session_ids)
+    return mutated
+
+
+def _marks_uncached(original):
+    def mutated(app, ids, order):
+        importlib.import_module(ATTENTION).clear_cache()
+        return original(app, ids, order)
+    return mutated
+
+
+def _counter_from_the_read_marks(original):
+    def mutated(app):
+        return {"tasks": app.marks, "sessions": []}
+    return mutated
+
+
+def _unread_rows_blank(original):
+    def mutated(app):
+        shown = original(app)
+        if shown is None or app.snapshot is None:
+            return shown
+        blank = {t["session_id"]: {"waiting": None} for t in app.snapshot["tasks"]}
+        return {**shown, "tasks": {**blank, **shown["tasks"]}}
+    return mutated
+
+
+MUTATIONS.update({
+    "model-child-index-rereads": (MODEL, "child_index", _child_cache_dropped),
+    "model-child-index-no-bound": (MODEL, "child_index", _child_index_unbounded),
+})
+
+TUI_MUTATIONS.update({
+    "order-ignores-transcript": (TUI, "activity_order", _order_without_transcripts),
+    "tui-app-all-overlay-eager": (TUI_APP, "visible_ids", _every_row_in_view),
+    "tui-app-all-overlay-no-cache": (TUI_APP, "read_marks_of", _marks_uncached),
+    "tui-app-all-counter-partial": (TUI_APP, "counted_marks", _counter_from_the_read_marks),
+    "tui-app-all-overlay-no-rescan": (TUI_APP, "marks_due", _always([])),
+    "tui-app-mark-unread-blank": (TUI_APP, "shown_marks", _unread_rows_blank),
+})
+
+ATTENTION_MUTATIONS["attention-cache-ignores-locator"] = ("plan_dashboard.locate", "inputs_stamp", _always((1,)))
+
 WEB_PAGE_MUTATIONS.update({
     "web-waiting-unmarked": (WEB, "page_bytes", _page_edit(
         'const wait = WAIT_MARKS[waiting] ? " wait-" + cssName(waiting) : "";', 'const wait = "";')),
