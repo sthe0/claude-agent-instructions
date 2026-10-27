@@ -543,6 +543,13 @@ def test_another_task_opens_collapsed_though_the_same_key_path_was_open_in_the_f
     run(scenario, root)
 
 
+def test_the_tree_state_of_one_task_is_not_carried_to_another():
+    # the loading placeholder already clears the tree on a switch, so the scenario above cannot reach this
+    open_in_a = tui.TreeState(task=REVIEWED_A, expanded=frozenset({("phases",)}), cursor=("phases",))
+    assert tui_app.tree_state_for(open_in_a, REVIEWED_B) == tui.TreeState(task=REVIEWED_B)
+    assert tui_app.tree_state_for(open_in_a, REVIEWED_A) == open_in_a
+
+
 def test_the_tree_pilot_runs_inside_the_read_only_guard(tmp_path):
     root = reviewed_root(tmp_path)
 
