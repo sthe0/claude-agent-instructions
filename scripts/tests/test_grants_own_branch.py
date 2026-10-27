@@ -150,3 +150,117 @@ def test_remote_head_branch_reads_the_symbolic_ref(tmp_path):
     git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunkish")
     assert grants.remote_head_branch(str(tmp_path)) == "trunkish"
     assert grants.remote_head_branch(None) is None
+
+
+def _git_repo(path):
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                       check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("commit", "-q", "--allow-empty", "-m", "c")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    return git
+
+
+@pytest.mark.parametrize("branch", ["tags/v1", "notes/x"])
+def test_tag_and_note_namespaces_are_not_branch_names(remote_head, branch):
+    resources, dropped = grants.derive_branch_resources(_stage(branch=branch), venue="/v")
+    assert resources == [] and "plain branch name" in dropped[0]["reason"]
+
+
+def test_a_name_git_resolves_to_a_tag_is_refused_in_a_repository(tmp_path, remote_head):
+    git = _git_repo(tmp_path)
+    git("tag", "v1")
+    git("branch", "tagish/v1")
+    assert grants._resolves_outside_heads("v1", str(tmp_path))
+    assert not grants._resolves_outside_heads("tagish/v1", str(tmp_path))
+    assert not grants._resolves_outside_heads("not-there", str(tmp_path))
+    assert not grants._resolves_outside_heads("v1", None)
+    resources, dropped = grants.derive_branch_resources(_stage(branch="v1"), venue=str(tmp_path))
+    assert resources == [] and "plain branch name" in dropped[0]["reason"]
+
+
+_PLAN = """[meta]
+repo_root = "{venue}"
+weight_class = "small_change"
+task_id = "t"
+goal = "g"
+done_criterion = "d"
+criterion_type = "measurable"
+
+[[stage]]
+index = 1
+title = "S"
+executor = "spawn:developer"
+expected_result_image = "e"
+criterion_type = "measurable"
+done_criterion = "d"
+depends_on = []
+output_artifacts = ["mod.py"]
+{branch}
+"""
+
+
+def _plan_doc(tmp_path, branch):
+    from agentctl import plan as plan_mod
+
+    path = tmp_path / f"plan-{branch or 'none'}.toml"
+    path.write_text(_PLAN.format(venue=tmp_path, branch=f'branch = "{branch}"' if branch else ""))
+    return plan_mod.load_plan(path, strict=False)
+
+
+def test_moving_the_declared_branch_is_grant_growth(tmp_path):
+    from agentctl import plan as plan_mod
+
+    _git_repo(tmp_path)
+    feat_a, feat_b = _plan_doc(tmp_path, "feat-a"), _plan_doc(tmp_path, "feat-b")
+    assert plan_mod._grants_grew(feat_a, feat_b)
+    assert plan_mod.diff_plans(feat_a, feat_b) == "substantive"
+    assert not plan_mod._grants_grew(feat_a, feat_a)
+    assert not plan_mod._grants_grew(feat_a, _plan_doc(tmp_path, None))
+
+
+def test_branch_resources_are_under_the_hash_and_only_when_present(tmp_path):
+    from agentctl import plan as plan_mod
+
+    _git_repo(tmp_path)
+    own, none = _plan_doc(tmp_path, "feat-a"), _plan_doc(tmp_path, None)
+    for doc in (own, none):
+        entries = plan_mod.materialized_grant_entries(doc)
+        assert plan_mod.entries_grants_sha256(entries) == plan_mod.grants_sha256(doc)
+    assert plan_mod.grants_sha256(own) != plan_mod.grants_sha256(_plan_doc(tmp_path, "feat-b"))
+    entries = plan_mod.materialized_grant_entries(none)
+    bare = plan_mod.entries_grants_sha256(
+        {k: {**v, "branch": {"remote_head": "main", "resources": []}} for k, v in entries.items()})
+    assert bare == plan_mod.entries_grants_sha256(entries)
+    tampered = plan_mod.materialized_grant_entries(own)
+    tampered["1"]["branch"]["resources"].append(R.resource_to_dict(R.VcsRefResource("origin", "x", "push")))
+    assert plan_mod.entries_grants_sha256(tampered) != plan_mod.grants_sha256(own)
+
+
+def test_refinement_keeps_only_admitted_branch_resources(tmp_path):
+    from agentctl import plan as plan_mod
+
+    _git_repo(tmp_path)
+    feat_a, feat_b = _plan_doc(tmp_path, "feat-a"), _plan_doc(tmp_path, "feat-b")
+    stored = plan_mod.materialized_grant_entries(feat_a)
+    moved, _ = plan_mod.refined_grant_entries(stored, feat_a, feat_b)
+    assert moved["1"]["branch"]["resources"] == []
+    unmoved, _ = plan_mod.refined_grant_entries(stored, feat_a, feat_a)
+    assert unmoved["1"]["branch"] == stored["1"]["branch"]
+    unreadable, _ = plan_mod.refined_grant_entries(stored, None, feat_b)
+    assert unreadable["1"]["branch"]["resources"] == []
+    dropped, _ = plan_mod.refined_grant_entries(stored, feat_a, _plan_doc(tmp_path, None))
+    assert dropped["1"]["branch"]["resources"] == []
+
+
+def test_dropped_report_carries_the_dr_p_tag(tmp_path):
+    from agentctl import plan as plan_mod
+
+    _git_repo(tmp_path)
+    report = plan_mod.dropped_grants_report(_plan_doc(tmp_path, "main"))
+    assert [d["rule"] for d in report] == ["DR-P"]

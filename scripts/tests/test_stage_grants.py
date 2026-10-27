@@ -592,6 +592,12 @@ def test_stage_grants_push_resource_is_frozen_at_approve_not_read_at_spawn(
     after = cli.cmd_stage_grants(ns(session=sid, stage=1, json=True), store=store)
     assert after.data["resources"] == before.data["resources"]
 
+    state = store.load(sid)
+    assert cli.stage_branch_resources(state, 1)
+    state.approved_grant_entries["1"]["branch"]["resources"].append(
+        R.resource_to_dict(R.VcsRefResource("origin", "extra", "push")))
+    assert cli.stage_branch_resources(state, 1) == []
+
 
 def test_cmd_stage_grants_unaffected_by_live_plan_path_edit_after_approval(store, fixtures_dir, tmp_path):
     """(#7) `cmd_stage_grants` reads declared/derived entries from the

@@ -3841,7 +3841,9 @@ def venue_declaration_blockers(doc: PlanDoc) -> list[str]:
     ]
 
 
-def _derive_stage_grants(stage, venue: str | None, remote_head=_grants.LIVE_REMOTE_HEAD):
+def _derive_stage_grants(
+    stage, venue: str | None, remote_head=_grants.LIVE_REMOTE_HEAD, branch_derivation=None,
+):
     """`grants.derive_stage_grants` for a venue that may be undeclared. With no venue
     every relative `output_artifacts` / `material_refs` entry has nothing to be
     resolved against, so DR-O and DR-E (which need it) derive nothing; DR-V and DR-R
@@ -3849,7 +3851,8 @@ def _derive_stage_grants(stage, venue: str | None, remote_head=_grants.LIVE_REMO
     root venue no absolute path is ever in, keeps `grants.py` untouched. `remote_head` is
     DR-P's frozen `origin/HEAD` branch (see `grants.derive_branch_resources`)."""
     if venue is not None:
-        return _grants.derive_stage_grants(stage, venue=venue, remote_head=remote_head)
+        return _grants.derive_stage_grants(
+            stage, venue=venue, remote_head=remote_head, branch_derivation=branch_derivation)
     anchored = dataclasses.replace(
         stage,
         output_artifacts=[a for a in stage.output_artifacts if os.path.isabs(a)],
@@ -3858,7 +3861,8 @@ def _derive_stage_grants(stage, venue: str | None, remote_head=_grants.LIVE_REMO
             material_refs=[r for r in stage.subject.material_refs if os.path.isabs(r)],
         ),
     )
-    return _grants.derive_stage_grants(anchored, venue="/", remote_head=remote_head)
+    return _grants.derive_stage_grants(
+        anchored, venue="/", remote_head=remote_head, branch_derivation=branch_derivation)
 
 
 def _stage_declared_and_derived_grants(s, venue: str | None):
@@ -3894,6 +3898,29 @@ def _grants_effective_map(doc: PlanDoc, *, venue: str | None = None) -> dict[int
     return {s.index: _effective_grants_for_stage(s, v).effective_tuple() for s in doc.stages}
 
 
+def _remote_head_for(*docs: PlanDoc, venue: str | None) -> str | None:
+    """The `origin/HEAD` branch, read once, when any of `docs` has a spawn stage (the only
+    stages DR-P derives for); None otherwise or when unreadable."""
+    return _grants.remote_head_branch(venue) if any(
+        s.is_spawn() for d in docs for s in d.stages) else None
+
+
+def _branch_resources_by_stage(doc: PlanDoc, venue: str | None, head: str | None) -> dict[int, list]:
+    """`{stage index: DR-P's commit/push resources}` against the frozen `head`."""
+    return {s.index: _grants.derive_branch_resources(s, venue=venue, remote_head=head)[0]
+            for s in doc.stages}
+
+
+def _branch_hash_part(by_stage: dict) -> str:
+    """The DR-P share of a grants digest: empty when no stage derives a resource, so a
+    plan without a declared `branch` keeps the digest it always had."""
+    part = tuple(
+        (int(idx), tuple(sorted(repr(sorted(d.items())) for d in dicts)))
+        for idx, dicts in sorted(by_stage.items(), key=lambda kv: int(kv[0])) if dicts
+    )
+    return repr(part) if part else ""
+
+
 def _grants_grew(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = False) -> bool:
     """Whether any stage's EFFECTIVE (declared+derived) grant set grew from `old` to
     `new` — a strictly wider Bash/Edit rule set, or a strictly wider set of add_dirs.
@@ -3921,7 +3948,12 @@ def _grants_grew(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fa
     new_map = _grants_effective_map(new, venue=shared_venue)
     old_stages = {s.index: s for s in old.stages}
     delta = norm_delta(old, new)
+    head = _remote_head_for(old, new, venue=shared_venue)
+    old_branch = _branch_resources_by_stage(old, shared_venue, head)
+    new_branch = _branch_resources_by_stage(new, shared_venue, head)
     for stage in new.stages:
+        if set(new_branch[stage.index]) - set(old_branch.get(stage.index, [])):
+            return True
         new_rules, new_dirs = new_map[stage.index]
         old_rules, old_dirs = old_map.get(stage.index, (frozenset(), frozenset()))
         grown_rules = new_rules - old_rules
@@ -3976,6 +4008,10 @@ def grants_sha256(doc: PlanDoc) -> str:
         (idx, tuple(sorted(rules)), tuple(sorted(dirs)))
         for idx, (rules, dirs) in sorted(_grants_effective_map(doc).items())
     ))
+    venue = _venue_for(doc)
+    branch = _branch_resources_by_stage(doc, venue, _remote_head_for(doc, venue=venue))
+    payload += _branch_hash_part(
+        {i: [_resources.resource_to_dict(r) for r in rs] for i, rs in branch.items()})
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -3988,14 +4024,16 @@ def materialized_grant_entries(doc: PlanDoc, *, venue: str | None = None) -> dic
     `branch` freezes DR-P: the `origin/HEAD` branch read once for the whole call
     (`remote_head`) and the commit/push resources derived from it (`resources`), so a spawn
     hands the child what the approval derived, even if the repository's HEAD moves between.
-    It is not part of `grants_sha256`, which covers only the rule and add_dir entries."""
+    The `resources` are part of `grants_sha256`/`entries_grants_sha256` (only when some
+    stage derives any), so what the child is handed is what the user approved."""
     venue = venue if venue is not None else _venue_for(doc)
     head = _grants.remote_head_branch(venue) if any(s.is_spawn() for s in doc.stages) else None
     entries: dict[str, dict] = {}
     for stage in doc.stages:
         declared = stage.grants if getattr(stage, "grants", None) else StageGrants()
-        derived, dropped = _derive_stage_grants(stage, venue, head)
-        branch_resources = _grants.derive_branch_resources(stage, venue=venue, remote_head=head)[0]
+        branch_derivation = _grants.derive_branch_resources(stage, venue=venue, remote_head=head)
+        derived, dropped = _derive_stage_grants(stage, venue, head, branch_derivation)
+        branch_resources = branch_derivation[0]
         entries[str(stage.index)] = {
             "declared": [r.to_dict() for r in declared.allow]
             + [a.to_dict() for a in declared.add_dirs],
@@ -4009,11 +4047,13 @@ def materialized_grant_entries(doc: PlanDoc, *, venue: str | None = None) -> dic
 
 
 def dropped_grants_report(doc: PlanDoc, *, venue: str | None = None) -> list[dict]:
-    """`[{"stage", "entry", "reason"}]` for every derivation the validator or DR-P refused,
-    in stage order. Advisory data: a dropped derived entry is not a plan defect by itself,
-    but the author otherwise sees only the grants that survived."""
+    """`[{"stage", "entry", "reason"[, "rule"]}]` for every derivation the validator or
+    DR-P refused (`rule` is set on DR-P's), in stage order. Advisory data: a dropped derived
+    entry is not a plan defect by itself, but the author otherwise sees only the grants
+    that survived."""
     return [
-        {"stage": int(idx), "entry": d["entry"], "reason": d["reason"]}
+        {"stage": int(idx), "entry": d["entry"], "reason": d["reason"],
+         **({"rule": d["rule"]} if "rule" in d else {})}
         for idx, stage_entries in materialized_grant_entries(doc, venue=venue).items()
         for d in stage_entries["dropped"]
     ]
@@ -4050,7 +4090,24 @@ def entries_grants_sha256(entries: dict[str, dict]) -> str:
         (int(idx), *projection(s))
         for idx, s in sorted(entries.items(), key=lambda kv: int(kv[0]))
     ))
+    payload += _branch_hash_part({
+        idx: list((s.get("branch") or {}).get("resources") or []) for idx, s in entries.items()})
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _refined_branch(stored: dict, old: dict | None, now: dict) -> dict:
+    """The DR-P block after a refinement: what `now` derives, limited to what the approval
+    stored or `old` already derived (the plan's own growth never reaches here -- the diff
+    layer classifies it substantive). A moved `branch` therefore never keeps the old
+    branch's resources, and a stale one is never widened by a live read."""
+    frozen = stored.get("branch") or {}
+    admitted = {tuple(sorted(d.items())) for d in frozen.get("resources") or []}
+    if old is not None:
+        admitted |= {tuple(sorted(d.items())) for d in old["branch"]["resources"]}
+    return {
+        "remote_head": frozen.get("remote_head", now["branch"]["remote_head"]),
+        "resources": [d for d in now["branch"]["resources"] if tuple(sorted(d.items())) in admitted],
+    }
 
 
 def refined_grant_entries(
@@ -4091,8 +4148,9 @@ def refined_grant_entries(
         if s is None:
             out[idx] = n
             continue
+        branch = _refined_branch(s, o, n)
         if o is not None and _effective_entry_keys(o) == _effective_entry_keys(n):
-            out[idx] = s
+            out[idx] = {**s, "branch": branch}
             continue
         admitted = {_entry_key(e) for e in s.get("derived") or []}
         if o is not None:
@@ -4101,6 +4159,7 @@ def refined_grant_entries(
             "declared": n["declared"],
             "derived": [e for e in n["derived"] if _entry_key(e) in admitted],
             "dropped": n["dropped"],
+            "branch": branch,
         }
         held = [e.get("rule") or f"{e['path']} ({e['mode']})" for e in n["derived"]
                 if _entry_key(e) not in admitted]

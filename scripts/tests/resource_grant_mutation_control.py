@@ -124,14 +124,16 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "ref-form-trunk-refused": Mutant(
         GRANTS,
-        "    if not _is_plain_branch_name(branch):",
+        "    if not _is_plain_branch_name(branch, venue):",
         "    if False:",
         "HEAD and ref-path spellings of trunk (refs/heads/main, origin/main) derive a push",
     ),
     "branch-frozen-at-approve": Mutant(
         CLI,
-        "    if stored is None or entries_grants_sha256(stored) != state.approved_grants_sha256:\n"
+        "    if stored is None:\n"
         "        return None\n"
+        "    if entries_grants_sha256(stored) != state.approved_grants_sha256:\n"
+        "        return []\n"
         '    frozen = (stored.get(str(stage_index)) or {}).get("branch")',
         "    if True:\n"
         "        return None\n"
@@ -143,6 +145,27 @@ CATALOGUE: "dict[str, Mutant]" = {
         '    if dropped:\n        d.data["dropped_grants"] = dropped',
         '    if False:\n        d.data["dropped_grants"] = dropped',
         "submit-plan no longer reports the dropped grants",
+    ),
+    "branch-change-is-grant-growth": Mutant(
+        PLAN,
+        "        if set(new_branch[stage.index]) - set(old_branch.get(stage.index, [])):\n"
+        "            return True",
+        "        if False:\n"
+        "            return True",
+        "a replan that moves the stage's branch counts as a self-approvable refinement",
+    ),
+    "branch-resources-hashed": Mutant(
+        PLAN,
+        '    payload += _branch_hash_part({\n'
+        '        idx: list((s.get("branch") or {}).get("resources") or []) for idx, s in entries.items()})\n',
+        "",
+        "the frozen DR-P resources fall out of the stored entries' hash",
+    ),
+    "refined-branch-limited-to-admitted": Mutant(
+        PLAN,
+        '        "resources": [d for d in now["branch"]["resources"] if tuple(sorted(d.items())) in admitted],',
+        '        "resources": list(now["branch"]["resources"]),',
+        "a refinement hands the child whatever the new plan derives, admitted or not",
     ),
 }
 

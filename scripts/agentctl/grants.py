@@ -857,7 +857,8 @@ BRANCH_LOCAL_REMOTE = "."
 _BRANCH_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
 #: First path segments that spell a ref rather than a branch (`refs/heads/main`,
 #: `origin/main`): each reaches trunk through a name the trunk list misses.
-_REF_FORM_FIRST_SEGMENTS = frozenset({"refs", "heads", "remotes", BRANCH_REMOTE, BRANCH_LOCAL_REMOTE})
+_REF_FORM_FIRST_SEGMENTS = frozenset(
+    {"refs", "heads", "remotes", "tags", "notes", BRANCH_REMOTE, BRANCH_LOCAL_REMOTE})
 #: Tags a dropped entry as DR-P's, so a consumer filters on it rather than on its text.
 DR_P_RULE = "DR-P"
 #: Default of `remote_head`: read `origin/HEAD` now. Approve passes the value it froze.
@@ -883,8 +884,26 @@ def remote_head_branch(venue: str | None) -> str | None:
     return out[len(prefix):] or None
 
 
-def _is_plain_branch_name(branch: str) -> bool:
-    """A single-ref branch name git accepts, not spelled as `HEAD` or a ref path."""
+def _resolves_outside_heads(branch: str, venue: str | None) -> bool:
+    """Whether git, in `venue`'s repository, resolves `branch` to a ref other than
+    `refs/heads/<branch>` (`tags/v1` -> `refs/tags/v1`). False when `venue` is not a
+    repository or nothing by that name exists yet; the segment list covers those."""
+    if not venue:
+        return False
+    try:
+        proc = subprocess.run(
+            ["git", "-C", venue, "rev-parse", "--symbolic-full-name", branch],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    out = proc.stdout.strip()
+    return proc.returncode == 0 and bool(out) and out != f"refs/heads/{branch}"
+
+
+def _is_plain_branch_name(branch: str, venue: str | None = None) -> bool:
+    """A single-ref branch name git accepts, not spelled as `HEAD` or a ref path, and
+    (given a `venue` repository) one git resolves to a branch rather than a tag or note."""
     if not _BRANCH_NAME_RE.match(branch) or ".." in branch or branch.upper() == "HEAD":
         return False
     if branch.split("/", 1)[0] in _REF_FORM_FIRST_SEGMENTS:
@@ -896,7 +915,8 @@ def _is_plain_branch_name(branch: str) -> bool:
         )
     except (OSError, subprocess.SubprocessError):
         return False
-    return proc.returncode == 0 and proc.stdout.strip() == branch
+    return (proc.returncode == 0 and proc.stdout.strip() == branch
+            and not _resolves_outside_heads(branch, venue))
 
 
 def _dr_p_dropped(entry: str, reason: str) -> dict:
@@ -930,7 +950,7 @@ def derive_branch_resources(
     if not branch:
         return [], [_dr_p_dropped("commit and push of the stage branch",
                                   "the plan declares no `branch` for the stage or in [meta]")]
-    if not _is_plain_branch_name(branch):
+    if not _is_plain_branch_name(branch, venue):
         return [], [_dr_p_dropped(f"commit and push of {branch!r}",
                                   f"{branch!r} is not a plain branch name")]
     head = remote_head_branch(venue) if remote_head is LIVE_REMOTE_HEAD else remote_head
@@ -953,7 +973,7 @@ def derive_branch_resources(
 
 
 def derive_stage_grants(
-    stage, *, venue: str, remote_head=LIVE_REMOTE_HEAD,
+    stage, *, venue: str, remote_head=LIVE_REMOTE_HEAD, branch_derivation=None,
 ) -> tuple[StageGrants, list[dict]]:
     """The function from a stage's declared elements to a derived
     grant set: DR-V (one `Bash(<segment>:*)` per top-level verify_command
@@ -1036,7 +1056,9 @@ def derive_stage_grants(
         seen_dirs.add(directory)
         _try_add_dir(directory, "read", "derived:DR-R")
 
-    dropped.extend(derive_branch_resources(stage, venue=venue, remote_head=remote_head)[1])
+    if branch_derivation is None:
+        branch_derivation = derive_branch_resources(stage, venue=venue, remote_head=remote_head)
+    dropped.extend(branch_derivation[1])
 
     return StageGrants(allow=allow, add_dirs=add_dirs), dropped
 

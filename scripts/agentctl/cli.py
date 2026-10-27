@@ -8613,11 +8613,14 @@ def _self_grant_resources_for_rule(
 def stage_branch_resources(state: SessionState, stage_index: int) -> "list | None":
     """DR-P's commit/push resources for one stage as frozen at approve beside the grant
     entries (`plan.materialized_grant_entries`), so a spawn and `stage-grants` hand out
-    what the approval derived. None when nothing readable was frozen (a session bound
-    before they were stored, or entries failing their hash): the caller derives live."""
+    what the approval derived. None when nothing was frozen (a session bound before they
+    were stored): the caller derives live. Entries failing their hash yield nothing --
+    drift may under-grant, never over-grant."""
     stored = state.approved_grant_entries
-    if stored is None or entries_grants_sha256(stored) != state.approved_grants_sha256:
+    if stored is None:
         return None
+    if entries_grants_sha256(stored) != state.approved_grants_sha256:
+        return []
     frozen = (stored.get(str(stage_index)) or {}).get("branch")
     if not isinstance(frozen, dict):
         return None
