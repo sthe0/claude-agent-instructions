@@ -14027,7 +14027,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("mandate_id", ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry",
                     "mandate-stop", "mandate-status"),
      "mandate slug the state directory is keyed by"),
-    ("by", ("confirm-delivery", "approve", "resolve", "reject", "fire-acknowledge", "resolve-permission",
+    ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission",
             "task-reset", "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry"),
      "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
      "identity token like any other --by, not free text)"),
@@ -14796,7 +14796,7 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                     help="override cost log path for tests (defaults to cost.COST_LOG); "
                          "read to derive the realized budget_tiers for the quality row")
     sp = add("reject"); sp.add_argument("--session", required=True)
-    sp.add_argument("--by", default=None,
+    sp.add_argument("--by", default=None, type=str.strip,
                     help="who rejected the delivery — a name, not a narrative; recorded on the "
                          "reject row (a `mandate:<id>` rejection does not clear the since-user counters)")
     sp.add_argument("--reason", required=True,
