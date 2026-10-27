@@ -816,6 +816,24 @@ def test_a_chat_read_that_returns_after_another_task_was_opened_is_dropped(tmp_p
     run(scenario, root, locator=attention_locator())
 
 
+def test_a_chat_answer_for_another_task_is_not_shown_on_the_open_chat_tab(tmp_path):
+    """The read above usually lands while Detail is open, where the tab check alone drops it; this one lands on
+    the open Chat tab of another task, so only the target check can keep it out."""
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, BETA)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert app.view.chat == ("task", BETA) and "done" in chat_text(app)
+        alpha_chat = tui.read_chat(("task", ALPHA), app.locator, app.transcripts_root)
+        tui_app.chat_ready(app, ("task", ALPHA), alpha_chat, None)
+        await settle(app, pilot)
+        assert "Which way?" not in chat_text(app) and "done" in chat_text(app)
+
+    run(scenario, root, locator=attention_locator())
+
+
 @pytest.mark.parametrize("failing", ["read_attention", "read_chat"])
 def test_a_failing_attention_or_chat_read_keeps_the_task_table_and_names_the_error(tmp_path, monkeypatch, failing):
     root = attention_root(tmp_path)
