@@ -2290,20 +2290,20 @@ hits = 2
 hit_classes = ["candidate-generation", "candidate-generation"]
 reviewed_by = "developer"
 
-[sites."scripts/skill-usage-audit.py::extract_skills_from_catalog::pattern.findall"]
+[sites."scripts/lib/agent_report/skill_usage.py::extract_skills_from_catalog::pattern.findall"]
 class = "structural"
 ground = "Extracts `- slug:` lines from the skills catalog block of a transcript; fixed listing syntax."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/skill-usage-audit.py::<module>::re.compile"]
+[sites."scripts/lib/agent_report/skill_usage.py::<module>::re.compile"]
 class = "structural"
 ground = "Compile the skill-catalog line pattern and an identifier-token pattern used for exact slug equality tests."
 hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
-[sites."scripts/skill-usage-audit.py::scan_session::pattern.findall"]
+[sites."scripts/lib/agent_report/skill_usage.py::scan_session::pattern.findall"]
 class = "structural"
 ground = "Extract skill-slug lines from a skill_listing attachment and identifier tokens from tool inputs for exact slug equality counts; identifier matching."
 hits = 2

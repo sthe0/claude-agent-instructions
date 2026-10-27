@@ -1,4 +1,4 @@
-"""Tests for scripts/spawn-outcome-report.py.
+"""Tests for scripts/lib/agent_report/spawn_outcomes.py (`agent-report.py spawn-outcomes`).
 
 Every test drives the instrument against a SYNTHETIC ledger under tmp_path. None
 reads ~/.local/log/claude-spawn-costs.jsonl: that file is the evidence base for
@@ -13,15 +13,12 @@ baseline must carry — the freeze recomputes those from its own rows.
 from __future__ import annotations
 
 import datetime as dt
-import importlib.util
 import json
+import sys
 from pathlib import Path
 
-_SRC = Path(__file__).resolve().parents[1] / "spawn-outcome-report.py"
-_spec = importlib.util.spec_from_file_location("spawn_outcome_report", _SRC)
-sor = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
-_spec.loader.exec_module(sor)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from lib.agent_report import spawn_outcomes as sor
 
 
 # ── fixture helpers ─────────────────────────────────────────────────────────
