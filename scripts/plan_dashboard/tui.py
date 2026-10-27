@@ -104,6 +104,12 @@ def _difficulty(task) -> str:
     return f"!{count}" if counts["open"] else str(count)
 
 
+def by_recency_live_first(tasks) -> list[dict]:
+    """The status digest's order: active tasks first, each band newest last activity first."""
+    recent = sorted(tasks, key=lambda t: (t["last_activity"] or "", t["session_id"]), reverse=True)
+    return sorted(recent, key=lambda t: t["liveness"] != "active")
+
+
 def _epoch(moment) -> float | None:
     parsed = _parse(moment)
     return None if parsed is None else parsed.timestamp()
@@ -203,31 +209,34 @@ def overview_header(snapshot: dict, now: dt.datetime, attention_payload=None, co
             f"  waiting: {waiting}")
 
 
+def task_row(task: dict, now: dt.datetime, attention_payload=None) -> dict:
+    """A task's row of the overview table, as ``overview_rows`` describes it."""
+    sid = task["session_id"]
+    waiting = _waiting_of(attention_payload, sid)
+    mark = wait_mark(waiting)
+    since = _since(now, task["last_activity"])
+    age = "?" if since is None else f"{since} ago"
+    if not task["readable"]:
+        cells = ("-", mark, sid[:SESSION_ID_WIDTH], task["liveness"], "?", "stage ?/?", "-", "-", age, "-", "-",
+                 f"unreadable: {task['reason']}")
+    else:
+        totals = task["totals"]
+        cells = (one_line(task["task_id"], TASK_ID_WIDTH) or "-", mark, sid[:SESSION_ID_WIDTH], task["liveness"],
+                 task["node"] or "?", _stage_progress(task["stages_done"], task["stages_total"]),
+                 _difficulty(task), str(task["replans"]), age,
+                 _wall(totals["wall_clock_s"], totals["estimate"]["wall_clock_s"]), cost_text(totals),
+                 one_line(task["goal"]))
+    return {"session_id": sid, "cells": cells, "kind": "task", "waiting": waiting,
+            "style": row_style(waiting, task["liveness"])}
+
+
 def overview_rows(snapshot: dict, now: dt.datetime, attention_payload=None, activity=None) -> list[dict]:
     """One row per task, newest last activity first (``last_activity``), then one per session the locator
     knows that no task owns, newest transcript first. A row is its ``session_id`` (a session row's harness
     id), the ``cells`` of ``OVERVIEW_COLUMNS``, its ``kind`` (``task`` or ``session``), ``waiting`` and
     ``style``."""
     activity = activity or {}
-    rows = []
-    for task in activity_order(snapshot["tasks"], activity):
-        sid = task["session_id"]
-        waiting = _waiting_of(attention_payload, sid)
-        mark = wait_mark(waiting)
-        since = _since(now, task["last_activity"])
-        age = "?" if since is None else f"{since} ago"
-        if not task["readable"]:
-            cells = ("-", mark, sid[:SESSION_ID_WIDTH], task["liveness"], "?", "stage ?/?", "-", "-", age, "-", "-",
-                     f"unreadable: {task['reason']}")
-        else:
-            totals = task["totals"]
-            cells = (one_line(task["task_id"], TASK_ID_WIDTH) or "-", mark, sid[:SESSION_ID_WIDTH], task["liveness"],
-                     task["node"] or "?", _stage_progress(task["stages_done"], task["stages_total"]),
-                     _difficulty(task), str(task["replans"]), age,
-                     _wall(totals["wall_clock_s"], totals["estimate"]["wall_clock_s"]), cost_text(totals),
-                     one_line(task["goal"]))
-        rows.append({"session_id": sid, "cells": cells, "kind": "task", "waiting": waiting,
-                     "style": row_style(waiting, task["liveness"])})
+    rows = [task_row(task, now, attention_payload) for task in activity_order(snapshot["tasks"], activity)]
     sessions = sorted(_session_rows(attention_payload), key=lambda e: activity.get(e["harness_session"], float("-inf")),
                       reverse=True)
     for entry in sessions:

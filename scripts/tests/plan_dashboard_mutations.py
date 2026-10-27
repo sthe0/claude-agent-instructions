@@ -517,10 +517,9 @@ def _reread_always(original):
 
 def _rows_ignore_binding(original):
     def mutated(engine_sessions, locator, transcripts_root):
-        attention = importlib.import_module(ATTENTION)
         overlays, _ = original(engine_sessions, locator, transcripts_root)
-        entries = sorted(importlib.import_module(LOCATE).sessions(locator), key=lambda e: e["harness_session"])
-        return overlays, [attention.session_row(e, locator, transcripts_root) for e in entries]
+        _, every_session = original([], locator, transcripts_root)
+        return overlays, every_session
     return mutated
 
 

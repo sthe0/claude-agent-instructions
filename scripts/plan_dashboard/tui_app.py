@@ -318,10 +318,10 @@ def show_marks(app: "DashboardApp", ids) -> None:
     """Restyle the rows of ``ids`` with their new marks in place, without rebuilding the table."""
     table, wanted = app.query_one(DataTable), set(ids)
     present = {key.value for key in table.rows}
-    subset = {**app.snapshot, "tasks": [t for t in app.snapshot["tasks"]
-                                        if t["session_id"] in wanted and t["session_id"] in present]}
-    for row in tui.overview_rows(subset, app.read_at, shown_marks(app)):
-        if row["kind"] == "task":
+    marks = shown_marks(app)
+    for task in app.snapshot["tasks"]:
+        if task["session_id"] in wanted and task["session_id"] in present:
+            row = tui.task_row(task, app.read_at, marks)
             for column, cell in zip(tui.OVERVIEW_COLUMNS, row_cells(row)):
                 table.update_cell(row["session_id"], column, cell)
 

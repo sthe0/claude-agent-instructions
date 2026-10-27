@@ -80,6 +80,14 @@ class Tail:
         self.state_ts: str | None = None
         self.last_ts: str | None = None
 
+    def copy(self) -> "Tail":
+        copy = Tail(self.inode)
+        copy.offset, copy.partial = self.offset, self.partial
+        copy.chat = collections.deque(self.chat, maxlen=CHAT_MAX_ENTRIES)
+        copy.pending = dict(self.pending)
+        copy.state, copy.state_ts, copy.last_ts = self.state, self.state_ts, self.last_ts
+        return copy
+
 
 def _items(message: dict) -> list:
     content = message.get("content")
@@ -180,15 +188,6 @@ def _first_read(handle, size: int) -> bytes:
     return data[newline + 1:] if newline >= 0 else b""
 
 
-def _copy(tail: Tail) -> Tail:
-    copy = Tail(tail.inode)
-    copy.offset, copy.partial = tail.offset, tail.partial
-    copy.chat = collections.deque(tail.chat, maxlen=CHAT_MAX_ENTRIES)
-    copy.pending = dict(tail.pending)
-    copy.state, copy.state_ts, copy.last_ts = tail.state, tail.state_ts, tail.last_ts
-    return copy
-
-
 def read_tail(path) -> Tail | None:
     """The cached state of the transcript at ``path``, brought up to date; None when unreadable.
     A published Tail is never changed again: an update reads into a copy outside the lock, so
@@ -205,7 +204,7 @@ def read_tail(path) -> Tail | None:
         cached = None
     if cached is not None and stat.st_size == cached.offset:
         return cached
-    tail = Tail(stat.st_ino) if cached is None else _copy(cached)
+    tail = Tail(stat.st_ino) if cached is None else cached.copy()
     try:
         with open(path, "rb") as handle:
             if cached is None:
@@ -353,12 +352,6 @@ def task_overlay(engine_session: str, locator, transcripts_root) -> dict:
 def _session_fields(entry: dict, overlay: dict) -> dict:
     return {"harness_session": entry["harness_session"], "cwd": entry["cwd"], "name": entry["name"],
             "waiting": overlay["waiting"], "since": overlay["since"]}
-
-
-def session_row(entry: dict, locator, transcripts_root, transcripts=None) -> dict:
-    harness = entry["harness_session"]
-    overlay, _ = _attend(harness, find_transcript(harness, locator, transcripts_root, transcripts), locator)
-    return _session_fields(entry, overlay)
 
 
 def collect(engine_sessions, locator, transcripts_root) -> tuple[dict, list[dict]]:
