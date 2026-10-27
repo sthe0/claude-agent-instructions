@@ -19,11 +19,12 @@ fleet hooks); ambient cells run on the live settings chain at `AGENT_RECURSION_D
 specialist. A cell's outcome is read from the side effect on disk (or a marker that only a real read can return),
 never from the child's own report.
 
-Hook timeout: 10s
+Hook timeout: 20s
 
-The value is provisional. The hook script itself answered in 0.001–0.017 s per call (Q2, Q3); the 10 s budget
-leaves room for the stage 7 judge, whose latency stage 7 measures. The final value is fixed after the live
-end-to-end run. Q5 shows that an overrun is safe: it never turns into an allow.
+The hook script itself answered in 0.001–0.017 s per call (Q2, Q3). The stage 7 judge took 3.1–3.5 s from the
+root and about 5.9 s from a developer session, so the first value of 10 s (judge budget 5 s) left no margin;
+20 s gives the judge 15 s (`resource-grant-judge-timeout-s`) and keeps the 5 s the rest of the hook needs.
+Q5 shows that an overrun is safe: it never turns into an allow.
 
 ## Q1 — Do hooks given through `claude -p --settings` run alongside the user-level hooks?
 

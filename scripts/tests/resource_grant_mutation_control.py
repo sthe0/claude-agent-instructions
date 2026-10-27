@@ -312,8 +312,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     "opaque-without-known-cwd": Mutant(
         SEGMENT_RESOLVER,
         '    if cwd is None:\n        return _unres(_OUTSIDE_LIST, _CWD_UNCERTAIN)\n'
-        '    operands = [t.text for t in toks[1:]]\n    is_python',
-        '    operands = [t.text for t in toks[1:]]\n    is_python',
+        '    if widening_targets.INTERPRETER_RE.match(prog):',
+        '    if widening_targets.INTERPRETER_RE.match(prog):',
         "an interpreter segment is called opaque although its working directory is unknown",
     ),
     "ansi-c-quote-skipped": Mutant(
@@ -384,8 +384,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "nonliteral-code-opaque": Mutant(
         SEGMENT_RESOLVER,
-        '                        if code is None or code.nonlit:\n',
-        '                        if code is None:\n',
+        '        if invocation.token is None or invocation.token.nonlit:\n            return _unres(_NONLITERAL, "the python -c code',
+        '        if invocation.token is None:\n            return _unres(_NONLITERAL, "the python -c code',
         "`python3 -c \"$CODE\"` is labelled opaque, so a later reader goes looking for the code in the wrong text",
     ),
     "script-operand-nonliteral": Mutant(
@@ -504,9 +504,9 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "judge-cache-key": Mutant(
         CODE_EFFECTS,
-        '"\\0".join([advisor.CODE_EFFECTS_PROMPT_SHA256, advisor.CODE_EFFECTS_MODEL, venue, code_sha256])',
-        '"\\0".join([advisor.CODE_EFFECTS_PROMPT_SHA256, code_sha256])',
-        "the code-effects cache key forgets the venue and the model the verdict was made for",
+        'advisor.CODE_EFFECTS_PROMPT_SHA256, advisor.CODE_EFFECTS_MODEL, venue, branch or "", code_sha256]',
+        'advisor.CODE_EFFECTS_PROMPT_SHA256, code_sha256]',
+        "the code-effects cache key forgets the venue, the branch and the model the verdict was made for",
     ),
     "import-closure-collected": Mutant(
         CODE_EFFECTS,
@@ -519,6 +519,90 @@ CATALOGUE: "dict[str, Mutant]" = {
         "        if len(self.files) >= MAX_FILES:\n",
         "        if False:\n",
         "the import closure is read without a file-count cap",
+    ),
+    "sibling-write-ignored": Mutant(
+        CODE_EFFECTS,
+        "            hit = next((w for w in watched if _overlap(path, w)), None)\n",
+        "            hit = None\n",
+        "a sibling segment that rewrites an imported module or the script is not noticed: the judge reads the old text",
+    ),
+    "sibling-unresolved-ignored": Mutant(
+        CODE_EFFECTS,
+        '        if other.status != "resolved":\n',
+        "        if False:\n",
+        "an unresolved or opaque sibling segment is assumed to write nothing",
+    ),
+    "branch-switch-ignored": Mutant(
+        CODE_EFFECTS,
+        "        if _may_switch_branch(root, segment, line_segments):\n",
+        "        if False:\n",
+        "a commit is attributed to the branch the judge was told although a sibling segment may switch it first",
+    ),
+    "nonfile-effect-rule-dropped": Mutant(
+        ADVISOR,
+        '    "- has ANY effect other than a file write or a git ref commit/push: a network request that can change remote "\n',
+        '    "- uses the network: a network request that can change remote "\n',
+        "the judge is no longer told that any effect other than a file write or a git ref commit/push is undeterminable",
+    ),
+    "interpreter-flag-allowlist-widened": Mutant(
+        CODE_EFFECTS,
+        '_SAFE_FLAG_LETTERS = frozenset("uBOq")',
+        '_SAFE_FLAG_LETTERS = frozenset("uBOqIPESsxidvbWX")',
+        "-I -P -E -S -s and the other options that move the import path or the code are read as harmless",
+    ),
+    "path-env-ignored": Mutant(
+        CODE_EFFECTS,
+        "        if os.environ.get(name):\n",
+        "        if False:\n",
+        "a PYTHONPATH in the hook's environment is not noticed, so imports are read from the wrong directory",
+    ),
+    "sys-path-allowed": Mutant(
+        CODE_EFFECTS,
+        "                if node.attr not in _SYS_SAFE:\n",
+        "                if False:\n",
+        "code that edits sys.path or sys.modules is read as if the import path were unchanged",
+    ),
+    "import-machinery-allowed": Mutant(
+        CODE_EFFECTS,
+        '                if alias.name.split(".")[0] in _DYNAMIC_MODULES:\n',
+        "                if False:\n",
+        "`import importlib` / `import builtins` / `import runpy` is accepted, so code loaded by name is never read",
+    ),
+    "namespace-directory-matched": Mutant(
+        CODE_EFFECTS,
+        "        if (directory / name).is_dir():\n",
+        "        if False:\n",
+        "a bare directory is read as a namespace package although an installed package of that name wins",
+    ),
+    "compiled-sibling-ignored": Mutant(
+        CODE_EFFECTS,
+        '        if any((directory / f"{name}{suffix}").exists() for suffix in _OTHER_MODULE_SUFFIXES):\n',
+        "        if False:\n",
+        "a .so or .pyc beside a module is ignored, so the text shown is not what the interpreter imports",
+    ),
+    "script-dir-not-search-path": Mutant(
+        CODE_EFFECTS,
+        "blob = closure.run(closure.relative(script), None, script, script.parent)",
+        "blob = closure.run(closure.relative(script), None, script, cwd)",
+        "a script's imports are looked for in the working directory instead of the script's directory",
+    ),
+    "tilde-path-accepted": Mutant(
+        ADVISOR,
+        "            if path is None or path.startswith(_CE_FORBIDDEN_PATH_PREFIX):\n",
+        "            if path is None:\n",
+        "a judge-reported ~/x path is accepted and later expanded to the home directory",
+    ),
+    "validation-not-total": Mutant(
+        ADVISOR,
+        "        if not isinstance(kind, str) or not isinstance(op, str):\n",
+        "        if False:\n",
+        "a list-valued kind or op in an answer raises instead of reading UNDETERMINABLE",
+    ),
+    "cache-path-unwritten-reported": Mutant(
+        CODE_EFFECTS,
+        "str(path) if stored and path is not None else None",
+        "str(path) if path is not None else None",
+        "cache_path is reported although the record could not be written",
     ),
 }
 

@@ -63,6 +63,7 @@ import re
 import shlex
 import subprocess
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from lib import widening_targets
 
@@ -1062,35 +1063,63 @@ def _delegate(toks: list[_Tok], cwd: str | None, ctx: "_Context") -> _Verdict:
     return _from_resolution(tool_contracts.resolve_command(text, cwd, contract_table=ctx.table))
 
 
+class PythonInvocation(NamedTuple):
+    """What a `python` command line runs. `kind` is `"c"` (inline code), `"m"` (a module), `"script"` or
+    `"stdin"`. `token` is the word holding the `-c` code (the flag itself when the code is attached to it) or
+    the script operand; `code` is the `-c` text. `flags` are the option words before the operand, as written."""
+
+    kind: str
+    token: "_Tok | None"
+    code: str | None
+    flags: tuple
+
+
+def python_invocation(toks: list[_Tok]) -> PythonInvocation:
+    """The one reading of a python command line's options, shared by the resolver and `code_effects`."""
+    operands = toks[1:]
+    flags: list[str] = []
+    i = 0
+    while i < len(operands) and operands[i].text.startswith("-") and operands[i].text != "-":
+        flag = operands[i].text
+        if flag == "--":
+            i += 1
+            break
+        flags.append(flag)
+        if flag.startswith("--"):
+            i += 1 if flag in _PYTHON_VALUE_FLAGS else 0
+        else:
+            letters = flag[1:]
+            for pos, ch in enumerate(letters):
+                if ch == "c":
+                    if pos + 1 < len(letters):
+                        return PythonInvocation("c", operands[i], letters[pos + 1 :], tuple(flags))
+                    following = operands[i + 1] if i + 1 < len(operands) else None
+                    return PythonInvocation("c", following, following.text if following else None, tuple(flags))
+                if ch == "m":
+                    return PythonInvocation("m", None, None, tuple(flags))
+                if ch in _PYTHON_VALUE_LETTERS:
+                    i += 1 if pos == len(letters) - 1 else 0
+                    break
+        i += 1
+    if i >= len(operands) or operands[i].text == "-":
+        return PythonInvocation("stdin", None, None, tuple(flags))
+    return PythonInvocation("script", operands[i], None, tuple(flags))
+
+
 def _interpreter(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context", has_body: bool) -> _Verdict:
     """`has_body`: this segment carries a heredoc or here-string, the only stdin code a later reader can see."""
     if cwd is None:
         return _unres(_OUTSIDE_LIST, _CWD_UNCERTAIN)
+    if widening_targets.INTERPRETER_RE.match(prog):
+        return _python(toks, cwd, ctx, has_body)
     operands = [t.text for t in toks[1:]]
-    is_python = bool(widening_targets.INTERPRETER_RE.match(prog))
     i = 0
     while i < len(operands) and operands[i].startswith("-") and operands[i] != "-":
         flag = operands[i]
         if flag == "--":
             i += 1
             break
-        if is_python:
-            if flag.startswith("--"):
-                i += 1 if flag in _PYTHON_VALUE_FLAGS else 0
-            else:
-                letters = flag[1:]
-                for pos, ch in enumerate(letters):
-                    if ch == "c":
-                        code = toks[1 + i] if pos + 1 < len(letters) else (toks[2 + i] if 2 + i < len(toks) else None)
-                        if code is None or code.nonlit:
-                            return _unres(_NONLITERAL, "the python -c code is missing or holds an expansion: the code that runs is not the text read here")
-                        return _opaque("python-c")
-                    if ch == "m":
-                        return _delegate(toks, cwd, ctx)
-                    if ch in _PYTHON_VALUE_LETTERS:
-                        i += 1 if pos == len(letters) - 1 else 0
-                        break
-        elif prog in _SHELL_INTERPRETERS:
+        if prog in _SHELL_INTERPRETERS:
             if flag in _SHELL_VALUE_FLAGS:
                 i += 1
             elif _SHELL_C_FLAG_RE.fullmatch(flag):
@@ -1104,10 +1133,24 @@ def _interpreter(prog: str, toks: list[_Tok], cwd: str | None, ctx: "_Context", 
         return _stdin_body(has_body)
     if toks[1 + i].nonlit:
         return _unres(_NONLITERAL, "the script operand holds an expansion: the file that runs is not the text read here")
-    if is_python:
-        delegated = _delegate(toks, cwd, ctx)
-        if delegated.status == "resolved":
-            return delegated
+    return _opaque("script-file")
+
+
+def _python(toks: list[_Tok], cwd: str, ctx: "_Context", has_body: bool) -> _Verdict:
+    invocation = python_invocation(toks)
+    if invocation.kind == "c":
+        if invocation.token is None or invocation.token.nonlit:
+            return _unres(_NONLITERAL, "the python -c code is missing or holds an expansion: the code that runs is not the text read here")
+        return _opaque("python-c")
+    if invocation.kind == "m":
+        return _delegate(toks, cwd, ctx)
+    if invocation.kind == "stdin":
+        return _stdin_body(has_body)
+    if invocation.token.nonlit:
+        return _unres(_NONLITERAL, "the script operand holds an expansion: the file that runs is not the text read here")
+    delegated = _delegate(toks, cwd, ctx)
+    if delegated.status == "resolved":
+        return delegated
     return _opaque("script-file")
 
 
@@ -1145,13 +1188,18 @@ class _Context:
     venue_common: str | None = None
 
 
-def _carries_stdin_body(raw: _RawSegment) -> bool:
-    """A heredoc or a literal here-string feeds stdin from text inside this segment; a pipe or `< file` does not.
-    Redirections apply left to right, so only the LAST one that touches fd 0 decides what the program reads."""
+def _stdin_redirect(raw: _RawSegment) -> _Redirect | None:
+    """Redirections apply left to right, so only the LAST one that touches fd 0 decides what the program reads."""
     last: _Redirect | None = None
     for red in raw.redirects:
         if red.fd == "0" or (red.fd is None and red.op in _STDIN_OPS):
             last = red
+    return last
+
+
+def _carries_stdin_body(raw: _RawSegment) -> bool:
+    """A heredoc or a literal here-string feeds stdin from text inside this segment; a pipe or `< file` does not."""
+    last = _stdin_redirect(raw)
     if last is None or last.target is None:
         return False
     return last.op in _HEREDOC_OPS or (last.op == "<<<" and not last.target.nonlit)
@@ -1249,3 +1297,99 @@ def resolve_segments(
             seg_text, cwd if verdict.status != "unresolved" else None, verdict.status, verdict.resources,
             verdict.opaque_kind, verdict.reason_class, verdict.reason))
     return tool_contracts.SegmentedResolution(segments)
+
+
+# --- the code an opaque segment runs (read by `code_effects`) ---------------------------------------
+
+class CodeSourceError(Exception):
+    """The code of an opaque segment cannot be read exactly as the interpreter will run it."""
+
+
+class CodeSource(NamedTuple):
+    """Where an opaque python segment's code is. `kind` is the segment's `opaque_kind`; `code` is the `-c`
+    text or the heredoc / here-string body (`None` for a script file); `script` is the operand as written;
+    `flags` are the interpreter options before the operand."""
+
+    kind: str
+    code: str | None
+    script: str | None
+    flags: tuple
+
+
+_HEREDOC_HEADER_RE = re.compile(r"<<-?[ \t]*(['\"\\]?)")
+
+
+def worktree_root(start: str) -> str | None:
+    return _worktree_root(start)
+
+
+def head_branch(root: str) -> str | None:
+    """The branch HEAD points at in the worktree `root`, or `None` (detached, not a repository, unreadable)."""
+    return _head_branch(root)
+
+
+def _command_line_end(text: str) -> int:
+    """Index of the newline that ends the command line (heredoc bodies start after it), or -1."""
+    position = text.find("\n")
+    while position >= 0:
+        try:
+            _Scanner(text[:position]).run()
+            return position
+        except _ScanError:
+            position = text.find("\n", position + 1)
+    return -1
+
+
+def _stdin_body_text(raw: _RawSegment, text: str) -> str:
+    redirect = _stdin_redirect(raw)
+    if redirect is None or redirect.target is None:
+        raise CodeSourceError("the interpreter reads its code from a stdin that is not a heredoc or here-string of this segment")
+    if _stdin_body_count(raw) != 1:
+        raise CodeSourceError("more than one heredoc or here-string feeds the segment")
+    if redirect.op == "<<<":
+        if redirect.target.nonlit:
+            raise CodeSourceError("the here-string holds an expansion: the code that runs is not the text read here")
+        return redirect.target.text + "\n"
+    if redirect.op not in _HEREDOC_OPS:
+        raise CodeSourceError("stdin comes from a file or pipe, not from text in this segment")
+    end = _command_line_end(text)
+    if end < 0:
+        raise CodeSourceError("the heredoc body is not found after the command line")
+    header = text[:end]
+    marks = _HEREDOC_HEADER_RE.findall(header)
+    if len(marks) != 1 or header.count("<<") != 1:
+        raise CodeSourceError("the heredoc operator cannot be told apart from other text on the command line")
+    body, _ = _read_heredoc(text, end + 1, redirect.target.text, redirect.op == "<<-")
+    if redirect.op == "<<-":
+        body = "\n".join(line.lstrip("\t") for line in body.split("\n"))
+    if marks[0] == "" and any(ch in body for ch in "$`\\"):
+        raise CodeSourceError("the heredoc is unquoted and its body holds $, a backtick or a backslash: the shell rewrites it before python reads it")
+    return body + "\n"
+
+
+def code_source(segment_text: str) -> CodeSource:
+    """The code source of one opaque python segment, read by the same option parser the resolver used to
+    call the segment opaque. Raises `CodeSourceError` for anything but python code whose text is in the
+    segment (`-c`, a heredoc or here-string body) or a literal script operand."""
+    try:
+        scanned = _Scanner(segment_text).run()
+    except _ScanError as exc:
+        raise CodeSourceError(f"the segment cannot be scanned: {exc}") from exc
+    if len(scanned) != 1 or not scanned[0].words:
+        raise CodeSourceError("the segment text does not scan as one command")
+    raw = scanned[0]
+    prog = raw.words[0].text
+    if not widening_targets.INTERPRETER_RE.match(prog):
+        raise CodeSourceError(f"{prog!r} is not a Python interpreter: only Python code is read")
+    invocation = python_invocation(raw.words)
+    if invocation.kind == "m":
+        raise CodeSourceError("the python command line runs a module, not code that is read here")
+    if invocation.kind == "c":
+        if invocation.token is None or invocation.token.nonlit or invocation.code is None:
+            raise CodeSourceError("the python -c code is missing or holds an expansion")
+        return CodeSource("python-c", invocation.code, None, invocation.flags)
+    if invocation.kind == "stdin":
+        return CodeSource("stdin-body", _stdin_body_text(raw, segment_text), None, invocation.flags)
+    if invocation.token.nonlit:
+        raise CodeSourceError("the script operand is not a literal file name")
+    return CodeSource("script-file", None, invocation.token.text, invocation.flags)

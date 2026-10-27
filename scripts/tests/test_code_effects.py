@@ -1,14 +1,15 @@
 """Opaque code, read (`code_effects.collect`, `advisor.judge_code_effects`, `code_effects.effects_of`).
 
-The judge runner is always a stub here -- no test makes a real `claude -p` call. To see one real call:
+The judge runner is always a stub here -- no test makes a real `claude -p` call. To see real calls:
     python3 scripts/code_effects_live_probe.py
-The two live-judge tests below are skipped unless CODE_EFFECTS_LIVE=1.
 
 What is pinned, by the failure each test guards:
   * collect is fed from `resolve_segments` over the replay fixture's opaque cases, not from hand-built
     segments, and returns the exact text the judge will read (or why it cannot be read);
   * the import closure -- python-c and stdin-body included -- is part of that text, capped, and anything
-    unseen (a module that cannot be located, exec/eval/importlib, a file outside the venue) is UNDETERMINABLE;
+    unseen (a module that cannot be located, import machinery, exec/eval, sys.path, an unmodelled
+    interpreter option, a file outside the venue) is UNDETERMINABLE: the reader is an allow-list;
+  * `effects_of(segment, line_segments)` refuses when another segment of the line may rewrite the text read;
   * every judge failure (timeout, exit code, no JSON, schema violation, a raise) is UNDETERMINABLE, never an
     empty effect list;
   * the cache key covers every byte the judge saw, and only an answered verdict is cached;
@@ -31,6 +32,7 @@ from lib import config_root, host_llm, judge_ledger
 
 TESTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS_DIR))
+import resource_grant_mutation_control as CONTROL  # noqa: E402
 import test_tool_contracts_segments as seg_tests  # noqa: E402
 
 REPO = TESTS_DIR.parent.parent
@@ -39,6 +41,12 @@ REPO = TESTS_DIR.parent.parent
 @pytest.fixture(autouse=True)
 def _no_cdpath(monkeypatch):
     monkeypatch.delenv("CDPATH", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_python_path_env(monkeypatch):
+    for name in code_effects._PATH_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -115,7 +123,7 @@ WRITE_OUT = {"kind": "file", "path": "out.txt", "op": "write"}
 
 #: fixture opaque case -> True when its code is fully readable in the synthetic world, else a reason fragment
 FIXTURE_EXPECTATION = {
-    "python-c-01": "lib",
+    "python-c-01": "sys.path",
     "python-stdin-01": True,
     "python-stdin-03": True,
     "python-stdin-04": True,
@@ -201,10 +209,22 @@ def test_relative_imports_inside_a_package_are_followed(repo):
     assert "RELATIVE" in collected("python3 pkg/main.py", repo).code
 
 
-def test_a_literal_sys_path_insert_adds_a_search_directory(repo):
-    write(repo, "libs/tool_mod.py", "MARK = 'ON-SYS-PATH'\n")
-    got = collected("python3 -c \"import sys; sys.path.insert(0, 'libs'); import tool_mod\"", repo)
-    assert "ON-SYS-PATH" in got.code
+@pytest.mark.parametrize("code", [
+    "import sys; sys.path.insert(0, 'libs'); import tool_mod",
+    "import sys; sys.path.append('libs')",
+    "import sys; print(sys.modules)",
+    "import sys as s; s.path = []",
+    "import sys; p = sys.path",
+    "from sys import path",
+    "import sys; f = sys",
+])
+def test_any_use_of_sys_beyond_the_safe_attributes_is_undeterminable(code, repo):
+    write(repo, "libs/tool_mod.py", "X = 1\n")
+    undeterminable(f"python3 - <<'E'\n{code}\nE", repo)
+
+
+def test_sys_argv_and_exit_are_allowed(repo):
+    collected("python3 -c 'import sys; print(sys.argv); sys.exit(0)'", repo)
 
 
 def test_standard_library_and_installed_packages_need_no_text(repo):
@@ -221,15 +241,101 @@ def test_standard_library_and_installed_packages_need_no_text(repo):
     "import importlib; importlib.import_module('os')",
     "import runpy; runpy.run_path('x.py')",
     "def broken(:",
+    "import builtins; builtins.exec('1')",
+    "from importlib import import_module as im; im('helper')",
+    "import imp",
+    "import pkgutil",
+    "import zipimport",
+    "from runpy import run_module",
+    "run = exec",
+    "f = __builtins__.__dict__['ex' + 'ec']",
+    "x = getattr(__import__, 'x')",
+    "import os; os.chdir('/')",
+    "import site",
+    "f = compile",
+    "print(vars())",
 ])
 def test_unseen_or_dynamic_code_is_undeterminable(code, repo):
     undeterminable(f"python3 - <<'E'\n{code}\nE", repo)
 
 
+def test_a_reference_to_exec_without_a_call_is_undeterminable(repo):
+    got = undeterminable("python3 -c 'f = exec'", repo)
+    assert "exec" in got.reason
+
+
 def test_an_import_outside_the_venue_is_undeterminable(repo, tmp_path):
     write(tmp_path, "elsewhere/ext.py", "X = 1\n")
-    got = undeterminable(f"python3 -c \"import sys; sys.path.insert(0, '{tmp_path / 'elsewhere'}'); import ext\"", repo)
+    (repo / "ext.py").symlink_to(tmp_path / "elsewhere" / "ext.py")
+    got = undeterminable("python3 -c 'import ext'", repo)
     assert "outside the venue" in got.reason
+
+
+# --- collect: the interpreter's import search path (B3) -------------------------------------------------
+
+@pytest.mark.parametrize("flag", ["-I", "-P", "-E", "-S", "-s", "-x", "-i", "-d", "-v", "-b", "-W error", "-X dev", "-Isu"])
+def test_an_unmodelled_interpreter_option_is_undeterminable(flag, repo):
+    write(repo, "helper2.py", "X = 1\n")
+    undeterminable(f"python3 {flag} -c 'import helper2'", repo)
+
+
+@pytest.mark.parametrize("flag", ["-u", "-B", "-O", "-q", "-uB", "-OO"])
+def test_the_modelled_interpreter_options_are_accepted(flag, repo):
+    write(repo, "helper2.py", "X = 1\n")
+    assert "=== helper2.py ===" in collected(f"python3 {flag} -c 'import helper2'", repo).code
+
+
+def test_a_long_interpreter_option_is_undeterminable(repo):
+    undeterminable("python3 --check-hash-based-pycs always -c 'print(1)'", repo)
+
+
+@pytest.mark.parametrize("name", ["PYTHONPATH", "PYTHONHOME", "PYTHONSAFEPATH"])
+def test_a_path_variable_in_the_environment_is_undeterminable(name, repo, monkeypatch):
+    monkeypatch.setenv(name, "/somewhere")
+    got = undeterminable("python3 -c 'print(1)'", repo)
+    assert name in got.reason
+
+
+def test_a_bare_directory_is_a_namespace_package_and_is_undeterminable(repo):
+    (repo / "yaml").mkdir()
+    got = undeterminable("python3 -c 'import yaml'", repo)
+    assert "namespace" in got.reason
+
+
+@pytest.mark.parametrize("sibling", ["helper2.so", "helper2.pyc", "helper2.cpython-312-x86_64-linux-gnu.so", "helper2.abi3.so"])
+def test_a_compiled_or_bytecode_sibling_is_undeterminable(sibling, repo):
+    write(repo, "helper2.py", "X = 1\n")
+    write(repo, sibling, "")
+    got = undeterminable("python3 -c 'import helper2'", repo)
+    assert "compiled or bytecode" in got.reason
+
+
+def test_a_package_wins_over_a_module_of_the_same_name_and_both_are_not_a_conflict(repo):
+    write(repo, "thing/__init__.py", "FROM = 'package'\n")
+    write(repo, "thing.py", "FROM = 'module'\n")
+    got = collected("python3 -c 'import thing'", repo)
+    assert "FROM = 'package'" in got.code and "FROM = 'module'" not in got.code
+
+
+def test_a_script_search_directory_is_the_script_directory_not_the_cwd(repo):
+    write(repo, "sub/tool.py", "import near\n")
+    write(repo, "sub/near.py", "NEAR = 'sub'\n")
+    write(repo, "near.py", "NEAR = 'cwd'\n")
+    got = collected("python3 sub/tool.py", repo)
+    assert "NEAR = 'sub'" in got.code and "NEAR = 'cwd'" not in got.code
+
+
+def test_collected_names_every_file_read_and_every_path_probed(repo):
+    write(repo, "tool.py", "import helper\n")
+    write(repo, "helper.py", "X = 1\n")
+    got = collected("python3 tool.py", repo)
+    assert got.files == (str(repo / "tool.py"), str(repo / "helper.py"))
+    for name in ("helper", "helper.py", "helper.so"):
+        assert str(repo / name) in got.probed
+
+
+def test_collected_carries_the_current_branch(repo):
+    assert collected("python3 -c 'print(1)'", repo).branch == "feature"
 
 
 def test_a_symlinked_script_pointing_outside_is_undeterminable(repo, tmp_path):
@@ -343,6 +449,12 @@ def test_every_judge_failure_is_undeterminable_never_an_empty_list(stub):
     {"effects": [{**WRITE_OUT, "op": "read"}], "undeterminable": False, "reason": "ok"},
     {"effects": [{**WRITE_OUT, "path": "out/*.txt"}], "undeterminable": False, "reason": "ok"},
     {"effects": [{**WRITE_OUT, "path": "$HOME/x"}], "undeterminable": False, "reason": "ok"},
+    {"effects": [{**WRITE_OUT, "path": "~/x"}], "undeterminable": False, "reason": "ok"},
+    {"effects": [{**WRITE_OUT, "path": "~"}], "undeterminable": False, "reason": "ok"},
+    {"effects": [{**WRITE_OUT, "op": ["write"]}], "undeterminable": False, "reason": "ok"},
+    {"effects": [{**WRITE_OUT, "kind": ["file"]}], "undeterminable": False, "reason": "ok"},
+    {"effects": [{**WRITE_OUT, "kind": None}], "undeterminable": False, "reason": "ok"},
+    {"effects": [{"kind": "vcs_ref", "remote": "origin", "ref": "main", "op": {"x": 1}}], "undeterminable": False, "reason": "ok"},
     {"effects": [{**WRITE_OUT, "path": ""}], "undeterminable": False, "reason": "ok"},
     {"effects": [{"kind": "network", "host": "x"}], "undeterminable": False, "reason": "ok"},
     {"effects": [{"kind": "vcs_ref", "remote": "origin", "ref": "a b", "op": "push"}], "undeterminable": False, "reason": "ok"},
@@ -411,11 +523,30 @@ def test_residual_risk_a_valid_narrow_answer_is_accepted():
 
 
 def test_the_prompt_forces_undeterminable_for_code_the_judge_cannot_see():
-    prompt = advisor._ce_prompt("x = 1\n", "/venue")
+    prompt = advisor._ce_prompt("x = 1\n", "/venue", "feature")
     for phrase in ("whose text is not shown", "exec, eval, compile, __import__, importlib or runpy",
                    "subprocess", "program taken from a variable", "computes a path"):
         assert phrase in prompt
     assert "/venue" in prompt
+
+
+def test_the_prompt_says_a_non_file_effect_is_undeterminable():
+    """The schema can express only a file write and a git commit/push; any other effect must not be
+    answered with an empty list (the empty list is an allow)."""
+    prompt = advisor._ce_prompt("x = 1\n", "/venue", "feature")
+    assert "The ONLY effects you can express are the two kinds below" in prompt
+    assert "has ANY effect other than a file write or a git ref commit/push" in prompt
+    for example in ("network request", "gh, curl, yc", "process signal", "package install", "database write",
+                    "subprocess of any program"):
+        assert example in prompt
+    assert "valid ONLY when the code's sole effects are reading, computing and printing" in prompt
+
+
+def test_the_prompt_states_the_branch_and_how_a_path_is_reported():
+    prompt = advisor._ce_prompt("x = 1\n", "/venue", "topic-branch")
+    assert "branch topic-branch checked out" in prompt
+    assert "never starting with ~" in prompt and "Python does not expand ~" in prompt
+    assert "(none: a detached HEAD or not a git repository)" in advisor._ce_prompt("x = 1\n", "/venue", None)
 
 
 def test_the_judge_writes_a_ledger_row_with_its_latency():
@@ -610,6 +741,158 @@ def test_the_default_cache_lives_under_the_agentctl_state_directory(repo, tmp_pa
     assert list((tmp_path / "state-root" / "code-effects-cache").glob("*.json"))
 
 
+def test_a_poisoned_cache_record_with_a_non_string_field_is_ignored_not_raised(repo, cache_dir):
+    segment = opaque_segment("python3 -c 'print(1)'", repo)
+    stub = Stub(answer([WRITE_OUT]))
+    code_effects.effects_of(segment, runner=stub, cache_dir=cache_dir)
+    (path,) = cache_dir.glob("*.json")
+    record = json.loads(path.read_text())
+    record["answer"]["effects"] = [{"kind": ["file"], "path": "x", "op": ["write"]}]
+    path.write_text(json.dumps(record))
+    got = code_effects.effects_of(segment, runner=stub, cache_dir=cache_dir)
+    assert isinstance(got, code_effects.Effects) and len(stub.calls) == 2
+
+
+def test_validation_is_total_over_non_string_kind_and_op():
+    for effect in ({"kind": ["file"], "path": "x", "op": "write"}, {"kind": "file", "path": "x", "op": ["write"]},
+                   {"kind": {}, "op": 1}, {"op": None}):
+        verdict = advisor.validate_code_effects_answer({"effects": [effect], "undeterminable": False, "reason": "r"})
+        assert verdict.effects is None and not verdict.answered
+
+
+def test_the_judge_has_no_runtime_host_parameter_the_cache_key_could_disagree_with():
+    import inspect
+    assert "runtime_host" not in inspect.signature(advisor.judge_code_effects).parameters
+
+
+def test_a_tilde_path_from_the_judge_is_undeterminable_not_a_home_write(repo, cache_dir):
+    segment = opaque_segment("python3 -c \"open('~/x', 'w')\"", repo)
+    stub = Stub(answer([{"kind": "file", "path": "~/x", "op": "write"}]))
+    got = code_effects.effects_of(segment, runner=stub, cache_dir=cache_dir)
+    assert isinstance(got, code_effects.Undeterminable)
+
+
+def test_cache_path_is_reported_only_when_the_record_was_written(repo, cache_dir, monkeypatch):
+    segment = opaque_segment("python3 -c 'print(1)'", repo)
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(code_effects.tempfile, "mkstemp", boom)
+    got = code_effects.effects_of(segment, runner=Stub(answer([])), cache_dir=cache_dir)
+    assert isinstance(got, code_effects.Effects) and got.cache_path is None and not got.cached
+    assert not list(cache_dir.glob("*.json"))
+
+
+# --- effects_of: the rest of the command line (B1) -----------------------------------------------------
+
+def line(text, venue):
+    """The opaque segment and every segment of its command line, as stage 8's hook has them."""
+    result = tool_contracts.resolve_segments(text, str(venue))
+    opaque = [s for s in result.segments if s.status == "opaque"]
+    assert len(opaque) == 1, [(s.text, s.status, s.reason) for s in result.segments]
+    return opaque[0], result.segments
+
+
+def effects_on_line(text, venue, cache_dir, stub=None):
+    segment, segments = line(text, venue)
+    stub = stub or Stub(answer([]))
+    return code_effects.effects_of(segment, segments, runner=stub, cache_dir=cache_dir), stub
+
+
+def test_a_sibling_heredoc_that_rewrites_an_imported_module_is_undeterminable(repo, cache_dir):
+    """Reviewer probe 1: the judge would read the old helper.py while the line replaces it first."""
+    write(repo, "helper.py", "OLD = 1\n")
+    got, stub = effects_on_line("cat > helper.py <<'E'\nNEW = 2\nopen('boom', 'w')\nE\npython3 -c 'import helper'", repo, cache_dir)
+    assert isinstance(got, code_effects.Undeterminable) and "helper.py" in got.reason
+    assert not stub.calls
+
+
+def test_a_sibling_that_writes_the_script_before_it_runs_is_undeterminable(repo, cache_dir):
+    """Reviewer probe 2: `cat > s.py <<EOF ... EOF` then `python3 s.py`."""
+    write(repo, "s.py", "OLD = 1\n")
+    got, stub = effects_on_line("cat > s.py <<'EOF'\nopen('x', 'w')\nEOF\npython3 s.py", repo, cache_dir)
+    assert isinstance(got, code_effects.Undeterminable) and "s.py" in got.reason
+    assert not stub.calls
+
+
+def test_the_opaque_segments_own_redirection_onto_its_module_is_undeterminable(repo, cache_dir):
+    write(repo, "helper.py", "OLD = 1\n")
+    got, stub = effects_on_line("python3 -c 'import helper' > helper.py", repo, cache_dir)
+    assert isinstance(got, code_effects.Undeterminable) and not stub.calls
+
+
+def test_a_sibling_write_to_a_directory_holding_a_read_file_is_undeterminable(repo, cache_dir):
+    write(repo, "libdir/helper.py", "X = 1\n")
+    write(repo, "libdir/tool.py", "import helper\n")
+    got, stub = effects_on_line("mkdir -p libdir\npython3 libdir/tool.py", repo, cache_dir)
+    assert isinstance(got, code_effects.Undeterminable) and "libdir" in got.reason and not stub.calls
+
+
+def test_a_sibling_that_creates_a_probed_path_is_undeterminable(repo, cache_dir):
+    write(repo, "helper.py", "X = 1\n")
+    got, stub = effects_on_line("touch helper.so\npython3 -c 'import helper'", repo, cache_dir)
+    assert isinstance(got, code_effects.Undeterminable) and "helper.so" in got.reason and not stub.calls
+
+
+def test_an_unresolved_sibling_makes_the_code_undeterminable(repo, cache_dir):
+    """The resolver itself degrades the segments after an unresolved one, so this hands `effects_of` the
+    shapes directly: an unresolved sibling next to an opaque segment that is otherwise readable."""
+    unresolved = tool_contracts.resolve_segments("./tool_nobody_knows --flag", str(repo)).segments[0]
+    assert unresolved.status == "unresolved"
+    segment = opaque_segment("python3 -c 'print(1)'", repo)
+    stub = Stub(answer([]))
+    got = code_effects.effects_of(segment, [unresolved, segment], runner=stub, cache_dir=cache_dir)
+    assert isinstance(got, code_effects.Undeterminable) and "unresolved" in got.reason and not stub.calls
+
+
+def test_a_second_opaque_segment_on_the_line_makes_both_undeterminable(repo, cache_dir):
+    result = tool_contracts.resolve_segments("python3 -c 'print(1)'\npython3 -c 'print(2)'", str(repo))
+    first = result.segments[0]
+    got = code_effects.effects_of(first, result.segments, runner=Stub(answer([])), cache_dir=cache_dir)
+    assert isinstance(got, code_effects.Undeterminable)
+
+
+def test_an_unrelated_sibling_write_does_not_block_the_read(repo, cache_dir):
+    write(repo, "helper.py", "X = 1\n")
+    got, stub = effects_on_line("echo hi > notes.txt\npython3 -c 'import helper'", repo, cache_dir)
+    assert isinstance(got, code_effects.Effects) and len(stub.calls) == 1
+
+
+def test_a_line_that_is_only_the_opaque_segment_needs_no_siblings(repo, cache_dir):
+    segment = opaque_segment("python3 -c 'print(1)'", repo)
+    assert isinstance(code_effects.effects_of(segment, runner=Stub(answer([])), cache_dir=cache_dir), code_effects.Effects)
+    assert isinstance(code_effects.effects_of(segment, [segment], runner=Stub(answer([])), cache_dir=cache_dir),
+                      code_effects.Effects)
+
+
+def test_the_judge_is_told_the_branch_and_the_key_covers_it(repo, cache_dir):
+    segment = opaque_segment("python3 -c 'print(1)'", repo)
+    stub = Stub(answer([]))
+    code_effects.effects_of(segment, runner=stub, cache_dir=cache_dir)
+    assert "branch feature checked out" in stub.calls[0]["stdin"]
+    seg_tests._git(repo, "checkout", "-q", "-B", "other")
+    code_effects.effects_of(segment, runner=stub, cache_dir=cache_dir)
+    assert len(stub.calls) == 2 and "branch other checked out" in stub.calls[1]["stdin"]
+    assert code_effects.cache_key("a" * 64, "/v", "x") != code_effects.cache_key("a" * 64, "/v", "y")
+    assert code_effects.cache_key("a" * 64, "/v", None) != code_effects.cache_key("a" * 64, "/v", "x")
+
+
+COMMIT_OUT = {"kind": "vcs_ref", "remote": ".", "ref": "feature", "op": "commit"}
+
+
+def test_a_commit_is_undeterminable_when_a_sibling_may_switch_the_branch(repo, cache_dir):
+    seg_tests._git(repo, "branch", "other")
+    got, stub = effects_on_line("git checkout -q other\npython3 -c 'print(1)'", repo, cache_dir, Stub(answer([COMMIT_OUT])))
+    assert isinstance(got, code_effects.Undeterminable) and stub.calls
+    assert "branch" in got.reason
+
+
+def test_a_commit_stands_when_no_sibling_touches_the_worktree(repo, cache_dir):
+    got, _ = effects_on_line("echo hi\npython3 -c 'print(1)'", repo, cache_dir, Stub(answer([COMMIT_OUT])))
+    assert isinstance(got, code_effects.Effects) and got.resources == (resources.VcsRefResource(".", "feature", "commit"),)
+
+
 # --- config: the two timeouts ----------------------------------------------------------------------
 
 def test_the_judge_timeout_ends_before_the_hook_timeout():
@@ -640,29 +923,22 @@ def test_both_keys_are_documented_in_the_rationale():
     assert "resource-grant-hook-timeout-s" in text and "resource-grant-judge-timeout-s" in text
 
 
-def test_the_catalogue_test_is_skipped_inside_a_mutated_copy():
+def _catalogue_anchor_test_outcome(marker):
+    env = {k: v for k, v in os.environ.items() if k != CONTROL.ACTIVE_MUTANT_ENV}
+    if marker:
+        env[CONTROL.ACTIVE_MUTANT_ENV] = marker
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rs",
+         "scripts/tests/test_resource_grant_mutation_catalogue.py", "-k", "test_every_anchor_occurs_exactly_once"],
+        cwd=REPO, env=env, capture_output=True, text=True, timeout=300)
+    return done.returncode, done.stdout
+
+
+@pytest.mark.skipif(bool(os.environ.get(CONTROL.ACTIVE_MUTANT_ENV)), reason="its unmarked half fails in a mutated copy")
+def test_the_catalogue_anchor_test_runs_normally_and_skips_inside_a_mutated_copy():
     """The anchor test of the mutation catalogue fails in every mutated copy (its anchor is gone); it must
-    skip itself on the active-mutant marker so a stage-7 mutant's `--run` stays about its own tests."""
-    source = (TESTS_DIR / "test_resource_grant_mutation_catalogue.py").read_text(encoding="utf-8")
-    assert "os.environ.get(CONTROL.ACTIVE_MUTANT_ENV)" in source
-    assert source.count("@in_mutated_copy") >= 1
-
-
-# --- live (opt-in) -------------------------------------------------------------------------------
-
-live = pytest.mark.skipif(os.environ.get("CODE_EFFECTS_LIVE") != "1", reason="set CODE_EFFECTS_LIVE=1 for a real judge call")
-
-
-@live
-def test_live_judge_names_a_file_write(repo, cache_dir):
-    got = code_effects.effects_of(opaque_segment("python3 -c \"open('live.txt', 'w').write('x')\"", repo), cache_dir=cache_dir)
-    print("LIVE verdict:", got)
-    assert isinstance(got, code_effects.Effects)
-    assert resources.FileResource(str(repo / "live.txt"), "write") in got.resources
-
-
-@live
-def test_live_judge_refuses_a_module_it_cannot_see(repo):
-    verdict = advisor.judge_code_effects("import unseen_local_module\nunseen_local_module.go()\n", str(repo))
-    print("LIVE verdict:", verdict)
-    assert verdict.effects is None
+    skip itself on the active-mutant marker so a mutant's `--run` stays about its own tests."""
+    _, out = _catalogue_anchor_test_outcome(None)
+    assert "skipped" not in out and ("passed" in out or "failed" in out), out[-400:]
+    code, out = _catalogue_anchor_test_outcome("some-mutant")
+    assert code == 0 and " skipped" in out and " passed" not in out and "failed" not in out, out[-400:]
