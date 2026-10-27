@@ -10871,7 +10871,7 @@ RESOLUTION_ASK_RULE_HINT = ("the marker must be inside an option label or descri
                             "verify-final between the ask and resolve")
 
 
-def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
+def _resolution_ask_gate(state: SessionState, args, *, channel_ok: bool = True) -> tuple[list[str], dict]:
     """The resolve-time resolution-ask blockers plus the record of how the gate was met.
 
     The 1-5 rating must be asked inside an AskUserQuestion that embeds
@@ -10881,7 +10881,9 @@ def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
     transcript is derived from the session id, never supplied. The record is
     {override, unverifiable}: the AGENTCTL_RESOLUTION_ASK_GATE value when it overrode
     the gate, and the reason given when --resolution-ask-unverifiable stood in for an
-    unreadable transcript — so a bypass is never silent."""
+    unreadable transcript — so a bypass is never silent. `channel_ok` is False while
+    another resolve blocker stands, so the headless channel is asked only about a
+    resolve that can otherwise succeed."""
     env = os.environ.get("AGENTCTL_RESOLUTION_ASK_GATE")
     record = {"override": env if env in ("0", "1") else None, "unverifiable": None}
     if not gates.resolution_ask_gate_active(state):
@@ -10895,11 +10897,10 @@ def _resolution_ask_gate(state: SessionState, args) -> tuple[list[str], dict]:
                          + RESOLUTION_ASK_RULE_HINT], record
     channel_text = (f"{RESOLUTION_ASK_MARKER} Resolve task {state.task_id!r} with quality "
                     f"{getattr(args, 'quality', None)}?\n").encode("utf-8")
-    channel_result = delivery_channel.deliver("resolution_ask", channel_text)
+    channel_result = delivery_channel.deliver("resolution_ask", channel_text) if channel_ok else None
     if channel_result is not None:
         delivery_channel.log_delivery(state, channel_result, plan_sha256=None)
         if channel_result.answered:
-            record["channel"] = channel_result.sha256
             return [], record
         return [prefix + "the resolution question was delivered through the headless "
                          "channel but it gave no `confirm` answer"], record
@@ -10971,7 +10972,7 @@ def cmd_resolve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         blockers = blockers + [f"invalid --quality {quality!r}: must be an integer 1-5"]
     landing_blockers, landing = _landing_gate(state, args, runner)
     blockers = blockers + landing_blockers
-    ask_blockers, resolution_ask = _resolution_ask_gate(state, args)
+    ask_blockers, resolution_ask = _resolution_ask_gate(state, args, channel_ok=not blockers)
     blockers = blockers + ask_blockers
     _log_gate(state, "resolution", blockers, passed=not blockers)
     if blockers:

@@ -149,6 +149,7 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/cli.py`:`_stage_grant_entries` | not a binding | Checks the approved snapshot's bytes against the recorded snapshot hash, which `plan-convert-live` never rewrites (no new snapshot is written). |
 | `scripts/agentctl/gates.py`:`_file_sha256` | not a binding | The hashing helper itself. |
 | `scripts/agentctl/gates.py`:`file_norm_digest` | not a binding | Hashes a norm file, not a plan. |
+| `scripts/agentctl/delivery.py`:`has_answered_channel_delivery` | not a binding | Compares the plan digest a channel stamp was written for with the one in the engine's own recorded channel-delivery event; both are recorded, neither is a plan file's current digest. |
 | `scripts/agentctl/gates.py`:`_delivery_stamp_blocker` | not a binding | Compares a delivery stamp with its receipt; both are recorded, neither is a plan file's current digest. |
 | `scripts/agentctl/plan_convert.py`:`cmd_plan_convert_live` | not a binding | Requires the plan file's digest to equal the accepted digest exactly before converting; after a conversion the two are different forms, and this check runs against the form on disk. |
 | `scripts/agentctl/plan_store.py`:`_intact` | not a binding | Re-hashes a stored object against its own name. |

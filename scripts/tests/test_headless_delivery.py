@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, delivery
+from agentctl import cli, delivery, delivery_channel
 from agentctl.render import render_plan_grants
 from agentctl.plan import load_plan
 from agentctl.state import Node
@@ -41,7 +41,8 @@ if mode == "fail":
     sys.exit(3)
 if mode == "silent":
     sys.exit(0)
-print("confirm" if kind == "resolution_ask" else "approve")
+right = "confirm" if kind == "resolution_ask" else "approve"
+print(("approve" if right == "confirm" else "confirm") if mode == "wrong" else right)
 """
 
 
@@ -65,6 +66,7 @@ def root(tmp_path, monkeypatch) -> Path:
     home.mkdir()
     monkeypatch.setenv("CLAUDE_AGENT_HOME", str(home))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    monkeypatch.setattr(delivery_channel, "CONFIG_NAME", "delivery-channel.toml")
     return home
 
 
@@ -115,8 +117,9 @@ def to_plan_ready(store, plan: str, sid=SID) -> None:
 
 def present(store, tmp_path, kind: str, plan: str, text: str, sid=SID, target=None):
     body = text
-    if kind == "essence":
-        body += "\n\n" + render_plan_grants(load_plan(plan), fmt="compact").strip()
+    if kind in ("essence", "full"):
+        fmt = "compact" if kind == "essence" else "full"
+        body += "\n\n" + render_plan_grants(load_plan(plan), fmt=fmt).strip()
     rendering = tmp_path / f"{kind}.md"
     rendering.write_text(body, encoding="utf-8")
     return cli.cmd_present_plan(ns(session=sid, kind=kind, plan=target, rendering_file=str(rendering),
@@ -263,4 +266,47 @@ def test_session_reachable_channel_config_ignored(store, channel, tmp_path, root
     assert present(store, tmp_path, "essence", plan, "Essence.").ok is True
     assert saved(channel) == []
     assert channel_events(store) == []
+
+
+def test_wrong_first_line_is_not_an_answer(store, channel, tmp_path, root):
+    (channel / "mode").write_text("wrong", encoding="utf-8")
+    plan = venued(tmp_path, "plan_two_stage.toml", tmp_path)
+    to_plan_ready(store, plan)
+    assert present(store, tmp_path, "essence", plan, "Essence.").ok is True
     assert delivery.read_stamp(store.path(SID)) is None
+    assert [e["answered"] for e in channel_events(store)] == [False]
+
+    (channel / "mode").write_text("ok", encoding="utf-8")
+    assert present(store, tmp_path, "essence", plan, "Essence again.").ok is True
+    assert approve(store).ok is True
+    to_resolution(store)
+    (channel / "mode").write_text("wrong", encoding="utf-8")
+    d = resolve(store)
+    assert d.ok is False
+    assert any("gave no `confirm` answer" in b for b in d.data["blockers"])
+
+
+def test_full_kind_is_logged_without_a_stamp(store, channel, tmp_path, root):
+    plan = venued(tmp_path, "plan_two_stage.toml", tmp_path)
+    to_plan_ready(store, plan)
+    assert present(store, tmp_path, "full", plan, "[stage 1] a\n[stage 2] b\n").ok is True
+    assert [e["kind"] for e in channel_events(store)] == ["full"]
+    assert channel_events(store)[0]["answered"] is True
+    assert delivery.read_stamp(store.path(SID)) is None
+
+
+def test_resolve_with_invalid_quality_does_not_call_channel(store, channel, tmp_path, root):
+    run_to_approved(store, tmp_path, root)
+    assert approve(store).ok is True
+    to_resolution(store)
+    before = len(saved(channel))
+    for quality in (None, 9):
+        d = cli.cmd_resolve(ns(session=SID, by="user", quality=quality, quality_by="user-confirmed",
+                               quality_note=None), store=store)
+        assert d.ok is False
+    assert len(saved(channel)) == before
+
+
+def test_unknown_kind_is_rejected(channel):
+    with pytest.raises(ValueError):
+        delivery_channel.deliver("bogus", b"x")
