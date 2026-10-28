@@ -1,4 +1,4 @@
-"""Mutants for scripts/lib/time_profile.py, applied to the tests through the environment.
+"""Mutants for scripts/lib/time_profile.py and time_profile_uncertainty.py, applied to the tests through the environment.
 
 A test file that imports `time_profile_mutant` (an autouse fixture) runs against one
 deliberately wrong `time_profile` (extractor or aggregation) when TIME_PROFILE_MUTANT
@@ -9,7 +9,8 @@ A mutant that cannot be applied, or a name that is not in MUTANTS, ends the run 
 exit 4, so a typo or a renamed hook cannot read as "the tests caught it".
 
 Each mutant names the suite that must catch it: the aggregation mutants
-(AGGREGATE_MUTANTS) belong to test_time_profile_aggregate.py, all others to
+(AGGREGATE_MUTANTS) belong to test_time_profile_aggregate.py, the uncertainty mutants
+(UNCERTAINTY_MUTANTS) to test_time_profile_uncertainty.py, all others to
 test_time_profile_extract.py; see suite_for().
 
 Extractor mutants are pure transforms over the extractor's own results, and a `Skipped`
@@ -23,7 +24,8 @@ import os
 
 import pytest
 
-from lib import time_profile
+from lib import time_profile, time_profile_uncertainty
+from lib.agent_report import time_profile as view
 
 ENV = "TIME_PROFILE_MUTANT"
 
@@ -188,7 +190,37 @@ def _apply_figure_without_n_eff(monkeypatch):
     monkeypatch.setattr(time_profile, "figure", lambda mean, se, n_eff: {"mean": mean, "se": se})
 
 
+def _apply_no_widening(monkeypatch):
+    monkeypatch.setattr(time_profile_uncertainty, "AMBIGUITY_SOURCES", {})
+
+
+def _apply_render_drops_share(monkeypatch):
+    payload, render = view.uncertainty_payload, view.render_uncertainty_md
+
+    def without_share(run, half_life):
+        result = payload(run, half_life)
+        for component in result["components"]:
+            del component["share_active"]
+        return result
+
+    def md_without_share(report):
+        filled = {**report, "components": [{**c, "share_active": time_profile.figure(0.0, None, 0.0)}
+                                           for c in report["components"]]}
+        return "\n".join(line for line in render(filled).splitlines() if not line.startswith("- share of active"))
+
+    monkeypatch.setattr(view, "uncertainty_payload", without_share)
+    monkeypatch.setattr(view, "render_uncertainty_md", md_without_share)
+
+
 MUTANTS = {
+    "no_widening": (
+        "AMBIGUITY_SOURCES is empty, so every reconstruction interval collapses to the point estimate",
+        _apply_no_widening,
+    ),
+    "render_drops_share": (
+        "the uncertainty renderer omits share_active from every heavy component",
+        _apply_render_drops_share,
+    ),
     "half_life_ignores_config": (
         "the default half-life is 7 days whatever config.md says",
         _apply_half_life_ignores_config,
@@ -280,11 +312,14 @@ MUTANTS = {
 }
 
 AGGREGATE_MUTANTS = frozenset({"half_life_ignores_config", "figure_without_n_eff"})
-assert AGGREGATE_MUTANTS <= set(MUTANTS)
+UNCERTAINTY_MUTANTS = frozenset({"no_widening", "render_drops_share"})
+assert AGGREGATE_MUTANTS | UNCERTAINTY_MUTANTS <= set(MUTANTS)
 
 
 def suite_for(mutant: str) -> str:
     """The test file that must fail under `mutant`."""
+    if mutant in UNCERTAINTY_MUTANTS:
+        return "test_time_profile_uncertainty.py"
     return "test_time_profile_aggregate.py" if mutant in AGGREGATE_MUTANTS else "test_time_profile_extract.py"
 
 
