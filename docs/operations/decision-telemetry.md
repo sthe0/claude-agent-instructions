@@ -30,7 +30,9 @@ other stdout (a PreToolUse `ask` included). An engine row is `deny` when the gat
 Telemetry is off, and writes nothing, when the log path cannot be created. It never changes a
 hook's stdout, stderr or exit code, crashes included: the capture lives in memory where the
 kernel allows (a full disk cannot swallow a refusal), descriptor 1 is restored whatever the
-capture does, and any failure after the hook returns is swallowed.
+capture does, and any failure after the hook returns is swallowed. One gap remains where the
+kernel has no `memfd_create` (macOS): the capture falls back to a temp file, so a hook that
+prints more than Python's ~8 KB buffer onto a full disk fails in its own `print`.
 
 ## Hooks
 
@@ -47,7 +49,8 @@ exactly one valid row.
 ## Engine gates
 
 `cli._log_gate(state, label, blockers, passed=...)` already wrote the gate log; it now also
-writes one engine row (`hook_telemetry.record`, layer `engine`) per call. The labels `escalation_orphans`,
+writes one engine row (`hook_telemetry.decision_row`, written by `cli._append_jsonl`, layer
+`engine`) per call. The labels `escalation_orphans`,
 `frozen_stage` and `renorm_final` used to be logged only on refusal; they are now logged on
 every evaluation, so a gate's deny rate has a denominator.
 

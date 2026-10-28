@@ -137,7 +137,9 @@ def _exit_status(code) -> int:
 
 def _open_capture():
     """An in-memory file where the kernel has one: a full disk must not be able to
-    swallow a hook's refusal."""
+    swallow a hook's refusal. Without ``memfd_create`` (macOS) the fallback is a temp
+    file, and a hook printing past Python's ~8 KB buffer onto a full disk then fails in
+    its own ``print`` — a known, accepted gap of the fallback only."""
     if hasattr(os, "memfd_create"):
         try:
             return os.fdopen(os.memfd_create("hook-stdout"), "w+b")
@@ -156,7 +158,7 @@ def _redirect_stdout():
     try:
         sys.stdout.flush()
         saved_fd = os.dup(1)
-    except OSError:
+    except Exception:
         capture.close()
         return None
     try:
