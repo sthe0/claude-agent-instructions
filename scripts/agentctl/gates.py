@@ -1195,7 +1195,9 @@ def _entry_understanding_challenged(state: SessionState, entry) -> bool:
 
 
 def _review_concern_challenged(state: SessionState, pr, index: int) -> bool:
-    ids = _plan_review_concern_ids(pr)
+    # A whole-plan record keeps its ledger ids in `stable_ids`; its `concern_ids` are the local c<n>.
+    stable = getattr(pr, "stable_ids", None) or []
+    ids = stable if len(stable) == len(pr.concerns) else _plan_review_concern_ids(pr)
     entry = state.concern_ledger.get(ids[index])
     return understanding_challenged(
         state, ids[index], pr.concerns[index], entry.restates if entry is not None else "")

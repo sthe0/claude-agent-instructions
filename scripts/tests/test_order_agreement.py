@@ -26,6 +26,7 @@ through their module (`gates.`, `cli.`), never a by-name import.
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import json
 import os
@@ -41,6 +42,8 @@ import pytest
 from agentctl import answer_ledger, cli, delivery, delivery_channel, gates, runtime_host
 from agentctl.state import (
     CHALLENGE_DISMISSED,
+    CONCERN_OPEN,
+    GateRecord,
     CHALLENGE_OPEN,
     CHALLENGE_REAGREED,
     ORDER_AGREEMENT_ANCHOR_CONFIRMED,
@@ -68,6 +71,7 @@ SCRIPTS = REPO_ROOT / "scripts"
 SESSION = "ord"
 STATE_FILE_NAME = f"{SESSION}.json"
 HOOK_PATH = SCRIPTS / "hook-ask-answer-record.py"
+RESTART_HINT = "register it with scripts/install-reminder-hooks.sh and restart the session"
 
 
 @pytest.fixture(autouse=True)
@@ -328,7 +332,7 @@ def test_order_agree_refuses_without_a_recorded_answer(ostore, home, armed_env, 
     d = _agree(ostore)
 
     assert d.ok is False and "needs the user's own answer" in d.detail
-    assert "ledger is empty or missing" in d.detail
+    assert RESTART_HINT in d.detail
     assert ostore.load(SESSION).order_agreement is None
 
 
@@ -338,7 +342,30 @@ def test_order_agree_refuses_an_answer_that_declined(ostore, home, armed_env, tm
 
     d = _agree(ostore)
 
-    assert d.ok is False and "ledger is empty" not in d.detail
+    assert d.ok is False and "needs the user's own answer" in d.detail
+    assert RESTART_HINT not in d.detail
+    assert ostore.load(SESSION).order_agreement is None
+
+
+def test_the_restart_hint_names_a_missing_ledger_file(ostore, home, armed_env, tmp_path):
+    _presented(ostore, tmp_path)
+    assert not answer_ledger.ledger_path_for(_state_file(home)).exists()
+
+    d = _agree(ostore)
+
+    assert "needs the user's own answer" in d.detail and RESTART_HINT in d.detail
+
+
+def test_the_restart_hint_names_a_ledger_holding_only_answers_before_the_presentation(
+        ostore, home, armed_env, tmp_path):
+    path = _presented(ostore, tmp_path)
+    stamp = delivery.read_stamp(_state_file(home))
+    _user_answers(_marker_of(path), at=stamp.verified_ts - 60)
+    assert answer_ledger.ledger_path_for(_state_file(home)).exists()
+
+    d = _agree(ostore)
+
+    assert "needs the user's own answer" in d.detail and RESTART_HINT in d.detail
     assert ostore.load(SESSION).order_agreement is None
 
 
@@ -545,10 +572,15 @@ def test_present_replan_diff_refuses_a_diverging_proposal(ostore, home, armed_en
 # --- challenges -----------------------------------------------------------------------
 
 
-def _plan_review(store, verdict="revise", concerns=None, *, reviewer="thinker"):
+def _plan_review(store, verdict="revise", concerns=None, *, reviewer="thinker", scope=None,
+                 plan_digest=None):
     return cli.cmd_plan_review(
         ns(session=SESSION, verdict=verdict, reviewer=reviewer, concerns=concerns, note="",
-           target=None, plan_digest=None), store=store)
+           target=None, plan_digest=plan_digest, scope=scope), store=store)
+
+
+def _file_sha256(path: str) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def _challenge(store, tmp_path: Path, state=None, text="the second requirement is not what I ordered") -> str:
@@ -560,7 +592,7 @@ def _challenge(store, tmp_path: Path, state=None, text="the second requirement i
         d = cli.cmd_submit_plan(ns(session=SESSION, plan=_plan(tmp_path)), store=store)
         assert d.ok, (d.detail, d.data)
     d = _plan_review(store, concerns=[f"blocking: understanding: {text}"])
-    assert d.ok, d.detail
+    assert d.ok, (d.detail, d.data.get("blockers"))
     challenges = [c for c in store.load(SESSION).order_challenges if c.status == CHALLENGE_OPEN]
     assert len(challenges) == 1, challenges
     return challenges[0].id
@@ -580,14 +612,33 @@ def test_blocking_understanding_concern_is_recorded_as_a_challenge(
     assert challenge_id in state.plan_review.stable_ids
 
 
+@pytest.fixture
+def review_gate(monkeypatch):
+    """The plan-review gate on, so a `revise` verdict holds the plan the way it does live."""
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
+
+
+def _held_by_review(store, plan: str) -> list[str]:
+    return gates.plan_review_blockers(store.load(SESSION), plan)
+
+
 def test_a_challenged_understanding_concern_does_not_hold_the_plan_review(
-        ostore, home, armed_env, tmp_path):
-    _agreed(ostore, home, tmp_path)
+        ostore, home, armed_env, review_gate, tmp_path):
+    plan = _plan_ready(ostore, home, tmp_path)
+
     _challenge(ostore, tmp_path)
 
-    held = gates.plan_review_blockers(ostore.load(SESSION), ostore.load(SESSION).plan_path)
+    assert _held_by_review(ostore, plan) == []
 
-    assert not any("blocking concern" in b or "plan blocked" in b for b in held), held
+
+def test_an_ordinary_blocking_concern_holds_the_plan_review(
+        ostore, home, armed_env, review_gate, tmp_path):
+    plan = _plan_ready(ostore, home, tmp_path)
+
+    d = _plan_review(ostore, concerns=["blocking: stage:1 the verify command proves nothing"])
+
+    assert d.ok is False and "does not clear the gate" in d.detail
+    assert any("revise" in b for b in _held_by_review(ostore, plan))
 
 
 def test_an_open_challenge_blocks_the_gate_until_dismissed(ostore, home, armed_env, tmp_path):
@@ -706,6 +757,235 @@ def test_a_reraise_after_a_new_agreement_opens_a_fresh_challenge(ostore, home, a
     statuses = {c.id: c.status for c in ostore.load(SESSION).order_challenges}
     assert statuses.pop(challenge_id) == CHALLENGE_REAGREED
     assert list(statuses.values()) == [CHALLENGE_OPEN]
+
+
+UNDERSTANDING_CONCERN = "blocking: understanding: the second requirement is not what I ordered"
+
+
+def _understanding_entries(state):
+    return [e for e in state.concern_ledger.values() if "second requirement" in e.text]
+
+
+def test_a_stage_scoped_understanding_concern_opens_no_challenge(ostore, home, armed_env, tmp_path):
+    _plan_ready(ostore, home, tmp_path)
+
+    d = _plan_review(ostore, scope="stage:1", concerns=[UNDERSTANDING_CONCERN])
+
+    state = ostore.load(SESSION)
+    assert d.ok, d.detail
+    [entry] = _understanding_entries(state)
+    assert entry.status != CONCERN_OPEN
+    assert state.order_challenges == []
+    assert gates.order_agreement_blockers(state, None) == []
+
+
+def test_an_unevidenced_post_pass_understanding_concern_opens_no_challenge(
+        ostore, home, armed_env, tmp_path):
+    plan = _plan_ready(ostore, home, tmp_path)
+    assert _plan_review(ostore, "pass", plan_digest=_file_sha256(plan)).ok
+
+    d = _plan_review(ostore, concerns=[UNDERSTANDING_CONCERN])
+
+    state = ostore.load(SESSION)
+    assert d.data.get("plan_review_post_pass_unevidenced") is True
+    [entry] = _understanding_entries(state)
+    assert entry.status != CONCERN_OPEN
+    assert state.order_challenges == []
+
+
+def test_a_challenged_understanding_concern_does_not_hold_a_topo_unit_review(
+        ostore, home, armed_env, tmp_path):
+    from agentctl.plan import load_plan, review_ids
+    plan = _plan_ready(ostore, home, tmp_path)
+    unit = next(r for r in review_ids(load_plan(plan)) if r.startswith("unit:"))
+
+    d = _plan_review(ostore, concerns=[UNDERSTANDING_CONCERN], scope=f"topo:{unit}")
+
+    state = ostore.load(SESSION)
+    assert d.ok, d.detail
+    assert state.plan_pair_reviews[unit].verdict == "revise"
+    assert len(state.order_challenges) == 1
+    assert gates.pair_status(state, load_plan(plan), plan, unit) == "current"
+    assert any(state.order_challenges[0].id in b for b in gates.order_agreement_blockers(state, None))
+
+
+def test_a_topo_unit_review_with_an_ordinary_concern_beside_the_challenged_one_still_revises(
+        ostore, home, armed_env, tmp_path):
+    from agentctl.plan import load_plan, review_ids
+    plan = _plan_ready(ostore, home, tmp_path)
+    unit = next(r for r in review_ids(load_plan(plan)) if r.startswith("unit:"))
+
+    _plan_review(ostore, concerns=[UNDERSTANDING_CONCERN, "blocking: the unit proves nothing"],
+                 scope=f"topo:{unit}")
+
+    state = ostore.load(SESSION)
+    assert gates.pair_status(state, load_plan(plan), plan, unit) == "revise"
+
+
+def test_an_order_coverage_concern_still_blocks_as_an_ordinary_revise(
+        ostore, home, armed_env, review_gate, tmp_path):
+    plan = _plan_ready(ostore, home, tmp_path)
+
+    d = _plan_review(ostore, concerns=["blocking: order: R2 has no stage that covers it"])
+
+    assert d.ok is False and "does not clear the gate" in d.detail
+    assert ostore.load(SESSION).order_challenges == []
+    assert any("revise" in b for b in _held_by_review(ostore, plan))
+
+
+def _unarmed_host(mp, store):
+    mp.setattr(runtime_host, "detect_host", lambda: None)
+
+
+def _linked_child(mp, store):
+    state = store.load(SESSION)
+    state.parent_link = {"parent_session": "p", "stage_index": 1, "depth": 1, "norm_digest": "x"}
+    store.save(state)
+
+
+@pytest.mark.parametrize("plant", [_unarmed_host, _linked_child], ids=["unarmed", "linked-child"])
+def test_an_understanding_concern_blocks_the_plan_review_where_the_gate_is_not_armed(
+        ostore, home, armed_env, review_gate, monkeypatch, tmp_path, plant):
+    _start(ostore)
+    plant(monkeypatch, ostore)
+    assert _classify(ostore).ok
+    assert ostore.load(SESSION).order_agreement_armed is False
+    assert cli.cmd_plan(ns(session=SESSION), store=ostore).ok
+    plan = _plan(tmp_path)
+    d = cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=ostore)
+    assert d.ok, (d.detail, d.data)
+
+    d = _plan_review(ostore, concerns=[UNDERSTANDING_CONCERN])
+
+    assert d.ok is False and "does not clear the gate" in d.detail
+    assert ostore.load(SESSION).order_challenges == []
+    assert any("revise" in b for b in _held_by_review(ostore, plan))
+
+
+# --- sub-plans, arming at the root, the staged draft, the status line ----------------
+
+
+def _push_child(store, tmp_path: Path):
+    state = store.load(SESSION)
+    state.node = "EXECUTING"
+    state.route = "IN_THREAD"
+    state.approval = GateRecord("plan_approval", armed=True, passed=True, by="user")
+    store.save(state)
+    return cli.cmd_push_subplan(
+        ns(session=SESSION, plan=str(tmp_path / "child.toml"), task=None, originating_stage=1),
+        store=store)
+
+
+def test_a_pushed_sub_plan_leaves_the_gate_and_the_pop_restores_the_agreement(
+        ostore, home, armed_env, tmp_path):
+    _agreed(ostore, home, tmp_path)
+    agreed = ostore.load(SESSION).order_agreement
+    challenge_id = _challenge(ostore, tmp_path)
+
+    pushed = _push_child(ostore, tmp_path)
+
+    child = ostore.load(SESSION)
+    assert pushed.ok, pushed.detail
+    assert child.order_agreement is None and child.order_challenges == []
+    assert gates.order_agreement_active(child) is False
+    assert gates.order_agreement_blockers(child, None) == []
+    assert cli.cmd_status(ns(session=SESSION), store=ostore).data["order_agreement"] is None
+
+    child.node = "RESOLVED"
+    child.resolution = GateRecord("resolution", armed=True, passed=True, by="user")
+    ostore.save(child)
+    popped = cli.cmd_pop_subplan(ns(session=SESSION), store=ostore)
+
+    restored = ostore.load(SESSION)
+    assert popped.ok, popped.detail
+    assert restored.order_agreement == agreed
+    assert [c.id for c in restored.order_challenges] == [challenge_id]
+    assert gates.order_agreement_active(restored) is True
+
+
+def test_a_root_session_with_a_parent_norm_and_no_parent_link_is_armed_and_held(
+        ostore, home, armed_env, tmp_path):
+    _start(ostore)
+    assert _classify(ostore).ok
+    state = ostore.load(SESSION)
+    assert state.parent_link is None and state.order_agreement_armed is True
+    assert cli.cmd_plan(ns(session=SESSION), store=ostore).ok
+    plan = _plan(tmp_path, replace={"parent_norm": 'parent_norm = "the stage that ordered this"'})
+    assert 'parent_norm = "the stage' in Path(plan).read_text(encoding="utf-8")
+
+    d = cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=ostore)
+
+    assert d.ok is False and "no agreed order understanding" in _blockers(d)
+
+
+def test_order_submit_refuses_a_staged_draft_before_the_agreement(ostore, home, armed_env, tmp_path):
+    _presented(ostore, tmp_path)
+
+    d = _submit(ostore, Path(_plan(tmp_path)))
+
+    assert d.ok is False and "has not agreed this session's order" in d.detail
+    assert ostore.load(SESSION).order_draft_path != _plan(tmp_path)
+
+
+def test_order_submit_accepts_a_staged_draft_after_the_agreement(ostore, home, armed_env, tmp_path):
+    _agreed(ostore, home, tmp_path)
+    staged = Path(_plan(tmp_path))
+
+    d = _submit(ostore, staged)
+
+    assert d.ok, d.detail
+    assert ostore.load(SESSION).order_draft_path == str(staged)
+
+
+def test_the_agreement_status_is_null_where_the_gate_is_inactive(ostore, home, armed_env, tmp_path):
+    _agreed(ostore, home, tmp_path)
+    assert cli.cmd_status(ns(session=SESSION), store=ostore).data["order_agreement"] is not None
+    state = ostore.load(SESSION)
+    state.order_agreement_armed = False
+    ostore.save(state)
+
+    status = cli.cmd_status(ns(session=SESSION), store=ostore)
+
+    assert status.data["order_agreement"] is None
+    assert ostore.load(SESSION).order_agreement is not None
+
+
+def test_the_transcript_is_not_evidence_of_the_users_answer(
+        ostore, home, armed_env, monkeypatch, tmp_path):
+    from lib import ask_evidence
+
+    def read_a_transcript(*_a, **_k):
+        raise AssertionError("order-agree read a transcript")
+
+    _presented(ostore, tmp_path)
+    monkeypatch.setattr(cli, "_present_plan_transcript", read_a_transcript)
+    monkeypatch.setattr(ask_evidence, "ask_after_event", read_a_transcript)
+
+    d = _agree(ostore)
+
+    assert d.ok is False and "needs the user's own answer" in d.detail
+    assert ostore.load(SESSION).order_agreement is None
+
+
+def test_the_agreement_records_the_anchor_time_and_the_rendering_digest(
+        ostore, home, armed_env, tmp_path):
+    _agreed(ostore, home, tmp_path)
+
+    agreement = ostore.load(SESSION).order_agreement
+    stamp = delivery.read_stamp(_state_file(home))
+
+    assert agreement.anchor_at == stamp.verified_ts
+    assert agreement.rendering_sha256 == stamp.rendering_sha256 and agreement.rendering_sha256
+
+
+def test_a_foreign_stamp_refusal_says_a_fresh_ask_is_needed(ostore, home, armed_env, tmp_path):
+    path = _presented(ostore, tmp_path)
+    assert _present(ostore, tmp_path, text=RENDERING + "\nAnd one more sentence.\n").ok
+    _user_answers(_marker_of(path))
+
+    d = _agree(ostore)
+
+    assert "another rendering" in d.detail and "fresh ask" in d.detail
 
 
 # --- structure ---------------------------------------------------------------------

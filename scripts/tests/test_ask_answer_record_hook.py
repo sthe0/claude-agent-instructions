@@ -158,3 +158,46 @@ def test_a_missing_ledger_reads_as_absent(home):
     read = answer_ledger.read(_state_file(home))
 
     assert read.exists is False and read.records == []
+
+
+def _config_root(tmp_path: Path, settings: str | None) -> Path:
+    root = tmp_path / "config"
+    root.mkdir()
+    if settings is not None:
+        (root / "settings.json").write_text(settings, encoding="utf-8")
+    return root
+
+
+def _registering(command: str) -> str:
+    return json.dumps({"hooks": {"PostToolUse": [{
+        "matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": command}]}]}})
+
+
+def test_the_hook_counts_as_registered_when_the_settings_chain_wires_it(tmp_path, monkeypatch):
+    from agentctl import gates
+    root = _config_root(tmp_path, _registering(f"python3 {HOOK}"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root))
+    monkeypatch.delenv("CLAUDE_AGENT_HOME", raising=False)
+
+    assert gates.answer_hook_registered() is True
+
+
+@pytest.mark.parametrize("settings", [
+    "{}",
+    _registering("python3 /somewhere/hook-si-freetext-answer.py"),
+    "{not json",
+], ids=["no-hooks", "another-hook", "unreadable-settings"])
+def test_the_hook_does_not_count_as_registered_without_a_definite_wiring(tmp_path, monkeypatch, settings):
+    from agentctl import gates
+    root = _config_root(tmp_path, settings)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root))
+    monkeypatch.delenv("CLAUDE_AGENT_HOME", raising=False)
+
+    assert gates.answer_hook_registered() is False
+
+
+def test_the_installer_table_registers_the_hook_on_ask_answers():
+    installer = Path(__file__).resolve().parent.parent / "install-reminder-hooks.sh"
+
+    assert '"PostToolUse",      "AskUserQuestion", "hook-ask-answer-record.py"' in installer.read_text(
+        encoding="utf-8")

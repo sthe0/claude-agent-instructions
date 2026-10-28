@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from agentctl import delivery
+from agentctl.state import order_dismiss_marker
 from test_order_agreement import DIVERGED, _plan
 from test_order_phase import RENDERING, _draft
 
@@ -88,12 +89,19 @@ def cli(env, tmp_path):
     return Cli(env, tmp_path)
 
 
-def _present_order(cli: Cli, tmp_path: Path) -> str:
+def _begin_substantive(cli: Cli) -> dict:
     cli.ok("start", "--session", SESSION, "--task", "od", "--goal", "g", "--done-criterion", "dc")
-    classified = cli.ok("classify", "--session", SESSION, "--architectural",
-                        "--changed-lines", "400", "--wall-clock-min", "60")
+    return cli.ok("classify", "--session", SESSION, "--architectural",
+                  "--changed-lines", "400", "--wall-clock-min", "60")
+
+
+def _present_order(cli: Cli, tmp_path: Path) -> str:
+    classified = _begin_substantive(cli)
     assert "order_agreement_exemption" not in classified["data"], classified["detail"]
-    draft = _draft(tmp_path)
+    return _present_draft(cli, tmp_path, _draft(tmp_path))
+
+
+def _present_draft(cli: Cli, tmp_path: Path, draft: Path) -> str:
     cli.ok("order-submit", "--session", SESSION, "--plan", str(draft))
     cli.ok("plan-review", "--session", SESSION, "--scope", "order", "--verdict", "pass",
            "--reviewer", "thinker")
@@ -156,3 +164,179 @@ def test_a_spawned_process_is_named_exempt(env, tmp_path):
                             "--changed-lines", "400", "--wall-clock-min", "60")
 
     assert "spawned" in classified["data"]["order_agreement_exemption"]
+
+
+EDITED_CONSTRAINT = {"constraints": 'constraints = [{ id = "K1", text = "a new dependency is welcome" }]'}
+NO_AGREEMENT = "no agreed order understanding"
+DIVERGES = "diverges from the agreed"
+
+
+def _agree(cli: Cli, tmp_path: Path, draft: Path | None = None) -> str:
+    marker = _present_draft(cli, tmp_path, draft or _draft(tmp_path))
+    cli.answer(marker, choose_marked=True)
+    cli.ok("order-agree", "--session", SESSION, "--note", "as stated")
+    return marker
+
+
+def _said(proc_json: dict) -> str:
+    return proc_json["detail"] + " | " + " | ".join(proc_json["data"].get("blockers", []))
+
+
+def _present_essence(cli: Cli, tmp_path: Path) -> dict:
+    rendering = tmp_path / "essence.txt"
+    rendering.write_text("the plan, in essence", encoding="utf-8")
+    proc = cli("present-plan", "--session", SESSION, "--kind", "essence",
+               "--rendering-file", str(rendering))
+    return json.loads(proc.stdout)
+
+
+def test_an_edited_constraint_is_refused_at_every_act_that_takes_a_plan(cli, tmp_path):
+    _begin_substantive(cli)
+    _agree(cli, tmp_path)
+    cli.ok("plan", "--session", SESSION)
+    plan = Path(_plan(tmp_path))
+    agreed_text = plan.read_text(encoding="utf-8")
+    edited = Path(_plan(tmp_path, replace=EDITED_CONSTRAINT, name="edited.toml"))
+
+    submit = cli.refused("submit-plan", "--session", SESSION, "--plan", str(edited))
+    assert DIVERGES in _said(submit)
+    cli.ok("submit-plan", "--session", SESSION, "--plan", str(plan))
+
+    plan.write_text(edited.read_text(encoding="utf-8"), encoding="utf-8")
+    approve = cli.refused("approve", "--session", SESSION, "--by", "user")
+    assert DIVERGES in _said(approve)
+    essence = _present_essence(cli, tmp_path)
+    assert essence["ok"] is False and DIVERGES in _said(essence)
+    replan = cli.refused("replan", "--session", SESSION, "--plan", str(edited))
+    assert DIVERGES in _said(replan)
+
+    plan.write_text(agreed_text, encoding="utf-8")
+    assert DIVERGES not in _said(cli.refused("approve", "--session", SESSION, "--by", "user"))
+    assert DIVERGES not in _said(_present_essence(cli, tmp_path))
+
+
+def _challenge_the_agreed_order(cli: Cli, tmp_path: Path) -> str:
+    cli.ok("plan", "--session", SESSION)
+    cli.ok("submit-plan", "--session", SESSION, "--plan", _plan(tmp_path))
+    reviewed = json.loads(cli("plan-review", "--session", SESSION, "--verdict", "revise",
+                              "--reviewer", "thinker", "--concern",
+                              "blocking: understanding: the second requirement is not what I ordered"
+                              ).stdout)
+    [challenge_id] = reviewed["data"]["concern_ids"]
+    return challenge_id
+
+
+def test_a_challenge_blocks_approval_until_the_user_dismisses_it(cli, tmp_path):
+    _begin_substantive(cli)
+    _agree(cli, tmp_path)
+    challenge_id = _challenge_the_agreed_order(cli, tmp_path)
+
+    held = cli.refused("approve", "--session", SESSION, "--by", "user")
+    assert challenge_id in _said(held)
+    unanswered = cli.refused("order-challenge-dismiss", "--session", SESSION, "--id", challenge_id,
+                             "--note", "the user confirms R2 as written")
+    assert "needs the user's own answer" in unanswered["detail"]
+
+    cli.answer(order_dismiss_marker(challenge_id), choose_marked=True)
+    cli.ok("order-challenge-dismiss", "--session", SESSION, "--id", challenge_id,
+           "--note", "the user confirms R2 as written")
+
+    assert challenge_id not in _said(cli.refused("approve", "--session", SESSION, "--by", "user"))
+
+
+def test_a_new_agreement_closes_an_open_challenge(cli, tmp_path):
+    _begin_substantive(cli)
+    _agree(cli, tmp_path)
+    challenge_id = _challenge_the_agreed_order(cli, tmp_path)
+    assert challenge_id in _said(cli.refused("approve", "--session", SESSION, "--by", "user"))
+
+    revised = _draft(tmp_path, name="revised.toml", replace={
+        "difficulty": 'difficulty = "a release takes a day of hand-work and a review"'})
+    _agree(cli, tmp_path, revised)
+
+    approve = cli.refused("approve", "--session", SESSION, "--by", "user")
+    assert challenge_id not in _said(approve)
+
+
+def _classified(cli: Cli, *flags: str) -> dict:
+    cli.ok("start", "--session", SESSION, "--task", "od", "--goal", "g", "--done-criterion", "dc")
+    return cli.ok("classify", "--session", SESSION, *flags)
+
+
+def _unaffected_plan_cycle(cli: Cli, tmp_path: Path) -> None:
+    """The gate would refuse this plan with no agreement; a session it does not govern takes it."""
+    cli.ok("plan", "--session", SESSION)
+    accepted = cli.ok("submit-plan", "--session", SESSION, "--plan", _plan(tmp_path))
+    assert NO_AGREEMENT not in _said(accepted)
+    assert cli.ok("status", "--session", SESSION)["data"]["order_agreement"] is None
+
+
+@pytest.mark.parametrize("flags", [["--chat"], ["--changed-lines", "20"]], ids=["chat", "small-change"])
+def test_chat_and_small_change_sessions_are_never_armed(cli, flags):
+    classified = _classified(cli, *flags)
+
+    assert "order_agreement_exemption" not in classified["data"]
+    status = cli.ok("status", "--session", SESSION)["data"]
+    assert status["order_agreement"] is None and status["order_agreement_exemption"] is None
+
+
+def test_a_headless_session_is_exempt_and_takes_a_plan_without_agreement(root, cli, tmp_path):
+    (root / "delivery-channel.toml").write_text('command = ["/bin/true"]\n', encoding="utf-8")
+
+    classified = _begin_substantive(cli)
+
+    assert "channel" in classified["data"]["order_agreement_exemption"]
+    _unaffected_plan_cycle(cli, tmp_path)
+
+
+def test_a_cursor_session_is_exempt_and_takes_a_plan_without_agreement(env, tmp_path):
+    scrubbed = {k: v for k, v in env.items() if k != "CLAUDE_CODE_SESSION_ID" and "CURSOR" not in k}
+    cursor = Cli(scrubbed, tmp_path)
+    cursor.ok("start", "--session", SESSION, "--task", "od", "--goal", "g", "--done-criterion", "dc",
+              "--host", "cursor")
+
+    classified = cursor.ok("classify", "--session", SESSION, "--host", "cursor", "--architectural",
+                           "--changed-lines", "400", "--wall-clock-min", "60")
+
+    assert "host" in classified["data"]["order_agreement_exemption"]
+    _unaffected_plan_cycle(cursor, tmp_path)
+
+
+def _patch_state(root: Path, **fields) -> None:
+    path = root / "agentctl" / "state" / f"{SESSION}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.update(fields)
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_a_linked_child_is_exempt_and_takes_a_plan_without_agreement(root, cli, tmp_path):
+    cli.ok("start", "--session", SESSION, "--task", "od", "--goal", "g", "--done-criterion", "dc")
+    _patch_state(root, parent_link={"parent_session": "p", "stage_index": 1, "depth": 1,
+                                    "norm_digest": "x"})
+
+    classified = cli.ok("classify", "--session", SESSION, "--architectural",
+                        "--changed-lines", "400", "--wall-clock-min", "60")
+
+    assert "linked" in classified["data"]["order_agreement_exemption"]
+    _unaffected_plan_cycle(cli, tmp_path)
+
+
+def test_a_sub_plan_is_not_held_to_the_parents_agreement(root, cli, tmp_path):
+    _begin_substantive(cli)
+    _agree(cli, tmp_path)
+    cli.ok("plan", "--session", SESSION)
+    cli.ok("submit-plan", "--session", SESSION, "--plan", _plan(tmp_path))
+    state = json.loads((root / "agentctl" / "state" / f"{SESSION}.json").read_text(encoding="utf-8"))
+    _patch_state(root, node="EXECUTING", route="IN_THREAD",
+                 approval={**state["approval"], "armed": True, "passed": True, "by": "user"})
+
+    cli.ok("push-subplan", "--session", SESSION, "--plan", _plan(tmp_path, name="child.toml"),
+           "--originating-stage", "1")
+    cli.ok("classify", "--session", SESSION, "--architectural",
+           "--changed-lines", "400", "--wall-clock-min", "60")
+
+    cli.ok("plan", "--session", SESSION)
+    accepted = cli.ok("submit-plan", "--session", SESSION,
+                      "--plan", _plan(tmp_path, replace=DIVERGED, name="child-diverged.toml"))
+    assert DIVERGES not in _said(accepted) and NO_AGREEMENT not in _said(accepted)
+    assert cli.ok("status", "--session", SESSION)["data"]["order_agreement"] is None

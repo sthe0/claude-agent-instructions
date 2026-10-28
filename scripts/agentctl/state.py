@@ -1500,6 +1500,8 @@ class OrderAgreement:
     note: str = ""
     evidence: str = ORDER_AGREEMENT_EVIDENCE_ASK
     anchor: str = ORDER_AGREEMENT_ANCHOR_STAMP
+    anchor_at: float = 0.0
+    rendering_sha256: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "OrderAgreement":
@@ -1511,6 +1513,8 @@ class OrderAgreement:
             note=d.get("note") or "",
             evidence=d.get("evidence") or ORDER_AGREEMENT_EVIDENCE_ASK,
             anchor=d.get("anchor") or ORDER_AGREEMENT_ANCHOR_STAMP,
+            anchor_at=d.get("anchor_at") or 0.0,
+            rendering_sha256=d.get("rendering_sha256") or "",
         )
 
 

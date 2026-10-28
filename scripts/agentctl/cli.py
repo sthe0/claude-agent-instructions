@@ -2069,19 +2069,24 @@ def _refresh_caches_from_plan_path(
     return []
 
 
+def _judge_order_agreement(state: SessionState, doc) -> list[str]:
+    """The order-agreement blockers against `doc`, logged; the one place the gate is judged."""
+    blockers = gates.order_agreement_blockers(state, doc)
+    _log_gate(state, "order_agreement", blockers, passed=not blockers)
+    return blockers
+
+
 def _order_agreement_refusal(
-    state: SessionState, plan_path: str | None, action: str, what: str,
+    state: SessionState, plan_path: str | None, action: str, what: str, *, doc=None,
 ) -> Directive | None:
     """The refusal Directive when the order-agreement gate blocks `what` against the plan at
-    `plan_path`, else None. The gate is judged and logged the same way at every act it guards."""
-    doc = None
-    if plan_path:
+    `plan_path` (or the already-loaded `doc`), else None."""
+    if doc is None and plan_path:
         try:
             doc = load_plan(plan_path)
         except (OSError, PlanError):
             doc = None
-    blockers = gates.order_agreement_blockers(state, doc)
-    _log_gate(state, "order_agreement", blockers, passed=not blockers)
+    blockers = _judge_order_agreement(state, doc)
     if not blockers:
         return None
     return Directive(False, state.node, action, f"cannot {what}: order agreement",
@@ -4242,17 +4247,18 @@ def _user_answered_after(state_file: Path, since: float, marker: str) -> "tuple[
     return chosen, ledger_read
 
 
-def _no_marked_answer_refusal(what: str, marker: str, ledger_read: "answer_ledger.LedgerRead") -> str:
+def _no_marked_answer_refusal(what: str, marker: str, ledger_read: "answer_ledger.LedgerRead",
+                              since: float) -> str:
     text = (
         f"{what} needs the user's own answer: an AskUserQuestion posed after the presentation "
         f"offering an option marked {marker!r} beside an unmarked one, which the user chose; "
         "no such answer is recorded"
     )
-    if not ledger_read.records:
+    if not any(record.at >= since for record in ledger_read.records):
         text += (
-            " (the answer ledger is empty or missing — a session that started before "
-            "hook-ask-answer-record.py was registered records nothing: register it with "
-            "scripts/install-reminder-hooks.sh and restart the session)"
+            " (the answer ledger is missing or holds no answer since the presentation — a session "
+            "that started before hook-ask-answer-record.py was registered records nothing: "
+            "register it with scripts/install-reminder-hooks.sh and restart the session)"
         )
     return text
 
@@ -4264,8 +4270,9 @@ def _order_agreement_anchor(state: SessionState, receipt, state_file: Path) -> "
     if stamp is not None and stamp.rendering_sha256 != receipt.rendering_sha256:
         return (
             "the delivery stamp on record belongs to another rendering than the order "
-            "presentation: present the order again (present-plan --kind order) and let the "
-            "delivery hook stamp it"
+            "presentation: present the order again (present-plan --kind order), let the "
+            "delivery hook stamp it, and put a fresh ask to the user, since an earlier answer "
+            "predates that stamp"
         )
     blockers = gates._delivery_stamp_blocker(state, receipt, None)
     if blockers:
@@ -4309,11 +4316,12 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
     marker = order_agree_marker(digest)
     answered, ledger_read = _agreement_ask_answered(state_file, since, marker)
     if not answered:
-        return refuse(_no_marked_answer_refusal("agreeing the order", marker, ledger_read))
+        return refuse(_no_marked_answer_refusal("agreeing the order", marker, ledger_read, since))
     previous = state.order_agreement
     agreement = OrderAgreement(
         understanding_sha256=digest, parts=understanding_parts(doc), draft_path=path,
         at=time.time(), note=(getattr(args, "note", "") or "").strip(), anchor=anchor,
+        anchor_at=since, rendering_sha256=receipt.rendering_sha256,
     )
     state.order_agreement = agreement
     state.order_agreement_history.append(agreement)
@@ -4331,6 +4339,7 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
     )
 
 
+# Pass-through kept as a module attribute so the agree_without_ask mutant can replace it.
 def _agreement_ask_answered(state_file: Path, since: float, marker: str):
     """The evidence test of `order-agree`: a marked user answer in the ledger since `since`."""
     return _user_answered_after(state_file, since, marker)
@@ -4358,7 +4367,7 @@ def cmd_order_challenge_dismiss(args, *, store: StateStore, runner: Runner | Non
     marker = order_dismiss_marker(challenge.id)
     answered, ledger_read = _user_answered_after(state_file, challenge.at, marker)
     if not answered:
-        return refuse(_no_marked_answer_refusal("dismissing the challenge", marker, ledger_read))
+        return refuse(_no_marked_answer_refusal("dismissing the challenge", marker, ledger_read, challenge.at))
     challenge.status = CHALLENGE_DISMISSED
     challenge.dismissed_at = time.time()
     challenge.dismiss_note = note
@@ -4799,6 +4808,7 @@ cmd_question_enumerate = cmd_question_enumerate_worker = cmd_question_enumerate_
     cmd_question_enumerate_retired)
 
 
+# Pass-through kept as a module attribute so the explicit_host_arms mutant can replace it.
 def _arming_host() -> "str | None":
     """The host classify arms against: detected from the environment, never the `--host` flag
     (the flag names a host to bind; it cannot make an unobservable user answer observable)."""
@@ -4815,6 +4825,7 @@ def _spawned_child(state: SessionState) -> bool:
         return False
 
 
+# Pass-through kept as a module attribute so the headless_channel_ignored mutant can replace it.
 def _headless_channel() -> bool:
     return delivery_channel.load_command() is not None
 
@@ -4838,7 +4849,8 @@ def _order_agreement_exemption(state: SessionState) -> str:
 
 def _arm_order_agreement(state: SessionState) -> str:
     """Set the arming fields at classify and return the exemption reason. Classify is the only
-    writer: a session armed here stays armed, one exempted here is never armed later."""
+    writer, and each substantive classify re-evaluates arming against the environment as it
+    stands then."""
     reason = _order_agreement_exemption(state)
     state.order_agreement_armed = not reason
     state.order_agreement_exemption = reason
@@ -4990,11 +5002,9 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # between separate reads can't desynchronize accepted_plan_digest from the bytes
     # that were actually parsed and verified.
     doc, _submitted_plan_bytes, _submitted_plan_digest = load_plan_with_digest(plan_path)
-    agreement_blockers = gates.order_agreement_blockers(state, doc)
-    _log_gate(state, "order_agreement", agreement_blockers, passed=not agreement_blockers)
-    if agreement_blockers:
-        return Directive(False, state.node, "fix_plan", "cannot submit plan: order agreement",
-                         data={"blockers": agreement_blockers})
+    refusal = _order_agreement_refusal(state, plan_path, "fix_plan", "submit plan", doc=doc)
+    if refusal is not None:
+        return refusal
     _prior_baseline = (*_review_baseline(store, state), state.plan_path) if resubmitting else None
     state.stages = doc.stages
     _sync_venue_from_plan(state, doc)
@@ -6167,16 +6177,18 @@ def _commit_concern_ledger(state: SessionState, review, cp: _ConcernPlan, ledger
 
 def _record_understanding_challenges(state: SessionState, review, cp: _ConcernPlan,
                                      ids: list[str]) -> None:
-    """Take every blocking `understanding:` concern of this record up as a challenge to the
-    agreed order. A re-raise of a challenge that is still open, or that the user dismissed
+    """Take every `understanding:` concern of this record that opened in the ledger up as a
+    challenge to the agreed order, so a record-only, out-of-scope or settling record opens
+    none. A re-raise of a challenge that is still open, or that the user dismissed
     against the understanding still agreed, opens nothing; a re-raise of a challenge a new
     agreement closed, or one dismissed against an understanding since changed, opens a fresh
     one. Notes and advisory concerns open none. Inert while the agreement gate is."""
     agreement = state.order_agreement
     if agreement is None or not gates.order_agreement_active(state):
         return
-    for pc, eff, cid in zip(cp.parsed, cp.effective, ids):
-        if eff != gates.EFFECTIVE_BLOCKING or gates._concern_part_token(pc.body) != gates.UNDERSTANDING_TOKEN:
+    for pc, cid in zip(cp.parsed, ids):
+        if state.concern_ledger[cid].status != CONCERN_OPEN \
+                or gates._concern_part_token(pc.body) != gates.UNDERSTANDING_TOKEN:
             continue
         prior = gates.challenge_for_restatement(state, pc.restates)
         if prior is not None and (
@@ -7900,8 +7912,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     mandate_basis = (args.by or "").strip() \
         if (args.by or "").strip().startswith(mandate_rules.MANDATE_BASIS + ":") else ""
     review_blockers = [] if mandate_basis else gates.plan_review_blockers(state, state.plan_path)
-    agreement_blockers = gates.order_agreement_blockers(state, _approved_doc)
-    _log_gate(state, "order_agreement", agreement_blockers, passed=not agreement_blockers)
+    agreement_blockers = _judge_order_agreement(state, _approved_doc)
     blockers = (
         gates.blockers(state, "plan_approval")
         + agreement_blockers
