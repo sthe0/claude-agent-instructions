@@ -564,6 +564,26 @@ def rewrites_pinned_worktree_files(surface: "git_surface.Surface") -> bool:
         _under(path, surface.toplevel) and not _under(path, surface.repo) for path in surface.paths)
 
 
+def rewrites_only_named_paths(text: str, run_dir: str, surface: "git_surface.Surface") -> bool:
+    """Whether a segment is `git checkout [<tree-ish>] -- <literal paths>` and none of the paths overlaps a
+    pinned worktree file: such a call rewrites exactly those paths, not the branch's tracked files."""
+    tokens = _after_plain_options(text)
+    if not tokens or tokens[0] != "checkout" or "--" not in tokens:
+        return False
+    head, named = tokens[1:tokens.index("--")], tokens[tokens.index("--") + 1:]
+    if len(head) > 1 or any(part.startswith("-") for part in head) or not named:
+        return False
+    pinned = [path for path in surface.paths if surface.toplevel is not None
+              and _under(path, surface.toplevel) and not _under(path, surface.repo)]
+    for name in named:
+        if name.startswith((":", "~", "-")) or "$" in name or any(ch in name for ch in GLOB_CHARS):
+            return False
+        target = _real(name if os.path.isabs(name) else os.path.join(run_dir, name))
+        if any(_under(path, target) or _under(target, path) for path in pinned):
+            return False
+    return True
+
+
 def worktree_code_blocker(approved: Approved, live: dict) -> "str | None":
     """Why the record's write grant inside a repository that holds code git starts blocks an allow: the child
     can edit what a hook or a framework file runs by path, which the snapshot digest does not cover, and the
@@ -616,7 +636,8 @@ def git_surface_blocker(approved: Approved, verdicts: list, budget: "JudgeBudget
             if not _after_plain_options(verdict.text):
                 return f"a git option that moves what git executes: {verdict.text}"
             surface = live[verdict.git_dir]
-            if surface is not None and not _preserves_worktree(verdict.text) and rewrites_pinned_worktree_files(surface):
+            if (surface is not None and not _preserves_worktree(verdict.text) and rewrites_pinned_worktree_files(surface)
+                    and not rewrites_only_named_paths(verdict.text, verdict.git_dir, surface)):
                 return f"a git command that rewrites tracked files, among them what git executes: {verdict.text}"
         elif may_change_git_surface(verdict, pinned):
             return f"another segment of the line could change what git executes: {verdict.text}"

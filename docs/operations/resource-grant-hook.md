@@ -101,7 +101,9 @@ that look covered are also made undeterminable:
   segment has no neighbour but must name no git option other than `-C <dir>` (`git -c core.hooksPath=... commit`
   moves what git executes), and a lone `checkout`, `merge` or another subcommand that rewrites tracked files is
   undeterminable when any pinned file lies in the worktree (`git checkout other` may replace `githooks/post-commit`
-  with the branch's version before the hook runs; a surface inside `.git` only is not affected). Second, any
+  with the branch's version before the hook runs; a surface inside `.git` only is not affected; `git checkout
+  [<tree-ish>] -- <paths>` rewrites only the named paths, so it stays decidable when every path is literal and
+  neither contains nor lies inside a pinned file). Second, any
   difference, a repository the snapshot does not list, a surface that cannot be read, or a
   record without the snapshot (an old format) is undeterminable, never an allow; the hook never denies on this
   basis. Third, a repository whose snapshot holds something git starts from the worktree (a hook or a program a

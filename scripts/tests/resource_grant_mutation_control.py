@@ -980,9 +980,21 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "hook-git-surface-rewriting-lone-runner-ok": Mutant(
         HOOK,
-        "            if surface is not None and not _preserves_worktree(verdict.text) and rewrites_pinned_worktree_files(surface):\n",
-        "            if False:\n",
+        "            if (surface is not None and not _preserves_worktree(verdict.text) and rewrites_pinned_worktree_files(surface)\n",
+        "            if (False and rewrites_pinned_worktree_files(surface)\n",
         "a lone `git checkout` / `merge` that rewrites tracked files, among them pinned ones, is allowed",
+    ),
+    "hook-git-surface-checkout-paths-overlap-ignored": Mutant(
+        HOOK,
+        "        if any(_under(path, target) or _under(target, path) for path in pinned):\n",
+        "        if any(_under(path, target) for path in pinned):\n",
+        "a `git checkout -- <path>` naming a directory above a pinned file is treated as not touching it",
+    ),
+    "hook-git-surface-checkout-glob-accepted": Mutant(
+        HOOK,
+        "        if name.startswith((\":\", \"~\", \"-\")) or \"$\" in name or any(ch in name for ch in GLOB_CHARS):\n",
+        "        if name.startswith(\"-\"):\n",
+        "a `git checkout -- <pathspec>` with a glob, magic prefix, tilde or variable is read as a literal path",
     ),
     "hook-git-surface-no-repository-early-return": Mutant(
         HOOK,

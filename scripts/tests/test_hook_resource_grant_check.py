@@ -806,6 +806,19 @@ def test_b12_a_checkout_that_rewrites_a_pinned_worktree_file_is_undeterminable(r
     assert rig.bash(child, "git push origin feat")[0] == "allow"
 
 
+def test_b12_a_checkout_of_named_paths_is_undeterminable_only_when_a_path_overlaps_a_pinned_file(rig):
+    use_hooks_dir(rig, "githooks")
+    plant(rig.venue / "githooks", "pre-push", body="#!/bin/sh\nexit 0\n")
+    (rig.venue / "notes.txt").write_text("x\n")
+    commit_all(rig)
+    child = rig.child(extra_patterns=["Bash(git checkout:*)"])
+    assert rig.bash(child, "git checkout -- notes.txt")[0] == "allow"
+    assert rig.bash(child, "git checkout HEAD -- notes.txt")[0] == "allow"
+    for named in ("githooks/pre-push", "githooks", ".", "'githooks/*'", ":/githooks", "$HOME"):
+        assert undeterminable(rig.bash(child, f"git checkout -- {named}")), named
+    assert undeterminable(rig.bash(child, "git checkout -b other -- notes.txt"))
+
+
 def test_b13_init_then_a_covered_hook_write_then_a_commit_is_undeterminable_without_any_repository(rig, tmp_path):
     plain = tmp_path / "plain"
     plain.mkdir()
