@@ -81,9 +81,10 @@ def test_gates_gained_no_new_blocker_for_the_record_only_scale():
     from agentctl import gates
 
     names = [n for n, _ in inspect.getmembers(gates, inspect.isfunction) if n.endswith("_blockers")]
-    assert len(names) == 28, (
-        f"expected 28 *_blockers functions (parent-accounting stage 3 added escalation_orphan_blockers; "
+    assert len(names) == 29, (
+        f"expected 29 *_blockers functions (parent-accounting stage 3 added escalation_orphan_blockers; "
         f"pretrial-fixes stage 5 added protected_grant_blockers; "
+        f"order-agreement stage 2 added order_review_blockers; "
         f"the record-only scale still adds none), found {len(names)}: {sorted(names)}"
     )
     assert "protected_grant_blockers" in names
