@@ -223,7 +223,10 @@ key, `n_eff < 2`, or an undefined SE) the item's own guess is used exactly as be
 figure is the whole time the mechanism takes, so it is an upper bound on the loss a fix could
 remove; the basis text says so. Each loss row carries `minutes_source`: `measured`, `guess`, or,
 for a family, `measured` only when every ready member was measured, `mixed` when some were, else
-`guess`. Phase B's rank recompute and the `loss` command use the guesses only.
+`guess`. Phase B's rank recompute and the `loss` command use the guesses only, so the board's
+persisted `rank` can differ from the order of `report`'s lanes, which are recomputed with the
+measured minutes: an item with a measured mechanism and no guess is awaiting on the board but
+sits in the report's loss lane.
 
 **"Where the time goes".** The section follows the measured-loss lane (markdown) and is the
 top-level `time_sinks` key (JSON). Rows are the heavy keys of the partition (`heavy_keys`: those
@@ -238,8 +241,10 @@ exists, i.e. after an earlier `agent-report time-profile` run left a cache, and 
 the sessions that changed; it never starts the first full pass (minutes of work). Without the
 flag or without a cache the profile is treated as empty.
 
-**Edge cases.** The heading is always printed. With no profiled sessions it says so and
-`time_sinks` is `[]`; with sessions but no heavy key it says that. Child sessions are not counted
+**Edge cases.** The heading is always printed. When it has no rows, `time_sinks` is `[]` and
+`time_sinks_status` (also in the markdown wording) says why: `not-requested` (no flag),
+`no-cache`, `error` (the cache could not be read; the error goes to stderr) or `empty` (no
+profiled sessions); with sessions but no heavy key it says that. Child sessions are not counted
 as sessions; their time lies in the parent's overlays.
 
 ## `sources` — external ideas

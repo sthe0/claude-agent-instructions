@@ -488,7 +488,7 @@ def _prior_from_raw(raw: dict) -> PriorBoard:
             loss_measurement=(
                 entry["loss_measurement"] if isinstance(entry.get("loss_measurement"), dict) else None
             ),
-            mechanism=str(entry.get("mechanism", "")),
+            mechanism=str(entry.get("mechanism") or ""),
         )
     return PriorBoard(
         schema=BOARD_SCHEMA, generated_at=str(raw.get("generated_at", "")), items=items
@@ -1696,10 +1696,21 @@ def _render_lanes_md(lanes: dict, ranked: "list[dict]", addresses: "dict[str, tu
     return parts
 
 
-def _render_time_sinks_md(time_sinks: "list[dict]", profiled_sessions: int) -> "list[str]":
+# Why the time-sinks section has no rows, when it has none: each reason reads differently.
+TIME_SINKS_EMPTY_TEXT = {
+    "not-requested": "Time profile not read; pass --time-profile-state to include it.",
+    "no-cache": "No profile cache found; run `agent-report.py time-profile` to profile sessions.",
+    "error": "Time profile could not be read (see the error on stderr); no time figures are shown.",
+    "empty": "No sessions are profiled yet, so no time figures are shown.",
+}
+
+
+def _render_time_sinks_md(
+    time_sinks: "list[dict]", profiled_sessions: int, status: str = "empty",
+) -> "list[str]":
     parts = ["## Where the time goes", ""]
     if not profiled_sessions:
-        return parts + ["No sessions are profiled yet, so no time figures are shown.", ""]
+        return parts + [TIME_SINKS_EMPTY_TEXT.get(status, TIME_SINKS_EMPTY_TEXT["empty"]), ""]
     if not time_sinks:
         return parts + [
             f"{profiled_sessions} session(s) profiled; no mechanism takes more time per session "
@@ -1828,6 +1839,7 @@ def _render_markdown(
     external: "dict | None" = None,
     time_sinks: "list[dict] | None" = None,
     profiled_sessions: int = 0,
+    time_sinks_status: str = "empty",
 ) -> str:
     lanes = lanes or {"loss": [], "silent": [], "awaiting": []}
     shown = _lane_member_refs(lanes)
@@ -1839,7 +1851,7 @@ def _render_markdown(
     unmeasured = [f for f in ranked if not f["cost_signal"]["measured"]]
     parts = ["# Improvement-scan report", ""]
     parts += _render_lanes_md(lanes, ranked, addresses or {})
-    parts += _render_time_sinks_md(time_sinks or [], profiled_sessions)
+    parts += _render_time_sinks_md(time_sinks or [], profiled_sessions, time_sinks_status)
     if measured:
         parts.append("## Measured cost signal — ranked by cost, then attention, then stability")
         parts.append("")
@@ -1863,7 +1875,7 @@ def _render_markdown(
 
 def _render_json(
     ranked: "list[dict]", lanes: "dict | None" = None, external: "dict | None" = None,
-    time_sinks: "list[dict] | None" = None,
+    time_sinks: "list[dict] | None" = None, time_sinks_status: str = "empty",
 ) -> str:
     lanes = lanes or {"loss": [], "silent": [], "awaiting": []}
     return json.dumps(
@@ -1871,6 +1883,7 @@ def _render_json(
             "findings": ranked,
             "loss": lanes["loss"],
             "time_sinks": time_sinks or [],
+            "time_sinks_status": time_sinks_status,
             "silent": lanes["silent"],
             "awaiting": lanes["awaiting"],
             "external_ideas": external or EMPTY_EXTERNAL,
@@ -1884,26 +1897,29 @@ def _board_for_report(board_path: "str | None") -> "PriorBoard | None":
     return _prior_from_raw(raw) if raw is not None else None
 
 
-def _time_profile_run(state_dir: "str | None") -> "tuple[time_profile.Aggregate, list] | None":
-    """The decayed aggregate and the profiles it covers, or None when nothing is profiled.
+def _time_profile_run(state_dir: "str | None") -> "tuple[tuple | None, str]":
+    """((decayed aggregate, the profiles it covers) or None, status), where status is one
+    of TIME_SINKS_EMPTY_TEXT's keys, or 'profiled' when there are profiled sessions.
 
     Reads the profile cache a prior `agent-report time-profile` run left in `state_dir`;
     with no directory or no cache it does not start the multi-minute full profiling pass."""
-    if not state_dir or not (Path(state_dir) / "sessions").is_dir():
-        return None
+    if not state_dir:
+        return None, "not-requested"
+    if not (Path(state_dir) / "sessions").is_dir():
+        return None, "no-cache"
     try:
         profiles = time_profile.profile_all(state_dir).profiles
         agg = time_profile.aggregate(profiles)
     except (OSError, ValueError) as exc:
         print(f"improvement-scan report: time profile unavailable: {exc}", file=sys.stderr)
-        return None
-    return (agg, profiles) if agg.sessions else None
+        return None, "error"
+    return ((agg, profiles), "profiled") if agg.sessions else (None, "empty")
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
     ranked = _rank_findings(_report_findings(args.store))
     board = _board_for_report(getattr(args, "board", None))
-    profiled = _time_profile_run(getattr(args, "time_profile_state", None))
+    profiled, sinks_status = _time_profile_run(getattr(args, "time_profile_state", None))
     agg, profiles = profiled if profiled else (None, [])
     measured = loss.measured_minutes(agg.rows) if agg else None
     lanes = loss.build_lanes(board.items, measured) if board is not None else None
@@ -1918,10 +1934,12 @@ def _cmd_report(args: argparse.Namespace) -> int:
         listed = []
     external = _external_report(_report_ideas(args.store), ranked, _sources_state(args), listed)
     if args.format == "json":
-        print(_render_json(ranked, lanes, external, sinks))
+        print(_render_json(ranked, lanes, external, sinks, sinks_status))
     else:
         addresses = {ref: item.addresses for ref, item in board.items.items()} if board else None
-        print(_render_markdown(ranked, lanes, addresses, external, sinks, agg.sessions if agg else 0))
+        print(_render_markdown(
+            ranked, lanes, addresses, external, sinks, agg.sessions if agg else 0, sinks_status,
+        ))
     return 0
 
 
