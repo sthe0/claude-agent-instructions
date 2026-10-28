@@ -8,6 +8,7 @@ import dataclasses
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -787,6 +788,7 @@ def test_b11_a_cd_into_another_repository_moves_the_repository_git_runs_in(rig, 
 def test_b11_a_repository_git_dir_that_cannot_be_resolved_is_undeterminable(rig):
     child = rig.child(extra_patterns=["Bash(git:*)"])
     for target in ("~/x", "$HOME", "sub/*"):
+        (rig.venue / target).mkdir(parents=True)
         assert undeterminable(rig.bash(child, f"git -C {target} status")), target
 
 
@@ -813,6 +815,25 @@ def test_b13_init_then_a_covered_hook_write_then_a_commit_is_undeterminable_with
     assert undeterminable(rig.bash(child, command))
     assert rig.bash(child, "git init -q")[0] == "allow"
     assert rig.bash(child, "cp hook-body copy && git init -q")[0] == "allow"
+
+
+def test_b13_a_copied_in_git_directory_with_a_hook_makes_the_next_git_run_undeterminable(rig, tmp_path):
+    seed = seed_repo_with_hook(tmp_path)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    shutil.copytree(seed / ".git", plain / "stash")
+    child = child_in(rig, plain, branch="feat", mode="default", allow=[], extra_patterns=["Bash(git status:*)"],
+                     extra_resources=[support.R.FileResource(str(plain), "write")])
+    assert rig.bash(child, "mv stash moved")[0] == "allow"
+    assert rig.bash(child, "git status")[0] == "allow"
+    assert undeterminable(rig.bash(child, "mv stash .git && git status"))
+    assert undeterminable(rig.bash(child, "mv stash sub/.git && git -C sub status"))
+
+
+def seed_repo_with_hook(tmp_path):
+    seed = seg_tests._init_repo(tmp_path / "seed", "feat")
+    plant(seed / ".git" / "hooks", "post-index-change")
+    return seed
 
 
 def test_s22_a_git_run_in_a_repository_holding_code_git_starts_needs_the_declared_flag(rig):

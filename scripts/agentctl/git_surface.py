@@ -14,18 +14,25 @@ What is pinned, per repository (keyed by the realpath of its absolute git dir):
               the worktree root): each entry but `*.sample` with its mode and, for a symlink, the
               realpath it resolves to and the bytes of that target
   config      every merged config entry that names a program or a hook path (see EXEC_KEY_PATTERNS, plus
-              `alias.*` / `submodule.*.update` values starting with `!`), as key and value, and the bytes of
-              each program or path such a value names
+              `alias.*` and `submodule.*.update` as written, `trailer.*.cmd`) and every entry that redirects
+              or re-speaks a remote (`remote.*.url`/`pushurl`, `url.*`, `protocol.*`, `gpg.*`), as key and
+              value, with the bytes of each program or path such a value names; and every config file git
+              read (`--show-origin`), an included one too
   attributes  the top-level and tracked nested `.gitattributes`, `info/attributes` and `core.attributesFile`
-  frameworks  `.pre-commit-config.yaml`, `lefthook.yml`, `.husky/`: files a hook may read to decide what to run
+  frameworks  `.pre-commit-config.yaml`, `lefthook.yml`, `.lefthook.yml`, `lefthook.yaml`, `lefthook-local.yml`,
+              `.lefthook/`, `.husky/`, `.overcommit.yml`, `package.json`: files a hook may read to decide
+              what to run
 
 Config entries that name nothing executable are not pinned, so the child's own `git push -u` (which writes
 `branch.*`) does not invalidate the snapshot. Anything the snapshot cannot read raises `Unreadable`; the
-caller treats a repository missing from the snapshot as unverifiable, never as unchanged.
+caller treats a repository missing from the snapshot as unverifiable, never as unchanged. The capture starts
+no program the repository configures: its `ls-files` runs with `core.fsmonitor` and `core.hooksPath`
+neutralised. `Surface.runnable` says the repository holds something git starts from the worktree (the
+hook's declaration rule, `grants.runs_worktree_code`, reads it).
 
 Not pinned (named in docs/operations/resource-grant-hook.md): what a hook or filter does by running a file of
-the worktree it names only by path (`githooks/pre-push` running `scripts/gate.py`), untracked nested
-`.gitattributes`, and config keys outside the list.
+the worktree it names only by path (`githooks/pre-push` running `scripts/gate.py`; the stage declares that
+with `runs_worktree_code`), untracked nested `.gitattributes`, and config keys outside the list.
 """
 from __future__ import annotations
 
