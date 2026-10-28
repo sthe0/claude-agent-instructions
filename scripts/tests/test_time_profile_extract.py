@@ -502,6 +502,7 @@ def test_the_gate_log_is_never_opened(fx, tmp_path, monkeypatch):
     for decoy in (fx / "agentctl_state", fx / "ledgers", tmp_path / "state"):
         decoy.mkdir(parents=True, exist_ok=True)
         (decoy / "gate-log.jsonl").write_text('{"decoy": true}\n')
+    monkeypatch.setenv("AGENTCTL_GATE_LOG", str(fx / "agentctl_state" / "gate-log.jsonl"))
     opened = []
     real = builtins.open
 
@@ -514,3 +515,140 @@ def test_the_gate_log_is_never_opened(fx, tmp_path, monkeypatch):
     run_all(fx, tmp_path / "state")
     assert any(name.endswith("sess-a.jsonl") for name in opened)
     assert not [name for name in opened if "gate-log" in name]
+
+
+# ------------------------------------------- id namespaces, failures, versions, odd inputs
+
+
+def clock(second: int) -> str:
+    return f"2026-03-01T10:{second // 60:02d}:{second % 60:02d}Z"
+
+
+def prompt_entry(second: int, text: str = "go") -> dict:
+    return {"type": "user", "timestamp": clock(second),
+            "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+
+
+def reply_entry(second: int, message_id: str = "m") -> dict:
+    return {"type": "assistant", "timestamp": clock(second),
+            "message": {"id": message_id, "content": [{"type": "text", "text": "ok"}]}}
+
+
+def hook_entry(second: int, command: str, duration_ms: int) -> dict:
+    return {"type": "attachment", "timestamp": clock(second),
+            "attachment": {"type": "hook_success", "command": command, "durationMs": duration_ms}}
+
+
+def queued_entry(second: int, **attachment) -> dict:
+    return {"type": "attachment", "timestamp": clock(second),
+            "attachment": {"type": "queued_command", **attachment}}
+
+
+def profile_of(tmp_path, *entries):
+    result = time_profile.profile_session(write_lines(tmp_path / "s.jsonl", *entries), lone_ctx())
+    assert isinstance(result, time_profile.SessionProfile)
+    assert time_profile.conservation_error_ms(result) == 0
+    return result
+
+
+def test_overlays_join_when_the_engine_session_id_differs_from_the_harness_id(fx, tmp_path):
+    proj = fx / "projects" / "proj"
+    write_lines(proj / "sess-h.jsonl", prompt_entry(0), reply_entry(10))
+    write_lines(proj / "sess-hc.jsonl", prompt_entry(0), reply_entry(4))
+    (fx / "agentctl_state" / "engine-e.json").write_text(json.dumps({"history": [
+        {"event": "classify", "ts": clock(0)}, {"event": "plan", "ts": clock(5)},
+        {"event": "submit_plan", "ts": clock(20)}]}))
+    bindings = fx / "engine-session-bindings"
+    bindings.mkdir()
+    (bindings / "sess-h.json").write_text(json.dumps({"driven": [{"session": "engine-e", "ts": "x"}]}))
+    with (fx / "ledgers" / "spawn.jsonl").open("a") as fh:
+        fh.write(json.dumps({"event": "spawn", "kind": "reviewer", "duration_ms": 3000,
+                             "spawner_session": "engine-e", "session_id": "sess-h",
+                             "child_session_id": "sess-hc"}) + "\n")
+    run = by_session(run_all(fx, tmp_path / "state"))
+    assert run["sess-h"].overlays == {"node:ROUTED": 5000, "node:PLANNING": 15000, "spawn:reviewer": 3000}
+    assert (run["sess-hc"].child_of, run["sess-hc"].kind) == ("sess-h", "reviewer")
+
+
+def test_one_unreadable_session_is_skipped_and_the_rest_are_still_profiled(fx, tmp_path, monkeypatch):
+    real = time_profile._walk_transcript
+
+    def failing(path):
+        if path.stem == "sess-b":
+            raise RuntimeError("boom")
+        return real(path)
+
+    monkeypatch.setattr(time_profile, "_walk_transcript", failing)
+    run = run_all(fx, tmp_path / "state")
+    assert [(s.session_id, s.reason) for s in run.skipped] == [("sess-b", "unparseable")]
+    assert sorted(by_session(run)) == ["sess-a", "sess-c"]
+
+
+def test_a_new_walker_version_reparses_transcripts_and_rescans_ledgers(fx, tmp_path, monkeypatch, ledger_reads):
+    state = tmp_path / "state"
+    judge = fx / "ledgers" / "judge.jsonl"
+    run_all(fx, state)
+    ledger_reads.clear()
+    monkeypatch.setattr(time_profile, "WALKER_VERSION", "after-a-rule-change")
+    again = run_all(fx, state)
+    assert sorted(Path(p).stem for p in again.reparsed) == SESSIONS
+    assert [r["offset"] for r in read_of(ledger_reads, judge)] == [0]
+    assert by_session(again)["sess-a"].overlays["judge:plan-review"] == 3750
+
+
+def test_node_dwell_reads_epoch_second_timestamps_beside_iso_ones(tmp_path):
+    state = tmp_path / "engine.json"
+    state.write_text(json.dumps({"history": [
+        {"event": "classify", "ts": 1772366400.0}, {"event": "plan", "ts": 1772366405.5},
+        {"event": "approve", "ts": "2026-03-01T12:00:15Z"}, {"event": "partition", "ts": 1772366420},
+        {"event": "note", "ts": True}]}))
+    dwell = time_profile.node_dwell(state)
+    assert dwell == {"dwell": {"ROUTED": 5500, "PLANNING": 9500, "APPROVED": 5000}, "timed": 4, "untimed": 1}
+
+
+def test_a_message_typed_mid_turn_is_model_time_but_a_task_notification_is_background(tmp_path):
+    profile = profile_of(
+        tmp_path, prompt_entry(0), reply_entry(2), queued_entry(5, prompt="also check X"),
+        queued_entry(9, prompt="<task-notification>done</task-notification>"),
+        queued_entry(12, commandMode="task-notification", prompt="timer"))
+    assert profile.partition == {"model:gap": 5000, "wait:background": 7000}
+
+
+def test_parallel_hooks_stamped_alike_each_take_their_duration_out_of_the_interval(tmp_path):
+    profile = profile_of(
+        tmp_path, prompt_entry(0), reply_entry(1), hook_entry(3, "/x/h1.sh", 500),
+        hook_entry(3, "/x/h2.sh", 700), hook_entry(3, "/x/h3.sh", 5000))
+    assert profile.partition == {"model:gap": 1000, "hook:h1.sh": 500, "hook:h2.sh": 700, "hook:h3.sh": 800}
+    assert profile.coverage["exposed_hook_ms"] == 2000
+
+
+def test_non_finite_ledger_numbers_are_skipped_and_the_cursor_still_advances(fx, tmp_path):
+    state = tmp_path / "state"
+    judge, spawn = fx / "ledgers" / "judge.jsonl", fx / "ledgers" / "spawn.jsonl"
+    with judge.open("a") as fh:
+        fh.write('{"kind":"call","judge":"j","duration":NaN,"source":"sess-a"}\n')
+        fh.write('{"kind":"call","judge":"j","duration":Infinity,"source":"sess-a"}\n')
+    with spawn.open("a") as fh:
+        fh.write('{"event":"spawn","kind":"developer","duration_ms":Infinity,"session_id":"sess-a"}\n')
+    run = by_session(run_all(fx, state))
+    assert run["sess-a"].overlays == EXPECTED_OVERLAYS["sess-a"]
+    saved = json.loads((state / "ledgers.json").read_text())
+    assert saved["judge"]["offset"] == judge.stat().st_size
+    assert saved["spawn"]["offset"] == spawn.stat().st_size
+
+
+def test_the_commit_index_follows_trunk_not_the_checked_out_branch(tmp_path):
+    import subprocess
+
+    def git(*args, when):
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x", "GIT_COMMITTER_NAME": "t",
+               "GIT_COMMITTER_EMAIL": "t@x", "GIT_AUTHOR_DATE": f"{when} +0000", "GIT_COMMITTER_DATE": f"{when} +0000"}
+        subprocess.run(["git", "-C", str(tmp_path), "-c", "commit.gpgsign=false", *args],
+                       check=True, capture_output=True, env=env)
+
+    git("init", "-q", "-b", "main", when=1_000_000_000)
+    git("commit", "-q", "--allow-empty", "-m", "trunk", when=1_000_000_000)
+    git("checkout", "-q", "-b", "topic", when=1_000_000_000)
+    git("commit", "-q", "--allow-empty", "-m", "branch", when=1_000_000_100)
+    assert [stamp for stamp, _ in time_profile.load_commit_index(tmp_path)] == [1_000_000_000]
+    assert time_profile.load_commit_index(tmp_path / "no-such-dir") == []

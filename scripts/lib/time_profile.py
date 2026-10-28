@@ -23,7 +23,8 @@ field, attachment command, shell token) -- the module does not import `re`:
 
   user:wait         end of an assistant turn to the next real user prompt, plus an
                     open AskUserQuestion call
-  wait:background   a gap ending in a task-notification (queued_command) entry
+  wait:background   a gap ending in a task-notification (queued_command) entry; a
+                    queued_command carrying a message typed mid-turn is model:gap
   tool:<Name>       tool_use ts to the matching tool_result ts; Bash is
                     tool:Bash:<program> (script basename for an interpreter; the
                     first positional subcommand joins agentctl-cli.py and git as
@@ -42,8 +43,13 @@ remainder going to the earliest-opened calls). Entry types other than
 assistant/user/attachment/system are bookkeeping: their time folds into the next
 terminating interval.
 
+Overlays join by the harness session id (the transcript stem): spawn rows by their
+`session_id`, node dwell through the state file of the same id and of every engine
+session the harness session drove (`engine-session-bindings` beside the state dir).
+
 Cache: $TIME_PROFILE_STATE_DIR (default ~/.local/state/time-profile/). A session
-is re-parsed only when its transcript fingerprint (mtime_ns, size) changes;
+is re-parsed only when its transcript fingerprint (mtime_ns, size) or WALKER_VERSION
+(a hash of this module and the helpers it parses with) changes;
 append-only ledgers are read from a stored byte offset and rescanned when the
 file shrinks or its device/inode changes. The agentctl gate-log is never opened.
 The module reads transcripts, ledgers and agentctl state and never writes them.
@@ -61,11 +67,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
-from lib import config_root, judge_ledger, shell_tokens, transcript_cost, transcript_turns
+from lib import config_root, engine_session_binding, judge_ledger, shell_tokens, transcript_cost, transcript_turns
 
 SKIP_REASONS = ("empty", "no_timestamps", "unparseable")
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 USER_WAIT = "user:wait"
 WAIT_BACKGROUND = "wait:background"
@@ -77,9 +83,24 @@ _TERMINATING_TYPES = frozenset({"assistant", "user", "attachment", "system"})
 _EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
 _MS = dt.timedelta(milliseconds=1)
 
+def _walker_version() -> str:
+    """Hash of the sources that decide a cached figure, so editing a label rule or the
+    walker (here or in the helpers it tokenizes and parses with) invalidates the caches."""
+    digest = hashlib.sha256(str(CACHE_VERSION).encode("ascii"))
+    for source in (__file__, shell_tokens.__file__, transcript_cost.__file__, transcript_turns.__file__):
+        try:
+            digest.update(Path(source).read_bytes())
+        except OSError:
+            digest.update(str(source).encode("utf-8"))
+    return digest.hexdigest()[:16]
+
+
+WALKER_VERSION = _walker_version()
+
 _SPAWN_LEDGER = Path.home() / ".local" / "log" / "claude-spawn-costs.jsonl"
 _POLICY_LEDGER = Path.home() / ".local" / "log" / "claude-policy-ledger.jsonl"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+TRUNK_REFS = ("origin/main", "main", "HEAD")
 
 
 @dataclass
@@ -153,6 +174,17 @@ def iter_ledger_rows(path: Path | str, offset: int = 0) -> Iterator[tuple]:
 def _ts_ms(value) -> int | None:
     parsed = transcript_cost.parse_ts_or_none(value)
     return None if parsed is None else (parsed - _EPOCH) // _MS
+
+
+def _finite_number(value) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+
+
+def _epoch_or_iso_ms(value) -> int | None:
+    """An engine history `ts`: epoch seconds (the engine's own clock) or an ISO string."""
+    if _finite_number(value):
+        return int(round(value * 1000))
+    return _ts_ms(value)
 
 
 _PUNCTUATION = frozenset("();<>|&")
@@ -272,9 +304,7 @@ def tool_key(name, tool_input) -> str:
 def hook_key(attachment: dict) -> str | None:
     command = attachment.get("command")
     duration = attachment.get("durationMs")
-    if not isinstance(command, str) or isinstance(duration, bool) or not isinstance(duration, (int, float)):
-        return None
-    if not math.isfinite(duration):
+    if not isinstance(command, str) or not _finite_number(duration):
         return None
     label = command_label(command, subcommands=False) or os.path.basename(command.strip()) or "unknown"
     return f"hook:{label}"
@@ -297,6 +327,14 @@ def _is_real_prompt(entry: dict) -> bool:
     )
 
 
+def _is_task_notification(attachment: dict) -> bool:
+    """A queued_command that is a background-task notification, not a message typed mid-turn."""
+    if attachment.get("commandMode") == "task-notification":
+        return True
+    prompt = attachment.get("prompt")
+    return isinstance(prompt, str) and prompt.lstrip().startswith("<task-notification")
+
+
 def _closed_key(entry: dict) -> str:
     kind = entry.get("type")
     if kind == "assistant":
@@ -304,7 +342,7 @@ def _closed_key(entry: dict) -> str:
     if kind == "attachment":
         attachment = entry.get("attachment")
         if isinstance(attachment, dict) and attachment.get("type") == "queued_command":
-            return WAIT_BACKGROUND
+            return WAIT_BACKGROUND if _is_task_notification(attachment) else MODEL_GAP
     elif kind == "user":
         if _is_real_prompt(entry):
             return USER_WAIT
@@ -330,27 +368,54 @@ class _Walk:
         self._open: dict = {}
         self._seen_calls: set = set()
         self._assistant_id = None
+        self._tail_ts: int | None = None
+        self._tail: list = []
 
     def _add(self, key: str, ms: int) -> None:
         if ms:
             self.partition[key] = self.partition.get(key, 0) + ms
 
-    def _interval(self, entry: dict, length: int) -> None:
+    def _hook_attachment(self, entry: dict) -> "tuple | None":
         attachment = entry.get("attachment") if entry.get("type") == "attachment" else None
-        if isinstance(attachment, dict):
-            key = hook_key(attachment)
-            if key is not None:
-                carved = min(length, max(0, int(attachment["durationMs"])))
-                self._add(key, carved)
-                self.hook_ms += carved
-                length -= carved
-        if not length:
-            return
-        if self._open:
-            for key, ms in _split_equally(length, list(self._open.values())):
+        key = hook_key(attachment) if isinstance(attachment, dict) else None
+        return None if key is None else (key, max(0, int(attachment["durationMs"])))
+
+    def _interval(self, entry: dict, ts: int, length: int) -> None:
+        hook = self._hook_attachment(entry)
+        if hook is not None:
+            carved = min(length, hook[1])
+            self._add(hook[0], carved)
+            self.hook_ms += carved
+            length -= carved
+        booked: list = []
+        if length:
+            if self._open:
+                booked = _split_equally(length, list(self._open.values()))
+            else:
+                booked = [(_closed_key(entry), length)]
+            for key, ms in booked:
                 self._add(key, ms)
-        else:
-            self._add(_closed_key(entry), length)
+        self._tail_ts, self._tail = ts, booked
+
+    def _carve_same_ts(self, entry: dict, ts: int) -> None:
+        """A hook attachment stamped like the entry before it (parallel hooks) takes its
+        duration out of the interval that entry closed, never more than is left of it."""
+        hook = self._hook_attachment(entry)
+        if hook is None or ts != self._tail_ts:
+            return
+        key, want = hook
+        for i in range(len(self._tail) - 1, -1, -1):
+            if not want:
+                break
+            tail_key, ms = self._tail[i]
+            taken = min(ms, want)
+            want -= taken
+            self._tail[i] = (tail_key, ms - taken)
+            self.partition[tail_key] -= taken
+            if not self.partition[tail_key]:
+                del self.partition[tail_key]
+            self._add(key, taken)
+            self.hook_ms += taken
 
     def _apply(self, entry: dict) -> None:
         kind = entry.get("type")
@@ -384,8 +449,10 @@ class _Walk:
         self.last = max(self.last, ts)
         if entry.get("type") in _TERMINATING_TYPES:
             if ts > self._cursor:
-                self._interval(entry, ts - self._cursor)
+                self._interval(entry, ts, ts - self._cursor)
                 self._cursor = ts
+            elif ts == self._cursor:
+                self._carve_same_ts(entry, ts)
             self._apply(entry)
 
     def finish(self) -> None:
@@ -433,19 +500,23 @@ def _fold_judge(agg: dict, row: dict) -> None:
     session, name, duration = row.get("source"), row.get("judge"), row.get("duration")
     if row.get("kind") != "call" or not isinstance(session, str) or not isinstance(name, str):
         return
-    if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+    if not _finite_number(duration):
         return
     by_name = agg.setdefault("by_session", {}).setdefault(session, {})
     by_name[name] = by_name.get(name, 0) + int(round(duration * 1000))
 
 
 def _fold_spawn(agg: dict, row: dict) -> None:
+    """Spawn rows are keyed by `session_id`, the spawning process's harness id (the
+    transcript stem); `spawner_session` is the engine session and may differ, so it is
+    only the fallback for rows written without `session_id`."""
     if row.get("event") != "spawn":
         return
-    spawner, kind, duration = row.get("spawner_session"), row.get("kind"), row.get("duration_ms")
+    spawner = row.get("session_id") if isinstance(row.get("session_id"), str) else row.get("spawner_session")
+    kind, duration = row.get("kind"), row.get("duration_ms")
     if not isinstance(kind, str):
         return
-    if isinstance(spawner, str) and isinstance(duration, (int, float)) and not isinstance(duration, bool):
+    if isinstance(spawner, str) and _finite_number(duration):
         by_kind = agg.setdefault("by_session", {}).setdefault(spawner, {})
         by_kind[kind] = by_kind.get(kind, 0) + int(duration)
     child = row.get("child_session_id")
@@ -504,10 +575,12 @@ def refresh_ledgers(state_dir: Path | None, paths: dict) -> Ledgers:
     """Fold new ledger bytes into the stored aggregates; `paths` maps judge/spawn/policy to files."""
     cache_file = state_dir / "ledgers.json" if state_dir is not None else None
     stored = (_read_json(cache_file) if cache_file else None) or {}
-    fresh: dict = {}
+    if stored.get("v") != WALKER_VERSION:
+        stored = {}
+    fresh: dict = {"v": WALKER_VERSION}
     for name, path in paths.items():
         saved = stored.get(name)
-        if saved and saved.get("path") != str(path):
+        if not isinstance(saved, dict) or saved.get("path") != str(path):
             saved = None
         entry = _advance_ledger(name, Path(path), saved)
         if entry:
@@ -555,7 +628,7 @@ def node_dwell(state_path: Path) -> dict | None:
         if not isinstance(event, dict):
             continue
         node = event["node"] if isinstance(event.get("node"), str) else targets.get(event.get("event"), node)
-        ts = _ts_ms(event.get("ts"))
+        ts = _epoch_or_iso_ms(event.get("ts"))
         if ts is None:
             untimed += 1
             gap_untimed = True
@@ -568,15 +641,22 @@ def node_dwell(state_path: Path) -> dict | None:
 
 
 def load_commit_index(repo_root: Path) -> list:
-    """(commit epoch s, sha) newest first; [] when `repo_root` is no repository."""
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-list", "--timestamp", "HEAD"],
-            capture_output=True, text=True, timeout=60,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if proc.returncode != 0:
+    """(commit epoch s, sha) newest first, along trunk; [] when `repo_root` is no repository.
+
+    Trunk is origin/main, else main, else HEAD: run from a feature worktree, HEAD's own
+    ancestry would stamp every later session with that branch's tip.
+    """
+    for ref in TRUNK_REFS:
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(repo_root), "rev-list", "--timestamp", ref],
+                capture_output=True, text=True, timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+        if proc.returncode == 0:
+            break
+    else:
         return []
     index = []
     for line in proc.stdout.splitlines():
@@ -606,10 +686,10 @@ class SessionCache:
 
     def get(self, path: Path) -> dict | None:
         entry = _read_json(self._file(path))
-        return entry if isinstance(entry, dict) and entry.get("v") == CACHE_VERSION else None
+        return entry if isinstance(entry, dict) and entry.get("v") == WALKER_VERSION else None
 
     def put(self, path: Path, entry: dict) -> None:
-        _write_json(self._file(path), {**entry, "v": CACHE_VERSION})
+        _write_json(self._file(path), {**entry, "v": WALKER_VERSION})
 
 
 def _fingerprint(stat: os.stat_result) -> list:
@@ -636,8 +716,10 @@ class Ctx:
 
 
 def _transcript_part(path: Path, ctx: Ctx) -> dict:
-    stat = path.stat() if path.exists() else None
-    fingerprint = _fingerprint(stat) if stat else [0, 0]
+    try:
+        fingerprint = _fingerprint(path.stat())
+    except OSError:
+        fingerprint = [0, 0]
     entry = ctx.cache.get(path) if ctx.cache else None
     if _cache_fresh(entry, fingerprint):
         return entry
@@ -658,13 +740,36 @@ def _transcript_part(path: Path, ctx: Ctx) -> dict:
     return entry
 
 
+def _engine_sessions(harness_session: str, state_dir: Path) -> list:
+    """The harness session's own id, then every engine session it drove (the
+    `engine-session-bindings` records beside the state dir): the two id spaces may differ."""
+    ids = [harness_session]
+    binding = state_dir.parent / engine_session_binding.BINDINGS_DIRNAME
+    data = _read_json(binding / f"{config_root.sanitize_session_id(harness_session)}.json")
+    driven = data.get("driven") if isinstance(data, dict) else None
+    for entry in driven if isinstance(driven, list) else []:
+        session = entry.get("session") if isinstance(entry, dict) else None
+        if isinstance(session, str) and session not in ids:
+            ids.append(session)
+    return ids
+
+
 def _node_part(session_id: str, ctx: Ctx) -> dict | None:
     if ctx.agentctl_state_dir is None:
         return None
-    state_path = ctx.agentctl_state_dir / f"{session_id}.json"
-    if not state_path.is_file():
-        return None
-    return node_dwell(state_path)
+    merged = None
+    for engine_id in _engine_sessions(session_id, ctx.agentctl_state_dir):
+        state_path = ctx.agentctl_state_dir / f"{config_root.sanitize_session_id(engine_id)}.json"
+        part = node_dwell(state_path) if state_path.is_file() else None
+        if part is None:
+            continue
+        if merged is None:
+            merged = {"dwell": {}, "timed": 0, "untimed": 0}
+        for name, ms in part["dwell"].items():
+            merged["dwell"][name] = merged["dwell"].get(name, 0) + ms
+        merged["timed"] += part["timed"]
+        merged["untimed"] += part["untimed"]
+    return merged
 
 
 def profile_session(transcript_path, ctx: Ctx) -> "SessionProfile | Skipped":
@@ -730,7 +835,10 @@ def profile_all(
     paths = sorted(Path(projects_root).glob("*/*.jsonl")) if projects_root else config_root.iter_transcripts()
     run = ProfileRun()
     for path in paths:
-        result = profile_session(path, ctx)
+        try:
+            result = profile_session(path, ctx)
+        except Exception:
+            result = Skipped(Path(path).stem, str(path), "unparseable")
         (run.skipped if isinstance(result, Skipped) else run.profiles).append(result)
     run.reparsed = ctx.reparsed
     return run
