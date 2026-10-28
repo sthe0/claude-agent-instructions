@@ -1,0 +1,28 @@
+{"type":"user","timestamp":"2026-03-01T10:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"go"}]}}
+{"type":"assistant","timestamp":"2026-03-01T10:00:01.000Z","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"u1","name":"Bash","input":{"command":"python3 scripts/agentctl-cli.py status --session x"}}]}}
+{"type":"attachment","timestamp":"2026-03-01T10:00:01.600Z","attachment":{"type":"hook_success","command":"python3 /x/hook-guard.py","durationMs":200}}
+{"type":"user","timestamp":"2026-03-01T10:00:03.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u1","content":"ok"}]}}
+{"type":"assistant","timestamp":"2026-03-01T10:00:03.500Z","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"checking"}]}}
+{"type":"assistant","timestamp":"2026-03-01T10:00:04.000Z","message":{"id":"m3","role":"assistant","content":[{"type":"tool_use","id":"u2","name":"Read","input":{"file_path":"/x/a"}}]}}
+{"type":"assistant","timestamp":"2026-03-01T10:00:04.100Z","message":{"id":"m3","role":"assistant","content":[{"type":"tool_use","id":"u3","name":"Grep","input":{"pattern":"p"}}]}}
+{"type":"user","timestamp":"2026-03-01T10:00:04.601Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u2","content":"a"}]}}
+{"type":"user","timestamp":"2026-03-01T10:00:05.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u3","content":"b"}]}}
+{"type":"assistant","timestamp":"2026-03-01T10:00:05.200Z","message":{"id":"m4","role":"assistant","content":[{"type":"tool_use","id":"u4","name":"AskUserQuestion","input":{"questions":[]}}]}}
+{"type":"user","timestamp":"2026-03-01T10:01:05.200Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u4","content":"yes"}]}}
+{"type":"assistant","timestamp":"2026-03-01T10:01:05.800Z","message":{"id":"m5","role":"assistant","content":[{"type":"text","text":"done"}]}}
+{"type":"system","subtype":"compact_boundary","timestamp":"2026-03-01T10:01:06.000Z"}
+{"type":"user","isCompactSummary":true,"timestamp":"2026-03-01T10:01:06.100Z","message":{"role":"user","content":[{"type":"text","text":"summary of the earlier conversation"}]}}
+{"type":"user","timestamp":"2026-03-01T10:01:10.000Z","message":{"role":"user","content":[{"type":"text","text":"next"}]}}
+{"type":"assistant","timestamp":"2026-03-01T10:01:11.000Z","message":{"id":"m6","role":"assistant","content":[{"type":"tool_use","id":"u5","name":"Skill","input":{"skill":"tdd"}}]}}
+{"type":"user","timestamp":"2026-03-01T10:01:13.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u5","content":"loaded"}]}}
+{"type":"assistant","timestamp":"2026-03-01T10:01:13.500Z","message":{"id":"m7","role":"assistant","content":[{"type":"tool_use","id":"u6","name":"Agent","input":{"subagent_type":"developer","prompt":"p"}}]}}
+{"type":"user","timestamp":"2026-03-01T10:01:23.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u6","content":"COMPLETED"}]}}
+{"type":"assistant","timestamp":"2026-03-01T10:01:24.000Z","message":{"id":"m8","role":"assistant","content":[{"type":"tool_use","id":"u7","name":"mcp__intrasearch__search","input":{"q":"x"}}]}}
+{"type":"user","timestamp":"2026-03-01T10:01:24.800Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u7","content":"hits"}]}}
+{"type":"assistant","timestamp":"2026-03-01T10:01:25.000Z","message":{"id":"m9","role":"assistant","content":[{"type":"text","text":"waiting for the job"}]}}
+{"type":"attachment","timestamp":"2026-03-01T10:01:35.000Z","attachment":{"type":"queued_command","prompt":"<task-notification>done</task-notification>"}}
+{"type":"assistant","timestamp":"2026-03-01T10:01:35.400Z","message":{"id":"m10","role":"assistant","content":[{"type":"text","text":"job finished"}]}}
+{"type":"system","subtype":"turn_duration","timestamp":"2026-03-01T10:01:36.000Z"}
+{"type":"summary","summary":"a session without any timestamp"}
+this line is not json {
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-03-01T10:01:37.000Z"}

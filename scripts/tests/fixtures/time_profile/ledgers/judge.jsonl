@@ -1,0 +1,5 @@
+{"ts":"2026-03-01T10:00:10Z","kind":"call","judge":"plan-review","duration":1.5,"source":"sess-a"}
+{"ts":"2026-03-01T10:00:30Z","kind":"call","judge":"plan-review","duration":2.25,"source":"sess-a"}
+{"ts":"2026-03-01T10:00:40Z","kind":"call","judge":"acceptance","duration":0.5,"source":"sess-a"}
+{"ts":"2026-03-01T11:00:08Z","kind":"call","judge":"acceptance","duration":1.0,"source":"sess-b"}
+{"ts":"2026-03-01T11:00:09Z","kind":"verdict","judge":"acceptance","duration":50.0,"source":"sess-b"}
