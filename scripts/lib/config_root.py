@@ -246,6 +246,16 @@ def agentctl_gate_log() -> Path:
     return agentctl_dir() / "gate-log.jsonl"
 
 
+def decision_log() -> Path:
+    """Decision telemetry log (``<root>/agentctl/decision-log.jsonl``): one row per
+    hook or engine-gate evaluation. Honors an ``$AGENTCTL_DECISION_LOG`` override,
+    mirroring ``agentctl_gate_log()``, so a test run never appends to the real log."""
+    override = os.environ.get("AGENTCTL_DECISION_LOG")
+    if override:
+        return Path(override).expanduser()
+    return agentctl_dir() / "decision-log.jsonl"
+
+
 def canon_roots_file() -> Path:
     """Machine-local list of extra canon-read-only path roots, one per line
     (``<root>/canon-roots.local`` — see hook-guard-canon-readonly.py). Org-

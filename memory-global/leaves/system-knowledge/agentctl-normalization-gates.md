@@ -28,6 +28,12 @@ Counts cutoff: 2026-10-26T00:00:00+00:00
 on refusal only (or on a subset of paths) has an evaluated count that does not measure use. `-` means
 the gate is never logged.
 
+**Superseded since the decision-telemetry stage.** `renorm_final`, `escalation_orphans` and
+`frozen_stage` are no longer refusal-only: `cli.py` logs them on every evaluation, and every
+`_log_gate` call also appends an `engine:<label>` row to the decision log (see
+`docs/operations/decision-telemetry.md`). The "refusal-only" remarks below describe the counts
+at the cutoff above, not the current code.
+
 **Per gate** (line numbers at base 00267dd6):
 
 - `normalization_blockers` (`gates.py:536`). Refuses `replan` at DIAGNOSING closure when the difficulty

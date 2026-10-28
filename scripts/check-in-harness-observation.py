@@ -108,6 +108,7 @@ def _seam_env(td: Path) -> dict[str, str]:
     seam_path.write_text(json.dumps([{"name": "stub-publish.sh", "kind": "bash_verb"}]), encoding="utf-8")
     env = dict(os.environ)
     env["CLAUDE_PUBLICATION_TOOLS_FILE"] = str(seam_path)
+    env["AGENT_TELEMETRY_TEST"] = "1"
     return env
 
 

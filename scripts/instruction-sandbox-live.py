@@ -104,6 +104,7 @@ def build_child_env(caller_env: dict, root: Path) -> tuple[dict, str]:
     home = root / "home"
     agent_root = home / ".claude-agent"
     env.update(
+        AGENT_TELEMETRY_TEST="1",
         HOME=str(home),
         CLAUDE_AGENT_HOME=str(agent_root),
         CLAUDE_CONFIG_DIR=str(agent_root),

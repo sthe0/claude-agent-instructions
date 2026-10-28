@@ -9,6 +9,7 @@ VIEWS = {
     "spawn-outcomes": "spawn_outcomes",
     "tool-usage": "tool_usage",
     "skill-usage": "skill_usage",
+    "hooks": "hooks",
 }
 
 
