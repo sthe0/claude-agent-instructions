@@ -100,6 +100,14 @@ def test_an_uncreatable_log_switches_telemetry_off_and_changes_nothing(tmp_path)
     assert not (blocker / "log.jsonl").exists()
 
 
+def test_record_itself_swallows_an_unwritable_log(tmp_path, monkeypatch):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, not a directory")
+    monkeypatch.setenv("AGENTCTL_DECISION_LOG", str(blocker / "log.jsonl"))
+    hook_telemetry.record("hook-x", "PreToolUse", "deny", "s1")
+    assert not (blocker / "log.jsonl").exists()
+
+
 def test_an_uncreatable_capture_file_runs_the_hook_untouched(monkeypatch, capsys):
     def no_capture():
         raise OSError("no space left")
