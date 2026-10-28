@@ -334,7 +334,7 @@ AGENTCTL_USER_AUTHORITY_VERBS = frozenset({
     "block", "unblock", "drive", "push-subplan", "pop-subplan", "task-reset",
     "declare", "investigate", "critique", "normalize", "difficulty-open",
     "difficulty-close", "partition",
-    "partition-units", "next-stage", "adopt-escalation", "plugin-activate", "plugin-deactivate",
+    "partition-units", "order-submit", "next-stage", "adopt-escalation", "plugin-activate", "plugin-deactivate",
     "plugin-record", "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry",
     "plan-convert-live",
 })

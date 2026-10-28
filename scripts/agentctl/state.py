@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 59  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 60  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -109,6 +109,11 @@ SCHEMA_VERSION = 59  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # 59: SessionState gains the review-cost trigger bookkeeping
                      # (review_cycle_*, review_stage_streaks, review_trigger_fire,
                      # review_trigger_spent)
+                     # 60: SessionState gains order_draft_path/order_draft_sha256/
+                     # order_reviews (the order phase: a submitted order understanding
+                     # and its reviews, bound to the understanding digest);
+                     # PlanPresentation gains understanding_sha256. No-op migration:
+                     # absent keys load as the empty defaults.
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1336,10 +1341,16 @@ PLAN_PRESENTATION_KIND_FULL = "full"
 # Gated by gates.replan_authorization_blockers, recorded by cmd_present_plan
 # exactly like the other two kinds.
 PLAN_PRESENTATION_KIND_REPLAN_DIFF = "replan_diff"
+# Fourth instance: the order understanding shown to the user before any plan exists.
+# Its receipt binds the draft's understanding digest (PlanPresentation.
+# understanding_sha256) as well as the rendering; recorded by cmd_present_plan and
+# stamped by the delivery hook like the other kinds.
+PLAN_PRESENTATION_KIND_ORDER = "order"
 PLAN_PRESENTATION_KINDS = (
     PLAN_PRESENTATION_KIND_ESSENCE,
     PLAN_PRESENTATION_KIND_FULL,
     PLAN_PRESENTATION_KIND_REPLAN_DIFF,
+    PLAN_PRESENTATION_KIND_ORDER,
 )
 
 # Language-independent ASCII marker a plan-approval AskUserQuestion option must
@@ -1365,6 +1376,15 @@ CONTENT_WAIVER_ASK_MARKER = "[content-waiver-ask]"
 # single-sourced here so the emitter and the checker can never drift apart.
 AUTHORIZE_REPLAN_MARKER = "[authorize-replan]"
 
+# Language-independent ASCII marker an order-agreement AskUserQuestion option must embed,
+# bound to the presented understanding: the prefix plus the first 12 hex digits of its
+# digest. Emitted by cmd_present_plan's order Directive, checked by the delivery hook.
+ORDER_AGREE_MARKER_PREFIX = "[order-agree:"
+
+
+def order_agree_marker(understanding_digest: str) -> str:
+    return f"{ORDER_AGREE_MARKER_PREFIX}{understanding_digest[:12]}]"
+
 
 @dataclass
 class PlanPresentation:
@@ -1382,6 +1402,9 @@ class PlanPresentation:
     # (absent key -> None via from_dict's .get), which approve treats as "no
     # grants digest was ever bound" rather than "matches" (fail-closed).
     grants_sha256: str | None = None
+    # The order understanding digest the rendering was made from (schema 60); set only
+    # on an order-kind receipt, None on every other kind and on older receipts.
+    understanding_sha256: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "PlanPresentation":
@@ -1393,6 +1416,47 @@ class PlanPresentation:
             rendering_text=d["rendering_text"],
             presented_ts=d["presented_ts"],
             grants_sha256=d.get("grants_sha256"),
+            understanding_sha256=d.get("understanding_sha256"),
+        )
+
+
+ORDER_REVIEW_SCOPE = "order"
+
+
+@dataclass
+class OrderReview:
+    """One review of a submitted order understanding (schema 60), recorded by
+    `plan-review --scope order`. `understanding_sha256` is the ENGINE's own digest of
+    the reviewed draft (plan.understanding_digest), so an edit to the understanding
+    leaves the record bound to bytes that are no longer current. `plan_sha256` is the
+    reviewer-attested sha256 of the draft file, kept only for the audit trail.
+    `verdict` is pass / revise / override with the plan scopes' override rules."""
+    verdict: str
+    reviewer: str
+    target: str
+    understanding_sha256: str
+    concerns: list[str] = field(default_factory=list)
+    customer_questions: list[str] = field(default_factory=list)
+    note: str = ""
+    plan_sha256: str = ""
+    transcript: str = ""
+    at: float = 0.0
+    scope: str = ORDER_REVIEW_SCOPE
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "OrderReview":
+        return cls(
+            verdict=d["verdict"],
+            reviewer=d["reviewer"],
+            target=d["target"],
+            understanding_sha256=d["understanding_sha256"],
+            concerns=list(d.get("concerns") or []),
+            customer_questions=list(d.get("customer_questions") or []),
+            note=d.get("note") or "",
+            plan_sha256=d.get("plan_sha256") or "",
+            transcript=d.get("transcript") or "",
+            at=d.get("at") or 0.0,
+            scope=d.get("scope") or ORDER_REVIEW_SCOPE,
         )
 
 
@@ -2465,6 +2529,12 @@ class SessionState:
     # for a substantive session — blocks approval until a receipt is recorded.
     plan_presentations: list[PlanPresentation] = field(default_factory=list)
     plan_conversions: list[PlanConversion] = field(default_factory=list)
+    # The order phase (schema 60): the submitted order understanding's draft path and
+    # the understanding digest it carried at order-submit, plus the reviews recorded
+    # against it. Empty on a session that never calls order-submit.
+    order_draft_path: str = ""
+    order_draft_sha256: str = ""
+    order_reviews: list[OrderReview] = field(default_factory=list)
     approval: GateRecord = field(default_factory=lambda: GateRecord("plan_approval"))
     resolution: GateRecord = field(default_factory=lambda: GateRecord("resolution"))
     stages: list[Stage] = field(default_factory=list)
@@ -3084,6 +3154,9 @@ class SessionState:
         data["plan_conversions"] = [
             PlanConversion.from_dict(x) for x in data.get("plan_conversions", [])
         ]
+        data["order_reviews"] = [
+            OrderReview.from_dict(x) for x in data.get("order_reviews", [])
+        ]
         cost_raw = data.get("cost")
         data["cost"] = CostRollup(**cost_raw) if cost_raw else None
         data["plan_stack"] = [
@@ -3170,4 +3243,5 @@ SESSION_SCOPED_FIELDS = frozenset({
     "declined_issues", "planning_misses", "materialization_defects",
     "settings_drift", "cwd_drift", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",
+    "order_draft_path", "order_draft_sha256", "order_reviews",
 })

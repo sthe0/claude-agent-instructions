@@ -62,6 +62,7 @@ from .plan import (
     customer_question_defect,
     entries_grants_sha256,
     grants_sha256,
+    load_order_draft,
     load_plan,
     load_plan_with_digest,
     materialized_grant_entries,
@@ -88,6 +89,7 @@ from .plan import (
     stage_question_key,
     stage_reattest_digest,
     unit_currency_hash,
+    understanding_digest,
     unit_node,
     verify_command_reachability_blockers,
     cost_tier_floor_advisories,
@@ -107,7 +109,14 @@ from .render import (
     render_plan_md,
     render_stages_md,
 )
-from .submission import plan_size_blocks, plan_size_warnings, submission_advice, submission_violations
+from .submission import (
+    _order_understanding_violations,
+    order_understanding_completeness_violations,
+    plan_size_blocks,
+    plan_size_warnings,
+    submission_advice,
+    submission_violations,
+)
 from .state import (
     _EXECUTION_NODES,
     _MAX_PLAN_STACK,
@@ -151,12 +160,16 @@ from .state import (
     NORMALIZATION_DESTINATION_ALIASES,
     NORMALIZATION_DESTINATIONS,
     NORMALIZATION_LEVELS,
+    ORDER_REVIEW_SCOPE,
+    OrderReview,
+    order_agree_marker,
     Outcome,
     PARENT_DIFFICULTY_ENV,
     parse_parent_difficulty,
     PermissionRequest,
     PLAN_PRESENTATION_KIND_ESSENCE,
     PLAN_PRESENTATION_KIND_FULL,
+    PLAN_PRESENTATION_KIND_ORDER,
     PLAN_PRESENTATION_KIND_REPLAN_DIFF,
     PLAN_PRESENTATION_KINDS,
     PLAN_PRESENTATION_RENDERING_CAP_BYTES,
@@ -4136,6 +4149,60 @@ def cmd_order_dispose(args, *, store: StateStore, runner: Runner | None = None) 
     )
 
 
+def _order_draft_violations(meta) -> list[str]:
+    """Every reason the order in `meta` is not fit to be put to the user: the
+    completeness findings (which already contain the understanding tables' own) and
+    the understanding findings once more, each reported once. Re-run on the CURRENT
+    draft wherever the draft is acted on, never trusted from an earlier submission."""
+    problems = list(order_understanding_completeness_violations(meta))
+    problems.extend(v for v in _order_understanding_violations(meta) if v not in problems)
+    return problems
+
+
+def _session_has_agreement(state: SessionState) -> bool:
+    """Whether the user has already agreed the order's understanding in this session.
+    No agreement record exists yet, so no session has one."""
+    return False
+
+
+def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Submit an order draft: the first act of the order phase, before any plan exists.
+
+    Refuses a draft whose order is incomplete or ill-formed, and a draft that already
+    carries stages while the session has no agreement; otherwise records the draft's
+    path and the engine's digest of its understanding for `plan-review --scope order`
+    and `present-plan --kind order` to bind to. Only records: `plan_path` is untouched
+    and the node never moves, so a session that never calls it is unchanged."""
+    state = _require(store, args.session)
+    try:
+        doc, staged = load_order_draft(args.plan)
+    except (OSError, PlanError) as exc:
+        return Directive(False, state.node, "noop", f"cannot load order draft: {exc}")
+    if staged and not _session_has_agreement(state):
+        return Directive(
+            False, state.node, "noop",
+            f"{args.plan} carries stages but the user has not agreed this session's order: "
+            "submit the order draft without [[stage]] entries first",
+        )
+    problems = _order_draft_violations(doc.meta)
+    if problems:
+        return Directive(
+            False, state.node, "noop",
+            f"order draft {args.plan} is not fit to put to the user: " + "; ".join(problems),
+            data={"problems": problems},
+        )
+    state.order_draft_path = args.plan
+    state.order_draft_sha256 = understanding_digest(doc)
+    state.log("order_submit", plan=args.plan, understanding_sha256=state.order_draft_sha256)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"order draft {args.plan} submitted (understanding {state.order_draft_sha256[:12]}); "
+        "next: plan-review --scope order, then present-plan --kind order",
+        data={"order_draft_path": args.plan, "understanding_sha256": state.order_draft_sha256},
+    )
+
+
 def cmd_order_list(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Read-only render of the order bag. `--format md` IS the gate's own block,
     via the same plugins_premise.coverage_block the essence check re-derives — so
@@ -4905,7 +4972,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
 # essence/full. An explicit set, not an inline special case, so a future
 # kind must choose its supersede key deliberately rather than inherit one
 # by falling through an if/else.
-_SUPERSEDE_BY_KIND_ALONE = frozenset({PLAN_PRESENTATION_KIND_REPLAN_DIFF})
+_SUPERSEDE_BY_KIND_ALONE = frozenset({PLAN_PRESENTATION_KIND_REPLAN_DIFF, PLAN_PRESENTATION_KIND_ORDER})
 
 
 def _record_plan_presentation(state: SessionState, presentation: PlanPresentation) -> None:
@@ -4981,6 +5048,201 @@ def _deliver_presentation_via_channel(state: SessionState, presentation, raw: by
     ))
 
 
+def _read_presented_rendering(args, state: SessionState) -> tuple[bytes, str, Directive | None]:
+    """`(bytes, text, refusal)` of the `--rendering-file` a presentation is stamped for:
+    the refusal names a missing, unreadable, over-cap or non-UTF-8 file, in which case
+    the first two are empty."""
+    rendering_file = getattr(args, "rendering_file", None)
+    if not rendering_file:
+        return b"", "", Directive(False, state.node, "noop", "--rendering-file is required")
+    try:
+        raw = Path(rendering_file).read_bytes()
+    except OSError as exc:
+        return b"", "", Directive(False, state.node, "noop", f"cannot read rendering file: {exc}")
+    if len(raw) > PLAN_PRESENTATION_RENDERING_CAP_BYTES:
+        return b"", "", Directive(
+            False, state.node, "noop",
+            f"rendering is {len(raw)} bytes, over the "
+            f"{PLAN_PRESENTATION_RENDERING_CAP_BYTES}-byte cap — trim it, never "
+            "truncate silently; the recorded receipt must match what the user saw",
+        )
+    try:
+        return raw, raw.decode("utf-8"), None
+    except UnicodeDecodeError:
+        return b"", "", Directive(False, state.node, "noop", "rendering file must be UTF-8 text")
+
+
+def _present_writer_gate(state: SessionState, text: str, kind: str) -> tuple[dict, Directive | None]:
+    """`(writer_gate, refusal)`: the rendering's bytes must be bound to a tech-writer
+    witness in this session's transcript — the published-text hook's table
+    (hook-published-text-writer-gate.py `_decide_text`) minus its content-rule
+    judge, which checks ticket-text publication rules, not a plan rendering.
+    Run last by every caller, so a rendering refused anyway costs no writer pass."""
+    writer_gate: dict
+    if os.environ.get(writer_pass.OVERRIDE_ENV) == "0":
+        writer_gate = {"outcome": "override"}
+    else:
+        transcript_path = _present_plan_transcript(state.session_id)
+        if transcript_path is None:
+            writer_gate = {"outcome": "no_transcript"}
+        else:
+            binding = writer_pass.bind(text, transcript_path)
+            writer_gate = {
+                "outcome": "bound", "strength": binding.strength,
+                "evidence": binding.evidence, "transcript": str(transcript_path),
+            }
+            if binding.strength == writer_pass.UNREADABLE:
+                writer_gate["outcome"] = "unreadable"
+            elif binding.strength in writer_pass.REFUSING_STRENGTHS:
+                return writer_gate, Directive(
+                    False, state.node, "noop",
+                    f"rendering is not bound to a tech-writer witness in {transcript_path}: "
+                    f"{binding.strength} — run the tech-writer pass on these exact bytes "
+                    "(Skill tech-writer, or spawn-specialist.py --kind tech-writer) and "
+                    "rewrite the whole rendering file with Write after it — an Edit fragment "
+                    f"never binds the whole body; {writer_pass.OVERRIDE_ENV}=0 overrides",
+                    data={"writer_gate": {**writer_gate, "outcome": "refused"}},
+                )
+            elif binding.strength not in (writer_pass.WRITER_OUTPUT, writer_pass.POST_WITNESS):
+                writer_gate["outcome"] = "allowed"
+    state.log("present_plan_writer_gate", outcome=writer_gate["outcome"], kind=kind)
+    return writer_gate, None
+
+
+def _attach_writer_gate(directive: Directive, writer_gate: dict) -> Directive:
+    directive.data["writer_gate"] = writer_gate
+    if writer_gate["outcome"] == "override":
+        directive.detail = (
+            f"writer gate OVERRIDDEN ({writer_pass.OVERRIDE_ENV}=0) — name this to the "
+            f"user in the presenting turn. {directive.detail}"
+        )
+    return directive
+
+
+_ORDER_ANCHOR_RE = re.compile(r"\[([RPK]\d+)\](?!\()")
+
+
+def _order_anchor_problems(doc: PlanDoc, text: str) -> tuple[list[str], list[str]]:
+    """`(missing, extra)` anchor ids of an order rendering. Every requirement, proposal
+    and constraint id must appear in `text` as its own `[R1]` / `[P1]` / `[K1]` anchor
+    and no anchor may name anything else, so the user is shown exactly what they are
+    asked to agree. Other bracketed text and markdown links are not anchors."""
+    order = doc.meta.order
+    expected = {item.id for items in (order.requirements, order.proposals, order.constraints)
+                for item in items}
+    found = set(_ORDER_ANCHOR_RE.findall(text))
+    return sorted(expected - found), sorted(found - expected)
+
+
+def _draft_is_submitted(state: SessionState, digest: str) -> bool:
+    """Whether the draft's current understanding `digest` is the one order-submit checked."""
+    return state.order_draft_sha256 == digest
+
+
+def _order_receipt_understanding(digest: str) -> str | None:
+    """The understanding digest an order receipt carries, which is what makes the
+    receipt stale when the draft moves."""
+    return digest
+
+
+def _present_order(args, state: SessionState, *, store: StateStore) -> Directive:
+    """`present-plan --kind order`: stamp a receipt for the submitted order draft.
+
+    Needs no plan. The draft shown must be the one order-submit recorded, still
+    complete, with a standing review of its current understanding, and the rendering
+    must carry every requirement, proposal and constraint id as an anchor. The receipt
+    binds the understanding digest as well as the rendering bytes; the delivery hook
+    stamps it when the rendering is a turn's final text. Records only — the node does
+    not move, and the channel delivery that essence takes is not offered for this kind."""
+    if getattr(args, "plan", None):
+        return Directive(
+            False, state.node, "noop",
+            "--plan is not accepted with --kind order: the order draft is the one "
+            "order-submit recorded",
+        )
+    path = state.order_draft_path
+    if not path:
+        return Directive(False, state.node, "noop",
+                         "no order draft to present: order-submit a draft first")
+    try:
+        doc, _ = load_order_draft(path)
+    except (OSError, PlanError) as exc:
+        return Directive(False, state.node, "noop", f"cannot load order draft: {exc}")
+    digest = understanding_digest(doc)
+    if not _draft_is_submitted(state, digest):
+        return Directive(
+            False, state.node, "noop",
+            f"the order draft {path} changed since order-submit recorded it "
+            f"(understanding {digest[:12]}, submitted {state.order_draft_sha256[:12]}): "
+            "order-submit it again and have it reviewed",
+        )
+    problems = _order_draft_violations(doc.meta)
+    if problems:
+        return Directive(
+            False, state.node, "noop",
+            f"order draft {path} is no longer fit to put to the user: " + "; ".join(problems),
+            data={"problems": problems},
+        )
+    blockers = gates.order_review_blockers(state, path)
+    _log_gate(state, "order_review", blockers, passed=not blockers)
+    if blockers:
+        return Directive(False, state.node, "noop", "cannot present order",
+                         data={"blockers": blockers})
+    raw, text, refusal = _read_presented_rendering(args, state)
+    if refusal is not None:
+        return refusal
+    missing, extra = _order_anchor_problems(doc, text)
+    if missing or extra:
+        found = []
+        if missing:
+            found.append(f"missing anchors: {missing}")
+        if extra:
+            found.append(f"unknown anchors: {extra}")
+        return Directive(
+            False, state.node, "noop",
+            "order rendering does not show exactly the order's requirements, proposals and "
+            "constraints as [id] anchors (e.g. [R1], [P1], [K1]); stamping nothing — "
+            + "; ".join(found),
+            data={"missing": missing, "extra": extra},
+        )
+    writer_gate, refusal = _present_writer_gate(state, text, PLAN_PRESENTATION_KIND_ORDER)
+    if refusal is not None:
+        return refusal
+    presentation = PlanPresentation(
+        plan_path=path,
+        kind=PLAN_PRESENTATION_KIND_ORDER,
+        plan_sha256=_plan_file_sha256(path),
+        rendering_sha256=hashlib.sha256(raw).hexdigest(),
+        rendering_text=text,
+        presented_ts=time.time(),
+        understanding_sha256=_order_receipt_understanding(digest),
+    )
+    _record_plan_presentation(state, presentation)
+    state.log("present_plan", plan=path, kind=PLAN_PRESENTATION_KIND_ORDER,
+              rendering_sha256=presentation.rendering_sha256,
+              rejection_text=getattr(args, "rejection_text", None))
+    store.save(state)
+    marker = order_agree_marker(digest)
+    next_steps = [
+        "arm a `sleep 2` background timer now (atomic with deferring the ask)",
+        "emit THIS exact rendering as the turn's FINAL text message — zero "
+        "tool calls after it",
+        "next turn, open directly with the agreement AskUserQuestion (zero preceding "
+        f"text) carrying an option whose label or description embeds the literal marker {marker!r}",
+    ]
+    return _attach_writer_gate(Directive(
+        True, state.node, "continue",
+        "presentation receipt recorded (kind=order). Next: "
+        + " Then, ".join(f"({i}) {step}" for i, step in enumerate(next_steps, 1)),
+        data={
+            "rendering_sha256": presentation.rendering_sha256,
+            "understanding_sha256": presentation.understanding_sha256,
+            "order_agree_marker": marker,
+            "next_steps": next_steps,
+        },
+    ), writer_gate)
+
+
 def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Stamp a PlanPresentation receipt: proof the coordinator rendered the plan
     for the user, bound to the exact plan version (plan_sha256) and the exact
@@ -4996,6 +5258,8 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
     hand-enumerate stages itself.
     """
     state = _require(store, args.session)
+    if getattr(args, "kind", None) == PLAN_PRESENTATION_KIND_ORDER:
+        return _present_order(args, state, store=store)
     if not state.plan_path:
         return Directive(False, state.node, "noop", "no plan to present: submit a plan first")
 
@@ -5054,24 +5318,9 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                 False, state.node, "noop", "cannot present replan_diff",
                 data={"blockers": prblock},
             )
-    rendering_file = getattr(args, "rendering_file", None)
-    if not rendering_file:
-        return Directive(False, state.node, "noop", "--rendering-file is required")
-    try:
-        raw = Path(rendering_file).read_bytes()
-    except OSError as exc:
-        return Directive(False, state.node, "noop", f"cannot read rendering file: {exc}")
-    if len(raw) > PLAN_PRESENTATION_RENDERING_CAP_BYTES:
-        return Directive(
-            False, state.node, "noop",
-            f"rendering is {len(raw)} bytes, over the "
-            f"{PLAN_PRESENTATION_RENDERING_CAP_BYTES}-byte cap — trim it, never "
-            "truncate silently; the recorded receipt must match what the user saw",
-        )
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return Directive(False, state.node, "noop", "rendering file must be UTF-8 text")
+    raw, text, refusal = _read_presented_rendering(args, state)
+    if refusal is not None:
+        return refusal
 
     if kind == PLAN_PRESENTATION_KIND_FULL:
         # Completeness is MECHANIZABLE (every stage anchor present) — enforce it.
@@ -5192,48 +5441,12 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             _sha_doc = None
     presented_grants_sha256 = grants_sha256(_sha_doc) if _sha_doc is not None else None
 
-    # Writer-pass gate: the rendering's bytes must be bound to a tech-writer
-    # witness in this session's transcript — the published-text hook's table
-    # (hook-published-text-writer-gate.py `_decide_text`) minus its content-rule
-    # judge, which checks ticket-text publication rules, not a plan rendering.
-    # Last, so a rendering refused anyway costs no writer pass.
-    writer_gate: dict
-    if os.environ.get(writer_pass.OVERRIDE_ENV) == "0":
-        writer_gate = {"outcome": "override"}
-    else:
-        transcript_path = _present_plan_transcript(state.session_id)
-        if transcript_path is None:
-            writer_gate = {"outcome": "no_transcript"}
-        else:
-            binding = writer_pass.bind(text, transcript_path)
-            writer_gate = {
-                "outcome": "bound", "strength": binding.strength,
-                "evidence": binding.evidence, "transcript": str(transcript_path),
-            }
-            if binding.strength == writer_pass.UNREADABLE:
-                writer_gate["outcome"] = "unreadable"
-            elif binding.strength in writer_pass.REFUSING_STRENGTHS:
-                return Directive(
-                    False, state.node, "noop",
-                    f"rendering is not bound to a tech-writer witness in {transcript_path}: "
-                    f"{binding.strength} — run the tech-writer pass on these exact bytes "
-                    "(Skill tech-writer, or spawn-specialist.py --kind tech-writer) and "
-                    "rewrite the whole rendering file with Write after it — an Edit fragment "
-                    f"never binds the whole body; {writer_pass.OVERRIDE_ENV}=0 overrides",
-                    data={"writer_gate": {**writer_gate, "outcome": "refused"}},
-                )
-            elif binding.strength not in (writer_pass.WRITER_OUTPUT, writer_pass.POST_WITNESS):
-                writer_gate["outcome"] = "allowed"
-    state.log("present_plan_writer_gate", outcome=writer_gate["outcome"], kind=kind)
+    writer_gate, refusal = _present_writer_gate(state, text, kind)
+    if refusal is not None:
+        return refusal
 
     def _with_writer_gate(directive: Directive) -> Directive:
-        directive.data["writer_gate"] = writer_gate
-        if writer_gate["outcome"] == "override":
-            directive.detail = (
-                f"writer gate OVERRIDDEN ({writer_pass.OVERRIDE_ENV}=0) — name this to the "
-                f"user in the presenting turn. {directive.detail}"
-            )
-        return directive
+        return _attach_writer_gate(directive, writer_gate)
 
     presentation = PlanPresentation(
         plan_path=target,
@@ -6024,6 +6237,123 @@ def _evaluate_review_trigger(
     )
 
 
+def _attested_digest_refusal(state: SessionState, target: str, attested: str) -> Directive | None:
+    """The refusal of a `--plan-digest` the engine cannot cross-check against the live
+    bytes of `target` (None when nothing is attested or the attestation holds). The
+    absent-digest case keeps its fail-open degradation — nothing was claimed, so nothing
+    needs checking."""
+    if not attested:
+        return None
+    live = _plan_file_sha256(target)
+    if not live:
+        return Directive(
+            False, state.node, "noop",
+            f"--plan-digest {attested!r} cannot be cross-checked: {target!r} is "
+            "unreadable, so the engine cannot confirm the reviewer read it; "
+            "re-run plan-review once the plan file is readable (or omit "
+            "--plan-digest to record an unattested review that does not bind)",
+        )
+    if attested != live:
+        return Directive(
+            False, state.node, "noop",
+            f"--plan-digest {attested!r} does not match the live plan bytes "
+            f"({live!r}) at {target!r}: the reviewer read a different or stale "
+            "plan; re-read the current plan and re-run plan-review",
+        )
+    refs_problem = _plan_refs_problem(target)
+    if refs_problem:
+        return Directive(
+            False, state.node, "noop",
+            f"--plan-digest {attested!r} cannot be cross-checked: the plan at {target!r} has a "
+            f"reference that does not resolve ({refs_problem}), so the engine cannot confirm "
+            "the reviewer read the text the plan stands for; fix the reference and re-run plan-review",
+        )
+    return None
+
+
+def _cmd_order_review(args, state: SessionState, *, store: StateStore) -> Directive:
+    """`plan-review --scope order`: record a review of an order draft's UNDERSTANDING.
+
+    The record is bound to the engine's own digest of the draft (`understanding_digest`),
+    never to the reviewer's word: `--plan-digest`, when given, is only cross-checked
+    against the file's bytes. It touches neither `plan_review` nor `plan_stage_reviews`
+    (the draft is not the plan), counts no review round, and never moves the node. An
+    override follows the plan scopes' rules — never by the reviewer whose `revise` it
+    overrides, and by the order's customer_id when one is declared — except that an
+    agent-authored override is refused outright: the release and trigger machinery that
+    admits one is about plan-review rounds, which the order phase does not run."""
+    target = getattr(args, "target", None) or state.order_draft_path
+    if not target:
+        return Directive(
+            False, state.node, "noop",
+            "no order draft to review: order-submit a draft first, or pass --target <draft.toml>",
+        )
+    try:
+        doc, _ = load_order_draft(target)
+    except (OSError, PlanError) as exc:
+        return Directive(
+            False, state.node, "noop",
+            f"cannot review {target!r} as an order: it does not load as an order draft: {exc}",
+        )
+    parsed, parse_error = _parse_review_concerns(
+        state, list(getattr(args, "concerns", None) or []), args.verdict)
+    if parsed is None:
+        return Directive(False, state.node, "noop", parse_error)
+    question_texts, question_error = _parse_review_questions(
+        list(getattr(args, "customer_questions", None) or []))
+    if question_texts is None:
+        return Directive(False, state.node, "noop", question_error)
+    reviewer = (getattr(args, "reviewer", "") or "").strip()
+    crossing = None
+    if args.verdict == gates._PLAN_REVIEW_OVERRIDE:
+        if reviewer.casefold() == AGENT_ACTOR:
+            return Directive(
+                False, state.node, "noop",
+                "an agent-authored override of an order review is refused: the override "
+                "is the customer's escape from a reviewer's `revise`",
+            )
+        prev = next((r for r in reversed(state.order_reviews) if r.target == target), None)
+        refusal, crossing = _plan_review_override_refusal(state, prev, reviewer, doc)
+        if refusal:
+            return Directive(False, state.node, "noop", refusal)
+    attested = (getattr(args, "plan_digest", None) or "").strip().lower()
+    refusal_directive = _attested_digest_refusal(state, target, attested)
+    if refusal_directive is not None:
+        return refusal_directive
+    review = OrderReview(
+        verdict=args.verdict,
+        reviewer=reviewer,
+        target=target,
+        understanding_sha256=understanding_digest(doc),
+        concerns=[pc.body for pc in parsed],
+        customer_questions=question_texts,
+        note=getattr(args, "note", "") or "",
+        plan_sha256=attested,
+        transcript=getattr(args, "transcript", None) or "",
+        at=time.time(),
+    )
+    state.order_reviews.append(review)
+    question_ids = _record_review_questions(state, ORDER_REVIEW_SCOPE, question_texts)
+    if review.verdict == gates._PLAN_REVIEW_OVERRIDE:
+        _settle_override_decision(state, review, "", crossing)
+    state.log("order_review", target=target, verdict=review.verdict, reviewer=reviewer,
+              understanding_sha256=review.understanding_sha256)
+    store.save(state)
+    blockers = gates.order_review_blockers(state, target)
+    return Directive(
+        True, state.node, "continue",
+        f"order review ({review.verdict}) recorded for {target} against understanding "
+        f"{review.understanding_sha256[:12]}; "
+        + ("it stands for the draft" if not blockers else "the order review gate is still blocked"),
+        data={
+            "understanding_sha256": review.understanding_sha256,
+            "blockers": blockers,
+            "concerns": review.concerns,
+            **_question_data(state, args, question_ids),
+        },
+    )
+
+
 def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Record a thinker review of a plan version, backing the plan-review gate.
 
@@ -6050,13 +6380,15 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     useful as a path/content-hash-bound record), but a stage-scoped review REFUSES:
     it cannot confirm the named stage even exists without parsing the plan."""
     state = _require(store, args.session)
+    scope = (getattr(args, "scope", None) or "").strip()
+    if scope == ORDER_REVIEW_SCOPE:
+        return _cmd_order_review(args, state, store=store)
     target = getattr(args, "target", None) or state.plan_path
     if not target:
         return Directive(
             False, state.node, "noop",
             "no plan to review: submit a plan first, or pass --target <plan.toml>",
         )
-    scope = (getattr(args, "scope", None) or "").strip()
     pair = plan_review_pair_scope(scope)
     if pair is not None:
         return _cmd_plan_review_pair(args, state, target, pair, store=store, runner=runner)
@@ -6128,31 +6460,9 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     # bind a plan by naming a path nobody read (#195). The absent-digest case keeps
     # its fail-open degradation — nothing was claimed, so nothing needs checking.
     attested = (getattr(args, "plan_digest", None) or "").strip().lower()
-    if attested:
-        live = _plan_file_sha256(target)
-        if not live:
-            return Directive(
-                False, state.node, "noop",
-                f"--plan-digest {attested!r} cannot be cross-checked: {target!r} is "
-                "unreadable, so the engine cannot confirm the reviewer read it; "
-                "re-run plan-review once the plan file is readable (or omit "
-                "--plan-digest to record an unattested review that does not bind)",
-            )
-        if attested != live:
-            return Directive(
-                False, state.node, "noop",
-                f"--plan-digest {attested!r} does not match the live plan bytes "
-                f"({live!r}) at {target!r}: the reviewer read a different or stale "
-                "plan; re-read the current plan and re-run plan-review",
-            )
-        refs_problem = _plan_refs_problem(target)
-        if refs_problem:
-            return Directive(
-                False, state.node, "noop",
-                f"--plan-digest {attested!r} cannot be cross-checked: the plan at {target!r} has a "
-                f"reference that does not resolve ({refs_problem}), so the engine cannot confirm "
-                "the reviewer read the text the plan stands for; fix the reference and re-run plan-review",
-            )
+    refusal = _attested_digest_refusal(state, target, attested)
+    if refusal is not None:
+        return refusal
     # Terminal-pass check: a `revise` arriving after a PASS already recorded
     # for this scope this approval cycle only overturns it with run-demonstrated
     # regression evidence — see gates.plan_review_prior_pass /
@@ -13851,6 +14161,7 @@ COMMANDS = {
     "question-candidate-dispose": cmd_question_candidate_dispose,
     "order-raise": cmd_order_raise,
     "order-dispose": cmd_order_dispose,
+    "order-submit": cmd_order_submit,
     "order-list": cmd_order_list,
     "classify": cmd_classify,
     "plan": cmd_plan,
@@ -13953,7 +14264,7 @@ _SESSION_COMMANDS = (
     "question-rebind", "question-retire", "question-list", "question-check",
     "question-enumerate", "question-enumerate-worker", "question-enumerate-escape",
     "question-candidate-dispose",
-    "order-raise", "order-dispose", "order-list", "classify", "plan",
+    "order-raise", "order-dispose", "order-submit", "order-list", "classify", "plan",
     "plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
     "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
@@ -14045,7 +14356,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
               "plan-seal", "plan-convert", "plan-review-delta", "submit-plan", "replan", "drive",
               "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
-              "question-rebind", "question-raise", "present-plan", "order-dispose"),
+              "question-rebind", "question-raise", "present-plan", "order-dispose",
+              "order-submit"),
      "plan file path"),
     ("out", ("plan-convert",), "output directory path for the converted tree"),
     ("field", ("plan-externalize",), "name of a plan field — an identifier, not narrative"),
@@ -14078,6 +14390,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "the escape is --note, which is RESOLVE"),
     ("reviewer", ("plan-review", "stage-review", "code-review"), "reviewer name"),
     ("plan_digest", ("plan-review",), "sha256 the review binds to"),
+    ("transcript", ("plan-review",), "path to the reviewer's transcript — a file path, not narrative"),
     ("scope", ("plan-review", "risk-accept"), "'' or 'stage:<n>' or 'topo:<pair-or-unit>' — the review's binding, not narrative"),
     ("concern_ids", ("plan-review",),
      "explicit stable ids for --concern, positionally paired — ids, not narrative"),
@@ -14364,6 +14677,11 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                     help="stamp content_digest against this plan instead of the session's "
                          "current plan_path (use when re-covering against a CORRECTED plan)")
 
+    sp = add("order-submit"); sp.add_argument("--session", required=True)
+    sp.add_argument("--plan", required=True,
+                    help="order draft file (a TOML with [meta.order] and no stages) to submit "
+                         "for review and presentation; only records it, the node does not move")
+
     sp = add("order-list"); sp.add_argument("--session", required=True)
     sp.add_argument("--format", dest="format", default="", choices=["", "md"],
                     help="md renders the scope-coverage block the essence must carry; "
@@ -14469,7 +14787,9 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                     help="essence = free-form summary, no completeness check; "
                          "full = every [stage N] anchor required, stage-enumerated; "
                          "replan_diff = proposed-diff rendering for a non-substantive "
-                         "replan against a candidate plan file (see --plan)")
+                         "replan against a candidate plan file (see --plan); "
+                         "order = the submitted order draft, every requirement, proposal "
+                         "and constraint id shown as an [R1]/[P1]/[K1] anchor")
     sp.add_argument("--plan", default=None,
                     help="candidate plan file the presentation is stamped against; "
                          "only legal with --kind replan_diff (defaults to the session's "
@@ -14530,8 +14850,13 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
                          "plan; cross-checked against the live bytes and stored as the "
                          "attested plan_sha256. A passing verdict does NOT bind without "
                          "it — a reviewer that could not read the plan cannot attest.")
+    sp.add_argument("--transcript", default=None,
+                    help="with --scope order: path to the reviewer's transcript, stored "
+                         "on the order review record")
     sp.add_argument("--scope", default=None,
-                    help="'stage:<n>' to bind this review to one stage instead of the "
+                    help="'order' to review an order draft's understanding (--target is "
+                         "the draft; defaults to the submitted one), 'stage:<n>' to bind "
+                         "this review to one stage instead of the "
                          "whole plan, or 'topo:<id>' (a pair, e.g. topo:3-1 or "
                          "topo:base-2; a unit, e.g. topo:unit:base or topo:unit:3) to "
                          "record one pair or unit review; omitted "

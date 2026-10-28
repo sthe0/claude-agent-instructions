@@ -59,6 +59,7 @@ from .plan import (
     effects_place,
     grants_place,
     grants_sha256,
+    load_order_draft,
     load_plan,
     load_plan_with_digest,
     moved_interfaces,
@@ -79,6 +80,7 @@ from .plan import (
     stage_question_key,
     unit_currency_hash,
     unit_id,
+    understanding_digest,
     unit_node,
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
@@ -2536,6 +2538,53 @@ def plan_presentation_active(state: SessionState) -> bool:
     return state.weight_class == WeightClass.SUBSTANTIVE.value
 
 
+def _order_review_binds(review, digest: str) -> bool:
+    return review.understanding_sha256 == digest
+
+
+def order_review_blockers(state: SessionState, path: str | None) -> list[str]:
+    """Why the order understanding at `path` has no standing review ([] == it has one).
+
+    The standing review is the LAST one recorded against the draft's current
+    understanding digest: a pass clears the gate, an override clears it only when its
+    reviewer is not one whose `revise` of the same understanding it overrides and it
+    carries a note, and a revise blocks. A review recorded against an earlier
+    understanding binds nothing — editing the activity, a requirement or a proposal
+    moves the digest and leaves every earlier verdict behind."""
+    if not path:
+        return ["no order draft to review: order-submit a draft first"]
+    try:
+        doc, _ = load_order_draft(path)
+    except (OSError, PlanError) as exc:
+        return [f"order draft {path!r} cannot be read: {exc}"]
+    digest = understanding_digest(doc)
+    bound = [r for r in state.order_reviews if _order_review_binds(r, digest)]
+    if not bound:
+        return [
+            f"no order review is bound to the current understanding ({digest[:12]}) of "
+            f"{path!r}; run plan-review --scope order --target {path} --verdict pass|revise"
+        ]
+    last = bound[-1]
+    if last.verdict == _PLAN_REVIEW_PASS:
+        return []
+    if last.verdict == _PLAN_REVIEW_OVERRIDE:
+        reviewer = (last.reviewer or "").strip()
+        if not reviewer or not (last.note or "").strip():
+            return ["the order review override needs a non-empty reviewer and note"]
+        if any(r.verdict == _PLAN_REVIEW_REVISE and (r.reviewer or "").strip() == reviewer
+               for r in bound):
+            return [
+                f"the order review override must come from a distinct reviewer: {reviewer!r} "
+                "issued the 'revise' it would override"
+            ]
+        return []
+    return [
+        f"the last order review of the current understanding ({digest[:12]}) is "
+        f"{last.verdict!r} by {last.reviewer!r}: revise the draft and review it again, or "
+        "override with a distinct reviewer and a note"
+    ]
+
+
 def _plan_presentation_for(state: SessionState, kind: str):
     """The most-recently-recorded PlanPresentation for `kind`, or None.
 
@@ -2550,6 +2599,27 @@ def _plan_presentation_for(state: SessionState, kind: str):
     regardless."""
     match = [p for p in state.plan_presentations if p.kind == kind]
     return match[-1] if match else None
+
+
+def order_presentation_stale_reason(state: SessionState, receipt) -> str | None:
+    """Why an order receipt no longer stands for the submitted understanding (None ==
+    it does): it must name the submitted draft, its bytes, and carry the understanding
+    digest that order-submit recorded and the draft still has."""
+    stale = _receipt_binding_blocker(receipt, state.order_draft_path, "order presentation", state)
+    if stale is not None:
+        return stale
+    try:
+        doc, _ = load_order_draft(state.order_draft_path)
+    except (OSError, PlanError) as exc:
+        return f"order presentation is stale — the draft cannot be read: {exc}"
+    digest = understanding_digest(doc)
+    if receipt.understanding_sha256 != digest or state.order_draft_sha256 != digest:
+        return (
+            "order presentation is stale — the receipt, the submitted draft and the "
+            "draft's current understanding are not the same digest; re-run order-submit "
+            "and present-plan --kind order"
+        )
+    return None
 
 
 DELIVERY_HOOK_BASENAME = "hook-plan-delivery-gate.py"

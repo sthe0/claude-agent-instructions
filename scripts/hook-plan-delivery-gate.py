@@ -122,7 +122,10 @@ try:
     from agentctl import delivery as _delivery  # noqa: E402
     from agentctl import gates as _gates  # noqa: E402
     from agentctl.state import PLAN_PRESENTATION_KIND_ESSENCE as _KIND_ESSENCE  # noqa: E402
+    from agentctl.state import PLAN_PRESENTATION_KIND_ORDER as _KIND_ORDER  # noqa: E402
     from agentctl.state import PLAN_PRESENTATION_KIND_REPLAN_DIFF as _KIND_REPLAN_DIFF  # noqa: E402
+    from agentctl.state import ORDER_AGREE_MARKER_PREFIX  # noqa: E402
+    from agentctl.state import order_agree_marker  # noqa: E402
     from agentctl.state import PlanPresentation as _PlanPresentation  # noqa: E402
     from agentctl.state import SessionState as _SessionState  # noqa: E402
     from agentctl.state import SHOW_FULL_PLAN_MARKER  # noqa: E402
@@ -647,6 +650,14 @@ def _decide_session(
                     if _delivery_observed(replan_receipt, None, delivered_texts):
                         replan_receipt_to_stamp = replan_receipt
 
+    order_receipt_to_stamp: _PlanPresentation | None = None
+    if has_marker_option(payload.get("tool_input") or {}, ORDER_AGREE_MARKER_PREFIX):
+        order_state = _state()
+        if order_state is not None:
+            order_receipt_to_stamp = _order_receipt_verified(
+                order_state, payload.get("tool_input") or {}, delivered_texts, transcript_path,
+            )
+
     decision, reason, delivery_verified = gate_decision(
         node, plan_ts, prompt_ts, turn_start_ts,
         presentation_active=presentation_active,
@@ -657,7 +668,32 @@ def _decide_session(
         is_approval_ask=is_approval_ask,
     )
     essence_receipt_to_stamp = receipt if delivery_verified else None
-    return decision, reason, sp, (essence_receipt_to_stamp or replan_receipt_to_stamp)
+    return decision, reason, sp, (
+        essence_receipt_to_stamp or replan_receipt_to_stamp or order_receipt_to_stamp
+    )
+
+
+def _order_receipt_verified(
+    state: _SessionState,
+    tool_input: dict,
+    delivered_texts: list[tuple[str, float | None]] | None,
+    transcript_path: object,
+) -> _PlanPresentation | None:
+    """The order receipt to stamp, or None. A sibling of the essence and replan-diff
+    certificates, keyed by the ask's own marker: it must carry the `[order-agree:<digest>]`
+    marker of the very understanding the receipt is bound to, the receipt must still be
+    current for the submitted draft, and its rendering must have landed as a completed
+    turn's final text after it was registered. Never denies — only certifies."""
+    receipt = _gates._plan_presentation_for(state, _KIND_ORDER)
+    if receipt is None or not receipt.understanding_sha256:
+        return None
+    if not has_marker_option(tool_input, order_agree_marker(receipt.understanding_sha256)):
+        return None
+    if _gates.order_presentation_stale_reason(state, receipt) is not None:
+        return None
+    if delivered_texts is None and isinstance(transcript_path, str) and transcript_path:
+        delivered_texts = delivered_final_texts(Path(transcript_path))
+    return receipt if _delivery_observed(receipt, None, delivered_texts) else None
 
 
 def main() -> int:

@@ -71,11 +71,35 @@ def _place_contributes_when_empty(mp):
     mp.setattr("agentctl.plan._understanding_empty", lambda order: False, raising=True)
 
 
+def _order_review_unbound(mp):
+    """A standing order review no longer has to be about the understanding now presented."""
+    mp.setattr("agentctl.gates._order_review_binds", lambda review, digest: True, raising=True)
+
+
+def _order_anchor_unchecked(mp):
+    """An order rendering is no longer held to show exactly the order's items as anchors."""
+    mp.setattr("agentctl.cli._order_anchor_problems", lambda doc, text: ([], []), raising=True)
+
+
+def _order_receipt_unbound(mp):
+    """An order receipt is recorded without the understanding digest it stands for."""
+    mp.setattr("agentctl.cli._order_receipt_understanding", lambda digest: None, raising=True)
+
+
+def _order_stale_draft_presented(mp):
+    """present-plan --kind order stops checking that the draft is the one order-submit recorded."""
+    mp.setattr("agentctl.cli._draft_is_submitted", lambda state, digest: True, raising=True)
+
+
 MUTANTS = {
     "verdict_unchecked": _verdict_unchecked,
     "digest_ignores_constraints": _digest_ignores_constraints,
     "completeness_unchecked": _completeness_unchecked,
     "place_contributes_when_empty": _place_contributes_when_empty,
+    "order_review_unbound": _order_review_unbound,
+    "order_anchor_unchecked": _order_anchor_unchecked,
+    "order_receipt_unbound": _order_receipt_unbound,
+    "order_stale_draft_presented": _order_stale_draft_presented,
 }
 
 
