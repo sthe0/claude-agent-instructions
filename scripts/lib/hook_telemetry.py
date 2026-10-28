@@ -57,8 +57,8 @@ def decision_class(stdout: str, exit_code) -> str:
     return NUDGE
 
 
-def record(mechanism: str, event: str, decision: str, session: str, *, layer: str = "core") -> None:
-    row = {
+def decision_row(mechanism: str, event: str, decision: str, session: str, *, layer: str = "core") -> dict:
+    return {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "mechanism": str(mechanism)[:_FIELD_MAX_CHARS],
         "event": str(event)[:_FIELD_MAX_CHARS],
@@ -67,6 +67,10 @@ def record(mechanism: str, event: str, decision: str, session: str, *, layer: st
         "test": is_test_run(session),
         "layer": layer,
     }
+
+
+def record(mechanism: str, event: str, decision: str, session: str, *, layer: str = "core") -> None:
+    row = decision_row(mechanism, event, decision, session, layer=layer)
     try:
         path = config_root.decision_log()
         path.parent.mkdir(parents=True, exist_ok=True)
