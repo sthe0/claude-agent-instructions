@@ -68,7 +68,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import self_diagnose_store as sds  # noqa: E402
-from lib import semantic_join  # noqa: E402
+from lib import semantic_join, time_profile, time_profile_uncertainty  # noqa: E402
 from difficulty_channel import DifficultyRecord, Severity, get_channel, is_registered  # noqa: E402
 from difficulty_channel.adapters import load_adapter  # noqa: E402
 from difficulty_channel.port import StreamUnsupported  # noqa: E402
@@ -399,6 +399,9 @@ class PriorBoardItem:
     family: str = ""
     silent_estimate: str = ""
     loss_measurement: "dict | None" = None
+    # The time-profile key this item's fix would shrink; when it has a measured figure the
+    # loss lane charges that instead of `minutes_per_occurrence`.
+    mechanism: str = ""
 
 
 @dataclass(frozen=True)
@@ -485,6 +488,7 @@ def _prior_from_raw(raw: dict) -> PriorBoard:
             loss_measurement=(
                 entry["loss_measurement"] if isinstance(entry.get("loss_measurement"), dict) else None
             ),
+            mechanism=str(entry.get("mechanism", "")),
         )
     return PriorBoard(
         schema=BOARD_SCHEMA, generated_at=str(raw.get("generated_at", "")), items=items
@@ -526,6 +530,7 @@ def write_board(board: PriorBoard, path: "str | Path") -> None:
                 "family": item.family,
                 "silent_estimate": item.silent_estimate,
                 "loss_measurement": item.loss_measurement,
+                "mechanism": item.mechanism,
             }
             for ref, item in board.items.items()
         },
@@ -1160,6 +1165,7 @@ def build_worklist(
             }
             if bucket != "new" and prior is not None and ref in prior.items:
                 entry["addresses"] = list(prior.items[ref].addresses)
+                entry["mechanism"] = prior.items[ref].mechanism
             items.append(entry)
     return {
         "schema": BOARD_SCHEMA,
@@ -1224,13 +1230,28 @@ def parse_addresses(ref: str, value) -> "tuple[str, ...]":
     return tuple(dict.fromkeys(value))
 
 
+def parse_mechanism(ref: str, value) -> str:
+    """Validate a classification's optional `mechanism`: `unattributed` or a time-profile key
+    (it starts with one of the profile's key prefixes). `''` or null clears it."""
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str) or not (
+        value == time_profile.UNATTRIBUTED or value.startswith(time_profile.KEY_PREFIXES)
+    ):
+        raise ValueError(
+            f"item {ref!r}: 'mechanism' must be {time_profile.UNATTRIBUTED!r} or start with one of "
+            f"{', '.join(time_profile.KEY_PREFIXES)}, got {value!r}"
+        )
+    return value
+
+
 # The model-supplied measured-loss fields, valid both in a full classification and (as any
-# non-empty subset, with `addresses`) in an amendment of a carried item.
+# non-empty subset, with `addresses` and `mechanism`) in an amendment of a carried item.
 LOSS_INPUT_KEYS = frozenset({
     "signatures", "minutes_per_occurrence", "minutes_basis", "precision", "precision_sample",
     "family", "silent_estimate",
 })
-AMENDABLE_KEYS = LOSS_INPUT_KEYS | {"addresses"}
+AMENDABLE_KEYS = LOSS_INPUT_KEYS | {"addresses", "mechanism"}
 
 
 def _is_number(value) -> bool:
@@ -1323,6 +1344,13 @@ def classify_and_score(
 
     addresses_of = {ref: parse_addresses(ref, c.get("addresses")) for ref, c in classified.items()}
     loss_of = {ref: parse_loss_fields(ref, c) for ref, c in classified.items()}
+    mechanism_of = {
+        ref: (
+            parse_mechanism(ref, c["mechanism"]) if "mechanism" in c
+            else prior.items[ref].mechanism if ref in prior.items else ""
+        )
+        for ref, c in classified.items()
+    }
     for ref, c in classified.items():
         _validate_vocab("breadth", c.get("breadth"), BREADTH_WEIGHTS)
         _validate_vocab("cost_to_resolve", c.get("cost_to_resolve"), _BUDGET_TIER_KEYS)
@@ -1399,6 +1427,7 @@ def classify_and_score(
             severity=str(c.get("severity") or ""),
             cost_to_resolve=c["cost_to_resolve"],
             old_score=old_score,
+            mechanism=mechanism_of[ref],
         )
         fresh[ref] = apply_loss_fields(_inherit_loss_fields(item, prior.items.get(ref)), loss_of[ref])
 
@@ -1667,6 +1696,31 @@ def _render_lanes_md(lanes: dict, ranked: "list[dict]", addresses: "dict[str, tu
     return parts
 
 
+def _render_time_sinks_md(time_sinks: "list[dict]", profiled_sessions: int) -> "list[str]":
+    parts = ["## Where the time goes", ""]
+    if not profiled_sessions:
+        return parts + ["No sessions are profiled yet, so no time figures are shown.", ""]
+    if not time_sinks:
+        return parts + [
+            f"{profiled_sessions} session(s) profiled; no mechanism takes more time per session "
+            "than the unattributed remainder.",
+            "",
+        ]
+    parts += [
+        "| mechanism | min/session ± SE | share of active time | n_eff | Core sha |",
+        "|---|---|---|---|---|",
+    ]
+    for row in time_sinks:
+        se = "n/a" if row["se"] is None else f"{row['se']:.2f}"
+        share = row["share_of_active"]
+        share_text = f"{100 * share['mean']:.1f}%" if share["mean"] is not None else "n/a"
+        parts.append(
+            f"| {_cell(row['key'])} | **{row['mean']:.2f}** ± {se} | {share_text} "
+            f"| {row['n_eff']:.1f} | {row['core_sha']} |"
+        )
+    return parts + [""]
+
+
 def _render_tail_lanes_md(lanes: dict) -> "list[str]":
     parts: "list[str]" = []
     if lanes["silent"]:
@@ -1772,6 +1826,8 @@ def _render_markdown(
     ranked: "list[dict]", lanes: "dict | None" = None,
     addresses: "dict[str, tuple[str, ...]] | None" = None,
     external: "dict | None" = None,
+    time_sinks: "list[dict] | None" = None,
+    profiled_sessions: int = 0,
 ) -> str:
     lanes = lanes or {"loss": [], "silent": [], "awaiting": []}
     shown = _lane_member_refs(lanes)
@@ -1783,6 +1839,7 @@ def _render_markdown(
     unmeasured = [f for f in ranked if not f["cost_signal"]["measured"]]
     parts = ["# Improvement-scan report", ""]
     parts += _render_lanes_md(lanes, ranked, addresses or {})
+    parts += _render_time_sinks_md(time_sinks or [], profiled_sessions)
     if measured:
         parts.append("## Measured cost signal — ranked by cost, then attention, then stability")
         parts.append("")
@@ -1804,12 +1861,16 @@ def _render_markdown(
     return "\n".join(parts).rstrip() + "\n"
 
 
-def _render_json(ranked: "list[dict]", lanes: "dict | None" = None, external: "dict | None" = None) -> str:
+def _render_json(
+    ranked: "list[dict]", lanes: "dict | None" = None, external: "dict | None" = None,
+    time_sinks: "list[dict] | None" = None,
+) -> str:
     lanes = lanes or {"loss": [], "silent": [], "awaiting": []}
     return json.dumps(
         {
             "findings": ranked,
             "loss": lanes["loss"],
+            "time_sinks": time_sinks or [],
             "silent": lanes["silent"],
             "awaiting": lanes["awaiting"],
             "external_ideas": external or EMPTY_EXTERNAL,
@@ -1823,10 +1884,33 @@ def _board_for_report(board_path: "str | None") -> "PriorBoard | None":
     return _prior_from_raw(raw) if raw is not None else None
 
 
+def _time_profile_run(state_dir: "str | None") -> "tuple[time_profile.Aggregate, list] | None":
+    """The decayed aggregate and the profiles it covers, or None when nothing is profiled.
+
+    Reads the profile cache a prior `agent-report time-profile` run left in `state_dir`;
+    with no directory or no cache it does not start the multi-minute full profiling pass."""
+    if not state_dir or not (Path(state_dir) / "sessions").is_dir():
+        return None
+    try:
+        profiles = time_profile.profile_all(state_dir).profiles
+        agg = time_profile.aggregate(profiles)
+    except (OSError, ValueError) as exc:
+        print(f"improvement-scan report: time profile unavailable: {exc}", file=sys.stderr)
+        return None
+    return (agg, profiles) if agg.sessions else None
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     ranked = _rank_findings(_report_findings(args.store))
     board = _board_for_report(getattr(args, "board", None))
-    lanes = loss.build_lanes(board.items) if board is not None else None
+    profiled = _time_profile_run(getattr(args, "time_profile_state", None))
+    agg, profiles = profiled if profiled else (None, [])
+    measured = loss.measured_minutes(agg.rows) if agg else None
+    lanes = loss.build_lanes(board.items, measured) if board is not None else None
+    sinks = (
+        loss.time_sinks(agg, profiles, time_profile_uncertainty.heavy_keys(agg, "partition"))
+        if agg else []
+    )
     try:
         listed = _load_sources_file(getattr(args, "sources", None))[1]
     except srcs.SourcesError as exc:
@@ -1834,10 +1918,10 @@ def _cmd_report(args: argparse.Namespace) -> int:
         listed = []
     external = _external_report(_report_ideas(args.store), ranked, _sources_state(args), listed)
     if args.format == "json":
-        print(_render_json(ranked, lanes, external))
+        print(_render_json(ranked, lanes, external, sinks))
     else:
         addresses = {ref: item.addresses for ref, item in board.items.items()} if board else None
-        print(_render_markdown(ranked, lanes, addresses, external))
+        print(_render_markdown(ranked, lanes, addresses, external, sinks, agg.sessions if agg else 0))
     return 0
 
 
@@ -1935,10 +2019,10 @@ def _read_json_object(path: str, what: str) -> "dict | None":
 def _apply_addresses_amendments(
     prior: PriorBoard, items: "dict[str, dict]", worklist_items: "list[dict] | None"
 ) -> "tuple[PriorBoard, dict[str, dict]]":
-    """Split off classifications that carry ONLY amendable keys (`addresses` and the
-    measured-loss fields) for an item already on the board (and not in this worklist):
-    they set exactly those fields (an empty `addresses` list clears) and change nothing
-    else. Every other entry is returned untouched for the normal merge, which rejects an
+    """Split off classifications that carry ONLY amendable keys (`addresses`, `mechanism` and
+    the measured-loss fields) for an item already on the board (and not in this worklist):
+    they set exactly those fields (an empty `addresses` list or `mechanism` clears) and
+    change nothing else. Every other entry is returned untouched for the normal merge, which rejects an
     unknown ref or an incomplete entry."""
     in_worklist = {w.get("item_ref") for w in worklist_items or ()}
     kept: "dict[str, dict]" = {}
@@ -1954,6 +2038,8 @@ def _apply_addresses_amendments(
             item = prior.items[ref]
             if "addresses" in c:
                 item = replace(item, addresses=parse_addresses(ref, c["addresses"]))
+            if "mechanism" in c:
+                item = replace(item, mechanism=parse_mechanism(ref, c["mechanism"]))
             amended[ref] = apply_loss_fields(item, parse_loss_fields(ref, c))
         else:
             kept[ref] = c
@@ -2574,6 +2660,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--board", default=str(board_state_path()),
         help="board state file; when readable, its measured-loss, silent and awaiting lanes are "
         "rendered ahead of the stored findings",
+    )
+    p_report.add_argument(
+        "--time-profile-state", nargs="?", default=None, const=str(time_profile.default_state_dir()),
+        help="time-profile state directory (bare flag: the default one); its cached profile feeds "
+        "the 'Where the time goes' section and the measured minutes of items with a mechanism. "
+        "Without the flag no profile is read",
     )
     p_report.add_argument("--format", choices=("md", "json"), default="md", help="output format")
     p_report.set_defaults(func=_cmd_report)
