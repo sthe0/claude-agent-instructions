@@ -322,20 +322,6 @@ ground = "_REMEDY_TAG_PREFIX_RE.match reads the leading 'cut:/add:' protocol pre
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/git_surface.py::<module>::re.compile"]
-class = "structural"
-ground = "Compiles the three git config key-name patterns (keys that name a program or a hook path; submodule.*.update; keys whose text git interprets such as alias.*, remote urls, url.*, protocol.*, gpg.*): fixed config-key syntax, not meaning."
-hits = 3
-hit_classes = ["structural", "structural", "structural"]
-reviewed_by = "developer"
-
-[sites."scripts/agentctl/git_surface.py::_exec_entries::pattern.match"]
-class = "structural"
-ground = "Matches a lower-cased git config key against the three key-name patterns to pick the entries whose value names something git runs or interprets; the key syntax is fixed by git."
-hits = 3
-hit_classes = ["structural", "structural", "structural"]
-reviewed_by = "developer"
-
 [sites."scripts/agentctl/grants.py::_is_unresolvable_segment::pattern.sub"]
 class = "structural"
 ground = "_REDIRECT_MERGE_RE.sub strips shell stream-merge redirects (2>&1, &>) before a structural '<'/'>' check."

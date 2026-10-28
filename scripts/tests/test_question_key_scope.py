@@ -125,8 +125,6 @@ _UNCLAIMED_STAGE_LEAVES = {
     "grants.resources": "the typed resources `grants.derive_stage_grants` derives at "
                         "approve (DR-P), a permission surface and not a place an answer "
                         "can rest on, same exclusion as `grants.allow.rule`",
-    "grants.runs_worktree_code": "a declared permission-surface flag, same exclusion as "
-                                 "`grants.allow.rule`",
     "effects.path": "a declared script-trust surface, not a place an answer can rest "
                     "on — no target names it; covered instead by "
                     "gates._renorm_stage_residual via plan.effects_place, on the same "

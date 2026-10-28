@@ -10,9 +10,10 @@ grant in `permissions.allow` and lists the `--add-dir` paths; a switched-off kil
 nothing. It prints the child payload it asserted on.
 
 `--live` is for the root coordinator: a spawned developer cannot start `claude`. It spawns a real
-linked child for a stage whose branch it may commit to, asks it to run a covered `git status`, an
-uncovered `touch <outside>` and a covered commit, and checks the decision log it left:
-one `covered`, one `uncovered-write` deny and a file that was not created.
+linked child for a stage whose branch it may commit to, asks it to run a covered
+`echo probe > <venue>/probe.txt`, an uncovered `touch <outside>` and a commit, and checks the decision
+log it left: one `covered`, one `uncovered-write` deny, the commit logged `undeterminable` (the hook
+never allows a line that runs git) and a file that was not created.
 """
 from __future__ import annotations
 
@@ -62,7 +63,7 @@ def live() -> int:
     child = support.link_child(spawn, work / "state", venue, branch="feat", allow=[])
     brief = (
         f"In {venue} run these three commands one at a time and report each outcome verbatim: "
-        f"`git status`, `touch {outside}`, `git commit --allow-empty -m probe`."
+        f"`echo probe > {venue}/probe.txt`, `touch {outside}`, `git commit --allow-empty -m probe`."
     )
     done = subprocess.run(
         ["claude", "-p", "--settings", json.dumps({"hooks": {"PreToolUse": [{
@@ -74,7 +75,7 @@ def live() -> int:
     rows = child.log_rows()
     classes = [row["reason_class"] for row in rows]
     print(json.dumps({"rc": done.returncode, "reason_classes": classes, "outside_created": outside.exists()}))
-    ok = "covered" in classes and "uncovered-write" in classes and not outside.exists()
+    ok = {"covered", "uncovered-write", "undeterminable"} <= set(classes) and not outside.exists()
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
 

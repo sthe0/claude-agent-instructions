@@ -770,7 +770,6 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "grants.add_dirs.mode": frozenset({"diff_plans"}),
     "grants.add_dirs.provenance": frozenset(),
     "grants.resources": frozenset(),
-    "grants.runs_worktree_code": frozenset({"diff_plans"}),
     "effects.path": frozenset({"diff_plans"}),
     "effects.sha256": frozenset({"diff_plans"}),
     "effects.resolver": frozenset({"diff_plans"}),

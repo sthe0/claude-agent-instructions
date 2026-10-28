@@ -54,6 +54,12 @@ Path placeholders: `{VENUE}` is the stage's worktree root, `{SCRATCH}` is the
 session scratchpad, and `{OUTSIDE}` is any directory outside both. Every path
 in a case starts with one of them.
 
+`expect` is what the plan sanctions, not what the hook says: the hook never
+allows a line that runs git (`docs/operations/resource-grant-hook.md`), so the
+13 sanctioned cases whose line runs git (`git-C`, `compound`, `push-own-branch`,
+`prefix-mismatch-01`) are replayed expecting `none`, and a denial of a git write
+the plan does not cover stays `deny`.
+
 ## Effect form (git answer key)
 
 Effects mirror `scripts/agentctl/resources.py`:

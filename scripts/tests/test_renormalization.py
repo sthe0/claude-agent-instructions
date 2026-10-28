@@ -744,7 +744,6 @@ _STAGE_RESIDUAL_COVERAGE = {
                         "field (grants.derive_stage_grants, DR-P) and compared by "
                         "diff_plans from the derivation (never from this stored "
                         "attribute), not a declared input a re-sequencing can move",
-    "grants.runs_worktree_code": "the residual's own splice, same reason as `grants.allow.rule`",
     "effects.path": "the residual's own splice — outside stage_question_key because "
                     "no Question.target names it, inside here because a declared "
                     "script-effect trust claim is part of what the stage's definition "

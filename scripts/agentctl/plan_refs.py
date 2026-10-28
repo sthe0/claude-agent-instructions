@@ -38,7 +38,7 @@ NON_STRING_FIELDS: dict[str, frozenset[str]] = {
     "stage": frozenset({
         "index", "depends_on", "material_refs", "knowledge_refs", "guard_exempt_paths",
         "expected_exit", "landed", "principle", "supplies", "output_artifacts", "renorms",
-        "grants", "effects", "optional", "amendments", "branch", "runs_worktree_code",
+        "grants", "effects", "optional", "amendments", "branch",
     }),
     "meta": frozenset({"order", "assumption", "branch"}),
     "order": frozenset({"requirements", "requires_traceability", "coverage"}),

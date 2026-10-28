@@ -20,13 +20,11 @@ Decisions (Bash):
          matches a record rule pattern (strictly, per segment); a segment that changes nothing must also read
          only inside the record's resources or the parent scratchpad. A segment that reads an environment
          variable the hook cannot check against the Bash shell (CDPATH, GIT_*, PYTHON*) is not covered. A line
-         that runs git (a git segment of any state, or a segment whose effects include a ref) is allowed only
-         while the live digest of what git would execute in that repository (`agentctl.git_surface`: hooks and
-         their symlink targets, config entries naming programs, attributes, hook-framework files) equals the
-         snapshot the spawn took into the record, and no other segment of the line could change it (opaque,
-         rule-pattern or harness-allowed segments that are not read-only, and covered writes onto a pinned
-         path). A record without a snapshot, a repository missing from it, or a surface that cannot be read
-         is undeterminable, never allowed.
+         in which anything may run git (the word in the line or in any unquoted token of it, a computed
+         command word, an effect on a ref, git named in opaque code) is never allowed, however covered:
+         what git executes (hooks, config programs, repository discovery, pathspec magic) is open-ended, so
+         no state of the repository is verifiable. It gets no decision and the harness's static allow-list
+         decides, which already covers the git an executor needs.
   deny   ALL of: the permission mode is acceptEdits (the only mode probe Q6 measured); the record carries
          `permissions_allow` and `add_dirs` explicitly; the settings files the harness merges with the record
          (user, config root, managed and the project's `.claude/settings[.local].json`) are all readable and
@@ -62,7 +60,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agentctl import advisor, code_effects, git_surface, resources, segment_resolver, tool_contracts  # noqa: E402
+from agentctl import advisor, code_effects, resources, segment_resolver, tool_contracts  # noqa: E402
 from agentctl import config as agentctl_config  # noqa: E402
 from agentctl.norm_handoff import NORM_HANDOFF_ENV, state_root_of, verify_env_value  # noqa: E402
 from agentctl.store import safe_session_id  # noqa: E402
@@ -100,18 +98,6 @@ NON_CARRIER_PROGRAMS = frozenset({
     "cd", "ls", "cat", "head", "tail", "wc", "mkdir", "touch", "cp", "mv", "rm", "echo", "printf", "pwd",
     "true", "false", "test", "[", "stat", "file", "diff", "pushd", "popd",
 })
-#: Programs that write nothing, however they are called (a redirect is a separate resolved effect).
-READ_ONLY_PROGRAMS = frozenset({
-    "cd", "ls", "cat", "head", "tail", "wc", "echo", "printf", "pwd", "true", "false", "test", "[", "stat",
-    "file", "diff", "pushd", "popd",
-})
-#: git subcommands that leave the worktree's files alone; the others (checkout, merge, reset, ...) rewrite
-#: tracked files, and so possibly a tracked hook.
-WORKTREE_PRESERVING_GIT = frozenset({
-    "status", "log", "diff", "show", "rev-parse", "ls-files", "blame", "branch", "push", "add", "commit",
-    "fetch", "tag", "remote",
-})
-GIT_PROBE_TIMEOUT_S = 5
 #: Settings files the harness merges into the child's permissions besides the record.
 MANAGED_SETTINGS = "/etc/claude-code/managed-settings.json"
 SETTINGS_NAMES = ("settings.json", "settings.local.json")
@@ -119,6 +105,7 @@ SETTINGS_NAMES = ("settings.json", "settings.local.json")
 #: further command hides an effect the rule text does not name.
 RULE_UNSAFE_CHARS = frozenset("<>`$\n\r;&|")
 GLOB_CHARS = frozenset("*?[")
+RUNS_GIT_MESSAGE = "the line runs git; the harness's static allow-list decides"
 
 ALLOW, DENY, NONE = "allow", "deny", "none"
 COVERED, UNCOVERED, UNDETERMINABLE = "covered", "uncovered", "undeterminable"
@@ -144,10 +131,6 @@ class Approved:
     #: The directory the child was started in, where the harness reads the project's settings from. The
     #: payload cwd for a record written before the key existed.
     launch_dir: str = ""
-    #: `git_surface.snapshot_venues` as the spawn recorded it; None for a record without one.
-    git_surface: "dict | None" = None
-    #: The stage's declared `runs_worktree_code`: the executor said it runs code its worktree holds.
-    runs_worktree_code: bool = False
 
 
 @dataclass
@@ -162,8 +145,6 @@ class SegmentVerdict:
     pattern: bool = False
     reason: str = ""
     venue: str = ""
-    #: The directory git would run in for this segment (its cwd moved by every `-C`), None when unknown.
-    git_dir: "str | None" = None
 
 
 @dataclass
@@ -340,13 +321,10 @@ def _operand_paths(tokens: list, venue: str) -> "list[str] | None":
 
 
 def reads_confined(approved: Approved, text: str, venue: str) -> "tuple[bool, list]":
-    """Whether every path a segment's operands name may be read. git is exempt: its operands are
-    repo-relative pathspecs the resolver already models (`-C` included)."""
+    """Whether every path a segment's operands name may be read."""
     tokens = _tokens(text)
     if not tokens:
         return False, []
-    if os.path.basename(tokens[0]) == "git":
-        return True, []
     paths = _operand_paths(tokens, venue)
     if paths is None:
         return False, []
@@ -493,155 +471,39 @@ def _program(text: str) -> str:
     return os.path.basename(tokens[0]) if tokens else ""
 
 
-def _after_plain_options(text: str) -> list:
-    """The tokens of a git segment from its subcommand on, or [] when an option other than `-C <dir>` comes
-    first: `-c core.hooksPath=...` or `--exec-path` would move what git executes."""
-    tokens = _tokens(text)[1:]
-    while len(tokens) >= 2 and tokens[0] == "-C":
-        tokens = tokens[2:]
-    return [] if not tokens or tokens[0].startswith("-") else tokens
-
-
-def _preserves_worktree(text: str) -> bool:
-    """A git segment whose subcommand leaves tracked files alone and that names no option but `-C <dir>`."""
-    tokens = _after_plain_options(text)
-    return bool(tokens) and tokens[0] in WORKTREE_PRESERVING_GIT
-
-
-def runs_git(verdict: "SegmentVerdict") -> bool:
-    """Whether the segment starts git: a git call of any state, or a segment whose resolved effects include
-    a ref (an opaque script the judge saw push). What other programs start by themselves is not modelled."""
-    return _program(verdict.text) == "git" or any(isinstance(r, resources.VcsRefResource) for r in verdict.changed)
-
-
-def may_change_git_surface(verdict: "SegmentVerdict", pinned: list) -> bool:
-    """Whether a segment of a line that runs git could write what git executes before git does: code whose
-    writes were never resolved (opaque, a rule pattern, a harness-allowed program that is not read-only), a
-    git subcommand that rewrites tracked files, or a resolved write onto a pinned path."""
-    program = _program(verdict.text)
-    if program == "git":
-        return not _preserves_worktree(verdict.text)
-    if verdict.opaque or verdict.pattern:
-        return True
-    if verdict.state == HARNESS and not verdict.changed and program not in READ_ONLY_PROGRAMS:
-        return True
-    for resource in verdict.changed:
-        if not isinstance(resource, resources.FileResource):
-            continue
-        real = _real(resource.path)
-        if any(_under(real, path) or _under(path, real) for path in pinned):
+def names_git(text: str) -> bool:
+    """Whether `text` holds the word `git` (`/usr/bin/git`, `git-upload-pack`, `--git-dir`, `x=git`) and not
+    only a name that contains it (`.git`, `.gitignore`, `github`). Matching more than git itself only costs
+    an allow, so the test errs toward the word."""
+    start = 0
+    while (at := text.find("git", start)) >= 0:
+        before = text[at - 1] if at else " "
+        after = text[at + 3] if at + 3 < len(text) else " "
+        if not (before.isalnum() or before in "_.") and not (after.isalnum() or after == "_"):
             return True
+        start = at + 1
     return False
 
 
-def git_run_dir(text: str, cwd: "str | None") -> "str | None":
-    """The directory a segment's git runs in: the segment's cwd moved by each leading `-C <dir>` (a relative
-    one from the directory before it), or None when it cannot be pinned down. A segment that is not `git`
-    runs in its cwd."""
-    if cwd is None:
-        return None
-    base = _real(cwd)
-    if _program(text) == "git":
-        tokens = (_tokens(text) or [])[1:]
-        while len(tokens) >= 2 and tokens[0] == "-C":
-            target = tokens[1]
-            if target.startswith("~") or "$" in target or any(ch in target for ch in GLOB_CHARS):
-                return None
-            base = _real(target if os.path.isabs(target) else os.path.join(base, target))
-            tokens = tokens[2:]
-    return base
-
-
-def _ancestor_dot_git(directory: str) -> list:
-    """Where a repository would have to appear for git to find one from `directory`."""
-    return [os.path.join(item, ".git") for item in [directory, *Path(directory).parents]]
-
-
-def rewrites_pinned_worktree_files(surface: "git_surface.Surface") -> bool:
-    """Whether some pinned path lies in the worktree outside the git directory: the files a checkout or a merge
-    rewrites. Every non-bare repository has some (the top-level `.gitattributes` is pinned even when absent)."""
-    return surface.toplevel is not None and any(
-        _under(path, surface.toplevel) and not _under(path, surface.repo) for path in surface.paths)
-
-
-def rewrites_only_named_paths(text: str, run_dir: str, surface: "git_surface.Surface") -> bool:
-    """Whether a segment is `git checkout [<tree-ish>] -- <literal paths>` and none of the paths overlaps a
-    pinned worktree file: such a call rewrites exactly those paths, not the branch's tracked files."""
-    tokens = _after_plain_options(text)
-    if not tokens or tokens[0] != "checkout" or "--" not in tokens:
-        return False
-    head, named = tokens[1:tokens.index("--")], tokens[tokens.index("--") + 1:]
-    if len(head) > 1 or any(part.startswith("-") for part in head) or not named:
-        return False
-    pinned = [path for path in surface.paths if surface.toplevel is not None
-              and _under(path, surface.toplevel) and not _under(path, surface.repo)]
-    for name in named:
-        if name.startswith((":", "~", "-")) or "$" in name or any(ch in name for ch in GLOB_CHARS):
-            return False
-        target = _real(name if os.path.isabs(name) else os.path.join(run_dir, name))
-        if any(_under(path, target) or _under(target, path) for path in pinned):
-            return False
-    return True
-
-
-def worktree_code_blocker(approved: Approved, live: dict) -> "str | None":
-    """Why the record's write grant inside a repository that holds code git starts blocks an allow: the child
-    can edit what a hook or a framework file runs by path, which the snapshot digest does not cover, and the
-    stage did not declare `runs_worktree_code`."""
-    if approved.runs_worktree_code:
-        return None
-    for surface in live.values():
-        if surface is None or not surface.runnable or surface.toplevel is None:
-            continue
-        for item in approved.resources:
-            if (isinstance(item, resources.FileResource) and item.mode == "write"
-                    and (_under(item.path, surface.toplevel) or _under(surface.toplevel, item.path))):
-                return (f"{surface.repo} holds code git starts (a hook, a hook-framework file or a program its "
-                        f"config names) and the record grants a write inside {surface.toplevel}; the stage "
-                        "did not declare runs_worktree_code")
-    return None
-
-
-def git_surface_blocker(approved: Approved, verdicts: list, budget: "JudgeBudget") -> "str | None":
-    """Why a line that runs git may not be allowed, or None. The repository each git-running segment runs in
-    (its cwd moved by `-C`) must show the digest the spawn recorded (`git_surface`), and no other segment may
-    be able to change it first: a covered `echo > .git/hooks/post-index-change && git status` matches the
-    snapshot when the hook looks and not when git runs. Not-a-repository is no hook yet, but a neighbour that
-    could create one still blocks; every other failure is a block."""
-    runners = [v for v in verdicts if runs_git(v)]
-    if not runners:
-        return None
-    live: dict = {}
-    for verdict in runners:
-        if verdict.git_dir is None:
-            return f"cannot tell which repository git runs in: {verdict.text}"
-        if verdict.git_dir in live:
-            continue
-        try:
-            live[verdict.git_dir] = git_surface.capture(verdict.git_dir, budget.git_timeout)
-        except git_surface.NotARepo:
-            live[verdict.git_dir] = None
-            continue
-        except git_surface.Unreadable as exc:
-            return f"cannot read what git would execute in {verdict.git_dir}: {exc}"
-        why = git_surface.mismatch(approved.git_surface, live[verdict.git_dir])
-        if why is not None:
-            return why
-    pinned = sorted({
-        *(path for surface in live.values() if surface is not None for path in surface.paths),
-        *(path for directory, surface in live.items() if surface is None for path in _ancestor_dot_git(directory)),
-    })
-    for verdict in verdicts:
-        if len(runners) == 1 and verdict is runners[0] and _program(verdict.text) == "git":
-            if not _after_plain_options(verdict.text):
-                return f"a git option that moves what git executes: {verdict.text}"
-            surface = live[verdict.git_dir]
-            if (surface is not None and not _preserves_worktree(verdict.text) and rewrites_pinned_worktree_files(surface)
-                    and not rewrites_only_named_paths(verdict.text, verdict.git_dir, surface)):
-                return f"a git command that rewrites tracked files, among them what git executes: {verdict.text}"
-        elif may_change_git_surface(verdict, pinned):
-            return f"another segment of the line could change what git executes: {verdict.text}"
-    return worktree_code_blocker(approved, live)
+def runs_git(command: str, segments: list, verdicts: list) -> bool:
+    """Whether any part of a Bash line may start git. The hook never allows such a line: what git executes
+    (hooks, config programs, repository discovery, pathspec magic) is open-ended, so no state of the
+    repository can be verified as safe. Tested as a closed-world abstention, over the whole line: the word
+    `git` in the line or in any shell-unquoted token of it (`g'i't`, `\\git`), a resolved or judge-named
+    effect on a ref, or the word in the code of an opaque segment. A computed command word (`$X push`)
+    never reaches here: the resolver leaves such a segment undeterminable. A program that starts git
+    without the line saying so (a script, `make`) is not seen."""
+    unquoted = _tokens(command) or []
+    if names_git(command) or any(names_git(token) for token in unquoted):
+        return True
+    for segment, verdict in zip(segments, verdicts):
+        if any(isinstance(r, resources.VcsRefResource) for r in verdict.changed):
+            return True
+        if verdict.opaque:
+            collected = code_effects.collect(segment)
+            if isinstance(collected, code_effects.Collected) and names_git(collected.code):
+                return True
+    return False
 
 
 # --- segments -------------------------------------------------------------------------------------
@@ -649,27 +511,18 @@ def git_surface_blocker(approved: Approved, verdicts: list, budget: "JudgeBudget
 class JudgeBudget:
     """One deadline for every opaque segment of a call: the harness kills the hook at its own timeout and
     falls through, so the judge calls together must end before it. Each call gets the judge's own timeout
-    at most, and what is left of the deadline at least. The git probes of the hooks check draw from the
-    same deadline."""
+    at most, and what is left of the deadline at least."""
 
     def __init__(self, total_s: float, judge_s: float, clock=time.monotonic):
         self.clock = clock
         self.deadline = clock() + total_s
         self.judge_s = judge_s
 
-    def _left(self, cap: float) -> int:
-        """Whole seconds up to `cap` still available, rounded up so a sliver of the deadline is a second,
-        not nothing; 0 when the deadline is spent."""
-        left = self.deadline - self.clock()
-        return 0 if left <= 0 else max(1, math.ceil(min(cap, left)))
-
     def next_timeout(self) -> int:
-        """Seconds the next judge call may take; 0 when the deadline is spent."""
-        return self._left(self.judge_s)
-
-    def git_timeout(self) -> int:
-        """Seconds the next git probe may take; 0 when the deadline is spent."""
-        return self._left(GIT_PROBE_TIMEOUT_S)
+        """Seconds the next judge call may take, rounded up so a sliver of the deadline is a second, not
+        nothing; 0 when the deadline is spent."""
+        left = self.deadline - self.clock()
+        return 0 if left <= 0 else max(1, math.ceil(min(self.judge_s, left)))
 
 
 def evaluate_segment(approved: Approved, segment, line: list, runner, budget: JudgeBudget, cache_dir) -> SegmentVerdict:
@@ -733,8 +586,6 @@ def decide_bash(approved: Approved, command: str, runner, budget: JudgeBudget, c
     if not split.segments:
         return Verdict(NONE, UNDETERMINABLE, venue=approved.cwd)
     verdicts = [evaluate_segment(approved, seg, split.segments, runner, budget, cache_dir) for seg in split.segments]
-    for verdict, seg in zip(verdicts, split.segments):
-        verdict.git_dir = git_run_dir(seg.text, seg.cwd)
     ambient = ambient_settings(approved)
     changed = list(dict.fromkeys(r for v in verdicts for r in v.changed))
     shown = [resources.resource_to_dict(r) for r in changed]
@@ -751,9 +602,8 @@ def decide_bash(approved: Approved, command: str, runner, budget: JudgeBudget, c
     if all(v.state == HARNESS for v in verdicts):
         return Verdict(NONE, "harness-allowed", **base)
     if all(v.state in (COVERED, HARNESS) for v in verdicts):
-        why = git_surface_blocker(approved, verdicts, budget)
-        if why is not None:
-            return Verdict(NONE, UNDETERMINABLE, message=why, **base)
+        if runs_git(command, split.segments, verdicts):
+            return Verdict(NONE, UNDETERMINABLE, message=RUNS_GIT_MESSAGE, **base)
         return Verdict(ALLOW, "opaque-judged" if opaque else "covered", **base)
     return Verdict(NONE, UNDETERMINABLE, **base)
 
@@ -801,8 +651,6 @@ def _approved(link: dict, payload: dict, env) -> Approved:
         add_dirs=_optional_strings(link.get("add_dirs")),
         env=dict(env),
         launch_dir=_real(str(link["launch_dir"])) if link.get("launch_dir") else cwd,
-        git_surface=link.get("git_surface"),
-        runs_worktree_code=link.get("runs_worktree_code") is True,
     )
 
 

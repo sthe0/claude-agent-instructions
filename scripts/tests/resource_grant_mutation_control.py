@@ -66,7 +66,6 @@ SEGMENT_RESOLVER = "scripts/agentctl/segment_resolver.py"
 ADVISOR = "scripts/agentctl/advisor.py"
 CODE_EFFECTS = "scripts/agentctl/code_effects.py"
 HOOK = "scripts/hook-resource-grant-check.py"
-GIT_SURFACE = "scripts/agentctl/git_surface.py"
 
 
 @dataclass(frozen=True)
@@ -876,65 +875,29 @@ CATALOGUE: "dict[str, Mutant]" = {
         "",
         "a GIT_*/PYTHON* variable makes even `cat` undeterminable",
     ),
-    "hook-git-surface-snapshot-ignored": Mutant(
+    "hook-allows-a-covered-git-line": Mutant(
         HOOK,
-        "        why = git_surface.mismatch(approved.git_surface, live[verdict.git_dir])\n",
-        "        why = None\n",
-        "a git run is allowed whatever the repository would execute, the spawn-time snapshot is never compared",
+        "        if runs_git(command, split.segments, verdicts):\n",
+        "        if False:\n",
+        "a line in which git runs, every segment of it covered, is allowed instead of left to the harness's static allow-list",
     ),
-    "hook-git-surface-blocker-skipped": Mutant(
+    "hook-git-ref-effect-ignored": Mutant(
         HOOK,
-        "        why = git_surface_blocker(approved, verdicts, budget)\n",
-        "        why = None\n",
-        "no segment that runs git is held to the snapshot",
-    ),
-    "hook-git-surface-harness-git-unchecked": Mutant(
-        HOOK,
-        "def runs_git(verdict: \"SegmentVerdict\") -> bool:\n",
-        "def runs_git(verdict: \"SegmentVerdict\") -> bool:\n    if verdict.state == HARNESS:\n        return False\n",
-        "a git segment the harness runs by an allow entry is not held to the snapshot",
-    ),
-    "hook-git-surface-neighbour-pinned-overlap-ignored": Mutant(
-        HOOK,
-        "        if any(_under(real, path) or _under(path, real) for path in pinned):\n            return True\n",
-        "        if False:\n            return True\n",
-        "a covered write onto a hook, config or attributes file beside a git run does not make the line undeterminable",
-    ),
-    "hook-git-surface-pattern-neighbour-not-counted": Mutant(
-        HOOK,
-        "    if verdict.opaque or verdict.pattern:\n        return True\n",
-        "    if verdict.opaque:\n        return True\n",
-        "a rule-pattern neighbour of a git run, whose writes were never resolved, counts as harmless",
-    ),
-    "hook-git-surface-opaque-neighbour-not-counted": Mutant(
-        HOOK,
-        "    if verdict.opaque or verdict.pattern:\n        return True\n",
-        "    if verdict.pattern:\n        return True\n",
-        "an opaque neighbour of a git run, whose writes the judge cannot enumerate, counts as harmless",
-    ),
-    "hook-git-surface-harness-neighbour-not-counted": Mutant(
-        HOOK,
-        "    if verdict.state == HARNESS and not verdict.changed and program not in READ_ONLY_PROGRAMS:\n        return True\n",
+        "        if any(isinstance(r, resources.VcsRefResource) for r in verdict.changed):\n            return True\n",
         "",
-        "a harness-allowed neighbour that is not read-only, with no resolved writes, counts as harmless",
+        "a segment whose resolved or judge-named effects include a ref change (git runs, though the line does not say so) does not make the line abstain",
     ),
-    "hook-git-surface-rewriting-subcommand-neighbour-ok": Mutant(
+    "hook-opaque-code-naming-git-ignored": Mutant(
         HOOK,
-        "        return not _preserves_worktree(verdict.text)\n",
-        "        return False\n",
-        "a git neighbour that rewrites tracked files (checkout, restore) cannot change what the next git run executes",
-    ),
-    "hook-git-surface-option-before-subcommand-ok": Mutant(
-        HOOK,
-        "    return [] if not tokens or tokens[0].startswith(\"-\") else tokens\n",
-        "    return tokens\n",
-        "`git -c core.hooksPath=... <subcommand>` is read as a plain subcommand",
-    ),
-    "hook-git-surface-lone-runner-option-unchecked": Mutant(
-        HOOK,
-        "            if not _after_plain_options(verdict.text):\n",
+        "            if isinstance(collected, code_effects.Collected) and names_git(collected.code):\n",
         "            if False:\n",
-        "a lone git segment with an option that moves what git executes is not stopped",
+        "opaque code that starts git (`subprocess.run(['git', ...])`) beside a covered write does not make the line abstain",
+    ),
+    "hook-git-word-in-a-token-ignored": Mutant(
+        HOOK,
+        "    if names_git(command) or any(names_git(token) for token in unquoted):\n",
+        "    if names_git(command):\n",
+        "a quoted or escaped spelling of git (`g'i't`, `\\git`) is not unquoted before the line is read for git",
     ),
     "hook-judge-child-guard-removed": Mutant(
         HOOK,
@@ -942,191 +905,17 @@ CATALOGUE: "dict[str, Mutant]" = {
         "",
         "the hook decides inside the opaque-code judge's own child process",
     ),
-    "hook-git-probe-timeout-ignores-deadline": Mutant(
-        HOOK,
-        "        return self._left(GIT_PROBE_TIMEOUT_S)\n",
-        "        return GIT_PROBE_TIMEOUT_S\n",
-        "the hooks-directory probe takes its fixed timeout whatever is left of the call's deadline",
-    ),
     "hook-deadline-sliver-is-nothing": Mutant(
         HOOK,
-        "        return 0 if left <= 0 else max(1, math.ceil(min(cap, left)))\n",
-        "        return 0 if left <= 0 else int(min(cap, left))\n",
+        "        return 0 if left <= 0 else max(1, math.ceil(min(self.judge_s, left)))\n",
+        "        return 0 if left <= 0 else int(min(self.judge_s, left))\n",
         "less than a second left of the deadline reads as no time at all",
-    ),
-    "hook-git-surface-unreadable-allows": Mutant(
-        HOOK,
-        "            return f\"cannot read what git would execute in {verdict.git_dir}: {exc}\"\n",
-        "            continue\n",
-        "a repository whose surface cannot be read is treated as one with nothing to execute",
-    ),
-    "hook-git-dir-is-the-approved-cwd": Mutant(
-        HOOK,
-        "        verdict.git_dir = git_run_dir(seg.text, seg.cwd)\n",
-        "        verdict.git_dir = _real(approved.cwd)\n",
-        "git is held to the snapshot of the directory the child started in, not of the one it runs in (a `-C` or a `cd` elsewhere)",
-    ),
-    "hook-git-dir-ignores-dash-C": Mutant(
-        HOOK,
-        "        while len(tokens) >= 2 and tokens[0] == \"-C\":\n            target = tokens[1]\n",
-        "        while False:\n            target = tokens[1]\n",
-        "a leading `-C <dir>` does not move the directory git is checked in",
-    ),
-    "hook-git-dir-unresolvable-target-accepted": Mutant(
-        HOOK,
-        "            if target.startswith(\"~\") or \"$\" in target or any(ch in target for ch in GLOB_CHARS):\n                return None\n",
-        "",
-        "a `-C` target with a tilde, a variable or a glob is taken literally instead of leaving the directory unknown",
-    ),
-    "hook-git-surface-rewriting-lone-runner-ok": Mutant(
-        HOOK,
-        "            if (surface is not None and not _preserves_worktree(verdict.text) and rewrites_pinned_worktree_files(surface)\n",
-        "            if (False and rewrites_pinned_worktree_files(surface)\n",
-        "a lone `git checkout` / `merge` that rewrites tracked files, among them pinned ones, is allowed",
-    ),
-    "hook-git-surface-checkout-paths-overlap-ignored": Mutant(
-        HOOK,
-        "        if any(_under(path, target) or _under(target, path) for path in pinned):\n",
-        "        if any(_under(path, target) for path in pinned):\n",
-        "a `git checkout -- <path>` naming a file inside a pinned directory is treated as not touching it",
-    ),
-    "hook-git-surface-checkout-glob-accepted": Mutant(
-        HOOK,
-        "        if name.startswith((\":\", \"~\", \"-\")) or \"$\" in name or any(ch in name for ch in GLOB_CHARS):\n",
-        "        if name.startswith(\"-\"):\n",
-        "a `git checkout -- <pathspec>` with a glob, magic prefix, tilde or variable is read as a literal path",
-    ),
-    "hook-git-surface-no-repository-early-return": Mutant(
-        HOOK,
-        "    pinned = sorted({\n        *(path for surface in live.values()",
-        "    if all(surface is None for surface in live.values()):\n        return None\n    pinned = sorted({\n        *(path for surface in live.values()",
-        "when no directory git runs in is a repository yet, neighbours are not looked at (`git init && cp ... .git/hooks/x && git commit`)",
-    ),
-    "hook-git-surface-absent-repository-not-pinned": Mutant(
-        HOOK,
-        "        *(path for directory, surface in live.items() if surface is None for path in _ancestor_dot_git(directory)),\n",
-        "",
-        "a covered write that creates the `.git` of a directory git will find no repository in is not counted",
-    ),
-    "hook-worktree-code-flag-always-set": Mutant(
-        HOOK,
-        "    if approved.runs_worktree_code:\n        return None\n    for surface in live.values():\n",
-        "    if True:\n        return None\n    for surface in live.values():\n",
-        "the stage is read as having declared runs_worktree_code whatever the plan said",
-    ),
-    "hook-worktree-code-needs-no-runnable-surface": Mutant(
-        HOOK,
-        "        if surface is None or not surface.runnable or surface.toplevel is None:\n",
-        "        if surface is None or surface.toplevel is None:\n",
-        "a git run needs the declaration even in a repository that holds nothing git starts",
-    ),
-    "hook-approved-drops-runs-worktree-code": Mutant(
-        HOOK,
-        "        runs_worktree_code=link.get(\"runs_worktree_code\") is True,\n",
-        "        runs_worktree_code=False,\n",
-        "the hook never reads the declared flag from the record",
-    ),
-    "norm-handoff-verify-drops-runs-worktree-code": Mutant(
-        NORM_HANDOFF,
-        "        \"runs_worktree_code\": record.get(\"runs_worktree_code\") is True,\n",
-        "        \"runs_worktree_code\": False,\n",
-        "the verified record never hands the declared flag on",
-    ),
-    "spawn-record-drops-runs-worktree-code": Mutant(
-        SPAWN,
-        "        runs_worktree_code=approved_runs_worktree_code(state, stage_index),\n",
-        "",
-        "the handoff record the spawn writes never carries the stage's declaration",
-    ),
-    "spawn-redispatch-prefers-the-fresh-snapshot": Mutant(
-        SPAWN,
-        "        current[\"repos\"] = {**current[\"repos\"], **prior}\n",
-        "        current[\"repos\"] = {**prior, **current[\"repos\"]}\n",
-        "a re-dispatch blesses what the previous child left in a hook: the fresh snapshot wins over the prior record's",
-    ),
-    "git-surface-ls-files-runs-the-fsmonitor": Mutant(
-        GIT_SURFACE,
-        "        listed = _git(toplevel, [\"ls-files\", \"-z\", \"--\", \":(glob)**/.gitattributes\"], timeout, neutral=True)\n",
-        "        listed = _git(toplevel, [\"ls-files\", \"-z\", \"--\", \":(glob)**/.gitattributes\"], timeout)\n",
-        "capturing the surface starts the fsmonitor program the repository configures",
-    ),
-    "git-surface-origin-files-not-pinned": Mutant(
-        GIT_SURFACE,
-        "        *_origin_files(entries, base),\n",
-        "",
-        "a config file git reads through an include is not a pinned path",
-    ),
-    "git-surface-old-record-matches": Mutant(
-        GIT_SURFACE,
-        "        return \"the handoff record carries no git-surface snapshot\"\n",
-        "        return None\n",
-        "a record without the snapshot (the old format) is read as matching every live surface",
-    ),
-    "git-surface-unknown-repo-matches": Mutant(
-        GIT_SURFACE,
-        "        return f\"{live.repo} is not in the git-surface snapshot taken at spawn\"\n",
-        "        return None\n",
-        "a repository the snapshot does not list is read as unchanged",
-    ),
-    "git-surface-digest-only-compared": Mutant(
-        GIT_SURFACE,
-        "    if saved[\"digest\"] == live.digest and saved[\"parts\"] == live.parts:\n",
-        "    if True:\n",
-        "a live surface is read as the snapshot's whatever its digest, as long as the repository is listed",
-    ),
-    "git-surface-hooks-entry-dropped": Mutant(
-        GIT_SURFACE,
-        "                record[\"entries\"][name] = _entry(path)\n",
-        "                record[\"entries\"][name] = {}\n",
-        "the entries of a hooks directory (name, mode, bytes) are not part of the snapshot",
-    ),
-    "git-surface-symlink-target-bytes-dropped": Mutant(
-        GIT_SURFACE,
-        "        record[\"content\"] = _file_digest(real) if target is not None and stat.S_ISREG(target.st_mode) else \"not-a-file\"\n",
-        "        record[\"content\"] = \"not-a-file\"\n",
-        "the bytes of the file a symlinked hook entry resolves to are not part of the snapshot",
-    ),
-    "git-surface-config-dropped": Mutant(
-        GIT_SURFACE,
-        "        \"config\": config_part,\n",
-        "        \"config\": [],\n",
-        "the config entries that name a program, and those programs' bytes, are not part of the snapshot",
-    ),
-    "git-surface-config-program-bytes-dropped": Mutant(
-        GIT_SURFACE,
-        "            record[\"programs\"] = {target: _entry(target) for target in targets}\n",
-        "            record[\"programs\"] = {target: {} for target in targets}\n",
-        "the bytes of a program a config entry names are not part of the snapshot",
-    ),
-    "git-surface-attributes-dropped": Mutant(
-        GIT_SURFACE,
-        "        \"attributes\": _attributes_part(toplevel, _resolve(info_attributes, base), attributes_file, timeout(), paths),\n",
-        "        \"attributes\": {},\n",
-        "the .gitattributes files are not part of the snapshot",
-    ),
-    "git-surface-frameworks-dropped": Mutant(
-        GIT_SURFACE,
-        "        \"frameworks\": _frameworks_part(toplevel, paths),\n",
-        "        \"frameworks\": {},\n",
-        "the hook framework files (.pre-commit-config.yaml, lefthook, .husky) are not part of the snapshot",
-    ),
-    "spawn-record-drops-git-surface": Mutant(
-        SPAWN,
-        "        git_surface=git_surface_snapshot([workdir, state.resolve_check_venue(CheckVenue.DELIVERY.value)]),\n",
-        "",
-        "the handoff record the spawn writes carries no git-surface snapshot, so no git run can be verified",
     ),
     "spawn-record-drops-launch-dir": Mutant(
         SPAWN,
         "        launch_dir=workdir or None,\n",
         "",
         "the handoff record carries no launch directory, so the hook reads project settings from its own cwd",
-    ),
-    "norm-handoff-verify-drops-git-surface": Mutant(
-        NORM_HANDOFF,
-        "        \"git_surface\": record.get(\"git_surface\") if isinstance(record.get(\"git_surface\"), dict) else None,\n",
-        "        \"git_surface\": None,\n",
-        "the verified record never hands the git-surface snapshot on",
     ),
     "spawn-record-drops-permissions-allow": Mutant(
         SPAWN,

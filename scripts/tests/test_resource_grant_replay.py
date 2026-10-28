@@ -33,8 +33,15 @@ from agentctl.dispatch import RunResult
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "resource_grant_replay" / "denials.jsonl"
 CASES = [json.loads(line) for line in FIXTURE.read_text().splitlines() if line.strip()]
 
+RUNS_GIT = "the line runs git: the hook never allows it, the harness's static allow-list decides"
+
 #: case -> why the hook makes no decision although the answer key expects allow/deny
 FALL_THROUGH = {
+    **{case_id: RUNS_GIT for case_id in (
+        "prefix-mismatch-01", "git-C-01", "git-C-02", "git-C-03", "git-C-04",
+        "compound-01", "compound-02", "compound-03", "compound-04",
+        "push-own-branch-01", "push-own-branch-02", "push-own-branch-03", "push-own-branch-04",
+    )},
     "prefix-mismatch-02": "`git push origin x:x` is not resolved by the per-segment resolver",
     "prefix-mismatch-03": "`git push origin x:x` is not resolved by the per-segment resolver",
     "prefix-mismatch-04": "`git push origin x:x` is not resolved by the per-segment resolver",
@@ -65,11 +72,9 @@ def _clean_environment(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def _patient_git_probes(monkeypatch, hook):
-    """The resolver's `git config` probes and the hook's own `git rev-parse` probe time out after 5 s; on a
-    machine loaded by a parallel run a timeout turns a resolvable segment into an unresolved one (and a
-    hooks-directory probe into an undeterminable one), so the replay waits for them."""
+    """The resolver's `git config` probes time out after 5 s; on a machine loaded by a parallel run a timeout
+    turns a resolvable segment into an unresolved one, so the replay waits for them."""
     monkeypatch.setattr(segment_resolver, "_GIT_CONFIG_TIMEOUT_S", 120)
-    monkeypatch.setattr(hook, "GIT_PROBE_TIMEOUT_S", 120)
 
 
 @pytest.fixture(scope="module")

@@ -411,12 +411,7 @@ def _parse_stage_grants(raw: object, context: str, *, strict: bool) -> "StageGra
         raise PlanError(
             f"{context}: grants.permission_mode is not a supported grant field — refused"
         )
-    runs_worktree_code = raw.get("runs_worktree_code", False)
-    if not isinstance(runs_worktree_code, bool):
-        raise PlanError(
-            f"{context}: grants.runs_worktree_code must be true or false, got {runs_worktree_code!r}"
-        )
-    stage_grants = StageGrants(allow=allow, add_dirs=add_dirs, runs_worktree_code=runs_worktree_code)
+    stage_grants = StageGrants(allow=allow, add_dirs=add_dirs)
     if strict:
         try:
             _grants.validate_grants(stage_grants)
@@ -2702,7 +2697,7 @@ def grants_place(stage) -> tuple:
     g = getattr(stage, "grants", None)
     if g is None or g.is_empty():
         return ()
-    return (g.effective_tuple(), *(("runs_worktree_code",) if g.runs_worktree_code else ()))
+    return (g.effective_tuple(),)
 
 
 def effects_place(stage) -> tuple:
@@ -3358,7 +3353,6 @@ def _reviewed_stage_keys(stage: Stage) -> dict[str, str]:
         tuple(sorted(rules)),
         tuple(sorted(add_dirs)),
         tuple(sorted(effects[0])) if effects else (),
-        *((grants[1],) if len(grants) > 1 else ()),
         *((("renorms", tuple(stage.renorms)),) if stage.renorms else ()),
     )
     if not any(extras):
@@ -3912,7 +3906,6 @@ def _effective_grants_for_stage(
         allow=list(declared.allow) + list(derived.allow),
         add_dirs=list(declared.add_dirs) + list(derived.add_dirs),
         resources=list(derived.resources),
-        runs_worktree_code=declared.runs_worktree_code,
     )
 
 
@@ -3950,12 +3943,6 @@ def _branch_hash_part(by_stage: dict) -> str:
     return repr(part) if part else ""
 
 
-def _worktree_code_hash_part(by_stage: dict) -> str:
-    """The `runs_worktree_code` share of a grants digest: empty when no stage declares it."""
-    flagged = tuple(sorted(int(idx) for idx, flag in by_stage.items() if flag))
-    return f"|runs_worktree_code:{flagged!r}" if flagged else ""
-
-
 def _grants_grew(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = False) -> bool:
     """Whether any stage's EFFECTIVE (declared+derived) grant set grew from `old` to
     `new` — a strictly wider Bash/Edit rule set, or a strictly wider set of add_dirs.
@@ -3987,8 +3974,6 @@ def _grants_grew(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fa
     for stage in new.stages:
         old_g = old_eff.get(stage.index, StageGrants())
         if new_eff[stage.index].effective_resources() - old_g.effective_resources():
-            return True
-        if new_eff[stage.index].runs_worktree_code and not old_g.runs_worktree_code:
             return True
         new_rules, new_dirs = new_eff[stage.index].effective_tuple()
         old_rules, old_dirs = old_g.effective_tuple()
@@ -4068,8 +4053,6 @@ def grants_sha256(doc: PlanDoc, *, effective: "dict[int, StageGrants] | None" = 
         for idx, (rules, dirs) in sorted((i, g.effective_tuple()) for i, g in effective.items())
     ))
     payload += _branch_hash_part(plan_branch_resources(doc, effective=effective))
-    payload += _worktree_code_hash_part(
-        {str(i): g.runs_worktree_code for i, g in effective.items()})
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -4099,7 +4082,6 @@ def materialized_grant_entries(doc: PlanDoc, *, venue: str | None = None) -> dic
             "dropped": list(dropped),
             "branch": {"remote_head": head,
                        "resources": [_resources.resource_to_dict(r) for r in branch_resources]},
-            **({"runs_worktree_code": True} if declared.runs_worktree_code else {}),
         }
     return entries
 
@@ -4150,7 +4132,6 @@ def entries_grants_sha256(entries: dict[str, dict]) -> str:
     ))
     payload += _branch_hash_part({
         idx: list((s.get("branch") or {}).get("resources") or []) for idx, s in entries.items()})
-    payload += _worktree_code_hash_part({idx: s.get("runs_worktree_code") for idx, s in entries.items()})
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -4215,8 +4196,6 @@ def refined_grant_entries(
             withheld.setdefault(idx, []).extend(held_branch)
         if o is not None and _effective_entry_keys(o) == _effective_entry_keys(n):
             out[idx] = {**s, "branch": branch}
-            if not n.get("runs_worktree_code"):
-                out[idx].pop("runs_worktree_code", None)
             continue
         admitted = {_entry_key(e) for e in s.get("derived") or []}
         if o is not None:
@@ -4226,7 +4205,6 @@ def refined_grant_entries(
             "derived": [e for e in n["derived"] if _entry_key(e) in admitted],
             "dropped": n["dropped"],
             "branch": branch,
-            **({"runs_worktree_code": True} if n.get("runs_worktree_code") and s.get("runs_worktree_code") else {}),
         }
         held = [e.get("rule") or f"{e['path']} ({e['mode']})" for e in n["derived"]
                 if _entry_key(e) not in admitted]
@@ -4452,7 +4430,6 @@ STAGE_LEAF_CLASS: dict[str, str] = {
     "grants.add_dirs.mode": "I",
     "grants.add_dirs.provenance": "I",
     "grants.resources": "I",
-    "grants.runs_worktree_code": "I",
     "effects.path": "I",
     "effects.sha256": "I",
     "effects.resolver": "I",
