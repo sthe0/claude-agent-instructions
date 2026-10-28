@@ -55,6 +55,7 @@ asserts that no token of a node the row does not show reaches the captured argv 
 | `scripts/agentctl/advisor.py`:`_judge_user_text` | none | no plan content | the user's text |
 | `scripts/agentctl/advisor.py`:`judge_approval_ask` | none | no plan content | the ask text |
 | `scripts/agentctl/advisor.py`:`judge_binary_ask` | none | no plan content | the final text |
+| `scripts/agentctl/advisor.py`:`judge_code_effects` | none | no plan content | the code of a command line and its venue |
 | `scripts/agentctl/advisor.py`:`judge_deferring_disposition` | none | no plan content | the ask text |
 | `scripts/agentctl/advisor.py`:`judge_feedback_signal` | none | no plan content | the user's text |
 | `scripts/agentctl/advisor.py`:`judge_landing_discipline_ask` | none | no plan content | the ask text |

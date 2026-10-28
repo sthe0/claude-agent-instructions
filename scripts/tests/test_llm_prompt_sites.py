@@ -522,6 +522,7 @@ def drive_user_text(plan_file, views, **_):
 
 
 STRUCTURAL_ONLY = {
+    "scripts/agentctl/advisor.py:judge_code_effects": "the code of a command line",
     "scripts/agentctl/cli.py:_venue_tree_identity.run": "a git command line",
     "scripts/agentctl/mandate.py:<module>": "a table of script names",
     "scripts/gen_crutch_registry.py:<module>": "a table key",
