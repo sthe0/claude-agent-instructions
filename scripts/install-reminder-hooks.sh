@@ -183,6 +183,9 @@ DESIRED = [
     # option label: a correction delivered this way bypasses the
     # UserPromptSubmit self-improvement reminder, which only sees prompts.
     ("PostToolUse",      "AskUserQuestion", "hook-si-freetext-answer.py", 5),
+    # Appends each answered ask to the session's answer ledger, the evidence
+    # `agentctl order-agree` and `order-challenge-dismiss` rest on.
+    ("PostToolUse",      "AskUserQuestion", "hook-ask-answer-record.py", 5),
     # session_scope: heartbeat + touched-path accumulation (Component A wiring).
     # Non-blocking by design — never emits a permissionDecision.
     ("PostToolUse",      "Edit|Write", "hook-scope-track.py",        5),

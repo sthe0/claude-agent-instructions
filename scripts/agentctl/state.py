@@ -27,7 +27,7 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 60  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 61  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -114,6 +114,9 @@ SCHEMA_VERSION = 60  # 34: PlanFrame gains parent_repo_root/parent_delivery_work
                      # and its reviews, bound to the understanding digest);
                      # PlanPresentation gains understanding_sha256. No-op migration:
                      # absent keys load as the empty defaults.
+                     # 61: SessionState gains order_agreement_armed/_exemption and
+                     # order_agreement/_history/order_challenges (the answer-evidenced
+                     # order agreement); the last three ride PlanFrame. No-op migration.
 
 # Mirrors max-recursion-depth in ~/.claude/config.md — the nesting cap that
 # prevents unbounded service-sub-plan recursion.
@@ -1081,6 +1084,7 @@ class ConcernRecord:
     record_seq: int = 0
     status: str = "recorded"
     regression_commands: list[str] = field(default_factory=list)
+    restates: str = ""
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "ConcernRecord | None":
@@ -1094,6 +1098,7 @@ class ConcernRecord:
             raise_digests=dict(rd) if isinstance(rd := d.get("raise_digests"), dict) else {},
             record_seq=d.get("record_seq") or 0, status=d.get("status", "recorded"),
             regression_commands=list(d.get("regression_commands", [])),
+            restates=d.get("restates") or "",
         )
 
 
@@ -1457,6 +1462,86 @@ class OrderReview:
             transcript=d.get("transcript") or "",
             at=d.get("at") or 0.0,
             scope=d.get("scope") or ORDER_REVIEW_SCOPE,
+        )
+
+
+ORDER_DISMISS_MARKER_PREFIX = "[order-dismiss:"
+
+
+def order_dismiss_marker(challenge_id: str) -> str:
+    return f"{ORDER_DISMISS_MARKER_PREFIX}{challenge_id}]"
+
+
+ORDER_AGREEMENT_EVIDENCE_ASK = "ask"
+ORDER_AGREEMENT_ANCHOR_STAMP = "stamp"
+ORDER_AGREEMENT_ANCHOR_CONFIRMED = "confirmed"
+
+CHALLENGE_OPEN = "open"
+CHALLENGE_DISMISSED = "dismissed"
+CHALLENGE_REAGREED = "reagreed"
+
+# Why a session that is eligible for the agreement gate is not armed (schema 61).
+ORDER_EXEMPT_HOST = "detected host is not claude"
+ORDER_EXEMPT_HOOK = "answer hook not registered"
+ORDER_EXEMPT_LINKED = "linked child"
+ORDER_EXEMPT_SPAWNED = "spawned child"
+ORDER_EXEMPT_CHANNEL = "headless delivery channel"
+
+
+@dataclass
+class OrderAgreement:
+    """The user's agreement to an order understanding (schema 61), recorded by `order-agree`
+    from an answer in the answer ledger. `parts` is `plan.understanding_parts` at agreement
+    time, kept so a later divergence can name every part that moved."""
+    understanding_sha256: str
+    parts: dict[str, str]
+    draft_path: str
+    at: float
+    note: str = ""
+    evidence: str = ORDER_AGREEMENT_EVIDENCE_ASK
+    anchor: str = ORDER_AGREEMENT_ANCHOR_STAMP
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "OrderAgreement":
+        return cls(
+            understanding_sha256=d["understanding_sha256"],
+            parts=dict(d.get("parts") or {}),
+            draft_path=d.get("draft_path") or "",
+            at=d.get("at") or 0.0,
+            note=d.get("note") or "",
+            evidence=d.get("evidence") or ORDER_AGREEMENT_EVIDENCE_ASK,
+            anchor=d.get("anchor") or ORDER_AGREEMENT_ANCHOR_STAMP,
+        )
+
+
+@dataclass
+class UnderstandingChallenge:
+    """A reviewer's blocking `understanding:` concern recorded against the agreed order
+    (schema 61). `id` is the originating concern id; `understanding_sha256` is the agreement
+    digest it was raised against. Open until the user dismisses it (`order-challenge-dismiss`)
+    or a new agreement supersedes it (`reagreed`)."""
+    id: str
+    text: str
+    reviewer: str
+    plan_sha256: str
+    understanding_sha256: str
+    at: float
+    status: str = CHALLENGE_OPEN
+    dismissed_at: float = 0.0
+    dismiss_note: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "UnderstandingChallenge":
+        return cls(
+            id=d["id"],
+            text=d.get("text") or "",
+            reviewer=d.get("reviewer") or "",
+            plan_sha256=d.get("plan_sha256") or "",
+            understanding_sha256=d.get("understanding_sha256") or "",
+            at=d.get("at") or 0.0,
+            status=d.get("status") or CHALLENGE_OPEN,
+            dismissed_at=d.get("dismissed_at") or 0.0,
+            dismiss_note=d.get("dismiss_note") or "",
         )
 
 
@@ -2106,6 +2191,11 @@ class PlanFrame:
     # starts with none and pop puts the parent's back. None = a frame written before this field
     # existed, which pop leaves the live grants alone for.
     runtime_grants: dict[str, list[dict]] | None = None
+    # The order agreement belongs to the plan it was given for (schema 61): the child starts
+    # with none and pop puts the parent's back.
+    order_agreement: OrderAgreement | None = None
+    order_agreement_history: list[OrderAgreement] = field(default_factory=list)
+    order_challenges: list[UnderstandingChallenge] = field(default_factory=list)
 
 
 @dataclass
@@ -2535,6 +2625,13 @@ class SessionState:
     order_draft_path: str = ""
     order_draft_sha256: str = ""
     order_reviews: list[OrderReview] = field(default_factory=list)
+    # The order agreement (schema 61). `order_agreement_armed` is set by classify alone;
+    # `order_agreement_exemption` names why an eligible session was left unarmed.
+    order_agreement_armed: bool = False
+    order_agreement_exemption: str = ""
+    order_agreement: OrderAgreement | None = None
+    order_agreement_history: list[OrderAgreement] = field(default_factory=list)
+    order_challenges: list[UnderstandingChallenge] = field(default_factory=list)
     approval: GateRecord = field(default_factory=lambda: GateRecord("plan_approval"))
     resolution: GateRecord = field(default_factory=lambda: GateRecord("resolution"))
     stages: list[Stage] = field(default_factory=list)
@@ -3157,6 +3254,15 @@ class SessionState:
         data["order_reviews"] = [
             OrderReview.from_dict(x) for x in data.get("order_reviews", [])
         ]
+        data["order_agreement"] = (
+            OrderAgreement.from_dict(data["order_agreement"]) if data.get("order_agreement") else None
+        )
+        data["order_agreement_history"] = [
+            OrderAgreement.from_dict(x) for x in data.get("order_agreement_history", [])
+        ]
+        data["order_challenges"] = [
+            UnderstandingChallenge.from_dict(x) for x in data.get("order_challenges", [])
+        ]
         cost_raw = data.get("cost")
         data["cost"] = CostRollup(**cost_raw) if cost_raw else None
         data["plan_stack"] = [
@@ -3199,6 +3305,15 @@ class SessionState:
                 accepted_plan_digest=f.get("accepted_plan_digest"),
                 plan_binding_captured=bool(f.get("plan_binding_captured", False)),
                 runtime_grants=f.get("runtime_grants"),
+                order_agreement=(
+                    OrderAgreement.from_dict(f["order_agreement"]) if f.get("order_agreement") else None
+                ),
+                order_agreement_history=[
+                    OrderAgreement.from_dict(x) for x in f.get("order_agreement_history") or []
+                ],
+                order_challenges=[
+                    UnderstandingChallenge.from_dict(x) for x in f.get("order_challenges") or []
+                ],
             )
             for f in data.get("plan_stack", [])
         ]
@@ -3223,6 +3338,7 @@ PLAN_BOUND_FIELDS = frozenset({
     "plugins_archive", "plan_snapshot_path", "plan_snapshot_hash", "accepted_plan_digest",
     "effort_estimate", "effort_baseline", "effort_actuals", "effort_fires", "effort_spend_seen",
     "approved_grants_sha256", "approved_grant_entries", "runtime_grants",
+    "order_agreement", "order_agreement_history", "order_challenges",
 })
 # SESSION_SCOPED_FIELDS belong to the session (or to the engine's bookkeeping of it): push and
 # pop leave them as they are, or reset them to the child's start state, and never restore them.
@@ -3244,4 +3360,5 @@ SESSION_SCOPED_FIELDS = frozenset({
     "settings_drift", "cwd_drift", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",
     "order_draft_path", "order_draft_sha256", "order_reviews",
+    "order_agreement_armed", "order_agreement_exemption",
 })

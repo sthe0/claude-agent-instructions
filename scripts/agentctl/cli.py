@@ -29,7 +29,7 @@ from pathlib import Path
 
 from lib import argv_text, ask_evidence, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, delivery_channel, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, answer_ledger, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, delivery_channel, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from . import config as agentctl_config
@@ -90,6 +90,7 @@ from .plan import (
     stage_reattest_digest,
     unit_currency_hash,
     understanding_digest,
+    understanding_parts,
     unit_node,
     verify_command_reachability_blockers,
     cost_tier_floor_advisories,
@@ -160,9 +161,22 @@ from .state import (
     NORMALIZATION_DESTINATION_ALIASES,
     NORMALIZATION_DESTINATIONS,
     NORMALIZATION_LEVELS,
+    CHALLENGE_DISMISSED,
+    CHALLENGE_OPEN,
+    CHALLENGE_REAGREED,
+    ORDER_AGREEMENT_ANCHOR_CONFIRMED,
+    ORDER_AGREEMENT_ANCHOR_STAMP,
+    ORDER_EXEMPT_CHANNEL,
+    ORDER_EXEMPT_HOOK,
+    ORDER_EXEMPT_HOST,
+    ORDER_EXEMPT_LINKED,
+    ORDER_EXEMPT_SPAWNED,
     ORDER_REVIEW_SCOPE,
+    OrderAgreement,
     OrderReview,
     order_agree_marker,
+    order_dismiss_marker,
+    UnderstandingChallenge,
     Outcome,
     PARENT_DIFFICULTY_ENV,
     parse_parent_difficulty,
@@ -2055,6 +2069,25 @@ def _refresh_caches_from_plan_path(
     return []
 
 
+def _order_agreement_refusal(
+    state: SessionState, plan_path: str | None, action: str, what: str,
+) -> Directive | None:
+    """The refusal Directive when the order-agreement gate blocks `what` against the plan at
+    `plan_path`, else None. The gate is judged and logged the same way at every act it guards."""
+    doc = None
+    if plan_path:
+        try:
+            doc = load_plan(plan_path)
+        except (OSError, PlanError):
+            doc = None
+    blockers = gates.order_agreement_blockers(state, doc)
+    _log_gate(state, "order_agreement", blockers, passed=not blockers)
+    if not blockers:
+        return None
+    return Directive(False, state.node, action, f"cannot {what}: order agreement",
+                     data={"blockers": blockers})
+
+
 def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bool) -> None:
     """Append one {ts, session, node, gate, blockers, passed} line to GATE_LOG.
 
@@ -2742,27 +2775,6 @@ def _landed_check_result(
     return result.returncode == 0, None, result
 
 
-def _option_carries_waiver_marker(option: dict) -> bool:
-    return transcript_turns.has_marker_option({"questions": [{"options": [option]}]},
-                                              CONTENT_WAIVER_ASK_MARKER)
-
-
-def _chose_waiver_option(tool_input: dict, answers) -> bool:
-    """True iff some question offering both a marked and an unmarked option was answered
-    with the label of a marked one. A question whose options are all marked leaves no
-    way to decline, so it never consents."""
-    if not isinstance(answers, dict):
-        return False
-    for q in tool_input.get("questions") or []:
-        if not isinstance(q, dict):
-            continue
-        options = [o for o in q.get("options") or [] if isinstance(o, dict)]
-        marked = [o.get("label") for o in options if _option_carries_waiver_marker(o)]
-        if marked and len(marked) < len(options) and answers.get(q.get("question")) in marked:
-            return True
-    return False
-
-
 def _content_waiver_blocker(state: SessionState, stage_index: int) -> str | None:
     """Why `--accept-content-loss` is refused for `stage_index`, else None. The stage
     must have an earlier `record_landing` event (the waiver follows a recorded red), and
@@ -2783,7 +2795,8 @@ def _content_waiver_blocker(state: SessionState, stage_index: int) -> str | None
     if scan is None:
         return (f"cannot locate or read the transcript of session {state.session_id!r}, so "
                 f"the {CONTENT_WAIVER_ASK_MARKER!r} answer cannot be verified")
-    after = [any(_chose_waiver_option(ask.tool_input, answers) for answers in ask.sole_answers)
+    after = [any(ask_evidence.chose_marked_option(ask.tool_input, answers, CONTENT_WAIVER_ASK_MARKER)
+                 for answers in ask.sole_answers)
              for ask in scan.after if ask.answered]
     if not after:
         return (f"no answered AskUserQuestion carrying {CONTENT_WAIVER_ASK_MARKER!r} in an "
@@ -4176,9 +4189,8 @@ def _order_draft_violations(meta) -> list[str]:
 
 
 def _session_has_agreement(state: SessionState) -> bool:
-    """Whether the user has already agreed the order's understanding in this session.
-    No agreement record exists yet, so no session has one."""
-    return False
+    """Whether the user has already agreed the order's understanding in this session."""
+    return state.order_agreement is not None
 
 
 def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -4217,6 +4229,142 @@ def cmd_order_submit(args, *, store: StateStore, runner: Runner | None = None) -
         "next: plan-review --scope order, then present-plan --kind order",
         data={"order_draft_path": args.plan, "understanding_sha256": state.order_draft_sha256},
     )
+
+
+def _user_answered_after(state_file: Path, since: float, marker: str) -> "tuple[bool, answer_ledger.LedgerRead]":
+    """Whether the ledger holds an answer given at or after `since` that chose a marked option
+    of an ask offering `marker`. The ledger is the only evidence: no transcript is read."""
+    ledger_read = answer_ledger.read(state_file)
+    chosen = any(
+        record.at >= since and ask_evidence.chose_marked_option(record.tool_input(), record.answers, marker)
+        for record in ledger_read.records
+    )
+    return chosen, ledger_read
+
+
+def _no_marked_answer_refusal(what: str, marker: str, ledger_read: "answer_ledger.LedgerRead") -> str:
+    text = (
+        f"{what} needs the user's own answer: an AskUserQuestion posed after the presentation "
+        f"offering an option marked {marker!r} beside an unmarked one, which the user chose; "
+        "no such answer is recorded"
+    )
+    if not ledger_read.records:
+        text += (
+            " (the answer ledger is empty or missing — a session that started before "
+            "hook-ask-answer-record.py was registered records nothing: register it with "
+            "scripts/install-reminder-hooks.sh and restart the session)"
+        )
+    return text
+
+
+def _order_agreement_anchor(state: SessionState, receipt, state_file: Path) -> "tuple[float, str] | str":
+    """`(time, anchor kind)` from the delivery stamp of the order receipt's own rendering, or the
+    refusal text. A sidecar holding another rendering's stamp anchors nothing."""
+    stamp = delivery.read_stamp(state_file)
+    if stamp is not None and stamp.rendering_sha256 != receipt.rendering_sha256:
+        return (
+            "the delivery stamp on record belongs to another rendering than the order "
+            "presentation: present the order again (present-plan --kind order) and let the "
+            "delivery hook stamp it"
+        )
+    blockers = gates._delivery_stamp_blocker(state, receipt, None)
+    if blockers:
+        return "the order presentation has no usable delivery proof: " + "; ".join(blockers)
+    anchor = (ORDER_AGREEMENT_ANCHOR_CONFIRMED if stamp.source == delivery.SOURCE_OVERRIDE
+              else ORDER_AGREEMENT_ANCHOR_STAMP)
+    return stamp.verified_ts, anchor
+
+
+def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record the user's agreement to the order understanding presented to them.
+
+    Rests on one thing the agent cannot write through a verb: an answer in the session's answer
+    ledger, given after the presentation was delivered, choosing the option marked
+    `[order-agree:<digest prefix>]`. With no such answer nothing is recorded and no flag
+    substitutes for it."""
+    state = _require(store, args.session)
+
+    def refuse(msg: str, **data) -> Directive:
+        return Directive(False, state.node, "noop", msg, data=data)
+
+    path = state.order_draft_path
+    blockers = gates.order_review_blockers(state, path)
+    if blockers:
+        return refuse("cannot record the agreement: " + "; ".join(blockers), blockers=blockers)
+    doc, _ = load_order_draft(path)
+    digest = understanding_digest(doc)
+    receipt = gates._plan_presentation_for(state, PLAN_PRESENTATION_KIND_ORDER)
+    if receipt is None:
+        return refuse("no order presentation recorded: present-plan --kind order first")
+    stale = gates.order_presentation_stale_reason(state, receipt)
+    if stale is not None or receipt.understanding_sha256 != digest:
+        return refuse(stale or "the order presentation is for another understanding: present it again")
+    state_file = config_root.resolve_agentctl_state_file(state.session_id)
+    if state_file is None:
+        return refuse("no state file for this session to read the answer ledger beside")
+    anchored = _order_agreement_anchor(state, receipt, state_file)
+    if isinstance(anchored, str):
+        return refuse(anchored)
+    since, anchor = anchored
+    marker = order_agree_marker(digest)
+    answered, ledger_read = _agreement_ask_answered(state_file, since, marker)
+    if not answered:
+        return refuse(_no_marked_answer_refusal("agreeing the order", marker, ledger_read))
+    previous = state.order_agreement
+    agreement = OrderAgreement(
+        understanding_sha256=digest, parts=understanding_parts(doc), draft_path=path,
+        at=time.time(), note=(getattr(args, "note", "") or "").strip(), anchor=anchor,
+    )
+    state.order_agreement = agreement
+    state.order_agreement_history.append(agreement)
+    if previous is None or previous.understanding_sha256 != digest:
+        for challenge in state.order_challenges:
+            if challenge.status == CHALLENGE_OPEN:
+                challenge.status = CHALLENGE_REAGREED
+    state.log("order_agree", understanding_sha256=digest, anchor=anchor, draft=path)
+    store.save(state)
+    return Directive(
+        True, state.node, "continue",
+        f"order understanding {digest[:12]} agreed by the user ({anchor} anchor); "
+        "next: author the plan and submit-plan",
+        data={"understanding_sha256": digest, "anchor": anchor},
+    )
+
+
+def _agreement_ask_answered(state_file: Path, since: float, marker: str):
+    """The evidence test of `order-agree`: a marked user answer in the ledger since `since`."""
+    return _user_answered_after(state_file, since, marker)
+
+
+def cmd_order_challenge_dismiss(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Dismiss an open challenge to the agreed order, on the user's marked answer to an ask
+    posed after the challenge was recorded (`[order-dismiss:<id>]`) and a stated reason."""
+    state = _require(store, args.session)
+
+    def refuse(msg: str) -> Directive:
+        return Directive(False, state.node, "noop", msg)
+
+    note = (getattr(args, "note", "") or "").strip()
+    if not note:
+        return refuse("order-challenge-dismiss requires a non-empty --note: why the user dismisses it")
+    challenge = next((c for c in state.order_challenges if c.id == args.id), None)
+    if challenge is None:
+        return refuse(f"no understanding challenge {args.id!r} is recorded")
+    if challenge.status != CHALLENGE_OPEN:
+        return refuse(f"challenge {args.id!r} is {challenge.status}, not open")
+    state_file = config_root.resolve_agentctl_state_file(state.session_id)
+    if state_file is None:
+        return refuse("no state file for this session to read the answer ledger beside")
+    marker = order_dismiss_marker(challenge.id)
+    answered, ledger_read = _user_answered_after(state_file, challenge.at, marker)
+    if not answered:
+        return refuse(_no_marked_answer_refusal("dismissing the challenge", marker, ledger_read))
+    challenge.status = CHALLENGE_DISMISSED
+    challenge.dismissed_at = time.time()
+    challenge.dismiss_note = note
+    state.log("order_challenge_dismiss", id=challenge.id, note=note)
+    store.save(state)
+    return Directive(True, state.node, "continue", f"challenge {challenge.id} dismissed by the user's answer")
 
 
 def cmd_order_list(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -4651,6 +4799,52 @@ cmd_question_enumerate = cmd_question_enumerate_worker = cmd_question_enumerate_
     cmd_question_enumerate_retired)
 
 
+def _arming_host() -> "str | None":
+    """The host classify arms against: detected from the environment, never the `--host` flag
+    (the flag names a host to bind; it cannot make an unobservable user answer observable)."""
+    return runtime_host.detect_host()
+
+
+def _spawned_child(state: SessionState) -> bool:
+    """Whether this process is a spawned specialist, read from the recursion-depth env at
+    classify time. Not `state.recursion_depth` or `--recursion-depth`: a caller-supplied
+    number must not be able to exempt a session from the gate."""
+    try:
+        return int(os.environ.get("AGENT_RECURSION_DEPTH") or 0) >= 1
+    except ValueError:
+        return False
+
+
+def _headless_channel() -> bool:
+    return delivery_channel.load_command() is not None
+
+
+def _order_agreement_exemption(state: SessionState) -> str:
+    """Why a substantive session is left unarmed for the order-agreement gate, or "" when it
+    is armed: the gate needs a user answer the engine can observe, which only an interactive
+    claude host with the answer hook registered, driven by a root session, can supply."""
+    if _arming_host() != runtime_host.HOST_CLAUDE:
+        return ORDER_EXEMPT_HOST
+    if not gates.answer_hook_registered():
+        return ORDER_EXEMPT_HOOK
+    if state.parent_link:
+        return ORDER_EXEMPT_LINKED
+    if _spawned_child(state):
+        return ORDER_EXEMPT_SPAWNED
+    if _headless_channel():
+        return ORDER_EXEMPT_CHANNEL
+    return ""
+
+
+def _arm_order_agreement(state: SessionState) -> str:
+    """Set the arming fields at classify and return the exemption reason. Classify is the only
+    writer: a session armed here stays armed, one exempted here is never armed later."""
+    reason = _order_agreement_exemption(state)
+    state.order_agreement_armed = not reason
+    state.order_agreement_exemption = reason
+    return reason
+
+
 def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     try:
@@ -4709,11 +4903,18 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     else:
         action, detail = "plan", "substantive: route to planner, then submit-plan"
 
+    exemption = ""
     if result.weight_class == WeightClass.SUBSTANTIVE.value:
         plugins.auto_activate_for(state)
+        exemption = _arm_order_agreement(state)
 
     store.save(state)
     d = Directive(True, state.node, action, detail, data={"reasons": result.reasons})
+    if exemption:
+        d.data["order_agreement_exemption"] = exemption
+        d.detail += f" | order agreement gate not armed: {exemption}"
+        if exemption == ORDER_EXEMPT_HOOK:
+            d.detail += " (register it with scripts/install-reminder-hooks.sh)"
     loop_self_check = _loop_self_check(state, thr)
     if loop_self_check is not None:
         d.data["loop_self_check"] = loop_self_check
@@ -4789,6 +4990,11 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # between separate reads can't desynchronize accepted_plan_digest from the bytes
     # that were actually parsed and verified.
     doc, _submitted_plan_bytes, _submitted_plan_digest = load_plan_with_digest(plan_path)
+    agreement_blockers = gates.order_agreement_blockers(state, doc)
+    _log_gate(state, "order_agreement", agreement_blockers, passed=not agreement_blockers)
+    if agreement_blockers:
+        return Directive(False, state.node, "fix_plan", "cannot submit plan: order agreement",
+                         data={"blockers": agreement_blockers})
     _prior_baseline = (*_review_baseline(store, state), state.plan_path) if resubmitting else None
     state.stages = doc.stages
     _sync_venue_from_plan(state, doc)
@@ -5315,6 +5521,10 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             f"essence/full always present state.plan_path ({state.plan_path!r})",
         )
     target = explicit_plan or state.plan_path
+    if kind in (PLAN_PRESENTATION_KIND_ESSENCE, PLAN_PRESENTATION_KIND_REPLAN_DIFF):
+        refusal = _order_agreement_refusal(state, target, "noop", f"present {kind}")
+        if refusal is not None:
+            return refusal
     if kind == PLAN_PRESENTATION_KIND_ESSENCE:
         # essence is the receipt an approval ask is assembled from — gate it on
         # the same plan_review_blockers precondition as approve/replan, so a
@@ -5945,12 +6155,40 @@ def _commit_concern_ledger(state: SessionState, review, cp: _ConcernPlan, ledger
             raise_digests={p: cp.part_digests.get(p, "") for p in parts}, record_seq=seq,
             status=CONCERN_OPEN if opens else CONCERN_RECORDED,
             regression_commands=[cp.regression_command] if cp.regression_command else [],
+            restates=pc.restates,
         )
         target = state.concern_ledger.get(pc.restates) if pc.restates else None
         if target is not None and cp.regression_command \
                 and cp.regression_command not in target.regression_commands:
             target.regression_commands.append(cp.regression_command)
+    _record_understanding_challenges(state, review, cp, ids)
     return ids
+
+
+def _record_understanding_challenges(state: SessionState, review, cp: _ConcernPlan,
+                                     ids: list[str]) -> None:
+    """Take every blocking `understanding:` concern of this record up as a challenge to the
+    agreed order. A re-raise of a challenge that is still open, or that the user dismissed
+    against the understanding still agreed, opens nothing; a re-raise of a challenge a new
+    agreement closed, or one dismissed against an understanding since changed, opens a fresh
+    one. Notes and advisory concerns open none. Inert while the agreement gate is."""
+    agreement = state.order_agreement
+    if agreement is None or not gates.order_agreement_active(state):
+        return
+    for pc, eff, cid in zip(cp.parsed, cp.effective, ids):
+        if eff != gates.EFFECTIVE_BLOCKING or gates._concern_part_token(pc.body) != gates.UNDERSTANDING_TOKEN:
+            continue
+        prior = gates.challenge_for_restatement(state, pc.restates)
+        if prior is not None and (
+            prior.status == CHALLENGE_OPEN
+            or (prior.status == CHALLENGE_DISMISSED
+                and prior.understanding_sha256 == agreement.understanding_sha256)
+        ):
+            continue
+        state.order_challenges.append(UnderstandingChallenge(
+            id=cid, text=pc.body, reviewer=getattr(review, "reviewer", "") or "",
+            plan_sha256=getattr(review, "plan_sha256", "") or "",
+            understanding_sha256=agreement.understanding_sha256, at=time.time()))
 
 
 def _log_concerns_downgraded(state: SessionState, cp: _ConcernPlan, scope: str, raw_verdict: str) -> None:
@@ -7662,8 +7900,11 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     mandate_basis = (args.by or "").strip() \
         if (args.by or "").strip().startswith(mandate_rules.MANDATE_BASIS + ":") else ""
     review_blockers = [] if mandate_basis else gates.plan_review_blockers(state, state.plan_path)
+    agreement_blockers = gates.order_agreement_blockers(state, _approved_doc)
+    _log_gate(state, "order_agreement", agreement_blockers, passed=not agreement_blockers)
     blockers = (
         gates.blockers(state, "plan_approval")
+        + agreement_blockers
         + plugins.plugin_gate_blockers(state, "plan_approval")
         + review_blockers
         + gates.protected_grant_blockers(state, state.plan_path)
@@ -12590,6 +12831,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # discharged the difficulty. The gates below govern the NORM, which is the very thing
     # this path is refused for touching: making an executor re-arm a review to reorder his
     # own operations is the cost the field split exists to remove.
+    refusal = _order_agreement_refusal(state, args.plan, "replan", "replan")
+    if refusal is not None:
+        return refusal
     if getattr(args, "renormalize", False):
         return _renormalize_replan(args, state, store, runner)
 
@@ -13547,11 +13791,26 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             # as a zero.
             "enumeration_escapes": _enumeration_escape_counts(state),
             "parent_link": _parent_link_summary(state.parent_link),
+            "order_agreement": _order_agreement_summary(state),
+            "order_agreement_exemption": state.order_agreement_exemption or None,
             **_replan_class_data(state),
             "effort_retiers": list(state.effort_retiers),
             "effort_finished_work": _finished_work_data(state).get("effort_finished_work", []),
         },
     )
+
+
+def _order_agreement_summary(state: SessionState) -> dict | None:
+    """The agreement the gate holds this session to, or None when the gate is inactive or
+    nothing is agreed yet."""
+    agreement = state.order_agreement
+    if agreement is None or not gates.order_agreement_active(state):
+        return None
+    return {
+        "understanding_sha256": agreement.understanding_sha256,
+        "at": agreement.at,
+        "anchor": agreement.anchor,
+    }
 
 
 def _parent_link_summary(link: dict | None) -> dict | None:
@@ -13744,6 +14003,9 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
         accepted_plan_digest=state.accepted_plan_digest,
         plan_binding_captured=True,
         runtime_grants=copy.deepcopy(state.runtime_grants),
+        order_agreement=copy.deepcopy(state.order_agreement),
+        order_agreement_history=copy.deepcopy(state.order_agreement_history),
+        order_challenges=copy.deepcopy(state.order_challenges),
     )
     state.plan_stack.append(frame)
     # The approval-binding fields copied into the frame stay live on purpose: the order key
@@ -13801,6 +14063,10 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     # Runtime grants are keyed by the live plan's stage index: the child starts with none and
     # pop puts the parent's back.
     state.runtime_grants = {}
+    # The agreement was given for the parent's order; the child agrees its own.
+    state.order_agreement = None
+    state.order_agreement_history = []
+    state.order_challenges = []
     state.log("push_subplan", child_plan=child_plan, originating_stage=originating, depth=len(state.plan_stack))
     store.save(state)
     return Directive(
@@ -13866,6 +14132,9 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
     # which no longer exists once the parent resumes.
     state.plugins = frame.plugins
     state.plugins_archive = frame.plugins_archive
+    state.order_agreement = frame.order_agreement
+    state.order_agreement_history = frame.order_agreement_history
+    state.order_challenges = frame.order_challenges
     if frame.plan_binding_captured:
         # Approval-binding custody (schema 56): the child's own approval rebound these to the
         # child's plan; the parent resumes with the binding it was approved under.
@@ -14184,6 +14453,8 @@ COMMANDS = {
     "order-raise": cmd_order_raise,
     "order-dispose": cmd_order_dispose,
     "order-submit": cmd_order_submit,
+    "order-agree": cmd_order_agree,
+    "order-challenge-dismiss": cmd_order_challenge_dismiss,
     "order-list": cmd_order_list,
     "classify": cmd_classify,
     "plan": cmd_plan,
@@ -14286,7 +14557,8 @@ _SESSION_COMMANDS = (
     "question-rebind", "question-retire", "question-list", "question-check",
     "question-enumerate", "question-enumerate-worker", "question-enumerate-escape",
     "question-candidate-dispose",
-    "order-raise", "order-dispose", "order-submit", "order-list", "classify", "plan",
+    "order-raise", "order-dispose", "order-submit", "order-agree", "order-challenge-dismiss",
+    "order-list", "classify", "plan",
     "plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
     "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
@@ -14306,7 +14578,8 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("goal", ("start", "reset")),
     ("done_criterion", ("start", "reset")),
     ("note", ("plugin-record", "confirm-delivery", "plan-review", "stage-review", "code-review",
-              "accept", "question-enumerate-escape", "fire-acknowledge", "accept-protected-grant")),
+              "accept", "question-enumerate-escape", "fire-acknowledge", "accept-protected-grant",
+              "order-agree", "order-challenge-dismiss")),
     ("statement", ("ledger-add", "ledger-candidate")),
     ("source", ("ledger-add", "question-dispose")),
     ("premises", ("ledger-add",)),
@@ -14363,7 +14636,8 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("tracker_key", ("plugin-activate", "classify", "drive"), "tracker issue key (ABC-123)"),
     ("id", ("ledger-add", "ledger-candidate", "ledger-dispose", "question-raise",
             "question-research", "question-dispose", "question-rebind", "question-retire",
-            "question-candidate-dispose", "order-raise", "order-dispose", "accept-protected-grant"),
+            "question-candidate-dispose", "order-raise", "order-dispose", "accept-protected-grant",
+            "order-challenge-dismiss"),
      "claim / question / order-element / protected-action id"),
     ("claim", ("ledger-dispose",), "id of the grounding claim, not its text"),
     ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
@@ -14703,6 +14977,17 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     sp.add_argument("--plan", required=True,
                     help="order draft file (a TOML with [meta.order] and no stages) to submit "
                          "for review and presentation; only records it, the node does not move")
+
+    sp = add("order-agree"); sp.add_argument("--session", required=True)
+    sp.add_argument("--note", default="",
+                    help="optional note recorded with the agreement; the agreement itself rests "
+                         "on the user's marked answer in the answer ledger, never on a flag")
+
+    sp = add("order-challenge-dismiss"); sp.add_argument("--session", required=True)
+    sp.add_argument("--id", required=True, help="id of the open understanding challenge")
+    sp.add_argument("--note", required=True,
+                    help="why the user dismisses it; needs the user's answer choosing the "
+                         "option marked [order-dismiss:<id>]")
 
     sp = add("order-list"); sp.add_argument("--session", required=True)
     sp.add_argument("--format", dest="format", default="", choices=["", "md"],

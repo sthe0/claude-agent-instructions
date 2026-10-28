@@ -91,7 +91,57 @@ def _order_stale_draft_presented(mp):
     mp.setattr("agentctl.cli._draft_is_submitted", lambda state, digest: True, raising=True)
 
 
+def _agree_without_ask(mp):
+    """order-agree stops requiring a recorded user answer choosing the marked option."""
+    mp.setattr("agentctl.cli._agreement_ask_answered", lambda state_file, since, marker: (True, True),
+               raising=True)
+
+
+def _divergence_ignored(mp):
+    """The gate stops noticing that the plan's understanding differs from the agreed one."""
+    mp.setattr("agentctl.gates._agreement_divergence", lambda agreed, current: [], raising=True)
+
+
+def _challenge_not_recorded(mp):
+    """A blocking `understanding:` concern is no longer taken up as a challenge."""
+    mp.setattr("agentctl.cli._record_understanding_challenges",
+               lambda state, review, cp, ids: None, raising=True)
+
+
+def _understanding_routes_order_token(mp):
+    """The `understanding:` concern token is routed as `order:`, so it is never a challenge."""
+    mp.setattr("agentctl.gates.UNDERSTANDING_TOKEN", "order:", raising=True)
+
+
+def _reraise_unmatched(mp):
+    """A re-raise (`re:<id>`) no longer finds the challenge it restates."""
+    mp.setattr("agentctl.gates.challenge_for_restatement", lambda state, restates: None, raising=True)
+
+
+def _explicit_host_arms(mp):
+    """Classify arms on whatever host was named, not on the host observed in the environment."""
+    mp.setattr("agentctl.cli._arming_host", lambda: "claude", raising=True)
+
+
+def _depth_flag_exempts(mp):
+    """A caller-supplied recursion depth on the session exempts it from the gate."""
+    mp.setattr("agentctl.cli._spawned_child", lambda state: state.recursion_depth >= 1, raising=True)
+
+
+def _headless_channel_ignored(mp):
+    """A configured headless delivery channel no longer exempts the session."""
+    mp.setattr("agentctl.cli._headless_channel", lambda: False, raising=True)
+
+
 MUTANTS = {
+    "agree_without_ask": _agree_without_ask,
+    "divergence_ignored": _divergence_ignored,
+    "challenge_not_recorded": _challenge_not_recorded,
+    "understanding_routes_order_token": _understanding_routes_order_token,
+    "reraise_unmatched": _reraise_unmatched,
+    "explicit_host_arms": _explicit_host_arms,
+    "depth_flag_exempts": _depth_flag_exempts,
+    "headless_channel_ignored": _headless_channel_ignored,
     "verdict_unchecked": _verdict_unchecked,
     "digest_ignores_constraints": _digest_ignores_constraints,
     "completeness_unchecked": _completeness_unchecked,

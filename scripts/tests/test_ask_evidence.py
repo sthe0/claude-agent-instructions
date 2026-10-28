@@ -60,3 +60,44 @@ def test_entry_with_several_results_contributes_no_answers(tmp_path):
     ])
     scan = ask_evidence.ask_after_event(path, MARKER, 0.0)
     assert scan.marked[0].answered and scan.marked[0].sole_answers == ()
+
+
+def _tool_input(*labels, question="q"):
+    return {"questions": [{"question": question, "options": [{"label": lab} for lab in labels]}]}
+
+
+def test_chose_marked_option_accepts_the_marked_label():
+    tool_input = _tool_input(f"Yes {MARKER}", "No")
+    assert ask_evidence.chose_marked_option(tool_input, {"q": f"Yes {MARKER}"}, MARKER)
+
+
+def test_chose_marked_option_refuses_the_unmarked_label():
+    tool_input = _tool_input(f"Yes {MARKER}", "No")
+    assert not ask_evidence.chose_marked_option(tool_input, {"q": "No"}, MARKER)
+
+
+def test_chose_marked_option_refuses_when_every_option_is_marked():
+    tool_input = _tool_input(f"Yes {MARKER}", f"Also yes {MARKER}")
+    assert not ask_evidence.chose_marked_option(tool_input, {"q": f"Yes {MARKER}"}, MARKER)
+
+
+def test_chose_marked_option_refuses_another_marker_and_malformed_input():
+    tool_input = _tool_input("Yes [other]", "No")
+    assert not ask_evidence.chose_marked_option(tool_input, {"q": "Yes [other]"}, MARKER)
+    assert not ask_evidence.chose_marked_option(None, {"q": "x"}, MARKER)
+    assert not ask_evidence.chose_marked_option(tool_input, ["q"], MARKER)
+
+
+def test_parse_ask_answers_reads_the_dict_forms():
+    assert ask_evidence.parse_ask_answers({"answers": {"q": "a"}}) == {"q": "a"}
+    assert ask_evidence.parse_ask_answers({"q": "a"}) == {"q": "a"}
+
+
+def test_parse_ask_answers_reads_the_harness_string_form():
+    text = 'User has answered your questions: "Which?"="Yes, agreed", "Again?"="No".'
+    assert ask_evidence.parse_ask_answers(text) == {"Which?": "Yes, agreed", "Again?": "No"}
+
+
+def test_parse_ask_answers_of_nothing_is_empty():
+    assert ask_evidence.parse_ask_answers(None) == {}
+    assert ask_evidence.parse_ask_answers({"answers": []}) == {}

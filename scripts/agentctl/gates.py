@@ -81,12 +81,13 @@ from .plan import (
     unit_currency_hash,
     unit_id,
     understanding_digest,
+    understanding_parts,
     unit_node,
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
 from .stage_norm import StageNorm
-from .state import CONCERN_OPEN, EFFORT_FIRE_FINISHED_WORK, CriterionType, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
+from .state import CHALLENGE_OPEN, CONCERN_OPEN, EFFORT_FIRE_FINISHED_WORK, CriterionType, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
@@ -1161,6 +1162,45 @@ def _concern_discharged(scope: str, concern_id: str, concern_text: str, state: S
     )
 
 
+UNDERSTANDING_TOKEN = "understanding:"
+
+
+def understanding_challenged(state: SessionState, stable_id: str, text: str, restates: str = "") -> bool:
+    """Whether a reviewer's `understanding:` concern has been taken up as a challenge to the
+    agreed order, by its own id or by the id it re-raises. Such a concern blocks the agreement
+    gate instead of the plan review. Only that one token is ever excluded."""
+    if not state.order_challenges or _concern_part_token(text) != UNDERSTANDING_TOKEN:
+        return False
+    return (stable_id in {c.id for c in state.order_challenges}
+            or challenge_for_restatement(state, restates) is not None)
+
+
+def challenge_for_restatement(state: SessionState, restates: str):
+    """The recorded challenge a chain of `re:` restatements starting at `restates` leads to,
+    or None."""
+    by_id = {c.id: c for c in state.order_challenges}
+    seen: set[str] = set()
+    current = restates
+    while current and current not in seen:
+        if current in by_id:
+            return by_id[current]
+        seen.add(current)
+        entry = state.concern_ledger.get(current)
+        current = entry.restates if entry is not None else ""
+    return None
+
+
+def _entry_understanding_challenged(state: SessionState, entry) -> bool:
+    return understanding_challenged(state, entry.id, entry.text, entry.restates)
+
+
+def _review_concern_challenged(state: SessionState, pr, index: int) -> bool:
+    ids = _plan_review_concern_ids(pr)
+    entry = state.concern_ledger.get(ids[index])
+    return understanding_challenged(
+        state, ids[index], pr.concerns[index], entry.restates if entry is not None else "")
+
+
 def concern_unresolved(entry, state: SessionState, doc) -> bool:
     """Whether a ledger entry is still open and no risk acceptance discharges it."""
     return entry.status == CONCERN_OPEN and not _concern_discharged(
@@ -1211,7 +1251,9 @@ def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=
     blocking_ids = set(pr.in_scope_concern_ids) if classified else set(ids)
     relevant = [(cid, text, i) for i, (cid, text) in enumerate(zip(ids, pr.concerns))
                 if cid in blocking_ids]
-    unfinished = _open_prior_concerns(pr, state, doc)
+    relevant = [r for r in relevant if not _review_concern_challenged(state, pr, r[2])]
+    unfinished = [e for e in _open_prior_concerns(pr, state, doc)
+                  if not _entry_understanding_challenged(state, e)]
     if unfinished:
         held = ", ".join(e.id for e in unfinished)
         default = [
@@ -1430,7 +1472,7 @@ def _concern_names_part(text: str, part_name: str) -> bool:
 #: number is out-of-scope) and from an arbitrary word-colon prefix like `Risk:`/
 #: `Note:`, which _PLAN_REVIEW_PART_TOKEN_RE also matches syntactically but which
 #: names no engine-defined part.
-_PLAN_REVIEW_RECOGNIZED_NON_STAGE_PREFIXES = ("meta:", "order:")
+_PLAN_REVIEW_RECOGNIZED_NON_STAGE_PREFIXES = ("meta:", "order:", UNDERSTANDING_TOKEN)
 
 
 def _concern_part_token(text: str, *, after_marker: bool = False) -> "str | None":
@@ -1583,7 +1625,18 @@ def pair_status(state: SessionState, doc, plan_path: str, pair: str) -> str:
         if record.held and not is_unit_id(pair) and record.held == review_currency_hash(doc, pair):
             return "held"
         return stale
-    return "current" if record.verdict == _PLAN_REVIEW_PASS else record.verdict
+    if record.verdict == _PLAN_REVIEW_PASS or _revise_only_challenged(state, record):
+        return "current"
+    return record.verdict
+
+
+def _revise_only_challenged(state: SessionState, record) -> bool:
+    """Whether a `revise` record blocks on nothing but `understanding:` concerns the agreement
+    gate has taken up as challenges."""
+    if record.verdict != _PLAN_REVIEW_REVISE or not state.order_challenges:
+        return False
+    blocking = [i for i in range(len(record.concerns)) if concern_is_blocking(record, i)]
+    return bool(blocking) and all(_review_concern_challenged(state, record, i) for i in blocking)
 
 
 def _pair_staleness(record, doc, plan_path: str, pair: str) -> str:
@@ -2583,6 +2636,68 @@ def order_review_blockers(state: SessionState, path: str | None) -> list[str]:
         f"{last.verdict!r} by {last.reviewer!r}: revise the draft and review it again, or "
         "override with a distinct reviewer and a note"
     ]
+
+
+ANSWER_HOOK_BASENAME = "hook-ask-answer-record.py"
+
+
+def answer_hook_registered() -> bool:
+    """Whether the answer-record hook is wired where this session loads its settings. Only a
+    definite WIRED counts: an UNKNOWN probe cannot promise that agreement evidence will exist."""
+    try:
+        return getattr(hook_wiring.probe(ANSWER_HOOK_BASENAME), "status", None) == hook_wiring.WIRED
+    except Exception:
+        return False
+
+
+def order_agreement_active(state: SessionState, doc=None) -> bool:
+    """Whether the order-agreement gate applies: an armed substantive session working at the
+    top of its plan stack. A declared `parent_norm` without a `parent_link` does not deactivate
+    it; only arming (set once, by classify) and a pushed sub-plan frame do."""
+    return (
+        state.order_agreement_armed
+        and state.weight_class == WeightClass.SUBSTANTIVE.value
+        and not state.plan_stack
+    )
+
+
+def _agreement_divergence(agreed: "dict[str, str]", current: "dict[str, str]") -> list[str]:
+    """Every part of the understanding that differs between the agreed and the current one,
+    including parts that exist on one side only (an id whose text changed differs the same way)."""
+    return sorted(name for name in set(agreed) | set(current) if agreed.get(name) != current.get(name))
+
+
+def order_agreement_blockers(state: SessionState, doc) -> list[str]:
+    """Why the plan may not move on under the agreement gate ([] == it may): the user has
+    agreed no order understanding, the plan's understanding differs from the agreed one in a
+    named part, or a reviewer's challenge to the agreed order is still open. Inert unless the
+    gate is active for this session."""
+    if not order_agreement_active(state, doc):
+        return []
+    agreement = state.order_agreement
+    if agreement is None:
+        return [
+            "no agreed order understanding — the user has not agreed this session's order: "
+            "order-submit the draft, plan-review --scope order, present-plan --kind order, "
+            "then put the agreement ask to the user and run order-agree"
+        ]
+    blockers = []
+    if doc is not None:
+        differing = _agreement_divergence(agreement.parts, understanding_parts(doc))
+        if differing:
+            blockers.append(
+                f"understanding diverges from the agreed one ({agreement.understanding_sha256[:12]}): "
+                f"{', '.join(differing)} differ — restore them, or order-submit the new "
+                "understanding, have it reviewed and presented, and run order-agree again"
+            )
+    for challenge in state.order_challenges:
+        if challenge.status == CHALLENGE_OPEN:
+            blockers.append(
+                f"open challenge {challenge.id} to the agreed order, raised by "
+                f"{challenge.reviewer or 'a reviewer'}: {challenge.text[:200]} — the user "
+                "dismisses it (order-challenge-dismiss) or agrees a changed understanding"
+            )
+    return blockers
 
 
 def _plan_presentation_for(state: SessionState, kind: str):

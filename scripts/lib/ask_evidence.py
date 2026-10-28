@@ -7,10 +7,49 @@ own refusal texts, escape and extra preconditions and builds its blockers from t
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import NamedTuple
 
 from . import transcript_turns
+
+PAIR_RE = re.compile(r'"([^"]*)"\s*=\s*"([^"]*)"')
+
+
+def chose_marked_option(tool_input: dict, answers, marker: str) -> bool:
+    """True iff some question offering both a marked and an unmarked option was answered
+    with the label of a marked one. A question whose options are all marked leaves no
+    way to decline, so it never consents."""
+    if not isinstance(answers, dict) or not isinstance(tool_input, dict):
+        return False
+    for q in tool_input.get("questions") or []:
+        if not isinstance(q, dict):
+            continue
+        options = [o for o in q.get("options") or [] if isinstance(o, dict)]
+        marked = [o.get("label") for o in options
+                  if transcript_turns.has_marker_option({"questions": [{"options": [o]}]}, marker)]
+        if marked and len(marked) < len(options) and answers.get(q.get("question")) in marked:
+            return True
+    return False
+
+
+def parse_ask_answers(tool_response) -> dict[str, str]:
+    """question text -> answer text from an AskUserQuestion tool_response. The harness
+    string form is `"<q>"="<a>", ...`; a dict form carries the same map (directly or under
+    `answers`). The dict is preferred when both parse."""
+    if isinstance(tool_response, dict):
+        raw = tool_response.get("answers")
+        raw = raw if isinstance(raw, dict) else tool_response
+        parsed = {q: a for q, a in raw.items() if isinstance(q, str) and isinstance(a, str)}
+        if parsed:
+            return parsed
+    if isinstance(tool_response, str):
+        text = tool_response
+    elif isinstance(tool_response, (dict, list)):
+        text = json.dumps(tool_response)
+    else:
+        return {}
+    return dict(PAIR_RE.findall(text))
 
 
 class Ask(NamedTuple):
