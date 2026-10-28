@@ -20,12 +20,18 @@ Decisions (Bash):
          matches a record rule pattern (strictly, per segment); a segment that changes nothing must also read
          only inside the record's resources or the parent scratchpad. A segment whose git operation would run
          a hook the child could have written, or that reads an environment variable the hook cannot check
-         against the Bash shell (CDPATH, GIT_DIR, ..., PYTHON*), is not covered.
+         against the Bash shell (CDPATH, GIT_DIR, ..., PYTHON*), is not covered. The git rule is an
+         allow-list: a git segment that changes anything is covered only if every other segment of the line
+         is covered and not opaque, and the effective hooks directory is either not writable through any
+         channel the child has (a record write resource, acceptEdits in the cwd, an add-dir, an Edit/Write
+         allow entry, settings that cannot be read) or holds no executable entry other than `*.sample`.
   deny   ALL of: the permission mode is acceptEdits (the only mode probe Q6 measured); the record carries
-         `permissions_allow` and `add_dirs` explicitly; no entry of `permissions_allow` matches the call even
-         leniently (`permission_entry_match.covers` on the whole call); some segment changes a resource the
-         record does not cover that is outside the child's cwd and every add-dir (or is not a file). The reason
-         carries a `PERMISSION-REQUEST:` Rule:/Resource: template.
+         `permissions_allow` and `add_dirs` explicitly; the settings files the harness merges with the record
+         (user, config root, managed and the project's `.claude/settings[.local].json`) are all readable and
+         no `permissions.allow` entry in the record or in them matches the call even leniently
+         (`permission_entry_match.covers` on the whole call); some segment changes a resource the record
+         does not cover that is outside the child's cwd and every add-dir (the record's and the settings'),
+         or is not a file. The reason carries a `PERMISSION-REQUEST:` Rule:/Resource: template.
   none   everything else: plan mode, an unresolved or undeterminable segment, a harness-allowed call, a record
          without the explicit lists, opaque code that writes nothing, an error. The harness then decides
          exactly as it would without the hook.
@@ -44,6 +50,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shlex
 import subprocess
@@ -59,6 +66,7 @@ from agentctl import config as agentctl_config  # noqa: E402
 from agentctl.norm_handoff import NORM_HANDOFF_ENV, state_root_of, verify_env_value  # noqa: E402
 from agentctl.store import safe_session_id  # noqa: E402
 from lib import config_root, permission_entry_match  # noqa: E402
+from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
 
 RECURSION_ENV = "AGENT_RECURSION_DEPTH"
 USES_DIRNAME = "resource-uses"
@@ -85,20 +93,16 @@ PYTHON_ENV_HARMLESS = frozenset({
     "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE", "PYTHONIOENCODING", "PYTHONUTF8", "PYTHONHASHSEED",
     "PYTHONWARNINGS", "PYTHONNOUSERSITE",
 })
-#: Hooks `git <subcommand>` runs; a subcommand missing here runs none the hook knows of.
-GIT_HOOKS = {
-    "commit": ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "post-rewrite"),
-    "push": ("pre-push",),
-    "merge": ("pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-merge", "post-commit"),
-    "pull": ("pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-merge", "post-commit"),
-    "checkout": ("post-checkout",),
-    "switch": ("post-checkout",),
-    "rebase": ("pre-rebase", "post-checkout", "post-rewrite", "post-commit"),
-    "cherry-pick": ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "post-rewrite"),
-    "revert": ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"),
-    "am": ("applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "commit-msg", "post-commit"),
-}
+#: Programs that cannot reach git or python from their own arguments: every other program may start one,
+#: so with a GIT_* or PYTHON* blocker exported it is not covered (a closed list, not a list of carriers).
+NON_CARRIER_PROGRAMS = frozenset({
+    "cd", "ls", "cat", "head", "tail", "wc", "mkdir", "touch", "cp", "mv", "rm", "echo", "printf", "pwd",
+    "true", "false", "test", "[", "stat", "file", "diff", "pushd", "popd",
+})
 GIT_PROBE_TIMEOUT_S = 5
+#: Settings files the harness merges into the child's permissions besides the record.
+MANAGED_SETTINGS = "/etc/claude-code/managed-settings.json"
+SETTINGS_NAMES = ("settings.json", "settings.local.json")
 #: A segment containing one of these is not matched against a rule: a redirect, a substitution or a
 #: further command hides an effect the rule text does not name.
 RULE_UNSAFE_CHARS = frozenset("<>`$\n\r;&|")
@@ -341,14 +345,70 @@ def segment_allow_entry(approved: Approved, text: str) -> "str | None":
     return next((e for e in (approved.allow_entries or []) if e in ("Bash", "Bash(*)") or rule_matches(e, text)), None)
 
 
-def lenient_allow_entry(approved: Approved, command: str) -> "str | None":
+@dataclass
+class Ambient:
+    """What the harness merges into the child's permissions besides the record: `permissions.allow` and
+    `permissions.additionalDirectories` of every settings file it reads."""
+
+    allow: list = field(default_factory=list)
+    add_dirs: list = field(default_factory=list)
+
+
+def _settings_files(approved: Approved) -> list:
+    env = approved.env
+    home = Path(env.get("HOME") or Path.home())
+    roots = [home / ".claude"]
+    for name in ("CLAUDE_CONFIG_DIR", "CLAUDE_AGENT_HOME"):
+        if env.get(name):
+            roots.append(Path(env[name]).expanduser())
+    for base in dict.fromkeys([approved.cwd, segment_resolver.worktree_root(approved.cwd) or approved.cwd]):
+        roots.append(Path(base) / ".claude")
+    files = [root / name for root in dict.fromkeys(roots) for name in SETTINGS_NAMES]
+    return [*files, Path(MANAGED_SETTINGS)]
+
+
+def _read_settings(path: Path) -> "Ambient | None":
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return Ambient()
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    permissions = data.get("permissions")
+    if permissions is None:
+        return Ambient()
+    if not isinstance(permissions, dict):
+        return None
+    allow, dirs = permissions.get("allow", []), permissions.get("additionalDirectories", [])
+    if not isinstance(allow, list) or not isinstance(dirs, list):
+        return None
+    return Ambient([str(e) for e in allow], [os.path.expanduser(str(d)) for d in dirs])
+
+
+def ambient_settings(approved: Approved) -> "Ambient | None":
+    """The merged ambient settings; None when any of the files exists but cannot be read as settings: a
+    file the hook cannot read may allow what the hook would deny, so no decision rests on it."""
+    merged = Ambient()
+    for path in _settings_files(approved):
+        found = _read_settings(path)
+        if found is None:
+            return None
+        merged.allow += found.allow
+        merged.add_dirs += found.add_dirs
+    return merged
+
+
+def lenient_allow_entry(entries: list, command: str) -> "str | None":
     """An entry of `permissions.allow` that MAY let the harness run this call: the reading that errs toward
     covering (any segment matching, redirects and substitutions ignored). It can only keep the hook from
     denying, never make it allow."""
-    return next(
-        (e for e in (approved.allow_entries or []) if permission_entry_match.covers(e, "Bash", {"command": command})),
-        None,
-    )
+    return next((e for e in entries if permission_entry_match.covers(e, "Bash", {"command": command})), None)
 
 
 def _all_files_in_cwd(approved: Approved, changed: list) -> bool:
@@ -365,46 +425,55 @@ def accept_edits_runs(approved: Approved, text: str, changed: list) -> bool:
     return _all_files_in_cwd(approved, changed)
 
 
-def outside_working_dirs(approved: Approved, resource) -> bool:
+def outside_working_dirs(approved: Approved, ambient: Ambient, resource) -> bool:
     """A resource the harness has no reason to run a command against unprompted: not a file at all (a ref
     or a service), or a file outside the child's cwd and every directory it was started with."""
     if not isinstance(resource, resources.FileResource):
         return True
     path = _real(resource.path)
-    return not any(_under(path, _real(root)) for root in [approved.cwd, *(approved.add_dirs or [])])
+    roots = [approved.cwd, *(approved.add_dirs or []), *ambient.add_dirs]
+    return not any(_under(path, _real(root)) for root in roots)
 
 
-def may_deny(approved: Approved, command: str) -> bool:
+def may_deny(approved: Approved, ambient: "Ambient | None", command: str) -> bool:
     """The narrow positive case for a deny: a permission mode probe Q6 measured, a record that states
-    `permissions_allow` and `add_dirs` itself, and no allow entry matching the call even leniently."""
+    `permissions_allow` and `add_dirs` itself, ambient settings that could all be read, and no allow entry
+    of the record or of those settings matching the call even leniently."""
     return (
         approved.mode == ACCEPT_EDITS
         and approved.allow_entries is not None
         and approved.add_dirs is not None
-        and lenient_allow_entry(approved, command) is None
+        and ambient is not None
+        and lenient_allow_entry([*approved.allow_entries, *ambient.allow], command) is None
     )
 
 
 def env_blocker(approved: Approved, text: str) -> "str | None":
-    """The exported variable that makes a git or python segment unverifiable against the Bash shell."""
+    """The exported variable that makes a segment unverifiable against the Bash shell. git answers to the
+    GIT_* family, python to PYTHON*, and any program outside the closed non-carrier list may start either."""
     tokens = _tokens(text)
     program = os.path.basename(tokens[0]) if tokens else ""
+    if program in NON_CARRIER_PROGRAMS:
+        return None
     for name in sorted(approved.env):
-        if program == "git" and (name in GIT_ENV_EXACT or name.startswith(GIT_ENV_PREFIX)):
-            return name
-        if program.startswith("python") and name.startswith("PYTHON") and name not in PYTHON_ENV_HARMLESS:
+        git_var = name in GIT_ENV_EXACT or name.startswith(GIT_ENV_PREFIX)
+        python_var = name.startswith("PYTHON") and name not in PYTHON_ENV_HARMLESS
+        is_git, is_python = program == "git", program.startswith("python")
+        if (is_git and git_var) or (is_python and python_var) or (not is_git and not is_python and (git_var or python_var)):
             return name
     return None
 
 
-def effective_hooks_dirs(repo: str) -> "list[str] | None":
+def effective_hooks_dirs(repo: str, timeout: float) -> "list[str] | None":
     """Where git looks for hooks in `repo` (`rev-parse --git-path hooks`, which follows `core.hooksPath`),
     as every absolute path the answer can mean: relative to the directory it was asked from and to the
-    worktree root. None when git cannot say."""
+    worktree root. None when git cannot say within `timeout` seconds."""
+    if timeout <= 0:
+        return None
     try:
         proc = subprocess.run(
             ["git", "-C", repo, "rev-parse", "--git-path", "hooks"],
-            capture_output=True, text=True, timeout=GIT_PROBE_TIMEOUT_S, check=False,
+            capture_output=True, text=True, timeout=timeout, check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -417,33 +486,74 @@ def effective_hooks_dirs(repo: str) -> "list[str] | None":
     return list(dict.fromkeys(os.path.normpath(os.path.join(base, answer)) for base in (repo, root) if base))
 
 
-def git_hooks_blocker(approved: Approved, verdict: "SegmentVerdict", others: list) -> "str | None":
-    """Why a covered git operation may run a hook the child wrote: the hook it would run exists in a
-    directory the record lets the child write, or another segment of the same line writes there first."""
+def hooks_dir_channel(approved: Approved, ambient: "Ambient | None", directory: str) -> "str | None":
+    """How the child can write into `directory`, or None when it cannot. Fail closed: a record or settings
+    that do not say what the child may write count as a channel."""
+    real = _real(directory)
+    if covered_by(approved, resources.FileResource(directory, "write")) or covered_by(approved, resources.FileResource(real, "write")):
+        return "a write resource of the record"
+    if approved.allow_entries is None or approved.add_dirs is None:
+        return "a record that does not state the child's directories"
+    if ambient is None:
+        return "settings that cannot be read"
+    if approved.mode == ACCEPT_EDITS and _under(real, _real(approved.cwd)):
+        return "acceptEdits in the child's cwd"
+    if any(_under(real, _real(root)) for root in [*approved.add_dirs, *ambient.add_dirs]):
+        return "an added directory"
+    probe = {"file_path": os.path.join(real, "hook")}
+    for entry in [*approved.allow_entries, *ambient.allow]:
+        if any(permission_entry_match.covers(entry, tool, probe) for tool in ("Edit", "Write")):
+            return f"the allow entry {entry}"
+    return None
+
+
+def executable_entries(directory: str) -> "list[str] | None":
+    """Entries git would run (anything but `*.sample` that is executable, a symlink or a directory); an
+    absent directory has none; None when it cannot be listed."""
+    try:
+        names = os.listdir(directory)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return None
+    found = []
+    for name in sorted(names):
+        path = os.path.join(directory, name)
+        if not name.endswith(".sample") and (os.path.islink(path) or os.access(path, os.X_OK)):
+            found.append(name)
+    return found
+
+
+def git_hooks_blocker(approved: Approved, ambient: "Ambient | None", verdict: "SegmentVerdict", others: list, budget: "JudgeBudget") -> "str | None":
+    """Why a covered git operation that changes something may run a hook the child could have written.
+    git runs hooks (post-index-change, reference-transaction, pre-auto-gc, ...) from the effective hooks
+    directory on many operations, so no hook list is kept: the operation is covered only if every other
+    segment of the line is covered and not opaque, and each directory git may read hooks from is either
+    not writable through any channel of the child or holds nothing git would run."""
     tokens = _tokens(verdict.text)
-    if not tokens or os.path.basename(tokens[0]) != "git":
+    if not verdict.changed or not tokens or os.path.basename(tokens[0]) != "git":
         return None
-    sub, _rest, global_values, reason = tool_contracts.find_git_subcommand(tokens[1:])
-    names = GIT_HOOKS.get(sub or "")
-    if reason is not None or not names:
-        return None
+    _sub, _rest, global_values, _reason = tool_contracts.find_git_subcommand(tokens[1:])
+    for other in others:
+        if other.state != COVERED or other.opaque:
+            return f"another segment of the line is not positively covered ({other.state}): it could write a hook git runs"
     c_value = global_values.get("-C")
     repo = c_value if c_value and os.path.isabs(c_value) else os.path.join(verdict.venue, c_value or ".")
-    dirs = effective_hooks_dirs(repo)
+    dirs = effective_hooks_dirs(repo, budget.git_timeout())
     if dirs is None:
         return "cannot read the effective git hooks directory"
     for directory in dirs:
-        if not covered_by(approved, resources.FileResource(directory, "write")):
+        channel = hooks_dir_channel(approved, ambient, directory)
+        if channel is None:
             continue
-        planted = [n for n in names if os.path.lexists(os.path.join(directory, n))]
-        if planted:
-            return f"git {sub} would run {planted[0]} from {directory}, which the stage may write"
+        runnable = executable_entries(directory)
+        if runnable is None:
+            return f"cannot list the git hooks directory {directory}"
+        if runnable:
+            return f"git would run {runnable[0]} from {directory}, which the child can write through {channel}"
         for other in others:
-            if other.opaque or any(
-                isinstance(r, resources.FileResource) and _under(_real(r.path), _real(directory))
-                for r in other.changed
-            ):
-                return f"another segment of the line may write a hook into {directory}, which git {sub} runs"
+            if any(isinstance(r, resources.FileResource) and _under(_real(r.path), _real(directory)) for r in other.changed):
+                return f"another segment of the line writes into {directory}, which git runs hooks from"
     return None
 
 
@@ -452,15 +562,27 @@ def git_hooks_blocker(approved: Approved, verdict: "SegmentVerdict", others: lis
 class JudgeBudget:
     """One deadline for every opaque segment of a call: the harness kills the hook at its own timeout and
     falls through, so the judge calls together must end before it. Each call gets the judge's own timeout
-    at most, and what is left of the deadline at least."""
+    at most, and what is left of the deadline at least. The git probes of the hooks check draw from the
+    same deadline."""
 
-    def __init__(self, total_s: float, judge_s: float):
-        self.deadline = time.monotonic() + total_s
+    def __init__(self, total_s: float, judge_s: float, clock=time.monotonic):
+        self.clock = clock
+        self.deadline = clock() + total_s
         self.judge_s = judge_s
+
+    def _left(self, cap: float) -> int:
+        """Whole seconds up to `cap` still available, rounded up so a sliver of the deadline is a second,
+        not nothing; 0 when the deadline is spent."""
+        left = self.deadline - self.clock()
+        return 0 if left <= 0 else max(1, math.ceil(min(cap, left)))
 
     def next_timeout(self) -> int:
         """Seconds the next judge call may take; 0 when the deadline is spent."""
-        return int(min(self.judge_s, self.deadline - time.monotonic()))
+        return self._left(self.judge_s)
+
+    def git_timeout(self) -> int:
+        """Seconds the next git probe may take; 0 when the deadline is spent."""
+        return self._left(GIT_PROBE_TIMEOUT_S)
 
 
 def evaluate_segment(approved: Approved, segment, line: list, runner, budget: JudgeBudget, cache_dir) -> SegmentVerdict:
@@ -479,6 +601,7 @@ def evaluate_segment(approved: Approved, segment, line: list, runner, budget: Ju
     if segment.status == "unresolved":
         return SegmentVerdict(text, UNDETERMINABLE, venue=venue, reason=f"unresolved: {segment.reason_class}")
     changed = list(segment.resources)
+    judged: list = []
     if opaque:
         timeout = budget.next_timeout()
         if timeout < 1:
@@ -486,6 +609,7 @@ def evaluate_segment(approved: Approved, segment, line: list, runner, budget: Ju
         found = code_effects.effects_of(segment, line, runner=runner, timeout=timeout, cache_dir=cache_dir)
         if isinstance(found, code_effects.Undeterminable):
             return SegmentVerdict(text, UNDETERMINABLE, venue=venue, changed=changed, opaque=True, reason=found.reason)
+        judged = [r for r in found.resources if _is_change(r)]
         changed += [r for r in found.resources if r not in changed]
     changes = [r for r in changed if _is_change(r)]
     uncovered = [r for r in changes if not covered_by(approved, r)]
@@ -493,8 +617,8 @@ def evaluate_segment(approved: Approved, segment, line: list, runner, budget: Ju
         return SegmentVerdict(text, HARNESS, venue=venue, changed=changes, matched=["mode:acceptEdits"], opaque=opaque)
     if uncovered:
         return SegmentVerdict(text, UNCOVERED, venue=venue, changed=changes, uncovered=uncovered, opaque=opaque)
-    if opaque and not changes:
-        return SegmentVerdict(text, UNDETERMINABLE, venue=venue, opaque=True, reason="opaque code that writes nothing: what it reads is not confined")
+    if opaque and not judged:
+        return SegmentVerdict(text, UNDETERMINABLE, venue=venue, changed=changes, opaque=True, reason="opaque code the judge found no write in: what it reads is not confined")
     confined, kinds = (True, []) if opaque else reads_confined(approved, text, venue)
     if not confined:
         return SegmentVerdict(text, UNDETERMINABLE, venue=venue, changed=changes, opaque=opaque, reason="reads outside the approved resources")
@@ -522,10 +646,12 @@ def decide_bash(approved: Approved, command: str, runner, budget: JudgeBudget, c
     if not split.segments:
         return Verdict(NONE, UNDETERMINABLE, venue=approved.cwd)
     verdicts = [evaluate_segment(approved, seg, split.segments, runner, budget, cache_dir) for seg in split.segments]
-    for index, verdict in enumerate(verdicts):
+    ambient = ambient_settings(approved)
+    snapshot = list(verdicts)
+    for index, verdict in enumerate(snapshot):
         if verdict.state != COVERED:
             continue
-        why = git_hooks_blocker(approved, verdict, verdicts[:index] + verdicts[index + 1:])
+        why = git_hooks_blocker(approved, ambient, verdict, snapshot[:index] + snapshot[index + 1:], budget)
         if why is not None:
             verdicts[index] = SegmentVerdict(
                 verdict.text, UNDETERMINABLE, venue=verdict.venue, changed=verdict.changed, opaque=verdict.opaque, reason=why)
@@ -536,8 +662,8 @@ def decide_bash(approved: Approved, command: str, runner, budget: JudgeBudget, c
     base = {"resources": shown, "matched": matched, "venue": approved.cwd}
     uncovered_segments = [v for v in verdicts if v.state == UNCOVERED]
     if uncovered_segments:
-        denied = [v for v in uncovered_segments if any(outside_working_dirs(approved, r) for r in v.uncovered)]
-        if denied and may_deny(approved, command):
+        denied = [v for v in uncovered_segments if any(outside_working_dirs(approved, ambient or Ambient(), r) for r in v.uncovered)]
+        if denied and may_deny(approved, ambient, command):
             uncovered = list(dict.fromkeys(r for v in denied for r in v.uncovered))
             return Verdict(DENY, "uncovered-write", message=deny_message(uncovered, denied[0].text), **base)
         return Verdict(NONE, "uncovered-write", **base)
@@ -659,6 +785,8 @@ def run(stdin_text: str, env, *, runner=None, cache_dir=None, constants=None) ->
 
 
 def main() -> int:
+    if os.environ.get(JUDGE_CHILD_ENV_VAR):
+        return 0
     try:
         answer = run(sys.stdin.read(), os.environ)
     except Exception as exc:  # noqa: BLE001

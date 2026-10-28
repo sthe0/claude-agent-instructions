@@ -4429,6 +4429,7 @@ STAGE_LEAF_CLASS: dict[str, str] = {
     "grants.add_dirs.path": "I",
     "grants.add_dirs.mode": "I",
     "grants.add_dirs.provenance": "I",
+    "grants.resources": "I",
     "effects.path": "I",
     "effects.sha256": "I",
     "effects.resolver": "I",

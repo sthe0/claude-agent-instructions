@@ -49,20 +49,27 @@ FALL_THROUGH = {
 }
 
 
+PATIENT_CONSTANTS = {"resource-grant-hook": "on", "resource-grant-hook-timeout-s": "600"}
+
+
 @pytest.fixture(autouse=True)
-def _clean_environment(monkeypatch):
+def _clean_environment(monkeypatch, tmp_path):
     monkeypatch.delenv("CDPATH", raising=False)
-    for name in ("PYTHONPATH", "PYTHONHOME", "PYTHONSAFEPATH", "AGENTCTL_RESOURCE_HOOK"):
+    for name in ("PYTHONPATH", "PYTHONHOME", "PYTHONSAFEPATH", "AGENTCTL_RESOURCE_HOOK", "CLAUDE_CONFIG_DIR"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "agent-home"))
 
 
 @pytest.fixture(autouse=True)
-def _patient_git_config_probe(monkeypatch):
-    """The resolver's `git config` probes time out after 5 s; on a machine loaded by a parallel run a timeout
-    turns a resolvable segment into an unresolved one, so the replay waits for them."""
+def _patient_git_probes(monkeypatch, hook):
+    """The resolver's `git config` probes and the hook's own `git rev-parse` probe time out after 5 s; on a
+    machine loaded by a parallel run a timeout turns a resolvable segment into an unresolved one (and a
+    hooks-directory probe into an undeterminable one), so the replay waits for them."""
     monkeypatch.setattr(segment_resolver, "_GIT_CONFIG_TIMEOUT_S", 120)
+    monkeypatch.setattr(hook, "GIT_PROBE_TIMEOUT_S", 120)
 
 
 @pytest.fixture(scope="module")
@@ -136,7 +143,7 @@ def replay(case, world, tmp_path, hook, spawn, *, today=False):
         payload = child.payload(case["tool"], file_path=seg_tests._subst(case["path"], world),
                                 content="x")
     judge = JudgeStub(_effects(case, world))
-    answer = hook.run(payload, child.env, runner=judge, cache_dir=tmp_path / "judge-cache")
+    answer = hook.run(payload, child.env, runner=judge, cache_dir=tmp_path / "judge-cache", constants=PATIENT_CONSTANTS)
     decision = json.loads(answer)["hookSpecificOutput"]["permissionDecision"] if answer else "none"
     row = child.log_rows()[-1]
     assert row["decision"] == decision

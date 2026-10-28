@@ -740,6 +740,10 @@ _STAGE_RESIDUAL_COVERAGE = {
     "grants.add_dirs.mode": "the residual's own splice, same reason as `grants.allow.rule`",
     "grants.add_dirs.provenance": "the residual's own splice, same reason as its sibling "
                                   "`grants.add_dirs.path`",
+    "grants.resources": "outside: derived at approve from the plan's declared branch "
+                        "field (grants.derive_stage_grants, DR-P) and compared by "
+                        "diff_plans from the derivation (never from this stored "
+                        "attribute), not a declared input a re-sequencing can move",
     "effects.path": "the residual's own splice — outside stage_question_key because "
                     "no Question.target names it, inside here because a declared "
                     "script-effect trust claim is part of what the stage's definition "

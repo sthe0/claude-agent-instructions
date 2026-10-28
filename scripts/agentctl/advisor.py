@@ -18,7 +18,7 @@ import secrets
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from typing import NamedTuple
 
 from lib import host_llm
 from lib import judge_ledger
@@ -1722,8 +1722,7 @@ def judge_approval_ask(
         judge_ledger.set_current_judge(None)
 
 
-@dataclass(frozen=True)
-class CodeEffectsVerdict:
+class CodeEffectsVerdict(NamedTuple):
     """What the code-effects judge said about one piece of code.
 
     ``effects`` is the validated tuple of named effects, or ``None`` for UNDETERMINABLE -- the

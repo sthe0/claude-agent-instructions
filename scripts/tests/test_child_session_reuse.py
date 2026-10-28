@@ -23,6 +23,7 @@ import pytest
 
 from agentctl import norm_handoff
 from agentctl.own_contour import OWN_CONTOUR_VERBS
+from agentctl.state import GateRecord, Node
 from agentctl.store import FileStateStore
 from test_child_contour_gate import (
     CHILD,
@@ -152,20 +153,61 @@ def test_redispatch_resumes_unresolved_child_session(tmp_path, monkeypatch):
     _assert_resumed(second, child)
 
 
-def test_redispatch_reuses_own_session_env(tmp_path, monkeypatch):
+def _advancing_records(monkeypatch):
+    """Every handoff record built from now on is stamped one second later than the previous one, so a
+    record is distinct from its predecessor whatever the wall clock does."""
+    real = norm_handoff.build_record
+    ticks = iter(range(10 ** 6))
+
+    def build(*args, **kwargs):
+        tick = next(ticks)
+        kwargs.setdefault("created_at", f"2026-10-28T10:{tick // 60:02d}:{tick % 60:02d}+00:00")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(norm_handoff, "build_record", build)
+
+
+def _approved_child(monkeypatch, tmp_path):
+    """A first child whose engine session is started and whose plan was approved and is executing."""
     home, workdir, first = _first_child(monkeypatch, tmp_path)
     child = first.option("--session-id")
-    monkeypatch.setenv(HANDOFF_ENV, first.env[HANDOFF_ENV])
-    _cli(_state_dir(home), "start", session=child, task="child", goal="g", done_criterion="dc")
-    monkeypatch.delenv(HANDOFF_ENV)
+    store = _start_child_engine(monkeypatch, home, first)
+    state = store.load(child)
+    state.node = Node.EXECUTING.value
+    state.approval = GateRecord(state.approval.name, armed=True, passed=True, by="user")
+    store.save(state)
     _write_transcript(workdir, child)
+    return home, workdir, first, child, store
+
+
+def test_redispatch_reuses_own_session_env_and_renews_the_record_keeping_the_approval(tmp_path, monkeypatch):
+    _advancing_records(monkeypatch)
+    home, workdir, first, child, store = _approved_child(monkeypatch, tmp_path)
     second = _spawn(monkeypatch, home, workdir)
     assert second.env.get(OWN_ENV) == child, (
         f"BEHAVIOUR: the re-dispatched child is pinned to {second.env.get(OWN_ENV)!r}, not {child!r}"
     )
-    assert second.env.get(HANDOFF_ENV) == first.env[HANDOFF_ENV], (
-        "the resumed child is not handed the norm handoff its engine session adopted"
-    )
+    assert second.env[HANDOFF_ENV] != first.env[HANDOFF_ENV], "the resumed child got the stale record"
+    renewed, why = norm_handoff.verify_env_value(second.env[HANDOFF_ENV])
+    assert renewed is not None, why
+    state = store.load(child)
+    assert state.parent_link == renewed
+    assert state.approval.passed and state.node == Node.EXECUTING.value
+    refreshed = [e for e in state.history if e["event"] == "norm_handoff_refreshed"]
+    assert len(refreshed) == 1 and refreshed[0]["norm_digest"] == renewed["norm_digest"]
+    assert refreshed[0]["old_norm_digest"] == renewed["norm_digest"]
+
+
+def test_refresh_without_keep_approval_returns_an_approved_child_to_plan_ready(tmp_path, monkeypatch):
+    _advancing_records(monkeypatch)
+    home, workdir, first, child, store = _approved_child(monkeypatch, tmp_path)
+    second = _spawn(monkeypatch, home, workdir)
+    spawn = _load_spawn()
+    state = store.load(child)
+    spawn.refresh_resumed_child_link(store, state, second.env[HANDOFF_ENV], keep_approval=False)
+    state = store.load(child)
+    assert not state.approval.passed and state.node == Node.PLAN_READY.value
+    assert [e["event"] for e in state.history].count("norm_handoff_refreshed") == 2
 
 
 def test_resumed_spawn_runs_in_first_spawn_workdir(tmp_path, monkeypatch):

@@ -73,9 +73,9 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/cli.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line, kind(args) resource spec, and the 'Refusal: grant-widening', 'Refusal: child-outside-project' and 'Handoff-sha256:' label lines, all fixed engine/markdown syntax."
-hits = 9
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Compiles: legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line, kind(args) resource spec, and the 'Refusal: grant-widening', 'Refusal: child-outside-project' and 'Handoff-sha256:' label lines and the 'Resource: vcs_ref <op> <remote>:<ref>' label line of a grant-widening refusal, all fixed engine/markdown syntax."
+hits = 10
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/cli.py::_is_child_outside_project_refusal::pattern.search"]
@@ -3004,4 +3004,95 @@ class = "structural"
 ground = "Splits a shell word on fixed shell punctuation into path candidates; tokenization, not meaning."
 hits = 2
 hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/advisor.py::_ce_prompt::re.sub"]
+class = "structural"
+ground = "Substitutes the fixed {begin}/{end}/{venue}/{branch}/{code} placeholders of the code-effects judge prompt template with run-time values; template filling, no meaning decided."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_refusal_vcs_resources::pattern.match"]
+class = "structural"
+ground = "Matches the fixed 'Resource: vcs_ref <op> <remote>:<ref>' label line of a grant-widening refusal block the engine itself printed."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli.py::_refusal_vcs_resources::pattern.search"]
+class = "structural"
+ground = "Detects the fixed 'Refusal: grant-widening' label line in a block the engine itself printed."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: a git count flag (-N), the CDPATH-safe literal directory prefixes, the awk redirect/pipe/system/getline tokens, the shell -c and -s flag clusters and the heredoc header; all fixed shell syntax read by the resolver that feeds the permission hook, none classifies free-text meaning."
+hits = 6
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_awk::pattern.search"]
+class = "structural"
+ground = "Refuses an awk program containing a redirect, pipe, system or getline token: fixed awk syntax that makes the program write or run something."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_cd::pattern.match"]
+class = "structural"
+ground = "Recognizes a literal absolute or dot-relative cd operand, so a CDPATH lookup cannot re-base the directory; shell path syntax."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_git::pattern.match"]
+class = "structural"
+ground = "Recognizes a git count flag (-N) among the operands of a git subcommand; fixed command-line syntax."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_interpreter::pattern.fullmatch"]
+class = "structural"
+ground = "Recognizes the -c / -s flag clusters of a shell invocation; fixed command-line syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_interpreter::pattern.match"]
+class = "structural"
+ground = "Recognizes an interpreter program name against the shared INTERPRETER_RE; fixed program-name shape."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_program::pattern.match"]
+class = "structural"
+ground = "Recognizes an interpreter program name against the shared INTERPRETER_RE; fixed program-name shape."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_resolve_one::pattern.match"]
+class = "structural"
+ground = "Recognizes a leading NAME=value shell assignment through the shared BARE_ASSIGNMENT_RE; fixed shell syntax."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_stdin_body_text::pattern.findall"]
+class = "structural"
+ground = "Reads the quote marks of a heredoc header (<<'EOF'); fixed shell syntax deciding whether the body is expanded."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::code_source::pattern.match"]
+class = "structural"
+ground = "Recognizes an interpreter program name against the shared INTERPRETER_RE; fixed program-name shape."
+hits = 1
+hit_classes = ["structural"]
 reviewed_by = "developer"

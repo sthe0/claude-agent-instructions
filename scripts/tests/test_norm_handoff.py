@@ -223,7 +223,8 @@ def test_record_carries_exactly_the_documented_fields(store, venued_fixtures_dir
     _, _, _, record = _read_exported(env[HANDOFF_ENV])
     assert set(record) == {"schema", "parent_session", "stage_index", "kind", "norm",
                            "norm_digest", "grants", "depth", "norm_lineage", "created_at",
-                           "closure_digest", "resources", "rule_patterns"}
+                           "closure_digest", "resources", "rule_patterns",
+                           "permissions_allow", "add_dirs"}
     assert record["schema"] == "norm-handoff/v1"
     assert (record["parent_session"], record["stage_index"], record["kind"]) == ("w2", 1, "thinker")
     assert record["grants"] == []

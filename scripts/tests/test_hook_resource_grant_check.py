@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,8 @@ def _clean_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("CLAUDE_AGENT_HOME", str(tmp_path / "agent-home"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
 
 @pytest.fixture(scope="module")
@@ -222,6 +225,11 @@ def test_deny_needs_the_accept_edits_mode(rig):
     assert rig.bash(child, f"touch {rig.outside}/f")[0] == "deny"
 
 
+def test_default_mode_does_not_run_a_filesystem_program_itself(rig):
+    decision, row, _ = rig.bash(rig.child(mode="default"), "touch f")
+    assert (decision, row["reason_class"], row["matched"]) == ("none", "uncovered-write", [])
+
+
 def test_s1_plan_mode_makes_no_decision(rig):
     child = rig.child()
     child.mode = "plan"
@@ -344,7 +352,21 @@ def test_s3_opaque_code_that_writes_nothing_is_not_allowed_on_its_reads(rig):
     assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable") and judge.calls == 1
 
 
+class FrozenTime:
+    """The hook's `time` module with a clock that never moves, so a deadline test is exact."""
+
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def monotonic(self):
+        return self.now
+
+    strftime = staticmethod(time.strftime)
+
+
 def test_s2_the_judge_gets_the_judge_timeout_and_one_deadline_for_the_whole_call(rig, hook, monkeypatch):
+    clock = FrozenTime()
+    monkeypatch.setattr(hook, "time", clock)
     seen = []
 
     def judge(argv, *, timeout, stdin=""):
@@ -357,9 +379,37 @@ def test_s2_the_judge_gets_the_judge_timeout_and_one_deadline_for_the_whole_call
     assert seen == [7]
     rig.bash(rig.child(), STDIN_CODE.replace("json", "csv"), judge=judge,
              constants={**CONSTANTS, "resource-grant-hook-timeout-s": "8"})
-    assert seen[-1] == 2
-    assert hook.JudgeBudget(total_s=3, judge_s=15).next_timeout() <= 3
-    assert hook.JudgeBudget(total_s=0, judge_s=15).next_timeout() < 1
+    assert seen[-1] == 3
+    assert hook.JudgeBudget(total_s=3, judge_s=15).next_timeout() == 3
+    assert hook.JudgeBudget(total_s=0, judge_s=15).next_timeout() == 0
+
+
+def test_n5_a_sliver_of_the_deadline_is_a_second_not_nothing(hook):
+    now = [100.0]
+    budget = hook.JudgeBudget(2.0, judge_s=15, clock=lambda: now[0])
+    assert (budget.next_timeout(), budget.git_timeout()) == (2, 2)
+    now[0] = 101.8
+    assert (budget.next_timeout(), budget.git_timeout()) == (1, 1)
+    now[0] = 102.0
+    assert (budget.next_timeout(), budget.git_timeout()) == (0, 0)
+
+
+def test_n6_the_hooks_directory_probe_draws_from_the_call_deadline(rig, hook, monkeypatch):
+    seen = []
+    real_run = hook.subprocess.run
+
+    def spy(argv, **kw):
+        if "--git-path" in argv:
+            seen.append(kw.get("timeout"))
+        return real_run(argv, **kw)
+
+    monkeypatch.setattr(hook.subprocess, "run", spy)
+    monkeypatch.setattr(hook, "time", FrozenTime())
+    rig.bash(rig.child(), "git commit -q -m x", constants={**CONSTANTS, "resource-grant-hook-timeout-s": "7"})
+    assert seen == [2]
+    monkeypatch.setattr(hook.JudgeBudget, "git_timeout", lambda self: 0)
+    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
+    assert (decision, row["reason_class"]) == ("none", "undeterminable")
 
 
 def test_s2_a_spent_deadline_makes_the_next_opaque_segment_undeterminable(rig, hook, monkeypatch):
@@ -429,7 +479,7 @@ def test_b4_a_commit_whose_hooks_directory_the_stage_may_write_is_not_covered(ri
     child = rig.child()
     decision, row, _ = rig.bash(child, "git commit -q -m x")
     assert (decision, row["reason_class"]) == ("allow", "covered")
-    (hooks / "pre-commit").write_text("#!/bin/sh\ntouch /tmp/x\n")
+    plant(hooks, "pre-commit")
     decision, row, answer = rig.bash(child, "git commit -q -m x")
     assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
     (hooks / "pre-commit").unlink()
@@ -439,11 +489,219 @@ def test_b4_a_commit_whose_hooks_directory_the_stage_may_write_is_not_covered(ri
 
 def test_b4_a_hooks_directory_outside_the_writable_resources_does_not_block(rig):
     elsewhere = rig.outside / "hooks"
-    elsewhere.mkdir()
-    (elsewhere / "pre-commit").write_text("#!/bin/sh\n")
+    plant(elsewhere, "pre-commit")
     seg_tests._git(rig.venue, "config", "core.hooksPath", str(elsewhere))
     decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
     assert (decision, row["reason_class"]) == ("allow", "covered")
+
+
+# --- B6: the git hooks rule is an allow-list ---------------------------------------------------------
+
+def plant(directory, name, executable=True):
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_text("#!/bin/sh\ntouch /tmp/planted\n")
+    path.chmod(0o755 if executable else 0o644)
+
+
+def use_hooks_dir(rig, directory):
+    seg_tests._git(rig.venue, "config", "core.hooksPath", str(directory))
+
+
+def test_b6_git_add_runs_post_index_change_from_a_hooks_directory_the_stage_may_write(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, hooks)
+    (rig.venue / "a.txt").write_text("x")
+    child = rig.child()
+    hooks.mkdir()
+    decision, row, _ = rig.bash(child, "git add a.txt")
+    assert (decision, row["reason_class"]) == ("allow", "covered")
+    plant(hooks, "post-index-change")
+    decision, row, answer = rig.bash(child, "git add a.txt")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
+
+
+def test_b6_a_segment_writing_into_the_hooks_directory_beside_a_git_write_makes_it_undeterminable(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, hooks)
+    hooks.mkdir()
+    (rig.venue / "a.txt").write_text("x")
+    child = rig.child()
+    decision, row, _ = rig.bash(child, "echo x > a.txt && git add a.txt")
+    assert (decision, row["reason_class"]) == ("allow", "covered"), row
+    decision, row, answer = rig.bash(child, f"echo x > {hooks}/post-index-change && git add a.txt")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
+
+
+def test_b6_a_hook_file_that_is_not_executable_or_is_a_sample_does_not_block(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, hooks)
+    plant(hooks, "pre-commit", executable=False)
+    plant(hooks, "pre-push.sample")
+    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
+    assert (decision, row["reason_class"]) == ("allow", "covered")
+
+
+def test_b6_a_harness_allowed_segment_beside_a_git_write_makes_it_undeterminable(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, hooks)
+    plant(hooks, "pre-push")
+    seg_tests._git(rig.venue, "add", "-f", "githooks/pre-push")
+    seg_tests._git(rig.venue, "commit", "-q", "-m", "hook")
+    (hooks / "pre-push").unlink()
+    child = rig.child(allow=["Bash(git restore:*)"])
+    decision, row, answer = rig.bash(child, "git restore githooks/pre-push && git push origin feat")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
+    decision, row, _ = rig.bash(child, "git push origin feat")
+    assert (decision, row["reason_class"]) == ("allow", "covered")
+
+
+def test_b6_an_opaque_segment_beside_a_git_write_makes_it_undeterminable(rig):
+    judge = JudgeStub([{"kind": "file", "op": "write", "path": f"{rig.venue}/out.txt"}])
+    decision, row, _ = rig.bash(rig.child(), f"{STDIN_CODE}\ngit commit -q -m x", judge=judge)
+    assert (decision, row["reason_class"]) == ("none", "undeterminable")
+    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
+    assert (decision, row["reason_class"]) == ("allow", "covered")
+
+
+def test_b6_a_covered_opaque_segment_beside_a_git_write_blocks_it_by_itself(hook):
+    git = hook.SegmentVerdict("git commit -q -m x", hook.COVERED, changed=[hook.resources.FileResource("/v/.git/x", "write")], venue="/v")
+    opaque = hook.SegmentVerdict("python3 job.py", hook.COVERED, opaque=True)
+    assert "not positively covered" in hook.git_hooks_blocker(None, None, git, [opaque], None)
+    plain = hook.SegmentVerdict("touch /v/f", hook.COVERED)
+    assert hook.git_hooks_blocker(None, None, git, [plain], hook.JudgeBudget(0, 15)) == "cannot read the effective git hooks directory"
+
+
+def test_b6_a_hooks_directory_in_an_add_dir_with_an_executable_hook_blocks(rig):
+    elsewhere = rig.outside / "hooks"
+    plant(elsewhere, "pre-commit")
+    use_hooks_dir(rig, elsewhere)
+    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
+    assert (decision, row["reason_class"]) == ("allow", "covered")
+    decision, row, answer = rig.bash(rig.child(add_dirs=[elsewhere]), "git commit -q -m x")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
+
+
+def test_b6_accept_edits_makes_a_hooks_directory_under_the_cwd_a_channel(hook, tmp_path):
+    def approved(mode):
+        return hook.Approved([], [], [], "p", 8, str(tmp_path), mode, add_dirs=[])
+
+    inside = str(tmp_path / "githooks")
+    channel = hook.hooks_dir_channel(approved("acceptEdits"), hook.Ambient(), inside)
+    assert channel == "acceptEdits in the child's cwd"
+    assert hook.hooks_dir_channel(approved("default"), hook.Ambient(), inside) is None
+    assert hook.hooks_dir_channel(approved("acceptEdits"), hook.Ambient(), str(tmp_path.parent / "elsewhere")) is None
+
+
+def test_b6_a_hooks_directory_in_a_settings_added_directory_with_an_executable_hook_blocks(rig):
+    elsewhere = rig.outside / "hooks"
+    plant(elsewhere, "pre-commit")
+    use_hooks_dir(rig, elsewhere)
+    write_settings(rig.venue / ".claude" / "settings.json", {"permissions": {"additionalDirectories": [str(rig.outside)]}})
+    decision, row, answer = rig.bash(rig.child(), "git commit -q -m x")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
+
+
+def test_b6_an_edit_allow_entry_over_the_hooks_directory_blocks(rig):
+    elsewhere = rig.outside / "hooks"
+    plant(elsewhere, "pre-commit")
+    use_hooks_dir(rig, elsewhere)
+    child = rig.child(allow=[f"Edit({elsewhere}/**)"])
+    decision, row, answer = rig.bash(child, "git commit -q -m x")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
+
+
+def test_b6_a_hooks_directory_git_cannot_name_blocks(rig, hook, monkeypatch):
+    monkeypatch.setattr(hook, "effective_hooks_dirs", lambda repo, timeout: None)
+    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
+    assert (decision, row["reason_class"]) == ("none", "undeterminable")
+
+
+def test_b6_a_read_only_git_call_is_not_held_to_the_hooks_rule(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, hooks)
+    plant(hooks, "post-index-change")
+    decision, row, _ = rig.bash(rig.child(), "git status")
+    assert (decision, row["reason_class"]) == ("allow", "covered")
+
+
+# --- B7: the settings the harness merges with the record ----------------------------------------------
+
+def write_settings(path, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body if isinstance(body, str) else json.dumps(body))
+
+
+def test_b7_a_project_scope_allow_entry_keeps_the_hook_from_denying(rig):
+    child = rig.child()
+    command = f"touch {rig.outside}/f"
+    assert rig.bash(child, command)[0] == "deny"
+    write_settings(rig.venue / ".claude" / "settings.local.json", {"permissions": {"allow": ["Bash(touch:*)"]}})
+    decision, row, answer = rig.bash(child, command)
+    assert (decision, answer, row["reason_class"]) == ("none", "", "uncovered-write")
+
+
+@pytest.mark.parametrize("where", ["user", "project", "config-root"])
+def test_b7_an_allow_entry_in_any_ambient_file_keeps_the_hook_from_denying(rig, where, tmp_path):
+    paths = {
+        "user": tmp_path / "home" / ".claude" / "settings.json",
+        "project": rig.venue / ".claude" / "settings.json",
+        "config-root": tmp_path / "agent-home" / "settings.json",
+    }
+    write_settings(paths[where], {"permissions": {"allow": ["Bash(touch:*)"]}})
+    child = rig.child()
+    decision, _, _ = rig.bash(child, f"touch {rig.outside}/f", env={**child.env, "CLAUDE_CONFIG_DIR": str(tmp_path / "agent-home")})
+    assert decision == "none"
+
+
+def test_b7_an_ambient_additional_directory_is_a_working_directory(rig):
+    child = rig.child()
+    command = f"touch {rig.outside}/f"
+    write_settings(rig.venue / ".claude" / "settings.json", {"permissions": {"additionalDirectories": [str(rig.outside)]}})
+    decision, row, _ = rig.bash(child, command)
+    assert (decision, row["reason_class"]) == ("none", "uncovered-write")
+
+
+@pytest.mark.parametrize("body", ["{not json", "[]", '{"permissions": []}', '{"permissions": {"allow": "x"}}', ""])
+def test_b7_a_settings_file_that_cannot_be_read_as_settings_means_no_deny(rig, body):
+    write_settings(rig.venue / ".claude" / "settings.json", body)
+    decision, row, _ = rig.bash(rig.child(), f"touch {rig.outside}/f")
+    assert (decision, row["reason_class"]) == ("none", "uncovered-write")
+
+
+def test_b7_an_unreadable_settings_file_blocks_the_hooks_rule_too(rig):
+    hooks = rig.outside / "hooks"
+    plant(hooks, "pre-commit")
+    use_hooks_dir(rig, hooks)
+    assert rig.bash(rig.child(), "git commit -q -m x")[0] == "allow"
+    write_settings(rig.venue / ".claude" / "settings.json", "{not json")
+    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
+    assert (decision, row["reason_class"]) == ("none", "undeterminable")
+
+
+# --- S9, S10: opaque confinement and the carrier set --------------------------------------------------
+
+def test_s9_opaque_code_whose_only_write_is_a_redirect_is_not_allowed_on_its_reads(rig):
+    judge = JudgeStub([])
+    code = f"python3 - <<'E' > {rig.venue}/o.txt\nimport json\nprint(json.dumps({{}}))\nE"
+    decision, row, _ = rig.bash(rig.child(), code, judge=judge)
+    assert (decision, row["reason_class"]) == ("none", "undeterminable") and judge.calls == 1
+
+
+def test_s10_a_git_variable_makes_any_carrier_segment_undeterminable_but_not_a_plain_file_program(rig):
+    child = rig.child(rules=["Bash(make test:*)"])
+    env = {**child.env, "GIT_DIR": str(rig.outside)}
+    assert rig.bash(child, "make test")[0] == "allow"
+    decision, row, _ = rig.bash(child, "make test", env=env)
+    assert (decision, row["reason_class"]) == ("none", "undeterminable")
+    assert rig.bash(child, f"cat {rig.venue}/f", env=env)[0] == "allow"
+
+
+def test_s10_a_python_variable_makes_a_carrier_segment_undeterminable(rig):
+    child = rig.child(rules=["Bash(make test:*)"])
+    decision, _, _ = rig.bash(child, "make test", env={**child.env, "PYTHONSTARTUP": str(rig.outside)})
+    assert decision == "none"
+    assert rig.bash(child, "make test", env={**child.env, "PYTHONUNBUFFERED": "1"})[0] == "allow"
 
 
 # --- Edit, Write, Read ----------------------------------------------------------------------------
@@ -525,6 +783,15 @@ def test_script_denies_through_stdout_and_exits_zero(rig):
     answer = json.loads(done.stdout)["hookSpecificOutput"]
     assert (done.returncode, answer["hookEventName"], answer["permissionDecision"]) == (0, "PreToolUse", "deny")
     assert child.log_rows()[-1]["decision"] == "deny"
+
+
+def test_script_inside_the_opaque_code_judge_child_decides_nothing_and_logs_nothing(rig):
+    child = rig.child()
+    rows = len(child.log_rows())
+    done = _run_script(rig, child, child.payload("Bash", command=f"touch {rig.outside}/f"),
+                       {"AGENTCTL_JUDGE_CHILD": "1"})
+    assert (done.returncode, done.stdout) == (0, "")
+    assert len(child.log_rows()) == rows
 
 
 def test_script_with_unreadable_stdin_exits_zero_silently(rig):
