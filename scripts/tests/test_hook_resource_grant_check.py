@@ -814,7 +814,7 @@ def test_b12_a_checkout_of_named_paths_is_undeterminable_only_when_a_path_overla
     child = rig.child(extra_patterns=["Bash(git checkout:*)"])
     assert rig.bash(child, "git checkout -- notes.txt")[0] == "allow"
     assert rig.bash(child, "git checkout HEAD -- notes.txt")[0] == "allow"
-    for named in ("githooks/pre-push", "githooks", ".", "'githooks/*'", ":/githooks", "$HOME"):
+    for named in ("githooks/pre-push", "githooks/post-commit", "githooks", ".", "'githooks/*'", ":/githooks", "$HOME"):
         assert undeterminable(rig.bash(child, f"git checkout -- {named}")), named
     assert undeterminable(rig.bash(child, "git checkout -b other -- notes.txt"))
 

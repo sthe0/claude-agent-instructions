@@ -988,7 +988,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         HOOK,
         "        if any(_under(path, target) or _under(target, path) for path in pinned):\n",
         "        if any(_under(path, target) for path in pinned):\n",
-        "a `git checkout -- <path>` naming a directory above a pinned file is treated as not touching it",
+        "a `git checkout -- <path>` naming a file inside a pinned directory is treated as not touching it",
     ),
     "hook-git-surface-checkout-glob-accepted": Mutant(
         HOOK,
