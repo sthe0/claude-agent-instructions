@@ -1,0 +1,8 @@
+{"history":[
+  {"event":"classify","ts":"2026-03-01T10:00:00Z"},
+  {"event":"plan","ts":"2026-03-01T10:00:05Z"},
+  {"event":"submit_plan","ts":"2026-03-01T10:00:20Z"},
+  {"event":"note"},
+  {"event":"approve","ts":"2026-03-01T10:00:50Z"},
+  {"event":"partition","ts":"2026-03-01T10:01:00Z"}
+]}

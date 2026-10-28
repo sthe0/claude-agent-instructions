@@ -1,0 +1,13 @@
+{"type":"user","timestamp":"2026-03-01T12:00:00Z","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
+{"type":"assistant","timestamp":"2026-03-01T12:00:01Z","message":{"id":"c1","role":"assistant","content":[{"type":"tool_use","id":"w1","name":"Bash","input":{"command":"timeout 30 bash scripts/lint.sh --all"}}]}}
+{"type":"assistant","timestamp":"2026-03-01T12:00:01Z","message":{"id":"c1","role":"assistant","content":[{"type":"tool_use","id":"w2","name":"Edit","input":{"file_path":"/x/c"}}]}}
+{"type":"attachment","timestamp":"2026-03-01T12:00:03Z","attachment":{"type":"hook_success","command":"/x/h.sh","durationMs":500}}
+{"type":"user","timestamp":"2026-03-01T12:00:04.001Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"w1","content":"ok"}]}}
+{"type":"user","timestamp":"2026-03-01T12:00:05Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"w2","content":"ok"}]}}
+{"type":"assistant","timestamp":"2026-03-01T12:00:05.500Z","message":{"id":"c2","role":"assistant","content":[{"type":"tool_use","id":"w3","name":"AskUserQuestion","input":{"questions":[]}}]}}
+{"type":"user","timestamp":"2026-03-01T12:00:35.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"w3","content":"a"}]}}
+{"type":"assistant","timestamp":"2026-03-01T12:00:36Z","message":{"id":"c3","role":"assistant","content":[{"type":"text","text":"ok"}]}}
+{"type":"system","subtype":"compact_boundary","timestamp":"2026-03-01T12:00:36.500Z"}
+{"type":"attachment","timestamp":"2026-03-01T12:00:40Z","attachment":{"type":"queued_command","prompt":"<task-notification>done</task-notification>"}}
+{"type":"assistant","timestamp":"2026-03-01T12:00:40.500Z","message":{"id":"c4","role":"assistant","content":[{"type":"text","text":"back"}]}}
+{"type":"user","timestamp":"2026-03-01T12:00:41+00:00","message":{"role":"user","content":[{"type":"text","text":"bye"}]}}

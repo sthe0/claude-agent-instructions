@@ -1,0 +1,26 @@
+{"type":"user","timestamp":"2026-03-01T11:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"start"}]}}
+{"type":"assistant","timestamp":"2026-03-01T11:00:02.000Z","message":{"id":"b1","role":"assistant","content":[{"type":"tool_use","id":"v1","name":"Read","input":{"file_path":"/x/a"}}]}}
+{"type":"assistant","timestamp":"2026-03-01T11:00:02.000Z","message":{"id":"b1","role":"assistant","content":[{"type":"tool_use","id":"v2","name":"Bash","input":{"command":"cd /x && git -C /y status --short"}}]}}
+{"type":"assistant","timestamp":"2026-03-01T11:00:02.000Z","message":{"id":"b1","role":"assistant","content":[{"type":"tool_use","id":"v3","name":"mcp__srv__do","input":{}}]}}
+{"type":"user","timestamp":"2026-03-01T11:00:03.001Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"v1","content":"a"}]}}
+{"type":"user","timestamp":"2026-03-01T11:00:04.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"v2","content":"b"}]}}
+{"type":"user","timestamp":"2026-03-01T11:00:04.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"v3","content":"c"}]}}
+{"type":"assistant","timestamp":"2026-03-01T11:00:05.000Z","message":{"id":"b2","role":"assistant","content":[{"type":"text","text":"ok"}]}}
+{"type":"assistant","isSidechain":true,"timestamp":"2026-03-01T11:00:05.500Z","message":{"id":"s1","role":"assistant","content":[{"type":"tool_use","id":"sv1","name":"Read","input":{}}]}}
+{"type":"assistant","timestamp":"2026-03-01T11:00:06.000Z","message":{"id":"b3","role":"assistant","content":[{"type":"tool_use","id":"v4","name":"Bash","input":{"command":"FOO=1 python3 -m pytest scripts/tests -q"}}]}}
+{"type":"attachment","timestamp":"2026-03-01T11:00:06.300Z","attachment":{"type":"hook_success","command":"/x/hooks/hook-log.sh","durationMs":5000}}
+{"type":"assistant","timestamp":"2026-03-01T11:00:09.000Z","message":{"id":"b4","role":"assistant","content":[{"type":"tool_use","id":"v5","name":"Write","input":{"file_path":"/x/b"}}]}}
+{"type":"user","timestamp":"2026-03-01T11:00:09.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"v5","content":"written"}]}}
+{"type":"assistant","timestamp":"2026-03-01T11:00:09.600Z","message":{"id":"b4","role":"assistant","content":[{"type":"tool_use","id":"v5","name":"Write","input":{"file_path":"/x/b"}}]}}
+{"type":"assistant","timestamp":"2026-03-01T11:00:10.000Z","message":{"id":"b5","role":"assistant","content":[{"type":"text","text":"written"}]}}
+{"type":"user","timestamp":"2026-03-01T11:00:12.000Z","message":{"role":"user","content":[{"type":"text","text":"more"}]}}
+{"type":"assistant","timestamp":"2026-03-01T11:00:13.000Z","message":{"id":"b6","role":"assistant","content":[{"type":"tool_use","id":"v6","name":"Task","input":{"prompt":"p"}}]}}
+{"type":"attachment","timestamp":"2026-03-01T11:00:14.000Z","attachment":{"type":"hook_success","command":"python3 /x/hook-a.py","durationMs":300}}
+{"type":"user","timestamp":"2026-03-01T11:00:16.000Z","message":{"role":"user","content":[{"type":"text","text":"stop"}]}}
+{"type":"assistant","timestamp":"2026-03-01T11:00:16.500Z","message":{"id":"b7","role":"assistant","content":[{"type":"text","text":"stopped"}]}}
+{"type":"attachment","timestamp":"2026-03-01T11:00:17.000Z","attachment":{"type":"todo_reminder"}}
+{"type":"assistant","timestamp":"2026-03-01T11:00:17.500Z","message":{"id":"b8","role":"assistant","content":[{"type":"tool_use","id":"v7","name":"AskUserQuestion","input":{"questions":[]}}]}}
+{"type":"user","timestamp":"2026-03-01T11:00:20.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"v7","content":"b"}]}}
+{"type":"assistant","timestamp":"2026-03-01T11:00:21.000Z","message":{"id":"b9","role":"assistant","content":[{"type":"text","text":"thanks"}]}}
+{"type":"attachment","timestamp":"2026-03-01T11:00:24.000Z","attachment":{"type":"queued_command","prompt":"<task-notification>done</task-notification>"}}
+{"type":"system","subtype":"compact_boundary","timestamp":"2026-03-01T11:00:24.200Z"}
