@@ -53,5 +53,6 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `plan-stage-max-chars` | `70000` | Largest rendered size of one plan node; over it blocks `submit-plan` and topological review. |
 | `plan-field-inline-max-chars` | `3000` | Longest prose field a plan prints inline; longer ones are externalized (advisory). |
 | `reaper-pressure-free-percent` | `10` | Free-space percent below which `hook-reaper.py --on-pressure` runs a reaper before its 24-hour throttle. |
+| `time-profile-half-life-days` | `7` | Half-life in days of the session age weight in `agent-report.py time-profile`; a session this old counts half as much as one that just ended. |
 
 Per-machine values live uncommitted beside this file (`agent-identity.local`, `term-rulesets/*.toml`); see `docs/operations/config-rationale.md` and `docs/operations/org-portability.md`.

@@ -9,6 +9,8 @@ Views:
   spawn-outcomes  malformed-spawn and re-spawn rates, baseline and delta check
   tool-usage      specialization spawns and skill / subagent invocations
   skill-usage     which user-invocable skills are actually used
+  time-profile    where session wall-clock goes: decayed mean ± SE per mechanism,
+                  [--format text|json] [--half-life D] [--by-sha] [--check]
 
 The implementation of each view is scripts/lib/agent_report/<view>.py; the old
 per-report script names (agent-stats.py, cost-report.py, spawn-outcome-report.py,
