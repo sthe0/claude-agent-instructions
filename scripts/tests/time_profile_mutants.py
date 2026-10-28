@@ -75,6 +75,50 @@ def _apply_cache_never_fresh(monkeypatch):
     monkeypatch.setattr(time_profile, "_cache_fresh", lambda entry, fingerprint: False)
 
 
+def _apply_spawn_join_on_engine_id(monkeypatch):
+    original = time_profile._FOLDS["spawn"]
+
+    def engine_keyed(agg, row):
+        original(agg, {k: v for k, v in row.items() if k != "session_id"})
+
+    monkeypatch.setitem(time_profile._FOLDS, "spawn", engine_keyed)
+
+
+def _apply_node_ignores_bindings(monkeypatch):
+    monkeypatch.setattr(time_profile, "_engine_sessions", lambda harness_session, state_dir: [harness_session])
+
+
+def _apply_same_ts_hook_dropped(monkeypatch):
+    monkeypatch.setattr(time_profile._Walk, "_carve_same_ts", lambda self, entry, ts: None)
+
+
+def _apply_typed_message_is_background(monkeypatch):
+    monkeypatch.setattr(time_profile, "_is_task_notification", lambda attachment: True)
+
+
+def _apply_cache_ignores_version(monkeypatch):
+    def get(self, path):
+        entry = time_profile._read_json(self._file(path))
+        return entry if isinstance(entry, dict) else None
+
+    monkeypatch.setattr(time_profile.SessionCache, "get", get)
+
+
+def _apply_node_epoch_ts_dropped(monkeypatch):
+    monkeypatch.setattr(time_profile, "_epoch_or_iso_ms", time_profile._ts_ms)
+
+
+def _apply_non_finite_accepted(monkeypatch):
+    monkeypatch.setattr(
+        time_profile, "_finite_number",
+        lambda value: not isinstance(value, bool) and isinstance(value, (int, float)),
+    )
+
+
+def _apply_commit_index_follows_head(monkeypatch):
+    monkeypatch.setattr(time_profile, "TRUNK_REFS", ("HEAD",))
+
+
 MUTANTS = {
     "all_to_model_gap": (
         "the whole partition is reported as model:gap; wall-clock is still conserved",
@@ -99,6 +143,38 @@ MUTANTS = {
     "cache_never_fresh": (
         "every transcript is re-parsed on every run",
         _apply_cache_never_fresh,
+    ),
+    "spawn_join_on_engine_id": (
+        "spawn rows are keyed by the engine session id instead of the spawning harness session",
+        _apply_spawn_join_on_engine_id,
+    ),
+    "node_ignores_bindings": (
+        "node dwell opens only the state file named like the transcript, never a bound engine session",
+        _apply_node_ignores_bindings,
+    ),
+    "same_ts_hook_dropped": (
+        "a hook attachment stamped like the entry before it contributes nothing",
+        _apply_same_ts_hook_dropped,
+    ),
+    "typed_message_is_background": (
+        "every queued_command, a message typed mid-turn included, ends a background wait",
+        _apply_typed_message_is_background,
+    ),
+    "cache_ignores_version": (
+        "a cached session figure is served after the walker's rules changed",
+        _apply_cache_ignores_version,
+    ),
+    "node_epoch_ts_dropped": (
+        "an epoch-seconds history ts is counted as untimed",
+        _apply_node_epoch_ts_dropped,
+    ),
+    "non_finite_accepted": (
+        "NaN and infinite ledger numbers reach int() instead of being skipped",
+        _apply_non_finite_accepted,
+    ),
+    "commit_index_follows_head": (
+        "the commit index is read from the checked-out HEAD, not from trunk",
+        _apply_commit_index_follows_head,
     ),
 }
 
