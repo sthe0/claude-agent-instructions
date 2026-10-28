@@ -59,7 +59,9 @@ Procedure step 6).
    or digest: phase B merges them from the worklist. An item with no severity
    label is still placed in a lane (below), never dropped. Supply the loss
    fields too: `signatures` (observable strings its failure leaves in a
-   transcript), `minutes_per_occurrence` with `minutes_basis`, `family` (a
+   transcript), `minutes_per_occurrence` with `minutes_basis`, `mechanism` (the
+   time-profile key whose time the item removes, e.g. `tool:Read`; `''` clears;
+   see the docs § Time profile), `family` (a
    shared id for items describing one failure), and for an item with no
    observable signature a `silent_estimate` instead. An item already on the
    board takes an amendment-only entry carrying just these keys (and
@@ -149,10 +151,11 @@ Procedure step 6).
 
 8. **Render the unified report:**
    ```
-   python3 scripts/improvement-scan.py report --store <store> --format md
+   python3 scripts/improvement-scan.py report --store <store> --format md --time-profile-state
    ```
    The report opens with the measured-loss lane (min/week,
-   sessions/window, min/occurrence, basis; a family is one row); the measured
+   sessions/window, min/occurrence, basis; a family is one row), then "Where the
+   time goes" (heaviest mechanisms, from the profile cache); the measured
    findings follow, then the silent lane (qualitative estimate, no
    signature) and awaiting loss classification, then the unmeasured
    findings. Findings are ranked cost-first, and measured and unmeasured
