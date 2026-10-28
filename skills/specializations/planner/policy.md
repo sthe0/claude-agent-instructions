@@ -98,7 +98,7 @@ Route: `order-submit` the draft, review it with `plan-review --scope order` (run
 
 **Two concern tokens.** On a user-agreed base, a reviewer's defect in the understanding itself is `understanding:`; it becomes a challenge only the user closes (`order-challenge-dismiss`, or a new agreement over a changed understanding). A defect the coordinator can fix in how the plan uses the base is `order:`, as before.
 
-**Exemptions.** The gate arms at `classify` only where the user's answer can be observed: a root session on a claude host with the answer hook registered. Linked and spawned children, the Cursor host, a headless delivery channel, an unregistered hook and sessions classified before the feature landed are unarmed, and `classify`/`status` name the reason; a sub-plan carries its parent's agreement. Chat and small-change sessions are never armed.
+**Exemptions.** The gate arms at `classify` only where the user's answer can be observed: a root session on a claude host with the answer hook registered. Linked and spawned children, the Cursor host, a headless delivery channel, and an unregistered hook are unarmed, and `classify`/`status` name the reason; a session last classified before the feature landed is unarmed with no reason until its next substantive `classify`. A pushed sub-plan runs outside the gate — it is neither held to the parent's agreement nor asked again — and `pop-subplan` restores the parent's agreement and challenges. Chat and small-change sessions are never armed.
 
 **Assumption A2.** The root reconstructs the order in-thread (this skill inline) and writes the order-only draft itself; no return marker exists for a spawned planner to hand back a draft.
 
