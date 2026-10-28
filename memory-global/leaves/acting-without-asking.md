@@ -112,6 +112,8 @@ When the plan is at `PLAN_READY` and the user replies with an instruction to *ch
 
 ## "Approved plan" defined
 
+For a substantive root session the plan approval below is preceded by an earlier, separate act: the user's agreement of the order understanding through `order-agree`, on their chosen answer to an ask marked `[order-agree:<digest>]` ([planner policy](../../skills/specializations/planner/policy.md) § Order agreement). Agreeing the understanding does not approve any plan, and approving a plan does not agree the understanding.
+
 The carve-out phrase "after the plan is approved" (see § In-context carve-out below and CLAUDE.md § Classify task weight) means one of:
 
 - **(a)** a `~/.claude-agent/plans/<slug>.toml` file whose **essence was presented** and the user then **explicitly approved** — TWO SEPARATE ACTS:

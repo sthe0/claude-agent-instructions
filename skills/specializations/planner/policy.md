@@ -84,6 +84,26 @@ For a substantive plan, `[meta.order]` states the order this plan answers — th
 
 A narrowing chosen at authoring time — a requirement the plan deliberately does not cover — is not silently dropped: name it and why in the turn carrying the plan's essence (`CLAUDE.md` § Escalation to the user), the same discipline that governs any other cut against the order.
 
+## Order agreement
+
+*Difficulty removed:* a plan was built, reviewed and approved on an understanding of the order the user never confirmed, so a misread order surfaced only after the stages existed. Mechanism: [ADR-0014](../../../docs/adr/0014-order-agreement.md); verbs: [agentctl README](../../../scripts/agentctl/README.md) § The order phase.
+
+For a substantive task the understanding is agreed *before* any stage is written. The draft is `[meta]` plus `[meta.order]` with no `[[stage]]`, and it carries, beyond § Order:
+
+- **`activity`** and **`difficulty`** — the activity the order sits in, and the step at which it fails; the `functional_place` is reconstructed from them, and every requirement carries a `derivation` from that difficulty.
+- **`proposals`** — the user's own ideas, each `{id = "P1", text, verdict, critique, against}`: `verdict` is `adopt`, `adapt` or `reject`, `critique` is the argument, and `against` names the requirement ids it is judged against. A user's solution is a hypothesis, not a requirement; a requirement that merely restates a proposal is a defect.
+- **`constraints`** — `{id = "K1", text}`, offered by the author. A constraint binds only through the user's agreement over an understanding that shows it; otherwise it is a proposal or a visible assumption.
+
+Route: `order-submit` the draft, review it with `plan-review --scope order` (run through `plan-review-topological.py`), `present-plan --kind order`, ask with the `[order-agree:<digest>]` marker, then `order-agree`; only then write stages. Ids are `R<n>`, `P<n>`, `K<n>` and every one is shown to the user as an anchor. Changing any agreed part, during a replan as much as before, needs a new `order-agree`; the plan's understanding must otherwise equal the agreed one.
+
+**Two concern tokens.** On a user-agreed base, a reviewer's defect in the understanding itself is `understanding:`; it becomes a challenge only the user closes (`order-challenge-dismiss`, or a new agreement over a changed understanding). A defect the coordinator can fix in how the plan uses the base is `order:`, as before.
+
+**Exemptions.** The gate arms at `classify` only where the user's answer can be observed: a root session on a claude host with the answer hook registered. Linked and spawned children, the Cursor host, a headless delivery channel, an unregistered hook and sessions classified before the feature landed are unarmed, and `classify`/`status` name the reason; a sub-plan carries its parent's agreement. Chat and small-change sessions are never armed.
+
+**Assumption A2.** The root reconstructs the order in-thread (this skill inline) and writes the order-only draft itself; no return marker exists for a spawned planner to hand back a draft.
+
+**Planning rule.** Before designing a gate, check that its evidence channel exists on every runtime host where the gate arms; otherwise arm it only where the channel exists and name the exemption. A gate whose evidence cannot be produced on some host stops all work there.
+
 ## Requirements via problematization
 
 `[meta.order].requirements` itself must be reached by problematization, not transcription — the same order → problematization → reconstruction-of-the-functional-place → task chain ([function-place-difficulty.md](../../../memory-global/leaves/function-place-difficulty.md)) applied recursively to the planner's own requirements-authoring step, not just to the plan's stages. A requirement transcribed verbatim (or lightly paraphrased) from the customer's raw sentences inherits whatever drift already existed in that ask; a requirement reached by problematizing the ask against the reconstructed functional place does not. The structural half is mechanized at the submission seam for any plan that declares `requires_traceability = true` in `[meta.order]` — required for every new substantive plan: `submission.py`'s `_requirement_derivation_violations` refuses such a plan where any requirement with non-empty text carries an empty `derivation` field. The semantic half — whether a given `derivation` shows genuine problematization rather than a restated order span or content-free filler — is not mechanizable (no textual-surface heuristic reliably tells genuine reasoning from disguised transcription, per [[regex-not-for-semantic-classification]]) and is instead a mandatory item on the thinker plan-review's checklist (`SKILL.md` § PLAN-READY).

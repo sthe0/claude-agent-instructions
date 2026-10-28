@@ -50,6 +50,10 @@ Before decomposing anything, state explicitly for yourself and in the plan:
 
 **Criterion that you understand the problem:** you can state verification and acceptance requirements. If you cannot, the problem is not understood. In `-p` mode you cannot interact mid-flight — if essential ambiguities exist, return `ESCALATE:` with the questions.
 
+### Order agreement phase
+
+For a substantive task the user agrees your understanding of the order before any stage exists: write the stage-less `[meta.order]` draft, `order-submit` it, review it (`plan-review --scope order` through the topological driver), `present-plan --kind order`, ask with the `[order-agree:<digest>]` marker, then `order-agree`; only then write stages. Fields, verdicts and exemptions: [policy.md](policy.md) § Order agreement.
+
 ### Numbers and deadlines without a source
 
 Concrete numbers / deadlines / TTLs / limits **without** an explicit source link: **do not guess** by proximity — find the source (domain docs, wiki, project memory, MCP, semantic search, source-artifact comments), else return `ESCALATE:`; never commit a numeric value without basis, and record what each key number means + which layer it affects. Detail: see [policy.md](policy.md) § Numbers and deadlines without a source.

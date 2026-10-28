@@ -653,6 +653,9 @@ The next acts bind to that digest:
 - `present-plan --kind order --rendering-file <f>` (no `--plan`) shows the draft. It is refused unless the draft is the one `order-submit` recorded, still complete and reviewed, and the rendering carries every requirement, proposal and constraint id as a `[R1]` / `[P1]` / `[K1]` anchor (exactly `\[[RPK]\d+\]`) and no other.
 - The receipt binds `understanding_sha256` as well as the rendering. The delivery hook stamps it when the rendering landed as a turn's final text and the ask embeds `[order-agree:<digest12>]`; `confirm-delivery --kind order` is the human escape.
 
+- `order-agree --session <s>` (see § The order agreement) then records the user's agreement to the presented digest, and `order-challenge-dismiss` closes an understanding challenge.
+- When given `--session`, `plan-review-topological.py` reads the agreement digest from `agentctl status` (null unless the gate is active) and passes it on every `unit:base` and `base-<s>` spawn as `--agreed-understanding`, so the reviewer's label never promises a routing the gate would not do.
+
 The delivery stamp is one per session, so present-and-consume the order stamp before the plan essence is presented.
 
 ## The order agreement

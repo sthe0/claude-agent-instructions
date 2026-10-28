@@ -28,6 +28,8 @@ Three layers, in SMD terms (Shchedrovitsky's `ММК`; Anisimov's `ММПК`):
 <!-- Language exception: проблематизация/морфология/функция/потребность/организованность are the settled SMD source-ontology terms this passage types; preserved verbatim for traceability. -->
 Before optimizing the literal order, run the beat: **order → проблематизация (problematization) → reconstruction of the functional place → (possibly redefined) task.** Problematization asks what organizedness this order is a filling for, and whether the stated order actually fills the functional place correctly. If it does not, the task to solve is the reconstructed one — which may differ from the literal order — not the literal one taken at face value.
 
+In a substantive plan the reconstruction is fixed in `[meta.order]` (`activity`, `difficulty`, `functional_place`) and agreed by the user before any stage is written ([planner policy](../../skills/specializations/planner/policy.md) § Order agreement).
+
 ### Worked example
 
 A user asks: "add a retry loop around this flaky API call." Taken as a morphology-level order, the fix is a `for` loop with backoff. Problematizing it: the functional place is "this call must not silently drop data on transient failure" — a place in the larger organizedness of the pipeline's reliability contract. If the actual cause is that the *downstream* consumer has no idempotency key (so a retry would double-write), the literal order (retry loop) fills the wrong place — patching morphology without reconstructing the function reproduces the divergence one layer down. The reconstructed task is "make the call safely retryable," which may mean adding an idempotency key first.
