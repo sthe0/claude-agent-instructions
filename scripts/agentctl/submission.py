@@ -625,6 +625,9 @@ def _order_understanding_violations(meta) -> list[str]:
     return out
 
 
+order_understanding_violations = _order_understanding_violations
+
+
 _UNDERSTANDING_PARTS = (
     (
         "activity",

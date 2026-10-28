@@ -110,8 +110,8 @@ from .render import (
     render_stages_md,
 )
 from .submission import (
-    _order_understanding_violations,
     order_understanding_completeness_violations,
+    order_understanding_violations,
     plan_size_blocks,
     plan_size_warnings,
     submission_advice,
@@ -4153,9 +4153,25 @@ def _order_draft_violations(meta) -> list[str]:
     """Every reason the order in `meta` is not fit to be put to the user: the
     completeness findings (which already contain the understanding tables' own) and
     the understanding findings once more, each reported once. Re-run on the CURRENT
-    draft wherever the draft is acted on, never trusted from an earlier submission."""
+    draft wherever the draft is acted on, never trusted from an earlier submission.
+    Also refuses an id the rendering cannot show as an anchor (see `_ORDER_ANCHOR_RE`),
+    so the author learns at submit what no presentation could ever satisfy."""
     problems = list(order_understanding_completeness_violations(meta))
-    problems.extend(v for v in _order_understanding_violations(meta) if v not in problems)
+    problems.extend(v for v in order_understanding_violations(meta) if v not in problems)
+    order = meta.order
+    if order is not None:
+        for kind, letter, items in (
+            ("requirement", "R", order.requirements),
+            ("proposal", "P", order.proposals),
+            ("constraint", "K", order.constraints),
+        ):
+            misshapen = sorted({i.id for i in items if i.id and not re.fullmatch(rf"{letter}\d+", i.id)})
+            if misshapen:
+                problems.append(
+                    f"[meta.order] {kind} id(s) {', '.join(misshapen)} do not have the form "
+                    f"{letter}<number> (e.g. {letter}1): the user agrees the order by the "
+                    f"[{letter}<number>] anchors of its rendering"
+                )
     return problems
 
 
@@ -5119,14 +5135,15 @@ def _attach_writer_gate(directive: Directive, writer_gate: dict) -> Directive:
     return directive
 
 
-_ORDER_ANCHOR_RE = re.compile(r"\[([RPK]\d+)\](?!\()")
+_ORDER_ANCHOR_RE = re.compile(r"\[([RPK]\d+)\]")
 
 
 def _order_anchor_problems(doc: PlanDoc, text: str) -> tuple[list[str], list[str]]:
     """`(missing, extra)` anchor ids of an order rendering. Every requirement, proposal
     and constraint id must appear in `text` as its own `[R1]` / `[P1]` / `[K1]` anchor
     and no anchor may name anything else, so the user is shown exactly what they are
-    asked to agree. Other bracketed text and markdown links are not anchors."""
+    asked to agree. An anchor is exactly a match of `\\[[RPK]\\d+\\]`: other bracketed
+    text and the text of a markdown link such as `[docs](https://…)` are not anchors."""
     order = doc.meta.order
     expected = {item.id for items in (order.requirements, order.proposals, order.constraints)
                 for item in items}
@@ -5135,13 +5152,17 @@ def _order_anchor_problems(doc: PlanDoc, text: str) -> tuple[list[str], list[str
 
 
 def _draft_is_submitted(state: SessionState, digest: str) -> bool:
-    """Whether the draft's current understanding `digest` is the one order-submit checked."""
+    """Whether the draft's current understanding `digest` is the one order-submit checked.
+    A one-line comparison kept as its own function so a test can plant a defect here
+    (the `order_stale_draft_presented` mutant) and prove the refusal is exercised."""
     return state.order_draft_sha256 == digest
 
 
 def _order_receipt_understanding(digest: str) -> str | None:
-    """The understanding digest an order receipt carries, which is what makes the
-    receipt stale when the draft moves."""
+    """The understanding digest to store on an order receipt: `digest` itself. It is
+    its own function only so a test can plant the defect of storing nothing (the
+    `order_receipt_unbound` mutant); the stored value is what makes the receipt stale
+    when the draft moves."""
     return digest
 
 
@@ -6277,7 +6298,9 @@ def _cmd_order_review(args, state: SessionState, *, store: StateStore) -> Direct
     The record is bound to the engine's own digest of the draft (`understanding_digest`),
     never to the reviewer's word: `--plan-digest`, when given, is only cross-checked
     against the file's bytes. It touches neither `plan_review` nor `plan_stage_reviews`
-    (the draft is not the plan), counts no review round, and never moves the node. An
+    (the draft is not the plan), counts no review round, leaves the plan-review release
+    as it stands (a user's override only restarts the since-user backstops), and never
+    moves the node. An
     override follows the plan scopes' rules — never by the reviewer whose `revise` it
     overrides, and by the order's customer_id when one is declared — except that an
     agent-authored override is refused outright: the release and trigger machinery that
@@ -6304,7 +6327,6 @@ def _cmd_order_review(args, state: SessionState, *, store: StateStore) -> Direct
     if question_texts is None:
         return Directive(False, state.node, "noop", question_error)
     reviewer = (getattr(args, "reviewer", "") or "").strip()
-    crossing = None
     if args.verdict == gates._PLAN_REVIEW_OVERRIDE:
         if reviewer.casefold() == AGENT_ACTOR:
             return Directive(
@@ -6313,7 +6335,7 @@ def _cmd_order_review(args, state: SessionState, *, store: StateStore) -> Direct
                 "is the customer's escape from a reviewer's `revise`",
             )
         prev = next((r for r in reversed(state.order_reviews) if r.target == target), None)
-        refusal, crossing = _plan_review_override_refusal(state, prev, reviewer, doc)
+        refusal, _ = _plan_review_override_refusal(state, prev, reviewer, doc)
         if refusal:
             return Directive(False, state.node, "noop", refusal)
     attested = (getattr(args, "plan_digest", None) or "").strip().lower()
@@ -6335,7 +6357,7 @@ def _cmd_order_review(args, state: SessionState, *, store: StateStore) -> Direct
     state.order_reviews.append(review)
     question_ids = _record_review_questions(state, ORDER_REVIEW_SCOPE, question_texts)
     if review.verdict == gates._PLAN_REVIEW_OVERRIDE:
-        _settle_override_decision(state, review, "", crossing)
+        _clear_since_user_decision(state, reviewer)
     state.log("order_review", target=target, verdict=review.verdict, reviewer=reviewer,
               understanding_sha256=review.understanding_sha256)
     store.save(state)

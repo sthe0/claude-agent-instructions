@@ -124,10 +124,11 @@ def _submit(store, path: Path, session=SESSION):
 
 
 def _review(store, verdict="pass", *, reviewer="thinker", target=None, note="", concerns=None,
-            plan_digest=None, session=SESSION):
+            plan_digest=None, session=SESSION, customer_questions=None, transcript=None):
     return cli.cmd_plan_review(
         ns(session=session, scope="order", target=target, verdict=verdict, reviewer=reviewer,
-           concerns=concerns, note=note, plan_digest=plan_digest), store=store)
+           concerns=concerns, note=note, plan_digest=plan_digest,
+           customer_questions=customer_questions, transcript=transcript), store=store)
 
 
 RENDERING = (
@@ -171,6 +172,25 @@ def test_order_submit_refuses_incomplete_draft(ostore, tmp_path, part):
     assert d.data["problems"], part
     state = ostore.load(SESSION)
     assert not (state.order_draft_path or state.order_draft_sha256)
+
+
+@pytest.mark.parametrize("field, letter, bad_id", [
+    ("requirements", "R", "REQ-1"),
+    ("requirements", "R", "R1a"),
+    ("proposals", "P", "R3"),
+    ("constraints", "K", "K-1"),
+])
+def test_order_submit_refuses_ids_without_the_anchor_form(ostore, tmp_path, field, letter, bad_id):
+    _start(ostore)
+    good_id = {"requirements": "R1", "proposals": "P1", "constraints": "K1"}[field]
+    bad = _LINES[field].replace(f'"{good_id}"', f'"{bad_id}"')
+    assert bad != _LINES[field]
+
+    d = _submit(ostore, _draft(tmp_path, replace={field: bad}))
+
+    assert d.ok is False
+    assert any(bad_id in p and f"{letter}<number>" in p for p in d.data["problems"]), d.data["problems"]
+    assert not ostore.load(SESSION).order_draft_path
 
 
 def test_order_submit_refuses_malformed_proposal(ostore, tmp_path):
@@ -290,6 +310,80 @@ def test_order_review_is_not_stale_for_bytes_outside_the_understanding(ostore, t
     assert gates.order_review_blockers(ostore.load(SESSION), str(path)) == []
 
 
+def test_an_edit_to_the_activity_blocks_until_a_new_pass(ostore, tmp_path):
+    path = _ready(ostore, tmp_path)
+    path.write_text(path.read_text(encoding="utf-8").replace("release engineering", "packaging"),
+                    encoding="utf-8")
+
+    assert gates.order_review_blockers(ostore.load(SESSION), str(path))
+    assert _submit(ostore, path).ok
+    assert gates.order_review_blockers(ostore.load(SESSION), str(path))
+
+    d = _review(ostore)
+
+    assert d.ok is True and d.data["blockers"] == []
+    assert gates.order_review_blockers(ostore.load(SESSION), str(path)) == []
+
+
+def test_order_review_stores_customer_questions_and_transcript(ostore, tmp_path):
+    _start(ostore)
+    path = _draft(tmp_path)
+    assert _submit(ostore, path).ok
+
+    d = _review(ostore, "revise", concerns=["blocking: vague"],
+                customer_questions=["Is a day of hand-work the real cost?"],
+                transcript="/tmp/thinker.jsonl")
+
+    assert d.ok is True, d.detail
+    review = ostore.load(SESSION).order_reviews[-1]
+    assert review.customer_questions == ["Is a day of hand-work the real cost?"]
+    assert review.transcript == "/tmp/thinker.jsonl"
+
+
+def test_order_review_refuses_a_malformed_customer_question(ostore, tmp_path):
+    _start(ostore)
+    assert _submit(ostore, _draft(tmp_path)).ok
+
+    d = _review(ostore, customer_questions=["line one\nline two"])
+
+    assert d.ok is False
+    assert ostore.load(SESSION).order_reviews == []
+
+
+def test_an_agent_authored_override_is_refused(ostore, tmp_path):
+    path = _ready(ostore, tmp_path)
+    assert _review(ostore, "revise", concerns=["blocking: vague"]).ok
+
+    d = _review(ostore, "override", reviewer="agent", note="proceeding")
+
+    assert d.ok is False
+    assert len(ostore.load(SESSION).order_reviews) == 2
+    assert gates.order_review_blockers(ostore.load(SESSION), str(path))
+
+
+def test_an_override_by_someone_other_than_the_customer_is_refused(ostore, tmp_path):
+    path = _ready(ostore, tmp_path)
+    assert _review(ostore, "revise", concerns=["blocking: vague"]).ok
+
+    d = _review(ostore, "override", reviewer="a-colleague", note="fine by me")
+
+    assert d.ok is False
+    assert len(ostore.load(SESSION).order_reviews) == 2
+    assert gates.order_review_blockers(ostore.load(SESSION), str(path))
+
+
+def test_a_user_override_leaves_the_plan_review_release_alone(ostore, tmp_path):
+    _ready(ostore, tmp_path)
+    assert _review(ostore, "revise", concerns=["blocking: vague"]).ok
+    state = ostore.load(SESSION)
+    state.review_release_difficulty_id = "diff-1"
+    ostore.save(state)
+
+    assert _review(ostore, "override", reviewer="user", note="accepted as is").ok
+
+    assert ostore.load(SESSION).review_release_difficulty_id == "diff-1"
+
+
 def test_a_revise_does_not_clear_the_gate(ostore, tmp_path):
     path = _ready(ostore, tmp_path)
     assert _review(ostore, "revise", concerns=["blocking: the difficulty is vague"]).ok
@@ -371,6 +465,7 @@ def test_present_order_refuses_a_draft_changed_after_submit(ostore, tmp_path):
     path = _ready(ostore, tmp_path)
     path.write_text(path.read_text(encoding="utf-8").replace("hand-work", "toil"), encoding="utf-8")
     assert _review(ostore).ok  # a fresh review of the edited draft; order-submit is not re-run
+    assert gates.order_review_blockers(ostore.load(SESSION), str(path)) == []
 
     d = _present(ostore, tmp_path)
 
@@ -407,7 +502,6 @@ def test_present_order_refuses_a_draft_that_is_no_longer_complete(ostore, tmp_pa
     (RENDERING.replace("[K1] no new dependency.\n", "no new dependency.\n"), ["K1"], []),
     (RENDERING.replace("[P1]", "P1"), ["P1"], []),
     (RENDERING + "[R9] something the order does not state.\n", [], ["R9"]),
-    (RENDERING.replace("[R2]", "[R2](https://example.org/x)"), ["R2"], []),
 ])
 def test_present_order_shows_exactly_the_orders_items_as_anchors(ostore, tmp_path, text, missing, extra):
     _ready(ostore, tmp_path)
@@ -423,6 +517,14 @@ def test_other_bracketed_text_is_not_an_anchor(ostore, tmp_path):
     _ready(ostore, tmp_path)
 
     d = _present(ostore, tmp_path, RENDERING + "See [note] and [order-agree: later] and [S1].\n")
+
+    assert d.ok is True, d.detail
+
+
+def test_an_ordinary_markdown_link_is_accepted_beside_the_anchors(ostore, tmp_path):
+    _ready(ostore, tmp_path)
+
+    d = _present(ostore, tmp_path, RENDERING + "Background: [the release notes](https://example.org/notes).\n")
 
     assert d.ok is True, d.detail
 
