@@ -39,6 +39,14 @@ def test_every_gate_log_line_has_one_engine_row(state):
         "engine:resolution", "engine:renorm_final", "engine:escalation_orphans", "engine:frozen_stage"]
 
 
+def test_the_engine_row_does_not_pass_through_the_hook_writer(state, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("engine row went through the hook writer")
+    monkeypatch.setattr(cli.hook_telemetry, "record", refuse)
+    cli._log_gate(state, "plan_approval", [], passed=True)
+    assert [r["mechanism"] for r in _rows()] == ["engine:plan_approval"]
+
+
 def test_an_uncreatable_log_changes_nothing(state, monkeypatch, tmp_path):
     blocker = tmp_path / "file"
     blocker.write_text("")
