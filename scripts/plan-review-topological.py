@@ -151,10 +151,12 @@ def done_criterion(pair: str) -> str:
 
 
 def forwarded_unit_digest(digest: "str | None") -> "str | None":
+    # Mutation seam: order_agreement_mutants replaces this to drop the digest.
     return digest
 
 
 def forwarded_pair_digest(digest: "str | None") -> "str | None":
+    # Mutation seam, like forwarded_unit_digest.
     return digest
 
 

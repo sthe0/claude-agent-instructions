@@ -23,7 +23,10 @@ its module, never a by-name import.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
+import json
 import os
 import subprocess
 import sys
@@ -33,9 +36,10 @@ import pytest
 from order_agreement_mutants import ENV, MUTANTS, apply_active_mutant, script_module
 from test_order_phase import _draft
 from test_plan_review_topo import _data, _write
-from test_plan_review_topological import canonical_stdout, review_original, summary_line
+from test_plan_review_topological import FakeEngine, canonical_stdout, review_original, summary_line
 
-from agentctl import plan, render
+from agentctl import cli, plan, render
+from agentctl.store import FileStateStore
 
 SCRIPTS = Path(__file__).resolve().parent.parent
 THIS_FILE = Path(__file__).resolve()
@@ -131,9 +135,36 @@ def test_unit_base_conditions_follow_the_phase(staged_plan, draft, tmp_path):
         assert marker in staged and marker in drafted
     assert "every constraint is respected by the coverage entries and the final checks" in staged
     assert "every proposal's verdict follows from its critique" in staged
-    assert "coverage entries" not in drafted.split(plan.CONDITION_MARKERS[2], 1)[1].split(
-        plan.CONDITION_MARKERS[3], 1)[0]
-    assert "proposal" in drafted.split(plan.CONDITION_MARKERS[1], 1)[1].lower()
+    c1, c2, c3, c4 = (_condition(drafted, i) for i in range(4))
+    assert "the activity is reconstructed and the difficulty is placed in it" in c1
+    assert "no requirement merely restates a proposal" in c2
+    assert "each proposal's critique holds against the requirements it names" in c2
+    assert "every constraint is user-stated and offered, not decided by the author" in c3
+    assert "coverage entries" not in c3 and "coverage entries" not in c4
+
+
+def _condition(text: str, index: int) -> str:
+    """The body of condition `index` (0-based) of a bundle, up to the next marker."""
+    markers = plan.CONDITION_MARKERS
+    text = text.rsplit("\nConditions:\n", 1)[1]
+    body = text.split(f"- `{markers[index]}`", 1)[1]
+    return body.split(f"`{markers[index + 1]}`", 1)[0] if index + 1 < len(markers) else body
+
+
+def test_unit_base_bundle_labels_the_activity_difficulty_and_functional_place(staged_plan, tmp_path):
+    text = _unit_text(staged_plan, tmp_path)
+    assert "**Activity:** release engineering" in text
+    assert "**Difficulty:** a release takes a day of hand-work" in text
+    assert "**Functional place:** the norm governing releases" in text
+
+
+def test_staged_c3_names_constraints_only_when_the_plan_has_them(staged_plan, tmp_path):
+    clause = "every constraint is respected by the coverage entries"
+    assert clause in _condition(_unit_text(staged_plan, tmp_path), 2)
+    data = _with_order_functional_place(_data(**{**ORDER_FIELDS, "constraints": []}))
+    bare = _unit_text(_write(tmp_path / "no-constraints.toml", data), tmp_path)
+    assert "constraint" not in _condition(bare, 2)
+    assert "none is left uncovered" in _condition(bare, 2)
 
 
 def test_plain_plan_unit_base_bundle_carries_no_understanding_section_and_no_label(tmp_path):
@@ -290,7 +321,88 @@ def test_driver_settle_of_a_draft_review_records_it_under_scope_order(draft, mon
     assert argv[argv.index("--transcript") + 1] == "/t/tr.jsonl"
 
 
+def _run_driver(monkeypatch, tmp_path, plan_path, engine):
+    """Run the driver's `main` in-process against `engine`, every spawn refused (rc 1);
+    return the spawner argvs it built."""
+    spawns = []
+    monkeypatch.setattr(drv, "spawn_pair", lambda argv: spawns.append(list(argv)) or (1, "", ""))
+    monkeypatch.setattr(drv, "run_agentctl", engine.run)
+    monkeypatch.setattr(drv, "COST_LOG", tmp_path / "costs.jsonl")
+    monkeypatch.setenv("AGENTCTL_TOPO_UNITS_DIR", str(tmp_path / "topo"))
+    drv.main(["--session", "s", "--plan", str(plan_path)])
+    return spawns
+
+
+def _digest_flag(argv):
+    return argv[argv.index("--agreed-understanding") + 1] if "--agreed-understanding" in argv else None
+
+
+def test_driver_run_hands_the_status_digest_to_unit_base_and_every_base_pair(
+        staged_plan, tmp_path, monkeypatch):
+    engine = FakeEngine([["unit:base"], ["base-1", "base-3"]])
+    engine.agreement = {"understanding_sha256": "ab" * 32}
+    spawns = _run_driver(monkeypatch, tmp_path, staged_plan, engine)
+    assert sorted(a[a.index("--review-topo") + 1] for a in spawns) == ["base-1", "base-3", "unit:base"]
+    assert {_digest_flag(a) for a in spawns} == {"ab" * 32}
+
+
+def test_driver_run_of_a_draft_hands_the_status_digest_to_unit_base(draft, tmp_path, monkeypatch):
+    engine = FakeEngine([])
+    engine.agreement = {"understanding_sha256": "cd" * 32}
+    (argv,) = _run_driver(monkeypatch, tmp_path, draft, engine)
+    assert argv[argv.index("--review-topo") + 1] == "unit:base"
+    assert _digest_flag(argv) == "cd" * 32
+
+
+def test_driver_run_hands_no_digest_when_status_has_no_agreement(staged_plan, tmp_path, monkeypatch):
+    engine = FakeEngine([["unit:base"], ["base-3"]])
+    spawns = _run_driver(monkeypatch, tmp_path, staged_plan, engine)
+    assert spawns and {_digest_flag(a) for a in spawns} == {None}
+
+
+def test_driver_compose_of_a_draft_records_an_order_review_naming_the_transcript(
+        draft, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    state_root = tmp_path / "agentctl" / "state"
+    store = FileStateStore(state_root)
+    cli.cmd_start(argparse.Namespace(session="s", task="od", goal="g", done_criterion="dc",
+                                     criterion_type="measurable", recursion_depth=0), store=store)
+
+    def engine(argv, env, script=None):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli.main(["--state-root", str(state_root), *argv])
+        return json.loads(buf.getvalue())
+
+    monkeypatch.setattr(drv, "run_agentctl", engine)
+    monkeypatch.setattr(drv, "pair_telemetry", lambda launched, pair: (None, None, None, "/t/tr.jsonl"))
+    sha = hashlib.sha256(draft.read_bytes()).hexdigest()
+    d = drv.Driver(argparse.Namespace(session="s", pairs=None), str(draft), {})
+    d.settle("unit:base", drv.Launched(0, canonical_stdout(review_original("pass", sha)),
+                                       summary_line() + "\n", 0, sha))
+    assert d.compose() == "pass"
+    (review,) = store.load("s").order_reviews
+    assert review.verdict == "pass" and review.transcript == "/t/tr.jsonl"
+    assert review.understanding_sha256 == plan.understanding_digest(plan.load_order_draft(draft)[0])
+
+
+def test_driver_dry_run_of_an_order_draft_lists_unit_base_and_refuses_nothing(
+        draft, tmp_path):
+    env = {k: v for k, v in os.environ.items() if k != ENV}
+    (tmp_path / "skills").mkdir()
+    (tmp_path / "skills" / "thinker").symlink_to(SCRIPTS.parent / "skills" / "specializations" / "thinker")
+    env.update(CLAUDE_CONFIG_DIR=str(tmp_path), AGENTCTL_TOPO_UNITS_DIR=str(tmp_path / "topo"))
+    run = subprocess.run(
+        [sys.executable, str(SCRIPTS / "plan-review-topological.py"), "--session", "s",
+         "--plan", str(draft), "--dry-run"],
+        cwd=SCRIPTS, capture_output=True, text=True, env=env, timeout=120)
+    assert run.returncode == 0, run.stdout[-800:] + run.stderr[-800:]
+    assert "TOPO-DRY: pair=unit:base" in run.stdout
+    assert "TOPO-REFUSED" not in run.stdout
+
+
 KILLERS = {
+    "driver_agreement_unread": "test_driver_run_hands_the_status_digest_to_unit_base_and_every_base_pair",
     "rejected_proposal_filtered": "test_pair_section_lists_a_rejected_proposal_against_any_requirement",
     "unit_base_omits_proposals": "test_unit_base_bundle_inlines_activity_difficulty_place_requirements_proposals_constraints",
     "draft_walk_empty": "test_driver_walks_exactly_unit_base_for_a_draft",

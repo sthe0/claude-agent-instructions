@@ -190,6 +190,12 @@ def _pair_digest_not_forwarded(mp):
                lambda digest: None, raising=True)
 
 
+def _driver_agreement_unread(mp):
+    """The driver never reads the agreement digest from `agentctl status`."""
+    mp.setattr(script_module("plan-review-topological.py").Driver, "read_agreement",
+               lambda self: None, raising=True)
+
+
 def _spawner_digest_dropped(mp):
     """The spawner accepts --agreed-understanding but never hands it to the renderer."""
     spawner = script_module("spawn-specialist.py")
@@ -227,6 +233,7 @@ MUTANTS = {
     "agreed_label_unconditional": _agreed_label_unconditional,
     "agreed_digest_not_forwarded": _agreed_digest_not_forwarded,
     "pair_digest_not_forwarded": _pair_digest_not_forwarded,
+    "driver_agreement_unread": _driver_agreement_unread,
     "spawner_digest_dropped": _spawner_digest_dropped,
     "spawner_refuses_draft": _spawner_refuses_draft,
     "draft_recorded_as_topo": _draft_recorded_as_topo,

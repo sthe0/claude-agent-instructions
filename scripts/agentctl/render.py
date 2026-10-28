@@ -1155,19 +1155,22 @@ def _unit_conditions(doc: PlanDoc, node: "int | str") -> list[str]:
     judged alone, from its own fields and its declared edges."""
     if node == PAIR_BASE_NODE and not doc.stages:
         return [
-            "the order is internally consistent — customer, activity, difficulty, "
-            "functional place, requirements, proposals and constraints do not contradict "
-            "each other",
+            "the activity is reconstructed and the difficulty is placed in it — customer, "
+            "activity, difficulty, functional place, requirements, proposals and "
+            "constraints do not contradict each other",
             "every requirement follows from the difficulty and the functional place — "
-            "none is arbitrary, none is missing a derivation; every proposal's verdict "
-            "follows from its critique and the requirements it stands against",
-            "every constraint binds the solution as stated and no requirement or adopted "
-            "or adapted proposal contradicts one; every requirement is decidable by a "
-            "check a later stage can carry",
+            "none is arbitrary, none is missing a derivation, and no requirement merely "
+            "restates a proposal; each proposal's critique holds against the requirements "
+            "it names",
+            "every constraint is user-stated and offered, not decided by the author, and "
+            "binds the solution as stated; no requirement or adopted or adapted proposal "
+            "contradicts one; every requirement is decidable by a check a later stage "
+            "can carry",
             "the goal and the done criterion, where stated, match the requirements and "
             "are checkable",
         ]
     if node == PAIR_BASE_NODE:
+        constraints = doc.meta.order is not None and bool(doc.meta.order.constraints)
         return [
             "the order and the meta are internally consistent — customer, functional "
             "place, requirements and the coverage map do not contradict each other",
@@ -1175,8 +1178,9 @@ def _unit_conditions(doc: PlanDoc, node: "int | str") -> list[str]:
             "none is arbitrary, none is missing a derivation; every proposal's verdict "
             "follows from its critique and the requirements it stands against",
             "every requirement has a coverage entry or a final check that decides it — "
-            "none is left uncovered; every constraint is respected by the coverage "
-            "entries and the final checks",
+            "none is left uncovered"
+            + ("; every constraint is respected by the coverage entries and the final "
+               "checks" if constraints else ""),
             "the goal, the done criterion and the final checks match the requirements "
             "and are checkable",
         ]
