@@ -32,7 +32,6 @@ to be exactly that set.
 | `scripts/agentctl/cli.py`:`_snapshot_approved_plan` | index-only | Copies the index bytes to the approved snapshot and puts the index and every referenced file into the object store (`plan_store.store_plan`). |
 | `scripts/agentctl/cli.py`:`_snapshot_plan_version` | index-only | Same for every submitted plan version: the index bytes are the version, the referenced files go to the object store. |
 | `scripts/agentctl/cli.py`:`_stamp_accepted_plan_digest` | index-only | Stamps the sha256 of the index bytes as the accepted plan digest. |
-| `scripts/agentctl/cli.py`:`cmd_present_plan` | not a plan | Reads the rendering file whose digest is bound to the delivery receipt, not the plan. |
 | `scripts/agentctl/order_approvals.py`:`record_approval` | not a plan | Reads the order-approval ledger (JSON); the plan appears only as a digest argument. |
 | `scripts/agentctl/plan.py`:`load_plan` | resolves | The loader: resolves references through `plan_refs.resolve_refs`. |
 | `scripts/agentctl/plan.py`:`load_plan_with_digest` | resolves | The loader that also returns the index bytes' digest from the same read. |
