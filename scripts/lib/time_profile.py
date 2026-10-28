@@ -921,7 +921,10 @@ _VARIABLE_PROGRAM_PREFIX = "tool:Bash:$"
 def half_life_days(config_path=None) -> float:
     """The `time-profile-half-life-days` row of config.md; a missing or non-positive
     row raises ValueError rather than falling back to a guessed value."""
-    constants = parse_config_md(Path(config_path) if config_path else CONFIG_PATH)
+    try:
+        constants = parse_config_md(Path(config_path) if config_path else CONFIG_PATH)
+    except OSError as exc:
+        raise ValueError(f"config.md is unreadable: {exc}") from exc
     try:
         value = float(constants[HALF_LIFE_KEY])
     except (KeyError, ValueError):
@@ -932,6 +935,7 @@ def half_life_days(config_path=None) -> float:
 
 
 def _default_half_life() -> float:
+    # `aggregate`'s half_life_days parameter shadows the module function of that name.
     return half_life_days()
 
 
@@ -1060,9 +1064,14 @@ def _children(kids: list, weight) -> list:
     ]
 
 
-def aggregate_by_sha(profiles, **kwargs) -> dict:
-    """`aggregate` per core_sha (None groups as "unknown"), over that sha's sessions only."""
+def aggregate_by_sha(profiles, *, half_life_days=None, now_ms=None, values=None) -> dict:
+    """`aggregate` per core_sha (None groups as "unknown"), over that sha's sessions only.
+
+    The half-life and the clock are resolved once, so every group is weighted alike."""
+    half = half_life_days if half_life_days is not None else _default_half_life()
+    now = now_ms if now_ms is not None else _clock_ms()
     groups: dict = {}
     for profile in profiles:
         groups.setdefault(profile.core_sha or "unknown", []).append(profile)
-    return {sha: aggregate(group, **kwargs) for sha, group in sorted(groups.items())}
+    return {sha: aggregate(group, half_life_days=half, now_ms=now, values=values)
+            for sha, group in sorted(groups.items())}
