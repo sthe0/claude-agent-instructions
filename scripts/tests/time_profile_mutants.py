@@ -171,7 +171,15 @@ def _apply_commit_index_follows_head(monkeypatch):
     monkeypatch.setattr(time_profile, "TRUNK_REFS", ("HEAD",))
 
 
+def _apply_human_origin_is_background(monkeypatch):
+    monkeypatch.setattr(time_profile, "_is_non_human_origin", bool)
+
+
 MUTANTS = {
+    "human_origin_is_background": (
+        "any truthy message origin, a human's included, counts as an injected message",
+        _apply_human_origin_is_background,
+    ),
     "all_to_model_gap": (
         "the whole partition is reported as model:gap; wall-clock is still conserved",
         _apply_all_to_model_gap,
