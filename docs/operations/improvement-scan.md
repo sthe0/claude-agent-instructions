@@ -201,6 +201,47 @@ copied, never summed across items sharing a cluster. Keys matching no open row a
 `dangling` (markdown and JSON) even when another key resolved; an item whose keys match only
 unmeasured rows, or none, stays in the unmeasured band.
 
+## Time profile
+
+The time profile (`scripts/lib/time_profile.py`, decayed per-session means in
+`lib/time_profile_uncertainty.py`) feeds the scan in two places: a measured minutes figure for the
+loss ranking and the "Where the time goes" report section. Nothing here files or dispatches.
+
+**`mechanism`.** A board item may carry `mechanism`, a profile key: `unattributed`, or a key that
+starts with one of `time_profile.KEY_PREFIXES` (`user:`, `wait:`, `model:`, `tool:`, `skill:`,
+`mcp:`, `hook:`, `node:`, `spawn:`, `judge:`). Anything else is rejected at the classify step, naming the item. It is
+supplied like `addresses`: in a full entry, or alone on a carried item (an amendment that changes
+nothing else); an absent key keeps the old value and `""` clears it. A board written before the
+field existed loads with `""` and ranks exactly as before.
+
+**Measured vs guess.** The measurement for a key is the decayed mean of its conditional minutes
+(`minutes_when_present`: the time per session in which the key occurs at all), with its standard
+error and effective sample size `n_eff`. For an item whose `mechanism` has such a figure with
+`n_eff >= 2` and a defined standard error, the mean replaces `minutes_per_occurrence` in the
+ranking, and the item is loss-ready without a guess. Otherwise (no mechanism, no figure for the
+key, `n_eff < 2`, or an undefined SE) the item's own guess is used exactly as before. A measured
+figure is the whole time the mechanism takes, so it is an upper bound on the loss a fix could
+remove; the basis text says so. Each loss row carries `minutes_source`: `measured`, `guess`, or,
+for a family, `measured` only when every ready member was measured, `mixed` when some were, else
+`guess`. Phase B's rank recompute and the `loss` command use the guesses only.
+
+**"Where the time goes".** The section follows the measured-loss lane (markdown) and is the
+top-level `time_sinks` key (JSON). Rows are the heavy keys of the partition (`heavy_keys`: those
+whose mean exceeds the unattributed remainder) in decreasing decayed mean minutes per session
+± SE, with the share of agent-active time (wall-clock without user wait), `n_eff` and the
+dominant Core sha: the sha whose sessions have the largest summed decay weight for that key, a
+tie going to the sha of the most recent session; a session with no sha counts as `unknown`.
+
+**Reading the profile.** `report` reads the profile only with `--time-profile-state [DIR]` (bare
+flag: `TIME_PROFILE_STATE_DIR` or the default state directory). It runs only when `<DIR>/sessions`
+exists, i.e. after an earlier `agent-report time-profile` run left a cache, and then re-reads just
+the sessions that changed; it never starts the first full pass (minutes of work). Without the
+flag or without a cache the profile is treated as empty.
+
+**Edge cases.** The heading is always printed. With no profiled sessions it says so and
+`time_sinks` is `[]`; with sessions but no heavy key it says that. Child sessions are not counted
+as sessions; their time lies in the parent's overlays.
+
 ## `sources` — external ideas
 
 ```
