@@ -78,7 +78,7 @@ G.P. Shchedrovitsky, *Philosophy. Science. Methodology*, ch. 5 ([source](https:/
 
 The same author, *Programming of scientific research and development*, part II ch. 3 ([source](https://gtmarket.ru/library/basis/6473/6482)), p. 3.12: «Во всех своих разнообразных формах оно [знание] включается в содержание способа» ("in all its various forms, knowledge enters the content of the way").
 
-Decision: the relation "prescription A rests on knowledge B", the **grounding** relation, admits only knowledge as B. The engine admits only knowledge references in a stage's `[stage.principle].source` and in a principle's `grounded_in`, and it judges the link, not only resolves it. Because the source speaks of strict correspondences, the knowledge listed must be the knowledge the prescription draws its content and justification from: neither a loose neighbour of it nor a partial cover. Decision 1's "Y follows from a named regularity" is read as "Y rests on a named regularity": a prescription is not the logical consequence of a fact.
+Decision: the bundle of prescriptions and knowledge is the unit, and the relation "prescription A rests on knowledge B", the **grounding** relation, admits only knowledge as B. The engine admits only knowledge references in a stage's `[stage.principle].source` and in a principle's `grounded_in`, and it judges the link, not only resolves it. Because the source asks for a strict correspondence, the knowledge listed must be the knowledge the prescription draws its content and justification from: neither a loose neighbour of it nor a partial cover. Decision 1's "Y follows from a named regularity" is read as "Y rests on a named regularity": a prescription is not the logical consequence of a fact, and the "if X then Y" thesis is rejected.
 
 ### (b) Norm over norm is a separate relation
 
@@ -90,7 +90,7 @@ Decision: this is the **superstructure** relation. A higher norm manages, orders
 
 Above, a principle is shown inadequate, not refuted. The 1967 text: «"нормы" сохраняют своё постоянство, несмотря на все изменения условий. В определённые моменты это приводит к конфликту» ("'norms' keep their constancy despite all changes of conditions; at certain moments this leads to a conflict"). The case here is an analogy, not the same event: when a regularity a prescription rests on is refuted, the conditions it was written for turn out to be other than assumed, and the prescription comes into question.
 
-Decision: the revision is closed in three steps. (1) Establish what the knowledge under the prescription now says. (2) Name the defect, of the link or of the ground. (3) Revise or retire the prescription, or confirm it on its remaining grounds. The three steps correspond to the research, critical and normative functions of reflection in O.S. Anisimov, *Reflection. Methodology. Science* ([archived source](https://web.archive.org/web/2023/http://acmegroup.ru/node/289)). That text could not be retrieved when this amendment was written, so the correspondence rests on secondary readings, and the order of the steps is this system's decision, not a claim about the source. A change that jumps to step 3 is rejected.
+Decision: the revision is closed in three steps. (1) Establish what the knowledge under the prescription now says. (2) Name the defect, of the link or of the ground. (3) Revise or retire the prescription, or confirm it on its remaining grounds. The three steps correspond to the research function, the critical function and the normative function of reflection in O.S. Anisimov, *Reflection. Methodology. Science* ([archived source](https://web.archive.org/web/2023/http://acmegroup.ru/node/289)). That text could not be retrieved when this amendment was written, so the correspondence rests on secondary readings, and the order of the steps is this system's decision, not a claim about the source. A change that jumps to step 3 is rejected.
 
 ### (d) Experience as singular knowledge; facts in an order
 
@@ -100,7 +100,7 @@ An order, the user's request, is a demand and so a norm; it is never generalized
 
 ### (e) Ontology as a third ground kind
 
-Some knowledge states a distinction (what counts as a stage, a norm, a difficulty) rather than a recurring pattern. Such leaves become `ontology/v1` leaves, referenced as `ontology:<slug>`; a distinction an ADR states may be cited the same way, the reference resolving to the ADR file. A distinction is not refuted by one observation: it is shown inadequate when it fails to separate the cases at hand. That is the failure mode of a norm, not of a regularity, and the grounding judge treats it so: it asks whether the distinction is adequate to the case, not whether it is true.
+Some knowledge states a distinction (what counts as a stage, a norm, a difficulty) rather than a recurring pattern. Such leaves become `ontology/v1` leaves, referenced as `ontology:<slug>`; a distinction an ADR states may be cited the same way, the reference resolving to the ADR file. A distinction is not refuted by one observation: it is shown inadequate when it fails to separate the cases at hand. That is the failure mode of a norm, not of a regularity, and the grounding judge treats it so: it asks about the adequacy of the distinction for the case, not whether the distinction is true.
 
 ### (f) The given regularity
 
