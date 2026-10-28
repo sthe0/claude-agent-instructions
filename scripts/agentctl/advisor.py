@@ -1723,7 +1723,9 @@ def judge_approval_ask(
 
 
 class CodeEffectsVerdict(NamedTuple):
-    """What the code-effects judge said about one piece of code.
+    """What the code-effects judge said about one piece of code. A named tuple so callers read the
+    fields by name (``effects`` None and ``answered`` False are different things) and the verdict stays
+    immutable once cached.
 
     ``effects`` is the validated tuple of named effects, or ``None`` for UNDETERMINABLE -- the
     only value that means "no allow may follow". An empty tuple is a positive claim: the code

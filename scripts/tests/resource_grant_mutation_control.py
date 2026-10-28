@@ -66,6 +66,7 @@ SEGMENT_RESOLVER = "scripts/agentctl/segment_resolver.py"
 ADVISOR = "scripts/agentctl/advisor.py"
 CODE_EFFECTS = "scripts/agentctl/code_effects.py"
 HOOK = "scripts/hook-resource-grant-check.py"
+GIT_SURFACE = "scripts/agentctl/git_surface.py"
 
 
 @dataclass(frozen=True)
@@ -773,12 +774,6 @@ CATALOGUE: "dict[str, Mutant]" = {
         "    variable = None\n",
         "a GIT_DIR / PYTHONPATH exported in the hook's environment does not make a git or python segment undeterminable",
     ),
-    "hook-git-hooks-ignored": Mutant(
-        HOOK,
-        "        why = git_hooks_blocker(approved, ambient, verdict, snapshot[:index] + snapshot[index + 1:], budget)\n",
-        "        why = None\n",
-        "a commit whose effective hooks directory the stage may write, and holds a hook, is allowed",
-    ),
     "hook-allow-entry-matches-whole-call": Mutant(
         HOOK,
         "    entry = segment_allow_entry(approved, text)\n",
@@ -835,9 +830,21 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "hook-project-settings-not-read": Mutant(
         HOOK,
-        "    for base in dict.fromkeys([approved.cwd, segment_resolver.worktree_root(approved.cwd) or approved.cwd]):\n",
+        "    for base in dict.fromkeys([launch, segment_resolver.worktree_root(launch) or launch]):\n",
         "    for base in []:\n",
         "the project's .claude/settings files are not among the ambient settings",
+    ),
+    "hook-project-settings-read-from-cwd": Mutant(
+        HOOK,
+        "    launch = approved.launch_dir or approved.cwd\n",
+        "    launch = approved.cwd\n",
+        "the project settings are read from the hook's cwd, not from the directory the child was launched in",
+    ),
+    "hook-relative-add-dir-not-anchored": Mutant(
+        HOOK,
+        "    root = path.parent.parent\n",
+        "    root = Path.cwd()\n",
+        "a relative additionalDirectories entry is anchored on the hook's cwd, not on the settings file's root",
     ),
     "hook-user-settings-not-read": Mutant(
         HOOK,
@@ -853,9 +860,15 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "hook-carrier-ignores-env-blocker": Mutant(
         HOOK,
-        "        if (is_git and git_var) or (is_python and python_var) or (not is_git and not is_python and (git_var or python_var)):\n",
-        "        if (is_git and git_var) or (is_python and python_var):\n",
-        "a GIT_*/PYTHON* variable blocks only a git or python segment, not a program that may start either",
+        "    for name in sorted(approved.env):\n        if name in GIT_ENV_EXACT or name.startswith(GIT_ENV_PREFIX):\n            return name\n",
+        "    for name in sorted(approved.env):\n        if program == \"git\" and (name in GIT_ENV_EXACT or name.startswith(GIT_ENV_PREFIX)):\n            return name\n",
+        "a GIT_* variable blocks only a git segment, so python run under GIT_DIR is checked as if it were plain",
+    ),
+    "hook-env-blocker-python-var-only-for-python": Mutant(
+        HOOK,
+        '        if name.startswith("PYTHON") and name not in PYTHON_ENV_HARMLESS:\n',
+        '        if program.startswith("python") and name.startswith("PYTHON") and name not in PYTHON_ENV_HARMLESS:\n',
+        "a PYTHON* variable blocks only a python segment, so git run under PYTHONPATH (a python hook or alias) is checked as if it were plain",
     ),
     "hook-env-blocker-blocks-plain-programs": Mutant(
         HOOK,
@@ -863,71 +876,65 @@ CATALOGUE: "dict[str, Mutant]" = {
         "",
         "a GIT_*/PYTHON* variable makes even `cat` undeterminable",
     ),
-    "hook-git-hooks-other-segments-unchecked": Mutant(
+    "hook-git-surface-snapshot-ignored": Mutant(
         HOOK,
-        "        if other.state != COVERED or other.opaque:\n",
-        "        if other.opaque:\n",
-        "a git write beside a harness-allowed segment is covered, although that segment may write a hook",
+        "        why = git_surface.mismatch(approved.git_surface, live[verdict.venue])\n",
+        "        why = None\n",
+        "a git run is allowed whatever the repository would execute, the spawn-time snapshot is never compared",
     ),
-    "hook-git-hooks-opaque-segment-not-counted": Mutant(
+    "hook-git-surface-blocker-skipped": Mutant(
         HOOK,
-        "        if other.state != COVERED or other.opaque:\n",
-        "        if other.state != COVERED:\n",
-        "a git write beside an opaque-judged segment is covered, although the judge sees only the files that segment names",
+        "        why = git_surface_blocker(approved, verdicts, budget)\n",
+        "        why = None\n",
+        "no segment that runs git is held to the snapshot",
     ),
-    "hook-git-hooks-dir-unknown-allows": Mutant(
+    "hook-git-surface-harness-git-unchecked": Mutant(
         HOOK,
-        '    if dirs is None:\n        return "cannot read the effective git hooks directory"\n',
-        "    if dirs is None:\n        return None\n",
-        "a git write is covered when git cannot name its hooks directory",
+        "def runs_git(verdict: \"SegmentVerdict\") -> bool:\n",
+        "def runs_git(verdict: \"SegmentVerdict\") -> bool:\n    if verdict.state == HARNESS:\n        return False\n",
+        "a git segment the harness runs by an allow entry is not held to the snapshot",
     ),
-    "hook-git-hooks-add-dir-channel-ignored": Mutant(
+    "hook-git-surface-neighbour-pinned-overlap-ignored": Mutant(
         HOOK,
-        "    if any(_under(real, _real(root)) for root in [*approved.add_dirs, *ambient.add_dirs]):\n",
-        "    if False:\n",
-        "a hooks directory inside a directory the child was started with is not a way for the child to write a hook",
+        "        if any(_under(real, path) or _under(path, real) for path in pinned):\n            return True\n",
+        "        if False:\n            return True\n",
+        "a covered write onto a hook, config or attributes file beside a git run does not make the line undeterminable",
     ),
-    "hook-git-hooks-ambient-add-dir-channel-ignored": Mutant(
+    "hook-git-surface-pattern-neighbour-not-counted": Mutant(
         HOOK,
-        "    if any(_under(real, _real(root)) for root in [*approved.add_dirs, *ambient.add_dirs]):\n",
-        "    if any(_under(real, _real(root)) for root in [*approved.add_dirs]):\n",
-        "a hooks directory inside a settings-added directory is not a way for the child to write a hook",
+        "    if verdict.opaque or verdict.pattern:\n        return True\n",
+        "    if verdict.opaque:\n        return True\n",
+        "a rule-pattern neighbour of a git run, whose writes were never resolved, counts as harmless",
     ),
-    "hook-git-hooks-edit-entry-channel-ignored": Mutant(
+    "hook-git-surface-opaque-neighbour-not-counted": Mutant(
         HOOK,
-        '        if any(permission_entry_match.covers(entry, tool, probe) for tool in ("Edit", "Write")):\n',
-        "        if False:\n",
-        "an Edit/Write allow entry over the hooks directory is not a way for the child to write a hook",
+        "    if verdict.opaque or verdict.pattern:\n        return True\n",
+        "    if verdict.pattern:\n        return True\n",
+        "an opaque neighbour of a git run, whose writes the judge cannot enumerate, counts as harmless",
     ),
-    "hook-git-hooks-accept-edits-channel-ignored": Mutant(
+    "hook-git-surface-harness-neighbour-not-counted": Mutant(
         HOOK,
-        "    if approved.mode == ACCEPT_EDITS and _under(real, _real(approved.cwd)):\n",
-        "    if False:\n",
-        "acceptEdits in the cwd is not a way for the child to write a hook into a hooks directory under the cwd",
+        "    if verdict.state == HARNESS and not verdict.changed and program not in READ_ONLY_PROGRAMS:\n        return True\n",
+        "",
+        "a harness-allowed neighbour that is not read-only, with no resolved writes, counts as harmless",
     ),
-    "hook-git-hooks-ambient-unreadable-open": Mutant(
+    "hook-git-surface-rewriting-subcommand-neighbour-ok": Mutant(
         HOOK,
-        '    if ambient is None:\n        return "settings that cannot be read"\n',
-        "    if ambient is None:\n        return None\n",
-        "settings the hook cannot read count as granting no way to write a hook",
+        "        return not _preserves_worktree(verdict.text)\n",
+        "        return False\n",
+        "a git neighbour that rewrites tracked files (checkout, restore) cannot change what the next git run executes",
     ),
-    "hook-git-hooks-sample-counted": Mutant(
+    "hook-git-surface-option-before-subcommand-ok": Mutant(
         HOOK,
-        '        if not name.endswith(".sample") and (os.path.islink(path) or os.access(path, os.X_OK)):\n',
-        "        if os.path.islink(path) or os.access(path, os.X_OK):\n",
-        "a `*.sample` file in the hooks directory counts as a hook git would run",
+        "    return [] if not tokens or tokens[0].startswith(\"-\") else tokens\n",
+        "    return tokens\n",
+        "`git -c core.hooksPath=... <subcommand>` is read as a plain subcommand",
     ),
-    "hook-git-hooks-non-executable-counted": Mutant(
+    "hook-git-surface-lone-runner-option-unchecked": Mutant(
         HOOK,
-        '        if not name.endswith(".sample") and (os.path.islink(path) or os.access(path, os.X_OK)):\n',
-        '        if not name.endswith(".sample"):\n',
-        "a file git would not run (not executable) counts as a hook",
-    ),
-    "hook-git-hooks-dir-writer-segment-ignored": Mutant(
-        HOOK,
-        "        for other in others:\n            if any(isinstance(r, resources.FileResource) and _under(_real(r.path), _real(directory)) for r in other.changed):\n",
-        "        for other in []:\n            if any(isinstance(r, resources.FileResource) and _under(_real(r.path), _real(directory)) for r in other.changed):\n",
-        "a segment writing a hook into the hooks directory beside a git write does not make the line undeterminable",
+        "            if not _after_plain_options(verdict.text):\n",
+        "            if False:\n",
+        "a lone git segment with an option that moves what git executes is not stopped",
     ),
     "hook-judge-child-guard-removed": Mutant(
         HOOK,
@@ -946,6 +953,84 @@ CATALOGUE: "dict[str, Mutant]" = {
         "        return 0 if left <= 0 else max(1, math.ceil(min(cap, left)))\n",
         "        return 0 if left <= 0 else int(min(cap, left))\n",
         "less than a second left of the deadline reads as no time at all",
+    ),
+    "hook-git-surface-unreadable-allows": Mutant(
+        HOOK,
+        "            return f\"cannot read what git would execute in {verdict.venue}: {exc}\"\n",
+        "            continue\n",
+        "a repository whose surface cannot be read is treated as one with nothing to execute",
+    ),
+    "git-surface-old-record-matches": Mutant(
+        GIT_SURFACE,
+        "        return \"the handoff record carries no git-surface snapshot\"\n",
+        "        return None\n",
+        "a record without the snapshot (the old format) is read as matching every live surface",
+    ),
+    "git-surface-unknown-repo-matches": Mutant(
+        GIT_SURFACE,
+        "        return f\"{live.repo} is not in the git-surface snapshot taken at spawn\"\n",
+        "        return None\n",
+        "a repository the snapshot does not list is read as unchanged",
+    ),
+    "git-surface-digest-only-compared": Mutant(
+        GIT_SURFACE,
+        "    if saved[\"digest\"] == live.digest and saved[\"parts\"] == live.parts:\n",
+        "    if True:\n",
+        "a live surface is read as the snapshot's whatever its digest, as long as the repository is listed",
+    ),
+    "git-surface-hooks-entry-dropped": Mutant(
+        GIT_SURFACE,
+        "                record[\"entries\"][name] = _entry(path)\n",
+        "                record[\"entries\"][name] = {}\n",
+        "the entries of a hooks directory (name, mode, bytes) are not part of the snapshot",
+    ),
+    "git-surface-symlink-target-bytes-dropped": Mutant(
+        GIT_SURFACE,
+        "        record[\"content\"] = _file_digest(real) if target is not None and stat.S_ISREG(target.st_mode) else \"not-a-file\"\n",
+        "        record[\"content\"] = \"not-a-file\"\n",
+        "the bytes of the file a symlinked hook entry resolves to are not part of the snapshot",
+    ),
+    "git-surface-config-dropped": Mutant(
+        GIT_SURFACE,
+        "        \"config\": _exec_entries(entries, base, paths),\n",
+        "        \"config\": [],\n",
+        "the config entries that name a program, and those programs' bytes, are not part of the snapshot",
+    ),
+    "git-surface-config-program-bytes-dropped": Mutant(
+        GIT_SURFACE,
+        "            record[\"programs\"] = {target: _entry(target) for target in targets}\n",
+        "            record[\"programs\"] = {target: {} for target in targets}\n",
+        "the bytes of a program a config entry names are not part of the snapshot",
+    ),
+    "git-surface-attributes-dropped": Mutant(
+        GIT_SURFACE,
+        "        \"attributes\": _attributes_part(toplevel, _resolve(info_attributes, base), attributes_file, timeout(), paths),\n",
+        "        \"attributes\": {},\n",
+        "the .gitattributes files are not part of the snapshot",
+    ),
+    "git-surface-frameworks-dropped": Mutant(
+        GIT_SURFACE,
+        "        \"frameworks\": _frameworks_part(toplevel, paths),\n",
+        "        \"frameworks\": {},\n",
+        "the hook framework files (.pre-commit-config.yaml, lefthook, .husky) are not part of the snapshot",
+    ),
+    "spawn-record-drops-git-surface": Mutant(
+        SPAWN,
+        "        git_surface=git_surface_snapshot([workdir, state.resolve_check_venue(CheckVenue.DELIVERY.value)]),\n",
+        "",
+        "the handoff record the spawn writes carries no git-surface snapshot, so no git run can be verified",
+    ),
+    "spawn-record-drops-launch-dir": Mutant(
+        SPAWN,
+        "        launch_dir=workdir or None,\n",
+        "",
+        "the handoff record carries no launch directory, so the hook reads project settings from its own cwd",
+    ),
+    "norm-handoff-verify-drops-git-surface": Mutant(
+        NORM_HANDOFF,
+        "        \"git_surface\": record.get(\"git_surface\") if isinstance(record.get(\"git_surface\"), dict) else None,\n",
+        "        \"git_surface\": None,\n",
+        "the verified record never hands the git-surface snapshot on",
     ),
     "spawn-record-drops-permissions-allow": Mutant(
         SPAWN,

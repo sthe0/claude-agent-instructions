@@ -69,23 +69,42 @@ that look covered are also made undeterminable:
   (`NON_CARRIER_PROGRAMS`: programs that neither run git nor python nor a shell nor an interpreter, e.g. `ls`,
   `cat`, `touch`). The alternative, blocking only `git` and `python`, lets a wrapper (`env`, `make`, `bash -c`,
   an arbitrary script) carry the variable into a git or python process; the allow-list errs toward a prompt.
-- **Git hooks, as an allow-list.** A `git` segment that changes something is covered only when (1) every other
-  segment of the line is covered and not opaque (a harness-allowed segment such as `git restore` or `touch` in
-  `acceptEdits` could write a hook; an opaque segment shows the judge only the files it names), and (2) for each
-  directory git may read hooks from (`git rev-parse --git-path hooks`, which follows `core.hooksPath`; relative
-  answers are tried against the repo and the worktree root), the child cannot write into it through any channel
-  or it holds nothing git would run. The channels: a write resource of the record, the cwd under `acceptEdits`, an
-  add-dir of the record or of a settings file, an `Edit`/`Write` allow entry of the record or of a settings file;
-  a record that states neither list or settings that cannot be read count as a channel. "Nothing git would run" is
-  any entry other than a `*.sample` file that is executable, a symlink or a directory. No list of hook names is
-  kept (git runs `post-index-change`, `reference-transaction`, `pre-auto-gc` and others on operations nobody
-  thinks of as hook-running), and a segment of the line that writes into the directory also blocks.
+- **A git run, held to a trusted snapshot.** git executes code nobody named: a hook (`post-index-change` runs
+  even on `git status`), a symlinked hook entry, a program the config names (`core.fsmonitor`, `filter.*`,
+  `diff.external`, `core.sshCommand`, `gpg.program`, an `alias` starting with `!`), attributes, a hook framework
+  reading a file of the worktree. Recognising each channel as it appeared was always one channel behind, so the
+  spawn takes **one digest of all of them** instead (`scripts/agentctl/git_surface.py`, `snapshot_venues`) for the
+  repositories of the child's working directory and delivery venue, and puts it into the handoff record
+  (`git_surface`, covered by the record's sha256). It is taken in `spawn-specialist.py`'s record builder, before
+  the child can change anything. What it pins, per repository: every hooks directory (the default one and
+  `core.hooksPath`; each entry but `*.sample`, its mode and, for a symlink, the realpath and the bytes of the
+  target), every config entry that names a program or a hook path together with the bytes of that program
+  (`EXEC_KEY_PATTERNS`, `alias.*`/`submodule.*.update` starting with `!`), `.gitattributes` (top level and tracked
+  nested), `info/attributes`, `core.attributesFile`, and the framework files `.pre-commit-config.yaml`,
+  `lefthook.yml`, `.lefthook.yml`, `lefthook.yaml` and the `.husky/` tree.
+  A segment that runs git (a `git` segment of any state, covered or harness-allowed, read-only or writing, or a
+  segment whose resolved effects include a ref) is allowed only when the live digest of its repository equals the
+  snapshot, and a line that holds such a segment is held to two more rules. First, no other segment may be able to
+  change the surface before git runs: a neighbour that is opaque, covered only by a rule pattern (its writes were
+  never resolved), harness-allowed and not read-only, a git subcommand that rewrites tracked files (`checkout`,
+  `restore`, ...), or a covered write onto a pinned path makes the line undeterminable; a lone git segment has no
+  neighbour but must name no git option other than `-C <dir>` (`git -c core.hooksPath=... commit` moves what git
+  executes). Second, any difference, a repository the snapshot does not list, a surface that cannot be read, or a
+  record without the snapshot (an old format) is undeterminable, never an allow; the hook never denies on this
+  basis. A directory that is not in a repository runs no hook. Config entries that name nothing executable are
+  not pinned, so the child's own `git push -u` (it writes `branch.*`) leaves the digest alone, and a push of the
+  plan-declared branch in a repository with tracked hooks (this repository: `core.hooksPath=githooks`) is
+  allowed as long as the tracked hooks are what they were at spawn. A line that only adds and commits beside a
+  push, `git add a && git commit -m x && git push origin b`, is allowed too, whether the add and the commit are
+  covered or run by an allow entry of the child (each is a git segment held to the same snapshot, and neither
+  rewrites tracked files); `git restore hook && git push` and `git checkout -- dir && git push` are not, because
+  the restore or checkout may rewrite a hook. So a push never gets an allow behind a neighbour that rewrites
+  tracked files, an opaque one, a rule-pattern one or a harness-allowed one that is not read-only.
 - **Opaque code that writes nothing the judge can name**, because what it reads is not confined.
 
 Every `cd <relative>` is resolved as if `CDPATH` were set (its value in the Bash shell cannot be read), so the
-working directory after it is unknown. The hook's git probes (`rev-parse --git-path hooks`) draw from the same
-per-call deadline as the judge calls: when the deadline is spent a probe is not started and the segment is
-undeterminable.
+working directory after it is unknown. The hook's git probes (the surface capture) draw from the same per-call
+deadline as the judge calls: when the deadline is spent a probe is not started and the segment is undeterminable.
 
 ## The decision log
 
@@ -112,8 +131,9 @@ call text, not of one segment). `decision` is `allow`, `deny` or
 ## Residuals
 
 These are the places where the hook sees less than the Bash tool does. Most fail toward "no decision" or a prompt.
-**Four can still yield an ALLOW** and are marked so: the shell snapshot divergence, git hooks the child cannot
-write, opaque code reads, and the parent scratchpad.
+**Six can still yield an ALLOW** and are marked so: the shell snapshot divergence, code a trusted git hook or
+filter runs by content, git run by other programs, the cross-call hook chain, opaque code reads, and the parent
+scratchpad.
 
 - **Shell snapshot divergence (can yield an ALLOW).** The hook runs in the hook process's environment, not the Bash
   tool's shell snapshot. A `GIT_*` (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_CONFIG_*`) or `PYTHON*` variable set only
@@ -122,12 +142,31 @@ write, opaque code reads, and the parent scratchpad.
   `CDPATH` is closed instead: every `cd <relative>` is resolved as if it were set, so it leaves the working
   directory unknown. `HOME` and `XDG_CONFIG_HOME` set only in the snapshot are a further residual of the same kind;
   the resolver reads the push configuration from the hook's own environment.
-- **Git hooks the child cannot write (can yield an ALLOW).** A resolved git operation that changes something runs
-  git hooks, which can write anywhere. The hook models the git ref effect, not the hooks'. It allows the operation
-  only under the allow-list above; a hooks directory that the child cannot write through any channel is trusted
-  with whatever it holds, so an existing executable hook there runs under the allow. A global git configuration
-  that the hook's own `git` reads differently from the Bash shell (see the snapshot item) can name another
-  directory.
+- **Code a trusted hook or filter runs by content (can yield an ALLOW).** The snapshot pins the hook, the
+  program a config entry names and the framework files, not what they go on to execute. A hook that execs a
+  file of the worktree, `.husky/` scripts, the `pre-commit` framework reading `.pre-commit-config.yaml`, runs
+  whatever that file holds when git runs, including code the child wrote after the spawn. The hook's own file and
+  the framework configuration are pinned; the files they run are not. In this repository `githooks/pre-push`
+  execs `scripts/instruction-smoke-gate.py` and `githooks/pre-commit` execs `scripts/verify-all.py --staged`, so a
+  child that edits those scripts, which its plan resources may allow, gets them run by an allowed `git push` or
+  `git commit` without the hook seeing it. Untracked nested `.gitattributes` and config keys outside
+  `EXEC_KEY_PATTERNS` are likewise not pinned.
+- **Git run by something that is not a git segment (can yield an ALLOW).** An opaque script, an `env`, `make` or
+  `bash -c` wrapper starts git itself, and a script the judge saw push is the only such case modelled (its ref
+  effect makes the segment a git runner). A wrapper that starts git without a ref effect is held to the
+  environment blocker and its own coverage, not to the snapshot.
+- **The cross-call chain (can yield an ALLOW).** The snapshot is compared at the time of each call. A harness-allowed
+  `git commit` that commits a hook into a tracked hooks directory in call 1 is declined by the hook (the next
+  call's digest differs, so call 2 is undeterminable), but call 1 itself ran under the harness, not under this
+  hook's allow. The hook can decline to allow; it cannot undo what the harness ran.
+- **The snapshot is re-taken per spawn.** A re-dispatch or a resumed child gets a fresh record
+  (`refresh_resumed_child_link`) and therefore a fresh snapshot: whatever the child left in the surface before the
+  resume is trusted from then on. The global git configuration is read at hook time with the child's
+  environment and at spawn time with the parent's; a systematic difference makes every git run undeterminable
+  (fail closed), which `scripts/tests/e2e_resource_grant_hook.py --dry-run` would show.
+- **Launch directory.** Project settings are read from `launch_dir` in the record (the directory the child was
+  started in) and its worktree root, not from the hook's current directory; a record without it falls back to the
+  cwd the hook sees.
 - **`PYTHONPATH`, `PYTHONHOME`, `PYTHONSAFEPATH` in the hook process** make `code_effects` refuse every opaque
   segment, so such calls are `undeterminable` (no decision). The hook is registered as `python3 -I` and locates
   `agentctl` relative to its own file, never through `PYTHONPATH`.
@@ -136,7 +175,8 @@ write, opaque code reads, and the parent scratchpad.
   segment is allowed only when the judge names at least one write and all of its writes are covered; code that
   writes nothing is `undeterminable`. The read confinement of a judged segment applies to the writes the judge
   named, not to the code's own reads. Non-opaque read-only programs have their path operands checked against the
-  record and the scratchpad; git operands are repo-relative and exempt.
+  record and the scratchpad; git operands are repo-relative and exempt. The reads of an opaque segment are
+  never confined, whether the judge named a write or not: only its writes are checked.
 - **Ambient settings.** The deny reads the settings files listed under Decisions at decision time, so it follows
   what the harness merges now; it cannot see an `--add-dir` or a permission rule given to the child only on its
   command line beyond what the record states, which is why a record without those lists never denies.
@@ -152,7 +192,8 @@ write, opaque code reads, and the parent scratchpad.
 
 ## Tests
 
-`scripts/tests/test_hook_resource_grant_check.py` (unit), `scripts/tests/test_resource_grant_replay.py` (every
+`scripts/tests/test_hook_resource_grant_check.py` (unit), `scripts/tests/test_git_surface.py` (the snapshot's
+digest and comparison), `scripts/tests/test_resource_grant_replay.py` (every
 case of `fixtures/resource_grant_replay/denials.jsonl` through the hook entry point, judge stubbed),
 `scripts/tests/e2e_resource_grant_hook.py` (`--dry-run` asserts the registration; `--live` is a root-only run) and
 the mutants named `hook-*` in `scripts/tests/resource_grant_mutation_control.py`.

@@ -18,13 +18,15 @@ segment positively covered; a deny needs a positive case that the harness would 
 Decisions (Bash):
   allow  every segment is covered: its changed resources lie within the record's resources, or the segment
          matches a record rule pattern (strictly, per segment); a segment that changes nothing must also read
-         only inside the record's resources or the parent scratchpad. A segment whose git operation would run
-         a hook the child could have written, or that reads an environment variable the hook cannot check
-         against the Bash shell (CDPATH, GIT_DIR, ..., PYTHON*), is not covered. The git rule is an
-         allow-list: a git segment that changes anything is covered only if every other segment of the line
-         is covered and not opaque, and the effective hooks directory is either not writable through any
-         channel the child has (a record write resource, acceptEdits in the cwd, an add-dir, an Edit/Write
-         allow entry, settings that cannot be read) or holds no executable entry other than `*.sample`.
+         only inside the record's resources or the parent scratchpad. A segment that reads an environment
+         variable the hook cannot check against the Bash shell (CDPATH, GIT_*, PYTHON*) is not covered. A line
+         that runs git (a git segment of any state, or a segment whose effects include a ref) is allowed only
+         while the live digest of what git would execute in that repository (`agentctl.git_surface`: hooks and
+         their symlink targets, config entries naming programs, attributes, hook-framework files) equals the
+         snapshot the spawn took into the record, and no other segment of the line could change it (opaque,
+         rule-pattern or harness-allowed segments that are not read-only, and covered writes onto a pinned
+         path). A record without a snapshot, a repository missing from it, or a surface that cannot be read
+         is undeterminable, never allowed.
   deny   ALL of: the permission mode is acceptEdits (the only mode probe Q6 measured); the record carries
          `permissions_allow` and `add_dirs` explicitly; the settings files the harness merges with the record
          (user, config root, managed and the project's `.claude/settings[.local].json`) are all readable and
@@ -43,8 +45,8 @@ Every call appends one row to `<state_root>/resource-uses/<parent_session>-<stag
 
 Residuals that can still yield an ALLOW, named in docs/operations/resource-grant-hook.md: the hook sees its
 own process environment, not the Bash tool's shell snapshot, so a GIT_* or PYTHON* value set only there is
-invisible and a call can be allowed that the shell redirects (CDPATH is closed: every `cd <relative>` leaves
-the working directory unknown); the parent scratchpad is recognised by path layout.
+invisible; a hook or filter that runs a file of the worktree by path runs whatever the child wrote there; the
+parent scratchpad is recognised by path layout.
 """
 from __future__ import annotations
 
@@ -53,7 +55,6 @@ import json
 import math
 import os
 import shlex
-import subprocess
 import sys
 import tempfile
 import time
@@ -61,7 +62,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agentctl import advisor, code_effects, resources, segment_resolver, tool_contracts  # noqa: E402
+from agentctl import advisor, code_effects, git_surface, resources, segment_resolver, tool_contracts  # noqa: E402
 from agentctl import config as agentctl_config  # noqa: E402
 from agentctl.norm_handoff import NORM_HANDOFF_ENV, state_root_of, verify_env_value  # noqa: E402
 from agentctl.store import safe_session_id  # noqa: E402
@@ -99,6 +100,17 @@ NON_CARRIER_PROGRAMS = frozenset({
     "cd", "ls", "cat", "head", "tail", "wc", "mkdir", "touch", "cp", "mv", "rm", "echo", "printf", "pwd",
     "true", "false", "test", "[", "stat", "file", "diff", "pushd", "popd",
 })
+#: Programs that write nothing, however they are called (a redirect is a separate resolved effect).
+READ_ONLY_PROGRAMS = frozenset({
+    "cd", "ls", "cat", "head", "tail", "wc", "echo", "printf", "pwd", "true", "false", "test", "[", "stat",
+    "file", "diff", "pushd", "popd",
+})
+#: git subcommands that leave the worktree's files alone; the others (checkout, merge, reset, ...) rewrite
+#: tracked files, and so possibly a tracked hook.
+WORKTREE_PRESERVING_GIT = frozenset({
+    "status", "log", "diff", "show", "rev-parse", "ls-files", "blame", "branch", "push", "add", "commit",
+    "fetch", "tag", "remote",
+})
 GIT_PROBE_TIMEOUT_S = 5
 #: Settings files the harness merges into the child's permissions besides the record.
 MANAGED_SETTINGS = "/etc/claude-code/managed-settings.json"
@@ -129,6 +141,11 @@ class Approved:
     #: None when the record does not say (written before the keys existed): never a reason to deny.
     add_dirs: "list | None" = None
     env: dict = field(default_factory=dict)
+    #: The directory the child was started in, where the harness reads the project's settings from. The
+    #: payload cwd for a record written before the key existed.
+    launch_dir: str = ""
+    #: `git_surface.snapshot_venues` as the spawn recorded it; None for a record without one.
+    git_surface: "dict | None" = None
 
 
 @dataclass
@@ -139,6 +156,8 @@ class SegmentVerdict:
     uncovered: list = field(default_factory=list)
     matched: list = field(default_factory=list)
     opaque: bool = False
+    #: Covered by text match against a record rule pattern: what the segment writes was never resolved.
+    pattern: bool = False
     reason: str = ""
     venue: str = ""
 
@@ -361,7 +380,8 @@ def _settings_files(approved: Approved) -> list:
     for name in ("CLAUDE_CONFIG_DIR", "CLAUDE_AGENT_HOME"):
         if env.get(name):
             roots.append(Path(env[name]).expanduser())
-    for base in dict.fromkeys([approved.cwd, segment_resolver.worktree_root(approved.cwd) or approved.cwd]):
+    launch = approved.launch_dir or approved.cwd
+    for base in dict.fromkeys([launch, segment_resolver.worktree_root(launch) or launch]):
         roots.append(Path(base) / ".claude")
     files = [root / name for root in dict.fromkeys(roots) for name in SETTINGS_NAMES]
     return [*files, Path(MANAGED_SETTINGS)]
@@ -388,7 +408,8 @@ def _read_settings(path: Path) -> "Ambient | None":
     allow, dirs = permissions.get("allow", []), permissions.get("additionalDirectories", [])
     if not isinstance(allow, list) or not isinstance(dirs, list):
         return None
-    return Ambient([str(e) for e in allow], [os.path.expanduser(str(d)) for d in dirs])
+    root = path.parent.parent
+    return Ambient([str(e) for e in allow], [os.path.join(root, os.path.expanduser(str(d))) for d in dirs])
 
 
 def ambient_settings(approved: Approved) -> "Ambient | None":
@@ -450,110 +471,94 @@ def may_deny(approved: Approved, ambient: "Ambient | None", command: str) -> boo
 
 def env_blocker(approved: Approved, text: str) -> "str | None":
     """The exported variable that makes a segment unverifiable against the Bash shell. git answers to the
-    GIT_* family, python to PYTHON*, and any program outside the closed non-carrier list may start either."""
-    tokens = _tokens(text)
-    program = os.path.basename(tokens[0]) if tokens else ""
+    GIT_* family and python to PYTHON*, but each starts the other (python runs git, a hook or alias may be
+    python), so every program outside the closed non-carrier list is held to both families."""
+    program = _program(text)
     if program in NON_CARRIER_PROGRAMS:
         return None
     for name in sorted(approved.env):
-        git_var = name in GIT_ENV_EXACT or name.startswith(GIT_ENV_PREFIX)
-        python_var = name.startswith("PYTHON") and name not in PYTHON_ENV_HARMLESS
-        is_git, is_python = program == "git", program.startswith("python")
-        if (is_git and git_var) or (is_python and python_var) or (not is_git and not is_python and (git_var or python_var)):
+        if name in GIT_ENV_EXACT or name.startswith(GIT_ENV_PREFIX):
+            return name
+        if name.startswith("PYTHON") and name not in PYTHON_ENV_HARMLESS:
             return name
     return None
 
 
-def effective_hooks_dirs(repo: str, timeout: float) -> "list[str] | None":
-    """Where git looks for hooks in `repo` (`rev-parse --git-path hooks`, which follows `core.hooksPath`),
-    as every absolute path the answer can mean: relative to the directory it was asked from and to the
-    worktree root. None when git cannot say within `timeout` seconds."""
-    if timeout <= 0:
-        return None
-    try:
-        proc = subprocess.run(
-            ["git", "-C", repo, "rev-parse", "--git-path", "hooks"],
-            capture_output=True, text=True, timeout=timeout, check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    answer = proc.stdout.strip()
-    if proc.returncode != 0 or not answer:
-        return None
-    if os.path.isabs(answer):
-        return [answer]
-    root = segment_resolver.worktree_root(repo)
-    return list(dict.fromkeys(os.path.normpath(os.path.join(base, answer)) for base in (repo, root) if base))
+def _program(text: str) -> str:
+    tokens = _tokens(text)
+    return os.path.basename(tokens[0]) if tokens else ""
 
 
-def hooks_dir_channel(approved: Approved, ambient: "Ambient | None", directory: str) -> "str | None":
-    """How the child can write into `directory`, or None when it cannot. Fail closed: a record or settings
-    that do not say what the child may write count as a channel."""
-    real = _real(directory)
-    if covered_by(approved, resources.FileResource(directory, "write")) or covered_by(approved, resources.FileResource(real, "write")):
-        return "a write resource of the record"
-    if approved.allow_entries is None or approved.add_dirs is None:
-        return "a record that does not state the child's directories"
-    if ambient is None:
-        return "settings that cannot be read"
-    if approved.mode == ACCEPT_EDITS and _under(real, _real(approved.cwd)):
-        return "acceptEdits in the child's cwd"
-    if any(_under(real, _real(root)) for root in [*approved.add_dirs, *ambient.add_dirs]):
-        return "an added directory"
-    probe = {"file_path": os.path.join(real, "hook")}
-    for entry in [*approved.allow_entries, *ambient.allow]:
-        if any(permission_entry_match.covers(entry, tool, probe) for tool in ("Edit", "Write")):
-            return f"the allow entry {entry}"
-    return None
+def _after_plain_options(text: str) -> list:
+    """The tokens of a git segment from its subcommand on, or [] when an option other than `-C <dir>` comes
+    first: `-c core.hooksPath=...` or `--exec-path` would move what git executes."""
+    tokens = _tokens(text)[1:]
+    while len(tokens) >= 2 and tokens[0] == "-C":
+        tokens = tokens[2:]
+    return [] if not tokens or tokens[0].startswith("-") else tokens
 
 
-def executable_entries(directory: str) -> "list[str] | None":
-    """Entries git would run (anything but `*.sample` that is executable, a symlink or a directory); an
-    absent directory has none; None when it cannot be listed."""
-    try:
-        names = os.listdir(directory)
-    except FileNotFoundError:
-        return []
-    except OSError:
-        return None
-    found = []
-    for name in sorted(names):
-        path = os.path.join(directory, name)
-        if not name.endswith(".sample") and (os.path.islink(path) or os.access(path, os.X_OK)):
-            found.append(name)
-    return found
+def _preserves_worktree(text: str) -> bool:
+    """A git segment whose subcommand leaves tracked files alone and that names no option but `-C <dir>`."""
+    tokens = _after_plain_options(text)
+    return bool(tokens) and tokens[0] in WORKTREE_PRESERVING_GIT
 
 
-def git_hooks_blocker(approved: Approved, ambient: "Ambient | None", verdict: "SegmentVerdict", others: list, budget: "JudgeBudget") -> "str | None":
-    """Why a covered git operation that changes something may run a hook the child could have written.
-    git runs hooks (post-index-change, reference-transaction, pre-auto-gc, ...) from the effective hooks
-    directory on many operations, so no hook list is kept: the operation is covered only if every other
-    segment of the line is covered and not opaque, and each directory git may read hooks from is either
-    not writable through any channel of the child or holds nothing git would run."""
-    tokens = _tokens(verdict.text)
-    if not verdict.changed or not tokens or os.path.basename(tokens[0]) != "git":
-        return None
-    _sub, _rest, global_values, _reason = tool_contracts.find_git_subcommand(tokens[1:])
-    for other in others:
-        if other.state != COVERED or other.opaque:
-            return f"another segment of the line is not positively covered ({other.state}): it could write a hook git runs"
-    c_value = global_values.get("-C")
-    repo = c_value if c_value and os.path.isabs(c_value) else os.path.join(verdict.venue, c_value or ".")
-    dirs = effective_hooks_dirs(repo, budget.git_timeout())
-    if dirs is None:
-        return "cannot read the effective git hooks directory"
-    for directory in dirs:
-        channel = hooks_dir_channel(approved, ambient, directory)
-        if channel is None:
+def runs_git(verdict: "SegmentVerdict") -> bool:
+    """Whether the segment starts git: a git call of any state, or a segment whose resolved effects include
+    a ref (an opaque script the judge saw push). What other programs start by themselves is not modelled."""
+    return _program(verdict.text) == "git" or any(isinstance(r, resources.VcsRefResource) for r in verdict.changed)
+
+
+def may_change_git_surface(verdict: "SegmentVerdict", pinned: list) -> bool:
+    """Whether a segment of a line that runs git could write what git executes before git does: code whose
+    writes were never resolved (opaque, a rule pattern, a harness-allowed program that is not read-only), a
+    git subcommand that rewrites tracked files, or a resolved write onto a pinned path."""
+    program = _program(verdict.text)
+    if program == "git":
+        return not _preserves_worktree(verdict.text)
+    if verdict.opaque or verdict.pattern:
+        return True
+    if verdict.state == HARNESS and not verdict.changed and program not in READ_ONLY_PROGRAMS:
+        return True
+    for resource in verdict.changed:
+        if not isinstance(resource, resources.FileResource):
             continue
-        runnable = executable_entries(directory)
-        if runnable is None:
-            return f"cannot list the git hooks directory {directory}"
-        if runnable:
-            return f"git would run {runnable[0]} from {directory}, which the child can write through {channel}"
-        for other in others:
-            if any(isinstance(r, resources.FileResource) and _under(_real(r.path), _real(directory)) for r in other.changed):
-                return f"another segment of the line writes into {directory}, which git runs hooks from"
+        real = _real(resource.path)
+        if any(_under(real, path) or _under(path, real) for path in pinned):
+            return True
+    return False
+
+
+def git_surface_blocker(approved: Approved, verdicts: list, budget: "JudgeBudget") -> "str | None":
+    """Why a line that runs git may not be allowed, or None. The repository of every git-running segment
+    must show the digest the spawn recorded (`git_surface`), and no other segment may be able to change it
+    first: a covered `echo > .git/hooks/post-index-change && git status` matches the snapshot when the hook
+    looks and not when git runs. Not-a-repository is no hook; every other failure is a block."""
+    live: dict = {}
+    for verdict in verdicts:
+        if not runs_git(verdict) or verdict.venue in live:
+            continue
+        try:
+            live[verdict.venue] = git_surface.capture(verdict.venue, budget.git_timeout)
+        except git_surface.NotARepo:
+            live[verdict.venue] = None
+            continue
+        except git_surface.Unreadable as exc:
+            return f"cannot read what git would execute in {verdict.venue}: {exc}"
+        why = git_surface.mismatch(approved.git_surface, live[verdict.venue])
+        if why is not None:
+            return why
+    pinned = sorted({path for surface in live.values() if surface is not None for path in surface.paths})
+    if not any(surface is not None for surface in live.values()):
+        return None
+    runners = [v for v in verdicts if runs_git(v)]
+    for verdict in verdicts:
+        if _program(verdict.text) == "git" and runners == [verdict]:
+            if not _after_plain_options(verdict.text):
+                return f"a git option that moves what git executes: {verdict.text}"
+        elif may_change_git_surface(verdict, pinned):
+            return f"another segment of the line could change what git executes: {verdict.text}"
     return None
 
 
@@ -596,7 +601,7 @@ def evaluate_segment(approved: Approved, segment, line: list, runner, budget: Ju
         return SegmentVerdict(text, UNDETERMINABLE, venue=venue, reason=f"{variable} is set and cannot be checked against the Bash shell")
     pattern = _first_rule(approved.rule_patterns, text)
     if pattern is not None:
-        return SegmentVerdict(text, COVERED, venue=venue, matched=[pattern])
+        return SegmentVerdict(text, COVERED, venue=venue, matched=[pattern], pattern=True)
     opaque = segment.status == "opaque"
     if segment.status == "unresolved":
         return SegmentVerdict(text, UNDETERMINABLE, venue=venue, reason=f"unresolved: {segment.reason_class}")
@@ -647,14 +652,6 @@ def decide_bash(approved: Approved, command: str, runner, budget: JudgeBudget, c
         return Verdict(NONE, UNDETERMINABLE, venue=approved.cwd)
     verdicts = [evaluate_segment(approved, seg, split.segments, runner, budget, cache_dir) for seg in split.segments]
     ambient = ambient_settings(approved)
-    snapshot = list(verdicts)
-    for index, verdict in enumerate(snapshot):
-        if verdict.state != COVERED:
-            continue
-        why = git_hooks_blocker(approved, ambient, verdict, snapshot[:index] + snapshot[index + 1:], budget)
-        if why is not None:
-            verdicts[index] = SegmentVerdict(
-                verdict.text, UNDETERMINABLE, venue=verdict.venue, changed=verdict.changed, opaque=verdict.opaque, reason=why)
     changed = list(dict.fromkeys(r for v in verdicts for r in v.changed))
     shown = [resources.resource_to_dict(r) for r in changed]
     matched = list(dict.fromkeys(m for v in verdicts for m in v.matched))
@@ -670,6 +667,9 @@ def decide_bash(approved: Approved, command: str, runner, budget: JudgeBudget, c
     if all(v.state == HARNESS for v in verdicts):
         return Verdict(NONE, "harness-allowed", **base)
     if all(v.state in (COVERED, HARNESS) for v in verdicts):
+        why = git_surface_blocker(approved, verdicts, budget)
+        if why is not None:
+            return Verdict(NONE, UNDETERMINABLE, message=why, **base)
         return Verdict(ALLOW, "opaque-judged" if opaque else "covered", **base)
     return Verdict(NONE, UNDETERMINABLE, **base)
 
@@ -716,6 +716,8 @@ def _approved(link: dict, payload: dict, env) -> Approved:
         protected=protected,
         add_dirs=_optional_strings(link.get("add_dirs")),
         env=dict(env),
+        launch_dir=_real(str(link["launch_dir"])) if link.get("launch_dir") else cwd,
+        git_surface=link.get("git_surface"),
     )
 
 

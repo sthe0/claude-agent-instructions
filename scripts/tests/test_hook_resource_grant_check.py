@@ -4,6 +4,7 @@ switch, each decision class, per-segment rule matching, the decision log and the
 The opaque-code judge is always a stub; no `claude` process is started. The cases of the denial
 fixture are replayed through the same entry point in `test_resource_grant_replay.py`.
 """
+import dataclasses
 import json
 import os
 import re
@@ -394,21 +395,21 @@ def test_n5_a_sliver_of_the_deadline_is_a_second_not_nothing(hook):
     assert (budget.next_timeout(), budget.git_timeout()) == (0, 0)
 
 
-def test_n6_the_hooks_directory_probe_draws_from_the_call_deadline(rig, hook, monkeypatch):
+def test_n6_the_git_surface_capture_draws_from_the_call_deadline(rig, hook, monkeypatch):
     seen = []
-    real_run = hook.subprocess.run
+    real_capture = hook.git_surface.capture
 
-    def spy(argv, **kw):
-        if "--git-path" in argv:
-            seen.append(kw.get("timeout"))
-        return real_run(argv, **kw)
+    def spy(directory, timeout):
+        seen.append(timeout())
+        return real_capture(directory, timeout)
 
-    monkeypatch.setattr(hook.subprocess, "run", spy)
+    child = rig.child()
+    monkeypatch.setattr(hook.git_surface, "capture", spy)
     monkeypatch.setattr(hook, "time", FrozenTime())
-    rig.bash(rig.child(), "git commit -q -m x", constants={**CONSTANTS, "resource-grant-hook-timeout-s": "7"})
+    rig.bash(child, "git commit -q -m x", constants={**CONSTANTS, "resource-grant-hook-timeout-s": "7"})
     assert seen == [2]
     monkeypatch.setattr(hook.JudgeBudget, "git_timeout", lambda self: 0)
-    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
+    decision, row, _ = rig.bash(child, "git commit -q -m x")
     assert (decision, row["reason_class"]) == ("none", "undeterminable")
 
 
@@ -472,91 +473,231 @@ def test_b4_a_python_variable_in_the_environment_makes_a_python_segment_undeterm
     assert decision == "allow"
 
 
-def test_b4_a_commit_whose_hooks_directory_the_stage_may_write_is_not_covered(rig):
-    seg_tests._git(rig.venue, "config", "core.hooksPath", "githooks")
-    hooks = rig.venue / "githooks"
-    hooks.mkdir()
-    child = rig.child()
-    decision, row, _ = rig.bash(child, "git commit -q -m x")
-    assert (decision, row["reason_class"]) == ("allow", "covered")
-    plant(hooks, "pre-commit")
-    decision, row, answer = rig.bash(child, "git commit -q -m x")
+def test_s13_a_git_option_before_the_subcommand_is_not_a_preserving_call(rig):
+    child = rig.child(extra_patterns=["Bash(git:*)"])
+    decision, row, answer = rig.bash(child, "git -c core.hooksPath=/tmp/x commit -q -m x")
     assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
-    (hooks / "pre-commit").unlink()
-    decision, row, _ = rig.bash(child, f"printf x > {hooks}/pre-commit && git commit -q -m x")
-    assert (decision, row["reason_class"]) == ("none", "undeterminable")
-
-
-def test_b4_a_hooks_directory_outside_the_writable_resources_does_not_block(rig):
-    elsewhere = rig.outside / "hooks"
-    plant(elsewhere, "pre-commit")
-    seg_tests._git(rig.venue, "config", "core.hooksPath", str(elsewhere))
-    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
+    decision, row, _ = rig.bash(child, f"git -C {rig.venue} commit -q -m x")
     assert (decision, row["reason_class"]) == ("allow", "covered")
 
 
-# --- B6: the git hooks rule is an allow-list ---------------------------------------------------------
+# --- the trusted snapshot of what git executes -------------------------------------------------------
+# The spawn records a digest of every git code-execution surface of the child's repositories; the hook
+# allows a line that runs git only while the live digest is the same.
 
-def plant(directory, name, executable=True):
+def plant(directory, name, executable=True, body="#!/bin/sh\ntouch /tmp/planted\n"):
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / name
-    path.write_text("#!/bin/sh\ntouch /tmp/planted\n")
+    path.write_text(body)
     path.chmod(0o755 if executable else 0o644)
+    return path
 
 
 def use_hooks_dir(rig, directory):
     seg_tests._git(rig.venue, "config", "core.hooksPath", str(directory))
 
 
-def test_b6_git_add_runs_post_index_change_from_a_hooks_directory_the_stage_may_write(rig):
+def commit_all(rig, message="m"):
+    seg_tests._git(rig.venue, "add", "-A", "-f")
+    seg_tests._git(rig.venue, "commit", "-q", "-m", message)
+
+
+def undeterminable(result):
+    decision, row, answer = result
+    return (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
+
+
+def test_a_line_that_runs_git_is_allowed_while_the_surface_is_the_one_the_spawn_recorded(rig):
     hooks = rig.venue / "githooks"
     use_hooks_dir(rig, hooks)
-    (rig.venue / "a.txt").write_text("x")
+    plant(hooks, "pre-push", body="#!/bin/sh\nexit 0\n")
+    commit_all(rig)
     child = rig.child()
-    hooks.mkdir()
-    decision, row, _ = rig.bash(child, "git add a.txt")
-    assert (decision, row["reason_class"]) == ("allow", "covered")
-    plant(hooks, "post-index-change")
-    decision, row, answer = rig.bash(child, "git add a.txt")
-    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
-
-
-def test_b6_a_segment_writing_into_the_hooks_directory_beside_a_git_write_makes_it_undeterminable(rig):
-    hooks = rig.venue / "githooks"
-    use_hooks_dir(rig, hooks)
-    hooks.mkdir()
-    (rig.venue / "a.txt").write_text("x")
-    child = rig.child()
-    decision, row, _ = rig.bash(child, "echo x > a.txt && git add a.txt")
-    assert (decision, row["reason_class"]) == ("allow", "covered"), row
-    decision, row, answer = rig.bash(child, f"echo x > {hooks}/post-index-change && git add a.txt")
-    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
-
-
-def test_b6_a_hook_file_that_is_not_executable_or_is_a_sample_does_not_block(rig):
-    hooks = rig.venue / "githooks"
-    use_hooks_dir(rig, hooks)
-    plant(hooks, "pre-commit", executable=False)
-    plant(hooks, "pre-push.sample")
-    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
-    assert (decision, row["reason_class"]) == ("allow", "covered")
-
-
-def test_b6_a_harness_allowed_segment_beside_a_git_write_makes_it_undeterminable(rig):
-    hooks = rig.venue / "githooks"
-    use_hooks_dir(rig, hooks)
-    plant(hooks, "pre-push")
-    seg_tests._git(rig.venue, "add", "-f", "githooks/pre-push")
-    seg_tests._git(rig.venue, "commit", "-q", "-m", "hook")
-    (hooks / "pre-push").unlink()
-    child = rig.child(allow=["Bash(git restore:*)"])
-    decision, row, answer = rig.bash(child, "git restore githooks/pre-push && git push origin feat")
-    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
     decision, row, _ = rig.bash(child, "git push origin feat")
     assert (decision, row["reason_class"]) == ("allow", "covered")
 
 
-def test_b6_an_opaque_segment_beside_a_git_write_makes_it_undeterminable(rig):
+def test_s14_a_push_of_the_declared_branch_in_a_repository_with_tracked_hooks_is_allowed(rig):
+    """This repository's layout: core.hooksPath=githooks, hooks tracked in the tree."""
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, "githooks")
+    plant(hooks, "pre-push", body="#!/bin/sh\nexit 0\n")
+    plant(hooks, "pre-commit", body="#!/bin/sh\nexit 0\n")
+    commit_all(rig)
+    child = rig.child()
+    assert rig.bash(child, "git push origin feat")[0] == "allow"
+    (hooks / "pre-push").write_text("#!/bin/sh\ntouch /tmp/planted\n")
+    assert undeterminable(rig.bash(child, "git push origin feat"))
+
+
+def test_n10_add_commit_push_is_allowed_while_a_harness_neighbour_only_adds_and_commits(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, "githooks")
+    plant(hooks, "pre-push", body="#!/bin/sh\nexit 0\n")
+    commit_all(rig)
+    (rig.venue / "a.txt").write_text("x")
+    child = rig.child(allow=["Bash(git add:*)", "Bash(git commit:*)", "Bash(git restore:*)", "Bash(git checkout:*)"])
+    assert rig.bash(child, "git add a.txt && git commit -q -m x && git push origin feat")[0] == "allow"
+    assert undeterminable(rig.bash(child, "git restore githooks/pre-push && git push origin feat"))
+    assert undeterminable(rig.bash(child, "git checkout -- githooks && git push origin feat"))
+
+
+def test_b8_a_status_beside_a_stale_index_runs_post_index_change_so_a_planted_hook_blocks(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, hooks)
+    hooks.mkdir()
+    child = rig.child(allow=["Bash(git status:*)"])
+    assert rig.bash(child, f"git -C {rig.venue} status")[0] == "allow"
+    plant(hooks, "post-index-change")
+    (rig.venue / "a.txt").write_text("x")
+    assert undeterminable(rig.bash(child, f"git -C {rig.venue} status"))
+    decision, row, _ = rig.bash(child, "git status")
+    assert (decision, row["reason_class"]) == ("none", "harness-allowed")
+
+
+def test_b8_a_harness_allowed_git_segment_is_checked_beside_a_covered_write(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, hooks)
+    hooks.mkdir()
+    child = rig.child(allow=["Bash(git status:*)"])
+    command = f"echo x > {rig.venue}/out.txt && git status"
+    assert rig.bash(child, command)[0] == "allow"
+    plant(hooks, "post-index-change")
+    assert undeterminable(rig.bash(child, command))
+
+
+def test_b8_a_covered_write_into_a_hooks_directory_beside_a_git_run_is_undeterminable(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, hooks)
+    hooks.mkdir()
+    (rig.venue / "a.txt").write_text("x")
+    child = rig.child()
+    assert rig.bash(child, "echo x > a.txt && git add a.txt")[0] == "allow"
+    assert undeterminable(rig.bash(child, f"echo x > {hooks}/post-index-change && git add a.txt"))
+
+
+def test_b9_a_symlinked_hook_entry_whose_target_is_rewritten_after_the_spawn_blocks(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, hooks)
+    target = rig.outside / "real-hook"
+    plant(rig.outside, "real-hook", body="#!/bin/sh\nexit 0\n")
+    hooks.mkdir()
+    (hooks / "pre-push").symlink_to(target)
+    child = rig.child()
+    assert rig.bash(child, "git push origin feat")[0] == "allow"
+    target.write_text("#!/bin/sh\ntouch /tmp/planted\n")
+    assert undeterminable(rig.bash(child, "git push origin feat"))
+
+
+def test_a_hook_entry_added_removed_or_made_executable_after_the_spawn_blocks(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, hooks)
+    plant(hooks, "pre-commit", executable=False, body="#!/bin/sh\nexit 0\n")
+    child = rig.child()
+    assert rig.bash(child, "git commit -q -m x")[0] == "allow"
+    (hooks / "pre-commit").chmod(0o755)
+    assert undeterminable(rig.bash(child, "git commit -q -m x"))
+    (hooks / "pre-commit").chmod(0o644)
+    assert rig.bash(child, "git commit -q -m x")[0] == "allow"
+    plant(hooks, "post-commit")
+    assert undeterminable(rig.bash(child, "git commit -q -m x"))
+    (hooks / "post-commit").unlink()
+    (hooks / "pre-commit").unlink()
+    assert undeterminable(rig.bash(child, "git commit -q -m x"))
+
+
+def test_a_hook_sample_is_not_part_of_the_surface(rig):
+    child = rig.child()
+    plant(rig.venue / ".git" / "hooks", "pre-push.sample")
+    assert rig.bash(child, "git push origin feat")[0] == "allow"
+
+
+@pytest.mark.parametrize("key, value", [
+    ("core.fsmonitor", "/tmp/evil-monitor"),
+    ("filter.lfs.clean", "/tmp/evil-filter"),
+    ("diff.external", "/tmp/evil-diff"),
+    ("core.sshCommand", "/tmp/evil-ssh"),
+    ("gpg.program", "/tmp/evil-gpg"),
+    ("alias.st", "!/tmp/evil-alias"),
+])
+def test_a_config_entry_naming_a_program_added_after_the_spawn_blocks(rig, key, value):
+    child = rig.child()
+    assert rig.bash(child, "git push origin feat")[0] == "allow"
+    seg_tests._git(rig.venue, "config", key, value)
+    assert undeterminable(rig.bash(child, "git push origin feat"))
+
+
+def test_a_program_named_by_the_config_that_is_rewritten_after_the_spawn_blocks(rig):
+    program = plant(rig.outside, "monitor", body="#!/bin/sh\nexit 0\n")
+    seg_tests._git(rig.venue, "config", "core.fsmonitor", str(program))
+    child = rig.child()
+    assert rig.bash(child, "git push origin feat")[0] == "allow"
+    program.write_text("#!/bin/sh\ntouch /tmp/planted\n")
+    assert undeterminable(rig.bash(child, "git push origin feat"))
+
+
+def test_a_config_entry_that_is_not_a_program_does_not_change_the_surface(rig):
+    child = rig.child()
+    seg_tests._git(rig.venue, "config", "user.name", "someone else")
+    assert rig.bash(child, "git push origin feat")[0] == "allow"
+
+
+def test_attributes_added_after_the_spawn_block(rig):
+    child = rig.child()
+    (rig.venue / ".gitattributes").write_text("*.txt filter=evil\n")
+    assert undeterminable(rig.bash(child, "git push origin feat"))
+    (rig.venue / ".gitattributes").unlink()
+    (rig.venue / ".git" / "info").mkdir(exist_ok=True)
+    (rig.venue / ".git" / "info" / "attributes").write_text("*.txt filter=evil\n")
+    assert undeterminable(rig.bash(child, "git push origin feat"))
+
+
+def test_a_hook_framework_file_changed_after_the_spawn_blocks(rig):
+    (rig.venue / ".pre-commit-config.yaml").write_text("repos: []\n")
+    (rig.venue / ".husky").mkdir()
+    (rig.venue / ".husky" / "pre-push").write_text("exit 0\n")
+    child = rig.child()
+    assert rig.bash(child, "git push origin feat")[0] == "allow"
+    (rig.venue / ".husky" / "pre-push").write_text("touch /tmp/planted\n")
+    assert undeterminable(rig.bash(child, "git push origin feat"))
+
+
+def test_a_record_without_the_snapshot_makes_every_git_run_undeterminable(rig, tmp_path):
+    child = rig.child()
+    record = dict(child.record)
+    del record["git_surface"]
+    path, sha = support.norm_handoff.write_record(tmp_path / "old-state", record)
+    env = {**child.env, support.norm_handoff.NORM_HANDOFF_ENV: support.norm_handoff.format_env_value(path, sha)}
+    old = dataclasses.replace(child, env=env, state_root=tmp_path / "old-state")
+    assert undeterminable(rig.bash(old, "git push origin feat"))
+    assert undeterminable(rig.bash(old, f"git -C {rig.venue} status"))
+    assert rig.bash(old, f"echo x > {rig.venue}/f")[0] == "allow"
+
+
+def test_a_repository_the_snapshot_does_not_know_is_undeterminable(rig, tmp_path):
+    other = seg_tests._init_repo(tmp_path / "other", "x")
+    child = rig.child(extra_resources=[support.R.FileResource(str(other), "write")])
+    assert undeterminable(rig.bash(child, f"git -C {other} status"))
+
+
+def test_a_segment_outside_any_repository_that_runs_git_is_no_hook(rig, hook):
+    verdict = hook.SegmentVerdict("git status", hook.COVERED, venue=str(rig.outside))
+    approved = hook.Approved([], [], [], "p", 8, str(rig.outside), "default", git_surface={"schema": 1, "repos": {}})
+    assert hook.git_surface_blocker(approved, [verdict], hook.JudgeBudget(20, 15)) is None
+
+
+def test_a_surface_git_cannot_be_read_makes_the_line_undeterminable(rig, hook, monkeypatch):
+    child = rig.child()
+
+    def broken(directory, timeout):
+        raise hook.git_surface.Unreadable("boom")
+
+    monkeypatch.setattr(hook.git_surface, "capture", broken)
+    assert undeterminable(rig.bash(child, "git push origin feat"))
+    assert rig.bash(child, f"echo x > {rig.venue}/f")[0] == "allow"
+
+
+def test_a_neighbour_that_could_change_the_surface_first_blocks_the_git_run(rig):
     judge = JudgeStub([{"kind": "file", "op": "write", "path": f"{rig.venue}/out.txt"}])
     decision, row, _ = rig.bash(rig.child(), f"{STDIN_CODE}\ngit commit -q -m x", judge=judge)
     assert (decision, row["reason_class"]) == ("none", "undeterminable")
@@ -564,65 +705,48 @@ def test_b6_an_opaque_segment_beside_a_git_write_makes_it_undeterminable(rig):
     assert (decision, row["reason_class"]) == ("allow", "covered")
 
 
-def test_b6_a_covered_opaque_segment_beside_a_git_write_blocks_it_by_itself(hook):
-    git = hook.SegmentVerdict("git commit -q -m x", hook.COVERED, changed=[hook.resources.FileResource("/v/.git/x", "write")], venue="/v")
-    opaque = hook.SegmentVerdict("python3 job.py", hook.COVERED, opaque=True)
-    assert "not positively covered" in hook.git_hooks_blocker(None, None, git, [opaque], None)
-    plain = hook.SegmentVerdict("touch /v/f", hook.COVERED)
-    assert hook.git_hooks_blocker(None, None, git, [plain], hook.JudgeBudget(0, 15)) == "cannot read the effective git hooks directory"
+def test_s13_a_rule_pattern_neighbour_counts_like_an_opaque_one(rig):
+    child = rig.child(rules=["Bash(make test:*)"])
+    assert rig.bash(child, "make test")[0] == "allow"
+    assert rig.bash(child, "git push origin feat")[0] == "allow"
+    assert undeterminable(rig.bash(child, "git push origin feat && make test"))
 
 
-def test_b6_a_hooks_directory_in_an_add_dir_with_an_executable_hook_blocks(rig):
-    elsewhere = rig.outside / "hooks"
-    plant(elsewhere, "pre-commit")
-    use_hooks_dir(rig, elsewhere)
-    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
-    assert (decision, row["reason_class"]) == ("allow", "covered")
-    decision, row, answer = rig.bash(rig.child(add_dirs=[elsewhere]), "git commit -q -m x")
-    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
+def test_s13_an_opaque_neighbour_after_the_git_run_blocks_it(rig):
+    judge = JudgeStub([{"kind": "file", "op": "write", "path": f"{rig.venue}/out.txt"}])
+    child = rig.child()
+    assert rig.bash(child, "git push origin feat && echo y")[0] == "allow"
+    assert rig.bash(child, STDIN_CODE, judge=judge)[0] == "allow"
+    assert undeterminable(rig.bash(child, f"git push origin feat && {STDIN_CODE}", judge=judge))
 
 
-def test_b6_accept_edits_makes_a_hooks_directory_under_the_cwd_a_channel(hook, tmp_path):
-    def approved(mode):
-        return hook.Approved([], [], [], "p", 8, str(tmp_path), mode, add_dirs=[])
-
-    inside = str(tmp_path / "githooks")
-    channel = hook.hooks_dir_channel(approved("acceptEdits"), hook.Ambient(), inside)
-    assert channel == "acceptEdits in the child's cwd"
-    assert hook.hooks_dir_channel(approved("default"), hook.Ambient(), inside) is None
-    assert hook.hooks_dir_channel(approved("acceptEdits"), hook.Ambient(), str(tmp_path.parent / "elsewhere")) is None
+def test_s13_a_harness_allowed_neighbour_blocks_the_git_run_unless_it_is_read_only(rig):
+    child = rig.child(allow=["Bash(make:*)", "Bash(ls:*)"])
+    assert rig.bash(child, "git push origin feat && ls")[0] == "allow"
+    assert undeterminable(rig.bash(child, "git push origin feat && make test"))
 
 
-def test_b6_a_hooks_directory_in_a_settings_added_directory_with_an_executable_hook_blocks(rig):
-    elsewhere = rig.outside / "hooks"
-    plant(elsewhere, "pre-commit")
-    use_hooks_dir(rig, elsewhere)
-    write_settings(rig.venue / ".claude" / "settings.json", {"permissions": {"additionalDirectories": [str(rig.outside)]}})
-    decision, row, answer = rig.bash(rig.child(), "git commit -q -m x")
-    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
-
-
-def test_b6_an_edit_allow_entry_over_the_hooks_directory_blocks(rig):
-    elsewhere = rig.outside / "hooks"
-    plant(elsewhere, "pre-commit")
-    use_hooks_dir(rig, elsewhere)
-    child = rig.child(allow=[f"Edit({elsewhere}/**)"])
-    decision, row, answer = rig.bash(child, "git commit -q -m x")
-    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
-
-
-def test_b6_a_hooks_directory_git_cannot_name_blocks(rig, hook, monkeypatch):
-    monkeypatch.setattr(hook, "effective_hooks_dirs", lambda repo, timeout: None)
-    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
-    assert (decision, row["reason_class"]) == ("none", "undeterminable")
-
-
-def test_b6_a_read_only_git_call_is_not_held_to_the_hooks_rule(rig):
+def test_s13_a_neighbour_writing_onto_a_pinned_path_blocks_the_git_run(rig):
     hooks = rig.venue / "githooks"
     use_hooks_dir(rig, hooks)
+    hooks.mkdir()
+    (rig.venue / ".git" / "info").mkdir(exist_ok=True)
+    child = rig.child()
+    assert undeterminable(rig.bash(child, f"echo x > {hooks}/pre-push && git push origin feat"))
+    for target in (f"{rig.venue}/.gitattributes", f"{rig.venue}/.pre-commit-config.yaml", f"{rig.venue}/.git/config"):
+        assert rig.bash(child, f"echo x > {target} && git push origin feat")[0] != "allow", target
+    assert rig.bash(child, f"echo x > {rig.venue}/ok.txt && git push origin feat")[0] == "allow"
+
+
+def test_s16_a_read_only_git_call_is_held_to_the_snapshot_too(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, hooks)
+    hooks.mkdir()
+    child = rig.child()
+    assert rig.bash(child, "git status")[0] == "allow"
     plant(hooks, "post-index-change")
-    decision, row, _ = rig.bash(rig.child(), "git status")
-    assert (decision, row["reason_class"]) == ("allow", "covered")
+    assert undeterminable(rig.bash(child, "git status"))
+    assert undeterminable(rig.bash(child, "git log -1"))
 
 
 # --- B7: the settings the harness merges with the record ----------------------------------------------
@@ -669,14 +793,26 @@ def test_b7_a_settings_file_that_cannot_be_read_as_settings_means_no_deny(rig, b
     assert (decision, row["reason_class"]) == ("none", "uncovered-write")
 
 
-def test_b7_an_unreadable_settings_file_blocks_the_hooks_rule_too(rig):
-    hooks = rig.outside / "hooks"
-    plant(hooks, "pre-commit")
-    use_hooks_dir(rig, hooks)
-    assert rig.bash(rig.child(), "git commit -q -m x")[0] == "allow"
-    write_settings(rig.venue / ".claude" / "settings.json", "{not json")
-    decision, row, _ = rig.bash(rig.child(), "git commit -q -m x")
-    assert (decision, row["reason_class"]) == ("none", "undeterminable")
+def test_s17_project_settings_are_read_from_the_launch_directory_not_the_cwd(rig):
+    child = rig.child()
+    command = f"touch {rig.outside}/f"
+    other = rig.tmp / "elsewhere"
+    other.mkdir()
+
+    def after_cd():
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(other),
+                              "permission_mode": child.mode})
+        return rig.hook.run(payload, child.env, runner=JudgeStub([]), cache_dir=rig.tmp / "judge-cache", constants=CONSTANTS)
+
+    assert json.loads(after_cd())["hookSpecificOutput"]["permissionDecision"] == "deny"
+    write_settings(rig.venue / ".claude" / "settings.json", {"permissions": {"allow": ["Bash(touch:*)"]}})
+    assert after_cd() == ""
+
+
+def test_n8_a_relative_additional_directory_is_anchored_on_the_settings_root(rig):
+    write_settings(rig.venue / ".claude" / "settings.json", {"permissions": {"additionalDirectories": ["../outside"]}})
+    decision, row, _ = rig.bash(rig.child(), f"touch {rig.outside}/f")
+    assert (decision, row["reason_class"]) == ("none", "uncovered-write")
 
 
 # --- S9, S10: opaque confinement and the carrier set --------------------------------------------------
@@ -702,6 +838,19 @@ def test_s10_a_python_variable_makes_a_carrier_segment_undeterminable(rig):
     decision, _, _ = rig.bash(child, "make test", env={**child.env, "PYTHONSTARTUP": str(rig.outside)})
     assert decision == "none"
     assert rig.bash(child, "make test", env={**child.env, "PYTHONUNBUFFERED": "1"})[0] == "allow"
+
+
+def test_b10_a_git_variable_stops_python_and_a_python_variable_stops_git(rig):
+    child = rig.child()
+    (rig.venue / "tool.py").write_text("print(1)\n")
+    judge = JudgeStub([{"kind": "file", "op": "write", "path": f"{rig.venue}/o"}])
+    python = f"python3 {rig.venue}/tool.py"
+    assert rig.bash(child, python, judge=judge)[0] == "allow"
+    assert undeterminable(rig.bash(child, python, judge=judge, env={**child.env, "GIT_DIR": str(rig.outside)}))
+    assert rig.bash(child, "git push origin feat")[0] == "allow"
+    assert undeterminable(rig.bash(child, "git push origin feat", env={**child.env, "PYTHONPATH": str(rig.outside)}))
+    assert rig.bash(child, "git push origin feat", env={**child.env, "PYTHONUNBUFFERED": "1"})[0] == "allow"
+    assert rig.bash(child, f"echo x > {rig.venue}/f", env={**child.env, "GIT_DIR": str(rig.outside)})[0] == "allow"
 
 
 # --- Edit, Write, Read ----------------------------------------------------------------------------

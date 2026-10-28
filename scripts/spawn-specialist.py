@@ -2266,7 +2266,20 @@ def norm_handoff_record(
         closure_digest=closure,
         resources=resource_set["resources"],
         rule_patterns=resource_set["rule_patterns"],
+        git_surface=git_surface_snapshot([workdir, state.resolve_check_venue(CheckVenue.DELIVERY.value)]),
+        launch_dir=workdir or None,
     )
+
+
+GIT_SURFACE_SNAPSHOT_TIMEOUT_S = 20
+
+
+def git_surface_snapshot(venues) -> dict:
+    """The record's `git_surface`: what git would execute in each repository the child works in, taken
+    now, before the child can change it. Taken here so it lands in the record and its sha256."""
+    from agentctl import git_surface
+
+    return git_surface.snapshot_venues(venues, lambda: GIT_SURFACE_SNAPSHOT_TIMEOUT_S)
 
 
 def own_contour_allow_rule() -> str:

@@ -62,6 +62,8 @@ def build_record(
     rule_patterns: list[str] | None = None,
     permissions_allow: list[str] | None = None,
     add_dirs: list[str] | None = None,
+    git_surface: dict | None = None,
+    launch_dir: str | None = None,
 ) -> dict:
     """The handoff record. `parent_lineage` is the parent session's own
     `parent_link.norm_lineage` (None for a session nobody linked); the record's lineage
@@ -74,7 +76,10 @@ def build_record(
     resource-grant hook reads it to leave alone a call the harness already allows. `add_dirs` are the
     directories the child was started with (`--add-dir`), which the harness treats as working directories.
     Both keys are written only when given: a record without them says "unknown", which the hook reads
-    as "never deny", not as "empty"."""
+    as "never deny", not as "empty". `git_surface` is `git_surface.snapshot_venues`: the digest of what git
+    would execute in the child's repositories at spawn, which the hook compares live before it allows a git
+    run; a record without it makes every git run unverifiable. `launch_dir` is the directory the child was
+    started in, where the harness reads the project's settings from however far the child later `cd`s."""
     record = {
         "schema": HANDOFF_SCHEMA,
         "parent_session": parent_session,
@@ -93,6 +98,10 @@ def build_record(
         record["permissions_allow"] = list(permissions_allow)
     if add_dirs is not None:
         record["add_dirs"] = list(add_dirs)
+    if git_surface is not None:
+        record["git_surface"] = git_surface
+    if launch_dir is not None:
+        record["launch_dir"] = launch_dir
     if closure_digest is not None:
         record["closure_digest"] = closure_digest
     return record
@@ -194,6 +203,8 @@ def verify_env_value(raw: str) -> tuple[dict | None, str | None]:
         "rule_patterns": record.get("rule_patterns") or [],
         "permissions_allow": _optional_list(record, "permissions_allow"),
         "add_dirs": _optional_list(record, "add_dirs"),
+        "git_surface": record.get("git_surface") if isinstance(record.get("git_surface"), dict) else None,
+        "launch_dir": record.get("launch_dir") if isinstance(record.get("launch_dir"), str) else None,
         "depth": depth,
         "norm_lineage": lineage,
     }, None

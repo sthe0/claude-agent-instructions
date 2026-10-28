@@ -113,6 +113,7 @@ def link_child(
         parent_session=PARENT_SESSION, stage_index=STAGE_INDEX, kind=kind,
         norm=StageNorm.from_stage(stage), grants=entries, depth=1, parent_lineage=None,
         resources=packed["resources"], rule_patterns=packed["rule_patterns"],
+        git_surface=spawn.git_surface_snapshot([venue]), launch_dir=venue,
     )
     spawn.attach_child_permission_surface(record, settings, child_dirs)
     if allow is not None:
