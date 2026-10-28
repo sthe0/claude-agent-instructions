@@ -59,7 +59,8 @@ def test_a_spent_deadline_is_unreadable_not_empty(repo):
 @pytest.mark.parametrize("change", [
     "hook-added", "hook-edited", "hook-chmod", "symlink-target-edited", "symlink-retargeted",
     "config-exec-key", "config-program-edited", "attributes", "info-attributes", "framework-file",
-    "framework-dir-file", "nested-attributes",
+    "framework-dir-file", "nested-attributes", "alias", "remote-url", "remote-pushurl", "url-rewrite",
+    "protocol", "gpg-format", "trailer-cmd", "lefthook-local", "overcommit", "package-json", "lefthook-dir",
 ])
 def test_every_surface_kind_moves_the_digest(repo, tmp_path, change):
     hooks = repo / ".git" / "hooks"
@@ -88,20 +89,67 @@ def test_every_surface_kind_moves_the_digest(repo, tmp_path, change):
         "framework-file": lambda: (repo / ".pre-commit-config.yaml").write_text("repos: [x]\n"),
         "framework-dir-file": lambda: (repo / ".husky" / "pre-push").write_text("touch /tmp/x\n"),
         "nested-attributes": lambda: (repo / "sub" / ".gitattributes").write_text("*.a filter=evil\n"),
+        "alias": lambda: seg_tests._git(repo, "config", "alias.st", "status -s"),
+        "remote-url": lambda: seg_tests._git(repo, "config", "remote.origin.url", "ext::sh -c evil"),
+        "remote-pushurl": lambda: seg_tests._git(repo, "config", "remote.origin.pushurl", "ext::sh -c evil"),
+        "url-rewrite": lambda: seg_tests._git(repo, "config", "url.ext::sh.insteadOf", "https://"),
+        "protocol": lambda: seg_tests._git(repo, "config", "protocol.ext.allow", "always"),
+        "gpg-format": lambda: seg_tests._git(repo, "config", "gpg.format", "ssh"),
+        "trailer-cmd": lambda: seg_tests._git(repo, "config", "trailer.t.cmd", "/tmp/evil"),
+        "lefthook-local": lambda: (repo / "lefthook-local.yml").write_text("pre-push: {}\n"),
+        "overcommit": lambda: (repo / ".overcommit.yml").write_text("PreCommit: {}\n"),
+        "package-json": lambda: (repo / "package.json").write_text("{}\n"),
+        "lefthook-dir": lambda: plant(repo / ".lefthook" / "pre-push" / "check.sh"),
     }[change]()
     assert capture(repo).digest != before.digest
 
 
-@pytest.mark.parametrize("change", ["sample-hook", "plain-config", "untouched-file", "alias-without-bang"])
+@pytest.mark.parametrize("change", ["sample-hook", "plain-config", "untouched-file", "branch-config"])
 def test_what_git_never_executes_leaves_the_digest_alone(repo, change):
     before = capture(repo)
     {
         "sample-hook": lambda: plant(repo / ".git" / "hooks" / "pre-push.sample"),
         "plain-config": lambda: seg_tests._git(repo, "config", "user.name", "someone"),
         "untouched-file": lambda: (repo / "a.txt").write_text("x"),
-        "alias-without-bang": lambda: seg_tests._git(repo, "config", "alias.st", "status -s"),
+        "branch-config": lambda: seg_tests._git(repo, "config", "branch.feat.remote", "origin"),
     }[change]()
     assert capture(repo).digest == before.digest
+
+
+def test_capture_never_starts_a_program_the_repository_configures(repo, tmp_path):
+    marker = tmp_path / "fsmonitor-ran"
+    program = plant(tmp_path / "monitor", body=f"#!/bin/sh\necho ran >> {marker}\nprintf '\\0'\n")
+    seg_tests._git(repo, "config", "core.fsmonitor", str(program))
+    assert capture(repo).digest
+    assert not marker.exists()
+
+
+def test_every_config_file_git_read_is_a_pinned_path(repo, tmp_path):
+    included = tmp_path / "extra.gitconfig"
+    included.write_text("[core]\n\tpager = cat\n")
+    seg_tests._git(repo, "config", "include.path", str(included))
+    assert str(included.resolve()) in capture(repo).paths
+
+
+def test_runnable_is_true_only_for_something_the_repository_holds_that_git_starts(repo, tmp_path):
+    assert capture(repo).runnable is False
+    plant(repo / ".git" / "hooks" / "pre-push.sample")
+    assert capture(repo).runnable is False
+    seg_tests._git(repo, "config", "alias.st", "status -s")
+    assert capture(repo).runnable is False
+    plant(repo / ".git" / "hooks" / "pre-push")
+    assert capture(repo).runnable is True
+
+
+@pytest.mark.parametrize("change", [
+    lambda repo: (repo / "lefthook.yml").write_text("pre-push: {}\n"),
+    lambda repo: (repo / "package.json").write_text("{}\n"),
+    lambda repo: plant(repo / ".husky" / "pre-push", body="exit 0\n"),
+    lambda repo: seg_tests._git(repo, "config", "core.fsmonitor", "/usr/bin/true"),
+], ids=["lefthook", "package-json", "husky", "repo-config-program"])
+def test_each_runnable_kind_marks_the_surface_runnable(repo, change):
+    change(repo)
+    assert capture(repo).runnable is True
 
 
 def test_core_hookspath_is_followed_and_relative_to_the_toplevel(repo):

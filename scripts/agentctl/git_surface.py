@@ -41,8 +41,17 @@ from typing import Callable
 
 SCHEMA = 1
 MAX_ENTRIES = 512
-FRAMEWORK_FILES = (".pre-commit-config.yaml", "lefthook.yml", ".lefthook.yml", "lefthook.yaml")
-FRAMEWORK_DIRS = (".husky",)
+FRAMEWORK_FILES = (
+    ".pre-commit-config.yaml", "lefthook.yml", ".lefthook.yml", "lefthook.yaml",
+    "lefthook-local.yml", ".lefthook-local.yml", ".overcommit.yml", "package.json",
+)
+FRAMEWORK_DIRS = (".husky", ".lefthook")
+#: Neutralising options for the calls that read the index: `ls-files` refreshes it through a configured
+#: fsmonitor program, which would run repository-chosen code inside the capture itself.
+NEUTRAL_OPTIONS = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null")
+#: Scopes of a config entry that the repository (or the caller's environment) chose, as opposed to the user's
+#: or the system's own files.
+REPO_SCOPES = frozenset({"local", "worktree", "command"})
 #: Config keys (lowercased) whose value names a program, a hook directory or a file git reads.
 EXEC_KEY_PATTERNS = re.compile(
     r"^(?:"
@@ -55,10 +64,16 @@ EXEC_KEY_PATTERNS = re.compile(
     r"|gpg\.(?:.+\.)?program"
     r"|sequence\.editor|uploadpack\.packobjectshook|init\.templatedir"
     r"|remote\..+\.(?:uploadpack|receivepack|vcs|proxy)"
-    r"|trailer\..+\.command|hook\..+\.command"
+    r"|trailer\..+\.(?:command|cmd)|hook\..+\.command"
     r")$"
 )
-BANG_KEY_PATTERNS = re.compile(r"^(?:alias\..+|submodule\..+\.update)$")
+BANG_KEY_PATTERNS = re.compile(r"^submodule\..+\.update$")
+#: Config keys whose value is text git interprets rather than a program it starts: pinned as key and value
+#: only. An alias may expand to `push --receive-pack=...`; a remote URL or `protocol.*` decides whether
+#: `ext::` transports run a command; `url.*` rewrites every URL; `gpg.*` picks the signing format and programs.
+TEXT_KEY_PATTERNS = re.compile(
+    r"^(?:alias\..+|remote\..+\.(?:url|pushurl)|url\..+|protocol\..+|gpg\..+)$"
+)
 
 
 class NotARepo(Exception):
@@ -76,6 +91,9 @@ class Surface:
     digest: str
     #: Realpaths of everything the digest covers, for the hook's overlap test against a neighbour's writes.
     paths: list = field(default_factory=list)
+    #: Whether the repository holds something a git run starts that the caller did not name and that lives
+    #: with the repository: a hook, a hook-framework file, or a program its own config names.
+    runnable: bool = False
 
     def to_dict(self) -> dict:
         return {"digest": self.digest, "parts": dict(self.parts)}
@@ -89,12 +107,15 @@ def _real(path: str) -> str:
     return os.path.realpath(path)
 
 
-def _git(directory: str, args: list, timeout: float) -> bytes:
+def _git(directory: str, args: list, timeout: float, neutral: bool = False) -> bytes:
+    """`neutral` adds NEUTRAL_OPTIONS; it is for calls that do not read config values, since the options
+    would show up in the config they answer."""
     if timeout <= 0:
         raise Unreadable("no time left to ask git")
     try:
         proc = subprocess.run(
-            ["git", "-C", directory, *args], capture_output=True, timeout=timeout, check=False,
+            ["git", "-C", directory, *(NEUTRAL_OPTIONS if neutral else ()), *args],
+            capture_output=True, timeout=timeout, check=False,
             env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -147,13 +168,28 @@ def _resolve(answer: str, *bases: "str | None") -> list:
 
 
 def _config_entries(raw: bytes) -> list:
+    """`(key, value, scope, origin)` per entry of `git config --list --show-scope --show-origin -z`, which
+    writes `scope NUL origin NUL key NL value NUL` for each."""
+    fields = raw.split(b"\0")
+    if fields and not fields[-1]:
+        fields.pop()
+    if len(fields) % 3:
+        raise Unreadable("git config answered in a shape the snapshot does not know")
     entries = []
-    for item in raw.split(b"\0"):
-        if not item:
-            continue
-        key, _sep, value = item.partition(b"\n")
-        entries.append((key.decode("utf-8", "surrogateescape"), value.decode("utf-8", "surrogateescape")))
+    for index in range(0, len(fields), 3):
+        scope, origin, item = (part.decode("utf-8", "surrogateescape") for part in fields[index:index + 3])
+        key, _sep, value = item.partition("\n")
+        entries.append((key, value, scope, origin))
     return entries
+
+
+def _origin_files(entries: list, base: str) -> list:
+    """The files the config entries were read from (`file:<path>`, relative ones from `base`)."""
+    files = []
+    for _key, _value, _scope, origin in entries:
+        if origin.startswith("file:"):
+            files.extend(_resolve(origin[len("file:"):], base))
+    return files
 
 
 def _named_program(value: str) -> "str | None":
@@ -169,20 +205,26 @@ def _named_program(value: str) -> "str | None":
     return program if "/" in program or program.startswith("~") else None
 
 
-def _exec_entries(entries: list, base: str, paths: list) -> list:
+def _exec_entries(entries: list, base: str, paths: list) -> "tuple[list, bool]":
+    """The pinned config entries, and whether any program-naming one comes from the repository's own config."""
     chosen = []
-    for key, value in entries:
+    repo_program = False
+    for key, value, scope, _origin in entries:
         lowered = key.lower()
-        if not (EXEC_KEY_PATTERNS.match(lowered) or (BANG_KEY_PATTERNS.match(lowered) and value.startswith("!"))):
+        names_program = bool(EXEC_KEY_PATTERNS.match(lowered)) or (
+            bool(BANG_KEY_PATTERNS.match(lowered)) and value.startswith("!"))
+        if not (names_program or TEXT_KEY_PATTERNS.match(lowered)):
             continue
         record = {"key": key, "value": value}
-        named = _named_program(value)
+        named = _named_program(value) if names_program else None
         if named is not None:
             targets = _resolve(named, base)
             record["programs"] = {target: _entry(target) for target in targets}
             paths.extend(targets)
+        if names_program and scope in REPO_SCOPES:
+            repo_program = True
         chosen.append(record)
-    return sorted(chosen, key=lambda item: (item["key"], item["value"]))
+    return sorted(chosen, key=lambda item: (item["key"], item["value"])), repo_program
 
 
 def _hooks_part(dirs: list, paths: list) -> dict:
@@ -214,7 +256,7 @@ def _attributes_part(toplevel: "str | None", info_attributes: list, configured: 
     files.append(os.path.join(xdg, "git", "attributes"))
     if toplevel:
         files.append(os.path.join(toplevel, ".gitattributes"))
-        listed = _git(toplevel, ["ls-files", "-z", "--", ":(glob)**/.gitattributes"], timeout)
+        listed = _git(toplevel, ["ls-files", "-z", "--", ":(glob)**/.gitattributes"], timeout, neutral=True)
         nested = [os.path.join(toplevel, name.decode("utf-8", "surrogateescape")) for name in listed.split(b"\0") if name]
         if len(nested) > MAX_ENTRIES:
             raise Unreadable("more nested .gitattributes than the snapshot holds")
@@ -279,23 +321,32 @@ def capture(directory: str, timeout: Callable[[], float]) -> Surface:
     if len(answer) < 4:
         raise Unreadable("git rev-parse answered too little")
     hooks_answer, info_attributes, config_file, worktree_config = answer[:4]
-    entries = _config_entries(_git(base, ["config", "--list", "-z"], timeout()))
-    values = {key.lower(): value for key, value in entries}
+    entries = _config_entries(_git(base, ["config", "--list", "--show-scope", "--show-origin", "-z"], timeout()))
+    values = {key.lower(): value for key, value, _scope, _origin in entries}
     hooks_dirs = _resolve(hooks_answer, base)
     attributes_file = _resolve(values["core.attributesfile"], base) if values.get("core.attributesfile") else []
     config_paths = [
         *_resolve(config_file, base), *_resolve(worktree_config, base),
         os.path.join(os.path.expanduser("~"), ".gitconfig"), "/etc/gitconfig",
+        *_origin_files(entries, base),
     ]
     paths.extend([*config_paths, *(_real(item) for item in config_paths)])
+    config_part, repo_program = _exec_entries(entries, base, paths)
     parts = {
         "hooks": _hooks_part(list(dict.fromkeys(hooks_dirs)), paths),
-        "config": _exec_entries(entries, base, paths),
+        "config": config_part,
         "attributes": _attributes_part(toplevel, _resolve(info_attributes, base), attributes_file, timeout(), paths),
         "frameworks": _frameworks_part(toplevel, paths),
     }
+    runnable = (repo_program or any(item.get("entries") for item in parts["hooks"].values())
+                or any(_present(item) for item in parts["frameworks"].values()))
     digests = {name: _sha(part) for name, part in parts.items()}
-    return Surface(repo=repo, parts=digests, digest=_sha(digests), paths=sorted(set(paths)))
+    return Surface(repo=repo, parts=digests, digest=_sha(digests), paths=sorted(set(paths)), runnable=runnable)
+
+
+def _present(item: dict) -> bool:
+    """Whether a frameworks-part entry (a file's `_entry` or a directory's tree) holds anything."""
+    return bool(item) and item.get("absent") is not True
 
 
 def snapshot_venues(directories, timeout: Callable[[], float]) -> dict:
