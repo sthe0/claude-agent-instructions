@@ -67,6 +67,9 @@ sum w^2 (Kish), variance s^2 = sum w (x - mean)^2 / (V1 - V2/V1) (reliability
 weights), SE = sqrt(s^2 / n_eff). A share is a ratio of weighted sums, its SE the
 linearized one. Every estimate is built by `figure`, so it always carries
 {mean, se, n_eff}; se is None, never 0, where n_eff < 2 leaves the variance undefined.
+
+The reconstruction error the SE cannot see, and the instrument / wait verdict built on it,
+live in lib/time_profile_uncertainty.py.
 """
 from __future__ import annotations
 
@@ -80,7 +83,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from agentctl.config import CONFIG_MD, parse_config_md
 from lib import config_root, engine_session_binding, judge_ledger, shell_tokens, transcript_cost, transcript_turns
@@ -152,6 +155,7 @@ class ProfileRun:
     profiles: list = field(default_factory=list)
     skipped: list = field(default_factory=list)
     reparsed: list = field(default_factory=list)
+    ctx: "Ctx | None" = None
 
 
 def conservation_error_ms(profile: SessionProfile) -> int:
@@ -774,6 +778,8 @@ class Ctx:
     commit_index: list | None = None
     cache: SessionCache | None = None
     reparsed: list = field(default_factory=list)
+    board: dict | None = None
+    rank_board: Callable | None = None
 
     def sha_at(self, ts_ms: int) -> str | None:
         if self.commit_index is None:
@@ -818,6 +824,41 @@ def _engine_sessions(harness_session: str, state_dir: Path) -> list:
         if isinstance(session, str) and session not in ids:
             ids.append(session)
     return ids
+
+
+def _engine_states(session_id: str, state_dir: Path) -> list:
+    """The parsed state files of every engine session the harness session drove, those that exist."""
+    states = (_read_json(state_dir / f"{config_root.sanitize_session_id(e)}.json")
+              for e in _engine_sessions(session_id, state_dir))
+    return [state for state in states if isinstance(state, dict)]
+
+
+def engine_effort_active_ms(session_id: str, state_dir: Path) -> float | None:
+    """The engine's own `effort_actuals.active_minutes` for the session, in ms; None where no
+    engine state file records one (the effort source never observed the session)."""
+    minutes = []
+    for state in _engine_states(session_id, state_dir):
+        actuals = state.get("effort_actuals")
+        value = actuals.get("active_minutes") if isinstance(actuals, dict) else None
+        if _finite_number(value) and value >= 0:
+            minutes.append(value)
+    return sum(minutes) * _MS_PER_MINUTE if minutes else None
+
+
+def engine_timed_span_ms(session_id: str, state_dir: Path, window: tuple) -> int | None:
+    """The span between the first and last timed event of the session's engine histories,
+    clipped to `window`; None where no engine state file exists."""
+    states = _engine_states(session_id, state_dir)
+    if not states:
+        return None
+    total = 0
+    for state in states:
+        history = state.get("history")
+        events = [e for e in history if isinstance(e, dict)] if isinstance(history, list) else []
+        stamps = [s for s in (_epoch_or_iso_ms(e.get("ts")) for e in events) if s is not None]
+        if len(stamps) >= 2:
+            total += max(0, min(max(stamps), window[1]) - max(min(stamps), window[0]))
+    return total
 
 
 def _node_part(session_id: str, ctx: Ctx, window: tuple) -> dict | None:
@@ -907,6 +948,7 @@ def profile_all(
             result = Skipped(Path(path).stem, str(path), "unparseable", f"{type(exc).__name__}: {exc}")
         (run.skipped if isinstance(result, Skipped) else run.profiles).append(result)
     run.reparsed = ctx.reparsed
+    run.ctx = ctx
     return run
 
 
@@ -986,6 +1028,7 @@ class Aggregate:
     totals: dict
     rows: list
     children: list
+    now_ms: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -1021,7 +1064,8 @@ def aggregate(profiles, *, half_life_days=None, now_ms=None, values=None) -> Agg
 
     top = [p for p in profiles if p.child_of is None]
     kids = [p for p in profiles if p.child_of is not None]
-    result = Aggregate(half_life_days=half, sessions=len(top), totals={}, rows=[], children=_children(kids, weight))
+    result = Aggregate(
+        half_life_days=half, sessions=len(top), totals={}, rows=[], children=_children(kids, weight), now_ms=now)
     if not top:
         return result
     weights = [weight(p) for p in top]

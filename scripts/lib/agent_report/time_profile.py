@@ -16,17 +16,29 @@ is not a share of anything.
   --half-life D     half-life in days (default: config.md `time-profile-half-life-days`)
   --by-sha          the same figures per Core sha
   --format json     machine-readable
+  --uncertainty     per heavy component: reconstruction interval, cross-source agreement,
+                    coverage and an instrument / wait verdict; --format md (default) | json;
+                    also written to $TIME_PROFILE_STATE_DIR/uncertainty-report.{md,json};
+                    excludes --check and --by-sha. The verdict that a board item's loss rank
+                    flips within a component's interval activates once board items carry
+                    `mechanism` (stage 4); the CLI passes no board until then
   --check           exit non-zero unless the data is sound: a session profiled, wall-clock
                     conserved on every one, every estimate complete, skipped fraction small
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
+import dataclasses
 import json
 import math
+import os
 import sys
+import tempfile
+from pathlib import Path
 
-from lib import time_profile
+import improvement_scan_loss as loss
+from lib import time_profile, time_profile_uncertainty
 
 FIGURE_KEYS = frozenset({"mean", "se", "n_eff"})
 FIGURES = (
@@ -110,6 +122,80 @@ def render_text(payload: dict) -> str:
     return "\n".join(lines)
 
 
+def rank_board(items: dict) -> dict:
+    """Board rank per item ref, as improvement-scan's loss lanes order them."""
+    return loss.lane_ranks(loss.build_lanes(items))
+
+
+def uncertainty_payload(run, half_life: float | None) -> dict:
+    agg = time_profile.aggregate(run.profiles, half_life_days=half_life)
+    ctx = run.ctx or time_profile.Ctx()
+    ctx = dataclasses.replace(ctx, rank_board=ctx.rank_board or rank_board)
+    report = time_profile_uncertainty.uncertainty(agg, run.profiles, ctx)
+    return {**report.to_dict(), "run": {"profiled": len(run.profiles), "skipped": len(run.skipped)}}
+
+
+def _fmt(value) -> str:
+    return "n/a" if value is None else f"{value:.{TEXT_DIGITS}g}"
+
+
+def _fmt_interval(interval) -> str:
+    return "n/a" if interval is None else f"[{_fmt(interval[0])}, {_fmt(interval[1])}]"
+
+
+def _fmt_discrepancies(discrepancies: dict) -> str:
+    if not discrepancies:
+        return "none"
+    return "; ".join(
+        f"{pair} n={d['n']} median {_fmt(d['median'])} p90 {_fmt(d['p90'])}" for pair, d in sorted(discrepancies.items()))
+
+
+def render_uncertainty_md(payload: dict) -> str:
+    lines = [
+        f"# time-profile uncertainty (half-life {payload['half_life_days']:g} days, {payload['sessions']} sessions)",
+        "",
+    ]
+    for c in payload["components"]:
+        verdict = c["verdict"] + (f" ({c['source']})" if c["source"] else "")
+        lines.append(f"## {c['key']} ({c['kind']})")
+        lines.append(f"- share of active: {format_figure(c['share_active'])}")
+        lines.append(f"- min/session: {format_figure(c['per_session'])}")
+        lines.append(f"- reconstruction interval: {_fmt_interval(c['interval'])}")
+        lines.append(f"- combined interval: {_fmt_interval(c['combined'])}")
+        lines.append(f"- cross-source: {_fmt_discrepancies(c['discrepancies'])}")
+        lines.append(f"- coverage: {json.dumps(_rounded(c['coverage']), sort_keys=True)}")
+        if c["flipped_items"]:
+            lines.append(f"- board items whose loss rank flips: {', '.join(c['flipped_items'])}")
+        lines.append(f"- verdict: {verdict}")
+        lines.append("")
+    cov = payload["coverage"]
+    lines.append(f"exposed hook minutes ({cov['exposed_hook_label']}): {_fmt(cov['exposed_hook_minutes'])}")
+    lines.append(f"untimed engine events: {_fmt(cov['node_untimed_share'])}")
+    lines.append("")
+    lines.append(f"overall: {payload['overall']}")
+    return "\n".join(lines)
+
+
+def _write_atomically(path: Path, text: str) -> None:
+    """Temp file beside `path`, then rename: a reader never sees a half-written report."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+
+
+def write_uncertainty_files(payload: dict, md: str) -> None:
+    state_dir = time_profile.default_state_dir()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    _write_atomically(state_dir / "uncertainty-report.json", json.dumps(_rounded(payload), indent=2, sort_keys=True) + "\n")
+    _write_atomically(state_dir / "uncertainty-report.md", md + "\n")
+
+
 def figure_problems(node, path: str = "") -> list:
     """Every way an estimate in `node` is incomplete: a figure object missing mean, se or
     n_eff, or with a null se although n_eff >= 2."""
@@ -146,7 +232,12 @@ def check(run, payload: dict, max_skip_fraction: float) -> list:
 
 def main(argv: list[str] | None = None, *, run=None) -> int:
     parser = argparse.ArgumentParser(prog="agent-report.py time-profile", description=__doc__.splitlines()[0])
-    parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument("--format", choices=("text", "md", "json"),
+                        help="text (default), or md (default) / json with --uncertainty")
+    parser.add_argument("--uncertainty", action="store_true",
+                        help="report reconstruction bounds, cross-source agreement and the instrument / wait "
+                             "verdict (not with --check or --by-sha); the board rank-flip verdict activates once "
+                             "board items carry `mechanism` (stage 4)")
     parser.add_argument("--half-life", type=float, metavar="D", help="half-life in days (default: from config.md)")
     parser.add_argument("--by-sha", action="store_true", help="also group the figures per Core sha")
     parser.add_argument("--check", action="store_true", help="verify the data is sound; exit 1 if not")
@@ -155,7 +246,19 @@ def main(argv: list[str] | None = None, *, run=None) -> int:
     args = parser.parse_args(argv)
     if args.half_life is not None and not (args.half_life > 0 and math.isfinite(args.half_life)):
         parser.error("--half-life must be a positive finite number")
+    if args.uncertainty and (args.check or args.by_sha):
+        parser.error("--uncertainty cannot be combined with --check or --by-sha")
+    if args.uncertainty and args.format == "text":
+        parser.error("--uncertainty renders --format md (default) or json")
+    if args.format == "md" and not args.uncertainty:
+        parser.error("--format md is only for --uncertainty")
     run = run if run is not None else time_profile.profile_all()
+    if args.uncertainty:
+        report = uncertainty_payload(run, args.half_life)
+        md = render_uncertainty_md(report)
+        write_uncertainty_files(report, md)
+        print(json.dumps(_rounded(report), indent=2, sort_keys=True) if args.format == "json" else md)
+        return 0
     payload = build_payload(run, args.half_life, args.by_sha)
     if args.check:
         problems = check(run, payload, args.max_skip_fraction)
