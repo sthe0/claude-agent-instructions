@@ -2053,18 +2053,22 @@ def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bo
     Every evaluation of every gate is written, including escalation_orphans,
     frozen_stage and renorm_final, so a gate's block rate has a real denominator.
     Each call also appends one engine row to the decision log (docs/operations/decision-telemetry.md)."""
-    hook_telemetry.record(f"engine:{gate}", "engine", "silent" if passed else "deny", state.session_id, layer="engine")
-    row = {
+    _append_jsonl(config_root.decision_log(), hook_telemetry.decision_row(
+        f"engine:{gate}", "engine", "silent" if passed else "deny", state.session_id, layer="engine"))
+    _append_jsonl(GATE_LOG, {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "session": state.session_id,
         "node": state.node,
         "gate": gate,
         "blockers": list(blockers),
         "passed": passed,
-    }
+    })
+
+
+def _append_jsonl(path: Path, row: dict) -> None:
     try:
-        GATE_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with GATE_LOG.open("a", encoding="utf-8") as f:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     except OSError:
         pass
