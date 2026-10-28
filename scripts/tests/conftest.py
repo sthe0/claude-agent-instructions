@@ -86,6 +86,14 @@ expected_exit = 0
 
 
 @pytest.fixture(autouse=True)
+def _isolate_decision_log(tmp_path, monkeypatch):
+    """Decision telemetry (lib/hook_telemetry.py, cli._log_gate) appends one row per hook
+    or engine-gate evaluation to $AGENTCTL_DECISION_LOG; no test may append to the real log.
+    The env var reaches the hook and CLI subprocesses a test spawns."""
+    monkeypatch.setenv("AGENTCTL_DECISION_LOG", str(tmp_path / "decision-log.jsonl"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_delivery_channel(monkeypatch):
     """No test may run a delivery-channel command configured in the real
     ~/.claude-agent. The config-root environment stays real (many tests depend on

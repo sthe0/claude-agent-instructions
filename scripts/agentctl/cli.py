@@ -27,7 +27,7 @@ import tomllib
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
-from lib import argv_text, ask_evidence, config_root, engine_session_binding, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
+from lib import argv_text, ask_evidence, config_root, engine_session_binding, hook_telemetry, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
 from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, delivery_channel, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
@@ -2050,10 +2050,10 @@ def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bo
     GATE_LOG as a module global (not a captured default) so tests can monkeypatch
     cli.GATE_LOG and have this pick it up on the next call.
 
-    The log is not a record of every evaluation of every gate. The refusal-only labels
-    are written only when the gate refuses (always passed=False): escalation_orphans,
-    frozen_stage, renorm_final. Their block rate is 100% by construction, since the
-    denominator is the refusals themselves, so it says nothing about the gate."""
+    Every evaluation of every gate is written, including escalation_orphans,
+    frozen_stage and renorm_final, so a gate's block rate has a real denominator.
+    Each call also appends one engine row to the decision log (docs/operations/decision-telemetry.md)."""
+    hook_telemetry.record(f"engine:{gate}", "engine", "silent" if passed else "deny", state.session_id, layer="engine")
     row = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "session": state.session_id,
@@ -10721,15 +10721,15 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             f"verify-final runs only from VERIFYING; node is {state.node}",
         )
     renorm_block = gates.pending_renorm_final_blockers(state)
+    _log_gate(state, "renorm_final", renorm_block, passed=not renorm_block)
     if renorm_block:
-        _log_gate(state, "renorm_final", renorm_block, passed=False)
         return Directive(False, state.node, "renorm",
                          "not ready for resolution: a normative difficulty's norm edit is "
                          "still owed", data={"blockers": renorm_block})
     orphan_block = gates.escalation_orphan_blockers(
         gates.escalation_orphans(state, _linked_children(store, state.session_id)))
+    _log_gate(state, "escalation_orphans", orphan_block, passed=not orphan_block)
     if orphan_block:
-        _log_gate(state, "escalation_orphans", orphan_block, passed=False)
         return Directive(False, state.node, "adopt_escalation",
                          "not ready for resolution: a linked child's escalation of a stage "
                          "norm is not adopted", data={"blockers": orphan_block})
@@ -12440,8 +12440,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
         reopen_ignored.extend(sorted(i for i in reopen_roots if i not in reopening))
     if tier is not None:
         frozen = _frozen_stage_refusal(state, tier, reopening)
+        _log_gate(state, "frozen_stage", [] if frozen is None else frozen[1]["blockers"],
+                  passed=frozen is None)
         if frozen is not None:
-            _log_gate(state, "frozen_stage", frozen[1]["blockers"], passed=False)
             return Directive(False, state.node, "replan", frozen[0], data=frozen[1])
 
     tier_number = tier.tier if tier is not None else None

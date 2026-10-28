@@ -372,7 +372,8 @@ class RunOutcome:
 def _run_process(argv: list[str], timeout_s: int) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout_s, env=_clean_env(),
+            argv, capture_output=True, text=True, timeout=timeout_s,
+            env={**_clean_env(), "AGENT_TELEMETRY_TEST": "1"},
         )
     except subprocess.TimeoutExpired as exc:
         raise GateError(f"{Path(argv[0]).name} did not finish within {timeout_s}s") from exc

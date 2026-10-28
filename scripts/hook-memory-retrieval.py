@@ -26,9 +26,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from lib import bm25f  # noqa: E402
     from lib import config_root  # noqa: E402
+    from lib import hook_telemetry  # noqa: E402
 except Exception:  # a broken or stale lib must never block a prompt: main() exits 0 below
     bm25f = None
     config_root = None
+    hook_telemetry = None
 try:
     from lib import memory_retrieval_ledger  # noqa: E402
 except Exception:  # the ledger is telemetry: its absence must not cost the pointers
@@ -233,4 +235,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main() if hook_telemetry is None else hook_telemetry.run(main, mechanism="hook-memory-retrieval"))

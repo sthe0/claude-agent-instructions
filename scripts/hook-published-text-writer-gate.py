@@ -510,5 +510,8 @@ def main() -> int:
     return 0
 
 
+from lib import hook_telemetry  # noqa: E402
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-published-text-writer-gate"))

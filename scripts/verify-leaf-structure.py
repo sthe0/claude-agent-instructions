@@ -306,5 +306,8 @@ def main(argv: list[str] | None = None) -> int:
     return _scan(mode)
 
 
+from lib import hook_telemetry  # noqa: E402
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="verify-leaf-structure"))

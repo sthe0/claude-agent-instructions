@@ -133,8 +133,10 @@ def test_walkthrough_logs_one_event_per_gate_evaluation(store, monkeypatch, tmp_
     # Stage 7 (item C) adds an "effort_fire" precondition check ahead of
     # cmd_submit_plan (inside _to_executing_stage1) — one more evaluation than
     # before, passing (no fire recorded in this walkthrough).
-    assert gates_fired == ["effort_fire", "plan_approval", "resolution", "resolution"]
-    assert [r["passed"] for r in rows] == [True, True, True, True]
+    # verify-final now logs renorm_final and escalation_orphans on every evaluation.
+    assert gates_fired == ["effort_fire", "plan_approval", "renorm_final", "escalation_orphans",
+                           "resolution", "resolution"]
+    assert [r["passed"] for r in rows] == [True] * 6
     assert store.load(sid).node == Node.RESOLVED.value
 
 
@@ -195,7 +197,7 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
                            "diagnosing_replan",
                            "normalization_blockers",
                            "failure_address_blockers", "plan_review",
-                           "replan_authorization",
+                           "frozen_stage", "replan_authorization",
                            "normative_edit", "renorm_retention",
                            "plan_approval_plugin", "replan_coverage"]
     assert rows[0]["passed"] is True   # effort_fire: no fire yet, submit_plan
