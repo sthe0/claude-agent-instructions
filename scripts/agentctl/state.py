@@ -1748,6 +1748,62 @@ class Requirement:
         )
 
 
+PROPOSAL_VERDICTS = ("adopt", "adapt", "reject")
+
+
+@dataclass
+class Proposal:
+    """One idea the user put forward, with the agent's criticism of it and what became of it.
+
+    `verdict` is one of PROPOSAL_VERDICTS, but this type does not check that: it is built
+    on the lenient loader path, so a verdict outside the vocabulary survives here and is
+    refused at the submission seam (submission._order_understanding_violations)."""
+    id: str
+    idea: str = ""
+    verdict: str = ""
+    rationale: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Proposal":
+        return cls(
+            id=str(d.get("id", "")),
+            idea=str(d.get("idea", "")),
+            verdict=str(d.get("verdict", "")),
+            rationale=str(d.get("rationale", "")),
+        )
+
+
+@dataclass
+class Constraint:
+    """One condition on the solution the user offered or the agent found binding, with
+    where it came from (`source`: the user's words, a file, a rule of the engine)."""
+    id: str
+    text: str = ""
+    source: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Constraint":
+        return cls(
+            id=str(d.get("id", "")),
+            text=str(d.get("text", "")),
+            source=str(d.get("source", "")),
+        )
+
+
+def _typed_table_list(raw, cls, name: str, malformed: list[str]) -> list:
+    """The entries of `raw` that are tables, built as `cls`; a non-list value, or a bare
+    sentence among the tables, is recorded in `malformed` under `name` and degrades to
+    what survived. The same totality `Order.from_dict` gives `requirements`."""
+    if isinstance(raw, list):
+        items = [cls.from_dict(r) for r in raw if isinstance(r, dict)]
+        if len(items) != len(raw):
+            malformed.append(name)
+        return items
+    if raw is not None:
+        malformed.append(name)
+    return []
+
+
 @dataclass
 class Order:
     """The order a plan serves, typed: the customer it came from, the functional place
@@ -1825,6 +1881,15 @@ class Order:
     # (`gates.parent_norm_boundary`); every digest and key built from the order includes
     # it only when set, so a plan without it keeps the digests it had before the field.
     parent_norm: str | None = None
+    # The agent's understanding of the order, set down for the user to agree before any
+    # stage is written: what the activity is, what the difficulty is in it, the user's
+    # ideas as criticized proposals, and the constraints offered. Each is empty for an
+    # order that does not state it, and `plan.order_place` / `plan.order_scope` add them to
+    # their keys only when non-empty, so an order without them keeps the keys it had.
+    activity: str = ""
+    difficulty: str = ""
+    proposals: list[Proposal] = field(default_factory=list)
+    constraints: list[Constraint] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Order":
@@ -1866,6 +1931,9 @@ class Order:
         elif raw_parent is not None:
             malformed.append("parent_norm")
 
+        proposals = _typed_table_list(d.get("proposals"), Proposal, "proposals", malformed)
+        constraints = _typed_table_list(d.get("constraints"), Constraint, "constraints", malformed)
+
         return cls(
             customer_id=str(d.get("customer_id", "")),
             customer=str(d.get("customer", "")),
@@ -1876,6 +1944,10 @@ class Order:
             requirements_dropped=requirements_dropped,
             requires_traceability=bool(d.get("requires_traceability", False)),
             parent_norm=parent_norm,
+            activity=str(d.get("activity", "")),
+            difficulty=str(d.get("difficulty", "")),
+            proposals=proposals,
+            constraints=constraints,
         )
 
 

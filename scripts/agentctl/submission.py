@@ -64,7 +64,10 @@ from .conditions import judge_restatement, restatement_prefilter
 from .plan import _declared_absolute_venue, venue_declaration_blockers
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
-from .state import AGENT_ACTOR, CheckKind, CheckVenue, CriterionType, WeightClass, asserts_landing
+from .state import (
+    AGENT_ACTOR, PROPOSAL_VERDICTS, CheckKind, CheckVenue, CriterionType, WeightClass,
+    asserts_landing,
+)
 from .text_shape import ELEMENT_NAMES
 from .text_shape import normalize_string as _normalize_string
 
@@ -213,6 +216,16 @@ _ORDER_SHAPE_HINTS = {
     "coverage": (
         "a table of requirement id -> controls — a [meta.order.coverage] section carrying "
         "one `R1 = [\"stage 1 verify_command\"]` line per declared requirement"
+    ),
+    "proposals": (
+        "an array of tables — repeated [[meta.order.proposals]] sections, each "
+        "{ id = \"P1\", idea = \"...\", verdict = \"adopt|adapt|reject\", rationale = \"...\" }. "
+        "A bare sentence among the tables, a single table, or a string reads as no proposal"
+    ),
+    "constraints": (
+        "an array of tables — repeated [[meta.order.constraints]] sections, each "
+        "{ id = \"C1\", text = \"...\", source = \"...\" }. A bare sentence among the "
+        "tables, a single table, or a string reads as no constraint"
     ),
 }
 
@@ -481,6 +494,135 @@ def _order_violations(meta) -> list[str]:
             f"engine as its own customer would let the engine's self-grant path read its "
             f"own approval back as if a real customer had given it"
         )
+    return out
+
+
+def _invalid_verdicts(proposals) -> list[str]:
+    """The ids of proposals whose verdict is outside PROPOSAL_VERDICTS. A proposal without
+    an id is reported by position, as `_order_understanding_violations` does for ids."""
+    return [
+        p.id or f"#{i}"
+        for i, p in enumerate(proposals, start=1)
+        if p.verdict not in PROPOSAL_VERDICTS
+    ]
+
+
+def _duplicated_ids(items) -> list[str]:
+    ids = [i.id for i in items if i.id]
+    return sorted({i for i in ids if ids.count(i) > 1})
+
+
+def _order_understanding_violations(meta) -> list[str]:
+    """Every way the understanding tables of `[meta.order]` are ill-formed. [] == clean.
+
+    Grades only what is PRESENT: an order that states no proposal and no constraint is
+    clean here, because whether the understanding is complete is a separate question
+    (`order_understanding_completeness_violations`) that only the call asking for an
+    agreed understanding puts. Well-formedness binds at every substantive submission for
+    the reason every part of the order does — a table written wrong is silently
+    misread, and the seam is where the author can be told which entry and why.
+
+    A proposal is { id, idea, verdict, rationale } with the verdict one of
+    PROPOSAL_VERDICTS and a rationale for it: a verdict with no criticism behind it is the
+    user's idea waved through or waved off. A constraint is { id, text } (+ source).
+    Pure over `meta`, like `_order_violations`, whose malformed-shape register it reuses."""
+    order = meta.order
+    if order is None or "order" in order.malformed:
+        return []
+    out: list[str] = []
+    for name in ("proposals", "constraints"):
+        if name in order.malformed:
+            out.append(_order_malformed(name))
+    unnamed = [i for i, p in enumerate(order.proposals, start=1) if not p.id]
+    if unnamed:
+        out.append(
+            f"[meta.order] proposal(s) at position {', '.join(str(i) for i in unnamed)} carry "
+            f"no 'id'. Write each as {{ id = \"P1\", idea = \"...\", verdict = \"adopt\", "
+            f"rationale = \"...\" }} — the user agrees a proposal by its id"
+        )
+    unideaed = sorted({p.id for p in order.proposals if p.id and not _normalize_string(p.idea)})
+    if unideaed:
+        out.append(
+            f"[meta.order] proposal(s) {', '.join(unideaed)} carry an id but no 'idea': "
+            f"state the user's idea, or there is nothing for the verdict to be about"
+        )
+    bad_verdicts = _invalid_verdicts(order.proposals)
+    if bad_verdicts:
+        out.append(
+            f"[meta.order] proposal(s) {', '.join(bad_verdicts)} carry a verdict outside "
+            f"{'/'.join(PROPOSAL_VERDICTS)}: each of the user's ideas is adopted as stated, "
+            f"adapted into something else, or rejected — a verdict of any other kind decides "
+            f"nothing about the idea"
+        )
+    unreasoned = sorted({p.id for p in order.proposals if p.id and not _normalize_string(p.rationale)})
+    if unreasoned:
+        out.append(
+            f"[meta.order] proposal(s) {', '.join(unreasoned)} carry no 'rationale': a "
+            f"verdict without the criticism behind it cannot be agreed or disputed"
+        )
+    duplicated = _duplicated_ids(order.proposals)
+    if duplicated:
+        out.append(
+            f"[meta.order] proposal id(s) {', '.join(duplicated)} are declared more than "
+            f"once. Ids must be unique: the user's agreement is recorded per id"
+        )
+    unnamed_c = [i for i, c in enumerate(order.constraints, start=1) if not c.id]
+    if unnamed_c:
+        out.append(
+            f"[meta.order] constraint(s) at position {', '.join(str(i) for i in unnamed_c)} "
+            f"carry no 'id'. Write each as {{ id = \"C1\", text = \"...\", source = \"...\" }}"
+        )
+    textless = sorted({c.id for c in order.constraints if c.id and not _normalize_string(c.text)})
+    if textless:
+        out.append(
+            f"[meta.order] constraint(s) {', '.join(textless)} carry an id but no 'text': "
+            f"an id with nothing stated is a constraint the plan never actually names"
+        )
+    duplicated_c = _duplicated_ids(order.constraints)
+    if duplicated_c:
+        out.append(
+            f"[meta.order] constraint id(s) {', '.join(duplicated_c)} are declared more "
+            f"than once. Ids must be unique: the user's agreement is recorded per id"
+        )
+    return out
+
+
+_UNDERSTANDING_PARTS = (
+    (
+        "activity",
+        "what the user is doing, in the user's terms — the activity this order serves, so "
+        "the product is judged against it and not against the requirements alone",
+    ),
+    (
+        "difficulty",
+        "the divergence between the state the user wants and the state they have, which "
+        "this order exists to remove",
+    ),
+)
+
+
+def order_understanding_completeness_violations(meta) -> list[str]:
+    """Every way the understanding of the order is not yet COMPLETE enough to put to the
+    user for agreement. [] == complete.
+
+    Exported for the call that asks for an agreed understanding (stage 2's order-submit);
+    the submission seam does not call it, because a plan may carry an order that states
+    no understanding at all and still be well-formed. Complete means: an order exists, it
+    states its activity and its difficulty, and what it does state is well-formed
+    (`_order_understanding_violations`) — complete implies well-formed, so a caller
+    needs only this one function."""
+    order = meta.order
+    if order is None:
+        return [_ORDER_ABSENT]
+    if "order" in order.malformed:
+        return [_order_malformed("order")]
+    out: list[str] = []
+    for name, why in _UNDERSTANDING_PARTS:
+        if not _normalize_string(getattr(order, name)):
+            out.append(
+                f"[meta.order] missing {name!r} (required of an agreed understanding): {why}"
+            )
+    out.extend(_order_understanding_violations(meta))
     return out
 
 
@@ -957,6 +1099,7 @@ def submission_violations(
                 f"[meta] missing {label!r} (required for substantive plans): {_WHY[label]}"
             )
     out.extend(_order_violations(doc.meta))
+    out.extend(_order_understanding_violations(doc.meta))
     out.extend(_element_traceability_violations(doc))
     out.extend(_requirement_derivation_violations(doc.meta.order))
     out.extend(_landed_delivery_venue_violations(doc))

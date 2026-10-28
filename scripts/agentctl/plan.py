@@ -1819,6 +1819,17 @@ def check_venue_warnings(
     return warnings
 
 
+def _parse_order(raw_order) -> Order | None:
+    """The `[meta.order]` value as an Order: None when absent, `Order(malformed=("order",))`
+    for a present value that is not a table, else `Order.from_dict`. Shared by `parse_plan`
+    and `load_order_draft` so a draft reads its order exactly as a plan does."""
+    if isinstance(raw_order, dict):
+        return Order.from_dict(raw_order)
+    if raw_order is not None:
+        return Order(malformed=("order",))
+    return None
+
+
 def parse_plan(
     data: dict, *, strict: bool = True, strict_executor: bool | None = None
 ) -> PlanDoc:
@@ -1911,13 +1922,7 @@ def parse_plan(
     # be retroactive over every plan a live session re-reads, which is why refusals live
     # in submission.py instead. A present, non-dict `order` is recorded as
     # `malformed=("order",)` rather than left `None` — see `Order.malformed` for why.
-    raw_order = m.get("order")
-    if isinstance(raw_order, dict):
-        order = Order.from_dict(raw_order)
-    elif raw_order is not None:
-        order = Order(malformed=("order",))
-    else:
-        order = None
+    order = _parse_order(m.get("order"))
 
     meta = PlanMeta(
         task_id=str(m["task_id"]),
@@ -2214,6 +2219,27 @@ def load_plan_with_digest(
     return doc, data, digest
 
 
+def load_order_draft(
+    path: str | Path, *, base_dir: str | Path | None = None,
+    root: str | Path | None = None, read=None,
+) -> Order | None:
+    """The `[meta.order]` of a stageless draft — a TOML file holding the order and
+    nothing the plan loader would demand around it (no stage, no task_id). None when the
+    file carries no `[meta.order]`; PlanError for a missing file or malformed TOML, like
+    `load_plan`. Reads the order through `_parse_order`, so a malformed order degrades
+    exactly as it does in a plan and is graded at the submission seam, not here."""
+    p = Path(path)
+    if not p.exists():
+        raise PlanError(f"order draft not found: {p}")
+    try:
+        data = tomllib.loads(p.read_bytes().decode("utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        raise PlanError(f"malformed TOML in order draft {p}: {exc}") from exc
+    data = _resolve_plan_refs(data, p, base_dir, root, read)
+    meta = data.get("meta")
+    return _parse_order(meta.get("order") if isinstance(meta, dict) else None)
+
+
 # --- Topological-review protocol constants ------------------------------
 # Sourced by render.render_pair_review_bundle so the checklist/protocol text
 # rendered into a --review-topo starting prompt and the markers a reviewer's
@@ -2440,6 +2466,68 @@ def stage_interface_digest(doc: PlanDoc, stage: Stage) -> str:
     return StageNorm.from_stage(stage, doc=doc).interface_digest()
 
 
+UNDERSTANDING_PARTS = ("activity", "difficulty", "proposals", "constraints")
+
+
+def _understanding_empty(order) -> bool:
+    return not (order.activity or order.difficulty or order.proposals or order.constraints)
+
+
+def _understanding_place(order) -> tuple:
+    """The whole understanding as ONE member of `order_place`'s key, or the empty tuple
+    when the order states none of it — so an order that predates the understanding keeps
+    the exact key it had. One grouped member rather than four, because a position-shifting
+    member per field would let a text moved from `activity` to `difficulty` read as no
+    change."""
+    if _understanding_empty(order):
+        return ()
+    return ((
+        order.activity,
+        order.difficulty,
+        tuple((p.id, p.idea, p.verdict, p.rationale) for p in order.proposals),
+        tuple((c.id, c.text, c.source) for c in order.constraints),
+    ),)
+
+
+def _understanding_scope(order) -> tuple:
+    """The understanding's scope-bearing half for `order_scope`: which proposals exist and
+    what became of each, and which constraints bind. Adding, removing or re-verdicting
+    either changes what the plan is for; re-wording an idea or a rationale does not."""
+    if _understanding_empty(order):
+        return ()
+    return ((
+        tuple(sorted((p.id, p.verdict) for p in order.proposals)),
+        tuple(sorted(c.id for c in order.constraints)),
+    ),)
+
+
+def understanding_parts(order) -> dict[str, str]:
+    """`{part name: digest}` for each UNDERSTANDING_PARTS entry of `order` (None reads as
+    an order stating nothing), so the user can be shown — and can agree or reject — one
+    part at a time. Proposals and constraints are hashed as sorted sets: reordering the
+    tables in the TOML changes nothing the user agreed."""
+    if order is None:
+        order = Order()
+    values = {
+        "activity": order.activity,
+        "difficulty": order.difficulty,
+        "proposals": tuple(sorted((p.id, p.idea, p.verdict, p.rationale) for p in order.proposals)),
+        "constraints": tuple(sorted((c.id, c.text, c.source) for c in order.constraints)),
+    }
+    return {
+        name: hashlib.sha256(repr((name, values[name])).encode("utf-8")).hexdigest()
+        for name in UNDERSTANDING_PARTS
+    }
+
+
+def understanding_digest(order) -> str:
+    """One digest over every part `understanding_parts` names — what the user's agreement
+    to the understanding binds to. Deliberately not an input of `order_digest`, the
+    customer-approvals ledger key, whose population must not move."""
+    parts = understanding_parts(order)
+    return hashlib.sha256(repr(tuple(sorted(parts.items()))).encode("utf-8")).hexdigest()
+
+
 def order_scope(meta) -> tuple:
     """The SCOPE-bearing half of the order, as a contribution to a change-decision key:
     a one-element tuple holding the requirement ids and the coverage map's keys, or the
@@ -2459,7 +2547,8 @@ def order_scope(meta) -> tuple:
     order = meta.order
     if order is None:
         return ()
-    return ((tuple(r.id for r in order.requirements), tuple(sorted(order.coverage))),)
+    return ((tuple(r.id for r in order.requirements), tuple(sorted(order.coverage))),
+            *_understanding_scope(order))
 
 
 def order_place(meta) -> tuple:
@@ -2497,6 +2586,7 @@ def order_place(meta) -> tuple:
         order.requirements_dropped,
         order.requires_traceability,
         *((order.parent_norm,) if order.parent_norm else ()),
+        *_understanding_place(order),
     ),)
 
 
