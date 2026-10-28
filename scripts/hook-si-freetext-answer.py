@@ -26,6 +26,8 @@ import json
 import re
 import sys
 
+from lib import hook_telemetry
+
 PAIR_RE = re.compile(r'"([^"]*)"\s*=\s*"([^"]*)"')
 
 
@@ -105,9 +107,6 @@ def main() -> int:
         file=sys.stderr,
     )
     return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

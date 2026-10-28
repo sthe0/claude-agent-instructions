@@ -28,6 +28,8 @@ import re
 import sys
 from pathlib import Path
 
+from lib import hook_telemetry
+
 
 def _tracker_hosts(identity_path=None) -> tuple[str, ...]:
     """Resolve extra tracker-API host/path fragments from `skill_first_tracker_hosts=`
@@ -148,9 +150,6 @@ def main() -> int:
         "is write-capable); else scan the system-reminder skill list for the Skill."
     )
     return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

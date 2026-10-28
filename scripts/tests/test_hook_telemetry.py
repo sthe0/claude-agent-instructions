@@ -101,11 +101,60 @@ def test_an_uncreatable_log_switches_telemetry_off_and_changes_nothing(tmp_path)
 
 
 def test_an_uncreatable_capture_file_runs_the_hook_untouched(monkeypatch, capsys):
-    def no_tempfile():
+    def no_capture():
         raise OSError("no space left")
 
-    monkeypatch.setattr(hook_telemetry.tempfile, "TemporaryFile", no_tempfile)
+    monkeypatch.setattr(hook_telemetry, "_open_capture", no_capture)
     assert hook_telemetry.run(lambda: 7, mechanism="hook-x") == 7
+
+
+FULL_DISK_CAPTURE = textwrap.dedent("""
+    class Full:
+        def __init__(self):
+            self._f = open('/dev/full', 'wb')
+        def fileno(self):
+            return self._f.fileno()
+        def seek(self, *args):
+            pass
+        def read(self):
+            return b''
+        def close(self):
+            self._f.close()
+    hook_telemetry._open_capture = Full
+""")
+
+
+@pytest.mark.skipif(not Path("/dev/full").exists(), reason="needs /dev/full")
+def test_a_capture_that_runs_out_of_space_cannot_turn_a_deny_into_an_allow(tmp_path):
+    body, _ = HOOKS["deny_json"]
+    bare = _run(_script(tmp_path, body, wrapped=False), tmp_path / "unused.jsonl")
+    wrapped = _run(_script(tmp_path, FULL_DISK_CAPTURE + body, wrapped=True), tmp_path / "log.jsonl")
+    assert wrapped.returncode == bare.returncode == 0
+    assert wrapped.stdout == bare.stdout == DENY_JSON + "\n"
+    assert wrapped.stderr == ""
+
+
+@pytest.mark.skipif(not Path("/dev/full").exists(), reason="needs /dev/full")
+def test_a_capture_that_runs_out_of_space_keeps_the_exit_code_and_stderr(tmp_path):
+    body, _ = HOOKS["exit_two"]
+    bare = _run(_script(tmp_path, body, wrapped=False), tmp_path / "unused.jsonl")
+    wrapped = _run(_script(tmp_path, FULL_DISK_CAPTURE + body, wrapped=True), tmp_path / "log.jsonl")
+    assert (wrapped.returncode, wrapped.stderr) == (bare.returncode, bare.stderr) == (2, "x\n")
+
+
+def test_any_failure_after_the_hook_returns_changes_nothing(tmp_path):
+    body = ("from lib import config_root\n"
+            "def broken():\n    raise RuntimeError('no log')\n"
+            "config_root.decision_log = broken\n" + HOOKS["deny_json"][0])
+    bare = _run(_script(tmp_path, HOOKS["deny_json"][0], wrapped=False), tmp_path / "unused.jsonl")
+    wrapped = _run(_script(tmp_path, body, wrapped=True), tmp_path / "log.jsonl")
+    assert (wrapped.stdout, wrapped.returncode, wrapped.stderr) == (bare.stdout, bare.returncode, "")
+    assert not (tmp_path / "log.jsonl").exists()
+
+
+def test_a_row_stays_under_the_byte_cap_whatever_the_fields_hold():
+    row = hook_telemetry.decision_row('"\\' * 300, "é" * 300, "deny", '𝄞"' * 300)
+    assert len(json.dumps(row).encode()) < 2048
 
 
 def test_stdin_is_not_consumed_for_a_hook_that_never_reads_it(tmp_path):

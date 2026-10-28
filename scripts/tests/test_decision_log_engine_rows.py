@@ -47,6 +47,14 @@ def test_the_engine_row_does_not_pass_through_the_hook_writer(state, monkeypatch
     assert [r["mechanism"] for r in _rows()] == ["engine:plan_approval"]
 
 
+def test_a_failing_path_resolver_leaves_the_gate_log_row_intact(state, monkeypatch):
+    def broken():
+        raise RuntimeError("no log")
+    monkeypatch.setattr(config_root, "decision_log", broken)
+    cli._log_gate(state, "plan_approval", [], passed=True)
+    assert cli.GATE_LOG.read_text(encoding="utf-8").strip()
+
+
 def test_an_uncreatable_log_changes_nothing(state, monkeypatch, tmp_path):
     blocker = tmp_path / "file"
     blocker.write_text("")

@@ -57,13 +57,19 @@ def decision_class(stdout: str, exit_code) -> str:
     return NUDGE
 
 
+def _field(value) -> str:
+    """Printable ASCII only, so the encoded line stays under 2048 bytes: three fields of
+    at most 256 characters, each at worst doubled by JSON escaping of quote and backslash."""
+    return "".join(c if " " <= c <= "~" else "?" for c in str(value)[:_FIELD_MAX_CHARS])
+
+
 def decision_row(mechanism: str, event: str, decision: str, session: str, *, layer: str = "core") -> dict:
     return {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "mechanism": str(mechanism)[:_FIELD_MAX_CHARS],
-        "event": str(event)[:_FIELD_MAX_CHARS],
+        "mechanism": _field(mechanism),
+        "event": _field(event),
         "decision": decision,
-        "session": str(session)[:_FIELD_MAX_CHARS],
+        "session": _field(session),
         "test": is_test_run(session),
         "layer": layer,
     }
@@ -129,18 +135,74 @@ def _exit_status(code) -> int:
     return code if isinstance(code, int) else 1
 
 
+def _open_capture():
+    """An in-memory file where the kernel has one: a full disk must not be able to
+    swallow a hook's refusal."""
+    if hasattr(os, "memfd_create"):
+        try:
+            return os.fdopen(os.memfd_create("hook-stdout"), "w+b")
+        except OSError:
+            pass
+    return tempfile.TemporaryFile()
+
+
+def _redirect_stdout():
+    """Point descriptor 1 at a capture file; ``(capture, saved_fd)``, or None when that is
+    not possible, in which case the hook runs unwrapped."""
+    try:
+        capture = _open_capture()
+    except OSError:
+        return None
+    try:
+        sys.stdout.flush()
+        saved_fd = os.dup(1)
+    except OSError:
+        capture.close()
+        return None
+    try:
+        os.dup2(capture.fileno(), 1)
+    except OSError:
+        os.close(saved_fd)
+        capture.close()
+        return None
+    return capture, saved_fd
+
+
+def _restore_stdout(saved_fd: int) -> None:
+    """Descriptor 1 is always put back, whatever the capture did. Bytes a failed capture
+    write left in Python's buffer reach the real stdout on the second flush."""
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    finally:
+        os.dup2(saved_fd, 1)
+        os.close(saved_fd)
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
+def _read_capture(capture) -> bytes:
+    try:
+        capture.seek(0)
+        return capture.read()
+    except OSError:
+        return b""
+    finally:
+        capture.close()
+
+
 def run(main, *, mechanism: str, layer: str = "core"):
     """Run ``main`` and return its result; stdout and the exit code reach the caller
     exactly as ``main`` produced them. Use as ``sys.exit(run(main, mechanism=...))``."""
-    try:
-        capture = tempfile.TemporaryFile()
-    except OSError:
+    redirected = _redirect_stdout()
+    if redirected is None:
         return main()
+    capture, saved_fd = redirected
     real_stdin = sys.stdin
     sys.stdin = recorder = _RecordingStdin(real_stdin)
-    sys.stdout.flush()
-    saved_fd = os.dup(1)
-    os.dup2(capture.fileno(), 1)
     result = None
     failure = None
     try:
@@ -148,25 +210,27 @@ def run(main, *, mechanism: str, layer: str = "core"):
     except BaseException as exc:
         failure = exc
     finally:
-        sys.stdout.flush()
-        os.dup2(saved_fd, 1)
-        os.close(saved_fd)
+        _restore_stdout(saved_fd)
         sys.stdin = real_stdin
-    capture.seek(0)
-    captured = capture.read()
-    capture.close()
-    _emit(captured)
+    captured = _read_capture(capture)
+    try:
+        _emit(captured)
+    except OSError:
+        pass
 
-    if failure is None:
-        status = _exit_status(result)
-    elif isinstance(failure, SystemExit):
-        status = _exit_status(failure.code)
-    else:
-        status = 1
-    payload = _payload(recorder.text)
-    session = payload.get("session_id") or os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"
-    event = payload.get("hook_event_name") or "unknown"
-    record(mechanism, event, decision_class(captured.decode("utf-8", errors="replace"), status), session, layer=layer)
+    try:
+        if failure is None:
+            status = _exit_status(result)
+        elif isinstance(failure, SystemExit):
+            status = _exit_status(failure.code)
+        else:
+            status = 1
+        payload = _payload(recorder.text)
+        session = payload.get("session_id") or os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"
+        event = payload.get("hook_event_name") or "unknown"
+        record(mechanism, event, decision_class(captured.decode("utf-8", errors="replace"), status), session, layer=layer)
+    except Exception:
+        pass
     if failure is not None:
         raise failure
     return result

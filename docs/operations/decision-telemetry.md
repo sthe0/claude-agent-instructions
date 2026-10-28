@@ -7,18 +7,20 @@ evaluation appends one row. `scripts/agent-report.py hooks` reads it.
 
 ## Row
 
-One JSON line, at most 2048 bytes, written with a single `O_APPEND` write (no lock, no
-fsync, no subprocess):
+One JSON line, at most 2048 UTF-8 bytes, written with a single `O_APPEND` write (no lock, no
+fsync, no subprocess). The free-text fields (`mechanism`, `event`, `session`) are cut to 256
+characters and any character outside printable ASCII becomes `?`, which keeps the line under
+the bound:
 
 | field | value |
 |---|---|
 | `ts` | ISO-8601 UTC, seconds |
-| `mechanism` | script basename without `.py` (`hook-state-gate`); `engine:<gate label>` for the engine; `arc:<name>` for a sub-hook of an arc dispatcher |
+| `mechanism` | script basename without `.py` (`hook-state-gate`); `engine:<gate label>` for the engine |
 | `event` | hook event name from the payload (`unknown` when the hook read no payload), or `engine` |
 | `decision` | `deny`, `nudge` or `silent` |
 | `session` | payload `session_id`, else `$CLAUDE_CODE_SESSION_ID`, else `unknown` |
 | `test` | true when `PYTEST_CURRENT_TEST` is set, the session is `agentctl-test-session`, or `AGENT_TELEMETRY_TEST=1` |
-| `layer` | `core`, `arc` or `engine` |
+| `layer` | `core` for a hook, `engine` for a gate |
 
 Decision class, from what the hook wrote: `deny` for a `permissionDecision` of `deny`, a
 top-level `"decision": "block"`, or exit code 2; `silent` for empty stdout; `nudge` for any
@@ -26,7 +28,9 @@ other stdout (a PreToolUse `ask` included). An engine row is `deny` when the gat
 `silent` when it passed.
 
 Telemetry is off, and writes nothing, when the log path cannot be created. It never changes a
-hook's stdout, stderr or exit code, crashes included.
+hook's stdout, stderr or exit code, crashes included: the capture lives in memory where the
+kernel allows (a full disk cannot swallow a refusal), descriptor 1 is restored whatever the
+capture does, and any failure after the hook returns is swallowed.
 
 ## Hooks
 

@@ -36,6 +36,7 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
+from lib import hook_telemetry  # noqa: E402
 
 try:
     import self_diagnose_store as store
@@ -473,9 +474,6 @@ def main(argv: "list[str] | None" = None) -> int:
         except Exception:
             pass
     return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

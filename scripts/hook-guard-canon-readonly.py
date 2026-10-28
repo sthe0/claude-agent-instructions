@@ -57,7 +57,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import bash_write_targets, config_root, git_cwd, shell_tokens  # noqa: E402
+from lib import bash_write_targets, config_root, git_cwd, hook_telemetry, shell_tokens  # noqa: E402
 
 GIT_TIMEOUT_S = 3
 
@@ -440,9 +440,6 @@ def main() -> int:
             }
         }))
     return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

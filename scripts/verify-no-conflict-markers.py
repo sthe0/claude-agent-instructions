@@ -45,6 +45,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lib import hook_telemetry
+
 # Built from char classes so no 7-char marker literal ever appears at column 0
 # in this source (which would make the verifier flag itself).
 OURS_RE = re.compile(r"^" + "<" * 7 + r"( |$)")
@@ -188,9 +190,6 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_file(args.path)
     mode = "staged" if args.staged else "all"
     return _scan(mode)
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

@@ -29,6 +29,8 @@ import re
 import shlex
 import sys
 
+from lib import hook_telemetry
+
 _VAR_RE = re.compile(r"\$\{?\w+\}?")
 
 
@@ -183,9 +185,6 @@ def main() -> int:
         }))
 
     return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

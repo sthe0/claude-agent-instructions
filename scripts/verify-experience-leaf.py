@@ -57,6 +57,7 @@ import sys
 from pathlib import Path
 
 import memory_dates as md
+from lib import hook_telemetry
 from lib import principle_provenance as pp
 
 EXPERIENCE_PATH_RE = re.compile(r"(^|/)experience/(?!MEMORY\.md$)[^/]+\.md$")
@@ -436,9 +437,6 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_file(args.path)
     mode = "staged" if args.staged else "all"
     return _scan(mode)
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

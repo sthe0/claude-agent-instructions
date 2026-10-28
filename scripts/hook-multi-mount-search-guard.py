@@ -41,6 +41,8 @@ import re
 import shlex
 import sys
 
+from lib import hook_telemetry
+
 _RECURSIVE_ALWAYS = frozenset(["find", "rg", "fd", "du"])
 _GREP_VARIANTS = frozenset(["grep", "egrep", "fgrep", "zgrep"])
 _SEGMENT_OPS = frozenset(["&&", "||", ";", ";;", "|", "|&", "&"])
@@ -331,9 +333,6 @@ def main() -> int:
         return _run()
     except Exception:
         return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

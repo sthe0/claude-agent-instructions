@@ -90,6 +90,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import config_root  # noqa: E402
+from lib import hook_telemetry  # noqa: E402
 from lib import hook_wiring  # noqa: E402
 
 GUARD_BASENAME = "hook-guard-canon-readonly.py"
@@ -404,9 +405,6 @@ def main() -> int:
             "================================================================"
         )
     return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

@@ -38,7 +38,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import config_root  # noqa: E402
+from lib import config_root, hook_telemetry  # noqa: E402
 
 SCRIPTS_DIR = Path(__file__).resolve().parent  # `python3 -m agentctl` runs from here
 
@@ -283,9 +283,6 @@ def main(argv: list[str] | None = None) -> int:
     _stamp_prompt_ts(session_id, time.time())
     print(build_message(session_id))
     return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":
