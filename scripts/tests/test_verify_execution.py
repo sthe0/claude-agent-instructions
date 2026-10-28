@@ -351,6 +351,56 @@ def test_final_check_label_in_failure_message(store):
     assert any("full suite" in f for f in d.data["failures"])
 
 
+def test_all_failing_final_checks_listed_in_detail(store):
+    """All failing final_check entries are enumerated in the directive's detail
+    string (not just the data field), so an agent reading the detail sees every
+    failing condition in one run rather than one at a time."""
+    stage = _stage(1, verify_command=None, status=StageStatus.PASSED.value)
+    store.save(_verifying_with_final_check(
+        "fc5", stage,
+        [
+            FinalCheck(command="false", expected_exit=0, label="alpha"),
+            FinalCheck(command="false", expected_exit=0, label="beta"),
+            FinalCheck(command="false", expected_exit=0, label="gamma"),
+        ],
+    ))
+    d = cli.cmd_verify_final(
+        ns(session="fc5"), store=store, runner=runner_returning(1)
+    )
+    assert d.ok is False
+    # All three must appear in the detail (not just the first one).
+    assert "alpha" in d.detail, d.detail
+    assert "beta" in d.detail, d.detail
+    assert "gamma" in d.detail, d.detail
+
+
+def test_all_failing_stage_commands_listed_in_detail(store):
+    """Multiple stages whose verify_command fails are all named in the detail."""
+    stage1 = _stage(1, verify_command="false", expected_exit=0,
+                    status=StageStatus.PASSED.value)
+    stage1.title = "first-stage"
+    stage2 = _stage(2, verify_command="false", expected_exit=0,
+                    status=StageStatus.PASSED.value)
+    stage2.title = "second-stage"
+    s = SessionState(
+        session_id="fc6", task_id="t",
+        weight_class=WeightClass.SUBSTANTIVE.value, route=Route.SPAWN.value,
+        node=Node.VERIFYING.value,
+        approval=GateRecord("plan_approval", armed=True, passed=True),
+        partition=Partition(m1=True, verdict="recommended"),
+        stages=[stage1, stage2],
+    )
+    store.save(s)
+    d = cli.cmd_verify_final(
+        ns(session="fc6"), store=store, runner=runner_returning(1)
+    )
+    assert d.ok is False
+    assert len(d.data["failures"]) == 2, d.data["failures"]
+    # Both stage failures must be visible in the detail.
+    assert "stage 1" in d.detail, d.detail
+    assert "stage 2" in d.detail, d.detail
+
+
 # --- cost rollup at verify-final ----------------------------------------------
 
 def _stage_passed_with_cost(i, cost_usd, duration_ms, spawn_count=1):

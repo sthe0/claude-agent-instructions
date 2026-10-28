@@ -10786,14 +10786,15 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             now = _utcnow()
             data["effort_divergence"] = _record_effort_fire(state, div, now=now, store=store)
         store.save(state)
+        failures_summary = "; ".join(failures)
         if opened is None:
             return _difficulty_cap_directive(
-                state, "final verification command(s) failed", data)
+                state, f"final verification command(s) failed: {failures_summary}", data)
         return Directive(
             False, state.node, "declare",
-            "final verification command(s) failed; run overcome-difficulty — declare "
-            "the divergence, then investigate, then critique; replan is blocked until "
-            "the cycle is complete",
+            f"final verification command(s) failed: {failures_summary}; "
+            "run overcome-difficulty — declare the divergence, then investigate, "
+            "then critique; replan is blocked until the cycle is complete",
             data=data,
         )
     # Fire check on a clean pass (fire site 2) — the last point at which `diagnose`
