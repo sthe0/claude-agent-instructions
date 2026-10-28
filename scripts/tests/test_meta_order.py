@@ -41,7 +41,7 @@ import pytest
 from conftest import declare_venue
 
 from agentctl import cli
-from agentctl.plan import UNDERSTANDING_PARTS, PlanError, diff_plans, load_plan, order_place
+from agentctl.plan import UNDERSTANDING_FIELDS, PlanError, diff_plans, load_plan, order_place
 from agentctl.state import Node, Order
 from agentctl.submission import ORDER_REFUSAL_MARKERS, submission_violations, validate_submission
 
@@ -305,8 +305,9 @@ def test_order_place_exhausts_the_order_s_field_set():
     fields = {f.name for f in dataclasses.fields(Order)}
     # `parent_norm` rides only when set, so an order that omits it keeps the key it had
     # before the field existed: the full arity is read with it set, the base with it unset.
-    # The four understanding fields ride as ONE grouped member and only when any is stated.
-    grouped = len(UNDERSTANDING_PARTS) - 1
+    # The understanding fields ride as ONE grouped member and only when any is stated.
+    understanding_fields = len(UNDERSTANDING_FIELDS)
+    optional_members = 1 + understanding_fields  # parent_norm, plus the fields behind the group
     place = order_place(
         Namespace(order=Order(customer_id="u", customer="c", functional_place="p",
                               parent_norm="0" * 64, activity="a"))
@@ -315,10 +316,10 @@ def test_order_place_exhausts_the_order_s_field_set():
         Namespace(order=Order(customer_id="u", customer="c", functional_place="p"))
     )
     assert len(place) == 1, "order_place contributes one element for a declared order"
-    assert len(base[0]) == len(fields) - 1 - len(UNDERSTANDING_PARTS), (
+    assert len(base[0]) == len(fields) - optional_members, (
         "an unset parent_norm and an unstated understanding add no member to the key"
     )
-    assert len(place[0]) == len(fields) - grouped, (
+    assert len(place[0]) == len(fields) - understanding_fields + 1, (
         f"order_place carries {len(place[0])} member(s) for {len(fields)} Order field(s) "
         f"({sorted(fields)}). A field added to Order and not listed in order_place belongs "
         f"to NEITHER change-decision key: an edit to it moves no digest, so it re-arms "

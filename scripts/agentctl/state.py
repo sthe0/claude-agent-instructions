@@ -1759,35 +1759,36 @@ class Proposal:
     on the lenient loader path, so a verdict outside the vocabulary survives here and is
     refused at the submission seam (submission._order_understanding_violations)."""
     id: str
-    idea: str = ""
+    text: str = ""
     verdict: str = ""
-    rationale: str = ""
+    critique: str = ""
+    # Ids of the requirements the critique rests on. A bare string reads as one id, like a
+    # `coverage` value; anything else degrades to empty, which the seam refuses.
+    against: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Proposal":
+        raw = d.get("against")
+        if isinstance(raw, str):
+            raw = [raw]
         return cls(
             id=str(d.get("id", "")),
-            idea=str(d.get("idea", "")),
+            text=str(d.get("text", "")),
             verdict=str(d.get("verdict", "")),
-            rationale=str(d.get("rationale", "")),
+            critique=str(d.get("critique", "")),
+            against=[str(x) for x in raw] if isinstance(raw, list) else [],
         )
 
 
 @dataclass
 class Constraint:
-    """One condition on the solution the user offered or the agent found binding, with
-    where it came from (`source`: the user's words, a file, a rule of the engine)."""
+    """One condition on the solution the user offered or the agent found binding."""
     id: str
     text: str = ""
-    source: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "Constraint":
-        return cls(
-            id=str(d.get("id", "")),
-            text=str(d.get("text", "")),
-            source=str(d.get("source", "")),
-        )
+        return cls(id=str(d.get("id", "")), text=str(d.get("text", "")))
 
 
 def _typed_table_list(raw, cls, name: str, malformed: list[str]) -> list:

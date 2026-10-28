@@ -2222,12 +2222,19 @@ def load_plan_with_digest(
 def load_order_draft(
     path: str | Path, *, base_dir: str | Path | None = None,
     root: str | Path | None = None, read=None,
-) -> Order | None:
-    """The `[meta.order]` of a stageless draft — a TOML file holding the order and
-    nothing the plan loader would demand around it (no stage, no task_id). None when the
-    file carries no `[meta.order]`; PlanError for a missing file or malformed TOML, like
-    `load_plan`. Reads the order through `_parse_order`, so a malformed order degrades
-    exactly as it does in a plan and is graded at the submission seam, not here."""
+) -> tuple[PlanDoc, bool]:
+    """`(doc, staged)` for a file that agrees an order before any stage is written.
+
+    A file with `[[stage]]` entries is a full plan: it parses as `load_plan(strict=False)`
+    would and `staged` is True. A file without them is a draft: `doc.stages` is empty,
+    `doc.meta` carries what `[meta]` states (task_id, goal, done_criterion and the order,
+    none of them required here), and `staged` is False. Either way `doc.meta.order` is
+    read through `_parse_order`, so `understanding_digest(doc)` is the same number the
+    later `load_plan` of this file yields.
+
+    PlanError for a missing file, malformed TOML, or no `[meta.order]` — a draft with no
+    order has nothing to agree. A malformed order degrades as it does in a plan and is
+    graded at the submission seam."""
     p = Path(path)
     if not p.exists():
         raise PlanError(f"order draft not found: {p}")
@@ -2237,7 +2244,17 @@ def load_order_draft(
         raise PlanError(f"malformed TOML in order draft {p}: {exc}") from exc
     data = _resolve_plan_refs(data, p, base_dir, root, read)
     meta = data.get("meta")
-    return _parse_order(meta.get("order") if isinstance(meta, dict) else None)
+    if not isinstance(meta, dict) or meta.get("order") is None:
+        raise PlanError(f"order draft {p} has no [meta.order]")
+    if data.get("stage"):
+        return parse_plan(data, strict=False), True
+    doc_meta = PlanMeta(
+        task_id=str(meta.get("task_id", "")),
+        goal=str(meta.get("goal", "")),
+        done_criterion=str(meta.get("done_criterion", "")),
+        order=_parse_order(meta["order"]),
+    )
+    return PlanDoc(meta=doc_meta), False
 
 
 # --- Topological-review protocol constants ------------------------------
@@ -2466,7 +2483,7 @@ def stage_interface_digest(doc: PlanDoc, stage: Stage) -> str:
     return StageNorm.from_stage(stage, doc=doc).interface_digest()
 
 
-UNDERSTANDING_PARTS = ("activity", "difficulty", "proposals", "constraints")
+UNDERSTANDING_FIELDS = ("activity", "difficulty", "proposals", "constraints")
 
 
 def _understanding_empty(order) -> bool:
@@ -2484,15 +2501,16 @@ def _understanding_place(order) -> tuple:
     return ((
         order.activity,
         order.difficulty,
-        tuple((p.id, p.idea, p.verdict, p.rationale) for p in order.proposals),
-        tuple((c.id, c.text, c.source) for c in order.constraints),
+        tuple((p.id, p.text, p.verdict, p.critique, tuple(p.against)) for p in order.proposals),
+        tuple((c.id, c.text) for c in order.constraints),
     ),)
 
 
 def _understanding_scope(order) -> tuple:
     """The understanding's scope-bearing half for `order_scope`: which proposals exist and
     what became of each, and which constraints bind. Adding, removing or re-verdicting
-    either changes what the plan is for; re-wording an idea or a rationale does not."""
+    either changes what the plan is for; re-wording a proposal, a critique or a constraint
+    does not."""
     if _understanding_empty(order):
         return ()
     return ((
@@ -2501,30 +2519,44 @@ def _understanding_scope(order) -> tuple:
     ),)
 
 
-def understanding_parts(order) -> dict[str, str]:
-    """`{part name: digest}` for each UNDERSTANDING_PARTS entry of `order` (None reads as
-    an order stating nothing), so the user can be shown — and can agree or reject — one
-    part at a time. Proposals and constraints are hashed as sorted sets: reordering the
-    tables in the TOML changes nothing the user agreed."""
+def understanding_parts(doc: PlanDoc) -> dict[str, str]:
+    """`{part name: digest}` for what the user is asked to agree about the order, one entry
+    per thing they can accept or reject on its own: `customer` (the identifier and the
+    prose), `activity`, `difficulty`, `functional_place`, and one entry per item —
+    `R:<id>` a requirement with its derivation, `P:<id>` a proposal with its verdict,
+    critique and the requirements it stands against, `K:<id>` a constraint. Empty for a
+    doc with no order.
+
+    Keyed by id and with `against` sorted, so reordering the tables in the TOML moves no
+    digest. The plan's `goal`, its `done_criterion`, the order's `coverage` and
+    `requires_traceability` are absent on purpose: they are the agent's answer to the
+    order, not the understanding of it, and may be settled after the user has agreed."""
+    order = doc.meta.order
     if order is None:
-        order = Order()
-    values = {
+        return {}
+    values: dict[str, object] = {
+        "customer": (order.customer_id, order.customer),
         "activity": order.activity,
         "difficulty": order.difficulty,
-        "proposals": tuple(sorted((p.id, p.idea, p.verdict, p.rationale) for p in order.proposals)),
-        "constraints": tuple(sorted((c.id, c.text, c.source) for c in order.constraints)),
+        "functional_place": order.functional_place,
     }
+    for r in order.requirements:
+        values[f"R:{r.id}"] = (r.text, r.derivation)
+    for p in order.proposals:
+        values[f"P:{p.id}"] = (p.text, p.verdict, p.critique, tuple(sorted(p.against)))
+    for c in order.constraints:
+        values[f"K:{c.id}"] = c.text
     return {
-        name: hashlib.sha256(repr((name, values[name])).encode("utf-8")).hexdigest()
-        for name in UNDERSTANDING_PARTS
+        name: hashlib.sha256(repr((name, value)).encode("utf-8")).hexdigest()
+        for name, value in values.items()
     }
 
 
-def understanding_digest(order) -> str:
+def understanding_digest(doc: PlanDoc) -> str:
     """One digest over every part `understanding_parts` names — what the user's agreement
     to the understanding binds to. Deliberately not an input of `order_digest`, the
     customer-approvals ledger key, whose population must not move."""
-    parts = understanding_parts(order)
+    parts = understanding_parts(doc)
     return hashlib.sha256(repr(tuple(sorted(parts.items()))).encode("utf-8")).hexdigest()
 
 

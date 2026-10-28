@@ -14,7 +14,17 @@ mutant that silently does nothing would read as a test that "caught" nothing and
 a green control. Exit 1 is reserved for what the mutant is for: a test failed.
 
 To add a mutant, add a row to MUTANTS and a test that goes red under it; the other order-
-agreement stages share this harness.
+agreement stages share this harness. A mutant is only killable if:
+
+  * the targeted test module installs the plant itself — an autouse fixture that calls
+    `apply_active_mutant(monkeypatch)`, imported explicitly into that module (conftest
+    does not do it for you);
+  * the production code calls the patched function through a module global or attribute,
+    and the test reaches it the same way (`submission.fn(...)`, never `from submission
+    import fn`, which freezes the original before the plant);
+  * the assertion that kills it runs in-process, in the plant's own interpreter — a test
+    that shells out to a subprocess never sees the monkeypatch, so a subprocess test is
+    never a mutant target.
 """
 
 from __future__ import annotations
@@ -32,14 +42,14 @@ def _verdict_unchecked(mp):
 
 
 def _digest_ignores_constraints(mp):
-    """understanding_digest stops hashing the constraints part."""
+    """understanding_digest stops hashing the constraint (`K:<id>`) parts."""
     from agentctl import plan
 
     original = plan.understanding_parts
     mp.setattr(
         plan,
         "understanding_parts",
-        lambda order: {k: v for k, v in original(order).items() if k != "constraints"},
+        lambda doc: {k: v for k, v in original(doc).items() if not k.startswith("K:")},
         raising=True,
     )
 

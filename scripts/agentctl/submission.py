@@ -219,12 +219,13 @@ _ORDER_SHAPE_HINTS = {
     ),
     "proposals": (
         "an array of tables — repeated [[meta.order.proposals]] sections, each "
-        "{ id = \"P1\", idea = \"...\", verdict = \"adopt|adapt|reject\", rationale = \"...\" }. "
-        "A bare sentence among the tables, a single table, or a string reads as no proposal"
+        "{ id = \"P1\", text = \"...\", verdict = \"adopt|adapt|reject\", critique = \"...\", "
+        "against = [\"R1\"] }. A bare sentence among the tables, a single table, or a "
+        "string reads as no proposal"
     ),
     "constraints": (
         "an array of tables — repeated [[meta.order.constraints]] sections, each "
-        "{ id = \"C1\", text = \"...\", source = \"...\" }. A bare sentence among the "
+        "{ id = \"K1\", text = \"...\" }. A bare sentence among the "
         "tables, a single table, or a string reads as no constraint"
     ),
 }
@@ -386,6 +387,42 @@ def _undeclared_weight_class(doc, session_weight_class: str | None) -> bool:
     )
 
 
+def _requirement_violations(order) -> list[str]:
+    """The id-less, textless and duplicated-id requirements of `order` — the part of the
+    order's grade that is about the requirements alone, shared by `_order_violations` and
+    the completeness check of an agreed understanding."""
+    out: list[str] = []
+    unnamed = [i for i, r in enumerate(order.requirements, start=1) if not r.id]
+    if unnamed:
+        out.append(
+            f"[meta.order] requirement(s) at position {', '.join(str(i) for i in unnamed)} "
+            f"carry no 'id'. Write each as {{ id = \"R1\", text = \"...\" }} — the coverage "
+            f"map and every acceptance verdict key on the id, so an id-less requirement "
+            f"cannot be covered or accepted at all"
+        )
+    textless = sorted(
+        {r.id for r in order.requirements if r.id and not _normalize_string(r.text)}
+    )
+    if textless:
+        out.append(
+            f"[meta.order] requirement(s) {', '.join(textless)} carry an id but no "
+            f"'text'. An id names WHICH requirement; the text is the requirement itself "
+            f"— an id with nothing to accept against is a coverage-map key standing in "
+            f"for a requirement the plan never actually states"
+        )
+    declared = [r.id for r in order.requirements if r.id]
+    duplicated = sorted({rid for rid in declared if declared.count(rid) > 1})
+    if duplicated:
+        out.append(
+            f"[meta.order] requirement id(s) {', '.join(duplicated)} are declared more "
+            f"than once. Ids must be unique: the coverage map and every acceptance verdict "
+            f"are keyed by id, so two requirements sharing one hide behind a single "
+            f"coverage entry and a single verdict — the second is accepted without ever "
+            f"having been decided"
+        )
+    return out
+
+
 def _order_violations(meta) -> list[str]:
     """Every way `[meta.order]` fails the substantive grade. [] == clean.
 
@@ -442,34 +479,8 @@ def _order_violations(meta) -> list[str]:
         # Not in _ORDER_PARTS — coverage is graded as a relation below, so its shape has
         # no presence check to hang off and needs its own line here.
         out.append(_order_malformed("coverage"))
-    unnamed = [i for i, r in enumerate(order.requirements, start=1) if not r.id]
-    if unnamed:
-        out.append(
-            f"[meta.order] requirement(s) at position {', '.join(str(i) for i in unnamed)} "
-            f"carry no 'id'. Write each as {{ id = \"R1\", text = \"...\" }} — the coverage "
-            f"map and every acceptance verdict key on the id, so an id-less requirement "
-            f"cannot be covered or accepted at all"
-        )
-    textless = sorted(
-        {r.id for r in order.requirements if r.id and not _normalize_string(r.text)}
-    )
-    if textless:
-        out.append(
-            f"[meta.order] requirement(s) {', '.join(textless)} carry an id but no "
-            f"'text'. An id names WHICH requirement; the text is the requirement itself "
-            f"— an id with nothing to accept against is a coverage-map key standing in "
-            f"for a requirement the plan never actually states"
-        )
+    out.extend(_requirement_violations(order))
     declared = [r.id for r in order.requirements if r.id]
-    duplicated = sorted({rid for rid in declared if declared.count(rid) > 1})
-    if duplicated:
-        out.append(
-            f"[meta.order] requirement id(s) {', '.join(duplicated)} are declared more "
-            f"than once. Ids must be unique: the coverage map and every acceptance verdict "
-            f"are keyed by id, so two requirements sharing one hide behind a single "
-            f"coverage entry and a single verdict — the second is accepted without ever "
-            f"having been decided"
-        )
     uncovered = sorted({r.id for r in order.requirements if r.id and not order.coverage.get(r.id)})
     if uncovered:
         out.append(
@@ -499,7 +510,8 @@ def _order_violations(meta) -> list[str]:
 
 def _invalid_verdicts(proposals) -> list[str]:
     """The ids of proposals whose verdict is outside PROPOSAL_VERDICTS. A proposal without
-    an id is reported by position, as `_order_understanding_violations` does for ids."""
+    an id is reported by position, as `_order_understanding_violations` does for ids.
+    A module-level function so the `verdict_unchecked` test mutant can replace it."""
     return [
         p.id or f"#{i}"
         for i, p in enumerate(proposals, start=1)
@@ -507,9 +519,19 @@ def _invalid_verdicts(proposals) -> list[str]:
     ]
 
 
-def _duplicated_ids(items) -> list[str]:
-    ids = [i.id for i in items if i.id]
-    return sorted({i for i in ids if ids.count(i) > 1})
+def _ambiguous_ids(order) -> list[str]:
+    """Ids that name more than one thing across requirements, proposals and constraints.
+    The user agrees by id and `against` points at requirement ids, so an id shared by a
+    requirement and a proposal is ambiguous even though each kind is keyed apart in the
+    digest. A requirement id repeated only among requirements is `_order_violations`'s
+    finding, not reported twice."""
+    kinds = [("R", r.id) for r in order.requirements] + [
+        ("P", p.id) for p in order.proposals] + [("K", c.id) for c in order.constraints]
+    ids = [i for _, i in kinds if i]
+    return sorted({
+        i for i in ids
+        if ids.count(i) > 1 and {k for k, j in kinds if j == i} != {"R"}
+    })
 
 
 def _order_understanding_violations(meta) -> list[str]:
@@ -522,10 +544,13 @@ def _order_understanding_violations(meta) -> list[str]:
     the reason every part of the order does — a table written wrong is silently
     misread, and the seam is where the author can be told which entry and why.
 
-    A proposal is { id, idea, verdict, rationale } with the verdict one of
-    PROPOSAL_VERDICTS and a rationale for it: a verdict with no criticism behind it is the
-    user's idea waved through or waved off. A constraint is { id, text } (+ source).
-    Pure over `meta`, like `_order_violations`, whose malformed-shape register it reuses."""
+    A proposal is { id, text, verdict, critique, against } with the verdict one of
+    PROPOSAL_VERDICTS, a critique for it, and the requirements it stands against: a verdict
+    with no criticism behind it is the user's idea waved through or waved off, and a
+    critique naming no requirement cannot be checked against what the order asks. A
+    constraint is { id, text }. Ids are unique across requirements, proposals and
+    constraints. Pure over `meta`, like `_order_violations`, whose malformed-shape
+    register it reuses."""
     order = meta.order
     if order is None or "order" in order.malformed:
         return []
@@ -537,13 +562,13 @@ def _order_understanding_violations(meta) -> list[str]:
     if unnamed:
         out.append(
             f"[meta.order] proposal(s) at position {', '.join(str(i) for i in unnamed)} carry "
-            f"no 'id'. Write each as {{ id = \"P1\", idea = \"...\", verdict = \"adopt\", "
-            f"rationale = \"...\" }} — the user agrees a proposal by its id"
+            f"no 'id'. Write each as {{ id = \"P1\", text = \"...\", verdict = \"adopt\", "
+            f"critique = \"...\", against = [\"R1\"] }} — the user agrees a proposal by its id"
         )
-    unideaed = sorted({p.id for p in order.proposals if p.id and not _normalize_string(p.idea)})
-    if unideaed:
+    untexted = sorted({p.id for p in order.proposals if p.id and not _normalize_string(p.text)})
+    if untexted:
         out.append(
-            f"[meta.order] proposal(s) {', '.join(unideaed)} carry an id but no 'idea': "
+            f"[meta.order] proposal(s) {', '.join(untexted)} carry an id but no 'text': "
             f"state the user's idea, or there is nothing for the verdict to be about"
         )
     bad_verdicts = _invalid_verdicts(order.proposals)
@@ -554,23 +579,35 @@ def _order_understanding_violations(meta) -> list[str]:
             f"adapted into something else, or rejected — a verdict of any other kind decides "
             f"nothing about the idea"
         )
-    unreasoned = sorted({p.id for p in order.proposals if p.id and not _normalize_string(p.rationale)})
-    if unreasoned:
+    uncriticized = sorted({p.id for p in order.proposals if p.id and not _normalize_string(p.critique)})
+    if uncriticized:
         out.append(
-            f"[meta.order] proposal(s) {', '.join(unreasoned)} carry no 'rationale': a "
+            f"[meta.order] proposal(s) {', '.join(uncriticized)} carry no 'critique': a "
             f"verdict without the criticism behind it cannot be agreed or disputed"
         )
-    duplicated = _duplicated_ids(order.proposals)
-    if duplicated:
+    declared = {r.id for r in order.requirements if r.id}
+    unanchored = sorted({p.id for p in order.proposals if p.id and not p.against})
+    if unanchored:
         out.append(
-            f"[meta.order] proposal id(s) {', '.join(duplicated)} are declared more than "
-            f"once. Ids must be unique: the user's agreement is recorded per id"
+            f"[meta.order] proposal(s) {', '.join(unanchored)} carry no 'against': name the "
+            f"requirement id(s) the critique stands on, as against = [\"R1\"]"
+        )
+    stray = sorted({
+        f"{p.id or '#' + str(i)}->{a}"
+        for i, p in enumerate(order.proposals, start=1)
+        for a in p.against if a not in declared
+    })
+    if stray:
+        out.append(
+            f"[meta.order] proposal 'against' entries name no declared requirement: "
+            f"{', '.join(stray)}. A critique resting on an id the order does not declare "
+            f"rests on nothing"
         )
     unnamed_c = [i for i, c in enumerate(order.constraints, start=1) if not c.id]
     if unnamed_c:
         out.append(
             f"[meta.order] constraint(s) at position {', '.join(str(i) for i in unnamed_c)} "
-            f"carry no 'id'. Write each as {{ id = \"C1\", text = \"...\", source = \"...\" }}"
+            f"carry no 'id'. Write each as {{ id = \"K1\", text = \"...\" }}"
         )
     textless = sorted({c.id for c in order.constraints if c.id and not _normalize_string(c.text)})
     if textless:
@@ -578,11 +615,12 @@ def _order_understanding_violations(meta) -> list[str]:
             f"[meta.order] constraint(s) {', '.join(textless)} carry an id but no 'text': "
             f"an id with nothing stated is a constraint the plan never actually names"
         )
-    duplicated_c = _duplicated_ids(order.constraints)
-    if duplicated_c:
+    ambiguous = _ambiguous_ids(order)
+    if ambiguous:
         out.append(
-            f"[meta.order] constraint id(s) {', '.join(duplicated_c)} are declared more "
-            f"than once. Ids must be unique: the user's agreement is recorded per id"
+            f"[meta.order] id(s) {', '.join(ambiguous)} name more than one requirement, "
+            f"proposal or constraint. Ids must be unique across all three: the user's "
+            f"agreement is recorded per id, and 'against' points at requirement ids"
         )
     return out
 
@@ -607,21 +645,29 @@ def order_understanding_completeness_violations(meta) -> list[str]:
 
     Exported for the call that asks for an agreed understanding (stage 2's order-submit);
     the submission seam does not call it, because a plan may carry an order that states
-    no understanding at all and still be well-formed. Complete means: an order exists, it
-    states its activity and its difficulty, and what it does state is well-formed
-    (`_order_understanding_violations`) — complete implies well-formed, so a caller
-    needs only this one function."""
+    no understanding at all and still be well-formed. Complete means: an order exists; it
+    states the customer pair, the functional place, its activity and its difficulty, and
+    at least one requirement, each requirement with an id, a text and no repeated id; and
+    what it states about proposals and constraints is well-formed
+    (`_order_understanding_violations`). The coverage map, `goal` and `done_criterion`
+    are the agent's answer to the order, not part of its understanding, and are not asked
+    for. Complete implies well-formed, so a caller needs only this one function."""
     order = meta.order
     if order is None:
         return [_ORDER_ABSENT]
     if "order" in order.malformed:
         return [_order_malformed("order")]
     out: list[str] = []
-    for name, why in _UNDERSTANDING_PARTS:
-        if not _normalize_string(getattr(order, name)):
-            out.append(
-                f"[meta.order] missing {name!r} (required of an agreed understanding): {why}"
-            )
+    for name, why in (*_ORDER_PARTS, *_UNDERSTANDING_PARTS):
+        if name in order.malformed:
+            out.append(_order_malformed(name, requirements_dropped=order.requirements_dropped))
+        else:
+            value = getattr(order, name)
+            if not (_normalize_string(value) if isinstance(value, str) else value):
+                out.append(
+                    f"[meta.order] missing {name!r} (required of an agreed understanding): {why}"
+                )
+    out.extend(_requirement_violations(order))
     out.extend(_order_understanding_violations(meta))
     return out
 
