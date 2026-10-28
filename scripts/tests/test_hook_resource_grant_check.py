@@ -1081,6 +1081,11 @@ def engine_dry_run(spawn, store, fixtures, tmp_path, monkeypatch, capsys, sessio
     plans = tmp_path / "plans"
     plans.mkdir()
     monkeypatch.setattr(spawn, "plans_dir", lambda: plans)
+    no_arc = tmp_path / "no-arc-bin"
+    no_arc.mkdir()
+    (no_arc / "arc").write_text("#!/bin/sh\nexit 1\n")
+    (no_arc / "arc").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{no_arc}{os.pathsep}{os.environ['PATH']}")
     plan = _write_declared_grants_plan(fixtures, plans)
     _to_executing(store, session, fixtures, plan_path=plan)
     argv = ["--kind", "developer", "--plan", plan, "--done-criterion", "tests green", "--criterion-type", "measurable",
