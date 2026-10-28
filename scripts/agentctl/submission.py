@@ -668,8 +668,27 @@ def order_understanding_completeness_violations(meta) -> list[str]:
                     f"[meta.order] missing {name!r} (required of an agreed understanding): {why}"
                 )
     out.extend(_requirement_violations(order))
+    if not order.requires_traceability:
+        out.append(
+            "[meta.order] requires_traceability is not true (required of an agreed "
+            "understanding): every requirement must be traced to the difficulty it is "
+            "derived from, and the traceability grade is gated on this flag"
+        )
+    out.extend(_underived_requirements(order))
     out.extend(_order_understanding_violations(meta))
     return out
+
+
+def _underived_requirements(order) -> list[str]:
+    """The named, texted requirements of `order` with no derivation — ungated, unlike
+    `_requirement_derivation_violations`, whose `requires_traceability` gate would let an
+    understanding that also lacks the flag pass as complete."""
+    return [
+        f"[meta.order] requirement {r.id} has no derivation (required of an agreed "
+        f"understanding): state how it follows from the difficulty"
+        for r in order.requirements
+        if r.id and _normalize_string(r.text) and not _normalize_string(r.derivation)
+    ]
 
 
 def _names_requirement_id(rid: str, norm: str) -> bool:

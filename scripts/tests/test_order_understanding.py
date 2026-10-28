@@ -515,6 +515,29 @@ def test_completeness_grades_the_requirements_themselves(tmp_path):
     assert any("R2" in p and "no 'text'" in p for p in problems), problems
 
 
+def test_completeness_asks_for_a_derivation_on_every_requirement(tmp_path):
+    problems = _incomplete(
+        tmp_path,
+        'activity = "a"\ndifficulty = "d"\n'
+        'requirements = [{ id = "R1", text = "t" }, { id = "R2", text = "u", derivation = "v" }]\n',
+        omit=("requirements",),
+    )
+
+    assert any("R1" in p and "no derivation" in p for p in problems), problems
+    assert not any("R2" in p and "no derivation" in p for p in problems), problems
+
+
+def test_completeness_asks_for_traceability_and_still_for_derivations(tmp_path):
+    problems = _incomplete(
+        tmp_path,
+        'activity = "a"\ndifficulty = "d"\nrequirements = [{ id = "R1", text = "t" }]\n',
+        omit=("requirements", "requires_traceability"),
+    )
+
+    assert any("requires_traceability" in p for p in problems), problems
+    assert any("R1" in p and "no derivation" in p for p in problems), problems
+
+
 def test_completeness_does_not_ask_for_coverage(tmp_path):
     assert _incomplete(tmp_path, _GOOD, omit=("coverage",)) == []
 
@@ -631,3 +654,28 @@ def test_an_unknown_mutant_fails_closed():
     result = _run_this_file("no_such_mutant")
 
     assert result.returncode == USAGE_ERROR, (result.returncode, result.stderr[-400:])
+
+
+_MISSING_TARGET_SCRIPT = """
+import os, sys
+sys.path[:0] = [sys.argv[1], sys.argv[2]]
+import pytest
+import order_agreement_mutants as m
+m.MUTANTS["gone"] = lambda mp: mp.setattr("agentctl.submission._no_such_function", None, raising=True)
+os.environ[m.ENV] = "gone"
+with pytest.MonkeyPatch.context() as mp:
+    m.apply_active_mutant(mp)
+sys.exit(0)
+"""
+
+
+@pytest.mark.skipif(bool(os.environ.get(ENV)), reason="the file is already running under a mutant")
+def test_a_mutant_whose_target_is_gone_fails_closed():
+    tests_dir = Path(__file__).resolve().parent
+    result = subprocess.run(
+        [sys.executable, "-c", _MISSING_TARGET_SCRIPT, str(tests_dir.parent), str(tests_dir)],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=60,
+    )
+
+    assert result.returncode == USAGE_ERROR, (result.returncode, result.stderr[-400:])
+    assert "no target to patch" in result.stderr, result.stderr[-400:]

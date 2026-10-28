@@ -16,9 +16,9 @@ a green control. Exit 1 is reserved for what the mutant is for: a test failed.
 To add a mutant, add a row to MUTANTS and a test that goes red under it; the other order-
 agreement stages share this harness. A mutant is only killable if:
 
-  * the targeted test module installs the plant itself — an autouse fixture that calls
-    `apply_active_mutant(monkeypatch)`, imported explicitly into that module (conftest
-    does not do it for you);
+  * the targeted test module installs the plant itself — `from order_agreement_mutants
+    import mutant` (an autouse fixture), or its own autouse fixture that calls
+    `apply_active_mutant(monkeypatch)`; conftest does not do it for you;
   * the production code calls the patched function through a module global or attribute,
     and the test reaches it the same way (`submission.fn(...)`, never `from submission
     import fn`, which freezes the original before the plant);
@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import os
 import sys
+
+import pytest
 
 ENV = "ORDER_AGREEMENT_MUTANT"
 USAGE_ERROR = 4
@@ -95,6 +97,13 @@ def apply_active_mutant(monkeypatch) -> str | None:
     except (AttributeError, ImportError) as exc:
         _usage_error(f"mutant {name!r} has no target to patch: {exc}")
     return name
+
+
+@pytest.fixture(autouse=True)
+def mutant(monkeypatch):
+    """The stage contract's fixture: `from order_agreement_mutants import mutant` in a
+    test module plants the requested mutant for every test in it."""
+    return apply_active_mutant(monkeypatch)
 
 
 def _usage_error(message: str):
