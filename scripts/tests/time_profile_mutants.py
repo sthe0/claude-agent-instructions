@@ -7,6 +7,10 @@ negative control is: the same test file must FAIL (pytest exit 1) under every mu
 A mutant that cannot be applied, or a name that is not in MUTANTS, ends the run with
 exit 4, so a typo or a renamed hook cannot read as "the tests caught it".
 
+Each mutant names the suite that must catch it: the aggregation mutants
+(AGGREGATE_MUTANTS) belong to test_time_profile_aggregate.py, all others to
+test_time_profile_extract.py; see suite_for().
+
 Mutants are pure transforms over the extractor's own results, and a `Skipped` passes
 through unchanged. Tests reach the extractor only through `time_profile` module
 attributes, which is what makes a monkeypatch of those attributes visible to them.
@@ -273,6 +277,13 @@ MUTANTS = {
         _apply_commit_index_follows_head,
     ),
 }
+
+AGGREGATE_MUTANTS = frozenset({"half_life_ignores_config", "figure_without_n_eff"})
+
+
+def suite_for(mutant: str) -> str:
+    """The test file that must fail under `mutant`."""
+    return "test_time_profile_aggregate.py" if mutant in AGGREGATE_MUTANTS else "test_time_profile_extract.py"
 
 
 @pytest.fixture(scope="session", autouse=True)
