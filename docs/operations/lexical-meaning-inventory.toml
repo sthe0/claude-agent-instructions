@@ -1693,6 +1693,30 @@ hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
+[sites."scripts/reaper/builtin/pytest_basetemp.py::<module>::re.compile"]
+class = "structural"
+ground = "NUMBERED_DIR compiles the literal directory-name shape pytest-<digits> that pytest itself gives its numbered base temporary directories; a fixed name syntax."
+hits = 1
+reviewed_by = "salvage-2026-10-23"
+
+[sites."scripts/reaper/builtin/pytest_basetemp.py::_judge::pattern.fullmatch"]
+class = "structural"
+ground = "NUMBERED_DIR.fullmatch checks a directory name against the fixed pytest-<digits> shape before judging it."
+hits = 1
+reviewed_by = "salvage-2026-10-23"
+
+[sites."scripts/reaper/builtin/pytest_basetemp.py::remove::pattern.fullmatch"]
+class = "structural"
+ground = "NUMBERED_DIR.fullmatch refuses to remove a directory whose name is not the fixed pytest-<digits> shape."
+hits = 1
+reviewed_by = "salvage-2026-10-23"
+
+[sites."scripts/reaper/builtin/pytest_basetemp.py::scan::pattern.fullmatch"]
+class = "structural"
+ground = "NUMBERED_DIR.fullmatch selects directory entries named in the fixed pytest-<digits> shape."
+hits = 1
+reviewed_by = "salvage-2026-10-23"
+
 [sites."scripts/record-experience.py::cmd_case_add::pattern.fullmatch"]
 class = "structural"
 ground = "SLUG.fullmatch checks a case or principle slug against the `[a-z0-9-]` file-stem charset; a format check."
