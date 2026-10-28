@@ -33,6 +33,7 @@ from agentctl.store import FileStateStore
 from lib import config_root
 from mandate_cycle import driver, notifiers
 from session_scope import registry as scopes
+from slow_selection import RUN_SLOW_OPTION
 
 ID = "core-debt"
 OWNER = "owner"
@@ -900,6 +901,22 @@ def test_the_suite_runs_under_the_conftest_auto_parallel_with_no_xdist_opt_out(e
     for argv in suites:
         opt_outs = [x for x in argv if x in ("no:xdist", "-n") or x.startswith("--dist")]
         assert opt_outs == [], argv
+
+
+def test_the_baseline_and_every_item_run_the_whole_slow_set(env):
+    """Slow selection runs every slow test on the baseline (its merge base is HEAD) but skips
+    unguarded ones on an item branch; a skip is not a pass, so both runs must force the full set."""
+    env.grant()
+    eligible(env, 1)
+    env.world.suites["item.xml"] = (["t1"], ["t2"])
+    env.world.suites["rerun.xml"] = (["t1", "t2"], [])
+    env.cycle()
+    suites = [c for c in env.world.calls_with("bash") if c[1].endswith("cap-run.sh")]
+    runs = {name: [c for c in suites if any(x.endswith(name) for x in c)]
+            for name in (driver.BASELINE_XML, "item.xml", "rerun.xml")}
+    assert all(runs.values()), runs
+    for argv in suites:
+        assert RUN_SLOW_OPTION in argv, argv
 
 
 def test_a_test_failing_on_the_baseline_does_not_count_against_the_item(env):

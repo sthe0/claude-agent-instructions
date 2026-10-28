@@ -67,7 +67,10 @@ HEARTBEAT_S = 60.0
 SUMMARY_CHARS = 3000
 REASON_CHARS = 300
 DIGEST_EXCUSED_IDS = 10
-DEFAULT_SUITE = (sys.executable, "-m", "pytest", "-q", "scripts/tests")
+# --run-slow: on the baseline worktree the merge base equals HEAD, so slow selection runs every
+# slow test there, while an item branch skips the slow tests its diff does not guard; without the
+# flag such a skip reads as "passed on the baseline, not on the item" and fails the item.
+DEFAULT_SUITE = (sys.executable, "-m", "pytest", "-q", "--run-slow", "scripts/tests")
 GATE_SCRIPTS = ("scripts/verify-all.py", "scripts/lint-prose-length.py")
 
 EXIT_OK, EXIT_ERROR, EXIT_BUSY = 0, 1, 3
