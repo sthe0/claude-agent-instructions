@@ -16,15 +16,19 @@ Two kinds of figure, kept apart on purpose:
 * OVERLAYS -- `node:<NODE>` dwell, `spawn:<kind>` and `judge:<name>` durations.
   They run inside partition intervals (a spawn runs inside a Bash call, a judge
   inside a hook) and overlap each other, so they are NEVER added to the
-  partition: no minute is counted twice.
+  partition: no minute is counted twice. Each is a per-session view -- node dwell is
+  clipped to the session's own [first_ts, last_ts] window -- and overlays must not
+  be summed across sessions that drove the same engine session.
 
 Partition keys, all derived from structural fields (tool name, tool_use input
 field, attachment command, shell token) -- the module does not import `re`:
 
   user:wait         end of an assistant turn to the next real user prompt, plus an
                     open AskUserQuestion call
-  wait:background   a gap ending in a task-notification (queued_command) entry; a
-                    queued_command carrying a message typed mid-turn is model:gap
+  wait:background   a gap ending in a queued_command entry that is not a human's
+                    message typed mid-turn: a task-notification or an inter-agent /
+                    cross-session message (isMeta, origin) wakes an idle agent. Only a
+                    genuine human mid-turn message ends in model:gap
   tool:<Name>       tool_use ts to the matching tool_result ts; Bash is
                     tool:Bash:<program> (script basename for an interpreter; the
                     first positional subcommand joins agentctl-cli.py and git as
@@ -122,6 +126,7 @@ class Skipped:
     session_id: str
     transcript: str
     reason: str
+    detail: str = ""
 
 
 @dataclass
@@ -171,13 +176,21 @@ def iter_ledger_rows(path: Path | str, offset: int = 0) -> Iterator[tuple]:
 # ------------------------------------------------------------------- time and labels
 
 
+_NUMBER_BOUND = 1e12  # keeps value * 1000 finite; no real duration or epoch-second reaches it
+
+
 def _ts_ms(value) -> int | None:
     parsed = transcript_cost.parse_ts_or_none(value)
     return None if parsed is None else (parsed - _EPOCH) // _MS
 
 
 def _finite_number(value) -> bool:
-    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+        and abs(value) < _NUMBER_BOUND
+    )
 
 
 def _epoch_or_iso_ms(value) -> int | None:
@@ -327,12 +340,29 @@ def _is_real_prompt(entry: dict) -> bool:
     )
 
 
-def _is_task_notification(attachment: dict) -> bool:
-    """A queued_command that is a background-task notification, not a message typed mid-turn."""
+def _opening_tag(prompt) -> str:
+    """The name of the XML-ish tag a prompt opens with ("" when it opens with text)."""
+    if not isinstance(prompt, str) or not prompt.lstrip().startswith("<"):
+        return ""
+    words = prompt.lstrip()[1:].split(">", 1)[0].split()
+    return words[0] if words else ""
+
+
+def _is_injected(entry: dict, attachment: dict) -> bool:
+    """A queued_command the harness or another agent injected: a task-notification, or an
+    inter-agent / cross-session message (`isMeta` or an `origin`, commandMode "prompt",
+    prompt opening with an `<...-message ...>` tag)."""
     if attachment.get("commandMode") == "task-notification":
         return True
-    prompt = attachment.get("prompt")
-    return isinstance(prompt, str) and prompt.lstrip().startswith("<task-notification")
+    if any(source.get("isMeta") or source.get("origin") for source in (attachment, entry)):
+        return True
+    tag = _opening_tag(attachment.get("prompt"))
+    return tag == "task-notification" or tag.endswith("-message")
+
+
+def _is_typed_mid_turn(entry: dict, attachment: dict) -> bool:
+    """A queued_command that is a message a human typed while the agent was working."""
+    return not _is_injected(entry, attachment)
 
 
 def _closed_key(entry: dict) -> str:
@@ -342,7 +372,7 @@ def _closed_key(entry: dict) -> str:
     if kind == "attachment":
         attachment = entry.get("attachment")
         if isinstance(attachment, dict) and attachment.get("type") == "queued_command":
-            return WAIT_BACKGROUND if _is_task_notification(attachment) else MODEL_GAP
+            return MODEL_GAP if _is_typed_mid_turn(entry, attachment) else WAIT_BACKGROUND
     elif kind == "user":
         if _is_real_prompt(entry):
             return USER_WAIT
@@ -408,6 +438,8 @@ class _Walk:
             if not want:
                 break
             tail_key, ms = self._tail[i]
+            if not ms:
+                continue
             taken = min(ms, want)
             want -= taken
             self._tail[i] = (tail_key, ms - taken)
@@ -608,11 +640,13 @@ def _transition_targets() -> dict:
     return {event: to for event, (_, to) in TRANSITIONS.items()}
 
 
-def node_dwell(state_path: Path) -> dict | None:
+def node_dwell(state_path: Path, window: tuple | None = None) -> dict | None:
     """Per-node dwell from consecutive history `ts` of one agentctl state file.
 
     Events carry no node, so the node is replayed through the engine's transition
     table. A gap with an untimed event inside it is dropped rather than guessed.
+    `window` is (lo_ms, hi_ms): each gap is clipped to it, so a harness session counts
+    only the dwell that fell inside its own transcript.
     """
     data = _read_json(state_path)
     history = data.get("history") if isinstance(data, dict) else None
@@ -635,7 +669,11 @@ def node_dwell(state_path: Path) -> dict | None:
             continue
         timed += 1
         if prev_ts is not None and not gap_untimed and ts >= prev_ts:
-            dwell[prev_node] = dwell.get(prev_node, 0) + ts - prev_ts
+            lo, hi = prev_ts, ts
+            if window is not None:
+                lo, hi = max(lo, window[0]), min(hi, window[1])
+            if hi > lo:
+                dwell[prev_node] = dwell.get(prev_node, 0) + hi - lo
         prev_ts, prev_node, gap_untimed = ts, node, False
     return {"dwell": dwell, "timed": timed, "untimed": untimed}
 
@@ -754,13 +792,13 @@ def _engine_sessions(harness_session: str, state_dir: Path) -> list:
     return ids
 
 
-def _node_part(session_id: str, ctx: Ctx) -> dict | None:
+def _node_part(session_id: str, ctx: Ctx, window: tuple) -> dict | None:
     if ctx.agentctl_state_dir is None:
         return None
     merged = None
     for engine_id in _engine_sessions(session_id, ctx.agentctl_state_dir):
         state_path = ctx.agentctl_state_dir / f"{config_root.sanitize_session_id(engine_id)}.json"
-        part = node_dwell(state_path) if state_path.is_file() else None
+        part = node_dwell(state_path, window) if state_path.is_file() else None
         if part is None:
             continue
         if merged is None:
@@ -780,7 +818,7 @@ def profile_session(transcript_path, ctx: Ctx) -> "SessionProfile | Skipped":
         return Skipped(session_id, str(path), part["skipped"])
     overlays: dict = {}
     coverage = dict(part["coverage"])
-    node = _node_part(session_id, ctx)
+    node = _node_part(session_id, ctx, (part["first_ts_ms"], part["last_ts_ms"]))
     if node is not None:
         for name, ms in node["dwell"].items():
             overlays[f"node:{name}"] = ms
@@ -837,8 +875,8 @@ def profile_all(
     for path in paths:
         try:
             result = profile_session(path, ctx)
-        except Exception:
-            result = Skipped(Path(path).stem, str(path), "unparseable")
+        except Exception as exc:
+            result = Skipped(Path(path).stem, str(path), "unparseable", f"{type(exc).__name__}: {exc}")
         (run.skipped if isinstance(result, Skipped) else run.profiles).append(result)
     run.reparsed = ctx.reparsed
     return run

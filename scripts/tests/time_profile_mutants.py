@@ -93,7 +93,59 @@ def _apply_same_ts_hook_dropped(monkeypatch):
 
 
 def _apply_typed_message_is_background(monkeypatch):
-    monkeypatch.setattr(time_profile, "_is_task_notification", lambda attachment: True)
+    monkeypatch.setattr(time_profile, "_is_typed_mid_turn", lambda entry, attachment: False)
+
+
+def _apply_inter_agent_message_is_model_time(monkeypatch):
+    monkeypatch.setattr(time_profile, "_is_injected", lambda entry, attachment: (
+        attachment.get("commandMode") == "task-notification"))
+
+
+def _apply_zero_share_tail_not_skipped(monkeypatch):
+    def carve(self, entry, ts):
+        hook = self._hook_attachment(entry)
+        if hook is None or ts != self._tail_ts:
+            return
+        key, want = hook
+        for i in range(len(self._tail) - 1, -1, -1):
+            if not want:
+                break
+            tail_key, ms = self._tail[i]
+            taken = min(ms, want)
+            want -= taken
+            self._tail[i] = (tail_key, ms - taken)
+            self.partition[tail_key] -= taken
+            if not self.partition[tail_key]:
+                del self.partition[tail_key]
+            self._add(key, taken)
+            self.hook_ms += taken
+
+    monkeypatch.setattr(time_profile._Walk, "_carve_same_ts", carve)
+
+
+def _apply_node_dwell_unclipped(monkeypatch):
+    original = time_profile.node_dwell
+    monkeypatch.setattr(time_profile, "node_dwell", lambda state_path, window=None: original(state_path))
+
+
+def _apply_huge_float_accepted(monkeypatch):
+    monkeypatch.setattr(
+        time_profile, "_finite_number",
+        lambda value: not isinstance(value, bool) and isinstance(value, (int, float)) and value == value
+        and value not in (float("inf"), float("-inf")),
+    )
+
+
+def _apply_skip_detail_dropped(monkeypatch):
+    original = time_profile.profile_session
+
+    def hiding(transcript_path, ctx):
+        try:
+            return original(transcript_path, ctx)
+        except Exception:
+            return time_profile.Skipped(time_profile.Path(transcript_path).stem, str(transcript_path), "unparseable")
+
+    monkeypatch.setattr(time_profile, "profile_session", hiding)
 
 
 def _apply_cache_ignores_version(monkeypatch):
@@ -159,6 +211,26 @@ MUTANTS = {
     "typed_message_is_background": (
         "every queued_command, a message typed mid-turn included, ends a background wait",
         _apply_typed_message_is_background,
+    ),
+    "inter_agent_message_is_model_time": (
+        "an isMeta / origin / <...-message> queued_command ends a model:gap, not a background wait",
+        _apply_inter_agent_message_is_model_time,
+    ),
+    "zero_share_tail_not_skipped": (
+        "the same-stamp hook carve touches a zero-ms tail share that is not in the partition",
+        _apply_zero_share_tail_not_skipped,
+    ),
+    "node_dwell_unclipped": (
+        "node dwell ignores the transcript window, so every driving session reports the full span",
+        _apply_node_dwell_unclipped,
+    ),
+    "huge_float_accepted": (
+        "a finite float too large to scale by 1000 reaches round() and overflows",
+        _apply_huge_float_accepted,
+    ),
+    "skip_detail_dropped": (
+        "a session that raised is skipped without the exception type and text",
+        _apply_skip_detail_dropped,
     ),
     "cache_ignores_version": (
         "a cached session figure is served after the walker's rules changed",

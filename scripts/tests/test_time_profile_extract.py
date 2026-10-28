@@ -566,7 +566,7 @@ def test_overlays_join_when_the_engine_session_id_differs_from_the_harness_id(fx
                              "spawner_session": "engine-e", "session_id": "sess-h",
                              "child_session_id": "sess-hc"}) + "\n")
     run = by_session(run_all(fx, tmp_path / "state"))
-    assert run["sess-h"].overlays == {"node:ROUTED": 5000, "node:PLANNING": 15000, "spawn:reviewer": 3000}
+    assert run["sess-h"].overlays == {"node:ROUTED": 5000, "node:PLANNING": 5000, "spawn:reviewer": 3000}
     assert (run["sess-hc"].child_of, run["sess-hc"].kind) == ("sess-h", "reviewer")
 
 
@@ -580,7 +580,8 @@ def test_one_unreadable_session_is_skipped_and_the_rest_are_still_profiled(fx, t
 
     monkeypatch.setattr(time_profile, "_walk_transcript", failing)
     run = run_all(fx, tmp_path / "state")
-    assert [(s.session_id, s.reason) for s in run.skipped] == [("sess-b", "unparseable")]
+    assert [(s.session_id, s.reason, s.detail) for s in run.skipped] == [
+        ("sess-b", "unparseable", "RuntimeError: boom")]
     assert sorted(by_session(run)) == ["sess-a", "sess-c"]
 
 
@@ -614,6 +615,61 @@ def test_a_message_typed_mid_turn_is_model_time_but_a_task_notification_is_backg
     assert profile.partition == {"model:gap": 5000, "wait:background": 7000}
 
 
+def test_an_inter_agent_message_wakes_an_idle_agent_and_is_background(tmp_path):
+    # Shapes of real queued_command attachments: an isMeta message with an origin, commandMode "prompt".
+    agent_message = queued_entry(
+        5, commandMode="prompt", isMeta=True, origin={"kind": "agent"},
+        prompt='<agent-message from="worker-1">review is done</agent-message>')
+    cross_session = queued_entry(
+        9, commandMode="prompt", isMeta=True, origin={"kind": "peer"},
+        prompt="<cross-session-message from=\"b\">ping</cross-session-message>")
+    only_tagged = queued_entry(12, commandMode="prompt", prompt='<agent-message from="w">x</agent-message>')
+    only_origin = queued_entry(15, commandMode="prompt", origin={"kind": "agent"}, prompt="plain text")
+    typed = queued_entry(20, commandMode="prompt", prompt="also check X")
+    profile = profile_of(tmp_path, prompt_entry(0), reply_entry(2),
+                         agent_message, cross_session, only_tagged, only_origin, typed)
+    assert profile.partition == {"model:gap": 7000, "wait:background": 13000}
+
+
+def test_more_open_calls_than_interval_milliseconds_then_a_same_stamp_hook_does_not_crash(tmp_path):
+    def stamped(entry, millis):
+        entry["timestamp"] = f"2026-03-01T10:00:01.{millis:03d}Z"
+        return entry
+
+    calls = {"type": "assistant", "message": {"id": "m", "content": [
+        {"type": "tool_use", "id": f"t{i}", "name": name, "input": {}}
+        for i, name in enumerate(["Glob", "Grep", "Read"])]}}
+    results = {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": f"t{i}", "content": "x"} for i in range(3)]}}
+    profile = profile_of(
+        tmp_path, prompt_entry(0), stamped(calls, 0), stamped(results, 2),
+        stamped(hook_entry(0, "/x/h.sh", 100), 2))
+    assert profile.partition == {"model:gap": 1000, "hook:h.sh": 2}
+
+
+def test_a_hook_after_the_interval_was_already_taken_by_earlier_same_stamp_hooks_is_dropped(tmp_path):
+    profile = profile_of(
+        tmp_path, prompt_entry(0), reply_entry(1), hook_entry(2, "/x/h1.sh", 5000),
+        hook_entry(2, "/x/h2.sh", 700), hook_entry(2, "/x/h3.sh", 700))
+    assert profile.partition == {"model:gap": 1000, "hook:h1.sh": 1000}
+
+
+def test_node_dwell_is_clipped_to_the_transcript_window_of_each_driving_session(fx, tmp_path):
+    proj = fx / "projects" / "proj"
+    write_lines(proj / "sess-early.jsonl", prompt_entry(0), reply_entry(10))
+    write_lines(proj / "sess-late.jsonl", prompt_entry(30), reply_entry(50))
+    (fx / "agentctl_state" / "engine-r.json").write_text(json.dumps({"history": [
+        {"event": "classify", "ts": clock(0)}, {"event": "plan", "ts": clock(5)},
+        {"event": "submit_plan", "ts": clock(40)}, {"event": "approve", "ts": clock(60)}]}))
+    bindings = fx / "engine-session-bindings"
+    bindings.mkdir()
+    for harness in ("sess-early", "sess-late"):
+        (bindings / f"{harness}.json").write_text(json.dumps({"driven": [{"session": "engine-r"}]}))
+    run = by_session(run_all(fx, tmp_path / "state"))
+    assert run["sess-early"].overlays == {"node:ROUTED": 5000, "node:PLANNING": 5000}
+    assert run["sess-late"].overlays == {"node:PLANNING": 10000, "node:PLAN_READY": 10000}
+
+
 def test_parallel_hooks_stamped_alike_each_take_their_duration_out_of_the_interval(tmp_path):
     profile = profile_of(
         tmp_path, prompt_entry(0), reply_entry(1), hook_entry(3, "/x/h1.sh", 500),
@@ -635,6 +691,13 @@ def test_non_finite_ledger_numbers_are_skipped_and_the_cursor_still_advances(fx,
     saved = json.loads((state / "ledgers.json").read_text())
     assert saved["judge"]["offset"] == judge.stat().st_size
     assert saved["spawn"]["offset"] == spawn.stat().st_size
+
+
+def test_a_finite_number_too_large_to_scale_is_skipped_not_an_overflow(fx, tmp_path):
+    with (fx / "ledgers" / "judge.jsonl").open("a") as fh:
+        fh.write('{"kind":"call","judge":"j","duration":1e306,"source":"sess-a"}\n')
+    run = by_session(run_all(fx, tmp_path / "state"))
+    assert run["sess-a"].overlays == EXPECTED_OVERLAYS["sess-a"]
 
 
 def test_the_commit_index_follows_trunk_not_the_checked_out_branch(tmp_path):
