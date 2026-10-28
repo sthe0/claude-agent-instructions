@@ -328,6 +328,11 @@ def test_the_last_resort_ceiling_is_the_family_maximum_plus_one():
     slowest = max(r.max_s for r in judge_latency.rows().values() if r.measured)
     assert judge_latency.LAST_RESORT_CEILING_S == math.ceil(slowest) + 1
     for constant in (advisor._BINARY_ASK_TIMEOUT_S,
+                     advisor._SAME_DIFFICULTY_TIMEOUT_S,
+                     advisor._FEEDBACK_SIGNAL_TIMEOUT_S,
+                     advisor._OUTAGE_ESCALATION_TIMEOUT_S,
+                     advisor._USER_QUESTION_TIMEOUT_S,
+                     advisor._RESOLUTION_CONFIRMATION_TIMEOUT_S,
                      advisor._DEFERRING_DISPOSITION_TIMEOUT_S,
                      advisor._ACCEPTANCE_JUDGE_TIMEOUT_S,
                      advisor._APPROVAL_ASK_TIMEOUT_S,
