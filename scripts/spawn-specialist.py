@@ -2028,6 +2028,20 @@ def _session_plan(state):
     return None
 
 
+def approved_runs_worktree_code(state, stage_index: int) -> bool:
+    """Whether the approved plan snapshot declares `runs_worktree_code` for the stage: read from what the
+    user approved, not the live plan file, which the stage's own child may be able to edit."""
+    if not state.plan_snapshot_path:
+        return False
+    try:
+        snapshot = plan_store.load_baseline(state.plan_snapshot_path, state.plan_path)
+    except (OSError, PlanError):
+        return False
+    stage = {s.index: s for s in snapshot.stages}.get(stage_index)
+    grants = getattr(stage, "grants", None)
+    return bool(grants and grants.runs_worktree_code)
+
+
 def _stage_norm(doc, stage_index: int) -> "StageNorm | None":
     stages = {s.index: s for s in doc.stages}
     stage = stages.get(stage_index)
@@ -2268,10 +2282,20 @@ def norm_handoff_record(
         rule_patterns=resource_set["rule_patterns"],
         git_surface=git_surface_snapshot([workdir, state.resolve_check_venue(CheckVenue.DELIVERY.value)]),
         launch_dir=workdir or None,
+        runs_worktree_code=approved_runs_worktree_code(state, stage_index),
     )
 
 
 GIT_SURFACE_SNAPSHOT_TIMEOUT_S = 20
+
+
+def carry_git_surface_forward(record: dict, prior_link: "dict | None") -> None:
+    """A re-dispatch continues a child that already ran in its repositories, so a fresh snapshot would
+    bless whatever it left in a hook. For every repository the prior record knew, its digest stays."""
+    prior = ((prior_link or {}).get("git_surface") or {}).get("repos")
+    current = record.get("git_surface") or {}
+    if isinstance(prior, dict) and isinstance(current.get("repos"), dict):
+        current["repos"] = {**current["repos"], **prior}
 
 
 def git_surface_snapshot(venues) -> dict:
@@ -3210,6 +3234,8 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
     resumed_state = None
     if resumed is not None:
         own_session, resumed_transcript, resumed_state = resumed
+        if handoff_record is not None and resumed_state is not None:
+            carry_git_surface_forward(handoff_record, resumed_state.parent_link)
     else:
         own_session = str(uuid.uuid4()) if child_linked else None
 

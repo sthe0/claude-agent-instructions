@@ -61,6 +61,7 @@ class Rig:
     def child(self, **kw):
         kw.setdefault("branch", "feat")
         kw.setdefault("allow", [])
+        kw.setdefault("runs_worktree_code", True)
         return support.link_child(self.spawn, self.tmp / "state", self.venue, **kw)
 
     def call(self, child, tool="Bash", *, env=None, judge=None, constants=CONSTANTS, **tool_input):
@@ -674,14 +675,25 @@ def test_a_record_without_the_snapshot_makes_every_git_run_undeterminable(rig, t
     assert rig.bash(old, f"echo x > {rig.venue}/f")[0] == "allow"
 
 
-def test_a_repository_the_snapshot_does_not_know_is_undeterminable(rig, tmp_path):
-    other = seg_tests._init_repo(tmp_path / "other", "x")
-    child = rig.child(extra_resources=[support.R.FileResource(str(other), "write")])
-    assert undeterminable(rig.bash(child, f"git -C {other} status"))
+def test_a_repository_the_snapshot_does_not_know_is_undeterminable(rig, hook, tmp_path):
+    linked = tmp_path / "linked"
+    child = rig.child(extra_resources=[support.R.FileResource(str(linked), "write")])
+    seg_tests._git(rig.venue, "worktree", "add", "-q", "-b", "side", str(linked))
+    assert hook.git_surface.capture(str(linked), lambda: 20).digest
+    assert rig.bash(child, f"git -C {rig.venue} status")[0] == "allow"
+    assert undeterminable(rig.bash(child, f"git -C {linked} status"))
+    verdict = hook.SegmentVerdict("git status", hook.COVERED, git_dir=str(linked))
+    why = hook.git_surface_blocker(child_approved(hook, child), [verdict], hook.JudgeBudget(20, 15))
+    assert "is not in the git-surface snapshot" in why
+
+
+def child_approved(hook, child):
+    record = child.record
+    return hook.Approved([], [], [], "p", 8, record["launch_dir"], "default", git_surface=record["git_surface"])
 
 
 def test_a_segment_outside_any_repository_that_runs_git_is_no_hook(rig, hook):
-    verdict = hook.SegmentVerdict("git status", hook.COVERED, venue=str(rig.outside))
+    verdict = hook.SegmentVerdict("git status", hook.COVERED, venue=str(rig.outside), git_dir=str(rig.outside))
     approved = hook.Approved([], [], [], "p", 8, str(rig.outside), "default", git_surface={"schema": 1, "repos": {}})
     assert hook.git_surface_blocker(approved, [verdict], hook.JudgeBudget(20, 15)) is None
 
@@ -747,6 +759,90 @@ def test_s16_a_read_only_git_call_is_held_to_the_snapshot_too(rig):
     plant(hooks, "post-index-change")
     assert undeterminable(rig.bash(child, "git status"))
     assert undeterminable(rig.bash(child, "git log -1"))
+
+
+def child_in(rig, venue, **kw):
+    kw.setdefault("runs_worktree_code", True)
+    return support.link_child(rig.spawn, rig.tmp / "state", venue, **kw)
+
+
+def test_b11_a_rule_pattern_git_call_into_another_repository_is_checked_there(rig, tmp_path):
+    other = seg_tests._init_repo(tmp_path / "other", "feat")
+    plant(other / ".git" / "hooks", "pre-push")
+    child = rig.child(extra_patterns=["Bash(git:*)"])
+    assert rig.bash(child, "git status")[0] == "allow"
+    assert undeterminable(rig.bash(child, f"git -C {other} status"))
+    assert undeterminable(rig.bash(child, f"git -C {other} -C . status"))
+    assert undeterminable(rig.bash(child, f"git -C {rig.venue} -C {other} status"))
+
+
+def test_b11_a_cd_into_another_repository_moves_the_repository_git_runs_in(rig, tmp_path):
+    other = seg_tests._init_repo(tmp_path / "other", "feat")
+    plant(other / ".git" / "hooks", "pre-push")
+    child = rig.child(extra_patterns=["Bash(git:*)"])
+    assert rig.bash(child, f"cd {rig.venue} && git push origin feat")[0] == "allow"
+    assert undeterminable(rig.bash(child, f"cd {other} && git push origin feat"))
+
+
+def test_b11_a_repository_git_dir_that_cannot_be_resolved_is_undeterminable(rig):
+    child = rig.child(extra_patterns=["Bash(git:*)"])
+    for target in ("~/x", "$HOME", "sub/*"):
+        assert undeterminable(rig.bash(child, f"git -C {target} status")), target
+
+
+def test_b12_a_checkout_that_rewrites_a_pinned_worktree_file_is_undeterminable(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, "githooks")
+    plant(hooks, "pre-push", body="#!/bin/sh\nexit 0\n")
+    commit_all(rig)
+    seg_tests._git(rig.venue, "checkout", "-q", "-b", "other")
+    plant(hooks, "post-checkout")
+    commit_all(rig)
+    seg_tests._git(rig.venue, "checkout", "-q", "feat")
+    child = rig.child(extra_patterns=["Bash(git checkout:*)"])
+    assert undeterminable(rig.bash(child, "git checkout other"))
+    assert rig.bash(child, "git push origin feat")[0] == "allow"
+
+
+def test_b13_init_then_a_covered_hook_write_then_a_commit_is_undeterminable_without_any_repository(rig, tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "hook-body").write_text("#!/bin/sh\ntouch /tmp/planted\n")
+    child = child_in(rig, plain, branch="feat", extra_patterns=["Bash(git init:*)"])
+    command = "git init -q && cp hook-body .git/hooks/post-commit && git commit --allow-empty -q -m x"
+    assert undeterminable(rig.bash(child, command))
+    assert rig.bash(child, "git init -q")[0] == "allow"
+    assert rig.bash(child, "cp hook-body copy && git init -q")[0] == "allow"
+
+
+def test_s22_a_git_run_in_a_repository_holding_code_git_starts_needs_the_declared_flag(rig):
+    hooks = rig.venue / "githooks"
+    use_hooks_dir(rig, "githooks")
+    plant(hooks, "pre-push", body="#!/bin/sh\nexit 0\n")
+    commit_all(rig)
+    assert undeterminable(rig.bash(rig.child(runs_worktree_code=False), "git push origin feat"))
+    assert undeterminable(rig.bash(rig.child(runs_worktree_code=False), "git status"))
+    assert rig.bash(rig.child(runs_worktree_code=True), "git push origin feat")[0] == "allow"
+
+
+def test_s22_without_code_git_starts_the_flag_is_not_needed(rig):
+    child = rig.child(runs_worktree_code=False)
+    assert rig.bash(child, "git push origin feat")[0] == "allow"
+    plant(rig.venue / ".git" / "hooks", "pre-push.sample")
+    assert rig.bash(child, "git push origin feat")[0] == "allow"
+
+
+def test_s22_without_a_write_grant_inside_the_worktree_the_flag_is_not_needed(rig, hook):
+    use_hooks_dir(rig, "githooks")
+    plant(rig.venue / "githooks", "pre-push", body="#!/bin/sh\nexit 0\n")
+    commit_all(rig)
+    live = {str(rig.venue): hook.git_surface.capture(str(rig.venue), lambda: 20)}
+    approved = hook.Approved([support.R.FileResource(str(rig.outside), "write")], [], [], "p", 8, str(rig.venue), "default")
+    assert hook.worktree_code_blocker(approved, live) is None
+    approved.resources.append(support.R.FileResource(str(rig.venue), "write"))
+    assert "runs_worktree_code" in hook.worktree_code_blocker(approved, live)
+    approved.runs_worktree_code = True
+    assert hook.worktree_code_blocker(approved, live) is None
 
 
 # --- B7: the settings the harness merges with the record ----------------------------------------------

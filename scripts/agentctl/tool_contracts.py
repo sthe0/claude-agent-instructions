@@ -96,7 +96,8 @@ class Segment:
     `"python-c"`, `"stdin-body"` or `"script-file"`, and `resources` holds
     only its redirect targets) or `"unresolved"` (`reason_class` is one of
     the canonical tags). `venue` is the cwd the segment ran in, or `None`
-    when that cwd was unknown (always for an unresolved segment)."""
+    when that cwd was unknown (always for an unresolved segment). `cwd` is the directory the segment ran
+    in whatever its status: known for an unresolved segment too, `None` only when an earlier `cd` left it unknown."""
 
     text: str
     venue: str | None
@@ -105,6 +106,7 @@ class Segment:
     opaque_kind: str | None = None
     reason_class: str | None = None
     reason: str | None = None
+    cwd: str | None = None
 
 
 @dataclass

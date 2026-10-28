@@ -94,6 +94,8 @@ class Surface:
     #: Whether the repository holds something a git run starts that the caller did not name and that lives
     #: with the repository: a hook, a hook-framework file, or a program its own config names.
     runnable: bool = False
+    #: Realpath of the worktree root (None for a bare repository).
+    toplevel: "str | None" = None
 
     def to_dict(self) -> dict:
         return {"digest": self.digest, "parts": dict(self.parts)}
@@ -341,7 +343,8 @@ def capture(directory: str, timeout: Callable[[], float]) -> Surface:
     runnable = (repo_program or any(item.get("entries") for item in parts["hooks"].values())
                 or any(_present(item) for item in parts["frameworks"].values()))
     digests = {name: _sha(part) for name, part in parts.items()}
-    return Surface(repo=repo, parts=digests, digest=_sha(digests), paths=sorted(set(paths)), runnable=runnable)
+    return Surface(repo=repo, parts=digests, digest=_sha(digests), paths=sorted(set(paths)), runnable=runnable,
+                   toplevel=_real(toplevel) if toplevel else None)
 
 
 def _present(item: dict) -> bool:

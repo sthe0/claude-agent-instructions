@@ -64,6 +64,7 @@ def build_record(
     add_dirs: list[str] | None = None,
     git_surface: dict | None = None,
     launch_dir: str | None = None,
+    runs_worktree_code: bool = False,
 ) -> dict:
     """The handoff record. `parent_lineage` is the parent session's own
     `parent_link.norm_lineage` (None for a session nobody linked); the record's lineage
@@ -79,7 +80,10 @@ def build_record(
     as "never deny", not as "empty". `git_surface` is `git_surface.snapshot_venues`: the digest of what git
     would execute in the child's repositories at spawn, which the hook compares live before it allows a git
     run; a record without it makes every git run unverifiable. `launch_dir` is the directory the child was
-    started in, where the harness reads the project's settings from however far the child later `cd`s."""
+    started in, where the harness reads the project's settings from however far the child later `cd`s.
+    `runs_worktree_code` is the stage's declared `[stage.grants] runs_worktree_code`: the executor said
+    the stage runs code its worktree holds, so the hook may allow a git run in a repository whose snapshot
+    has runnable hooks; written only when true, so a record without it says "not declared"."""
     record = {
         "schema": HANDOFF_SCHEMA,
         "parent_session": parent_session,
@@ -102,6 +106,8 @@ def build_record(
         record["git_surface"] = git_surface
     if launch_dir is not None:
         record["launch_dir"] = launch_dir
+    if runs_worktree_code:
+        record["runs_worktree_code"] = True
     if closure_digest is not None:
         record["closure_digest"] = closure_digest
     return record
@@ -205,6 +211,7 @@ def verify_env_value(raw: str) -> tuple[dict | None, str | None]:
         "add_dirs": _optional_list(record, "add_dirs"),
         "git_surface": record.get("git_surface") if isinstance(record.get("git_surface"), dict) else None,
         "launch_dir": record.get("launch_dir") if isinstance(record.get("launch_dir"), str) else None,
+        "runs_worktree_code": record.get("runs_worktree_code") is True,
         "depth": depth,
         "norm_lineage": lineage,
     }, None

@@ -85,9 +85,15 @@ class StageGrants:
     #: branch). Filled by `derive_stage_grants`; part of the stage's effective grants for every
     #: consumer, but kept out of `effective_tuple`/`to_dict` so plans without any keep their digests.
     resources: list = field(default_factory=list)
+    #: Declared by the executor at the planning consult: the stage runs code its worktree holds
+    #: (a git hook, a framework file, a configured program). `hook-resource-grant-check.py` allows
+    #: a git runner in such a repository only while the norm-handoff record carries it. Like
+    #: `resources`, kept out of `effective_tuple`/`to_dict` so plans without it keep their digests.
+    runs_worktree_code: bool = False
 
     def is_empty(self) -> bool:
-        return not self.allow and not self.add_dirs and not self.resources
+        return (not self.allow and not self.add_dirs and not self.resources
+                and not self.runs_worktree_code)
 
     def effective_resources(self) -> frozenset:
         return frozenset(self.resources)

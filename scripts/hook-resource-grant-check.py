@@ -146,6 +146,8 @@ class Approved:
     launch_dir: str = ""
     #: `git_surface.snapshot_venues` as the spawn recorded it; None for a record without one.
     git_surface: "dict | None" = None
+    #: The stage's declared `runs_worktree_code`: the executor said it runs code its worktree holds.
+    runs_worktree_code: bool = False
 
 
 @dataclass
@@ -160,6 +162,8 @@ class SegmentVerdict:
     pattern: bool = False
     reason: str = ""
     venue: str = ""
+    #: The directory git would run in for this segment (its cwd moved by every `-C`), None when unknown.
+    git_dir: "str | None" = None
 
 
 @dataclass
@@ -530,36 +534,93 @@ def may_change_git_surface(verdict: "SegmentVerdict", pinned: list) -> bool:
     return False
 
 
+def git_run_dir(text: str, cwd: "str | None") -> "str | None":
+    """The directory a segment's git runs in: the segment's cwd moved by each leading `-C <dir>` (a relative
+    one from the directory before it), or None when it cannot be pinned down. A segment that is not `git`
+    runs in its cwd."""
+    if cwd is None:
+        return None
+    base = _real(cwd)
+    if _program(text) == "git":
+        tokens = (_tokens(text) or [])[1:]
+        while len(tokens) >= 2 and tokens[0] == "-C":
+            target = tokens[1]
+            if target.startswith("~") or "$" in target or any(ch in target for ch in GLOB_CHARS):
+                return None
+            base = _real(target if os.path.isabs(target) else os.path.join(base, target))
+            tokens = tokens[2:]
+    return base
+
+
+def _ancestor_dot_git(directory: str) -> list:
+    """Where a repository would have to appear for git to find one from `directory`."""
+    return [os.path.join(item, ".git") for item in [directory, *Path(directory).parents]]
+
+
+def rewrites_pinned_worktree_files(surface: "git_surface.Surface") -> bool:
+    """Whether some pinned path lies in the worktree outside the git directory: the files a checkout or a merge
+    rewrites. Every non-bare repository has some (the top-level `.gitattributes` is pinned even when absent)."""
+    return surface.toplevel is not None and any(
+        _under(path, surface.toplevel) and not _under(path, surface.repo) for path in surface.paths)
+
+
+def worktree_code_blocker(approved: Approved, live: dict) -> "str | None":
+    """Why the record's write grant inside a repository that holds code git starts blocks an allow: the child
+    can edit what a hook or a framework file runs by path, which the snapshot digest does not cover, and the
+    stage did not declare `runs_worktree_code`."""
+    if approved.runs_worktree_code:
+        return None
+    for surface in live.values():
+        if surface is None or not surface.runnable or surface.toplevel is None:
+            continue
+        for item in approved.resources:
+            if (isinstance(item, resources.FileResource) and item.mode == "write"
+                    and (_under(item.path, surface.toplevel) or _under(surface.toplevel, item.path))):
+                return (f"{surface.repo} holds code git starts (a hook, a hook-framework file or a program its "
+                        f"config names) and the record grants a write inside {surface.toplevel}; the stage "
+                        "did not declare runs_worktree_code")
+    return None
+
+
 def git_surface_blocker(approved: Approved, verdicts: list, budget: "JudgeBudget") -> "str | None":
-    """Why a line that runs git may not be allowed, or None. The repository of every git-running segment
-    must show the digest the spawn recorded (`git_surface`), and no other segment may be able to change it
-    first: a covered `echo > .git/hooks/post-index-change && git status` matches the snapshot when the hook
-    looks and not when git runs. Not-a-repository is no hook; every other failure is a block."""
+    """Why a line that runs git may not be allowed, or None. The repository each git-running segment runs in
+    (its cwd moved by `-C`) must show the digest the spawn recorded (`git_surface`), and no other segment may
+    be able to change it first: a covered `echo > .git/hooks/post-index-change && git status` matches the
+    snapshot when the hook looks and not when git runs. Not-a-repository is no hook yet, but a neighbour that
+    could create one still blocks; every other failure is a block."""
+    runners = [v for v in verdicts if runs_git(v)]
+    if not runners:
+        return None
     live: dict = {}
-    for verdict in verdicts:
-        if not runs_git(verdict) or verdict.venue in live:
+    for verdict in runners:
+        if verdict.git_dir is None:
+            return f"cannot tell which repository git runs in: {verdict.text}"
+        if verdict.git_dir in live:
             continue
         try:
-            live[verdict.venue] = git_surface.capture(verdict.venue, budget.git_timeout)
+            live[verdict.git_dir] = git_surface.capture(verdict.git_dir, budget.git_timeout)
         except git_surface.NotARepo:
-            live[verdict.venue] = None
+            live[verdict.git_dir] = None
             continue
         except git_surface.Unreadable as exc:
-            return f"cannot read what git would execute in {verdict.venue}: {exc}"
-        why = git_surface.mismatch(approved.git_surface, live[verdict.venue])
+            return f"cannot read what git would execute in {verdict.git_dir}: {exc}"
+        why = git_surface.mismatch(approved.git_surface, live[verdict.git_dir])
         if why is not None:
             return why
-    pinned = sorted({path for surface in live.values() if surface is not None for path in surface.paths})
-    if not any(surface is not None for surface in live.values()):
-        return None
-    runners = [v for v in verdicts if runs_git(v)]
+    pinned = sorted({
+        *(path for surface in live.values() if surface is not None for path in surface.paths),
+        *(path for directory, surface in live.items() if surface is None for path in _ancestor_dot_git(directory)),
+    })
     for verdict in verdicts:
-        if _program(verdict.text) == "git" and runners == [verdict]:
+        if len(runners) == 1 and verdict is runners[0] and _program(verdict.text) == "git":
             if not _after_plain_options(verdict.text):
                 return f"a git option that moves what git executes: {verdict.text}"
+            surface = live[verdict.git_dir]
+            if surface is not None and not _preserves_worktree(verdict.text) and rewrites_pinned_worktree_files(surface):
+                return f"a git command that rewrites tracked files, among them what git executes: {verdict.text}"
         elif may_change_git_surface(verdict, pinned):
             return f"another segment of the line could change what git executes: {verdict.text}"
-    return None
+    return worktree_code_blocker(approved, live)
 
 
 # --- segments -------------------------------------------------------------------------------------
@@ -651,6 +712,8 @@ def decide_bash(approved: Approved, command: str, runner, budget: JudgeBudget, c
     if not split.segments:
         return Verdict(NONE, UNDETERMINABLE, venue=approved.cwd)
     verdicts = [evaluate_segment(approved, seg, split.segments, runner, budget, cache_dir) for seg in split.segments]
+    for verdict, seg in zip(verdicts, split.segments):
+        verdict.git_dir = git_run_dir(seg.text, seg.cwd)
     ambient = ambient_settings(approved)
     changed = list(dict.fromkeys(r for v in verdicts for r in v.changed))
     shown = [resources.resource_to_dict(r) for r in changed]
@@ -718,6 +781,7 @@ def _approved(link: dict, payload: dict, env) -> Approved:
         env=dict(env),
         launch_dir=_real(str(link["launch_dir"])) if link.get("launch_dir") else cwd,
         git_surface=link.get("git_surface"),
+        runs_worktree_code=link.get("runs_worktree_code") is True,
     )
 
 

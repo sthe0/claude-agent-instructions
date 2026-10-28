@@ -599,6 +599,43 @@ def test_the_handoff_record_carries_the_git_surface_of_the_workdir_and_the_launc
     assert list(record["git_surface"]["repos"]) == [str(repo.resolve() / ".git")]
 
 
+def test_the_handoff_record_carries_runs_worktree_code_only_from_the_approved_snapshot(plan, tmp_path, monkeypatch):
+    from agentctl import plan as plan_module
+    from agentctl.grants import StageGrants
+
+    spawner = _spawner()
+    doc = plan_module.load_plan(str(plan))
+    state = SimpleNamespace(
+        plan_path=str(plan), plan_snapshot_path="snapshot", parent_link=None,
+        approved_grant_entries=None, approved_grants_sha256=None,
+        stage=lambda index: next(s for s in doc.stages if s.index == index),
+        resolve_check_venue=lambda venue: str(tmp_path),
+    )
+    store = SimpleNamespace(load=lambda session_id: state)
+
+    def record_with(declared):
+        approved = plan_module.load_plan(str(plan))
+        next(s for s in approved.stages if s.index == 2).grants = StageGrants(runs_worktree_code=declared)
+        monkeypatch.setattr(spawner.plan_store, "load_baseline", lambda *a: approved)
+        return spawner.norm_handoff_record("session", 2, "developer", 1, None, store=store)
+
+    assert "runs_worktree_code" not in record_with(False)
+    assert record_with(True)["runs_worktree_code"] is True
+    state.plan_snapshot_path = None
+    assert "runs_worktree_code" not in spawner.norm_handoff_record("session", 2, "developer", 1, None, store=store)
+
+
+def test_a_redispatch_keeps_the_digest_of_every_repository_the_prior_record_knew():
+    spawner = _spawner()
+    record = {"git_surface": {"schema": 1, "repos": {"/a/.git": {"digest": "new"}, "/b/.git": {"digest": "fresh"}}}}
+    spawner.carry_git_surface_forward(record, {"git_surface": {"schema": 1, "repos": {"/a/.git": {"digest": "old"}}}})
+    assert record["git_surface"]["repos"] == {"/a/.git": {"digest": "old"}, "/b/.git": {"digest": "fresh"}}
+    untouched = {"git_surface": {"schema": 1, "repos": {"/a/.git": {"digest": "new"}}}}
+    spawner.carry_git_surface_forward(untouched, None)
+    spawner.carry_git_surface_forward(untouched, {"git_surface": None})
+    assert untouched["git_surface"]["repos"] == {"/a/.git": {"digest": "new"}}
+
+
 # --- the former inline trigger -----------------------------------------------------------
 # Until a spawn met four conditions together (a kind allowed to read the plans directory,
 # `--plan-brief`, `--stage-index`, a plan inside the plans directory) it received the whole

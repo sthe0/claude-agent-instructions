@@ -1297,7 +1297,7 @@ def resolve_segments(
         seg_text = (text[raw.start : raw.end].strip() + raw.extra).strip()
         segments.append(tool_contracts.Segment(
             seg_text, cwd if verdict.status != "unresolved" else None, verdict.status, verdict.resources,
-            verdict.opaque_kind, verdict.reason_class, verdict.reason))
+            verdict.opaque_kind, verdict.reason_class, verdict.reason, cwd))
     return tool_contracts.SegmentedResolution(segments)
 
 

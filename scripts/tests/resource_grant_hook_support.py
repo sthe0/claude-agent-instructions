@@ -80,7 +80,7 @@ class LinkedChild:
 def link_child(
     spawn, state_root: Path, venue, *, kind: str = "developer", branch: "str | None" = None,
     rules=(), mode: "str | None" = None, extra_resources=(), extra_patterns=(), allow=None,
-    remote_head: str = "main", evidence_dir: "str | None" = None, add_dirs=(),
+    remote_head: str = "main", evidence_dir: "str | None" = None, add_dirs=(), runs_worktree_code: bool = False,
 ) -> LinkedChild:
     """Write the handoff record `spawn-specialist.py` would write for a stage of `kind` running in
     `venue` under `rules` and return the environment of the child it spawns.
@@ -113,7 +113,7 @@ def link_child(
         parent_session=PARENT_SESSION, stage_index=STAGE_INDEX, kind=kind,
         norm=StageNorm.from_stage(stage), grants=entries, depth=1, parent_lineage=None,
         resources=packed["resources"], rule_patterns=packed["rule_patterns"],
-        git_surface=spawn.git_surface_snapshot([venue]), launch_dir=venue,
+        git_surface=spawn.git_surface_snapshot([venue]), launch_dir=venue, runs_worktree_code=runs_worktree_code,
     )
     spawn.attach_child_permission_surface(record, settings, child_dirs)
     if allow is not None:
