@@ -624,11 +624,13 @@ def test_an_inter_agent_message_wakes_an_idle_agent_and_is_background(tmp_path):
         9, commandMode="prompt", isMeta=True, origin={"kind": "peer"},
         prompt="<cross-session-message from=\"b\">ping</cross-session-message>")
     only_tagged = queued_entry(12, commandMode="prompt", prompt='<agent-message from="w">x</agent-message>')
-    only_origin = queued_entry(15, commandMode="prompt", origin={"kind": "agent"}, prompt="plain text")
+    only_origin = queued_entry(15, commandMode="prompt", origin={"kind": "peer"}, prompt="plain text")
+    typed_by_human = queued_entry(24, commandMode="prompt", origin={"kind": "human"}, prompt="and Y")
     typed = queued_entry(20, commandMode="prompt", prompt="also check X")
     profile = profile_of(tmp_path, prompt_entry(0), reply_entry(2),
-                         agent_message, cross_session, only_tagged, only_origin, typed)
-    assert profile.partition == {"model:gap": 7000, "wait:background": 13000}
+                         agent_message, cross_session, only_tagged, only_origin, typed,
+                         typed_by_human)
+    assert profile.partition == {"model:gap": 11000, "wait:background": 13000}
 
 
 def test_more_open_calls_than_interval_milliseconds_then_a_same_stamp_hook_does_not_crash(tmp_path):

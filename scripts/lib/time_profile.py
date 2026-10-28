@@ -27,7 +27,7 @@ field, attachment command, shell token) -- the module does not import `re`:
                     open AskUserQuestion call
   wait:background   a gap ending in a queued_command entry that is not a human's
                     message typed mid-turn: a task-notification or an inter-agent /
-                    cross-session message (isMeta, origin) wakes an idle agent. Only a
+                    cross-session message (isMeta, non-human origin) wakes an idle agent. Only a
                     genuine human mid-turn message ends in model:gap
   tool:<Name>       tool_use ts to the matching tool_result ts; Bash is
                     tool:Bash:<program> (script basename for an interpreter; the
@@ -348,13 +348,23 @@ def _opening_tag(prompt) -> str:
     return words[0] if words else ""
 
 
+def _is_non_human_origin(origin) -> bool:
+    """A message `origin` naming a source other than the human: a dict whose `kind` is
+    neither absent nor "human"; any other truthy value counts."""
+    if isinstance(origin, dict):
+        return origin.get("kind") not in (None, "human")
+    return bool(origin)
+
+
 def _is_injected(entry: dict, attachment: dict) -> bool:
     """A queued_command the harness or another agent injected: a task-notification, or an
-    inter-agent / cross-session message (`isMeta` or an `origin`, commandMode "prompt",
-    prompt opening with an `<...-message ...>` tag)."""
+    inter-agent / cross-session message (`isMeta` or a non-human `origin`, commandMode
+    "prompt", prompt opening with an `<...-message ...>` tag). A human-typed message
+    carries `origin.kind == "human"` and is not injected."""
     if attachment.get("commandMode") == "task-notification":
         return True
-    if any(source.get("isMeta") or source.get("origin") for source in (attachment, entry)):
+    if any(source.get("isMeta") or _is_non_human_origin(source.get("origin"))
+           for source in (attachment, entry)):
         return True
     tag = _opening_tag(attachment.get("prompt"))
     return tag == "task-notification" or tag.endswith("-message")
