@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
+import re
 from pathlib import Path
 
 import pytest
@@ -146,10 +148,31 @@ def test_a_missing_config_row_is_an_error(tmp_path):
         time_profile.half_life_days(path)
 
 
-def test_both_config_rows_exist_with_value_7():
-    assert "| `time-profile-half-life-days` | `7` |" in (REPO_ROOT / "config.md").read_text()
-    assert "| `time-profile-half-life-days` | `7` |" in (REPO_ROOT / "docs/operations/config-rationale.md").read_text()
-    assert time_profile.half_life_days() == 7.0
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_a_non_positive_half_life_argument_is_rejected(value):
+    with pytest.raises(ValueError):
+        agg(half_life_days=float(value))
+
+
+def test_an_unreadable_config_file_is_the_documented_value_error(tmp_path):
+    with pytest.raises(ValueError):
+        time_profile.half_life_days(tmp_path / "absent.md")
+
+
+@pytest.mark.parametrize("value", ["inf", "nan"])
+def test_a_non_finite_config_row_is_an_error(tmp_path, value):
+    with pytest.raises(ValueError):
+        time_profile.half_life_days(write_config(tmp_path, value))
+
+
+def test_both_config_rows_exist_and_the_function_returns_the_config_value():
+    pattern = re.compile(r"^\| `time-profile-half-life-days` \| `([^`]+)` \|", re.MULTILINE)
+    config = pattern.search((REPO_ROOT / "config.md").read_text())
+    assert config, "config.md has no time-profile-half-life-days row"
+    value = float(config.group(1))
+    assert value > 0 and math.isfinite(value)
+    assert time_profile.half_life_days() == value
+    assert "`time-profile-half-life-days`" in (REPO_ROOT / "docs/operations/config-rationale.md").read_text()
 
 
 def test_the_view_half_life_option_overrides_config(capsys):
@@ -157,6 +180,14 @@ def test_the_view_half_life_option_overrides_config(capsys):
     code, out = run_view(capsys, run, "--format", "json", "--half-life", "3")
     assert code == 0
     assert json.loads(out)["half_life_days"] == 3
+
+
+@pytest.mark.parametrize("value", ["0", "-2", "inf", "nan"])
+def test_the_view_rejects_a_non_positive_or_non_finite_half_life(capsys, value):
+    with pytest.raises(SystemExit) as stop:
+        view.main(["--half-life", value], run=time_profile.ProfileRun(profiles=scenario()))
+    assert stop.value.code == 2
+    assert "positive finite" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------- the estimates
@@ -183,8 +214,9 @@ def test_minutes_when_present_averages_only_the_sessions_with_the_key():
 
 
 def test_occurrence_rate_is_the_decayed_share_of_sessions_with_the_key():
-    close(row(agg(), "tool:Read")["occurrence_rate"], 1.25 / 1.75, row(agg(), "tool:Read")["occurrence_rate"]["se"], 7 / 3)
-    assert row(agg(), "tool:Read")["occurrence_rate"]["se"] > 0
+    # x = 1, 0, 1 under weights 1, 1/2, 1/4: mean 5/7; s^2 = (1*(2/7)^2 + 1/2*(5/7)^2 + 1/4*(2/7)^2) / 1.0 = 5/14;
+    # SE = sqrt(s^2 / n_eff) = sqrt(5/14 * 3/7).
+    close(row(agg(), "tool:Read")["occurrence_rate"], 5 / 7, math.sqrt(15 / 98), 7 / 3)
 
 
 def test_share_of_wallclock_is_the_ratio_of_decayed_sums():
@@ -198,6 +230,30 @@ def test_share_of_active_excludes_user_wait_and_background_wait_from_the_denomin
         (120_000 + 0.25 * 240_000) / (360_000 + 0.5 * 600_000 + 0.25 * 1_200_000))
     totals = agg().totals
     assert totals["active_minutes"]["mean"] == pytest.approx((6 + 0.5 * 10 + 0.25 * 20) / 1.75)
+
+
+def test_ratio_se_is_the_linearized_se_divided_by_the_mean_denominator():
+    # Read ms 120000, 0, 240000 over active ms 360000, 600000, 1200000, weights 1, 1/2, 1/4:
+    # ratio 180000 / 960000 = 0.1875; residuals ms - 0.1875 * active = 52500, -112500, 15000 (weighted mean 0);
+    # s^2 = (1*52500^2 + 1/2*112500^2 + 1/4*15000^2) / 1.0; mean active ms = 960000 / 1.75.
+    variance = 52_500 ** 2 + 0.5 * 112_500 ** 2 + 0.25 * 15_000 ** 2
+    close(row(agg(), "tool:Read")["share_of_active"], 0.1875, math.sqrt(variance * 3 / 7) / (960_000 / 1.75), 7 / 3)
+
+
+def test_ratio_entries_with_a_zero_denominator_are_dropped():
+    zero_wall = prof("Z", 0, 0, {})
+    result = agg(scenario() + [zero_wall])
+    assert result.sessions == 4
+    assert row(result, "tool:Read")["share_of_wallclock"] == row(agg(), "tool:Read")["share_of_wallclock"]
+    only_waiting = prof("W", 0, 10 * MIN, {"user:wait": 10 * MIN})
+    result = agg(scenario() + [only_waiting])
+    assert row(result, "tool:Read")["share_of_active"] == row(agg(), "tool:Read")["share_of_active"]
+    assert row(result, "user:wait")["share_of_wallclock"]["mean"] > row(agg(), "user:wait")["share_of_wallclock"]["mean"]
+
+
+def test_a_key_with_no_usable_denominator_gets_an_empty_figure_not_a_crash():
+    result = agg([prof("W", 0, 10 * MIN, {"user:wait": 10 * MIN})])
+    assert row(result, "user:wait")["share_of_active"] == {"mean": 0.0, "se": None, "n_eff": 0.0}
 
 
 def test_overlay_keys_get_the_same_figures_and_are_marked_overlay():
@@ -254,6 +310,26 @@ def test_two_equally_weighted_sessions_have_n_eff_two_and_a_defined_se():
     close(agg(pair).totals["wall_minutes"], 20.0, 10.0, 2.0)
 
 
+def pair_apart_by(ms):
+    return [prof("A", 0, 10 * MIN, {"model:gap": 10 * MIN}), prof("B", ms / DAY, 30 * MIN, {"model:gap": 30 * MIN})]
+
+
+def test_n_eff_within_rounding_of_two_counts_as_two_and_gets_an_se():
+    # weights 1 and 1 - d: n_eff = 2 - d^2 / 2 (to first order); 27 s apart is a deficit of ~5e-10
+    nearly = agg(pair_apart_by(27_000)).totals["wall_minutes"]
+    assert nearly["n_eff"] < 2
+    assert nearly["se"] is not None
+    assert view.figure_problems({"x": nearly}) == []
+
+
+def test_n_eff_clearly_below_two_has_no_se():
+    # 60 s apart is a deficit of ~2.4e-9, beyond the 1e-9 tolerance
+    clearly = agg(pair_apart_by(60_000)).totals["wall_minutes"]
+    assert clearly["n_eff"] < 2
+    assert clearly["se"] is None
+    assert view.figure_problems({"x": clearly}) == []
+
+
 def test_children_are_excluded_from_top_level_and_reported_under_their_kind():
     child = prof("K", 0, 5 * MIN, {"model:gap": 5 * MIN, "tool:Edit": 99}, child_of="A", kind="developer")
     with_child = agg(scenario() + [child])
@@ -271,6 +347,23 @@ def test_by_sha_groups_the_sessions_of_each_core_sha():
     assert groups["y"].rows and all(r["minutes_per_session"]["se"] is None for r in groups["y"].rows)
     unnamed = time_profile.aggregate_by_sha([prof("U", 0, MIN, {"model:gap": MIN})], half_life_days=7, now_ms=NOW)
     assert list(unnamed) == ["unknown"]
+
+
+def test_by_sha_reads_the_clock_and_the_config_once(monkeypatch):
+    reads = {"clock": 0, "config": 0}
+
+    def clock():
+        reads["clock"] += 1
+        return NOW
+
+    def half_life(config_path=None):
+        reads["config"] += 1
+        return 7.0
+
+    monkeypatch.setattr(time_profile, "_clock_ms", clock)
+    monkeypatch.setattr(time_profile, "half_life_days", half_life)
+    assert len(time_profile.aggregate_by_sha(scenario())) == 2
+    assert reads == {"clock": 1, "config": 1}
 
 
 def test_a_shell_variable_program_key_is_flagged_not_ranked_as_a_mechanism():
@@ -370,8 +463,9 @@ def relative_paths(payload):
 
 def test_golden_default_view_on_the_fixtures(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(time_profile, "_clock_ms", lambda: NOW)
-    monkeypatch.setattr(time_profile, "half_life_days", lambda config_path=None: 7.0)
-    payload = relative_paths(view_json(capsys, fixture_run(tmp_path)))
+    # The two top-level fixture sessions are within hours of each other, so n_eff reaches 2 (and the
+    # SEs are defined) only when the weights are almost equal, which a ten-year half-life gives.
+    payload = relative_paths(view_json(capsys, fixture_run(tmp_path), "--half-life", "3650"))
     assert figure_violations(payload) == []
     if not GOLDEN.exists():
         GOLDEN.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
@@ -392,6 +486,13 @@ def test_text_render_prints_every_estimate_with_se_and_n_eff(capsys):
     assert all("±" in line and "n_eff" in line for line in detail)
     assert "± n/a (n_eff" in out
     assert "children" not in out
+
+
+def test_a_tiny_nonzero_estimate_never_prints_or_serializes_as_zero():
+    tiny = {"mean": 3.2e-9, "se": 4.1e-9, "n_eff": 2.5}
+    assert view.format_figure(tiny) == "3.2e-09 ± 4.1e-09 (n_eff 2.5)"
+    assert view._rounded(tiny) == tiny
+    assert view._rounded({"mean": 0.123456789})["mean"] == 0.123457
 
 
 def test_text_render_lists_skipped_sessions_with_their_reasons(capsys):

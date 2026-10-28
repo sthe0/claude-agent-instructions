@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 
 from lib import time_profile
@@ -37,11 +38,12 @@ FIGURES = (
 )
 DEFAULT_MAX_SKIP_FRACTION = 0.25
 JSON_DIGITS = 6
+TEXT_DIGITS = 4
 
 
 def _rounded(value):
     if isinstance(value, float):
-        return round(value, JSON_DIGITS)
+        return float(f"{value:.{JSON_DIGITS}g}")
     if isinstance(value, dict):
         return {k: _rounded(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -71,8 +73,8 @@ def build_payload(run, half_life: float | None, by_sha: bool) -> dict:
 
 
 def format_figure(fig: dict) -> str:
-    se = "n/a" if fig["se"] is None else f"{fig['se']:.3f}"
-    return f"{fig['mean']:.3f} ± {se} (n_eff {fig['n_eff']:.1f})"
+    se = "n/a" if fig["se"] is None else f"{fig['se']:.{TEXT_DIGITS}g}"
+    return f"{fig['mean']:.{TEXT_DIGITS}g} ± {se} (n_eff {fig['n_eff']:.1f})"
 
 
 def _render_rows(rows: list) -> list:
@@ -151,8 +153,8 @@ def main(argv: list[str] | None = None, *, run=None) -> int:
     parser.add_argument("--max-skip-fraction", type=float, default=DEFAULT_MAX_SKIP_FRACTION,
                         help=f"--check fails above this skipped fraction (default {DEFAULT_MAX_SKIP_FRACTION})")
     args = parser.parse_args(argv)
-    if args.half_life is not None and not args.half_life > 0:
-        parser.error("--half-life must be positive")
+    if args.half_life is not None and not (args.half_life > 0 and math.isfinite(args.half_life)):
+        parser.error("--half-life must be a positive finite number")
     run = run if run is not None else time_profile.profile_all()
     payload = build_payload(run, args.half_life, args.by_sha)
     if args.check:

@@ -10,36 +10,36 @@
       }
     }
   ],
-  "half_life_days": 7.0,
+  "half_life_days": 3650.0,
   "rows": [
     {
       "flag": null,
       "key": "user:wait",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.573175,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.574165,
+        "n_eff": 2.0,
+        "se": 0.490833
       },
       "minutes_when_present": {
-        "mean": 0.573175,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.574165,
+        "n_eff": 2.0,
+        "se": 0.490833
       },
       "occurrence_rate": {
         "mean": 1.0,
-        "n_eff": 1.999992,
-        "se": null
+        "n_eff": 2.0,
+        "se": 0.0
       },
       "share_of_active": {
-        "mean": 1.750773,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 1.75318,
+        "n_eff": 2.0,
+        "se": 1.19092
       },
       "share_of_wallclock": {
-        "mean": 0.568189,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.568481,
+        "n_eff": 2.0,
+        "se": 0.14451
       }
     },
     {
@@ -47,9 +47,9 @@
       "key": "node:PLANNING",
       "kind": "overlay",
       "minutes_per_session": {
-        "mean": 0.124747,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.125,
+        "n_eff": 2.0,
+        "se": 0.125
       },
       "minutes_when_present": {
         "mean": 0.25,
@@ -57,19 +57,19 @@
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.498989,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.499998,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.381043,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.381678,
+        "n_eff": 2.0,
+        "se": 0.314667
       },
       "share_of_wallclock": {
-        "mean": 0.123662,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.123762,
+        "n_eff": 2.0,
+        "se": 0.0494235
       }
     },
     {
@@ -77,29 +77,29 @@
       "key": "wait:background",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.108215,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.108333,
+        "n_eff": 2.0,
+        "se": 0.0583333
       },
       "minutes_when_present": {
-        "mean": 0.108215,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.108333,
+        "n_eff": 2.0,
+        "se": 0.0583333
       },
       "occurrence_rate": {
         "mean": 1.0,
-        "n_eff": 1.999992,
-        "se": null
+        "n_eff": 2.0,
+        "se": 0.0
       },
       "share_of_active": {
-        "mean": 0.330546,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.330788,
+        "n_eff": 2.0,
+        "se": 0.12004
       },
       "share_of_wallclock": {
-        "mean": 0.107274,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.107261,
+        "n_eff": 2.0,
+        "se": 0.00667149
       }
     },
     {
@@ -107,9 +107,9 @@
       "key": "spawn:developer",
       "kind": "overlay",
       "minutes_per_session": {
-        "mean": 0.103956,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.104166,
+        "n_eff": 2.0,
+        "se": 0.104167
       },
       "minutes_when_present": {
         "mean": 0.208333,
@@ -117,19 +117,19 @@
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.498989,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.499998,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.317536,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.318065,
+        "n_eff": 2.0,
+        "se": 0.262223
       },
       "share_of_wallclock": {
-        "mean": 0.103052,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.103135,
+        "n_eff": 2.0,
+        "se": 0.0411862
       }
     },
     {
@@ -137,29 +137,29 @@
       "key": "model:gap",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.099185,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0991667,
+        "n_eff": 2.0,
+        "se": 0.00916667
       },
       "minutes_when_present": {
-        "mean": 0.099185,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0991667,
+        "n_eff": 2.0,
+        "se": 0.00916667
       },
       "occurrence_rate": {
         "mean": 1.0,
-        "n_eff": 1.999992,
-        "se": null
+        "n_eff": 2.0,
+        "se": 0.0
       },
       "share_of_active": {
-        "mean": 0.302963,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.302799,
+        "n_eff": 2.0,
+        "se": 0.0811531
       },
       "share_of_wallclock": {
-        "mean": 0.098323,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0981851,
+        "n_eff": 2.0,
+        "se": 0.0680519
       }
     },
     {
@@ -167,9 +167,9 @@
       "key": "node:APPROVED",
       "kind": "overlay",
       "minutes_per_session": {
-        "mean": 0.083165,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.083333,
+        "n_eff": 2.0,
+        "se": 0.0833333
       },
       "minutes_when_present": {
         "mean": 0.166667,
@@ -177,19 +177,19 @@
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.498989,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.499998,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.254029,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.254452,
+        "n_eff": 2.0,
+        "se": 0.209778
       },
       "share_of_wallclock": {
-        "mean": 0.082442,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0825081,
+        "n_eff": 2.0,
+        "se": 0.032949
       }
     },
     {
@@ -197,9 +197,9 @@
       "key": "tool:Agent:developer",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.083165,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.083333,
+        "n_eff": 2.0,
+        "se": 0.0833333
       },
       "minutes_when_present": {
         "mean": 0.166667,
@@ -207,19 +207,19 @@
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.498989,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.499998,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.254029,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.254452,
+        "n_eff": 2.0,
+        "se": 0.209778
       },
       "share_of_wallclock": {
-        "mean": 0.082442,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0825081,
+        "n_eff": 2.0,
+        "se": 0.032949
       }
     },
     {
@@ -227,29 +227,29 @@
       "key": "node:ROUTED",
       "kind": "overlay",
       "minutes_per_session": {
-        "mean": 0.041582,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0416665,
+        "n_eff": 2.0,
+        "se": 0.0416667
       },
       "minutes_when_present": {
-        "mean": 0.083333,
+        "mean": 0.0833333,
         "n_eff": 1.0,
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.498989,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.499998,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.127014,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.127226,
+        "n_eff": 2.0,
+        "se": 0.104889
       },
       "share_of_wallclock": {
-        "mean": 0.041221,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0412541,
+        "n_eff": 2.0,
+        "se": 0.0164745
       }
     },
     {
@@ -257,29 +257,29 @@
       "key": "spawn:thinker",
       "kind": "overlay",
       "minutes_per_session": {
-        "mean": 0.033266,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0333332,
+        "n_eff": 2.0,
+        "se": 0.0333333
       },
       "minutes_when_present": {
-        "mean": 0.066667,
+        "mean": 0.0666667,
         "n_eff": 1.0,
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.498989,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.499998,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.101612,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.101781,
+        "n_eff": 2.0,
+        "se": 0.0839113
       },
       "share_of_wallclock": {
-        "mean": 0.032977,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0330032,
+        "n_eff": 2.0,
+        "se": 0.0131796
       }
     },
     {
@@ -287,9 +287,9 @@
       "key": "judge:plan-review",
       "kind": "overlay",
       "minutes_per_session": {
-        "mean": 0.031187,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0312499,
+        "n_eff": 2.0,
+        "se": 0.03125
       },
       "minutes_when_present": {
         "mean": 0.0625,
@@ -297,19 +297,19 @@
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.498989,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.499998,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.095261,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0954195,
+        "n_eff": 2.0,
+        "se": 0.0786669
       },
       "share_of_wallclock": {
-        "mean": 0.030916,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0309405,
+        "n_eff": 2.0,
+        "se": 0.0123559
       }
     },
     {
@@ -317,9 +317,9 @@
       "key": "tool:Agent:general-purpose",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.022545,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0225001,
+        "n_eff": 2.0,
+        "se": 0.0225
       },
       "minutes_when_present": {
         "mean": 0.045,
@@ -327,19 +327,19 @@
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.501011,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.500002,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.068866,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0687026,
+        "n_eff": 2.0,
+        "se": 0.0807646
       },
       "share_of_wallclock": {
-        "mean": 0.022349,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0222774,
+        "n_eff": 2.0,
+        "se": 0.0356584
       }
     },
     {
@@ -347,9 +347,9 @@
       "key": "tool:Bash:pytest",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.022545,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0225001,
+        "n_eff": 2.0,
+        "se": 0.0225
       },
       "minutes_when_present": {
         "mean": 0.045,
@@ -357,19 +357,19 @@
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.501011,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.500002,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.068866,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0687026,
+        "n_eff": 2.0,
+        "se": 0.0807646
       },
       "share_of_wallclock": {
-        "mean": 0.022349,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0222774,
+        "n_eff": 2.0,
+        "se": 0.0356584
       }
     },
     {
@@ -377,29 +377,29 @@
       "key": "unattributed",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.018313,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0183333,
+        "n_eff": 2.0,
+        "se": 0.01
       },
       "minutes_when_present": {
-        "mean": 0.018313,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0183333,
+        "n_eff": 2.0,
+        "se": 0.01
       },
       "occurrence_rate": {
         "mean": 1.0,
-        "n_eff": 1.999992,
-        "se": null
+        "n_eff": 2.0,
+        "se": 0.0
       },
       "share_of_active": {
-        "mean": 0.055938,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0559796,
+        "n_eff": 2.0,
+        "se": 0.0207059
       },
       "share_of_wallclock": {
-        "mean": 0.018154,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0181518,
+        "n_eff": 2.0,
+        "se": 0.00100209
       }
     },
     {
@@ -407,29 +407,29 @@
       "key": "skill:tdd",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.016633,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0166666,
+        "n_eff": 2.0,
+        "se": 0.0166667
       },
       "minutes_when_present": {
-        "mean": 0.033333,
+        "mean": 0.0333333,
         "n_eff": 1.0,
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.498989,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.499998,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.050806,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0508904,
+        "n_eff": 2.0,
+        "se": 0.0419557
       },
       "share_of_wallclock": {
-        "mean": 0.016488,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0165016,
+        "n_eff": 2.0,
+        "se": 0.0065898
       }
     },
     {
@@ -437,9 +437,9 @@
       "key": "tool:Bash:agentctl-cli.py:status",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.01497,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0149999,
+        "n_eff": 2.0,
+        "se": 0.015
       },
       "minutes_when_present": {
         "mean": 0.03,
@@ -447,19 +447,19 @@
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.498989,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.499998,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.045725,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0458014,
+        "n_eff": 2.0,
+        "se": 0.0377601
       },
       "share_of_wallclock": {
-        "mean": 0.014839,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0148515,
+        "n_eff": 2.0,
+        "se": 0.00593082
       }
     },
     {
@@ -467,29 +467,29 @@
       "key": "judge:acceptance",
       "kind": "overlay",
       "minutes_per_session": {
-        "mean": 0.012508,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0125,
+        "n_eff": 2.0,
+        "se": 0.00416667
       },
       "minutes_when_present": {
-        "mean": 0.012508,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0125,
+        "n_eff": 2.0,
+        "se": 0.00416667
       },
       "occurrence_rate": {
         "mean": 1.0,
-        "n_eff": 1.999992,
-        "se": null
+        "n_eff": 2.0,
+        "se": 0.0
       },
       "share_of_active": {
-        "mean": 0.038207,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.038168,
+        "n_eff": 2.0,
+        "se": 0.0194239
       },
       "share_of_wallclock": {
-        "mean": 0.0124,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0123763,
+        "n_eff": 2.0,
+        "se": 0.0115594
       }
     },
     {
@@ -497,9 +497,9 @@
       "key": "mcp:srv",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.011122,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0111,
+        "n_eff": 2.0,
+        "se": 0.0111
       },
       "minutes_when_present": {
         "mean": 0.0222,
@@ -507,19 +507,19 @@
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.501011,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.500002,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.033974,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0338933,
+        "n_eff": 2.0,
+        "se": 0.0398439
       },
       "share_of_wallclock": {
-        "mean": 0.011026,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0109902,
+        "n_eff": 2.0,
+        "se": 0.0175915
       }
     },
     {
@@ -527,9 +527,9 @@
       "key": "tool:Bash:git:status",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.006964,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00695003,
+        "n_eff": 2.0,
+        "se": 0.00695
       },
       "minutes_when_present": {
         "mean": 0.0139,
@@ -537,19 +537,19 @@
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.501011,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.500002,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.021272,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0212215,
+        "n_eff": 2.0,
+        "se": 0.0249473
       },
       "share_of_wallclock": {
-        "mean": 0.006903,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00688123,
+        "n_eff": 2.0,
+        "se": 0.0110145
       }
     },
     {
@@ -557,29 +557,29 @@
       "key": "mcp:intrasearch",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.006653,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00666664,
+        "n_eff": 2.0,
+        "se": 0.00666667
       },
       "minutes_when_present": {
-        "mean": 0.013333,
+        "mean": 0.0133333,
         "n_eff": 1.0,
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.498989,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.499998,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.020322,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0203562,
+        "n_eff": 2.0,
+        "se": 0.0167823
       },
       "share_of_wallclock": {
-        "mean": 0.006595,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00660065,
+        "n_eff": 2.0,
+        "se": 0.00263592
       }
     },
     {
@@ -587,29 +587,29 @@
       "key": "tool:Read",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.005708,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00570833,
+        "n_eff": 2.0,
+        "se": 0.000141667
       },
       "minutes_when_present": {
-        "mean": 0.005708,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00570833,
+        "n_eff": 2.0,
+        "se": 0.000141667
       },
       "occurrence_rate": {
         "mean": 1.0,
-        "n_eff": 1.999992,
-        "se": null
+        "n_eff": 2.0,
+        "se": 0.0
       },
       "share_of_active": {
-        "mean": 0.017435,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.01743,
+        "n_eff": 2.0,
+        "se": 0.00262767
       },
       "share_of_wallclock": {
-        "mean": 0.005658,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00565183,
+        "n_eff": 2.0,
+        "se": 0.00325457
       }
     },
     {
@@ -617,29 +617,29 @@
       "key": "tool:Grep",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.005397,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00540831,
+        "n_eff": 2.0,
+        "se": 0.00540833
       },
       "minutes_when_present": {
-        "mean": 0.010817,
+        "mean": 0.0108167,
         "n_eff": 1.0,
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.498989,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.499998,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.016486,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0165139,
+        "n_eff": 2.0,
+        "se": 0.0136146
       },
       "share_of_wallclock": {
-        "mean": 0.00535,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00535478,
+        "n_eff": 2.0,
+        "se": 0.00213839
       }
     },
     {
@@ -647,29 +647,29 @@
       "key": "tool:Write",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.004175,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00416668,
+        "n_eff": 2.0,
+        "se": 0.00416667
       },
       "minutes_when_present": {
-        "mean": 0.008333,
+        "mean": 0.00833333,
         "n_eff": 1.0,
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.501011,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.500002,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.012753,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0127227,
+        "n_eff": 2.0,
+        "se": 0.0149564
       },
       "share_of_wallclock": {
-        "mean": 0.004139,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00412544,
+        "n_eff": 2.0,
+        "se": 0.00660341
       }
     },
     {
@@ -677,29 +677,29 @@
       "key": "model:compact",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.003333,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00333333,
+        "n_eff": 2.0,
+        "se": 0.0
       },
       "minutes_when_present": {
-        "mean": 0.003333,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00333333,
+        "n_eff": 2.0,
+        "se": 0.0
       },
       "occurrence_rate": {
         "mean": 1.0,
-        "n_eff": 1.999992,
-        "se": null
+        "n_eff": 2.0,
+        "se": 0.0
       },
       "share_of_active": {
-        "mean": 0.010182,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.0101781,
+        "n_eff": 2.0,
+        "se": 0.001787
       },
       "share_of_wallclock": {
-        "mean": 0.003304,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00330034,
+        "n_eff": 2.0,
+        "se": 0.00198239
       }
     },
     {
@@ -707,9 +707,9 @@
       "key": "hook:hook-a.py",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.002505,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00250001,
+        "n_eff": 2.0,
+        "se": 0.0025
       },
       "minutes_when_present": {
         "mean": 0.005,
@@ -717,19 +717,19 @@
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.501011,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.500002,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.007652,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00763362,
+        "n_eff": 2.0,
+        "se": 0.00897385
       },
       "share_of_wallclock": {
-        "mean": 0.002483,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00247526,
+        "n_eff": 2.0,
+        "se": 0.00396205
       }
     },
     {
@@ -737,9 +737,9 @@
       "key": "hook:hook-log.sh",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.002505,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00250001,
+        "n_eff": 2.0,
+        "se": 0.0025
       },
       "minutes_when_present": {
         "mean": 0.005,
@@ -747,19 +747,19 @@
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.501011,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.500002,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.007652,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00763362,
+        "n_eff": 2.0,
+        "se": 0.00897385
       },
       "share_of_wallclock": {
-        "mean": 0.002483,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00247526,
+        "n_eff": 2.0,
+        "se": 0.00396205
       }
     },
     {
@@ -767,29 +767,29 @@
       "key": "hook:hook-guard.py",
       "kind": "partition",
       "minutes_per_session": {
-        "mean": 0.001663,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00166666,
+        "n_eff": 2.0,
+        "se": 0.00166667
       },
       "minutes_when_present": {
-        "mean": 0.003333,
+        "mean": 0.00333333,
         "n_eff": 1.0,
         "se": null
       },
       "occurrence_rate": {
-        "mean": 0.498989,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.499998,
+        "n_eff": 2.0,
+        "se": 0.5
       },
       "share_of_active": {
-        "mean": 0.005081,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00508904,
+        "n_eff": 2.0,
+        "se": 0.00419557
       },
       "share_of_wallclock": {
-        "mean": 0.001649,
-        "n_eff": 1.999992,
-        "se": null
+        "mean": 0.00165016,
+        "n_eff": 2.0,
+        "se": 0.00065898
       }
     }
   ],
@@ -805,14 +805,14 @@
   "sessions": 2,
   "totals": {
     "active_minutes": {
-      "mean": 0.327384,
-      "n_eff": 1.999992,
-      "se": null
+      "mean": 0.3275,
+      "n_eff": 2.0,
+      "se": 0.0575
     },
     "wall_minutes": {
-      "mean": 1.008774,
-      "n_eff": 1.999992,
-      "se": null
+      "mean": 1.01,
+      "n_eff": 2.0,
+      "se": 0.606667
     }
   }
 }
