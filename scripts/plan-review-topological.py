@@ -15,6 +15,10 @@ already has a record is re-reviewed with `agentctl plan-review-pair-history` han
 the spawner (`--review-topo-history`). Cost, duration and pull counts are printed as
 telemetry; nothing is gated on them.
 
+An order draft (a file with no stages) is walked as `unit:base` alone and its verdict is
+recorded with scope `order`. When `agentctl status` reports an agreed order understanding,
+its digest is forwarded to every `unit:base` and `base-<s>` spawn (`--agreed-understanding`).
+
   plan-review-topological.py (--session <sid> | --own) --plan <plan.toml>
       [--complexity low|medium|high | --model <m>] [--dry-run] [--early-stop]
       [--parallel <k>] [--pairs <p,...>] [--ledger <path>]
@@ -146,9 +150,28 @@ def done_criterion(pair: str) -> str:
     )
 
 
+def forwarded_unit_digest(digest: "str | None") -> "str | None":
+    return digest
+
+
+def forwarded_pair_digest(digest: "str | None") -> "str | None":
+    return digest
+
+
+def forwarded_digest(pair: str, digest: "str | None") -> "str | None":
+    """The agreement digest the spawn of `pair` receives: only the reviews that show the
+    order (`unit:base` and each `base-<s>` pair) are told what the user agreed."""
+    if pair == plan.unit_id(plan.PAIR_BASE_NODE):
+        return forwarded_unit_digest(digest)
+    if pair.startswith(f"{plan.PAIR_BASE_NODE}-"):
+        return forwarded_pair_digest(digest)
+    return None
+
+
 def build_spawn_argv(args, pair: str, plan_path: str, *, dry_run: bool,
                      history_path: "str | None" = None,
-                     view_root: "str | None" = None) -> list[str]:
+                     view_root: "str | None" = None,
+                     agreed_understanding: "str | None" = None) -> list[str]:
     selector = ["--model", args.model] if args.model else ["--complexity", args.complexity or "high"]
     argv = [
         "--kind", "thinker", *selector, "--effort", "high",
@@ -159,6 +182,9 @@ def build_spawn_argv(args, pair: str, plan_path: str, *, dry_run: bool,
         argv += ["--review-topo-history", history_path]
     if view_root is not None:
         argv += ["--view-root", str(view_root)]
+    digest = forwarded_digest(pair, agreed_understanding)
+    if digest is not None:
+        argv += ["--agreed-understanding", digest]
     if dry_run:
         argv.append("--dry-run")
     return argv
@@ -172,12 +198,14 @@ def _spawner_module():
 
 
 def reviewer_prompt(plan_path: str, unit_id: str, *, view_root: "str | Path",
-                    history_path: "str | None" = None) -> str:
+                    history_path: "str | None" = None,
+                    agreed_understanding: "str | None" = None) -> str:
     """The full prompt the spawn of `build_spawn_argv` sends to the reviewer of `unit_id`
     (a pair id or `unit:<n>`), whatever its length: the spawner's own assembly, nothing
     spawned and no size ceiling applied."""
     argv = build_spawn_argv(argparse.Namespace(model=None, complexity=None), unit_id, plan_path,
-                            dry_run=False, history_path=history_path, view_root=str(view_root))
+                            dry_run=False, history_path=history_path, view_root=str(view_root),
+                            agreed_understanding=agreed_understanding)
     return _spawner_module().assembled_prompt(argv)
 
 
@@ -187,11 +215,17 @@ def session_args(sid: "str | None") -> list[str]:
 
 
 def record_argv(sid: "str | None", plan_path: str, pair: str, verdict: str, digest: str,
-                concerns: list[str], questions: "list[str] | None" = None) -> list[str]:
+                concerns: list[str], questions: "list[str] | None" = None, *,
+                draft: bool = False, transcript: "str | None" = None) -> list[str]:
+    """The `plan-review` record of a verdict: scope `topo:<pair>` for a plan, scope `order`
+    (with the reviewer's transcript) for an order draft, whose only review is `unit:base`."""
+    scope = "order" if draft else f"topo:{pair}"
     argv = [
-        "plan-review", *session_args(sid), "--target", plan_path, "--scope", f"topo:{pair}",
+        "plan-review", *session_args(sid), "--target", plan_path, "--scope", scope,
         "--reviewer", "thinker", "--verdict", verdict, "--plan-digest", digest,
     ]
+    if draft and transcript:
+        argv += ["--transcript", transcript]
     for concern in concerns:
         argv += ["--concern", concern]
     for question in questions or []:
@@ -439,6 +473,22 @@ def pair_telemetry(launched: Launched, pair: str) -> tuple["float | None", "int 
 # --- the walk ------------------------------------------------------------------
 
 
+def is_order_draft(plan_path: str) -> bool:
+    """True when `plan_path` is an order draft (no stages, an order stated), not a plan."""
+    try:
+        return not plan.load_order_draft(plan_path)[1]
+    except (plan.PlanError, ValueError, OSError):
+        return False
+
+
+def draft_walk() -> dict:
+    """The walk of an order draft: `unit:base` alone, with nothing to wait on. Local, as
+    the engine's `plan-review-walk` enumerates a plan's units and a draft has none."""
+    unit = plan.unit_id(plan.PAIR_BASE_NODE)
+    return {"levels": [[{"pair": unit, "kind": "unit", "status": "missing",
+                         "ready": True, "waiting": []}]]}
+
+
 def resolve_parallel(requested: "int | None", batch_width: int) -> int:
     """Workers for one level: an explicit request wins, else the level's batch width
     capped by config.md `review-parallel-max` (missing or unparsable -> sequential)."""
@@ -467,9 +517,18 @@ class Driver:
         self.level_refused = False
         self.history_dir: "str | None" = None
         self.history_lock = threading.Lock()
+        self.draft = is_order_draft(plan_path)
+        self.agreed: "str | None" = None
 
     def engine(self, argv: list[str]) -> dict:
         return run_agentctl(argv, self.env, self.engine_script)
+
+    def read_agreement(self) -> "str | None":
+        """The digest of the order understanding the user agreed, from the engine's
+        `status` (null unless the agreement gate is active); None when it cannot be read."""
+        directive = self.engine(["status", *session_args(self.sid)])
+        agreement = ((directive.get("data") or {}).get("order_agreement")) or {}
+        return agreement.get("understanding_sha256") if directive.get("ok") else None
 
     def agentctl(self, verb: str, *extra: str) -> dict:
         return self.engine([verb, *session_args(self.sid), "--target", self.plan_path, *extra])
@@ -499,6 +558,8 @@ class Driver:
             self.history_dir = None
 
     def read_walk(self) -> dict:
+        if self.draft:
+            return draft_walk()
         directive = self.agentctl("plan-review-walk", "--format", "json")
         if not directive.get("ok"):
             raise RuntimeError(f"plan-review-walk failed: {directive.get('detail', '')}")
@@ -514,11 +575,12 @@ class Driver:
         limit, or the full prompt over the spawn ceiling. None when it may, or when the plan
         does not load (the spawner then answers for itself)."""
         try:
-            doc = plan.load_plan(self.plan_path)
+            doc = plan.load_order_draft(self.plan_path)[0] if self.draft else plan.load_plan(self.plan_path)
             nodes = (plan.parse_unit(doc, pair),) if plan.is_unit_id(pair) else plan.parse_pair(doc, pair)
             text = reviewer_prompt(self.plan_path, pair,
                                    view_root=self.view_root or config_root.topo_units_root(),
-                                   history_path=history_path)
+                                   history_path=history_path,
+                                   agreed_understanding=self.agreed)
         except (plan.PlanError, ValueError, OSError):
             return None
         return topo_unit_refusal(doc, ("meta", *nodes), text, model=self.args.model)
@@ -535,7 +597,8 @@ class Driver:
         view_dir = None if plan.is_unit_id(pair) else view_dir_for(self.plan_path, pair, self.view_root)
         offset = cost_log_size()
         argv = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
-                                history_path=history_path, view_root=self.view_root)
+                                history_path=history_path, view_root=self.view_root,
+                                agreed_understanding=self.agreed)
         rc, out, err = spawn_pair(argv)
         return Launched(rc, out, err, offset, sha, view_dir)
 
@@ -559,7 +622,7 @@ class Driver:
         )
         recorded = self.engine(
             record_argv(self.sid, self.plan_path, pair, parsed.verdict, parsed.digest,
-                        parsed.concerns, parsed.questions)
+                        parsed.concerns, parsed.questions, draft=self.draft, transcript=transcript)
         )
         if not recorded.get("ok"):
             self.refuse(pair, f"engine refused the record: {recorded.get('detail', '')}")
@@ -638,24 +701,37 @@ class Driver:
                     continue
                 spawn_cmd = build_spawn_argv(self.args, pair, self.plan_path, dry_run=False,
                                              history_path=HISTORY_PLACEHOLDER if history_path else None,
-                                             view_root=self.view_root)
+                                             view_root=self.view_root,
+                                             agreed_understanding=self.agreed)
                 if history_path:
                     emit(f"  history: {shlex.join([sys.executable, str(self.engine_script), 'plan-review-pair-history', *session_args(self.sid), '--target', self.plan_path, '--pair', pair])}"
                          f" > {HISTORY_PLACEHOLDER}")
                 emit("  spawn: " + shlex.join([sys.executable, str(SPAWNER), *spawn_cmd]))
                 emit("  record: " + shlex.join(
                     [sys.executable, str(self.engine_script),
-                     *record_argv(self.sid, self.plan_path, pair, "<pass|revise>", "<sha256>", [])]))
+                     *record_argv(self.sid, self.plan_path, pair, "<pass|revise>", "<sha256>", [],
+                                  draft=self.draft, transcript="<transcript>")]))
                 rc, out, err = spawn_pair(build_spawn_argv(self.args, pair, self.plan_path, dry_run=True,
                                                            history_path=history_path,
-                                                           view_root=self.view_root))
+                                                           view_root=self.view_root,
+                                                           agreed_understanding=self.agreed))
                 chars, files = DRY_CHARS_RE.search(out), DRY_VIEW_RE.search(out)
                 if rc != 0 or chars is None or files is None:
                     emit(f"TOPO-REFUSED: pair={pair} spawner --dry-run exited {rc} ({CEILING_HINT})")
                     continue
                 emit(f"TOPO-DRY: pair={pair} prompt_chars={chars.group(1)} view_files={files.group(1)}")
 
+    def compose_draft(self) -> str:
+        """A draft's review is the one `unit:base` verdict: it stands as recorded, so there
+        is nothing for the engine to compose."""
+        unit = plan.unit_id(plan.PAIR_BASE_NODE)
+        passed = any(r.pair == unit and r.verdict == "pass" for r in self.results)
+        emit("COMPOSE: pass" if passed else f"COMPOSE: blocked {unit}")
+        return "pass" if passed else "blocked"
+
     def compose(self) -> str:
+        if self.draft:
+            return self.compose_draft()
         directive = self.agentctl("plan-review-compose")
         if directive.get("ok"):
             emit("COMPOSE: pass")
@@ -682,6 +758,7 @@ class Driver:
             self.cleanup_history()
 
     def _run(self, parser: argparse.ArgumentParser) -> int:
+        self.agreed = self.read_agreement()
         try:
             walk = self.read_walk()
         except RuntimeError as exc:

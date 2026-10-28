@@ -25,6 +25,7 @@ import argparse
 import datetime as dt
 import fnmatch
 import glob
+import hashlib
 import json
 import math
 import os
@@ -52,6 +53,7 @@ from agentctl.own_contour import OWN_CONTOUR_VERBS, OWN_SESSION_ENV, own_plan_pa
 from agentctl.plan import (  # parse the TOML plan for a single-stage brief projection
     PlanError,
     is_unit_id,
+    load_order_draft,
     load_plan,
     load_plan_with_digest,
     parse_pair,
@@ -234,6 +236,23 @@ def plan_site_kind(args: argparse.Namespace) -> str:
     return "dispatch-no-stage"
 
 
+def load_review_doc(path: str) -> tuple:
+    """`(doc, sha256)` of a `--review-topo` target: a plan, or an order draft — a file with
+    no `[[stage]]` entries that states an order, which only `unit:base` can be reviewed
+    from. A file that has stages but does not load as a plan is refused as before."""
+    try:
+        doc, _data, sha256 = load_plan_with_digest(path)
+        return doc, sha256
+    except PlanError:
+        try:
+            doc, staged = load_order_draft(path)
+        except PlanError:
+            doc, staged = None, True
+        if staged:
+            raise
+        return doc, hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
 def plan_site(
     args: argparse.Namespace, *, view_root: "Path | str | None" = None,
     history: "dict | None" = None, materialize: bool = True,
@@ -250,6 +269,7 @@ def plan_site(
         selector["stage"] = args.stage_index
     elif kind in ("topo-pair", "topo-unit"):
         selector["unit" if kind == "topo-unit" else "pair"] = args.review_topo
+        selector["agreed_understanding"] = getattr(args, "agreed_understanding", None)
     try:
         return build_site_prompt(
             kind, args.plan, view_root=view_root, history=history,
@@ -933,6 +953,14 @@ def build_parser() -> argparse.ArgumentParser:
         "for the --review-topo pair: the bundle then carries the pair's prior "
         "verdicts and concerns and the parts changed since, for a re-review. "
         "Only valid with --review-topo; the spawn stays session-free.",
+    )
+    p.add_argument(
+        "--agreed-understanding",
+        default=None,
+        metavar="<sha256>",
+        help="the digest of the order understanding the user agreed: a --review-topo bundle of "
+        "unit:base or of a base-<s> pair carries the user-agreed label when this equals the "
+        "plan's own understanding digest, and none otherwise. Only valid with --review-topo.",
     )
     p.add_argument("--dry-run", action="store_true", help="print the prompt and the command that would run, then exit")
     return p
@@ -2913,6 +2941,10 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         print("error: --review-topo-history is only valid with --review-topo.", file=sys.stderr)
         log_refused("review-topo-history-without-review-topo", {"kind": args.kind})
         return 2
+    if args.agreed_understanding is not None and args.review_topo is None:
+        print("error: --agreed-understanding is only valid with --review-topo.", file=sys.stderr)
+        log_refused("agreed-understanding-without-review-topo", {"kind": args.kind})
+        return 2
     if args.review_topo is not None:
         if args.kind != "thinker":
             print(
@@ -2939,7 +2971,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
             log_refused("review-topo-bad-pair", {"kind": args.kind, "review_pair": args.review_topo})
             return 2
         try:
-            topo_doc, _topo_plan_bytes, topo_plan_sha256 = load_plan_with_digest(str(args.plan))
+            topo_doc, topo_plan_sha256 = load_review_doc(str(args.plan))
         except PlanError as exc:
             print(f"error: --review-topo: {exc}", file=sys.stderr)
             log_refused("review-topo-plan-error", {"kind": args.kind, "review_pair": topo_pair})

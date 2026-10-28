@@ -479,7 +479,9 @@ def test_tb6_base_stage_pair_conditions_read_the_named_requirements_through_the_
         "- `C2:` each named requirement is genuinely derived from the difficulty and the "
         "functional place",
         "- `C3:` every named requirement is discharged through this edge — stage 2 "
-        "(Stage 2)'s declared product delivers what the requirement asks",
+        "(Stage 2)'s declared product delivers what the requirement asks; stage 2 "
+        "(Stage 2) realizes no rejected proposal listed above and realizes an adopted or "
+        "adapted one only as its verdict says",
         "- `C4:` the control each coverage entry names, in stage 2 (Stage 2), genuinely "
         "decides its requirement and is checkable from that stage's declared product",
     ]

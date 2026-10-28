@@ -29,8 +29,10 @@ agreement stages share this harness. A mutant is only killable if:
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -133,7 +135,101 @@ def _headless_channel_ignored(mp):
     mp.setattr("agentctl.cli._headless_channel", lambda: False, raising=True)
 
 
+_SCRIPTS = Path(__file__).resolve().parent.parent
+_script_modules: dict = {}
+
+
+def script_module(filename: str):
+    """The hyphenated script `scripts/<filename>` loaded once as a module, so that a test
+    and a mutant patch the same object."""
+    if filename not in _script_modules:
+        name = "oa_" + Path(filename).stem.replace("-", "_")
+        spec = importlib.util.spec_from_file_location(name, _SCRIPTS / filename)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        _script_modules[filename] = module
+    return _script_modules[filename]
+
+
+def _rejected_proposal_filtered(mp):
+    """A base-<s> section stops listing the rejected proposals."""
+    from agentctl import render
+
+    original = render._base_edge_proposals
+    mp.setattr(render, "_base_edge_proposals",
+               lambda doc, service: [p for p in original(doc, service) if p.verdict != "reject"],
+               raising=True)
+
+
+def _unit_base_omits_proposals(mp):
+    """The unit:base bundle stops inlining the order's understanding."""
+    mp.setattr("agentctl.render.render_order_understanding_md", lambda doc: [], raising=True)
+
+
+def _draft_walk_empty(mp):
+    """The driver's walk of an order draft has no unit to review."""
+    mp.setattr(script_module("plan-review-topological.py"), "draft_walk",
+               lambda: {"levels": []}, raising=True)
+
+
+def _agreed_label_unconditional(mp):
+    """The user-agreed label appears whatever digest was passed."""
+    mp.setattr("agentctl.render._agreement_matches", lambda doc, agreed: True, raising=True)
+
+
+def _agreed_digest_not_forwarded(mp):
+    """The driver's spawn of unit:base is not told the agreement digest."""
+    mp.setattr(script_module("plan-review-topological.py"), "forwarded_unit_digest",
+               lambda digest: None, raising=True)
+
+
+def _pair_digest_not_forwarded(mp):
+    """The driver's spawn of a base-<s> pair is not told the agreement digest."""
+    mp.setattr(script_module("plan-review-topological.py"), "forwarded_pair_digest",
+               lambda digest: None, raising=True)
+
+
+def _spawner_digest_dropped(mp):
+    """The spawner accepts --agreed-understanding but never hands it to the renderer."""
+    spawner = script_module("spawn-specialist.py")
+    original = spawner.build_site_prompt
+
+    def dropping(*args, **kwargs):
+        kwargs.pop("agreed_understanding", None)
+        return original(*args, **kwargs)
+
+    mp.setattr(spawner, "build_site_prompt", dropping, raising=True)
+
+
+def _spawner_refuses_draft(mp):
+    """The spawner no longer recognizes a stageless order draft."""
+    mp.setattr(script_module("spawn-specialist.py"), "load_order_draft",
+               lambda path: (None, True), raising=True)
+
+
+def _draft_recorded_as_topo(mp):
+    """The driver records a draft's verdict under scope topo:unit:base, not order."""
+    driver = script_module("plan-review-topological.py")
+    original = driver.record_argv
+
+    def as_topo(*args, **kwargs):
+        kwargs["draft"] = False
+        return original(*args, **kwargs)
+
+    mp.setattr(driver, "record_argv", as_topo, raising=True)
+
+
 MUTANTS = {
+    "rejected_proposal_filtered": _rejected_proposal_filtered,
+    "unit_base_omits_proposals": _unit_base_omits_proposals,
+    "draft_walk_empty": _draft_walk_empty,
+    "agreed_label_unconditional": _agreed_label_unconditional,
+    "agreed_digest_not_forwarded": _agreed_digest_not_forwarded,
+    "pair_digest_not_forwarded": _pair_digest_not_forwarded,
+    "spawner_digest_dropped": _spawner_digest_dropped,
+    "spawner_refuses_draft": _spawner_refuses_draft,
+    "draft_recorded_as_topo": _draft_recorded_as_topo,
     "agree_without_ask": _agree_without_ask,
     "divergence_ignored": _divergence_ignored,
     "challenge_not_recorded": _challenge_not_recorded,

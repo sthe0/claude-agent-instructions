@@ -56,6 +56,7 @@ from .plan import (
     grants_sha256,
     interface_empty,
     is_unit_id,
+    load_order_draft,
     load_plan,
     parse_pair,
     parse_plan,
@@ -65,6 +66,7 @@ from .plan import (
     review_pairs,
     split_pair_id,
     stage_closure_digest,
+    understanding_digest,
     unit_node,
 )
 
@@ -195,6 +197,40 @@ def render_order_md(doc: PlanDoc) -> list[str]:
                 lines.append(f"    - **Derivation:** {r.derivation or '*(none)*'}")
         lines.append("")
     return lines
+
+
+def _proposal_lines(proposals, indent: str = "  ") -> list[str]:
+    """One entry per proposal — id, verdict, text, critique and the requirements the
+    critique stands against."""
+    lines: list[str] = []
+    for p in proposals:
+        lines.append(f"{indent}- **{p.id or '(no id)'}** ({p.verdict or 'no verdict'}): {p.text}")
+        lines.append(f"{indent}  - **Critique:** {p.critique or '*(none)*'}")
+        lines.append(f"{indent}  - **Against:** {', '.join(p.against) if p.against else '*(none)*'}")
+    return lines
+
+
+def render_order_understanding_md(doc: PlanDoc) -> list[str]:
+    """The order's activity, difficulty, proposals and constraints — the part of the
+    understanding `render_order_md` leaves out (it already prints the customer, the
+    functional place and the requirements with derivations) — as raw lines. Each field
+    appears only when the order states it, so an order without them renders as before;
+    `[]` when it states none."""
+    order = doc.meta.order
+    if order is None:
+        return []
+    lines: list[str] = []
+    if order.activity:
+        lines.append(f"- **Activity:** {order.activity}")
+    if order.difficulty:
+        lines.append(f"- **Difficulty:** {order.difficulty}")
+    if order.proposals:
+        lines.append("- **Proposals:**")
+        lines.extend(_proposal_lines(order.proposals))
+    if order.constraints:
+        lines.append("- **Constraints:**")
+        lines.extend(f"  - **{c.id or '(no id)'}**: {c.text}" for c in order.constraints)
+    return ["## Order understanding", "", *lines, ""] if lines else []
 
 
 def render_order_coverage_md(doc: PlanDoc) -> list[str]:
@@ -771,15 +807,34 @@ def _base_edge_requirements(doc: PlanDoc, service: int) -> list:
     return [r for r in (order.requirements if order is not None else ()) if r.id in wanted]
 
 
+def _base_edge_proposals(doc: PlanDoc, service: int) -> list:
+    """The proposals that bear on stage `service`: every rejected one, which no stage may
+    realize, and the adopted or adapted ones standing against a requirement this edge
+    names, which the stage may realize only as the verdict says."""
+    order = doc.meta.order
+    if order is None:
+        return []
+    edge_ids = {r.id for r in _base_edge_requirements(doc, service)}
+    return [
+        p for p in order.proposals
+        if p.verdict == "reject" or (p.verdict in ("adopt", "adapt") and edge_ids & set(p.against))
+    ]
+
+
 def _base_edge_section(doc: PlanDoc, service: int) -> str:
     """The base side of a `base-<s>` pair: only the requirements the edge
-    supplies — id, text, derivation — and never the goal, done criterion, final
+    supplies — id, text, derivation — and the proposals bearing on it
+    (`_base_edge_proposals`), and never the goal, done criterion, final
     checks, other requirements or the rest of the order."""
     lines = ["- **Requirements named by this edge:**"]
     for r in _base_edge_requirements(doc, service):
         label = f"**{r.id}**" if r.id else "*(no id)*"
         lines.append(f"  - {label}: {r.text}")
         lines.append(f"    - **Derivation:** {r.derivation or '*(none)*'}")
+    proposals = _base_edge_proposals(doc, service)
+    if proposals:
+        lines.append("- **Proposals bearing on this edge:**")
+        lines.extend(_proposal_lines(proposals))
     return "\n".join(lines) + "\n"
 
 
@@ -849,7 +904,9 @@ def _pair_conditions(doc: PlanDoc, base: "int | str", service: "int | str") -> l
             "each named requirement is genuinely derived from the difficulty and the "
             "functional place",
             f"every named requirement is discharged through this edge — {service_label}'s "
-            f"declared product delivers what the requirement asks",
+            f"declared product delivers what the requirement asks; {service_label} realizes no "
+            f"rejected proposal listed above and realizes an adopted or adapted one only as "
+            f"its verdict says",
             f"the control each coverage entry names, in {service_label}, genuinely decides "
             f"its requirement and is checkable from that stage's declared product",
         ]
@@ -861,6 +918,24 @@ def _pair_conditions(doc: PlanDoc, base: "int | str", service: "int | str") -> l
         f"{service_label}'s product measured against it, the rest standing on its own",
         f"{service_label}'s declared product covers the part of {base_label} attributed "
         f"to this edge",
+    ]
+
+
+def _agreement_matches(doc: PlanDoc, agreed: "str | None") -> bool:
+    return agreed is not None and agreed == understanding_digest(doc)
+
+
+def _agreement_label_lines(doc: PlanDoc, agreed: "str | None") -> list[str]:
+    """The line telling a reviewer the order understanding it reads is the one the user
+    agreed — present only when `agreed` is the digest of this plan's own understanding, so
+    a digest of an earlier understanding never vouches for the current one. `doc` is the
+    plan itself, never a pointerized view of it, whose digest differs."""
+    if not _agreement_matches(doc, agreed):
+        return []
+    return [
+        f"User-agreed order understanding (digest {understanding_digest(doc)[:12]}): judge the "
+        "stage against it; a defect in it is an `understanding:` concern, not a rewrite.",
+        "",
     ]
 
 
@@ -971,7 +1046,8 @@ def _protocol_lines(history: "dict | None", noun: str) -> list[str]:
 
 def render_pair_review_bundle(
     doc: PlanDoc, pair_id: str, *, plan_sha256: str, view_dir: "Path | str",
-    history: "dict | None" = None,
+    history: "dict | None" = None, agreed_understanding: "str | None" = None,
+    understanding_doc: "PlanDoc | None" = None,
 ) -> str:
     """The `--review-topo` starting prompt for one reliance edge: the order
     context, the base's full node file, the service's declared product
@@ -998,6 +1074,7 @@ def render_pair_review_bundle(
     if base == PAIR_BASE_NODE:
         lines.append(f"## Base: {_node_label(doc, base)} — the part this edge supplies")
         lines.append("")
+        lines.extend(_agreement_label_lines(understanding_doc or doc, agreed_understanding))
         lines.append(_base_edge_section(doc, int(service)).rstrip("\n"))
         lines.append("")
     else:
@@ -1076,14 +1153,30 @@ def render_pair_review_bundle(
 def _unit_conditions(doc: PlanDoc, node: "int | str") -> list[str]:
     """The four condition texts of a unit review, read for its kind. A unit is
     judged alone, from its own fields and its declared edges."""
+    if node == PAIR_BASE_NODE and not doc.stages:
+        return [
+            "the order is internally consistent — customer, activity, difficulty, "
+            "functional place, requirements, proposals and constraints do not contradict "
+            "each other",
+            "every requirement follows from the difficulty and the functional place — "
+            "none is arbitrary, none is missing a derivation; every proposal's verdict "
+            "follows from its critique and the requirements it stands against",
+            "every constraint binds the solution as stated and no requirement or adopted "
+            "or adapted proposal contradicts one; every requirement is decidable by a "
+            "check a later stage can carry",
+            "the goal and the done criterion, where stated, match the requirements and "
+            "are checkable",
+        ]
     if node == PAIR_BASE_NODE:
         return [
             "the order and the meta are internally consistent — customer, functional "
             "place, requirements and the coverage map do not contradict each other",
             "every requirement follows from the difficulty and the functional place — "
-            "none is arbitrary, none is missing a derivation",
+            "none is arbitrary, none is missing a derivation; every proposal's verdict "
+            "follows from its critique and the requirements it stands against",
             "every requirement has a coverage entry or a final check that decides it — "
-            "none is left uncovered",
+            "none is left uncovered; every constraint is respected by the coverage "
+            "entries and the final checks",
             "the goal, the done criterion and the final checks match the requirements "
             "and are checkable",
         ]
@@ -1133,6 +1226,7 @@ def _unit_edge_lines(doc: PlanDoc, node: "int | str") -> list[str]:
 
 def render_unit_review_bundle(
     doc: PlanDoc, unit: str, *, plan_sha256: str, history: "dict | None" = None,
+    agreed_understanding: "str | None" = None,
 ) -> str:
     """The `--review-topo` starting prompt for one UNIT: every field of the
     node, inlined, and its full edge set; nothing else is read. `unit:base`
@@ -1147,6 +1241,8 @@ def render_unit_review_bundle(
     lines: list[str] = [f"# Topological review unit: {unit}", ""]
     lines.append(f"Unit: {_node_label(doc, node)}.")
     lines.append("")
+    if node == PAIR_BASE_NODE:
+        lines.extend(_agreement_label_lines(doc, agreed_understanding))
 
     lines.append("## Fields")
     lines.append("")
@@ -1205,7 +1301,8 @@ _WRAPPER_STAGE = {
 
 
 def _meta_node_lines(doc: PlanDoc) -> list[str]:
-    return render_meta_md(doc) + render_order_md(doc) + render_order_coverage_md(doc)
+    return (render_meta_md(doc) + render_order_md(doc) + render_order_understanding_md(doc)
+            + render_order_coverage_md(doc))
 
 
 def _meta_extra_lines(doc: PlanDoc) -> list[str]:
@@ -1477,7 +1574,11 @@ def _load_site_source(plan_path: "str | Path") -> _SiteSource:
         return content
 
     resolved, visited = plan_refs.resolve_refs(raw, path.parent, None, read=collect, index_path=path)
-    return _SiteSource(parse_plan(resolved), data, hashlib.sha256(data).hexdigest(), visited, files)
+    if not resolved.get("stage") and (resolved.get("meta") or {}).get("order") is not None:
+        doc, _ = load_order_draft(path)
+    else:
+        doc = parse_plan(resolved)
+    return _SiteSource(doc, data, hashlib.sha256(data).hexdigest(), visited, files)
 
 
 def _visited_nodes(visited: list) -> dict[str, set]:
@@ -1628,6 +1729,7 @@ def build_site_prompt(
     pair: "str | None" = None, unit: "str | None" = None,
     view_root: "str | Path | None" = None, history: "dict | None" = None,
     materialize: bool = True, inline_max_chars: "int | None" = None, with_view: bool = True,
+    agreed_understanding: "str | None" = None,
 ) -> SitePrompt:
     """The plan content one model-facing site passes, and the directories the model is
     granted to read the rest from (`add_dirs`). `shown_nodes` names the nodes — "meta" or a
@@ -1656,7 +1758,9 @@ def build_site_prompt(
 
     if kind == "topo-unit":
         node = parse_unit(doc, unit or "")
-        text = render_unit_review_bundle(doc, unit, plan_sha256=source.plan_sha256, history=history)
+        text = render_unit_review_bundle(
+            doc, unit, plan_sha256=source.plan_sha256, history=history,
+            agreed_understanding=agreed_understanding)
         return SitePrompt(text, (), frozenset({"meta" if node == PAIR_BASE_NODE else int(node)}))
     if kind == "enumerate-node":
         if stage is None:
@@ -1698,7 +1802,8 @@ def build_site_prompt(
         def render(view_dir: Path) -> tuple[str, dict[str, str]]:
             bundle = render_pair_review_bundle(
                 shown_doc, pair, plan_sha256=source.plan_sha256, view_dir=view_dir,
-                history=history)
+                history=history, agreed_understanding=agreed_understanding,
+                understanding_doc=doc)
             return ("\n".join([*header(view_dir), bundle]),
                     {node_file_name(service): node_file_text(shown_doc, service)})
     else:
