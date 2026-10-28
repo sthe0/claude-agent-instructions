@@ -39,7 +39,7 @@ NON_STRING_FIELDS: dict[str, frozenset[str]] = {
         "grants", "effects", "optional", "amendments",
     }),
     "meta": frozenset({"order", "assumption"}),
-    "order": frozenset({"requirements", "requires_traceability", "coverage"}),
+    "order": frozenset({"requirements", "requires_traceability", "coverage", "proposals", "constraints"}),
 }
 
 # Exactly the keys parse_plan and Order read (pinned by a test). `[meta] context` is not
@@ -57,7 +57,9 @@ EXTERNALIZABLE_FIELDS: dict[str, frozenset[str]] = {
         "task_id", "goal", "done_criterion", "criterion_type", "weight_class",
         "external_research", "repo_root", "delivery_worktree", "landing_waiver",
     }),
-    "order": frozenset({"customer_id", "customer", "functional_place", "parent_norm"}),
+    "order": frozenset({
+        "customer_id", "customer", "functional_place", "parent_norm", "activity", "difficulty",
+    }),
 }
 
 _NODE_KIND = {"meta": "meta", "meta.order": "order"}
