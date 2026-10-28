@@ -50,6 +50,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import edit_ledger  # noqa: E402
 from agentctl.exempt_paths import is_engine_exempt, is_ledger_noise  # noqa: E402
+from lib import hook_telemetry  # noqa: E402
 from session_scope import registry  # noqa: E402
 
 TRACKED_TOOLS = ("Edit", "Write")
@@ -226,9 +227,6 @@ def main() -> int:
     except Exception:
         pass
     return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

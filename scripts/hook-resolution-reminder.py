@@ -74,6 +74,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import hook_telemetry  # noqa: E402
 from lib import judge_ledger  # noqa: E402
 
 # judge_ledger itself must import cleanly above for this to record anything —
@@ -599,9 +600,6 @@ def main() -> int:
         "`Considered resolved?` explicitly. Otherwise continue the work."
     )
     return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

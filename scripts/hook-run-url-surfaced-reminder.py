@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import transcript_read  # noqa: E402
 import url_scan  # noqa: E402
+from lib import hook_telemetry  # noqa: E402
 
 # A URL is a "run URL" when its PATH contains one of these run/job/graph
 # segments — the generic surface shared by orchestration and CI platforms.
@@ -151,9 +152,6 @@ def main() -> int:
         "scratch/recovery file is not surfacing. Give it now, then continue."
     )
     return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

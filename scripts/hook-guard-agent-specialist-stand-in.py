@@ -23,6 +23,8 @@ import json
 import re
 import sys
 
+from lib import hook_telemetry
+
 _TOOLS = frozenset({"Agent", "Task"})
 _FIELDS = ("prompt", "description")
 _SKILL_PATH = re.compile(r"skills/[\w./-]*SKILL\.md")
@@ -67,9 +69,6 @@ def main() -> int:
         }))
 
     return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

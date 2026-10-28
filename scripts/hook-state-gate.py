@@ -41,7 +41,7 @@ from agentctl.exempt_paths import (  # noqa: E402
 from agentctl.norm_handoff import NORM_HANDOFF_ENV  # noqa: E402
 from agentctl.own_contour import OWN_SESSION_ENV  # noqa: E402
 from agentctl.state import SessionState as _SessionState  # noqa: E402
-from lib import config_root, engine_session_binding  # noqa: E402
+from lib import config_root, engine_session_binding, hook_telemetry  # noqa: E402
 
 # Current-vs-legacy-root fallback lookup lives in lib/config_root.py (shared
 # with the other state-reading hooks); resolve_state_path is a thin alias kept
@@ -406,9 +406,6 @@ def main() -> int:
                 "editing production code through another session"
             ))
     return 0
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

@@ -48,6 +48,7 @@ import sys
 from pathlib import Path
 
 import memory_dates as md
+from lib import hook_telemetry
 
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 SCHEMA_RE = re.compile(r"^schema\s*:\s*(.*?)\s*$", re.MULTILINE)
@@ -304,9 +305,6 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_file(args.path)
     mode = "staged" if args.staged else "all"
     return _scan(mode)
-
-
-from lib import hook_telemetry  # noqa: E402
 
 
 if __name__ == "__main__":

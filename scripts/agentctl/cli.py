@@ -2050,11 +2050,15 @@ def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bo
     GATE_LOG as a module global (not a captured default) so tests can monkeypatch
     cli.GATE_LOG and have this pick it up on the next call.
 
-    Every evaluation of every gate is written, including escalation_orphans,
-    frozen_stage and renorm_final, so a gate's block rate has a real denominator.
-    Each call also appends one engine row to the decision log (docs/operations/decision-telemetry.md)."""
-    _append_jsonl(config_root.decision_log(), hook_telemetry.decision_row(
-        f"engine:{gate}", "engine", "silent" if passed else "deny", state.session_id, layer="engine"))
+    Each call writes one line whether the gate passed or refused: escalation_orphans,
+    frozen_stage and renorm_final are called on every evaluation too, so a gate's
+    block rate has a real denominator. The call also appends one engine row to the
+    decision log (docs/operations/decision-telemetry.md)."""
+    try:
+        _append_jsonl(config_root.decision_log(), hook_telemetry.decision_row(
+            f"engine:{gate}", "engine", "silent" if passed else "deny", state.session_id, layer="engine"))
+    except Exception:
+        pass
     _append_jsonl(GATE_LOG, {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "session": state.session_id,
