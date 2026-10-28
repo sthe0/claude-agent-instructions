@@ -57,6 +57,16 @@ is re-parsed only when its transcript fingerprint (mtime_ns, size) or WALKER_VER
 append-only ledgers are read from a stored byte offset and rescanned when the
 file shrinks or its device/inode changes. The agentctl gate-log is never opened.
 The module reads transcripts, ledgers and agentctl state and never writes them.
+
+`aggregate` turns the per-session profiles into one decayed estimate per key. Session
+age weights are w = 2^(-age_days/half_life), age counted from the session's last
+timestamp; the half-life is the config.md row `time-profile-half-life-days`. The
+sampling unit is the session (tool calls inside one session are autocorrelated), so a
+key's per-session minutes are treated as weighted i.i.d. draws: n_eff = (sum w)^2 /
+sum w^2 (Kish), variance s^2 = sum w (x - mean)^2 / (V1 - V2/V1) (reliability
+weights), SE = sqrt(s^2 / n_eff). A share is a ratio of weighted sums, its SE the
+linearized one. Every estimate is built by `figure`, so it always carries
+{mean, se, n_eff}; se is None, never 0, where n_eff < 2 leaves the variance undefined.
 """
 from __future__ import annotations
 
@@ -67,10 +77,12 @@ import math
 import os
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
+from agentctl.config import CONFIG_MD, parse_config_md
 from lib import config_root, engine_session_binding, judge_ledger, shell_tokens, transcript_cost, transcript_turns
 
 SKIP_REASONS = ("empty", "no_timestamps", "unparseable")
@@ -82,6 +94,12 @@ WAIT_BACKGROUND = "wait:background"
 MODEL_GAP = "model:gap"
 MODEL_COMPACT = "model:compact"
 UNATTRIBUTED = "unattributed"
+
+KEY_PREFIXES = ("user:", "wait:", "model:", "tool:", "skill:", "mcp:", "hook:", "node:", "spawn:", "judge:")
+OVERLAY_PREFIXES = ("node:", "spawn:", "judge:")
+COUNT_FIELDS = ("n_eff", "sessions", "profiled", "half_life_days")
+CONFIG_PATH = CONFIG_MD
+HALF_LIFE_KEY = "time-profile-half-life-days"
 
 _TERMINATING_TYPES = frozenset({"assistant", "user", "attachment", "system"})
 _EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
@@ -890,3 +908,161 @@ def profile_all(
         (run.skipped if isinstance(result, Skipped) else run.profiles).append(result)
     run.reparsed = ctx.reparsed
     return run
+
+
+# ------------------------------------------------------------------------- aggregate
+
+_MS_PER_MINUTE = 60_000
+_MS_PER_DAY = 86_400_000
+_N_EFF_TOLERANCE = 1e-9
+_VARIABLE_PROGRAM_PREFIX = "tool:Bash:$"
+
+
+def half_life_days(config_path=None) -> float:
+    """The `time-profile-half-life-days` row of config.md; a missing or non-positive
+    row raises ValueError rather than falling back to a guessed value."""
+    constants = parse_config_md(Path(config_path) if config_path else CONFIG_PATH)
+    try:
+        value = float(constants[HALF_LIFE_KEY])
+    except (KeyError, ValueError):
+        raise ValueError(f"config.md row `{HALF_LIFE_KEY}` is missing or not a number") from None
+    if not value > 0 or not math.isfinite(value):
+        raise ValueError(f"config.md row `{HALF_LIFE_KEY}` must be a positive number, got {value}")
+    return value
+
+
+def _default_half_life() -> float:
+    return half_life_days()
+
+
+def _clock_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def figure(mean: float, se: float | None, n_eff: float) -> dict:
+    """The one constructor of an estimate."""
+    return {"mean": mean, "se": se, "n_eff": n_eff}
+
+
+def is_overlay(key: str) -> bool:
+    return key.startswith(OVERLAY_PREFIXES)
+
+
+def _estimate(weights: list, nums: list, dens: list | None = None) -> dict:
+    """Weighted mean of `nums` (dens=None) or ratio of weighted sums sum(w*num)/sum(w*den).
+
+    Entries with zero weight, or with a zero denominator (they say nothing about a ratio),
+    are dropped first. The SE is sqrt(s^2 / n_eff) with s^2 the reliability-weights
+    variance; for a ratio, of the residuals num - ratio*den, divided by the mean
+    denominator (the linearized ratio SE). It is None when n_eff < 2.
+    """
+    keep = [i for i, w in enumerate(weights) if w > 0 and (dens is None or dens[i] > 0)]
+    if not keep:
+        return figure(0.0, None, 0.0)
+    w = [weights[i] for i in keep]
+    x = [nums[i] for i in keep]
+    d = [1.0] * len(keep) if dens is None else [dens[i] for i in keep]
+    v1 = sum(w)
+    v2 = sum(wi * wi for wi in w)
+    n_eff = v1 * v1 / v2
+    den_mean = sum(wi * di for wi, di in zip(w, d)) / v1
+    ratio = sum(wi * xi for wi, xi in zip(w, x)) / v1 / den_mean
+    if n_eff < 2 - _N_EFF_TOLERANCE:
+        return figure(ratio, None, n_eff)
+    resid = [xi - ratio * di for xi, di in zip(x, d)]
+    centre = sum(wi * ri for wi, ri in zip(w, resid)) / v1
+    variance = sum(wi * (ri - centre) ** 2 for wi, ri in zip(w, resid)) / (v1 - v2 / v1)
+    return figure(ratio, math.sqrt(variance / n_eff) / den_mean, n_eff)
+
+
+@dataclass
+class Aggregate:
+    half_life_days: float
+    sessions: int
+    totals: dict
+    rows: list
+    children: list
+
+    def to_dict(self) -> dict:
+        return {
+            "half_life_days": self.half_life_days, "sessions": self.sessions,
+            "totals": self.totals, "rows": self.rows, "children": self.children,
+        }
+
+
+def _session_values(profile: SessionProfile, values: dict | None) -> dict:
+    replaced = values.get(profile.session_id) if values else None
+    cells = replaced if replaced is not None else {**profile.partition, **profile.overlays}
+    return {key: ms for key, ms in cells.items() if ms > 0}
+
+
+def aggregate(profiles, *, half_life_days=None, now_ms=None, values=None) -> Aggregate:
+    """Decayed estimates per key over the top-level sessions in `profiles`.
+
+    Child spawn sessions (`child_of` set) are left out of every top-level figure and
+    reported under their spawn kind in `children`. `values` maps a session_id to
+    replacement per-key ms (partition and overlay keys alike) in place of the profile's
+    own; the weights are unchanged, and the agent-active denominator is recomputed from
+    the replacement's `user:wait` and `wait:background`, while wall-clock stays
+    last_ts_ms - first_ts_ms.
+    """
+    half = half_life_days if half_life_days is not None else _default_half_life()
+    if not half > 0:
+        raise ValueError(f"half-life must be positive, got {half}")
+    now = now_ms if now_ms is not None else _clock_ms()
+
+    def weight(profile: SessionProfile) -> float:
+        age_days = max(0.0, (now - profile.last_ts_ms) / _MS_PER_DAY)
+        return 2.0 ** (-age_days / half)
+
+    top = [p for p in profiles if p.child_of is None]
+    kids = [p for p in profiles if p.child_of is not None]
+    result = Aggregate(half_life_days=half, sessions=len(top), totals={}, rows=[], children=_children(kids, weight))
+    if not top:
+        return result
+    weights = [weight(p) for p in top]
+    cells = [_session_values(p, values) for p in top]
+    wall = [float(p.last_ts_ms - p.first_ts_ms) for p in top]
+    active = [w - c.get(USER_WAIT, 0) - c.get(WAIT_BACKGROUND, 0) for w, c in zip(wall, cells)]
+    result.totals = {
+        "wall_minutes": _estimate(weights, [w / _MS_PER_MINUTE for w in wall]),
+        "active_minutes": _estimate(weights, [a / _MS_PER_MINUTE for a in active]),
+    }
+    for key in sorted({key for c in cells for key in c}):
+        ms = [c.get(key, 0) for c in cells]
+        present = [i for i, v in enumerate(ms) if v > 0]
+        result.rows.append({
+            "key": key,
+            "kind": "overlay" if is_overlay(key) else "partition",
+            "flag": "shell-variable-program" if key.startswith(_VARIABLE_PROGRAM_PREFIX) else None,
+            "minutes_per_session": _estimate(weights, [v / _MS_PER_MINUTE for v in ms]),
+            "minutes_when_present": _estimate(
+                [weights[i] for i in present], [ms[i] / _MS_PER_MINUTE for i in present]),
+            "occurrence_rate": _estimate(weights, [1.0 if v > 0 else 0.0 for v in ms]),
+            "share_of_wallclock": _estimate(weights, ms, wall),
+            "share_of_active": _estimate(weights, ms, active),
+        })
+    result.rows.sort(key=lambda r: (-r["minutes_per_session"]["mean"], r["key"]))
+    return result
+
+
+def _children(kids: list, weight) -> list:
+    by_kind: dict = {}
+    for kid in kids:
+        by_kind.setdefault(kid.kind, []).append(kid)
+    return [
+        {
+            "kind": kind, "sessions": len(group),
+            "wall_minutes": _estimate(
+                [weight(k) for k in group], [(k.last_ts_ms - k.first_ts_ms) / _MS_PER_MINUTE for k in group]),
+        }
+        for kind, group in sorted(by_kind.items())
+    ]
+
+
+def aggregate_by_sha(profiles, **kwargs) -> dict:
+    """`aggregate` per core_sha (None groups as "unknown"), over that sha's sessions only."""
+    groups: dict = {}
+    for profile in profiles:
+        groups.setdefault(profile.core_sha or "unknown", []).append(profile)
+    return {sha: aggregate(group, **kwargs) for sha, group in sorted(groups.items())}

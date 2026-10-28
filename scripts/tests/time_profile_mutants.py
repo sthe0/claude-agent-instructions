@@ -175,7 +175,23 @@ def _apply_human_origin_is_background(monkeypatch):
     monkeypatch.setattr(time_profile, "_is_non_human_origin", bool)
 
 
+def _apply_half_life_ignores_config(monkeypatch):
+    monkeypatch.setattr(time_profile, "half_life_days", lambda config_path=None: 7.0)
+
+
+def _apply_figure_without_n_eff(monkeypatch):
+    monkeypatch.setattr(time_profile, "figure", lambda mean, se, n_eff: {"mean": mean, "se": se})
+
+
 MUTANTS = {
+    "half_life_ignores_config": (
+        "the default half-life is 7 days whatever config.md says",
+        _apply_half_life_ignores_config,
+    ),
+    "figure_without_n_eff": (
+        "every estimate is built without its n_eff member",
+        _apply_figure_without_n_eff,
+    ),
     "human_origin_is_background": (
         "any truthy message origin, a human's included, counts as an injected message",
         _apply_human_origin_is_background,
