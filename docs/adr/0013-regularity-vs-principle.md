@@ -65,3 +65,43 @@ The global principle leaves were migrated in one change into approved regulariti
 - **Keep one kind and add a `kind:` tag.** Rejected: it types the distinction on the leaf without separating the refutation rules, and ADR-0004 already ruled out an is/ought tag on the principle.
 - **Make the regularity an experience leaf of higher generality.** Rejected: an experience leaf records one incident; a regularity is a cross-incident claim with its own refutation condition and sources.
 - **Ground project principles in regularities too.** Deferred: the project tier cannot hold global regularities without leaking identifiers, and the case route already covers the cross-tier link.
+
+## Amendment (2026-10-27) — the grounding norm
+
+This amendment keeps every decision above and refines it from primary sources and from the user's decisions of 2026-10-27 (the dossier decisions D-ADR, D-ONTO, D-PRESC, D-SK, D-GIVEN, D-GJ). It states what the code stages of the grounding-norm task enforce, so that a later reader does not undo a distinction as duplication.
+
+> **Language exception:** the sources below are in Russian. This section cites them by URL and renders their position in English; no Russian text is quoted.
+
+### (a) The bundle and its strict correspondence
+
+G.P. Shchedrovitsky, *Philosophy. Science. Methodology*, ch. 5 ([source](https://gtmarket.ru/library/basis/5484/5489)): methodical statements are prescriptions, not knowledge; yet a prescription functions together with knowledge, and the bundle of prescriptions and knowledge forms one whole, the method. The same author, *Programming of scientific research and development*, part II ch. 3 ([source](https://gtmarket.ru/library/basis/6473/6482)): a methodics is a kind of norm; regularities of nature set the conditions of an activity and limit its way, and knowledge enters the content of the way. The same author, *The natural and the artificial in semiotic systems*, 1967 ([source](https://gtmarket.ru/library/basis/3961/3965)): norms keep their constancy although conditions change, which leads to a conflict that is resolved by changing the norm.
+
+Consequence: a prescription is never grounded in another prescription; it rests on knowledge, and the bundle of prescriptions and knowledge is the unit. The engine therefore admits only knowledge in a stage's `[stage.principle].source`, and the link "prescription A rests on knowledge B" is a statement to be judged, not only resolved: the knowledge listed must correspond strictly to the prescription, neither a loose neighbour of it nor a partial cover. A refuted regularity changes the conditions under which the norm was constant, so the norm is revised (the conflict of the 1967 text).
+
+### (b) Three functions of reflection
+
+O.S. Anisimov, *Reflection. Methodology. Science* ([source](http://acmegroup.ru/node/289)): the research function of reflection serves the passage to the critical function and the normative function. Applied here: induction of a regularity from experience is the research function; testing a link and a ground is the critical function; writing or revising the prescription is the normative function. Refuting a prescription is therefore closed in three steps, in this order: (1) the research step establishes what the knowledge under it now says; (2) the critical step names the defect (the link or the ground); (3) the normative step revises or retires the prescription. A change that jumps to step 3 without 1 and 2 is the "if X then Y" thesis, which is rejected: a prescription is not the logical consequence of a fact.
+
+### (c) Experience as singular knowledge
+
+An experience leaf and a sanitized case are singular knowledge: one incident, one observation. They may stand as the source of a plan stage next to regularities, but they do not become a regularity by being cited; a regularity generalizes them (decision 1). An order quote that no regularity covers may be generalized into an order-derived regularity, shown in the plan's essence for the user to see.
+
+### (d) Ontology as a third ground kind
+
+Knowledge is not only regularities. Some leaves state a distinction (what counts as a stage, a norm, a difficulty) and not a claim about recurrence. These become `ontology/v1` leaves, referenced as `ontology:<slug>` (an ADR counts as one as well). Such a ground is refuted not by a contradicting observation but by the inadequacy of the distinction: the grounding judge asks whether the adequacy of the distinction holds for the case at hand.
+
+### (e) leaf/v1 is retired
+
+leaf/v1 is retired as a prescription form. Each existing leaf/v1 leaf is converted in place by a user-approved, judged table: a prescription becomes `principle/v1` grounded in regularities, knowledge becomes `regularity/v1`, a mixed leaf is split, an ontological leaf becomes `ontology/v1`. Every reference that resolved before still resolves, and the size ceilings hold. The decision is recorded here because a leaf kind that tags nothing about its refutation rule is exactly the conflation decision 1 removed.
+
+### (f) The given regularity
+
+System knowledge (facts about systems, processes and structure that the agent did not observe itself) converts to a given regularity: a `regularity/v1` leaf whose currency is presumed suspect. A given is an unverified given until a check has confirmed it; a plan that rests on one carries that status into the link judgment, and a stale or wrong given is a defect of the ground, not of the link.
+
+### (g) The project tier
+
+Decision 3 and the deferred alternative above are amended: the project memory gains a regularity area like the root. Project principles are grounded in project regularities, referenced as `project:regularity:<slug>`, and project experience is cited as singular knowledge. The global tier still reaches a project leaf only through a sanitized case.
+
+### (h) The grounding judge
+
+Resolving a reference proves that B exists, not that A rests on B. A model grounding judge applies a two-way counterfactual test to each link: refuting each listed B must force revising A, and refuting any B that A really depends on must reach A through the list. It names a link defect (irrelevant, insufficient, scope_mismatch, contradicting) apart from a defective ground (stale or wrong B, an unverified given, an inadequate distinction, knowledge that prescribes). The judge fails open, with a recorded reason, as the advisor does; a defect refuses the act unless the link is fixed or an override with a reason is recorded and shown in the essence. This follows the split of rule from perception: existence of the reference is a rule, relevance of the ground is judgment, and a lexical match never stands in for it.
