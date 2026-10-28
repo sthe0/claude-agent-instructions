@@ -67,8 +67,8 @@ that look covered are also made undeterminable:
 - **A line in which anything may run git.** The hook never returns an allow for such a line: it makes no decision
   (reason class `undeterminable`, message "the line runs git; the harness's static allow-list decides"), and never
   a deny on this basis. This holds for a git segment of any form, state and venue, covered, harness-allowed or
-  matched by a rule pattern, read-only or writing, and for any segment whose resolved or judge-named effects
-  include running git. *Functional ground:* git's execution surface is open-ended. A hook (`post-index-change`
+  matched by a rule pattern, read-only or writing, for pytest and the scripts of `scripts/script_effects.toml`,
+  and for any segment whose resolved or judge-named effects include a ref change. *Functional ground:* git's execution surface is open-ended. A hook (`post-index-change`
   runs even on `git status`), a program the config names (`core.fsmonitor`, `filter.*`, `diff.external`,
   `core.sshCommand`, `gpg.program`, an `alias` starting with `!`), repository discovery (`GIT_DIR`, a `.git` file,
   `safe.directory`), attributes, a hook framework reading a file of the worktree and pathspec magic each start
@@ -78,9 +78,17 @@ that look covered are also made undeterminable:
   What counts as "may run git" (`runs_git`), over the whole line and with no pattern matching on meaning: the word
   `git` (not part of a longer name: `digit`, `github`, `.gitignore` do not count) in the line or in any
   shell-unquoted token of it, so `g'i't`, `\git`, `/usr/bin/git`, `env git`, `command git`, `xargs git`,
-  `exec git`, `sh -c 'git ...'` and `git-upload-pack` all abstain; a segment whose resolved or judge-named
-  effects include a ref change (`VcsRefResource`), which is how a script or `make` target that the judge saw push
-  is caught; and opaque code (a `-c` operand, a heredoc body, a script file) in which the word `git` occurs. A
+  `exec git`, `sh -c 'git ...'` and `git-upload-pack` all abstain; a segment holding the word `pytest` or
+  naming a script of the registry (`land-branch.py`, `instruction-smoke-gate.py`: both run `git -C`, and pytest
+  runs this repository's tests, which start git and `conftest.py`); a segment whose resolved or judge-named
+  effects include a ref change (`VcsRefResource`), which is how a script or `make` target whose judged effects
+  include a ref change is caught; and opaque code (a `-c` operand, a heredoc body, a script file) in which the
+  word `git` occurs. The registry and pytest are matched by their tokens whether or not the resolver went on to
+  resolve them, so no per-entry exemption exists. An entry could be exempted only together with pinning of its
+  whole import closure, since the registry pins the entry file's sha256 and nothing it imports; that is out of
+  scope here. For the same reason an edited import or `conftest.py` can no longer ride a registry or pytest
+  allow: there is none. The resolver still resolves both, because the uncovered-write deny needs their
+  resources; only the allow is withheld. A
   computed command word (`$X push`) never gets this far: the resolver leaves such a segment undeterminable. The
   rule applies once every segment is otherwise covered, so it never hides an uncovered-write deny: `git push origin
   HEAD:refs/heads/main` and `git push origin feat && touch /outside/f` are still denied.
@@ -103,8 +111,9 @@ working directory after it is unknown. The judge calls of one hook call draw fro
 ## The decision log
 
 Every call appends one JSON row to `<state root>/resource-uses/<parent session>-<stage>.jsonl`:
-`{ts, tool, call_sha, decision, reason_class, resources, venue, matched}` (`call_sha` is the hash of the whole
-call text, not of one segment). `decision` is `allow`, `deny` or
+`{ts, tool, call_sha, decision, reason_class, resources, venue, matched, reason}` (`call_sha` is the hash of the
+whole call text, not of one segment; `reason` is the free-text cause of a no-decision row, e.g. the line-runs-git
+message or an error, and empty otherwise). `decision` is `allow`, `deny` or
 `none`. `reason_class` is one of:
 
 | reason_class | meaning |
@@ -135,11 +144,13 @@ line does not show, opaque code reads, and the parent scratchpad.
   if it were set, so it leaves the working directory unknown. `HOME` and `XDG_CONFIG_HOME` set only in the
   snapshot are a further residual of the same kind; the resolver reads the push configuration from the hook's own
   environment. A `GIT_*` variable no longer matters for an allow, since a line that runs git gets none.
-- **Git started by a program the line does not show (can yield an ALLOW).** `runs_git` reads the line, the effects
-  the resolver or the judge names and the code of an opaque segment. A script file that is not read as opaque code,
-  a `make` target, an alias or a binary that starts git without the line naming it, with no ref effect the judge
-  saw, is not modelled; it is held only to the environment blocker and its own coverage. The static allow-list of
-  the child stays the only guard for what such a program then runs.
+- **Git started by a program the line does not show (can yield an ALLOW).** `runs_git` reads the line, pytest and
+  the registry scripts, the effects the resolver or the judge names and the code of an opaque segment. What it does
+  not model is a program that is neither pytest nor a registry script and starts git without the line naming it: a
+  `make` target, an alias or a binary the line does not show, and a script file read as opaque code whose judged
+  effects name no ref change (the judge reports writes, so read-only git inside code it clears is invisible). Such a
+  segment is held only to the environment blocker and its own coverage. The static allow-list of the child stays the
+  only guard for what such a program then runs.
 - **Launch directory.** Project settings are read from `launch_dir` in the record (the directory the child was
   started in) and its worktree root, not from the hook's current directory; a record without it falls back to the
   cwd the hook sees.
@@ -175,7 +186,12 @@ sanctioned cases whose line runs git are listed in its `FALL_THROUGH` with the r
 `scripts/tests/e2e_resource_grant_hook.py` (`--dry-run` asserts the registration; `--live` is a root-only run) and
 the mutants named `hook-*` in `scripts/tests/resource_grant_mutation_control.py`, among them
 `hook-allows-a-covered-git-line` (the abstention removed) and `hook-git-ref-effect-ignored`,
-`hook-opaque-code-naming-git-ignored`, `hook-git-word-in-a-token-ignored` (a way the line can run git left unread).
+`hook-opaque-code-naming-git-ignored`, `hook-git-word-in-a-token-ignored` (a way the line can run git left unread),
+`hook-resolved-program-starting-git-ignored` (pytest or a registry script allowed on the resolver's resources) and
+`hook-git-abstention-has-no-message` (the abstention loses its `reason`, so any other undeterminable segment would
+satisfy the tests). The unit and replay tests assert that `reason` is the git abstention's message, not only that no
+decision was made. `plan-removed-runs-worktree-code-accepted` holds the load-time refusal of the removed
+`grants.runs_worktree_code` field (`test_stage_grants.py`).
 
 The replay patches the resolver's `git config` probe timeout (`_GIT_CONFIG_TIMEOUT_S`) and the timing constants
 it lists in `PATIENT_CONSTANTS` so a loaded machine does not turn a probe into an `undeterminable`. The deadline

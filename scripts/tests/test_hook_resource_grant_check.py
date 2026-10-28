@@ -22,7 +22,9 @@ from lib import config_root
 from test_resource_grant_replay import JudgeStub
 
 CONSTANTS = {"resource-grant-hook": "on", "resource-grant-hook-timeout-s": "20", "resource-grant-judge-timeout-s": "15"}
-ROW_FIELDS = {"ts", "tool", "call_sha", "decision", "reason_class", "resources", "venue", "matched"}
+ROW_FIELDS = {"ts", "tool", "call_sha", "decision", "reason_class", "resources", "venue", "matched", "reason"}
+RUNS_GIT_MESSAGE = support.load_hook().RUNS_GIT_MESSAGE
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture(autouse=True)
@@ -278,8 +280,9 @@ def test_b3_the_state_root_comes_from_the_handoff_path(rig):
 
 def test_rule_pattern_covers_the_segment_it_matches(rig):
     child = rig.child(extra_patterns=["Bash(python3 -m pytest:*)"])
-    decision, row, _ = rig.bash(child, f"python3 -m pytest -q {rig.venue}/tests")
-    assert (decision, row["reason_class"], row["matched"]) == ("allow", "covered", ["Bash(python3 -m pytest:*)"])
+    result = rig.bash(child, f"python3 -m pytest -q {rig.venue}/tests")
+    assert undeterminable(result)
+    assert result[1]["matched"] == ["Bash(python3 -m pytest:*)"]
 
 
 def test_rule_pattern_is_matched_per_segment_not_per_call(rig):
@@ -466,8 +469,24 @@ def test_b4_a_python_variable_in_the_environment_makes_a_python_segment_undeterm
 # static allow-list decides. An uncovered write is still denied, whether or not the line runs git.
 
 def undeterminable(result):
+    """No decision, and the reason is the abstention for a line that runs git, not some other
+    undeterminable segment (a resolver probe timing out under load would otherwise pass as one)."""
     decision, row, answer = result
-    return (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
+    return (decision, answer, row["reason_class"], row["reason"]) == ("none", "", "undeterminable", RUNS_GIT_MESSAGE)
+
+
+def verdict_of(rig, child, command, judge=None):
+    payload = json.loads(child.payload("Bash", command=command))
+    verdict, _, _ = rig.hook.decide(payload, child.env, runner=judge or JudgeStub([]),
+                                    cache_dir=rig.tmp / "judge-cache", constants=CONSTANTS)
+    return verdict
+
+
+def install_registry_scripts(venue):
+    """The two scripts of `script_effects.toml` as the registry pins them, so the resolver resolves them."""
+    (venue / "scripts").mkdir(exist_ok=True)
+    for name in ("land-branch.py", "instruction-smoke-gate.py"):
+        (venue / "scripts" / name).write_bytes((SCRIPTS_DIR / name).read_bytes())
 
 
 def test_a_fully_covered_git_line_gets_no_decision(rig):
@@ -514,7 +533,8 @@ def test_every_spelling_that_names_git_gets_no_decision_even_when_a_rule_covers_
 @pytest.mark.parametrize("program", ["$PROG", "${PROG}", "`which prog`"])
 def test_a_computed_command_word_is_left_to_the_harness_even_when_a_rule_covers_it(rig, program):
     child = rig.child(allow=[f"Bash({program} push:*)"], extra_patterns=[f"Bash({program}:*)"])
-    assert undeterminable(rig.bash(child, f"{program} push origin feat")), program
+    decision, row, answer = rig.bash(child, f"{program} push origin feat")
+    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable"), program
 
 
 @pytest.mark.parametrize("line", ["echo digit > out.txt", "echo github.com > out.txt", "cat .gitignore > out.txt",
@@ -561,6 +581,50 @@ def test_an_uncovered_git_write_is_still_denied(rig):
     assert (decision, row["reason_class"]) == ("deny", "uncovered-write")
     decision, row, _ = rig.bash(child, f"git push origin feat && touch {rig.outside}/f")
     assert (decision, row["reason_class"]) == ("deny", "uncovered-write")
+
+
+REGISTRY_AND_PYTEST_LINES = [
+    "python3 scripts/instruction-smoke-gate.py check --remote-sha 0123456789abcdef",
+    "python3 scripts/instruction-smoke-gate.py pre-push origin x",
+    "python3 scripts/land-branch.py --check",
+    "python3 -m pytest scripts/tests/test_plan.py",
+    "pytest -q scripts/tests",
+]
+
+
+@pytest.mark.parametrize("line", REGISTRY_AND_PYTEST_LINES)
+def test_a_registry_script_or_pytest_line_gets_no_decision_though_the_resolver_covers_it(rig, line):
+    install_registry_scripts(rig.venue)
+    child = rig.child()
+    split = rig.hook.tool_contracts.resolve_segments(line, str(rig.venue), cdpath_unverified=True)
+    assert [seg.status for seg in split.segments] == ["resolved"], "the line must resolve, or this test pins nothing"
+    verdict = verdict_of(rig, child, line)
+    assert (verdict.decision, verdict.message) == ("none", RUNS_GIT_MESSAGE)
+    assert undeterminable(rig.bash(child, line)), line
+
+
+@pytest.mark.parametrize("line", ["python3 scripts/land-branch.py --check", "python3 scripts/instruction-smoke-gate.py pre-push o x"])
+def test_a_registry_script_is_held_back_by_its_token_even_when_its_digest_no_longer_matches(rig, line):
+    install_registry_scripts(rig.venue)
+    for name in ("land-branch.py", "instruction-smoke-gate.py"):
+        with open(rig.venue / "scripts" / name, "a") as handle:
+            handle.write("\n# edited\n")
+    judge = JudgeStub([{"kind": "file", "op": "write", "path": f"{rig.venue}/out.txt"}])
+    assert rig.hook.starts_registered_program(line, str(rig.venue))
+    assert verdict_of(rig, rig.child(), line, judge=judge).decision == "none"
+
+
+def test_a_registry_script_beside_a_covered_write_makes_the_line_abstain(rig):
+    install_registry_scripts(rig.venue)
+    child = rig.child()
+    assert rig.bash(child, f"echo x > {rig.venue}/a")[0] == "allow"
+    assert undeterminable(rig.bash(child, f"echo x > {rig.venue}/a && python3 scripts/instruction-smoke-gate.py pre-push o x"))
+
+
+def test_a_script_outside_the_registry_is_still_read_by_the_judge_and_allowed(rig):
+    (rig.venue / "tool.py").write_text("print(1)\n")
+    judge = JudgeStub([{"kind": "file", "op": "write", "path": f"{rig.venue}/out.txt"}])
+    assert rig.bash(rig.child(), f"python3 {rig.venue}/tool.py", judge=judge)[0] == "allow"
 
 
 def test_the_names_git_test_reads_the_word_not_a_name_containing_it(hook):
@@ -667,7 +731,8 @@ def test_b10_a_git_variable_stops_python(rig):
     judge = JudgeStub([{"kind": "file", "op": "write", "path": f"{rig.venue}/o"}])
     python = f"python3 {rig.venue}/tool.py"
     assert rig.bash(child, python, judge=judge)[0] == "allow"
-    assert undeterminable(rig.bash(child, python, judge=judge, env={**child.env, "GIT_DIR": str(rig.outside)}))
+    decision, row, answer = rig.bash(child, python, judge=judge, env={**child.env, "GIT_DIR": str(rig.outside)})
+    assert (decision, answer, row["reason_class"]) == ("none", "", "undeterminable")
     assert rig.bash(child, f"echo x > {rig.venue}/f", env={**child.env, "GIT_DIR": str(rig.outside)})[0] == "allow"
 
 

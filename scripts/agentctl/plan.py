@@ -411,6 +411,10 @@ def _parse_stage_grants(raw: object, context: str, *, strict: bool) -> "StageGra
         raise PlanError(
             f"{context}: grants.permission_mode is not a supported grant field — refused"
         )
+    if "runs_worktree_code" in raw:
+        raise PlanError(
+            f"{context}: grants.runs_worktree_code was removed (the resource-grant hook never allows a line that may run git) — refused"
+        )
     stage_grants = StageGrants(allow=allow, add_dirs=add_dirs)
     if strict:
         try:

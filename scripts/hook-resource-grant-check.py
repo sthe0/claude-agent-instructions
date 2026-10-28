@@ -21,7 +21,8 @@ Decisions (Bash):
          only inside the record's resources or the parent scratchpad. A segment that reads an environment
          variable the hook cannot check against the Bash shell (CDPATH, GIT_*, PYTHON*) is not covered. A line
          in which anything may run git (the word in the line or in any unquoted token of it, a computed
-         command word, an effect on a ref, git named in opaque code) is never allowed, however covered:
+         command word, pytest or a `script_effects.toml` script, an effect on a ref, git named in opaque
+         code) is never allowed, however covered:
          what git executes (hooks, config programs, repository discovery, pathspec magic) is open-ended, so
          no state of the repository is verifiable. It gets no decision and the harness's static allow-list
          decides, which already covers the git an executor needs.
@@ -43,8 +44,9 @@ Every call appends one row to `<state_root>/resource-uses/<parent_session>-<stag
 
 Residuals that can still yield an ALLOW, named in docs/operations/resource-grant-hook.md: the hook sees its
 own process environment, not the Bash tool's shell snapshot, so a GIT_* or PYTHON* value set only there is
-invisible; a hook or filter that runs a file of the worktree by path runs whatever the child wrote there; the
-parent scratchpad is recognised by path layout.
+invisible; the parent scratchpad is recognised by path layout; opaque code the judge clears may still run
+read-only git (the judge reports writes only); and a program that is neither pytest nor a registry script
+but starts git without the line saying so (a `make` target, an alias, a binary) is not seen.
 """
 from __future__ import annotations
 
@@ -60,7 +62,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agentctl import advisor, code_effects, resources, segment_resolver, tool_contracts  # noqa: E402
+from agentctl import advisor, code_effects, resources, script_effects, segment_resolver, tool_contracts  # noqa: E402
 from agentctl import config as agentctl_config  # noqa: E402
 from agentctl.norm_handoff import NORM_HANDOFF_ENV, state_root_of, verify_env_value  # noqa: E402
 from agentctl.store import safe_session_id  # noqa: E402
@@ -106,6 +108,8 @@ SETTINGS_NAMES = ("settings.json", "settings.local.json")
 RULE_UNSAFE_CHARS = frozenset("<>`$\n\r;&|")
 GLOB_CHARS = frozenset("*?[")
 RUNS_GIT_MESSAGE = "the line runs git; the harness's static allow-list decides"
+#: Words that name pytest: a segment holding one runs a test suite, which starts git and runs conftest code.
+PYTEST_PROGRAMS = frozenset({"pytest", "py.test"})
 
 ALLOW, DENY, NONE = "allow", "deny", "none"
 COVERED, UNCOVERED, UNDETERMINABLE = "covered", "uncovered", "undeterminable"
@@ -211,6 +215,7 @@ def _row(tool: str, text: str, verdict: Verdict) -> dict:
         "resources": verdict.resources,
         "venue": verdict.venue,
         "matched": verdict.matched,
+        "reason": verdict.message if verdict.decision == NONE else "",
     }
 
 
@@ -474,7 +479,8 @@ def _program(text: str) -> str:
 def names_git(text: str) -> bool:
     """Whether `text` holds the word `git` (`/usr/bin/git`, `git-upload-pack`, `--git-dir`, `x=git`) and not
     only a name that contains it (`.git`, `.gitignore`, `github`). Matching more than git itself only costs
-    an allow, so the test errs toward the word."""
+    an allow, so the test errs toward the word. A program-identity test on fixed text, not a reading of
+    meaning; the lexical-meaning inventory enumerates regex calls and does not see a `str.find`."""
     start = 0
     while (at := text.find("git", start)) >= 0:
         before = text[at - 1] if at else " "
@@ -485,18 +491,39 @@ def names_git(text: str) -> bool:
     return False
 
 
+def starts_registered_program(text: str, venue: str) -> bool:
+    """Whether a segment may run pytest or a script of the `script_effects.toml` registry. Both start git
+    inside (the registered scripts run `git -C`; the tests of this repository run it all the time), and the
+    registry pins only the entry file, not what it imports, so neither is held to resources alone. Fail-closed
+    over the segment's tokens: any word that is `pytest` or names a registry script counts, whether or not the
+    resolver went on to resolve it. A registry that cannot be loaded counts as a match."""
+    tokens = _tokens(text)
+    if tokens is None:
+        return True
+    try:
+        table = script_effects.load_script_effects_table()
+        return any(
+            os.path.basename(token) in PYTEST_PROGRAMS or script_effects.registered_entry(token, venue, table=table) is not None
+            for token in tokens
+        )
+    except Exception:  # noqa: BLE001 - an unreadable registry must not become an allow
+        return True
+
+
 def runs_git(command: str, segments: list, verdicts: list) -> bool:
     """Whether any part of a Bash line may start git. The hook never allows such a line: what git executes
     (hooks, config programs, repository discovery, pathspec magic) is open-ended, so no state of the
-    repository can be verified as safe. Tested as a closed-world abstention, over the whole line: the word
-    `git` in the line or in any shell-unquoted token of it (`g'i't`, `\\git`), a resolved or judge-named
-    effect on a ref, or the word in the code of an opaque segment. A computed command word (`$X push`)
-    never reaches here: the resolver leaves such a segment undeterminable. A program that starts git
-    without the line saying so (a script, `make`) is not seen."""
+    repository can be verified as safe. Tested over the whole line: the word `git` in the line or in any
+    shell-unquoted token of it (`g'i't`, `\\git`), a segment that is pytest or a registry script, a resolved
+    or judge-named effect on a ref, or the word in the code of an opaque segment. A computed command word
+    (`$X push`) never reaches here: the resolver leaves such a segment undeterminable. What this does not
+    model is named under Residuals in docs/operations/resource-grant-hook.md."""
     unquoted = _tokens(command) or []
     if names_git(command) or any(names_git(token) for token in unquoted):
         return True
     for segment, verdict in zip(segments, verdicts):
+        if starts_registered_program(segment.text, verdict.venue):
+            return True
         if any(isinstance(r, resources.VcsRefResource) for r in verdict.changed):
             return True
         if verdict.opaque:

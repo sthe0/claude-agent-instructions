@@ -526,6 +526,17 @@ def test_load_plan_refuses_declared_write_add_dir_on_home(fixtures_dir, tmp_path
         plan_mod.load_plan(plan_path)
 
 
+@pytest.mark.parametrize("value", ["true", "false"])
+def test_load_plan_refuses_a_plan_that_still_names_the_removed_runs_worktree_code_field(fixtures_dir, tmp_path, value):
+    plan_path = _write_plan_with_grants_block(
+        fixtures_dir, tmp_path,
+        f"[stage.grants]\nruns_worktree_code = {value}\n",
+        "plan_removed_runs_worktree_code.toml",
+    )
+    with pytest.raises(plan_mod.PlanError, match="runs_worktree_code was removed"):
+        plan_mod.load_plan(plan_path)
+
+
 def test_diff_plans_classifies_declared_grants_only_change_as_substantive(fixtures_dir, tmp_path):
     """(#6a) Two plans that are otherwise identical, differing ONLY by a
     declared `[stage.grants]` block added to stage 1, must classify as

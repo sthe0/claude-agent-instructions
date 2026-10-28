@@ -163,6 +163,8 @@ def expected_decision(case):
 def test_case_through_the_hook(case, world, tmp_path, hook, spawn):
     decision, row, answer = replay(case, world, tmp_path, hook, spawn)
     assert decision == expected_decision(case), (case["id"], row)
+    if FALL_THROUGH.get(case["id"]) == RUNS_GIT:
+        assert row["reason"] == hook.RUNS_GIT_MESSAGE, (case["id"], row)
     if case.get("allowed_by"):
         assert decision != "deny", "a call the harness already allows must never be denied"
     if decision == "deny":

@@ -899,6 +899,24 @@ CATALOGUE: "dict[str, Mutant]" = {
         "    if names_git(command):\n",
         "a quoted or escaped spelling of git (`g'i't`, `\\git`) is not unquoted before the line is read for git",
     ),
+    "hook-resolved-program-starting-git-ignored": Mutant(
+        HOOK,
+        "        if starts_registered_program(segment.text, verdict.venue):\n            return True\n",
+        "",
+        "pytest or a script_effects.toml script, whose resolver covers it with resources alone, is allowed though it starts git inside",
+    ),
+    "hook-git-abstention-has-no-message": Mutant(
+        HOOK,
+        "            return Verdict(NONE, UNDETERMINABLE, message=RUNS_GIT_MESSAGE, **base)\n",
+        "            return Verdict(NONE, UNDETERMINABLE, **base)\n",
+        "the abstention for a line that runs git carries no reason, so it cannot be told from any other undeterminable segment",
+    ),
+    "plan-removed-runs-worktree-code-accepted": Mutant(
+        PLAN,
+        '    if "runs_worktree_code" in raw:\n',
+        "    if False:\n",
+        "a plan still naming the removed grants.runs_worktree_code field loads silently",
+    ),
     "hook-judge-child-guard-removed": Mutant(
         HOOK,
         "    if os.environ.get(JUDGE_CHILD_ENV_VAR):\n        return 0\n",
