@@ -420,11 +420,14 @@ def test_report_on_an_empty_profile_state_says_so_and_raises_nothing(tmp_path, m
     report = Report(tmp_path, monkeypatch, [])
     extra = ["--time-profile-state", str(report.state)] if flag else []
 
+    status, text = ("empty", "No sessions are profiled") if flag else (
+        "not-requested", "Time profile not read; pass --time-profile-state")
+
     payload = report.json(capsys, *extra)
-    assert payload["time_sinks"] == []
+    assert payload["time_sinks"] == [] and payload["time_sinks_status"] == status
     assert {r["minutes_source"] for r in payload["loss"]} == {"guess"}
     md = report.run(capsys, *extra)
-    assert "## Where the time goes" in md and "No sessions are profiled" in md
+    assert "## Where the time goes" in md and text in md
 
 
 def test_report_without_a_profile_cache_does_not_profile(tmp_path, monkeypatch, capsys):
@@ -435,13 +438,29 @@ def test_report_without_a_profile_cache_does_not_profile(tmp_path, monkeypatch, 
         raise AssertionError("a cold report must not start a profiling pass")
 
     monkeypatch.setattr(scan.time_profile, "profile_all", forbidden)
-    assert report.json(capsys, "--time-profile-state", str(report.state))["time_sinks"] == []
+    payload = report.json(capsys, "--time-profile-state", str(report.state))
+    assert payload["time_sinks"] == [] and payload["time_sinks_status"] == "no-cache"
+    assert "No profile cache found" in report.run(capsys, "--time-profile-state", str(report.state))
+
+
+def test_an_unreadable_profile_says_so_instead_of_claiming_no_sessions(tmp_path, monkeypatch, capsys):
+    report = Report(tmp_path, monkeypatch, equal_weight_sessions())
+
+    def broken(*_a, **_k):
+        raise ValueError("corrupt cache")
+
+    monkeypatch.setattr(scan.time_profile, "profile_all", broken)
+    payload = report.json(capsys, "--time-profile-state", str(report.state))
+    assert payload["time_sinks"] == [] and payload["time_sinks_status"] == "error"
+    md = report.run(capsys, "--time-profile-state", str(report.state))
+    assert "could not be read" in md and "No sessions are profiled" not in md
 
 
 def test_a_bare_time_profile_state_flag_means_the_default_directory(tmp_path, monkeypatch, capsys):
     seen = []
     monkeypatch.setenv("TIME_PROFILE_STATE_DIR", str(tmp_path / "default-state"))
-    monkeypatch.setattr(scan, "_time_profile_run", lambda state_dir: seen.append(state_dir))
+    monkeypatch.setattr(
+        scan, "_time_profile_run", lambda state_dir: seen.append(state_dir) or (None, "not-requested"))
     store = str(tmp_path / "findings.jsonl")
 
     assert scan.main(["report", "--store", store, "--time-profile-state", "--format", "json"]) == 0
