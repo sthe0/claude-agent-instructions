@@ -498,9 +498,93 @@ def _measurement_current(item: Any) -> bool:
     return digest is None or digest == signatures_digest(getattr(item, "signatures", ()) or ())
 
 
-def _loss_ready(item: Any) -> bool:
+_MEASURED_MIN_N_EFF = 2 - 1e-9
+_MS_PER_DAY = 86_400_000
+
+Measured = Mapping[str, "tuple[float, float | None, float]"]
+
+
+def measured_minutes(rows: Iterable[Mapping]) -> "dict[str, tuple[float, float | None, float]]":
+    """{key: (mean, se, n_eff)} of the decayed conditional minutes per occurrence, from the
+    rows of a time-profile aggregate."""
+    out: "dict[str, tuple[float, float | None, float]]" = {}
+    for row in rows:
+        fig = row["minutes_when_present"]
+        out[row["key"]] = (fig["mean"], fig["se"], fig["n_eff"])
+    return out
+
+
+def _measured_for(item: Any, measured: "Measured | None") -> "tuple[str, float, float, float] | None":
+    """(mechanism, mean, se, n_eff) when the item's mechanism has a measurement with a defined
+    error; None sends the item back to its guessed minutes."""
+    key = getattr(item, "mechanism", "") or ""
+    figure = measured.get(key) if measured and key else None
+    if figure is None:
+        return None
+    mean, se, n_eff = figure
+    if se is None or n_eff < _MEASURED_MIN_N_EFF or not mean > 0:
+        return None
+    return key, mean, se, n_eff
+
+
+def _loss_ready(item: Any, measured: "Measured | None" = None) -> bool:
     minutes = getattr(item, "minutes_per_occurrence", None)
-    return bool(getattr(item, "signatures", ())) and bool(minutes) and _measurement_current(item)
+    has_minutes = bool(minutes) or _measured_for(item, measured) is not None
+    return bool(getattr(item, "signatures", ())) and has_minutes and _measurement_current(item)
+
+
+def _member_minutes(item: Any, measured: "Measured | None") -> float:
+    figure = _measured_for(item, measured)
+    return figure[1] if figure else float(item.minutes_per_occurrence)
+
+
+def _minutes_source(ready: "Sequence[tuple[str, Any]]", measured: "Measured | None") -> str:
+    """`measured` only when every ready member is, `mixed` when some are, else `guess`."""
+    count = sum(_measured_for(it, measured) is not None for _r, it in ready)
+    if count == 0:
+        return "guess"
+    return "measured" if count == len(ready) else "mixed"
+
+
+def _measured_text(figure: "tuple[str, float, float, float]") -> str:
+    key, mean, se, n_eff = figure
+    return (
+        f"measured {key} {mean:.3g} +/- {se:.3g} min/occurrence "
+        f"(decayed, n_eff {n_eff:.1f}; whole-mechanism time, an upper bound on removable loss)"
+    )
+
+
+def time_sinks(agg: Any, profiles: Iterable[Any], keys: Iterable[str]) -> "list[dict]":
+    """One row per key of `keys`, in that order: decayed minutes per session +/- SE, share of
+    agent-active time, and the dominant Core sha.
+
+    The dominant sha is the one with the largest summed decay weight over the top-level
+    sessions in which the key occurs, a tie going to the most recent session. The weight is
+    the aggregate's own: 2^(-age_days / half_life) from the session's last_ts_ms to `agg.now_ms`."""
+    rows = {r["key"]: r for r in agg.rows}
+    top = [p for p in profiles if p.child_of is None]
+
+    def weight(profile: Any) -> float:
+        age_days = max(0.0, (agg.now_ms - profile.last_ts_ms) / _MS_PER_DAY)
+        return 2.0 ** (-age_days / agg.half_life_days)
+
+    def dominant_sha(key: str) -> str:
+        by_sha: "dict[str, list]" = {}
+        for p in top:
+            if {**p.partition, **p.overlays}.get(key, 0) > 0:
+                entry = by_sha.setdefault(p.core_sha or "unknown", [0.0, 0])
+                entry[0] += weight(p)
+                entry[1] = max(entry[1], p.last_ts_ms)
+        return max(by_sha, key=lambda sha: tuple(by_sha[sha]))
+
+    out: "list[dict]" = []
+    for key in keys:
+        fig = rows[key]["minutes_per_session"]
+        out.append({
+            "key": key, "mean": fig["mean"], "se": fig["se"], "n_eff": fig["n_eff"],
+            "share_of_active": rows[key]["share_of_active"], "core_sha": dominant_sha(key),
+        })
+    return out
 
 
 def _silent_ready(item: Any) -> bool:
@@ -516,7 +600,8 @@ def _member_sessions(ref: str, item: Any) -> "frozenset[str]":
 
 
 def _basis(
-    members: "Sequence[tuple[str, Any]]", figures: LossFigures, window_days: int, uncounted: int
+    members: "Sequence[tuple[str, Any]]", figures: LossFigures, window_days: int, uncounted: int,
+    measured: "Measured | None" = None,
 ) -> str:
     if len(members) == 1:
         ref, item = members[0]
@@ -527,11 +612,15 @@ def _basis(
             precision_text = f"precision {p:.2f}{sampled}"
         else:
             precision_text = "precision unjudged (upper bound)"
-        return (
-            f"{figures.sessions_hit} session(s) in {window_days}d x "
-            f"{getattr(item, 'minutes_per_occurrence', 0):g} min/occurrence "
-            f"({getattr(item, 'minutes_basis', '') or 'no basis recorded'}); {precision_text}"
-        )
+        figure = _measured_for(item, measured)
+        if figure:
+            minutes_text = _measured_text(figure)
+        else:
+            minutes_text = (
+                f"{getattr(item, 'minutes_per_occurrence', 0):g} min/occurrence "
+                f"({getattr(item, 'minutes_basis', '') or 'no basis recorded'})"
+            )
+        return f"{figures.sessions_hit} session(s) in {window_days}d x {minutes_text}; {precision_text}"
     unjudged = [r for r, it in members if not effective_precision(it)[1]]
     text = (
         f"union of {len(members)} members' sessions ({figures.sessions_hit} in {window_days}d), "
@@ -541,6 +630,9 @@ def _basis(
         text += "; precision unjudged (upper bound) for " + ", ".join(unjudged)
     if uncounted:
         text += f"; {uncounted} member(s) without a measurement not counted"
+    figures_of = [f for f in (_measured_for(it, measured) for _r, it in members) if f]
+    if figures_of:
+        text += "; " + "; ".join(_measured_text(f) for f in figures_of)
     return text
 
 
@@ -548,13 +640,17 @@ def _unit_tie(units: "Sequence[tuple[str, Any]]") -> tuple:
     return min(_tie_break(it, ref) for ref, it in units)
 
 
-def build_lanes(items: "Mapping[str, Any]") -> dict:
+def build_lanes(items: "Mapping[str, Any]", measured: "Measured | None" = None) -> dict:
     """Partition the open board items into the loss, silent and awaiting lanes, each ordered.
 
     Every item lands in exactly one lane, in exactly one row. Family members (shared
     `family` id) form one unit: the unit's lane is decided by its best member, its loss is
     computed once over the union of its members' sessions, and it is one row. Rows carry
-    only dicts; the ordering key is internal."""
+    only dicts; the ordering key is internal.
+
+    `measured` maps a time-profile key to (mean, se, n_eff) of its decayed conditional
+    minutes per occurrence; an item whose `mechanism` is in it with n_eff >= 2 charges that
+    mean instead of its guessed minutes, and is loss-ready without a guess."""
     units: "dict[str, list[tuple[str, Any]]]" = {}
     for ref, item in items.items():
         family = getattr(item, "family", "") or ""
@@ -564,7 +660,7 @@ def build_lanes(items: "Mapping[str, Any]") -> dict:
     silent_units: "list[tuple[str, list]]" = []
     awaiting: "list[tuple[str, Any]]" = []
     for unit_id, members in units.items():
-        if any(_loss_ready(it) for _r, it in members):
+        if any(_loss_ready(it, measured) for _r, it in members):
             loss_units.append((unit_id, members))
         elif any(_silent_ready(it) for _r, it in members):
             silent_units.append((unit_id, members))
@@ -584,7 +680,7 @@ def build_lanes(items: "Mapping[str, Any]") -> dict:
     loss_rows: "dict[str, dict]" = {}
     loss_sort: "dict[str, tuple]" = {}
     for unit_id, members in loss_units:
-        ready = [(r, it) for r, it in members if _loss_ready(it)]
+        ready = [(r, it) for r, it in members if _loss_ready(it, measured)]
         window_days = max(
             int(it.loss_measurement.get("window_days") or DEFAULT_WINDOW_DAYS) for _r, it in ready
         )
@@ -592,7 +688,7 @@ def build_lanes(items: "Mapping[str, Any]") -> dict:
             [
                 Member(
                     r, _member_sessions(r, it), effective_precision(it)[0],
-                    float(it.minutes_per_occurrence),
+                    _member_minutes(it, measured),
                 )
                 for r, it in ready
             ],
@@ -612,7 +708,8 @@ def build_lanes(items: "Mapping[str, Any]") -> dict:
             "sessions_hit": figures.sessions_hit,
             "sessions_est": figures.sessions_est,
             "min_per_occurrence": figures.min_per_occurrence,
-            "basis": _basis(ready, figures, window_days, len(members) - len(ready)),
+            "minutes_source": _minutes_source(ready, measured),
+            "basis": _basis(ready, figures, window_days, len(members) - len(ready), measured),
             "fix_cost": fix if fix in _FIX_COST_RANK else "",
             "window_days": window_days,
         }

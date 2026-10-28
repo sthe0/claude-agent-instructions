@@ -10,7 +10,8 @@ exit 4, so a typo or a renamed hook cannot read as "the tests caught it".
 
 Each mutant names the suite that must catch it: the aggregation mutants
 (AGGREGATE_MUTANTS) belong to test_time_profile_aggregate.py, the uncertainty mutants
-(UNCERTAINTY_MUTANTS) to test_time_profile_uncertainty.py, all others to
+(UNCERTAINTY_MUTANTS) to test_time_profile_uncertainty.py, the improvement-scan mutants
+(IMPROVEMENT_SCAN_MUTANTS) to test_improvement_scan_time.py, all others to
 test_time_profile_extract.py; see suite_for().
 
 Extractor mutants are pure transforms over the extractor's own results, and a `Skipped`
@@ -24,6 +25,7 @@ import os
 
 import pytest
 
+import improvement_scan_loss
 from lib import time_profile, time_profile_uncertainty
 from lib.agent_report import time_profile as view
 
@@ -212,7 +214,26 @@ def _apply_render_drops_share(monkeypatch):
     monkeypatch.setattr(view, "render_uncertainty_md", md_without_share)
 
 
+def _apply_ignore_measured(monkeypatch):
+    build_lanes = improvement_scan_loss.build_lanes
+    monkeypatch.setattr(
+        improvement_scan_loss, "build_lanes", lambda items, measured=None: build_lanes(items)
+    )
+
+
+def _apply_drop_time_sinks(monkeypatch):
+    monkeypatch.setattr(improvement_scan_loss, "time_sinks", lambda agg, profiles, keys: [])
+
+
 MUTANTS = {
+    "ignore_measured": (
+        "the loss lane charges every item its guessed minutes, whatever the profile measured",
+        _apply_ignore_measured,
+    ),
+    "drop_time_sinks": (
+        "the report's 'Where the time goes' section has no rows",
+        _apply_drop_time_sinks,
+    ),
     "no_widening": (
         "AMBIGUITY_SOURCES is empty, so every reconstruction interval collapses to the point estimate",
         _apply_no_widening,
@@ -313,11 +334,14 @@ MUTANTS = {
 
 AGGREGATE_MUTANTS = frozenset({"half_life_ignores_config", "figure_without_n_eff"})
 UNCERTAINTY_MUTANTS = frozenset({"no_widening", "render_drops_share"})
-assert AGGREGATE_MUTANTS | UNCERTAINTY_MUTANTS <= set(MUTANTS)
+IMPROVEMENT_SCAN_MUTANTS = frozenset({"ignore_measured", "drop_time_sinks"})
+assert AGGREGATE_MUTANTS | UNCERTAINTY_MUTANTS | IMPROVEMENT_SCAN_MUTANTS <= set(MUTANTS)
 
 
 def suite_for(mutant: str) -> str:
     """The test file that must fail under `mutant`."""
+    if mutant in IMPROVEMENT_SCAN_MUTANTS:
+        return "test_improvement_scan_time.py"
     if mutant in UNCERTAINTY_MUTANTS:
         return "test_time_profile_uncertainty.py"
     return "test_time_profile_aggregate.py" if mutant in AGGREGATE_MUTANTS else "test_time_profile_extract.py"
