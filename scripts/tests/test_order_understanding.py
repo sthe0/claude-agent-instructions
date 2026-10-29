@@ -10,15 +10,17 @@ Four claims, each pinned in the direction that could fail:
   `order_understanding_completeness_violations`;
 * an order stating none of it keeps the exact keys the BASE commit computes for it. The
   golden is not a literal copied out of the new code: the base tree is extracted with
-  `git archive` and asked, so "unchanged" is a re-runnable comparison.
+  `git archive` and asked, so "unchanged" is a re-runnable comparison. The base must be an
+  ancestor of HEAD and must hold neither `Proposal` nor `understanding_digest`.
 
 A test earns trust only when it goes red on a real mutation, so `order_agreement_mutants`
-plants four defects and `test_every_mutant_is_killed` re-runs this file under each and
+plants six defects against this file and `test_every_mutant_is_killed` re-runs this file under each and
 asserts pytest exit 1 and the intended test among the failures. Every call into the code a
 mutant replaces goes through its module (`plan_mod.`, `submission.`), never a by-name import.
 """
 from __future__ import annotations
 
+import argparse
 import copy
 import inspect
 import io
@@ -31,13 +33,16 @@ from pathlib import Path
 
 import pytest
 
+from agentctl import cli
 from agentctl import plan as plan_mod
 from agentctl import submission
+from agentctl.store import FileStateStore
 from agentctl.plan import PlanError, diff_plans, load_order_draft, load_plan, order_place, order_scope
 from agentctl.state import PROPOSAL_VERDICTS, Constraint, Order, Proposal
 from agentctl.submission import _ORDER_ABSENT, submission_violations, validate_submission
 from order_agreement_mutants import ENV, MUTANTS, USAGE_ERROR, apply_active_mutant
 from test_meta_order import _write_plan
+from test_order_phase import _draft as _order_draft
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -427,6 +432,42 @@ def test_seam_refuses_an_ill_formed_table(tmp_path, what, extra, expected):
     assert any(expected in p for p in problems), (what, problems)
 
 
+_PROPOSAL_LINE = (
+    'proposals = [{{ id = "P1", text = "tag releases automatically", verdict = "{verdict}", '
+    'critique = "cheap, reversible", against = {against} }}]'
+)
+
+
+def _order_submit(tmp_path, monkeypatch, **proposal):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    store = FileStateStore(tmp_path / "agentctl" / "state")
+    cli.cmd_start(argparse.Namespace(session="s", task="od", goal="g", done_criterion="dc",
+                                     criterion_type="measurable", recursion_depth=0), store=store)
+    fields = {"verdict": "adopt", "against": '["R1"]', **proposal}
+    draft = _order_draft(tmp_path, replace={"proposals": _PROPOSAL_LINE.format(**fields)})
+    d = cli.cmd_order_submit(argparse.Namespace(session="s", plan=str(draft)), store=store)
+    return d, store.load("s")
+
+
+def test_order_submit_accepts_a_well_formed_proposal(tmp_path, monkeypatch):
+    d, state = _order_submit(tmp_path, monkeypatch)
+
+    assert d.ok, d.detail
+    assert state.order_draft_path and state.order_draft_sha256
+
+
+@pytest.mark.parametrize("proposal, expected", [
+    ({"verdict": "maybe"}, "verdict outside adopt/adapt/reject"),
+    ({"against": '["R9"]'}, "P1->R9"),
+])
+def test_order_submit_refuses_a_malformed_proposal_and_records_nothing(
+        tmp_path, monkeypatch, proposal, expected):
+    d, state = _order_submit(tmp_path, monkeypatch, **proposal)
+
+    assert d.ok is False and any(expected in p for p in d.data["problems"]), d.detail
+    assert not state.order_draft_path and not state.order_draft_sha256
+
+
 def test_a_requirement_id_repeated_among_requirements_is_not_reported_twice(tmp_path):
     doc = _doc(tmp_path, 'requirements = [{ id = "R1", text = "a" }, { id = "R1", text = "b" }]\n',
                omit=("requirements",))
@@ -606,6 +647,27 @@ def base_scripts_dir(tmp_path_factory):
     return root / "scripts"
 
 
+def test_the_base_commit_is_an_ancestor_of_head():
+    """A base that is not in this branch's history compares against nothing the branch grew from."""
+    proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "merge-base", "--is-ancestor", ORDER_AGREEMENT_BASE, "HEAD"],
+        capture_output=True,
+    )
+
+    assert proc.returncode == 0, (proc.returncode, proc.stderr.decode(errors="replace")[:200])
+
+
+def test_the_base_tree_predates_the_understanding(base_scripts_dir):
+    """The golden is only a golden if the base holds no trace of what is being compared."""
+    sources = [p for p in (base_scripts_dir / "agentctl").rglob("*.py")]
+    assert sources, "the base archive holds no engine"
+
+    for needle in ("Proposal", "understanding_digest"):
+        holders = [str(p.relative_to(base_scripts_dir)) for p in sources
+                   if needle in p.read_text(encoding="utf-8", errors="replace")]
+        assert holders == [], (needle, holders[:5])
+
+
 @pytest.mark.parametrize("omit", [(), ("order",)], ids=["with-order", "order-less"])
 def test_an_order_without_the_understanding_keeps_its_base_keys(tmp_path, base_scripts_dir, omit):
     path = _write_plan(tmp_path / "golden.toml", omit=omit)
@@ -626,6 +688,8 @@ _KILLERS = {
     "digest_ignores_constraints": "test_digest_covers_every_part",
     "completeness_unchecked": "test_completeness_reports_an_absent_activity_and_difficulty",
     "place_contributes_when_empty": "test_empty_understanding_adds_no_member_to_place_or_scope",
+    "digest_proposal_partial": "test_digest_covers_every_part",
+    "seam_unwired": "test_seam_refuses_a_verdict_outside_the_vocabulary",
 }
 
 

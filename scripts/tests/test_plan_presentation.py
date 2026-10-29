@@ -77,6 +77,9 @@ def _to_plan_ready(store, sid, plan) -> None:
            new_dependency=False, public_api_change=False),
         store=store,
     )
+    state = store.load(sid)
+    state.order_agreement_exemption = ""
+    store.save(state)
     cli.cmd_plan(ns(session=sid), store=store)
     cli.cmd_submit_plan(ns(session=sid, plan=plan), store=store)
 

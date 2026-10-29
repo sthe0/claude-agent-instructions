@@ -523,6 +523,34 @@ def _no_worktree_routing_by_default(request, monkeypatch):
 
 
 
+_OWNS_ORDER_AGREEMENT_EXEMPTION = frozenset(
+    {"test_order_agreement", "test_order_agreement_e2e", "test_plan_presentation"})
+
+
+@pytest.fixture(autouse=True)
+def _no_reported_order_exemption_by_default(request, monkeypatch):
+    """Keep a classified session's recorded order-agreement exemption empty for the suite at
+    large. Whether the answer hook is wired is a property of the machine, and an
+    unwired one records an exemption that a root session's essence must then report
+    (`cli._required_exemption_line`); the many tests that present an essence on a fixture
+    rendering are not about that line, and would pass or fail with the machine's settings.
+    Arming itself is untouched, so the directive and the gate behave as before.
+
+    The modules that own the exemption opt out and set the state they exercise."""
+    if request.module.__name__ in _OWNS_ORDER_AGREEMENT_EXEMPTION:
+        return
+    from agentctl import cli
+
+    arm = cli._arm_order_agreement
+
+    def arm_without_reported_exemption(state):
+        reason = arm(state)
+        state.order_agreement_exemption = ""
+        return reason
+
+    monkeypatch.setattr(cli, "_arm_order_agreement", arm_without_reported_exemption)
+
+
 @pytest.fixture(autouse=True)
 def _default_claude_runtime_host(monkeypatch):
     """Default CLAUDE_CODE_SESSION_ID so runtime_host.detect_host() resolves to claude."""

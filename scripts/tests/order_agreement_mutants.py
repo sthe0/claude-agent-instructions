@@ -107,7 +107,7 @@ def _divergence_ignored(mp):
 def _challenge_not_recorded(mp):
     """A blocking `understanding:` concern is no longer taken up as a challenge."""
     mp.setattr("agentctl.cli._record_understanding_challenges",
-               lambda state, review, cp, ids: None, raising=True)
+               lambda *a, **k: None, raising=True)
 
 
 def _understanding_routes_order_token(mp):
@@ -226,7 +226,140 @@ def _draft_recorded_as_topo(mp):
     mp.setattr(driver, "record_argv", as_topo, raising=True)
 
 
+def _draft_coverage_rendered(mp):
+    """The base node of an order draft prints the empty coverage map again."""
+    from agentctl import render
+
+    mp.setattr(
+        render, "_meta_node_lines",
+        lambda doc: (render.render_meta_md(doc) + render.render_order_md(doc)
+                     + render.render_order_understanding_md(doc)
+                     + render.render_order_coverage_md(doc)),
+        raising=True,
+    )
+
+
+def _exemption_report_unchecked(mp):
+    """present-plan --kind essence owes no exemption line from any session."""
+    mp.setattr("agentctl.cli._required_exemption_line", lambda state: "", raising=True)
+
+
+def _exemption_asks_children(mp):
+    """A child session with a host or hook reason is asked for the exemption line too."""
+    from agentctl import cli
+
+    def asks(state):
+        reason = state.order_agreement_exemption
+        return f"[order-exempt: {reason}]" if reason in cli._ROOT_REPORTED_EXEMPTIONS else ""
+
+    mp.setattr(cli, "_required_exemption_line", asks, raising=True)
+
+
+def _exemption_over_asks(mp):
+    """An armed session, or one with no recorded reason, is asked for the line as well."""
+    mp.setattr("agentctl.cli._required_exemption_line",
+               lambda state: f"[order-exempt: {state.order_agreement_exemption}]", raising=True)
+
+
+def _challenge_token_marker_blind(mp):
+    """The part token after a reviewer's `C<n>:` marker is no longer read."""
+    from agentctl import gates
+
+    original = gates._concern_part_token
+    mp.setattr(gates, "_concern_part_token",
+               lambda text, *, after_marker=False: original(text), raising=True)
+
+
+def _challenge_after_downgrade(mp):
+    """Challenges are recorded only from the concerns that opened in the ledger."""
+    import dataclasses
+
+    from agentctl import cli
+
+    original = cli._record_understanding_challenges
+
+    def opened_only(state, review, cp, ids):
+        kept = [(pc, cid) for pc, cid in zip(cp.parsed, ids)
+                if state.concern_ledger[cid].status == cli.CONCERN_OPEN]
+        original(state, review, dataclasses.replace(cp, parsed=[pc for pc, _ in kept]),
+                 [cid for _, cid in kept])
+
+    mp.setattr(cli, "_record_understanding_challenges", opened_only, raising=True)
+
+
+def _agreed_forwarded_on_draft(mp):
+    """The driver reads the agreement digest for an order-draft walk as for a staged one."""
+    driver = script_module("plan-review-topological.py")
+    original = driver.Driver.read_agreement
+
+    def forwarding(self):
+        draft, self.draft = self.draft, False
+        try:
+            return original(self)
+        finally:
+            self.draft = draft
+
+    mp.setattr(driver.Driver, "read_agreement", forwarding, raising=True)
+
+
+def _digest_proposal_partial(mp):
+    """A proposal part of the understanding digest hashes only its id and verdict."""
+    import hashlib
+
+    from agentctl import plan
+
+    original = plan.understanding_parts
+
+    def partial(doc):
+        parts = original(doc)
+        order = doc.meta.order
+        for p in order.proposals if order is not None else ():
+            name = f"P:{p.id}"
+            parts[name] = hashlib.sha256(repr((name, p.verdict)).encode("utf-8")).hexdigest()
+        return parts
+
+    mp.setattr(plan, "understanding_parts", partial, raising=True)
+
+
+def _seam_unwired(mp):
+    """order-submit stops checking the proposal tables for well-formedness."""
+    mp.setattr("agentctl.cli.order_understanding_violations", lambda meta: [], raising=True)
+    mp.setattr("agentctl.submission._order_understanding_violations", lambda meta: [], raising=True)
+
+
+def _pair_proposal_clause_omitted(mp):
+    """The C3 of a base-<s> pair no longer says the stage realizes no rejected proposal."""
+    from agentctl import render
+
+    original = render._pair_conditions
+
+    def without_clause(doc, base, service):
+        texts = original(doc, base, service)
+        if base == render.PAIR_BASE_NODE:
+            texts[2] = texts[2].split("; ")[0]
+        return texts
+
+    mp.setattr(render, "_pair_conditions", without_clause, raising=True)
+
+
+def _adopted_proposal_unfiltered(mp):
+    """A base-<s> section lists every proposal, not only those bearing on its edge."""
+    mp.setattr("agentctl.render._base_edge_proposals",
+               lambda doc, service: list(doc.meta.order.proposals), raising=True)
+
+
 MUTANTS = {
+    "draft_coverage_rendered": _draft_coverage_rendered,
+    "exemption_report_unchecked": _exemption_report_unchecked,
+    "exemption_asks_children": _exemption_asks_children,
+    "exemption_over_asks": _exemption_over_asks,
+    "challenge_token_marker_blind": _challenge_token_marker_blind,
+    "challenge_after_downgrade": _challenge_after_downgrade,
+    "agreed_forwarded_on_draft": _agreed_forwarded_on_draft,
+    "digest_proposal_partial": _digest_proposal_partial,
+    "seam_unwired": _seam_unwired,
+    "pair_proposal_clause_omitted": _pair_proposal_clause_omitted,
+    "adopted_proposal_unfiltered": _adopted_proposal_unfiltered,
     "rejected_proposal_filtered": _rejected_proposal_filtered,
     "unit_base_omits_proposals": _unit_base_omits_proposals,
     "draft_walk_empty": _draft_walk_empty,

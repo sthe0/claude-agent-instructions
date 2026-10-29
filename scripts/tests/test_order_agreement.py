@@ -13,13 +13,18 @@ Claims, each pinned in the direction that could fail:
 * submit-plan, approve, replan and the essence / replan_diff presentations refuse a session
   with no agreement, a plan whose understanding differs from the agreed one in a named part, and
   an open challenge;
-* a reviewer's blocking `understanding:` concern is taken up as a challenge keyed by its ledger
-  id, stops holding the plan review, and is closed only by the user's `order-challenge-dismiss`
-  answer or a new agreement; a re-raise of a challenge already in force opens nothing;
+* a reviewer's blocking `understanding:` concern — with or without a `C<n>:` marker, and even
+  when a post-pass downgrade keeps it out of the plan review's ledger — is taken up as a
+  challenge keyed by its ledger id, stops holding the plan review, and is closed only by the
+  user's `order-challenge-dismiss` answer or a new agreement; a re-raise of a challenge already
+  in force opens nothing;
+* a root session that skipped the gate for a reason it can report (host, hook, channel) cannot
+  present its essence without the `[order-exempt: <reason>]` line; a child, an armed session
+  and one with no recorded reason are never asked;
 * every assignment of `plan_path` in the engine sits behind the gate or carries a stated reason.
 
 A test earns trust only when it goes red on a real mutation: `order_agreement_mutants` plants
-eight defects and one `test_*_is_killed` case per defect re-runs this file under it, asserting
+thirteen defects against this file and one `test_*_is_killed` case per defect re-runs this file under it, asserting
 pytest exit 1 and the intended test among the failures. Calls into code a mutant replaces go
 through their module (`gates.`, `cli.`), never a by-name import.
 """
@@ -557,6 +562,125 @@ def test_present_essence_refuses_a_diverged_plan(ostore, home, armed_env, tmp_pa
         p.kind != "essence" for p in ostore.load(SESSION).plan_presentations)
 
 
+# --- the essence of a root session that skipped the gate says so --------------------------
+
+_ROOT_EXEMPTIONS = [
+    (ORDER_EXEMPT_HOST, _exempt_host),
+    (ORDER_EXEMPT_HOOK, _exempt_hook),
+    (ORDER_EXEMPT_CHANNEL, _exempt_channel),
+]
+
+
+def _exempt_root_with_plan(store, monkeypatch, tmp_path, plant):
+    plant(monkeypatch, tmp_path)
+    _start(store)
+    assert _classify(store).ok
+    assert cli.cmd_plan(ns(session=SESSION), store=store).ok
+    d = cli.cmd_submit_plan(ns(session=SESSION, plan=_plan(tmp_path)), store=store)
+    assert d.ok, (d.detail, d.data)
+
+
+def _essence(store, tmp_path: Path, text: str):
+    from agentctl.plan import load_plan
+    from agentctl.render import render_plan_grants
+    grants = render_plan_grants(load_plan(store.load(SESSION).plan_path), fmt="compact")
+    rendering = tmp_path / "essence.txt"
+    rendering.write_text(text + "\n" + grants, encoding="utf-8")
+    return cli.cmd_present_plan(ns(session=SESSION, kind="essence", rendering_file=str(rendering),
+                                   emit_skeleton=False, plan=None), store=store)
+
+
+def _essence_receipts(store) -> list:
+    return [p for p in store.load(SESSION).plan_presentations if p.kind == "essence"]
+
+
+@pytest.mark.parametrize("reason, plant", _ROOT_EXEMPTIONS)
+def test_essence_of_an_exempt_root_refuses_without_the_exemption_line(
+        ostore, home, armed_env, monkeypatch, tmp_path, reason, plant):
+    _exempt_root_with_plan(ostore, monkeypatch, tmp_path, plant)
+
+    d = _essence(ostore, tmp_path, "The plan, in essence.\n")
+
+    assert d.ok is False and d.action == "noop"
+    assert f"[order-exempt: {reason}]" in d.detail
+    assert d.data["exemption_line"] == f"[order-exempt: {reason}]"
+    assert _essence_receipts(ostore) == []
+
+
+@pytest.mark.parametrize("reason, plant", _ROOT_EXEMPTIONS)
+def test_essence_of_an_exempt_root_with_the_line_is_stamped(
+        ostore, home, armed_env, monkeypatch, tmp_path, reason, plant):
+    _exempt_root_with_plan(ostore, monkeypatch, tmp_path, plant)
+
+    d = _essence(ostore, tmp_path, f"[order-exempt: {reason}]\nThe plan, in essence.\n")
+
+    assert d.ok, d.detail
+    assert len(_essence_receipts(ostore)) == 1
+
+
+def test_essence_of_an_exempt_root_refuses_the_line_of_another_reason(
+        ostore, home, armed_env, monkeypatch, tmp_path):
+    _exempt_root_with_plan(ostore, monkeypatch, tmp_path, _exempt_host)
+
+    d = _essence(ostore, tmp_path, f"[order-exempt: {ORDER_EXEMPT_HOOK}]\nThe plan.\n")
+
+    assert d.ok is False and f"[order-exempt: {ORDER_EXEMPT_HOST}]" in d.detail
+    assert _essence_receipts(ostore) == []
+
+
+def test_essence_of_an_armed_root_needs_no_exemption_line(ostore, home, armed_env, tmp_path):
+    _plan_ready(ostore, home, tmp_path)
+
+    d = _essence(ostore, tmp_path, "The plan, in essence.\n")
+
+    assert d.ok, d.detail
+    assert len(_essence_receipts(ostore)) == 1
+
+
+def test_essence_of_a_root_with_no_recorded_exemption_needs_no_line(
+        ostore, home, armed_env, monkeypatch, tmp_path):
+    _exempt_root_with_plan(ostore, monkeypatch, tmp_path, _exempt_host)
+    state = ostore.load(SESSION)
+    state.order_agreement_exemption = ""
+    ostore.save(state)
+
+    d = _essence(ostore, tmp_path, "The plan, in essence.\n")
+
+    assert d.ok, d.detail
+
+
+def test_essence_of_a_linked_child_needs_no_exemption_line(
+        ostore, home, armed_env, monkeypatch, tmp_path):
+    _exempt_root_with_plan(ostore, monkeypatch, tmp_path, _exempt_host)
+    state = ostore.load(SESSION)
+    state.parent_link = {"parent_session": "p", "stage_index": 1, "depth": 1, "norm_digest": "x"}
+    ostore.save(state)
+
+    d = _essence(ostore, tmp_path, "The plan, in essence.\n")
+
+    assert d.ok, d.detail
+
+
+def test_essence_of_a_spawned_child_needs_no_exemption_line(
+        ostore, home, armed_env, monkeypatch, tmp_path):
+    _exempt_root_with_plan(ostore, monkeypatch, tmp_path, _exempt_host)
+    monkeypatch.setenv("AGENT_RECURSION_DEPTH", "1")
+
+    d = _essence(ostore, tmp_path, "The plan, in essence.\n")
+
+    assert d.ok, d.detail
+
+
+def test_essence_of_a_child_classified_as_one_needs_no_exemption_line(
+        ostore, home, armed_env, monkeypatch, tmp_path):
+    _exempt_root_with_plan(ostore, monkeypatch, tmp_path, _exempt_spawned)
+    assert ostore.load(SESSION).order_agreement_exemption == ORDER_EXEMPT_SPAWNED
+
+    d = _essence(ostore, tmp_path, "The plan, in essence.\n")
+
+    assert d.ok, d.detail
+
+
 def test_present_replan_diff_refuses_a_diverging_proposal(ostore, home, armed_env, tmp_path):
     _plan_ready(ostore, home, tmp_path)
     proposal = _plan(tmp_path, replace=DIVERGED, name="proposal.toml")
@@ -779,7 +903,7 @@ def test_a_stage_scoped_understanding_concern_opens_no_challenge(ostore, home, a
     assert gates.order_agreement_blockers(state, None) == []
 
 
-def test_an_unevidenced_post_pass_understanding_concern_opens_no_challenge(
+def test_a_post_pass_understanding_concern_opens_a_challenge_that_blocks_the_gate(
         ostore, home, armed_env, tmp_path):
     plan = _plan_ready(ostore, home, tmp_path)
     assert _plan_review(ostore, "pass", plan_digest=_file_sha256(plan)).ok
@@ -790,7 +914,38 @@ def test_an_unevidenced_post_pass_understanding_concern_opens_no_challenge(
     assert d.data.get("plan_review_post_pass_unevidenced") is True
     [entry] = _understanding_entries(state)
     assert entry.status != CONCERN_OPEN
-    assert state.order_challenges == []
+    [challenge] = state.order_challenges
+    assert challenge.status == CHALLENGE_OPEN and "second requirement" in challenge.text
+    assert any(challenge.id in b for b in gates.order_agreement_blockers(state, None))
+    approve = cli.cmd_approve(ns(session=SESSION, by="user"), store=ostore)
+    assert approve.ok is False and challenge.id in _blockers(approve)
+
+
+@pytest.mark.parametrize("marker", ["C1: ", "c2: ", "C3: "])
+def test_a_marked_understanding_concern_opens_a_challenge(
+        ostore, home, armed_env, tmp_path, marker):
+    _plan_ready(ostore, home, tmp_path)
+
+    _plan_review(ostore, concerns=[f"blocking: {marker}understanding: the second requirement is wrong"])
+
+    [challenge] = ostore.load(SESSION).order_challenges
+    assert challenge.status == CHALLENGE_OPEN and "second requirement" in challenge.text
+
+
+def test_a_marked_concern_about_another_part_opens_no_challenge(ostore, home, armed_env, tmp_path):
+    _plan_ready(ostore, home, tmp_path)
+
+    _plan_review(ostore, concerns=["blocking: C2: stage:1 the verify command proves nothing"])
+
+    assert ostore.load(SESSION).order_challenges == []
+
+
+def test_a_marked_note_about_the_understanding_opens_no_challenge(ostore, home, armed_env, tmp_path):
+    _plan_ready(ostore, home, tmp_path)
+
+    _plan_review(ostore, concerns=["note: C2: understanding: R2 reads thin to me"])
+
+    assert ostore.load(SESSION).order_challenges == []
 
 
 def test_a_challenged_understanding_concern_does_not_hold_a_topo_unit_review(
@@ -1077,6 +1232,12 @@ _KILLERS = {
     "explicit_host_arms": "test_classify_does_not_arm_on_an_explicit_host_flag",
     "depth_flag_exempts": "test_classify_arms_despite_a_recursion_depth_flag",
     "headless_channel_ignored": "test_classify_exempts_with_a_reason",
+    "exemption_report_unchecked": "test_essence_of_an_exempt_root_refuses_without_the_exemption_line",
+    "exemption_asks_children": "test_essence_of_a_linked_child_needs_no_exemption_line",
+    "exemption_over_asks": "test_essence_of_an_armed_root_needs_no_exemption_line",
+    "challenge_token_marker_blind": "test_a_marked_understanding_concern_opens_a_challenge",
+    "challenge_after_downgrade":
+        "test_a_post_pass_understanding_concern_opens_a_challenge_that_blocks_the_gate",
 }
 
 

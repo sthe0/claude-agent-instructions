@@ -128,6 +128,22 @@ def test_unit_base_bundle_of_a_draft_inlines_the_order_and_its_proposals(draft, 
         assert expected in text, expected
 
 
+def test_unit_base_bundle_of_a_draft_says_coverage_does_not_apply(draft, tmp_path):
+    text = _unit_text(draft, tmp_path)
+    assert "Coverage: not applicable to an order draft" in text
+    assert "## Order coverage" not in text
+    assert "(none declared)" not in text and "Requires traceability" not in text
+    assert "none at the order phase" in text
+
+
+def test_unit_base_bundle_of_a_staged_plan_keeps_the_coverage_map(staged_plan, tmp_path):
+    text = _unit_text(staged_plan, tmp_path)
+    assert "## Order coverage" in text
+    assert "R1: stage 3 verify_command" in text and "R2: stage 1 verify_command" in text
+    assert "not applicable to an order draft" not in text
+    assert "R1 → stage 3" in text
+
+
 def test_unit_base_conditions_follow_the_phase(staged_plan, draft, tmp_path):
     staged = _unit_text(staged_plan, tmp_path)
     drafted = _unit_text(draft, tmp_path)
@@ -180,6 +196,21 @@ def test_pair_section_lists_every_rejected_proposal_and_the_adopted_ones_bearing
     assert "P1" in section and "tag releases by hand" in section
     assert "P2" in section and "a command tags releases" in section
     assert "a bot tags releases" not in section
+
+
+def test_pair_section_lists_the_proposals_of_its_own_edge_only(
+        staged_plan, tmp_path):
+    section = _pair_text(staged_plan, tmp_path, pair="base-1")
+    assert "P1" in section and "tag releases by hand" in section
+    assert "P3" in section and "a bot tags releases" in section
+    assert "a command tags releases" not in section
+
+
+def test_stage_pair_section_carries_no_proposals_and_no_proposal_clause(staged_plan, tmp_path):
+    section = _pair_text(staged_plan, tmp_path, pair="3-1")
+    assert "Proposals bearing on this edge" not in section
+    assert "tag releases by hand" not in section
+    assert "realizes no rejected proposal" not in section
 
 
 def test_pair_section_lists_a_rejected_proposal_against_any_requirement(staged_plan, tmp_path):
@@ -346,12 +377,13 @@ def test_driver_run_hands_the_status_digest_to_unit_base_and_every_base_pair(
     assert {_digest_flag(a) for a in spawns} == {"ab" * 32}
 
 
-def test_driver_run_of_a_draft_hands_the_status_digest_to_unit_base(draft, tmp_path, monkeypatch):
+def test_driver_run_of_a_draft_hands_no_digest_even_when_status_has_an_agreement(
+        draft, tmp_path, monkeypatch):
     engine = FakeEngine([])
     engine.agreement = {"understanding_sha256": "cd" * 32}
     (argv,) = _run_driver(monkeypatch, tmp_path, draft, engine)
     assert argv[argv.index("--review-topo") + 1] == "unit:base"
-    assert _digest_flag(argv) == "cd" * 32
+    assert _digest_flag(argv) is None
 
 
 def test_driver_run_hands_no_digest_when_status_has_no_agreement(staged_plan, tmp_path, monkeypatch):
@@ -413,6 +445,12 @@ KILLERS = {
         "test_spawner_prompt_for_a_draft_unit_base_carries_the_label_for_the_agreed_digest",
     "spawner_refuses_draft": "test_spawner_loads_an_order_draft_and_a_plan",
     "draft_recorded_as_topo": "test_driver_settle_of_a_draft_review_records_it_under_scope_order",
+    "draft_coverage_rendered": "test_unit_base_bundle_of_a_draft_says_coverage_does_not_apply",
+    "agreed_forwarded_on_draft":
+        "test_driver_run_of_a_draft_hands_no_digest_even_when_status_has_an_agreement",
+    "pair_proposal_clause_omitted": "test_pair_condition_three_asks_that_no_rejected_proposal_is_realized",
+    "adopted_proposal_unfiltered":
+        "test_pair_section_lists_the_proposals_of_its_own_edge_only",
 }
 
 
