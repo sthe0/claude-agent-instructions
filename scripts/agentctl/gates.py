@@ -1169,7 +1169,8 @@ def understanding_challenged(state: SessionState, stable_id: str, text: str, res
     """Whether a reviewer's `understanding:` concern has been taken up as a challenge to the
     agreed order, by its own id or by the id it re-raises. Such a concern blocks the agreement
     gate instead of the plan review. Only that one token is ever excluded."""
-    if not state.order_challenges or _concern_part_token(text) != UNDERSTANDING_TOKEN:
+    if (not state.order_challenges
+            or _concern_part_token(text, after_marker=True) != UNDERSTANDING_TOKEN):
         return False
     return (stable_id in {c.id for c in state.order_challenges}
             or challenge_for_restatement(state, restates) is not None)

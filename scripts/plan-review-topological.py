@@ -17,7 +17,9 @@ telemetry; nothing is gated on them.
 
 An order draft (a file with no stages) is walked as `unit:base` alone and its verdict is
 recorded with scope `order`. When `agentctl status` reports an agreed order understanding,
-its digest is forwarded to every `unit:base` and `base-<s>` spawn (`--agreed-understanding`).
+its digest is forwarded to every `unit:base` and `base-<s>` spawn of a staged walk
+(`--agreed-understanding`); an order-draft walk has no agreement to be judged against and
+forwards none.
 
   plan-review-topological.py (--session <sid> | --own) --plan <plan.toml>
       [--complexity low|medium|high | --model <m>] [--dry-run] [--early-stop]
@@ -527,7 +529,10 @@ class Driver:
 
     def read_agreement(self) -> "str | None":
         """The digest of the order understanding the user agreed, from the engine's
-        `status` (null unless the agreement gate is active); None when it cannot be read."""
+        `status` (null unless the agreement gate is active); None when it cannot be read, and
+        for an order draft, which has no agreement to be judged against."""
+        if self.draft:
+            return None
         directive = self.engine(["status", *session_args(self.sid)])
         agreement = ((directive.get("data") or {}).get("order_agreement")) or {}
         return agreement.get("understanding_sha256") if directive.get("ok") else None

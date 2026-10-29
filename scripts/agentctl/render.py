@@ -1199,6 +1199,13 @@ def _unit_edge_lines(doc: PlanDoc, node: "int | str") -> list[str]:
     """The `## Edges` body of a unit bundle: the unit's full edge set, an empty
     set stated explicitly (an empty inbound set is the orphan signal)."""
     lines: list[str] = []
+    if node == PAIR_BASE_NODE and not doc.stages:
+        lines.append(
+            "Outbound — none at the order phase: coverage entries are written with the stages."
+        )
+        lines.append("")
+        lines.append("Inbound — what relies on the base: nothing (the base is the root).")
+        return lines
     if node == PAIR_BASE_NODE:
         entries = plan_coverage_entries(doc)
         known = {s.index for s in doc.stages}
@@ -1304,7 +1311,16 @@ _WRAPPER_STAGE = {
 }
 
 
+_DRAFT_COVERAGE_LINE = (
+    "Coverage: not applicable to an order draft; it maps requirements to stages "
+    "written after agreement"
+)
+
+
 def _meta_node_lines(doc: PlanDoc) -> list[str]:
+    if not doc.stages:
+        return (render_meta_md(doc) + render_order_md(doc) + render_order_understanding_md(doc)
+                + [_DRAFT_COVERAGE_LINE, ""])
     return (render_meta_md(doc) + render_order_md(doc) + render_order_understanding_md(doc)
             + render_order_coverage_md(doc))
 

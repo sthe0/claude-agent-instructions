@@ -4847,6 +4847,20 @@ def _order_agreement_exemption(state: SessionState) -> str:
     return ""
 
 
+_ROOT_REPORTED_EXEMPTIONS = frozenset({ORDER_EXEMPT_HOST, ORDER_EXEMPT_HOOK, ORDER_EXEMPT_CHANNEL})
+
+
+def _required_exemption_line(state: SessionState) -> str:
+    """The line a root session's essence must carry to say it skipped the order-agreement
+    gate, or "" when none is owed: a child, an armed session and one with no recorded
+    reason report nothing, and so does a root exempt for a reason it did not choose
+    to report."""
+    reason = state.order_agreement_exemption
+    if reason not in _ROOT_REPORTED_EXEMPTIONS or state.parent_link or _spawned_child(state):
+        return ""
+    return f"[order-exempt: {reason}]"
+
+
 def _arm_order_agreement(state: SessionState) -> str:
     """Set the arming fields at classify and return the exemption reason. Classify is the only
     writer, and each substantive classify re-evaluates arming against the environment as it
@@ -5602,6 +5616,15 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                 )
 
     if kind == PLAN_PRESENTATION_KIND_ESSENCE:
+        line = _required_exemption_line(state)
+        if line and line not in text:
+            return Directive(
+                False, state.node, "noop",
+                f"essence rendering omits the exemption line {line}; stamping nothing — "
+                "this root session skipped the order-agreement gate, so say so in the "
+                "essence with that exact line and re-run",
+                data={"exemption_line": line},
+            )
         # The scope-coverage block must be IN the essence — checked the same
         # mechanical way the `full` branch above checks stage anchors (containment
         # of engine-generated lines, never a read of the essence's own prose).
@@ -6177,18 +6200,23 @@ def _commit_concern_ledger(state: SessionState, review, cp: _ConcernPlan, ledger
 
 def _record_understanding_challenges(state: SessionState, review, cp: _ConcernPlan,
                                      ids: list[str]) -> None:
-    """Take every `understanding:` concern of this record that opened in the ledger up as a
-    challenge to the agreed order, so a record-only, out-of-scope or settling record opens
-    none. A re-raise of a challenge that is still open, or that the user dismissed
-    against the understanding still agreed, opens nothing; a re-raise of a challenge a new
-    agreement closed, or one dismissed against an understanding since changed, opens a fresh
-    one. Notes and advisory concerns open none. Inert while the agreement gate is."""
+    """Take every blocking `understanding:` concern the reviewer raised in a revise record up
+    as a challenge to the agreed order. It is read from the raw concern, after its `C<n>`
+    marker, so neither the post-pass or delta downgrade nor a record-only ledger entry hides
+    it; a concern outside the reviewer's scope and a settling record open none. A re-raise of
+    a challenge that is still open, or that the user dismissed against the understanding
+    still agreed, opens nothing; a re-raise of a challenge a new agreement closed, or one
+    dismissed against an understanding since changed, opens a fresh one. Notes and advisory
+    concerns open none. Inert while the agreement gate is."""
     agreement = state.order_agreement
-    if agreement is None or not gates.order_agreement_active(state):
+    if (agreement is None or not gates.order_agreement_active(state)
+            or getattr(review, "raw_verdict", "") != gates._PLAN_REVIEW_REVISE):
         return
+    out_of_scope = set(getattr(review, "out_of_scope_concern_ids", []))
     for pc, cid in zip(cp.parsed, ids):
-        if state.concern_ledger[cid].status != CONCERN_OPEN \
-                or gates._concern_part_token(pc.body) != gates.UNDERSTANDING_TOKEN:
+        if pc.severity != SEVERITY_BLOCKING \
+                or state.concern_ledger[cid].local_id in out_of_scope \
+                or gates._concern_part_token(pc.body, after_marker=True) != gates.UNDERSTANDING_TOKEN:
             continue
         prior = gates.challenge_for_restatement(state, pc.restates)
         if prior is not None and (
