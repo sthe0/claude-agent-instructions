@@ -42,3 +42,4 @@ Nothing mechanically couples a code change to *being under review*, to *justifyi
 - `~/.claude-agent/skills/specializations/code-reviewer/SKILL.md` § What you review (reviewer side)
 - [[mirror-working-caller-before-bypass]] — the runtime-context analogue of "mirror the *right* exemplar by understanding, not surface".
 - [[determinize-required-specialist-dispatch]] — the mechanism (`review_dispatch` plugin) that pairs a `spawn:developer` stage's `dispatch` event with `gates.code_review_blockers`; its binding is one-shot at first-passage, which is exactly the gap the post-stage-fix sentence above names.
+- regularity:what-a-change-does-not-carry-ends-with-its-authors-context — the regularity this rule rests on.

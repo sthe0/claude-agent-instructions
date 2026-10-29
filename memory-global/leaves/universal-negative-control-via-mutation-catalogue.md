@@ -20,3 +20,4 @@ A corollary, from the same task: **an ad-hoc mutation/injection script written d
 
 - [[committed-files-earn-their-place]] — the general committed-vs-scratch keep-criterion this corollary specializes.
 - [[plan-control-criterion-hygiene]] — the universally-quantified-done-criterion twin on the planning side.
+- regularity:a-probe-observes-only-the-domain-it-reads — the regularity this rule rests on.

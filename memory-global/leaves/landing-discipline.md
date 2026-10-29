@@ -44,3 +44,4 @@ Never hand-roll `checkout` / `reset --hard` / `clean` on a shared tree; leave an
 - `~/.claude-agent/CLAUDE.md` § On task resolution — the short rule + pointer that loads this leaf.
 - [[acting-without-asking]] § carve-out #4 — personal-branch push is pre-authorized.
 - `scripts/hook-resolution-reminder.py` — the delivery-point mechanism that nudges the land/push at the gate and cites this leaf.
+- regularity:a-change-outside-the-state-its-consumers-read-is-unseen-by-them — the regularity this rule rests on.

@@ -32,3 +32,4 @@ Nothing mechanically couples a code change to a test of that change — the disc
 - `~/.claude-agent/skills/specializations/developer/SKILL.md` § Tests and build (author side)
 - `~/.claude-agent/skills/specializations/code-reviewer/SKILL.md` § What you review (reviewer side)
 - [[plan-activity-ontology]] — review is the control criterion of a developer-actor stage
+- regularity:what-a-change-does-not-carry-ends-with-its-authors-context — the regularity this rule rests on.

@@ -30,3 +30,4 @@ This leaf is the elaboration of a `CLAUDE.md` bullet, extracted 2026-09-15 to ke
 
 - [formalization-ladder-l1-l3.md](formalization-ladder-l1-l3.md)
 - [behavioral-conformance-control.md](behavioral-conformance-control.md)
+- regularity:a-probe-observes-only-the-domain-it-reads — the regularity this rule rests on.

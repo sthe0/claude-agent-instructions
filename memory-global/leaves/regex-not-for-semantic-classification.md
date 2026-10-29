@@ -97,3 +97,4 @@ The honest bound is a blind spot, stated in the tool's `--help` as well: a keywo
 - `agentctl/advisor.py::judge_binary_ask` — the in-repo fail-open prefilter→model→YES/NO template this leaf's recipe mirrors.
 - `CLAUDE.md` preamble, "Separate rule from perception; determinize the rule at its proper structural level" — the root principle this leaf sharpens for the semantic/content case.
 - `skills/self-improvement/SKILL.md` § "Structural form before prose" — the tie-breaker rule (extend an existing mechanism rather than invent prose) this leaf's recipe follows.
+- regularity:a-judgement-call-contains-a-decidable-sub-decision — the regularity this rule rests on.

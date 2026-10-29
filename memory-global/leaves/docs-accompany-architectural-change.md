@@ -29,3 +29,4 @@ When "done" is gated on a *measurable* criterion (tests green, PR merged), the h
 - [[tests-accompany-code]] — the symmetric default on the runtime axis (output accompanies the artifact it describes)
 - [[plan-activity-ontology]] — the README update is part of a stage's *result*/control-criterion, not optional polish
 - `README.md` § Maintaining this README — "when the cooperation model changes, update the affected sections"
+- regularity:what-a-change-does-not-carry-ends-with-its-authors-context — the regularity this rule rests on.
