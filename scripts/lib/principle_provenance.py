@@ -394,7 +394,7 @@ def introduced_by(text: str) -> str | None:
 def order_quote(text: str) -> str | None:
     """The body of the `## Derived from order` section, outer newlines trimmed; None when the
     section is absent or holds only blank lines."""
-    body = _section_body(text, ORDER_SECTION_TITLE)
+    body = section_body(text, ORDER_SECTION_TITLE)
     return body.strip("\n") if body and body.strip() else None
 
 
@@ -523,7 +523,7 @@ def origin_tier_ok(value) -> bool:
     return value == ORIGIN_TIER
 
 
-def _section_body(text: str, name: str) -> str | None:
+def section_body(text: str, name: str) -> str | None:
     m = re.search(rf"^##[ \t]+{re.escape(name)}[ \t]*$", text, re.MULTILINE)
     if not m:
         return None
@@ -531,12 +531,8 @@ def _section_body(text: str, name: str) -> str | None:
     return text[m.end():m.end() + nxt.start()] if nxt else text[m.end():]
 
 
-def section_body(text: str, name: str) -> str | None:
-    return _section_body(text, name)
-
-
 def case_section_error(text: str) -> str | None:
-    missing = [n for n in CASE_SECTIONS if not (_section_body(text, n) or "").strip()]
+    missing = [n for n in CASE_SECTIONS if not (section_body(text, n) or "").strip()]
     if missing:
         return "case is missing or has empty section(s): " + ", ".join(f"## {n}" for n in missing)
     return None

@@ -263,6 +263,16 @@ def test_block_lists_uncited_introduced(world):
     assert "- regularity:reg-lone — Nobody cites it. (not cited by any stage)" in block
 
 
+def test_line_without_statement_section_shows_placeholder(world):
+    world.put("regularities/reg-bare.md",
+              _LEAF.format(slug="reg-bare", schema="regularity/v1",
+                           extra=f"introduced_by: {TASK}\n", body="No statement heading here."))
+
+    block = _printed(_plan(world))
+
+    assert "- regularity:reg-bare — (no statement section)" in block
+
+
 def test_block_lists_stamped_principle(world):
     world.put("principles/prin-new.md", _principle("prin-new", "To X, do Y.", introduced_by=TASK))
 

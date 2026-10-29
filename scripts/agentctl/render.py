@@ -32,7 +32,7 @@ from pathlib import Path
 from lib import kind_baselines, principle_provenance
 from lib.spawn_ceiling import dispatch_prompt_ceiling_chars
 
-from . import plan_refs, plan_store, protected_actions
+from . import grounding, plan_refs, plan_store, protected_actions
 from .config import PlanLimitError, plan_field_inline_limit, plan_size_limits
 from .directive import Directive
 from .plan import (
@@ -1875,7 +1875,7 @@ def generalization_candidates(leaves, task_id, cited=()) -> list:
 def generalization_line(leaf) -> str:
     body = principle_provenance.section_body(leaf.text, _STATEMENT_SECTION[leaf.area]) or ""
     paragraphs = [p for p in body.strip().split("\n\n") if p.strip()]
-    statement = " ".join(paragraphs[0].split()) if paragraphs else ""
+    statement = " ".join(paragraphs[0].split()) if paragraphs else "(no statement section)"
     prefix = "project:" if leaf.tier == "project" else ""
     return f"- {prefix}{leaf.area}:{leaf.slug} — {statement}"
 
@@ -1884,8 +1884,7 @@ def render_plan_generalizations(doc: PlanDoc, corpus) -> str:
     """The generalizations the plan introduces, generated from the corpus the submission seam
     loads (staged leaves included) and never hand-maintained: present-plan requires this
     block's text inside an essence, so an introduced leaf cannot be left out of the approval."""
-    from . import grounding
-
+    # cited is matched by bare slug: a same-slug leaf of another area or tier counts as cited too
     cited = {ref.slug
              for stage in doc.stages if stage.principle is not None
              for ref in grounding.parse_ground_refs(stage.principle.source)[0]}
