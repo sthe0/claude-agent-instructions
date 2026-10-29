@@ -33,6 +33,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lib import leaf_forms
+
 FIELD = "generalized_into"
 INDUCED = "induced_from"
 GROUNDED = "grounded_in"
@@ -78,6 +80,7 @@ PRINCIPLE_INDUCED = "principle_induced_from"
 ORDER_NO_QUOTE = "order_no_quote"
 ORDER_ON_PRINCIPLE = "order_on_principle"
 ORDER_NO_INTRODUCED = "order_no_introduced"
+GIVEN_SOURCE = "given_source"
 
 FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 DIGEST_RE = re.compile(re.escape(DIGEST_PREFIX) + r"[0-9a-f]{64}")
@@ -90,7 +93,7 @@ class Leaf:
     slug: str
     path: Path
     tier: str  # 'global' | 'project'
-    area: str  # 'experience' | 'regularity' | 'principle' | 'case' | 'other'
+    area: str  # 'experience' | 'regularity' | 'principle' | 'ontology' | 'case' | 'other'
     text: str
 
 
@@ -108,7 +111,7 @@ class Finding:
     detail: str
 
 
-_AREA_PRIORITY = ("experience", "case", "regularity", "principle", "other")
+_AREA_PRIORITY = ("experience", "case", "regularity", "principle", "ontology", "other")
 
 
 def fallback_tiers(tier: str) -> tuple[str, ...]:
@@ -154,17 +157,8 @@ class Corpus:
         return _build(self.leaves_dir, self.project_root, files)
 
 
-def _area(rel: Path, tier: str) -> str:
-    parts = rel.parts
-    if len(parts) == 2 and parts[0] == "experience":
-        return "experience"
-    if tier == "global" and len(parts) == 3 and parts[:2] == CASES_DIR.parts:
-        return "case"
-    if len(parts) == 2 and parts[0] == "regularities":
-        return "regularity"
-    if len(parts) == 2 and parts[0] == "principles":
-        return "principle"
-    return "other"
+def _area(rel: Path, tier: str, text: str = "") -> str:
+    return leaf_forms.area_of(rel, tier, text)
 
 
 def _build(leaves_dir: Path, project_root: Path | None, files: dict[Path, str]) -> Corpus:
@@ -179,7 +173,7 @@ def _build(leaves_dir: Path, project_root: Path | None, files: dict[Path, str]) 
                 rel = path.relative_to(base)
             except ValueError:
                 continue
-            items.append(Leaf(path.stem, path, tier, _area(rel, tier), text))
+            items.append(Leaf(path.stem, path, tier, _area(rel, tier, text), text))
             break
     return Corpus(leaves_dir, project_root, files, items)
 
@@ -372,7 +366,7 @@ def rule_mark_state(target: Leaf, corpus: Corpus) -> str:
     kinds = [resolve_source(s, corpus, target.tier) for s in _induced_or_empty(target.text)]
     has_experience = any(k in EXPERIENCE_SOURCE_KINDS for k in kinds)
     marked = bool(field_value(target.text, RULE_DERIVED))
-    from_order = bool(field_value(target.text, ORDER_DERIVED))
+    from_order = bool(field_value(target.text, ORDER_DERIVED)) or leaf_forms.given_provenance(target.text) is not None
     if has_experience and marked:
         return "stale"
     if not (has_experience or marked or from_order):
@@ -637,6 +631,12 @@ def experiences_of(target: Leaf, corpus: Corpus) -> list[Leaf]:
     return out
 
 
+def _repo_of(corpus: Corpus, leaf: Leaf) -> Path | None:
+    """The repository a leaf's `given_source` path is relative to: two levels above its memory dir."""
+    base = corpus.project_root if leaf.tier == "project" else corpus.leaves_dir
+    return base.parent.parent if base is not None else None
+
+
 def unaccounted(corpus: Corpus) -> list[Finding]:
     findings: list[Finding] = []
 
@@ -721,6 +721,10 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
             report(ORDER_NO_QUOTE, leaf, f"no quote under `## {ORDER_SECTION_TITLE}`")
         for problem in order_introduced_problems(leaf.text):
             report(ORDER_NO_INTRODUCED, leaf, problem)
+
+    for leaf in corpus.of("regularity"):
+        for problem in leaf_forms.given_source_problems(leaf.text, _repo_of(corpus, leaf)):
+            report(GIVEN_SOURCE, leaf, problem)
 
     for leaf in index_mismatches(corpus):
         field_name = GROUNDED if leaf.area == "principle" else INDUCED

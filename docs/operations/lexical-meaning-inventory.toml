@@ -1621,26 +1621,13 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/grounding.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles the `[project:]<kind>:<slug>` ground-reference grammar and the frontmatter `schema:` line; fixed reference and leaf syntax resolved against the corpus, not free text."
-hits = 2
-hit_classes = ["structural", "structural"]
+ground = "Compiles the `[project:]<kind>:<slug>` ground-reference grammar; fixed reference syntax resolved against the corpus, not free text."
+hits = 1
 reviewed_by = "developer"
 
 [sites."scripts/agentctl/grounding.py::parse_ground_refs::pattern.match"]
 class = "structural"
 ground = "Parses one `;`-separated item as a ground reference; the grammar is fixed and a non-matching item is refused, never interpreted."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/agentctl/grounding.py::schema_of::pattern.match"]
-class = "structural"
-ground = "Splits the `---` frontmatter block off a leaf before reading its schema; frontmatter syntax."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/agentctl/grounding.py::schema_of::pattern.search"]
-class = "structural"
-ground = "Finds the `schema:` line of a leaf's frontmatter to read its value; frontmatter syntax."
 hits = 1
 reviewed_by = "developer"
 
@@ -2688,18 +2675,6 @@ hits = 6
 hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
-[sites."scripts/verify-leaf-structure.py::_section_text::pattern.search"]
-class = "structural"
-ground = "SECTION_RE finds the next markdown '## ' heading to delimit a named section's body (fixed heading syntax)."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/verify-leaf-structure.py::_section_text::re.search"]
-class = "structural"
-ground = "Locates the '## <name>' heading line of a required section by its fixed heading syntax; the name is a schema constant, not free text."
-hits = 1
-reviewed_by = "developer"
-
 [sites."scripts/verify-leaf-structure.py::is_sk_leaf::pattern.search"]
 class = "structural"
 ground = "SK_PATH_RE matches the system-knowledge/<name>.md path shape."
@@ -3051,6 +3026,38 @@ reviewed_by = "developer"
 [sites."scripts/agentctl/check_cache.py::names_path::re.split"]
 class = "structural"
 ground = "Splits a shell word on fixed shell punctuation into path candidates; tokenization, not meaning."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/leaf_forms.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles the leading `---` frontmatter block pattern; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/leaf_forms.py::frontmatter_of::pattern.match"]
+class = "structural"
+ground = "Splits the `---` frontmatter block off a leaf; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/leaf_forms.py::field::re.search"]
+class = "structural"
+ground = "Finds the `<key>:` line of a leaf's frontmatter to read its value; the key is a schema constant, not free text."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/leaf_forms.py::_section_text::re.search"]
+class = "structural"
+ground = "Locates the `## <name>` heading of a required section and the next `## ` heading that ends its body; the names are schema constants, fixed heading syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/leaf_forms.py::_missing::pattern.match"]
+class = "structural"
+ground = "Splits the frontmatter block off a leaf before its sections are read; frontmatter syntax."
 hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "developer"

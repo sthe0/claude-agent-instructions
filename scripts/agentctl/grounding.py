@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from lib import leaf_forms
 from lib import principle_provenance as pp
 
 from .submission import is_substantive
@@ -26,10 +27,11 @@ GROUND_KINDS = {
     "experience": ("experience", "difficulty/v1"),
     "case": ("case", "case/v1"),
 }
+ONTOLOGY_KIND = "ontology"
+ONTOLOGY_PAIR = ("ontology", leaf_forms.ONTOLOGY_SCHEMA)
 REFUSED_KINDS = frozenset({"principle"})
 
 _REF = re.compile(r"^(?:(project):)?([a-z]+):([a-z0-9][a-z0-9-]*)$")
-_SCHEMA = re.compile(r"^schema[ \t]*:(.*)$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -46,16 +48,18 @@ def engine_leaves_root() -> Path:
     return Path(__file__).resolve().parents[2] / "memory-global" / "leaves"
 
 
+def engine_adr_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "docs" / "adr"
+
+
 def schema_of(text: str) -> str:
-    front = pp.FRONTMATTER.match(text)
-    found = _SCHEMA.search(front.group(1)) if front else None
-    return found.group(1).strip() if found else ""
+    return leaf_forms.schema_of(text)
 
 
 def parse_ground_refs(source: str):
     refs: list[GroundRef] = []
     bad: list[str] = []
-    known = set(GROUND_KINDS) | set(REFUSED_KINDS)
+    known = set(GROUND_KINDS) | set(REFUSED_KINDS) | {ONTOLOGY_KIND}
     for item in (source or "").split(";"):
         item = item.strip()
         if not item:
@@ -122,15 +126,49 @@ def kind_matches(ref: GroundRef, leaf) -> bool:
     return pair is not None and (leaf.area, schema_of(leaf.text)) == pair
 
 
-def source_problems(source: str, corpus) -> list[str]:
+def ontology_target(ref: GroundRef, corpus, adr_dir) -> Path | None:
+    """The file an `ontology:<slug>` ref names: a leaf of that slug in the tier's corpus (an
+    ontology/v1 leaf first) or, failing that, the Core ADR `<slug>.md`; None when neither exists."""
+    leaf = leaf_for(ref, corpus)
+    if leaf is not None:
+        return leaf.path
+    adr = Path(adr_dir) / f"{ref.slug}.md"
+    return adr if adr.is_file() else None
+
+
+def ontology_kind_ok(target: Path, corpus, adr_dir) -> bool:
+    """A target answers an ontology ref when it is an ontology/v1 leaf of the corpus or a file of the ADR directory."""
+    if Path(target).parent == Path(adr_dir):
+        return True
+    return any(leaf.path == target and (leaf.area, schema_of(leaf.text)) == ONTOLOGY_PAIR
+               for leaf in corpus.items)
+
+
+def ontology_problem(ref: GroundRef, corpus, adr_dir) -> str | None:
+    target = ontology_target(ref, corpus, adr_dir)
+    if target is None:
+        return (f"{ref.text()}: no such ontology/v1 leaf and no Core ADR docs/adr/{ref.slug}.md")
+    if not ontology_kind_ok(target, corpus, adr_dir):
+        return f"{ref.text()}: the leaf is not {ONTOLOGY_PAIR[0]} / {ONTOLOGY_PAIR[1]}"
+    return None
+
+
+def source_problems(source: str, corpus, adr_dir=None) -> list[str]:
     if not (source or "").strip():
         return ["empty: cite at least one regularity, experience or case"]
+    adr_dir = engine_adr_dir() if adr_dir is None else adr_dir
     refs, bad = parse_ground_refs(source)
     out = [f"source item {item!r} is not a ground reference "
-           f"`[project:]<kind>:<slug>` with kind in {sorted(GROUND_KINDS)}" for item in bad]
+           f"`[project:]<kind>:<slug>` with kind in {sorted(GROUND_KINDS) + [ONTOLOGY_KIND]}"
+           for item in bad]
     for ref in refs:
         if ref.kind in REFUSED_KINDS:
             out.append(f"{ref.text()}: {principle_hint(ref.slug, corpus, ref.tier)}")
+            continue
+        if ref.kind == ONTOLOGY_KIND:
+            problem = ontology_problem(ref, corpus, adr_dir)
+            if problem is not None:
+                out.append(problem)
             continue
         leaf = leaf_for(ref, corpus)
         if leaf is None:
@@ -142,7 +180,7 @@ def source_problems(source: str, corpus) -> list[str]:
     return out
 
 
-def grounding_violations(doc, *, corpus, exempt_stages=frozenset()) -> list[str]:
+def grounding_violations(doc, *, corpus, exempt_stages=frozenset(), adr_dir=None) -> list[str]:
     if not is_substantive(doc):
         return []
     out: list[str] = []
@@ -150,5 +188,5 @@ def grounding_violations(doc, *, corpus, exempt_stages=frozenset()) -> list[str]
         if stage.index in exempt_stages or stage.principle is None:
             continue
         out.extend(f"stage {stage.index} [stage.principle].source: {problem}"
-                   for problem in source_problems(stage.principle.source, corpus))
+                   for problem in source_problems(stage.principle.source, corpus, adr_dir))
     return out

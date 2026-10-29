@@ -95,6 +95,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import edit_ledger  # noqa: E402
+from lib import leaf_forms  # noqa: E402
 from lib import memory_retrieval_ledger  # noqa: E402
 from lib import principle_provenance as pp  # noqa: E402
 from lib import semantic_join  # noqa: E402
@@ -384,7 +385,11 @@ def cmd_search(a) -> int:
     if not terms:
         sys.exit("search needs keywords")
     scored: list[tuple[int, Path, str]] = []
-    for leaf in sorted(root.glob("*.md")):
+    if tier in leaf_forms.TIER_AREAS:
+        candidates = leaf_forms.tier_leaves(REPO_ROOT / "memory-global/leaves", tier)
+    else:
+        candidates = sorted(root.glob("*.md"))
+    for leaf in candidates:
         if leaf.name == "MEMORY.md":
             continue
         text = leaf.read_text(encoding="utf-8")
