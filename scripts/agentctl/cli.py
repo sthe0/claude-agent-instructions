@@ -103,6 +103,7 @@ from .render import (
     cmd_plan_render,
     plan_render_stage_arg_type,
     plan_summary_text,
+    render_plan_generalizations,
     render_plan_grants,
     render_plan_md,
     render_stages_md,
@@ -1648,6 +1649,26 @@ def _grounding_inputs(doc) -> dict:
         "staged_leaves": staged if staged is not None and staged.is_dir() else None,
         "task_id": meta.task_id or None,
     }
+
+
+def _generalizations_block(doc) -> str:
+    corpus = grounding.load_ground_corpus(**_grounding_inputs(doc))
+    return render_plan_generalizations(doc, corpus)
+
+
+def _generalizations_missing(doc, text: str) -> str | None:
+    """The new-generalizations block when `text` does not contain it, else None."""
+    block = _generalizations_block(doc)
+    return None if block.strip() in text else block
+
+
+def cmd_plan_generalizations(args, *, store=None, runner=None) -> Directive:
+    try:
+        doc = load_plan(args.plan)
+    except Exception as exc:
+        return Directive(False, "(render)", "noop", f"cannot load plan: {exc}")
+    block = _generalizations_block(doc)
+    return Directive(True, "(render)", "inspect", block, data={"generalizations_block": block})
 
 
 def _grounding_problems(doc, grounding_exempt_stages: frozenset[int] = frozenset()) -> list[str]:
@@ -5202,6 +5223,15 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                     "essence rendering omits the grants block; stamping nothing — "
                     "paste this block into it verbatim and re-run",
                     data={"grants_block": compact_grants_block},
+                )
+        if _grants_doc is not None and grounding.is_substantive(_grants_doc):
+            generalizations_block = _generalizations_missing(_grants_doc, text)
+            if generalizations_block is not None:
+                return Directive(
+                    False, state.node, "noop",
+                    "essence rendering omits the new-generalizations block; stamping "
+                    "nothing — paste this block into it verbatim and re-run",
+                    data={"generalizations_block": generalizations_block},
                 )
 
         # Refuse to stamp a receipt for a plan `approve` would refuse on premise
@@ -13911,6 +13941,7 @@ COMMANDS = {
     "plan": cmd_plan,
     "plan-render": cmd_plan_render,
     "plan-grants": cmd_plan_grants,
+    "plan-generalizations": cmd_plan_generalizations,
     "plan-resources": plan_resources.cmd_plan_resources,
     "plan-digest": plan_refs.cmd_plan_digest,
     "plan-externalize": plan_refs.cmd_plan_externalize,
@@ -14009,8 +14040,8 @@ _SESSION_COMMANDS = (
     "question-enumerate", "question-enumerate-worker", "question-enumerate-escape",
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-list", "classify", "plan",
-    "plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
-    "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
+    "plan-render", "plan-grants", "plan-generalizations", "plan-resources", "plan-digest",
+    "plan-externalize", "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
     "risk-accept", "accept-protected-grant", "stage-review", "code-review", "accept", "approve",
     "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
@@ -14096,7 +14127,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("control", ("question-raise",),
      "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
      "grammar-bound name, never the prose --control of record-result/close"),
-    ("plan", ("plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
+    ("plan", ("plan-render", "plan-grants", "plan-generalizations", "plan-resources", "plan-digest", "plan-externalize",
               "plan-seal", "plan-convert", "plan-review-delta", "submit-plan", "replan", "drive",
               "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",
@@ -14465,6 +14496,10 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
              "on demand (a projection, never written to disk)")
     sp.add_argument("--format", choices=["compact", "full", "json"], default="compact")
     # Session-free read, same reason as plan-render's suppressed --session above.
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-generalizations"); sp.add_argument("--plan", required=True,
+        help="TOML plan whose new-generalizations block (the regularities and principles it "
+             "introduces) to print; an essence must contain this block")
     sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp = add("plan-resources"); sp.add_argument("--plan", required=False, default=None,
         help="TOML plan whose per-stage typed resources (declared + derived rules, "

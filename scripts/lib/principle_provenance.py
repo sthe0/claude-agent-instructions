@@ -531,6 +531,10 @@ def _section_body(text: str, name: str) -> str | None:
     return text[m.end():m.end() + nxt.start()] if nxt else text[m.end():]
 
 
+def section_body(text: str, name: str) -> str | None:
+    return _section_body(text, name)
+
+
 def case_section_error(text: str) -> str | None:
     missing = [n for n in CASE_SECTIONS if not (_section_body(text, n) or "").strip()]
     if missing:

@@ -29,7 +29,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from lib import kind_baselines
+from lib import kind_baselines, principle_provenance
 from lib.spawn_ceiling import dispatch_prompt_ceiling_chars
 
 from . import plan_refs, plan_store, protected_actions
@@ -1851,6 +1851,55 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
                 parts.append("(no grants)")
             lines.append(" ".join(parts))
     return "\n".join(lines).rstrip() + "\n"
+
+
+GENERALIZATIONS_HEADER = "New generalizations (for approval):"
+EMPTY_GENERALIZATIONS_LINE = "- none: no leaf stamped with this plan's task id is staged"
+# area of a generalization leaf -> the section holding its statement
+_STATEMENT_SECTION = {"regularity": "Regularity", "principle": "Principle"}
+
+
+def introduced_by_plan(leaf_text: str, task_id) -> bool:
+    return bool(task_id) and principle_provenance.introduced_by(leaf_text) == task_id
+
+
+def generalization_candidates(leaves, task_id, cited=()) -> list:
+    """Every regularity or principle leaf of the corpus the plan introduces, cited by a stage
+    or not, in slug order. `cited` (the slugs the stages cite) does not filter: an introduced
+    leaf no stage cites still joins the corpus on approval."""
+    found = [leaf for leaf in leaves
+             if leaf.area in _STATEMENT_SECTION and introduced_by_plan(leaf.text, task_id)]
+    return sorted(found, key=lambda leaf: (leaf.slug, leaf.tier, leaf.area))
+
+
+def generalization_line(leaf) -> str:
+    body = principle_provenance.section_body(leaf.text, _STATEMENT_SECTION[leaf.area]) or ""
+    paragraphs = [p for p in body.strip().split("\n\n") if p.strip()]
+    statement = " ".join(paragraphs[0].split()) if paragraphs else ""
+    prefix = "project:" if leaf.tier == "project" else ""
+    return f"- {prefix}{leaf.area}:{leaf.slug} — {statement}"
+
+
+def render_plan_generalizations(doc: PlanDoc, corpus) -> str:
+    """The generalizations the plan introduces, generated from the corpus the submission seam
+    loads (staged leaves included) and never hand-maintained: present-plan requires this
+    block's text inside an essence, so an introduced leaf cannot be left out of the approval."""
+    from . import grounding
+
+    cited = {ref.slug
+             for stage in doc.stages if stage.principle is not None
+             for ref in grounding.parse_ground_refs(stage.principle.source)[0]}
+    lines = [GENERALIZATIONS_HEADER]
+    for leaf in generalization_candidates(corpus.items, doc.meta.task_id, cited):
+        line = generalization_line(leaf)
+        lines.append(line if leaf.slug in cited else line + " (not cited by any stage)")
+        if principle_provenance.field_value(leaf.text, principle_provenance.ORDER_DERIVED):
+            quote = principle_provenance.order_quote(leaf.text)
+            if quote:
+                lines.append("  order quote: " + quote.replace("\n", "\n    "))
+    if len(lines) == 1:
+        lines.append(EMPTY_GENERALIZATIONS_LINE)
+    return "\n".join(lines) + "\n"
 
 
 def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
