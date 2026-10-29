@@ -762,6 +762,10 @@ ENUMERATION_WRITERS = {
     ("cmd_ledger_enumerate", "enumerated"),
 }
 
+def cli_module_paths() -> list[Path]:
+    return sorted(AGENTCTL_ROOT.glob("cli*.py"))
+
+
 ENUMERATION_KEYS = {"enumerated", "enumerated_at", "enumerate_pass", "enumerate_launch",
                     "enumerated_runner_ok", "enumerated_runner_stderr"}
 
@@ -834,8 +838,9 @@ def check_enumeration_writers() -> list[str]:
     `cmd_ledger_enumerate` shows the bypass shape already exists in the module (on
     a different, ungated bag).
     """
-    tree = ast.parse((AGENTCTL_ROOT / "cli.py").read_text(encoding="utf-8"))
-    found = enumeration_bag_writers(tree)
+    found: set[tuple[str, str]] = set()
+    for path in cli_module_paths():
+        found |= enumeration_bag_writers(ast.parse(path.read_text(encoding="utf-8")))
     problems: list[str] = []
     for scope, key in sorted(found - ENUMERATION_WRITERS):
         problems.append(
@@ -868,8 +873,8 @@ def check_workspace_cleanup() -> list[str]:
     shared decision rule and its own guard, and no removal argv carries a forced flag.
     """
     problems: list[str] = []
-    cli_tree = ast.parse((AGENTCTL_ROOT / "cli.py").read_text(encoding="utf-8"))
-    resolve = next((n for n in ast.walk(cli_tree)
+    resolve = next((n for path in cli_module_paths()
+                    for n in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
                     if isinstance(n, ast.FunctionDef) and n.name == "cmd_resolve"), None)
     if resolve is None:
         return ["cli.py: cmd_resolve not found"]
