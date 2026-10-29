@@ -253,20 +253,21 @@ def test_staged_regularity_triggers(tmp_path, env):
 
 
 def test_project_principle_grandfathered(tmp_path, env):
+    """The project tier has the root's knowledge layer: its experience is induced into a project regularity."""
     c = Corpus(tmp_path).good()
     project = tmp_path / "acme-widgets" / ".claude" / "agent-memory"
     _write(project / "experience" / "w1.md", _fm({
         "name": "w1", "description": "a project experience", "type": "reference",
-        "schema": "difficulty/v1", "generalized_into": "[widget-principle]",
+        "schema": "difficulty/v1", "generalized_into": "[widget-regularity]",
         "resolution_confirmed_by_user": '"yes"', "created": DATE, "last_verified": DATE,
     }) + "\n# Sample\n\n## Difficulty\n\nA widget drifts.\n")
-    _write(project / "principles" / "widget-principle.md", _fm({
-        "name": "widget-principle", "description": "a project principle", "type": "reference",
-        "schema": "principle/v1", "generality": 1, "induced_from": "[w1]",
+    _write(project / "regularities" / "widget-regularity.md", _fm({
+        "name": "widget-regularity", "description": "a project regularity", "type": "reference",
+        "schema": "regularity/v1", "generality": 1, "induced_from": "[w1]",
         "created": DATE, "last_verified": DATE,
-    }) + "\n# Sample\n\n## Principle\n\nKeep widgets aligned.\n")
-    _write(project / "principles" / "MEMORY.md",
-           "# Principles\n\n- [Widgets](widget-principle.md) — a sample ← `w1`.\n")
+    }) + "\n# Sample\n\n## Regularity\n\nWidgets drift.\n")
+    _write(project / "regularities" / "MEMORY.md",
+           "# Regularities\n\n- [Widgets](widget-regularity.md) — a sample ← `w1`.\n")
     done = _run(RECORD, env, "provenance", "--check", "--root", c.memory,
                 "--project-dir", tmp_path / "acme-widgets")
     assert done.returncode == 0, done.stdout + done.stderr

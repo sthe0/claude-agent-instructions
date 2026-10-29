@@ -12,6 +12,10 @@ and a citing regularity. The rules live in `lib/principle_provenance.py`; the
 project-side checks (orphan, stale and leaking cases) run through
 `record-experience.py provenance --project-dir D --check`.
 
+--project DIR: also check a project's memory (the repo dir or its memory dir) with the same
+rules: its regularities are induced from its experience, its principles are grounded in
+regularities of the project tier first, then global.
+
 --staged: run only when a staged path lies under experience/, regularities/ or principles/,
 then check the whole corpus as the git index holds it (a link has two sides, so
 a one-file check misses the side that was not staged; an unstaged edit or an
@@ -63,7 +67,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--staged", action="store_true")
+    parser.add_argument("--project", type=Path, metavar="DIR",
+                        help="also check this project's memory (the repo dir or its memory dir)")
     args = parser.parse_args(argv)
+    if args.project and args.staged:
+        parser.error("--project checks the working tree; it cannot be combined with --staged")
 
     if args.staged and not pp.staged_triggers(_staged_paths(args.root)):
         print(f"{NAME}: OK — no staged experience, regularity or principle leaf")
@@ -72,14 +80,17 @@ def main(argv: list[str] | None = None) -> int:
     if not leaves.is_dir():
         print(f"{NAME}: OK — no {pp.LEAVES_REL}/ tree")
         return 0
-    corpus = _indexed_corpus(args.root) if args.staged else pp.load_corpus(leaves)
-    findings = pp.unaccounted(corpus)
+    if args.staged:
+        findings = pp.unaccounted(_indexed_corpus(args.root))
+    else:
+        findings = pp.verify_corpus(args.root, pp.project_memory(args.project))
     if not findings:
         print(f"{NAME}: OK")
         return 0
     print(f"{NAME}: FAIL")
     for f in findings:
-        print(f"  {f.kind}: {f.path.relative_to(args.root)} — {f.detail}")
+        shown = f.path.relative_to(args.root) if f.path.is_relative_to(args.root) else f.path
+        print(f"  {f.kind}: {shown} — {f.detail}")
     return 1
 
 

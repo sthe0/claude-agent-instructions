@@ -73,7 +73,8 @@ class World:
         self.project = self.repo / ".claude" / "agent-memory"
         for d in (self.leaves / "experience", self.leaves / "principles" / "cases",
                   self.leaves / "regularities",
-                  self.project / "experience", self.project / "principles"):
+                  self.project / "experience", self.project / "regularities",
+                  self.project / "principles"):
             d.mkdir(parents=True, exist_ok=True)
 
     def _base(self, tier: str) -> Path:
@@ -97,22 +98,20 @@ class World:
 
     def induced_leaf(self, slug, induced=(), tier="global", rule_derived=None,
                      pointer=None) -> Path:
-        """The induced-from leaf of the tier: a global regularity, a (grandfathered) project principle."""
-        is_global = tier == "global"
-        base = self._base(tier) / ("regularities" if is_global else "principles")
+        """The induced-from leaf of the tier: a regularity."""
+        base = self._base(tier) / "regularities"
         path = base / f"{slug}.md"
-        schema, section = ("regularity/v1", "Regularity") if is_global else ("principle/v1", "Principle")
         path.write_text(_fm({
             "name": slug, "description": "a sample principle", "type": "reference",
-            "schema": schema, "generality": 1, pp.INDUCED: pp.format_list(induced),
+            "schema": "regularity/v1", "generality": 1, pp.INDUCED: pp.format_list(induced),
             pp.RULE_DERIVED: json.dumps(rule_derived) if rule_derived else None,
             "created": DATE, "last_verified": DATE,
-        }) + f"\n# A principle\n\n## {section}\n\nRun a check where its subject lives.\n",
+        }) + "\n# A principle\n\n## Regularity\n\nRun a check where its subject lives.\n",
             encoding="utf-8")
         listed = induced if pointer is None else pointer
         index = base / pp.INDEX
         text = index.read_text(encoding="utf-8") if index.exists() else (
-            f"# {'Regularities' if is_global else 'Principles'}\n\n## Level 1 — sibling-context rules\n\n")
+            "# Regularities\n\n## Level 1 — sibling-context rules\n\n")
         index.write_text(text + f"- [A principle]({slug}.md) — a sample principle "
                          + pp.ARROW + ", ".join(f"`{s}`" for s in listed) + ".\n",
                          encoding="utf-8")
@@ -575,7 +574,7 @@ def test_promote_project_principle(tmp_path):
     w = World(tmp_path)
     leaf = w.exp("2026-03-01-widget-drift", status=[], tier="project")
     assert _promote(w, "--induced-from", leaf.stem, "--project-dir", w.repo) == 0
-    assert induced_of(w.project / "principles" / "new-principle.md") == [leaf.stem]
+    assert induced_of(w.project / "regularities" / "new-principle.md") == [leaf.stem]
     assert status_of(leaf) == ["new-principle"]
     assert not (w.leaves / "regularities" / "new-principle.md").exists()
 
@@ -660,8 +659,8 @@ def test_split_leaf_born_unlinked(tmp_path):
 
 
 @pytest.mark.parametrize("flags, message", [
-    (["--principle", "--grounded-in", "venue-regularity", "--project-dir", "PROJECT"],
-     "project tier keeps its principles induced"),
+    (["--principle", "--grounded-in", "no-such-regularity", "--project-dir", "PROJECT"],
+     "not found under"),
     (["--principle", "--grounded-in", "venue-regularity", "--induced-from", "2026-01-01-sample"],
      "--induced-from and --rule-derived belong to a regularity"),
     (["--principle", "--grounded-in", "venue-regularity", "--rule-derived", "why"],

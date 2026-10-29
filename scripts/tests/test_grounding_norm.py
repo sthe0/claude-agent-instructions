@@ -399,10 +399,14 @@ def test_project_tier_resolved(world):
 
 
 def test_project_ref_never_falls_back_to_global(world):
-    problems = _problems(f"{GOOD}; project:regularity:reg-a", world)
+    """Superseded by the project tier's global fallback: a project ref resolves to the global
+    leaf when the project has none; the miss that remains is a slug present in neither tier."""
+    assert _problems(f"{GOOD}; project:regularity:reg-a", world) == []
+
+    problems = _problems(f"{GOOD}; project:regularity:reg-nowhere", world)
 
     assert len(problems) == 1
-    assert "project:regularity:reg-a" in problems[0]
+    assert "project:regularity:reg-nowhere" in problems[0]
 
 
 def test_same_slug_in_another_area_does_not_shadow(world):

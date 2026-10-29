@@ -68,13 +68,20 @@ def parse_ground_refs(source: str):
     return refs, bad
 
 
+fallback_tiers = pp.fallback_tiers
+
+
 def principle_hint(slug: str, corpus, tier: str = "global") -> str:
     leaf = leaf_for(GroundRef(tier, "principle", slug), corpus)
     grounds = pp.grounded_regularities(leaf) if leaf is not None else []
     if not grounds:
         return "a principle is a norm, not a ground; cite a regularity: regularity:<slug>"
+    cited = []
+    for g in grounds:
+        found = leaf_for(GroundRef(leaf.tier, "regularity", g), corpus)
+        cited.append(GroundRef(found.tier if found is not None else "global", "regularity", g).text())
     return ("a principle is a norm, not a ground; cite the regularities it is grounded in: "
-            + ", ".join(f"regularity:{g}" for g in grounds))
+            + ", ".join(cited))
 
 
 def admits_staged(leaf_text: str, task_id) -> bool:
@@ -95,13 +102,19 @@ def load_ground_corpus(global_leaves, project_root=None, staged_leaves=None, tas
 def leaf_for(ref: GroundRef, corpus):
     """The leaf `ref` cites: its own kind's area in its own tier first, so a same-slug leaf of
     another area cannot shadow it; failing that any leaf of that slug in that tier, which
-    `kind_matches` then refuses. A project ref never falls back to the global tier."""
+    `kind_matches` then refuses. A project ref falls back to the global tier when the project
+    holds no such leaf."""
     area = GROUND_KINDS[ref.kind][0] if ref.kind in GROUND_KINDS else ref.kind
-    in_area = [leaf for leaf in corpus.of(area, ref.tier) if leaf.slug == ref.slug]
-    if in_area:
-        return in_area[0]
-    elsewhere = [leaf for leaf in corpus.items if leaf.slug == ref.slug and leaf.tier == ref.tier]
-    return elsewhere[0] if elsewhere else None
+    tiers = fallback_tiers(ref.tier)
+    for tier in tiers:
+        in_area = [leaf for leaf in corpus.of(area, tier) if leaf.slug == ref.slug]
+        if in_area:
+            return in_area[0]
+    for tier in tiers:
+        elsewhere = [leaf for leaf in corpus.items if leaf.slug == ref.slug and leaf.tier == tier]
+        if elsewhere:
+            return elsewhere[0]
+    return None
 
 
 def kind_matches(ref: GroundRef, leaf) -> bool:
