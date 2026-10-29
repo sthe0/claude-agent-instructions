@@ -186,6 +186,7 @@ def test_promote_writes_project_regularity(mem):
     leaf = mem.experience("w1")
     assert mem.promote("--induced-from", "w1", "--project-dir", mem.repo) == 0
     written = mem.project / "regularities" / "new-leaf.md"
+    assert written.is_file()
     assert pp.field_value(written.read_text(encoding="utf-8"), "schema") == "regularity/v1"
     assert pp.read_induced(written.read_text(encoding="utf-8")) == ["w1"]
     assert "new-leaf.md" in (mem.project / "regularities" / pp.INDEX).read_text(encoding="utf-8")
