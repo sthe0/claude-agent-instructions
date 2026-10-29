@@ -676,11 +676,16 @@ def file_norm_digest(path: str) -> str | None:
 
 
 PRESCRIPTION_SCHEMAS = frozenset({"leaf/v1", "principle/v1"})
+# Keys that tools write without changing what a regularity claims: promote and the picture step
+# (induced_from), the temporal-frontmatter tooling, and the grounding judge's stamps -- including
+# grounding_unjudged, the marker a fail-open judge leaves when it could not judge the link.
 REGULARITY_PROVENANCE_KEYS = frozenset({
     "induced_from", "created", "last_verified",
     "grounding_judged", "grounding_override", "grounding_unjudged",
 })
 STEP_HINTS = {
+    "file": "the rule file is gone: restore it at this path -- no replan retargets or drops an "
+            "open obligation, so a renamed rule is brought back to this path first",
     "picture": "write the experience leaf (or case) that records the instance and cite it in the "
                "induced_from of a regularity the rule is grounded in",
     "condition": "refine or add the regularity: change a grounded regularity's claim, or "
@@ -717,13 +722,16 @@ def regularity_digest(text: str) -> str:
 
 
 def _memory_root(path: Path) -> tuple[Path, str] | None:
-    """The memory root a leaf file sits in and its tier: the nearest `leaves/` dir is global,
-    the nearest `.claude/agent-memory` dir is project."""
+    """The memory root a leaf file sits in and its tier: a `.claude/agent-memory` ancestor is
+    project (checked first, since project memory may hold a `leaves/` dir of its own), else the
+    nearest `leaves/` dir is global."""
+    rel = pp.PROJECT_MEMORY_REL.parts
+    for parent in path.parents:
+        if parent.parts[-len(rel):] == rel:
+            return parent, "project"
     for parent in path.parents:
         if parent.name == "leaves":
             return parent, "global"
-        if parent.name == "agent-memory" and parent.parent.name == ".claude":
-            return parent, "project"
     return None
 
 
@@ -771,11 +779,12 @@ def _read_grounded(text: str) -> list[str]:
         return []
 
 
-def _read_induced(text: str) -> list[str]:
+def _read_induced(text: str) -> list[str] | None:
+    """The refs of `induced_from`; None when the field cannot be parsed."""
     try:
         return pp.read_induced(text)
     except ValueError:
-        return []
+        return None
 
 
 def _current_grounds(target: str):
@@ -813,15 +822,22 @@ def prescription_snapshot(target: str) -> dict | None:
     leaves = _tier_regularities(target)
     digests = snapshot_regularities(target)
     _corpus, grounded = _current_grounds(target)
-    return {
+    induced = {ref: _read_induced(leaves[ref].text) for ref in digests if ref in leaves}
+    snapshot = {
         "grounded_in": sorted(grounded),
         "regularities": digests,
-        "sources": {ref: _read_induced(leaves[ref].text) for ref in digests if ref in leaves},
+        "sources": {ref: refs or [] for ref, refs in induced.items()},
     }
+    unparsed = sorted(ref for ref, refs in induced.items() if refs is None)
+    if unparsed:
+        snapshot["unparsed"] = unparsed
+    return snapshot
 
 
 def known_sources(entry: dict) -> frozenset:
-    """Every experience or case ref the snapshot's regularities already held."""
+    """Every experience or case ref the snapshot's regularities already held. Refs compare as
+    written in `induced_from`: the same leaf spelled differently across tiers (`e3` against
+    `project:experience:e3`) reads as a new ref."""
     sources = (entry.get("prescription") or {}).get("sources", {})
     return frozenset(item for refs in sources.values() for item in refs)
 
@@ -840,17 +856,22 @@ def condition_met(entry: dict, grounds=None) -> bool:
 def _picture_met(entry: dict, grounds) -> bool:
     corpus, grounded = grounds
     known = known_sources(entry)
+    unparsed = set((entry.get("prescription") or {}).get("unparsed", []))
     return any(item not in known
                and pp.resolve_source(item, corpus, leaf.tier) in pp.EXPERIENCE_SOURCE_KINDS
-               for leaf in grounded.values() for item in _read_induced(leaf.text))
+               for ref, leaf in grounded.items() if ref not in unparsed
+               for item in _read_induced(leaf.text) or [])
 
 
 def refutation_steps_missing(entry: dict) -> list[str]:
     """The steps of closing a refuted prescription still undone, in order: the picture (a new
     experience or case enters a grounded regularity), the condition (the ground itself changed),
-    the prescription (the rule file differs from its baseline)."""
+    the prescription (the rule file differs from its baseline). A rule file that is gone leaves
+    one step: the file itself, which only restoring it clears."""
     if not entry.get("prescription"):
         return []
+    if file_norm_digest(entry["target"]) is None:
+        return ["file"]
     grounds = _current_grounds(entry["target"])
     missing = []
     if not _picture_met(entry, grounds):
@@ -874,20 +895,33 @@ def renorm_record(target: str, baseline, stage: int, depth: int, prescription=No
     return record
 
 
-def renorm_admission_open(entry: dict) -> bool:
+def renorm_admission_open(entry: dict, missing=None) -> bool:
     """Whether an obligation stays open although its rule file was edited: a prescription whose
-    refutation steps are not all done. A deleted file has nothing left to ground."""
-    return (bool(entry.get("prescription")) and file_norm_digest(entry["target"]) is not None
-            and bool(refutation_steps_missing(entry)))
+    refutation steps are not all done, a vanished rule file included. `missing` is the steps
+    already computed for `entry`, so a caller that holds them does not load the grounds again."""
+    if not entry.get("prescription"):
+        return False
+    return bool(refutation_steps_missing(entry) if missing is None else missing)
+
+
+def _open_steps(entry: dict) -> list[str] | None:
+    """None when the obligation is closed; else the refutation steps still undone ([] for an
+    unedited target that is not a prescription). Loads the grounds once per entry."""
+    missing = refutation_steps_missing(entry) if entry.get("prescription") else []
+    if renorm_admission_open(entry, missing):
+        return missing
+    if file_norm_digest(entry.get("target", "")) == entry.get("baseline"):
+        return missing
+    return None
 
 
 def _renorm_open(entry: dict) -> bool:
-    return file_norm_digest(entry.get("target", "")) == entry.get("baseline") or renorm_admission_open(entry)
+    return _open_steps(entry) is not None
 
 
-def _open_renorm_blocker(entry: dict, fallback: str) -> str:
+def _open_renorm_blocker(entry: dict, fallback: str, missing: list[str]) -> str:
     if entry.get("prescription"):
-        return missing_step_message(entry, refutation_steps_missing(entry))
+        return missing_step_message(entry, missing)
     return fallback
 
 
@@ -989,9 +1023,11 @@ def normative_edit_blockers(state: SessionState, new_plan, pending_indices,
                 f"PASSED and will not run again -- name it on a stage this replan leaves "
                 f"pending"
             )
-        elif renorm_admission_open(t) and not any(i in pending for i in naming):
+        elif (t.get("prescription")
+              and renorm_admission_open(t, missing := refutation_steps_missing(t))
+              and not any(i in pending for i in naming)):
             out.append(
-                f"{missing_step_message(t, refutation_steps_missing(t))}; the only stage(s) "
+                f"{missing_step_message(t, missing)}; the only stage(s) "
                 f"naming it in `renorms` ({', '.join(str(i) for i in naming)}) are carried "
                 f"forward as PASSED and will not run again -- name it on a stage this replan "
                 f"leaves pending"
@@ -999,12 +1035,16 @@ def normative_edit_blockers(state: SessionState, new_plan, pending_indices,
     return out
 
 
+def _open_with_steps(state: SessionState) -> list[tuple[dict, list[str]]]:
+    return [(e, steps) for e in state.pending_renorms if (steps := _open_steps(e)) is not None]
+
+
 def open_renorms(state: SessionState) -> list[dict]:
     """The obligations in `state.pending_renorms` whose file still has its baseline bytes, or
     that are a prescription whose refutation is not closed (`renorm_admission_open`). A moved
     one is otherwise discharged: the observable is the file's digest, never the path's
     class or who edited it."""
-    return [e for e in state.pending_renorms if _renorm_open(e)]
+    return [e for e, _steps in _open_with_steps(state)]
 
 
 def renorm_retention_blockers(state: SessionState, new_plan, pending_indices,
@@ -1027,7 +1067,8 @@ def renorm_retention_blockers(state: SessionState, new_plan, pending_indices,
                 f"installs, whose bytes move with the replan itself"
             )
             continue
-        if not _renorm_open(e):
+        missing = _open_steps(e)
+        if missing is None:
             continue
         naming = _stages_naming(new_plan, e["target"])
         if not any(i in pending for i in naming):
@@ -1036,7 +1077,7 @@ def renorm_retention_blockers(state: SessionState, new_plan, pending_indices,
                 f"`renorms` of a stage that is still to run (it was bound to stage "
                 f"{e.get('stage')}); a reference on a carried-forward PASSED stage does "
                 f"not count"
-            )))
+            ), missing))
     return out
 
 
@@ -1076,8 +1117,8 @@ def pending_renorm_stage_blockers(state: SessionState, stage_index: int) -> list
     return [
         _open_renorm_blocker(e, (
             f"stage {stage_index} is bound to norm target {e['target']}, which still has its "
-            f"baseline bytes -- edit it (the re-norming act), then record the result"))
-        for e in open_renorms(state)
+            f"baseline bytes -- edit it (the re-norming act), then record the result"), steps)
+        for e, steps in _open_with_steps(state)
         if e.get("depth", 0) == depth and e.get("stage") == stage_index
     ]
 
@@ -1092,8 +1133,8 @@ def pending_renorm_final_blockers(state: SessionState) -> list[str]:
         _open_renorm_blocker(e, (
             f"norm target {e['target']} (bound to stage {e.get('stage')}) was named by a "
             f"normative critique and its file still has its baseline bytes -- edit it, "
-            f"the re-norming act that closes the difficulty"))
-        for e in open_renorms(state)
+            f"the re-norming act that closes the difficulty"), steps)
+        for e, steps in _open_with_steps(state)
         if e.get("depth", 0) == depth
     ]
 

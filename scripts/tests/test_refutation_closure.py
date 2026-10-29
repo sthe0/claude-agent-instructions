@@ -12,11 +12,11 @@ assertion.
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from agentctl import cli, gates, grounding
+from agentctl import gates, grounding
+from agentctl.plan import load_plan
 from agentctl.state import SessionState
 from lib import principle_provenance as pp
 
@@ -169,7 +169,6 @@ def test_picture_without_condition_stays_open(mem):
 def test_three_steps_discharge(mem):
     entry = _entry(mem.rule)
     _edit_rule(mem)
-    _refine_claim(mem)
     mem.edit(mem.r1, regularity_text("claim v2", ("e1", "e3")))
     assert gates.refutation_steps_missing(entry) == []
     assert gates.open_renorms(_state(entry)) == [], \
@@ -257,10 +256,15 @@ def _bound(store, plans, mem, sid):
 
 
 def test_snapshot_survives_rebind(mem, store, plans):
-    state = _bound(store, plans, mem, "b1")
-    (entry,) = state.pending_renorms
-    assert "prescription" in entry, "BEHAVIOUR: the replan's rebind dropped the snapshot"
-    assert entry["prescription"] == gates.prescription_snapshot(mem.rule)
+    at_critique = gates.prescription_snapshot(mem.rule)
+    (entry,) = _bound(store, plans, mem, "b1").pending_renorms
+    assert entry.get("prescription") == at_critique, "BEHAVIOUR: the replan's rebind dropped the snapshot"
+    _refine_claim(mem)
+    again = plans("again", _stages(s1={"renorms": [mem.rule], "method": "m4"}))
+    assert _replan(store, "b1", again).ok is True
+    (entry,) = store.load("b1").pending_renorms
+    assert entry["prescription"] == at_critique, \
+        "BEHAVIOUR: a later rebind re-took the snapshot instead of keeping the critique-time one"
 
 
 def test_replan_closure_keeps_edited_prescription_open(mem, store, plans):
@@ -279,3 +283,78 @@ def test_replan_names_missing_step(mem, store, plans):
     assert d.ok is False, "BEHAVIOUR: a replan dropped an open prescription renorm"
     text = _blockers(d)
     assert "picture" in text and "condition" in text, f"BEHAVIOUR: the refusal names no step: {text!r}"
+
+
+def test_deleted_rule_file_keeps_prescription_open(mem):
+    entry = _entry(mem.rule)
+    Path(mem.rule).unlink()
+    assert gates.refutation_steps_missing(entry) == ["file"]
+    assert gates.open_renorms(_state(entry)) == [entry], \
+        "BEHAVIOUR: deleting the rule file closed a prescription obligation"
+    for text in (_stage_blocked(entry), " | ".join(gates.pending_renorm_final_blockers(_state(entry)))):
+        assert "gone" in text and "restore" in text, f"BEHAVIOUR: the refusal does not say the file is gone: {text!r}"
+
+
+def test_deleted_nonprescription_target_still_closes(mem):
+    entry = _entry(mem.r1)
+    Path(mem.r1).unlink()
+    assert gates.open_renorms(_state(entry)) == [], \
+        "BEHAVIOUR: a deleted non-prescription target stayed open"
+
+
+def test_renamed_rule_file_stays_open_until_restored(mem):
+    entry = _entry(mem.rule)
+    moved = Path(mem.rule).with_name("P-renamed.md")
+    Path(mem.rule).rename(moved)
+    assert gates.open_renorms(_state(entry)) == [entry], \
+        "BEHAVIOUR: renaming the rule file closed the obligation"
+    moved.rename(mem.rule)
+    assert gates.refutation_steps_missing(entry) == ["picture", "condition", "prescription"]
+
+
+def test_carried_passed_stage_with_open_prescription_is_refused(mem, store, plans):
+    _diagnosing(store, "c1", plans("base"), fail_stage=2)
+    assert _critique(store, "c1", "normative", [mem.rule]).ok is True
+    _normalize(store, "c1")
+    _edit_rule(mem)
+    new_plan = load_plan(plans("on-passed", _stages(s1={"renorms": [mem.rule]})), strict=False)
+    out = gates.normative_edit_blockers(store.load("c1"), new_plan, {2})
+    text = " | ".join(out)
+    assert "PASSED" in text and "picture" in text and "condition" in text, \
+        f"BEHAVIOUR: an edited rule with picture and condition open was admitted on a carried PASSED stage: {out}"
+    assert gates.normative_edit_blockers(store.load("c1"), new_plan, {1, 2}) == []
+
+
+def test_project_rule_under_a_leaves_dir_is_project_tier(mem):
+    mem.write("project", "regularities", "p1", regularity_text("project claim", ("e1",)))
+    nested = mem.dirs["project"] / "leaves"
+    nested.mkdir()
+    rule = nested / "x.md"
+    rule.write_text(principle_text(grounded=("p1",)).replace("principle/v1", "leaf/v1"), encoding="utf-8")
+    assert gates.snapshot_tiers(str(rule)) == ("project", "global")
+    snap = gates.prescription_snapshot(str(rule))
+    assert snap is not None and "project:regularity:p1" in snap["regularities"], \
+        "BEHAVIOUR: a project rule under a leaves/ dir was read as global"
+
+
+def test_project_rule_discharges_in_three_steps(mem):
+    mem.write("project", "regularities", "p1", regularity_text("project claim", ("e1",)))
+    rule = mem.write("project", "principles", "PP", principle_text(grounded=("p1",)))
+    entry = _entry(rule)
+    assert gates.refutation_steps_missing(entry) == ["picture", "condition", "prescription"]
+    mem.edit(rule, principle_text(grounded=("p1",), rule="rule v2"))
+    mem.edit(str(mem.dirs["project"] / "regularities" / "p1.md"),
+             regularity_text("project claim v2", ("e1", "e3")))
+    assert gates.refutation_steps_missing(entry) == [], \
+        "BEHAVIOUR: a project-tier rule never reached the discharged state"
+
+
+def test_unparsed_induced_from_does_not_make_later_refs_a_picture(mem):
+    broken = regularity_text().replace("induced_from: [e1]", "induced_from: [e1")
+    mem.edit(mem.r1, broken)
+    snap = gates.prescription_snapshot(mem.rule)
+    assert snap["unparsed"] == ["regularity:R1"]
+    entry = _entry(mem.rule)
+    mem.edit(mem.r1, regularity_text("claim v1", ("e1", "e3")))
+    assert "picture" in gates.refutation_steps_missing(entry), \
+        "BEHAVIOUR: refs of a regularity unparsed at snapshot time counted as a new picture"
