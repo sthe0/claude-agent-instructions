@@ -326,6 +326,27 @@ def own_contour_brief_lines(args: argparse.Namespace, own_plan: "Path | None" = 
     ]
 
 
+def push_checkpoint_text(push_rules: "Sequence[str]") -> str:
+    """The checkpoint brief's push sentence, built from the same rules the child's
+    `--settings` carries (`push_allow_rules`), so the brief cannot name a push the child
+    may not run."""
+    if not push_rules:
+        return "Commit only: no push rule was granted for this stage. Never land. "
+    commands = ", ".join(f"`{rule[len('Bash('):-1]}`" for rule in push_rules)
+    return (
+        f"Push your own branch after each commit with exactly {commands}: the allow rule "
+        "matches only that spelling, so any other form (no operand, `HEAD:<ref>`, a flag) "
+        "stops on a permission prompt. Never push another branch and never land. "
+        "The rule was granted because the git config at launch could not remap this push "
+        "(`push.default=upstream`, `remote.<r>.push`, `push.followTags`, "
+        "`push.recurseSubmodules` were checked); do not change git config. Residual: it "
+        "does not pin the URL (`remote.<r>.pushurl`, `url.<base>.insteadOf`, "
+        "`url.<base>.pushInsteadOf`) or the code "
+        "the push runs (a `pre-push` hook, `core.hooksPath`, `core.sshCommand`), and "
+        "config changed after launch is not re-checked. "
+    )
+
+
 def assemble_prompt(
     args: argparse.Namespace,
     depth: int,
@@ -340,6 +361,7 @@ def assemble_prompt(
     site: "SitePrompt | None" = None,
     own_contour: bool = False,
     own_plan: "Path | None" = None,
+    push_rules: "Sequence[str]" = (),
 ) -> str:
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
     done_criterion = argv_text.read_arg_text(args.done_criterion)
@@ -479,10 +501,8 @@ def assemble_prompt(
             "",
             "Commit each checkpoint as soon as its own control goes green — don't "
             "batch unrelated checkpoints into one commit. "
-            "In the Core repo the git-worktrees reaper backs up committed branches, so commit only. "
-            "Outside the Core repo, push the personal/ticket branch after each commit "
-            "where your grants allow it (never a shared/trunk branch); never land. "
-            "Keep evidence (test output, command logs, intermediate artifacts) in the "
+            + push_checkpoint_text(push_rules)
+            + "Keep evidence (test output, command logs, intermediate artifacts) in the "
             "durable evidence directory below, not under `/tmp` or another OS-temp "
             "scratch root — a scratch root can be swept before anyone reviews it.",
             "",
@@ -2187,6 +2207,47 @@ def _stage_branch_resources(state, stage_index: int) -> list:
             if isinstance(r, agentctl_resources.VcsRefResource) and r.op in ("commit", "push")]
 
 
+# A branch name the rule text carries verbatim: no shell or rule metacharacter can reach it.
+_PUSH_RULE_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+
+
+def push_allow_rules(linked, stage_index: "int | None", kind: str) -> "list[str]":
+    """One exact `Bash(git push <remote> <branch>)` allow rule per frozen DR-P push resource of
+    the delegated stage. The resource-grant hook abstains on every line that may run git, so
+    the static allow list alone decides a push; without this rule a developer could not push
+    its own branch. Colon-less, so the harness matches only that spelling. A colon-less push
+    is remapped by `push.default=upstream` and by `remote.<r>.push`, so the rule is rendered
+    only while the venue's git config passes the resolver's own `_push_config_blocker`. A branch
+    whose name carries anything outside `_PUSH_RULE_BRANCH`, or a blocked config, gets no rule,
+    with the reason on stderr."""
+    if linked is None or stage_index is None or kind != "developer":
+        return []
+    from agentctl import segment_resolver
+    from agentctl.state import CheckVenue
+
+    state, _ = linked
+    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+    rules = []
+    for resource in _stage_branch_resources(state, stage_index):
+        if resource.op != "push":
+            continue
+        if not (_PUSH_RULE_BRANCH.match(resource.remote) and _PUSH_RULE_BRANCH.match(resource.ref)):
+            print(
+                f"note: no push rule for {resource.remote}/{resource.ref}: the name carries a "
+                "character outside [A-Za-z0-9._/-], which a rule text cannot carry safely",
+                file=sys.stderr,
+            )
+            continue
+        blocker = segment_resolver._push_config_blocker(venue, resource.remote, True)
+        if blocker is not None:
+            print(f"note: no push rule for {resource.remote}/{resource.ref}: {blocker}", file=sys.stderr)
+            continue
+        rule = f"Bash(git push {resource.remote} {resource.ref})"
+        grants.validate_rule(rule)
+        rules.append(rule)
+    return rules
+
+
 def grant_widening_refusal(linked, stage_index: int, kind: str, uncovered: "list[dict]") -> str:
     """The `PERMISSION-REQUEST:` block a refused delegation prints on stdout. The
     `Refusal: grant-widening` line is what the engine's dispatch route keys on; the
@@ -2320,10 +2381,12 @@ def child_permission_settings(
     guard_exempt_paths,
     read_dirs: "list[Path]",
     own_session: "str | None",
+    push_rules: "Sequence[str]" = (),
 ) -> dict:
     """The child's `--settings` payload before the hook is registered: the kind baseline, the
-    stage grants, the read-only view directories and, for a linked child (`own_session` set), the
-    own-contour rules. Raises `GrantShadowError` when a rule is shadowed by a deny. One builder
+    stage grants, the read-only view directories, the exact own-branch push rules
+    (`push_allow_rules`) and, for a linked child (`own_session` set), the own-contour rules.
+    Raises `GrantShadowError` when a rule is shadowed by a deny. One builder
     for the spawn and for the test support that rebuilds a child, so the record's
     `permissions_allow` cannot drift from the settings the child really gets."""
     settings = build_child_settings(
@@ -2335,6 +2398,13 @@ def child_permission_settings(
         read_allow, read_deny = review_topo_view_permission_rules(read_dir)
         permissions.setdefault("allow", []).extend(read_allow)
         permissions.setdefault("deny", []).extend(read_deny)
+    if push_rules:
+        denies = permissions.get("deny", [])
+        _check_no_allow_fully_denied(
+            list(push_rules), denies, {rule: "push_allow_rules" for rule in push_rules},
+            {rule: "child settings" for rule in denies},
+        )
+        permissions.setdefault("allow", []).extend(push_rules)
     if own_session is not None:
         own_plan_rule = own_plan_allow_rule(own_session)
         denies = permissions.get("deny", [])
@@ -3232,6 +3302,8 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         topo_bundle = site.text
         if topo_check_scripts:
             topo_bundle += "\n\n" + check_scripts_brief_section(topo_check_scripts)
+    push_rules = push_allow_rules(linked, args.stage_index, args.kind)
+
     def brief(own_contour: bool) -> str:
         return assemble_prompt(
             args,
@@ -3246,6 +3318,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
             site=site,
             own_contour=own_contour,
             own_plan=own_plan_path(own_session) if own_contour else None,
+            push_rules=push_rules,
         )
 
     try:
@@ -3280,6 +3353,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
                 guard_exempt_paths=guard_exempt_paths,
                 read_dirs=read_dirs,
                 own_session=own_session if linked else None,
+                push_rules=push_rules,
             )
         except GrantShadowError as exc:
             print(f"error: {exc}", file=sys.stderr)

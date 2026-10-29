@@ -66,6 +66,7 @@ SEGMENT_RESOLVER = "scripts/agentctl/segment_resolver.py"
 ADVISOR = "scripts/agentctl/advisor.py"
 CODE_EFFECTS = "scripts/agentctl/code_effects.py"
 HOOK = "scripts/hook-resource-grant-check.py"
+REGEX_LEAF = "memory-global/leaves/regex-not-for-semantic-classification.md"
 
 
 @dataclass(frozen=True)
@@ -982,6 +983,18 @@ CATALOGUE: "dict[str, Mutant]" = {
         "register_resource_grant_hook(child_settings, resource_grant_hook_timeout_s(constants))",
         "register_resource_grant_hook(child_settings, 60)",
         "the hook's timeout in the child's settings ignores resource-grant-hook-timeout-s",
+    ),
+    "push-rule-not-rendered": Mutant(
+        SPAWN,
+        "        rules.append(rule)\n",
+        "        pass\n",
+        "the frozen DR-P push resource never reaches the child's allow list as a rule",
+    ),
+    "norm-scope-effect-text": Mutant(
+        REGEX_LEAF,
+        "**The same principle in the grant design: a grant checker reads the code.** ",
+        "",
+        "the SCOPE/EFFECT section no longer states that a grant checker reads opaque code",
     ),
 }
 
