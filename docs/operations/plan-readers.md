@@ -157,6 +157,7 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/plan_store.py`:`_intact` | not a binding | Re-hashes a stored object against its own name. |
 | `scripts/hook-plan-delivery-gate.py`:`_already_stamped` | not a binding | Compares a stamp's receipt digest with the receipt, both recorded. |
 | `scripts/plan-review-topological.py`:`Driver.launch` | not a binding | Recomputes the root digest the reviewer attests: the sha256 of the index bytes. A positive control of the enumerator. |
+| `scripts/spawn-specialist.py`:`load_review_doc` | not a binding | Computes the digest a `--review-topo` reviewer attests: the loader's index digest for a plan, the sha256 of the file's bytes for an order draft; it compares nothing. |
 | `scripts/plan-review-topological.py`:`select_cost_row` | audit only | Picks a cost-ledger row for a pair by the plan digest it was recorded under; a miss means no cost estimate. |
 | `scripts/verify-agentctl.py`:`check_obligations` | not a binding | Hashes a synthetic plan to attest a review in a self-check fixture. |
 | `scripts/verify-agentctl.py`:`check_review_dispatch` | not a binding | Same, for the review-dispatch self-check fixture. |
