@@ -182,7 +182,14 @@ def test_promote_order_on_principle_refused(tmp_path, capsys):
     assert not (w.leaves / "principles" / "new-reg.md").exists()
 
 
-@pytest.mark.parametrize("task", ["   ", "bad\nname"])
+@pytest.mark.parametrize("task", ["ABC-582", "model-5.2-run"])
+def test_promote_order_derived_accepts_task_ids(tmp_path, task):
+    w = World(tmp_path)
+    assert w.promote("--order-derived", task, "--order-quote", QUOTE) == 0
+    assert f"order_derived: {task}\n" in w.written.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("task", ["   ", "bad\nname", "a: b", "a#b", "'q'"])
 def test_promote_order_derived_value_refused(tmp_path, task):
     w = World(tmp_path)
     assert w.promote("--order-derived", task, "--order-quote", QUOTE) != 0

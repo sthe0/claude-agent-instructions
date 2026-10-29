@@ -661,6 +661,7 @@ def cmd_ticket(a) -> int:
 # --------------------------------------------------------------------------
 CONTEXT_ID = re.compile(r"[0-9]+:[0-9a-f]{12}")
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
+TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 REVISION = re.compile(r"[0-9A-Za-z._/~^@{}-]+")
 CONTEXTS_HEADING = re.compile(r"## Contexts(\s.*)?")
 SPLIT_MARKER = "Moved by memory-curator split on"
@@ -1197,8 +1198,8 @@ def promote_problems(a, corpus, leaves: Path, project: Path | None,
     regularities, a regularity or project principle is induced from existing leaves."""
     problems = []
     for flag, value in (("--order-derived", a.order_derived), ("--introduced-by", a.introduced_by)):
-        if value is not None and not SLUG.fullmatch(value):
-            problems.append(f"{flag} must be a task slug (lowercase letters, digits, hyphens)")
+        if value is not None and not TASK_ID.fullmatch(value):
+            problems.append(f"{flag} must be a task id: one token of letters, digits, '.', '_', '-'")
     if a.order_derived:
         area = "regularity" if not (a.principle or project) else "principle"
         if not pp.order_kind_ok(area):

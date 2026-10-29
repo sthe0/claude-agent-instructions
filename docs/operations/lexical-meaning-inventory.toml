@@ -2011,9 +2011,9 @@ reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::<module>::re.compile"]
 class = "structural"
-ground = "Compile H2 (`## ` heading), FRONTMATTER (`---` block), CONTEXT_ID (`<n>:<12 hex>`), SLUG, REVISION (git ref charset), CONTEXTS_HEADING and SPLIT_MARKER_LINE patterns: fixed identifier, heading and marker syntax."
-hits = 7
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Compile H2 (`## ` heading), FRONTMATTER (`---` block), CONTEXT_ID (`<n>:<12 hex>`), SLUG, TASK_ID (task-id charset), REVISION (git ref charset), CONTEXTS_HEADING and SPLIT_MARKER_LINE patterns: fixed identifier, heading and marker syntax."
+hits = 8
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::_id_list::pattern.fullmatch"]
