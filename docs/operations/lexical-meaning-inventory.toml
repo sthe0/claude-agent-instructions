@@ -2037,9 +2037,9 @@ reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::promote_problems::pattern.fullmatch"]
 class = "structural"
-ground = "Checks each named source slug against the fixed slug charset before looking it up in the corpus."
-hits = 1
-hit_classes = ["structural"]
+ground = "Checks each named source slug, and the --order-derived / --introduced-by task slugs, against the fixed slug charset before looking them up or writing them to frontmatter."
+hits = 2
+hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::cmd_promote::pattern.search"]
