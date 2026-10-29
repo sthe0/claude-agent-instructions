@@ -2178,7 +2178,9 @@ def test_the_installer_rejects_an_unknown_argument(box):
 
 # --- an item as a linked child of a mandate-approved parent session -----------------------
 
-OPEN_VERBS = ["start", "classify", "plan", "submit-plan", "approve", "partition", "next-stage"]
+OPEN_VERBS = [
+    "start", "classify", "plan", "order-raise", "submit-plan", "order-dispose", "approve", "partition", "next-stage",
+]
 DONE = "COMPLETED:\nFixed the issue.\n"
 APPROVER = rules.mandate_approver(ID)
 RATE_LIMIT = {"type": "assistant", "isApiErrorMessage": True, "error": "rate_limit", "timestamp": "2026-10-27T00:00:00Z"}
@@ -2601,7 +2603,7 @@ def test_a_parent_session_open_failure_is_a_spawn_error_and_opens_the_breaker(en
     assert env.spawner.calls == []
     mandate = store.load_mandate(ID)
     assert mandate.breaker_open and mandate.breaker_reason == "failed:spawn-error on #1"
-    assert env.world.engine_verbs() == OPEN_VERBS[:4]
+    assert env.world.engine_verbs() == OPEN_VERBS[:5]
 
 
 def test_an_approve_refusal_after_the_gate_closed_ends_as_a_limit_without_the_breaker(env):
