@@ -632,9 +632,17 @@ def experiences_of(target: Leaf, corpus: Corpus) -> list[Leaf]:
 
 
 def _repo_of(corpus: Corpus, leaf: Leaf) -> Path | None:
-    """The repository a leaf's `given_source` path is relative to: two levels above its memory dir."""
-    base = corpus.project_root if leaf.tier == "project" else corpus.leaves_dir
-    return base.parent.parent if base is not None else None
+    """The repository a leaf's `given_source` path is relative to: the parent of the `.claude` directory
+    holding the project memory, else two levels above the global leaves dir."""
+    if leaf.tier == "project":
+        base = corpus.project_root
+        if base is None:
+            return None
+        for ancestor in Path(base).parents:
+            if ancestor.name == ".claude":
+                return ancestor.parent
+        return base.parent.parent
+    return corpus.leaves_dir.parent.parent
 
 
 def unaccounted(corpus: Corpus) -> list[Finding]:

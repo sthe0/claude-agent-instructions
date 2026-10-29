@@ -149,7 +149,11 @@ def ontology_problem(ref: GroundRef, corpus, adr_dir) -> str | None:
     if target is None:
         return (f"{ref.text()}: no such ontology/v1 leaf and no Core ADR docs/adr/{ref.slug}.md")
     if not ontology_kind_ok(target, corpus, adr_dir):
-        return f"{ref.text()}: the leaf is not {ONTOLOGY_PAIR[0]} / {ONTOLOGY_PAIR[1]}"
+        message = f"{ref.text()}: the leaf is not {ONTOLOGY_PAIR[0]} / {ONTOLOGY_PAIR[1]}"
+        adr = Path(adr_dir) / f"{ref.slug}.md"
+        if adr.is_file():
+            message += f"; docs/adr/{ref.slug}.md exists but the same-slug leaf takes precedence"
+        return message
     return None
 
 

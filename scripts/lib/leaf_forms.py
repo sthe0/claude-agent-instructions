@@ -70,7 +70,7 @@ def tier_leaves(root, tier: str) -> list[Path]:
     for path in sorted(root.rglob("*.md")):
         if path.name == INDEX:
             continue
-        text = path.read_bytes().decode("utf-8")
+        text = path.read_bytes().decode("utf-8", errors="replace")
         if area_of(path.relative_to(root), "global", text) == area:
             found.append(path)
     return found
@@ -126,12 +126,20 @@ def given_source_problems(text: str, base) -> list[str]:
         return []
     if kind not in GIVEN_KINDS:
         return [f"given: {kind!r} is not one of {', '.join(GIVEN_KINDS)}"]
+    if field(front, "induced_from") is not None or field(front, "order_derived") is not None:
+        return ["given and induced_from are exclusive: a regularity is given or induced, not both"]
     source = field(front, "given_source")
     if not source:
         return ["given_source: a given regularity names the file it is given from"]
     path = Path(source)
     if path.is_absolute() or ".." in path.parts:
         return [f"given_source: {source!r} is not a path inside the repository"]
-    if base is None or not (Path(base) / path).is_file():
+    if base is None:
+        return [f"given_source: {source!r} names no file"]
+    root = Path(base).resolve()
+    resolved = (root / path).resolve()
+    if not resolved.is_relative_to(root):
+        return [f"given_source: {source!r} is not a path inside the repository"]
+    if not resolved.is_file():
         return [f"given_source: {source!r} names no file"]
     return []

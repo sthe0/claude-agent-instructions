@@ -208,3 +208,58 @@ def test_search_finds_in_place_regularity(tree, monkeypatch, capsys):
     assert RE.main(["search", "--tier", "regularities", "widgets"]) == 0
     out = capsys.readouterr().out
     assert "widget-regularity.md" in out and "gadget-regularity.md" not in out
+
+
+def test_given_and_induced_are_exclusive(tree):
+    both = _given(induced_from="[]")
+    assert leaf_forms.given_provenance(both) is None
+    assert leaf_forms.given_source_problems(both, tree.repo) == [
+        "given and induced_from are exclusive: a regularity is given or induced, not both"]
+    assert leaf_forms.given_source_problems(_given(), tree.repo) == []
+
+
+@pytest.mark.parametrize("replacement", ["/etc/hostname", "scripts/../../elsewhere.py", "scripts/lib"])
+def test_given_source_shapes_refused(tree, replacement):
+    problems = leaf_forms.given_source_problems(_given().replace(GIVEN_FILE, replacement), tree.repo)
+    assert len(problems) == 1 and replacement in problems[0]
+
+
+def test_given_kind_invalid_refused(tree):
+    problems = leaf_forms.given_source_problems(_given().replace("given: code", "given: rumor"), tree.repo)
+    assert len(problems) == 1 and "rumor" in problems[0]
+
+
+def test_given_source_symlink_out_of_repo_refused(tree, tmp_path):
+    outside = tmp_path / "outside.py"
+    outside.write_text("X = 1\n", encoding="utf-8")
+    (tree.repo / "scripts" / "lib" / "link.py").symlink_to(outside)
+    problems = leaf_forms.given_source_problems(_given().replace(GIVEN_FILE, "scripts/lib/link.py"), tree.repo)
+    assert len(problems) == 1 and "inside the repository" in problems[0]
+
+
+@pytest.mark.parametrize("memory", [".claude/agent-memory", ".claude/agent-memory/leaves"])
+def test_project_tier_given_source_resolved_against_repo(tree, memory):
+    project = tree.repo / memory
+    (project / "regularities").mkdir(parents=True)
+    sound = project / "regularities" / "sound-regularity.md"
+    sound.write_text(_given(), encoding="utf-8")
+    broken = project / "regularities" / "broken-regularity.md"
+    broken.write_text(_given().replace(GIVEN_FILE, "scripts/none.py"), encoding="utf-8")
+    corpus = pp.load_corpus(tree.leaves, project)
+    found = {(f.kind, f.path) for f in pp.unaccounted(corpus)}
+    assert (pp.GIVEN_SOURCE, broken) in found
+    assert (pp.GIVEN_SOURCE, sound) not in found
+
+
+def test_tier_leaves_survives_non_utf8_file(tree):
+    tree.write("misc/widget-regularity.md", _regularity(induced_from="[]"))
+    (tree.leaves / "misc" / "binary.md").write_bytes(b"\xff\xfe\x00 not utf-8")
+    found = [p.name for p in leaf_forms.tier_leaves(tree.leaves, "regularities")]
+    assert found == ["widget-regularity.md"]
+
+
+def test_ontology_kind_mismatch_names_shadowed_adr(tree):
+    tree.write("regularities/widget-decision.md", _regularity(induced_from="[]"))
+    (tree.adr / "widget-decision.md").write_text("# Decision\n", encoding="utf-8")
+    problems = tree.problems("ontology:widget-decision")
+    assert len(problems) == 1 and "docs/adr/widget-decision.md" in problems[0]
