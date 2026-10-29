@@ -36,6 +36,8 @@ FIELD = "generalized_into"
 INDUCED = "induced_from"
 GROUNDED = "grounded_in"
 INTRODUCED_BY = "introduced_by"
+ORDER_DERIVED = "order_derived"
+ORDER_SECTION_TITLE = "Derived from order"
 REGULARITY_PREFIX = "regularity:"
 RULE_DERIVED = "rule_derived"
 SOURCE_DIGEST = "source_digest"
@@ -72,6 +74,9 @@ CASE_LEAK = "case_leak"
 UNGROUNDED_PRINCIPLE = "ungrounded_principle"
 UNKNOWN_REGULARITY = "unknown_regularity"
 PRINCIPLE_INDUCED = "principle_induced_from"
+ORDER_NO_QUOTE = "order_no_quote"
+ORDER_ON_PRINCIPLE = "order_on_principle"
+ORDER_NO_INTRODUCED = "order_no_introduced"
 
 FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 DIGEST_RE = re.compile(re.escape(DIGEST_PREFIX) + r"[0-9a-f]{64}")
@@ -358,15 +363,50 @@ def rule_mark_state(target: Leaf, corpus: Corpus) -> str:
     kinds = [resolve_source(s, corpus, target.tier) for s in _induced_or_empty(target.text)]
     has_experience = any(k in EXPERIENCE_SOURCE_KINDS for k in kinds)
     marked = bool(field_value(target.text, RULE_DERIVED))
+    from_order = bool(field_value(target.text, ORDER_DERIVED))
     if has_experience and marked:
         return "stale"
-    if not has_experience and not marked:
+    if not (has_experience or marked or from_order):
         return "missing"
     return "ok"
 
 
-def promote_sources_ok(kinds, rule_derived) -> bool:
-    return bool(rule_derived) or any(k in EXPERIENCE_SOURCE_KINDS for k in kinds)
+def promote_sources_ok(kinds, rule_derived, order_derived=None) -> bool:
+    return (bool(rule_derived) or bool(order_derived)
+            or any(k in EXPERIENCE_SOURCE_KINDS for k in kinds))
+
+
+def order_kind_ok(kind: str) -> bool:
+    """Order provenance yields knowledge, so only a regularity may carry it."""
+    return kind == "regularity"
+
+
+def order_introduced_by(order_derived, introduced_by):
+    """The `introduced_by` stamp to write: the given one, else the order's task."""
+    return introduced_by or order_derived or None
+
+
+def introduced_by(text: str) -> str | None:
+    return field_value(text, INTRODUCED_BY) or None
+
+
+def order_quote(text: str) -> str | None:
+    """The body of the `## Derived from order` section, outer newlines trimmed; None when the
+    section is absent or holds only blank lines."""
+    body = _section_body(text, ORDER_SECTION_TITLE)
+    return body.strip("\n") if body and body.strip() else None
+
+
+def render_order_section(quote: str, date: str) -> str:
+    """The chunk a promoted regularity carries: a dated line, then the section whose whole
+    body is the quote."""
+    return f"Generalized from an order on {date}.\n\n## {ORDER_SECTION_TITLE}\n\n{quote}\n"
+
+
+def order_introduced_problems(text: str) -> list[str]:
+    if field_value(text, ORDER_DERIVED) and not introduced_by(text):
+        return [f"an order-derived leaf carries no `{INTRODUCED_BY}`"]
+    return []
 
 
 def target_allowed(leaf_tier: str, target: Leaf) -> bool:
@@ -628,6 +668,17 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
                 report(UNKNOWN_REGULARITY, principle,
                        f"`{GROUNDED}` item {item!r} is not `{REGULARITY_PREFIX}<slug>` of an "
                        "existing regularity")
+
+    for leaf in corpus.items:
+        if not field_value(leaf.text, ORDER_DERIVED):
+            continue
+        if not order_kind_ok(leaf.area):
+            report(ORDER_ON_PRINCIPLE, leaf,
+                   f"`{ORDER_DERIVED}` belongs to a regularity, not a {leaf.area}")
+        if order_quote(leaf.text) is None:
+            report(ORDER_NO_QUOTE, leaf, f"no quote under `## {ORDER_SECTION_TITLE}`")
+        for problem in order_introduced_problems(leaf.text):
+            report(ORDER_NO_INTRODUCED, leaf, problem)
 
     for leaf in index_mismatches(corpus):
         field_name = GROUNDED if leaf.area == "principle" and leaf.tier == "global" else INDUCED

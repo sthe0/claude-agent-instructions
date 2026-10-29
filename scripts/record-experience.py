@@ -1170,14 +1170,17 @@ def promote_skeleton(a, area: str, induced: list[str], grounded: list[str]) -> t
         )
         return link_line, body
     heading = "Regularity" if area == "regularity" else "Principle"
+    order_derived = getattr(a, "order_derived", None)
     body = (
         f"## {heading}\n\n{statement}\n\n"
         "## Generality\n\n"
         f"Level {a.generality} — TODO (curator): name the class of tasks this statement "
         "ranges over and what it is deliberately not claimed for.\n\n"
-        "## Induced from\n\n"
-        + "".join(f"- [[{s}]] — TODO (curator): what this source contributes.\n"
-                  for s in induced)
+        + ("## Induced from\n\n"
+           + "".join(f"- [[{s}]] — TODO (curator): what this source contributes.\n"
+                     for s in induced) if induced or not order_derived else "")
+        + (("\n" if induced else "")
+           + pp.render_order_section(a.order_quote, a.date) if order_derived else "")
         + refutation
         + ("" if area == "regularity" else
            "\n## See also\n\n"
@@ -1191,6 +1194,19 @@ def promote_problems(a, corpus, leaves: Path, project: Path | None,
     """Why the requested leaf cannot be written: a principle is grounded in existing
     regularities, a regularity or project principle is induced from existing leaves."""
     problems = []
+    if a.order_derived:
+        area = "regularity" if not (a.principle or project) else "principle"
+        if not pp.order_kind_ok(area):
+            problems.append("--order-derived belongs to a regularity: order provenance yields "
+                            f"knowledge, not a {area}")
+        quote = a.order_quote or ""
+        if pp.order_quote(pp.render_order_section(quote, a.date)) is None:
+            problems.append("--order-derived needs a non-empty --order-quote: the order's "
+                            "factual statement, verbatim")
+        if any(line.startswith("##") for line in quote.splitlines()):
+            problems.append("--order-quote must not contain a heading line (## ...)")
+    elif a.order_quote is not None:
+        problems.append("--order-quote goes with --order-derived")
     if a.principle:
         if project:
             problems.append("--principle writes a global principle; the project tier keeps "
@@ -1210,16 +1226,18 @@ def promote_problems(a, corpus, leaves: Path, project: Path | None,
     kinds = []
     if grounded:
         problems.append("--grounded-in belongs to --principle")
-    if not induced:
-        problems.append("promote needs --induced-from SLUG (repeatable), or --principle "
-                        "--grounded-in REG[,REG] for a principle")
+    if not induced and not a.order_derived:
+        problems.append("promote needs --induced-from SLUG (repeatable), --order-derived TASK "
+                        "--order-quote TEXT, or --principle --grounded-in REG[,REG] for a "
+                        "principle")
     for slug in induced:
         found = corpus.find(slug, tier) if SLUG.fullmatch(slug) else None
         if found is None or (project and found.tier != "project"):
             problems.append(f"induced-from leaf {slug!r} not found under {project or leaves}")
         else:
             kinds.append(pp.classify(slug, corpus, tier))
-    if induced and not problems and not pp.promote_sources_ok(kinds, a.rule_derived):
+    if ((induced or a.order_derived) and not problems
+            and not pp.promote_sources_ok(kinds, a.rule_derived, a.order_derived)):
         problems.append("no induced-from leaf is an experience leaf or a case; name one, "
                         "or give --rule-derived REASON for a regularity written from rules")
     if a.rule_derived and any(k in pp.EXPERIENCE_SOURCE_KINDS for k in kinds):
@@ -1263,6 +1281,7 @@ def cmd_promote(a) -> int:
     source_links = grounded if a.principle else induced
     schema = "principle/v1" if area == "principle" else "regularity/v1"
     link_line, body = promote_skeleton(a, area, induced, grounded)
+    stamp = pp.order_introduced_by(a.order_derived, a.introduced_by)
     text = (
         "---\n"
         f"name: {a.slug}\n"
@@ -1273,6 +1292,8 @@ def cmd_promote(a) -> int:
         + link_line
         + (f"{pp.RULE_DERIVED}: {json.dumps(one_line(a.rule_derived))}\n"
            if a.rule_derived else "")
+        + (f"{pp.ORDER_DERIVED}: {one_line(a.order_derived)}\n" if a.order_derived else "")
+        + (f"{pp.INTRODUCED_BY}: {one_line(stamp)}\n" if stamp else "")
         + (f"domain: {a.domain}\n" if a.domain else "")
         + f"created: {a.date}\n"
         f"last_verified: {a.date}\n"
@@ -1824,6 +1845,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="ledger session_id for the edit-ledger stamp of this write")
     pr.add_argument("--rule-derived", metavar="REASON",
                     help="why a regularity with no experience or case source exists")
+    pr.add_argument("--order-derived", metavar="TASK",
+                    help="a regularity generalized from the factual statements of this task's "
+                         "order; needs --order-quote, --induced-from becomes optional")
+    pr.add_argument("--order-quote", metavar="TEXT",
+                    help="with --order-derived: the order's factual statement, stored verbatim")
+    pr.add_argument("--introduced-by", metavar="TASK",
+                    help="the task that introduces this leaf (default with --order-derived: "
+                         "that task)")
     pr.add_argument("--project-dir", metavar="D",
                     help="project repo dir (a memory dir holding experience/ or principles/ is "
                          "also accepted): write the project's principles/<slug>.md from its leaves")
