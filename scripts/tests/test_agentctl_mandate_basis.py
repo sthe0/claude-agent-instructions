@@ -145,7 +145,7 @@ def world(tmp_path, monkeypatch):
 
 
 LIVE_ARMED_KNOBS = (
-    "AGENTCTL_PREMISE", "AGENTCTL_PLAN_REVIEW", "AGENTCTL_PLAN_PRESENTATION", "AGENTCTL_CODE_REVIEW",
+    "AGENTCTL_PREMISE", "AGENTCTL_CODE_REVIEW",
     "AGENTCTL_STAGE_REVIEW", "AGENTCTL_ACCEPTANCE", "AGENTCTL_LANDING_GATE", "AGENTCTL_RESOLUTION_ASK_GATE",
     "AGENTCTL_WORKSPACE_CLEANUP",
 )
@@ -154,7 +154,8 @@ LIVE_ARMED_KNOBS = (
 @pytest.fixture
 def engine_world(tmp_path, monkeypatch):
     """A world whose cycle repo is the repo the real engine subprocess runs from, with the gates a
-    live session meets armed: conftest's force-off knobs are dropped. AGENTCTL_ADVISOR stays '0':
+    live session meets armed: conftest's force-off knobs are dropped (World itself forces plan review
+    and presentation on). AGENTCTL_ADVISOR stays '0':
     unset, submit-plan and approve would run a real model call, and the advisor never blocks."""
     for knob in LIVE_ARMED_KNOBS:
         monkeypatch.delenv(knob, raising=False)
