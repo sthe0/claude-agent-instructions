@@ -982,6 +982,10 @@ CATALOGUE: "dict[str, Mutant]" = {
         RULES, 'if rest.pop("mandate_id", None) != mandate.id:', 'if rest.pop("mandate_id", None) is None and False:',
         _ids(T_RULES, "test_mandate_approval_reads_and_strips_the_mandate_id_key"),
     ),
+    "driver-records-order": Mutant(
+        DRIVER, '            ("order-raise", ["--id", "issue",', '            ("plan", ["--id", "issue",',
+        _ids(T_BASIS, "test_the_driver_parent_session_reaches_stage_one_executing_with_live_gate_arming"),
+    ),
 }
 
 

@@ -2178,7 +2178,9 @@ def test_the_installer_rejects_an_unknown_argument(box):
 
 # --- an item as a linked child of a mandate-approved parent session -----------------------
 
-OPEN_VERBS = ["start", "classify", "plan", "submit-plan", "approve", "partition", "next-stage"]
+OPEN_VERBS = [
+    "start", "classify", "plan", "order-raise", "submit-plan", "order-dispose", "approve", "partition", "next-stage",
+]
 DONE = "COMPLETED:\nFixed the issue.\n"
 APPROVER = rules.mandate_approver(ID)
 RATE_LIMIT = {"type": "assistant", "isApiErrorMessage": True, "error": "rate_limit", "timestamp": "2026-10-27T00:00:00Z"}
