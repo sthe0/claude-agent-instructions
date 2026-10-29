@@ -1711,7 +1711,7 @@ ground = "Tests the `sha256:<64 hex>` digest format of a case; a format check."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/lib/principle_provenance.py::_section_body::re.search"]
+[sites."scripts/lib/principle_provenance.py::section_body::re.search"]
 class = "structural"
 ground = "Finds a `## <name>` section heading and the next heading to cut a section body; markdown heading syntax."
 hits = 2
