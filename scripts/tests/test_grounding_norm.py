@@ -398,9 +398,9 @@ def test_project_tier_resolved(world):
     assert cli._grounding_problems(doc) == []
 
 
-def test_project_ref_never_falls_back_to_global(world):
-    """Superseded by the project tier's global fallback: a project ref resolves to the global
-    leaf when the project has none; the miss that remains is a slug present in neither tier."""
+def test_project_ref_resolves_project_first_then_global(world):
+    """A project ref resolves to the global leaf when the project tier lacks the slug; the miss
+    that remains is a slug present in neither tier."""
     assert _problems(f"{GOOD}; project:regularity:reg-a", world) == []
 
     problems = _problems(f"{GOOD}; project:regularity:reg-nowhere", world)

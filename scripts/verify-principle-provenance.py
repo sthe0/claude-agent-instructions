@@ -73,6 +73,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.project and args.staged:
         parser.error("--project checks the working tree; it cannot be combined with --staged")
 
+    project = pp.project_memory(args.project)
+    if project is not None and not project.is_dir():
+        parser.error(f"--project: no project memory directory at {project}")
+
     if args.staged and not pp.staged_triggers(_staged_paths(args.root)):
         print(f"{NAME}: OK — no staged experience, regularity or principle leaf")
         return 0
@@ -83,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.staged:
         findings = pp.unaccounted(_indexed_corpus(args.root))
     else:
-        findings = pp.verify_corpus(args.root, pp.project_memory(args.project))
+        findings = pp.verify_corpus(args.root, project)
     if not findings:
         print(f"{NAME}: OK")
         return 0

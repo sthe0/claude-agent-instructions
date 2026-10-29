@@ -114,12 +114,8 @@ def experience_dir(scope: str, project_dir: str | None) -> Path:
     if scope == "project":
         if not project_dir:
             sys.exit("--scope project requires --project-dir")
-        return Path(project_dir) / PROJECT_MEMORY_REL / "experience"
+        return Path(project_dir) / pp.PROJECT_MEMORY_REL / "experience"
     return REPO_ROOT / "memory-global/leaves/experience"
-
-
-PROJECT_MEMORY_REL = pp.PROJECT_MEMORY_REL
-project_memory = pp.project_memory
 
 
 # The ranking section per tier: experience leaves rank on their `## Difficulty`,
@@ -148,7 +144,7 @@ def search_root(scope: str, project_dir: str | None, tier: str) -> Path:
         if scope == "project":
             if not project_dir:
                 sys.exit("--scope project requires --project-dir")
-            return Path(project_dir) / PROJECT_MEMORY_REL / "system-knowledge"
+            return Path(project_dir) / pp.PROJECT_MEMORY_REL / "system-knowledge"
         return REPO_ROOT / "memory-global/leaves/system-knowledge"
     return experience_dir(scope, project_dir)
 
@@ -1213,7 +1209,8 @@ def promote_problems(a, corpus, leaves: Path, project: Path | None,
                             "regularities the principle rests on")
         known = {r.slug for t in pp.fallback_tiers("project" if project else "global")
                  for r in corpus.of("regularity", t)}
-        searched = " or ".join(str(pp.promote_target_dir(leaves, p)) for p in ([project, None] if project else [None]))
+        global_dir = pp.promote_target_dir(leaves)
+        searched = f"{pp.promote_target_dir(leaves, project)} or {global_dir}" if project else str(global_dir)
         problems += [f"grounded-in regularity {slug!r} not found under {searched}"
                      for slug in grounded if slug not in known]
         return problems
@@ -1258,7 +1255,7 @@ def cmd_promote(a) -> int:
     if manifest is not None:
         problems += manifest_problems(manifest)
     leaves = root / "leaves"
-    project = project_memory(a.project_dir)
+    project = pp.project_memory(a.project_dir)
     tier = "project" if project else "global"
     corpus = pp.load_corpus(leaves, project)
     induced = a.induced_from or []
@@ -1361,7 +1358,7 @@ def provenance_tier(a) -> str:
 
 
 def provenance_corpus(a) -> pp.Corpus:
-    return pp.load_corpus(memory_root(a) / "leaves", project_memory(a.project_dir))
+    return pp.load_corpus(memory_root(a) / "leaves", pp.project_memory(a.project_dir))
 
 
 def commit_changes(a, changes, command: str) -> None:
@@ -1473,7 +1470,7 @@ def cmd_case_add(a) -> int:
             problems.append(f"case spec lacks {', '.join(missing)}")
     if problems:
         refuse(*problems)
-    explicit = project_memory(a.project_dir)
+    explicit = pp.project_memory(a.project_dir)
     projects = {explicit or Path(s["source"]).resolve().parent.parent for s in specs}
     if len(projects) > 1:
         refuse("case specs name leaves of more than one project: "

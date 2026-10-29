@@ -182,6 +182,17 @@ def test_project_grounds_global_fallback(mem):
     assert not {k for k, _ in mem.findings()}
 
 
+def test_project_regularity_wins_over_same_global_slug(mem):
+    from agentctl import grounding
+
+    mem.regularity("shared-regularity", rule_derived="seeded from rules", tier="global")
+    local = mem.regularity("shared-regularity", rule_derived="seeded from rules")
+    found = grounding.leaf_for(grounding.GroundRef("project", "regularity", "shared-regularity"), mem.corpus())
+    assert (found.tier, found.path) == ("project", local)
+    assert grounding.leaf_for(grounding.GroundRef("global", "regularity", "shared-regularity"),
+                              mem.corpus()).tier == "global"
+
+
 def test_promote_writes_project_regularity(mem):
     leaf = mem.experience("w1")
     assert mem.promote("--induced-from", "w1", "--project-dir", mem.repo) == 0
@@ -208,3 +219,11 @@ def test_verify_reads_project_dir(mem, capsys):
     assert _main(VPP, "--root", root, "--project", mem.repo) == 1
     assert pp.UNGROUNDED_PRINCIPLE in capsys.readouterr().out
     assert _main(VPP, "--root", root, "--project", mem.project) == 1
+
+
+def test_verify_refuses_a_missing_project_dir(mem, capsys):
+    root = mem.root.parent / "repo-root"
+    (root / pp.LEAVES_REL).parent.mkdir(parents=True)
+    (root / pp.LEAVES_REL).symlink_to(mem.leaves)
+    assert _main(VPP, "--root", root, "--project", mem.root.parent / "no-such-repo") == 2
+    assert "--project" in capsys.readouterr().err
