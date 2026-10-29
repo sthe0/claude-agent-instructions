@@ -562,6 +562,8 @@ def test_stamp_writes_digest():
     overridden = {"status": "ok", "verdict": "defective", "link_defects": ["irrelevant"], "ground_defects": [],
                   "digest": "abc", "override": "accepted: indirect"}
     assert gj.stamp_lines(overridden) == ["grounding_judged: abc", "grounding_override: accepted: indirect"]
+    judged = _judge(Runner(reply()))
+    assert gj.stamp_lines(judged) == [f"grounding_judged: {judged.get('digest')}"]
 
 
 def test_defective_link_not_stamped():
