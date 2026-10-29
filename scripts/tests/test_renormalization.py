@@ -72,6 +72,7 @@ from agentctl.state import (
 from agentctl.submission import submission_violations
 
 from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
+from plan_site_fixture import GROUNDED_SOURCE
 from dataclass_domain import leaf_paths
 
 CORPUS = Path(__file__).resolve().parent / "fixtures" / "plan_corpus"
@@ -132,7 +133,7 @@ knowledge_refs = ["scripts/agentctl/plan.py"]
 knowledge = "how the loader stays lenient"
 [stage.principle]
 statement = "s"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"
@@ -161,7 +162,7 @@ on = 1
 element = "result"
 [stage.principle]
 statement = "s"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"
@@ -1054,7 +1055,7 @@ on = 2
 element = "result"
 [stage.principle]
 statement = "s"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"

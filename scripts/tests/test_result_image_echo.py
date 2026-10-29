@@ -38,6 +38,7 @@ from agentctl.state import Node
 from agentctl.submission import submission_advice, validate_submission
 
 from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER, declare_venue
+from plan_site_fixture import GROUNDED_SOURCE
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CORPUS_DIR = FIXTURES / "plan_corpus"
@@ -104,7 +105,7 @@ knowledge_refs = ["scripts/agentctl/submission.py"]
 knowledge = "how the submission seam differs from the loader"
 [stage.principle]
 statement = "s"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"

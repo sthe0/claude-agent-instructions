@@ -39,6 +39,7 @@ from pathlib import Path
 import pytest
 
 from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER, declare_venue
+from plan_site_fixture import GROUNDED_SOURCE
 
 from agentctl import cli, plan as plan_mod, submission as submission_mod, text_shape
 from agentctl.plan import PlanError, load_plan
@@ -91,7 +92,7 @@ knowledge_refs = ["scripts/agentctl/premise.py"]
 knowledge = "which places an edge really hands over"
 [stage.principle]
 statement = "s"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"
@@ -118,7 +119,7 @@ knowledge_refs = ["scripts/agentctl/plan.py"]
 knowledge = "where a submission requirement may bind"
 {edge}[stage.principle]
 statement = "s"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"

@@ -64,6 +64,7 @@ from agentctl.state import (
 from agentctl.submission import submission_violations, validate_submission
 
 from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
+from plan_site_fixture import GROUNDED_SOURCE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -117,7 +118,7 @@ capability_required = "cap (traces to R1)"
 {knowledge_block}
 [stage.principle]
 statement = "s"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"
@@ -280,7 +281,7 @@ element = "knowledge"
 
 [stage.principle]
 statement = "s2"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der2"
 confidence = "high"
 refutation = "r2"

@@ -24,6 +24,7 @@ from agentctl.state import Stage
 from agentctl.store import FileStateStore
 
 from conftest import SUBSTANTIVE_ORDER
+from plan_site_fixture import GROUNDED_SOURCE
 
 
 def ns(**kw):
@@ -49,7 +50,7 @@ def _stage(index=1, title="s", verify_command="python3 -m agentctl status",
         "conditions": "co",
         "verify_command": verify_command,
         "principle": {
-            "statement": "s", "source": "regularity:a-controls-defects-surface-only-when-it-is-executed",
+            "statement": "s", "source": GROUNDED_SOURCE,
             "derivation": "a distinct derivation clause",
             "confidence": "high", "refutation": "r",
         },
@@ -102,7 +103,7 @@ verify_command = "pytest -q"
 output_artifacts = ["scripts/agentctl/new.py", "scripts/tests/"]
 [stage.principle]
 statement = "s"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "a distinct derivation clause"
 confidence = "high"
 refutation = "r"
@@ -513,7 +514,7 @@ negative_control = "false"
 
 [stage.principle]
 statement = "s"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "a distinct derivation clause"
 confidence = "high"
 refutation = "r"

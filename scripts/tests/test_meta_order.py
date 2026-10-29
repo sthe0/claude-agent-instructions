@@ -39,6 +39,7 @@ from pathlib import Path
 import pytest
 
 from conftest import declare_venue
+from plan_site_fixture import GROUNDED_SOURCE
 
 from agentctl import cli
 from agentctl.plan import PlanError, diff_plans, load_plan, order_place
@@ -155,7 +156,7 @@ knowledge_refs = ["scripts/agentctl/plan.py"]
 knowledge = "where a submission requirement may bind"
 [stage.principle]
 statement = "s"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"

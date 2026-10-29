@@ -18,7 +18,7 @@ from pathlib import Path
 
 from lib import principle_provenance as pp
 
-from .submission import _is_substantive
+from .submission import is_substantive
 
 # kind -> (corpus area, frontmatter schema)
 GROUND_KINDS = {
@@ -26,7 +26,7 @@ GROUND_KINDS = {
     "experience": ("experience", "difficulty/v1"),
     "case": ("case", "case/v1"),
 }
-REFUSED_KINDS = {"principle": "principle/v1"}
+REFUSED_KINDS = frozenset({"principle"})
 
 _REF = re.compile(r"^(?:(project):)?([a-z]+):([a-z0-9][a-z0-9-]*)$")
 _SCHEMA = re.compile(r"^schema[ \t]*:(.*)$", re.MULTILINE)
@@ -55,12 +55,13 @@ def schema_of(text: str) -> str:
 def parse_ground_refs(source: str):
     refs: list[GroundRef] = []
     bad: list[str] = []
+    known = set(GROUND_KINDS) | set(REFUSED_KINDS)
     for item in (source or "").split(";"):
         item = item.strip()
         if not item:
             continue
         found = _REF.match(item)
-        if found and found.group(2) in {**GROUND_KINDS, **REFUSED_KINDS}:
+        if found and found.group(2) in known:
             refs.append(GroundRef(found.group(1) or "global", found.group(2), found.group(3)))
         else:
             bad.append(item)
@@ -68,7 +69,7 @@ def parse_ground_refs(source: str):
 
 
 def principle_hint(slug: str, corpus, tier: str = "global") -> str:
-    leaf = corpus.find(slug, tier)
+    leaf = leaf_for(GroundRef(tier, "principle", slug), corpus)
     grounds = pp.grounded_regularities(leaf) if leaf is not None else []
     if not grounds:
         return "a principle is a norm, not a ground; cite a regularity: regularity:<slug>"
@@ -92,7 +93,15 @@ def load_ground_corpus(global_leaves, project_root=None, staged_leaves=None, tas
 
 
 def leaf_for(ref: GroundRef, corpus):
-    return corpus.find(ref.slug, ref.tier)
+    """The leaf `ref` cites: its own kind's area in its own tier first, so a same-slug leaf of
+    another area cannot shadow it; failing that any leaf of that slug in that tier, which
+    `kind_matches` then refuses. A project ref never falls back to the global tier."""
+    area = GROUND_KINDS[ref.kind][0] if ref.kind in GROUND_KINDS else ref.kind
+    in_area = [leaf for leaf in corpus.of(area, ref.tier) if leaf.slug == ref.slug]
+    if in_area:
+        return in_area[0]
+    elsewhere = [leaf for leaf in corpus.items if leaf.slug == ref.slug and leaf.tier == ref.tier]
+    return elsewhere[0] if elsewhere else None
 
 
 def kind_matches(ref: GroundRef, leaf) -> bool:
@@ -102,7 +111,7 @@ def kind_matches(ref: GroundRef, leaf) -> bool:
 
 def source_problems(source: str, corpus) -> list[str]:
     if not (source or "").strip():
-        return ["[stage.principle].source is empty: cite at least one regularity, experience or case"]
+        return ["empty: cite at least one regularity, experience or case"]
     refs, bad = parse_ground_refs(source)
     out = [f"source item {item!r} is not a ground reference "
            f"`[project:]<kind>:<slug>` with kind in {sorted(GROUND_KINDS)}" for item in bad]
@@ -121,7 +130,7 @@ def source_problems(source: str, corpus) -> list[str]:
 
 
 def grounding_violations(doc, *, corpus, exempt_stages=frozenset()) -> list[str]:
-    if not _is_substantive(doc):
+    if not is_substantive(doc):
         return []
     out: list[str] = []
     for stage in doc.stages:

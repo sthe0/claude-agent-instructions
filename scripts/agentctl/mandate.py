@@ -1013,7 +1013,7 @@ def item_norm_toml(*, mandate, issue, title, body, cycle_id, base_sha, bound, wo
         "[stage.principle]",
         'statement = "(I1) A debt issue is resolved when the repository\'s acceptance checks pass on the change, judged by a checker the resolver cannot edit."',
         'source = "regularity:a-controls-defects-surface-only-when-it-is-executed"',
-        'derivation = "check-item runs the live repo\'s checker by absolute path against the worktree\'s tree, so a green verdict is not the resolver\'s own claim, and the issue body names what must change; the two together fix the result."',
+        'derivation = "The mandate\'s acceptance rule (check-item, docs/operations/background-mandate.md § One cycle; ADR-0008): check-item runs the live repo\'s checker by absolute path against the worktree\'s tree, so a green verdict is not the resolver\'s own claim, and the issue body names what must change; the two together fix the result."',
         'confidence = "medium"',
         'refutation = "An item whose check-item is green while a person reviewing the pull request finds the issue not resolved."',
         "",

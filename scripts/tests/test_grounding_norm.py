@@ -359,19 +359,32 @@ def test_approve_edit_exempts_finished(store, world):
 def test_edited_finished_principle_judged(store, world):
     from agentctl import cli
 
-    plan = _write_plan(world)
-    state = _approved(store, plan)
+    _approved(store, _write_plan(world))
     _finish_stage_1(store)
     _convert_to_leaf_v1(world)
-    state = store.load("gn")
-    baseline = _doc(plan)
-    unchanged = _doc(_write_plan(world, "same.toml", title2="renamed"))
-    edited = _doc(_write_plan(world, "edit.toml", statement1="a different statement"))
 
-    assert cli._grounding_exempt_stages(state, baseline, unchanged) == frozenset({1})
-    exempt = cli._grounding_exempt_stages(state, baseline, edited)
-    assert exempt == frozenset()
-    assert any(p.startswith("stage 1 ") for p in cli._grounding_problems(edited, exempt))
+    d = cli.cmd_replan(
+        ns(session="gn", plan=_write_plan(world, "q.toml", statement1="a different statement")),
+        store=store, runner=_judge_unavailable)
+
+    problems = _grounding_problems_of(d)
+    assert any(p.startswith("stage 1 ") for p in problems), d.data
+
+
+def test_approve_edited_finished_principle_judged(store, world):
+    from agentctl import cli
+
+    _approved(store, _write_plan(world))
+    _finish_stage_1(store)
+    _convert_to_leaf_v1(world)
+    _write_plan(world, statement1="a different statement")
+
+    state = store.load("gn")
+    violations = cli._refresh_caches_from_plan_path(
+        state, runner=_judge_unavailable, baseline=cli._baseline_plan_for_tier(store, state))
+
+    assert any(p.startswith("stage 1 ") and "[stage.principle].source" in p
+               for p in violations), violations
 
 
 # --- the corpora the seam reads ---------------------------------------------
@@ -383,6 +396,33 @@ def test_project_tier_resolved(world):
     doc = _doc(_write_plan(world, source2=f"{GOOD}; project:experience:exp-p"))
 
     assert cli._grounding_problems(doc) == []
+
+
+def test_project_ref_never_falls_back_to_global(world):
+    problems = _problems(f"{GOOD}; project:regularity:reg-a", world)
+
+    assert len(problems) == 1
+    assert "project:regularity:reg-a" in problems[0]
+
+
+def test_same_slug_in_another_area_does_not_shadow(world):
+    _leaf(world.leaves, "regularities/dup.md", "regularity/v1")
+    _leaf(world.leaves, "experience/dup.md", "difficulty/v1")
+
+    assert _problems("regularity:dup; experience:dup", world) == []
+
+
+def test_missing_engine_leaves_root_is_one_named_problem(world, monkeypatch):
+    from agentctl import cli, grounding
+
+    missing = world.tmp / "no-such-root"
+    monkeypatch.setattr(grounding, "engine_leaves_root", lambda: missing)
+    doc = _doc(_write_plan(world))
+
+    problems = cli._grounding_problems(doc)
+
+    assert len(problems) == 1
+    assert str(missing) in problems[0]
 
 
 def test_staged_generalization_resolved(world):

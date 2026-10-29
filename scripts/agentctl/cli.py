@@ -1651,8 +1651,14 @@ def _grounding_inputs(doc) -> dict:
 
 
 def _grounding_problems(doc, grounding_exempt_stages: frozenset[int] = frozenset()) -> list[str]:
+    if not grounding.is_substantive(doc):
+        return []
+    inputs = _grounding_inputs(doc)
+    if not Path(inputs["global_leaves"]).is_dir():
+        return [f"grounding: the engine's leaves root {inputs['global_leaves']} is not a "
+                "directory, so no [stage.principle].source can be resolved"]
     return grounding.grounding_violations(
-        doc, corpus=grounding.load_ground_corpus(**_grounding_inputs(doc)),
+        doc, corpus=grounding.load_ground_corpus(**inputs),
         exempt_stages=grounding_exempt_stages)
 
 
@@ -4775,7 +4781,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     run = runner if runner is not None else advisor.subprocess_runner
     problems: list[str] = _submission_problems(
         doc, run, state.weight_class,
-        grounding_exempt_stages=_grounding_exempt_stages(state, None, doc))
+        grounding_exempt_stages=frozenset())
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never

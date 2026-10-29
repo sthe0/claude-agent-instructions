@@ -283,7 +283,7 @@ _UNDECLARED = (
 )
 
 
-def _is_substantive(doc) -> bool:
+def is_substantive(doc) -> bool:
     """Keyed on the PLAN's own [meta] weight_class, not the session's, so this function
     stays pure and session-free — and so it agrees with `plan._validate_substantive_stage`,
     the sibling enumerator of substantive-stage requirements, which keys the same way. A
@@ -947,7 +947,7 @@ def submission_violations(
     # every field violation below moot. It is the module's one-round-trip contract: the
     # author whose plan the session will hold to the substantive grade sees the declaration
     # AND the places it will require in one answer, instead of one round trip per layer.
-    if not (_is_substantive(doc) or undeclared):
+    if not (is_substantive(doc) or undeclared):
         return out
     # Plan-level first, then per-stage: an author reading one round trip meets the whole
     # of what the plan owes before the list turns into stage numbers.

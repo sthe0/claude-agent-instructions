@@ -60,6 +60,7 @@ from agentctl.state import (
 from agentctl.submission import submission_violations
 
 from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER, declare_venue
+from plan_site_fixture import GROUNDED_SOURCE
 
 # A restatement: everything it says, `depends_on = [1]` already said.
 RESTATEMENT = "Stage 1 is complete and its output has landed."
@@ -97,7 +98,7 @@ knowledge_refs = ["scripts/agentctl/state.py"]
 knowledge = "how the loader stays lenient"
 [stage.principle]
 statement = "s"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"
@@ -130,7 +131,7 @@ on = 1
 element = "result"
 [stage.principle]
 statement = "s"
-source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"
