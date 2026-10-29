@@ -11586,8 +11586,12 @@ def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[lis
         refusal = _norm_file_refusal(state, path)
         if refusal:
             return [], refusal
-        entries.append({"target": path, "kind": "file",
-                        "baseline": gates.file_norm_digest(path), "source": "critique"})
+        entry = {"target": path, "kind": "file",
+                 "baseline": gates.file_norm_digest(path), "source": "critique"}
+        prescription = gates.prescription_snapshot(path)
+        if prescription is not None:
+            entry["prescription"] = prescription
+        entries.append(entry)
     return entries, None
 
 
