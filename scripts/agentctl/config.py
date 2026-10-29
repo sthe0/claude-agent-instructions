@@ -156,6 +156,11 @@ class Thresholds:
         trigger fires regardless of the multiple."""
         return self._int("effort-replan-absolute")
 
+    def given_regularity_max_age_days(self) -> int:
+        """Age in days beyond which a given regularity's last_verified no longer
+        counts as current for the grounding judge."""
+        return self._int('given-regularity-max-age-days')
+
     def _backstop(self, key: str) -> int:
         """A missing or unparsable backstop row falls back to
         `effort-replan-absolute + 1` -- the smallest value that still lets the

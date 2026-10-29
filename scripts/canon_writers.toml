@@ -117,6 +117,8 @@
 "scripts/lib/bash_write_targets.py" = { disposition = "not-canon", category = "not-canon", reason = "parser that recognises `sed -i`/`git apply` in a command string; writes no file" }
 "scripts/lib/config-root.sh" = { disposition = "not-canon", category = "not-canon", reason = "resolves the config root; writes no file" }
 "scripts/lib/git_cwd.py" = { disposition = "not-canon", category = "not-canon", reason = "parses the directory a `git commit` targets; writes no file" }
+"scripts/agentctl/grounding_judge.py" = { disposition = "not-canon", category = "not-canon", reason = "verdict cache under the agentctl state directory, outside the repo; writes no tracked file" }
+"scripts/grounding-judge.py" = { disposition = "not-canon", category = "not-canon", reason = "writes the verdicts file at the path the caller names with --out, otherwise stdout; no tracked file" }
 "scripts/lib/hook_fragments.py" = { disposition = "exempt", category = "exempt-config-root", reason = "writes the fragment ownership record into the config root, next to the settings file install-reminder-hooks.sh edits" }
 "scripts/lib/hook_telemetry.py" = { disposition = "not-canon", category = "not-canon", reason = "decision log under the config root's agentctl state directory, outside the repo" }
 "scripts/lib/hook_wiring.py" = { disposition = "not-canon", category = "not-canon", reason = "hook wiring table; names `git commit`/`sed -i` as deny patterns in text" }
