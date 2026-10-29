@@ -132,7 +132,7 @@ knowledge_refs = ["scripts/agentctl/plan.py"]
 knowledge = "how the loader stays lenient"
 [stage.principle]
 statement = "s"
-source = "src"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "der"
 confidence = "high"
 refutation = "r"
@@ -161,7 +161,7 @@ on = 1
 element = "result"
 [stage.principle]
 statement = "s"
-source = "src"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "der"
 confidence = "high"
 refutation = "r"
@@ -1054,7 +1054,7 @@ on = 2
 element = "result"
 [stage.principle]
 statement = "s"
-source = "src"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "der"
 confidence = "high"
 refutation = "r"

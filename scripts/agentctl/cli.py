@@ -29,7 +29,7 @@ from pathlib import Path
 
 from lib import argv_text, ask_evidence, config_root, engine_session_binding, hook_telemetry, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, delivery_channel, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, delivery_channel, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, grounding, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from . import config as agentctl_config
@@ -1623,6 +1623,39 @@ def _frozen_edge_stages(state: SessionState, baseline, new) -> frozenset[int]:
                      and s.supplies == old[s.index])
 
 
+def _grounding_exempt_stages(state: SessionState, baseline, new) -> frozenset[int]:
+    """PASSED stages whose `[stage.principle]` `new` leaves as `baseline` had it: finished
+    work is not re-judged, an edited principle is. With no baseline every PASSED stage is
+    exempt; with no state none is."""
+    if state is None:
+        return frozenset()
+    passed = {s.index for s in state.stages
+              if s.outcome.status == StageStatus.PASSED.value}
+    if baseline is None:
+        return frozenset(passed)
+    old = {s.index: s.principle for s in baseline.stages}
+    return frozenset(s.index for s in new.stages
+                     if s.index in passed and s.index in old and s.principle == old[s.index])
+
+
+def _grounding_inputs(doc) -> dict:
+    meta = doc.meta
+    project = Path(meta.repo_root) / ".claude" / "agent-memory" if meta.repo_root else None
+    staged = Path(meta.delivery_worktree) / "memory-global" / "leaves" if meta.delivery_worktree else None
+    return {
+        "global_leaves": grounding.engine_leaves_root(),
+        "project_root": project if project is not None and project.is_dir() else None,
+        "staged_leaves": staged if staged is not None and staged.is_dir() else None,
+        "task_id": meta.task_id or None,
+    }
+
+
+def _grounding_problems(doc, grounding_exempt_stages: frozenset[int] = frozenset()) -> list[str]:
+    return grounding.grounding_violations(
+        doc, corpus=grounding.load_ground_corpus(**_grounding_inputs(doc)),
+        exempt_stages=grounding_exempt_stages)
+
+
 def _plan_from_snapshot(store: StateStore, state: SessionState, digest: str):
     """The plan version `digest` parsed from its stored snapshot, or None when no readable
     snapshot of it exists or it does not parse."""
@@ -1998,7 +2031,8 @@ def _refresh_caches_from_plan_path(
     # `baseline` is the last approved plan: a finished stage's unchanged edge is frozen
     # against it, exactly as at replan, so approve judges the same exemption replan did.
     violations = _submission_problems(refreshed, runner, state.weight_class,
-                                      _frozen_edge_stages(state, baseline, refreshed))
+                                      _frozen_edge_stages(state, baseline, refreshed),
+                                      _grounding_exempt_stages(state, baseline, refreshed))
     if violations:
         return violations
     if advice is not None:
@@ -2168,7 +2202,8 @@ def _submission_advice(
 
 
 def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
-                         frozen_edge_stages: frozenset[int] = frozenset()) -> list[str]:
+                         frozen_edge_stages: frozenset[int] = frozenset(),
+                         grounding_exempt_stages: frozenset[int] = frozenset()) -> list[str]:
     """The submission seam's REFUSING channel, with its judge resolved the way the advice
     channel's is — one place per channel, so no seam re-derives the enabled rule.
 
@@ -2194,7 +2229,8 @@ def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
     # A node over plan-stage-max-chars cannot be reviewed in one pair prompt, so every seam
     # that admits plan bytes to a session (submit-plan, approve after an in-place edit,
     # replan, renormalize) refuses it; a missing size limit refuses too (fails closed).
-    return violations + [f["message"] for f in plan_size_blocks(doc)]
+    return (violations + _grounding_problems(doc, grounding_exempt_stages)
+            + [f["message"] for f in plan_size_blocks(doc)])
 
 
 def _run_check(command: str, expected_exit: int, runner: Runner | None, cwd: str | None = None):
@@ -4737,7 +4773,9 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # and a refusal cannot be computed after the return that acts on it. The binding itself
     # costs nothing; only a prefilter hit spends a judge call.
     run = runner if runner is not None else advisor.subprocess_runner
-    problems: list[str] = _submission_problems(doc, run, state.weight_class)
+    problems: list[str] = _submission_problems(
+        doc, run, state.weight_class,
+        grounding_exempt_stages=_grounding_exempt_stages(state, None, doc))
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
@@ -11934,7 +11972,8 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
     # ones `new` was diffed and gated against.
     new, _new_plan_bytes, _new_plan_digest = load_plan_with_digest(args.plan)
     run = runner if runner is not None else advisor.subprocess_runner
-    submission = _submission_problems(new, run, state.weight_class)
+    submission = _submission_problems(new, run, state.weight_class,
+                                      grounding_exempt_stages=_grounding_exempt_stages(state, old, new))
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "renormalization blocked: the corrected plan does not meet "
@@ -12403,9 +12442,11 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # `_load(args.plan)` used to be a separate read from the digest stamp and the
     # snapshot write, leaving a window for a concurrent edit to desynchronize them.
     new, _new_plan_bytes, _new_plan_digest = load_plan_with_digest(args.plan)
+    baseline = _baseline_plan_for_tier(store, state)
     submission = _submission_problems(
         new, run, state.weight_class,
-        _frozen_edge_stages(state, _baseline_plan_for_tier(store, state), new))
+        _frozen_edge_stages(state, baseline, new),
+        _grounding_exempt_stages(state, baseline, new))
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "replan blocked: the corrected plan does not meet submission "
@@ -12431,7 +12472,6 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # stages depending on it. Refused before anything is written. Without a known old
     # side there is no tier, and the replan routes as it did before the tier existed.
     tier = None
-    baseline = _baseline_plan_for_tier(store, state)
     if baseline is not None:
         tier = change_tier(baseline, new)
     change_class = replan_class(tier)

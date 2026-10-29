@@ -35,6 +35,7 @@ from pathlib import Path
 FIELD = "generalized_into"
 INDUCED = "induced_from"
 GROUNDED = "grounded_in"
+INTRODUCED_BY = "introduced_by"
 REGULARITY_PREFIX = "regularity:"
 RULE_DERIVED = "rule_derived"
 SOURCE_DIGEST = "source_digest"

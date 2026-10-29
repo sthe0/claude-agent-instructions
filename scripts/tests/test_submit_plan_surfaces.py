@@ -62,7 +62,7 @@ verify_command = "{verify}"
 
 [stage.principle]
 statement = "s"
-source = "src"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "a distinct derivation clause"
 confidence = "high"
 refutation = "r"
@@ -294,7 +294,7 @@ negative_control = "false"
 
 [stage.principle]
 statement = "s"
-source = "src"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "a distinct derivation clause"
 confidence = "high"
 refutation = "r"

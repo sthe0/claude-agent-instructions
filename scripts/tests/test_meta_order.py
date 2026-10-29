@@ -155,7 +155,7 @@ knowledge_refs = ["scripts/agentctl/plan.py"]
 knowledge = "where a submission requirement may bind"
 [stage.principle]
 statement = "s"
-source = "src"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "der"
 confidence = "high"
 refutation = "r"

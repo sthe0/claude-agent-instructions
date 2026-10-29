@@ -14,6 +14,8 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent
 
+GROUNDED_SOURCE = "regularity:a-controls-defects-surface-only-when-it-is-executed"
+
 STAGES = (1, 2, 3, 4)
 STAGE_KEYS = (
     "knowledge", "material", "invariants", "means", "method", "procedure", "preconditions",
@@ -64,7 +66,7 @@ def _stage(n: int, *, relies_on: "int | None", blank_done: bool = False) -> str:
         "",
         "[stage.principle]",
         'statement = "s"',
-        'source = "s"',
+        f'source = "{GROUNDED_SOURCE}"',
         'derivation = "d"',
         'confidence = "high"',
         'refutation = "r"',

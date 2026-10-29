@@ -1012,6 +1012,7 @@ def _copy_subject(parent: Path) -> Path:
     subject = parent / "scripts"
     shutil.copytree(SCRIPTS_DIR, subject, symlinks=True, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
     shutil.copy2(SCRIPTS_DIR.parent / "config.md", parent / "config.md")
+    (parent / "memory-global").symlink_to(SCRIPTS_DIR.parent / "memory-global")
     return subject
 
 

@@ -49,7 +49,7 @@ def _stage(index=1, title="s", verify_command="python3 -m agentctl status",
         "conditions": "co",
         "verify_command": verify_command,
         "principle": {
-            "statement": "s", "source": "src",
+            "statement": "s", "source": "regularity:a-controls-defects-surface-only-when-it-is-executed",
             "derivation": "a distinct derivation clause",
             "confidence": "high", "refutation": "r",
         },
@@ -102,7 +102,7 @@ verify_command = "pytest -q"
 output_artifacts = ["scripts/agentctl/new.py", "scripts/tests/"]
 [stage.principle]
 statement = "s"
-source = "src"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "a distinct derivation clause"
 confidence = "high"
 refutation = "r"
@@ -513,7 +513,7 @@ negative_control = "false"
 
 [stage.principle]
 statement = "s"
-source = "src"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "a distinct derivation clause"
 confidence = "high"
 refutation = "r"

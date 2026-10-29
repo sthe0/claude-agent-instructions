@@ -117,7 +117,7 @@ capability_required = "cap (traces to R1)"
 {knowledge_block}
 [stage.principle]
 statement = "s"
-source = "src"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "der"
 confidence = "high"
 refutation = "r"
@@ -280,7 +280,7 @@ element = "knowledge"
 
 [stage.principle]
 statement = "s2"
-source = "src2"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "der2"
 confidence = "high"
 refutation = "r2"

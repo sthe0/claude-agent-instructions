@@ -187,7 +187,7 @@ capability_required = "cap"
 
 [stage.principle]
 statement = "s"
-source = "s"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "d"
 confidence = "high"
 refutation = "r"

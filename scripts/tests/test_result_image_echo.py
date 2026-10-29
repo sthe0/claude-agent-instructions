@@ -104,7 +104,7 @@ knowledge_refs = ["scripts/agentctl/submission.py"]
 knowledge = "how the submission seam differs from the loader"
 [stage.principle]
 statement = "s"
-source = "src"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "der"
 confidence = "high"
 refutation = "r"
