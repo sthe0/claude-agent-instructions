@@ -169,12 +169,24 @@ def test_promote_order_without_induced(tmp_path):
     assert w.written.is_file()
 
 
-def test_promote_order_on_principle_refused(tmp_path):
+def test_promote_order_on_principle_refused(tmp_path, capsys):
     w = World(tmp_path)
     w.order_reg(slug="base-reg")
+    assert w.promote("--principle", "--grounded-in", "base-reg") == 0
+    (w.leaves / "principles" / "new-reg.md").unlink()
+    capsys.readouterr()
     assert w.promote("--principle", "--grounded-in", "base-reg", "--order-derived", TASK,
                      "--order-quote", QUOTE) != 0
+    captured = capsys.readouterr()
+    assert "belongs to a regularity" in captured.out + captured.err
     assert not (w.leaves / "principles" / "new-reg.md").exists()
+
+
+@pytest.mark.parametrize("task", ["   ", "bad\nname"])
+def test_promote_order_derived_value_refused(tmp_path, task):
+    w = World(tmp_path)
+    assert w.promote("--order-derived", task, "--order-quote", QUOTE) != 0
+    assert not w.written.exists()
 
 
 def test_order_derived_principle_flagged(tmp_path):

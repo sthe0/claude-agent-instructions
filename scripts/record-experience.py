@@ -1171,16 +1171,18 @@ def promote_skeleton(a, area: str, induced: list[str], grounded: list[str]) -> t
         return link_line, body
     heading = "Regularity" if area == "regularity" else "Principle"
     order_derived = getattr(a, "order_derived", None)
+    induced_part = ("## Induced from\n\n"
+                    + "".join(f"- [[{s}]] — TODO (curator): what this source contributes.\n"
+                             for s in induced)) if induced or not order_derived else ""
+    order_part = (("\n" if induced else "")
+                  + pp.render_order_section(a.order_quote, a.date)) if order_derived else ""
     body = (
         f"## {heading}\n\n{statement}\n\n"
         "## Generality\n\n"
         f"Level {a.generality} — TODO (curator): name the class of tasks this statement "
         "ranges over and what it is deliberately not claimed for.\n\n"
-        + ("## Induced from\n\n"
-           + "".join(f"- [[{s}]] — TODO (curator): what this source contributes.\n"
-                     for s in induced) if induced or not order_derived else "")
-        + (("\n" if induced else "")
-           + pp.render_order_section(a.order_quote, a.date) if order_derived else "")
+        + induced_part
+        + order_part
         + refutation
         + ("" if area == "regularity" else
            "\n## See also\n\n"
@@ -1194,6 +1196,9 @@ def promote_problems(a, corpus, leaves: Path, project: Path | None,
     """Why the requested leaf cannot be written: a principle is grounded in existing
     regularities, a regularity or project principle is induced from existing leaves."""
     problems = []
+    for flag, value in (("--order-derived", a.order_derived), ("--introduced-by", a.introduced_by)):
+        if value is not None and not SLUG.fullmatch(value):
+            problems.append(f"{flag} must be a task slug (lowercase letters, digits, hyphens)")
     if a.order_derived:
         area = "regularity" if not (a.principle or project) else "principle"
         if not pp.order_kind_ok(area):

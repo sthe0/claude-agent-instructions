@@ -382,7 +382,8 @@ def order_kind_ok(kind: str) -> bool:
 
 
 def order_introduced_by(order_derived, introduced_by):
-    """The `introduced_by` stamp to write: the given one, else the order's task."""
+    """The `introduced_by` value promote writes (the given one, else the order's task); the
+    reader of a written leaf is `introduced_by()`."""
     return introduced_by or order_derived or None
 
 
@@ -674,7 +675,7 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
             continue
         if not order_kind_ok(leaf.area):
             report(ORDER_ON_PRINCIPLE, leaf,
-                   f"`{ORDER_DERIVED}` belongs to a regularity, not a {leaf.area}")
+                   f"`{ORDER_DERIVED}` belongs to a regularity only (found on {leaf.area})")
         if order_quote(leaf.text) is None:
             report(ORDER_NO_QUOTE, leaf, f"no quote under `## {ORDER_SECTION_TITLE}`")
         for problem in order_introduced_problems(leaf.text):
