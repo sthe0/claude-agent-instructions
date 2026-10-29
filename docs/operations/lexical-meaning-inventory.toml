@@ -71,7 +71,7 @@ ground = "_PLAN_PRESENTATION_STAGE_ANCHOR_RE.findall extracts '[stage N]' anchor
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::<module>::re.compile"]
+[sites."scripts/agentctl/cli_questions.py::<module>::re.compile"]
 class = "structural"
 ground = "Compiles the legacy id shape qenum-N, fixed engine syntax."
 hits = 1
@@ -202,7 +202,7 @@ ground = "_TRANSCRIPT_PATH_RE.match reads the 'spawn-specialist: transcript=<pat
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_upsert_candidate::pattern.match"]
+[sites."scripts/agentctl/cli_questions.py::_upsert_candidate::pattern.match"]
 class = "structural"
 ground = "_LEGACY_ENUMERATION_ID.match tests an id for the qenum-N identifier shape."
 hits = 1
