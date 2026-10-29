@@ -57,7 +57,7 @@ DROPPED_CASES = {
 
 Case = namedtuple("Case", "id fn stamp setup expect dry_reports")
 
-GROOMING_STAMP = "claude-instruction-grooming.stamp.json"
+GROOMING_STAMP = "claude-curator.stamp.json"
 
 _CONFIG_TEMPLATE = """\
 | Key | Value | Meaning |
@@ -209,7 +209,7 @@ CASES = [
     Case("self-diagnose", "check_self_diagnose", "claude-self-diagnose.stamp",
          _setup_self_diagnose, "self-diagnose: 1 self-friction item(s)", True),
     Case("promote-scan", "check_promote_scan", "claude-promote-scan.stamp",
-         _setup_promote, "promote-scan: 1 principle-induction candidate(s)", True),
+         _setup_promote, "promote-scan: 1 regularity-induction candidate(s)", True),
 ]
 CASE_PARAMS = [pytest.param(c, id=c.id) for c in CASES]
 
@@ -219,7 +219,7 @@ CASE_PARAMS = [pytest.param(c, id=c.id) for c in CASES]
 def test_due_intervals_are_the_base_values():
     day = 86400
     assert hook.DUE_INTERVALS_S == {
-        "claude-instruction-grooming.stamp.json": 7 * day,
+        "claude-curator.stamp.json": 7 * day,
         "claude-self-diagnose.stamp": day,
         "claude-phase3-due.stamp": 7 * day,
         "claude-promote-scan.stamp": 7 * day,
@@ -366,7 +366,7 @@ def test_main_runs_all_nine_checks_and_stamps_each(env, capsys):
     make_fake_repo(env, readme_lines=46)
     assert hook.main([]) == 0
     captured = capsys.readouterr()
-    assert "[instruction-grooming]" in captured.out
+    assert "[curator]" in captured.out
     for case in CASES:
         assert case.expect in captured.err, case.id
     for stamp in hook.DUE_INTERVALS_S:
@@ -465,42 +465,42 @@ def test_the_default_budget_is_twenty_seconds():
     assert hook.TOTAL_BUDGET_S == 20.0
 
 
-# ── instruction-grooming (stdout offer, per-file debounce) ──────────────────
+# ── curator, instructions mode (stdout offer, per-file debounce) ──────────────────
 
 def test_grooming_offer_names_file_and_pct(env, capsys):
-    """Ported: test_instruction_grooming_hook.py::test_warn_file_emits_offer"""
+    """Ported: the standalone grooming-offer hook test::test_warn_file_emits_offer"""
     make_fake_repo(env, readme_lines=46)
     run_check("check_grooming", GROOMING_STAMP)
     out = capsys.readouterr().out
-    assert "[instruction-grooming]" in out and "README.md" in out and "92%" in out
+    assert "[curator]" in out and "README.md" in out and "92%" in out
     assert "AskUserQuestion" in out
     assert json.loads(stamp_file(env, GROOMING_STAMP).read_text()).keys() == {"README.md"}
 
 
 def test_grooming_clean_tree_silent(env, capsys):
-    """Ported: test_instruction_grooming_hook.py::test_clean_tree_silent"""
+    """Ported: the standalone grooming-offer hook test::test_clean_tree_silent"""
     make_fake_repo(env, readme_lines=10)
     run_check("check_grooming", GROOMING_STAMP)
     assert capsys.readouterr().out.strip() == ""
 
 
 def test_grooming_missing_repo_silent(env, capsys):
-    """Ported: test_instruction_grooming_hook.py::test_missing_repo_silent"""
+    """Ported: the standalone grooming-offer hook test::test_missing_repo_silent"""
     run_check("check_grooming", GROOMING_STAMP)
     assert capsys.readouterr().out.strip() == ""
 
 
 def test_grooming_second_run_within_window_silent(env, capsys):
-    """Ported: test_instruction_grooming_hook.py::test_second_run_within_window_silent"""
+    """Ported: the standalone grooming-offer hook test::test_second_run_within_window_silent"""
     make_fake_repo(env, readme_lines=46)
     run_check("check_grooming", GROOMING_STAMP)
-    assert "[instruction-grooming]" in capsys.readouterr().out
+    assert "[curator]" in capsys.readouterr().out
     run_check("check_grooming", GROOMING_STAMP)
     assert capsys.readouterr().out.strip() == ""
 
 
 def test_grooming_due_again_after_window_fires(env, capsys):
-    """Ported: test_instruction_grooming_hook.py::test_due_again_after_window_fires"""
+    """Ported: the standalone grooming-offer hook test::test_due_again_after_window_fires"""
     make_fake_repo(env, readme_lines=46)
     stale = dt.datetime.now() - dt.timedelta(days=8)
     path = stamp_file(env, GROOMING_STAMP)
@@ -508,11 +508,11 @@ def test_grooming_due_again_after_window_fires(env, capsys):
     path.write_text(json.dumps({"README.md": stale.isoformat()}), encoding="utf-8")
     run_check("check_grooming", GROOMING_STAMP)
     out = capsys.readouterr().out
-    assert "[instruction-grooming]" in out and "README.md" in out
+    assert "[curator]" in out and "README.md" in out
 
 
 def test_grooming_only_newly_due_file_named(env, capsys):
-    """Ported: test_instruction_grooming_hook.py::test_only_newly_due_file_named"""
+    """Ported: the standalone grooming-offer hook test::test_only_newly_due_file_named"""
     repo = make_fake_repo(env, readme_lines=46)
     path = stamp_file(env, GROOMING_STAMP)
     path.parent.mkdir(parents=True)

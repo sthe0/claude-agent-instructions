@@ -14,3 +14,4 @@ skills-local/*
 !skills-local/README.md
 mcp-local/*
 !mcp-local/README.md
+scripts/crutch_registry.toml

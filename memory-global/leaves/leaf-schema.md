@@ -38,7 +38,7 @@ The two required date fields (`created` / `last_verified`) are common to every l
 
 A leaf carrying `schema: leaf/v1` MUST contain these three H2 headers (enforced by regex on `^## `):
 
-1. **`## Difficulty`** — the divergence between desired and actual state that this leaf removes; its functional ground. State it as the X in "to achieve X, do Y". This is the section that makes the leaf applicable and prunable.
+1. **`## Difficulty`** — the divergence between desired and actual state that this leaf removes; its functional ground. State it as the X in "to achieve X, do Y" — the goal the leaf serves; the Y is a norm and the knowledge behind it is a regularity (`regularity/v1`, [[regularity-leaf-schema]]), not part of this section. This is the section that makes the leaf applicable and prunable.
 2. **`## Guidance`** — the durable fact, rule, or runbook itself (the "do Y"). Carries the body that the leaf existed for before the schema. Cite sources for OS / binary / version-dependent claims with a `> verified by: …` line.
 3. **`## See also`** — cross-references: `[[other-leaf]]` links and pointers into the difficulty graph. May be **present-but-empty** if there are genuinely none — the header is still required.
 
@@ -61,6 +61,7 @@ Migrate a grandfathered leaf to `leaf/v1` opportunistically when you next touch 
 
 ## See also
 
-- [[experience-leaf-schema]] — the `difficulty/v1` schema for experience leaves (out of scope for `leaf/v1`). It and the `principle/v1` principle leaf are two profiles — generality 0 vs ≥1 — of one difficulty-record model; `leaf/v1` here is a separate, unrelated shape, not a point on that continuum.
-- [[principle-leaf-schema]] — the `principle/v1` schema (the generality≥1 profile of that same model).
+- [[experience-leaf-schema]] — the `difficulty/v1` schema for experience leaves (out of scope for `leaf/v1`). It sits at generality 0 of the chain experience → regularity → principle; `leaf/v1` here is a separate, unrelated shape, not a point on that chain.
+- [[regularity-leaf-schema]] — the `regularity/v1` schema (the knowledge layer induced from experience leaves).
+- [[principle-leaf-schema]] — the `principle/v1` schema (the norm layer, grounded in regularities via `grounded_in`).
 - [[memory-hierarchy]] — when to spin off `<subdir>/MEMORY.md` sub-indexes.

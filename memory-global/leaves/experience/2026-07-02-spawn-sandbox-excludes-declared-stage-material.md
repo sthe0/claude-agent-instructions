@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "Fedor (2026-07-02: clicked 'Да, решена (R
 refs: [scripts/spawn-specialist.py, ~/.claude/plans/ghost-scope-fix.toml]
 created: 2026-07-02
 last_verified: 2026-09-01
-generalized_into: [a-spawned-child-inherits-nothing-the-brief-does-not-name]
+generalized_into: [a-process-boundary-carries-only-what-is-passed-across-it]
 ---
 
 # Spawn budget burned on permission denials when declared stage material lies outside the spawn sandbox

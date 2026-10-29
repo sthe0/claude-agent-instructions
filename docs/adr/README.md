@@ -4,7 +4,7 @@ Significant, hard-to-reverse design decisions for the agent system. An ADR is im
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-consensus-architecture.md) | Consensus architecture for a distributed agent system | Accepted (2026-06-26) — implemented in slices S1–S4 |
+| [0001](0001-consensus-architecture.md) | Consensus architecture for a distributed agent system | Accepted (2026-06-26) — implemented in slices S1–S4; refined by ADR-0013 |
 | [0002](0002-dialectical-transition.md) | Dialectical transition: the σ operator and principle revision | Accepted (2026-06-29) — σ-sentinel slice implemented; σ deferred behind the build-trigger |
 | [0003](0003-statement-kind-typed-principle.md) | Typed principle: `statement_kind` (`знание`/`сущее` vs `норма`/`должное`) | Superseded by ADR-0004 (2026-07-14) — § 1 was a category error; § 4 (`failure_address`) retained |
 | [0004](0004-principle-is-always-a-norm.md) | The principle (element 7) is always a `норма`; drop `statement_kind` | Accepted (2026-07-14) — supersedes ADR-0003 § 1; field dropped across plan.py/state.py/verify-plan-file.py + docs |
@@ -16,5 +16,6 @@ Significant, hard-to-reverse design decisions for the agent system. An ADR is im
 | [0010](0010-child-contour.md) | The child's own contour — approval, escalation and state gate inside the parent's norm | Accepted (2026-10-12) — `parent_norm` basis, `--norm-target parent` escalation, own-contour state gate and `agentctl-own.py`; child-contour-gaps amendment (own plan path, wildcard cover for a child's checks); parent-side accounting (4c) is decided in [ADR-0011](0011-parent-accounting.md) |
 | [0011](0011-parent-accounting.md) | Parent-side accounting — what a delegated child costs, and how its escalations end | Accepted (2026-10-15) — `spawner_session` cost rows and subtree spend, `effort_child_runs` wall-clock, typed `escalated_to`/`escalated_from` link, `adopt-escalation` gate |
 | [0012](0012-hypertext-plans.md) | Hypertext plans — hash-pinned references, a Merkle root digest and a deterministic converter | Proposed (2026-10-14) — reference resolver, closure digest, plan views, size limits and `plan-convert` / `plan-convert-live` to be implemented |
+| [0013](0013-regularity-vs-principle.md) | A regularity is knowledge, a principle is a norm grounded in regularities | Accepted (2026-10-27) — `regularity/v1` leaves in `regularities/`, `grounded_in` on global principles, provenance rules in `principle_provenance.py`; the project tier keeps `induced_from` |
 
 The operational distillations of an ADR (the contracts a tool or developer applies) live alongside it under [docs/](../): e.g. [instruction-layering.md](../architecture/instruction-layering.md), [layer-maintenance.md](../operations/layer-maintenance.md), [personal-layer.md](../architecture/personal-layer.md), [core-difficulty-calibration.md](../architecture/core-difficulty-calibration.md) all distil ADR-0001; [sigma-build-trigger.md](../sigma-build-trigger.md) distils ADR-0002.

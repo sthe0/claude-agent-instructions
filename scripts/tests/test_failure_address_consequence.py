@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agentctl import cli, gates
+from agentctl import cli, cli_common, gates
 from agentctl.dispatch import RunResult
 from agentctl.plan import PlanError, load_plan
 from agentctl.stage_norm import StageNorm
@@ -76,6 +76,7 @@ def real_roots(tmp_path, monkeypatch):
     wt = tmp_path / "wt"
     _git(canon, "worktree", "add", "-q", "-b", "wt-branch", str(wt))
     monkeypatch.setattr(cli, "REPO_ROOT", canon)
+    monkeypatch.setattr(cli_common, "REPO_ROOT", canon)
     return SimpleNamespace(scratch=scratch, home=home, canon=canon, wt=wt)
 
 
@@ -973,6 +974,7 @@ def test_child_subplan_verifies_and_resolves_with_a_parent_obligation_open(
 def test_verify_final_refusal_is_logged_as_a_gate(store, plans, norms, tmp_path, monkeypatch):
     gate_log = tmp_path / "gates.jsonl"
     monkeypatch.setattr(cli, "GATE_LOG", gate_log)
+    monkeypatch.setattr(cli_common, "GATE_LOG", gate_log)
     f = _norm_file(norms)
     _start(store, "d2", plans("base"))
     _pass(store, "d2", 1)

@@ -73,15 +73,6 @@ inv = _load_inventory_module()
 
 CODE_PARTITIONS = [
     (
-        "scripts/tests/**",
-        lambda f: f.startswith("scripts/tests/"),
-        "not-a-gate",
-        "keep",
-        "Synthetic gate-input fixtures: these exercise the real detectors/gates under "
-        "controlled inputs (including deliberately adversarial ones) but are not "
-        "themselves gates guarding production behaviour.",
-    ),
-    (
         "scripts/lib/writer_rules.py (candidate generation)",
         lambda f: f == "scripts/lib/writer_rules.py",
         "semantic-guarded",
@@ -575,6 +566,27 @@ CODE_ID_OVERRIDES = {
         "`_spawn_tags` is flagged hard-behaviour only because its name contains "
         "the token \"spawn\" — it builds a label list, it does not itself spawn "
         "or dispatch anything.",
+    ),
+    ("scripts/plan_dashboard/publish.py", "record_attempt"): (
+        "structural", "keep",
+        "record_attempt only stores the time of a failed publish and the plugin's "
+        "numeric retry_after in the publish state file; it matches no text and "
+        "decides no meaning, so it is a rate-bound bookkeeping step, not a semantic "
+        "gate.",
+    ),
+    ("scripts/plan-dashboard.py", "run_tui"): (
+        "structural", "keep",
+        "False pairing: the scope holds no regex; it is flagged hard-behaviour only "
+        "because `locate.select_or_none` carries the verb \"select\" — that call loads "
+        "the locator plugin the operator named with `--locator` from the plugin "
+        "directory, a lookup by an exact argparse value, not a reading of text.",
+    ),
+    ("scripts/plan_dashboard/tui_app.py", "main"): (
+        "structural", "keep",
+        "False pairing: the scope holds no regex; it is flagged hard-behaviour only "
+        "because `locate.select_or_none` carries the verb \"select\" — that call loads "
+        "the locator plugin the operator named with `--locator` from the plugin "
+        "directory, a lookup by an exact argparse value, not a reading of text.",
     ),
 }
 

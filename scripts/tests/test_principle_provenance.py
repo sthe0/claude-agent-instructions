@@ -72,6 +72,7 @@ class World:
         self.repo = tmp / "acme-widgets"
         self.project = self.repo / ".claude" / "agent-memory"
         for d in (self.leaves / "experience", self.leaves / "principles" / "cases",
+                  self.leaves / "regularities",
                   self.project / "experience", self.project / "principles"):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -94,21 +95,24 @@ class World:
                         + "\n# A rule\n", encoding="utf-8")
         return path
 
-    def principle(self, slug, induced=(), tier="global", rule_derived=None,
-                  pointer=None) -> Path:
-        base = self._base(tier) / "principles"
+    def induced_leaf(self, slug, induced=(), tier="global", rule_derived=None,
+                     pointer=None) -> Path:
+        """The induced-from leaf of the tier: a global regularity, a (grandfathered) project principle."""
+        is_global = tier == "global"
+        base = self._base(tier) / ("regularities" if is_global else "principles")
         path = base / f"{slug}.md"
+        schema, section = ("regularity/v1", "Regularity") if is_global else ("principle/v1", "Principle")
         path.write_text(_fm({
             "name": slug, "description": "a sample principle", "type": "reference",
-            "schema": "principle/v1", "generality": 1, pp.INDUCED: pp.format_list(induced),
+            "schema": schema, "generality": 1, pp.INDUCED: pp.format_list(induced),
             pp.RULE_DERIVED: json.dumps(rule_derived) if rule_derived else None,
             "created": DATE, "last_verified": DATE,
-        }) + "\n# A principle\n\n## Principle\n\nRun a check where its subject lives.\n",
+        }) + f"\n# A principle\n\n## {section}\n\nRun a check where its subject lives.\n",
             encoding="utf-8")
         listed = induced if pointer is None else pointer
         index = base / pp.INDEX
         text = index.read_text(encoding="utf-8") if index.exists() else (
-            "# Principles\n\n## Level 1 — sibling-context rules\n\n")
+            f"# {'Regularities' if is_global else 'Principles'}\n\n## Level 1 — sibling-context rules\n\n")
         index.write_text(text + f"- [A principle]({slug}.md) — a sample principle "
                          + pp.ARROW + ", ".join(f"`{s}`" for s in listed) + ".\n",
                          encoding="utf-8")
@@ -158,7 +162,7 @@ def _cross_tier_world(tmp_path, digest_matches=True):
     leaf = w.exp("2026-03-01-widget-drift", status=["sample-case"], tier="project")
     digest = body_sha(leaf.read_text(encoding="utf-8")) if digest_matches else None
     w.case("sample-case", status=["sample-principle"], digest=digest)
-    w.principle("sample-principle", induced=["sample-case"])
+    w.induced_leaf("sample-principle", induced=["sample-case"])
     return w, leaf
 
 
@@ -206,7 +210,7 @@ def test_asymmetry_reported_both_ways(tmp_path):
     w.exp("2026-01-01-listed", status=["sample-principle"])
     claims = w.exp("2026-01-02-claims", status=["sample-principle"])
     w.exp("2026-01-03-silent", status=[])
-    principle = w.principle("sample-principle", induced=["2026-01-01-listed", "2026-01-03-silent"])
+    principle = w.induced_leaf("sample-principle", induced=["2026-01-01-listed", "2026-01-03-silent"])
     found = w.findings()
     assert (pp.ASYMMETRIC, claims) in found
     assert (pp.ASYMMETRIC, principle) in found
@@ -216,7 +220,7 @@ def test_case_link_symmetric(tmp_path):
     w = World(tmp_path)
     w.case("sample-case", status=[])
     w.exp("2026-01-01-sample", status=["sample-principle"])
-    principle = w.principle("sample-principle", induced=["2026-01-01-sample", "sample-case"])
+    principle = w.induced_leaf("sample-principle", induced=["2026-01-01-sample", "sample-case"])
     assert (pp.ASYMMETRIC, principle) in w.findings()
 
 
@@ -224,7 +228,7 @@ def test_project_principle_symmetric(tmp_path):
     w = World(tmp_path)
     w.exp("2026-03-01-widget-listed", status=["widget-principle"], tier="project")
     claims = w.exp("2026-03-02-widget-claims", status=["widget-principle"], tier="project")
-    w.principle("widget-principle", induced=["2026-03-01-widget-listed"], tier="project")
+    w.induced_leaf("widget-principle", induced=["2026-03-01-widget-listed"], tier="project")
     assert (pp.ASYMMETRIC, claims) in w.findings(project=True)
 
 
@@ -234,14 +238,14 @@ def test_project_principle_symmetric(tmp_path):
 def test_rule_only_principle_needs_mark(tmp_path):
     w = World(tmp_path)
     w.rule("sample-rule")
-    principle = w.principle("sample-principle", induced=["sample-rule"])
+    principle = w.induced_leaf("sample-principle", induced=["sample-rule"])
     assert (pp.NO_SOURCE, principle) in w.findings()
 
 
 def test_case_counts_as_experience_source(tmp_path):
     w = World(tmp_path)
     w.case("sample-case", status=["sample-principle"])
-    w.principle("sample-principle", induced=["sample-case"])
+    w.induced_leaf("sample-principle", induced=["sample-case"])
     assert pp.NO_SOURCE not in w.kinds()
     assert pp.unaccounted(w.corpus()) == []
 
@@ -249,20 +253,20 @@ def test_case_counts_as_experience_source(tmp_path):
 def test_stale_rule_mark_reported(tmp_path):
     w = World(tmp_path)
     w.exp("2026-01-01-sample", status=["sample-principle"])
-    principle = w.principle("sample-principle", induced=["2026-01-01-sample"],
+    principle = w.induced_leaf("sample-principle", induced=["2026-01-01-sample"],
                             rule_derived="written from rules")
     assert (pp.STALE_MARK, principle) in w.findings()
 
 
 def test_project_principle_needs_source(tmp_path):
     w = World(tmp_path)
-    principle = w.principle("widget-principle", induced=[], tier="project")
+    principle = w.induced_leaf("widget-principle", induced=[], tier="project")
     assert (pp.NO_SOURCE, principle) in w.findings(project=True)
 
 
 def test_dangling_source_reported(tmp_path):
     w = World(tmp_path)
-    principle = w.principle("sample-principle", induced=["2026-01-01-gone"],
+    principle = w.induced_leaf("sample-principle", induced=["2026-01-01-gone"],
                             rule_derived="written from rules")
     assert (pp.DANGLING, principle) in w.findings()
 
@@ -270,7 +274,7 @@ def test_dangling_source_reported(tmp_path):
 def test_index_mirror_checked(tmp_path):
     w = World(tmp_path)
     w.exp("2026-01-01-sample", status=["sample-principle"])
-    principle = w.principle("sample-principle", induced=["2026-01-01-sample"],
+    principle = w.induced_leaf("sample-principle", induced=["2026-01-01-sample"],
                             pointer=["2026-01-01-other"])
     assert (pp.INDEX_MISMATCH, principle) in w.findings()
 
@@ -281,21 +285,21 @@ def test_index_mirror_checked(tmp_path):
 def test_case_sections_required(tmp_path):
     w = World(tmp_path)
     case = w.case("sample-case", status=["sample-principle"], sections=pp.CASE_SECTIONS[:-1])
-    w.principle("sample-principle", induced=["sample-case"])
+    w.induced_leaf("sample-principle", induced=["sample-case"])
     assert (pp.CASE_SECTIONS_KIND, case) in w.findings()
 
 
 def test_case_digest_format_checked(tmp_path):
     w = World(tmp_path)
     case = w.case("sample-case", status=["sample-principle"], digest=pp.DIGEST_PREFIX + "xyz")
-    w.principle("sample-principle", induced=["sample-case"])
+    w.induced_leaf("sample-principle", induced=["sample-case"])
     assert (pp.CASE_DIGEST_FORMAT, case) in w.findings()
 
 
 def test_case_origin_tier_checked(tmp_path):
     w = World(tmp_path)
     case = w.case("sample-case", status=["sample-principle"], origin="global")
-    w.principle("sample-principle", induced=["sample-case"])
+    w.induced_leaf("sample-principle", induced=["sample-case"])
     assert (pp.CASE_ORIGIN_TIER, case) in w.findings()
 
 
@@ -308,14 +312,14 @@ def test_uncited_case_reported(tmp_path):
 def test_core_check_without_project_memory(tmp_path):
     w = World(tmp_path)
     w.case("sample-case", status=["sample-principle"])
-    w.principle("sample-principle", induced=["sample-case"])
+    w.induced_leaf("sample-principle", induced=["sample-case"])
     assert pp.unaccounted(w.corpus(project=False)) == []
 
 
 def test_project_direct_global_reported(tmp_path):
     w = World(tmp_path)
     w.exp("2026-01-01-sample", status=["sample-principle"])
-    w.principle("sample-principle", induced=["2026-01-01-sample"])
+    w.induced_leaf("sample-principle", induced=["2026-01-01-sample"])
     leaf = w.exp("2026-03-01-widget-drift", status=["sample-principle"], tier="project")
     assert (pp.PROJECT_DIRECT_GLOBAL, leaf) in w.findings(project=True)
 
@@ -333,7 +337,7 @@ def test_stale_case_reported(tmp_path):
 def test_orphan_case_reported(tmp_path):
     w = World(tmp_path)
     case = w.case("sample-case", status=["sample-principle"])
-    w.principle("sample-principle", induced=["sample-case"])
+    w.induced_leaf("sample-principle", induced=["sample-case"])
     assert (pp.ORPHAN_CASE, case) in w.findings(project=True)
 
 
@@ -368,7 +372,7 @@ def _case_add_world(tmp_path):
     w = World(tmp_path)
     leaf = w.exp("2026-03-01-widget-drift", status=[], tier="project")
     w.exp("2026-01-01-sample", status=["sample-principle"])
-    w.principle("sample-principle", induced=["2026-01-01-sample"])
+    w.induced_leaf("sample-principle", induced=["2026-01-01-sample"])
     return w, leaf
 
 
@@ -392,7 +396,8 @@ def test_case_add_writes_body_digest(tmp_path):
     case = (w.leaves / pp.CASES_DIR / "sample-case.md").read_text(encoding="utf-8")
     assert pp.field_value(case, pp.SOURCE_DIGEST) == body_sha(leaf_bytes.decode())
     assert leaf.read_bytes() == leaf_bytes
-    assert "sample-case" in induced_of(w.leaves / "principles" / "sample-principle.md")
+    assert "sample-case" in induced_of(w.leaves / "regularities" / "sample-principle.md")
+    assert "`sample-case`" in (w.leaves / "regularities" / pp.INDEX).read_text(encoding="utf-8")
 
 
 def test_case_add_refuses_non_project_source(tmp_path, capsys):
@@ -428,11 +433,11 @@ def test_case_add_output_passes_memory_index(tmp_path):
     w = World(tmp_path, root=root)
     leaf = w.exp("2026-03-01-widget-drift", status=[], tier="project")
     w.exp("2026-01-01-sample", status=["sample-principle"])
-    w.principle("sample-principle", induced=["2026-01-01-sample"])
+    w.induced_leaf("sample-principle", induced=["2026-01-01-sample"])
     (w.leaves / "experience" / "MEMORY.md").write_text(
         "- [Sample](2026-01-01-sample.md) — a sample leaf\n", encoding="utf-8")
     (w.mem / "MEMORY.md").write_text(
-        "# Global\n\n- [Principles](leaves/principles/MEMORY.md) — index\n", encoding="utf-8")
+        "# Global\n\n- [Regularities](leaves/regularities/MEMORY.md) — index\n", encoding="utf-8")
     assert w.cli("case-add", "--spec", _case_spec(w, leaf)) == 0
     assert (w.leaves / pp.CASES_DIR / "sample-case.md").is_file()
     assert _run(VMI, ["--root", root]) == 0
@@ -467,7 +472,7 @@ def test_link_writes_both_sides(tmp_path):
     w = World(tmp_path)
     leaf = w.exp("2026-01-02-new", status=[])
     w.exp("2026-01-01-sample", status=["sample-principle"])
-    principle = w.principle("sample-principle", induced=["2026-01-01-sample"])
+    principle = w.induced_leaf("sample-principle", induced=["2026-01-01-sample"])
     assert w.cli("link", "2026-01-02-new", "sample-principle") == 0
     assert status_of(leaf) == ["sample-principle"]
     assert induced_of(principle) == ["2026-01-01-sample", "2026-01-02-new"]
@@ -477,7 +482,7 @@ def test_link_writes_both_sides(tmp_path):
 def test_link_project_principle_both_sides(tmp_path):
     w = World(tmp_path)
     leaf = w.exp("2026-03-01-widget-drift", status=[], tier="project")
-    principle = w.principle("widget-principle", induced=[], tier="project",
+    principle = w.induced_leaf("widget-principle", induced=[], tier="project",
                             rule_derived="seeded from rules")
     assert w.cli("link", leaf.stem, "widget-principle", "--project-dir", w.repo) == 0
     assert status_of(leaf) == ["widget-principle"]
@@ -488,7 +493,7 @@ def test_link_project_case_leaf_only(tmp_path):
     w = World(tmp_path)
     leaf = w.exp("2026-03-01-widget-drift", status=[], tier="project")
     case = w.case("sample-case", status=["sample-principle"])
-    w.principle("sample-principle", induced=["sample-case"])
+    w.induced_leaf("sample-principle", induced=["sample-case"])
     case_bytes = case.read_bytes()
     assert w.cli("link", leaf.stem, "sample-case", "--project-dir", w.repo) == 0
     assert status_of(leaf) == ["sample-case"]
@@ -499,7 +504,7 @@ def test_link_clears_rule_mark(tmp_path):
     w = World(tmp_path)
     w.rule("sample-rule")
     w.exp("2026-01-01-sample", status=[])
-    principle = w.principle("sample-principle", induced=["sample-rule"],
+    principle = w.induced_leaf("sample-principle", induced=["sample-rule"],
                             rule_derived="written from rules")
     assert w.cli("link", "2026-01-01-sample", "sample-principle") == 0
     assert pp.field_value(principle.read_text(encoding="utf-8"), pp.RULE_DERIVED) is None
@@ -509,7 +514,7 @@ def test_link_clears_rule_mark(tmp_path):
 def test_link_atomic(tmp_path, monkeypatch):
     w = World(tmp_path)
     leaf = w.exp("2026-01-01-sample", status=[])
-    principle = w.principle("sample-principle", induced=["sample-rule"],
+    principle = w.induced_leaf("sample-principle", induced=["sample-rule"],
                             rule_derived="written from rules")
     w.rule("sample-rule")
     before = {p: p.read_bytes() for p in (leaf, principle, principle.parent / pp.INDEX)}
@@ -532,7 +537,7 @@ def test_unlink_symmetric(tmp_path):
     w = World(tmp_path)
     leaf = w.exp("2026-01-01-sample", status=["sample-principle"])
     w.exp("2026-01-02-kept", status=["sample-principle"])
-    principle = w.principle("sample-principle", induced=["2026-01-01-sample", "2026-01-02-kept"])
+    principle = w.induced_leaf("sample-principle", induced=["2026-01-01-sample", "2026-01-02-kept"])
     assert w.cli("unlink", "2026-01-01-sample", "sample-principle") == 0
     assert status_of(leaf) == []
     assert induced_of(principle) == ["2026-01-02-kept"]
@@ -572,18 +577,20 @@ def test_promote_project_principle(tmp_path):
     assert _promote(w, "--induced-from", leaf.stem, "--project-dir", w.repo) == 0
     assert induced_of(w.project / "principles" / "new-principle.md") == [leaf.stem]
     assert status_of(leaf) == ["new-principle"]
-    assert not (w.leaves / "principles" / "new-principle.md").exists()
+    assert not (w.leaves / "regularities" / "new-principle.md").exists()
 
 
 def test_promote_requires_experience_or_mark(tmp_path):
     w = World(tmp_path)
     w.rule("sample-rule")
     assert _promote(w, "--induced-from", "sample-rule") == 2
-    assert not (w.leaves / "principles" / "new-principle.md").exists()
+    assert not (w.leaves / "regularities" / "new-principle.md").exists()
 
 
-def _split_world(tmp_path):
-    """The split fixture's source with a principle the drift cluster names as existing."""
+def _split_world(tmp_path, key="existing_regularity", existing="venue-regularity"):
+    """The split fixture's source and a regularity `venue-regularity` (grounding the principle
+    `venue-norm`); the drift cluster names `existing` under manifest `key`. Returns the
+    split-apply exit code too."""
     root = tmp_path / "work"
     (root / "leaves/experience").mkdir(parents=True)
     shutil.copyfile(FIXTURES / "good/base.md", root / "leaves/experience/2026-01-05-sample-venue-difficulty.md")
@@ -592,30 +599,116 @@ def _split_world(tmp_path):
                                                       encoding="utf-8")
     w = World(tmp_path)
     w.leaves = root / "leaves"
-    (w.leaves / "principles").mkdir()
+    (w.leaves / "regularities").mkdir()
     w.rule("sample-rule")
-    principle = w.principle("venue-principle", induced=["sample-rule"],
-                            rule_derived="written from rules")
+    regularity = w.induced_leaf("venue-regularity", induced=["sample-rule"],
+                                rule_derived="written from rules")
+    _grounded_principle(w, "venue-norm", ["venue-regularity"])
     manifest = json.loads((FIXTURES / "good.json").read_text(encoding="utf-8"))
-    manifest.update(root=str(root), principles=[])
-    manifest["clusters"][0]["existing_principle"] = "venue-principle"
+    manifest.update(root=str(root), regularities=[], principles=[])
+    manifest["clusters"][0][key] = existing
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(manifest), encoding="utf-8")
-    assert _run(RE, ["split-apply", "--manifest", path, "--date", DATE]) == 0
-    return root, principle, manifest
+    return root, regularity, manifest, _run(RE, ["split-apply", "--manifest", path, "--date", DATE])
+
+
+def _grounded_principle(w: World, slug, regularities) -> Path:
+    base = w.leaves / "principles"
+    base.mkdir(exist_ok=True)
+    path = base / f"{slug}.md"
+    path.write_text(_fm({
+        "name": slug, "description": "a sample norm", "type": "reference",
+        "schema": "principle/v1", "generality": 1,
+        pp.GROUNDED: pp.format_list(pp.REGULARITY_PREFIX + r for r in regularities),
+        "created": DATE, "last_verified": DATE,
+    }) + "\n# A norm\n\n## Principle\n\nRun a check where its subject lives.\n", encoding="utf-8")
+    index = base / pp.INDEX
+    head = index.read_text(encoding="utf-8") if index.exists() else "# Principles\n\n"
+    index.write_text(head + f"- [A norm]({slug}.md) — a sample norm " + pp.ARROW
+                     + ", ".join(f"`{r}`" for r in regularities) + ".\n", encoding="utf-8")
+    return path
 
 
 def test_split_apply_links_cluster_principle(tmp_path):
-    root, principle, manifest = _split_world(tmp_path)
+    root, regularity, manifest, code = _split_world(tmp_path)
+    assert code == 0
     drift = manifest["clusters"][0]["slug"]
-    assert status_of(root / "leaves/experience" / f"{drift}.md") == ["venue-principle"]
-    assert drift in induced_of(principle)
+    assert status_of(root / "leaves/experience" / f"{drift}.md") == ["venue-regularity"]
+    assert drift in induced_of(regularity)
+
+
+def test_split_apply_accepts_deprecated_existing_principle_key(tmp_path, capsys):
+    root, regularity, manifest, code = _split_world(
+        tmp_path, key="existing_principle", existing="venue-regularity")
+    assert code == 0
+    assert "existing_principle is deprecated" in capsys.readouterr().err
+    assert manifest["clusters"][0]["slug"] in induced_of(regularity)
+
+
+def test_split_apply_refuses_a_principle_as_existing_regularity(tmp_path, capsys):
+    root, _, manifest, code = _split_world(tmp_path, existing="venue-norm")
+    assert code == 2
+    assert "not a regularity leaf" in capsys.readouterr().err
+    assert not (root / "leaves/experience" / f"{manifest['clusters'][0]['slug']}.md").exists()
 
 
 def test_split_leaf_born_unlinked(tmp_path):
-    root, _, manifest = _split_world(tmp_path)
+    root, _, manifest, code = _split_world(tmp_path)
+    assert code == 0
     hang = manifest["clusters"][1]["slug"]
     assert status_of(root / "leaves/experience" / f"{hang}.md") == []
+
+
+@pytest.mark.parametrize("flags, message", [
+    (["--principle", "--grounded-in", "venue-regularity", "--project-dir", "PROJECT"],
+     "project tier keeps its principles induced"),
+    (["--principle", "--grounded-in", "venue-regularity", "--induced-from", "2026-01-01-sample"],
+     "--induced-from and --rule-derived belong to a regularity"),
+    (["--principle", "--grounded-in", "venue-regularity", "--rule-derived", "why"],
+     "--induced-from and --rule-derived belong to a regularity"),
+    (["--principle", "--grounded-in", "no-such-regularity"], "not found under"),
+    (["--grounded-in", "venue-regularity", "--induced-from", "2026-01-01-sample"],
+     "--grounded-in belongs to --principle"),
+])
+def test_promote_refusals(tmp_path, capsys, flags, message):
+    w = World(tmp_path)
+    w.exp("2026-01-01-sample", status=[])
+    w.induced_leaf("venue-regularity", induced=["2026-01-01-sample"])
+    flags = [str(w.repo) if f == "PROJECT" else f for f in flags]
+    assert _promote(w, *flags) == 2
+    assert message in capsys.readouterr().err
+    assert not (w.leaves / "principles" / "new-principle.md").exists()
+    assert not (w.leaves / "regularities" / "new-principle.md").exists()
+
+
+def test_provenance_of_global_principle_lists_its_regularities_experience(tmp_path, capsys):
+    w = World(tmp_path)
+    w.exp("2026-01-01-sample", status=["venue-regularity"])
+    w.induced_leaf("venue-regularity", induced=["2026-01-01-sample"])
+    _grounded_principle(w, "venue-norm", ["venue-regularity"])
+    assert w.cli("provenance", "--of", "venue-norm") == 0
+    listed = capsys.readouterr().out.splitlines()
+    assert [line.split("\t")[:2] for line in listed] == [["global", "2026-01-01-sample"]]
+
+
+def test_backfill_marks_a_regularity_rule_derived(tmp_path, capsys):
+    w = World(tmp_path)
+    w.rule("sample-rule")
+    regularity = w.induced_leaf("venue-regularity", induced=["sample-rule"])
+    assert (pp.NO_SOURCE, regularity) in w.findings()
+    assert w.cli("backfill", "--rule-derived", "venue-regularity=written from rules") == 0
+    assert pp.field_value(regularity.read_text(encoding="utf-8"), pp.RULE_DERIVED)
+    assert pp.unaccounted(w.corpus()) == []
+
+
+def test_backfill_refuses_to_mark_a_principle_rule_derived(tmp_path, capsys):
+    w = World(tmp_path)
+    w.induced_leaf("venue-regularity", induced=[], rule_derived="written from rules")
+    norm = _grounded_principle(w, "venue-norm", ["venue-regularity"])
+    before = norm.read_text(encoding="utf-8")
+    assert w.cli("backfill", "--rule-derived", "venue-norm=why") == 2
+    assert "no global regularity" in capsys.readouterr().err
+    assert norm.read_text(encoding="utf-8") == before
 
 
 # --------------------------------------------------------------------------
@@ -626,10 +719,11 @@ def test_case_files_exempt_from_index(tmp_path):
     w = World(tmp_path)
     w.leaves = root / "memory-global/leaves"
     (w.leaves / pp.CASES_DIR).mkdir(parents=True)
+    (w.leaves / "regularities").mkdir(parents=True)
     w.case("sample-case", status=["sample-principle"])
-    w.principle("sample-principle", induced=["sample-case"])
+    w.induced_leaf("sample-principle", induced=["sample-case"])
     (root / "memory-global/MEMORY.md").write_text(
-        "# Global\n\n- [Principles](leaves/principles/MEMORY.md) — index\n", encoding="utf-8")
+        "# Global\n\n- [Regularities](leaves/regularities/MEMORY.md) — index\n", encoding="utf-8")
     assert _run(VMI, ["--root", root]) == 0
 
 
@@ -637,7 +731,7 @@ def test_backfill_mirrors_links(tmp_path):
     w = World(tmp_path)
     linked = w.exp("2026-01-01-sample", status=None)
     unlinked = w.exp("2026-01-02-other", status=None)
-    w.principle("sample-principle", induced=["2026-01-01-sample"])
+    w.induced_leaf("sample-principle", induced=["2026-01-01-sample"])
     assert w.cli("backfill") == 0
     assert status_of(linked) == ["sample-principle"]
     assert status_of(unlinked) == []
@@ -647,7 +741,7 @@ def test_backfill_mirrors_links(tmp_path):
 def test_backfill_idempotent(tmp_path):
     w = World(tmp_path)
     leaf = w.exp("2026-01-01-sample", status=None)
-    w.principle("sample-principle", induced=["2026-01-01-sample"])
+    w.induced_leaf("sample-principle", induced=["2026-01-01-sample"])
     assert w.cli("backfill") == 0
     once = leaf.read_bytes()
     assert w.cli("backfill") == 0
@@ -661,6 +755,7 @@ def _verifier_world(tmp_path):
     w.leaves = root / pp.LEAVES_REL
     (w.leaves / "experience").mkdir(parents=True)
     (w.leaves / "principles").mkdir(parents=True)
+    (w.leaves / "regularities").mkdir(parents=True)
     return root, w
 
 
@@ -698,7 +793,7 @@ def test_verifier_staged_ignores_untracked_leaf(tmp_path):
 def test_verifier_staged_reads_the_index_not_the_working_tree(tmp_path):
     root, w = _verifier_world(tmp_path)
     leaf = w.exp("2026-01-01-sample", status=[])
-    principle = w.principle("sample-principle", induced=["2026-01-01-sample"])
+    principle = w.induced_leaf("sample-principle", induced=["2026-01-01-sample"])
     _stage(tmp_path, root, leaf, principle)
     w.exp("2026-01-01-sample", status=["sample-principle"])
     assert _run(VPP, ["--root", root]) == 0

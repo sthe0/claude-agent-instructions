@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "the0 (user)"
 refs: [2026-06-24-agentctl-verify-venue-worktree-needs-substantive-replan.md, 2026-07-03-engine-replan-artifact-discipline.md, 2026-07-20-agentctl-premise-gate-blocks-venue-refinement-replan.md]
 created: 2026-07-21
 last_verified: 2026-07-21
-generalized_into: [a-spawned-child-inherits-nothing-the-brief-does-not-name]
+generalized_into: [a-process-boundary-carries-only-what-is-passed-across-it]
 ---
 
 # agentctl dispatch threads no worktree/branch continuity across dependent spawn stages

@@ -9,7 +9,7 @@ refs: [memory-global/leaves/delegatable-work-patterns.md, memory-global/leaves/s
 plan_file: /home/the0/.claude-agent/plans/season2-instruction-tuning.toml
 created: 2026-10-06
 last_verified: 2026-10-06
-generalized_into: [review-loop-cannot-measure-its-own-convergence]
+generalized_into: [incremental-repair-review-has-a-nonzero-finding-floor]
 ---
 
 # Tuning the agent's own instructions to an external productivity metric (AI Profile Season II)

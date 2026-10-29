@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-10-12
 last_verified: 2026-10-23
-generalized_into: [shared-resource-health-asserted-relative-to-a-pinned-base]
+generalized_into: [a-shared-resource-moves-under-others-action]
 ---
 
 # A stage control asserts an absolute property of a suite or tree the delivery does not own

@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev"
 refs: [2026-07-17-2026-07-17-core-pr-landing-with-fine-grained-pat, 2026-07-02-periodic-instruction-refresh-offer-not-silent-pull, 2026-06-30-2026-06-30-verify-spawned-developer-commit-scope-shared-tree, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]
 created: 2026-08-11
 last_verified: 2026-08-19
-generalized_into: [delivered-identity-is-established-by-content-or-ancestry, verdict-covers-the-evidence-domain-it-claims]
+generalized_into: [a-coordinate-shifts-while-the-content-it-addressed-stays, a-probe-observes-only-the-domain-it-reads]
 ---
 
 # Addressing a shared stack by position instead of identity: sync-instructions-repo popped other sessions' stashes, silently

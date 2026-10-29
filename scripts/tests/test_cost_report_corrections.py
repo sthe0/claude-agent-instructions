@@ -1,4 +1,4 @@
-"""cost-report.py counts corrections by the rule policy-scorecard.py uses.
+"""`agent-report.py cost` (lib/agent_report/cost.py) counts corrections by the rule policy-scorecard.py uses.
 
 Who spoke is structure (origin.kind == "human"); whether a human prompt is a
 correction is meaning: the si_feedback_detect prefilter nominates and the judge
@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parent.parent
-COST_REPORT = SCRIPTS / "cost-report.py"
+COST_REPORT = SCRIPTS / "lib" / "agent_report" / "cost.py"
 POLICY_SCORECARD = SCRIPTS / "policy-scorecard.py"
 PROMPT_JUDGES = SCRIPTS / "lib" / "prompt_judges.py"
 
@@ -36,7 +36,9 @@ def _load(path: Path, name: str):
 
 @pytest.fixture
 def cr():
-    return _load(COST_REPORT, "cost_report_corrections_under_test")
+    sys.path.insert(0, str(SCRIPTS))
+    from lib.agent_report import cost
+    return cost
 
 
 def _strip(text: str) -> str:

@@ -2659,7 +2659,17 @@ def _delivery_stamp_blocker(state: SessionState, receipt, probe) -> list[str]:
                 " (the user's explicit escape reason) — re-run confirm-delivery"
             ]
         return []
-    return [f"delivery stamp source is {stamp.source!r} — expected 'hook' or 'override'"]
+    if stamp.source == delivery.SOURCE_CHANNEL:
+        if delivery.has_answered_channel_delivery(
+                state.history, kind=receipt.kind, sha256=stamp.rendering_sha256,
+                plan_sha256=stamp.plan_sha256):
+            return []
+        return [
+            "delivery stamp claims the channel source but the engine recorded no answered "
+            "channel delivery of these bytes — present-plan again so the engine delivers "
+            "them, or confirm-delivery --by <you> --note <why> --escape-reason <reason>"
+        ]
+    return [f"delivery stamp source is {stamp.source!r} — expected 'hook', 'override' or 'channel'"]
 
 
 def plan_presentation_blockers(

@@ -1,11 +1,11 @@
 ---
 name: verdict-covers-the-evidence-domain-it-claims
-description: Anything that issues a verdict — a gate, a checker, or an agent's own investigation — must actually cover the evidence domain its verdict claims, and where it cannot, say so instead of answering. A gate demanding proof whose prover is absent, a checker enumerating from one source while reading another, and and an agent's claim about a mechanism it never ran — its absence, its cause, or its next move — are the same fault; where the mechanism ships a dry run, not spending it before the claim is the whole failure. Escape hatches must stay reachable, diagnosed, typed and counted.
+description: Anything that issues a verdict — a gate, a checker, or an agent's own investigation — must actually cover the evidence domain its verdict claims, and where it cannot, say so instead of answering. A gate demanding proof whose prover is absent, a checker enumerating from one source while reading another, and an agent's claim about a mechanism it never ran — its absence, its cause, or its next move — are the same fault; where the mechanism ships a dry run, not spending it before the claim is the whole failure. Escape hatches must stay reachable, diagnosed, typed and counted.
 type: reference
 schema: principle/v1
 generality: 3
 domain: development
-induced_from: [ask-user-question-split-turn, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-09-gate-must-execute-what-it-attests, 2026-07-04-spawn-budget-death-forensics-before-respawn, 2026-09-27-negative-finding-amplified-from-bounded-probe, evocative-sample-label-without-provenance, tests-cover-resolved-path-not-raw-readers, pilot-sample-too-small-to-claim-the-sign, 2026-06-04-verify-load-bearing-axis, 2026-06-26-guard-coupled-doc-relocation, 2026-07-01-imagined-permission-vs-deterministic-scoped-wrapper, 2026-07-01-monitor-self-defeats-verify-its-own-run, 2026-07-02-seam-stub-tests-never-exercise-default, 2026-07-04-topological-gate-when-signal-unobservable, 2026-07-09-landed-not-deployed-checkout-parked-on-feature-branch, 2026-07-11-detect-compiled-claude-exe-via-ps-comm-not-pgrep-argv, 2026-07-14-claim-provenance-ledger-reasoning-deliverable, 2026-07-16-benchmark-measurement-contamination-env-resource-artifact, 2026-07-17-reviewer-claim-accepted-on-authority, 2026-07-20-git-index-file-env-leak-empty-commit-nested-worktree, 2026-07-21-agentctl-acceptance-judge-stale-verdict-nested-claude-unavailable, 2026-07-21-cwd-keyed-hook-cross-repo-blind, 2026-07-29-crutch-registry-standing-prevention, 2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer, 2026-08-05-scope-substitution-at-plan-authoring, 2026-08-11-sync-stash-identity-not-position, 2026-08-12-symlinked-write-path-defeats-path-based-guard, 2026-08-18-fail-open-gate-exit-zero-and-underfetched-listing, 2026-08-20-staged-vs-full-verification-and-generated-registry, 2026-08-22-acceptance-carveout-for-multiweek-measurement, 2026-08-24-required-flag-strands-stubbed-callers, 2026-09-03-hygiene-sweep-ownership-check-argument-order-bug, 2026-09-29-tracker-publish-gate-missed-per-stage-artifacts]
+grounded_in: [regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-two-valued-judge-absorbs-could-not-look]
 created: 2026-08-04
 last_verified: 2026-09-27
 ---
@@ -14,10 +14,7 @@ last_verified: 2026-09-27
 
 ## Principle
 
-To make a verdict mean what it says, **make it cover the evidence domain the verdict claims — and
-where it cannot, say so instead of answering.** Anything that judges has three possible honest
-answers, not two: *satisfied*, *not satisfied*, and *I could not look*. Collapsing the third into
-either of the first two is the fault; which of the two it collapses into decides who it hurts.
+Because a probe observes only the domain it reads ([[a-probe-observes-only-the-domain-it-reads]]) and a two-valued judge absorbs "could not look" into one of its two answers ([[a-two-valued-judge-absorbs-could-not-look]]), for the goal of verdicts a consumer can act on, **make each verdict cover the evidence domain it claims — and where it cannot, say so instead of answering.** Anything that judges has three possible honest answers, not two: *satisfied*, *not satisfied*, and *I could not look*. Collapsing the third into either of the first two is the fault; which of the two it collapses into decides who it hurts.
 
 This holds whether the judge is a piece of machinery or a reasoner. The three forms met so far:
 
@@ -102,6 +99,10 @@ existing names, because a norm that requires touching every prior artifact to st
 confuses the difficulty it removes (an unlabeled NEW artifact reads as trustworthy by default) with
 an unrelated one (a naming scheme applied retroactively to a stable, already-consumed corpus).
 
+## Goal class
+
+Verdicts — of gates, tests, monitors, reviews, research findings — that a consumer can act on as meaning what they say: a pass that licenses proceeding, a fail that names a real defect.
+
 ## Generality
 
 Level 3 — a cross-domain invariant over **anything that issues a verdict over evidence it does not
@@ -123,64 +124,14 @@ mechanism reports its own coverage" — a transformer, a renderer, a transport m
 owes no coverage statement. The invariant binds at the moment something asserts a state of the world
 on evidence, and not before.
 
-## Induced from
+## Grounded in
 
-- [[ask-user-question-split-turn]] — the plan-presentation delivery gate and its residuals. The
-  unreachable-prover case is one of those residuals made concrete: `approve` refused for "no
-  delivery proof recorded" on a machine where the hook that writes the proof was not registered in
-  the root the session loads from, and nothing in the refusal said so.
-- [[2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]] — the verifier form, met
-  first as a green stage followed by a red pre-commit: a checker enumerating from the git index over
-  a working tree that had moved on.
-- [[2026-07-09-gate-must-execute-what-it-attests]] — the experience leaf this task extended. Its
-  (b) REFUSE-WITHOUT-A-ROUTE limb is the same fault one level in: a refusal with no reachable
-  resolution path. The 2026-08-04 context is the absent-PROVER twin — the route exists, but nothing
-  had built the road it points at.
-- [[2026-07-04-spawn-budget-death-forensics-before-respawn]] — § 2026-08-10 (the judge-abort verdict)
-  is what induced the naming corollary. That stage produced two artifacts side by side in one diff —
-  one named after the probe that captured it, one named after its subject — and nothing but the
-  author's own memory of who wrote which distinguished "collected" from "asserted". The verdict
-  recorded there (the ledger cannot see an abort it was never wired to observe) is the same fault on
-  the evidence-domain axis that this principle states.
-- [[2026-09-27-negative-finding-amplified-from-bounded-probe]] — the investigator form, and the
-  instance outside the judging-mechanism class that promoted this leaf from level 2 to level 3. A peer
-  VM was declared a "forgotten rudiment, can be shut down" on the strength of a name-filtered process
-  grep and a policy-routing check, neither of which could have seen the `iptables` NAT table the whole
-  mechanism lived in; a positive counter-signal (2.7GB of tunnel egress) was explained away to keep the
-  conclusion. The host was carrying the user's daily VPN traffic, and only the user's contradiction
-  caught it. Its two further contexts, recorded the same day, are what widened consequence 1 beyond
-  absence: a permission denial whose CAUSE was named twice and probed neither (the real cause was
-  opacity, and one `cat` of the script refuted both guesses), and a package manager's future
-  BEHAVIOUR promised to the user while `apt-get -s` sat unused — the dry run was reached for only
-  after the promise had failed.
+- [[a-probe-observes-only-the-domain-it-reads]] — A check, probe or reasoner observes only the inputs it actually reads; its verdict carries no information about the part of the claimed domain it did not read, however confidently that verdict is worded.
+- [[a-two-valued-judge-absorbs-could-not-look]] — A judge that can only answer pass or fail still meets cases where it could not observe; those cases do not disappear but are silently reported as one of the two answers, so an unrun check reads as passed or a lost signal reads as failed.
 
 ## Refutation
 
-The principle is refuted, or driven to a broader form, by a judging mechanism that provably cannot
-distinguish "not satisfied" from "could not look" — where the coverage question is undecidable to
-the mechanism itself rather than merely unimplemented. At that point the requirement is not
-"diagnose" but "declare the undecidability at the boundary", and the statement must widen to admit
-a mechanism whose honest output is a permanent third state rather than a diagnosis.
-
-The naming half is refuted by a corpus where a filename cannot carry provenance without lying: a
-producer that is itself a chain (a script invoked by a hook invoked by the engine) has no single name
-to give, and forcing one asserts a provenance narrower than the truth. Should that shape prove to be
-the common case rather than the exception, the requirement moves off the filename and into a
-machine-readable provenance field inside the artifact, and the corollary narrows to "an artifact
-declares its producer" — with the filename as merely one place to declare it.
-
-The investigator half — and with it the level-3 claim — is refuted by an investigative domain where
-enumerating candidate mechanisms before accepting an absence is not merely expensive but impossible:
-an open-world question whose mechanism space cannot be bounded even in principle, so that *I could
-not look* is the only answer ever available and the rule degenerates to "never conclude anything
-negative". Should that be the common shape rather than the exception, the statement must narrow back
-to closed-world domains — where the set of mechanisms that could produce an observation is
-enumerable — and level 3 is not earned.
-
-The narrower escape-hatch half carries its own refutation: if escapes turn out to be genuinely rare,
-the typed reason is overhead. The measurement is what refutes that — 3 of the first 5 delivery
-stamps on this machine were overrides — and `scripts/escape-hatch-report.py` is what will show
-whether the ratio falls once the gate names the real cause.
+The principle fails its goal if verdicts that state their covered domain and report could-not-look separately are still acted on wrongly — a pass followed by a defect inside the stated domain, a fail with no defect — at a rate no lower than verdicts built without it.
 
 ## See also
 

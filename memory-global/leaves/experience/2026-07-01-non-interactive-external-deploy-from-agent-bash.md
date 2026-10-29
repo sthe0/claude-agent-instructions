@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "the0"
 refs: [2026-05-25-resolution-gate-confirm-before-record.md]
 created: 2026-07-01
 last_verified: 2026-07-01
-generalized_into: [a-generic-failure-symptom-is-traced-to-its-cause-before-a-remedy-is-applied]
+generalized_into: [a-generic-failure-message-names-a-surface-shared-by-many-causes]
 ---
 
 # Shipping to an external service non-interactively from the agent's Bash tool: three coupled traps

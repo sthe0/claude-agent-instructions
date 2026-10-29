@@ -70,9 +70,7 @@ Whether the ANSWER is a fact or a qualified one is a second question, and
 ``Wiring.scope_fully_covered`` is the field for it: a member the probe opened
 and could not turn into entries leaves a partial view whatever scope it sits
 in, and a user-level member hides a registration exactly as well as a project
-one. Callers that must not over-claim read that field instead of assuming; see
-``dispatch_witness_snapshot.entry_for``, which derives the snapshot's
-``scope_qualified`` from it.
+one. Callers that must not over-claim read that field instead of assuming.
 
 Consequently ABSENT is never a bare "not registered": it is either "not
 registered in any user-level settings member of <root>" or, once the project

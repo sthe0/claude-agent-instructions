@@ -4,7 +4,7 @@ description: An operation that assumes it owns the state it touches ('whatever s
 type: reference
 schema: principle/v1
 generality: 2
-induced_from: [2026-07-17-2026-07-17-core-pr-landing-with-fine-grained-pat, 2026-07-02-periodic-instruction-refresh-offer-not-silent-pull, 2026-06-29-resume-paused-task-isolated-worktree-pinned-sha, 2026-07-01-2026-07-01-engine-spawn-proc-tree-macos-and-rm-empty-var]
+grounded_in: [regularity:a-name-from-position-or-an-empty-variable-designates-a-foreign-object, regularity:a-shared-resource-moves-under-others-action]
 created: 2026-10-21
 last_verified: 2026-10-21
 ---
@@ -13,19 +13,21 @@ last_verified: 2026-10-21
 
 ## Principle
 
-Before a mutating act on a resource other sessions or tasks may share (a stash, a working tree, a branch, a directory built from a variable), name the exact object by identity, guard the conditions under which the name is empty or foreign, and prefer an offer to a user over a silent background mutation; recover by isolating onto a pinned clean base rather than editing in place.
+Because a name from position or an empty variable designates a foreign object ([[a-name-from-position-or-an-empty-variable-designates-a-foreign-object]]) and a shared resource moves under others' action ([[a-shared-resource-moves-under-others-action]]), for the goal of acting on exactly the intended object, before a mutating act on a resource other sessions or tasks may share (a stash, a working tree, a branch, a directory built from a variable), name the exact object by identity, guard the conditions under which the name is empty or foreign, and prefer an offer to a user over a silent background mutation; recover by isolating onto a pinned clean base rather than editing in place.
+
+## Goal class
+
+Mutating actions on shared resources that change exactly their intended object and leave every other session's or task's objects untouched.
 
 ## Generality
 
 Level 2 - a rule for any write to a resource with more than one potential owner.
 
-## Induced from
+## Grounded in
 
-- [[2026-07-17-2026-07-17-core-pr-landing-with-fine-grained-pat]] - a guarded stash pop applied a stash left by another task and conflicted unrelated files.
-- [[2026-07-02-periodic-instruction-refresh-offer-not-silent-pull]] - a background auto-pull rebased a live session's tree mid-task; the fix was an offer through the agent.
-- [[2026-06-29-resume-paused-task-isolated-worktree-pinned-sha]] - resuming in a tree held by a parallel session would have corrupted its work and dragged in a foreign commit.
-- [[2026-07-01-2026-07-01-engine-spawn-proc-tree-macos-and-rm-empty-var]] - a cleanup built from an empty variable collapsed to a parent directory and deleted the personal memory.
+- [[a-name-from-position-or-an-empty-variable-designates-a-foreign-object]] — A name for the object of an action that is built from position (top of a stack, current branch) or from a variable that can be empty resolves, under shared use, to an object belonging to someone else or to a parent of the intended one.
+- [[a-shared-resource-moves-under-others-action]] — A resource other sessions or tasks also act on — a working tree, a trunk branch, a test suite's population, a session-state schema — changes between two observations by one task for reasons unrelated to that task.
 
 ## Refutation
 
-Refuted by a mutation of shared state that was done by position or ambient default ('the top stash', 'the current directory') and was safe by construction, or by a case where naming the object cost more than the collisions it would prevent.
+The principle fails its goal if actions that name their object by identity and guard empty or foreign names still mutate another session's object.

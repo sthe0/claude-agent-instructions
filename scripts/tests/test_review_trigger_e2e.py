@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, config, task_accumulator
+from agentctl import cli, cli_common, config, task_accumulator
 from agentctl.config import Thresholds
 from agentctl.state import Node, PlanReview, SessionState
 from test_replan_autonomy_boundary import Eng, plan_text, thinker_review
@@ -197,7 +197,7 @@ def reflected_session(eng: Eng, sid: str = "t1") -> str:
 
 
 def test_a_fire_at_the_difficulty_depth_cap_keeps_the_review_and_spends_the_evidence(eng, monkeypatch):
-    monkeypatch.setattr(cli, "_difficulty_level_cap", lambda: 0)
+    monkeypatch.setattr(cli_common, "_difficulty_level_cap", lambda: 0)
     plan = eng.write(plan_text(), "draft.toml")
     eng.open("t1", plan)
     thinker_review(eng, "t1", plan, "revise")

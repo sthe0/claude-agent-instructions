@@ -13,9 +13,7 @@ Covers the stage's done criterion end to end:
   4. an engine-path invocation (no hook_start line at all) still classifies as
      None, not outcome 12 -- and outcome 12 itself is fail_open and outside
      NOT_FAIL_OPEN_IDS;
-  5. check-dispatch-witness.py, run on synthetic fixtures covering its full
-     required argument set, produces no traceback;
-  6. the other two judge-calling hooks wrap the same imports in the same
+  5. the other two judge-calling hooks wrap the same imports in the same
      except-BaseException / import_failed / bare-raise shape (structural
      parity, checked without paying for two more real subprocess runs).
 
@@ -56,7 +54,6 @@ from lib import judge_ledger  # noqa: E402
 HOOK_NAME = "hook-escalation-diagnosis-gate.py"
 HOOK = SCRIPTS_DIR / HOOK_NAME
 POISON_TARGET_NAME = "outage_escalation_detect.py"
-DISPATCH_WITNESS = SCRIPTS_DIR / "check-dispatch-witness.py"
 
 OTHER_HOOKS = {
     "deferring_disposition": SCRIPTS_DIR / "hook-deferring-disposition-gate.py",
@@ -200,35 +197,7 @@ def test_outcome_12_is_fail_open_and_outside_not_fail_open_ids():
     assert "12" not in _report.NOT_FAIL_OPEN_IDS
 
 
-# --- 5. the dispatch witness runs clean on synthetic fixtures -------------------
-
-def test_dispatch_witness_synthetic_fixtures_produce_no_traceback(tmp_path):
-    since_file = tmp_path / "since.stamp"
-    since_file.write_text("", encoding="utf-8")
-    old_wiring_file = tmp_path / "old-wiring.json"
-    old_wiring_file.write_text(
-        json.dumps({"schema": "dispatch-witness-old-wiring/v2", "hooks": {}}),
-        encoding="utf-8",
-    )
-    ledger = tmp_path / "empty-ledger.jsonl"
-    ledger.write_text("", encoding="utf-8")
-
-    result = subprocess.run(
-        [
-            sys.executable, str(DISPATCH_WITNESS),
-            "--since-file", str(since_file),
-            "--session-id", "synthetic-import-blindness-session",
-            "--old-wiring-file", str(old_wiring_file),
-            "--ledger", str(ledger),
-        ],
-        capture_output=True, text=True,
-    )
-
-    assert "Traceback" not in result.stderr
-    assert result.returncode in (0, 1)  # a clean verdict either way, never a crash
-
-
-# --- 6. structural parity across the other two judge-calling hooks -------------
+# --- 5. structural parity across the other two judge-calling hooks -------------
 
 def test_other_hooks_wrap_their_imports_the_same_way():
     for hook_name, path in OTHER_HOOKS.items():

@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "Да, решена"
 refs: [scripts/hook-guard-destructive-rm.py, scripts/proc_tree.py, 2026-06-24-developer-marker-not-on-line-1-false-block.md]
 created: 2026-07-01
 last_verified: 2026-07-01
-generalized_into: [an-action-on-shared-state-names-its-object-and-leaves-others-untouched, an-assumed-ambient-facility-is-declared-with-a-generic-default]
+generalized_into: [a-name-from-position-or-an-empty-variable-designates-a-foreign-object, a-tool-relies-on-facilities-its-authors-host-supplies-unasked]
 ---
 
 # Engine specialist-spawn breaks on macOS (proc_tree /proc), and destructive rm from an empty var wiped ~/.claude

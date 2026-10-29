@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Claude Code parity (global rule)
 
-**Canonical source:** `~/.claude-agent/CLAUDE.md` (symlink → `~/claude-agent-instructions/CLAUDE.md`). On any conflict — `~/.claude-agent/CLAUDE.md` wins. Read it at the start of a non-trivial conversation. This rule is a thin mirror for the parts Cursor must always see; full text lives in the canonical file and in the linked skills/memory.
+**Canonical source:** `~/.claude-agent/CLAUDE.md` (symlink → `~/claude-agent-instructions/CLAUDE.md`). On any conflict — `~/.claude-agent/CLAUDE.md` wins. Read it at the start of a non-trivial conversation. This rule is a thin mirror for the parts Cursor must always see; full text lives in the canonical file and in the linked skills/memory (shortened CLAUDE.md paragraphs keep their full originals in `memory-global/leaves/claude-md-elaboration.md`).
 
 Edit policy in `~/claude-agent-instructions/`; never patch this rule in isolation.
 
@@ -113,13 +113,13 @@ Editing the agent's own config / instructions / skills is **state-changing produ
 
 When triggered → read `~/.claude-agent/skills/tracker-management/SKILL.md` and layer tracker publication on top of normal coordination: load ticket context, publish the plan, post key progress updates, post the final result. Tracker-agnostic — project-specific conventions live in `<project_cwd>/.claude/agent-memory/`.
 
-### `instruction-grooming`
+### Instructions mode of the curator specialization
 
 **TRIGGER:** an instruction file crosses `lint-prose-length.py`'s 90% WARN threshold (`CLAUDE.md`, `README.md`, the cursor mirror, any `SKILL.md`/`policy.md`) — flagged directly by the linter or via the `hook-session-due.py` OFFER — or the user asks to slim / groom / consolidate / deduplicate a bloated instruction file.
 
 **SKIP** when the file is comfortably under 90% of its ceiling and no user request references grooming.
 
-When triggered → read `~/.claude-agent/skills/instruction-grooming/SKILL.md` and work through measure → survey → verify consumers → plan; the actual edit still rides the standard plan-approval spine like any other production change to instructions.
+When triggered → read `~/.claude-agent/skills/specializations/curator/SKILL.md` (Instructions mode) and work through measure → survey → verify consumers → plan; the actual edit still rides the standard plan-approval spine like any other production change to instructions.
 
 ### `improvement-scan`
 
@@ -133,7 +133,7 @@ When triggered → read `~/.claude-agent/skills/improvement-scan/SKILL.md` and d
 
 Close the loop **proactively** when all plan stages have passed their `Expected result image:` and the plan's `## Final verification` has passed: one-line recap (`Requested: X. Delivered: Y.`) + explicit ask in the user's language, **shaped to the criterion type** — *measurable*: a generic "Считаем решённой?"; *acceptance-review*: ask the user to confirm a **specific observation they have just performed**, not a meta-belief. For in-thread work without a formal plan, the final user-facing summary **is** the resolution gate — put the ask in the **same reply** as the recap. **Bare gratitude (`thanks` / `perfect` alone) is not confirmation** — ask anyway. **The terminal state of committed work is trunk/main, not a personal branch — strive to land, don't just push:** land as its own step before `verify-final` (push the branch if unpushed — pre-authorized; then land via the repo's landing mechanism, ff or PR — a non-trivial fast-forward is a landing *path*, not a reason to strand the branch), then `verify-final`, then the `[resolution-ask]` carrying the agent-proposed 1-5 rating as its first option; `resolve` refuses an unlanded git delivery branch and a rating without that marked ask answered after `verify-final`. Full discipline: `~/.claude-agent/CLAUDE.md` § On task resolution + `~/.claude-agent/memory-global/leaves/landing-discipline.md`. Then **decide whether to record**.
 
-**Quality bar.** Record only if a future you would actually want to **read** the leaf before a similar task (non-obvious choice, reusable difficulty resolution, missing tool / memory / instruction discovered, ≥ 5 min rediscovery saved); else skip — bloat is worse than a gap. Schema (`difficulty/v1` — which, with the `principle/v1` principle leaf, are two profiles (generality 0 vs ≥1) of one difficulty-record model keyed by an optional `generality` field (implied 0; `leaf/v1` is separate)), the **required** `resolution_confirmed_by_user: "<user's literal confirmation quote>"` frontmatter field (Claude Code blocks the Write without it via `verify-experience-leaf.py`; in Cursor apply it manually), scope routing (cross-project → `memory-global/leaves/`, project → `<project>/.claude/agent-memory/`), one leaf per task `type: reference`, and the skip-trivial rule: `~/.claude-agent/CLAUDE.md` § On task resolution + `~/.claude-agent/memory-global/leaves/experience-leaf-schema.md`.
+**Quality bar.** Record only if a future you would actually want to **read** the leaf before a similar task (non-obvious choice, reusable difficulty resolution, missing tool / memory / instruction discovered, ≥ 5 min rediscovery saved); else skip — bloat is worse than a gap. Schema (`difficulty/v1`, induced into `regularity/v1` knowledge that `principle/v1` norms cite; `leaf/v1` is separate), the **required** `resolution_confirmed_by_user: "<user's literal confirmation quote>"` frontmatter field (Claude Code blocks the Write without it via `verify-experience-leaf.py`; in Cursor apply it manually), scope routing (cross-project → `memory-global/leaves/`, project → `<project>/.claude/agent-memory/`), one leaf per task `type: reference`, and the skip-trivial rule: `~/.claude-agent/CLAUDE.md` § On task resolution + `~/.claude-agent/memory-global/leaves/experience-leaf-schema.md`.
 
 **Auto-trigger self-improvement.** If § self-critique names any concrete friction, invoke `self-improvement` in the same turn (after the leaf, before the final user reply) — treat the self-critique as the input signal.
 
@@ -171,7 +171,7 @@ In Claude Code a general `Agent` (exploration/polling only) told to read a SKILL
 | `thinker` | Reasoning check on a non-trivial chain (note: no fresh-context isolation available in Cursor) | `~/.claude-agent/skills/thinker/SKILL.md` |
 | `yandex-cloud-expert` | Yandex Cloud setup / `yc` operations | `~/.claude-agent/skills/yandex-cloud-expert/SKILL.md` |
 | `tech-writer` | README / docs authoring and polishing a plan rendering, a long reply/comment or a file-report for the user, in the language of the dialogue (clear, concise prose, no calques/jargon) | `~/.claude-agent/skills/tech-writer/SKILL.md` |
-| `memory-curator` | A `self-diagnose` `oversized-leaf` finding: split a grown experience leaf by functional ground (memory-only edits, never commits) | `~/.claude-agent/skills/memory-curator/SKILL.md` |
+| `curator` | A `self-diagnose` `oversized-leaf` finding: split a grown experience leaf by functional ground (Memory mode: memory-only edits, never commits) | `~/.claude-agent/skills/specializations/curator/SKILL.md` |
 
 The SKILL.md bodies are written for the spawned-process model ("you have been spawned as a fresh manager"). In Cursor, treat that framing as the **role** to adopt and the **working principles** to follow, not literal instructions about a separate process. Return markers (`COMPLETED:` / `PLAN-READY:` / `INCOMPLETE:` / `CLARIFY:` / `REPLAN:` / `PERMISSION-REQUEST:` / `ESCALATE:`) are **internal phase markers** in your in-thread work — they tell you when to pause and check with the user. Two behave specially in-thread: `PLAN-READY:` is a hard gate (stop and get explicit user approval before executing the first step); `CLARIFY:` means ask the user for the one small specific fact and resume on the answer. You lose the fresh-context property of spawning, but you stay entirely within Cursor and never invoke `claude`.
 

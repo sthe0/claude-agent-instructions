@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli
+from agentctl import cli, cli_common
 from agentctl.store import FileStateStore
 
 SCRIPTS = Path(__file__).resolve().parent.parent
@@ -202,6 +202,7 @@ def test_root_parser_entry_resolves_under_any_subcommand(tmp_path, monkeypatch):
     classified RESOLVE and never actually be resolved — classified and inert.
     """
     monkeypatch.setattr(cli, "_ARG_RESOLVE", frozenset({(cli._ROOT, "state_root")}))
+    monkeypatch.setattr(cli_common, "_ARG_RESOLVE", frozenset({(cli._ROOT, "state_root")}))
     args = _resolved("--state-root", f"@{_file(tmp_path, '/tmp/elsewhere')}", "status", "--session", "s")
     assert args.state_root == "/tmp/elsewhere"
 

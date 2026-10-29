@@ -885,7 +885,7 @@ def test_renormalize_refuses_a_stage_field_outside_the_question_key(store, tmp_p
     )
 
 
-def test_renormalize_refuses_an_output_artifacts_re_declaration(store, tmp_path):
+def test_renormalize_refuses_an_output_artifacts_re_declaration(store, tmp_path, monkeypatch):
     """`output_artifacts` is the residual's OTHER splice, and had no behavioral test of
     its own before this stage's review — only `cost_tier`'s case above did, so a revert
     of the `output_artifacts` line in `_renorm_stage_residual` would have stayed green.
@@ -897,7 +897,9 @@ def test_renormalize_refuses_an_output_artifacts_re_declaration(store, tmp_path)
     _approved(store, plan)
     # The plan's venue is a tmp dir, so a RELATIVE output artifact would resolve under
     # the OS-temp scratch root and be refused by the durability lint at submission
-    # (before the residual is reached). An absolute path under the repo is durable.
+    # (before the residual is reached). An absolute path under the repo is durable —
+    # unless the repo itself is a clone under /tmp, so the scratch roots are pinned away.
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratch"))
     durable = Path(__file__).resolve().parents[1] / "agentctl" / "gates.py"
 
     d = _renormalize(store, _edited(plan, tmp_path / "q.toml",

@@ -264,7 +264,7 @@ def _run_child(cmd: list[str], prompt: str, *, env: dict, cwd: str, timeout_s: i
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        env=env,
+        env={**env, "AGENT_TELEMETRY_TEST": "1"},
         cwd=cwd,
     )
     try:

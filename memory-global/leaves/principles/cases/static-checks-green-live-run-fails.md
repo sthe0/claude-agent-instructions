@@ -5,7 +5,7 @@ type: reference
 schema: case/v1
 origin_tier: project
 source_digest: sha256:158d0cb3c08b0c7b09af067801f0f85ea5da7b72032682ef7c0e77ece985ecf0
-generalized_into: [result-checked-against-its-result-image]
+generalized_into: [a-step-that-ran-is-not-thereby-a-step-that-worked]
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

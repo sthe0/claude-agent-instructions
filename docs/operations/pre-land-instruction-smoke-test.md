@@ -91,6 +91,8 @@ The recipe above is wired into landing so that an instruction change cannot reac
 
 **`land-on-main.sh` cannot land surface diffs.** It commits the staged patch as a new commit on every attempt, so no record can ever name that commit and the hook refuses the push. The refusal is permanent for a surface diff, not a cost: the script stops at the first `pre-push: refused` rejection (no rebase-and-retry loop), prints the refusal once and points at `land-branch.py`. Commit the change on a branch and land that branch; exempt-only diffs are unaffected.
 
+**The suite gate beside it.** The same landing also needs a passing full-suite run (`pre-land-full-suite-gate.md`). `land-branch.py` fetches the remote tip once for both gates and runs the suite gate first, and `githooks/pre-push` checks both records.
+
 ## Cost
 
 A run makes two live `claude -p` calls (the marker launch and the hook-gate launch), or three with a project, on a small model. The hook-gate launch edits a real file in a private directory outside `/tmp` (the state gate exempts `/tmp` paths), by default under `/dev/shm` and removed afterwards, and saves the raw stream to `<root>/hook-probe/stream.jsonl`; without a creatable probe directory (`no-probe-dir`), or when the gate would not guard it (`probe-dir-exempt`), the check is UNAVAILABLE, which a landing admits only with a waiver. A landing of an instruction-surface change pays this once (see Landing gate); the standalone recipe stays a manual check and is not meant for CI.

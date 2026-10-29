@@ -73,7 +73,7 @@ scripts/
   record-experience.py                 # generate / extend difficulty-centric experience leaves (search/new/extend/ticket); auto-maintains the experience/MEMORY.md sub-index (see memory-global/leaves/experience-leaf-schema.md)
   hook-self-critique-reminder.py       # PostToolUse Write: nudge to invoke `self-improvement` when an experience leaf has substantive § Self-critique
   hook-prompt-reminders.py             # UserPromptSubmit: self-improvement feedback, tracker / tracker-publish / ticket-plan-sync, experience-record, language, instructions-refresh and context-growth reminders
-  hook-session-due.py                  # SessionStart: throttled due checks (self-diagnose, phase3, promote-scan, policy-scorecard, budget-calibration, sigma-sentinel, improvement-scan, judge-ceiling-drift, instruction-grooming)
+  hook-session-due.py                  # SessionStart: throttled due checks (self-diagnose, phase3, promote-scan, policy-scorecard, budget-calibration, sigma-sentinel, improvement-scan, judge-ceiling-drift, curator offer)
   hook-resolution-reminder.py          # UserPromptSubmit: nudge when user reply is brief gratitude — do NOT treat as resolution confirmation
   hook-burn-rate-guard.py              # UserPromptSubmit: fast-burn companion to policy-scorecard.py's 7-day spend flag — warns when the last 15 min AND the last 3 h are both past a multiple of the declared medium-tier rate; advisory, throttled per band per session
   install-reminder-hooks.sh            # idempotently wire the canonical reminder-hook set into machine-local settings.json (hooks are not merged from base.json)

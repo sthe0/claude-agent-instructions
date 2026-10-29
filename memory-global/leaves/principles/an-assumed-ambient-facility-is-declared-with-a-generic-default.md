@@ -4,7 +4,7 @@ description: A tool that works on its author's host because of an ambient facili
 type: reference
 schema: principle/v1
 generality: 2
-induced_from: [2026-07-01-2026-07-01-engine-spawn-proc-tree-macos-and-rm-empty-var, 2026-06-29-org-portable-core-internal-coupling-opt-in, 2026-07-31-second-agent-cli-launcher-seam, 2026-06-27-stub-mechanism-not-deployable-until-caller-cli-onboarding]
+grounded_in: [regularity:a-tool-relies-on-facilities-its-authors-host-supplies-unasked]
 created: 2026-10-21
 last_verified: 2026-10-21
 ---
@@ -13,19 +13,20 @@ last_verified: 2026-10-21
 
 ## Principle
 
-For every dependency that the author's environment supplies without being asked, either test the tool where the facility is absent or make the dependency explicit: a generic default in the shared layer, the environment-specific choice in a per-machine file that is not shared, and a dividing line drawn by reachability from outside the boundary rather than by what looks local.
+Because a tool relies on facilities its authors' host supplies unasked ([[a-tool-relies-on-facilities-its-authors-host-supplies-unasked]]), for the goal of tools that run on other hosts, for every dependency that the author's environment supplies without being asked, either test the tool where the facility is absent or make the dependency explicit: a generic default in the shared layer, the environment-specific choice in a per-machine file that is not shared, and a dividing line drawn by reachability from outside the boundary rather than by what looks local.
+
+## Goal class
+
+Tools that run on hosts other than their authors', failing — when a facility is missing — with a named dependency rather than an unexplained error.
 
 ## Generality
 
 Level 2 - a rule for any tool distributed beyond the host it was written on.
 
-## Induced from
+## Grounded in
 
-- [[2026-07-01-2026-07-01-engine-spawn-proc-tree-macos-and-rm-empty-var]] - the spawn cleanup read a Linux-only process filesystem and failed every spawn elsewhere.
-- [[2026-06-29-org-portable-core-internal-coupling-opt-in]] - internal-only facilities were coupled in; the fix was a generic default with internal opt-in.
-- [[2026-07-31-second-agent-cli-launcher-seam]] - ambient workspace detection picked the wrong backend outside its home tree.
-- [[2026-06-27-stub-mechanism-not-deployable-until-caller-cli-onboarding]] - a 'per-machine' flag lived in a git-shared file and so varied by nothing.
+- [[a-tool-relies-on-facilities-its-authors-host-supplies-unasked]] — A tool built on one machine relies on facilities that machine supplies without being asked — a GNU coreutil, a pre-installed launcher, an org-internal service — and fails on a host that lacks them, with nothing in the tool naming the dependency.
 
 ## Refutation
 
-Refuted by a tool that ran on a second host with the author's ambient facilities removed and failed in a way unrelated to any undeclared dependency.
+The principle fails its goal if tools whose ambient dependencies were declared with generic defaults still fail on a foreign host with an undeclared dependency.

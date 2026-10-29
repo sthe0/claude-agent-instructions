@@ -507,7 +507,7 @@ def test_rebase_preserves_quoting_of_untouched_word(tmp_path):
     still expects. `grep -q 'cwd_drift' README.md` from `<venue>/scripts`
     must rebase to `grep -q 'cwd_drift' scripts/README.md` -- the quoted
     search word untouched, only the path word rewritten."""
-    from agentctl import cli as _cli
+    from agentctl import cli_common as _cli
 
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
@@ -535,7 +535,7 @@ def test_rebase_resolves_symlinked_venue_before_comparing(tmp_path):
     call incorrectly stays a `planning_miss`. With realpath, both resolve to
     `real_dir` and the rebase produces the venue-relative text a grant there
     covers."""
-    from agentctl import cli as _cli
+    from agentctl import cli_common as _cli
 
     real_dir = tmp_path / "real-venue"
     (real_dir / "scripts").mkdir(parents=True)

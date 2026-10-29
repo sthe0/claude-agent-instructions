@@ -7,10 +7,7 @@ APPROVED, has been passed). This hook reads the durable session state written by
 agentctl's FileStateStore and DENIES Edit/Write on production files whenever the
 session is in any node other than EXECUTING.
 
-It is the enforcement twin of hook-prewrite-plan-check.py: that hook nudges when
-no agentctl session exists (prose fallback); this one hard-blocks when one does.
-The two run in parallel — if there is no agentctl state file for the session this
-hook exits 0 (allow) and the prose-fallback nudge still applies.
+If there is no agentctl state file for the session this hook exits 0 (allow).
 
 State file: <agent-home>/agentctl/state/<session_id>.json (see scripts/agentctl/store.py;
 the session_id is sanitized to alnum/-/_ exactly as FileStateStore does), where session_id
@@ -44,7 +41,7 @@ from agentctl.exempt_paths import (  # noqa: E402
 from agentctl.norm_handoff import NORM_HANDOFF_ENV  # noqa: E402
 from agentctl.own_contour import OWN_SESSION_ENV  # noqa: E402
 from agentctl.state import SessionState as _SessionState  # noqa: E402
-from lib import config_root, engine_session_binding  # noqa: E402
+from lib import config_root, engine_session_binding, hook_telemetry  # noqa: E402
 
 # Current-vs-legacy-root fallback lookup lives in lib/config_root.py (shared
 # with the other state-reading hooks); resolve_state_path is a thin alias kept
@@ -412,4 +409,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-state-gate"))

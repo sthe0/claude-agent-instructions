@@ -3,58 +3,29 @@ same-scope fail-open judge is a NAMED, individually-grounded site — never a
 silently growing set.
 
 Difficulty removed: the prior version of this pin asserted that no code site
-carries class == "semantic-unguarded" — a value the stage-2 classifier
-(gen_crutch_registry.py) can NEVER produce (its codomain is structural /
-semantic-guarded / not-a-gate / decidable / perception / already-mechanized /
-not-normative). A code review confirmed the test was vacuous: injecting a real
-bare-regex-decides-meaning deny hook with no judge_* guard left it GREEN,
-because a brand-new hook falls through to the "other guardian hooks"
-partition's `structural` default rather than ever being classified
-`semantic-unguarded` — that value belongs to a taxonomy the actual classifier
-never emits, so the assertion could never fire on any input.
+carries class == "semantic-unguarded" — a value the stage-2 classifier can
+never produce — so it was vacuous. This version pins on data the ENUMERATOR
+itself produces (crutch-inventory.py's enumerate_code_sites): the scope-level
+sites whose outcome_class is a real hard sink (pretooluse_deny / stop_block /
+exit_code_2 — the three enforcement contracts memory-global/leaves/
+regex-not-for-semantic-classification.md's hand audit named) with no judge_*
+call in the same scope. That set is frozen in
+scripts/lib/unguarded_sink_allowlist.py, shared with
+scripts/verify-semantic-gates.py so the two cannot disagree.
 
-This version pins on data the ENUMERATOR itself produces
-(crutch-inventory.py's enumerate_code_sites), independent of the stage-2
-perception table: the set of scope-level sites whose outcome_class is a real
-hard sink (pretooluse_deny / stop_block / exit_code_2 — the THREE enforcement
-contracts crutch-inventory.py itself enumerates in priority order, and the
-same three memory-global/leaves/regex-not-for-semantic-classification.md's
-hand audit named; a bare regex feeding any one of them can produce a
-genuinely wrong verdict) with no judge_* call in the same scope. That set is
-frozen below as _KNOWN_UNGUARDED_HARD_SINKS, one entry per site, each with
-its own one-line why-safe ground (cross-checked against
-scripts/crutch_registry.toml, where every id below carries class
-"structural" or "semantic-guarded", disposition "keep").
+Any NEW site entering this set grows the enumerated set past the allowlist and
+this test goes RED — the author must add a fail-open judge_* guard
+(agentctl/advisor.py::judge_binary_ask) or, for a genuine false pairing, add
+the site to the allowlist with its own why-safe ground. A stale allowlist
+entry (a site that no longer appears) also fails.
 
-Any NEW site entering this set (a brand-new deny/block/exit(2) hook, or an
-existing guarded one losing its judge_* call) grows the enumerated set past
-the frozen allowlist and this test goes RED — the author must either add a
-fail-open judge_* guard (agentctl/advisor.py::judge_binary_ask) or, if the
-site is a genuine false pairing (the regex reads unrelated structural
-syntax), add it to this allowlist with its own why-safe ground and a
-matching per-id override in gen_crutch_registry.py's CODE_ID_OVERRIDES. A
-stale allowlist entry (a site that no longer appears, e.g. renamed or now
-guarded) also fails, so the allowlist cannot silently drift from what the
-enumerator actually sees.
+Honest limits: (1) the enumerator's scope-local view — a regex severed from its
+sink by more than one call hop is invisible; (2) the allowlist id is file and
+scope name only, never the regex's content, so a meaning-regex added inside an
+already-allowlisted scope does not trip this pin.
 
-Honest limits, so this pin is not read as covering more than it does:
-(1) it inherits the enumerator's own scope-local view — a regex severed from
-its sink by more than one call hop is invisible to both, the same limit
-crutch-inventory.py's own docstring states; (2) the allowlist id is
-`_stable_id("code", rel, scope_name)` — FILE and SCOPE NAME only, never the
-regex's own content. A meaning-regex added *inside* an already-allowlisted
-scope (one of the ids below) does not change the id and does NOT trip this
-pin — it stays silently allowlisted. That reintroduction path is guarded
-instead by scripts/verify-semantic-gates.py (stage 4), which traces whether
-the SAME regex feeds the sink, not just whether the (file, scope) pair is
-already known.
-
-Complementary to, not a duplicate of: scripts/verify-semantic-gates.py
-(stage 4's standing per-commit AST verifier, which additionally traces
-whether the SAME regex feeds the sink) and scripts/crutch-inventory.py
---check (which fails on any undispositioned or stale registry entry in
-general, not specifically on this hard-sink subset). This test is the narrow,
-fast, always-run pin on the enumerator's own current output.
+Complementary to scripts/verify-semantic-gates.py, which runs the same check
+on every verify-all and additionally corroborates by file-level judge calls.
 """
 from __future__ import annotations
 
@@ -63,6 +34,10 @@ import sys
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from lib.unguarded_sink_allowlist import HARD_SINK_CLASSES, KNOWN_UNGUARDED_HARD_SINKS  # noqa: E402
 
 
 def _load_inventory_module():
@@ -77,145 +52,34 @@ def _load_inventory_module():
 
 inv = _load_inventory_module()
 
-_HARD_SINK_CLASSES = frozenset({"pretooluse_deny", "stop_block", "exit_code_2"})
-
-# Every scope-level site the enumerator currently reports with a real
-# deny/block sink and NO judge_* call in the same scope, keyed by its stable
-# id (crutch-inventory.py's content-derived hash, which survives unrelated
-# line drift). id -> (file, scope, why-safe ground).
-_KNOWN_UNGUARDED_HARD_SINKS = {
-    "470d72f243768e36": (
-        "scripts/record-experience.py", "refuse",
-        "sink-only scope with no regex: refuse() prints caller-built problems "
-        "and exits 2; every caller derives them from structure "
-        "(canonical-checkout routing, manifest JSON shape, path existence, "
-        "SLUG/CONTEXT_ID/REVISION identifier fullmatch); the judged "
-        "same-difficulty refusal in cmd_new exits via sys.exit(message), not "
-        "via refuse().",
-    ),
-    "156a5c93ad796c48": (
-        "scripts/hook-escalation-diagnosis-gate.py", "deny_with",
-        "semantic-guarded per the registry: the judge_outage_escalation call "
-        "that guards this deny happens one scope up, in decide() — the "
-        "scope-local severing crutch-inventory.py's own docstring names; "
-        "confirmed by reading decide() -> deny_with() at source.",
-    ),
-    "a0ce40334c52b3b1": (
-        "scripts/hook-published-text-writer-gate.py", "deny_with",
-        "semantic-guarded per the registry: decide() dispatches to "
-        "_decide_text (structural transcript-witness check, then "
-        "judge_published_text_rules behind a candidate-only prefilter) or "
-        "_decide_attachment (judge_published_attachment behind a structural "
-        "prefilter) one scope up — the same scope-local severing as the "
-        "hook-escalation-diagnosis-gate.py row above; confirmed by reading "
-        "decide() -> deny_with() at source.",
-    ),
-    "c66f1c838758119e": (
-        "scripts/hook-guard-canon-readonly.py", "main",
-        "structural per the registry: this file has no local regex; its "
-        "one-hop transitive import lib.shell_tokens carries only "
-        "shell-token-syntax regexes (assignment-prefix / delimiter-word / "
-        "definition patterns), never natural-language meaning.",
-    ),
-    "6fd054ca18985f63": (
-        "scripts/hook-guard-bash-source-edit.py", "main",
-        "structural per the registry: the verdict is a function of shell "
-        "syntax (write-verb shape, redirect target) and filesystem facts "
-        "(git work tree, `.arc` marker, allowlist roots) only; the one regex "
-        "is the `NAME=value` assignment-prefix shape, and one-hop import "
-        "lib.shell_tokens carries only shell-token-syntax regexes, never "
-        "natural-language meaning.",
-    ),
-    "943098c19a6861d7": (
-        "scripts/hook-guard-destructive-rm.py", "main",
-        "structural per the registry: only regex is shell-variable syntax "
-        "(`\\$\\{?\\w+\\}?`), never natural-language meaning.",
-    ),
-    "4c318993ddc97c55": (
-        "scripts/hook-multi-mount-search-guard.py", "_run",
-        "structural per the registry: the verdict from decide() is a function "
-        "of shlex-token command shape, path containment and the /proc mounts "
-        "fstype; the only regex is the mounts octal decode in "
-        "fuse_mounts_from_text, never natural-language meaning.",
-    ),
-    "6b802bd6c3ae8553": (
-        "scripts/hook-plan-delivery-gate.py", "deny_with",
-        "structural per the registry: this file contains no regex, at scope "
-        "or anywhere in its full transitive import closure (agentctl.delivery, "
-        "agentctl.gates, agentctl.state, agentctl.text_shape, lib.config_root, "
-        "lib.transcript_turns — all verified regex-free); the deny is driven "
-        "by engine-state / path predicates.",
-    ),
-    "756f3a83003805ac": (
-        "scripts/hook-scope-conflict.py", "deny",
-        "structural per the registry: this file has no local regex; its "
-        "two-hop transitive import (session_scope.detector -> "
-        "agentctl.exempt_paths) carries only a file-extension path-syntax "
-        "regex (_PRODUCTION_FILE_RE), never natural-language meaning.",
-    ),
-    "c487fa3edf74bd84": (
-        "scripts/hook-state-gate.py", "deny_with",
-        "structural per the registry: this file has no local regex; its "
-        "one-hop transitive import agentctl.exempt_paths carries only a "
-        "file-extension path-syntax regex (_PRODUCTION_FILE_RE), never "
-        "natural-language meaning.",
-    ),
-    "23f1443ae65073d6": (
-        "scripts/hook-turn-end-gate.py", "decide",
-        "semantic-guarded per CODE_ID_OVERRIDES: decide() calls "
-        "build_context() (which runs every prefilter + judge_* call and "
-        "freezes the results) then collect_blockers() — the propagation "
-        "point where the judge-guarded booleans reach this stop_block sink.",
-    ),
-    "43ad016e7533db1e": (
-        "scripts/hook-guard-agent-specialist-stand-in.py", "main",
-        "structural per the registry: main() calls decide(), which matches a "
-        "literal `skills/.../SKILL.md` path token in the Agent/Task prompt and "
-        "description fields — path syntax, no natural-language classification; "
-        "the deny verdict rests on the token's presence, not on what the prompt "
-        "means — confirmed by reading decide() at source.",
-    ),
-    "69a68ca9bdda4152": (
-        "scripts/hook-guard-subagent-destructive-action.py", "main",
-        "structural per the registry: main() calls decide(), which gates on "
-        "two structural facts only — payload shape (agent_id/agent_type "
-        "presence, via _is_subagent_call) and hook-guard-destructive-rm.py's "
-        "_rm_recursive_targets, a shlex-token flag parser recognizing -r/-R/"
-        "--recursive; no free-text or natural-language classification "
-        "anywhere in the call chain — confirmed by reading decide() and "
-        "_rm_recursive_targets at source.",
-    ),
-}
-
 
 def test_hard_sink_sites_without_a_same_scope_judge_are_a_named_allowlist():
     sites = inv.enumerate_code_sites(SCRIPTS_DIR)
     unguarded = {
         s.id: s
         for s in sites
-        if s.outcome_class in _HARD_SINK_CLASSES and not s.judge_guarded
+        if s.outcome_class in HARD_SINK_CLASSES and not s.judge_guarded
     }
 
-    known_ids = set(_KNOWN_UNGUARDED_HARD_SINKS)
+    known_ids = set(KNOWN_UNGUARDED_HARD_SINKS)
     found_ids = set(unguarded)
 
     new_ids = found_ids - known_ids
     assert not new_ids, (
         "a NEW hard-outcome sink (deny/block/exit(2)) with no judge_* call in its own "
-        "scope appeared and is not in the frozen allowlist above: "
+        "scope appeared and is not in the frozen allowlist: "
         f"{sorted((i, unguarded[i].file, unguarded[i].scope, unguarded[i].outcome_class) for i in new_ids)}. "
         "Fix it with a fail-open judge_* guard (see "
         "agentctl/advisor.py::judge_binary_ask) — never widen the regex's "
         "recall to compensate — or, if the pairing is a genuine false one "
         "(the regex reads unrelated structural syntax), add it to "
-        "_KNOWN_UNGUARDED_HARD_SINKS above with its own one-line why-safe "
-        "ground and a matching grounded per-id override in "
-        "gen_crutch_registry.py's CODE_ID_OVERRIDES."
+        "KNOWN_UNGUARDED_HARD_SINKS in scripts/lib/unguarded_sink_allowlist.py "
+        "with its own one-line why-safe ground."
     )
 
     gone_ids = known_ids - found_ids
     assert not gone_ids, (
-        "the allowlist above is stale: these ids no longer appear as "
+        "the allowlist is stale: these ids no longer appear as "
         "unguarded hard-sink sites (site renamed, removed, or now judge-"
-        f"guarded) — remove them from _KNOWN_UNGUARDED_HARD_SINKS: {sorted(gone_ids)}"
+        f"guarded) — remove them from KNOWN_UNGUARDED_HARD_SINKS: {sorted(gone_ids)}"
     )

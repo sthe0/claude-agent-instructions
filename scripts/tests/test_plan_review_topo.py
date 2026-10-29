@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, gates, task_accumulator
+from agentctl import cli, cli_common, gates, task_accumulator
 from agentctl.dispatch import RunResult
 from agentctl.plan import (
     CONDITION_MARKERS,
@@ -736,7 +736,9 @@ def _hand_baseline(env: Env, *, record_seq: int = 1, **overrides) -> PlanReview:
 def test_tr4_compose_over_all_current_pair_passes_writes_an_ordinary_whole_plan_pass(env, monkeypatch):
     env.record_all()
     recorded = []
-    monkeypatch.setattr(cli, "_record_first_thinker_verdict", lambda *a, **k: recorded.append(a[2:]))
+    stub = lambda *a, **k: recorded.append(a[2:])
+    monkeypatch.setattr(cli, "_record_first_thinker_verdict", stub)
+    monkeypatch.setattr(cli_common, "_record_first_thinker_verdict", stub)
     d = _compose(env)
     assert len(recorded) == 1 and recorded[0][1] == ""
     assert d.ok, d.detail

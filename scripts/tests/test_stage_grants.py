@@ -1142,6 +1142,7 @@ _SETTINGS_REFERENCE_RE = re.compile(r"settings[^/\s\"'`]*\.json")
 # added here too.
 SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
     "agentctl/cli.py": "reader",
+    "agentctl/cli_common.py": "reader",
     "agentctl/classify.py": "mention",
     "agentctl/exempt_paths.py": "mention",
     "agentctl/mandate.py": "mention",
@@ -1156,7 +1157,6 @@ SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
     "hook-resource-grant-check.py": "reader",
     "install-reminder-hooks.sh": "writer",
     "lib/config_root.py": "mention",
-    "lib/dispatch_witness_snapshot.py": "mention",
     "lib/hook_fragments.py": "reader",
     "lib/hook_wiring.py": "writer",
     "lib/host_llm.py": "reader",

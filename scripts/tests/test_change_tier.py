@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli
+from agentctl import cli, cli_common
 from agentctl.plan import diff_plans, load_plan, stage_carry_key
 from agentctl.state import Node, Stage, StageStatus
 from conftest import STAGE_OBSERVATIONS
@@ -423,6 +423,7 @@ def test_frozen_stage_refusal_is_logged_as_a_gate(
         store, venued_fixtures_dir, tmp_path, monkeypatch):
     log = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(cli, "GATE_LOG", log)
+    monkeypatch.setattr(cli_common, "GATE_LOG", log)
     sid = "frozen-log"
     plan = venued_fixtures_dir / "plan_two_stage.toml"
     _passed_session(store, sid, str(plan))

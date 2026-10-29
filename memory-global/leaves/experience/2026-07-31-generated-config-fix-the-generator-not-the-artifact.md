@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "да"
 created: 2026-07-31
 last_verified: 2026-07-31
-generalized_into: [a-defect-seen-in-an-artifact-is-fixed-at-its-writer]
+generalized_into: [a-generated-artifact-is-overwritten-by-its-writer]
 ---
 
 # A schema error in a config file: fix the generator, not the artifact

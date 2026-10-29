@@ -182,7 +182,7 @@ def test_every_gitattributes_pattern_matches_a_tracked_file_and_names_its_genera
 
 @pytest.mark.skipif(not (REPO_ROOT / ".gitattributes").exists(), reason="needs the repo root")
 def test_the_known_generated_files_are_marked_by_check_attr():
-    paths = ["scripts/crutch_registry.toml", "docs/operations/lexical-meaning-inventory.toml", "scripts/agentctl/plan.py"]
+    paths = ["docs/operations/inline-size-calibration.json", "docs/operations/lexical-meaning-inventory.toml", "scripts/agentctl/plan.py"]
     out = subprocess.run(
         ic.check_attr_argv(), cwd=REPO_ROOT, input="".join(p + "\0" for p in paths),
         capture_output=True, text=True, check=True,

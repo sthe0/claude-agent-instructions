@@ -1,4 +1,9 @@
 #!/bin/sh
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
-exec python3 "$HERE/../scripts/instruction-smoke-gate.py" pre-push "$@"
+STDIN="$(cat)"
+smoke=0
+suite=0
+printf '%s\n' "$STDIN" | python3 "$HERE/../scripts/instruction-smoke-gate.py" pre-push "$@" || smoke=$?
+printf '%s\n' "$STDIN" | python3 "$HERE/../scripts/suite-gate.py" pre-push "$@" || suite=$?
+[ "$smoke" -eq 0 ] && [ "$suite" -eq 0 ]

@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user (fedor.solovyev@gmail.com)"
 refs: [https://github.com/sthe0/claude-agent-instructions/issues/50, https://github.com/sthe0/claude-agent-instructions/commit/9dcabb6]
 created: 2026-07-28
 last_verified: 2026-07-28
-generalized_into: [a-defect-seen-in-an-artifact-is-fixed-at-its-writer, a-value-written-to-an-external-channel-is-cleaned-at-emission]
+generalized_into: [a-generated-artifact-is-overwritten-by-its-writer, a-value-emitted-to-an-external-channel-persists-beyond-recall]
 ---
 
 # An agent-emitted value can leak an org-internal key into PUBLIC history — neutralize at emit-time, don't drop the field

@@ -43,6 +43,7 @@ The skills, agents, hooks, scripts, memory scopes, settings, and the Cursor mirr
 - [Scripts](components/scripts.md) — the coordination engine, the verification guards, the setup wiring, and the experience tooling.
 - [Memory scopes](components/memory-scopes.md) — the three scopes (personal / global / project) and the shared leaf-and-index shape.
 - [Settings and permissions](components/settings-and-permissions.md) — the layered settings.json, the permissions CLI, and the action taxonomy.
+- [Plan dashboard](components/plan-dashboard.md) — the read-only view of live agentctl tasks: liveness, stage progress, and per-phase time and cost.
 - [The Cursor mirror](components/cursor-mirror.md) — the thin Cursor rule and its sync discipline.
 - [Skills (symlinks)](components/skills-symlinks.md) — how the runtime `~/.claude-agent/skills/` symlink tree is laid out.
 
@@ -63,6 +64,7 @@ Setup and distribution, the git workflow, the verification-guard suite, and laye
 - [Cross-session filesystem-scope isolation](operations/cross-session-scope-isolation.md) — the deterministic session-scope registry + conflict detector + PreToolUse hook that denies/warns when two live sessions overlap the same working tree/mount; isolate, not serialize.
 - [Plan review: routes, severity, round budget](../scripts/agentctl/README.md#topological-review--the-review-route-of-a-spawn-route-plan) — how a plan is reviewed (pairwise on a SPAWN route, whole-plan otherwise), the `blocking:`/`note:` concern severity, the reviewer memory, and the task-level `review_rounds` counter that fires the round release.
 - [Planning-convergence contradictions ledger](operations/planning-convergence-contradictions.toml) — the eight doc-versus-mechanism contradictions found in the plan-review engine, each closed by a literal in a repo file or tracked by an issue.
+- [Pre-land full-suite gate](operations/pre-land-full-suite-gate.md) — the full test suite run on a committed candidate before it lands on `main`: a failure the remote tip does not already have refuses the landing; the record, the exemption for memory and docs, the waiver and what the gate does not cover.
 - [Pre-land instruction smoke test](operations/pre-land-instruction-smoke-test.md) — loading a committed candidate revision into a throw-away sandbox, running its own static checks plus a tool-less live session, and what that does and does not catch; plus the landing gate that makes `land-branch.py` and the pre-push hook require an admitted smoke record before an instruction-surface change reaches `main`.
 
 ## Decisions — architecture decision records

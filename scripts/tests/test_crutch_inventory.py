@@ -305,6 +305,22 @@ def test_git_tracked_helper_falls_back_to_rglob_outside_git(tmp_path):
     assert "loose_site.py" in rollup_files
 
 
+@pytest.mark.parametrize("git_listing", ["tracked", "rglob"])
+def test_repo_test_tree_is_outside_the_enumeration_domain(git_listing, monkeypatch):
+    """A test whose name carries a hard-behaviour token (`..._spawn_...`) must
+    not become a candidate site: the repo's own scripts/tests/ guards no
+    production behaviour, so no code site or rollup may come from it — on the
+    git-tracked listing and on the rglob fallback alike."""
+    if git_listing == "rglob":
+        monkeypatch.setattr(inv, "_tracked_files", lambda _root: None)
+    tests_prefix = str(inv.TESTS_DIR.relative_to(inv.REPO_ROOT)) + "/"
+    sites = inv.enumerate_code_sites(inv.SCRIPTS_DIR)
+    rollups = inv.enumerate_code_file_rollups(inv.SCRIPTS_DIR)
+    assert sites, "the real scripts/ tree must still yield candidate sites"
+    assert not [s.file for s in sites if s.file.startswith(tests_prefix)]
+    assert not [r.file for r in rollups if r.file.startswith(tests_prefix)]
+
+
 def test_find_untracked_relevant_files(tmp_path):
     """find_untracked_relevant_files returns exactly the untracked files that
     fall within the registry's enumeration domains (scripts/*.py, CLAUDE.md,
@@ -334,7 +350,9 @@ def test_find_untracked_relevant_files(tmp_path):
     (leaves_dir / "new_leaf.md").write_text("# new leaf", encoding="utf-8")
     (skills_dir / "SKILL.md").write_text("# skill", encoding="utf-8")
 
-    # Untracked file OUTSIDE the relevant domains — must NOT be returned.
+    # Untracked files OUTSIDE the relevant domains — must NOT be returned.
+    (scripts_dir / "tests").mkdir()
+    (scripts_dir / "tests" / "test_new.py").write_text("# new test", encoding="utf-8")
     docs_dir = repo / "docs"
     docs_dir.mkdir()
     (docs_dir / "readme.md").write_text("# docs readme", encoding="utf-8")
@@ -352,6 +370,7 @@ def test_find_untracked_relevant_files(tmp_path):
     assert "committed.py" not in names
     assert "staged.py" not in names
     assert "readme.md" not in names
+    assert "test_new.py" not in names
 
 
 def test_find_untracked_relevant_files_returns_empty_outside_git(tmp_path):

@@ -43,7 +43,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lib import band_throttle, config_root  # noqa: E402
+from lib import band_throttle, config_root, hook_telemetry  # noqa: E402
 from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
 from si_feedback_detect import find_signals as find_feedback_signals  # noqa: E402
 from si_feedback_detect import strip_injected_context  # noqa: E402
@@ -840,4 +840,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-prompt-reminders"))

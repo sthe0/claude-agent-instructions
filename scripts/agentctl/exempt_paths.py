@@ -1,6 +1,6 @@
 """Engine-gate path classification — the single source of truth for *which* file
-edits the agentctl gate governs, shared by hook-state-gate.py and
-hook-prewrite-plan-check.py so the two can never drift.
+edits the agentctl gate governs, shared by hook-state-gate.py
+and the other gate hooks so they can never drift.
 
 Difficulty removed: the agent's own configuration and instructions (CLAUDE.md,
 skills/**, settings*.json, the instructions repo) used to bypass the coordination

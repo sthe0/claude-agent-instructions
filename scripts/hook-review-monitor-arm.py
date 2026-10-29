@@ -43,6 +43,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import review_open_detect  # noqa: E402
+from lib import hook_telemetry  # noqa: E402
 
 MONITOR = Path(__file__).resolve().parent / "review-monitor.sh"
 
@@ -264,4 +265,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-review-monitor-arm"))

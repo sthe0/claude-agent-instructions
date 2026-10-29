@@ -26,6 +26,8 @@ import json
 import re
 import sys
 
+from lib import hook_telemetry
+
 PAIR_RE = re.compile(r'"([^"]*)"\s*=\s*"([^"]*)"')
 
 
@@ -108,4 +110,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-si-freetext-answer"))

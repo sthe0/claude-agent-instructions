@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Plan dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --text: #1b1f24; --text-dim: #4a5560; --text-ok: #0b5d1e; --text-warn: #7a4a00; --text-bad: #a01212; --text-accent: #0a4ea0;
+    --bg: #ffffff; --bg-panel: #f6f8fa; --bg-hover: #e9eef4; --bg-selected: #d4e4f7;
+    --bg-live-active: #e3f6e8; --bg-live-idle: #fff6d6; --bg-live-stale: #eceff2; --bg-live-resolved: #e8e4f7; --bg-live-stub: #f2f2f2;
+    --bg-wait-choice: #ffe0b3; --bg-wait-permission: #ffd0d0; --bg-wait-idle: #fff1b8;
+    --line: #8c959f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --text: #e6edf3; --text-dim: #a5b0bd; --text-ok: #6fdc8c; --text-warn: #f0b44c; --text-bad: #ff8f8f; --text-accent: #79b8ff;
+      --bg: #0d1117; --bg-panel: #161b22; --bg-hover: #1f2630; --bg-selected: #1d3a5c;
+      --bg-live-active: #12301d; --bg-live-idle: #33290a; --bg-live-stale: #1b1f24; --bg-live-resolved: #2a2347; --bg-live-stub: #20252b;
+      --bg-wait-choice: #4d3200; --bg-wait-permission: #5a1a1a; --bg-wait-idle: #4a3d00;
+      --line: #6e7681;
+    }
+  }
+  [hidden] { display: none !important; }
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 1rem 2rem; color: var(--text); background: var(--bg); }
+  h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+  #status { color: var(--text-dim); margin-bottom: .75rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .25rem .6rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td.goal { white-space: normal; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .dim { color: var(--text-dim); }
+  tr.task { cursor: pointer; border-left: .35rem solid transparent; }
+  tr.task:hover { background: var(--bg-hover); }
+  tr.task:focus-visible { outline: 2px solid var(--text-accent); outline-offset: -2px; }
+  tr.live-active { background: var(--bg-live-active); }
+  tr.live-idle { background: var(--bg-live-idle); }
+  tr.live-stale { background: var(--bg-live-stale); color: var(--text-dim); }
+  tr.live-resolved { background: var(--bg-live-resolved); }
+  tr.live-stub { background: var(--bg-live-stub); color: var(--text-dim); }
+  tr.wait-choice { background: var(--bg-wait-choice); }
+  tr.wait-permission { background: var(--bg-wait-permission); }
+  tr.wait-idle { background: var(--bg-wait-idle); }
+  tr.task.selected { background: var(--bg-selected); border-left-color: var(--text-accent); font-weight: 600; }
+  td.node-executing, .st-active { color: var(--text-accent); }
+  td.node-diagnosing, td.node-failed, .st-failed { color: var(--text-bad); }
+  td.node-resolved, .st-passed { color: var(--text-ok); }
+  td.node-plan_ready, td.node-routed, td.node-classified, .st-pending { color: var(--text-warn); }
+  #detail { position: fixed; top: 1rem; right: 1rem; width: min(46rem, calc(100vw - 2rem));
+    max-height: calc(100vh - 2rem); overflow-y: auto; overflow-x: auto;
+    box-sizing: border-box; padding: .75rem 1rem; z-index: 10;
+    background: var(--bg-panel); color: var(--text); border: 2px solid var(--text-accent); border-radius: .4rem; }
+  #detail:focus { outline: none; }
+  #detail-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  #detail h2 { font-size: 1rem; margin: .5rem 0 .25rem; }
+  #detail-close { font: inherit; cursor: pointer; padding: .1rem .6rem; color: var(--text); background: var(--bg-hover);
+    border: 1px solid var(--line); border-radius: .25rem; }
+  #detail-close:focus-visible, #detail button:focus-visible { outline: 2px solid var(--text-accent); }
+  ul.phases { list-style: none; padding-left: 1.2rem; margin: .1rem 0; }
+  ul.phases.root { padding-left: 0; }
+  td.wait { font-weight: 700; text-align: center; }
+  #waiting { font-weight: 700; margin-bottom: .5rem; }
+  .chat-entry { margin: .25rem 0; padding-left: .5rem; border-left: 3px solid var(--line); }
+  .chat-entry.chat-user { border-left-color: var(--text-accent); }
+  .chat-who { color: var(--text-dim); margin-right: .5rem; }
+  .chat-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<h1>Plan dashboard</h1>
+<div id="status">connecting…</div>
+<div id="waiting">waiting: 0</div>
+<table>
+  <thead><tr id="head"></tr></thead>
+  <tbody id="tasks"></tbody>
+</table>
+<aside id="detail" tabindex="-1" role="dialog" aria-label="Task detail" hidden>
+  <div id="detail-head"><strong id="detail-title"></strong><button id="detail-close" type="button">Close (Esc)</button></div>
+  <div id="detail-body"></div>
+  <div id="detail-chat"></div>
+</aside>
+<script>
+"use strict";
+const COLUMNS = ["task", "wait", "session", "live", "node", "stage", "wall", "cost", "goal"];
+const NOT_COUNTED = "not counted";
+const NO_VALUE = "—";
+const SESSION_ID_CHARS = 8;
+const WAIT_MARKS = {choice: "?", permission: "!", idle: "…"};
+const NEEDS_YOU = ["choice", "permission"];
+// The server's default --interval; the page cannot know a different one.
+const CHAT_POLL_MS = 2000;
+let snapshot = null;
+let attention = {tasks: {}, sessions: []};
+let selected = null;
+let selectedKind = "task";
+let lastDetail = null;
+let chatTimer = null;
+let chatShown = null;
+
+function el(tag, text, className) {
+  const node = document.createElement(tag);
+  if (text !== undefined && text !== null) node.textContent = text;
+  if (className) node.className = className;
+  return node;
+}
+
+function duration(seconds) {
+  if (seconds === null || seconds === undefined) return "?";
+  const total = Math.max(Math.floor(seconds), 0);
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  return h ? h + "h" + String(m).padStart(2, "0") + "m" : m + "m" + String(s).padStart(2, "0") + "s";
+}
+
+// A value that is an estimate reads "~", one that is a lower bound reads "≥"; never a bare number.
+function estimateMark(estimate, partial) {
+  return partial ? "≥" : (estimate ? "~" : "");
+}
+
+function money(value, estimate, partial) {
+  if (value === null || value === undefined) return NOT_COUNTED;
+  return estimateMark(estimate, partial) + "$" + value.toFixed(2);
+}
+
+function wall(seconds, estimate) {
+  return (seconds === null || seconds === undefined ? "" : estimateMark(estimate, false)) + duration(seconds);
+}
+
+function shortId(id) { return String(id).slice(0, SESSION_ID_CHARS); }
+
+function rowCells(task) {
+  if (!task.readable) {
+    return [shortId(task.session_id), task.liveness, "?", "?/?", "-", "-", "unreadable: " + task.reason];
+  }
+  const totals = task.totals;
+  return [
+    shortId(task.session_id), task.liveness, task.node || "?",
+    task.stages_done + "/" + task.stages_total,
+    wall(totals.wall_clock_s, totals.estimate.wall_clock_s),
+    money(totals.cost_usd, totals.estimate.cost_usd, totals.partial) +
+      (totals.root_counted ? " + root " + money(totals.root_cost_usd, totals.estimate.root_cost_usd, false) : " (root " + NOT_COUNTED + ")"),
+    (task.goal || "").split(/\s+/).join(" "),
+  ];
+}
+
+function cssName(value) {
+  return String(value || "unknown").toLowerCase().replace(/[^a-z0-9_]+/g, "-");
+}
+
+function rowFor(session) {
+  return Array.from(document.getElementById("tasks").children).find((row) => row.dataset.session === session) || null;
+}
+
+function waitMark(waiting) { return WAIT_MARKS[waiting] || ""; }
+
+function waitingOf(task) {
+  const overlay = attention.tasks[task.session_id];
+  return overlay ? overlay.waiting : null;
+}
+
+function sessionCells(row) {
+  return [NO_VALUE, waitMark(row.waiting), row.name || row.harness_session, "session", NO_VALUE, NO_VALUE, NO_VALUE, NO_VALUE, row.cwd || ""];
+}
+
+function tableRow(id, kind, waiting, cells) {
+  const wait = WAIT_MARKS[waiting] ? " wait-" + cssName(waiting) : "";
+  const tr = el("tr", null, "task " + (kind === "task" ? "live-" + cssName(cells[3]) : "session-row") + wait +
+    (id === selected ? " selected" : ""));
+  tr.dataset.session = id;
+  tr.title = id;
+  tr.setAttribute("tabindex", "0");
+  cells.forEach((text, i) => {
+    const name = COLUMNS[i];
+    tr.appendChild(el("td", text, name === "goal" ? "goal" : name === "wait" ? "wait" : name === "node" ? "node-" + cssName(text) : ""));
+  });
+  tr.addEventListener("click", () => openDetail(id, kind));
+  tr.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); openDetail(id, kind); }
+  });
+  return tr;
+}
+
+function renderTasks() {
+  if (!snapshot) return;
+  const head = document.getElementById("head");
+  head.replaceChildren(...COLUMNS.map((name) => el("th", name)));
+  const rows = snapshot.tasks.map((task) => {
+    const waiting = waitingOf(task);
+    return tableRow(task.session_id, "task", waiting, [task.task_id || NO_VALUE, waitMark(waiting), ...rowCells(task)]);
+  });
+  attention.sessions.forEach((row) => rows.push(tableRow(row.harness_session, "session", row.waiting, sessionCells(row))));
+  document.getElementById("tasks").replaceChildren(...rows);
+  const needYou = snapshot.tasks.filter((task) => NEEDS_YOU.includes(waitingOf(task))).length +
+    attention.sessions.filter((row) => NEEDS_YOU.includes(row.waiting)).length;
+  document.getElementById("waiting").textContent = "waiting: " + needYou;
+  document.getElementById("status").textContent =
+    snapshot.tasks.length ? snapshot.tasks.length + " task(s), updated " + new Date().toLocaleTimeString() : "no live tasks";
+}
+
+// A window whose end is null is still running and the model gives it no wall-clock; the time so
+// far is measured from its start to the snapshot's own clock, as the console view does.
+function openWindowText(start, nowMs) {
+  return "open (" + duration((nowMs - Date.parse(start)) / 1000) + " so far)";
+}
+
+// The server's clock at the last snapshot, as an offset from the browser's, so an open window keeps
+// counting between pushes (a snapshot is pushed only when the state changes).
+let clockOffsetMs = 0;
+function serverNow() { return Date.now() + clockOffsetMs; }
+
+function phaseWall(item) {
+  if (item.end === null && item.start) return openWindowText(item.start, serverNow());
+  return wall(item.wall_clock_s, item.estimate.wall_clock_s);
+}
+
+function phaseRows(items, depth, expanded, body) {
+  for (const item of items) {
+    const key = depth + ":" + item.label + ":" + item.start;
+    const tr = el("tr");
+    const label = el("td", null, "label");
+    label.style.paddingLeft = (depth * 1.2 + 0.6) + "rem";
+    const open = item.children.length > 0;
+    if (open) {
+      const toggle = el("button", expanded.has(key) ? "−" : "+");
+      toggle.addEventListener("click", () => {
+        if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
+        loadDetail();
+      });
+      label.appendChild(toggle);
+    }
+    label.appendChild(el("span", " " + item.label));
+    tr.appendChild(label);
+    tr.appendChild(el("td", phaseWall(item), "num"));
+    tr.appendChild(el("td", item.spawn_cost_usd === null ? "not attributed" : money(item.spawn_cost_usd, item.estimate.spawn_cost_usd, false), "num"));
+    tr.appendChild(el("td", money(item.root_cost_usd, item.estimate.root_cost_usd, false), "num"));
+    body.appendChild(tr);
+    if (open && expanded.has(key)) phaseRows(item.children, depth + 1, expanded, body);
+  }
+}
+
+const expandedPhases = new Set();
+
+function phasesTable(items) {
+  const table = el("table");
+  const head = el("tr");
+  ["phase", "wall-clock", "spawn cost", "root cost"].forEach((name) => head.appendChild(el("th", name)));
+  table.appendChild(el("thead")).appendChild(head);
+  const body = el("tbody");
+  phaseRows(items, 0, expandedPhases, body);
+  table.appendChild(body);
+  return table;
+}
+
+function stagesList(stages) {
+  const list = el("ul", null, "phases root");
+  for (const stage of stages) {
+    list.appendChild(el("li", stage.index + ". " + (stage.title || "?") + " — " + (stage.status || "pending") +
+      " (" + (stage.actor || "?") + ")", "st-" + cssName(stage.status || "pending")));
+  }
+  return list;
+}
+
+function detailBody() { return document.getElementById("detail-body"); }
+
+function chatUrl(id, kind) {
+  return kind === "session" ? "/api/session/" + encodeURIComponent(id) + "/chat" : "/api/task/" + encodeURIComponent(id) + "/chat";
+}
+
+function chatEntry(entry) {
+  const who = (entry.role === "user" ? "you" : entry.role) + (entry.tool ? " [" + entry.tool + "]" : "");
+  const node = el("div", null, "chat-entry chat-" + cssName(entry.role));
+  node.appendChild(el("span", who, "chat-who"));
+  node.appendChild(el("span", entry.text, "chat-text"));
+  return node;
+}
+
+function renderChat(chat) {
+  const key = JSON.stringify(chat.entries);
+  if (key === chatShown) return;
+  chatShown = key;
+  const section = document.getElementById("detail-chat");
+  section.replaceChildren(el("h2", "Chat"),
+    ...(chat.entries.length ? chat.entries.map(chatEntry) : [el("p", "no messages yet", "dim")]));
+}
+
+async function loadChat() {
+  if (!selected) return;
+  const wanted = selected;
+  try {
+    const response = await fetch(chatUrl(wanted, selectedKind));
+    if (wanted !== selected) return;
+    if (!response.ok) return;
+    const chat = await response.json();
+    if (wanted !== selected) return;
+    renderChat(chat);
+  } catch (e) { /* retry on the next tick */ }
+}
+
+function openDetail(session, kind) {
+  const panel = document.getElementById("detail");
+  selected = session;
+  selectedKind = kind || "task";
+  chatShown = null;
+  renderTasks();
+  const title = document.getElementById("detail-title");
+  title.textContent = shortId(session);
+  title.title = session;
+  detailBody().replaceChildren(selectedKind === "task" ? el("p", "loading…", "dim") : el("p", "session without a task", "dim"));
+  document.getElementById("detail-chat").replaceChildren(el("h2", "Chat"), el("p", "loading…", "dim"));
+  panel.hidden = false;
+  panel.focus();
+  loadDetail();
+  loadChat();
+  clearInterval(chatTimer);
+  chatTimer = setInterval(loadChat, CHAT_POLL_MS);
+}
+
+function closeDetail() {
+  const session = selected;
+  selected = null;
+  lastDetail = null;
+  clearInterval(chatTimer);
+  chatTimer = null;
+  document.getElementById("detail").hidden = true;
+  detailBody().replaceChildren();
+  document.getElementById("detail-chat").replaceChildren();
+  renderTasks();
+  const row = rowFor(session);
+  if (row) row.focus();
+}
+
+async function loadDetail() {
+  // The ticking timer re-renders lastDetail, so it must never outlive the task it was fetched for.
+  lastDetail = null;
+  if (!selected || selectedKind !== "task") return;
+  const wanted = selected;
+  const response = await fetch("/api/task/" + encodeURIComponent(wanted));
+  if (wanted !== selected) return;
+  if (!response.ok) { detailBody().replaceChildren(el("p", "task is gone", "dim")); return; }
+  const detail = await response.json();
+  if (wanted !== selected) return;
+  lastDetail = detail;
+  renderDetail();
+}
+
+function renderDetail() {
+  const detail = lastDetail;
+  if (!detail) return;
+  if (!detail.readable) { detailBody().replaceChildren(el("p", "unreadable: " + detail.reason, "dim")); return; }
+  detailBody().replaceChildren(el("h2", "Stages"), stagesList(detail.stages),
+    el("h2", "Phases"), phasesTable(detail.phases));
+}
+
+document.getElementById("detail-close").addEventListener("click", closeDetail);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && selected) closeDetail();
+});
+
+setInterval(() => { if (selected && lastDetail) renderDetail(); }, 1000);
+
+function apply(data) {
+  snapshot = data;
+  if (data.generated_at) clockOffsetMs = Date.parse(data.generated_at) - Date.now();
+  renderTasks();
+  if (selected) loadDetail();
+}
+
+function applyAttention(payload) {
+  attention = {tasks: payload.tasks || {}, sessions: payload.sessions || []};
+  renderTasks();
+}
+
+async function loadAttention() {
+  try {
+    const response = await fetch("/api/attention");
+    if (response.ok) applyAttention(await response.json());
+  } catch (e) { /* the next open or event retries */ }
+}
+
+let polling = null;
+function poll() {
+  if (polling) return;
+  polling = setInterval(async () => {
+    try { apply(await (await fetch("/api/snapshot")).json()); } catch (e) { /* retry on the next tick */ }
+    loadAttention();
+  }, 5000);
+}
+
+function connect() {
+  if (typeof EventSource === "undefined") { loadAttention(); poll(); return; }
+  const source = new EventSource("/api/events");
+  source.onopen = loadAttention;
+  source.addEventListener("snapshot", (event) => {
+    if (polling) { clearInterval(polling); polling = null; }
+    apply(JSON.parse(event.data));
+  });
+  source.addEventListener("attention", (event) => applyAttention(JSON.parse(event.data)));
+  source.onerror = () => { document.getElementById("status").textContent = "disconnected, retrying…"; poll(); };
+}
+
+connect();
+</script>
+</body>
+</html>

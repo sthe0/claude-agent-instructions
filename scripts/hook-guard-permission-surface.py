@@ -160,7 +160,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import bash_write_targets, config_root, git_cwd, permission_surface, widening_targets  # noqa: E402
+from lib import bash_write_targets, config_root, git_cwd, hook_telemetry, permission_surface, widening_targets  # noqa: E402
 
 # Security-relevant settings keys other than `permissions` itself (handled
 # separately via `permission_surface.widens`, which fires only on a WIDENING
@@ -932,4 +932,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-guard-permission-surface"))

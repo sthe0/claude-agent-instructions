@@ -78,7 +78,7 @@ The productivity test is the real discriminator and the most Hegelian (the concr
 | Induction | repetition of one difficulty | `promote-scan` (Rule of Three) | — |
 | **Dialectic (σ)** | a refuting precedent | the organs exist (§5) | the tier verdict + a route into a σ registry |
 
-A new principle's `induced_from` points, in the first case, at a *recurring cluster*; in the second, at the *refuted predecessor* `P0`.
+A new regularity's `induced_from` (a principle's, in a project tier) points, in the first case, at a *recurring cluster*; in the second, at the *refuted predecessor* `P0`.
 
 ### 5. Failure attribution: who decides "principle, not execution"
 

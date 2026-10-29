@@ -43,7 +43,8 @@ Workflow-level permissions (separate from memory): `~/claude-agent-instructions/
 
 ## Principles (ADR-0001 generality tier)
 
-- [Principles sub-index](leaves/principles/MEMORY.md) — generality-graded, provenance-rooted, refutable principles induced from recurring difficulties; the planner retrieves them at a plan's `refutable principle` element (retrieval-augmented planning). The **generality≥1 profile** of one difficulty-record model whose generality-0 profile is the experience leaf (two physically-separate sub-indexes, one model). Schema: [principle-leaf-schema.md](leaves/principle-leaf-schema.md).
+- [Principles sub-index](leaves/principles/MEMORY.md) — the norm layer: generality-graded principles ("to achieve X, do Y"), each with a goal class and `grounded_in` the regularities it rests on; the planner retrieves them at a plan's `refutable principle` element (retrieval-augmented planning). Schema: [principle-leaf-schema.md](leaves/principle-leaf-schema.md).
+- [Regularities sub-index](leaves/regularities/MEMORY.md) — the knowledge layer: refutable claims about how things are, induced from recurring experience and refuted by a contradicting observation; what a principle is grounded in. Schema: [regularity-leaf-schema.md](leaves/regularity-leaf-schema.md); decision: ADR-0013.
 
 ## System knowledge
 
@@ -52,5 +53,5 @@ Workflow-level permissions (separate from memory): `~/claude-agent-instructions/
 ## Resolved-task experience
 
 - [Experience sub-index](leaves/experience/MEMORY.md) — chronological log of resolved-task experience leaves (one per non-trivial task — final plan, difficulties, artifacts, lessons, self-critique, cost).
-- [Experience leaf schema](leaves/experience-leaf-schema.md) — the `difficulty/v1` leaf schema (Difficulty / Order & criterion / Contexts / Cost) + `record-experience.py` tooling for resolved-task leaves; the **generality-0 profile** of one difficulty-record model whose generality≥1 profile is the principle leaf (`principle/v1`), keyed by an optional `generality` field (implied 0).
+- [Experience leaf schema](leaves/experience-leaf-schema.md) — the `difficulty/v1` leaf schema (Difficulty / Order & criterion / Contexts / Cost) + `record-experience.py` tooling for resolved-task leaves; the **generality-0 profile** of the difficulty-record model; recurring experience is induced into a regularity (`regularity/v1`), and a principle (`principle/v1`) is grounded in regularities.
 - [Published-text writer gate](leaves/published-text-writer-gate.md) — publishing to a ticket/issue is gated on the FACT of a tech-writer pass before those exact bytes, then a fail-open judge checks the rules in publish-rules.toml; routes, residuals, calibration.

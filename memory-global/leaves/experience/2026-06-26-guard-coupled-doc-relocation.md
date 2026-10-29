@@ -7,7 +7,7 @@ resolution_confirmed_by_user: "Да, решено"
 refs: [2026-06-24-developer-marker-not-on-line-1-false-block]
 created: 2026-06-27
 last_verified: 2026-07-01
-generalized_into: [verdict-covers-the-evidence-domain-it-claims]
+generalized_into: [a-probe-observes-only-the-domain-it-reads]
 ---
 
 # Relocating guard-pinned docs: move + repoint the guard in lockstep, watch region-relative paths

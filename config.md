@@ -23,7 +23,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `difficulty-channel` | `github` | Channel for filing Core difficulties from non-author machines; auto-detected per machine. |
 | `advisor-mode` | `substantive` | When the agentctl advisory judge activates: `off` or `substantive`; `AGENTCTL_ADVISOR` overrides. |
 | `child-contour-linking` | `on` | Kill switch linking a spawned specialist into its own engine contour; `AGENTCTL_CHILD_LINKING` overrides. |
-| `principle-promotion-threshold` | `3` | Context-block count at which promote-scan flags an experience cluster for a principle leaf. |
+| `principle-promotion-threshold` | `3` | Context-block count at which promote-scan flags an experience cluster for a regularity leaf. |
 | `skill-description-max-chars` | `850` | Character ceiling on a SKILL.md frontmatter `description:`. |
 | `always-loaded-surface-advisory-chars` | `80000` | Advisory-only ceiling on the aggregate always-loaded surface; never fails. |
 | `memory-index-max-bytes` | `24000` | UTF-8 bytes cap on `memory-global/MEMORY.md` (harness truncates at 25000); see memory-index-max-bytes-derivation.md. |
@@ -47,6 +47,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `root-silent-max-min` | `25` | Longest stretch the root stays silent to the user while specialists are in flight. |
 | `fanout-cap-extra-tasks` | `512` | Extra threads/processes a fan-out trial under `scripts/cap-run.sh` may add to the user's task count. |
 | `fanout-cap-timeout-s` | `3600` | Wall-clock limit in seconds for one capped fan-out trial. |
+| `suite-gate-timeout-s` | `1800` | Wall-clock limit in seconds for one full-suite run of the pre-land suite gate (the candidate's, or the tip baseline's). |
 | `memory-leaf-max-bytes` | `74000` | Byte size above which `self-diagnose.py` flags a difficulty/v1 leaf `oversized-leaf`. |
 | `memory-leaf-max-contexts-multiple` | `27` | Multiple of `principle-promotion-threshold` in `### ` contexts above which the same flag fires. |
 | `plan-stage-max-chars` | `70000` | Largest rendered size of one plan node; over it blocks `submit-plan` and topological review. |

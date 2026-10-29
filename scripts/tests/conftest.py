@@ -86,6 +86,24 @@ expected_exit = 0
 
 
 @pytest.fixture(autouse=True)
+def _isolate_decision_log(tmp_path, monkeypatch):
+    """Decision telemetry (lib/hook_telemetry.py, cli._log_gate) appends one row per hook
+    or engine-gate evaluation to $AGENTCTL_DECISION_LOG; no test may append to the real log.
+    The env var reaches the hook and CLI subprocesses a test spawns."""
+    monkeypatch.setenv("AGENTCTL_DECISION_LOG", str(tmp_path / "decision-log.jsonl"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_delivery_channel(monkeypatch):
+    """No test may run a delivery-channel command configured in the real
+    ~/.claude-agent. The config-root environment stays real (many tests depend on
+    it), so only the channel's config file name is pointed at a name nothing
+    holds; test_headless_delivery restores it for its own tmp root."""
+    from agentctl import delivery_channel
+    monkeypatch.setattr(delivery_channel, "CONFIG_NAME", "no-such-delivery-channel.toml")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_edit_ledger(tmp_path, monkeypatch):
     """Redirect the durable edit ledger to tmp for the suite at large.
 
@@ -116,19 +134,22 @@ def _parent_session_outside_any_project(tmp_path_factory, monkeypatch):
 def _isolate_task_quality_ledger(tmp_path, monkeypatch):
     """The scorecard aggregates the real ledger into degradation flags, so a
     test resolve must never append to it."""
-    from agentctl import cli
-    monkeypatch.setattr(cli, "TASK_QUALITY_LOG", tmp_path / "task-quality.jsonl")
+    from agentctl import cli, cli_common
+    log = tmp_path / "task-quality.jsonl"
+    monkeypatch.setattr(cli, "TASK_QUALITY_LOG", log)
+    monkeypatch.setattr(cli_common, "TASK_QUALITY_LOG", log)
 
 
 @pytest.fixture(autouse=True)
 def _isolate_gate_log(tmp_path, monkeypatch):
     """policy-scorecard reads the gate log as production telemetry, so no test may append
-    to the real one. The env var reaches subprocesses; cli.GATE_LOG is bound at import,
-    so it is patched as well."""
-    from agentctl import cli
+    to the real one. The env var reaches subprocesses; GATE_LOG is bound at import in
+    cli and in cli_common (which reads it), so both are patched."""
+    from agentctl import cli, cli_common
     log = tmp_path / "gate-log.jsonl"
     monkeypatch.setenv("AGENTCTL_GATE_LOG", str(log))
     monkeypatch.setattr(cli, "GATE_LOG", log)
+    monkeypatch.setattr(cli_common, "GATE_LOG", log)
 
 
 @pytest.fixture(autouse=True)
@@ -497,7 +518,7 @@ def _no_ambient_project_dir(monkeypatch):
     test_canon_guard_wired_check's strict-mode expectations from a fixture the
     test wrote to a file the machine happens to have. Same accommodation as
     `_no_ambient_recursion_depth` above — the tests that own the predicate
-    (test_hook_wiring, test_dispatch_witness) set the variable themselves,
+    (test_hook_wiring) set the variable themselves,
     which overrides this."""
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 

@@ -19,7 +19,7 @@
 # --- routed: write tracked files, reach the repo through worktree_route ---
 "scripts/record-experience.py" = { disposition = "routed", category = "routed", reason = "creates and extends experience leaves and MEMORY.md indexes under memory-global/" }
 "scripts/stamp-memory-dates.py" = { disposition = "routed", category = "routed", reason = "rewrites created/last_verified frontmatter of memory leaves" }
-"scripts/gen_crutch_registry.py" = { disposition = "routed", category = "routed", reason = "regenerates scripts/crutch_registry.toml and the crutch docs" }
+"scripts/gen_crutch_registry.py" = { disposition = "routed", category = "routed", reason = "regenerates the git-ignored local scripts/crutch_registry.toml classification report and the crutch docs; no check reads the file" }
 "scripts/permissions-cli.py" = { disposition = "routed", category = "routed", reason = "edits permissions/*.json grant files" }
 "scripts/verify-readme.py" = { disposition = "routed", category = "routed", reason = "--fix rewrites the README inventory tables" }
 
@@ -66,12 +66,16 @@
 "scripts/measure-marker-extractor-latency.py" = { disposition = "deferred", category = "deferred", reason = "appends docs/operations/marker-extractor-calibration.jsonl; a calibration run, outside #353" }
 
 # --- not-canon: writes only outside the repo, or names a write primitive without using it ---
+"scripts/plan_dashboard/publish.py" = { disposition = "not-canon", category = "not-canon", reason = "writes one publish-state file under XDG_STATE_HOME (or the path --publish-state names); no tracked file" }
 "scripts/lib/instruction_smoke_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes smoke records under the git common dir and a throwaway sandbox under the temp dir; no tracked file" }
+"scripts/lib/suite_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes suite records and baselines under the git common dir and a throwaway sandbox under the temp dir; no tracked file" }
+"scripts/lib/landing_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes gate records under the git common dir, temp file then rename; no tracked file" }
 "scripts/lib/engine_session_binding.py" = { disposition = "not-canon", category = "not-canon", reason = "harness-to-engine session binding records under the agentctl state dir, temp file then rename; no tracked file" }
 "scripts/hook-memory-retrieval.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session surfaced-leaf dedupe state under the agent state dir; reads the memory corpus, writes no tracked file" }
 "scripts/lib/memory_retrieval_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only retrieval ledger under ~/.local/log; writes no tracked file" }
 "scripts/agent_commit_trailer.py" ={ disposition = "not-canon", category = "not-canon", reason = "prints a commit trailer; `git commit` appears in prose only" }
 "scripts/agentctl/cli.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }
+"scripts/agentctl/cli_common.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }
 "scripts/agentctl/delivery.py" = { disposition = "not-canon", category = "not-canon", reason = "delivery receipts in the agentctl state dir" }
 "scripts/agentctl/dispatch.py" = { disposition = "not-canon", category = "not-canon", reason = "removes its own dispatch markers in the agentctl state dir" }
 "scripts/agentctl/edit_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only ledger under ~/.local/log" }
@@ -100,7 +104,6 @@
 "scripts/hook-guard-canon-readonly.py" = { disposition = "not-canon", category = "not-canon", reason = "the read-only guard: names `git commit`/`sed -i` as patterns to deny, writes no file" }
 "scripts/hook-guard-permission-surface.py" = { disposition = "not-canon", category = "not-canon", reason = "fire log under ~/.local/log/claude-permission-guard.jsonl" }
 "scripts/hook-long-job-arm.py" = { disposition = "not-canon", category = "not-canon", reason = "arm marker under the hook state dir" }
-"scripts/hook-prewrite-plan-check.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session check markers and logs under the hook state dir" }
 "scripts/hook-prompt-reminders.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session language-reminder stamp and the instructions-refresh stamp under the hook state dir" }
 "scripts/hook-retry-detector.py" = { disposition = "not-canon", category = "not-canon", reason = "retry counter state under the hook state dir" }
 "scripts/hook-review-mergeable-guardian.py" = { disposition = "not-canon", category = "not-canon", reason = "guardian state under the hook state dir" }
@@ -118,9 +121,9 @@
 "scripts/lib/band_throttle.py" = { disposition = "not-canon", category = "not-canon", reason = "throttle band files under the hook state dir" }
 "scripts/lib/bash_write_targets.py" = { disposition = "not-canon", category = "not-canon", reason = "parser that recognises `sed -i`/`git apply` in a command string; writes no file" }
 "scripts/lib/config-root.sh" = { disposition = "not-canon", category = "not-canon", reason = "resolves the config root; writes no file" }
-"scripts/lib/dispatch_witness_snapshot.py" = { disposition = "not-canon", category = "not-canon", reason = "witness snapshot in the agentctl state dir" }
 "scripts/lib/git_cwd.py" = { disposition = "not-canon", category = "not-canon", reason = "parses the directory a `git commit` targets; writes no file" }
 "scripts/lib/hook_fragments.py" = { disposition = "exempt", category = "exempt-config-root", reason = "writes the fragment ownership record into the config root, next to the settings file install-reminder-hooks.sh edits" }
+"scripts/lib/hook_telemetry.py" = { disposition = "not-canon", category = "not-canon", reason = "decision log under the config root's agentctl state directory, outside the repo" }
 "scripts/lib/hook_wiring.py" = { disposition = "not-canon", category = "not-canon", reason = "hook wiring table; names `git commit`/`sed -i` as deny patterns in text" }
 "scripts/lib/host_llm.py" = { disposition = "not-canon", category = "not-canon", reason = "per-call sandbox home under the fleet temp root, pruned by itself" }
 "scripts/lib/judge_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "judge ledger under ~/.local/log" }
@@ -162,7 +165,7 @@
 "scripts/session_scope/registry.py" = { disposition = "not-canon", category = "not-canon", reason = "scope registry files under the config-root state dir" }
 "scripts/spawn-cursor-escape.py" = { disposition = "not-canon", category = "not-canon", reason = "spawn logs and task files under ~/.local and /tmp" }
 "scripts/spawn-cursor-specialist.py" = { disposition = "not-canon", category = "not-canon", reason = "spawn logs and task files under ~/.local and /tmp" }
-"scripts/spawn-outcome-report.py" = { disposition = "not-canon", category = "not-canon", reason = "spawn outcome report under ~/.local/log" }
+"scripts/lib/agent_report/spawn_outcomes.py" = { disposition = "not-canon", category = "not-canon", reason = "spawn outcome report under ~/.local/log" }
 "scripts/spawn-specialist.py" = { disposition = "not-canon", category = "not-canon", reason = "spawn logs, costs ledger and task files under ~/.local and /tmp" }
 "scripts/usage-digest.py" = { disposition = "not-canon", category = "not-canon", reason = "writes agent-identity.local and its ledger in the config root, untracked" }
 "scripts/verify-agentctl.py" = { disposition = "not-canon", category = "not-canon", reason = "fixtures in temp dirs" }

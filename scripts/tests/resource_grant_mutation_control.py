@@ -62,6 +62,7 @@ PLAN = "scripts/agentctl/plan.py"
 SPAWN = "scripts/spawn-specialist.py"
 GRANTS = "scripts/agentctl/grants.py"
 CLI = "scripts/agentctl/cli.py"
+CLI_COMMON = "scripts/agentctl/cli_common.py"
 SEGMENT_RESOLVER = "scripts/agentctl/segment_resolver.py"
 ADVISOR = "scripts/agentctl/advisor.py"
 CODE_EFFECTS = "scripts/agentctl/code_effects.py"
@@ -134,7 +135,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         "HEAD and ref-path spellings of trunk (refs/heads/main, origin/main) derive a push",
     ),
     "branch-frozen-at-approve": Mutant(
-        CLI,
+        CLI_COMMON,
         "    if stored is None:\n"
         "        return []\n"
         "    if entries_grants_sha256(stored) != state.approved_grants_sha256:\n"
@@ -146,21 +147,21 @@ CATALOGUE: "dict[str, Mutant]" = {
         "spawn and stage-grants re-derive DR-P from the repository as it is now",
     ),
     "runtime-merge-carries-resources": Mutant(
-        CLI,
+        CLI_COMMON,
         "        allow=allow, add_dirs=add_dirs, resources=stage_branch_resources(state, stage_index))\n\n\n"
         "def _effective_stage_grants_for_self_grant",
         "        allow=allow, add_dirs=add_dirs)\n\n\ndef _effective_stage_grants_for_self_grant",
         "the dispatch coverage drops the stage's DR-P resources",
     ),
     "self-grant-merge-carries-resources": Mutant(
-        CLI,
+        CLI_COMMON,
         "        allow=allow, add_dirs=add_dirs, resources=stage_branch_resources(state, stage_index))\n\n\n"
         "def _consume_once_grants",
         "        allow=allow, add_dirs=add_dirs)\n\n\ndef _consume_once_grants",
         "the agent self-grant coverage drops the stage's DR-P resources",
     ),
     "self-grant-counts-resources": Mutant(
-        CLI,
+        CLI_COMMON,
         "    approved.extend(coverage.resources)\n",
         "",
         "an own-branch push the plan approved becomes a question to the user",
@@ -209,7 +210,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         "the autonomy boundary cannot see a replan that moves the stage's branch",
     ),
     "handoff-held-sees-vcs-resources": Mutant(
-        CLI,
+        CLI_COMMON,
         "    held: list = handoff_vcs_resources(parent_link)\n",
         "    held: list = []\n",
         "a child's self-approval compares against a parent that holds no push",

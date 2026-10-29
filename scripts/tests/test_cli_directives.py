@@ -7,7 +7,7 @@ from argparse import Namespace
 
 import pytest
 
-from agentctl import cli, plan, plugins
+from agentctl import cli, cli_common, plan, plugins
 from agentctl import plugins_premise as pp
 from agentctl.directive import Directive
 from agentctl.state import Node, StageStatus
@@ -967,6 +967,7 @@ def test_replan_is_noop_without_active_plugin(store, tmp_path, monkeypatch):
     blocker set — the byte-identical no-op path the composition promises."""
     log_path = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(cli, "GATE_LOG", log_path)
+    monkeypatch.setattr(cli_common, "GATE_LOG", log_path)
     sid = "replan-no-plugin"
     plan_path = tmp_path / "plan.toml"
     plan_path.write_text(_two_stage_plan_text())

@@ -5,7 +5,7 @@ type: reference
 schema: case/v1
 origin_tier: project
 source_digest: sha256:5c05c562b38afe6702fb1c44424b52e7425ce8b1c6c6fe911d50983924687745
-generalized_into: [review-loop-cannot-measure-its-own-convergence]
+generalized_into: [incremental-repair-review-has-a-nonzero-finding-floor]
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

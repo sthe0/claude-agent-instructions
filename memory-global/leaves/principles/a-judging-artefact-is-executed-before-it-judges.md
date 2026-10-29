@@ -4,7 +4,7 @@ description: An artefact that will JUDGE other work — a plan's controls, a CI 
 type: reference
 schema: principle/v1
 generality: 2
-induced_from: [2026-07-09-gate-must-execute-what-it-attests, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-20-stage-verify-command-narrower-than-final-check, 2026-07-01-monitor-self-defeats-verify-its-own-run, 2026-09-03-hygiene-sweep-ownership-check-argument-order-bug, 2026-10-12-stage-control-authoring-interface-mismatch]
+grounded_in: [regularity:a-controls-defects-surface-only-when-it-is-executed]
 created: 2026-08-11
 last_verified: 2026-08-11
 ---
@@ -13,11 +13,7 @@ last_verified: 2026-08-11
 
 ## Principle
 
-To keep a control's defects from being paid for by the work it judges, **execute the judging
-artefact read-only against the real environment before that work is reviewed or approved.** Reading
-a control is not verifying it. A `verify_command`, a `final_check`, a CI job definition, a lint
-rule, a generated review checklist — each is *code that will issue verdicts*, and shipping it
-unexecuted is shipping untested code into the position of judge.
+Because a control's defects surface only when it is executed ([[a-controls-defects-surface-only-when-it-is-executed]]), for the goal of keeping a control's defects from being paid for by the work it judges, **execute the judging artefact read-only against the real environment before that work is reviewed or approved.** Reading a control is not verifying it. A `verify_command`, a `final_check`, a CI job definition, a lint rule, a generated review checklist — each is *code that will issue verdicts*, and shipping it unexecuted is shipping untested code into the position of judge.
 
 The operational form: run every candidate control read-only **before** the plan is submitted, and
 **before** spawning the reviewer — the two most expensive gates on the spine sit between authoring
@@ -36,6 +32,10 @@ exit-status and stderr, without recording a stage result. Until that exists, mat
 controls to a scratch directory and run them by hand before `submit_plan` — a stopgap, and one that
 should be named as such rather than normalized.
 
+## Goal class
+
+Keeping a control's own defects from being paid for by the work it judges — no stage, delivery or approval failed or blocked by a defect of its check.
+
 ## Generality
 
 Level 2 — a class of tasks: authoring any artefact whose purpose is to render a verdict on other
@@ -45,26 +45,13 @@ guards, and generated test harnesses. It is not claimed at level 3: the statemen
 the judged. An ordinary deliverable is of course also tested, but there the cost of a defect falls
 on the deliverable itself, which is a different economics.
 
-## Induced from
+## Grounded in
 
-- [[2026-07-09-gate-must-execute-what-it-attests]] — the same fault one level in: a gate that
-  attests to a property it never executed the check for.
-- [[2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]] — the vector catalogue of
-  controls that are wrong in venue, scope, interface, suite or lifetime. Every vector in it is a
-  defect that one read-only execution before `submit_plan` would have surfaced.
-- [[2026-07-20-stage-verify-command-narrower-than-final-check]] — a control whose text looked right
-  and whose executed scope was narrower than the final check it was supposed to anticipate.
+- [[a-controls-defects-surface-only-when-it-is-executed]] — A control (verify_command, final_check, CI job, lint rule) is code; its defects — a wrong argument order, a path that never exists, a check narrower than its claim — stay invisible on reading and surface at its first real execution.
 
 ## Refutation
 
-The principle is refuted, or driven to a broader form, by a control whose read-only execution is
-**not** cheaper than the cycle it protects — a check that is inherently destructive, that cannot run
-before the work it judges exists (a genuine post-condition over an artefact not yet produced), or
-whose single run costs more than a replan. The first two are the real class: a post-condition
-control has nothing to run against at authoring time, and forcing one produces a *different* fault
-(a pre-action probe wired as a post-condition, which is structurally unsatisfiable). So the honest
-widened form is: execute what can be executed now, and for the rest verify the **shape** — venue,
-scope, interface — against a dry-run harness, declaring which conjuncts stayed unexecuted.
+The principle fails its goal if controls executed read-only before approval still fail correct work on their first real verdict at a rate no lower than unexecuted ones.
 
 ## See also
 

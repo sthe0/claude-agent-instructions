@@ -26,6 +26,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lib import hook_telemetry
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -68,4 +70,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-branch-backup"))

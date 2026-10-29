@@ -22,6 +22,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from lib import config_root  # noqa: E402
+from lib import hook_telemetry  # noqa: E402
 from lib import term_ruleset as tr  # noqa: E402
 
 REPO_ROOT = SCRIPTS_DIR.parent
@@ -76,4 +77,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-term-neutrality"))

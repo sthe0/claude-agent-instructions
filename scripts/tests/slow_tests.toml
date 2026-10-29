@@ -28,7 +28,7 @@
 nodes = ["scripts/tests/test_review_exhaustion_reflection.py::test_rx_mutation_catalogue_kills_every_mutant"]
 guards = [
     "scripts/agentctl/gates.py",
-    "scripts/agentctl/cli.py",
+    "scripts/agentctl/cli*.py",
     "scripts/agentctl/task_accumulator.py",
     "scripts/tests/test_review_exhaustion_reflection.py",
     "scripts/tests/rx_mutation_control.py",
@@ -64,6 +64,7 @@ catalogue_targets = { module = "scripts/tests/gc_mutation_control.py", kind = "g
 nodes = ["scripts/tests/test_instruction_smoke_gate.py::test_every_catalogue_mutant_is_killed_and_the_control_is_green"]
 guards = [
     "scripts/lib/instruction_smoke_gate.py",
+    "scripts/lib/landing_gate.py",
     "githooks/pre-push",
     "scripts/land-branch.py",
     "scripts/tests/test_instruction_smoke_gate.py",
@@ -82,12 +83,18 @@ guards = [
     "scripts/agentctl/mandate_store.py",
     "scripts/agentctl/state.py",
     "scripts/agentctl/plan.py",
-    "scripts/agentctl/cli.py",
+    "scripts/agentctl/cli*.py",
     "scripts/agentctl/gates.py",
+    "scripts/agentctl/classify.py",
+    "scripts/agentctl/inline_class.py",
     "scripts/lib/widening_targets.py",
     "scripts/mandate_cycle/*.py",
     "scripts/tests/test_mandate_*.py",
+    "scripts/tests/test_agentctl_mandate_basis.py",
     "scripts/tests/test_optional_stages.py",
+    "scripts/tests/test_classify.py",
+    "scripts/tests/test_inline_class.py",
+    "scripts/tests/test_inline_measure.py",
     "scripts/tests/mandate_mutation_control.py",
     "config.md",
 ]

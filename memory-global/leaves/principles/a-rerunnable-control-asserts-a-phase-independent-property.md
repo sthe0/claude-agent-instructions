@@ -4,7 +4,7 @@ description: A stage control is evaluated at record-result and again at verify-f
 type: reference
 schema: principle/v1
 generality: 2
-induced_from: [2026-10-12-stage-control-phase-of-evaluation, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-03-engine-replan-artifact-discipline]
+grounded_in: [regularity:a-stage-control-is-re-evaluated-after-its-world-has-changed]
 domain: development
 created: 2026-10-12
 last_verified: 2026-10-12
@@ -14,20 +14,23 @@ last_verified: 2026-10-12
 
 ## Principle
 
-Before freezing a control, name the phase of the plan in which each clause is true and ask whether it is still true after the commit, after landing and after every later stage that extends or reverses its subject; assert membership not equality, post-conditions not pre-action probes, and the durable end state in the stage that reaches it.
+Because a stage control is re-evaluated after its world has changed ([[a-stage-control-is-re-evaluated-after-its-world-has-changed]]), for the goal of controls whose verdict does not depend on the phase they run in, before freezing a control, name the phase of the plan in which each clause is true and ask whether it is still true after the commit, after landing and after every later stage that extends or reverses its subject; assert membership not equality, post-conditions not pre-action probes, and the durable end state in the stage that reaches it.
+
+## Goal class
+
+Re-runnable controls whose verdict on a correct delivery does not depend on the plan phase in which they are evaluated.
 
 ## Generality
 
 Level 2 — ranges over any machine-evaluated check that is authored in one phase of a plan's lifecycle and evaluated again in others: per-stage result checks re-run at the closing gate, regression scripts replayed after a merge, acceptance checks replayed from a recorded plan. The class is "a snapshot written as if it were a law". It is not claimed for a control the engine evaluates exactly once at the moment it was written for, and it does not forbid phase-specific probes as evidence: a pre-action probe is legitimate diagnostic evidence, it is only unsound as the control that the closing gate re-runs.
 
-## Induced from
+## Grounded in
 
-- [[2026-10-12-stage-control-phase-of-evaluation]] — six contexts in which a probe correct before the action was wired as a post-condition, a working-tree diff correct before the commit was re-run after it, an equality a later stage deliberately broke was kept as the control, and a literal frozen before the world changed was cited; in each the control could not go green for the right reason at verify-final and nothing in the plan said which phase it was written for.
-- [[2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]] — the original difficulty that established the engine's final re-run of every measurable stage (the very mechanism that makes phase a property of the control) and the kept contexts that first showed a stage-time observable going stale at that re-run.
+- [[a-stage-control-is-re-evaluated-after-its-world-has-changed]] — A stage's control is run again at final verification and after replans, by which time landing, cleanup and later stages have removed its venue or changed the state it was written against.
 
 ## Refutation
 
-A control that asserts a phase-specific state and is nonetheless sound at the closing re-run (because the engine freezes the evaluation snapshot, or re-runs it at the phase it was written for) would show the principle is a property of this engine's re-run discipline, not of controls in general. A re-run phase in which the end-state property itself is unobservable (the final state is destroyed or unreachable), so that no phase-independent assertion exists, would force a broader form: the control belongs in a stage-time-only gate and must be declared as such, not re-run.
+The principle fails its goal if controls written this way still flip from pass to fail across phases on a delivery that did not change.
 
 ## See also
 

@@ -44,6 +44,8 @@ import json
 import sys
 from pathlib import Path
 
+from lib import hook_telemetry
+
 
 def _load_rm_target_detector():
     """Import `_rm_recursive_targets` from the sibling hook-guard-destructive-rm.py by
@@ -116,4 +118,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-guard-subagent-destructive-action"))

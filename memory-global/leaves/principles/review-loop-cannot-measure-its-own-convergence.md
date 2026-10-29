@@ -4,7 +4,7 @@ description: A review loop with a non-zero finding floor and a pass-required gat
 type: reference
 schema: principle/v1
 generality: 1
-induced_from: [2026-08-11-review-loop-cannot-measure-its-own-convergence, review-loop-shifting-grounds-never-converges, 2026-08-04-no-circuit-breaker-on-verification-effort, 2026-08-17-diagnosing-has-no-exit-to-the-customer, 2026-09-03-published-text-writer-gate-effort-divergence-deadlock, 2026-10-06-season2-metric-instruction-tuning]
+grounded_in: [regularity:incremental-repair-review-has-a-nonzero-finding-floor]
 domain: coordination
 created: 2026-08-25
 last_verified: 2026-08-25
@@ -14,10 +14,7 @@ last_verified: 2026-08-25
 
 ## Principle
 
-To prevent a plan-review or enumeration loop from cycling indefinitely, **bound the round count
-structurally** — as a hard element of the spec, not a heuristic. A loop with a pass-required gate
-and a non-zero finding floor has no reachable fixed point and terminates only when someone stops it;
-the bound is what makes "someone stopping it" a spec-compliant action rather than a surrender.
+Because an incremental-repair review loop has a nonzero finding floor ([[incremental-repair-review-has-a-nonzero-finding-floor]]), for the goal of a review loop that ends in a recorded decision at bounded cost, **bound the round count structurally** — as a hard element of the spec, not a heuristic. A loop with a pass-required gate and a non-zero finding floor has no reachable fixed point and terminates only when someone stops it; the bound is what makes "someone stopping it" a spec-compliant action rather than a surrender.
 
 A review round that has not falsified any of the four non-convergence mechanisms below carries no
 evidence its next round will converge. Instrumenting the loop (recording plan bytes, finding count,
@@ -25,20 +22,7 @@ finding text per round) is therefore a precondition to any hypothesis about WHY 
 converging — without the record you cannot distinguish "volume problem" from "iatrogenic floor" from
 "unanswerable study" from "artifact-machinery gap".
 
-## Generality
-
-Level 1 — holds across a handful of sibling contexts in the agentctl review system: a 12-round
-plan-review series, a 15-round independent-review series, the post-approval path where the valve
-was wired only to the pre-approval path (so the counter stayed at zero on the path the difficulty
-actually travels), and the enumeration axis that had the same non-terminating shape from a
-structurally distinct cause. A single iteration-control pattern (pass-required gate, incremental
-repair) produces the same non-termination property across each.
-
-## Induced from
-
-- [[2026-08-11-review-loop-cannot-measure-its-own-convergence]] — four contexts: measuring breach
-  count (79% iatrogenic across 15 rounds), showing the terminator valve was wired only to the
-  pre-approval path, and confirming the enumeration axis carries the same non-terminating shape.
+## Mechanisms
 
 Four mechanisms, each individually sufficient to defeat termination:
 
@@ -62,20 +46,31 @@ Four mechanisms, each individually sufficient to defeat termination:
    refuse, a guard watching a constant rather than the live array) are invisible to review at any
    number of rounds; they surface only on first execution.
 
+## Goal class
+
+A plan-review, enumeration or publication loop that ends in a recorded decision at bounded cost, rather than cycling until someone abandons it.
+
+## Generality
+
+Level 1 — holds across a handful of sibling contexts in the agentctl review system: a 12-round
+plan-review series, a 15-round independent-review series, the post-approval path where the valve
+was wired only to the pre-approval path (so the counter stayed at zero on the path the difficulty
+actually travels), and the enumeration axis that had the same non-terminating shape from a
+structurally distinct cause. A single iteration-control pattern (pass-required gate, incremental
+repair) produces the same non-termination property across each.
+
+## Grounded in
+
+- [[incremental-repair-review-has-a-nonzero-finding-floor]] — A review loop in which each round repairs the previous round's findings keeps producing findings at a floor above zero, because each repair is new material and each fresh reviewer applies a moving standard; the finding count does not trend to zero.
+
 ## Refutation
 
-If a review loop is shown to reliably terminate without a round bound — a pass-required gate with
-an incremental-repair process that reaches zero findings in practice — then mechanism 3 does not
-hold for that process and the principle narrows to "measure the floor before relying on
-termination." If a review vocabulary is extended with a distinct verb for "study cannot be done"
-that routes separately from "plan has a defect," mechanism 2 no longer applies to loops using that
-verb. Both narrowings drive the principle to a higher generality level (what invariant subsumes the
-remainder?), not to abandonment.
+The principle fails its goal if loops with a structural bound still end without a recorded decision — abandoned, or overridden outside the bound — or if the bound is reached so routinely that the released decision is no better informed than a stop at round one.
 
 ## See also
 
 - [[2026-08-11-review-loop-cannot-measure-its-own-convergence]] — the generality-0 experience leaf
-  this principle is induced from (four contexts, occurrence count ≥ `principle-promotion-threshold`).
+  among the precedents this principle is grounded in (four contexts, occurrence count ≥ `principle-promotion-threshold`).
 - [effort-divergence-trigger.md](../effort-divergence-trigger.md) — the companion overrun detector;
   fires on PASSING stages when cost overruns the estimate, not on BLOCKING stages in a review loop.
   The review-round scale was explicitly cut at closure; this principle records what that cut costs.

@@ -48,7 +48,7 @@ the `public-ablation-benchmark-pilot` plan, which reuses this exact tree — see
   future session to benefit from written memory, and no time budget to spend
   reading a large memory tree that mostly encodes org-specific
   process knowledge irrelevant to fixing one Go bug.
-- **Non-coding skills**: `instruction-grooming`, `overcome-difficulty`,
+- **Non-coding skills**: `curator`, `overcome-difficulty`,
   `self-improvement`, `tracker-management`, `yandex-cloud-expert`,
   `tech-writer` — all org/meta-workflow skills with no role in a single-shot
   autonomous code fix.

@@ -35,6 +35,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
+from cli_module_anchor import anchor_target
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 RULES = "agentctl/mandate.py"
 STORE = "agentctl/mandate_store.py"
@@ -44,6 +46,7 @@ T_CLI = "tests/test_mandate_cli.py"
 DRIVER = "mandate_cycle/driver.py"
 NOTIFIERS = "mandate_cycle/notifiers.py"
 T_CYCLE = "tests/test_mandate_cycle.py"
+T_BASIS = "tests/test_agentctl_mandate_basis.py"
 T_NOTIFIER = "tests/test_mandate_notifier.py"
 STATE = "agentctl/state.py"
 PLAN = "agentctl/plan.py"
@@ -177,20 +180,20 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "baseline-relative-tests": Mutant(
         DRIVER,
-        "            baseline.passed, baseline.seen, item_suite.passed, item_suite.seen, rules.diff_path_groups(lines),\n"
-        "        )\n"
-        '        row["excused_tests"] = excused[:DIGEST_EXCUSED_IDS]\n'
-        '        row["excused_count"] = len(excused)\n'
-        "        if failing:\n"
-        '            rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))\n'
-        "            green = rules.passes_after_rerun(baseline.passed, item_suite.passed, rerun.passed, excused)\n",
-        "            baseline.seen, baseline.seen, item_suite.passed, item_suite.seen, rules.diff_path_groups(lines),\n"
-        "        )\n"
-        '        row["excused_tests"] = excused[:DIGEST_EXCUSED_IDS]\n'
-        '        row["excused_count"] = len(excused)\n'
-        "        if failing:\n"
-        '            rerun = self.run_suite(worktree, item_dir / "rerun.xml", files=rerun_targets(failing, worktree))\n'
-        "            green = rules.passes_after_rerun(baseline.seen, item_suite.passed, rerun.passed, excused)\n",
+        "        baseline.passed, baseline.seen, result.passed, result.seen, rules.diff_path_groups(verdict.diff_lines),\n"
+        "    )\n"
+        "    verdict.excused, verdict.excused_count, verdict.failing = excused[:DIGEST_EXCUSED_IDS], len(excused), list(failing)\n"
+        "    green = True\n"
+        "    if failing:\n"
+        "        rerun = suite_run(sh, suite, worktree, item_dir / \"rerun.xml\", timeout_s, files=rerun_targets(failing, worktree))\n"
+        "        green = rules.passes_after_rerun(baseline.passed,",
+        "        baseline.seen, baseline.seen, result.passed, result.seen, rules.diff_path_groups(verdict.diff_lines),\n"
+        "    )\n"
+        "    verdict.excused, verdict.excused_count, verdict.failing = excused[:DIGEST_EXCUSED_IDS], len(excused), list(failing)\n"
+        "    green = True\n"
+        "    if failing:\n"
+        "        rerun = suite_run(sh, suite, worktree, item_dir / \"rerun.xml\", timeout_s, files=rerun_targets(failing, worktree))\n"
+        "        green = rules.passes_after_rerun(baseline.seen,",
         _ids(T_CYCLE, "test_a_test_failing_on_the_baseline_does_not_count_against_the_item"),
     ),
     "no-trunk-push": Mutant(
@@ -217,7 +220,7 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "head-pinned-before-review": Mutant(
         DRIVER,
-        "if pinned[0] != checked:",
+        "if run.judged_tree and item_tree(self.sh, worktree, checked)[0] != run.judged_tree:",
         "if False:",
         _ids(T_CYCLE, "test_a_commit_made_while_the_suite_runs_is_never_pushed"),
     ),
@@ -682,27 +685,6 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_exclusion_reasons_are_reported",
         ),
     ),
-    "inline-cycle-gate": Mutant(
-        DRIVER,
-        "        if not inline_class.within_bound(measured, bound):\n",
-        "        if False:\n",
-        _ids(
-            T_CYCLE,
-            "test_a_change_over_the_bound_is_declined_as_needing_a_plan_with_no_pull_request",
-            "test_a_counted_binary_file_declines_the_item_even_when_its_lines_are_few",
-            "test_the_digest_lists_a_declined_item_and_the_needs_a_plan_section",
-        ),
-    ),
-    "inline-cycle-trunk-attrs": Mutant(
-        DRIVER,
-        "attrs_source=f\"{REMOTE}/{TRUNK}\"",
-        "attrs_source=None",
-        _ids(
-            T_CYCLE,
-            "test_the_measurement_reads_the_trusted_checkouts_committed_attributes_not_its_working_tree",
-            "test_the_measurement_reads_the_attributes_at_trunk_not_at_the_checkouts_lagging_head",
-        ),
-    ),
     "inline-constitution-fixed": Mutant(
         RULES,
         'FIXED_CONSTITUTION = (\n    "scripts/agentctl/inline_class.py",\n',
@@ -716,11 +698,289 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_the_fixed_entries_name_every_file_the_counted_set_depends_on",
         ),
     ),
-    "inline-triage-definition": Mutant(
+    "triage-admits-any-size": Mutant(
         DRIVER,
-        "definition=inline_class.INLINE_DEFINITION",
-        'definition=""',
-        _ids(T_CYCLE, "test_the_triage_prompt_carries_the_shared_definition_and_the_bound_and_keeps_its_json_example"),
+        'Size is not a reason for "auto-no": a larger item is planned by the developer under a standing norm;',
+        'Larger items are "auto-no": too big to fix unattended;',
+        _ids(T_CYCLE, "test_the_triage_prompt_admits_an_in_repo_item_of_any_size_and_keeps_its_json_example"),
+    ),
+    "basis-skips-only-under-mandate": Mutant(
+        CLI,
+        "    if not by_agent and not mandate_basis:\n        blockers = (\n",
+        "    if False:\n        blockers = (\n",
+        _ids(T_BASIS, "test_a_non_mandate_approval_still_requires_presentation_and_grants_approval[user]"),
+    ),
+    "basis-exact-norm": Mutant(
+        CLI,
+        "    return problems + mandate_rules.mandate_approval_problems(plan_text, inputs, mandate, gate_result)\n",
+        "    return problems\n",
+        _ids(T_BASIS, "test_a_mandate_approval_of_an_edited_norm_is_refused"),
+    ),
+    "basis-keeps-since-user": Mutant(
+        CLI,
+        "    if not mandate_basis:\n        _clear_since_user_decision(state, args.by)\n",
+        "    if True:\n        _clear_since_user_decision(state, args.by)\n",
+        _ids(T_BASIS, "test_a_mandate_approval_does_not_clear_the_since_user_counters_or_stamp_the_order_ledger"),
+    ),
+    "basis-binds-taken-item": Mutant(
+        CLI,
+        '    if not taken:\n        problems.append("the cycle recorded no item taken',
+        '    if False:\n        problems.append("the cycle recorded no item taken',
+        _ids(T_BASIS, "test_a_mandate_approval_of_a_norm_for_no_taken_item_is_refused"),
+    ),
+    "reject-records-actor": Mutant(
+        CLI,
+        'state.log("reject", reason=reason, stages=idxs, **({"by": rejecter} if rejecter else {}))',
+        'state.log("reject", reason=reason, stages=idxs)',
+        _ids(T_BASIS, "test_reject_by_mandate_moves_the_child_to_diagnosing_and_records_the_actor"),
+    ),
+    "child-is-linked": Mutant(
+        DRIVER,
+        'argv += ["--session", session, "--stage-index", str(STAGE_INDEX)]',
+        "pass",
+        _ids(T_CYCLE, "test_an_item_runs_as_a_linked_child_of_a_mandate_approved_parent_session"),
+    ),
+    "settled-is-mandates": Mutant(
+        DRIVER,
+        '"mandate-answer", {"issue": run.number, "kind": kind, "answer": verdict.answer, "round": run.rounds},\n'
+        "                by=rules.mandate_approver(self.mid),",
+        '"mandate-answer", {"issue": run.number, "kind": kind, "answer": verdict.answer, "round": run.rounds},\n'
+        '                by="user",',
+        _ids(T_CYCLE, "test_every_settled_answer_is_recorded_as_the_mandates_never_the_users"),
+    ),
+    "stop-keeps-breaker-closed": Mutant(
+        DRIVER,
+        'row.update(outcome="overrun", overrun_reasons=list(detail), cost_usd=self.item_cost(run.item_dir)[0])',
+        'row.update(outcome="failed", failure_kind=KIND_INFRA, overrun_reasons=list(detail), '
+        "cost_usd=self.item_cost(run.item_dir)[0])",
+        _ids(T_CYCLE, "test_a_spend_fire_stops_the_item_as_overrun_without_the_breaker"),
+    ),
+    "check-item-bound": Mutant(
+        DRIVER,
+        'verdict.over_bound = not inline_class.within_bound(measured, int(inputs["bound"]))',
+        "verdict.over_bound = False",
+        _ids(T_CYCLE, "test_check_item_judges_constitution_org_neutral_suite_gates_and_bound[_bound-failed5]"),
+    ),
+    "check-item-empty-diff": Mutant(
+        DRIVER,
+        "    if not verdict.diff_lines:\n",
+        "    if False:\n",
+        _ids(T_CYCLE, "test_check_item_is_red_on_an_unchanged_tree"),
+    ),
+    "covered-denials-counted": Mutant(
+        DRIVER,
+        'denials = sum(1 for a in run.asks if a["kind"] == "permission-covered")',
+        "denials = 0",
+        _ids(T_CYCLE, "test_a_repeated_covered_denial_stops_the_item_as_exceeds_mandate"),
+    ),
+    "nested-cost-charged": Mutant(
+        DRIVER,
+        "for nested in nested_spawn_rows(rows, self._child):",
+        "for nested in []:",
+        _ids(T_CYCLE, "test_nested_spawn_spend_is_charged_to_the_item_and_the_mandate_windows"),
+    ),
+    "salvage-kept": Mutant(
+        DRIVER,
+        'if row["outcome"] != "pr-opened" and self._item_base:',
+        "if False:",
+        _ids(T_CYCLE, "test_every_stopped_item_with_a_diff_keeps_its_patch[garbage-True-M\\tscripts/foo.py\\n]"),
+    ),
+    "salvage-fail-open": Mutant(
+        DRIVER,
+        '        except (DriverError, OSError) as exc:\n            self.event("salvage-failed"',
+        '        except ZeroDivisionError as exc:\n            self.event("salvage-failed"',
+        _ids(T_CYCLE, "test_a_salvage_error_is_an_event_and_keeps_the_outcome"),
+    ),
+    "account-limit-graceful": Mutant(
+        DRIVER,
+        "    if status != STATUS_ACCOUNT_LIMIT and gate.may_start:\n",
+        "    if gate.may_start:\n",
+        _ids(T_CYCLE, "test_an_account_limit_on_a_spawn_stops_the_cycle_without_the_breaker[developer]"),
+    ),
+    "ask-unknown-exceeds": Mutant(
+        RULES, 'return exceeds("unclassified")', 'return settled("unclassified")',
+        _ids(T_RULES, "test_every_ask_kind_has_a_class_and_an_unknown_kind_exceeds"),
+    ),
+    "ask-fire-exceeds": Mutant(
+        RULES,
+        'return exceeds("effort-spend" if get("fire_scale", str) == "spend" else "observation:fire_scale")',
+        'return settled("effort-spend")',
+        _ids(T_RULES, "test_effort_fires_backstops_and_ceiling_exceed_the_mandate"),
+    ),
+    "ask-permission-covered": Mutant(
+        RULES, "if not covered:", "if False:",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-missing-field": Mutant(
+        RULES, "if covered is absent:", "if False:",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-repeat-denial": Mutant(
+        RULES, "if denials >= 1:", "if False:",
+        _ids(T_RULES, "test_a_repeated_covered_denial_exceeds"),
+    ),
+    "ask-fire-replans": Mutant(
+        RULES,
+        'return exceeds("effort-replans" if get("fire_scale", str) == "replans" else "observation:fire_scale")',
+        'return settled("effort-replans")',
+        _ids(T_RULES, "test_effort_fires_backstops_and_ceiling_exceed_the_mandate"),
+    ),
+    "ask-since-user-backstop": Mutant(
+        RULES, 'return exceeds("backstop")', 'return settled("backstop")',
+        _ids(T_RULES, "test_effort_fires_backstops_and_ceiling_exceed_the_mandate"),
+    ),
+    "ask-question-for-user": Mutant(
+        RULES,
+        'return exceeds("question-for-user" if get("fire_scale", str, type(None)) is None else "observation:fire_scale")',
+        'return settled("question-for-user")',
+        _ids(T_RULES, "test_questions_norm_mismatch_incomplete_and_user_only_verbs_exceed_the_mandate"),
+    ),
+    "ask-user-only-verb": Mutant(
+        RULES,
+        'return exceeds("observation:user_verb" if verb is absent else "needs-user:" + verb)',
+        'return settled("needs-user")',
+        _ids(T_RULES, "test_questions_norm_mismatch_incomplete_and_user_only_verbs_exceed_the_mandate"),
+    ),
+    "ask-loop-detected": Mutant(
+        RULES, 'return exceeds("loop-detected")', 'return settled("loop-detected")',
+        _ids(T_RULES, "test_questions_norm_mismatch_incomplete_and_user_only_verbs_exceed_the_mandate"),
+    ),
+    "ask-rounds-limit": Mutant(
+        RULES, "under_limit = rounds < rounds_limit", "under_limit = rounds <= rounds_limit",
+        _ids(T_RULES, "test_check_review_bound_and_covered_permission_are_settled_until_the_rounds_limit"),
+    ),
+    "stop-resource-retried": Mutant(
+        RULES,
+        'if reason in ("effort-spend", "effort-wall-clock"):',
+        'if reason in ("effort-wall-clock",):',
+        _ids(T_RULES, "test_stop_disposition_retries_resource_stops_and_declines_authority_stops"),
+    ),
+    "approval-exact-norm": Mutant(
+        RULES, "if plan_text != rendered:", "if False:",
+        _ids(T_RULES, "test_mandate_approval_requires_the_exact_item_norm_and_an_open_gate"),
+    ),
+    "approval-open-gate": Mutant(
+        RULES, 'if not getattr(gate_result, "may_start", False):', "if False:",
+        _ids(T_RULES, "test_mandate_approval_requires_the_exact_item_norm_and_an_open_gate"),
+    ),
+    "item-norm-grants": Mutant(
+        RULES,
+        "f'allow = [\"Bash(python3 -m pytest:*)\", {q(thinker)}]',",
+        "f'allow = [\"Bash(python3 -m pytest:*)\", {q(thinker)}, \"Bash(git push:*)\"]',",
+        _ids(T_RULES, "test_the_item_norm_grants_are_the_fixed_literal"),
+    ),
+    "account-limit-precedence": Mutant(
+        RULES, 'if marker not in (None, "MALFORMED", "CHILD_INFRA_FAILURE"):', "if False:",
+        _ids(T_RULES, "test_a_genuine_marker_outranks_a_rate_limit_record"),
+    ),
+    "account-limit-error-kind": Mutant(
+        RULES,
+        'return last.get("error") == ACCOUNT_LIMIT_ERROR or last.get("apiErrorStatus") == ACCOUNT_LIMIT_STATUS',
+        "return True",
+        _ids(T_RULES, "test_other_api_errors_and_model_text_are_not_an_account_limit"),
+    ),
+    "account-limit-last-record": Mutant(
+        RULES, "last = record", "last = last or record",
+        _ids(T_RULES, "test_other_api_errors_and_model_text_are_not_an_account_limit"),
+    ),
+    "account-limit-api-flag": Mutant(
+        RULES, 'if last.get("isApiErrorMessage") is not True:', "if False:",
+        _ids(T_RULES, "test_other_api_errors_and_model_text_are_not_an_account_limit"),
+    ),
+    "account-limit-infra-marker": Mutant(
+        RULES, '(None, "MALFORMED", "CHILD_INFRA_FAILURE")', '(None, "MALFORMED")',
+        _ids(T_RULES, "test_a_synthetic_rate_limit_record_is_an_account_limit"),
+    ),
+    "nested-cost-counted": Mutant(
+        RULES,
+        'EVENT_COST_KINDS = ("judge-cost", "overrun-charge", "nested-spawn-cost")',
+        'EVENT_COST_KINDS = ("judge-cost", "overrun-charge")',
+        _ids(T_RULES, "test_a_nested_spawn_cost_event_counts_toward_the_mandate_windows"),
+    ),
+    "basis-binds-taken-worktree": Mutant(
+        CLI,
+        '        and (e.get("detail") or {}).get("worktree") == worktree\n',
+        "        and True\n",
+        _ids(T_BASIS, "test_a_mandate_approval_of_a_norm_for_no_taken_item_is_refused"),
+    ),
+    "basis-binds-engine-repo": Mutant(
+        CLI,
+        '    elif os.path.realpath(detail["repo"]) != os.path.realpath(REPO_ROOT):\n',
+        "    elif False:\n",
+        _ids(T_BASIS, "test_a_mandate_approval_outside_the_running_cycles_binding_is_refused[not-engine-repo]"),
+    ),
+    "review-crash-fails-item": Mutant(
+        DRIVER,
+        '            else:\n                row.update(outcome="failed", failure_kind=KIND_SPAWN_ERROR, '
+        'detail=tail(review.stderr or review.stdout))\n            return ""\n        verdicts =',
+        '            else:\n                pass\n            return ""\n        verdicts =',
+        _ids(
+            T_CYCLE,
+            "test_a_reviewer_that_crashed_fails_the_item_and_opens_the_breaker[exit-code]",
+            "test_a_reviewer_that_crashed_fails_the_item_and_opens_the_breaker[no-marker]",
+        ),
+    ),
+    "item-norm-escape": Mutant(
+        RULES, r'out.append("\\\\")', r'out.append("\\")',
+        _ids(T_RULES, "test_hostile_issue_text_cannot_change_the_item_norm_structure"),
+    ),
+    "ask-self-approval-settled": Mutant(
+        RULES, 'return settled("parent-norm")', 'return exceeds("parent-norm")',
+        _ids(T_RULES, "test_check_review_bound_and_covered_permission_are_settled_until_the_rounds_limit"),
+    ),
+    "ask-over-bound-parent-norm": Mutant(
+        RULES, 'if basis is absent or basis == "parent_norm":', "if basis is absent:",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-check-green": Mutant(
+        RULES, 'if get("check_green", bool) is not False:', "if False:",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-landing-waiver": Mutant(
+        RULES, 'if get("landing_waiver", bool) is True else', "if True else",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-resolution-node": Mutant(
+        RULES, 'if get("child_node", str) == "RESOLUTION" else', "if True else",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-acceptance-active": Mutant(
+        RULES, 'if get("acceptance_active", bool) is False else', "if True else",
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "ask-wall-clock-exceeds": Mutant(
+        RULES,
+        'return exceeds("effort-wall-clock" if get("fire_scale", str) == "wall-clock" else "observation:fire_scale")',
+        'return settled("effort-wall-clock")',
+        _ids(T_RULES, "test_effort_fires_backstops_and_ceiling_exceed_the_mandate"),
+    ),
+    "ask-wall-clock-scale": Mutant(
+        RULES, 'get("fire_scale", str) == "wall-clock"', 'get("fire_scale", str) != absent',
+        _ids(T_RULES, "test_a_missing_or_disagreeing_observed_key_exceeds"),
+    ),
+    "stop-limit-mapping": Mutant(
+        RULES, "if reason == ACCOUNT_LIMIT_REASON:", "if False:",
+        _ids(T_RULES, "test_stop_disposition_retries_resource_stops_and_declines_authority_stops"),
+    ),
+    "stop-declined-fallback": Mutant(
+        RULES, 'return "declined", "exceeds-mandate"', 'return "overrun", [reason]',
+        _ids(T_RULES, "test_stop_disposition_retries_resource_stops_and_declines_authority_stops"),
+    ),
+    "item-norm-title-cut": Mutant(
+        RULES, "title = str(title)[:200]", "title = str(title)",
+        _ids(T_RULES, "test_hostile_issue_text_cannot_change_the_item_norm_structure"),
+    ),
+    "item-norm-body-cut": Mutant(
+        RULES, "if len(body) > 2000:", "if False:",
+        _ids(T_RULES, "test_the_item_norm_cuts_a_long_body_below_the_inline_field_limit"),
+    ),
+    "item-norm-body-cut-length": Mutant(
+        RULES, "body = body[:2000] +", "body = body[:2500] +",
+        _ids(T_RULES, "test_hostile_issue_text_cannot_change_the_item_norm_structure"),
+    ),
+    "mandate-id-compared": Mutant(
+        RULES, 'if rest.pop("mandate_id", None) != mandate.id:', 'if rest.pop("mandate_id", None) is None and False:',
+        _ids(T_RULES, "test_mandate_approval_reads_and_strips_the_mandate_id_key"),
     ),
 }
 
@@ -779,7 +1039,7 @@ def run_mutant(name: str) -> int:
     try:
         with tempfile.TemporaryDirectory(prefix="mandate-mutant-") as tmp:
             subject = _copy_subject(Path(tmp))
-            target = subject / mutant.relpath
+            target = anchor_target(subject, mutant.relpath, mutant.anchor)
             source = target.read_text(encoding="utf-8")
             if source.count(mutant.anchor) != 1:
                 print(f"{name}: anchor matched {source.count(mutant.anchor)} times in {mutant.relpath}", file=sys.stderr)

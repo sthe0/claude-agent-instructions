@@ -4,7 +4,7 @@ description: A child process or installed tool that runs with the ambient enviro
 type: reference
 schema: principle/v1
 generality: 2
-induced_from: [2026-08-25-unisolated-judge-subprocess-recursion, 2026-07-01-isolate-tool-config-root-per-root-auth]
+grounded_in: [regularity:a-child-process-reads-its-parents-ambient-root]
 created: 2026-10-21
 last_verified: 2026-10-21
 ---
@@ -13,17 +13,20 @@ last_verified: 2026-10-21
 
 ## Principle
 
-When a process is launched by an agent or installed beside a personal setup, decide its root explicitly: relocate it with the tool's own root variable from one single-source seam, then enumerate what the old root held in files and re-supply it; otherwise the unisolated child recurses or clobbers, and the isolated one silently loses its login. Pair the isolation with an alarm, because a caller that tolerates failure shows neither outcome.
+Because a child process reads its parent's ambient root ([[a-child-process-reads-its-parents-ambient-root]]), for the goal of children that neither recurse nor clobber and keep their login, when a process is launched by an agent or installed beside a personal setup, decide its root explicitly: relocate it with the tool's own root variable from one single-source seam, then enumerate what the old root held in files and re-supply it; otherwise the unisolated child recurses or clobbers, and the isolated one silently loses its login. Pair the isolation with an alarm, because a caller that tolerates failure shows neither outcome.
+
+## Goal class
+
+Child processes and side-by-side installations that neither recurse into nor clobber their parent's setup and keep the credentials they need, with any failure of either kind visible.
 
 ## Generality
 
 Level 2 - a rule for any child process or co-installed tool that reads configuration from an ambient location.
 
-## Induced from
+## Grounded in
 
-- [[2026-08-25-unisolated-judge-subprocess-recursion]] - single-turn judge children loaded the fleet's own hooks and recursed; isolating the config root then severed their file-carried login.
-- [[2026-07-01-isolate-tool-config-root-per-root-auth]] - an install into the shared config dir clobbered a personal config; the fix was a separate root, with authentication being per-root.
+- [[a-child-process-reads-its-parents-ambient-root]] — A child process launched by an agent or installed beside a personal setup reads the parent's ambient configuration root (settings, hooks, credentials) unless relocated; relocated, it loses whatever that root held, including its login.
 
 ## Refutation
 
-Refuted by a case where an unisolated child sharing the parent's root caused neither recursion nor collision, or where relocating a root lost nothing the old root carried. Weak on count (two sources); a third independent isolation case would settle it.
+The principle fails its goal if children relocated from one seam with their root's files re-supplied still recurse, clobber or lose their credentials, or if such a failure stays silent despite the alarm.

@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import review_open_detect  # noqa: E402
 import transcript_read  # noqa: E402
+from lib import hook_telemetry  # noqa: E402
 
 MAX_LISTED = transcript_read.MAX_LISTED
 
@@ -138,4 +139,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-review-mergeable-guardian"))

@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user, 2026-08-27, AskUserQuestion: accepted all 5 requirements and quality=4 for the session in which this was observed"
 created: 2026-08-27
 last_verified: 2026-08-27
-generalized_into: [a-generic-failure-symptom-is-traced-to-its-cause-before-a-remedy-is-applied]
+generalized_into: [a-generic-failure-message-names-a-surface-shared-by-many-causes]
 ---
 
 # A backgrounded `cd DIR && cmd &` sometimes runs against the ORIGINAL session cwd, not the cd-ed one

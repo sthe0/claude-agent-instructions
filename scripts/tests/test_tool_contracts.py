@@ -485,6 +485,81 @@ def test_land_branch_dash_c_resolved_against_venue_not_engine_cwd(tmp_path, monk
     assert "different checkout" in (r.reason or ""), r.reason
 
 
+def test_land_branch_resolver_knows_the_suite_gate_flags(tmp_path):
+    tc = _tool_contracts_module()
+    venue = _land_branch_registry_venue(tmp_path)
+    cmd = ("python3 scripts/land-branch.py --branch feature --keep-branch "
+           "--suite-waiver 'runner down' --suite-timeout 60")
+
+    res = tc.resolve_command(cmd, str(venue.resolve()))
+
+    assert res.status == "resolved", res
+
+
+def _suite_gate_registry_venue(tmp_path):
+    """A venue with `scripts/suite-gate.py` copied verbatim, so its sha256 matches the pinned entry."""
+    venue = tmp_path / "venue"
+    (venue / "scripts").mkdir(parents=True)
+    (venue / ".git").mkdir()
+    real = Path(__file__).resolve().parent.parent / "suite-gate.py"
+    (venue / "scripts" / "suite-gate.py").write_text(real.read_text(encoding="utf-8"), encoding="utf-8")
+    return venue
+
+
+@pytest.mark.parametrize("command", [
+    "python3 scripts/suite-gate.py run",
+    "python3 scripts/suite-gate.py run --remote-sha abc123 --timeout 60",
+    "python3 scripts/suite-gate.py check",
+    "python3 scripts/suite-gate.py waive --sha abc --reason because",
+])
+def test_suite_gate_writing_subcommands_resolve_to_the_common_dir_write(tmp_path, command):
+    tc = _tool_contracts_module()
+    rs = _resources_module()
+    venue = _suite_gate_registry_venue(tmp_path)
+    res = tc.resolve_command(command, str(venue.resolve()))
+    assert res.status == "resolved", (command, res)
+    assert len(res.resources) == 1
+    assert isinstance(res.resources[0], rs.FileResource) and res.resources[0].mode == "write"
+
+
+@pytest.mark.parametrize("command", [
+    "python3 scripts/suite-gate.py show",
+    "python3 scripts/suite-gate.py check --remote-sha abc123",
+    "python3 scripts/suite-gate.py pre-push origin url",
+])
+def test_suite_gate_read_only_subcommands_resolve_to_no_resources(tmp_path, command):
+    tc = _tool_contracts_module()
+    venue = _suite_gate_registry_venue(tmp_path)
+    res = tc.resolve_command(command, str(venue.resolve()))
+    assert res.status == "resolved", (command, res)
+    assert list(res.resources) == []
+
+
+@pytest.mark.parametrize("command", [
+    "python3 scripts/suite-gate.py",
+    "python3 scripts/suite-gate.py land",
+    "python3 scripts/suite-gate.py run --exempt",
+    "python3 scripts/suite-gate.py run --timeout",
+    "python3 scripts/suite-gate.py run -C ..",
+    "python3 scripts/suite-gate.py pre-push a b c",
+])
+def test_suite_gate_outside_the_reviewed_grammar_is_unresolved(tmp_path, command):
+    tc = _tool_contracts_module()
+    venue = _suite_gate_registry_venue(tmp_path)
+    res = tc.resolve_command(command, str(venue.resolve()))
+    assert res.status == "unresolved", (command, res)
+    assert res.reason_class == "contract-unresolved", (command, res)
+
+
+def test_an_edited_suite_gate_script_loses_its_registry_trust(tmp_path):
+    tc = _tool_contracts_module()
+    venue = _suite_gate_registry_venue(tmp_path)
+    script = venue / "scripts" / "suite-gate.py"
+    script.write_text(script.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8")
+    res = tc.resolve_command("python3 scripts/suite-gate.py show", str(venue.resolve()))
+    assert res.status == "unresolved", res
+
+
 def test_pytest_resolves_to_venue_subtree(tmp_path):
     tc = _tool_contracts_module()
     resources = _resources_module()

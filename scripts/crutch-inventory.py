@@ -18,13 +18,14 @@ This script CLASSIFIES NOTHING. It emits candidates and mechanical attributes
 only — domain membership and a same-scope structural signal, never a verdict on
 whether a site is a legitimate structural check or an unguarded semantic one, and
 never a verdict on whether a prose statement is genuine perception or should be
-mechanized. That judgment is scripts/crutch_registry.toml (stage 2), a SEPARATE
+mechanized. That judgment is scripts/gen_crutch_registry.py's partitions, a SEPARATE
 pass over this script's own output — fusing the two would let the judgment hide
 inside the enumerator, which is the exact defect being audited (CLAUDE.md
 preamble, "Separate rule from perception; determinize the rule at its proper
 structural level").
 
-Domain A — CODE SITES (enumerate_code_sites): AST-walk scripts/**/*.py. A "scope"
+Domain A — CODE SITES (enumerate_code_sites): AST-walk scripts/**/*.py except
+scripts/tests/ (test code guards no production behaviour). A "scope"
 is a module or a function/method body, EXCLUDING nested function bodies (each
 nested def is its own scope). A scope becomes a candidate site iff it locally
 constructs a regex (`re.compile`/`search`/`match`/`fullmatch`/`findall`/
@@ -117,8 +118,8 @@ Honest limits (stated so no one over-trusts this):
 
 Usage:
     crutch-inventory.py                 # print the JSONL inventory to stdout
-    crutch-inventory.py --check         # exit 1 if any site lacks a registry
-                                         # disposition, or the registry is stale
+    crutch-inventory.py --check         # exit 1 if two sites share a stable id
+                                         # (live enumeration; no stored file)
 """
 from __future__ import annotations
 
@@ -131,13 +132,17 @@ import os
 import re
 import subprocess
 import sys
-import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
-REGISTRY_PATH = SCRIPTS_DIR / "crutch_registry.toml"
+# Test code exercises the gates under synthetic inputs and guards no production
+# behaviour, so it is outside the enumeration domain (the same exclusion
+# verify-canon-writers.py makes). Enumerating it only turned every test whose
+# name carries a hard-behaviour token (`..._spawn_...`, `..._select_...`) into
+# a registry entry whose verdict was fixed by path, not by judgment.
+TESTS_DIR = SCRIPTS_DIR / "tests"
 
 
 def _clean_git_env() -> dict[str, str]:
@@ -191,11 +196,14 @@ def _list_py_files(root: Path) -> list[Path]:
     """The *.py files under `root`, restricted to the git-tracked set when
     `root` is inside a git checkout so an untracked working-tree file (e.g.
     another session's WIP) never enters the enumeration domain; falls back
-    to a recursive walk when git is unavailable."""
+    to a recursive walk when git is unavailable. This repo's own test tree
+    (TESTS_DIR) is never part of the domain."""
     tracked = _tracked_files(root)
     if tracked is None:
-        return sorted(root.rglob("*.py"))
-    return sorted(p for p in tracked if p.suffix == ".py" and p.is_relative_to(root))
+        files = root.rglob("*.py")
+    else:
+        files = (p for p in tracked if p.suffix == ".py" and p.is_relative_to(root))
+    return sorted(p for p in files if not p.is_relative_to(TESTS_DIR))
 
 
 # --- Domain A: code sites ---------------------------------------------------
@@ -691,7 +699,7 @@ def discover_prose_paths(repo_root: Path) -> list[Path]:
 
 def find_untracked_relevant_files(repo_root: Path) -> list[Path]:
     """Untracked (unstaged, not committed) files under `repo_root` that fall
-    within the enumeration domains: scripts/*.py, CLAUDE.md,
+    within the enumeration domains: scripts/**/*.py except scripts/tests/, CLAUDE.md,
     skills/**/SKILL.md, skills/**/policy.md, memory-global/leaves/**/*.md.
 
     Used by gen_crutch_registry.py to detect the ordering trap: an author
@@ -713,6 +721,7 @@ def find_untracked_relevant_files(repo_root: Path) -> list[Path]:
         return []
 
     scripts_dir = repo_root / "scripts"
+    tests_dir = scripts_dir / "tests"
     skills_dir = repo_root / "skills"
     leaves_dir = repo_root / "memory-global" / "leaves"
     claude_md = repo_root / "CLAUDE.md"
@@ -724,7 +733,7 @@ def find_untracked_relevant_files(repo_root: Path) -> list[Path]:
         p = repo_root / entry
         if p == claude_md:
             result.append(p)
-        elif p.is_relative_to(scripts_dir) and p.suffix == ".py":
+        elif p.is_relative_to(scripts_dir) and p.suffix == ".py" and not p.is_relative_to(tests_dir):
             result.append(p)
         elif p.is_relative_to(skills_dir) and p.name in ("SKILL.md", "policy.md"):
             result.append(p)
@@ -734,15 +743,6 @@ def find_untracked_relevant_files(repo_root: Path) -> list[Path]:
 
 
 # --- Registry check ----------------------------------------------------------
-
-
-def _load_registry(path: Path) -> dict[str, dict]:
-    if not path.exists():
-        return {}
-    with path.open("rb") as fh:
-        data = tomllib.load(fh)
-    entries = data.get("entry", [])
-    return {e["id"]: e for e in entries if isinstance(e, dict) and "id" in e}
 
 
 def _index_by_id(records: list) -> dict[str, object]:
@@ -762,43 +762,24 @@ def _index_by_id(records: list) -> dict[str, object]:
     return index
 
 
-def run_check(root: Path, registry_path: Path) -> int:
+def run_check(root: Path) -> int:
+    """Live self-consistency of the enumeration: every site of both domains
+    gets a distinct stable id. Nothing is compared against a stored file."""
     code_sites = enumerate_code_sites(root)
     file_rollups = enumerate_code_file_rollups(root)
     prose_sites = enumerate_prose_sites(discover_prose_paths(REPO_ROOT))
-    all_sites = _index_by_id([*code_sites, *file_rollups, *prose_sites])
-    registry = _load_registry(registry_path)
-
-    missing = sorted(set(all_sites) - set(registry))
-    stale = sorted(set(registry) - set(all_sites))
-    undispositioned = sorted(
-        eid for eid, e in registry.items()
-        if eid in all_sites and not e.get("disposition")
-    )
-    bad_defer = sorted(
-        eid for eid, e in registry.items()
-        if e.get("disposition") == "defer" and not e.get("reason")
-    )
-
     print(
         f"crutch-inventory --check: {len(code_sites)} code site(s), "
         f"{len(file_rollups)} file-rollup(s), {len(prose_sites)} prose site(s)"
     )
-    print(f"registry: {len(registry)} entrie(s) at {registry_path}")
-    print(f"missing from registry: {len(missing)}")
-    for eid in missing[:20]:
-        print(f"  MISSING {eid}  {all_sites[eid].file}")
-    if len(missing) > 20:
-        print(f"  ... and {len(missing) - 20} more")
-    print(f"stale registry entries (site no longer exists): {len(stale)}")
-    for eid in stale[:20]:
-        print(f"  STALE {eid}")
-    print(f"undispositioned registry entries: {len(undispositioned)}")
-    print(f"defer entries missing a reason: {len(bad_defer)}")
-
-    ok = not (missing or stale or undispositioned or bad_defer)
-    print("crutch-inventory --check: OK" if ok else "crutch-inventory --check: FAIL")
-    return 0 if ok else 1
+    try:
+        _index_by_id([*code_sites, *file_rollups, *prose_sites])
+    except ValueError as exc:
+        print(f"id collision: {exc}")
+        print("crutch-inventory --check: FAIL")
+        return 1
+    print("crutch-inventory --check: OK")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -819,7 +800,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.check:
-        return run_check(args.root, REGISTRY_PATH)
+        return run_check(args.root)
 
     code_sites = enumerate_code_sites(args.root)
     file_rollups = enumerate_code_file_rollups(args.root)

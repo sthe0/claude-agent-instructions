@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """Verify experience leaves carry an explicit user-confirmation quote.
 
-One model, two profiles. This verifier guards the `schema: difficulty/v1`
-leaf — the **generality-0 profile** of a single difficulty-record model
-(a recorded difficulty is a principle at generality level 0). Its sibling
-`verify-leaf-structure.py` guards the **generality>=1 profile**, the
-`schema: principle/v1` leaf under `principles/` (grandfathered there). The two
-schemas are two faces of one continuum keyed by the `generality` field, not
-unrelated types; `leaf/v1` (also handled by verify-leaf-structure.py) is a
-separate, unrelated ordinary-leaf shape. `generality` is accepted but NOT
+This verifier guards the `schema: difficulty/v1` leaf — experience, generality 0.
+Induction lifts experience into a `regularity/v1` leaf (knowledge), and a
+`principle/v1` leaf (a norm) is grounded in regularities via `grounded_in`; both
+are guarded by the sibling `verify-leaf-structure.py`, which also handles
+`leaf/v1`, a separate ordinary-leaf shape. `generality` is accepted but NOT
 required here — its absence implies 0, which is exactly what lets existing
 leaves stay valid without migration (no conditional-required logic).
 
@@ -25,7 +22,7 @@ Rule (CLAUDE.md § On task resolution):
   relying on prose recall.
 
   A difficulty/v1 leaf must also carry `generalized_into: [...]` — the
-  principles that generalize it, `[]` when none does yet; the link's other
+  regularities that generalize it, `[]` when none does yet; the link's other
   side is checked by verify-principle-provenance.py.
 
 Invocation modes:
@@ -60,6 +57,7 @@ import sys
 from pathlib import Path
 
 import memory_dates as md
+from lib import hook_telemetry
 from lib import principle_provenance as pp
 
 EXPERIENCE_PATH_RE = re.compile(r"(^|/)experience/(?!MEMORY\.md$)[^/]+\.md$")
@@ -442,4 +440,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="verify-experience-leaf"))

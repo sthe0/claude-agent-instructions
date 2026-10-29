@@ -80,6 +80,8 @@ class Canon:
         shutil.copy(SCRIPTS_DIR / "lib" / "worktree_route.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "memory_retrieval_ledger.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "instruction_smoke_gate.py", scripts / "lib")
+        shutil.copy(SCRIPTS_DIR / "lib" / "landing_gate.py", scripts / "lib")
+        shutil.copy(SCRIPTS_DIR / "lib" / "suite_gate.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "principle_provenance.py", scripts / "lib")
         (scripts / "lib" / "__init__.py").write_text("")
         (scripts / "lib" / "semantic_join.py").write_text(

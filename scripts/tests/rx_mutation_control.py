@@ -38,6 +38,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
+from cli_module_anchor import anchor_target
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = SCRIPTS_DIR.parent
 GATES = "agentctl/gates.py"
@@ -383,7 +385,7 @@ def run_mutant(name: str) -> int:
     try:
         with tempfile.TemporaryDirectory(prefix="rx-mutant-") as tmp:
             subject = _copy_subject(Path(tmp))
-            target = subject / mutant.relpath
+            target = anchor_target(subject, mutant.relpath, mutant.anchor)
             source = target.read_text(encoding="utf-8")
             if source.count(mutant.anchor) != 1:
                 print(f"{name}: anchor matched {source.count(mutant.anchor)} times in {mutant.relpath}",

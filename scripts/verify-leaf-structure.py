@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Verify non-experience memory leaves have the required structure.
 
-This verifier also guards the `schema: principle/v1` leaf (grandfathered below,
-under `principles/`), which is the **generality>=1 profile** of a single
-difficulty-record model. Its **generality-0 profile** is the
-`schema: difficulty/v1` experience leaf guarded by the sibling
-`verify-experience-leaf.py` — the two schemas are two faces of one continuum
-keyed by the `generality` field, not unrelated types. The `leaf/v1` shape this
-verifier enforces for ordinary reference/feedback leaves is SEPARATE from that
-continuum (an unrelated ordinary-leaf structure), not a point on it.
+This verifier also guards the `schema: regularity/v1` leaf (under `regularities/`,
+the knowledge layer), which must carry non-empty `## Regularity`, `## Generality`,
+`## Refutation` and `## Induced from` sections.
+
+It also guards the `schema: principle/v1` leaf (grandfathered below, under
+`principles/`), the norm layer grounded in regularities via `grounded_in`. The
+chain is experience (`schema: difficulty/v1`, generality 0, guarded by the
+sibling `verify-experience-leaf.py`) -> regularity (`regularity/v1`, induced
+from experience) -> principle. The `leaf/v1` shape this verifier enforces for
+ordinary reference/feedback leaves is SEPARATE from that chain (an unrelated
+ordinary-leaf structure).
 
 Rules:
   1. Leaves with `schema: leaf/v1` in frontmatter must contain all three
@@ -45,6 +48,7 @@ import sys
 from pathlib import Path
 
 import memory_dates as md
+from lib import hook_telemetry
 
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 SCHEMA_RE = re.compile(r"^schema\s*:\s*(.*?)\s*$", re.MULTILINE)
@@ -66,6 +70,18 @@ BODY_MARKER_RE = re.compile(r"^>\s*\*\*(Difficulty|Затруднение)\b", r
 H1_RE = re.compile(r"^#\s", re.MULTILINE)
 SECTION_RE = re.compile(r"^##\s", re.MULTILINE)
 DEVELOPED_MIN_LINES = 10
+
+
+REGULARITY_SECTIONS = ("Regularity", "Generality", "Refutation", "Induced from")
+
+
+def _section_text(body: str, name: str) -> str | None:
+    m = re.search(rf"^##[ \t]+{re.escape(name)}[ \t]*$", body, re.MULTILINE)
+    if m is None:
+        return None
+    rest = body[m.end():]
+    nxt = SECTION_RE.search(rest)
+    return rest[:nxt.start()] if nxt else rest
 
 
 def is_leaf(path: str) -> bool:
@@ -108,6 +124,14 @@ def check_content(content: str, path: str = "") -> str | None:
         if missing:
             return ("schema:leaf/v1 leaf missing required section(s): "
                     + ", ".join(missing))
+        return None
+
+    if "regularity/v1" in schema:
+        missing = [name for name in REGULARITY_SECTIONS
+                   if not (_section_text(body, name) or "").strip()]
+        if missing:
+            return ("schema:regularity/v1 leaf missing or empty section(s): "
+                    + ", ".join(f"## {n}" for n in missing))
         return None
 
     # Grandfathered — no schema: leaf/v1
@@ -284,4 +308,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="verify-leaf-structure"))

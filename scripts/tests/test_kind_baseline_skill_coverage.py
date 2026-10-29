@@ -69,7 +69,7 @@ _KIND_FILES: dict[str, tuple[str, ...]] = {
         "skills/specializations/planner/policy.md",
     ),
     "tech-writer": ("skills/specializations/tech-writer/SKILL.md",),
-    "memory-curator": ("skills/specializations/memory-curator/SKILL.md",),
+    "curator": ("skills/specializations/curator/SKILL.md",),
 }
 
 # (kind, span) -> one-line reason. Every entry here is a span the regex would flag
@@ -84,6 +84,14 @@ _EXEMPT: dict[tuple[str, str], str] = {
     ("developer", "git -C <worktree> commit …"): (
         "illustrative placeholder shape (<worktree> + trailing ellipsis) showing which "
         "flag to use, not a literal invocation"
+    ),
+    ("curator", "python3 scripts/lint-prose-length.py"): (
+        "instructions-mode command: that mode runs inline in the root, not in the spawned "
+        "memory-only kind"
+    ),
+    ("curator", "python3 scripts/verify-all.py"): (
+        "instructions-mode command: that mode runs inline in the root, not in the spawned "
+        "memory-only kind"
     ),
     (
         "planner",

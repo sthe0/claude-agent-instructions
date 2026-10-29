@@ -28,6 +28,8 @@ import re
 import sys
 from pathlib import Path
 
+from lib import hook_telemetry
+
 THRESHOLD = 3
 
 NOISE_RE = re.compile(r"\s*(;\s*(exit\s+0|true|:)\s*)+$")
@@ -150,4 +152,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-retry-detector"))

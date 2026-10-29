@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Verify the experience <-> principle provenance links of the global memory corpus.
+"""Verify the experience <-> regularity provenance links of the global memory corpus.
 
 Every difficulty/v1 leaf and every case carries `generalized_into: [...]`; every
-principle's `induced_from` mirrors those links, names only existing leaves, has
+regularity's `induced_from` mirrors those links, names only existing leaves, has
 an experience or case source or a `rule_derived:` reason, and its
-`principles/MEMORY.md` pointer lists the same sources. Cases carry the four
-case sections, a well-formed `source_digest`, `origin_tier: project` and a citing
-principle. The rules live in `lib/principle_provenance.py`; the project-side
-checks (orphan, stale and leaking cases) run through
+`regularities/MEMORY.md` pointer lists the same sources. Every global principle
+names existing regularities in `grounded_in: [regularity:<slug>, ...]`, has no
+`induced_from`, and its `principles/MEMORY.md` pointer lists the same slugs. Cases
+carry the four case sections, a well-formed `source_digest`, `origin_tier: project`
+and a citing regularity. The rules live in `lib/principle_provenance.py`; the
+project-side checks (orphan, stale and leaking cases) run through
 `record-experience.py provenance --project-dir D --check`.
 
---staged: run only when a staged path lies under experience/ or principles/,
+--staged: run only when a staged path lies under experience/, regularities/ or principles/,
 then check the whole corpus as the git index holds it (a link has two sides, so
 a one-file check misses the side that was not staged; an unstaged edit or an
 untracked file is not part of the commit and is not read). Exit 1 on any finding.
@@ -64,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.staged and not pp.staged_triggers(_staged_paths(args.root)):
-        print(f"{NAME}: OK — no staged experience or principle leaf")
+        print(f"{NAME}: OK — no staged experience, regularity or principle leaf")
         return 0
     leaves = args.root / pp.LEAVES_REL
     if not leaves.is_dir():

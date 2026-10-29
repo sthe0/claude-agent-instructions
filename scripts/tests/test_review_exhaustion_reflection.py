@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, effort, gates, task_accumulator
+from agentctl import cli, cli_common, effort, gates, task_accumulator
 from agentctl.config import Thresholds
 from agentctl.state import (
     Critique, Declaration, Difficulty, Investigation, Normalization, PlanReview, SessionState,
@@ -687,6 +687,7 @@ def test_backstop_crossing_refused_for_a_session_with_no_user_approved_version(e
     # `parent_norm` order, which needs an adopted parent handoff; the ledger lookup is what
     # that session differs by.
     monkeypatch.setattr(cli, "_ledgered_order_key", lambda state: None)
+    monkeypatch.setattr(cli_common, "_ledgered_order_key", lambda state: None)
     d = agent_override(eng, "o1", plan)
     assert d["ok"] is False
     assert "no user-approved version of the order" in d["detail"], f"BEHAVIOUR: {d['detail']}"
@@ -872,6 +873,7 @@ def sentinel_predicate(monkeypatch):
         return "SENTINEL-REFUSAL"
 
     monkeypatch.setattr(cli, "_agent_self_decision_refusal", refuse)
+    monkeypatch.setattr(cli_common, "_agent_self_decision_refusal", refuse)
     return calls
 
 

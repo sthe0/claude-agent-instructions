@@ -7,7 +7,7 @@ self-friction, at what threshold — that used to live only as a forgettable
 "notice when..." directive. This script determinizes that rule part; the
 PERCEPTION part (is a flagged item worth re-norming, and how) stays the
 model's, surfaced as a normal difficulty declaration once this scanner's
-worklist reaches a session (see reflexive-exit-is-base-activity-figure.md —
+worklist reaches a session (see plan-activity-ontology.md —
 material = the norm; this scanner supplies the "actual" half of that
 material/result comparison).
 
@@ -42,14 +42,15 @@ Read-only, mechanical scans over the agent's OWN functional elements:
                         context-count cap, both derived from the corpus's own
                         log-scale far-out fence (docs/operations/
                         memory-leaf-size-calibration.json); the action it names
-                        is the memory-curator split.
-  crutch-defer-overdue  a scripts/crutch_registry.toml entry disposed "defer"
-                        that has gone unreviewed past a horizon, keyed to that
-                        entry's own deferred_since date (an authored literal —
-                        see gen_crutch_registry.py's CLAUDE_MD_OVERRIDES).
-  crutch-registry-drift  the count of code sites verify-semantic-gates.py's
-                        own condition (a) finds unregistered has risen since
-                        the last scan (tracked in a small history file).
+                        is the curator split (memory mode).
+  crutch-defer-overdue  a gen_crutch_registry.py CLAUDE_MD_OVERRIDES entry
+                        disposed "defer" that has gone unreviewed past a
+                        horizon, keyed to that entry's own deferred_since date
+                        (an authored literal), computed live.
+  crutch-registry-drift  the count of semantic-unguarded hard sinks
+                        verify-semantic-gates.py finds on the live tree has
+                        risen since the last scan (tracked in a small history
+                        file).
   writer-gate-unresolved
                         the published-text writer gate failed open on a
                         publication whose body it could not resolve, within a
@@ -77,6 +78,7 @@ memory content) — see that function's own docstring.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -113,7 +115,7 @@ WRITER_GATE_ADVISORY_WINDOW_DAYS = 7
 OVERSIZED_LEAF_DEFAULT_MAX_BYTES = 74000
 OVERSIZED_LEAF_DEFAULT_CONTEXTS_MULTIPLE = 27
 PRINCIPLE_PROMOTION_DEFAULT = 3
-OVERSIZED_LEAF_ACTION = "action: memory-curator split"
+OVERSIZED_LEAF_ACTION = "action: curator split"
 
 _LINK_RE = re.compile(r"\]\(([^)]+)\)")
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
@@ -560,9 +562,8 @@ def scan_ceiling_proximity(repo_root: Path) -> "list[Difficulty]":
 
 
 # Each "defer" entry carries its own deferred_since (an authored-literal
-# YYYY-MM-DD date in gen_crutch_registry.py's CLAUDE_MD_OVERRIDES, never
-# computed at generation time) so the horizon below is keyed per-entry, not
-# to the registry file's own mtime — which any unrelated tree change resets.
+# YYYY-MM-DD date in gen_crutch_registry.py's CLAUDE_MD_OVERRIDES) so the
+# horizon below is keyed per-entry, not to any file's mtime.
 CRUTCH_DEFER_HORIZON_DAYS = 90
 CRUTCH_REGISTRY_HISTORY_PATH = Path.home() / ".local" / "state" / "claude-crutch-registry-history.json"
 
@@ -600,19 +601,51 @@ def _parse_deferred_since(value) -> "float | None":
         return None
 
 
+def _load_claude_md_deferrals(repo_root: Path) -> "dict[str, dict]":
+    """The "defer" entries of gen_crutch_registry.py's CLAUDE_MD_OVERRIDES,
+    keyed by a short hash of the sentence. Fail-open: a missing or broken
+    generator yields {}, never an exception."""
+    path = repo_root / "scripts" / "gen_crutch_registry.py"
+    if not path.is_file():
+        return {}
+    try:
+        scripts_dir = str(path.parent)
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        spec = importlib.util.spec_from_file_location("self_diagnose_gen_crutch_registry", path)
+        if spec is None or spec.loader is None:
+            return {}
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        deferrals = {}
+        for sentence, override in mod.CLAUDE_MD_OVERRIDES.items():
+            if override[1] != "defer":
+                continue
+            deferrals[hashlib.sha256(sentence.encode("utf-8")).hexdigest()[:16]] = {
+                "file": "CLAUDE.md",
+                "ground": override[2],
+                "deferred_since": override[4] if len(override) == 5 else None,
+            }
+        return deferrals
+    except Exception:
+        return {}
+
+
 def scan_crutch_regressions(
     repo_root: Path,
     history_path: "Path | None" = None,
     defer_horizon_days: int = CRUTCH_DEFER_HORIZON_DAYS,
 ) -> "list[Difficulty]":
-    """Advisory-only: scripts/crutch_registry.toml entries deferred past a
-    review horizon, and a rising trend in verify-semantic-gates.py's own
-    condition (a) (code sites with no registry entry at all).
+    """Advisory-only: crutch deferrals past a review horizon, and a rising
+    count of verify-semantic-gates.py's semantic-unguarded hard sinks.
 
-    Reuses verify-semantic-gates.py's find_regressions (never re-derives its
-    AST logic here) — this scanner only reads the registry's own disposition
-    field and tracks a small persisted count, mirroring the rest of this
-    module's "mechanize the rule part, never re-derive it elsewhere" norm.
+    Computed from the live tree, nothing stored: the deferrals are
+    gen_crutch_registry.py's CLAUDE_MD_OVERRIDES entries disposed "defer",
+    each keyed to its own deferred_since; the sink count is verify-semantic-
+    gates.py's find_unguarded_hard_sinks (never re-deriving its AST logic
+    here), tracked in a small persisted count. A scripts/crutch_registry.toml
+    left in the checkout is never read.
 
     Deliberate, narrow exception to this module's "never edits anything"
     invariant (see module docstring): history_path is external runtime
@@ -621,22 +654,12 @@ def scan_crutch_regressions(
     meant to leave untouched. Fail-open: any I/O/parse/import error yields [].
     """
     out: "list[Difficulty]" = []
-    registry_path = repo_root / "scripts" / "crutch_registry.toml"
-    if not registry_path.is_file():
-        return out
     vsg = _load_verify_semantic_gates(repo_root)
     if vsg is None:
         return out
-    try:
-        inv = vsg._load_inventory_module()
-        registry = inv._load_registry(registry_path)
-    except Exception:
-        return out
 
     now = time.time()
-    for eid, entry in sorted(registry.items()):
-        if entry.get("disposition") != "defer":
-            continue
+    for eid, entry in sorted(_load_claude_md_deferrals(repo_root).items()):
         since_epoch = _parse_deferred_since(entry.get("deferred_since"))
         if since_epoch is None:
             continue
@@ -647,14 +670,16 @@ def scan_crutch_regressions(
         out.append(
             Difficulty(
                 "crutch-defer-overdue",
-                f"scripts/crutch_registry.toml#{eid}",
+                f"CLAUDE.md#{eid}",
                 f"deferred entry ({entry.get('file', '?')}) unreviewed for >= {defer_horizon_days}d "
                 f"(deferred_since {entry.get('deferred_since')}, {age_days:.0f}d ago); ground: {ground}",
             )
         )
 
     try:
-        missing, _stale, _reverted, _all_code = vsg.find_regressions(inv, repo_root / "scripts", registry_path)
+        inv = vsg._load_inventory_module()
+        unguarded, _all_code = vsg.find_unguarded_hard_sinks(inv, repo_root / "scripts")
+        missing = unguarded
     except Exception:
         return out
 
@@ -671,8 +696,8 @@ def scan_crutch_regressions(
         out.append(
             Difficulty(
                 "crutch-registry-drift",
-                "scripts/crutch_registry.toml",
-                f"unregistered code sites (condition a) rose from {prev_count} to {current_count}",
+                "scripts/verify-semantic-gates.py",
+                f"semantic-unguarded hard sinks rose from {prev_count} to {current_count}",
             )
         )
 

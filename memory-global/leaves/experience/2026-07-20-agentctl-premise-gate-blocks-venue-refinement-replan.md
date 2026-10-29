@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user (Fedor Solovyev)"
 refs: [2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-09-gate-must-execute-what-it-attests, 2026-07-03-engine-replan-artifact-discipline]
 created: 2026-07-20
 last_verified: 2026-10-01
-generalized_into: [renorming-at-principle-level-sweeps-the-class]
+generalized_into: [a-fix-at-the-failing-site-leaves-siblings-of-the-same-form]
 ---
 
 # Premise gate blocks a verify_command-venue refinement replan — nudge plan_path + re-enumerate

@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user (inherited from parent 2026-06-29-org-portab
 refs: [2026-06-29-org-portable-core-internal-coupling-opt-in.md, 2026-06-29-resume-paused-task-isolated-worktree-pinned-sha.md]
 created: 2026-06-30
 last_verified: 2026-10-25
-generalized_into: [shared-resource-health-asserted-relative-to-a-pinned-base]
+generalized_into: [a-shared-resource-moves-under-others-action]
 ---
 
 # Diagnose ownership before treating a shared-tree red suite as your own regression

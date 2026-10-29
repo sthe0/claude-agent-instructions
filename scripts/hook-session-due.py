@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SessionStart hook: run the periodic due checks and surface what each finds.
 
-Nine standing checks used to be nine SessionStart hooks — instruction-grooming
+Nine standing checks used to be nine SessionStart hooks — curator
 offer, self-diagnose, phase3 readiness, promote-scan, policy-scorecard ledger
 refresh, budget calibration, sigma sentinel, improvement-scan count and
 judge-ceiling drift — so every session start launched nine interpreters and the
@@ -36,6 +36,7 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
+from lib import hook_telemetry  # noqa: E402
 
 try:
     import self_diagnose_store as store
@@ -43,7 +44,7 @@ except Exception:
     store = None
 
 DUE_INTERVALS_S = {
-    "claude-instruction-grooming.stamp.json": 7 * 86400,
+    "claude-curator.stamp.json": 7 * 86400,
     "claude-self-diagnose.stamp": 24 * 3600,
     "claude-phase3-due.stamp": 7 * 86400,
     "claude-promote-scan.stamp": 7 * 86400,
@@ -188,8 +189,8 @@ def check_grooming(run: Run, stamp: str) -> None:
             pass
     parts = [f"{f} ({pct}% of ceiling)" for f, pct in due]
     print(
-        "[instruction-grooming] " + ", ".join(parts) + " past the WARN threshold. "
-        "OFFER the `instruction-grooming` skill to the user via AskUserQuestion before "
+        "[curator] " + ", ".join(parts) + " past the WARN threshold. "
+        "OFFER the `curator` skill (instructions mode) to the user via AskUserQuestion before "
         "running it — grooming edits still go through the normal plan-approval spine."
     )
 
@@ -328,8 +329,8 @@ def report_promote(scan: dict) -> None:
     if not flagged:
         return
     err(
-        f"promote-scan: {len(flagged)} principle-induction candidate(s) at or above "
-        "principle-promotion-threshold — lift each into a principle/v1 leaf via "
+        f"promote-scan: {len(flagged)} regularity-induction candidate(s) at or above "
+        "principle-promotion-threshold — lift each into a regularity/v1 leaf via "
         "`scripts/record-experience.py promote-scan` (config.md § principle-promotion-threshold)."
     )
     for cluster in flagged[:MAX_PRINTED_LINES]:
@@ -449,7 +450,7 @@ CHECKS = [
     ("claude-sigma-sentinel.stamp", check_sigma_sentinel),
     ("claude-improvement-scan.stamp", check_improvement_scan),
     ("claude-policy-scorecard.stamp", check_policy_scorecard),
-    ("claude-instruction-grooming.stamp.json", check_grooming),
+    ("claude-curator.stamp.json", check_grooming),
     ("claude-budget-calibration.stamp", check_budget_calibration),
     ("claude-judge-ceiling-drift.stamp", check_judge_ceiling_drift),
     ("claude-phase3-due.stamp", check_phase3),
@@ -476,4 +477,4 @@ def main(argv: "list[str] | None" = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-session-due"))

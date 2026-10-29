@@ -86,11 +86,26 @@ def harness_sessions_driving(engine_session: str) -> list[str]:
     if not engine_session:
         return []
     engine = config_root.sanitize_session_id(engine_session)
+    return [p.stem for p in binding_paths() if any(e["session"] == engine for e in _read(p))]
+
+
+def binding_paths() -> list[Path]:
+    """Every binding file, sorted by name: the files share one directory, so this is path order
+    without comparing thousands of path objects."""
     try:
-        paths = sorted(_bindings_dir().glob("*.json"))
+        return sorted(_bindings_dir().glob("*.json"), key=lambda path: path.name)
     except OSError:
         return []
-    return [p.stem for p in paths if any(e["session"] == engine for e in _read(p))]
+
+
+def harness_index() -> dict[str, list[str]]:
+    """``harness_sessions_driving`` for every engine session at once, from one pass over the
+    binding files: a reader of many tasks scans the store once rather than once per task."""
+    index: dict[str, list[str]] = {}
+    for path in binding_paths():
+        for engine in dict.fromkeys(e["session"] for e in _read(path)):
+            index.setdefault(engine, []).append(path.stem)
+    return index
 
 
 def _is_linked_child(session: str) -> bool:

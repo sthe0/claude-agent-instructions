@@ -6,7 +6,7 @@ that counts exactly one log line per gate evaluation across a realistic session
 import json
 from argparse import Namespace
 
-from agentctl import cli
+from agentctl import cli, cli_common
 from agentctl.state import Node, StageStatus
 from conftest import STAGE_OBSERVATIONS
 
@@ -53,6 +53,7 @@ def _to_executing_stage1(store, sid, plan):
 def test_log_gate_appends_expected_shape(store, monkeypatch, tmp_path):
     log_path = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(cli, "GATE_LOG", log_path)
+    monkeypatch.setattr(cli_common, "GATE_LOG", log_path)
     _start(store, "s1")
     state = store.load("s1")
 
@@ -72,6 +73,7 @@ def test_log_gate_appends_expected_shape(store, monkeypatch, tmp_path):
 def test_log_gate_appends_one_line_per_call(store, monkeypatch, tmp_path):
     log_path = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(cli, "GATE_LOG", log_path)
+    monkeypatch.setattr(cli_common, "GATE_LOG", log_path)
     _start(store, "s2")
     state = store.load("s2")
 
@@ -91,6 +93,7 @@ def test_log_gate_fails_open_on_unwritable_path(store, monkeypatch, tmp_path):
     blocker_file = tmp_path / "not-a-dir"
     blocker_file.write_text("occupied", encoding="utf-8")
     monkeypatch.setattr(cli, "GATE_LOG", blocker_file / "gate-log.jsonl")
+    monkeypatch.setattr(cli_common, "GATE_LOG", blocker_file / "gate-log.jsonl")
     _start(store, "s3")
     state = store.load("s3")
 
@@ -107,6 +110,7 @@ def test_walkthrough_logs_one_event_per_gate_evaluation(store, monkeypatch, tmp_
     resolution, which is evaluated twice: once at verify-final, once at resolve)."""
     log_path = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(cli, "GATE_LOG", log_path)
+    monkeypatch.setattr(cli_common, "GATE_LOG", log_path)
     plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     sid = "w1"
     _to_executing_stage1(store, sid, plan)
@@ -133,8 +137,10 @@ def test_walkthrough_logs_one_event_per_gate_evaluation(store, monkeypatch, tmp_
     # Stage 7 (item C) adds an "effort_fire" precondition check ahead of
     # cmd_submit_plan (inside _to_executing_stage1) — one more evaluation than
     # before, passing (no fire recorded in this walkthrough).
-    assert gates_fired == ["effort_fire", "plan_approval", "resolution", "resolution"]
-    assert [r["passed"] for r in rows] == [True, True, True, True]
+    # verify-final now logs renorm_final and escalation_orphans on every evaluation.
+    assert gates_fired == ["effort_fire", "plan_approval", "renorm_final", "escalation_orphans",
+                           "resolution", "resolution"]
+    assert [r["passed"] for r in rows] == [True] * 6
     assert store.load(sid).node == Node.RESOLVED.value
 
 
@@ -144,6 +150,7 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     difficulty_blockers evaluation plus one replan_coverage evaluation."""
     log_path = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(cli, "GATE_LOG", log_path)
+    monkeypatch.setattr(cli_common, "GATE_LOG", log_path)
     plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     sid = "w2"
@@ -195,7 +202,7 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
                            "diagnosing_replan",
                            "normalization_blockers",
                            "failure_address_blockers", "plan_review",
-                           "replan_authorization",
+                           "frozen_stage", "replan_authorization",
                            "normative_edit", "renorm_retention",
                            "plan_approval_plugin", "replan_coverage"]
     assert rows[0]["passed"] is True   # effort_fire: no fire yet, submit_plan

@@ -5,7 +5,7 @@ type: reference
 schema: case/v1
 origin_tier: project
 source_digest: sha256:4e4c40a1a6d6df43cb29e29b960a7087bed72390a808f2d85f94f8091c890e4e
-generalized_into: [verdict-covers-the-evidence-domain-it-claims]
+generalized_into: [a-probe-observes-only-the-domain-it-reads]
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

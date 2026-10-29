@@ -40,6 +40,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 GITHOOKS_DIR = SCRIPTS_DIR.parent / "githooks"
 LIB = "scripts/lib/instruction_smoke_gate.py"
+SHARED = "scripts/lib/landing_gate.py"
 HOOK = "githooks/pre-push"
 LAND = "scripts/land-branch.py"
 TESTS = "tests/test_instruction_smoke_gate.py"
@@ -88,7 +89,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids("test_waiver_never_covers_an_unavailable_static_or_canon_check"),
     ),
     "base-binding": Mutant(
-        LIB,
+        SHARED,
         '    if record.get("base_sha") != live_remote_sha:',
         "    if False:",
         _ids(
@@ -97,7 +98,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         ),
     ),
     "sha-binding": Mutant(
-        LIB,
+        SHARED,
         '    if record.get("candidate_sha") != candidate_sha:',
         "    if False:",
         _ids(
@@ -106,7 +107,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         ),
     ),
     "sandbox-binding": Mutant(
-        LIB,
+        SHARED,
         '    if record.get("sandbox_core_sha") != candidate_sha:',
         "    if False:",
         _ids("test_a_sandbox_built_from_another_commit_is_refused"),
@@ -133,26 +134,27 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids("test_a_traversal_out_of_an_exempt_directory_is_surface"),
     ),
     "rename-detect": Mutant(
-        LIB,
+        SHARED,
         '"diff-tree", "-r", "--no-renames", "-z"',
         '"diff-tree", "-r", "-M", "-z"',
         _ids("test_changed_paths_lists_both_sides_of_a_rename"),
     ),
     "prepush-wired": Mutant(
         HOOK,
-        'exec python3 "$HERE/../scripts/instruction-smoke-gate.py" pre-push "$@"',
-        "exit 0",
+        'printf \'%s\\n\' "$STDIN" | python3 "$HERE/../scripts/instruction-smoke-gate.py" pre-push "$@" || smoke=$?',
+        "smoke=0",
         _ids("test_git_push_runs_the_hook_and_a_recorded_candidate_lands"),
     ),
     "land-gate-wired": Mutant(
         LAND,
-        "    refusal, smoke_line, remote_tip = _smoke_gate(repo_root, assessment, smoke_timeout, smoke_waiver, runner, smoke_model)",
-        '    refusal, smoke_line, remote_tip = None, "SMOKE: not required (diff touches only exempt paths)", None',
+        "        refusal, smoke_line = _smoke_gate(\n"
+        "            repo_root, assessment, remote_tip, smoke_timeout, smoke_waiver, runner, smoke_model\n"
+        "        )",
+        '        refusal, smoke_line = None, "SMOKE: not required (diff touches only exempt paths)"',
         _ids(
             "test_a_surface_diff_runs_the_smoke_and_lands_on_pass",
             "test_a_failing_smoke_refuses_and_pushes_nothing",
             "test_an_unavailable_live_launch_needs_a_waiver_to_land",
-            "test_a_remote_tip_the_branch_lacks_is_refused_before_any_launch",
             module=LAND_TESTS,
         ),
     ),
@@ -254,7 +256,11 @@ def run_control() -> int:
         if early is not None:
             print(f"control: {description}", file=sys.stderr)
             return CONTROL_RED
-        return 0 if all(s == "passed" for s in description.split(",")) else CONTROL_RED
+        red = [node for node, s in zip(ids, description.split(",")) if s != "passed"]
+        if red:
+            print("control: not green on the unmutated tree: " + ", ".join(red), file=sys.stderr)
+            return CONTROL_RED
+        return 0
 
 
 def main(argv: "list[str] | None" = None) -> int:

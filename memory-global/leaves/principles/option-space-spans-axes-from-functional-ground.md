@@ -4,7 +4,7 @@ description: A complete option space for a design question spans orthogonal axes
 type: reference
 schema: principle/v1
 generality: 3
-induced_from: [coordinator-pitfalls, 2026-06-26-critique-primitive-unifies-conflict-and-principle]
+grounded_in: [regularity:options-recalled-from-known-mechanisms-cluster-on-known-axes]
 created: 2026-06-26
 last_verified: 2026-06-26
 ---
@@ -13,12 +13,11 @@ last_verified: 2026-06-26
 
 ## Principle
 
-To present a complete set of options for a design/architecture question, **span orthogonal axes** —
-passive-mechanism vs active-agent, batch-accumulation vs per-item, mechanical-precedence vs
-synthesized-invariant — and **generate the options from the difficulty's functional ground**, not by
-reciting the mechanisms you already know. Then ask whether an **induced invariant subsumes** the
-competing options (dialectical synthesis) rather than leaving a flat catalogue. The system's
-functional-ground ontology is itself an option-*generator*, not merely a justification check.
+Because options recalled from known mechanisms cluster on known axes ([[options-recalled-from-known-mechanisms-cluster-on-known-axes]]), for the goal of an option set that contains the right choice, **span orthogonal axes** — passive-mechanism vs active-agent, batch-accumulation vs per-item, mechanical-precedence vs synthesized-invariant — and **generate the options from the difficulty's functional ground**, not by reciting the mechanisms you already know. Then ask whether an **induced invariant subsumes** the competing options (dialectical synthesis) rather than leaving a flat catalogue. The system's functional-ground ontology is itself an option-*generator*, not merely a justification check.
+
+## Goal class
+
+Presenting a decision-maker with an option set for a design or architecture question that contains the option they would choose with full knowledge, so the choice is made among real alternatives rather than within one familiar region.
 
 ## Generality
 
@@ -26,20 +25,13 @@ Level 3 — cross-domain. It applies to any enumeration under uncertainty (archi
 hypotheses, resolution menus). The same move — restate the ground, span the axes, ask what subsumes —
 recurs whenever an agent risks anchoring on the loudest or most familiar candidate.
 
-## Induced from
+## Grounded in
 
-- [[coordinator-pitfalls]] — "Enumerated variants … from the familiar passive-mechanism catalog only …
-  omitting active-agent variants and the cadence axis."
-- [[2026-06-26-critique-primitive-unifies-conflict-and-principle]] — the consensus-architecture task
-  where the passive-only option set was corrected; the unlock was deriving options from the one
-  critique primitive (commonality/difference) instead of a mechanism list.
+- [[options-recalled-from-known-mechanisms-cluster-on-known-axes]] — An option set produced by recalling mechanisms one already knows varies along the axes those mechanisms already occupy and misses options on axes no recalled mechanism sits on.
 
 ## Refutation
 
-If a design question is found where the axes are genuinely not orthogonal (one axis fully determines
-the others, so spanning them produces redundant rather than distinct options), the "always span
-orthogonal axes" form over-generates and must be tempered to "span the axes that remain free after the
-ground fixes the rest."
+The principle fails its goal if option sets built by spanning axes from the functional ground miss the eventually chosen option as often as recalled-mechanism sets do, or if the decision-maker repeatedly picks an option outside the presented set.
 
 ## See also
 

@@ -1,4 +1,4 @@
-"""The memory-curator kind gets Edit rights on the memory roots of its workdir and
+"""The curator kind gets Edit rights on the memory roots of its workdir and
 nothing else, and its Bash baseline can read and run the split subcommands but
 cannot commit, fetch, rebase, push or write through a general-purpose verb."""
 from __future__ import annotations
@@ -34,10 +34,10 @@ def _edit_rules(settings: dict) -> list[str]:
     return [r for r in allow if r.startswith(("Edit(", "Write("))]
 
 
-def test_memory_curator_write_scope_(tmp_path):
+def test_curator_write_scope_(tmp_path):
     worktree = _worktree(tmp_path, project_memory=True)
-    rules = _edit_rules(MOD.build_child_settings("memory-curator", workdir=str(worktree)))
-    assert rules, "memory-curator received no Edit rule"
+    rules = _edit_rules(MOD.build_child_settings("curator", workdir=str(worktree)))
+    assert rules, "curator received no Edit rule"
     roots = (f"/{worktree}/memory-global/", f"/{worktree}/.claude/agent-memory/")
     for rule in rules:
         assert rule.startswith("Edit(") and rule.endswith("/**)"), rule
@@ -45,13 +45,13 @@ def test_memory_curator_write_scope_(tmp_path):
     assert len(rules) == 2
 
 
-def test_memory_curator_write_scope_follows_the_roots_that_exist(tmp_path):
+def test_curator_write_scope_follows_the_roots_that_exist(tmp_path):
     worktree = _worktree(tmp_path)
-    rules = _edit_rules(MOD.build_child_settings("memory-curator", workdir=str(worktree)))
+    rules = _edit_rules(MOD.build_child_settings("curator", workdir=str(worktree)))
     assert rules == [f"Edit(/{worktree}/memory-global/**)"]
 
 
-def test_memory_curator_write_scope_is_not_granted_to_other_kinds(tmp_path):
+def test_curator_write_scope_is_not_granted_to_other_kinds(tmp_path):
     worktree = _worktree(tmp_path, project_memory=True)
     for kind in ("developer", "thinker", "code-reviewer", "tech-writer", "planner", "default"):
         settings = MOD.build_child_settings(kind, workdir=str(worktree))
@@ -59,8 +59,8 @@ def test_memory_curator_write_scope_is_not_granted_to_other_kinds(tmp_path):
         assert not leaked, f"{kind} received memory write rules: {leaked}"
 
 
-def test_memory_curator_without_workdir_gets_no_edit_rule():
-    assert not _edit_rules(MOD.build_child_settings("memory-curator"))
+def test_curator_without_workdir_gets_no_edit_rule():
+    assert not _edit_rules(MOD.build_child_settings("curator"))
 
 
 def _script(name: str) -> list[str]:
@@ -90,8 +90,8 @@ _WRITING_COMMANDS = re.compile(
 )
 
 
-def test_memory_curator_baseline_has_no_commit_():
-    baseline = set(MOD.KIND_BASELINES["memory-curator"])
+def test_curator_baseline_has_no_commit_():
+    baseline = set(MOD.KIND_BASELINES["curator"])
     assert baseline <= _EXPECTED_BASH, f"unexpected rules: {sorted(baseline - _EXPECTED_BASH)}"
     for rule in baseline:
         assert rule.startswith("Bash("), rule
@@ -101,7 +101,7 @@ def test_memory_curator_baseline_has_no_commit_():
         assert not any(rule.startswith(f"Bash({forbidden}") for rule in baseline)
 
 
-def test_memory_curator_baseline_names_every_split_subcommand():
-    baseline = set(MOD.KIND_BASELINES["memory-curator"])
+def test_curator_baseline_names_every_split_subcommand():
+    baseline = set(MOD.KIND_BASELINES["curator"])
     for sub in ("split-contexts", "split-apply", "split-verify", "promote", "search"):
         assert f"Bash(python3 {SCRIPTS}/record-experience.py {sub}:*)" in baseline

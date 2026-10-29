@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "fedor.solovyev"
 refs: [docs/adr/0001-consensus-architecture.md, scripts/difficulty_channel/, scripts/file-difficulty.py, 2026-06-25-critique-primitive-unifies-conflict-and-principle.md, 2026-06-25-state-gate-needs-acting-session-at-executing-via-toml.md, 2026-06-24-gate-exemption-is-category-error-for-result-images.md]
 created: 2026-06-29
 last_verified: 2026-06-30
-generalized_into: [a-mechanism-is-done-when-its-consumers-and-its-population-are-covered, an-assumed-ambient-facility-is-declared-with-a-generic-default]
+generalized_into: [a-mechanism-green-in-isolation-can-lack-consumers-and-population, a-tool-relies-on-facilities-its-authors-host-supplies-unasked]
 ---
 
 # A designed port/adapter mechanism is not deployable until it has a production caller, a CLI, live preconditions, and onboarding

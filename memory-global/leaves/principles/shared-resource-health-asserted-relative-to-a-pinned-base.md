@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 domain: development
-induced_from: [2026-06-30-shared-tree-suite-failure-wrong-ownership-attribution, 2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan, 2026-07-03-foreign-wip-schema-leaks-into-session-state, 2026-10-12-stage-control-baseline-hostage]
+grounded_in: [regularity:a-shared-resource-moves-under-others-action]
 created: 2026-08-11
 last_verified: 2026-08-11
 ---
@@ -14,9 +14,7 @@ last_verified: 2026-08-11
 
 ## Principle
 
-To make a control answer the question the delivery actually owns — *did this change break
-anything?* — **assert the health of any SHARED resource relatively, against a measurement of that
-same resource taken at a named, pinned base**, never absolutely:
+Because a shared resource moves under others' action ([[a-shared-resource-moves-under-others-action]]), for the goal of a control that answers the question the delivery actually owns — *did this change break anything?* — **assert the health of any SHARED resource relatively, against a measurement of that same resource taken at a named, pinned base**, never absolutely:
 
 | Instead of | Write |
 |---|---|
@@ -37,6 +35,10 @@ artifact (here: `{"base": <sha>, "passed": N, "failures": [...]}`). Pinning the 
 recording the measurement leaves the comparison to be re-derived at run time against a moving
 trunk, which is the absolute form again with extra steps.
 
+## Goal class
+
+A control that answers the question the delivery owns — did this change break anything? — and neither blames the delivery for others' breakage nor hides the delivery's own.
+
 ## Generality
 
 Level 2 — a class of tasks: authoring any automated control (a plan stage's `verify_command`, a
@@ -47,13 +49,9 @@ co-owned state*, and the sole-ownership case is genuinely exempt — a control o
 delivery alone produces should assert absolutely, because there the absolute value **is** the local
 property.
 
-## Induced from
+## Grounded in
 
-- [[2026-06-30-shared-tree-suite-failure-wrong-ownership-attribution]] — the ownership fault in its
-  first form: a suite red in a shared tree attributed to the session that happened to run it.
-- [[2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan]] — the vector catalogue for
-  mis-scoped engine-run controls; "whole-suite gate false-failing on pre-existing unrelated reds" is
-  this principle's difficulty stated as one of that leaf's venue/scope vectors.
+- [[a-shared-resource-moves-under-others-action]] — A resource other sessions or tasks also act on — a working tree, a trunk branch, a test suite's population, a session-state schema — changes between two observations by one task for reasons unrelated to that task.
 
 Third occurrence inside one task (2026-08, the advisor-timeout delivery): stage 1's merge-base
 control, the stage-8 control caught in review, and stage 9's suite conjunct all carried the absolute
@@ -61,18 +59,7 @@ form — which is the `principle-promotion-threshold` recurrence that lifted it 
 
 ## Refutation
 
-The principle is refuted, or driven to a broader form, by a shared resource whose base measurement
-is **not reproducible enough to compare against** — a suite with genuinely non-deterministic
-membership, or a base whose failure set differs run-to-run by more than the delivery's own effect.
-There the subset relation stops discriminating, and the requirement must widen from "compare to a
-pinned base" to "compare to a distribution over the base", with a stated tolerance — at which point
-the honest control is statistical, not a subset test.
-
-A narrower, already-known limb the current form does **not** cover, and which would refute the
-comfortable reading that a subset test is sufficient: a delivery-caused red whose node is *already*
-in the base failure set is invisible to the subset relation, as is a passing→skipped transition.
-The subset test bounds new reds only; closing those two needs a per-node diff and a `skipped <=
-base` conjunct.
+The principle fails its goal if base-relative controls still attribute to the delivery a breakage present at the base, or pass a delivery whose own change broke the resource.
 
 ## See also
 

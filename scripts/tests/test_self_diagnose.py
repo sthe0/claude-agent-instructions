@@ -491,27 +491,19 @@ def test_scan_clean_tree_empty(tmp_path):
 
 # ── scan_crutch_regressions (verify-semantic-gates.py stubbed) ──────────────
 #
-# Mirrors the scan_ceiling_proximity convention above: _load_verify_semantic_gates
-# is monkeypatched onto a fake module exposing _load_inventory_module() and
-# find_regressions(), so this test never depends on the real registry's content
-# or on re-walking the real tree.
+# Computed live: _load_verify_semantic_gates is monkeypatched onto a fake module
+# exposing _load_inventory_module() and find_unguarded_hard_sinks(), and
+# _load_claude_md_deferrals onto the deferral table, so these tests depend on
+# neither the real tree nor the real CLAUDE_MD_OVERRIDES content.
 
 
-def _stub_vsg(monkeypatch, registry_entries, missing_ids):
-    fake_inv = types.SimpleNamespace(_load_registry=lambda path: registry_entries)
+def _stub_vsg(monkeypatch, deferrals, unguarded_ids):
     fake_vsg = types.SimpleNamespace(
-        _load_inventory_module=lambda: fake_inv,
-        find_regressions=lambda inv, root, registry_path: (missing_ids, [], [], {}),
+        _load_inventory_module=lambda: object(),
+        find_unguarded_hard_sinks=lambda inv, root: (unguarded_ids, {}),
     )
     monkeypatch.setattr(sd, "_load_verify_semantic_gates", lambda repo_root: fake_vsg)
-
-
-def _make_registry(tmp_path):
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir(parents=True, exist_ok=True)
-    registry_path = scripts_dir / "crutch_registry.toml"
-    registry_path.write_text("", encoding="utf-8")
-    return registry_path
+    monkeypatch.setattr(sd, "_load_claude_md_deferrals", lambda repo_root: deferrals)
 
 
 def _deferred_since(days_ago):
@@ -523,16 +515,12 @@ def _deferred_since(days_ago):
 
 
 def test_crutch_defer_overdue_flagged_when_deferred_since_old(tmp_path, monkeypatch):
-    _make_registry(tmp_path)
     _stub_vsg(
         monkeypatch,
-        registry_entries={
-            "eid1": {
-                "disposition": "defer", "file": "CLAUDE.md", "ground": "why deferred",
-                "deferred_since": _deferred_since(100),
-            }
+        deferrals={
+            "eid1": {"file": "CLAUDE.md", "ground": "why deferred", "deferred_since": _deferred_since(100)}
         },
-        missing_ids=[],
+        unguarded_ids=[],
     )
     findings = sd.scan_crutch_regressions(tmp_path, history_path=tmp_path / "hist.json")
     overdue = [f for f in findings if f.kind == "crutch-defer-overdue"]
@@ -541,28 +529,24 @@ def test_crutch_defer_overdue_flagged_when_deferred_since_old(tmp_path, monkeypa
     assert "CLAUDE.md" in overdue[0].detail
 
 
-def test_crutch_defer_not_flagged_when_deferred_since_recent(tmp_path, monkeypatch):
-    _make_registry(tmp_path)
+def test_crutch_defer_horizon_is_a_parameter(tmp_path, monkeypatch):
     _stub_vsg(
         monkeypatch,
-        registry_entries={
-            "eid1": {
-                "disposition": "defer", "file": "CLAUDE.md", "ground": "why deferred",
-                "deferred_since": _deferred_since(0),
-            }
-        },
-        missing_ids=[],
+        deferrals={"eid1": {"file": "CLAUDE.md", "ground": "g", "deferred_since": _deferred_since(10)}},
+        unguarded_ids=[],
     )
-    findings = sd.scan_crutch_regressions(tmp_path, history_path=tmp_path / "hist.json")
-    assert not [f for f in findings if f.kind == "crutch-defer-overdue"]
+    hist = tmp_path / "hist.json"
+    assert not sd.scan_crutch_regressions(tmp_path, history_path=hist, defer_horizon_days=90)
+    assert sd.scan_crutch_regressions(tmp_path, history_path=hist, defer_horizon_days=5)
 
 
-def test_crutch_defer_not_flagged_for_keep_disposition(tmp_path, monkeypatch):
-    _make_registry(tmp_path)
+def test_crutch_defer_not_flagged_when_deferred_since_recent(tmp_path, monkeypatch):
     _stub_vsg(
         monkeypatch,
-        registry_entries={"eid1": {"disposition": "keep", "file": "CLAUDE.md", "ground": "why kept"}},
-        missing_ids=[],
+        deferrals={
+            "eid1": {"file": "CLAUDE.md", "ground": "why deferred", "deferred_since": _deferred_since(0)}
+        },
+        unguarded_ids=[],
     )
     findings = sd.scan_crutch_regressions(tmp_path, history_path=tmp_path / "hist.json")
     assert not [f for f in findings if f.kind == "crutch-defer-overdue"]
@@ -570,21 +554,39 @@ def test_crutch_defer_not_flagged_for_keep_disposition(tmp_path, monkeypatch):
 
 def test_crutch_defer_not_flagged_when_deferred_since_missing(tmp_path, monkeypatch):
     """Fail-open: a defer entry with no (or unparsable) deferred_since must
-    not be flagged, not crash the scanner — mirrors an old/hand-edited
-    registry snapshot that predates this field."""
-    _make_registry(tmp_path)
+    not be flagged, not crash the scanner."""
     _stub_vsg(
         monkeypatch,
-        registry_entries={"eid1": {"disposition": "defer", "file": "CLAUDE.md", "ground": "why deferred"}},
-        missing_ids=[],
+        deferrals={"eid1": {"file": "CLAUDE.md", "ground": "why deferred", "deferred_since": None}},
+        unguarded_ids=[],
     )
     findings = sd.scan_crutch_regressions(tmp_path, history_path=tmp_path / "hist.json")
     assert not [f for f in findings if f.kind == "crutch-defer-overdue"]
 
 
-def test_crutch_registry_drift_flagged_when_missing_count_rises(tmp_path, monkeypatch):
-    _make_registry(tmp_path)
-    _stub_vsg(monkeypatch, registry_entries={}, missing_ids=["a", "b", "c"])
+def test_load_claude_md_deferrals_reads_only_defer_entries_from_the_generator(tmp_path):
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "gen_crutch_registry.py").write_text(
+        "CLAUDE_MD_OVERRIDES = {\n"
+        "    'kept sentence': ('structural', 'keep', 'why kept'),\n"
+        "    'deferred sentence': ('semantic', 'defer', 'why deferred', 'r', '2026-01-02'),\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (scripts_dir / "crutch_registry.toml").write_text("not [valid toml\n", encoding="utf-8")
+
+    deferrals = sd._load_claude_md_deferrals(tmp_path)
+
+    assert [(e["ground"], e["deferred_since"]) for e in deferrals.values()] == [("why deferred", "2026-01-02")]
+
+
+def test_load_claude_md_deferrals_without_generator_is_empty(tmp_path):
+    assert sd._load_claude_md_deferrals(tmp_path) == {}
+
+
+def test_crutch_registry_drift_flagged_when_unguarded_count_rises(tmp_path, monkeypatch):
+    _stub_vsg(monkeypatch, deferrals={}, unguarded_ids=["a", "b", "c"])
     history_path = tmp_path / "hist.json"
     history_path.write_text(json.dumps({"missing_count": 1}), encoding="utf-8")
 
@@ -596,8 +598,7 @@ def test_crutch_registry_drift_flagged_when_missing_count_rises(tmp_path, monkey
 
 
 def test_crutch_registry_drift_not_flagged_when_count_falls_or_steady(tmp_path, monkeypatch):
-    _make_registry(tmp_path)
-    _stub_vsg(monkeypatch, registry_entries={}, missing_ids=["a"])
+    _stub_vsg(monkeypatch, deferrals={}, unguarded_ids=["a"])
     history_path = tmp_path / "hist.json"
     history_path.write_text(json.dumps({"missing_count": 5}), encoding="utf-8")
 
@@ -606,8 +607,7 @@ def test_crutch_registry_drift_not_flagged_when_count_falls_or_steady(tmp_path, 
 
 
 def test_crutch_registry_drift_first_run_writes_history_without_flagging(tmp_path, monkeypatch):
-    _make_registry(tmp_path)
-    _stub_vsg(monkeypatch, registry_entries={}, missing_ids=["a", "b"])
+    _stub_vsg(monkeypatch, deferrals={}, unguarded_ids=["a", "b"])
     history_path = tmp_path / "hist.json"
     assert not history_path.exists()
 
@@ -616,12 +616,11 @@ def test_crutch_registry_drift_first_run_writes_history_without_flagging(tmp_pat
     assert json.loads(history_path.read_text(encoding="utf-8"))["missing_count"] == 2
 
 
-def test_crutch_regressions_missing_registry_file_is_empty(tmp_path):
+def test_crutch_regressions_without_gate_module_is_empty(tmp_path):
     assert sd.scan_crutch_regressions(tmp_path, history_path=tmp_path / "hist.json") == []
 
 
 def test_crutch_regressions_missing_vsg_module_is_empty(tmp_path, monkeypatch):
-    _make_registry(tmp_path)
     monkeypatch.setattr(sd, "_load_verify_semantic_gates", lambda repo_root: None)
     assert sd.scan_crutch_regressions(tmp_path, history_path=tmp_path / "hist.json") == []
 
@@ -634,7 +633,6 @@ def _make_broken_vsg(tmp_path):
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
     (scripts_dir / "verify-semantic-gates.py").write_text("def broken(:\n", encoding="utf-8")
-    return scripts_dir / "crutch_registry.toml"
 
 
 def test_load_verify_semantic_gates_returns_none_on_syntax_error(tmp_path):
@@ -643,8 +641,7 @@ def test_load_verify_semantic_gates_returns_none_on_syntax_error(tmp_path):
 
 
 def test_crutch_regressions_survives_broken_verify_semantic_gates(tmp_path):
-    registry_path = _make_broken_vsg(tmp_path)
-    registry_path.write_text("", encoding="utf-8")
+    _make_broken_vsg(tmp_path)
     assert sd.scan_crutch_regressions(tmp_path, history_path=tmp_path / "hist.json") == []
 
 
@@ -652,7 +649,7 @@ def test_scan_survives_broken_verify_semantic_gates_alongside_other_scanners(tmp
     """self-diagnose's fail-open contract: a broken verify-semantic-gates.py
     must not take scan() down with it — the other scanners' findings (here,
     oversized-index) must still come back."""
-    _make_broken_vsg(tmp_path).write_text("", encoding="utf-8")
+    _make_broken_vsg(tmp_path)
     memory_root = tmp_path / "memory"
     memory_root.mkdir()
     (memory_root / "MEMORY.md").write_text("\n".join(["line"] * 5), encoding="utf-8")
@@ -663,16 +660,10 @@ def test_scan_survives_broken_verify_semantic_gates_alongside_other_scanners(tmp
 
 
 def test_scan_wires_crutch_regressions_into_repo_root_scan(tmp_path, monkeypatch):
-    _make_registry(tmp_path)
     _stub_vsg(
         monkeypatch,
-        registry_entries={
-            "eid1": {
-                "disposition": "defer", "file": "CLAUDE.md", "ground": "why",
-                "deferred_since": _deferred_since(100),
-            }
-        },
-        missing_ids=[],
+        deferrals={"eid1": {"file": "CLAUDE.md", "ground": "why", "deferred_since": _deferred_since(100)}},
+        unguarded_ids=[],
     )
     monkeypatch.setattr(sd, "_load_lint_prose_length", lambda repo_root: None)
     monkeypatch.setattr(sd, "CRUTCH_REGISTRY_HISTORY_PATH", tmp_path / "hist.json")
@@ -801,7 +792,7 @@ def test_oversized_leaf_ignores_non_difficulty_(tmp_path):
 def test_oversized_leaf_detail_names_split_(tmp_path):
     root = _root_with(tmp_path, _dleaf(filler=5000))
     f = sd.scan_oversized_leaves(root, max_bytes=100, max_contexts=50)
-    assert f[0].detail.endswith("action: memory-curator split")
+    assert f[0].detail.endswith("action: curator split")
 
 
 def test_measure_leaf_counts_only_contexts_section_headings():

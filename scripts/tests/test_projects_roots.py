@@ -220,13 +220,26 @@ def test_iter_transcripts_with_no_roots_yields_empty(monkeypatch, tmp_path):
 # The converted sites: each one looks through the accessor, not past it
 # ---------------------------------------------------------------------------
 
+_REPORT_MODULES = {
+    "agent-stats": "stats",
+    "cost-report": "cost",
+    "skill-usage-audit": "skill_usage",
+    "tool-usage-report": "tool_usage",
+}
+
+
 def _load(name: str):
     """Load a hyphenated script by path (the repo idiom).
 
     Registered in sys.modules BEFORE exec: `dataclasses` resolves a string
     annotation by looking the defining module up there, and a module absent from
     sys.modules makes that lookup return None mid-decorator.
+
+    The report scripts are thin entry points: their implementation, and so the
+    globals a test inspects or patches, is the `lib.agent_report` module.
     """
+    if name in _REPORT_MODULES:
+        return importlib.import_module(f"lib.agent_report.{_REPORT_MODULES[name]}")
     mod_name = f"_projects_roots_{name.replace('-', '_')}"
     spec = importlib.util.spec_from_file_location(mod_name, SCRIPTS_DIR / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)

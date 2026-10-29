@@ -126,6 +126,21 @@ def test_build_digest_shape_and_invariants(tmp_path: Path) -> None:
     assert any("(B)" in s["signal"] for s in d["deferred"])
 
 
+def test_promoted_targets_include_regularities_and_principles(tmp_path: Path, monkeypatch) -> None:
+    """A lifted regularity and a principle of the same filename are both (A) targets, kept apart."""
+    reg, pri = tmp_path / "regularities", tmp_path / "principles"
+    reg.mkdir()
+    pri.mkdir()
+    for directory, heading in ((reg, "Regularity"), (pri, "Principle")):
+        (directory / "same.md").write_text(
+            f"---\nname: same\ndescription: d\n---\n\n## {heading}\n{GROUND}\n", encoding="utf-8")
+    monkeypatch.setattr(td, "REGULARITIES_DIR", reg)
+    monkeypatch.setattr(td, "PRINCIPLES_DIR", pri)
+    promoted = td._load_promoted()
+    assert [p.name for p in promoted] == ["regularities/same.md", "principles/same.md"]
+    assert all(GROUND in p.ground for p in promoted)
+
+
 def test_read_leaf_parses_tier(tmp_path: Path) -> None:
     """(vii) _read_leaf reads the optional tier field; absent ⇒ 0."""
     exp = tmp_path / "e"

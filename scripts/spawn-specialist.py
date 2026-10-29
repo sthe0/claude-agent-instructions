@@ -1071,7 +1071,7 @@ PLANS_READ_KINDS = ("thinker", "code-reviewer", "developer")
 # The memory curator's deliverable is memory leaves, so its Edit grant is the
 # memory roots of the repo/worktree it runs in and nothing else: a wrong
 # judgement then cannot reach code, instructions or config.
-MEMORY_WRITE_KINDS = ("memory-curator",)
+MEMORY_WRITE_KINDS = ("curator",)
 
 # The only kind whose spawn inherits the target project's own
 # `.claude/settings.local.json` permissions (see build_child_settings) —

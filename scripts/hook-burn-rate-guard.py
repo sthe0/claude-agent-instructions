@@ -147,7 +147,7 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
-from lib import band_throttle, transcript_cost  # noqa: E402
+from lib import band_throttle, hook_telemetry, transcript_cost  # noqa: E402
 
 # Significance window: how far back "sustained" is allowed to look. Costs nothing
 # when the session is younger, because window_rate divides by the span actually
@@ -394,4 +394,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-burn-rate-guard"))

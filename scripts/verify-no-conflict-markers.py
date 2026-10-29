@@ -45,6 +45,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lib import hook_telemetry
+
 # Built from char classes so no 7-char marker literal ever appears at column 0
 # in this source (which would make the verifier flag itself).
 OURS_RE = re.compile(r"^" + "<" * 7 + r"( |$)")
@@ -191,4 +193,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="verify-no-conflict-markers"))

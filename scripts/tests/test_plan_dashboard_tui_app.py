@@ -1,0 +1,1491 @@
+"""The textual layer of the console view, driven headless through textual's pilot.
+
+The only test file besides ``tui_app.py`` that imports textual. Run with
+``PLAN_DASHBOARD_REQUIRE_TEXTUAL=1`` a missing textual fails the run; without it the file is skipped.
+Layout and key decisions are pinned in ``test_plan_dashboard_tui.py``; here the widgets must show them.
+"""
+from __future__ import annotations
+
+import asyncio
+import datetime as dt
+import json
+import os
+import subprocess
+import threading
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+if os.environ.get("PLAN_DASHBOARD_REQUIRE_TEXTUAL") == "1":
+    import textual  # noqa: F401
+else:
+    pytest.importorskip("textual", exc_type=ImportError)
+
+from textual.containers import VerticalScroll  # noqa: E402
+from textual.widgets import DataTable, Header, Static, TabbedContent, Tabs, Tree  # noqa: E402
+
+from plan_dashboard import attention, locate, model, tui  # noqa: E402
+from plan_dashboard import tui_app  # noqa: E402
+from plan_dashboard.tui_app import CHAT_LOADING, DashboardApp  # noqa: E402
+from plan_dashboard_fixtures import build_fixture_root, read_only_guard  # noqa: E402
+from plan_dashboard_support import (  # noqa: E402,F401
+    ALPHA, BETA, NOW, STALE, at, console_root, event, isolated_home, iso, make_state,
+)
+
+SIZE = (150, 40)
+PILOT_DEADLINE_S = 30
+
+
+class Clock:
+    def __init__(self):
+        self.now = NOW
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += dt.timedelta(seconds=seconds)
+
+
+def make_app(root, clock=None, **options):
+    return DashboardApp(state_root=root.state_root, cost_log=root.cost_log, transcripts_root=root.transcripts_root,
+                        clock=clock or Clock(), **{"interval": 3600.0, **options})
+
+
+async def settle(app, pilot, rounds=5):
+    """Wait out the running workers and the ones they start (the reload starts the order read, which
+    starts the overlay and marks reads)."""
+    for _ in range(rounds):
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        if not any(worker.is_running for worker in app.workers):
+            return
+
+
+def run(scenario, root, **options):
+    app = make_app(root, **options)
+
+    async def main():
+        async with app.run_test(size=SIZE) as pilot:
+            await settle(app, pilot)
+            await scenario(app, pilot)
+
+    asyncio.run(asyncio.wait_for(main(), PILOT_DEADLINE_S))
+    return app
+
+
+def table_ids(app):
+    return [key.value for key in app.query_one(DataTable).rows]
+
+
+def table_cells(app, index):
+    cells = [cell.plain for cell in app.query_one(DataTable).get_row_at(index)]
+    return dict(zip(tui.OVERVIEW_COLUMNS, cells))
+
+
+def labels(node):
+    return [node.label.plain] + [text for child in node.children for text in labels(child)]
+
+
+def tree_text(app):
+    return "\n".join(labels(app.query_one(Tree).root))
+
+
+def count_collects(monkeypatch):
+    calls = []
+    real = model.collect
+
+    def counting(*args, **kwargs):
+        calls.append(kwargs.get("now"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(model, "collect", counting)
+    return calls
+
+
+def test_tasks_tab_lists_the_live_tasks(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        assert set(table_ids(app)) == {ALPHA, BETA, "broken"}
+        by_id = {sid: index for index, sid in enumerate(table_ids(app))}
+        alpha = table_cells(app, by_id[ALPHA])
+        assert [alpha[name] for name in ("session", "task", "live", "node", "stage", "diff", "replans")] == [
+            "alpha-00", f"task-{ALPHA}", "active", "EXECUTING", "stage 1/3 [###-----]", "0", "0"]
+        assert alpha["cost"] == "≥$1.50"
+        assert alpha["goal"] == "Build the thing [with brackets]"
+        assert table_cells(app, by_id["broken"])["stage"] == "stage ?/?"
+        assert "live: 3 tasks" in app.sub_title
+        head = str(app.query_one("#overview-head").render())
+        assert head.endswith("3 active  0 idle  3 total  waiting: 0") and "2026-10-22 12:00:00 UTC" in head
+
+    run(scenario, root)
+
+
+def test_enter_opens_the_detail_of_the_selected_task(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        index = table_ids(app).index(ALPHA)
+        for _ in range(index):
+            await pilot.press("down")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "detail"
+        text = tree_text(app)
+        assert "[done] 1. Stage 1 (in_thread, measurable)" in text
+        assert "[active] 2. Stage 2 (in_thread, measurable)" in text
+        assert "stage 2: wall open (10m00s so far)" in text
+        assert "alpha-00 EXECUTING  Build the thing [with brackets]" in text
+
+    run(scenario, root)
+
+
+def test_clicking_a_row_opens_its_detail(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        index = table_ids(app).index(ALPHA)
+        # The first click only highlights a row the cursor is not on yet; a click on the highlighted row selects it.
+        for _ in range(2):
+            if app.query_one(TabbedContent).active == "tasks":
+                await pilot.click(DataTable, offset=(4, 1 + index))
+                await pilot.pause()
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "detail"
+        assert "[active] 2. Stage 2" in tree_text(app)
+
+    run(scenario, root)
+
+
+def test_escape_goes_back_and_tab_returns_to_the_detail(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await pilot.press("enter")
+        await settle(app, pilot)
+        await pilot.press("escape")
+        assert app.query_one(TabbedContent).active == "tasks"
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "detail"
+        await pilot.press("tab")
+        assert app.query_one(TabbedContent).active == "chat"
+        await pilot.press("tab")
+        assert app.query_one(TabbedContent).active == "tasks"
+
+    run(scenario, root)
+
+
+def test_a_toggles_between_live_and_all_tasks(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        assert STALE not in table_ids(app)
+        await pilot.press("a")
+        await settle(app, pilot)
+        assert STALE in table_ids(app) and f"all: {len(table_ids(app))} tasks" in app.sub_title
+        await pilot.press("a")
+        await settle(app, pilot)
+        assert STALE not in table_ids(app) and f"live: {len(table_ids(app))} tasks" in app.sub_title
+
+    run(scenario, root)
+
+
+def test_q_quits(tmp_path):
+    root = console_root(tmp_path)
+    exited = []
+
+    async def scenario(app, pilot):
+        await pilot.press("q")
+        await pilot.pause()
+        exited.append(app._exit)
+
+    run(scenario, root)
+    assert exited == [True]
+
+
+def test_r_reads_again_at_once(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+    calls = count_collects(monkeypatch)
+
+    async def scenario(app, pilot):
+        before = len(calls)
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert len(calls) == before + 1
+
+    run(scenario, root)
+
+
+def test_the_view_reads_again_once_the_interval_has_passed(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+    calls = count_collects(monkeypatch)
+    clock = Clock()
+
+    async def scenario(app, pilot):
+        before = len(calls)
+        await pilot.pause(0.7)
+        assert len(calls) == before
+        clock.advance(10)
+        await pilot.pause(0.7)
+        await settle(app, pilot)
+        assert len(calls) > before
+        assert calls[-1] == NOW + dt.timedelta(seconds=10)
+        assert "read 12:00:10" in app.sub_title
+
+    run(scenario, root, clock=clock, interval=5.0)
+
+
+def test_the_cursor_follows_its_task_when_a_read_reorders_the_rows(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+    reads = []
+    real = model.collect
+
+    def reversing(*args, **kwargs):
+        snapshot = real(*args, **kwargs)
+        reads.append(1)
+        if len(reads) > 1:
+            tasks = sorted(snapshot["tasks"], key=lambda t: t["last_activity"])
+            stamps = [task["last_activity"] for task in tasks]
+            for task, stamp in zip(tasks, reversed(stamps)):
+                task["last_activity"] = stamp
+        return snapshot
+
+    monkeypatch.setattr(model, "collect", reversing)
+
+    async def scenario(app, pilot):
+        before = table_ids(app)
+        followed = before[1]
+        await pilot.press("down")
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert table_ids(app) != before
+        assert table_ids(app)[app.query_one(DataTable).cursor_row] == followed
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert app.view.selected == followed
+
+    run(scenario, root)
+
+
+def test_the_detail_tab_says_so_when_the_selected_task_vanishes(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        for _ in range(table_ids(app).index(ALPHA)):
+            await pilot.press("down")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert "Stage 2" in tree_text(app)
+        (root.state_root / f"{app.view.selected}.json").unlink()
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert tree_text(app) == "no such session"
+
+    run(scenario, root)
+
+
+def test_a_reload_warms_the_child_index_from_the_oldest_task_and_a_detail_read_from_its_parent(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+    bounds = []
+    real = model.child_index
+    monkeypatch.setattr(model, "child_index", lambda *a, **k: bounds.append(k.get("since", "unbounded")) or real(*a, **k))
+
+    async def scenario(app, pilot):
+        await pilot.press("enter")
+        await settle(app, pilot)
+        before = len(bounds)
+        await pilot.press("r")
+        await settle(app, pilot)
+        tasks = app.snapshot["tasks"]
+        selected = next(task for task in tasks if task["session_id"] == app.view.selected)
+        assert sorted(bounds[before:], key=str) == sorted(
+            [tui.oldest_first_activity(tasks), tui.first_activity(selected)], key=str)
+        assert "unbounded" not in bounds
+
+    run(scenario, root)
+
+
+def test_the_app_writes_nothing(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await pilot.press("enter")
+        await settle(app, pilot)
+        await pilot.press("a")
+        await settle(app, pilot)
+        await pilot.press("r")
+        await settle(app, pilot)
+
+    with read_only_guard(root.home):
+        run(scenario, root)
+
+
+def test_every_key_of_the_pure_layer_is_bound():
+    bound = {binding.key for binding in DashboardApp.BINDINGS}
+    assert {"up", "down", "j", "k", "enter", "escape", "backspace", "tab", "a", "r", "q"} <= bound
+    assert {"j", "k", "space", "left", "right"} <= {b.key for b in DashboardApp.BINDINGS if "tree_key" in b.action}
+    assert tui.TABS == ("tasks", "detail", "chat")
+    assert {b.key for b in DashboardApp.BINDINGS if "chat_key" in b.action} == set(tui.CHAT_KEYS)
+
+
+# --- the Detail tree: collapsed start, keyboard navigation, state kept across a refresh -------------
+
+REVIEWED_A = "review-aaaa-0001"
+REVIEWED_B = "review-bbbb-0002"
+PHASE = ("phases", "phase:plan v1")
+ROUND = PHASE + ("phase:review round 1",)
+
+
+def reviewed_root(tmp_path):
+    """Two tasks in plan review: an open ``plan v1`` phase holding two review-round children."""
+    def reviewing(sid, minutes):
+        return make_state(sid, node="PLAN_READY", stages=("PENDING",), history=[
+            event("classify", at(minutes=minutes)), event("submit_plan", at(minutes=minutes - 10)),
+            event("plan_review", at(minutes=minutes - 15)), event("plan_review", at(minutes=minutes - 18))])
+    return build_fixture_root(tmp_path, [reviewing(REVIEWED_A, 40), reviewing(REVIEWED_B, 39)], now=NOW)
+
+
+def tree_of(app):
+    return app.query_one(Tree)
+
+
+def find(tree, path):
+    node = tree.root
+    for depth in range(1, len(path) + 1):
+        node = next(child for child in node.children if child.data == path[:depth])
+    return node
+
+
+def top_level(app):
+    return {child.data[0]: child for child in tree_of(app).root.children}
+
+
+async def open_task(app, pilot, sid):
+    target = table_ids(app).index(sid)
+    while app.view.cursor != target:
+        await pilot.press("down" if app.view.cursor < target else "up")
+    await pilot.press("enter")
+    await settle(app, pilot)
+
+
+def cursor_path(app):
+    return tree_of(app).cursor_node.data
+
+
+def test_the_detail_tree_opens_collapsed_with_focus_on_the_tree_by_enter(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        assert app.query_one(TabbedContent).active == "detail"
+        assert app.focused is tree_of(app)
+        top = top_level(app)
+        assert {"totals", "stages", "phases"} <= set(top)
+        assert top["stages"].children and not top["stages"].is_expanded
+        assert not any(node.is_expanded for node in top.values())
+
+    run(scenario, root)
+
+
+def test_tab_and_a_click_on_the_tab_focus_the_tree_and_escape_the_table(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("escape")
+        await settle(app, pilot)
+        assert app.focused is app.query_one(DataTable)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert app.focused is tree_of(app)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "chat" and app.focused is app.query_one(VerticalScroll)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert app.focused is app.query_one(DataTable)
+        await pilot.click("#--content-tab-detail")
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "detail" and app.focused is tree_of(app)
+
+    run(scenario, root)
+
+
+def test_arrow_keys_move_the_tree_cursor_and_enter_and_space_toggle_a_node(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("down")
+        assert cursor_path(app) == ("totals",)
+        await pilot.press("down")
+        assert cursor_path(app) == ("stages",)
+        await pilot.press("enter")
+        assert top_level(app)["stages"].is_expanded
+        await pilot.press("down")
+        assert cursor_path(app) == ("stages", "stage:1")
+        await pilot.press("up")
+        await pilot.press("space")
+        assert not top_level(app)["stages"].is_expanded
+        await pilot.press("space")
+        assert top_level(app)["stages"].is_expanded
+
+    run(scenario, root)
+
+
+def test_j_k_right_and_left_drive_the_tree(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("j", "j")
+        assert cursor_path(app) == ("stages",)
+        await pilot.press("right")
+        assert top_level(app)["stages"].is_expanded
+        await pilot.press("j")
+        assert cursor_path(app) == ("stages", "stage:1")
+        await pilot.press("left")
+        assert cursor_path(app) == ("stages",) and top_level(app)["stages"].is_expanded
+        await pilot.press("left")
+        assert not top_level(app)["stages"].is_expanded
+        await pilot.press("k")
+        assert cursor_path(app) == ("totals",)
+
+    run(scenario, root)
+
+
+def test_escape_hands_the_arrow_keys_back_to_the_table(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("escape")
+        await settle(app, pilot)
+        before = app.query_one(DataTable).cursor_row
+        await pilot.press("down" if before == 0 else "up")
+        assert app.query_one(DataTable).cursor_row != before
+
+    run(scenario, root)
+
+
+def test_a_click_expands_a_phase_node(tmp_path):
+    root = reviewed_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, REVIEWED_A)
+        await pilot.click(Tree, offset=(6, 3))
+        assert top_level(app)["phases"].is_expanded
+        await pilot.click(Tree, offset=(6, 5))
+        assert find(tree_of(app), PHASE).is_expanded
+
+    run(scenario, root)
+
+
+def test_a_refresh_keeps_what_the_user_opened_and_the_cursor_though_the_label_changes(tmp_path):
+    root = reviewed_root(tmp_path)
+    clock = Clock()
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, REVIEWED_A)
+        await pilot.press("j", "j", "j", "right", "j", "j", "right", "j")
+        assert cursor_path(app) == ROUND
+        before = find(tree_of(app), PHASE).label.plain
+        clock.advance(120)
+        await pilot.press("r")
+        await settle(app, pilot)
+        after = find(tree_of(app), PHASE).label.plain
+        assert before != after
+        assert top_level(app)["phases"].is_expanded and find(tree_of(app), PHASE).is_expanded
+        assert not top_level(app)["stages"].is_expanded
+        assert cursor_path(app) == ROUND
+
+    run(scenario, root, clock=clock)
+
+
+def test_a_vanished_cursor_node_falls_back_to_its_nearest_surviving_ancestor(tmp_path):
+    root = reviewed_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, REVIEWED_A)
+        await pilot.press("j", "j", "j", "right", "j", "j", "right", "j")
+        assert cursor_path(app) == ROUND
+        state_file = root.state_root / f"{REVIEWED_A}.json"
+        data = json.loads(state_file.read_text(encoding="utf-8"))
+        data["history"] = [e for e in data["history"] if e.get("event") != "plan_review"]
+        state_file.write_text(json.dumps(data), encoding="utf-8")
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert cursor_path(app) == PHASE
+
+    run(scenario, root)
+
+
+def test_another_task_opens_collapsed_though_the_same_key_path_was_open_in_the_first(tmp_path):
+    root = reviewed_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, REVIEWED_A)
+        await pilot.press("j", "j", "j", "right")
+        assert top_level(app)["phases"].is_expanded
+        await pilot.press("escape")
+        await settle(app, pilot)
+        await open_task(app, pilot, REVIEWED_B)
+        assert app.view.selected == REVIEWED_B
+        assert ("phases",) in tui.key_paths(tui.detail_tree(model.detail(
+            root.state_root, REVIEWED_B, cost_log=root.cost_log), NOW))
+        assert not top_level(app)["phases"].is_expanded
+
+    run(scenario, root)
+
+
+def test_the_tree_state_of_one_task_is_not_carried_to_another():
+    # the loading placeholder already clears the tree on a switch, so the scenario above cannot reach this
+    open_in_a = tui.TreeState(task=REVIEWED_A, expanded=frozenset({("phases",)}), cursor=("phases",))
+    assert tui_app.tree_state_for(open_in_a, REVIEWED_B) == tui.TreeState(task=REVIEWED_B)
+    assert tui_app.tree_state_for(open_in_a, REVIEWED_A) == open_in_a
+
+
+def test_the_tree_pilot_runs_inside_the_read_only_guard(tmp_path):
+    root = reviewed_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, REVIEWED_A)
+        await pilot.press("j", "j", "j", "right", "r")
+        await settle(app, pilot)
+
+    with read_only_guard(root.home):
+        run(scenario, root)
+
+
+# --- waiting marks, session rows and the Chat tab ---------------------------------------------------
+
+PROJECT = "-console-project"
+ASK_SESSION, PERMISSION_SESSION, FREE_SESSION = "ask-session", "permission-session", "free-session"
+QUESTION = {"questions": [{"header": "HEADER-TEXT", "question": "Which way?", "multiSelect": False, "options": [
+    {"label": "Left", "description": "DESC-LEFT"}, {"label": "Right", "description": "DESC-RIGHT"}]}]}
+
+
+@pytest.fixture(autouse=True)
+def fresh_attention_cache():
+    attention.clear_cache()
+    yield
+    attention.clear_cache()
+
+
+def write_fixture_transcript(root, session, entries):
+    path = root.transcripts_root / PROJECT / f"{session}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
+    return path
+
+
+def append_fixture_transcript(root, session, entries):
+    with open(root.transcripts_root / PROJECT / f"{session}.jsonl", "a", encoding="utf-8") as handle:
+        handle.write("".join(json.dumps(entry) + "\n" for entry in entries))
+
+
+def line(role, minutes, content, stop=None):
+    message = {"role": role, "content": content}
+    if stop:
+        message["stop_reason"] = stop
+    return {"type": role, "timestamp": iso(at(minutes=minutes)), "message": message}
+
+
+def tool_use(tool_id, name, tool_input=None):
+    return {"type": "tool_use", "id": tool_id, "name": name, "input": tool_input or {}}
+
+
+ASKING = [line("user", 10, "go on"), line("assistant", 9, [tool_use("q1", "AskUserQuestion", QUESTION)], "tool_use")]
+IDLE = [line("user", 10, "go on"), line("assistant", 9, [{"type": "text", "text": "done"}], "end_turn")]
+WORKING = [line("user", 10, "go on"), line("assistant", 9, [tool_use("t1", "Bash", {"command": "ls"})], "tool_use")]
+
+
+def fake_locator(sessions, *, permission=()):
+    return SimpleNamespace(NAME="fake", sessions=lambda: sessions, permission_wait=lambda harness: harness in permission)
+
+
+def attention_root(tmp_path, alpha=ASKING):
+    root = console_root(tmp_path)
+    write_fixture_transcript(root, ALPHA, alpha)
+    write_fixture_transcript(root, BETA, IDLE)
+    write_fixture_transcript(root, ASK_SESSION, ASKING)
+    write_fixture_transcript(root, PERMISSION_SESSION, WORKING)
+    write_fixture_transcript(root, FREE_SESSION, IDLE)
+    return root
+
+
+def attention_locator():
+    return fake_locator([
+        {"harness_session": ASK_SESSION, "cwd": "/work/ask", "name": "Asker"},
+        {"harness_session": PERMISSION_SESSION, "cwd": None, "name": None},
+        {"harness_session": FREE_SESSION, "cwd": "/work/free", "name": "Free"},
+    ], permission=(PERMISSION_SESSION,))
+
+
+def guarded(root):
+    """Engine state is what the app must leave alone; transcripts stay writable so a test can grow one."""
+    return read_only_guard(root.state_root.parent)
+
+
+def row_of(app, sid):
+    return table_ids(app).index(sid)
+
+
+def chat_text(app):
+    return str(app.query_one("#chat-body", Static).render())
+
+
+def test_rows_carry_the_waiting_mark_style_and_the_header_count(tmp_path):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        marks = {sid: table_cells(app, row_of(app, sid))["wait"] for sid in table_ids(app)}
+        assert (marks[ALPHA], marks[BETA], marks["broken"]) == ("Q", "…", "")
+        assert (marks[ASK_SESSION], marks[PERMISSION_SESSION], marks[FREE_SESSION]) == ("Q", "!", "…")
+        table = app.query_one(DataTable)
+        assert table.get_row_at(row_of(app, ALPHA))[0].style == tui.WAIT_STYLES["choice"]
+        assert table.get_row_at(row_of(app, PERMISSION_SESSION))[0].style == tui.WAIT_STYLES["permission"]
+        assert table.get_row_at(row_of(app, "broken"))[0].style == ""
+        head = str(app.query_one("#overview-head").render())
+        assert head.endswith("waiting: 3")
+
+    with guarded(root):
+        run(scenario, root, locator=attention_locator())
+
+
+def test_session_rows_show_a_dash_where_a_task_has_its_columns(tmp_path):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        cells = table_cells(app, row_of(app, ASK_SESSION))
+        assert cells["session"] == "Asker" and {cells[name] for name in ("stage", "cost")} == {tui.NO_VALUE}
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_the_mark_and_the_chat_follow_a_transcript_that_grows_after_a_tick(tmp_path):
+    root = attention_root(tmp_path, alpha=WORKING)
+    clock = Clock()
+
+    async def scenario(app, pilot):
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == ""
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "chat"
+        assert "Bash" in chat_text(app) and "Which way?" not in chat_text(app)
+        append_fixture_transcript(root, ALPHA, [ASKING[1]])
+        clock.advance(5)
+        await pilot.pause(1.2)
+        await settle(app, pilot)
+        assert "Which way?" in chat_text(app) and "- Left" in chat_text(app)
+        await pilot.press("escape")
+        await settle(app, pilot)
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
+
+    with guarded(root):
+        run(scenario, root, clock=clock, interval=1.0, locator=attention_locator())
+
+
+def test_j_k_up_and_down_scroll_the_chat_and_leave_the_task_cursor(tmp_path):
+    long = [line("user", 30, "go on")] + [
+        line("assistant", 29 - i // 4, [{"type": "text", "text": f"entry {i}\nsecond line {i}"}], "end_turn")
+        for i in range(40)]
+    root = attention_root(tmp_path, alpha=long)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        cursor = (app.view.cursor, app.query_one(DataTable).cursor_row)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        await pilot.pause(0.2)
+        scroll = app.query_one(VerticalScroll)
+        assert scroll.max_scroll_y > 4 and scroll.scroll_y == scroll.max_scroll_y
+        for key, sign in (("k", -1), ("up", -1), ("j", 1), ("down", 1)):
+            before = scroll.scroll_y
+            await pilot.press(key)
+            await pilot.pause(0.1)
+            assert (scroll.scroll_y - before) * sign > 0, key
+        assert (app.view.cursor, app.query_one(DataTable).cursor_row) == cursor
+        assert app.query_one(TabbedContent).active == "chat"
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_escape_leaves_the_chat_for_the_tasks(tmp_path):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        await pilot.press("escape")
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "tasks" and app.focused is app.query_one(DataTable)
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_enter_on_a_session_row_opens_its_chat(tmp_path):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        target = row_of(app, ASK_SESSION)
+        while app.view.cursor != target:
+            await pilot.press("down")
+        await pilot.press("enter")
+        await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == "chat"
+        text = chat_text(app)
+        assert f"chat: {ASK_SESSION}" in text and "Which way?" in text and "- Left" in text and "- Right" in text
+        assert "HEADER-TEXT" not in text and "DESC-LEFT" not in text
+
+    with guarded(root):
+        run(scenario, root, locator=attention_locator())
+
+
+def gate_chat_reads(monkeypatch, held):
+    """Make ``tui.read_chat`` of the target ``held`` wait for the returned event; every target it was asked for is
+    appended to the returned list."""
+    release, reads = threading.Event(), []
+    real = tui.read_chat
+
+    def gated(target, locator, transcripts_root):
+        reads.append(target)
+        if target == held:
+            release.wait(PILOT_DEADLINE_S)
+        return real(target, locator, transcripts_root)
+
+    monkeypatch.setattr(tui, "read_chat", gated)
+    return release, reads
+
+
+async def cursor_to(app, pilot, sid):
+    target = table_ids(app).index(sid)
+    while app.view.cursor != target:
+        await pilot.press("down" if app.view.cursor < target else "up")
+
+
+def test_opening_another_task_shows_no_chat_of_the_previous_one_while_its_own_loads(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    release, _ = gate_chat_reads(monkeypatch, ("task", BETA))
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert "Which way?" in chat_text(app)
+        await pilot.press("escape")
+        await open_task(app, pilot, BETA)
+        assert "Which way?" not in chat_text(app)
+        await pilot.press("tab")
+        await pilot.pause(0.3)
+        assert "Which way?" not in chat_text(app) and CHAT_LOADING in chat_text(app)
+        release.set()
+        await settle(app, pilot)
+        assert "done" in chat_text(app) and "Which way?" not in chat_text(app) and CHAT_LOADING not in chat_text(app)
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_a_chat_read_that_returns_after_another_task_was_opened_is_dropped(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    release, _ = gate_chat_reads(monkeypatch, ("task", ALPHA))
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("tab")
+        await pilot.pause(0.3)
+        await pilot.press("escape")
+        await cursor_to(app, pilot, BETA)
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        assert app.view.chat == ("task", BETA)
+        release.set()
+        await settle(app, pilot)
+        assert "Which way?" not in chat_text(app) and CHAT_LOADING in chat_text(app)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert "done" in chat_text(app) and "Which way?" not in chat_text(app)
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_a_chat_answer_for_another_task_is_not_shown_on_the_open_chat_tab(tmp_path):
+    """The read above usually lands while Detail is open, where the tab check alone drops it; this one lands on
+    the open Chat tab of another task, so only the target check can keep it out."""
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, BETA)
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert app.view.chat == ("task", BETA) and "done" in chat_text(app)
+        alpha_chat = tui.read_chat(("task", ALPHA), app.locator, app.transcripts_root)
+        tui_app.chat_ready(app, ("task", ALPHA), alpha_chat, None)
+        await settle(app, pilot)
+        assert "Which way?" not in chat_text(app) and "done" in chat_text(app)
+
+    run(scenario, root, locator=attention_locator())
+
+
+@pytest.mark.parametrize("failing", ["read_attention", "read_chat"])
+def test_a_failing_attention_or_chat_read_keeps_the_task_table_and_names_the_error(tmp_path, monkeypatch, failing):
+    root = attention_root(tmp_path)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("locator down")
+
+    async def scenario(app, pilot):
+        if failing == "read_chat":
+            await open_task(app, pilot, ALPHA)
+            monkeypatch.setattr(tui, failing, boom)
+            await pilot.press("tab")
+            await settle(app, pilot)
+        assert ALPHA in table_ids(app)
+        assert "live: " in app.sub_title and "read failed: locator down" in app.sub_title
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == ("?" if failing == "read_attention" else "Q")
+        if failing == "read_chat":
+            await pilot.press("tab")
+            await pilot.press("r")
+            await settle(app, pilot)
+            assert "live: " in app.sub_title and "read failed" not in app.sub_title
+
+    if failing == "read_attention":
+        monkeypatch.setattr(tui, failing, boom)
+    run(scenario, root, locator=attention_locator())
+
+
+def test_the_chat_is_read_only_while_the_chat_tab_is_open(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    _, reads = gate_chat_reads(monkeypatch, None)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert reads == []
+        await pilot.press("tab")
+        await settle(app, pilot)
+        assert reads and set(reads) == {("task", ALPHA)}
+        await pilot.press("escape")
+        await settle(app, pilot)
+        seen = len(reads)
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert len(reads) == seen
+
+    run(scenario, root, locator=attention_locator())
+
+
+# --- g: jump to the session's own window ------------------------------------------------------
+
+def jumping_locator():
+    def jump_target(harness):
+        return {"argv": ["placeholder-no-op", harness], "label": f"window of {harness}", "return_hint": "tab keys back"}
+
+    base = attention_locator()
+    return SimpleNamespace(NAME="fake", sessions=base.sessions, permission_wait=base.permission_wait,
+                           jump_target=jump_target)
+
+
+def record_jumps(monkeypatch, returncode=0, stderr=""):
+    """Replace the process runner below locate's own, so the runner the app really uses is the one tested."""
+    calls = []
+
+    def run_process(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, returncode, "", stderr)
+
+    monkeypatch.setattr(locate.subprocess, "run", run_process)
+    return calls
+
+
+def status_text(app):
+    return str(app.query_one("#status", Static).render())
+
+
+def test_g_is_bound():
+    assert "g" in {binding.key for binding in DashboardApp.BINDINGS}
+
+
+def test_g_on_the_tasks_tab_jumps_to_the_task_under_the_cursor_and_names_the_way_back(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    calls = record_jumps(monkeypatch)
+
+    async def scenario(app, pilot):
+        target = row_of(app, ALPHA)
+        while app.view.cursor != target:
+            await pilot.press("down")
+        await pilot.press("g")
+        await settle(app, pilot)
+        assert [argv for argv, _ in calls] == [["placeholder-no-op", ALPHA]]
+        assert calls[0][1]["shell"] is False and calls[0][1]["timeout"] == 5
+        assert status_text(app) == f"window of {ALPHA} — return: tab keys back"
+        assert app.query_one(TabbedContent).active == "tasks"
+
+    with guarded(root):
+        run(scenario, root, locator=jumping_locator())
+
+
+@pytest.mark.parametrize("tabs", [1, 2])
+def test_g_works_from_the_detail_and_chat_tabs(tmp_path, monkeypatch, tabs):
+    root = attention_root(tmp_path)
+    calls = record_jumps(monkeypatch)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        for _ in range(tabs - 1):
+            await pilot.press("tab")
+            await settle(app, pilot)
+        assert app.query_one(TabbedContent).active == ("detail", "chat")[tabs - 1]
+        await pilot.press("g")
+        await settle(app, pilot)
+        assert [argv for argv, _ in calls] == [["placeholder-no-op", ALPHA]]
+        assert "tab keys back" in status_text(app)
+
+    with guarded(root):
+        run(scenario, root, locator=jumping_locator())
+
+
+def test_g_on_a_session_row_uses_that_rows_own_harness_session(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    calls = record_jumps(monkeypatch)
+
+    async def scenario(app, pilot):
+        target = row_of(app, ASK_SESSION)
+        while app.view.cursor != target:
+            await pilot.press("down")
+        await pilot.press("g")
+        await settle(app, pilot)
+        assert [argv for argv, _ in calls] == [["placeholder-no-op", ASK_SESSION]]
+        await pilot.press("enter")
+        await settle(app, pilot)
+        await pilot.press("g")
+        await settle(app, pilot)
+        assert [argv for argv, _ in calls][-1] == ["placeholder-no-op", ASK_SESSION]
+
+    run(scenario, root, locator=jumping_locator())
+
+
+def test_a_failed_jump_shows_its_reason_and_the_view_goes_on(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    record_jumps(monkeypatch, returncode=1, stderr="no such window")
+
+    async def scenario(app, pilot):
+        target = row_of(app, ALPHA)
+        while app.view.cursor != target:
+            await pilot.press("down")
+        await pilot.press("g")
+        await settle(app, pilot)
+        assert status_text(app) == f"window of {ALPHA} failed: no such window"
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert table_ids(app)
+
+    run(scenario, root, locator=jumping_locator())
+
+
+def test_g_without_a_locator_says_so_and_runs_nothing(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    calls = record_jumps(monkeypatch)
+
+    empty_plugins = tmp_path / "empty-plugins"
+    empty_plugins.mkdir()
+
+    async def scenario(app, pilot):
+        await pilot.press("g")
+        await settle(app, pilot)
+        assert status_text(app) == "no jump target" and calls == []
+
+    run(scenario, root, locator=locate.select_or_none(empty_plugins, None))
+
+
+# --- what the user perceives: order, geometry, time to content, feedback while waiting ------------
+
+def test_the_overview_columns_open_with_the_task_in_the_order_of_the_web_page():
+    assert tui.OVERVIEW_COLUMNS == ("task", "wait", "session", "live", "node", "stage", "diff", "replans", "age",
+                                    "wall", "cost", "goal")
+
+
+def test_the_table_shows_the_task_column_first(tmp_path):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        table = app.query_one(DataTable)
+        assert [str(column.label) for column in table.columns.values()][:3] == ["task", "wait", "session"]
+        assert table.get_row_at(table_ids(app).index(ALPHA))[0].plain == f"task-{ALPHA}"
+
+    run(scenario, root)
+
+
+def hold_reloads(monkeypatch):
+    """Make every ``model.collect`` from now on wait for the returned event, as a reload over thousands of tasks would."""
+    release, real = threading.Event(), model.collect
+
+    def slow(*args, **kwargs):
+        release.wait(PILOT_DEADLINE_S)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(model, "collect", slow)
+    return release
+
+
+@pytest.mark.parametrize("size", [(150, 40), (80, 24)])
+@pytest.mark.parametrize("tab", ["tasks", "detail", "chat"])
+def test_no_tab_scrolls_the_screen_and_the_tabs_row_sits_below_the_header(tmp_path, size, tab):
+    root = attention_root(tmp_path)
+    long_chat = [line("user", 10, "go on")] + [
+        line("assistant", 9, [{"type": "text", "text": f"reply number {n}"}], "end_turn") for n in range(80)]
+    write_fixture_transcript(root, ALPHA, long_chat)
+    app = make_app(root, locator=attention_locator())
+
+    async def main():
+        async with app.run_test(size=size) as pilot:
+            await settle(app, pilot)
+            await open_task(app, pilot, ALPHA)
+            if tab == "tasks":
+                await pilot.press("escape")
+            elif tab == "chat":
+                await pilot.press("tab")
+            await settle(app, pilot)
+            assert app.query_one(TabbedContent).active == tab
+            header, tabs = app.query_one(Header).region, app.query_one(Tabs).region
+            assert tabs.y >= header.y + header.height
+            assert app.screen.max_scroll_y == 0
+
+    asyncio.run(asyncio.wait_for(main(), PILOT_DEADLINE_S))
+
+
+def test_the_chat_shows_within_two_seconds_though_the_reload_is_still_running(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        release = hold_reloads(monkeypatch)
+        try:
+            await pilot.press("tab")
+            for _ in range(20):
+                await pilot.pause(0.1)
+                if "Which way?" in chat_text(app):
+                    break
+            assert "Which way?" in chat_text(app)
+            assert app._loading and not release.is_set()
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert not app._loading and "Which way?" in chat_text(app)
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_a_chat_read_does_not_cancel_the_reload_that_is_running(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        release = hold_reloads(monkeypatch)
+        try:
+            await pilot.press("tab")
+            await pilot.pause(0.5)
+            reload_workers = [w for w in app.workers if w.group == "collect"]
+            assert reload_workers and all(w.is_running for w in reload_workers)
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert not app._loading
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_a_toggle_names_the_load_at_once_and_then_the_mode_and_count(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        release = hold_reloads(monkeypatch)
+        try:
+            await pilot.press("a")
+            await pilot.pause(0.3)
+            assert app.sub_title == "loading all tasks…"
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert app.sub_title.startswith(f"all: {len(table_ids(app))} tasks")
+        release = hold_reloads(monkeypatch)
+        try:
+            await pilot.press("a")
+            await pilot.pause(0.3)
+            assert app.sub_title == "loading live tasks…"
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert app.sub_title.startswith(f"live: {len(table_ids(app))} tasks")
+
+    run(scenario, root)
+
+
+# --- q returns at once, and no read applies out of order -------------------------------------
+
+QUIT_DEADLINE_S = 2
+
+
+def test_q_returns_to_the_shell_within_two_seconds_while_a_reload_is_still_running(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+    release = hold_reloads(monkeypatch)
+    pressed, finished = [], []
+
+    class Quitting(DashboardApp):
+        def on_mount(self):
+            # textual already calls DashboardApp.on_mount itself: it dispatches a handler on every class in the MRO
+            self.set_timer(0.5, self.quit_now)
+
+        def quit_now(self):
+            pressed.append(time.monotonic())
+            self.dispatch_key("q")
+
+    app = Quitting(state_root=root.state_root, cost_log=root.cost_log, transcripts_root=root.transcripts_root,
+                   clock=Clock(), interval=3600.0)
+
+    def run_as_the_shell_does():
+        asyncio.run(app.run_async(headless=True, size=SIZE))
+        finished.append(time.monotonic())
+
+    thread = threading.Thread(target=run_as_the_shell_does, daemon=True)
+    thread.start()
+    try:
+        thread.join(QUIT_DEADLINE_S + 3)
+        assert pressed and finished and finished[0] - pressed[0] < QUIT_DEADLINE_S
+    finally:
+        release.set()
+
+
+def test_a_read_that_ends_after_the_app_exited_raises_nothing(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+    release = hold_reloads(monkeypatch)
+    raised = []
+    monkeypatch.setattr(threading, "excepthook", raised.append)
+    app = make_app(root)
+
+    async def main():
+        async with app.run_test(size=SIZE) as pilot:
+            await pilot.pause(0.3)
+            await pilot.press("q")
+            await pilot.pause(0.2)
+
+    asyncio.run(asyncio.wait_for(main(), PILOT_DEADLINE_S))
+    release.set()
+    for thread in threading.enumerate():
+        if thread.name == "plan-dashboard-read":
+            thread.join(PILOT_DEADLINE_S)
+    assert raised == []
+
+
+def test_a_chat_read_that_ends_after_a_newer_one_is_dropped(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    older, slow = threading.Event(), [True]
+
+    def read(target, locator, transcripts_root):
+        if slow[0]:
+            older.wait(PILOT_DEADLINE_S)
+            return {"harness_session": "x", "entries": [{"role": "user", "text": "OLDER"}]}
+        return {"harness_session": "x", "entries": [{"role": "user", "text": "NEWER"}]}
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        monkeypatch.setattr(tui, "read_chat", read)
+        await pilot.press("tab")
+        await pilot.pause(0.3)
+        slow[0] = False
+        tui_app.start_chat_read(app)
+        await pilot.pause(0.5)
+        assert "NEWER" in chat_text(app)
+        older.set()
+        await pilot.pause(0.5)
+        assert "NEWER" in chat_text(app) and "OLDER" not in chat_text(app)
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_the_loading_title_survives_a_reload_issued_before_the_toggle(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+    first, later, calls, real = threading.Event(), threading.Event(), [], model.collect
+
+    def slow(*args, **kwargs):
+        calls.append(1)
+        (first if len(calls) == 1 else later).wait(PILOT_DEADLINE_S)
+        return real(*args, **kwargs)
+
+    async def scenario(app, pilot):
+        monkeypatch.setattr(model, "collect", slow)
+        try:
+            await pilot.press("r")
+            await pilot.pause(0.2)
+            await pilot.press("a")
+            await pilot.pause(0.2)
+            first.set()
+            await pilot.pause(0.5)
+            assert app.sub_title == "loading all tasks…"
+        finally:
+            first.set()
+            later.set()
+        await settle(app, pilot)
+        assert app.sub_title.startswith(f"all: {len(table_ids(app))} tasks")
+
+    run(scenario, root)
+
+
+# --- each read on its own: the table before the marks, the tree apart from the reload ---------
+
+def hold(monkeypatch, module, name, tag=None):
+    """Make every ``module.name`` call from now on wait for the returned event; ``calls`` counts them and,
+    with ``tag``, the n-th call's result passes through ``tag(result, n)``."""
+    release, calls, real = threading.Event(), [], getattr(module, name)
+
+    def slow(*args, **kwargs):
+        calls.append(1)
+        n = len(calls)
+        release.wait(PILOT_DEADLINE_S)
+        result = real(*args, **kwargs)
+        return tag(result, n) if tag else result
+
+    monkeypatch.setattr(module, name, slow)
+    return release, calls
+
+
+async def until(pilot, condition, seconds=2.0):
+    for _ in range(int(seconds / 0.1)):
+        if condition():
+            return True
+        await pilot.pause(0.1)
+    return condition()
+
+
+def test_the_table_and_its_title_show_before_the_waiting_marks_are_read(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        release, calls = hold(monkeypatch, tui, "read_attention")
+        try:
+            await pilot.press("a")
+            assert await until(pilot, lambda: app.sub_title.startswith("all: "))
+            assert calls and not release.is_set()
+            assert ALPHA in table_ids(app)
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_the_detail_tree_fills_while_the_reload_is_still_running(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        release = hold_reloads(monkeypatch)
+        try:
+            for _ in range(table_ids(app).index(ALPHA)):
+                await pilot.press("down")
+            await pilot.press("enter")
+            assert await until(pilot, lambda: "Stage 2" in tree_text(app))
+            assert app._loading and not release.is_set()
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert "Stage 2" in tree_text(app)
+
+    run(scenario, root)
+
+
+def test_another_task_shows_loading_in_the_tree_at_once_and_none_of_the_previous_one(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        assert "Stage 2" in tree_text(app)
+        await pilot.press("escape")
+        release, _ = hold(monkeypatch, model, "detail")
+        try:
+            await open_task_unsettled(app, pilot, BETA)
+            await pilot.pause(0.3)
+            assert tree_text(app) == tui_app.TREE_LOADING
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert "beta-111" in tree_text(app) and "alpha-00" not in tree_text(app)
+
+    run(scenario, root)
+
+
+async def open_task_unsettled(app, pilot, sid):
+    target = table_ids(app).index(sid)
+    while app.view.cursor != target:
+        await pilot.press("down" if app.view.cursor < target else "up")
+    await pilot.press("enter")
+
+
+def test_a_detail_read_that_ends_after_a_newer_one_is_dropped(tmp_path, monkeypatch):
+    root = console_root(tmp_path)
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        older, real = threading.Event(), model.detail
+
+        def read(*args, **kwargs):
+            detail = real(*args, **kwargs)
+            if not older.is_set() and not read.newer:
+                read.newer = True
+                older.wait(PILOT_DEADLINE_S)
+                return {**detail, "goal": "OLDER"}
+            return {**detail, "goal": "NEWER"}
+
+        read.newer = False
+        monkeypatch.setattr(model, "detail", read)
+        try:
+            tui_app.start_detail_read(app)
+            await pilot.pause(0.3)
+            tui_app.start_detail_read(app)
+            assert await until(pilot, lambda: "NEWER" in tree_text(app))
+        finally:
+            older.set()
+        await pilot.pause(0.5)
+        assert "NEWER" in tree_text(app) and "OLDER" not in tree_text(app)
+
+    run(scenario, root)
+
+
+def test_ticks_leave_the_reads_in_flight_alone_and_each_lands_once_released(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    clock = Clock()
+
+    async def scenario(app, pilot):
+        await open_task(app, pilot, ALPHA)
+        details, detail_calls = hold(monkeypatch, model, "detail")
+        marks, mark_calls = hold(monkeypatch, tui, "read_attention")
+        reloads = count_collects(monkeypatch)
+        try:
+            await pilot.press("r")
+            await pilot.pause(0.3)
+            for _ in range(4):
+                clock.advance(10)
+                await pilot.pause(0.7)
+            assert len(reloads) >= 3, "the tick goes on reloading the table"
+            assert (len(detail_calls), len(mark_calls)) == (1, 1)
+        finally:
+            details.set()
+            marks.set()
+        await settle(app, pilot)
+        assert "Stage 2" in tree_text(app)
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
+        assert app.overlay is not None and not app._loading
+
+    run(scenario, root, clock=clock, interval=5.0, locator=attention_locator())
+
+
+BULK = [f"bulk-{i:03d}" for i in range(500)]
+
+
+def bulk_root(tmp_path):
+    """500 stale tasks, each with an idle transcript dated like its last activity, newest first by index."""
+    states = [make_state(sid, history=[event("classify", at(hours=48, minutes=i))]) for i, sid in enumerate(BULK)]
+    root = build_fixture_root(tmp_path, states, now=NOW)
+    for i, sid in enumerate(BULK):
+        write_fixture_transcript(root, sid, IDLE)
+        stamp = at(hours=48, minutes=i).timestamp()
+        os.utime(root.transcripts_root / PROJECT / f"{sid}.jsonl", (stamp, stamp))
+    return root
+
+
+def count_tail_reads(monkeypatch):
+    """The bulk task ids whose transcripts ``attention.read_tail`` reads, one entry per read."""
+    reads, real = [], attention.read_tail
+
+    def counting(path):
+        reads.append(Path(path).stem)
+        return real(path)
+
+    monkeypatch.setattr(attention, "read_tail", counting)
+    return reads
+
+
+def in_view(app):
+    table = app.query_one(DataTable)
+    return set(tui.rows_in_view(app.view.session_ids, round(table.scroll_offset.y), table.size.height))
+
+
+def test_all_mode_reads_the_marks_of_the_rows_in_view_only_and_each_once_per_change(tmp_path, monkeypatch):
+    root = bulk_root(tmp_path)
+    reads = count_tail_reads(monkeypatch)
+
+    async def scenario(app, pilot):
+        await pilot.press("a")
+        await settle(app, pilot)
+        assert table_ids(app)[:len(BULK)] == BULK
+        first = [sid for sid in reads if sid in BULK]
+        assert first and set(first) == in_view(app) and len(first) == len(set(first))
+        assert len(first) <= app.query_one(DataTable).size.height + 2 * tui.MARK_MARGIN
+        assert table_cells(app, row_of(app, BULK[0]))["wait"] == "…"
+        assert table_cells(app, row_of(app, BULK[450]))["wait"] == "?"
+        app.query_one(DataTable).move_cursor(row=300, animate=False)
+        assert await until(pilot, lambda: BULK[300] in reads, seconds=5.0)
+        await settle(app, pilot)
+        scrolled = reads[len(first):]
+        assert set(scrolled) <= in_view(app) and not set(scrolled) & set(first)
+        assert len(scrolled) == len(set(scrolled))
+        assert table_cells(app, row_of(app, BULK[300]))["wait"] == "…"
+        assert table_cells(app, row_of(app, BULK[450]))["wait"] == "?"
+        before = len(reads)
+        await pilot.press("r")
+        await settle(app, pilot)
+        await pilot.pause(1.0)
+        assert reads[before:] == []
+        assert table_cells(app, row_of(app, BULK[300]))["wait"] == "…"
+
+    run(scenario, root)
+
+
+def test_the_all_mode_counter_counts_the_live_set_like_live_mode(tmp_path):
+    root = attention_root(tmp_path)
+    write_fixture_transcript(root, STALE, ASKING)
+
+    async def scenario(app, pilot):
+        live_head = str(app.query_one("#overview-head").render())
+        assert live_head.endswith("waiting: 3")
+        await pilot.press("a")
+        await settle(app, pilot)
+        assert await until(pilot, lambda: table_cells(app, row_of(app, STALE))["wait"] == "Q", seconds=5.0)
+        assert str(app.query_one("#overview-head").render()).endswith("waiting: 3")
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
+
+    run(scenario, root, locator=attention_locator())
+
+
+def test_the_table_shows_before_the_ordering_read_and_the_cursor_survives_the_re_sort(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+
+    async def scenario(app, pilot):
+        assert app.query_one(DataTable).cursor_row == 0, "an unmoved cursor stays on the top row"
+        await pilot.press("down")
+        await settle(app, pilot)
+        chosen = table_ids(app)[app.query_one(DataTable).cursor_row]
+        newest = max(p.stat().st_mtime for p in root.transcripts_root.glob("*/*.jsonl")) + 60
+        os.utime(root.transcripts_root / PROJECT / f"{BETA}.jsonl", (newest, newest))
+        release, calls = hold(monkeypatch, tui, "read_order")
+        collects = count_collects(monkeypatch)
+        try:
+            await pilot.press("r")
+            assert await until(pilot, lambda: collects and calls and not app._loading)
+            assert table_ids(app) and app.sub_title.startswith("live: ") and not release.is_set()
+            assert table_ids(app)[app.query_one(DataTable).cursor_row] == chosen
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert table_ids(app)[0] == BETA
+        assert table_ids(app)[app.query_one(DataTable).cursor_row] == chosen
+
+    run(scenario, root, locator=attention_locator())

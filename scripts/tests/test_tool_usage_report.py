@@ -8,17 +8,14 @@ dir keeps scanning past ONE unreadable file (the report is handed a glob, unlike
 the hooks, which the harness hands a single transcript), and that malformed
 content shapes yield nothing rather than raising.
 """
-import importlib.util
 import json
+import sys
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 
-_SPEC = importlib.util.spec_from_file_location(
-    "tool_usage_report", SCRIPTS / "tool-usage-report.py"
-)
-mod = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(mod)
+sys.path.insert(0, str(SCRIPTS))
+from lib.agent_report import tool_usage as mod
 
 
 def _write(path: Path, entries) -> Path:
