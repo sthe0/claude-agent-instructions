@@ -3,7 +3,10 @@
   grounding-judge.py table <table.toml> [--out verdicts.json] [--cache DIR] [--leaves DIR] [--project DIR]
                            [--checked-path PATH ...]
       The verdicts file a bulk-conversion table needs: one record per [[leaf]], [[stamp]] and [[rebase]]
-      entry, each cached at <cache>/<digest>.json (default: the judge's own cache directory).
+      entry, each cached at <cache>/<digest>.json (default: the judge's own cache directory). Without
+      --leaves the judge has no corpus: a given G ground then has no `last_verified` and reads as
+      `unverified_given` unless its `given_source` is among the --checked-path values, and a stamped
+      principle's text is not shown to the model.
   grounding-judge.py link <link.json> [--cache DIR] [--checked-path PATH ...]
       One link, from {"prescription": {...}, "grounds": [...], "candidates": [...], "override": "..."}.
   grounding-judge.py corpus --leaves DIR [--project DIR] [--cache DIR] [--checked-path PATH ...]

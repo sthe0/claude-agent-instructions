@@ -302,7 +302,8 @@ def test_verdict_cached_by_digest(tmp_path):
     runner = Runner(reply("irrelevant"))
     first = _judge(runner, cache=cache)
     digest = first.get("digest")
-    assert digest == hashlib.sha256(gj.link_inputs(PRESCRIPTION, [GROUND]).encode()).hexdigest()
+    asked = dict(PRESCRIPTION, question="link")
+    assert digest == hashlib.sha256(gj.link_inputs(asked, [GROUND]).encode()).hexdigest()
     assert (cache / f"{digest}.json").is_file()
     second = _judge(runner, cache=cache)
     assert len(runner.calls) == 1
@@ -497,21 +498,98 @@ def test_ground_only_entries_no_link_defect(tmp_path):
     gj = _gj()
     runner = Runner(reply("irrelevant", "defective_ground"))
     verdicts = _judge_table(tmp_path, runner, checked_paths=("docs/vendor.md",))
-    for tag in (G_TAG, O_TAG, KI_TAG):
+    for tag in (G_TAG, O_TAG, KR_TAG, KI_TAG):
         record = _rec(verdicts, tag)
         assert record.get("link_defects") == [], tag
         assert record.get("ground_defects") == ["defective_ground"], tag
-    for tag in (P_TAG, KR_TAG):
+    for tag in (P_TAG, P2_TAG):
         record = _rec(verdicts, tag)
         assert record.get("link_defects") == ["irrelevant"], tag
         assert record.get("ground_defects") == ["defective_ground"], tag
     data = __import__("tomllib").loads(TABLE)
     questions = {tag: gj.entry_question(tag, entry) for tag, entry in gj.table_entries(data)}
-    assert questions[G_TAG] == questions[O_TAG] == questions[KI_TAG] == "ground"
-    assert questions[P_TAG] == questions[KR_TAG] == questions[P2_TAG] == "link"
-    # the [[stamp]] and the [[rebase]] entry share one link, so the second is a cache hit
+    assert questions[G_TAG] == questions[O_TAG] == questions[KR_TAG] == questions[KI_TAG] == "ground"
+    assert questions[P_TAG] == questions[P2_TAG] == "link"
+    # the [[stamp]] and the [[rebase]] entry are two identities, so each is judged
     assert sum("Backward test" in p for p in runner.calls) == 4
-    assert sum("This entry is a ground and no prescription" in p for p in runner.calls) == 3
+    assert sum("This entry is a ground and no prescription" in p for p in runner.calls) == 4
+
+
+def test_a_rule_derived_regularity_is_asked_the_ground_question_over_no_grounds(tmp_path):
+    runner = Runner(reply())
+    verdicts = _judge_table(tmp_path, runner)
+    record = _rec(verdicts, KR_TAG)
+    assert record.get("status") == "ok"
+    assert record.get("verdict") == "sound"
+    assert record.get("link_defects") == []
+
+
+def _stamp_table(*pairs) -> str:
+    return "".join(
+        f'[[stamp]]\ntier = "global"\npath = "principles/{slug}.md"\ngrounded_in = ["regularity:reg-a"]\n\n'
+        for slug in pairs)
+
+
+def test_equal_grounds_but_different_principle_text_do_not_share_a_cached_verdict(tmp_path):
+    from lib import principle_provenance as pp
+
+    gj = _gj()
+    leaves = tmp_path / "leaves"
+    _corpus(tmp_path)
+    _write(leaves / "principles" / "prin-t.md", _PRINCIPLE.format(
+        slug="prin-t", refs="[regularity:reg-a]", extra="", text="Never cache anything."))
+    corpus = pp.load_corpus(leaves)
+    runner = Runner(reply())
+    table = _table(tmp_path, _stamp_table("prin-s", "prin-t"))
+    verdicts = gj.judge_table(table, runner=runner, cache=tmp_path / "cache", corpus=corpus, today=TODAY)
+    first, second = (_rec(verdicts, f"global:principles/{s}.md") for s in ("prin-s", "prin-t"))
+    assert first.get("digest") != second.get("digest")
+    assert len(runner.calls) == 2
+    assert any("Not part of the digest." in p for p in runner.calls)
+    assert any("Never cache anything." in p for p in runner.calls)
+
+
+def test_editing_a_stamped_principle_text_invalidates_its_cached_verdict(tmp_path):
+    from lib import principle_provenance as pp
+
+    gj = _gj()
+    leaves = tmp_path / "leaves"
+    table = _table(tmp_path, _stamp_table("prin-s"))
+    _corpus(tmp_path)
+    runner = Runner(reply())
+    gj.judge_table(table, runner=runner, cache=tmp_path / "cache", corpus=pp.load_corpus(leaves), today=TODAY)
+    gj.judge_table(table, runner=runner, cache=tmp_path / "cache", corpus=pp.load_corpus(leaves), today=TODAY)
+    assert len(runner.calls) == 1
+    _write(leaves / "principles" / "prin-s.md", _PRINCIPLE.format(
+        slug="prin-s", refs="[regularity:reg-a]", extra="", text="A rewritten principle."))
+    gj.judge_table(table, runner=runner, cache=tmp_path / "cache", corpus=pp.load_corpus(leaves), today=TODAY)
+    assert len(runner.calls) == 2
+    assert "A rewritten principle." in runner.calls[1]
+
+
+def test_cache_serves_only_an_ok_record_of_its_own_digest(tmp_path):
+    cache = tmp_path / "cache"
+    runner = Runner(reply("irrelevant"))
+    first = _judge(runner, cache=cache)
+    digest = first.get("digest")
+    path = cache / f"{digest}.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    for tampered in (dict(record, digest="0" * 64), dict(record, status="unavailable")):
+        path.write_text(json.dumps(tampered), encoding="utf-8")
+        _judge(runner, cache=cache)
+    assert len(runner.calls) == 3
+
+
+def test_cache_write_leaves_no_temporary_file(tmp_path):
+    cache = tmp_path / "cache"
+    first = _judge(Runner(reply()), cache=cache)
+    assert sorted(p.name for p in cache.iterdir()) == [f"{first.get('digest')}.json"]
+
+
+def test_unknown_defect_names_are_reported_as_such(tmp_path):
+    out = _judge(Runner(reply("not_a_defect")))
+    assert out.get("status") == "unavailable"
+    assert "unknown defect names" in out.get("warning", "")
 
 
 def test_table_given_currency_comes_from_the_corpus(tmp_path):
@@ -638,7 +716,7 @@ def test_cli_link_subcommand(tmp_path, capsys):
     assert rc == 0
     shown = json.loads(capsys.readouterr().out)
     assert shown["link_defects"] == ["irrelevant"]
-    assert shown["digest"] == _gj().link_digest(PRESCRIPTION, [GROUND])
+    assert shown["digest"] == _gj().link_digest(dict(PRESCRIPTION, question="link"), [GROUND])
 
 
 def test_cli_corpus_subcommand(tmp_path, capsys):

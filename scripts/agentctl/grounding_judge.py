@@ -1,6 +1,6 @@
 """Grounding judge: a fail-open model judge of each link between a prescription and the knowledge it rests on.
 
-A prescription (a principle, a rule-derived regularity) names its grounds explicitly. Whether a named
+A prescription (a principle) names its grounds explicitly. Whether a named
 ground is *relevant*, *sufficient*, in *scope* and consistent with the prescription is meaning, so a
 model decides it; whether a ref resolves and whether a given regularity is current is observable, so a
 rule decides it before the model is asked (`given_currency`).
@@ -8,18 +8,23 @@ rule decides it before the model is asked (`given_currency`).
 One model question carries two counterfactual tests -- forward (would refuting each listed ground put
 the prescription in question) and backward (which candidate, if refuted, would, and is it listed) -- and
 returns defects of two kinds that stay apart: `LINK_DEFECTS` (the link is wrong) and `GROUND_DEFECTS` (a
-ground is wrong). A ground-only entry (a given or induced regularity, an ontology) gets no link defects.
+ground is wrong). A ground-only entry (a regularity -- given, induced or rule-derived -- or an ontology,
+all knowledge and no prescription) gets no link defects.
 
 The judge fails open: an outage yields an `unavailable` outcome with a warning, never a pass and never a
 stamp. The digest of a link is defined once -- `link_inputs` over the whitelisted fields of the
-prescription and of its grounds -- and every side (table, leaf, judge) hashes that text. A verdict is
-cached at `<cache_dir()>/<digest>.json`. Callers reach every seam as `grounding_judge.<name>` so a control
+prescription and of its grounds -- and every side (table, leaf, judge) hashes that text; the fields
+include the entry's identity and the question asked of it, so two entries that share their grounds never
+share a digest. A verdict is cached at `<cache_dir()>/<digest>.json` together with a hash of the text the
+model was shown, and a record is served only to a call that shows the model the same text. Callers reach every seam as `grounding_judge.<name>` so a control
 can replace one at its module attribute.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 import time
 import tomllib
 from datetime import date, timedelta
@@ -40,8 +45,10 @@ GROUND_DEFECTS = ("defective_ground", "unverified_given", "inadequate_distinctio
 RULE_DEFECTS = ("unverified_given",)
 UNFAITHFUL_QUOTE = "unfaithful_quote"
 
+DIGEST_ONLY_FIELDS = ("id", "question")
 LINK_FIELDS = ("principle", "grounded_in", "statement", "rule_derived", "distinction", "adequacy",
-               "given", "given_source")
+               "given", "given_source") + DIGEST_ONLY_FIELDS
+PROMPT_FIELDS = tuple(f for f in LINK_FIELDS if f not in DIGEST_ONLY_FIELDS)
 GROUND_FIELDS = ("ref", "statement", "distinction", "adequacy", "given", "given_source")
 
 _JUDGE_COMPLEXITY = "medium"
@@ -157,12 +164,13 @@ def table_entries(data) -> list[tuple[str, dict]]:
 
 
 def entry_question(tag, entry) -> str:
-    """`ground` for an entry that is knowledge and no prescription (a given or induced regularity, an
+    """`ground` for an entry that is knowledge and no prescription (a regularity of any origin, an
     ontology); `link` for one that rests on other knowledge."""
-    cls = entry.get("class")
-    if cls in ("G", "O") or (cls == "K" and not entry.get("rule_derived")):
-        return "ground"
-    return "link"
+    return "ground" if entry.get("class") in ("G", "O", "K") else "link"
+
+
+def _entry_id(tier, path) -> str:
+    return f"{tier}:{_stem(path)}"
 
 
 def table_override(entry) -> str | None:
@@ -207,7 +215,8 @@ def _entry_refs(entry) -> list[str]:
 
 
 def table_prescription(entry) -> dict:
-    return {**entry, "grounded_in": _entry_refs(entry)}
+    return {**entry, "grounded_in": _entry_refs(entry), "id": _entry_id(entry.get("tier"), entry.get("path")),
+            "question": entry_question(None, entry)}
 
 
 def table_link_inputs(entry, data) -> str:
@@ -251,6 +260,10 @@ def _ground_of(leaf) -> dict:
     return out
 
 
+def leaf_question(schema) -> str:
+    return "link" if schema == "principle/v1" else "ground"
+
+
 def leaf_link_fields(leaf, corpus) -> tuple[dict, list[dict]]:
     """The prescription and ground fields a converted leaf carries, shaped like the table's. A principle
     leaf that was converted from `leaf/v1` carries its principle text; one that was not (a stamped
@@ -258,7 +271,7 @@ def leaf_link_fields(leaf, corpus) -> tuple[dict, list[dict]]:
     text = leaf.text
     front = leaf_forms.frontmatter_of(text)
     schema = leaf_forms.field(front, "schema")
-    prescription: dict = {}
+    prescription: dict = {"id": f"{leaf.tier}:{leaf.slug}", "question": leaf_question(schema)}
     refs: list[str] = []
     if schema == "principle/v1":
         raw = leaf_forms.field(front, "grounded_in") or ""
@@ -324,7 +337,7 @@ def split_defects(names) -> tuple[list[str], list[str]]:
     """The defect names a model returned, apart: (link defects, ground defects), each in vocabulary order."""
     unknown = [n for n in names if n not in LINK_DEFECTS + GROUND_DEFECTS]
     if unknown:
-        raise ValueError(f"unknown defect names: {unknown}")
+        raise ValueError(f"the model returned unknown defect names: {unknown}")
     return ([n for n in LINK_DEFECTS if n in names], [n for n in GROUND_DEFECTS if n in names])
 
 
@@ -399,10 +412,18 @@ def _render(items, with_ref=True) -> str:
     return "\n".join(lines) or "(none)"
 
 
+def _shown(prescription, context) -> str:
+    """The text of the prescription the model is shown: its whitelisted fields, then the caller's context."""
+    shown = "\n".join(f"{k}: {v}" for k, v in _pick(prescription, PROMPT_FIELDS).items())
+    return f"{shown}\n{context}" if context else shown
+
+
+def _inputs_hash(question, prescription, context) -> str:
+    return hashlib.sha256(f"{question}\n{_shown(prescription, context)}".encode("utf-8")).hexdigest()
+
+
 def _prompt(question, prescription, grounds, candidates, context) -> str:
-    shown = "\n".join(f"{k}: {v}" for k, v in _pick(prescription, LINK_FIELDS).items())
-    if context:
-        shown += f"\n{context}"
+    shown = _shown(prescription, context)
     if question == "ground":
         return (_PROMPT_HEAD + f"ENTRY:\n{shown}\n\n" + _GROUND_TESTS + ontology_question([prescription]))
     return (_PROMPT_HEAD + f"PRESCRIPTION:\n{shown}\n\nLISTED GROUNDS:\n{_render(grounds)}\n\n"
@@ -425,31 +446,45 @@ def apply_override(verdict, reason) -> dict:
     return {**verdict, "override": reason, "overridden": bool(defects)}
 
 
-def _cache_read(cache, digest):
+def _cache_read(cache, digest, inputs):
+    """The record cached for `digest`, when it is a judged one of this very link shown the same text."""
     if cache is None:
         return None
     try:
-        return json.loads((Path(cache) / f"{digest}.json").read_text(encoding="utf-8"))
+        record = json.loads((Path(cache) / f"{digest}.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    if not isinstance(record, dict):
+        return None
+    ok = record.get("status") == "ok" and record.get("digest") == digest and record.get("inputs") == inputs
+    return record if ok else None
 
 
 def _cache_write(cache, digest, record) -> None:
     if cache is None:
         return
-    Path(cache).mkdir(parents=True, exist_ok=True)
-    (Path(cache) / f"{digest}.json").write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+    cache = Path(cache)
+    cache.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=cache, prefix=f".{digest}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True))
+        os.replace(tmp, cache / f"{digest}.json")
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def judge_grounding_link(prescription, grounds, candidates, *, runner, cache=None, digest=None, today=None,
                          checked_paths=(), context="", question="link", override=None) -> dict:
     """Judge one link. The model's part is cached by the link's digest; the given-currency rule is decided
     on every call, before and apart from the model."""
-    digest = digest or link_digest(prescription, grounds)
+    digest = digest or link_digest({**prescription, "question": question}, grounds)
+    inputs = _inputs_hash(question, prescription, context)
     subjects = list(grounds) + ([prescription] if question == "ground" else [])
     stale = [d for d in RULE_DEFECTS
              if any(not given_currency(g, checked_paths=checked_paths, today=today) for g in subjects)]
-    cached = _cache_read(cache, digest)
+    cached = _cache_read(cache, digest, inputs)
     if cached is not None:
         link, ground, reason = cached.get("link_defects", []), cached.get("ground_defects", []), cached.get("reason", "")
     else:
@@ -465,8 +500,8 @@ def judge_grounding_link(prescription, grounds, candidates, *, runner, cache=Non
     outcome = {"status": "ok", "verdict": "defective" if link or ground else "sound", "link_defects": link,
                "ground_defects": ground, "reason": reason, "digest": digest, "blocking": False,
                "warning": None, "override": None, "overridden": False}
-    _cache_write(cache, digest, {k: outcome[k] for k in ("status", "verdict", "link_defects", "ground_defects",
-                                                           "reason", "digest")})
+    _cache_write(cache, digest, {**{k: outcome[k] for k in ("status", "verdict", "link_defects", "ground_defects",
+                                                              "reason", "digest")}, "inputs": inputs})
     return apply_override(outcome, override)
 
 
@@ -536,9 +571,12 @@ def judge_table(table_path, *, runner, cache=None, corpus=None, today=None, chec
 def judge_leaf(leaf, corpus, *, runner, cache=None, today=None, checked_paths=()) -> dict:
     prescription, grounds = leaf_link_fields(leaf, corpus)
     override = leaf_forms.field(leaf_forms.frontmatter_of(leaf.text), "grounding_override")
-    context = f"principle: {_section(leaf.text, '## Principle')}" if prescription.get("grounded_in") else ""
+    shown_in_fields = "principle" in prescription
+    context = "" if shown_in_fields or not prescription.get("grounded_in") else (
+        f"principle: {_section(leaf.text, '## Principle')}")
     outcome = judge_grounding_link(prescription, grounds, candidate_grounds(corpus), runner=runner, cache=cache,
-                                   today=today, checked_paths=checked_paths, context=context, override=override)
+                                   today=today, checked_paths=checked_paths, context=context,
+                                   question=prescription["question"], override=override)
     return table_record(outcome)
 
 
