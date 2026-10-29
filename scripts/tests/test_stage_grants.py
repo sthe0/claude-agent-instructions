@@ -1087,6 +1087,7 @@ _SETTINGS_REFERENCE_RE = re.compile(r"settings[^/\s\"'`]*\.json")
 # added here too.
 SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
     "agentctl/cli.py": "reader",
+    "agentctl/cli_common.py": "reader",
     "agentctl/classify.py": "mention",
     "agentctl/exempt_paths.py": "mention",
     "agentctl/mandate.py": "mention",

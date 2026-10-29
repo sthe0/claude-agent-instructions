@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli
+from agentctl import cli, cli_common
 from agentctl import state as state_module
 from agentctl.state import Difficulty, Node, SessionState, StageStatus
 
@@ -669,6 +669,7 @@ def test_closing_replan_with_a_factor_files_no_waiver_on_the_root(store, venued_
 def test_refused_waiver_gate_row_carries_the_blocker_text(store, venued_fixtures_dir, tmp_path, monkeypatch):
     log = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(cli, "GATE_LOG", log)
+    monkeypatch.setattr(cli_common, "GATE_LOG", log)
     sid = "c7g"
     _with_child_target(store, tmp_path, venued_fixtures_dir, sid, parent_address="resource")
     d = _replan(store, sid, venued_fixtures_dir / "plan_two_stage_refined.toml",

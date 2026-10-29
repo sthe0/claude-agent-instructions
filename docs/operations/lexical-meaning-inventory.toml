@@ -73,24 +73,31 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/cli.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line, kind(args) resource spec, and the 'Refusal: grant-widening', 'Refusal: child-outside-project' and 'Handoff-sha256:' label lines, all fixed engine/markdown syntax."
-hits = 9
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Compiles the legacy id shape qenum-N, fixed engine syntax."
+hits = 1
+hit_classes = ["structural"]
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_is_child_outside_project_refusal::pattern.search"]
+[sites."scripts/agentctl/cli_common.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line, kind(args) resource spec, and the 'Refusal: grant-widening', 'Refusal: child-outside-project' and 'Handoff-sha256:' label lines, all fixed engine/markdown syntax."
+hits = 8
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli_common.py::_is_child_outside_project_refusal::pattern.search"]
 class = "structural"
 ground = "_CHILD_OUTSIDE_PROJECT_LINE_RE.search finds the 'Refusal: child-outside-project' label line spawn-specialist itself writes; a fixed engine label syntax."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_is_grant_widening_refusal::pattern.search"]
+[sites."scripts/agentctl/cli_common.py::_is_grant_widening_refusal::pattern.search"]
 class = "structural"
 ground = "_REFUSAL_LINE_RE.search finds the 'Refusal: grant-widening' label line spawn-specialist itself writes; a fixed engine label syntax."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_parse_rule_lines::pattern.match"]
+[sites."scripts/agentctl/cli_common.py::_parse_rule_lines::pattern.match"]
 class = "structural"
 ground = "_RULE_LINE_RE.match reads each 'Rule:' label line of a marker body, a fixed label syntax."
 hits = 1
@@ -171,25 +178,25 @@ ground = "Splits the scrub array body into its upper-case environment variable n
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_parse_resource_line::pattern.match"]
+[sites."scripts/agentctl/cli_common.py::_parse_resource_line::pattern.match"]
 class = "structural"
 ground = "_RESOURCE_LINE_RE.match reads the 'Resource:' label line of a marker body, a fixed label syntax."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_parse_resource_spec::pattern.match"]
+[sites."scripts/agentctl/cli_common.py::_parse_resource_spec::pattern.match"]
 class = "structural"
 ground = "_RESOURCE_SPEC_RE.match parses the kind(args) resource-spec syntax."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_parse_rule_line::pattern.match"]
+[sites."scripts/agentctl/cli_common.py::_parse_rule_line::pattern.match"]
 class = "structural"
 ground = "_RULE_LINE_RE.match reads the 'Rule:' label line of a marker body, a fixed label syntax."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_parse_transcript_path::pattern.match"]
+[sites."scripts/agentctl/cli_common.py::_parse_transcript_path::pattern.match"]
 class = "structural"
 ground = "_TRANSCRIPT_PATH_RE.match reads the 'spawn-specialist: transcript=<path>' line the engine itself writes."
 hits = 1
@@ -201,13 +208,13 @@ ground = "_LEGACY_ENUMERATION_ID.match tests an id for the qenum-N identifier sh
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_record_review_questions::re.compile"]
+[sites."scripts/agentctl/cli_common.py::_record_review_questions::re.compile"]
 class = "structural"
 ground = "Compiles the engine's own candidate-id shape qrev-<review id>-<N> so the next unused number can be read off the ids already on file; the question text is never matched."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_record_review_questions::pattern.fullmatch"]
+[sites."scripts/agentctl/cli_common.py::_record_review_questions::pattern.fullmatch"]
 class = "structural"
 ground = "The qrev-<review id>-<N> id pattern's .fullmatch tells this review's candidate rows from every other row by id shape, to find the standing row and the highest number; the statement is compared by equality, not by pattern."
 hits = 2

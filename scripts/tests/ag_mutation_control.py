@@ -43,6 +43,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
+from cli_module_anchor import anchor_target
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = ROOT / "scripts"
 CASE_FILE_RELPATH = "scripts/tests/test_authoring_grant_check.py"
@@ -183,7 +185,7 @@ def _copy_scripts(dest_root: Path) -> None:
 def _build_mutant(dest_root: Path, substitutions: list[Substitution], name: str) -> None:
     _copy_scripts(dest_root)
     for relpath, anchor, replacement in substitutions:
-        target = dest_root / relpath
+        target = anchor_target(dest_root, relpath, anchor)
         target.write_text(_substitute(target.read_text(), anchor, replacement, f"{name} {relpath}"))
 
 

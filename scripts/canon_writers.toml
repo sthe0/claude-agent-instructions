@@ -72,6 +72,7 @@
 "scripts/lib/memory_retrieval_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only retrieval ledger under ~/.local/log; writes no tracked file" }
 "scripts/agent_commit_trailer.py" ={ disposition = "not-canon", category = "not-canon", reason = "prints a commit trailer; `git commit` appears in prose only" }
 "scripts/agentctl/cli.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }
+"scripts/agentctl/cli_common.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }
 "scripts/agentctl/delivery.py" = { disposition = "not-canon", category = "not-canon", reason = "delivery receipts in the agentctl state dir" }
 "scripts/agentctl/dispatch.py" = { disposition = "not-canon", category = "not-canon", reason = "removes its own dispatch markers in the agentctl state dir" }
 "scripts/agentctl/edit_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only ledger under ~/.local/log" }

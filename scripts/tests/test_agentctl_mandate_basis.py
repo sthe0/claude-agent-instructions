@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, mandate as rules, mandate_store as store, order_approvals, protected_actions, task_accumulator
+from agentctl import cli, cli_common, mandate as rules, mandate_store as store, order_approvals, protected_actions, task_accumulator
 from agentctl.plan import load_plan, order_digest
 from agentctl.stage_norm import StageNorm
 from agentctl.state import Node, PlanPresentation
@@ -70,6 +70,7 @@ class World:
             self.repo = str(tmp_path / "repo")
             (tmp_path / "repo").mkdir()
             monkeypatch.setattr(cli, "REPO_ROOT", Path(self.repo))
+            monkeypatch.setattr(cli_common, "REPO_ROOT", Path(self.repo))
         self.worktree_root = tmp_path / "worktrees"
         self.worktree = self.worktree_root / f"{CYCLE_ID}-{ISSUE}"
         self.worktree.mkdir(parents=True)
@@ -258,6 +259,7 @@ def _unbound_world(tmp_path, monkeypatch, name, *, record_cycle=True, inputs=Non
         world.write_norm()
     if engine_repo:
         monkeypatch.setattr(cli, "REPO_ROOT", Path(engine_repo))
+        monkeypatch.setattr(cli_common, "REPO_ROOT", Path(engine_repo))
     world.parent_to_plan_ready()
     if release_lock:
         world.close()

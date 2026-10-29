@@ -63,7 +63,7 @@ asserts that no token of a node the row does not show reaches the captured argv 
 | `scripts/agentctl/advisor.py`:`judge_published_text_rules` | none | no plan content | the published body |
 | `scripts/agentctl/advisor.py`:`judge_same_difficulty` | none | no plan content | two difficulty descriptions |
 | `scripts/agentctl/advisor.py`:`judge_silent_closure` | none | no plan content | the assistant text |
-| `scripts/agentctl/cli.py`:`_venue_tree_identity.run` | none | no plan content | a git command line |
+| `scripts/agentctl/cli_common.py`:`_venue_tree_identity.run` | none | no plan content | a git command line |
 | `scripts/agentctl/mandate.py`:`<module>` | none | no plan content | a list of script names, no call |
 | `scripts/gen_crutch_registry.py`:`<module>` | none | no plan content | a table key, no call |
 | `scripts/measure-marker-extractor-latency.py`:`_one_call` | none | no plan content | a fixed synthetic message |
