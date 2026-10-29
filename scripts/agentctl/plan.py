@@ -386,7 +386,8 @@ def _parse_stage_grants(raw: object, context: str, *, strict: bool) -> "StageGra
     Read-only baseline loads (strict=False) skip validation, matching every
     other field parsed here under that flag: a plan snapshot frozen before a
     grant became invalid (validator tightened after approval) must still
-    load for diffing, not raise."""
+    load for diffing, not raise. Removed fields (`permission_mode`,
+    `runs_worktree_code`) are refused on every load: no frozen plan carries them."""
     if not raw:
         return None
     if not isinstance(raw, dict):

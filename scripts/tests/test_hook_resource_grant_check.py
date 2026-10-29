@@ -285,6 +285,12 @@ def test_rule_pattern_covers_the_segment_it_matches(rig):
     assert result[1]["matched"] == ["Bash(python3 -m pytest:*)"]
 
 
+def test_rule_pattern_allows_a_segment_that_runs_no_git(rig):
+    child = rig.child(extra_patterns=["Bash(date:*)"])
+    decision, row, _ = rig.bash(child, "date +%s")
+    assert (decision, row["reason_class"], row["matched"]) == ("allow", "covered", ["Bash(date:*)"])
+
+
 def test_rule_pattern_is_matched_per_segment_not_per_call(rig):
     child = rig.child(extra_patterns=["Bash(python3 -m pytest:*)"])
     decision, row, _ = rig.bash(child, f"python3 -m pytest -q && touch {rig.outside}/f")
@@ -603,15 +609,19 @@ def test_a_registry_script_or_pytest_line_gets_no_decision_though_the_resolver_c
     assert undeterminable(rig.bash(child, line)), line
 
 
-@pytest.mark.parametrize("line", ["python3 scripts/land-branch.py --check", "python3 scripts/instruction-smoke-gate.py pre-push o x"])
-def test_a_registry_script_is_held_back_by_its_token_even_when_its_digest_no_longer_matches(rig, line):
+@pytest.mark.parametrize("line, pattern", [
+    ("python3 scripts/land-branch.py --check", "Bash(python3 scripts/land-branch.py:*)"),
+    ("python3 scripts/instruction-smoke-gate.py pre-push o x", "Bash(python3 scripts/instruction-smoke-gate.py:*)"),
+])
+def test_a_registry_script_is_held_back_by_its_token_even_when_its_digest_no_longer_matches(rig, line, pattern):
     install_registry_scripts(rig.venue)
     for name in ("land-branch.py", "instruction-smoke-gate.py"):
         with open(rig.venue / "scripts" / name, "a") as handle:
             handle.write("\n# edited\n")
-    judge = JudgeStub([{"kind": "file", "op": "write", "path": f"{rig.venue}/out.txt"}])
     assert rig.hook.starts_registered_program(line, str(rig.venue))
-    assert verdict_of(rig, rig.child(), line, judge=judge).decision == "none"
+    result = rig.bash(rig.child(extra_patterns=[pattern]), line)
+    assert undeterminable(result)
+    assert result[1]["matched"] == [pattern]
 
 
 def test_a_registry_script_beside_a_covered_write_makes_the_line_abstain(rig):

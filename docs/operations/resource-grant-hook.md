@@ -79,8 +79,8 @@ that look covered are also made undeterminable:
   `git` (not part of a longer name: `digit`, `github`, `.gitignore` do not count) in the line or in any
   shell-unquoted token of it, so `g'i't`, `\git`, `/usr/bin/git`, `env git`, `command git`, `xargs git`,
   `exec git`, `sh -c 'git ...'` and `git-upload-pack` all abstain; a segment holding the word `pytest` or
-  naming a script of the registry (`land-branch.py`, `instruction-smoke-gate.py`: both run `git -C`, and pytest
-  runs this repository's tests, which start git and `conftest.py`); a segment whose resolved or judge-named
+  naming any script of `scripts/script_effects.toml` (today `land-branch.py` and `instruction-smoke-gate.py`,
+  both running `git -C`; pytest runs this repository's tests, which start git and `conftest.py`); a segment whose resolved or judge-named
   effects include a ref change (`VcsRefResource`), which is how a script or `make` target whose judged effects
   include a ref change is caught; and opaque code (a `-c` operand, a heredoc body, a script file) in which the
   word `git` occurs. The registry and pytest are matched by their tokens whether or not the resolver went on to
@@ -143,7 +143,9 @@ line does not show, opaque code reads, and the parent scratchpad.
   environment makes the segment `undeterminable`. `CDPATH` is closed instead: every `cd <relative>` is resolved as
   if it were set, so it leaves the working directory unknown. `HOME` and `XDG_CONFIG_HOME` set only in the
   snapshot are a further residual of the same kind; the resolver reads the push configuration from the hook's own
-  environment. A `GIT_*` variable no longer matters for an allow, since a line that runs git gets none.
+  environment. So is `RIPGREP_CONFIG_PATH`: `rg` resolves to no effect, but a config file it names can add
+  `--pre`, which runs a program per file. The line cannot set it (`VAR=… rg` stays unresolved); only an ambient
+  value can. A `GIT_*` variable no longer matters for an allow, since a line that runs git gets none.
 - **Git started by a program the line does not show (can yield an ALLOW).** `runs_git` reads the line, pytest and
   the registry scripts, the effects the resolver or the judge names and the code of an opaque segment. What it does
   not model is a program that is neither pytest nor a registry script and starts git without the line naming it: a
