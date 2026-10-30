@@ -128,7 +128,7 @@ enumerator finds and says why each one is routed or exempt. A test
 | Site | Disposition | Why |
 |---|---|---|
 | `scripts/agentctl/cli_common.py`:`_count_plan_review_round` | routed through plan_digest_equivalent | Decides whether a review round was already counted for this plan version by comparing the recorded counted digest with the current one. |
-| `scripts/agentctl/cli.py`:`cmd_accept` | routed through plan_digest_equivalent | Refuses to bind an acceptance to a plan file that is not the accepted version: the file's digest against the accepted plan digest. |
+| `scripts/agentctl/cli_review.py`:`cmd_accept` | routed through plan_digest_equivalent | Refuses to bind an acceptance to a plan file that is not the accepted version: the file's digest against the accepted plan digest. |
 | `scripts/agentctl/gates.py`:`acceptance_staleness` | routed through plan_digest_equivalent | Compares the digest a review without bindings was recorded against with the digest accepted now. |
 | `scripts/agentctl/gates.py`:`_acceptance_review_check` | routed through plan_digest_equivalent | Compares the review's digest and the plan file's digest with the accepted digest. |
 | `scripts/agentctl/gates.py`:`_plan_review_content_stale` | routed through plan_digest_equivalent | The review-currency comparison: the plan file's digest against the digest the whole-plan review attested. |
@@ -145,7 +145,7 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/cli_common.py`:`_refresh_approved_grant_snapshot` | not a binding | Re-hashes the approved snapshot to refresh the recorded snapshot hash; the snapshot is a copy the engine wrote. |
 | `scripts/agentctl/cli_common.py`:`_stamp_accepted_plan_digest` | not a binding | Writes the accepted digest from the file's bytes; `plan-convert-live` writes the converted root the same way. |
 | `scripts/agentctl/cli_plan.py`:`cmd_present_plan` | not a binding | Binds a new receipt to the digest of the plan as it is now; the receipt is created here, not compared. |
-| `scripts/agentctl/cli.py`:`cmd_plan_review` | not a binding | An exact cross-check of the digest the reviewer attests against the plan file's bytes at record time; the staleness that follows is read through the callee that counts rounds. |
+| `scripts/agentctl/cli_review.py`:`cmd_plan_review` | not a binding | An exact cross-check of the digest the reviewer attests against the plan file's bytes at record time; the staleness that follows is read through the callee that counts rounds. |
 | `scripts/agentctl/cli.py`:`cmd_dispatch` | not a binding | Compares the hashes of the settings files a spawn materializes, not a plan. |
 | `scripts/agentctl/cli_common.py`:`_stage_grant_entries` | not a binding | Checks the approved snapshot's bytes against the recorded snapshot hash, which `plan-convert-live` never rewrites (no new snapshot is written). |
 | `scripts/agentctl/gates.py`:`_file_sha256` | not a binding | The hashing helper itself. |
