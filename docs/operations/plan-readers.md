@@ -32,7 +32,7 @@ to be exactly that set.
 | `scripts/agentctl/cli_common.py`:`_snapshot_approved_plan` | index-only | Copies the index bytes to the approved snapshot and puts the index and every referenced file into the object store (`plan_store.store_plan`). |
 | `scripts/agentctl/cli_common.py`:`_snapshot_plan_version` | index-only | Same for every submitted plan version: the index bytes are the version, the referenced files go to the object store. |
 | `scripts/agentctl/cli_common.py`:`_stamp_accepted_plan_digest` | index-only | Stamps the sha256 of the index bytes as the accepted plan digest. |
-| `scripts/agentctl/cli.py`:`cmd_present_plan` | not a plan | Reads the rendering file whose digest is bound to the delivery receipt, not the plan. |
+| `scripts/agentctl/cli_plan.py`:`cmd_present_plan` | not a plan | Reads the rendering file whose digest is bound to the delivery receipt, not the plan. |
 | `scripts/agentctl/order_approvals.py`:`record_approval` | not a plan | Reads the order-approval ledger (JSON); the plan appears only as a digest argument. |
 | `scripts/agentctl/plan.py`:`load_plan` | resolves | The loader: resolves references through `plan_refs.resolve_refs`. |
 | `scripts/agentctl/plan.py`:`load_plan_with_digest` | resolves | The loader that also returns the index bytes' digest from the same read. |
@@ -144,7 +144,7 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/gates.py`:`_pair_staleness` | not a binding | The same shortcut for a legacy pair record against the plan file's digest; a miss falls through to the content-derived binding comparison, which does not depend on the root digest. |
 | `scripts/agentctl/cli_common.py`:`_refresh_approved_grant_snapshot` | not a binding | Re-hashes the approved snapshot to refresh the recorded snapshot hash; the snapshot is a copy the engine wrote. |
 | `scripts/agentctl/cli_common.py`:`_stamp_accepted_plan_digest` | not a binding | Writes the accepted digest from the file's bytes; `plan-convert-live` writes the converted root the same way. |
-| `scripts/agentctl/cli.py`:`cmd_present_plan` | not a binding | Binds a new receipt to the digest of the plan as it is now; the receipt is created here, not compared. |
+| `scripts/agentctl/cli_plan.py`:`cmd_present_plan` | not a binding | Binds a new receipt to the digest of the plan as it is now; the receipt is created here, not compared. |
 | `scripts/agentctl/cli.py`:`cmd_plan_review` | not a binding | An exact cross-check of the digest the reviewer attests against the plan file's bytes at record time; the staleness that follows is read through the callee that counts rounds. |
 | `scripts/agentctl/cli.py`:`cmd_dispatch` | not a binding | Compares the hashes of the settings files a spawn materializes, not a plan. |
 | `scripts/agentctl/cli_common.py`:`_stage_grant_entries` | not a binding | Checks the approved snapshot's bytes against the recorded snapshot hash, which `plan-convert-live` never rewrites (no new snapshot is written). |

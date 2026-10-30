@@ -519,7 +519,7 @@ CODE_ID_OVERRIDES = {
         "Stop-block sink, so it inherits semantic-guarded rather than the file's "
         "structural default.",
     ),
-    ("scripts/agentctl/cli.py", "cmd_present_plan"): (
+    ("scripts/agentctl/cli_plan.py", "cmd_present_plan"): (
         "structural", "keep",
         "False pairing: the scope's regex (`^\\[stage (\\d+)\\]`) extracts a stage "
         "number from markdown headers — unrelated to the `plan_review_blockers()` "
