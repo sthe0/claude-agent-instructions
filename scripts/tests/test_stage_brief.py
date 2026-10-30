@@ -344,6 +344,8 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         # excluded: plan-level assumptions are registered as premises at submit-plan,
         # a root-side gate input; a stage executor works from its own stage fields.
         (PlanMeta, "assumptions"),
+        # excluded: the executor's grant estimate is a submit-plan check input, not stage material.
+        (PlanMeta, "resource_requests"),
         (FinalCheck, "label"),
         (FinalCheck, "command"),  # excluded: labels-only method
         (FinalCheck, "expected_exit"),  # excluded: labels-only method

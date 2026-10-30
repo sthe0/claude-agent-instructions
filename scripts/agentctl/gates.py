@@ -3823,6 +3823,10 @@ def _meta_place(meta) -> tuple:
         _final_check_surface(meta),
         order_place(meta),
         tuple((a.id, a.text, a.basis, a.risk, a.stage) for a in meta.assumptions),
+        tuple(
+            (r.kind, r.stage, r.consult_ref, tuple(r.allow), tuple(r.add_dirs))
+            for r in meta.resource_requests
+        ),
     )
 
 
