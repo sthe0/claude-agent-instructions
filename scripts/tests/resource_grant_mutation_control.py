@@ -1030,6 +1030,18 @@ CATALOGUE: "dict[str, Mutant]" = {
         '        mode = "write"\n',
         "a denied Read is resolved as a file write, so reads count as under-estimates",
     ),
+    "logged-read-counted-as-change": Mutant(
+        RESOURCE_ESTIMATION,
+        "changes = [r for r in _row_resources(row) if _is_change(r)]",
+        "changes = _row_resources(row)",
+        "a read the hook logged is graded like a write, so reads count as under-estimates",
+    ),
+    "dispatch-start-filter-dropped": Mutant(
+        CLI,
+        "        since=_dispatch_started)",
+        "        since=None)",
+        "dispatch compares decision-log rows left by earlier dispatches of the stage",
+    ),
     "drift-repeat-threshold": Mutant(
         SELF_DIAGNOSE,
         "if len(tasks[kind]) < repeat:",

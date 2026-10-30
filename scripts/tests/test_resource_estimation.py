@@ -344,6 +344,21 @@ def test_dispatch_records_the_comparison_in_state_and_ledger(store, fixtures_dir
     assert [r["stage"] for r in ledger.read_rows(_ledger_in_tmp)] == [1]
 
 
+def test_dispatch_compares_only_decision_log_rows_logged_since_its_own_start(
+        store, fixtures_dir, tmp_path, _ledger_in_tmp):
+    stale = {**WRITE_ROW, "ts": "2000-01-01T00:00:00+0000",
+             "resources": [{"kind": "file", "path": "/nowhere/stale", "mode": "write"}]}
+    _, state = _dispatch(store, fixtures_dir, tmp_path, "est-since", seed_rows=[stale, WRITE_ROW])
+    assert state.resource_estimates["1"]["under"] == [{"class": "file", "text": "/nowhere/f (write)"}]
+
+
+def test_a_logged_read_is_never_an_under_estimate(tmp_path):
+    row = {"decision": "allow", "reason_class": "undeterminable", "matched": [],
+           "resources": [{"kind": "file", "path": "/nowhere/read", "mode": "read"}]}
+    result = RE.compare([], [], [row], venue=str(tmp_path), workdir=str(tmp_path))
+    assert result["under"] == []
+
+
 def test_dispatch_without_a_decision_log_routes_as_before_and_records_nothing(
         store, fixtures_dir, tmp_path, _ledger_in_tmp):
     directive, state = _dispatch(store, fixtures_dir, tmp_path, "est-nolog", seed_rows=None)
