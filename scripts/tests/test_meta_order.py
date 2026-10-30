@@ -71,6 +71,12 @@ _NOT_REQUIRED: dict[str, str] = {
         "its omission would defeat the exact grandfather it exists to provide. See "
         "Order.requires_traceability in state.py."
     ),
+    "requires_resource_request": (
+        "not a part of the order the customer states -- it is the plan's own opt-in into "
+        "the resource-request grade (submission._resource_request_violations), exactly as "
+        "requires_traceability is for R3/R5: absence means 'authored before the request "
+        "existed', not 'missing'."
+    ),
     "parent_norm": (
         "not a part of the order the customer states -- it is the link a child plan "
         "declares to the parent stage whose norm it serves, and only a plan the engine "
@@ -298,13 +304,15 @@ def test_order_place_exhausts_the_order_s_field_set():
     # before the field existed: the full arity is read with it set, the base with it unset.
     place = order_place(
         Namespace(order=Order(customer_id="u", customer="c", functional_place="p",
-                              parent_norm="0" * 64))
+                              parent_norm="0" * 64, requires_resource_request=True))
     )
     base = order_place(
         Namespace(order=Order(customer_id="u", customer="c", functional_place="p"))
     )
     assert len(place) == 1, "order_place contributes one element for a declared order"
-    assert len(base[0]) == len(fields) - 1, "an unset parent_norm adds no member to the key"
+    assert len(base[0]) == len(fields) - 2, (
+        "an unset parent_norm and an unarmed requires_resource_request add no member to the key"
+    )
     assert len(place[0]) == len(fields), (
         f"order_place carries {len(place[0])} member(s) for {len(fields)} Order field(s) "
         f"({sorted(fields)}). A field added to Order and not listed in order_place belongs "

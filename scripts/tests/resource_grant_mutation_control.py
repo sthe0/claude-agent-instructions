@@ -59,6 +59,7 @@ CONTROL_RED = 7
 PLAN_RESOURCES = "scripts/agentctl/plan_resources.py"
 NORM_HANDOFF = "scripts/agentctl/norm_handoff.py"
 PLAN = "scripts/agentctl/plan.py"
+SUBMISSION = "scripts/agentctl/submission.py"
 SPAWN = "scripts/spawn-specialist.py"
 GRANTS = "scripts/agentctl/grants.py"
 CLI = "scripts/agentctl/cli.py"
@@ -996,6 +997,24 @@ CATALOGUE: "dict[str, Mutant]" = {
         "**The same principle in the grant design: a grant checker reads the code.** ",
         "",
         "the SCOPE/EFFECT section no longer states that a grant checker reads opaque code",
+    ),
+    "request-required-when-armed": Mutant(
+        SUBMISSION,
+        "if kind in RESOURCE_REQUEST_KINDS and (kind, stage.index) not in by_key:",
+        "if False and (kind, stage.index) not in by_key:",
+        "an armed plan no longer needs a request row for a request-bearing stage",
+    ),
+    "request-subset-of-grants": Mutant(
+        SUBMISSION,
+        "missing = uncovered_request_entries(row.allow, row.add_dirs, held, held_rules, venue)",
+        "missing = []",
+        "a request entry the stage's grants do not cover is accepted",
+    ),
+    "other-kind-warns-only": Mutant(
+        SUBMISSION,
+        "if s.is_spawn() and s.spawn_kind() not in RESOURCE_REQUEST_KINDS",
+        "if False and s.spawn_kind() not in RESOURCE_REQUEST_KINDS",
+        "a stage of a spawned kind outside the request-bearing kinds is no longer warned about",
     ),
 }
 

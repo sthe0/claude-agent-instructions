@@ -238,6 +238,25 @@ class PlanMeta:
     # registered at submit-plan as `assumed` premises. Not part of any digest: an
     # assumption is a record of a premise, never an input of the work.
     assumptions: "list[PlanAssumption]" = field(default_factory=list)
+    # The executor's own estimate of what a spawned stage needs, parsed from
+    # `[[meta.resource_request]]` rows and graded at submit-plan only when
+    # `[meta.order].requires_resource_request` arms it. In no digest: the check compares it
+    # to grants that are digested, so an edited request moves nothing the user approved.
+    resource_requests: "list[ResourceRequest]" = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ResourceRequest:
+    """One `[[meta.resource_request]]` row: the allow rules and added directories the
+    executor of `stage` (a spawned `kind`) says it needs, from the consult `consult_ref`
+    names. `defects` lists what the row could not be read as; the parse stays lenient and
+    submission.py refuses."""
+    kind: str
+    stage: "int | None"
+    consult_ref: str
+    allow: tuple[str, ...] = ()
+    add_dirs: tuple[tuple[str, str], ...] = ()
+    defects: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -638,6 +657,54 @@ def _parse_assumptions(raw: object) -> list[PlanAssumption]:
         )
         for a in raw if isinstance(a, dict) and str(a.get("id", "")).strip()
     ]
+
+
+def _parse_resource_requests(raw: object) -> "list[ResourceRequest]":
+    """Lenient, like `_parse_assumptions`: a row that cannot be read keeps its readable
+    part and names what it lacks in `defects`; a non-list value is no rows."""
+    if not isinstance(raw, list):
+        return []
+    out: list[ResourceRequest] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        defects: list[str] = []
+        stage = row.get("stage")
+        if not isinstance(stage, int) or isinstance(stage, bool):
+            defects.append("'stage' is not an integer")
+            stage = None
+        kind = row.get("kind")
+        if not isinstance(kind, str) or not kind.strip():
+            defects.append("'kind' is missing")
+            kind = ""
+        ref = row.get("consult_ref")
+        if not isinstance(ref, str) or not ref.strip():
+            defects.append("'consult_ref' is missing")
+            ref = ""
+        allow_raw = row.get("allow", [])
+        if not isinstance(allow_raw, list):
+            allow_raw = []
+            defects.append("'allow' is not a list")
+        allow = [a.strip() for a in allow_raw if isinstance(a, str) and a.strip()]
+        if len(allow) != len(allow_raw):
+            defects.append("'allow' holds an entry that is not a rule string")
+        dirs_raw = row.get("add_dirs", [])
+        if not isinstance(dirs_raw, list):
+            dirs_raw = []
+            defects.append("'add_dirs' is not a list")
+        dirs: list[tuple[str, str]] = []
+        for d in dirs_raw:
+            path = d.get("path") if isinstance(d, dict) else d
+            mode = d.get("mode", "read") if isinstance(d, dict) else "read"
+            if not isinstance(path, str) or not path.strip() or mode not in ("read", "write"):
+                defects.append(f"'add_dirs' entry {d!r} is not a path or a {{path, mode}} table (mode read|write)")
+                continue
+            dirs.append((path.strip(), mode))
+        out.append(ResourceRequest(
+            kind=(kind or "").strip(), stage=stage, consult_ref=(ref or "").strip(),
+            allow=tuple(allow), add_dirs=tuple(dirs), defects=tuple(defects),
+        ))
+    return out
 
 
 def _parse_renorms(raw: object, context: str) -> list[str]:
@@ -1960,6 +2027,7 @@ def parse_plan(
         final_check=final_checks,
         order=order,
         assumptions=_parse_assumptions(m.get("assumption")),
+        resource_requests=_parse_resource_requests(m.get("resource_request")),
     )
 
     is_substantive = meta.weight_class is not None and meta.weight_class.lower() == "substantive"
@@ -2526,6 +2594,7 @@ def order_place(meta) -> tuple:
         order.requirements_dropped,
         order.requires_traceability,
         *((order.parent_norm,) if order.parent_norm else ()),
+        *((True,) if order.requires_resource_request else ()),
     ),)
 
 

@@ -221,6 +221,87 @@ def resource_set_from_entries(
     return out
 
 
+#: Spawned kinds that return a RESOURCE-REQUEST and whose stages an armed plan must carry one for.
+#: Both run under `acceptEdits`, so their workdir is writable by the mode alone.
+RESOURCE_REQUEST_KINDS = ("developer", "tech-writer")
+
+
+def plan_time_resource_set(stage: Stage, venue: str | None, kind: str) -> tuple[StageResourceSet, set]:
+    """What a spawned `kind` child of `stage` may change, computed from the plan alone: the
+    stage's declared + derived grants, the kind baseline and, for a kind running under
+    `acceptEdits`, the venue as the workdir. The second member is the set of rule texts
+    those grants carry verbatim, for a rule that resolves to no typed resource."""
+    from lib import kind_baselines
+
+    effective = _effective_grants_for_stage(stage, venue)
+    entries = [{"rule": g.rule} for g in effective.allow]
+    entries += [{"rule": r} for r in kind_baselines.baseline_for_workdir(kind, venue)]
+    entries += [{"path": d.path, "mode": d.mode} for d in effective.add_dirs]
+    held = resource_set_from_entries(entries, stage, venue, effective.resources)
+    if venue and kind in RESOURCE_REQUEST_KINDS:
+        workdir = _resources.FileResource(venue, "write")
+        if workdir not in held.resources:
+            held.resources.append(workdir)
+    return held, {e["rule"] for e in entries if "rule" in e}
+
+
+def _wildcard_prefix(rule: str) -> "tuple[str, str] | None":
+    """`(tool, command prefix)` of a `Bash(<prefix>:*)` rule, else None."""
+    parsed = _grants.rule_program_and_arg(rule)
+    if parsed is None or parsed[0] != "Bash" or not parsed[1].endswith(":*"):
+        return None
+    return parsed[0], _grants.bash_command_from_rule_arg(parsed[1])
+
+
+def _narrower_than_pattern(rule: str, pattern: str) -> bool:
+    """True when `rule` is equal to, or a prefix-narrower form of, the wildcard-tail
+    `pattern`: same tool, and `rule`'s command (its own prefix when it carries a tail)
+    equals the pattern's prefix or continues it after a space."""
+    pat = _wildcard_prefix(pattern)
+    parsed = _grants.rule_program_and_arg(rule)
+    if pat is None or parsed is None or parsed[0] != pat[0]:
+        return False
+    command = _grants.bash_command_from_rule_arg(parsed[1])
+    return command == pat[1] or command.startswith(pat[1] + " ")
+
+
+def uncovered_request_entries(
+    allow: "tuple[str, ...]", add_dirs: "tuple[tuple[str, str], ...]",
+    held: StageResourceSet, held_rules: set, venue: str | None,
+) -> list[str]:
+    """The request entries the stage's held set does not cover, as readable strings.
+
+    An allow rule resolving to typed resources is covered when each is covered
+    (`resources.covers`) by a held one. A wildcard-tail rule is covered when equal to, or
+    prefix-narrower than, a held wildcard pattern. A rule that resolves to nothing else is
+    covered only by the identical rule text among the held grants."""
+    def covered(want) -> bool:
+        return any(h.covers(want) for h in held.resources)
+
+    out: list[str] = []
+    for rule in allow:
+        if rule in held_rules:
+            continue
+        res = resolve_rule_grant(rule, venue)
+        if res.status == "resolved":
+            if not all(covered(r) for r in res.resources):
+                out.append(rule)
+        elif res.reason_class == "wildcard-tail":
+            if not any(_narrower_than_pattern(rule, p) for p in held.rule_patterns):
+                out.append(rule)
+        else:
+            out.append(rule)
+    for path, mode in add_dirs:
+        try:
+            want = _resources.FileResource(path, mode)
+        except ValueError:
+            out.append(f"add_dir {path} ({mode})")
+            continue
+        if not covered(want):
+            out.append(f"add_dir {path} ({mode})")
+    return out
+
+
 #: Elements whose text the engine itself executes verbatim; an unresolved command
 #: sourced from one of them is a fixed text a reviewer can vouch for once.
 ENGINE_EXECUTED_ORIGINS = frozenset({"verify_command", "negative_control", "final_check"})

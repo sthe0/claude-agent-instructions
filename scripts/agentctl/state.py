@@ -1825,6 +1825,11 @@ class Order:
     # (`gates.parent_norm_boundary`); every digest and key built from the order includes
     # it only when set, so a plan without it keeps the digests it had before the field.
     parent_norm: str | None = None
+    # Arms submission.py's resource-request check for the request-bearing spawned kinds
+    # (`plan_resources.RESOURCE_REQUEST_KINDS`). Opt-in like `requires_traceability`, and for
+    # the same reason: plans written before the convention carry no `[[meta.resource_request]]`
+    # rows. Rides in `order_place` only when true, so an unarmed order keeps its old key.
+    requires_resource_request: bool = False
 
     @classmethod
     def from_dict(cls, d: dict) -> "Order":
@@ -1876,6 +1881,7 @@ class Order:
             requirements_dropped=requirements_dropped,
             requires_traceability=bool(d.get("requires_traceability", False)),
             parent_norm=parent_norm,
+            requires_resource_request=bool(d.get("requires_resource_request", False)),
         )
 
 

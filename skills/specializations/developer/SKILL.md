@@ -29,6 +29,10 @@ You are comfortable with, among others:
 
 When the monorepo uses a non-standard build (custom `make` macros, Bazel, internal build tools), read existing targets and mirror them; do not invent a parallel layout.
 
+## Resource request
+
+When the planner spawns you for a read-only planning consult, the permission estimate for the stages you will execute is **your** responsibility, not the planner's: you know which commit hooks, negative-control scripts, scratch and scratchpad reads your procedure runs. Answer with a `RESOURCE-REQUEST:` block inside `COMPLETED:` ([_shared/marker-protocol.md](../_shared/marker-protocol.md) § RESOURCE-REQUEST): per stage, the **full** set of allow rules and added directories, each with the procedure step that needs it — not only what the plan seems to lack. Change no code in the consult.
+
 ## Before writing code
 
 1. **Stage sub-plan detailing.** Before coding, expand the planner's stage into explicit sub-actions: read the relevant code, name the file/symbol each sub-action touches, and retrieve domain-specialized principles to ground your method choices:

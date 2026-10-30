@@ -68,3 +68,16 @@ Two things do still matter. Do not present a marker you do not mean — the pass
 
 - `ESCALATE:` — other decision the manager must make (ambiguity in the spec you cannot resolve from context, dependency on another step's output that isn't yet available, a strategic call that affects scope).
 - `REVIEW:` — (thinker) the terminal marker of a plan review: the body is one of `pass` / `revise` / `override`, the same vocabulary `agentctl plan-review --verdict` and `gates.PLAN_REVIEW_VERDICTS` use. The root records the verdict immediately with `agentctl plan-review --verdict <body> --reviewer thinker --target <plan> [--concern …]… [--customer-question …]…` (one `--customer-question` per `Q:` line of the reply's `Customer questions:` field), before any further edit to the plan file — the verdict is bound to the plan's sha256 and an edit invalidates the binding.
+
+## RESOURCE-REQUEST (a block inside `COMPLETED:`, not a return marker)
+
+The executor's estimate of the permissions its stages need. A planner obtains it from **one read-only planning consult per spawned kind per plan** (`developer`, `tech-writer`): the prompt hands the kind the draft plan and each stage that kind will execute, and the kind answers with `COMPLETED:` carrying this block. It changes no code and adds no return marker — the extraction pass reads `COMPLETED:` as usual. For **each stage** the kind executes, state the **full** set of allow rules and added directories it will need while following that stage's procedure — not only what the plan lacks — each with the procedure step that needs it:
+
+```
+RESOURCE-REQUEST:
+Stage <n>:
+  allow: <Tool(arg) rule> — <procedure step that needs it>
+  add_dirs: <absolute path> (<read|write>) — <procedure step that needs it>
+```
+
+The planner records each stage's answer as a plan row `[[meta.resource_request]] {kind, stage, consult_ref, allow, add_dirs}` (`consult_ref` names the consult) and arms the check with `[meta.order] requires_resource_request = true`. `submit-plan` then refuses a request-bearing stage with no row, and a row with an entry the stage's declared + derived grants, kind baseline and workdir do not cover: a typed resource must be covered through `resources.covers`, a wildcard-tail Bash rule must equal or be prefix-narrower than a wildcard rule the stage holds, and any other rule must be held verbatim. An entry the baseline already grants passes without being declared again; one it does not is declared on the stage in `[stage.grants]` or dropped from the request.

@@ -40,8 +40,9 @@ NON_STRING_FIELDS: dict[str, frozenset[str]] = {
         "expected_exit", "landed", "principle", "supplies", "output_artifacts", "renorms",
         "grants", "effects", "optional", "amendments", "branch",
     }),
-    "meta": frozenset({"order", "assumption", "branch"}),
-    "order": frozenset({"requirements", "requires_traceability", "coverage"}),
+    "meta": frozenset({"order", "assumption", "branch", "resource_request"}),
+    "order": frozenset({"requirements", "requires_traceability", "coverage",
+                        "requires_resource_request"}),
 }
 
 # Exactly the keys parse_plan and Order read (pinned by a test). `[meta] context` is not

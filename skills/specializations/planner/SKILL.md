@@ -87,7 +87,7 @@ If the search surfaces a precedent: either **reuse** it (apply the recipe with a
 
 ### Planning-time grant research
 
-Before finalizing a substantive plan, check each specialist-executed stage's effective grant set — baseline + declared + derived — against what its `Procedure:` steps actually invoke, via `agentctl plan-grants --plan <path> --format full`; a gap either routes the procedure through a form the deriver already covers or is declared explicitly in that stage's `[stage.grants]` table, never left for the executor to discover as a mid-dispatch `PERMISSION-REQUEST:`. Mandatory, not browse-if-time — record the `--format compact` output as the essence content-floor's item (d). Detail: [policy.md](policy.md) § Planning-time grant research.
+Before finalizing a substantive plan, check each specialist-executed stage's effective grant set — baseline + declared + derived — against what its `Procedure:` steps actually invoke, via `agentctl plan-grants --plan <path> --format full`; a gap either routes the procedure through a form the deriver already covers or is declared explicitly in that stage's `[stage.grants]` table, never left for the executor to discover as a mid-dispatch `PERMISSION-REQUEST:`. For each spawned `developer` / `tech-writer` kind, also obtain its `RESOURCE-REQUEST:` from one read-only consult and record it as `[[meta.resource_request]]` rows, arming `[meta.order] requires_resource_request = true` on new plans. Mandatory, not browse-if-time — record the `--format compact` output as the essence content-floor's item (d). Detail: [policy.md](policy.md) § Planning-time grant research.
 
 ### Consult specialists on technical decisions
 
