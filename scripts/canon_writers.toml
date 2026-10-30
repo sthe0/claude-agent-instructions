@@ -130,6 +130,7 @@
 "scripts/lib/kind_baselines.py" = { disposition = "not-canon", category = "not-canon", reason = "table of permission rules such as Bash(git commit:*); writes no file" }
 "scripts/lib/mcp_registration.py" = { disposition = "not-canon", category = "not-canon", reason = "atomic rewrite of the user's MCP registration file outside the repo" }
 "scripts/lib/published_body.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only sink under ~/.local; `git commit` appears in a docstring" }
+"scripts/lib/resource_estimation_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "estimation ledger under ~/.local/log, rewritten atomically; writes no tracked file" }
 "scripts/lib/semantic_join.py" = { disposition = "not-canon", category = "not-canon", reason = "join cache under ~/.local, written atomically" }
 "scripts/lib/shell_tokens.py" = { disposition = "not-canon", category = "not-canon", reason = "tokenizer that recognises `git apply`/`git commit` in command strings; writes no file" }
 "scripts/lint-settings-base.py" = { disposition = "not-canon", category = "not-canon", reason = "reads settings/base.json; `git pull` appears in a docstring" }

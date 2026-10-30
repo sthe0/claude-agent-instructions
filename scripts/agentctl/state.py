@@ -2650,6 +2650,10 @@ class SessionState:
     materialization_defects: list[dict] = field(default_factory=list)
     settings_drift: list[dict] = field(default_factory=list)
     cwd_drift: list[dict] = field(default_factory=list)
+    # Stage index (as text) -> the request-vs-fact comparison of that stage's last dispatch:
+    # {"kind", "under", "over", "plan_sha"}; see agentctl/resource_estimation.py. An older
+    # state lacks the key and reads as the empty dict: no comparison was ever recorded.
+    resource_estimates: dict[str, dict] = field(default_factory=dict)
     # Norm-edit obligations admitted by a closing replan and still open (schema 47).
     # Entry: {"target": file path, "baseline": digest at critique time, "stage": index of
     # the lowest-index pending stage whose `renorms` names it, "depth": len(plan_stack)
@@ -3107,6 +3111,6 @@ SESSION_SCOPED_FIELDS = frozenset({
     "review_cycle_minutes_anchor", "review_stage_streaks", "review_trigger_fire",
     "review_trigger_spent", "renegotiations", "runtime_host", "reattest_stash",
     "declined_issues", "planning_misses", "materialization_defects",
-    "settings_drift", "cwd_drift", "pending_renorms", "difficulty_stack", "parent_difficulty",
+    "settings_drift", "cwd_drift", "resource_estimates", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",
 })

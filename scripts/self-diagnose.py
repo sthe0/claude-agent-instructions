@@ -63,6 +63,15 @@ Read-only, mechanical scans over the agent's OWN functional elements:
                         publications for as long as nobody happened to look.
                         Surfacing it here is what turns the sink from an audit
                         trail into a signal.
+  resource-estimate-drift
+                        one executor kind whose resource request (the
+                        RESOURCE-REQUEST consult's rows) left out writes its
+                        children then made, in at least
+                        `resource-estimate-drift-repeat` different tasks (config
+                        key). The engine records each stage's request-vs-fact
+                        comparison in ~/.local/log/claude-resource-estimation.jsonl;
+                        the finding names the missing resource classes and the
+                        kind's SKILL.md § Resource request as the place to fix.
 
 The DECIDABLE rule is mechanized here; the PERCEPTION (is a flagged candidate
 worth re-norming, and how) stays the model's — this scanner only detects and
@@ -93,7 +102,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 
 sys.path.insert(0, str(SCRIPT_DIR))
-from lib import config_root  # noqa: E402
+from lib import config_root, resource_estimation_ledger  # noqa: E402
 from lib.hook_script import hook_script_path  # noqa: E402
 
 # Mirrors memory-global/MEMORY.md's own "keep this index under ~200 lines" note
@@ -780,6 +789,47 @@ def scan_writer_gate_advisories(
     ]
 
 
+RESOURCE_ESTIMATE_DRIFT_DEFAULT_REPEAT = 2
+
+
+def scan_resource_estimate_drift(
+    ledger_file: "Path | None" = None, config_path: "Path | None" = None
+) -> "list[Difficulty]":
+    """Report an executor kind whose resource request under-estimated in several different tasks.
+
+    Reads the request-vs-fact ledger (lib/resource_estimation_ledger.py). Counting is per kind
+    and over distinct task ids, never plan versions or stages, so one task's replans cannot
+    fire it; the threshold is `resource-estimate-drift-repeat`. The proposed edit is the
+    kind's own skill, which owns the request; the edit itself stays the self-improvement
+    cycle's. Fail-open: an unreadable ledger reports nothing."""
+    repeat = read_config_int(
+        "resource-estimate-drift-repeat", RESOURCE_ESTIMATE_DRIFT_DEFAULT_REPEAT, config_path)
+    tasks: "dict[str, set]" = {}
+    missing: "dict[str, dict[str, set]]" = {}
+    for row in resource_estimation_ledger.read_rows(ledger_file):
+        kind, under = row.get("kind"), row.get("under")
+        if not isinstance(kind, str) or not isinstance(under, list) or not under:
+            continue
+        tasks.setdefault(kind, set()).add(row.get("task_id"))
+        for item in under:
+            if isinstance(item, dict):
+                missing.setdefault(kind, {}).setdefault(str(item.get("class")), set()).add(str(item.get("text")))
+    out = []
+    for kind in sorted(tasks):
+        if len(tasks[kind]) < repeat:
+            continue
+        classes = "; ".join(
+            f"{cls} ({len(texts)}: {', '.join(sorted(texts)[:3])})" for cls, texts in sorted(missing[kind].items()))
+        out.append(Difficulty(
+            "resource-estimate-drift",
+            f"skills/specializations/{kind}/SKILL.md",
+            f"the {kind} executor's resource request left out writes its children then made, in "
+            f"{len(tasks[kind])} different tasks; missing resource classes: {classes}. "
+            f"action: edit {kind} SKILL.md § Resource request so the consult names them",
+        ))
+    return out
+
+
 def default_memory_roots() -> "list[Path]":
     roots: "list[Path]" = []
     global_mem = config_root.agent_home() / "memory-global"
@@ -817,6 +867,7 @@ def scan(
     out: "list[Difficulty]" = []
     if scan_advisories:
         out.extend(scan_writer_gate_advisories())
+        out.extend(scan_resource_estimate_drift())
     if scan_hooks:
         paths = settings_paths if settings_paths is not None else default_settings_paths()
         out.extend(scan_broken_hooks(paths))

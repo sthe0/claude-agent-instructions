@@ -68,6 +68,8 @@ SEGMENT_RESOLVER = "scripts/agentctl/segment_resolver.py"
 ADVISOR = "scripts/agentctl/advisor.py"
 CODE_EFFECTS = "scripts/agentctl/code_effects.py"
 HOOK = "scripts/hook-resource-grant-check.py"
+RESOURCE_ESTIMATION = "scripts/agentctl/resource_estimation.py"
+SELF_DIAGNOSE = "scripts/self-diagnose.py"
 REGEX_LEAF = "memory-global/leaves/regex-not-for-semantic-classification.md"
 
 
@@ -1015,6 +1017,24 @@ CATALOGUE: "dict[str, Mutant]" = {
         "if s.is_spawn() and s.spawn_kind() not in RESOURCE_REQUEST_KINDS",
         "if False and s.spawn_kind() not in RESOURCE_REQUEST_KINDS",
         "a stage of a spawned kind outside the request-bearing kinds is no longer warned about",
+    ),
+    "estimate-under-recorded": Mutant(
+        RESOURCE_ESTIMATION,
+        "if not request.covers(change) and not rule_covered:",
+        "if False and not rule_covered:",
+        "a logged write the request does not cover is never recorded as an under-estimate",
+    ),
+    "drift-repeat-threshold": Mutant(
+        SELF_DIAGNOSE,
+        "if len(tasks[kind]) < repeat:",
+        "if len(tasks[kind]) < repeat + 1:",
+        "the drift finding needs one more task than the configured repeat",
+    ),
+    "drift-counts-tasks-not-plans": Mutant(
+        SELF_DIAGNOSE,
+        'tasks.setdefault(kind, set()).add(row.get("task_id"))',
+        'tasks.setdefault(kind, set()).add(row.get("plan_sha"))',
+        "the drift finding counts plan versions instead of distinct tasks",
     ),
 }
 

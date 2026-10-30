@@ -29,7 +29,7 @@ from pathlib import Path
 
 from lib import argv_text, ask_evidence, config_root, engine_session_binding, hook_telemetry, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, delivery_channel, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, delivery_channel, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resource_estimation, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from . import config as agentctl_config
@@ -3142,6 +3142,8 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     # self-reported `Rule:`-line fallback for the case this transcript-based path
     # finds nothing (announcer-thread timeout, or discovery failed).
     _classify_transcript_denials(state, stage, coverage, _parse_transcript_path(result.stderr))
+    resource_estimation.record_stage_estimate(
+        state, stage, state_root=getattr(store, "root", None), new_misses=state.planning_misses[_misses_before:])
     if child_launched and marker not in (CHILD_INFRA_FAILURE, CHILD_EXHAUSTED):
         # A transient/resource marker means the child never meaningfully ran
         # against the once-scoped grant this launch was meant to spend — the

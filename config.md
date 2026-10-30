@@ -56,5 +56,6 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `resource-grant-hook` | `on` | Kill switch for the resource-grant PreToolUse hook in a linked child; `AGENTCTL_RESOURCE_HOOK` overrides. |
 | `resource-grant-hook-timeout-s` | `20` | Seconds the harness gives the resource-grant PreToolUse hook before it kills it and falls through. |
 | `resource-grant-judge-timeout-s` | `15` | Seconds the opaque-code judge may run; at most `resource-grant-hook-timeout-s` minus 5. |
+| `resource-estimate-drift-repeat` | `2` | Distinct tasks in which one executor kind's resource request must under-estimate before self-diagnosis proposes an edit to that kind's skill. |
 
 Per-machine values live uncommitted beside this file (`agent-identity.local`, `term-rulesets/*.toml`); see `docs/operations/config-rationale.md` and `docs/operations/org-portability.md`.
