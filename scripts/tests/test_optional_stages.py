@@ -908,7 +908,7 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "n/a: builds the benchmark's own three-stage fixture state, none of it optional, so "
         "no SKIPPED stage can reach the write"
     ),
-    ("agentctl/cli.py", "cmd_approve"): (
+    ("agentctl/cli_approval.py", "cmd_approve"): (
         "n/a: the ONLY writer of SKIPPED, and only for stages the plan declares optional "
         "and the customer named in --skip-optional"
     ),
@@ -916,7 +916,7 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "guarded: the default target is the last stage that is not SKIPPED, and an explicit "
         "--stage naming a SKIPPED stage is refused; FAILED is never written to a declined one"
     ),
-    ("agentctl/cli.py", "cmd_next_stage"): (
+    ("agentctl/cli_approval.py", "cmd_next_stage"): (
         "n/a: writes ACTIVE to ready[0], taken from ready_stages(), which lists PENDING "
         "stages only"
     ),
