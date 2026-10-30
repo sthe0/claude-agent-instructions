@@ -27,11 +27,6 @@ def eng(tmp_path):
     return Eng(tmp_path)
 
 
-@pytest.fixture(autouse=True)
-def _no_ambient_harness_session(monkeypatch):
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-
-
 def _branch_plan(branch: str, *, revised: bool = False) -> str:
     return plan_text(revised=revised).replace(
         "depends_on = []\n", f'depends_on = []\nbranch = "{branch}"\n', 1)

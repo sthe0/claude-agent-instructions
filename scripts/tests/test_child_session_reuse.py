@@ -48,6 +48,9 @@ STAGE = 1
 def _isolated_env(tmp_path, monkeypatch):
     for name in _AMBIENT_ENV:
         monkeypatch.delenv(name, raising=False)
+    # Restore conftest's in-process host signal, so classify does not fall back to detecting
+    # a Cursor CLI that only some machines have.
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "agentctl-test-session")
     config = tmp_path / "config"
     skill = config / "skills" / "thinker"
     skill.mkdir(parents=True)
