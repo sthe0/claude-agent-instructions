@@ -823,7 +823,7 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "at RESOLUTION `resolution_gate_open` takes over both paths. Fix is the one-line "
         "`in (\"PASSED\", \"SKIPPED\")`; remove this entry with it"
     ),
-    ("agentctl/cli.py", "cmd_record_result"): (
+    ("agentctl/cli_results.py", "cmd_record_result"): (
         "`args.status == \"passed\"` is the incoming result's own verdict on the one stage "
         "being recorded (--status passed|failed), not a read of the plan's stage statuses"
     ),
@@ -920,7 +920,7 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "n/a: writes ACTIVE to ready[0], taken from ready_stages(), which lists PENDING "
         "stages only"
     ),
-    ("agentctl/cli.py", "cmd_record_result"): (
+    ("agentctl/cli_results.py", "cmd_record_result"): (
         "n/a: writes PASSED/FAILED to state.active_stage() (current_stage), which only "
         "next-stage sets, from ready_stages()"
     ),
