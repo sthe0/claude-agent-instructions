@@ -267,6 +267,32 @@ def _wildcard_prefix(rule: str) -> "tuple[str, str] | None":
 _COMPOSING_CHARS = frozenset("$`;&|<>(){}*?\\\n\r")
 
 
+def _composes(text: str) -> bool:
+    """True when `text` carries a character the shell would act on: outside quotes any of
+    `_COMPOSING_CHARS` (an escaped space aside); inside double quotes only `$`, a backtick
+    or a backslash; inside single quotes nothing. An unterminated quote composes."""
+    quote = ""
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if quote == "'":
+            if c == "'":
+                quote = ""
+        elif quote == '"':
+            if c == '"':
+                quote = ""
+            elif c in "$`\\":
+                return True
+        elif c in "'\"":
+            quote = c
+        elif c == "\\" and text[i + 1:i + 2] == " ":
+            i += 1
+        elif c in _COMPOSING_CHARS:
+            return True
+        i += 1
+    return bool(quote)
+
+
 def _narrower_than_pattern(rule: str, pattern: str) -> bool:
     """True when `rule` is equal to, or a plain word-extension of, the wildcard-tail
     `pattern`: same tool, and `rule`'s command (its own prefix when it carries a tail)
@@ -279,7 +305,7 @@ def _narrower_than_pattern(rule: str, pattern: str) -> bool:
     command = _grants.bash_command_from_rule_arg(parsed[1])
     if command == pat[1]:
         return True
-    return command.startswith(pat[1] + " ") and not _COMPOSING_CHARS & set(command[len(pat[1]):])
+    return command.startswith(pat[1] + " ") and not _composes(command[len(pat[1]):])
 
 
 def uncovered_request_entries(
@@ -311,14 +337,18 @@ def uncovered_request_entries(
         except _grants.GrantValidationError as exc:
             out.append(f"{rule} (malformed: {exc})")
             continue
-        res = resolve_rule_grant(rule, venue)
+        try:
+            res = resolve_rule_grant(rule, venue)
+        except ValueError as exc:
+            out.append(f"{rule!r} (malformed: {exc})")
+            continue
         if res.status == "resolved" and res.resources:
             if not all(covered(r) for r in res.resources):
                 out.append(rule)
         elif not any(_narrower_than_pattern(rule, p) for p in held.rule_patterns):
             out.append(rule)
     for path, mode in add_dirs:
-        if not os.path.isabs(path):
+        if not os.path.isabs(path):  # the row parser already refuses this; guards direct callers
             out.append(f"add_dir {path} ({mode}) (not absolute)")
             continue
         try:

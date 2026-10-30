@@ -2743,17 +2743,11 @@ def deregister_child_scope(
         )
 
 
-# `_ACCEPT_EDITS_TRUSTED_KINDS` (imported above) is the set `resolve_permission_mode` grants
-# `acceptEdits` to unconditionally. Every other kind reaching `acceptEdits` gets there only
-# because a `mode="write"` engine grant forced it — `write_grant_forces_accept_edits`/
-# `write_grant_cwd_deny_rules` both key off this same set so the forcing condition and its
-# cwd-wide deny counterweight never drift apart.
-
-
 def write_grant_forces_accept_edits(kind: str, engine_grants: "list[dict] | None") -> bool:
     """True exactly when a `mode="write"` entry in `engine_grants` is the
     reason `resolve_permission_mode` returns `acceptEdits` for `kind` --
-    i.e. `kind` is not already trusted (`_ACCEPT_EDITS_TRUSTED_KINDS`) but
+    i.e. `kind` is not already trusted (`_ACCEPT_EDITS_TRUSTED_KINDS`, the
+    set granted `acceptEdits` unconditionally) but
     gets the wide mode anyway because of the grant. Shared with
     `build_child_settings` (via `write_grant_cwd_deny_rules`) so the mode
     that got forced and the deny rule narrowing it back down are computed

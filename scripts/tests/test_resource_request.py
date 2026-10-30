@@ -170,6 +170,31 @@ def test_narrower_than_pattern_refuses_composing_extensions(rule):
     assert not plan_resources._narrower_than_pattern(rule, "Bash(git add:*)")
 
 
+@pytest.mark.parametrize("rule, pattern", [
+    ('Bash(git commit -m "fix (x)")', "Bash(git commit:*)"),
+    ("Bash(git commit -m 'a; b')", "Bash(git commit:*)"),
+    ("Bash(git log --format='%h {x}')", "Bash(git log:*)"),
+    (r"Bash(git add my\ file.py)", "Bash(git add:*)"),
+])
+def test_quoted_or_escaped_characters_do_not_count_as_composing(rule, pattern):
+    assert plan_resources._narrower_than_pattern(rule, pattern)
+
+
+@pytest.mark.parametrize("rule", [
+    'Bash(git commit -m "$(x)")', 'Bash(git commit -m "`x`")', "Bash(git commit -m 'a)",
+    'Bash(git commit -m "a\\b")',
+])
+def test_quoted_substitution_still_composes(rule):
+    assert not plan_resources._narrower_than_pattern(rule, "Bash(git commit:*)")
+
+
+def test_nul_byte_in_request_entry_is_reported_not_raised(tmp_path, venue):
+    rule = r"Bash(git add foo\u0000bar)"
+    doc = _write(tmp_path, venue, [_dev(1)], rows=[_row("developer", 1, allow=[rule])])
+    (problem,) = _request_problems(doc)
+    assert "malformed" in problem
+
+
 def test_exact_request_under_a_held_wildcard_is_accepted(tmp_path, venue):
     rows = [_row("developer", 1, allow=["Bash(git add foo.py)"])]
     doc = _write(tmp_path, venue, [_dev(1)], rows=rows)

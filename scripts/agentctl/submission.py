@@ -62,7 +62,7 @@ import re
 from . import exempt_paths, grant_shadow
 from . import grants as _grants
 from .conditions import judge_restatement, restatement_prefilter
-from .plan import _declared_absolute_venue, venue_declaration_blockers
+from .plan import _declared_absolute_venue, _remote_head_for, venue_declaration_blockers
 from .plan_resources import RESOURCE_REQUEST_KINDS, plan_time_resource_set, uncovered_request_entries
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
@@ -623,16 +623,14 @@ def _resource_request_violations(doc) -> list[str]:
     """For an armed plan, every request-bearing spawned stage needs its own
     `[[meta.resource_request]]` row (kind + stage), and every entry of a row must be covered
     by what that stage's child already holds: declared + derived grants, the kind baseline
-    and the workdir. Coverage is mechanical: typed resources through `resources.covers`, a
-    wildcard-tail Bash rule only when equal to or prefix-narrower than a held wildcard rule,
-    any other rule only when held verbatim. Gated on `order.requires_resource_request`, the
+    and the workdir; the coverage rules are `uncovered_request_entries`'. Gated on `order.requires_resource_request`, the
     same opt-in shape as `requires_traceability`: plans written before the request existed
     are never held to it."""
     if not _resource_request_armed(doc):
         return []
     venue = _declared_absolute_venue(doc.meta)
     stages = {s.index: s for s in doc.stages}
-    head = _grants.remote_head_branch(venue) if any(s.is_spawn() for s in doc.stages) else None
+    head = _remote_head_for(doc, venue=venue)
     out: list[str] = []
     by_key: dict[tuple, list] = {}
     for row in doc.meta.resource_requests:
