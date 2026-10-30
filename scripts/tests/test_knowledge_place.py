@@ -37,7 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import checkrun, cli, cli_approval, cli_common, plugins, text_shape
+from agentctl import checkrun, cli, cli_approval, cli_common, cli_difficulty, plugins, text_shape
 from agentctl import state as state_mod
 from agentctl.dispatch import RunResult
 from agentctl.plan import (
@@ -1171,6 +1171,7 @@ def test_destination_alias_identity_canonicalizer_is_caught(tmp_path, store, mon
     monkeypatch.setattr(state_mod, "canonical_normalization_destination", lambda v: v)
     monkeypatch.setattr(cli, "canonical_normalization_destination", lambda v: v)
     monkeypatch.setattr(cli_common, "canonical_normalization_destination", lambda v: v)
+    monkeypatch.setattr(cli_difficulty, "canonical_normalization_destination", lambda v: v)
     assert Normalization(factor="f", destination="знание").destination != "knowledge"
     _to_normalize_ready(store, "alias-mut", _write_plan(tmp_path / "plan.toml"))
     d = cli.cmd_normalize(
