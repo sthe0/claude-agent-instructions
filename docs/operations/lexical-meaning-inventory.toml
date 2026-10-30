@@ -59,13 +59,13 @@ ground = "TRACKER_KEY_RE compiles the ABC-123 tracker-key shape pattern."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::cmd_classify::pattern.match"]
+[sites."scripts/agentctl/cli_plan.py::cmd_classify::pattern.match"]
 class = "structural"
 ground = "TRACKER_KEY_RE.match checks the ABC-123 key shape of the --tracker-key argument."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::cmd_present_plan::pattern.findall"]
+[sites."scripts/agentctl/cli_plan.py::cmd_present_plan::pattern.findall"]
 class = "structural"
 ground = "_PLAN_PRESENTATION_STAGE_ANCHOR_RE.findall extracts '[stage N]' anchors, the engine's own rendering syntax, to compare with the plan's stage indices."
 hits = 1

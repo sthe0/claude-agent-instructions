@@ -64,6 +64,7 @@ SPAWN = "scripts/spawn-specialist.py"
 GRANTS = "scripts/agentctl/grants.py"
 CLI = "scripts/agentctl/cli.py"
 CLI_COMMON = "scripts/agentctl/cli_common.py"
+CLI_PLAN = "scripts/agentctl/cli_plan.py"
 SEGMENT_RESOLVER = "scripts/agentctl/segment_resolver.py"
 ADVISOR = "scripts/agentctl/advisor.py"
 CODE_EFFECTS = "scripts/agentctl/code_effects.py"
@@ -188,7 +189,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         "a user-granted resource does not count towards the delegation's coverage",
     ),
     "dropped-surfaced": Mutant(
-        CLI,
+        CLI_PLAN,
         '    if dropped:\n        d.data["dropped_grants"] = dropped',
         '    if False:\n        d.data["dropped_grants"] = dropped',
         "submit-plan no longer reports the dropped grants",
