@@ -3009,6 +3009,7 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     coverage = _effective_stage_grants(state, stage.index)
     _defects_before = len(state.materialization_defects)
     _misses_before = len(state.planning_misses)
+    _dispatch_started = dt.datetime.now().astimezone().replace(microsecond=0)
     _settings_paths = widening_targets.enumerate_live_settings(child_cwd, state.repo_root)
     _settings_before = {p: _plan_file_sha256(p) for p in _settings_paths}
     # Resolved (not created) BEFORE the child spawns, so an unresolvable evidence
@@ -3143,7 +3144,8 @@ def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
     # finds nothing (announcer-thread timeout, or discovery failed).
     _classify_transcript_denials(state, stage, coverage, _parse_transcript_path(result.stderr))
     resource_estimation.record_stage_estimate(
-        state, stage, state_root=getattr(store, "root", None), new_misses=state.planning_misses[_misses_before:])
+        state, stage, state_root=getattr(store, "root", None), new_misses=state.planning_misses[_misses_before:],
+        since=_dispatch_started)
     if child_launched and marker not in (CHILD_INFRA_FAILURE, CHILD_EXHAUSTED):
         # A transient/resource marker means the child never meaningfully ran
         # against the once-scoped grant this launch was meant to spend — the

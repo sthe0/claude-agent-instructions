@@ -293,7 +293,7 @@ def _composes(text: str) -> bool:
     return bool(quote)
 
 
-def _narrower_than_pattern(rule: str, pattern: str) -> bool:
+def narrower_than_pattern(rule: str, pattern: str) -> bool:
     """True when `rule` is equal to, or a plain word-extension of, the wildcard-tail
     `pattern`: same tool, and `rule`'s command (its own prefix when it carries a tail)
     equals the pattern's prefix or continues it after a space with words that compose
@@ -345,7 +345,7 @@ def uncovered_request_entries(
         if res.status == "resolved" and res.resources:
             if not all(covered(r) for r in res.resources):
                 out.append(rule)
-        elif not any(_narrower_than_pattern(rule, p) for p in held.rule_patterns):
+        elif not any(narrower_than_pattern(rule, p) for p in held.rule_patterns):
             out.append(rule)
     for path, mode in add_dirs:
         if not os.path.isabs(path):  # the row parser already refuses this; guards direct callers

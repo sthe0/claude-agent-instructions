@@ -5,11 +5,13 @@ Decision-log rows come from the real hook (`scripts/hook-resource-grant-check.py
 through a subprocess), and the transcript denials from the stage-3 replay fixture, so the comparison reads
 what the hook and the harness really produce rather than rows written to suit it.
 """
+import datetime as dt
 import importlib.util
 import json
 import os
 import subprocess
 import sys
+import time
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -123,7 +125,7 @@ def test_an_opaque_write_the_judge_named_counts_through_the_real_hook(rig):
     child = rig.child()
     judge = JudgeStub([{"kind": "file", "path": f"{rig.outside}/o", "op": "write"}])
     uses = _uses(rig, child, f"python3 -c \"open('{rig.outside}/o', 'w')\"", judge=judge)
-    assert [r["reason_class"] for r in uses] != []
+    assert any(r["resources"] for r in uses)
     assert {"class": "file", "text": f"{rig.outside}/o (write)"} in _compare(rig, uses)["under"]
 
 
@@ -155,6 +157,48 @@ def test_a_transcript_denial_from_the_replay_fixture_is_under_when_the_request_l
                       denials=[miss])["under"] == []
 
 
+def _denials(rig, *misses):
+    return RE.compare([], [], [], venue=str(rig.venue), workdir=str(rig.venue), denials=list(misses))
+
+
+@pytest.mark.parametrize("tool", ["Edit", "Write", "NotebookEdit"])
+def test_a_denied_file_write_tool_is_under_when_the_request_lacks_the_path(rig, tool):
+    result = _denials(rig, {"tool_name": tool, "command": f"{rig.outside}/w"})
+    assert result["under"] == [{"class": "file", "text": f"{rig.outside}/w (write)"}]
+
+
+def test_a_write_denial_from_the_replay_fixture_is_under(rig):
+    case = next(c for c in _fixture_denials() if c["tool"] == "Write")
+    path = case["path"].replace("{VENUE}", str(rig.venue)).replace("{OUTSIDE}", str(rig.outside)) \
+        .replace("{SCRATCH}", str(rig.scratch))
+    assert _denials(rig, {"tool_name": "Write", "command": path})["under"]
+
+
+def test_a_denied_read_is_never_an_under_estimate_with_or_without_a_read_dir(rig):
+    miss = {"tool_name": "Read", "command": f"{rig.outside}/secret.txt"}
+    assert _denials(rig, miss)["under"] == []
+    with_dir = RE.compare([], [(str(rig.outside), "read")], [], venue=str(rig.venue),
+                          workdir=str(rig.venue), denials=[miss])
+    assert with_dir["under"] == [] and with_dir["over"] == []
+
+
+def test_a_read_class_service_use_is_not_a_change():
+    from agentctl import resources
+    from agentctl.resource_uses import is_change
+    assert not is_change(resources.ServiceResource("svc", "read"))
+    assert is_change(resources.ServiceResource("svc", "write"))
+
+
+def test_the_hook_and_the_calibration_share_one_log_path_and_change_test():
+    spec = importlib.util.spec_from_file_location("hook_under_test", SCRIPTS / "hook-resource-grant-check.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    link = {"parent_session": "ps", "stage_index": 4}
+    assert module._log_path(Path("/r"), link) == RE.uses_log_path("/r", "ps", 4)
+    assert module._is_change is RE._is_change
+
+
 # --- the ledger -------------------------------------------------------------------------------------
 
 def _row(task, stage, under=(), kind="developer", plan_sha="p"):
@@ -165,18 +209,23 @@ def _row(task, stage, under=(), kind="developer", plan_sha="p"):
 MISSING = [{"class": "file", "text": "/x/f (write)"}]
 
 
-def test_the_ledger_replaces_the_row_of_the_same_task_and_stage(tmp_path):
+def test_the_ledger_only_appends_and_the_reader_keeps_the_last_row_of_a_task_and_stage(tmp_path):
     path = tmp_path / "l.jsonl"
-    ledger.replace_row(_row("t1", 1, plan_sha="v1"), path)
-    ledger.replace_row(_row("t1", 2), path)
-    ledger.replace_row(_row("t1", 1, MISSING, plan_sha="v2"), path)
+    ledger.append_row(_row("t1", 1, plan_sha="v1"), path)
+    ledger.append_row(_row("t1", 2), path)
+    ledger.append_row(_row("t1", 1, MISSING, plan_sha="v2"), path)
+    assert len(path.read_text().splitlines()) == 3
     rows = ledger.read_rows(path)
     assert [(r["stage"], r["plan_sha"]) for r in rows] == [(2, "p"), (1, "v2")]
 
 
-def test_the_ledger_path_follows_the_override_and_never_the_home_file_in_tests(_ledger_in_tmp):
-    assert ledger.ledger_path() == _ledger_in_tmp
-    assert str(Path.home() / ".local" / "log") not in str(ledger.ledger_path())
+def test_the_ledger_reader_skips_a_torn_line_and_an_absent_file(tmp_path):
+    path = tmp_path / "l.jsonl"
+    assert ledger.read_rows(path) == []
+    ledger.append_row(_row("t1", 1), path)
+    with open(path, "a") as handle:
+        handle.write('{"torn": \n')
+    assert [r["task_id"] for r in ledger.read_rows(path)] == ["t1"]
 
 
 # --- recording after a stage ------------------------------------------------------------------------
@@ -225,6 +274,19 @@ def test_a_second_dispatch_of_the_same_stage_replaces_its_ledger_row(tmp_path, _
     state.accepted_plan_digest = "digest-2"
     RE.record_stage_estimate(state, stage, state_root=tmp_path / "root", doc=_doc(request), venue=str(tmp_path))
     assert [r["plan_sha"] for r in ledger.read_rows(_ledger_in_tmp)] == ["digest-2"]
+
+
+def test_decision_log_rows_older_than_this_dispatch_are_not_compared(tmp_path, _ledger_in_tmp):
+    state, stage = _state(tmp_path), support.stage_for("developer", "feat")
+    request = ResourceRequest(kind="developer", stage=1, consult_ref="c")
+    stale = {**WRITE_ROW, "ts": "2000-01-01T00:00:00+0000"}
+    fresh = {**WRITE_ROW, "ts": time.strftime(RE.LOG_TS_FORMAT),
+             "resources": [{"kind": "file", "path": "/nowhere/fresh", "mode": "write"}]}
+    _log(tmp_path / "root", [stale, fresh])
+    since = dt.datetime.now().astimezone().replace(microsecond=0) - dt.timedelta(seconds=5)
+    record = RE.record_stage_estimate(state, stage, state_root=tmp_path / "root", doc=_doc(request),
+                                      venue=str(tmp_path), since=since)
+    assert record["under"] == [{"class": "file", "text": "/nowhere/fresh (write)"}]
 
 
 def test_no_request_row_records_nothing_and_raises_nothing(tmp_path, _ledger_in_tmp):
@@ -339,6 +401,13 @@ def test_the_threshold_is_the_config_key(tmp_path):
     rows = [_row("task-a", 1, MISSING), _row("task-b", 1, MISSING)]
     assert _scan(tmp_path, rows, repeat=3) == []
     assert len(_scan(tmp_path, rows, repeat=2)) == 1
+
+
+@pytest.mark.parametrize("under", [["not-a-dict"], [None, 3], "text", {"class": "file"}])
+def test_under_rows_without_dict_items_are_skipped_not_raised_on(tmp_path, under):
+    rows = [{**_row("task-a", 1), "under": under}, _row("task-b", 1, MISSING), _row("task-c", 1, MISSING)]
+    found = _scan(tmp_path, rows)
+    assert len(found) == 1 and "2 different tasks" in found[0].detail
 
 
 def test_the_live_config_row_is_two():

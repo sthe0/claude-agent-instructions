@@ -808,12 +808,12 @@ def scan_resource_estimate_drift(
     missing: "dict[str, dict[str, set]]" = {}
     for row in resource_estimation_ledger.read_rows(ledger_file):
         kind, under = row.get("kind"), row.get("under")
-        if not isinstance(kind, str) or not isinstance(under, list) or not under:
+        items = [i for i in under if isinstance(i, dict)] if isinstance(under, list) else []
+        if not isinstance(kind, str) or not items:
             continue
         tasks.setdefault(kind, set()).add(row.get("task_id"))
-        for item in under:
-            if isinstance(item, dict):
-                missing.setdefault(kind, {}).setdefault(str(item.get("class")), set()).add(str(item.get("text")))
+        for item in items:
+            missing.setdefault(kind, {}).setdefault(str(item.get("class")), set()).add(str(item.get("text")))
     out = []
     for kind in sorted(tasks):
         if len(tasks[kind]) < repeat:

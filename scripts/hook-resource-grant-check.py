@@ -62,15 +62,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agentctl import advisor, code_effects, resources, script_effects, segment_resolver, tool_contracts  # noqa: E402
+from agentctl import advisor, code_effects, resource_uses, resources, script_effects, segment_resolver, tool_contracts  # noqa: E402
 from agentctl import config as agentctl_config  # noqa: E402
 from agentctl.norm_handoff import NORM_HANDOFF_ENV, state_root_of, verify_env_value  # noqa: E402
-from agentctl.store import safe_session_id  # noqa: E402
 from lib import config_root, permission_entry_match  # noqa: E402
 from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
 
 RECURSION_ENV = "AGENT_RECURSION_DEPTH"
-USES_DIRNAME = "resource-uses"
 UNLINKED_LOG = "_unlinked"
 
 BASH_TOOLS = ("Bash",)
@@ -189,10 +187,9 @@ def _sha(text: str) -> str:
 # --- the log --------------------------------------------------------------------------------------
 
 def _log_path(state_root: Path, link: "dict | None") -> Path:
-    directory = state_root / USES_DIRNAME
     if link is None:
-        return directory / f"{UNLINKED_LOG}.jsonl"
-    return directory / f"{safe_session_id(link['parent_session'])}-{link['stage_index']}.jsonl"
+        return resource_uses.uses_dir(state_root) / f"{UNLINKED_LOG}.jsonl"
+    return resource_uses.uses_log_path(state_root, link["parent_session"], link["stage_index"])
 
 
 def append_row(path: Path, row: dict) -> None:
@@ -255,12 +252,7 @@ def _first_rule(entries: list, text: str) -> "str | None":
     return next((entry for entry in entries if rule_matches(entry, text)), None)
 
 
-def _is_change(resource) -> bool:
-    if isinstance(resource, resources.FileResource):
-        return resource.mode == "write"
-    if isinstance(resource, resources.ServiceResource):
-        return resource.op_class != "read"
-    return True
+_is_change = resource_uses.is_change
 
 
 def _describe(resource) -> str:

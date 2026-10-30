@@ -1024,6 +1024,12 @@ CATALOGUE: "dict[str, Mutant]" = {
         "if False and not rule_covered:",
         "a logged write the request does not cover is never recorded as an under-estimate",
     ),
+    "read-denial-counted-as-write": Mutant(
+        RESOURCE_ESTIMATION,
+        '        mode = "read"\n',
+        '        mode = "write"\n',
+        "a denied Read is resolved as a file write, so reads count as under-estimates",
+    ),
     "drift-repeat-threshold": Mutant(
         SELF_DIAGNOSE,
         "if len(tasks[kind]) < repeat:",

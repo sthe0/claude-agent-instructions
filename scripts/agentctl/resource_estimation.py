@@ -16,7 +16,8 @@ The comparison is two recorded sets, so it is mechanical:
          equal to nor a plain extension of a request rule. Reads never count, and a call a
          wildcard rule covered without logging a typed change is not a write the hook can name,
          so it never counts. A transcript denial of this dispatch counts when the command or
-         path it carried resolves to a change the request does not cover.
+         path it carried resolves to a change the request does not cover (Edit, Write and
+         NotebookEdit denials write their path, a Read denial reads it and so never counts).
   over   a request entry no logged use matched. Only entries whose use the log can show are
          graded: a rule or write-mode add_dir whose typed resources cover a logged change, or a
          rule the log's `matched` names (equal, or one a plain extension of the other). A
@@ -31,44 +32,39 @@ raises nothing: the caller is the dispatch path and must not change its routing.
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import time
 from pathlib import Path
 
 from lib import resource_estimation_ledger as ledger
+from lib.transcript_cost import iter_jsonl
 
 from . import resources as _resources
 from . import tool_contracts
-from .plan_resources import _narrower_than_pattern, resolve_rule_grant
-from .store import safe_session_id
+from .plan_resources import narrower_than_pattern, resolve_rule_grant
+from .resource_uses import is_change as _is_change
+from .resource_uses import uses_log_path
 
-USES_DIRNAME = "resource-uses"
-
-
-def uses_log_path(state_root: "Path | str", session_id: str, stage_index: int) -> Path:
-    """Where the hook logs this stage's child's calls (the hook's own layout, `<parent>-<stage>.jsonl`)."""
-    return Path(state_root) / USES_DIRNAME / f"{safe_session_id(session_id)}-{stage_index}.jsonl"
+LOG_TS_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
+FILE_WRITE_TOOLS = frozenset({"Edit", "Write", "NotebookEdit"})
 
 
 def read_uses(path: Path) -> "list[dict] | None":
     """The decision-log rows, or None when the log does not exist."""
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    if not path.exists():
         return None
-    rows = []
-    for line in text.splitlines():
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
+    return list(iter_jsonl(path))
 
 
-def _is_change(resource) -> bool:
-    return not (isinstance(resource, _resources.FileResource) and resource.mode == "read")
+def _logged_since(row: dict, since: "dt.datetime | None") -> bool:
+    """True when the row was logged at or after `since`; a row whose ts will not parse is kept."""
+    if since is None:
+        return True
+    try:
+        return dt.datetime.strptime(str(row.get("ts")), LOG_TS_FORMAT) >= since
+    except ValueError:
+        return True
 
 
 class _Request:
@@ -99,7 +95,7 @@ class _Request:
         return any(t.covers(resource) for t in self.typed)
 
     def names_rule(self, matched: str) -> bool:
-        return any(matched == r or _narrower_than_pattern(matched, r) for r in self.rules)
+        return any(matched == r or narrower_than_pattern(matched, r) for r in self.rules)
 
 
 def _row_resources(row: dict) -> list:
@@ -129,10 +125,18 @@ def _denial_resources(miss: dict, venue: str) -> list:
         except Exception:  # noqa: BLE001 - an unresolvable denial is simply not counted
             return []
         return [r for r in split.resources if _is_change(r)]
+    tool = miss.get("tool_name")
+    if tool == "Read":
+        mode = "read"
+    elif tool in FILE_WRITE_TOOLS:
+        mode = "write"
+    else:
+        return []
     try:
-        return [_resources.FileResource(text, "write")]
+        resource = _resources.FileResource(text, mode)
     except ValueError:
         return []
+    return [resource] if _is_change(resource) else []
 
 
 def compare(allow, add_dirs, uses: "list[dict]", *, venue: "str | None", workdir: "str | None",
@@ -166,7 +170,7 @@ def compare(allow, add_dirs, uses: "list[dict]", *, venue: "str | None", workdir
             continue
         used = any(w.covers(c) for w in writes for c in logged)
         if not used and add_dir is None:
-            used = any(label == m or _narrower_than_pattern(m, label) or _narrower_than_pattern(label, m)
+            used = any(label == m or narrower_than_pattern(m, label) or narrower_than_pattern(label, m)
                        for m in matched_all)
         if not used:
             over.append(label)
@@ -182,8 +186,17 @@ def request_row(doc, kind: "str | None", stage_index: int):
 
 
 def record_stage_estimate(state, stage, *, state_root, new_misses=None, doc=None,
-                          venue: "str | None" = None, ledger_file: "Path | None" = None) -> "dict | None":
-    """Compute, store and append the comparison for `stage`; None (nothing recorded) without a request row or a log."""
+                          venue: "str | None" = None, ledger_file: "Path | None" = None,
+                          since: "dt.datetime | None" = None) -> "dict | None":
+    """Compute, store and append the comparison for `stage`; None (nothing recorded) without a request row or a log.
+
+    `since` is the dispatch's start: the decision log is per (parent session, stage) and survives a
+    re-dispatch, so only rows logged at or after it describe this dispatch's child.
+
+    The ledger key is the plan's own [meta].task_id (`state.plan_task_id`, the session's `task_id`
+    only as a fallback). A replan keeps that id (the landed-check trailer depends on it), so every
+    plan version of one task writes under one key and the ledger's latest-row-wins reading folds
+    them into one row per stage, which is what lets the drift finding count tasks and not plans."""
     if state_root is None:
         return None
     try:
@@ -196,6 +209,7 @@ def record_stage_estimate(state, stage, *, state_root, new_misses=None, doc=None
         uses = read_uses(uses_log_path(state_root, state.session_id, stage.index))
         if uses is None:
             return None
+        uses = [u for u in uses if _logged_since(u, since)]
         if venue is None:
             venue = state.resolve_check_venue("delivery")
         result = compare(row.allow, row.add_dirs, uses, venue=venue, workdir=venue, denials=new_misses)
@@ -204,8 +218,8 @@ def record_stage_estimate(state, stage, *, state_root, new_misses=None, doc=None
             "plan_sha": state.accepted_plan_digest or "",
         }
         state.resource_estimates[str(stage.index)] = record
-        ledger.replace_row({
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        ledger.append_row({
+            "ts": time.strftime(LOG_TS_FORMAT),
             "task_id": state.plan_task_id or state.task_id,
             "session": state.session_id, "stage": stage.index, **record,
         }, ledger_file)
