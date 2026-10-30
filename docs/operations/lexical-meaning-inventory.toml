@@ -103,7 +103,7 @@ ground = "_RULE_LINE_RE.match reads each 'Rule:' label line of a marker body, a 
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::cmd_dispatch::pattern.search"]
+[sites."scripts/agentctl/cli_dispatch.py::cmd_dispatch::pattern.search"]
 class = "structural"
 ground = "_HANDOFF_SHA_LINE_RE.search reads the 'Handoff-sha256:' label line spawn-specialist itself writes; a fixed engine label syntax."
 hits = 1

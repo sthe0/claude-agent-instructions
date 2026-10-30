@@ -64,6 +64,7 @@ GRANTS = "scripts/agentctl/grants.py"
 CLI = "scripts/agentctl/cli.py"
 CLI_COMMON = "scripts/agentctl/cli_common.py"
 CLI_PLAN = "scripts/agentctl/cli_plan.py"
+CLI_DISPATCH = "scripts/agentctl/cli_dispatch.py"
 SEGMENT_RESOLVER = "scripts/agentctl/segment_resolver.py"
 ADVISOR = "scripts/agentctl/advisor.py"
 CODE_EFFECTS = "scripts/agentctl/code_effects.py"
@@ -174,7 +175,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         "a child may be handed a branch push its parent never held",
     ),
     "refusal-resources-materialized": Mutant(
-        CLI,
+        CLI_DISPATCH,
         "            for resource in _refusal_vcs_resources(req.raw):\n",
         "            for resource in []:\n",
         "the user's answer to a resource-only refusal grants nothing",

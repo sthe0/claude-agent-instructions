@@ -1141,8 +1141,8 @@ _SETTINGS_REFERENCE_RE = re.compile(r"settings[^/\s\"'`]*\.json")
 # test_settings_reference_classification_has_no_unclassified_hit until it is
 # added here too.
 SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
-    "agentctl/cli.py": "reader",
     "agentctl/cli_common.py": "reader",
+    "agentctl/cli_dispatch.py": "reader",
     "agentctl/classify.py": "mention",
     "agentctl/exempt_paths.py": "mention",
     "agentctl/mandate.py": "mention",
