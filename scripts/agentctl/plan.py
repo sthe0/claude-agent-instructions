@@ -659,16 +659,29 @@ def _parse_assumptions(raw: object) -> list[PlanAssumption]:
     ]
 
 
+_RESOURCE_REQUEST_KEYS = frozenset({"kind", "stage", "consult_ref", "allow", "add_dirs"})
+
+
 def _parse_resource_requests(raw: object) -> "list[ResourceRequest]":
     """Lenient, like `_parse_assumptions`: a row that cannot be read keeps its readable
-    part and names what it lacks in `defects`; a non-list value is no rows."""
-    if not isinstance(raw, list):
+    part and names what it lacks in `defects`; a value or row that is not a table is a
+    sentinel row carrying that defect, so submission refuses it rather than losing it."""
+    if raw is None:
         return []
+    if not isinstance(raw, list):
+        return [ResourceRequest(kind="", stage=None, consult_ref="",
+                                defects=("'resource_request' is not an array of tables",))]
     out: list[ResourceRequest] = []
+    seen: set[tuple] = set()
     for row in raw:
         if not isinstance(row, dict):
+            out.append(ResourceRequest(kind="", stage=None, consult_ref="",
+                                       defects=(f"row {row!r} is not a table",)))
             continue
         defects: list[str] = []
+        unknown = sorted(set(row) - _RESOURCE_REQUEST_KEYS)
+        if unknown:
+            defects.append(f"unknown key(s) {unknown} (known: {sorted(_RESOURCE_REQUEST_KEYS)})")
         stage = row.get("stage")
         if not isinstance(stage, int) or isinstance(stage, bool):
             defects.append("'stage' is not an integer")
@@ -677,10 +690,12 @@ def _parse_resource_requests(raw: object) -> "list[ResourceRequest]":
         if not isinstance(kind, str) or not kind.strip():
             defects.append("'kind' is missing")
             kind = ""
+        kind = kind.strip()
         ref = row.get("consult_ref")
         if not isinstance(ref, str) or not ref.strip():
             defects.append("'consult_ref' is missing")
             ref = ""
+        ref = ref.strip()
         allow_raw = row.get("allow", [])
         if not isinstance(allow_raw, list):
             allow_raw = []
@@ -699,9 +714,18 @@ def _parse_resource_requests(raw: object) -> "list[ResourceRequest]":
             if not isinstance(path, str) or not path.strip() or mode not in ("read", "write"):
                 defects.append(f"'add_dirs' entry {d!r} is not a path or a {{path, mode}} table (mode read|write)")
                 continue
-            dirs.append((path.strip(), mode))
+            path = path.strip()
+            if not os.path.isabs(path):
+                defects.append(f"'add_dirs' path {path!r} is not absolute")
+                continue
+            dirs.append((path, mode))
+        key = (kind, stage)
+        if kind and stage is not None:
+            if key in seen:
+                defects.append(f"duplicate row for kind={kind!r} stage={stage}")
+            seen.add(key)
         out.append(ResourceRequest(
-            kind=(kind or "").strip(), stage=stage, consult_ref=(ref or "").strip(),
+            kind=kind, stage=stage, consult_ref=ref,
             allow=tuple(allow), add_dirs=tuple(dirs), defects=tuple(defects),
         ))
     return out
@@ -2594,7 +2618,7 @@ def order_place(meta) -> tuple:
         order.requirements_dropped,
         order.requires_traceability,
         *((order.parent_norm,) if order.parent_norm else ()),
-        *((True,) if order.requires_resource_request else ()),
+        *((("requires_resource_request",),) if order.requires_resource_request else ()),
     ),)
 
 

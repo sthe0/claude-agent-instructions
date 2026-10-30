@@ -80,4 +80,4 @@ Stage <n>:
   add_dirs: <absolute path> (<read|write>) — <procedure step that needs it>
 ```
 
-The planner records each stage's answer as a plan row `[[meta.resource_request]] {kind, stage, consult_ref, allow, add_dirs}` (`consult_ref` names the consult) and arms the check with `[meta.order] requires_resource_request = true`. `submit-plan` then refuses a request-bearing stage with no row, and a row with an entry the stage's declared + derived grants, kind baseline and workdir do not cover: a typed resource must be covered through `resources.covers`, a wildcard-tail Bash rule must equal or be prefix-narrower than a wildcard rule the stage holds, and any other rule must be held verbatim. An entry the baseline already grants passes without being declared again; one it does not is declared on the stage in `[stage.grants]` or dropped from the request.
+The planner records the answer per stage and `submit-plan` grades it against the stage's grants; how: [planner/policy.md](../planner/policy.md) § Planning-time grant research.

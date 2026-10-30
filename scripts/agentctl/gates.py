@@ -3794,13 +3794,13 @@ def _meta_place(meta) -> tuple:
     approval spine keys on — passed as "a re-sequencing". So the totality claim is made
     here and the named rows keep only the job they are good at, naming the norm.
 
-    Hand-written, but for a narrower reason than `plan.order_place`'s: eight of these eleven
-    fields (`task_id` through `delivery_worktree`) are plain scalars or optional strings,
+    Hand-written, but for a narrower reason than `plan.order_place`'s: ten of these fourteen
+    fields (`task_id` through `branch`) are plain scalars or optional strings,
     already hashable and comparable as `meta.X` with no transformation at all — a
-    `dataclasses.fields` derivation could emit those as-is. Only three actually need custom
+    `dataclasses.fields` derivation could emit those as-is. Only four actually need custom
     handling: `final_check` and `order` are themselves compound structures, routed through
     `_final_check_surface`/`order_place` for the same reason those helpers exist, and
-    `assumptions` is a list, flattened inline to a tuple of its fields. The list
+    `assumptions` and `resource_requests` are lists, flattened inline to tuples of their fields. The list
     stays hand-written regardless, because a derived walk would still have to dispatch
     `final_check`/`order` away from the plain fields, and because the totality claim needs
     its own pin either way: `test_the_meta_residual_exhausts_plan_meta_s_field_set` goes

@@ -258,6 +258,13 @@ KIND_BASELINES: dict[str, list[str]] = {
 }
 
 
+ACCEPT_EDITS_TRUSTED_KINDS = ("developer", "tech-writer")
+"""Kinds the launcher runs under `acceptEdits` unconditionally (unattended Read/Grep/Write
+is their whole point). The one source for the launcher's mode choice and for the plan-time
+`RESOURCE_REQUEST_KINDS`, so what a child may write by mode alone and which kinds owe a
+resource request never drift."""
+
+
 def baseline_for_workdir(kind: str, workdir: "str | None") -> list[str]:
     """One kind's baseline (`KIND_BASELINES`), expanded with a THIRD script-rule
     spelling: the child's own workdir-absolute form

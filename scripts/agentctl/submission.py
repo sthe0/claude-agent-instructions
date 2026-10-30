@@ -60,6 +60,7 @@ import os
 import re
 
 from . import exempt_paths, grant_shadow
+from . import grants as _grants
 from .conditions import judge_restatement, restatement_prefilter
 from .plan import _declared_absolute_venue, venue_declaration_blockers
 from .plan_resources import RESOURCE_REQUEST_KINDS, plan_time_resource_set, uncovered_request_entries
@@ -631,6 +632,7 @@ def _resource_request_violations(doc) -> list[str]:
         return []
     venue = _declared_absolute_venue(doc.meta)
     stages = {s.index: s for s in doc.stages}
+    head = _grants.remote_head_branch(venue) if any(s.is_spawn() for s in doc.stages) else None
     out: list[str] = []
     by_key: dict[tuple, list] = {}
     for row in doc.meta.resource_requests:
@@ -645,7 +647,7 @@ def _resource_request_violations(doc) -> list[str]:
         if stage.spawn_kind() != row.kind:
             out.append(f"{label}: stage {stage.index} runs {stage.actor.executor!r}, not spawn:{row.kind}")
             continue
-        held, held_rules = plan_time_resource_set(stage, venue, row.kind)
+        held, held_rules = plan_time_resource_set(stage, venue, row.kind, head)
         missing = uncovered_request_entries(row.allow, row.add_dirs, held, held_rules, venue)
         if missing:
             out.append(
@@ -1198,8 +1200,10 @@ def submission_advice(doc, *, judge_runner=None, judge_enabled: bool = True) -> 
     round trip on a coin flip, so an echo NEVER refuses: it names the stage, says what its
     image restates, and the submission proceeds.
 
-    Fail-open throughout: no runner, a disabled judge, or a judge that errors yields no
-    advice at all. Silence here is indistinguishable from the feature being absent.
+    The model-judged half is fail-open: no runner, a disabled judge, or a judge that
+    errors yields none of its advice, and that silence is indistinguishable from the
+    feature being absent. The resource-request advice is mechanical and needs no judge, so
+    it is returned either way.
     """
     out: list[str] = resource_request_advice(doc)
     if not judge_enabled or judge_runner is None:

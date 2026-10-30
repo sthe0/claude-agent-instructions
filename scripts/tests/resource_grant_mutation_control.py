@@ -87,9 +87,9 @@ CATALOGUE: "dict[str, Mutant]" = {
         "the handoff record drops the stage's typed resources",
     ),
     "workdir-write-baseline": Mutant(
-        SPAWN,
-        'baseline = agentctl_resources.FileResource(workdir, "write")',
-        'baseline = agentctl_resources.FileResource(workdir, "read")',
+        PLAN_RESOURCES,
+        'workdir_write = _resources.FileResource(workdir, "write")',
+        'workdir_write = _resources.FileResource(workdir, "read")',
         "the acceptEdits workdir baseline is read, not write",
     ),
     "workdir-baseline-needs-accept-edits": Mutant(

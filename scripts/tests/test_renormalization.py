@@ -865,6 +865,24 @@ def test_renormalize_refuses_an_edit_to_the_plan_level(store, tmp_path, old, new
     assert store.load("rn").plan_path == plan
 
 
+def test_renormalize_refuses_an_edit_to_a_resource_request_allow_entry(store, tmp_path):
+    """A `[[meta.resource_request]]` row is plan material an executor could edit under
+    --renormalize to widen what the request says it needs; the meta residual carries it,
+    so an `allow` change is a refusal, not a re-sequencing."""
+    plan = _write_plan(tmp_path / "p.toml")
+    row = ('\n[[meta.resource_request]]\nkind = "developer"\nstage = 1\n'
+           'consult_ref = "c1"\nallow = ["Bash(git add:*)"]\nadd_dirs = []\n')
+    Path(plan).write_text(Path(plan).read_text(encoding="utf-8") + row, encoding="utf-8")
+    _approved(store, plan)
+
+    d = _renormalize(store, _edited(plan, tmp_path / "q.toml", 'allow = ["Bash(git add:*)"]',
+                                    'allow = ["Bash(git add:*)", "Bash(git commit:*)"]'))
+
+    assert d.ok is False, d.data
+    assert any("[meta] something" in b for b in d.data["blockers"]), d.data["blockers"]
+    assert store.load("rn").plan_path == plan
+
+
 def test_renormalize_refuses_a_stage_field_outside_the_question_key(store, tmp_path):
     """`cost_tier` is the concrete case must-fix 1 was found on: engine-consumed (the
     spawn budget, and the per-stage term of the effort-divergence estimate) but outside

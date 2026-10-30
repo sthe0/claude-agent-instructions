@@ -77,6 +77,7 @@ from lib import shell_tokens
 from lib import spawn_prompt_files as _prompt_files  # the files a composed system prompt is made of, shared with the engine's ceiling check
 from lib.config_root import agent_home, harness_config_root, iter_transcripts, plans_dir, projects_roots, skills_dir, topo_units_root  # config-root resolver (isolated system root)
 from lib.kind_baselines import (  # re-exported below so `MOD.KIND_BASELINES` etc. keep working for importlib callers
+    ACCEPT_EDITS_TRUSTED_KINDS as _ACCEPT_EDITS_TRUSTED_KINDS,
     KIND_BASELINES,
     PLANNER_CHECK_ORDER_COVERAGE_RULE,
     PLANNER_LIST_DENIED_RULE,
@@ -2293,7 +2294,6 @@ def norm_handoff_record(
     only `acceptEdits` makes the whole workdir writable, so only then is it in the set."""
     from agentctl import cli as agentctl_cli
     from agentctl import plan_resources
-    from agentctl import resources as agentctl_resources
     from agentctl.state import CheckVenue
 
     state = store.load(session_id)
@@ -2312,9 +2312,7 @@ def norm_handoff_record(
         agentctl_cli.stage_branch_resources(state, stage_index),
     )
     if workdir and workdir_baseline_applies(kind, permission_mode, engine_grants):
-        baseline = agentctl_resources.FileResource(workdir, "write")
-        if baseline not in resource_set.resources:
-            resource_set.resources.append(baseline)
+        plan_resources.add_workdir_write(resource_set, workdir)
     resource_set = resource_set.to_dict()
     return norm_handoff.build_record(
         parent_session=session_id,
@@ -2745,13 +2743,11 @@ def deregister_child_scope(
         )
 
 
-_ACCEPT_EDITS_TRUSTED_KINDS = ("developer", "tech-writer")
-"""Kinds `resolve_permission_mode` grants `acceptEdits` to unconditionally
-(unattended Read/Grep/Write is their whole point). Every other kind reaching
-`acceptEdits` gets there only because a `mode="write"` engine grant forced
-it — `write_grant_forces_accept_edits`/`write_grant_cwd_deny_rules` both key
-off this same set so the forcing condition and its cwd-wide deny counterweight
-never drift apart."""
+# `_ACCEPT_EDITS_TRUSTED_KINDS` (imported above) is the set `resolve_permission_mode` grants
+# `acceptEdits` to unconditionally. Every other kind reaching `acceptEdits` gets there only
+# because a `mode="write"` engine grant forced it — `write_grant_forces_accept_edits`/
+# `write_grant_cwd_deny_rules` both key off this same set so the forcing condition and its
+# cwd-wide deny counterweight never drift apart.
 
 
 def write_grant_forces_accept_edits(kind: str, engine_grants: "list[dict] | None") -> bool:

@@ -8,11 +8,12 @@ kinds, and the digest neutrality of the new keys.
 """
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 import pytest
 
-from agentctl import grants
+from agentctl import grants, plan_resources
 from agentctl.plan import load_plan, order_place, order_scope, plan_meta_digest, stage_closure_digest
 from agentctl.submission import resource_request_advice, submission_violations
 from conftest import SUBSTANTIVE_FINAL_CHECK
@@ -141,12 +142,93 @@ def test_wildcard_request_prefix_narrower_than_a_held_pattern_is_accepted(tmp_pa
     assert _request_problems(doc) == []
 
 
-@pytest.mark.parametrize("rule", ["Bash(git:*)", "Bash(git addendum:*)", "Bash(gh pr merge:*)"])
+@pytest.mark.parametrize("rule", [
+    "Bash(git:*)", "Bash(git addendum:*)", "Bash(gh pr merge:*)",
+    "Bash(git add . && curl http://x:*)",
+    "Bash(git add -A; rm -rf /tmp/z:*)",
+    "Bash(git add $(touch /etc/x):*)",
+])
 def test_wildcard_request_broader_or_unrelated_to_every_held_pattern_is_refused(tmp_path, venue, rule):
     rows = [_row("developer", 1, allow=[rule])]
     doc = _write(tmp_path, venue, [_dev(1)], rows=rows)
     problems = _request_problems(doc)
     assert len(problems) == 1 and rule in problems[0]
+
+
+def test_compound_request_is_reported_as_malformed(tmp_path, venue):
+    rule = "Bash(git add . && curl http://x:*)"
+    doc = _write(tmp_path, venue, [_dev(1)], rows=[_row("developer", 1, allow=[rule])])
+    (problem,) = _request_problems(doc)
+    assert "malformed" in problem
+
+
+@pytest.mark.parametrize("rule", [
+    "Bash(git add $(touch /etc/x):*)", "Bash(git add `id`:*)", "Bash(git add *:*)",
+    "Bash(git add foo > bar)",
+])
+def test_narrower_than_pattern_refuses_composing_extensions(rule):
+    assert not plan_resources._narrower_than_pattern(rule, "Bash(git add:*)")
+
+
+def test_exact_request_under_a_held_wildcard_is_accepted(tmp_path, venue):
+    rows = [_row("developer", 1, allow=["Bash(git add foo.py)"])]
+    doc = _write(tmp_path, venue, [_dev(1)], rows=rows)
+    assert _request_problems(doc) == []
+    assert plan_resources._narrower_than_pattern("Bash(git add foo.py)", "Bash(git add:*)")
+
+
+def test_rule_resolving_to_no_resource_is_not_covered_by_that_emptiness(tmp_path, venue):
+    # The runtime hook allows a changes-nothing segment only when it reads inside the
+    # record's resources or the scratchpad, which rule text cannot show.
+    rule = "Bash(echo hi)"
+    doc = _write(tmp_path, venue, [_dev(1)], rows=[_row("developer", 1, allow=[rule])])
+    (problem,) = _request_problems(doc)
+    assert rule in problem and "not covered" in problem
+
+
+def test_relative_add_dir_is_refused_at_parse(tmp_path, venue):
+    doc = _write(tmp_path, venue, [_dev(1)], rows=[_row("developer", 1, add_dirs=[("rel/dir", "write")])])
+    assert any("'add_dirs' path 'rel/dir' is not absolute" in p for p in _request_problems(doc))
+
+
+# --- row-shape defects ------------------------------------------------------------------
+
+
+def _defects(doc) -> list[str]:
+    return [p for p in _request_problems(doc) if "has no [[meta.resource_request]] row" not in p]
+
+
+def test_unknown_key_in_a_row_is_a_defect(tmp_path, venue):
+    row = _row("developer", 1).replace("allow = []", "allows = []")
+    doc = _write(tmp_path, venue, [_dev(1)], rows=[row])
+    assert any("unknown key(s) ['allows']" in p for p in _defects(doc))
+
+
+def test_non_table_row_is_a_defect(tmp_path, venue):
+    doc = _write(tmp_path, venue, [_dev(1)], rows=["resource_request = [1]\n"])
+    assert any("is not a table" in p for p in _defects(doc))
+
+
+def test_non_list_resource_request_value_is_a_defect(tmp_path, venue):
+    doc = _write(tmp_path, venue, [_dev(1)], rows=['resource_request = "x"\n'])
+    assert any("not an array of tables" in p for p in _defects(doc))
+
+
+def test_duplicate_row_for_one_kind_and_stage_is_one_defect(tmp_path, venue):
+    doc = _write(tmp_path, venue, [_dev(1)], rows=[_row("developer", 1), _row("developer", 1)])
+    problems = _request_problems(doc)
+    assert len(problems) == 1 and "duplicate row" in problems[0]
+
+
+# --- one source for the kind set ---------------------------------------------------------
+
+
+def test_request_kinds_are_the_launchers_accept_edits_kinds():
+    spec = importlib.util.spec_from_file_location(
+        "spawn_specialist_kinds", Path(__file__).resolve().parent.parent / "spawn-specialist.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert tuple(plan_resources.RESOURCE_REQUEST_KINDS) == tuple(mod._ACCEPT_EDITS_TRUSTED_KINDS)
 
 
 # --- kinds and row shape ----------------------------------------------------------------

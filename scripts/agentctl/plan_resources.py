@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import grants as _grants
 from . import resources as _resources
+from lib import kind_baselines as _kind_baselines
 from .directive import Directive
 from .plan import (
     PlanDoc,
@@ -221,27 +222,35 @@ def resource_set_from_entries(
     return out
 
 
-#: Spawned kinds that return a RESOURCE-REQUEST and whose stages an armed plan must carry one for.
-#: Both run under `acceptEdits`, so their workdir is writable by the mode alone.
-RESOURCE_REQUEST_KINDS = ("developer", "tech-writer")
+#: Spawned kinds that return a RESOURCE-REQUEST and whose stages an armed plan must carry one
+#: for: the kinds the launcher runs under `acceptEdits`, so their workdir is writable by the
+#: mode alone. The same tuple as the launcher's mode choice, by construction.
+RESOURCE_REQUEST_KINDS = _kind_baselines.ACCEPT_EDITS_TRUSTED_KINDS
 
 
-def plan_time_resource_set(stage: Stage, venue: str | None, kind: str) -> tuple[StageResourceSet, set]:
+def add_workdir_write(resource_set: StageResourceSet, workdir: str) -> None:
+    """Add the write grant on `workdir` that `acceptEdits` gives a child, once. Shared by the
+    launcher (the handoff record) and the plan-time computation, so both name it alike."""
+    workdir_write = _resources.FileResource(workdir, "write")
+    if workdir_write not in resource_set.resources:
+        resource_set.resources.append(workdir_write)
+
+
+def plan_time_resource_set(
+    stage: Stage, venue: str | None, kind: str, remote_head=_grants.LIVE_REMOTE_HEAD,
+) -> tuple[StageResourceSet, set]:
     """What a spawned `kind` child of `stage` may change, computed from the plan alone: the
     stage's declared + derived grants, the kind baseline and, for a kind running under
     `acceptEdits`, the venue as the workdir. The second member is the set of rule texts
-    those grants carry verbatim, for a rule that resolves to no typed resource."""
-    from lib import kind_baselines
-
-    effective = _effective_grants_for_stage(stage, venue)
+    those grants carry verbatim, for a rule that resolves to no typed resource. Pass
+    `remote_head` (read once per plan) to avoid a git call per stage."""
+    effective = _effective_grants_for_stage(stage, venue, remote_head)
     entries = [{"rule": g.rule} for g in effective.allow]
-    entries += [{"rule": r} for r in kind_baselines.baseline_for_workdir(kind, venue)]
+    entries += [{"rule": r} for r in _kind_baselines.baseline_for_workdir(kind, venue)]
     entries += [{"path": d.path, "mode": d.mode} for d in effective.add_dirs]
     held = resource_set_from_entries(entries, stage, venue, effective.resources)
     if venue and kind in RESOURCE_REQUEST_KINDS:
-        workdir = _resources.FileResource(venue, "write")
-        if workdir not in held.resources:
-            held.resources.append(workdir)
+        add_workdir_write(held, venue)
     return held, {e["rule"] for e in entries if "rule" in e}
 
 
@@ -253,16 +262,24 @@ def _wildcard_prefix(rule: str) -> "tuple[str, str] | None":
     return parsed[0], _grants.bash_command_from_rule_arg(parsed[1])
 
 
+#: Characters that let a word extension of a held prefix run or read something other than
+#: the held command: separators, substitution, redirects, expansion, globs.
+_COMPOSING_CHARS = frozenset("$`;&|<>(){}*?\\\n\r")
+
+
 def _narrower_than_pattern(rule: str, pattern: str) -> bool:
-    """True when `rule` is equal to, or a prefix-narrower form of, the wildcard-tail
+    """True when `rule` is equal to, or a plain word-extension of, the wildcard-tail
     `pattern`: same tool, and `rule`'s command (its own prefix when it carries a tail)
-    equals the pattern's prefix or continues it after a space."""
+    equals the pattern's prefix or continues it after a space with words that compose
+    nothing (no separator, substitution, redirect or glob). An exact rule counts too."""
     pat = _wildcard_prefix(pattern)
     parsed = _grants.rule_program_and_arg(rule)
     if pat is None or parsed is None or parsed[0] != pat[0]:
         return False
     command = _grants.bash_command_from_rule_arg(parsed[1])
-    return command == pat[1] or command.startswith(pat[1] + " ")
+    if command == pat[1]:
+        return True
+    return command.startswith(pat[1] + " ") and not _COMPOSING_CHARS & set(command[len(pat[1]):])
 
 
 def uncovered_request_entries(
@@ -271,10 +288,17 @@ def uncovered_request_entries(
 ) -> list[str]:
     """The request entries the stage's held set does not cover, as readable strings.
 
-    An allow rule resolving to typed resources is covered when each is covered
-    (`resources.covers`) by a held one. A wildcard-tail rule is covered when equal to, or
-    prefix-narrower than, a held wildcard pattern. A rule that resolves to nothing else is
-    covered only by the identical rule text among the held grants."""
+    A rule held verbatim is covered. Any other is first validated by `grants.validate_rule`
+    (a compound command, a bare wrapper, a write-capable wildcard... is reported as
+    malformed, never graded). One resolving to typed resources is covered when each is
+    covered (`resources.covers`) by a held one; every other Bash rule, wildcard-tail or
+    exact, is covered when equal to or a plain word-extension of a held wildcard pattern.
+
+    A rule resolving to no resource at all (`Bash(cat /etc/shadow)`) is not covered by that
+    emptiness: the runtime hook (scripts/hook-resource-grant-check.py, "Decisions") allows a
+    segment that changes nothing only when it reads inside the record's resources or the
+    parent scratchpad, which a plan-time rule text cannot show; it needs a verbatim hold or
+    a held wildcard."""
     def covered(want) -> bool:
         return any(h.covers(want) for h in held.resources)
 
@@ -282,16 +306,21 @@ def uncovered_request_entries(
     for rule in allow:
         if rule in held_rules:
             continue
+        try:
+            _grants.validate_rule(rule)
+        except _grants.GrantValidationError as exc:
+            out.append(f"{rule} (malformed: {exc})")
+            continue
         res = resolve_rule_grant(rule, venue)
-        if res.status == "resolved":
+        if res.status == "resolved" and res.resources:
             if not all(covered(r) for r in res.resources):
                 out.append(rule)
-        elif res.reason_class == "wildcard-tail":
-            if not any(_narrower_than_pattern(rule, p) for p in held.rule_patterns):
-                out.append(rule)
-        else:
+        elif not any(_narrower_than_pattern(rule, p) for p in held.rule_patterns):
             out.append(rule)
     for path, mode in add_dirs:
+        if not os.path.isabs(path):
+            out.append(f"add_dir {path} ({mode}) (not absolute)")
+            continue
         try:
             want = _resources.FileResource(path, mode)
         except ValueError:
