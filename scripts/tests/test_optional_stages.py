@@ -806,9 +806,13 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "asks whether THIS stage's earlier PASS survives an edit of its own definition; a "
         "SKIPPED stage has no pass to invalidate and is reset by _apply_refined_stage_fields"
     ),
-    ("agentctl/cli_common.py", "_cmd_replan"): (
+    ("agentctl/cli_common.py", "_replan_apply_substantive"): (
         "re-attest stash and substantive-replan carry: both ask whether a stage has a PASS "
         "outcome to reuse, and the carry arm names SKIPPED beside PASSED explicitly"
+    ),
+    ("agentctl/cli_common.py", "_replan_submission_gates"): (
+        "asks which stages `--reopen` actually re-arms: only a stage that has a PASS to "
+        "invalidate, so PASSED is the exact set"
     ),
     ("agentctl/plugins_tracker.py", "_passed_artifact_stages"): (
         "asks which stages produced artifacts a ticket reader must be told about; a declined "
@@ -945,9 +949,16 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "`declined` mark, which the agent's approve refuses; an unchanged declined stage "
         "keeps SKIPPED"
     ),
-    ("agentctl/cli_common.py", "_cmd_replan"): (
-        "guarded: FAILED stages go back to PENDING (a SKIPPED one is never FAILED, see "
-        "cmd_reject); the substantive carry copies the outcome of an unchanged PASSED or "
+    ("agentctl/cli_common.py", "_replan_apply_no_change"): (
+        "guarded: only a `--reopen`ed (PASSED) or FAILED stage goes back to PENDING (a "
+        "SKIPPED one is never FAILED, see cmd_reject)"
+    ),
+    ("agentctl/cli_common.py", "_replan_apply_refinement"): (
+        "guarded: only a `--reopen`ed (PASSED) or FAILED stage goes back to PENDING (a "
+        "SKIPPED one is never FAILED, see cmd_reject)"
+    ),
+    ("agentctl/cli_common.py", "_replan_apply_substantive"): (
+        "guarded: the substantive carry copies the outcome of an unchanged PASSED or "
         "SKIPPED stage, and a changed one is left PENDING with `declined` set so only the "
         "customer's approve can re-offer it"
     ),

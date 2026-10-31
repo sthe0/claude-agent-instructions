@@ -17,6 +17,7 @@ import time
 import tomllib
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
+from typing import Any
 from lib import (
     argv_text,
     ask_evidence,
@@ -6521,15 +6522,76 @@ def _replan_spelling_advisories(plan_path: str) -> list[str]:
     return grant_shadow.mixed_spelling_advisories(doc)
 
 
+@dataclass
+class _ReplanContext:
+    """What the phases of `_cmd_replan` share: the command's inputs, then the values
+    each gate phase derives for the ones after it."""
+    state: SessionState
+    store: StateStore
+    args: Any
+    runner: Runner | None
+    crossed: list[dict] | None
+    reopened: list[int] | None
+    reopen_ignored: list[int] | None
+    normalize_factor: str = ""
+    normalize_level: Any = None
+    agent_acked_difficulty: bool = False
+    closing_waiver: str | None = None
+    gate_state: Any = None
+    carry_change: Any = None
+    trigger_exit: str | None = None
+    run: Any = None
+    new: Any = None
+    new_plan_bytes: Any = None
+    new_plan_digest: str = ""
+    auth_kind: str = ""
+    tier: Any = None
+    tier_number: int | None = None
+    change_class: Any = None
+    reopening: set = field(default_factory=set)
+    auth_waived: bool = False
+    renorm_pending: Any = None
+    old: Any = None
+    prev_plan_sha256: Any = None
+    new_plan_sha256: str = ""
+    echo_advice: list[str] = field(default_factory=list)
+    diagnosing: bool = False
+    replan_cause: dict = field(default_factory=dict)
+
+
 def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 crossed: list[dict] | None = None,
                 reopened: list[int] | None = None,
                 reopen_ignored: list[int] | None = None) -> Directive:
     """`crossed`, when given, receives the backstop crossing a renegotiation applied;
     `reopened`, the indices of the PASSED stages an applied `--reopen` re-armed;
-    `reopen_ignored`, the `--reopen` indices that named a stage that is not PASSED."""
-    state = _require(store, args.session)
-    from .plan import diff_plans, load_plan as _load
+    `reopen_ignored`, the `--reopen` indices that named a stage that is not PASSED.
+
+    Every phase but the last either refuses with a Directive or returns None to let the
+    next one run, in the order the gates were written; the last applies the plan."""
+    ctx = _ReplanContext(
+        state=_require(store, args.session), store=store, args=args, runner=runner,
+        crossed=crossed, reopened=reopened, reopen_ignored=reopen_ignored)
+    for phase in (
+        _replan_entry_gates,
+        _replan_renegotiation_gate,
+        _replan_closure_gates,
+        _replan_review_gate,
+        _replan_submission_gates,
+        _replan_norm_and_premise_gates,
+        _replan_baseline_and_coverage_gates,
+        _replan_record_acceptance,
+    ):
+        refusal = phase(ctx)
+        if refusal is not None:
+            return refusal
+    apply = {"no_change": _replan_apply_no_change,
+             "refinement": _replan_apply_refinement}.get(ctx.auth_kind, _replan_apply_substantive)
+    return apply(ctx)
+
+
+def _replan_entry_gates(ctx: _ReplanContext) -> Directive | None:
+    state, store, args = ctx.state, ctx.store, ctx.args
 
     # --normalize-factor lets a replan record a normalize event in the SAME call,
     # instead of requiring a separate `normalize` invocation first. Validated here
@@ -6593,6 +6655,13 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
 
     if not state.plan_path:
         return Directive(False, state.node, "submit_plan", "no current plan to replan against")
+    ctx.normalize_factor, ctx.normalize_level = normalize_factor, normalize_level
+    return None
+
+
+def _replan_renegotiation_gate(ctx: _ReplanContext) -> Directive | None:
+    state, store, args, crossed = ctx.state, ctx.store, ctx.args, ctx.crossed
+    from .plan import load_plan as _load
 
     # diagnosing-replan renegotiation gate (GitHub #177): once this task's
     # cross-session replan_count reaches the ceiling
@@ -6699,6 +6768,12 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
         store.save(state)
         if crossing is not None and crossed is not None:
             crossed.append(crossing)
+    return None
+
+
+def _replan_closure_gates(ctx: _ReplanContext) -> Directive | None:
+    state, store, args, runner = ctx.state, ctx.store, ctx.args, ctx.runner
+    normalize_factor = ctx.normalize_factor
 
     # The renormalization branch sits HERE deliberately: after difficulty_blockers (a
     # renormalization offers a whole plan, and offering one while the difficulty record
@@ -6779,6 +6854,13 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                          "replan blocked: the fault must be routed to the inadequate "
                          "provision (re-run critique with --failure-address)",
                          data={"blockers": fablock})
+    ctx.agent_acked_difficulty, ctx.closing_waiver = agent_acked_difficulty, closing_waiver
+    return None
+
+
+def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
+    state, store, args = ctx.state, ctx.store, ctx.args
+    from .plan import load_plan as _load
 
     # plan-review gate: the corrected plan (args.plan) must carry a thinker review
     # with a passing/overridden verdict BOUND to it before it may be applied. Gates
@@ -6833,6 +6915,13 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
             replan_data = {"blockers": prblock, "plan_review_round_release": round_release,
                            "review_delta": delta}
         return Directive(False, state.node, "plan_review", message, data=replan_data)
+    ctx.gate_state, ctx.carry_change, ctx.trigger_exit = gate_state, carry_change, trigger_exit
+    return None
+
+
+def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
+    state, store, args, runner = ctx.state, ctx.store, ctx.args, ctx.runner
+    reopen_ignored = ctx.reopen_ignored
 
     # Submission seam (b): the single NEW-side load and the check it feeds. Its placement
     # answers one ordering: before the plan_approval plugin block below, so a command that
@@ -6909,6 +6998,16 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                          "replan blocked: this plan edit has not been authorized by "
                          "the user",
                          data={"blockers": arblock})
+    ctx.run, ctx.new, ctx.new_plan_bytes, ctx.new_plan_digest = run, new, _new_plan_bytes, _new_plan_digest
+    ctx.auth_kind, ctx.auth_waived = auth_kind, auth_waived
+    ctx.tier, ctx.tier_number, ctx.change_class, ctx.reopening = tier, tier_number, change_class, reopening
+    return None
+
+
+def _replan_norm_and_premise_gates(ctx: _ReplanContext) -> Directive | None:
+    state, store, args = ctx.state, ctx.store, ctx.args
+    gate_state, carry_change, new = ctx.gate_state, ctx.carry_change, ctx.new
+    auth_kind, tier, reopening = ctx.auth_kind, ctx.tier, ctx.reopening
 
     # Norm-edit consequence: a replan closing a difficulty whose record names norm targets
     # must be the re-norming it named, and an obligation an earlier replan admitted must
@@ -6981,6 +7080,17 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                                # LEGACY field: the retired gate's escape history
                                "enumeration_escapes": _enumeration_escape_counts(
                                    state, new)})
+    ctx.renorm_pending = renorm_pending
+    return None
+
+
+def _replan_baseline_and_coverage_gates(ctx: _ReplanContext) -> Directive | None:
+    state, store, args = ctx.state, ctx.store, ctx.args
+    from .plan import diff_plans
+    new, tier_number, trigger_exit = ctx.new, ctx.tier_number, ctx.trigger_exit
+    agent_acked_difficulty = ctx.agent_acked_difficulty
+    _new_plan_bytes, _new_plan_digest = ctx.new_plan_bytes, ctx.new_plan_digest
+
     # #8: diff against the plan AS APPROVED (the immutable snapshot), not plan_path —
     # which the coordinator may have edited in place. Absent a snapshot (legacy
     # session, or an approve that predates the field) fall back to plan_path.
@@ -7051,6 +7161,19 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
             marker=DIRECTIVE_ESCALATE_TO_USER,
             data={"blockers": ["corrected plan changes no operative surface, or no difference to remove"]},
         )
+    ctx.old, ctx.prev_plan_sha256, ctx.new_plan_sha256 = old, _prev_plan_sha256, _new_plan_sha256
+    return None
+
+
+def _replan_record_acceptance(ctx: _ReplanContext) -> None:
+    """Past every refusal: books the replan's side effects shared by all three apply
+    branches and derives what they log."""
+    state, store, args = ctx.state, ctx.store, ctx.args
+    normalize_factor, normalize_level = ctx.normalize_factor, ctx.normalize_level
+    new, tier_number = ctx.new, ctx.tier_number
+    reopening, renorm_pending, auth_waived = ctx.reopening, ctx.renorm_pending, ctx.auth_waived
+    _new_plan_digest, run, reopened = ctx.new_plan_digest, ctx.run, ctx.reopened
+
     if normalize_factor:
         if state.node == Node.DIAGNOSING.value:
             state.difficulty.normalization = Normalization(
@@ -7058,7 +7181,6 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
         _log_normalize_event(state, factor=normalize_factor, level=normalize_level,
                              destination=None, in_diagnosis=(state.node == Node.DIAGNOSING.value))
 
-    kind = auth_kind
     if reopened is not None:
         reopened.extend(sorted(reopening))
     state.pending_renorms = gates.bound_renorms(state, new, renorm_pending)
@@ -7179,119 +7301,144 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     # the NEXT refresh against the new path, once a branch below rewrites plan_path.
     _refresh_spend(state, store, _cost_rows(args), state.plan_path)
     _flush_order_effort(state, store=store)
+    ctx.echo_advice, ctx.diagnosing, ctx.replan_cause = echo_advice, diagnosing, replan_cause
 
-    if kind == "no_change":
-        # A legacy session with no approved-plan snapshot (plan_snapshot_path=None)
-        # diffs plan_path against itself, so an in-place edit self-diffs to no_change
-        # (issue #8, one branch deeper). Re-materialize each live stage's prose+verify
-        # fields from the freshly-loaded plan BEFORE re-arming, or record-result runs
-        # the STALE verify_command still held in state. Idempotent when the plan is
-        # genuinely unchanged (copies identical values).
-        for ns in new.stages:
-            try:
-                cur = state.stage(ns.index)
-            except KeyError:
-                continue
-            _apply_refined_stage_fields(cur, ns)
-            _refresh_runtime_grant_titles(state, ns.index, ns.title)
-            if ns.index in reopening:
-                cur.outcome.status = StageStatus.PENDING.value
-        # final_check is meta-level (not per-stage), so it needs its own refresh
-        # next to the stage loop above — a self-diffed no_change still means the
-        # FILE changed relative to what was cached at submit-plan/last replan.
-        state.final_check = new.meta.final_check
-        _sync_venue_from_plan(state, new)
-        # …and plan_path follows the bytes too, as it does on the refinement and
-        # substantive branches. "no_change" names the DIFF, not the file: the stages,
-        # final_check and venue above were all just re-materialized from `args.plan`, so
-        # leaving plan_path on the previous file would leave the session executing one
-        # path's content while every later fresh load (the premise gate, verify-final,
-        # the next replan's baseline) reads a different path — and accepted_plan_digest,
-        # stamped on `args.plan`, would name bytes plan_path does not point at.
-        state.plan_path = args.plan
-        # Unconditional refresh (not just a legacy backfill when no snapshot exists at
-        # all): a no_change replan can still carry corrected bytes for stages this
-        # diff kind doesn't cover (prose/verify only, per the diff), so the approved
-        # snapshot and approved_grants_sha256 must track `new` every time, not only
-        # the first time a session ever takes a snapshot.
-        _refresh_approved_grant_snapshot(state, store, new, _new_plan_bytes, _new_plan_digest)
-        if diagnosing:
-            for s in state.stages:
-                if s.outcome.status == StageStatus.FAILED.value:
-                    s.outcome.status = StageStatus.PENDING.value
-            _archive_difficulty(state, closing_waiver)
-            if not state.approval.passed:
-                return _replan_to_plan_ready(
-                    state, store, new, echo_advice, trigger_exit=trigger_exit,
-                    kind="no_change", exited_diagnosing=True,
-                    plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
-                    plan_sha256=_new_plan_sha256, change_class=change_class, **replan_cause)
-            state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
-            state.log("replan", kind="no_change", exited_diagnosing=True, plan=args.plan,
-                      prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
-                      change_class=change_class, **replan_cause)
-            _count_replan(state, change_class)
-            effort.rederive(state)  # re-derive AFTER logging so this in-flight replan is counted
-            store.save(state)
-            if state.ready_stages():
-                return _with_advisories(Directive(
-                    True, state.node, "next_stage",
-                    "difficulty worked through; plan unchanged — retry the re-armed stage",
-                    data=_replan_class_data(state)), echo_advice)
-            return _with_advisories(Directive(
-                True, state.node, "continue", "difficulty worked through; resume execution",
-                data=_replan_class_data(state)), echo_advice)
-        effort.rederive(state)  # re-derive the estimate from the (possibly refined) stages
-        store.save(state)
-        return _with_advisories(Directive(
-            True, state.node, "continue", "replan is a no-op; plan unchanged"), echo_advice)
 
-    if kind == "refinement":
-        # apply prose refinements and re-arm any FAILED stage for another attempt
-        for ns in new.stages:
-            try:
-                cur = state.stage(ns.index)
-            except KeyError:
-                continue
-            # carry the corrected prose+means/method/conditions/invariants/verify into
-            # state so a difficulty-driven refinement actually re-selects the means
-            # (not just prose).
-            _apply_refined_stage_fields(cur, ns)
-            _refresh_runtime_grant_titles(state, ns.index, ns.title)
-            if cur.outcome.status == StageStatus.FAILED.value or ns.index in reopening:
-                cur.outcome.status = StageStatus.PENDING.value
-        state.plan_path = args.plan
-        # Same unconditional refresh as the no_change branch above: a refinement
-        # touches stage prose/means/verify, which can shift a stage's DERIVED grants
-        # even though grants_sha256 growth is already checked by diff_plans/
-        # _grants_grew before this branch is ever reached -- the snapshot bytes and
-        # approved_grants_sha256 must track `new`, not the plan this session most
-        # recently APPROVED via a full `approve` call.
-        _refresh_approved_grant_snapshot(state, store, new, _new_plan_bytes, _new_plan_digest)
-        _sync_venue_from_plan(state, new)
-        state.final_check = new.meta.final_check
-        if diagnosing:
-            _archive_difficulty(state, closing_waiver)
-            if not state.approval.passed:
-                return _replan_to_plan_ready(
-                    state, store, new, echo_advice, trigger_exit=trigger_exit,
-                    kind="refinement", exited_diagnosing=True,
-                    plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
-                    plan_sha256=_new_plan_sha256, change_class=change_class, **replan_cause)
-            state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
-        state.log("replan", kind="refinement", exited_diagnosing=diagnosing, plan=args.plan,
+def _replan_apply_no_change(ctx: _ReplanContext) -> Directive:
+    state, store, args, new = ctx.state, ctx.store, ctx.args, ctx.new
+    reopening, diagnosing, echo_advice = ctx.reopening, ctx.diagnosing, ctx.echo_advice
+    _new_plan_bytes, _new_plan_digest = ctx.new_plan_bytes, ctx.new_plan_digest
+    closing_waiver, trigger_exit, replan_cause = ctx.closing_waiver, ctx.trigger_exit, ctx.replan_cause
+    _prev_plan_sha256, _new_plan_sha256 = ctx.prev_plan_sha256, ctx.new_plan_sha256
+    change_class = ctx.change_class
+
+    # A legacy session with no approved-plan snapshot (plan_snapshot_path=None)
+    # diffs plan_path against itself, so an in-place edit self-diffs to no_change
+    # (issue #8, one branch deeper). Re-materialize each live stage's prose+verify
+    # fields from the freshly-loaded plan BEFORE re-arming, or record-result runs
+    # the STALE verify_command still held in state. Idempotent when the plan is
+    # genuinely unchanged (copies identical values).
+    for ns in new.stages:
+        try:
+            cur = state.stage(ns.index)
+        except KeyError:
+            continue
+        _apply_refined_stage_fields(cur, ns)
+        _refresh_runtime_grant_titles(state, ns.index, ns.title)
+        if ns.index in reopening:
+            cur.outcome.status = StageStatus.PENDING.value
+    # final_check is meta-level (not per-stage), so it needs its own refresh
+    # next to the stage loop above — a self-diffed no_change still means the
+    # FILE changed relative to what was cached at submit-plan/last replan.
+    state.final_check = new.meta.final_check
+    _sync_venue_from_plan(state, new)
+    # …and plan_path follows the bytes too, as it does on the refinement and
+    # substantive branches. "no_change" names the DIFF, not the file: the stages,
+    # final_check and venue above were all just re-materialized from `args.plan`, so
+    # leaving plan_path on the previous file would leave the session executing one
+    # path's content while every later fresh load (the premise gate, verify-final,
+    # the next replan's baseline) reads a different path — and accepted_plan_digest,
+    # stamped on `args.plan`, would name bytes plan_path does not point at.
+    state.plan_path = args.plan
+    # Unconditional refresh (not just a legacy backfill when no snapshot exists at
+    # all): a no_change replan can still carry corrected bytes for stages this
+    # diff kind doesn't cover (prose/verify only, per the diff), so the approved
+    # snapshot and approved_grants_sha256 must track `new` every time, not only
+    # the first time a session ever takes a snapshot.
+    _refresh_approved_grant_snapshot(state, store, new, _new_plan_bytes, _new_plan_digest)
+    if diagnosing:
+        for s in state.stages:
+            if s.outcome.status == StageStatus.FAILED.value:
+                s.outcome.status = StageStatus.PENDING.value
+        _archive_difficulty(state, closing_waiver)
+        if not state.approval.passed:
+            return _replan_to_plan_ready(
+                state, store, new, echo_advice, trigger_exit=trigger_exit,
+                kind="no_change", exited_diagnosing=True,
+                plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
+                plan_sha256=_new_plan_sha256, change_class=change_class, **replan_cause)
+        state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
+        state.log("replan", kind="no_change", exited_diagnosing=True, plan=args.plan,
                   prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
                   change_class=change_class, **replan_cause)
         _count_replan(state, change_class)
-        effort.rederive(state)  # re-derive AFTER logging so this replan is counted
+        effort.rederive(state)  # re-derive AFTER logging so this in-flight replan is counted
         store.save(state)
-        if state.node == Node.VERIFYING.value and state.ready_stages():
+        if state.ready_stages():
             return _with_advisories(Directive(
-                True, state.node, "next_stage", "refinement applied; retry the ready stage",
+                True, state.node, "next_stage",
+                "difficulty worked through; plan unchanged — retry the re-armed stage",
                 data=_replan_class_data(state)), echo_advice)
         return _with_advisories(Directive(
-            True, state.node, "continue", "refinement applied; resume execution",
+            True, state.node, "continue", "difficulty worked through; resume execution",
             data=_replan_class_data(state)), echo_advice)
+    effort.rederive(state)  # re-derive the estimate from the (possibly refined) stages
+    store.save(state)
+    return _with_advisories(Directive(
+        True, state.node, "continue", "replan is a no-op; plan unchanged"), echo_advice)
+
+
+def _replan_apply_refinement(ctx: _ReplanContext) -> Directive:
+    state, store, args, new = ctx.state, ctx.store, ctx.args, ctx.new
+    reopening, diagnosing, echo_advice = ctx.reopening, ctx.diagnosing, ctx.echo_advice
+    _new_plan_bytes, _new_plan_digest = ctx.new_plan_bytes, ctx.new_plan_digest
+    closing_waiver, trigger_exit, replan_cause = ctx.closing_waiver, ctx.trigger_exit, ctx.replan_cause
+    _prev_plan_sha256, _new_plan_sha256 = ctx.prev_plan_sha256, ctx.new_plan_sha256
+    change_class = ctx.change_class
+
+    # apply prose refinements and re-arm any FAILED stage for another attempt
+    for ns in new.stages:
+        try:
+            cur = state.stage(ns.index)
+        except KeyError:
+            continue
+        # carry the corrected prose+means/method/conditions/invariants/verify into
+        # state so a difficulty-driven refinement actually re-selects the means
+        # (not just prose).
+        _apply_refined_stage_fields(cur, ns)
+        _refresh_runtime_grant_titles(state, ns.index, ns.title)
+        if cur.outcome.status == StageStatus.FAILED.value or ns.index in reopening:
+            cur.outcome.status = StageStatus.PENDING.value
+    state.plan_path = args.plan
+    # Same unconditional refresh as the no_change branch above: a refinement
+    # touches stage prose/means/verify, which can shift a stage's DERIVED grants
+    # even though grants_sha256 growth is already checked by diff_plans/
+    # _grants_grew before this branch is ever reached -- the snapshot bytes and
+    # approved_grants_sha256 must track `new`, not the plan this session most
+    # recently APPROVED via a full `approve` call.
+    _refresh_approved_grant_snapshot(state, store, new, _new_plan_bytes, _new_plan_digest)
+    _sync_venue_from_plan(state, new)
+    state.final_check = new.meta.final_check
+    if diagnosing:
+        _archive_difficulty(state, closing_waiver)
+        if not state.approval.passed:
+            return _replan_to_plan_ready(
+                state, store, new, echo_advice, trigger_exit=trigger_exit,
+                kind="refinement", exited_diagnosing=True,
+                plan=args.plan, prev_plan_sha256=_prev_plan_sha256,
+                plan_sha256=_new_plan_sha256, change_class=change_class, **replan_cause)
+        state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
+    state.log("replan", kind="refinement", exited_diagnosing=diagnosing, plan=args.plan,
+              prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
+              change_class=change_class, **replan_cause)
+    _count_replan(state, change_class)
+    effort.rederive(state)  # re-derive AFTER logging so this replan is counted
+    store.save(state)
+    if state.node == Node.VERIFYING.value and state.ready_stages():
+        return _with_advisories(Directive(
+            True, state.node, "next_stage", "refinement applied; retry the ready stage",
+            data=_replan_class_data(state)), echo_advice)
+    return _with_advisories(Directive(
+        True, state.node, "continue", "refinement applied; resume execution",
+        data=_replan_class_data(state)), echo_advice)
+
+
+def _replan_apply_substantive(ctx: _ReplanContext) -> Directive:
+    state, store, args, new = ctx.state, ctx.store, ctx.args, ctx.new
+    reopening, echo_advice, tier = ctx.reopening, ctx.echo_advice, ctx.tier
+    closing_waiver, trigger_exit, replan_cause = ctx.closing_waiver, ctx.trigger_exit, ctx.replan_cause
+    _prev_plan_sha256, _new_plan_sha256 = ctx.prev_plan_sha256, ctx.new_plan_sha256
+    change_class = ctx.change_class
 
     # substantive: re-arm the plan-approval gate, reload stages, return to PLAN_READY.
     # #12: carry PASSED status forward for any stage whose FULL definition is
