@@ -218,7 +218,7 @@ def test_given_and_induced_are_exclusive(tree):
     assert leaf_forms.given_source_problems(_given(), tree.repo) == []
 
 
-@pytest.mark.parametrize("replacement", ["/etc/hostname", "scripts/../../elsewhere.py", "scripts/lib"])
+@pytest.mark.parametrize("replacement", ["scripts/../../elsewhere.py", "scripts/lib"])
 def test_given_source_shapes_refused(tree, replacement):
     problems = leaf_forms.given_source_problems(_given().replace(GIVEN_FILE, replacement), tree.repo)
     assert len(problems) == 1 and replacement in problems[0]
@@ -240,6 +240,7 @@ def test_given_source_symlink_out_of_repo_refused(tree, tmp_path):
 @pytest.mark.parametrize("memory", [".claude/agent-memory", ".claude/agent-memory/leaves"])
 def test_project_tier_given_source_resolved_against_repo(tree, memory):
     project = tree.repo / memory
+    (tree.repo / ".git").mkdir()
     (project / "regularities").mkdir(parents=True)
     sound = project / "regularities" / "sound-regularity.md"
     sound.write_text(_given(), encoding="utf-8")
@@ -263,3 +264,76 @@ def test_ontology_kind_mismatch_names_shadowed_adr(tree):
     (tree.adr / "widget-decision.md").write_text("# Decision\n", encoding="utf-8")
     problems = tree.problems("ontology:widget-decision")
     assert len(problems) == 1 and "docs/adr/widget-decision.md" in problems[0]
+
+
+@pytest.mark.parametrize("locator", ["https://example.org/spec.html", "/opt/vendor/readme.md", "~/notes/spec.md"])
+def test_given_source_external_locator_accepted(tree, locator):
+    leaf = tree.write("regularities/external-regularity.md", _given().replace(GIVEN_FILE, locator))
+    assert leaf_forms.given_source_problems(leaf.read_text(encoding="utf-8"), tree.repo) == []
+    assert leaf_forms.given_source_problems(leaf.read_text(encoding="utf-8"), None) == []
+    assert (pp.GIVEN_SOURCE, leaf) not in tree.findings()
+
+
+def test_given_source_missing_local_refused(tree):
+    missing = tree.write("regularities/missing-regularity.md", _given().replace(GIVEN_FILE, "scripts/none.py"))
+    assert (pp.GIVEN_SOURCE, missing) in tree.findings()
+    problems = leaf_forms.given_source_problems(missing.read_text(encoding="utf-8"), tree.repo)
+    assert len(problems) == 1 and "scripts/none.py" in problems[0]
+
+
+def test_given_source_relative_without_root_refused(tree):
+    text = _given()
+    problems = leaf_forms.given_source_problems(text, None)
+    assert len(problems) == 1 and "no repository root" in problems[0]
+
+
+def _project_corpus(tree, source):
+    project = tree.repo.parent / "product"
+    memory = project / ".claude" / "agent-memory"
+    (project / ".git").mkdir(parents=True, exist_ok=True)
+    (project / "docs").mkdir(exist_ok=True)
+    (project / "docs" / "spec.md").write_text("spec\n", encoding="utf-8")
+    leaf = memory / "regularities" / "spec-regularity.md"
+    leaf.parent.mkdir(parents=True, exist_ok=True)
+    leaf.write_text(_given().replace(GIVEN_FILE, source), encoding="utf-8")
+    return leaf, pp.load_corpus(tree.leaves, memory)
+
+
+def test_given_source_project_relative_checked(tree):
+    leaf, corpus = _project_corpus(tree, "docs/spec.md")
+    assert leaf_forms.given_source_root("project", leaf) == leaf.parents[3]
+    assert (pp.GIVEN_SOURCE, leaf) not in {(f.kind, f.path) for f in pp.unaccounted(corpus)}
+    leaf, corpus = _project_corpus(tree, "docs/none.md")
+    assert (pp.GIVEN_SOURCE, leaf) in {(f.kind, f.path) for f in pp.unaccounted(corpus)}
+
+
+def test_given_source_root_global_is_core_repo(tree):
+    leaf = tree.write("regularities/widget-regularity.md", _given())
+    assert leaf_forms.given_source_root("global", leaf) == tree.repo
+    assert leaf_forms.given_source_root("project", leaf) is None
+
+
+def _principle(tree, grounded):
+    return tree.write("principles/widget-principle.md", _fm(
+        name="widget-principle", description="a sample", type="reference", schema="principle/v1",
+        generality=1, grounded_in=f"[{grounded}]", created=DATE, last_verified=DATE)
+        + "\n## Principle\n\nRealign widgets.\n")
+
+
+def test_provenance_accepts_ontology_ground(tree):
+    tree.write("system-knowledge/widget-distinction.md", _ontology())
+    (tree.adr / "0042-widget-decision.md").write_text("# decision\n", encoding="utf-8")
+    for slug in ("widget-distinction", "0042-widget-decision"):
+        principle = _principle(tree, f"ontology:{slug}")
+        kinds = {kind for kind, path in tree.findings() if path == principle}
+        assert pp.UNKNOWN_ONTOLOGY not in kinds and pp.UNKNOWN_REGULARITY not in kinds
+    assert pp.ontology_ground_target("ontology:widget-distinction", tree.corpus(), tree.adr)
+
+
+def test_provenance_refuses_unresolved_ontology_ground(tree):
+    tree.write("regularities/widget-regularity.md", _regularity(induced_from="[]"))
+    for ground in ("ontology:no-such-distinction", "ontology:widget-regularity"):
+        principle = _principle(tree, ground)
+        kinds = {kind for kind, path in tree.findings() if path == principle}
+        assert pp.UNKNOWN_ONTOLOGY in kinds and pp.UNKNOWN_REGULARITY not in kinds
+        assert pp.ontology_ground_target(ground, tree.corpus(), tree.adr) is None

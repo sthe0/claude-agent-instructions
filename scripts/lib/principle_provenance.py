@@ -76,6 +76,8 @@ ORPHAN_CASE = "orphan_case"
 CASE_LEAK = "case_leak"
 UNGROUNDED_PRINCIPLE = "ungrounded_principle"
 UNKNOWN_REGULARITY = "unknown_regularity"
+UNKNOWN_ONTOLOGY = "unknown_ontology"
+ONTOLOGY_PREFIXES = ("ontology:", "project:ontology:")
 PRINCIPLE_INDUCED = "principle_induced_from"
 ORDER_NO_QUOTE = "order_no_quote"
 ORDER_ON_PRINCIPLE = "order_on_principle"
@@ -631,18 +633,19 @@ def experiences_of(target: Leaf, corpus: Corpus) -> list[Leaf]:
     return out
 
 
-def _repo_of(corpus: Corpus, leaf: Leaf) -> Path | None:
-    """The repository a leaf's `given_source` path is relative to: the parent of the `.claude` directory
-    holding the project memory, else two levels above the global leaves dir."""
-    if leaf.tier == "project":
-        base = corpus.project_root
-        if base is None:
-            return None
-        for ancestor in Path(base).parents:
-            if ancestor.name == ".claude":
-                return ancestor.parent
-        return base.parent.parent
-    return corpus.leaves_dir.parent.parent
+def ontology_ground_target(item: str, corpus: Corpus, adr_dir=None) -> Path | None:
+    """The ontology/v1 leaf or Core ADR an `ontology:<slug>` ground item names, or None when it names
+    neither or names a leaf of another kind. Resolution is the grounding gate's own."""
+    from agentctl import grounding
+
+    refs, bad = grounding.parse_ground_refs(item)
+    if bad or len(refs) != 1 or refs[0].kind != grounding.ONTOLOGY_KIND:
+        return None
+    adr_dir = grounding.engine_adr_dir() if adr_dir is None else adr_dir
+    target = grounding.ontology_target(refs[0], corpus, adr_dir)
+    if target is None or not grounding.ontology_kind_ok(target, corpus, adr_dir):
+        return None
+    return target
 
 
 def unaccounted(corpus: Corpus) -> list[Finding]:
@@ -713,6 +716,11 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
                 report(UNGROUNDED_PRINCIPLE, principle,
                        f"no `{GROUNDED}: [{REGULARITY_PREFIX}<slug>, ...]` naming a regularity")
             for item in grounded:
+                if item.startswith(ONTOLOGY_PREFIXES):
+                    if ontology_ground_target(item, corpus, corpus.leaves_dir.parent.parent / "docs" / "adr") is None:
+                        report(UNKNOWN_ONTOLOGY, principle,
+                               f"`{GROUNDED}` item {item!r} names no ontology/v1 leaf and no Core ADR")
+                    continue
                 if not (item.startswith(REGULARITY_PREFIX)
                         and item[len(REGULARITY_PREFIX):] in regularity_slugs):
                     report(UNKNOWN_REGULARITY, principle,
@@ -731,7 +739,8 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
             report(ORDER_NO_INTRODUCED, leaf, problem)
 
     for leaf in corpus.of("regularity"):
-        for problem in leaf_forms.given_source_problems(leaf.text, _repo_of(corpus, leaf)):
+        for problem in leaf_forms.given_source_problems(
+                leaf.text, leaf_forms.given_source_root(leaf.tier, leaf.path)):
             report(GIVEN_SOURCE, leaf, problem)
 
     for leaf in index_mismatches(corpus):

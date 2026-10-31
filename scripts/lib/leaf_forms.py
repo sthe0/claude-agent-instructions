@@ -117,9 +117,27 @@ def ontology_section_problems(text: str) -> list[str]:
     return _missing(text, ONTOLOGY_SECTIONS)
 
 
+_URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+
+
+def is_external_locator(source: str) -> bool:
+    """A source that is not a file of the tier's own repository: a URL, an absolute path or a `~` path."""
+    return bool(_URL.match(source)) or source.startswith("~") or Path(source).is_absolute()
+
+
+def given_source_root(tier: str, leaf_path) -> Path | None:
+    """The repository a relative `given_source` of a leaf resolves against: the Core repo above
+    `memory-global` for the global tier, the nearest ancestor holding `.git` or `.arc` for a project
+    leaf; None when there is none."""
+    ancestors = Path(leaf_path).parents
+    if tier != "project":
+        return next((a.parent for a in ancestors if a.name == "memory-global"), None)
+    return next((a for a in ancestors if (a / ".git").exists() or (a / ".arc").exists()), None)
+
+
 def given_source_problems(text: str, base) -> list[str]:
-    """What is wrong with the `given_source` a given regularity names: it must be a relative path
-    that, under `base`, names a file."""
+    """What is wrong with the `given_source` a given regularity names: an external locator is taken
+    as named; a relative path must, under the repository root `base`, name a file."""
     front = frontmatter_of(text)
     kind = field(front, "given")
     if kind is None:
@@ -131,11 +149,13 @@ def given_source_problems(text: str, base) -> list[str]:
     source = field(front, "given_source")
     if not source:
         return ["given_source: a given regularity names the file it is given from"]
+    if is_external_locator(source):
+        return []
     path = Path(source)
-    if path.is_absolute() or ".." in path.parts:
+    if ".." in path.parts:
         return [f"given_source: {source!r} is not a path inside the repository"]
     if base is None:
-        return [f"given_source: {source!r} names no file"]
+        return [f"given_source: {source!r} has no repository root to resolve it against"]
     root = Path(base).resolve()
     resolved = (root / path).resolve()
     if not resolved.is_relative_to(root):
