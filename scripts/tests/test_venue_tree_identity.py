@@ -10,7 +10,7 @@ import subprocess
 from argparse import Namespace
 from pathlib import Path
 
-from agentctl import cli, cli_common
+from agentctl import cli, cli_common, cli_results
 from agentctl.dispatch import RunResult
 from session_fixtures import measurable_session as _measurable_session
 
@@ -398,6 +398,7 @@ def test_git_call_timeout_at_any_step_returns_none(tmp_path, monkeypatch):
         return real_runner(argv, timeout=timeout)
 
     monkeypatch.setattr(cli_common, "subprocess_runner", timeout_on_write_tree)
+    monkeypatch.setattr(cli_results, "subprocess_runner", timeout_on_write_tree)
     assert cli._venue_tree_identity(str(work), None) is None
     assert len(timeouts_seen) == 6
     assert all(t == cli._VENUE_IDENTITY_GIT_TIMEOUT_S for t in timeouts_seen)
