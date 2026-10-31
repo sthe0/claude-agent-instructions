@@ -2,7 +2,10 @@
 name: mini-od-self-devised-workaround
 description: Extend the mini-OD (Expected/Actual/Mismatch) discipline to any blocker met while building or running a self-devised workaround, not only a failed orchestrated job — and use the Mismatch sentence as the escalation question when own research can't close it.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-blocker-not-stated-as-a-checkable-sentence-gets-neither-investigated-nor-asked-about, regularity:a-generic-failure-message-names-a-surface-shared-by-many-causes, regularity:a-question-escalated-by-reflex-spends-the-users-attention-a-held-channel-would-have-saved]
+grounding_judged: 20e0997d52daceaee572647dbd261f040711d11ab643a00305d319aaa5ac3a00
 created: 2026-09-03
 last_verified: 2026-09-03
 ---
@@ -12,6 +15,20 @@ last_verified: 2026-09-03
 ## Difficulty
 
 CLAUDE.md's mini-OD rule (inline Expected/Actual/Mismatch before relaunch or log-diving) is scoped to a failed *orchestrated job* — CI run, orchestrator work item, build graph. A blocker met while building or running a workaround **you invented yourself** (a credential exchange, a wrapper script, a one-off build) gets no equivalent discipline. Without it, the response to such a blocker drifts into one of two failure modes: silent improvisation past the blocker (try approach after approach with no declared Mismatch, no escalation), or silent stalling (no progress, no question) — until the user notices and has to specify the next concrete step themselves. Both defeat the point of mini-OD: neither produces a structured investigation, and neither produces an articulated question.
+
+## Principle
+
+To keep a blocker met while building or running a self-devised workaround from being improvised past or stalled on in silence, state the Mismatch as one concrete checkable sentence before a second alternative approach, and when own research cannot close it, ask the user that same sentence via AskUserQuestion; treat an engine refusal that follows your own action as a symptom to diagnose (last success, input diff, the refusing check's code) and escalate only what you lack authority for.
+
+## Goal class
+
+structured handling of a blocker met in self-devised work
+
+## Grounded in
+
+- [[a-blocker-not-stated-as-a-checkable-sentence-gets-neither-investigated-nor-asked-about]]
+- [[a-generic-failure-message-names-a-surface-shared-by-many-causes]]
+- [[a-question-escalated-by-reflex-spends-the-users-attention-a-held-channel-would-have-saved]]
 
 ## Guidance
 

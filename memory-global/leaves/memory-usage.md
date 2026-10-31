@@ -2,7 +2,11 @@
 name: memory-usage
 description: When to read / verify / write memory and what never to persist — the hygiene rules behind the CLAUDE.md three-scope table
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-memory-leaf-describing-mutable-state-ages-while-its-live-source-moves, regularity:a-recorded-remedy-is-absent-at-the-act-it-governs, regularity:a-memory-that-records-every-task-charges-later-tasks-for-entries-they-never-use]
+grounding_judged: d2cc0fa805604645a3c463cb61677a83809be0df56c990fb6060e0f9412961e7
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-06-25
 last_verified: 2026-06-25
 ---
@@ -10,6 +14,20 @@ last_verified: 2026-06-25
 ## Difficulty
 
 The three memory scopes (personal / global / project) say *where* a fact goes but not *when* to read it, *when* to trust it, or *what* must never be persisted. Without these rules memory drifts: stale mutable state gets presented as current, ephemeral task state bloats the index, and behavioral rules land in leaves where the always-loaded surface never sees them.
+
+## Principle
+
+To keep memory trustworthy and findable, read the relevant scope index when a task touches a known domain, reconcile any mutable-state leaf against its live source before presenting it as current, cite a source line for OS-, binary- and version-dependent claims, write only durable non-obvious facts, and never persist ephemeral task state, one-session plan drafts, secrets or behavioral rules in memory.
+
+## Goal class
+
+memory that stays accurate, lean and retrievable
+
+## Grounded in
+
+- [[a-memory-leaf-describing-mutable-state-ages-while-its-live-source-moves]]
+- [[a-recorded-remedy-is-absent-at-the-act-it-governs]]
+- [[a-memory-that-records-every-task-charges-later-tasks-for-entries-they-never-use]]
 
 ## Guidance
 
@@ -38,4 +56,4 @@ When `self-diagnose` reports an `oversized-leaf` finding (action: curator split)
 ## See also
 
 - [memory-hierarchy.md](memory-hierarchy.md) — when to spin off `<subdir>/MEMORY.md` sub-indexes.
-- [leaf-schema.md](leaf-schema.md) — the `leaf/v1` section shape ordinary leaves opt into.
+- [leaf-schema.md](leaf-schema.md) — the retired `leaf/v1` section shape ordinary leaves once opted into.

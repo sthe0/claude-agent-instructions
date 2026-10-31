@@ -2,7 +2,11 @@
 name: capability-before-offload
 description: When you hold both the tools and the rights to carry out a step, do it — never hand the user a manual click, a decision, a deferral, or a knowledge question as a substitute for a capability you have; verify a claimed "no CLI path" with a memory check and a --help check first.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-generic-failure-message-names-a-surface-shared-by-many-causes, regularity:a-defect-is-cheapest-to-remove-at-the-moment-it-is-found, regularity:a-question-escalated-by-reflex-spends-the-users-attention-a-held-channel-would-have-saved]
+grounding_judged: 361c13868d6f58851050491c09ddc73a333b4c9a55deba7f0840c7636f94a54c
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-07-02
 last_verified: 2026-08-31
 ---
@@ -14,6 +18,21 @@ The short rule lives in CLAUDE.md § Acting without asking; this leaf carries th
 ## Difficulty
 
 Repeatedly stalling on a doable land / merge / ship and pushing manual work onto the user — who then has to notice, context-switch, and click — when memory already documents the exact command and the tool already exposes it (the recurring *"you have the instructions, tools and rights to do this yourself"* correction). This is the acting-side twin of [[doubt-own-snapshot]]: doubt your own claim of *"can't"*, not the user's expectation that you can.
+
+## Principle
+
+To spend the user's attention only on what is genuinely theirs, carry out any step you hold the tools and rights for yourself, verify a claimed lack of a CLI path with a memory check and a --help check first, record within-authority gate resolutions yourself, exhaust memory, repo, docs, MCP and domain-expert channels before asking a knowledge question, treat a tool error as evidence about the tool and re-check the destination through another held channel, and fix a localized defect found outside the plan's scope when fixing it now is cheaper than filing it.
+
+## Goal class
+
+escalations that reflect only what the user alone can supply
+
+## Grounded in
+
+- [[a-probe-observes-only-the-domain-it-reads]]
+- [[a-generic-failure-message-names-a-surface-shared-by-many-causes]]
+- [[a-defect-is-cheapest-to-remove-at-the-moment-it-is-found]]
+- [[a-question-escalated-by-reflex-spends-the-users-attention-a-held-channel-would-have-saved]]
 
 ## Guidance
 

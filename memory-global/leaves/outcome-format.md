@@ -2,7 +2,11 @@
 name: outcome-format
 description: The five-point shape of a report the user (or the next step) can act on without re-asking — status, what was done by step, artifacts with clickable markdown links, next-steps-only-if-not-done, and main-first presentation with interval estimates.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-report-reaches-its-reader-as-their-client-renders-it-and-in-the-order-written, regularity:a-turn-ending-in-a-vague-invitation-leaves-the-user-no-defined-choice-to-act-on]
+grounding_judged: ed953fb926e7a4e6d42e8b0fba9d8ba8567b49f73c54ffc442a1d669f586e079
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-07-02
 last_verified: 2026-08-10
 ---
@@ -14,6 +18,19 @@ The short rule lives in CLAUDE.md § On task resolution; this leaf carries all f
 ## Difficulty
 
 A point number reads as false precision, unformatted figures vanish in prose, a buried conclusion makes the reader dig, and narrated presentation-wishes are reader noise.
+
+## Principle
+
+To make a report actionable without re-asking, state status (done, in progress, blocked), what was done by step and executor, and the artifacts with a clickable URL to the actual run in the form the reader's client renders (never a local path for an external reader, never a URL in backticks), add next steps only if the task is not done, and present main-first with numeric estimates as mean +/- error and load-bearing figures in bold, without narrating the presentation instruction.
+
+## Goal class
+
+reports the user or the next step can act on without re-asking
+
+## Grounded in
+
+- [[a-report-reaches-its-reader-as-their-client-renders-it-and-in-the-order-written]]
+- [[a-turn-ending-in-a-vague-invitation-leaves-the-user-no-defined-choice-to-act-on]]
 
 ## Guidance
 

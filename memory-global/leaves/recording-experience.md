@@ -2,7 +2,11 @@
 name: recording-experience
 description: The discipline for recording a resolved-task experience leaf — the quality bar (decide before writing), what to record (search-before, scope, schema, ticket-thin, required frontmatter, self-critique), and the auto-trigger of self-improvement from the self-critique. The resolution gate itself stays in CLAUDE.md § On task resolution; this leaf is the execution-time how-to.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-memory-that-records-every-task-charges-later-tasks-for-entries-they-never-use, regularity:a-reproducible-cause-left-unnormed-fails-again-at-its-next-occurrence, regularity:text-loaded-into-every-session-is-paid-for-by-sessions-that-never-consult-it, regularity:a-memory-leaf-describing-mutable-state-ages-while-its-live-source-moves]
+grounding_judged: 0c665a2f5571189a426c8e102afc66b4b40bac29b329d7211b89b6f0da69b271
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-06-25
 last_verified: 2026-06-27
 ---
@@ -12,6 +16,21 @@ last_verified: 2026-06-27
 ## Difficulty
 
 At task resolution you must decide *whether* and *how* to record the experience. Recording everything bloats the always-loaded memory surface (worse than a gap); recording nothing loses reusable difficulties. Both failure modes cost future tasks. This procedure is consulted **only at the moment of recording** — after the resolution gate in `CLAUDE.md` § On task resolution has passed — so it lives next to its live tool (`scripts/record-experience.py`) rather than in the always-loaded prompt.
+
+## Principle
+
+To keep memory worth reading while losing no reusable difficulty, record a resolved-task experience leaf only when a future similar task would want to read it first (a non-obvious choice, a reusable overcome difficulty, a missing tool or instruction, or at least rediscovery-threshold-min minutes of rediscovery saved), search before recording and extend an analogous leaf rather than duplicate it, and always re-norm a reproducible factor with agentctl normalize, letting the bar decide only the level (note, leaf or principle).
+
+## Goal class
+
+recording resolved-task experience
+
+## Grounded in
+
+- [[a-memory-that-records-every-task-charges-later-tasks-for-entries-they-never-use]]
+- [[a-reproducible-cause-left-unnormed-fails-again-at-its-next-occurrence]]
+- [[text-loaded-into-every-session-is-paid-for-by-sessions-that-never-consult-it]]
+- [[a-memory-leaf-describing-mutable-state-ages-while-its-live-source-moves]]
 
 ## Guidance
 

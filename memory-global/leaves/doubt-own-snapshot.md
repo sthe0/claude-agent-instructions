@@ -2,7 +2,10 @@
 name: doubt-own-snapshot
 description: When a user's stated requirement appears to contradict what you observe, first suspect your OWN source is stale or incomplete and refresh it before doubting the requirement or asking a clarifying question built on a false premise.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on]
+grounding_judged: 74bf1b4407a77d21f2e33440d0674d88fd6e6efdc722abb90c7afa12c65ea484
 created: 2026-07-02
 last_verified: 2026-10-10
 ---
@@ -14,6 +17,18 @@ The short rule lives in CLAUDE.md § Escalation to the user; this leaf carries t
 ## Difficulty
 
 Challenging a **correct** requirement from an out-of-date local view wastes the user's attention and erodes trust; the apparent contradiction is far more often your staleness than the user's error.
+
+## Principle
+
+To avoid challenging a correct requirement from an out-of-date view, when a stated requirement or result appears to contradict what you observe, first refresh your own source (pull, fetch, re-read the authoritative state, reproduce with the real client, check live status) and resolve the contradiction to root before doubting the requirement, declaring an outage, asserting closure or asking a clarifying question.
+
+## Goal class
+
+claims about live state that rest on a current view of the authoritative source
+
+## Grounded in
+
+- [[a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on]]
 
 ## Guidance
 

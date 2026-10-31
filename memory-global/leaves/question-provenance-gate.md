@@ -1,7 +1,10 @@
 ---
 name: question-provenance-gate
 description: The premise plugin gates plan_approval on question provenance — every planning question dispositioned (the enumeration cross-check is retired; customer questions come from review acts), and every element of the ORDER either covered by a stage or cut with a reason and visible in the approved essence — the plan-time twin of the ledger's resolution-time claim gate; a question binds to the ELEMENT it targets, must name the control its answer could flip, and the pre-approval review rounds carry a budget; carries the honest ceiling (the silent-advisor fail-open hole is retired with the enumerator), the designed-in incentive gradient, and the unenumerated order.
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-plan-checked-only-against-itself-passes-over-premises-it-leaves-unrecorded-and-parts-of-the-order-it-leaves-out, regularity:incremental-repair-review-has-a-nonzero-finding-floor]
+grounding_judged: 4ad8a848678428de8dcecf8c192fcd531a4bc7ff6141aa8e52d01d75fc06778e
 type: reference
 created: 2026-07-20
 last_verified: 2026-08-26
@@ -18,6 +21,19 @@ last_verified: 2026-08-26
 ## Difficulty
 
 An ungrounded planning leap — "the reporter says it reproduces", "the goal is agreed", "that path exists" — dissolves in confident prose and is never addressable by a reviewer: there is no NAMED record, bound to a NAMED plan element, carrying a NAMED source and an asserted inference. The ledger closes this on the *resolution* axis (every load-bearing claim in the deliverable grounded), but a plan is approved and executed long before resolution; a false premise baked in at plan-approval time has already cost the execution before any claim ledger runs. The plan_approval boundary needs its own provenance gate, and — like enumeration for the ledger — *which questions exist* is perception the engine must not regex-extract, while *whether the recorded set is structurally dispositioned* is a decidable form the engine owns.
+
+## Principle
+
+To keep a false premise and a quietly narrowed order out of an approved plan, record every planning question as a named record bound to the plan element it targets and name the control its answer could flip, record each element of the order and mark it covered by an existing stage or cut with a reason, show the covered and cut elements in the essence the user approves, enumerate the order elements from the order's text before submit-plan, and edit the plan for a finding only if it changes what gets built or verified.
+
+## Goal class
+
+plan-approval premise and order-coverage control
+
+## Grounded in
+
+- [[a-plan-checked-only-against-itself-passes-over-premises-it-leaves-unrecorded-and-parts-of-the-order-it-leaves-out]]
+- [[incremental-repair-review-has-a-nonzero-finding-floor]]
 
 ## Guidance
 

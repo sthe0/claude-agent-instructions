@@ -2,7 +2,10 @@
 name: home-dir-arc-fuse-mounts
 description: difficulty — a broad find/grep/Grep/Glob rooted at /home/the0, ~, or $HOME silently fans out across several network-backed FUSE mounts of an org-specific VCS tool and is pathologically slow / hammers the mount. Fact — the home dir holds multiple such FUSE mountpoints as direct children; scope every recursive search to a specific repo or subdir, never to the home root.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-recursive-search-rooted-above-network-backed-fuse-mounts-traverses-all-of-them]
+grounding_judged: d4fa981d77c75ec9d1849cacc12bad5b4c82c11b951353ce0a69ce181711ba92
 created: 2026-06-23
 last_verified: 2026-06-24
 ---
@@ -12,6 +15,18 @@ last_verified: 2026-06-24
 ## Difficulty
 
 A broad `find`/`grep -r`/`rg`/`Grep`/`Glob` rooted at `/home/the0`, `~`, or `$HOME` silently fans out across several network-backed FUSE mounts of an org-specific VCS tool hanging off the home directory — the search becomes pathologically slow and hammers the mount with stat/readdir calls across the entire virtual FS tree.
+
+## Principle
+
+To avoid pathologically slow searches that hammer network-backed FUSE mounts, scope every recursive find, grep -r, rg, fd, Grep or Glob to the specific repository or subdirectory needed, pinning its absolute path, and never root it at the home directory, ~, $HOME or any ancestor of two or more such mounts.
+
+## Goal class
+
+bounded-cost recursive file search
+
+## Grounded in
+
+- [[a-recursive-search-rooted-above-network-backed-fuse-mounts-traverses-all-of-them]]
 
 ## Guidance
 

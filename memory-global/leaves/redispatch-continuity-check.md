@@ -3,7 +3,11 @@ name: redispatch-continuity-check
 description: Before re-dispatching a stage that was dispatched before, check the repo's existing .claude/worktrees/* and run the stage's verify_command against them — agentctl dispatch forks a fresh worktree for an independent stage every time, so finished work is silently re-derived from zero.
 created: 2026-08-28
 last_verified: 2026-10-10
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-dispatcher-that-tracks-a-units-status-but-not-its-artifact-restarts-a-repeat-dispatch-from-nothing, regularity:a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on, regularity:a-controls-defects-surface-only-when-it-is-executed, regularity:a-remedy-named-in-prose-can-denote-a-cheap-query-or-an-expensive-rewalk, regularity:a-stage-control-is-re-evaluated-after-its-world-has-changed]
+grounding_judged: 642cdd9be1d5a2166d9b5188db48c242df53c73d0316d1a26ed1e6925de39693
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 type: reference
 ---
 
@@ -23,6 +27,22 @@ deliverable sitting in a sibling worktree, and re-derived it from scratch —
 ~$25 and ~6 active hours on a deliverable that was already done and whose
 `verify_command` already passed. Nothing noticed until the effort-divergence
 trigger fired on the absolute replan count, four spawns too late.
+
+## Principle
+
+To avoid re-deriving finished work, before re-dispatching a stage that was dispatched before, list the repo's .claude/worktrees/, check git log in each candidate and run the stage's verify_command directly against it; if it passes, close the stage with agentctl code-review and record-result instead of spawning a developer; after a substantive replan dispatch a formerly passed stage with --re-attest; confirm grants with stage-grants rather than assuming resolve-permission behavior; read a plan's declared field back through the loader rather than trusting the plan's prose.
+
+## Goal class
+
+redispatching a stage without re-deriving finished work
+
+## Grounded in
+
+- [[a-dispatcher-that-tracks-a-units-status-but-not-its-artifact-restarts-a-repeat-dispatch-from-nothing]]
+- [[a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on]]
+- [[a-controls-defects-surface-only-when-it-is-executed]]
+- [[a-remedy-named-in-prose-can-denote-a-cheap-query-or-an-expensive-rewalk]]
+- [[a-stage-control-is-re-evaluated-after-its-world-has-changed]]
 
 ## Guidance
 

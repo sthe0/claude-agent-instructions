@@ -1,7 +1,11 @@
 ---
 name: pr-size-proportional-to-task
 description: A PR's diff stays proportionate to what the task brings in (a ported prototype, the stated scope) — a diff more than 3x that size, or one carrying an unnamed deliverable, is justified addition by addition or split; tests and golden data stay proportionate to the original's.
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-diff-that-outgrows-its-task-costs-reviewer-attention-by-the-whole-diff, regularity:a-change-outside-the-state-its-consumers-read-is-unseen-by-them, regularity:what-a-change-does-not-carry-ends-with-its-authors-context]
+grounding_judged: 60eb697c87dcddea0cceb1c46ba38236bed869df01a65e9b8b3eedcdecd6586f
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 type: feedback
 created: 2026-10-27
 last_verified: 2026-10-27
@@ -10,6 +14,20 @@ last_verified: 2026-10-27
 ## Difficulty
 
 A task ported a ~1.2k-line Python prototype (211 of them tests) into a Go service. The PR that went to human review was about 7x the source: tests plus golden testdata alone were ~5900 lines (97 golden files copying the prototype's whole output tree), and a local-run launcher plus a frontend UI rode along — added as a verification aid in one stage and grown through review rounds, never reconsidered as a separate deliverable. Neither the developer's self-review nor the independent code-reviewer compared the diff size with the size of the ported code, so the human reviewer was the first to see that the port was buried under everything around it. Each round of review on such a PR costs reviewer attention proportional to the whole diff, not to the task.
+
+## Principle
+
+To keep a port or a scoped task from being buried under its surroundings in review, compare the PR's diff with what the task brings in (the ported prototype, the stated scope) before it goes to review; justify each addition in the description or split the extra part into its own PR when the diff exceeds 3x that reference or carries a deliverable the brief never named (a local runner, a UI, a docs page); keep tests and golden data proportionate to the original's; and split along the import boundary so the second PR depends on the first.
+
+## Goal class
+
+PRs whose review cost is proportional to the task they deliver
+
+## Grounded in
+
+- [[a-diff-that-outgrows-its-task-costs-reviewer-attention-by-the-whole-diff]]
+- [[a-change-outside-the-state-its-consumers-read-is-unseen-by-them]]
+- [[what-a-change-does-not-carry-ends-with-its-authors-context]]
 
 ## Guidance
 

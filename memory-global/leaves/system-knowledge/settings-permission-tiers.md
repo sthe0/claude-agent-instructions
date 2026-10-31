@@ -4,7 +4,10 @@ description: Where a tool permission belongs by class — read-only → versione
 type: reference
 created: 2026-07-23
 last_verified: 2026-09-26
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:settings-base-json-is-merged-fleet-wide-without-prompt-and-admits-only-read-only-entries, regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-process-boundary-carries-only-what-is-passed-across-it]
+grounding_judged: 556749c9b1abd2390f79a773cfaf76bea3856c4006b6c39dfe8f114ffaa4333c
 ---
 
 ## Difficulty
@@ -15,6 +18,20 @@ next to a lookalike entry (`Bash(python3 -m json.tool:*)`). For a **code-executi
 permission this is wrong and is caught only at final verification: `verify-all` →
 `lint-settings-base.py` **FAILS** ("non-read-only entry in base.json"). Rediscovering
 the correct home mid-task costs a full replan.
+
+## Principle
+
+To grant a tool permission that spawned developers need without exposing the whole fleet, place it by class: a read-only entry goes in the versioned settings/base.json; a code-executing entry (for example Bash(python3 -m pytest:*)) is injected through the --settings payload that scripts/spawn-specialist.py passes for kind developer; a grant that is neither fleet-wide read-only nor a standing per-kind baseline goes in a plan's [stage.grants] table so it is materialized only into that one stage's child; never put an exec entry in base.json; and verify a spawn permission change with a live diagnostic spawn, not only a static test that the entry exists.
+
+## Goal class
+
+least-exposure placement of an agent tool permission
+
+## Grounded in
+
+- [[settings-base-json-is-merged-fleet-wide-without-prompt-and-admits-only-read-only-entries]]
+- [[a-probe-observes-only-the-domain-it-reads]]
+- [[a-process-boundary-carries-only-what-is-passed-across-it]]
 
 ## Guidance
 

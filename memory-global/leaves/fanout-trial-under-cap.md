@@ -2,7 +2,10 @@
 name: fanout-trial-under-cap
 description: Before trialing any mechanism that spawns processes per invocation (test parallelizers, pools, recursive hooks, spawners), check how the hook looks from inside a child and run the trial under a memory + task cap; an uncapped trial of such a mechanism cost a 2 h machine reset on 2026-10-07
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-fan-out-hook-that-re-fires-inside-its-children-multiplies-processes-instead-of-failing-a-test]
+grounding_judged: 8e66fd47e19ce6c73e32b9973a46da63197db076170d4d85da966a7e3c5f09e4
 created: 2026-10-07
 last_verified: 2026-10-10
 ---
@@ -10,6 +13,18 @@ last_verified: 2026-10-10
 ## Difficulty
 
 A prototype that turns on a process fan-out (a `conftest.py` auto-enabling pytest-xdist, a worker pool, a hook that re-spawns the tool it runs in) fails differently from ordinary code: a wrong guard does not produce a red test, it produces an exponential process tree. On 2026-10-07 such a prototype was run with no resource limit and without asking how the same hook evaluates inside a spawned worker; the workers re-fired it (12 → 144 → 1728 processes), the no-swap VM ran out of memory within seconds and stayed hung for about two hours until a hard reset. Nothing in the developer or coordinator norms asked for a cap or a re-entrancy check before the trial, so the cost of one mistake was the machine, not the trial.
+
+## Principle
+
+To make the worst case of a first trial of a process fan-out mechanism a killed trial rather than a reset machine, before its first run check how the hook evaluates inside a spawned child and make it exit early on any child marker, and run the trial under a task and wall-clock cap (scripts/cap-run.sh).
+
+## Goal class
+
+bounded blast radius of a first trial of a process-spawning mechanism
+
+## Grounded in
+
+- [[a-fan-out-hook-that-re-fires-inside-its-children-multiplies-processes-instead-of-failing-a-test]]
 
 ## Guidance
 

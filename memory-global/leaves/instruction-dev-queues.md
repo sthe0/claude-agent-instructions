@@ -2,7 +2,10 @@
 name: instruction-dev-queues
 description: "The 3-tier instruction-development tracking model (Core / Org / Project): each tier has a proactive internal backlog + a reactive report inbox, with a collapse rule when filers==editors and a stream-separation axis (separate queue vs separate label); Core venue is PUBLIC — split mixed items by tier at filing time, pre-publish check via check-org-neutral.py."
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-value-emitted-to-an-external-channel-persists-beyond-recall, regularity:a-single-tracker-holding-both-backlog-and-reports-keeps-them-apart-only-by-a-label-the-digest-filters-on]
+grounding_judged: 603323d8509f84526570d8251373f40fcb422bfb00ef37a01081a66bac763ec2
 created: 2026-06-30
 last_verified: 2026-07-04
 ---
@@ -12,6 +15,19 @@ last_verified: 2026-07-04
 ## Difficulty
 
 To achieve **a planned destination for every instruction-development idea** — both the refinements *we* decide to make and the difficulties *users* report — instead of letting them accumulate ad-hoc on someone's local notes where they are lost between sessions, each instruction tier needs an explicit, durable place to track that work. Two distinct flows are easy to conflate: a **proactive internal backlog** (things the tier's *editors* plan to build) and a **reactive report inbox** (difficulties filed by people *without* edit authority, via self-improvement / the difficulty-channel). Without naming both and saying where each lands per tier, reports get planned-over and backlog ideas get filed as if they were external difficulties — and the digest that clusters difficulties (`core-difficulty-digest.py`, which pulls `labels=difficulty`) silently swallows planning items.
+
+## Principle
+
+To keep org-internal content off the public Core venue and planning items out of the difficulty digest, split an item that spans Core and Org content by tier at filing time, file the org-neutral half to the Core queue and the org-specific half to the org backlog cross-linked one-way from internal to public, run every body destined for a Core issue, PR or commit through scripts/check-org-neutral.py before posting, and give backlog items the backlog label and reports the difficulty label.
+
+## Goal class
+
+separating instruction-development streams and tiers at filing
+
+## Grounded in
+
+- [[a-value-emitted-to-an-external-channel-persists-beyond-recall]]
+- [[a-single-tracker-holding-both-backlog-and-reports-keeps-them-apart-only-by-a-label-the-digest-filters-on]]
 
 ## Guidance
 

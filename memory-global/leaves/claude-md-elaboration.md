@@ -2,7 +2,10 @@
 name: claude-md-elaboration
 description: The full original wording of CLAUDE.md rule paragraphs whose elaboration was moved out to keep the always-loaded file short; read it when a CLAUDE.md rule's one-line directive is not enough.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:text-loaded-into-every-session-is-paid-for-by-sessions-that-never-consult-it]
+grounding_judged: f942689aab87a05e4dd147d211c56c8e2142a407dd1f38662ebfcf440206196c
 created: 2026-10-26
 last_verified: 2026-10-26
 ---
@@ -12,6 +15,18 @@ last_verified: 2026-10-26
 ## Difficulty
 
 CLAUDE.md is loaded into every session and is held under a character ceiling. A rule's directive belongs there; its rationale, worked detail and enumerations cost every session tokens it rarely needs. Moving them here keeps the directive in the always-loaded file and the full wording one link away, so no rule is deleted by being shortened.
+
+## Principle
+
+To keep the always-loaded CLAUDE.md under its character ceiling without deleting any rule, keep each rule's directive in CLAUDE.md and move its rationale, worked detail and enumerations into this leaf under the same heading, editing a rule in CLAUDE.md first and moving the elaboration here when its wording grows back.
+
+## Goal class
+
+keeping an always-loaded rulebook short without losing rules
+
+## Grounded in
+
+- [[text-loaded-into-every-session-is-paid-for-by-sessions-that-never-consult-it]]
 
 ## Guidance
 
@@ -99,7 +114,7 @@ Numeric constants for the coordination machinery (recursion cap, budget tiers, t
 | **Global engineering** | `~/.claude-agent/memory-global/MEMORY.md` + `leaves/` + `leaves/experience/` + `leaves/system-knowledge/` | Cross-project engineering patterns, reasoning practices, runbooks, retrospectives, granted-permissions. English, structured. Imported into every session via the line at the end of this file. |
 | **Project (local)** | `<project_cwd>/.claude/agent-memory/MEMORY.md` + leaves + `experience/` + `system-knowledge/` | Project-specific runbooks — product pipelines, ticket detail, repo conventions, prod naming. English. Shared via the project's git. |
 
-All three follow the same file shape: `MEMORY.md` as a short index, detail in leaf files, frontmatter `name` / `description` / `type` (`user` / `feedback` / `project` / `reference`) plus the temporal fields `created` / `last_verified` (required, tool-stamped) — see [memory-temporal-frontmatter.md](memory-temporal-frontmatter.md). Spin off `<subdir>/MEMORY.md` sub-indexes for monotonic (`experience/`, retrospectives) or domain-coherent (`system-knowledge/`) content — full principle in [memory-hierarchy.md](memory-hierarchy.md). Ordinary leaves (reference / feedback / `system-knowledge/`) opt into the rigid `schema: leaf/v1` shape — `## Difficulty` / `## Guidance` / `## See also`, `verify-leaf-structure.py`-enforced ([leaf-schema.md](leaf-schema.md)); experience leaves use `difficulty/v1`, induced into `regularity/v1` knowledge that `principle/v1` norms cite.
+All three follow the same file shape: `MEMORY.md` as a short index, detail in leaf files, frontmatter `name` / `description` / `type` (`user` / `feedback` / `project` / `reference`) plus the temporal fields `created` / `last_verified` (required, tool-stamped) — see [memory-temporal-frontmatter.md](memory-temporal-frontmatter.md). Spin off `<subdir>/MEMORY.md` sub-indexes for monotonic (`experience/`, retrospectives) or domain-coherent (`system-knowledge/`) content — full principle in [memory-hierarchy.md](memory-hierarchy.md). Ordinary leaves (reference / feedback / `system-knowledge/`) take the schema that fits their kind (`principle/v1`, `regularity/v1` or `ontology/v1`), each carrying a `## Difficulty` section; the older fixed Difficulty / Guidance / See also leaf shape is retired ([leaf-schema.md](leaf-schema.md)); experience leaves use `difficulty/v1`, induced into `regularity/v1` knowledge that `principle/v1` norms cite.
 
 Project memory is shared via the project's git: `scripts/setup-project-memory.sh` symlinks `~/.claude-agent/projects/<cwd-hash>/memory/` → `<project_cwd>/.claude/agent-memory/`. The native auto-memory mechanism then reads/writes through the symlink, and other developers inherit the memory on clone.
 
