@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, cli_approval, cli_common, effort, gates, task_accumulator
+from agentctl import cli, cli_approval, cli_common, cli_final, effort, gates, task_accumulator
 from agentctl.config import Thresholds
 from agentctl.state import (
     Critique, Declaration, Difficulty, Investigation, Normalization, PlanReview, SessionState,
@@ -561,7 +561,7 @@ def test_resolve_keeps_a_crossing_recorded_after_the_disclosure_snapshot(eng, mo
         task_accumulator.record_crossing(task, late, session_id="late-session", now="late-moment")
         return detail
 
-    monkeypatch.setattr(cli, "_disclose_backstop_crossings", disclose_then_let_another_session_cross)
+    monkeypatch.setattr(cli_final, "_disclose_backstop_crossings", disclose_then_let_another_session_cross)
     resolved = eng.run("resolve", session="b1", by="user", quality=5, quality_by="user-confirmed")
     assert resolved["ok"] is True, resolved
     assert [c["decision"] for c in resolved["data"]["agent_backstop_crossings"]] == [

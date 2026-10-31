@@ -912,7 +912,7 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "n/a: the ONLY writer of SKIPPED, and only for stages the plan declares optional "
         "and the customer named in --skip-optional"
     ),
-    ("agentctl/cli.py", "cmd_reject"): (
+    ("agentctl/cli_final.py", "cmd_reject"): (
         "guarded: the default target is the last stage that is not SKIPPED, and an explicit "
         "--stage naming a SKIPPED stage is refused; FAILED is never written to a declined one"
     ),
