@@ -308,6 +308,8 @@ def test_driver_own_mode_takes_session_from_own_channel(own_driver, capsys):
     for call in engine.calls:
         assert call[:2] == [sys.executable, str(OWN_SCRIPT)], f"an engine call bypasses the channel: {call}"
         assert not any(t == "--session" or t.startswith("--session=") for t in call), call
+        if _Engine.verb(call) == "status":
+            continue  # the driver's agreement read: an own-contour verb with no target
         assert call[call.index("--target") + 1] == own_driver.plan, call
     verbs = {_Engine.verb(call) for call in engine.calls}
     assert {"plan-review-walk", "plan-review", "plan-review-compose"} <= verbs, verbs
