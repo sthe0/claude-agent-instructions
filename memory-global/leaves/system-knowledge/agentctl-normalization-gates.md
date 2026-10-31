@@ -2,7 +2,10 @@
 name: agentctl-normalization-gates
 description: "The ten normalization-closure gates of scripts/agentctl/gates.py (what each refuses, where it is called, how its gate-log label is written, which refusals overlap) and a keep/merge/delete/fix decision per gate, with real-session counts at a fixed cutoff; none is duplicate, dead or buggy"
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: scripts/agentctl/gates.py
 created: 2026-10-26
 last_verified: 2026-10-26
 ---
@@ -16,6 +19,18 @@ gate, has to rediscover three things from the code: which verb each gate guards,
 `_log_gate` label is written on every evaluation or only on refusal (a refusal-only label has no
 denominator), and which gates really share a predicate. Rates computed over the whole log mostly
 describe the test suite, because test sessions leave no engine state file and write most rows.
+
+## Regularity
+
+Ten functions in scripts/agentctl/gates.py guard the closing of a difficulty and the norm edits it owes: normalization_blockers, normalization_waiver_blockers, failure_address_blockers, difficulty_stack_blockers, difficulty_close_blockers, normative_edit_blockers, renorm_retention_blockers, pending_renorm_stage_blockers, pending_renorm_final_blockers and renormalization_blockers. They guard different verbs (replan, difficulty-close, record-result, verify-final and resolve, replan --renormalize) or judge different state, so none is a duplicate, dead or buggy gate; pairs sharing a predicate (for example the waiver rule, written inline for the normalize verb and in difficulty_close_blockers) do so at another verb or over other state. Gate-log counts of some of these gates, being labels logged on refusal only or on a subset of paths, do not give an evaluation denominator, and pending_renorm_stage_blockers is never logged. At cutoff 2026-10-26 over real sessions normalization_blockers had 2583 evaluations and 109 refusals, renorm_retention 398 evaluations and 0 refusals, renormalization 35 and 12.
+
+## Given
+
+Given from code: `scripts/agentctl/gates.py`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+Finding in scripts/agentctl/gates.py and cli.py two of these gates that refuse an identical state at the same verb, a gate that can never refuse, or a gate-log row count at the cutoff differing from the cited figures, would show the statement false.
 
 ## Guidance
 

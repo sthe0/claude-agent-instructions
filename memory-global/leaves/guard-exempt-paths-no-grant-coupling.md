@@ -3,7 +3,10 @@ name: guard-exempt-paths-no-grant-coupling
 description: agentctl's guard_exempt_paths stage field lifts the repo-root write-guard deny on a declared path but has no code-level check that the path is covered by an actual validated grant for that stage — a follow-up structural validator is still open.
 created: 2026-10-02
 last_verified: 2026-10-02
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: scripts/agentctl/dispatch.py
 type: reference
 ---
 
@@ -34,6 +37,18 @@ plan-review `thinker` pass for the corresponding plan-TOML correction
 because the declaration still rides the normal plan-review/approval gates like
 any other plan field, but named the missing coupling explicitly as a tracked
 follow-up, not a blocker.
+
+## Regularity
+
+In agentctl, the stage field guard_exempt_paths lifts the repo-root write-guard deny (write_guard_deny_rules, which otherwise blocks Edit on .claude/**, .git/**, .git and settings*.json reached only through ambient write access) for a declared path, but no code checks that the exempted path is covered by a grant the stage separately declared and had validated (grants.validate_rule, validate_add_dir). A stage can therefore exempt a path its own grants never covered, and only the plan-review pass stands between an unjustified exemption and the write.
+
+## Given
+
+Given from code: `scripts/agentctl/dispatch.py`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+Reading scripts/agentctl/dispatch.py and scripts/spawn-specialist.py (as of landing in claude-agent-instructions@7b0b5e90 or later) shows a validator that rejects a guard_exempt_paths entry not contained in the union of the stage's own validated Edit-allow grants.
 
 ## Guidance
 

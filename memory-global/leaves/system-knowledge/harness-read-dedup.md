@@ -2,7 +2,10 @@
 name: harness-read-dedup
 description: Difficulty it removes — you are tempted to build a hook to dedup re-Reads, or you burn tokens re-reading an unchanged file. Fact — the Claude Code harness already returns a "Wasted call" stub for a re-Read of an unchanged file (whether first loaded via Read or via a system-reminder), so no custom hook is needed; grounds the no-rereads rule in CLAUDE.md.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: measurement
+given_source: ~/.claude/projects/<project-slug>/eae4ea0f-9c8a-40ba-9aea-3df06793cc7b.jsonl
 created: 2026-05-27
 last_verified: 2026-06-24
 ---
@@ -12,6 +15,18 @@ last_verified: 2026-06-24
 ## Difficulty
 
 You are tempted to build a PreToolUse hook to block re-Read of unchanged files — or you burn tokens re-reading a file that hasn't changed. The question is whether the harness already handles this, or whether a custom hook is needed.
+
+## Regularity
+
+In session eae4ea0f on 2026-05-27 an explicit Read of ~/.claude-agent/projects/.../memory/MEMORY.md returned the stub "Wasted call — file unchanged since your last Read. Refer to that earlier tool_result instead." The same file's content had earlier been delivered in that session through the codebase-and-user-instructions system reminder rather than an explicit Read, so in that one logged case the stub appeared after a prior surfacing of the content other than a Read. The mechanism is inferred, not observed, from that single session log: a per-session file history under ~/.claude/file-history/<session-id>/<hash>@v<N> that the harness compares with the on-disk content. The leaf does not record observing any of the cases it lists as possibly not caught by the dedup (a different file whose content is a subset of an already-loaded one, a re-Read in a separate session, a re-Read after an external change).
+
+## Given
+
+Given from measurement, from the session transcript named in the `given_source` field. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+A transcript of session eae4ea0f showing that the Read of MEMORY.md on 2026-05-27 returned the file content rather than the Wasted call stub, or showing that the file's content had not been delivered earlier in the session, would show the observation false.
 
 ## Guidance
 

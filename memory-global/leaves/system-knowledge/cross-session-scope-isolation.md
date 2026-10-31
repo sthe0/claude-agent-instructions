@@ -2,7 +2,10 @@
 name: cross-session-scope-isolation
 description: "Deterministic cross-session filesystem-scope isolation: a session-scope registry + online conflict detector + PreToolUse hook that denies/warns when two LIVE sessions overlap the same tree, replacing the reactive git-status/worktree playbook. Isolate, not serialize."
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: docs/operations/cross-session-scope-isolation.md
 created: 2026-07-01
 last_verified: 2026-07-01
 ---
@@ -12,6 +15,18 @@ last_verified: 2026-07-01
 ## Difficulty
 
 Desired — parallel Claude Code sessions that share one working tree (git checkout or a VCS-specific mount) never collide over it. Actual — one session's uncommitted edits get attributed to, staged by, or clobbered by another, and the only protection is a reactive, perception-heavy manual playbook (detect via `git status`, isolate via `git worktree add` off a pinned SHA, recover via cherry-pick) captured in three experience leaves. There was no session→scope registry, no liveness signal, and no online conflict detector — so a collision was caught only after it had already happened.
+
+## Regularity
+
+Cross-session filesystem-scope isolation in the agent repo is a registry plus an online detector plus hooks, all under scripts/. session_scope/registry.py keeps one JSON record per session at ~/.claude-agent/agentctl/scopes/<session>.json ({heartbeat_ts, cwd, repo_root, vcs, touched_paths[]}), written by hook-scope-track.py after Edit, Write and Bash calls. session_scope/detector.py tests path overlap by normalized ancestor-or-equal prefix, independent of VCS, over other live sessions only (liveness is a heartbeat within 30 minutes); hook-scope-conflict.py, a PreToolUse hook on Edit and Write, denies only a gated path already held by another live session, warns on a non-gated held path, and allows silently for a single session or distinct worktrees and mounts; every hook fails open. session-isolate.sh routes a contended task into its own worktree or mount through a backend contract; Core ships only the git backend, and an org-specific VCS backend is a machine-local plugin that a same-named built-in would shadow. hook-guard-canon-readonly.py denies Edit, Write and git commit under a canonical root (the Core repo's primary checkout, or canon roots named in ~/.claude-agent/canon-roots.local) on any branch, so writing into memory-global/ from the primary checkout is denied and goes through a worktree.
+
+## Given
+
+Given from code: `docs/operations/cross-session-scope-isolation.md`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+Reading scripts/session_scope, hook-scope-conflict.py and hook-guard-canon-readonly.py and finding that two live sessions in distinct worktrees are denied, that a crashing hook denies the tool call, or that an Edit under the primary checkout on main is allowed, would show the statement false.
 
 ## Guidance
 

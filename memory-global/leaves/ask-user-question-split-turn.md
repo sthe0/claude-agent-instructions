@@ -1,7 +1,10 @@
 ---
 name: ask-user-question-split-turn
 description: The plan-presentation delivery gate — the essence rendering must land as a completed turn's final message bound to plan_sha256 before cmd_approve, scoped by a fail-open classifier to the ask it identifies as the approval ask; hook-plan-delivery-gate.py enforcement, its two-prover split, its second (replan_diff) receipt kind and DIAGNOSING carve-out, and its residuals. (The former universal AskUserQuestion turn-split is retired — the client render bug it worked around is fixed on 2.1.216.)
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: scripts/hook-plan-delivery-gate.py
 type: feedback
 created: 2026-07-14
 last_verified: 2026-08-27
@@ -12,6 +15,18 @@ last_verified: 2026-08-27
 Plan approval must prove an *act of presentation* actually occurred: the plan's essence rendering has to reach the user as a completed turn's **final** message, bound to the exact plan version, before `cmd_approve` may pass. Delivery is observable ONLY by a hook — agentctl never sees a transcript — so the approval gate needs a hook to PRODUCE the proof and `cmd_approve` to CONSUME it, or a plan can be "approved" with nothing shown.
 
 > **Historical note (2026-07-21).** This leaf formerly also carried a *universal* AskUserQuestion turn-split: on clients up to v2.1.211, same-turn text preceding a tool call could be dropped from render and transcript, so every confirmation ask had to be deferred to its own turn behind a `sleep 2` timer, enforced by dedicated turn-boundary and answer-delivery hooks. That client behavior was **re-measured false on client 2.1.216** (2026-07-21) — text preceding a same-turn tool call now renders and persists — so the universal split and those enforcement hooks were **retired**; see [claude-code-drops-pre-tool-call-text.md](system-knowledge/claude-code-drops-pre-tool-call-text.md) for the forensic history. An ask may now share its turn with preceding text and tool calls. What remains live — and what this leaf now documents — is the **plan-presentation delivery gate**, which is grounded on receipt-binding to the plan version, not on any client render behavior.
+
+## Regularity
+
+Delivery of a plan's essence is observable only to hooks, because only hooks receive a transcript_path and agentctl never sees a transcript. hook-plan-delivery-gate.py stamps a source=hook delivery receipt bound to plan_sha256 only when it positively verifies that the registered essence landed as the final assistant message of a completed turn, strictly after the receipt that registered it; cmd_approve requires that stamp. The check applies only to an AskUserQuestion that advisor.judge_approval_ask classifies as the plan-approval ask; when the classifier is absent, slow or malformed, is_approval_ask resolves to False and the hook allows the call without stamping. A second receipt kind, replan_diff, is stamped by the same hook for asks carrying the literal marker [authorize-replan], and a refinement or no_change diff applied at node DIAGNOSING with a complete difficulty record needs no presentation. The gate shows that those exact bytes landed bound to that plan version; it does not show that the essence is meaningful, faithful to the plan, or read. The former universal AskUserQuestion turn-split was retired after the client behavior it worked around was re-measured false on client 2.1.216.
+
+## Given
+
+Given from code: `scripts/hook-plan-delivery-gate.py`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+cmd_approve passes for a plan whose essence was registered but never emitted as the final message of a completed turn; or the hook stamps a delivery receipt on a fail-open allow; or the client drops text preceding a same-turn tool call on 2.1.216 or later.
 
 ## Guidance
 

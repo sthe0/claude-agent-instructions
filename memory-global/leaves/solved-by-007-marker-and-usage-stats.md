@@ -2,7 +2,10 @@
 name: solved-by-007-marker-and-usage-stats
 description: The resolution gate auto-stamps a `solved_by_007` marker (internal-tracker tag / GitHub label) on a resolved task's tracker ticket so resolved tasks become a searchable precedent corpus, and the tracker key it now captures on the quality-ledger row backs a single local usage report — why the stamp is engine-executed while the sibling ticket-status transition stays skill-executed.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: scripts/agentctl/solved_marker.py
 created: 2026-07-13
 last_verified: 2026-07-13
 ---
@@ -10,6 +13,18 @@ last_verified: 2026-07-13
 ## Difficulty
 
 A task the system resolves left no trace on its tracker ticket, so there was no way to later search the tracker for "tasks the system solved" as a precedent corpus. Separately, the per-task quality row written at resolution (`~/.local/log/claude-task-quality.jsonl`) recorded `task_id` but not the ticket/issue it corresponded to, so usage could not be joined back to tickets and no single command answered "how much is this system being used, here vs. everywhere".
+
+## Regularity
+
+Without a stamp, a task the system resolved left no trace on its tracker ticket and its quality-ledger row carried no ticket key. In agentctl, cmd_resolve calls solved_marker.stamp(tracker_key) right after writing the quality row; stamp classifies the key by shape and adds the tag solved_by_007 to an issue-key ticket through the machine's configured channel adapter, or adds the label solved_by_007 to a fully-qualified GitHub ref, and returns {stamped: False, skipped_reason: ...} instead of raising when there is no key, no token, an HTTP error, an unclassifiable key, no adapter installed, or a bare GitHub number. The GitHub labels endpoint does not auto-create a label, so a missing label in the target repo gives a 422 that is swallowed as a skip. The quality row's tracker_key field backs scripts/agent-stats.py, a read-only aggregator over the quality, policy and spawn-cost ledgers.
+
+## Given
+
+Given from code: `scripts/agentctl/solved_marker.py`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+A resolved task with a known tracker key, a token, an installed adapter and an existing label whose ticket did not receive the solved_by_007 marker without a recorded skipped_reason, or a marker failure that aborted a resolution already done, or a quality row written at resolve with no tracker_key field, would show the statement false.
 
 ## Guidance
 

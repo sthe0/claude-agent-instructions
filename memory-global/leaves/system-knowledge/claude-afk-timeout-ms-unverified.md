@@ -2,7 +2,10 @@
 name: claude-afk-timeout-ms-unverified
 description: CLAUDE_AFK_TIMEOUT_MS (set to 2e9 in settings/base.json to disable the ~60s AskUserQuestion no-response auto-proceed) is NOT documented in any Claude Code primary source (docs, settings.md, CHANGELOG.md, GitHub) — treat as an unverified/possible-dead-config env var; its only asserted purpose comes from the repo's own commit cbe290f, not from authoritative docs. Verify empirically before relying on it.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: doc
+given_source: settings/base.json
 created: 2026-07-02
 last_verified: 2026-07-21
 ---
@@ -20,6 +23,18 @@ Two facts establish the risk:
 So its purpose is asserted only by the repo's own commit message + the variable name, not by an independent source. It may be (a) real-but-undocumented/internal, (b) an experimental-build artifact, or (c) a no-op. The 60s auto-proceed itself is a Claude Code **harness** behavior, not the messaging bridge (the messaging bridge's autoclose only closes chat topics, `AUTOCLOSE_DEAD/DONE_MINUTES` 10/30 min — a different mechanism).
 
 > verified by: claude-code-guide subagent web research 2026-07-02 (session 5108f108) — checked docs.claude.com map, settings.md, hooks.md, GitHub CHANGELOG.md, issues #30740/#70294; no primary source mentions the var. Also `grep -rn CLAUDE_AFK_TIMEOUT_MS` across the repo → only `settings/base.json`.
+
+## Regularity
+
+The env var CLAUDE_AFK_TIMEOUT_MS, set to 2000000000 in settings/base.json (intent stated by commit cbe290f: disable the AskUserQuestion no-response auto-proceed after about 60s), has no consumer anywhere else in the repo since 2026-07-21 and appears in no Claude Code primary source: not in the docs map, settings.md, hooks.md, the anthropics/claude-code CHANGELOG.md (zero "afk" matches), or a GitHub search for the literal string. The closest feature request, anthropics/claude-code issue 30740 (configurable AskUserQuestion timeout), was closed as not planned. Its purpose is asserted only by the repo's own commit message and the variable name, so whether it is honoured by the harness, is internal, or is a no-op is unverified. The 60s auto-proceed is a Claude Code harness behaviour, not the messaging bridge's autoclose.
+
+## Given
+
+Given from doc: `settings/base.json`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+Documentation, a changelog entry or a live session showing CLAUDE_AFK_TIMEOUT_MS honoured (an unanswered AskUserQuestion not auto-proceeding after 60s with the var set) or a primary source naming it, would show the statement false.
 
 ## Guidance
 

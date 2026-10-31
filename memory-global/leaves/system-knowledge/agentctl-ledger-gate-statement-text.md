@@ -2,7 +2,10 @@
 name: agentctl-ledger-gate-statement-text
 description: "The agentctl ledger plugin (auto-activates on SUBSTANTIVE + deliverable_kind reasoning|mixed) blocks resolve until every load-bearing claim is enumerated and dispositioned, but no CLI surface (ledger-check, status) prints a raised candidate's actual statement text — only its bare enum-N id; the text lives only in state.plugins.ledger.candidates[].statement inside the raw session-state JSON."
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: doc
+given_source: scripts/agentctl/README.md
 created: 2026-10-01
 last_verified: 2026-10-01
 ---
@@ -17,6 +20,18 @@ candidates (`enum-1`..`enum-36`), and `agentctl ledger-check` listed all 36 as
 statement text. Neither `ledger-check` nor `status` nor any `ledger-*` `--help` surface
 prints the text needed to judge and disposition each candidate (`ledger-dispose --as
 recorded --claim <id>` / `--as dismissed --reason <text>`).
+
+## Regularity
+
+The agentctl ledger plugin blocks resolve until every load-bearing claim is a recorded axiom, derivation or assumption with grounding and every raised enumeration candidate is dispositioned; the engine checks only structural closure (an acyclic claim graph, validate_ledger) and never judges content. ledger-enumerate sets enumerated true and raises candidates from a sonnet pass over the artifact. No ledger-* command or status output prints a candidate's statement text: ledger-check lists only the bare ids enum-N, and the text exists only in the session's raw state JSON at state.plugins.ledger.candidates[], each entry shaped {id, statement, disposition, claim, reason}.
+
+## Given
+
+Given from doc: `scripts/agentctl/README.md`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+Running agentctl ledger-check, status or any ledger-* --help on a session with raised candidates and finding the candidate statement text printed there, would show the statement false.
 
 ## Guidance
 
