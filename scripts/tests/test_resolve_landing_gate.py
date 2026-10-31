@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, gates
+from agentctl import cli, cli_common, gates
 from agentctl.plan import parse_plan
 from agentctl.render import render_meta_md
 from agentctl.state import (
@@ -66,7 +66,7 @@ def commit_file(work: Path, name: str, text: str) -> None:
 
 
 def quality_rows():
-    path = cli.TASK_QUALITY_LOG
+    path = cli_common.TASK_QUALITY_LOG
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]

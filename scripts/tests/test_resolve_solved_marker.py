@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 
-from agentctl import cli, solved_marker
+from agentctl import cli, cli_common, solved_marker
 from agentctl.state import Node
 from conftest import STAGE_OBSERVATIONS
 
@@ -102,7 +102,7 @@ def test_resolve_with_an_issue_key_writes_row_and_invokes_stamp(store, monkeypat
     assert calls == ["PROJ-1"]
     assert d.data["solved_marker"]["stamped"] is True
     assert d.data["quality"]["tracker_key"] == "PROJ-1"
-    rows = _read_quality_rows(cli.TASK_QUALITY_LOG)
+    rows = _read_quality_rows(cli_common.TASK_QUALITY_LOG)
     assert rows[-1]["tracker_key"] == "PROJ-1"
 
 
@@ -132,7 +132,7 @@ def test_resolve_stamp_raising_still_completes_and_still_wrote_row(store, monkey
     assert d.node == Node.RESOLVED.value
     assert d.marker == "COMPLETED"
     assert d.data["solved_marker"]["stamped"] is False
-    rows = _read_quality_rows(cli.TASK_QUALITY_LOG)
+    rows = _read_quality_rows(cli_common.TASK_QUALITY_LOG)
     assert rows[-1]["tracker_key"] == "PROJ-2"
     assert rows[-1]["quality"] == 5
 
@@ -150,7 +150,7 @@ def test_resolve_without_tracker_key_writes_null_and_stamps_nothing(store, monke
     assert calls == [None]
     assert d.data["solved_marker"]["stamped"] is False
     assert d.data["quality"]["tracker_key"] is None
-    rows = _read_quality_rows(cli.TASK_QUALITY_LOG)
+    rows = _read_quality_rows(cli_common.TASK_QUALITY_LOG)
     assert rows[-1]["tracker_key"] is None
 
 

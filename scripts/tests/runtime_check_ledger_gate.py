@@ -31,7 +31,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-from agentctl import advisor, cli  # noqa: E402
+from agentctl import advisor, cli, cli_common  # noqa: E402
 
 _PLAN = _REPO_ROOT / "tests" / "fixtures" / "plan_two_stage.toml"
 
@@ -97,7 +97,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = str(Path(tmp) / "state")
         # keep the quality-ledger write inside the tempdir (fail-open anyway)
-        cli.TASK_QUALITY_LOG = Path(tmp) / "quality.jsonl"
+        cli_common.TASK_QUALITY_LOG = Path(tmp) / "quality.jsonl"
         sid = "rt-ledger"
 
         artifact = Path(tmp) / "deliverable.md"

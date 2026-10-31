@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 from argparse import Namespace
 
-from agentctl import cli
+from agentctl import cli, cli_common
 from agentctl.state import Node, StageStatus
 from agentctl import plan as plan_mod
 from agentctl.dispatch import RunResult
@@ -1289,7 +1289,7 @@ def test_cmd_resolve_quality_row_separates_asked_and_unasked_planning_misses(sto
 
     rows = [
         json.loads(line)
-        for line in cli.TASK_QUALITY_LOG.read_text(encoding="utf-8").splitlines()
+        for line in cli_common.TASK_QUALITY_LOG.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
     row = rows[-1]

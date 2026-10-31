@@ -1,6 +1,6 @@
 """No test may append to the real agentctl gate log.
 
-conftest's autouse `_isolate_gate_log` points `AGENTCTL_GATE_LOG` and `cli.GATE_LOG` at a
+conftest's autouse `_isolate_gate_log` points `AGENTCTL_GATE_LOG` and `cli_common.GATE_LOG` at a
 temporary file. A nonce session id is written through each path (in process, and through an
 `agentctl-cli.py` subprocess that inherits the environment) and must appear in the temporary
 log and be absent from the real one, whose path is resolved with the override removed."""
@@ -11,7 +11,7 @@ import uuid
 from argparse import Namespace
 from pathlib import Path
 
-from agentctl import cli
+from agentctl import cli, cli_common
 from lib import config_root
 
 CLI = Path(__file__).resolve().parents[1] / "agentctl-cli.py"
@@ -35,7 +35,7 @@ def test_env_override_sets_the_gate_log_path(monkeypatch, tmp_path):
 
 def test_in_process_gate_evaluation_reaches_only_the_temporary_log(store, monkeypatch):
     nonce = f"canary-{uuid.uuid4().hex}"
-    temp_log = cli.GATE_LOG
+    temp_log = cli_common.GATE_LOG
     cli.cmd_start(Namespace(session=nonce, task="t", goal="g", done_criterion="d",
                             criterion_type="measurable", recursion_depth=0), store=store)
     cli._log_gate(store.load(nonce), "plan_approval", ["canary"], passed=False)

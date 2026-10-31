@@ -436,14 +436,14 @@ def _drive_to_resolved_with_normalizations(store, sid, plan, refined):
 
 
 def test_quality_row_counts_normalizations(store, venued_fixtures_dir):
-    from agentctl import cli
+    from agentctl import cli_common
 
     plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     d = _drive_to_resolved_with_normalizations(store, "r9-e1", plan, refined)
     assert d.ok is True
 
-    rows = [json.loads(line) for line in cli.TASK_QUALITY_LOG.read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in cli_common.TASK_QUALITY_LOG.read_text(encoding="utf-8")
            .splitlines() if line.strip()]
     row = rows[-1]
     assert row["n_normalizations"] == 2
