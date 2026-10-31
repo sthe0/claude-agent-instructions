@@ -2,7 +2,8 @@
 name: principle-leaf-schema
 description: The schema for principle leaves (schema:principle/v1) — the norm layer of the memory: a generality-graded "to achieve X, do Y" statement with a goal class, grounded in the regularities (regularity/v1) it rests on via grounded_in, and refuted by not reaching its goal class. The fractal principles/ tier that ADR-0001 § "Principle as a concept with a generality gradient" mandates; the knowledge layer is regularity-leaf-schema.md. Experience leaves (difficulty/v1) sit below both at generality level 0.
 type: reference
-schema: leaf/v1
+schema: ontology/v1
+converted_from: leaf/v1
 created: 2026-06-26
 last_verified: 2026-10-27
 ---
@@ -13,11 +14,19 @@ last_verified: 2026-10-27
 
 The system accumulates `difficulty/v1` experience leaves — each "this worked once, here", at **generality level 0**. Planning with a level-0 record is literal repetition; nothing lifts a recurring resolution into a broader statement that a *different* task can consume. Two kinds of statement are needed above the experience leaf, and they must not share a leaf: a **regularity** (knowledge: how things are, refuted by a contradicting observation — [regularity-leaf-schema.md](regularity-leaf-schema.md)) and a **principle** (a norm: what to do for a goal, shown inadequate when the goal is not reached). A principle is always a norm ([ADR-0004](../../docs/adr/0004-principle-is-always-a-norm.md)), and a norm is not induced from observations; it follows from the knowledge it rests on and a goal. Without that separation a principle cannot say what would refute it, and the planner cannot tell a fact from a rule when it retrieves a leaf to ground a stage ([ADR-0013](../../docs/adr/0013-regularity-vs-principle.md)). ADR-0001 makes **refutation ≡ generalization**: the *difference* found when repetition fails to reproduce a result is what drives a statement up the generality axis. This schema makes the norm layer machine-recordable.
 
+## Distinction
+
+Separates the three layers that stand above a task's own record: an experience leaf (difficulty/v1, generality 0, worked once here), a regularity (regularity/v1, knowledge: how things are, refuted by a contradicting observation) and a principle (principle/v1, a norm: to achieve X do Y, with a goal class, grounded_in the regularities it rests on, shown inadequate when its goal class is not reached). A principle is always a norm and carries no a-priori knowledge-versus-norm tag; its generality is graded 0 to 3 and its domain is orthogonal; a sanitized case (case/v1) is the only route from a project experience leaf to a global regularity.
+
+## Adequacy
+
+The distinction is inadequate if the planner retrieving a leaf to ground a stage still cannot tell a fact from a rule, if a principle is found whose refutation cannot be stated as a goal-blockage, if a statement is found that is both induced from experience and prescriptive and cannot be split without loss, or if the generality ladder places two statements at one level that differ in the contexts they claim to cover.
+
 ## Guidance
 
-The chain is: experience leaf (`difficulty/v1`, [experience-leaf-schema.md](experience-leaf-schema.md), generality 0) → regularity (`regularity/v1`, the knowledge layer) → **principle** (`principle/v1`, this schema, the norm layer). The three are physically separate (`experience/`, `regularities/`, `principles/`), with their own sub-indexes, and linked by provenance fields. The `leaf/v1` ordinary-leaf shape ([leaf-schema.md](leaf-schema.md)) is **separate and unrelated** — it is not a point on this chain.
+The chain is: experience leaf (`difficulty/v1`, [experience-leaf-schema.md](experience-leaf-schema.md), generality 0) → regularity (`regularity/v1`, the knowledge layer) → **principle** (`principle/v1`, this schema, the norm layer). The three are physically separate (`experience/`, `regularities/`, `principles/`), with their own sub-indexes, and linked by provenance fields. The ordinary-leaf shape of [leaf-schema.md](leaf-schema.md) is retired and was **separate and unrelated** — it is not a point on this chain.
 
-A global principle leaf lives under `memory-global/leaves/principles/` and carries `schema: principle/v1` (grandfathered by `verify-leaf-structure.py`, so it is **not** held to the `leaf/v1` section set — it uses the sections below instead).
+A global principle leaf lives under `memory-global/leaves/principles/` and carries `schema: principle/v1` (it is **not** held to the retired ordinary-leaf section set — it uses the sections below instead).
 
 **Frontmatter** (in addition to `name` / `description` / `type: reference`):
 

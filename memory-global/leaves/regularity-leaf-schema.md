@@ -2,7 +2,8 @@
 name: regularity-leaf-schema
 description: The schema for regularity leaves (schema:regularity/v1) — the knowledge layer of the memory: a refutable claim about how things are, induced from experience leaves and refuted by a contradicting observation. A principle (principle/v1) is the norm layer and cites the regularities it rests on in grounded_in.
 type: reference
-schema: leaf/v1
+schema: ontology/v1
+converted_from: leaf/v1
 created: 2026-10-27
 last_verified: 2026-10-27
 ---
@@ -13,11 +14,19 @@ last_verified: 2026-10-27
 
 One leaf kind used to serve two roles: a claim about how things are, and a norm for what to do. A claim is refuted by a contradicting observation; a norm (a principle, always a norm per [ADR-0004](../../docs/adr/0004-principle-is-always-a-norm.md)) is shown inadequate when the goal it serves is not reached. With both in one leaf, a reader could not tell what would make it wrong, the planner could not tell a fact from a rule, and induction from experience had no honest target — a norm is not induced from observations, only the knowledge it rests on is. The decision and its alternatives are in [ADR-0013](../../docs/adr/0013-regularity-vs-principle.md). This schema fixes the knowledge layer.
 
+## Distinction
+
+Separates a regularity (regularity/v1) from a principle (principle/v1): a regularity is a refutable claim about how things are, induced from experience leaves or derived from rules and refuted by a contradicting observation; a principle is always a norm, 'to achieve X, do Y', which is not induced but written for a goal class, cites the regularities it rests on in grounded_in, and fails by not reaching its goal rather than by a contradicting observation.
+
+## Adequacy
+
+The distinction is inadequate if a leaf can be found that is both a claim refuted by an observation and a norm judged by reaching its goal and cannot be split into a regularity and a principle, or if a reader still cannot tell from a leaf's schema what would make it wrong.
+
 ## Guidance
 
 The chain is: experience leaf (`difficulty/v1`, generality 0) → **regularity** (`regularity/v1`, this schema) → **principle** ([principle-leaf-schema.md](principle-leaf-schema.md)). Induction lands in a regularity; a principle is then written for a goal class and cites the regularities that justify it in `grounded_in`.
 
-A regularity lives under `memory-global/leaves/regularities/` and carries `schema: regularity/v1` (checked by `verify-leaf-structure.py`: the four sections below must be present and non-empty; it is **not** held to the `leaf/v1` section set). Index it in [regularities/MEMORY.md](regularities/MEMORY.md) with one pointer line; the sources after the `←` arrow must be the leaf's own `induced_from` (`index_mismatch` otherwise).
+A regularity lives under `memory-global/leaves/regularities/` and carries `schema: regularity/v1` (checked by `verify-leaf-structure.py`: the four sections below must be present and non-empty; it is **not** held to the section set of the retired ordinary-leaf form). Index it in [regularities/MEMORY.md](regularities/MEMORY.md) with one pointer line; the sources after the `←` arrow must be the leaf's own `induced_from` (`index_mismatch` otherwise).
 
 **Frontmatter** (in addition to `name` / `description` / `type: reference`):
 

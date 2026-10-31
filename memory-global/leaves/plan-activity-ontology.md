@@ -2,7 +2,8 @@
 name: plan-activity-ontology
 description: The 8-element activity-structure ontology a plan must cover, mapped to concrete agentctl/plan.py fields; substantive-only requirement; recursive sub-ordering as the genesis of composite (multi-stage) plans.
 type: reference
-schema: leaf/v1
+schema: ontology/v1
+converted_from: leaf/v1
 created: 2026-06-25
 last_verified: 2026-08-06
 ---
@@ -12,6 +13,14 @@ last_verified: 2026-08-06
 ## Difficulty
 
 A plan stated as a free list of steps silently omits the constituents that decide whether the activity can actually be *performed* and *verified*: what is transformed and into what; by which immutable means and method; under which conditions and which properties must stay unchanged; by which actor holding which capability; and on the strength of which refutable principle the transformation was chosen. The machine TOML validator (`agentctl/plan.py`) and this prose leaf — a now-retired standalone markdown-plan validator once existed alongside them — historically named only a subset and drifted apart, so an author could satisfy the *shape* while leaving the activity under-specified. Functional ground: **a plan is the image of removing a difficulty; an incomplete image is unrealizable or unverifiable.** This leaf fixes the complete element set and where each element lives in the schema, so neither surface can quietly drop one.
+
+## Distinction
+
+Separates the constituents of an activity that a plan must cover, so that a plan stated as a free list of steps cannot silently omit one: the order, the material and its result, the knowledge the method needs, the control criterion (objective control versus subjective acceptance), the means (immutable during the transformation) and the method, the conditions and the preserved invariants, the actor with its capability, the refutable principle (always a norm), and the multi-stage graph in which any element that is not a given becomes the order of a service sub-plan. Each element is mapped to a field of the typed model in agentctl state.py and plan.py, which is canonical.
+
+## Adequacy
+
+The distinction is inadequate if a plan that fills every field of every element can still be unrealizable or unverifiable for lack of a constituent the set does not name, if a stage is found whose real constituent fits no element and no supply edge, or if the same constituent can be filed under two elements with different consequences for validation.
 
 ## Guidance
 
@@ -41,7 +50,7 @@ A plan has a `[meta]` head and one or more `[[stage]]` blocks; each stage is a f
 
 ### Weight gating (substantive-only)
 
-The full element set is **mandatory for substantive plans** (`meta.weight_class = "substantive"`) and optional/lighter for `small_change` / `chat`. When `weight_class` is absent, treat the plan **leniently** (new fields optional) so legacy plans keep parsing — strictness applies only where substantive is declared. This mirrors the `schema:leaf/v1` grandfathering: opt-in enforcement, grandfather the rest. See [[leaf-schema]].
+The full element set is **mandatory for substantive plans** (`meta.weight_class = "substantive"`) and optional/lighter for `small_change` / `chat`. When `weight_class` is absent, treat the plan **leniently** (new fields optional) so legacy plans keep parsing — strictness applies only where substantive is declared. This mirrors the grandfathering of the retired section form of ordinary leaves: opt-in enforcement, grandfather the rest. See [[leaf-schema]].
 
 ### Element 3 splits an objective control from a subjective acceptance
 
