@@ -931,7 +931,7 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
     ("agentctl/cli_common.py", "_fail_stage_into_diagnosing"): (
         "n/a: receives the stage a spawn just ran (ACTIVE) from its caller"
     ),
-    ("agentctl/cli.py", "cmd_pop_subplan"): (
+    ("agentctl/cli_control.py", "cmd_pop_subplan"): (
         "guarded: marks the stage that opened the sub-plan PASSED unless it is SKIPPED, behind "
         "push-subplan, which refuses a SKIPPED originating stage (--originating-stage can "
         "name any stage)"
