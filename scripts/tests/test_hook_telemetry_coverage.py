@@ -49,7 +49,10 @@ def test_a_registered_hook_leaves_one_valid_row(event, command, tmp_path):
                "prompt": "hello", "transcript_path": str(tmp_path / "none.jsonl")}
     subprocess.run([sys.executable, str(SCRIPTS / script), *flags], input=json.dumps(payload),
                    env=env, cwd=tmp_path, capture_output=True, text=True, timeout=120)
+    # A hook may spawn detached children (hook-branch-backup -> hook-reaper) that inherit the log
+    # env and append their own rows at any moment, so count only the hook under test.
     rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    rows = [r for r in rows if r.get("mechanism") == Path(script).stem]
     assert len(rows) == 1, rows
     row = rows[0]
     assert set(row) == FIELDS
