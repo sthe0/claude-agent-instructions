@@ -686,7 +686,6 @@ def test_backstop_crossing_refused_for_a_session_with_no_user_approved_version(e
     # The only real session that is inside the boundary yet has no ledgered version is a
     # `parent_norm` order, which needs an adopted parent handoff; the ledger lookup is what
     # that session differs by.
-    monkeypatch.setattr(cli, "_ledgered_order_key", lambda state: None)
     monkeypatch.setattr(cli_common, "_ledgered_order_key", lambda state: None)
     monkeypatch.setattr(cli_approval, "_ledgered_order_key", lambda state: None)
     d = agent_override(eng, "o1", plan)
@@ -873,7 +872,6 @@ def sentinel_predicate(monkeypatch):
         calls.append(kw.get("event"))
         return "SENTINEL-REFUSAL"
 
-    monkeypatch.setattr(cli, "_agent_self_decision_refusal", refuse)
     monkeypatch.setattr(cli_common, "_agent_self_decision_refusal", refuse)
     return calls
 

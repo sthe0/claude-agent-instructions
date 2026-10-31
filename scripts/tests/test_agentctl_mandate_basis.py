@@ -69,7 +69,6 @@ class World:
         else:
             self.repo = str(tmp_path / "repo")
             (tmp_path / "repo").mkdir()
-            monkeypatch.setattr(cli, "REPO_ROOT", Path(self.repo))
             monkeypatch.setattr(cli_common, "REPO_ROOT", Path(self.repo))
         self.worktree_root = tmp_path / "worktrees"
         self.worktree = self.worktree_root / f"{CYCLE_ID}-{ISSUE}"
@@ -270,7 +269,6 @@ def _unbound_world(tmp_path, monkeypatch, name, *, record_cycle=True, inputs=Non
         world.inputs = {**world.inputs, **inputs}
         world.write_norm()
     if engine_repo:
-        monkeypatch.setattr(cli, "REPO_ROOT", Path(engine_repo))
         monkeypatch.setattr(cli_common, "REPO_ROOT", Path(engine_repo))
     world.parent_to_plan_ready()
     if release_lock:

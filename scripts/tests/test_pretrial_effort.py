@@ -84,7 +84,6 @@ def _flush(store, sid: str) -> None:
 
 
 def test_i441_subplan_spend_reaches_order_window_once(store, venued_fixtures_dir, tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_ledgered_order_key", lambda state: "shared-order")
     monkeypatch.setattr(cli_common, "_ledgered_order_key", lambda state: "shared-order")
     monkeypatch.setattr(cli_approval, "_ledgered_order_key", lambda state: "shared-order")
     parent_plan = str(venued_fixtures_dir / "plan_two_stage.toml")
@@ -382,7 +381,6 @@ def test_pop_restores_parent_runtime_grants_not_the_childs(store, venued_fixture
 
 
 def test_subplan_wall_clock_reaches_order_window_once(store, venued_fixtures_dir, tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_ledgered_order_key", lambda state: "shared-order")
     monkeypatch.setattr(cli_common, "_ledgered_order_key", lambda state: "shared-order")
     monkeypatch.setattr(cli_approval, "_ledgered_order_key", lambda state: "shared-order")
     parent_plan = str(venued_fixtures_dir / "plan_two_stage.toml")
@@ -405,7 +403,6 @@ def test_subplan_wall_clock_reaches_order_window_once(store, venued_fixtures_dir
 
 
 def test_nested_subplan_spend_reaches_order_window_once(store, venued_fixtures_dir, tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_ledgered_order_key", lambda state: "shared-order")
     monkeypatch.setattr(cli_common, "_ledgered_order_key", lambda state: "shared-order")
     monkeypatch.setattr(cli_approval, "_ledgered_order_key", lambda state: "shared-order")
     parent_plan = str(venued_fixtures_dir / "plan_two_stage.toml")
@@ -441,7 +438,6 @@ def test_subplan_naming_another_order_books_each_side_to_its_own_window(
     child_plan = _copy_plan(parent_plan, tmp_path / "child.toml")
     order_key_stub = (
         lambda state: "order-child" if state.plan_path == child_plan else "order-parent")
-    monkeypatch.setattr(cli, "_ledgered_order_key", order_key_stub)
     monkeypatch.setattr(cli_common, "_ledgered_order_key", order_key_stub)
     monkeypatch.setattr(cli_approval, "_ledgered_order_key", order_key_stub)
     _to_executing_stage1(store, "P", parent_plan)
@@ -465,7 +461,6 @@ def test_child_units_after_its_last_flush_reach_the_childs_order_window(
     child_plan = _copy_plan(parent_plan, tmp_path / "child.toml")
     order_key_stub = (
         lambda state: "order-child" if state.plan_path == child_plan else "order-parent")
-    monkeypatch.setattr(cli, "_ledgered_order_key", order_key_stub)
     monkeypatch.setattr(cli_common, "_ledgered_order_key", order_key_stub)
     monkeypatch.setattr(cli_approval, "_ledgered_order_key", order_key_stub)
     _to_executing_stage1(store, "P", parent_plan)

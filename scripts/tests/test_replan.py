@@ -314,7 +314,6 @@ def _to_diagnosing_with_critique(store, sid, plan, *, invariants_to_preserve=Non
 
 def test_coverage_waiver_bypasses_block_and_is_recorded(store, monkeypatch, tmp_path, venued_fixtures_dir):
     log_path = tmp_path / "gate-log.jsonl"
-    monkeypatch.setattr(cli, "GATE_LOG", log_path)
     monkeypatch.setattr(cli_common, "GATE_LOG", log_path)
     sid = "cw1"
     plan = str(venued_fixtures_dir / "plan_two_stage.toml")

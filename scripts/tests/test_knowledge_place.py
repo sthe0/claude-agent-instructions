@@ -400,7 +400,6 @@ def test_plan_digest_follows_an_in_place_edit_through_approve(tmp_path, store,
         seen.setdefault(gate, state.accepted_plan_digest)
         return real(state, gate, blockers, passed=passed)
 
-    monkeypatch.setattr(cli, "_log_gate", spy)
     monkeypatch.setattr(cli_common, "_log_gate", spy)
     monkeypatch.setattr(cli_approval, "_log_gate", spy)
 
@@ -411,7 +410,6 @@ def test_plan_digest_follows_an_in_place_edit_through_approve(tmp_path, store,
     assert seen["plan_approval"] == before
     assert store.load("dig-c").accepted_plan_digest == before
 
-    monkeypatch.setattr(cli, "_log_gate", real)
     monkeypatch.setattr(cli_common, "_log_gate", real)
     monkeypatch.setattr(cli_approval, "_log_gate", real)
     cli.cmd_approve(ns(session="dig-c", by="user"), store=store)
@@ -806,7 +804,6 @@ def test_a_refused_replan_leaves_the_accepted_digest_unchanged(tmp_path, store,
         seen.setdefault(gate, state.accepted_plan_digest)
         return real(state, gate, blockers, passed=passed)
 
-    monkeypatch.setattr(cli, "_log_gate", spy)
     monkeypatch.setattr(cli_common, "_log_gate", spy)
     monkeypatch.setattr(cli_approval, "_log_gate", spy)
 
@@ -1169,7 +1166,6 @@ def test_destination_alias_leaves_an_unknown_or_absent_value_alone():
 
 def test_destination_alias_identity_canonicalizer_is_caught(tmp_path, store, monkeypatch):
     monkeypatch.setattr(state_mod, "canonical_normalization_destination", lambda v: v)
-    monkeypatch.setattr(cli, "canonical_normalization_destination", lambda v: v)
     monkeypatch.setattr(cli_common, "canonical_normalization_destination", lambda v: v)
     monkeypatch.setattr(cli_difficulty, "canonical_normalization_destination", lambda v: v)
     assert Normalization(factor="f", destination="знание").destination != "knowledge"

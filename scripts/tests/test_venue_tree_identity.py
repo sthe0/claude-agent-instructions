@@ -397,7 +397,6 @@ def test_git_call_timeout_at_any_step_returns_none(tmp_path, monkeypatch):
             return RunResult(-1, stdout="", stderr="timed out after 30s")
         return real_runner(argv, timeout=timeout)
 
-    monkeypatch.setattr(cli, "subprocess_runner", timeout_on_write_tree)
     monkeypatch.setattr(cli_common, "subprocess_runner", timeout_on_write_tree)
 
     assert cli._venue_tree_identity(str(work), None) is None
