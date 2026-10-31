@@ -117,12 +117,9 @@ def ontology_section_problems(text: str) -> list[str]:
     return _missing(text, ONTOLOGY_SECTIONS)
 
 
-_URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
-
-
 def is_external_locator(source: str) -> bool:
     """A source that is not a file of the tier's own repository: a URL, an absolute path or a `~` path."""
-    return bool(_URL.match(source)) or source.startswith("~") or Path(source).is_absolute()
+    return "://" in source or source.startswith("~") or Path(source).is_absolute()
 
 
 def given_source_root(tier: str, leaf_path) -> Path | None:
