@@ -6,6 +6,8 @@ schema: principle/v1
 generality: 2
 domain: coordination
 grounded_in: [regularity:a-judgement-call-contains-a-decidable-sub-decision]
+grounding_judged: bd07913ef391b789de129a059d2d654f5231ad8465d4cc2f3802a442737103c5
+grounding_override: Stamp: the leaf is not edited in this conversion and its grounded_in is fixed as the leaf states it; the judge finds the listed grounds support the central rule but not every clause, which a later curator split of the leaf can address.
 created: 2026-09-01
 last_verified: 2026-09-01
 ---

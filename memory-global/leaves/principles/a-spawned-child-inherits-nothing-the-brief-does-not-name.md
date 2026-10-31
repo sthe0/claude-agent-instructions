@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:a-process-boundary-carries-only-what-is-passed-across-it]
+grounding_judged: 13e282d3d0ade5d38a8f1496e09df91feb187b831c39eacfeaa318a2824ba4f5
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

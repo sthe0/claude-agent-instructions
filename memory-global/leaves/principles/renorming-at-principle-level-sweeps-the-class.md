@@ -6,6 +6,7 @@ schema: principle/v1
 generality: 2
 domain: planning
 grounded_in: [regularity:a-fix-at-the-failing-site-leaves-siblings-of-the-same-form]
+grounding_judged: 9fc719d07d2da15b494c9c0b873b38457de38e07ad11775f8b571f6a2e9aa230
 created: 2026-08-11
 last_verified: 2026-08-11
 ---

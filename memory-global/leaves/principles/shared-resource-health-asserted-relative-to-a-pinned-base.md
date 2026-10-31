@@ -6,6 +6,7 @@ schema: principle/v1
 generality: 2
 domain: development
 grounded_in: [regularity:a-shared-resource-moves-under-others-action]
+grounding_judged: d187ca8e28f39c7e802130875b1c3ed08c2fb6610d0c374cf91db5f506af665f
 created: 2026-08-11
 last_verified: 2026-08-11
 ---

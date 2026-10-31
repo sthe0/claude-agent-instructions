@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 1
 grounded_in: [regularity:a-non-hermetic-read-fails-independently-of-the-artifact, regularity:a-two-valued-judge-absorbs-could-not-look]
+grounding_judged: 71d41ea1f41319dcbf809d76c065da8b6afd091965917aa2480e8487f3f7e174
 domain: development
 created: 2026-10-12
 last_verified: 2026-10-12

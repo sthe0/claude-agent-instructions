@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:a-child-process-reads-its-parents-ambient-root]
+grounding_judged: d8f0b8a7e7e9e7dd40bdd0e8b4ccb0fa292f0e469def3e0b207dc1afe70784b7
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

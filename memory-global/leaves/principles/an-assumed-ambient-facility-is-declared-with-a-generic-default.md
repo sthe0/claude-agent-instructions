@@ -5,6 +5,8 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:a-tool-relies-on-facilities-its-authors-host-supplies-unasked]
+grounding_judged: 5cf430efc0b67321ac89453f128e572f1ff6f9fa4ee93a7a4e2e333b01f9ce03
+grounding_override: Stamp: the leaf is not edited in this conversion and its grounded_in is fixed as the leaf states it; the judge finds the listed grounds support the central rule but not every clause, which a later curator split of the leaf can address.
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

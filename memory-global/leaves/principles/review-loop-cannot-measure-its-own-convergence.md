@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 1
 grounded_in: [regularity:incremental-repair-review-has-a-nonzero-finding-floor]
+grounding_judged: ea9abe0f9a35f462ec1b6f3e2dba8c632e5fedacfa24e7ebd1c59117b784ce43
 domain: coordination
 created: 2026-08-25
 last_verified: 2026-08-25

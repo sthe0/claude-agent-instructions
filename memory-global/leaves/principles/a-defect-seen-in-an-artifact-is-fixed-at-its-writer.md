@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:a-generated-artifact-is-overwritten-by-its-writer]
+grounding_judged: 95ea3038c668fa93e892ecf9c7d40bce61950481a4a5edaa3a7669d83494b76c
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

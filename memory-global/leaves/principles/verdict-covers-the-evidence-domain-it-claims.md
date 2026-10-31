@@ -6,6 +6,8 @@ schema: principle/v1
 generality: 3
 domain: development
 grounded_in: [regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-two-valued-judge-absorbs-could-not-look]
+grounding_judged: c59289ae2d4ff590f578cca7b73c6ecbcfe5d3be6cef5b4ed1ecb1c38a0b1eab
+grounding_override: Stamp: the leaf is not edited in this conversion and its grounded_in is fixed as the leaf states it; the judge finds the listed grounds support the central rule but not every clause, which a later curator split of the leaf can address.
 created: 2026-08-04
 last_verified: 2026-09-27
 ---

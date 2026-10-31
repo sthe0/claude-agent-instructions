@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:a-stage-control-is-re-evaluated-after-its-world-has-changed]
+grounding_judged: c814b748a3a412d0d12dce4517bff7119fdc0dffd0766a7b049362bbd0928447
 domain: development
 created: 2026-10-12
 last_verified: 2026-10-12

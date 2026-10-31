@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 3
 grounded_in: [regularity:a-step-that-ran-is-not-thereby-a-step-that-worked]
+grounding_judged: 0ac7dd6dd845b8d50ce4e98342719bdc3fff37b28428d39926311055f80d79b2
 created: 2026-06-26
 last_verified: 2026-06-26
 ---

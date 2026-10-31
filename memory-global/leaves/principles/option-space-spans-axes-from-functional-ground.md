@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 3
 grounded_in: [regularity:options-recalled-from-known-mechanisms-cluster-on-known-axes]
+grounding_judged: a7d6b978889a8f4fa208c5bdeb5dd495cf21a3ea9f994e5d4bcfa11017d93174
 created: 2026-06-26
 last_verified: 2026-06-26
 ---
