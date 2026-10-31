@@ -6572,19 +6572,30 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     ctx = _ReplanContext(
         state=_require(store, args.session), store=store, args=args, runner=runner,
         crossed=crossed, reopened=reopened, reopen_ignored=reopen_ignored)
-    for phase in (
-        _replan_entry_gates,
-        _replan_renegotiation_gate,
-        _replan_closure_gates,
-        _replan_review_gate,
-        _replan_submission_gates,
-        _replan_norm_and_premise_gates,
-        _replan_baseline_and_coverage_gates,
-        _replan_record_acceptance,
-    ):
-        refusal = phase(ctx)
-        if refusal is not None:
-            return refusal
+    refusal = _replan_entry_gates(ctx)
+    if refusal is not None:
+        return refusal
+    refusal = _replan_renegotiation_gate(ctx)
+    if refusal is not None:
+        return refusal
+    refusal = _replan_closure_gates(ctx)
+    if refusal is not None:
+        return refusal
+    refusal = _replan_review_gate(ctx)
+    if refusal is not None:
+        return refusal
+    refusal = _replan_submission_gates(ctx)
+    if refusal is not None:
+        return refusal
+    refusal = _replan_norm_and_premise_gates(ctx)
+    if refusal is not None:
+        return refusal
+    refusal = _replan_baseline_and_coverage_gates(ctx)
+    if refusal is not None:
+        return refusal
+    refusal = _replan_record_acceptance(ctx)
+    if refusal is not None:
+        return refusal
     apply = {"no_change": _replan_apply_no_change,
              "refinement": _replan_apply_refinement}.get(ctx.auth_kind, _replan_apply_substantive)
     return apply(ctx)
