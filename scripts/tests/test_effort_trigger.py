@@ -14,7 +14,7 @@ from argparse import Namespace
 
 import pytest
 
-from agentctl import cli, effort
+from agentctl import cli, cli_common, effort
 from agentctl.state import Node, StageStatus
 from conftest import STAGE_OBSERVATIONS, declare_venue
 
@@ -643,7 +643,7 @@ def test_quality_row_carries_both_effort_vectors(store, venued_fixtures_dir):
     cli.cmd_resolve(ns(session=sid, by="user", quality=5, quality_by="user-confirmed",
                        quality_note=None, cost_log=None), store=store)
 
-    rows = [json.loads(line) for line in cli.TASK_QUALITY_LOG.read_text(encoding="utf-8").splitlines()
+    rows = [json.loads(line) for line in cli_common.TASK_QUALITY_LOG.read_text(encoding="utf-8").splitlines()
             if line.strip()]
     row = rows[-1]
     assert row["effort_estimate"][effort.SCALE_SPEND] == pytest.approx(_ESTIMATE_SPEND)

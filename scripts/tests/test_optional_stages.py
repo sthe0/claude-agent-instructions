@@ -806,9 +806,13 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "asks whether THIS stage's earlier PASS survives an edit of its own definition; a "
         "SKIPPED stage has no pass to invalidate and is reset by _apply_refined_stage_fields"
     ),
-    ("agentctl/cli_common.py", "_cmd_replan"): (
+    ("agentctl/cli_common.py", "_replan_apply_substantive"): (
         "re-attest stash and substantive-replan carry: both ask whether a stage has a PASS "
         "outcome to reuse, and the carry arm names SKIPPED beside PASSED explicitly"
+    ),
+    ("agentctl/cli_common.py", "_replan_submission_gates"): (
+        "asks which stages `--reopen` actually re-arms: only a stage that has a PASS to "
+        "invalidate, so PASSED is the exact set"
     ),
     ("agentctl/plugins_tracker.py", "_passed_artifact_stages"): (
         "asks which stages produced artifacts a ticket reader must be told about; a declined "
@@ -823,7 +827,7 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "at RESOLUTION `resolution_gate_open` takes over both paths. Fix is the one-line "
         "`in (\"PASSED\", \"SKIPPED\")`; remove this entry with it"
     ),
-    ("agentctl/cli.py", "cmd_record_result"): (
+    ("agentctl/cli_results.py", "cmd_record_result"): (
         "`args.status == \"passed\"` is the incoming result's own verdict on the one stage "
         "being recorded (--status passed|failed), not a read of the plan's stage statuses"
     ),
@@ -908,19 +912,19 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "n/a: builds the benchmark's own three-stage fixture state, none of it optional, so "
         "no SKIPPED stage can reach the write"
     ),
-    ("agentctl/cli.py", "cmd_approve"): (
+    ("agentctl/cli_approval.py", "cmd_approve"): (
         "n/a: the ONLY writer of SKIPPED, and only for stages the plan declares optional "
         "and the customer named in --skip-optional"
     ),
-    ("agentctl/cli.py", "cmd_reject"): (
+    ("agentctl/cli_final.py", "cmd_reject"): (
         "guarded: the default target is the last stage that is not SKIPPED, and an explicit "
         "--stage naming a SKIPPED stage is refused; FAILED is never written to a declined one"
     ),
-    ("agentctl/cli.py", "cmd_next_stage"): (
+    ("agentctl/cli_approval.py", "cmd_next_stage"): (
         "n/a: writes ACTIVE to ready[0], taken from ready_stages(), which lists PENDING "
         "stages only"
     ),
-    ("agentctl/cli.py", "cmd_record_result"): (
+    ("agentctl/cli_results.py", "cmd_record_result"): (
         "n/a: writes PASSED/FAILED to state.active_stage() (current_stage), which only "
         "next-stage sets, from ready_stages()"
     ),
@@ -931,7 +935,7 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
     ("agentctl/cli_common.py", "_fail_stage_into_diagnosing"): (
         "n/a: receives the stage a spawn just ran (ACTIVE) from its caller"
     ),
-    ("agentctl/cli.py", "cmd_pop_subplan"): (
+    ("agentctl/cli_control.py", "cmd_pop_subplan"): (
         "guarded: marks the stage that opened the sub-plan PASSED unless it is SKIPPED, behind "
         "push-subplan, which refuses a SKIPPED originating stage (--originating-stage can "
         "name any stage)"
@@ -945,9 +949,16 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "`declined` mark, which the agent's approve refuses; an unchanged declined stage "
         "keeps SKIPPED"
     ),
-    ("agentctl/cli_common.py", "_cmd_replan"): (
-        "guarded: FAILED stages go back to PENDING (a SKIPPED one is never FAILED, see "
-        "cmd_reject); the substantive carry copies the outcome of an unchanged PASSED or "
+    ("agentctl/cli_common.py", "_replan_apply_no_change"): (
+        "guarded: only a `--reopen`ed (PASSED) or FAILED stage goes back to PENDING (a "
+        "SKIPPED one is never FAILED, see cmd_reject)"
+    ),
+    ("agentctl/cli_common.py", "_replan_apply_refinement"): (
+        "guarded: only a `--reopen`ed (PASSED) or FAILED stage goes back to PENDING (a "
+        "SKIPPED one is never FAILED, see cmd_reject)"
+    ),
+    ("agentctl/cli_common.py", "_replan_apply_substantive"): (
+        "guarded: the substantive carry copies the outcome of an unchanged PASSED or "
         "SKIPPED stage, and a changed one is left PENDING with `declined` set so only the "
         "customer's approve can re-offer it"
     ),

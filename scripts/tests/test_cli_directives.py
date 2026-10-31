@@ -966,7 +966,6 @@ def test_replan_is_noop_without_active_plugin(store, tmp_path, monkeypatch):
     nothing. The gate is still EVALUATED (one telemetry row) and passes with an empty
     blocker set — the byte-identical no-op path the composition promises."""
     log_path = tmp_path / "gate-log.jsonl"
-    monkeypatch.setattr(cli, "GATE_LOG", log_path)
     monkeypatch.setattr(cli_common, "GATE_LOG", log_path)
     sid = "replan-no-plugin"
     plan_path = tmp_path / "plan.toml"

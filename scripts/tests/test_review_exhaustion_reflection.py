@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, cli_common, effort, gates, task_accumulator
+from agentctl import cli, cli_approval, cli_common, cli_control, cli_final, effort, gates, task_accumulator
 from agentctl.config import Thresholds
 from agentctl.state import (
     Critique, Declaration, Difficulty, Investigation, Normalization, PlanReview, SessionState,
@@ -561,7 +561,7 @@ def test_resolve_keeps_a_crossing_recorded_after_the_disclosure_snapshot(eng, mo
         task_accumulator.record_crossing(task, late, session_id="late-session", now="late-moment")
         return detail
 
-    monkeypatch.setattr(cli, "_disclose_backstop_crossings", disclose_then_let_another_session_cross)
+    monkeypatch.setattr(cli_final, "_disclose_backstop_crossings", disclose_then_let_another_session_cross)
     resolved = eng.run("resolve", session="b1", by="user", quality=5, quality_by="user-confirmed")
     assert resolved["ok"] is True, resolved
     assert [c["decision"] for c in resolved["data"]["agent_backstop_crossings"]] == [
@@ -686,8 +686,9 @@ def test_backstop_crossing_refused_for_a_session_with_no_user_approved_version(e
     # The only real session that is inside the boundary yet has no ledgered version is a
     # `parent_norm` order, which needs an adopted parent handoff; the ledger lookup is what
     # that session differs by.
-    monkeypatch.setattr(cli, "_ledgered_order_key", lambda state: None)
     monkeypatch.setattr(cli_common, "_ledgered_order_key", lambda state: None)
+    monkeypatch.setattr(cli_approval, "_ledgered_order_key", lambda state: None)
+    monkeypatch.setattr(cli_control, "_ledgered_order_key", lambda state: None)
     d = agent_override(eng, "o1", plan)
     assert d["ok"] is False
     assert "no user-approved version of the order" in d["detail"], f"BEHAVIOUR: {d['detail']}"
@@ -872,7 +873,6 @@ def sentinel_predicate(monkeypatch):
         calls.append(kw.get("event"))
         return "SENTINEL-REFUSAL"
 
-    monkeypatch.setattr(cli, "_agent_self_decision_refusal", refuse)
     monkeypatch.setattr(cli_common, "_agent_self_decision_refusal", refuse)
     return calls
 

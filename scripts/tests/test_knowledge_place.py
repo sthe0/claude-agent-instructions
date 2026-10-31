@@ -37,7 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import checkrun, cli, cli_common, plugins, text_shape
+from agentctl import checkrun, cli, cli_approval, cli_common, cli_difficulty, cli_dispatch, cli_final, cli_plan, cli_review, plugins, text_shape
 from agentctl import state as state_mod
 from agentctl.dispatch import RunResult
 from agentctl.plan import (
@@ -400,8 +400,13 @@ def test_plan_digest_follows_an_in_place_edit_through_approve(tmp_path, store,
         seen.setdefault(gate, state.accepted_plan_digest)
         return real(state, gate, blockers, passed=passed)
 
-    monkeypatch.setattr(cli, "_log_gate", spy)
     monkeypatch.setattr(cli_common, "_log_gate", spy)
+    monkeypatch.setattr(cli_approval, "_log_gate", spy)
+    monkeypatch.setattr(cli_difficulty, "_log_gate", spy)
+    monkeypatch.setattr(cli_dispatch, "_log_gate", spy)
+    monkeypatch.setattr(cli_final, "_log_gate", spy)
+    monkeypatch.setattr(cli_plan, "_log_gate", spy)
+    monkeypatch.setattr(cli_review, "_log_gate", spy)
 
     # an empty approver: a blocker composed AFTER the refresh, so it exercises exactly the
     # window between seam (c) and the gate's refusal
@@ -410,8 +415,13 @@ def test_plan_digest_follows_an_in_place_edit_through_approve(tmp_path, store,
     assert seen["plan_approval"] == before
     assert store.load("dig-c").accepted_plan_digest == before
 
-    monkeypatch.setattr(cli, "_log_gate", real)
     monkeypatch.setattr(cli_common, "_log_gate", real)
+    monkeypatch.setattr(cli_approval, "_log_gate", real)
+    monkeypatch.setattr(cli_difficulty, "_log_gate", real)
+    monkeypatch.setattr(cli_dispatch, "_log_gate", real)
+    monkeypatch.setattr(cli_final, "_log_gate", real)
+    monkeypatch.setattr(cli_plan, "_log_gate", real)
+    monkeypatch.setattr(cli_review, "_log_gate", real)
     cli.cmd_approve(ns(session="dig-c", by="user"), store=store)
     after = store.load("dig-c").accepted_plan_digest
     assert after != before
@@ -804,8 +814,13 @@ def test_a_refused_replan_leaves_the_accepted_digest_unchanged(tmp_path, store,
         seen.setdefault(gate, state.accepted_plan_digest)
         return real(state, gate, blockers, passed=passed)
 
-    monkeypatch.setattr(cli, "_log_gate", spy)
     monkeypatch.setattr(cli_common, "_log_gate", spy)
+    monkeypatch.setattr(cli_approval, "_log_gate", spy)
+    monkeypatch.setattr(cli_difficulty, "_log_gate", spy)
+    monkeypatch.setattr(cli_dispatch, "_log_gate", spy)
+    monkeypatch.setattr(cli_final, "_log_gate", spy)
+    monkeypatch.setattr(cli_plan, "_log_gate", spy)
+    monkeypatch.setattr(cli_review, "_log_gate", spy)
 
     corrected = _write_plan(tmp_path / "corrected.toml", title="a different title")
     d = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
@@ -1166,8 +1181,8 @@ def test_destination_alias_leaves_an_unknown_or_absent_value_alone():
 
 def test_destination_alias_identity_canonicalizer_is_caught(tmp_path, store, monkeypatch):
     monkeypatch.setattr(state_mod, "canonical_normalization_destination", lambda v: v)
-    monkeypatch.setattr(cli, "canonical_normalization_destination", lambda v: v)
     monkeypatch.setattr(cli_common, "canonical_normalization_destination", lambda v: v)
+    monkeypatch.setattr(cli_difficulty, "canonical_normalization_destination", lambda v: v)
     assert Normalization(factor="f", destination="знание").destination != "knowledge"
     _to_normalize_ready(store, "alias-mut", _write_plan(tmp_path / "plan.toml"))
     d = cli.cmd_normalize(

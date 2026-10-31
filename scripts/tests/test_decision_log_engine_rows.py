@@ -4,7 +4,7 @@ from argparse import Namespace
 
 import pytest
 
-from agentctl import cli
+from agentctl import cli, cli_common
 from lib import config_root
 
 
@@ -33,7 +33,7 @@ def test_every_gate_log_line_has_one_engine_row(state):
     for label, ok in (("resolution", False), ("renorm_final", True), ("escalation_orphans", True),
                       ("frozen_stage", True)):
         cli._log_gate(state, label, [] if ok else ["x"], passed=ok)
-    gate_lines = cli.GATE_LOG.read_text(encoding="utf-8").splitlines()
+    gate_lines = cli_common.GATE_LOG.read_text(encoding="utf-8").splitlines()
     assert len(_rows()) == len(gate_lines)
     assert [r["mechanism"] for r in _rows()][-4:] == [
         "engine:resolution", "engine:renorm_final", "engine:escalation_orphans", "engine:frozen_stage"]
@@ -52,7 +52,7 @@ def test_a_failing_path_resolver_leaves_the_gate_log_row_intact(state, monkeypat
         raise RuntimeError("no log")
     monkeypatch.setattr(config_root, "decision_log", broken)
     cli._log_gate(state, "plan_approval", [], passed=True)
-    assert cli.GATE_LOG.read_text(encoding="utf-8").strip()
+    assert cli_common.GATE_LOG.read_text(encoding="utf-8").strip()
 
 
 def test_an_uncreatable_log_changes_nothing(state, monkeypatch, tmp_path):
@@ -60,4 +60,4 @@ def test_an_uncreatable_log_changes_nothing(state, monkeypatch, tmp_path):
     blocker.write_text("")
     monkeypatch.setenv("AGENTCTL_DECISION_LOG", str(blocker / "sub" / "log.jsonl"))
     cli._log_gate(state, "plan_approval", [], passed=True)
-    assert cli.GATE_LOG.read_text(encoding="utf-8").strip()
+    assert cli_common.GATE_LOG.read_text(encoding="utf-8").strip()

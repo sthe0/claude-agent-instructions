@@ -422,7 +422,6 @@ def test_frozen_stage_is_refused_without_reopen_on_a_substantive_replan_too(
 def test_frozen_stage_refusal_is_logged_as_a_gate(
         store, venued_fixtures_dir, tmp_path, monkeypatch):
     log = tmp_path / "gate-log.jsonl"
-    monkeypatch.setattr(cli, "GATE_LOG", log)
     monkeypatch.setattr(cli_common, "GATE_LOG", log)
     sid = "frozen-log"
     plan = venued_fixtures_dir / "plan_two_stage.toml"

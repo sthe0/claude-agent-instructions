@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, gates, state as state_module
+from agentctl import cli, cli_common, gates, state as state_module
 from agentctl.state import Node
 from conftest import STAGE_OBSERVATIONS, venue_plan
 from lib import transcript_turns
@@ -121,7 +121,7 @@ def ask_blockers(d):
 
 
 def quality_rows():
-    path = cli.TASK_QUALITY_LOG
+    path = cli_common.TASK_QUALITY_LOG
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]

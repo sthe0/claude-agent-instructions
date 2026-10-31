@@ -201,7 +201,6 @@ def test_root_parser_entry_resolves_under_any_subcommand(tmp_path, monkeypatch):
     current coverage: without it, the first narrative top-level option would sit
     classified RESOLVE and never actually be resolved — classified and inert.
     """
-    monkeypatch.setattr(cli, "_ARG_RESOLVE", frozenset({(cli._ROOT, "state_root")}))
     monkeypatch.setattr(cli_common, "_ARG_RESOLVE", frozenset({(cli._ROOT, "state_root")}))
     args = _resolved("--state-root", f"@{_file(tmp_path, '/tmp/elsewhere')}", "status", "--session", "s")
     assert args.state_root == "/tmp/elsewhere"

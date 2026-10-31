@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, cli_common, effort
+from agentctl import cli, cli_approval, cli_common, cli_control, effort
 from agentctl.config import Thresholds
 from agentctl.state import (
     Actor,
@@ -249,8 +249,9 @@ def test_running_child_finished_descendants_count(store, fixtures_dir, tmp_path)
 
 
 def _shared_order_parent_and_child(store, fixtures_dir, tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_ledgered_order_key", lambda state: "shared-order")
     monkeypatch.setattr(cli_common, "_ledgered_order_key", lambda state: "shared-order")
+    monkeypatch.setattr(cli_approval, "_ledgered_order_key", lambda state: "shared-order")
+    monkeypatch.setattr(cli_control, "_ledgered_order_key", lambda state: "shared-order")
     plan_p = str(fixtures_dir / "plan_two_stage.toml")
     plan_c = str(tmp_path / "child_plan.toml")
     shutil.copy(plan_p, plan_c)
@@ -376,8 +377,9 @@ def test_credit_counts_what_parent_already_credited_not_booking_order(
 
 
 def test_never_flushed_linked_session_watch_total_counts_its_spend(monkeypatch):
-    monkeypatch.setattr(cli, "_ledgered_order_key", lambda state: "shared-order")
     monkeypatch.setattr(cli_common, "_ledgered_order_key", lambda state: "shared-order")
+    monkeypatch.setattr(cli_approval, "_ledgered_order_key", lambda state: "shared-order")
+    monkeypatch.setattr(cli_control, "_ledgered_order_key", lambda state: "shared-order")
     linked = SessionState(session_id="C", task_id="C-task",
                           parent_link={"parent_session": "P", "stage_index": 1, "depth": 1})
     plain = SessionState(session_id="U", task_id="U-task")
@@ -418,8 +420,9 @@ def _linked_session_resubmitting(store, plan, sid, parent, depth, tmp_path, rows
 def _ledgered_once_planned(monkeypatch):
     order_key_stub = (
         lambda state: "shared-order" if state.plan_path else None)
-    monkeypatch.setattr(cli, "_ledgered_order_key", order_key_stub)
     monkeypatch.setattr(cli_common, "_ledgered_order_key", order_key_stub)
+    monkeypatch.setattr(cli_approval, "_ledgered_order_key", order_key_stub)
+    monkeypatch.setattr(cli_control, "_ledgered_order_key", order_key_stub)
 
 
 def test_child_review_spend_before_first_flush_reaches_window(
@@ -619,7 +622,6 @@ def test_mutant_unlinked_rollup_is_caught(store, fixtures_dir, tmp_path, monkeyp
     every_candidate_is_a_descendant = lambda store, parent, candidates: {
         s: [SessionState(session_id=s, task_id=f"{s}-task")] for s in sorted(candidates)
     }
-    monkeypatch.setattr(cli, "_descendant_sessions", every_candidate_is_a_descendant)
     monkeypatch.setattr(cli_common, "_descendant_sessions", every_candidate_is_a_descendant)
     with pytest.raises(AssertionError, match="BEHAVIOUR:"):
         _scenario_only_linked_descendants(store, fixtures_dir, tmp_path)

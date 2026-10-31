@@ -737,7 +737,6 @@ def test_tr4_compose_over_all_current_pair_passes_writes_an_ordinary_whole_plan_
     env.record_all()
     recorded = []
     stub = lambda *a, **k: recorded.append(a[2:])
-    monkeypatch.setattr(cli, "_record_first_thinker_verdict", stub)
     monkeypatch.setattr(cli_common, "_record_first_thinker_verdict", stub)
     monkeypatch.setattr(cli_review, "_record_first_thinker_verdict", stub)
     d = _compose(env)

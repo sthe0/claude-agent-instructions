@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 
-from agentctl import cli
+from agentctl import cli, cli_common
 from conftest import STAGE_OBSERVATIONS
 
 
@@ -61,7 +61,7 @@ def test_quality_row_carries_weight_class_route_deliverable_kind(store, venued_f
     d = _drive_to_resolved(store, "tt-1", plan, deliverable_kind="code")
 
     assert d.ok is True
-    rows = _read_quality_rows(cli.TASK_QUALITY_LOG)
+    rows = _read_quality_rows(cli_common.TASK_QUALITY_LOG)
     row = rows[-1]
     assert row["weight_class"] == "SUBSTANTIVE"
     assert row["route"] == "SPAWN"
@@ -73,7 +73,7 @@ def test_quality_row_deliverable_kind_null_when_unclassified(store, venued_fixtu
 
     _drive_to_resolved(store, "tt-2", plan, deliverable_kind="")
 
-    rows = _read_quality_rows(cli.TASK_QUALITY_LOG)
+    rows = _read_quality_rows(cli_common.TASK_QUALITY_LOG)
     assert rows[-1]["deliverable_kind"] is None
 
 
@@ -94,7 +94,7 @@ def test_quality_row_budget_tiers_from_matching_spawn_rows(store, venued_fixture
     d = _drive_to_resolved(store, "tt-3", str(plan), cost_log=cost_log)
 
     assert d.ok is True
-    rows = _read_quality_rows(cli.TASK_QUALITY_LOG)
+    rows = _read_quality_rows(cli_common.TASK_QUALITY_LOG)
     row = rows[-1]
     assert row["budget_tiers"] == ["large", "medium"]
     # pre-existing fields stay populated (additive change, not a rewrite)
@@ -110,7 +110,7 @@ def test_quality_row_budget_tiers_empty_when_no_spawn_rows(store, venued_fixture
     d = _drive_to_resolved(store, "tt-4", str(plan), cost_log=empty_log)
 
     assert d.ok is True
-    rows = _read_quality_rows(cli.TASK_QUALITY_LOG)
+    rows = _read_quality_rows(cli_common.TASK_QUALITY_LOG)
     row = rows[-1]
     assert row["budget_tiers"] == []
     assert row["spawn_count"] == 0
