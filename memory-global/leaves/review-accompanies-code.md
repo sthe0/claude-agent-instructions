@@ -2,7 +2,11 @@
 name: review-accompanies-code
 description: For review-gated work, a code-producing stage is not done until its change is an OPEN, self-justified review request — opening the review ≠ merging it, so a deferred trunk-land never licenses a deferred review — AND then driven by the author to MERGEABLE (CI green, reviewer comments answered, approval obtained) without being prompted, monitored via the long-job-monitoring mechanism; the change/review justifies each non-obvious field (rationale in commit/PR description where inline comments are impossible, e.g. JSON); symmetric author(developer)/reviewer
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:what-a-change-does-not-carry-ends-with-its-authors-context, regularity:a-step-that-ran-is-not-thereby-a-step-that-worked, regularity:a-change-outside-the-state-its-consumers-read-is-unseen-by-them, regularity:a-coordinate-shifts-while-the-content-it-addressed-stays]
+grounding_judged: b92fb6538f7bdbed29973dc4a6ce548f445a33399da7f5851b59e22f2d6f32c3
+grounding_override: Seed leaf fixed as class P on the named ground; the rule applies to review-gated work only, which the leaf states in its own scope, so the judge scope_mismatch reads the rule wider than the leaf does.
 created: 2026-07-27
 last_verified: 2026-10-12
 ---
@@ -16,6 +20,21 @@ Three distinct failures, one root — a code-producing stage treated as "produce
 3. **Review opened, then abandoned.** The review request was opened — and the author stopped watching it. A red CI check, reviewer comments, and the pending approval sat unattended until the user had to point at them. Opening the review is the *start* of the author's ownership, not the end; a review sitting red or unanswered is not progressing toward merge, and the open-review done-signal (failure 1's fix) silently degraded into a new false done-signal one step later. (User correction: *"В ревью тесты упали. Я хочу чтобы ты сам следил за статусом проверок … и старался самостоятельно довести ревью до состояния, когда его можно вливать."*)
 
 Nothing mechanically couples a code change to *being under review*, to *justifying its non-obvious content*, or to *being driven to mergeable*; the discipline lives only in prose, so under load a change lands pushed-but-unreviewed, surface-cloned, or opened-then-abandoned.
+
+## Principle
+
+To deliver reviewed, justified, mergeable code rather than a pushed artifact, treat an open self-justified review request (not the trunk-land) as part of the code-producing stage's done-criterion for review-gated work, open it only after an independent code-reviewer has accepted the full diff of the current head, justify each non-obvious field against the target's own requirements (in the commit or PR description where the format forbids comments), then drive the review unprompted to mergeable (CI green, comments answered, approval) via the long-job monitor, and re-review behavior-changing fixes made after the stage passed.
+
+## Goal class
+
+delivering reviewed mergeable code changes
+
+## Grounded in
+
+- [[what-a-change-does-not-carry-ends-with-its-authors-context]]
+- [[a-step-that-ran-is-not-thereby-a-step-that-worked]]
+- [[a-change-outside-the-state-its-consumers-read-is-unseen-by-them]]
+- [[a-coordinate-shifts-while-the-content-it-addressed-stays]]
 
 ## Guidance
 

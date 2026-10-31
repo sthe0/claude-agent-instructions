@@ -2,7 +2,11 @@
 name: review-object-requirements-contract
 description: Seed checklist of properties any reviewed object (plan, code, artifact, or future review target) must satisfy regardless of type — a starter, explicitly-refinable universal contract, not yet an induced principle.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-judgement-call-contains-a-decidable-sub-decision, regularity:a-controls-defects-surface-only-when-it-is-executed, regularity:a-plan-checked-only-against-itself-passes-over-premises-it-leaves-unrecorded-and-parts-of-the-order-it-leaves-out]
+grounding_judged: bc0929263d8843e714679753f3c88888dd1b1bc14cffc053f995caf1393abf47
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-01
 last_verified: 2026-09-01
 ---
@@ -13,9 +17,23 @@ last_verified: 2026-09-01
 
 Today, what makes a reviewed object "adequate" is left to per-invocation prose judgment, re-derived independently by every reviewer (thinker on a plan, code-reviewer on a diff, a future reviewer of some other artifact type) with no standing, cross-object-type checklist to anchor against. This is a source of avoidable stochasticity: two review passes over the same object can reasonably disagree not because the object changed but because the reviewer's ad-hoc notion of "adequate" drifted. Individual object types already have their own partial, type-specific instances of such a checklist (a plan's 8-element activity ontology, plan-review's materiality test, the M1-M4 partition markers), but nothing states the properties common to *any* reviewed object, independent of type — so each new review context reinvents the checklist from scratch, or skips stating it at all.
 
+## Principle
+
+To keep review verdicts from drifting with each reviewer's ad-hoc notion of adequacy, check any reviewed object, whatever its type, against four properties: internal consistency of goal, scope and steps; every step or claim resting on a resource of verifiable named origin; every named control actually reachable and executable; and an explicit scope in which any narrowing is visible rather than silently absorbed.
+
+## Goal class
+
+consistent review verdicts across object types
+
+## Grounded in
+
+- [[a-judgement-call-contains-a-decidable-sub-decision]]
+- [[a-controls-defects-surface-only-when-it-is-executed]]
+- [[a-plan-checked-only-against-itself-passes-over-premises-it-leaves-unrecorded-and-parts-of-the-order-it-leaves-out]]
+
 ## Guidance
 
-This leaf is a **SEED**, not a finished contract. It states a starter set of properties any reviewed object should satisfy, explicitly meant to be refined incrementally — via `self-improvement`/`overcome-difficulty` — as concrete review difficulties on other object types (code review, documentation review, other future review targets) are recorded. Individual items may later graduate into their own `principle/v1` leaves once enough accumulated difficulties are induced into the regularities they are `grounded_in` ([[principle-leaf-schema]] — "a principle is never rootless"; [[regularity-leaf-schema]]). Until then, this leaf carries the seed as a `leaf/v1` reference, which carries no induction requirement.
+This leaf is a **SEED**, not a finished contract. It states a starter set of properties any reviewed object should satisfy, explicitly meant to be refined incrementally — via `self-improvement`/`overcome-difficulty` — as concrete review difficulties on other object types (code review, documentation review, other future review targets) are recorded. Individual items may later graduate into their own `principle/v1` leaves once enough accumulated difficulties are induced into the regularities they are `grounded_in` ([[principle-leaf-schema]] — "a principle is never rootless"; [[regularity-leaf-schema]]). Until then, this leaf carries the seed as a plain reference, which carries no induction requirement (the former ordinary-leaf form is retired).
 
 The starter checklist:
 

@@ -2,7 +2,10 @@
 name: tests-accompany-code
 description: Any change to code ships with tests that verify the change — the default for both the developer (who writes them) and the reviewer (who rejects a code diff lacking them); narrow named escape class for the genuinely non-testable
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:what-a-change-does-not-carry-ends-with-its-authors-context]
+grounding_judged: 465854e6c4709937a8f38b04ccf28460e32dc0d75adc6f04e06b239265e798de
 created: 2026-06-25
 last_verified: 2026-06-25
 ---
@@ -10,6 +13,18 @@ last_verified: 2026-06-25
 ## Difficulty
 
 Nothing mechanically couples a code change to a test of that change — the discipline lives only in prose, so under load a change lands without coverage and the regression it introduces (or the bug it "fixes") is caught later, by a human, or not at all. The narrow framing "bugfixes need a regression test" is too small: the same gap exists for *every* code change, and singling out bugfixes invites arguing about whether a given change "is a bugfix" instead of just writing the test.
+
+## Principle
+
+To keep a code change's behavior verified after its author's context is gone, ship with every change that writes or modifies behavior tests that exercise the new or changed path in the same change (red before and green after for a fix); the reviewer treats a code diff with no corresponding test delta as a should-fix, blocking for behavioral changes, and checks the tests cover the changed paths; only the named non-testable class (pure rename or reformat, prose-only files, config with no logic, an unreachable trigger with a stated one-line waiver) ships without.
+
+## Goal class
+
+code changes verified by tests that travel with them
+
+## Grounded in
+
+- [[what-a-change-does-not-carry-ends-with-its-authors-context]]
 
 ## Guidance
 

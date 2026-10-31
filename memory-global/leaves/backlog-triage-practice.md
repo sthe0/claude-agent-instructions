@@ -2,7 +2,11 @@
 name: backlog-triage-practice
 description: "Разбор беклога" as a nameable, recurring task type across the Core (GitHub Issues) and Org (org-tier tracker) backlog tiers — compact priority rubric + procedure, referencing (not duplicating) the general coordination-spine docs.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:an-unkeyed-or-unweighted-total-misranks-the-decision-it-feeds, regularity:a-judgement-call-contains-a-decidable-sub-decision, regularity:a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on]
+grounding_judged: 05a22ff001ea309a7c0b46aec424ea57141f0ee85f058dad3e4c983980b52d1b
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-08-19
 last_verified: 2026-09-23
 ---
@@ -14,6 +18,20 @@ last_verified: 2026-09-23
 The backlog accumulates across two disjoint sources — Core (public GitHub Issues, `sthe0/claude-agent-instructions`, labels `difficulty`/`backlog`) and Org (an org-tier tracker's backlog + report queues — see [[instruction-dev-queues]] for the tier model; org-specific queue names/keys are internal detail and don't belong in this Core leaf) — with no standing way to (a) see both together, (b) rank them by anything other than recency/gut feel, or (c) re-derive that ranking each time the user actually has attention to spend on the backlog, since which item is "most worth doing" changes as items get closed, drift in, or accumulate cluster-mates. Without a repeatable procedure, every visit re-invents the triage from scratch — costly, and prone to silently inventing urgency for items that carry no real signal.
 
 This leaf packages "разбор беклога" (backlog triage over a named scope) as one instance of the **general task-resolution process** already governed by `~/.claude-agent/CLAUDE.md` § Coordination spine, `scripts/agentctl/README.md`, and [[plan-activity-ontology]] — it does **not** restate that model. What it adds is specific to this one task type: the priority rubric and the collection procedure. Per explicit user correction: the engine itself never picks which task to work on — triage produces an ORDERED LIST, not an autonomous action; work on a specific item begins only via an explicit appeal naming that item.
+
+## Principle
+
+To spend the user's backlog attention on the items that cost the most, rank each open item across the Core and Org sources by measured loss (sessions per window times minutes per occurrence, per week, with a family counted once), place every item in a measured, silent or awaiting-classification lane, break ties by severity and fix cost, reconcile against the stored board instead of re-deriving it, and return an ordered list without ever auto-selecting an item to work on.
+
+## Goal class
+
+ranking a multi-source backlog by real cost
+
+## Grounded in
+
+- [[an-unkeyed-or-unweighted-total-misranks-the-decision-it-feeds]]
+- [[a-judgement-call-contains-a-decidable-sub-decision]]
+- [[a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on]]
 
 ## Guidance
 

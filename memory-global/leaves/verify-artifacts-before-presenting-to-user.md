@@ -2,7 +2,11 @@
 name: verify-artifacts-before-presenting-to-user
 description: Personally re-verify concrete claims — including a retrospective "did X already happen" status claim, not only a plan/essence/report about to be presented — against the live engine state BEFORE telling the user, not after and not on memory/reasoning alone. User flagged this as an engine-mechanization proposal, not just a prose reminder, and pointed at a shared verification-code module as the shape.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on]
+grounding_judged: fa7d8052ca3061ff47aa49279d9f9e1c522b8176f6ed8afcbcabbdcb9d374a73
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-04
 last_verified: 2026-10-21
 ---
@@ -10,6 +14,19 @@ last_verified: 2026-10-21
 ## Difficulty
 
 On the `heredoc-body-spans` plan (GitHub claude-agent-instructions#108, agentctl session `13cc59ff-...`), rounds 4–6 of plan review (spawned `thinker` subagents) each independently verified fixes against the live plan file and quoted concrete evidence (grep output, line numbers, sha256 digests). I trusted that chain of reports and moved straight to `agentctl present-plan --kind essence` + the user-approval `AskUserQuestion` without personally re-running even the cheap confirming checks (`grep -c "22 added"` → 0, `grep -no "39 added"` → the 4 expected lines, reading the corrected `material_refs` text) myself first. The user caught this explicitly: *"проверки полноты плана... до того как сочтешь план... готовым... эти правки ты делал?"* — asking whether I had actually done the completeness check before deciding the plan was ready, not after. I ran the check only once asked, and it happened to confirm the reports were accurate — but the **order** was wrong regardless of the outcome.
+
+## Principle
+
+To ensure what is presented to the user holds in the live state, personally re-run the cheapest check that could refute the specific claim (a grep, a digest match plus the reviewer's headline assert, a read of the changed lines, the live `agentctl status` for a retrospective claim about what already happened) in the same turn before the presenting call, even when a competent subagent or reviewer already verified it, and run a subagent's or reviewer's claim about current behaviour through its cheapest refuting command before relaying it as a reason for a user decision.
+
+## Goal class
+
+claims presented to the user match the live state
+
+## Grounded in
+
+- [[a-probe-observes-only-the-domain-it-reads]]
+- [[a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on]]
 
 ## Guidance
 

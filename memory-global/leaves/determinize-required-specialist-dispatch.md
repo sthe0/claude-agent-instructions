@@ -1,7 +1,11 @@
 ---
 name: determinize-required-specialist-dispatch
 description: The review_dispatch plugin proactively names two engine-required, non-stage-actor specialist spawns (thinker @ plan-review, code-reviewer @ a spawn:developer stage) at the event that mints each obligation, in front of a pre-existing reactive gate it never weakens.
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-recorded-remedy-is-absent-at-the-act-it-governs, regularity:a-judgement-call-contains-a-decidable-sub-decision, regularity:a-two-valued-judge-absorbs-could-not-look, regularity:a-step-that-ran-is-not-thereby-a-step-that-worked]
+grounding_judged: 879de2b187622cf87eb998f1ccf2330f5c0c4a4ffabd0c09d69709ba1c9ae1d5
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 type: reference
 created: 2026-07-22
 last_verified: 2026-07-22
@@ -10,6 +14,21 @@ last_verified: 2026-07-22
 ## Difficulty
 
 The engine already **structurally requires** two specialist invocations that are not plan stages — a thinker plan-review before `approve`, and a code-reviewer review before a `spawn:developer` stage records PASSED — and both already carry a REACTIVE precondition (`gates.plan_review_blockers` refuses `approve`/`replan`/`present-plan --kind essence`; `gates.code_review_blockers` refuses `record-result --status passed`). But nothing PROACTIVELY names the required spawn at the moment each obligation is minted, so the coordinator has to remember, from prose, to spawn the specialist before the gate is reached — the exact "rule determinized, perception still doing the remembering" split CLAUDE.md's "separate rule from perception" principle flags as immature. `gates.plan_review_blockers` already proved the *rule* half was state-decidable; only its *trigger* half was missing.
+
+## Principle
+
+To get an engine-required specialist spawn done before its gate is reached, pair a proactive trigger that names the spawn at the event that mints the obligation with the existing reactive gate, and never replace or weaken that gate.
+
+## Goal class
+
+required specialist spawns named at the moment the obligation arises, not remembered from prose
+
+## Grounded in
+
+- [[a-recorded-remedy-is-absent-at-the-act-it-governs]]
+- [[a-judgement-call-contains-a-decidable-sub-decision]]
+- [[a-two-valued-judge-absorbs-could-not-look]]
+- [[a-step-that-ran-is-not-thereby-a-step-that-worked]]
 
 ## Guidance
 

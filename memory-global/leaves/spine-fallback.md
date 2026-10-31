@@ -2,7 +2,10 @@
 name: spine-fallback
 description: When the agentctl engine is not started or unavailable, walk the substantive-task spine by hand in the same order — restate, classify+route, plan approval, execute against result images, final verification.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-recorded-remedy-is-absent-at-the-act-it-governs]
+grounding_judged: c85dc415ca43800f29a9e79a4ef07808350de76516e0abd5bd509712cdf5c5c7
 created: 2026-07-02
 last_verified: 2026-07-02
 ---
@@ -14,6 +17,18 @@ The short pointer lives in CLAUDE.md § Coordination spine; this leaf carries th
 ## Difficulty
 
 When the `agentctl` engine is not driving the session (not started, or unavailable), the deterministic spine is absent — without an explicit hand-walk the manager skips gates (starts coding before approval, declares done without final verification).
+
+## Principle
+
+To keep the coordination spine's gates from being skipped when the agentctl engine is not driving the session, walk the same five steps by hand in the same order: restate the goal and done criterion with its criterion type, classify weight and route, get plan approval before editing production, execute each stage against its Expected result image, and run the plan's Final verification before declaring done.
+
+## Goal class
+
+coordination-spine gates kept when the engine is unavailable
+
+## Grounded in
+
+- [[a-recorded-remedy-is-absent-at-the-act-it-governs]]
 
 ## Guidance
 

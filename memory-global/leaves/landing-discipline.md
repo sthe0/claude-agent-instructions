@@ -2,7 +2,10 @@
 name: landing-discipline
 description: Committed work must reach its terminal VCS state — trunk/main — not sit on a personal branch, and it lands before verify-final and the marked resolution ask; the checkpoint-vs-delivered distinction, land mechanisms, branch deletion as part of landing, and the land → verify-final → resolution-ask ordering contract.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-change-outside-the-state-its-consumers-read-is-unseen-by-them, regularity:a-coordinate-shifts-while-the-content-it-addressed-stays]
+grounding_judged: 05a30af6d6ff0c8ffbf7e7e54bf7374ea895612a82c1154248ad60e6b0deeec2
 created: 2026-07-02
 last_verified: 2026-10-08
 ---
@@ -14,6 +17,19 @@ The short rule and its trigger live in CLAUDE.md § On task resolution; this lea
 ## Difficulty
 
 `resolve` records task-done but has **no VCS-integration beat**, so committed work strands — first **locally** (unpushed: no remote backup, defeating the "push after each commit" safety net), then on a **personal remote branch reported as "delivered" while never landed into trunk** ("подвисла ветка"). The sharpest form: when landing isn't a trivial fast-forward — a review-gated repo lands via PR, **never** a fast-forward — a fast-forward-only rule silently excludes the case and the branch is called done while it sits outside trunk.
+
+## Principle
+
+To make committed work visible to everything that reads trunk, push and land it into trunk/main through the repo's landing mechanism (fast-forward land for a repo with no distinct reviewer, PR create-publish-merge with a plain merge commit for a review-gated one), delete the branch and its task-scoped scratch resources as part of landing, and do this before verify-final and the marked resolution ask.
+
+## Goal class
+
+committed work reaching its terminal VCS state
+
+## Grounded in
+
+- [[a-change-outside-the-state-its-consumers-read-is-unseen-by-them]]
+- [[a-coordinate-shifts-while-the-content-it-addressed-stays]]
 
 ## Guidance
 

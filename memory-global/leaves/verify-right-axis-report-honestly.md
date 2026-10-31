@@ -2,7 +2,11 @@
 name: verify-right-axis-report-honestly
 description: Static checks (imports/tests/build-diff) never substitute for runtime correctness, durable-store coverage, universal-quantification, or provenance/conformance axes — each is its own axis and must be checked on its own terms.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-step-that-ran-is-not-thereby-a-step-that-worked, regularity:a-change-outside-the-state-its-consumers-read-is-unseen-by-them, regularity:a-fix-at-the-failing-site-leaves-siblings-of-the-same-form]
+grounding_judged: a9a402d134821b0b3a715261a0e5859284ac04d51fd5c4731771add7d7566b44
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-15
 last_verified: 2026-10-26
 ---
@@ -10,6 +14,21 @@ last_verified: 2026-10-26
 ## Difficulty
 
 Reporting "imports pass / tests green / build-diff identical" reads as "it works", but each of those is a *static* check. A report that stops there silently substitutes a cheap axis for the one that actually matters, and the gap only surfaces later, after the artifact is already relied on.
+
+## Principle
+
+To keep a success report from resting on a cheap axis in place of the one that matters, treat runtime correctness, partial progress, published-versus-posted, durable-store coverage, universally-quantified criteria (mechanical enumeration plus a negative end-state check), provenance for reasoning deliverables, the outcome rather than a proxy for an improvement trial, and conformance to the instructions and plan as separate verification axes, and report success on an axis only after checking that axis on its own terms.
+
+## Goal class
+
+success reports resting on the axis that matters
+
+## Grounded in
+
+- [[a-probe-observes-only-the-domain-it-reads]]
+- [[a-step-that-ran-is-not-thereby-a-step-that-worked]]
+- [[a-change-outside-the-state-its-consumers-read-is-unseen-by-them]]
+- [[a-fix-at-the-failing-site-leaves-siblings-of-the-same-form]]
 
 ## Guidance
 

@@ -2,6 +2,11 @@
 name: universal-negative-control-via-mutation-catalogue
 description: A universally-quantified control claim ("no narrowing passes", "nothing widens the gate") is discharged by a committed mutation catalogue over the subject, not by enumerating more input axes
 type: feedback
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-controls-defects-surface-only-when-it-is-executed, regularity:a-recorded-remedy-is-absent-at-the-act-it-governs]
+grounding_judged: e6af7e6e8e2e073f08998df8fd42db438fa032961d7a90f631140f7049eba146
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-04
 last_verified: 2026-09-04
 ---
@@ -15,6 +20,20 @@ When a test suite has to establish a **universal negative** about a piece of cod
 **How to apply:** when a plan's done criterion or a control-suite's claim is phrased as a universal negative over some code (no narrowing/widening/regression/bypass survives), do not accept "the grid/corpus covers these cases" as the done criterion. Require instead: **a committed, in-suite mutation catalogue** — a small module enumerating the known-dangerous mutations of the subject (each one a change that would violate the claim if undetected) and asserting, for each, that at least one *named* control goes RED. New mutations are added to the catalogue as they're discovered (by review, by incident); the catalogue only grows. This is the existential twin of the planner's rule for universally-quantified *done criteria* ("all X", "no Y remains" needs mechanical enumeration of the domain plus a negative end-state check, [[plan-control-criterion-hygiene]]) applied to *control claims* instead: universal claims need mechanical enumeration of the mutation space, not the input space.
 
 A corollary, from the same task: **an ad-hoc mutation/injection script written during a review round is a committed artifact by default, not scratch** ([[committed-files-earn-their-place]]) — if a script was worth running once to measure a control gap, it is worth the next reviewer's time, and leaving it in `/tmp` guarantees the next round reinvents it (or worse, doesn't, and the same class of gap reopens unmeasured).
+
+## Principle
+
+To discharge a universally-quantified negative control claim over code (no narrowing, widening or bypass survives), require a committed in-suite mutation catalogue of the known-dangerous mutations of the subject, each asserting that at least one named control goes RED, which only grows as mutations are found, rather than enlarging the input corpus; an ad-hoc mutation or injection script written during a review round is a committed artifact by default, not scratch.
+
+## Goal class
+
+universal negative control claims discharged
+
+## Grounded in
+
+- [[a-probe-observes-only-the-domain-it-reads]]
+- [[a-controls-defects-surface-only-when-it-is-executed]]
+- [[a-recorded-remedy-is-absent-at-the-act-it-governs]]
 
 ## See also
 
