@@ -28,7 +28,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agentctl import cli, cli_common, cli_results
+from agentctl import cli, cli_results
 from agentctl.state import (
     Actor, CheckKind, Criterion, CriterionType, FinalCheck, LANDED_GIT_ERROR_EXIT,
     LandedSpec, Means, Node, Outcome, SessionState, Stage, StageStatus, Subject,
@@ -461,8 +461,7 @@ def transcripts(tmp_path, monkeypatch):
 def clock(monkeypatch):
     now = {"t": 1_000_000.0}
     frozen = SimpleNamespace(time=lambda: now["t"])
-    for module in (cli_common, cli_results):
-        monkeypatch.setattr(module, "time", frozen)
+    monkeypatch.setattr(cli_results, "time", frozen)
     return now
 
 
