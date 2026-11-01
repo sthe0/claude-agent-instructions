@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, cli_approval, cli_control, cli_final, effort, gates, task_accumulator
+from agentctl import cli, cli_final, effort, gates, task_accumulator
 from agentctl.config import Thresholds
 from conftest import patch_cli_name
 from agentctl.state import (
@@ -688,8 +688,6 @@ def test_backstop_crossing_refused_for_a_session_with_no_user_approved_version(e
     # `parent_norm` order, which needs an adopted parent handoff; the ledger lookup is what
     # that session differs by.
     patch_cli_name(monkeypatch, "_ledgered_order_key", lambda state: None)
-    monkeypatch.setattr(cli_approval, "_ledgered_order_key", lambda state: None)
-    monkeypatch.setattr(cli_control, "_ledgered_order_key", lambda state: None)
     d = agent_override(eng, "o1", plan)
     assert d["ok"] is False
     assert "no user-approved version of the order" in d["detail"], f"BEHAVIOUR: {d['detail']}"

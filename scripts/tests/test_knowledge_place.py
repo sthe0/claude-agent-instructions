@@ -1164,7 +1164,6 @@ def test_destination_alias_leaves_an_unknown_or_absent_value_alone():
 def test_destination_alias_identity_canonicalizer_is_caught(tmp_path, store, monkeypatch):
     monkeypatch.setattr(state_mod, "canonical_normalization_destination", lambda v: v)
     patch_cli_name(monkeypatch, "canonical_normalization_destination", lambda v: v)
-    monkeypatch.setattr(cli_difficulty, "canonical_normalization_destination", lambda v: v)
     assert Normalization(factor="f", destination="знание").destination != "knowledge"
     _to_normalize_ready(store, "alias-mut", _write_plan(tmp_path / "plan.toml"))
     d = cli.cmd_normalize(

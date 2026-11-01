@@ -17,7 +17,7 @@ from argparse import Namespace
 
 import pytest
 
-from agentctl import cli, cli_results
+from agentctl import cli
 from agentctl.dispatch import RunResult
 from conftest import patch_cli_name
 from agentctl.plan import parse_plan
@@ -300,8 +300,7 @@ def test_r1_older_final_check_without_cacheable_loads_as_false():
 
 def _real_runner(monkeypatch, runner, *, parallel, budget):
     """Route the engine's own (runner=None) subprocess path through `runner`."""
-    patch_cli_name(monkeypatch, "subprocess_runner", runner)
-    monkeypatch.setattr(cli_results, "subprocess_runner", runner)    # Literal env names, no check_cache attribute: a behaviour test must reach the
+    patch_cli_name(monkeypatch, "subprocess_runner", runner)    # Literal env names, no check_cache attribute: a behaviour test must reach the
     # engine only through the CLI, so at a tree without check_cache it fails on its
     # own assertion. The budget override makes the machine's load irrelevant.
     monkeypatch.setenv("AGENTCTL_VERIFY_FINAL_PARALLEL", str(parallel))
