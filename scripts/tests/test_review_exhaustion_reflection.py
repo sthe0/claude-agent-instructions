@@ -23,8 +23,9 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, cli_approval, cli_common, cli_control, cli_final, effort, gates, task_accumulator
+from agentctl import cli, cli_approval, cli_control, cli_final, effort, gates, task_accumulator
 from agentctl.config import Thresholds
+from conftest import patch_cli_name
 from agentctl.state import (
     Critique, Declaration, Difficulty, Investigation, Normalization, PlanReview, SessionState,
 )
@@ -686,7 +687,7 @@ def test_backstop_crossing_refused_for_a_session_with_no_user_approved_version(e
     # The only real session that is inside the boundary yet has no ledgered version is a
     # `parent_norm` order, which needs an adopted parent handoff; the ledger lookup is what
     # that session differs by.
-    monkeypatch.setattr(cli_common, "_ledgered_order_key", lambda state: None)
+    patch_cli_name(monkeypatch, "_ledgered_order_key", lambda state: None)
     monkeypatch.setattr(cli_approval, "_ledgered_order_key", lambda state: None)
     monkeypatch.setattr(cli_control, "_ledgered_order_key", lambda state: None)
     d = agent_override(eng, "o1", plan)
@@ -873,7 +874,7 @@ def sentinel_predicate(monkeypatch):
         calls.append(kw.get("event"))
         return "SENTINEL-REFUSAL"
 
-    monkeypatch.setattr(cli_common, "_agent_self_decision_refusal", refuse)
+    patch_cli_name(monkeypatch, "_agent_self_decision_refusal", refuse)
     return calls
 
 

@@ -10,8 +10,9 @@ import subprocess
 from argparse import Namespace
 from pathlib import Path
 
-from agentctl import cli, cli_common, cli_results
+from agentctl import cli, cli_results
 from agentctl.dispatch import RunResult
+from conftest import patch_cli_name
 from session_fixtures import measurable_session as _measurable_session
 
 
@@ -397,7 +398,7 @@ def test_git_call_timeout_at_any_step_returns_none(tmp_path, monkeypatch):
             return RunResult(-1, stdout="", stderr="timed out after 30s")
         return real_runner(argv, timeout=timeout)
 
-    monkeypatch.setattr(cli_common, "subprocess_runner", timeout_on_write_tree)
+    patch_cli_name(monkeypatch, "subprocess_runner", timeout_on_write_tree)
     monkeypatch.setattr(cli_results, "subprocess_runner", timeout_on_write_tree)
     assert cli._venue_tree_identity(str(work), None) is None
     assert len(timeouts_seen) == 6
