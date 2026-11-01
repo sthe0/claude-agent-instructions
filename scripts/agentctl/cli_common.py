@@ -1,6 +1,7 @@
 """Helpers shared by more than one agentctl command group, moved verbatim from cli.py."""
 from __future__ import annotations
 
+import argparse
 import copy
 import datetime as dt
 import hashlib
@@ -13,7 +14,7 @@ import tempfile
 import tomllib
 from dataclasses import asdict, fields, replace
 from pathlib import Path
-from lib import config_root, engine_session_binding, hook_telemetry
+from lib import argv_text, config_root, engine_session_binding, hook_telemetry
 from . import (
     advisor,
     carry_forward,
@@ -28,6 +29,7 @@ from . import (
     plan_refs,
     plan_resources,
     plan_store,
+    plugins,
     plugins_premise,
     premise,
     resources as _resources,
@@ -74,7 +76,7 @@ from .state import (
     StageReview,
     StageStatus,
 )
-from .store import StateStore, safe_session_id as _safe_session_id
+from .store import FileStateStore, StateStore, safe_session_id as _safe_session_id
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -2171,4 +2173,327 @@ def _linked_children(store: StateStore, parent: str) -> list[SessionState]:
     loaded: dict = {}
     return [loaded[session_id] for session_id in (list_ids() if list_ids is not None else [])
             if _parent_session_of(store, session_id, loaded) == parent]
+
+
+# --- Argument partition for the `@<path>` convention ---------------------------
+#
+# Every argument the parser below declares belongs to exactly one of the three
+# structures here. scripts/tests/test_argv_text_call_sites.py walks the parser
+# itself — the root parser and every subparser — and goes RED on an argument that
+# is in none of them, in two of them, or named here but no longer declared.
+#
+# OWNERSHIP RULE: the change that INTRODUCES an argument registers it here, in
+# that same change. The table is exhaustive only as long as it stays exhaustive,
+# and nobody re-derives it retroactively.
+#
+#   _ARG_RESOLVE      narrative free text this process CONSUMES. Resolved through
+#                     lib.argv_text before dispatch, so the value may be written
+#                     '@<path>' once the text outgrows a single argv string
+#                     (Linux MAX_ARG_STRLEN = 131072 bytes).
+#   _ARG_FORWARD      narrative free text this process only HANDS ON to a child,
+#                     which resolves it at its own boundary. Resolving it here
+#                     would inline the text straight back into the child's argv —
+#                     the very ceiling the convention exists to stay under.
+#   _ARG_DO_NOT_WRAP  identifiers, slugs, digests, file paths, enum-like tokens.
+#                     Never prose, so a leading '@' carries no meaning; each entry
+#                     states why in one line.
+
+_ROOT = "<root>"  # sentinel subcommand key for the top-level parser's own options
+
+
+# Every subcommand that takes --session. Spelled out rather than derived: a
+# derivation would silently classify the next subcommand someone adds.
+_SESSION_COMMANDS = (
+    "start", "reset", "plugin-activate", "plugin-deactivate", "plugin-record",
+    "ledger-add", "ledger-check", "ledger-candidate", "ledger-dispose",
+    "ledger-enumerate", "question-raise", "question-research", "question-dispose",
+    "question-rebind", "question-retire", "question-list", "question-check",
+    "question-enumerate", "question-enumerate-worker", "question-enumerate-escape",
+    "question-candidate-dispose",
+    "order-raise", "order-dispose", "order-list", "classify", "plan",
+    "plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
+    "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
+    "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
+    "risk-accept", "accept-protected-grant", "stage-review", "code-review", "accept", "approve",
+    "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
+    "record-result", "record-landing", "declare",
+    "investigate", "critique", "normalize", "difficulty-open", "difficulty-close",
+    "verify-final", "resolve", "reject",
+    "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status", "children",
+    "adopt-escalation", "drive", "close", "push-subplan", "pop-subplan", "task-reset",
+    "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry", "mandate-stop", "mandate-status",
+    "workspace-register",
+)
+
+
+# (dest, subcommands that declare it)
+_RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("goal", ("start", "reset")),
+    ("done_criterion", ("start", "reset")),
+    ("note", ("plugin-record", "confirm-delivery", "plan-review", "stage-review", "code-review",
+              "accept", "question-enumerate-escape", "fire-acknowledge", "accept-protected-grant")),
+    ("statement", ("ledger-add", "ledger-candidate")),
+    ("source", ("ledger-add", "question-dispose")),
+    ("premises", ("ledger-add",)),
+    ("basis", ("ledger-add", "question-dispose", "risk-accept")),
+    ("reason", ("ledger-dispose", "question-retire", "question-candidate-dispose",
+                "order-dispose", "reject", "block", "task-reset", "replan")),
+    ("element", ("order-raise",)),
+    ("question", ("question-raise", "question-candidate-dispose")),
+    ("attempted", ("question-research",)),
+    ("answer", ("question-dispose",)),
+    ("derivation", ("question-dispose",)),
+    ("risk", ("question-dispose", "risk-accept")),
+    ("confirm_still_valid", ("question-rebind",)),
+    ("concerns", ("plan-review", "stage-review", "code-review")),
+    ("customer_questions", ("plan-review",)),
+    ("observation", ("stage-review", "record-result", "close")),
+    ("actual", ("record-result", "declare", "close")),
+    ("control", ("record-result", "close")),
+    ("expected", ("declare",)),
+    ("mismatch", ("declare",)),
+    ("localized_expectation", ("investigate",)),
+    ("localized_actual", ("investigate",)),
+    ("hypotheses", ("investigate",)),
+    ("functional_ground", ("critique",)),
+    ("replanning_task", ("critique",)),
+    ("invariants_to_preserve", ("critique",)),
+    ("differences_to_remove", ("critique",)),
+    ("factor", ("normalize",)),
+    ("normalize_factor", ("replan",)),
+    ("quality_note", ("resolve", "close")),
+    ("landing_waiver", ("resolve", "close")),
+    ("resolution_ask_unverifiable", ("resolve", "close")),
+    ("coverage_waiver", ("replan",)),
+    ("normalization_waiver", ("replan", "normalize")),
+    ("renegotiation_note", ("replan",)),
+    ("bypass_reason", ("accept",)),
+    ("reopen_reason", ("reset",)),
+    ("reopen_user_decision", ("reset",)),
+    ("rejection_text", ("present-plan",)),
+    ("accept_content_loss", ("record-landing",)),
+)
+
+
+# (dest, subcommands that declare it, why '@' means nothing here)
+_DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("state_root", (_ROOT,), "directory path the state store is rooted at"),
+    ("session", _SESSION_COMMANDS, "session id — the slug state is keyed by"),
+    ("task", ("start", "reset", "push-subplan", "task-reset"), "task slug, not a description"),
+    ("child", ("adopt-escalation",), "session id of the linked child"),
+    ("criterion_type", ("start", "reset"), "one of two fixed verification kinds"),
+    ("plugin", ("plugin-activate", "plugin-deactivate", "plugin-record"), "plugin registry name"),
+    ("phase", ("plugin-record",), "plugin phase name from a fixed vocabulary"),
+    ("attachment", ("plugin-record",), "ticket attachment id or URL, not a file to read"),
+    ("comment", ("plugin-record",), "ticket comment id or URL, not a file to read"),
+    ("tracker_key", ("plugin-activate", "classify", "drive"), "tracker issue key (ABC-123)"),
+    ("id", ("ledger-add", "ledger-candidate", "ledger-dispose", "question-raise",
+            "question-research", "question-dispose", "question-rebind", "question-retire",
+            "question-candidate-dispose", "order-raise", "order-dispose", "accept-protected-grant"),
+     "claim / question / order-element / protected-action id"),
+    ("claim", ("ledger-dispose",), "id of the grounding claim, not its text"),
+    ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
+    ("target", ("question-raise", "plan-review", "plan-review-walk", "plan-review-compose",
+                "plan-review-pair-history"),
+     "plan element address or plan file path"),
+    ("pair", ("plan-review-pair-history",), "review pair id (`<base>-<service>`) or unit id (`unit:<node>`) — an id, not narrative"),
+    ("control", ("question-raise",),
+     "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
+     "grammar-bound name, never the prose --control of record-result/close"),
+    ("plan", ("plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
+              "plan-seal", "plan-convert", "plan-review-delta", "submit-plan", "replan", "drive",
+              "push-subplan", "question-enumerate", "question-enumerate-worker",
+              "question-enumerate-escape", "question-dispose",
+              "question-rebind", "question-raise", "present-plan", "order-dispose"),
+     "plan file path"),
+    ("out", ("plan-convert",), "output directory path for the converted tree"),
+    ("field", ("plan-externalize",), "name of a plan field — an identifier, not narrative"),
+    ("meta_field", ("plan-externalize",), "name of a [meta] field — an identifier, not narrative"),
+    ("order_field", ("plan-externalize",),
+     "name of a [meta.order] field — an identifier, not narrative"),
+    ("corpus", ("plan-resources",), "directory/ies to scan for *.toml plans — file paths, not narrative"),
+    ("commands_file", ("plan-resources",), "path to a file of literal command lines — a file path"),
+    ("dump_commands", ("plan-resources",), "output file path for the collected command list"),
+    ("report_json", ("plan-resources",), "output file path for the JSON resolution report"),
+    ("digest", ("question-enumerate-worker",),
+     "plan content digest the launcher computed — the sidecar's key, passed down "
+     "verbatim rather than a narrative"),
+    ("stages", ("question-enumerate-worker",),
+     "comma-separated stage indices the launcher narrowed the pass to"),
+    ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
+    ("rendering_file", ("present-plan",), "path to the rendered presentation"),
+    ("mandate_id", ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry",
+                    "mandate-stop", "mandate-status"),
+     "mandate slug the state directory is keyed by"),
+    ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission",
+            "task-reset", "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry"),
+     "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
+     "identity token like any other --by, not free text)"),
+    # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
+    # for the @<path> partition (test_argv_text_call_sites.py's _is_candidate excludes any
+    # action with choices set), so classifying it would be a stale entry the moment it's added.
+    ("escape_reason", ("confirm-delivery",),
+     "one token from delivery.DELIVERY_ESCAPE_REASONS — the narrative half of "
+     "the escape is --note, which is RESOLVE"),
+    ("reviewer", ("plan-review", "stage-review", "code-review"), "reviewer name"),
+    ("plan_digest", ("plan-review",), "sha256 the review binds to"),
+    ("scope", ("plan-review", "risk-accept"), "'' or 'stage:<n>' or 'topo:<pair-or-unit>' — the review's binding, not narrative"),
+    ("concern_ids", ("plan-review",),
+     "explicit stable ids for --concern, positionally paired — ids, not narrative"),
+    ("concern_id", ("risk-accept",), "the concern id this acceptance answers — an id, not narrative"),
+    ("norm_targets", ("critique",),
+     "norm-target address (`stage:<n>` or a repo path) the critique must edit — an address, not narrative"),
+    ("code_ref", ("code-review", "record-result"), "commit / PR reference the verdict binds to"),
+    ("head", ("record-landing",), "commit the landing pushed — a revision, not narrative"),
+    ("base", ("record-landing",), "commit the landing was rebased onto — a revision, not narrative"),
+    ("unit", ("partition", "partition-units"), "'|'-delimited partition-unit record"),
+    ("author", ("accept", "risk-accept"), "acceptance author id — an identity token, not narrative"),
+    ("renegotiated_by", ("replan",), "who made the renegotiation decision — a name, not a narrative"),
+    ("verdict", ("accept",), "'|'-delimited requirement-verdict record"),
+    ("budget", ("dispatch",), "budget tier name"),
+    ("complexity", ("dispatch",), "complexity tier name"),
+    ("cost_log", ("record-result", "resolve", "verify-final", "replan", "effort-check", "submit-plan"),
+     "cost log file path (test override)"),
+    ("quality_by", ("resolve", "close"), "how the quality rating was obtained — a fixed token"),
+    ("confirmed_by", ("close",), "who confirmed — a name, not a narrative"),
+    ("approved_by", ("drive",), "who approved — a name, not a narrative"),
+    ("not_checked", ("code-review",),
+     "short axis name(s) or 'none' — a fixed-vocabulary token, not review narrative"),
+    ("rules", ("resolve-permission",),
+     "Bash/Edit/etc rule strings — grant syntax tokens, not narrative"),
+    ("add_dirs", ("resolve-permission",),
+     "'PATH:MODE' tokens — grant syntax, not narrative"),
+    ("regression_command", ("plan-review",),
+     "shell command run verbatim via the runner (terminal-pass evidence) — an "
+     "invocation string, not narrative prose for the @<path> convention"),
+    ("path", ("workspace-register",), "filesystem path of the workspace — a path, not narrative"),
+    ("ws_backend", ("workspace-register",), "workspace backend name from the registry — an identifier"),
+    ("ws_name", ("workspace-register",), "workspace/mount name the backend teardown is keyed by — an identifier"),
+)
+
+
+_ARG_RESOLVE: frozenset[tuple[str, str]] = frozenset(
+    (command, dest) for dest, commands in _RESOLVE_ROWS for command in commands
+)
+
+
+_ARG_FORWARD: frozenset[tuple[str, str]] = frozenset({
+    # dispatch's own process never reads this narrative text — it only hands it
+    # on to the spawned specialist's argv, which resolves it via the same
+    # lib.argv_text convention on its own side (see spawn-specialist.py /
+    # spawn-cursor-specialist.py's _WRAPPER_RESOLVE).
+    ("dispatch", "constraints"),
+})
+
+
+_ARG_DO_NOT_WRAP: dict[tuple[str, str], str] = {
+    (command, dest): reason
+    for dest, commands, reason in _DO_NOT_WRAP_ROWS
+    for command in commands
+}
+
+
+def resolve_arg_text(args: argparse.Namespace) -> None:
+    """Apply the `@<path>` convention in place to this command's RESOLVE arguments.
+
+    One pass over the parsed namespace before dispatch, so no cmd_* body sees an
+    unresolved reference and none has to remember to call the helper itself.
+
+    Deliberately not an argparse ``type=`` converter: a SystemExit raised inside a
+    converter is attributed to argparse's own error path rather than to the
+    convention, and an append action applies its converter per element — which
+    cannot preserve the None-vs-empty-list distinction the helpers guarantee.
+    """
+    for command, dest in _ARG_RESOLVE:
+        # A _ROOT entry belongs to the top-level parser, so it applies whatever
+        # subcommand ran. Matching only args.command would leave a root narrative
+        # option classified RESOLVE but never actually resolved — the silent
+        # false-green this partition exists to make impossible.
+        if command not in (args.command, _ROOT):
+            continue
+        value = getattr(args, dest)
+        # An append dest arrives as a list once given and as None when never
+        # given; both helpers pass None through unchanged.
+        setattr(
+            args,
+            dest,
+            argv_text.read_arg_text_list(value)
+            if isinstance(value, list)
+            else argv_text.read_arg_text(value),
+        )
+
+
+def _inject_default_session(argv: list[str], harness: str | None) -> list[str]:
+    """Return a copy of ``argv`` with ``--session <harness>`` appended when the
+    harness session id is known and the caller passed no --session of its own.
+
+    hook-state-gate.py receives only the HARNESS conversation session_id
+    (payload["session_id"] == $CLAUDE_CODE_SESSION_ID) and reads the state of the
+    engine session bound to it (lib/engine_session_binding.py, written by a verb
+    that saves state under an explicit --session), else of the harness id itself.
+    An omitted --session must default to the harness id — not stay unset and
+    fail the 30 required=True subcommands. Appending places the flag inside the
+    subparser's argument region (--session is a subcommand option); it is a
+    no-op when --session (either '--session X' or '--session=X') is already
+    present, or when the harness id is empty/None."""
+    if not harness:
+        return list(argv)
+    for tok in argv:
+        if tok == "--session" or tok.startswith("--session="):
+            return list(argv)
+    return list(argv) + ["--session", harness]
+
+
+class _BindingStore(FileStateStore):
+    """The default store of a verb run by a harness session: saving the state of the
+    session the verb was run on binds that session to the harness id, so the
+    production-edit gate (which sees only the harness id) follows the session the
+    coordinator drives. Query verbs save nothing and so never bind."""
+
+    def __init__(self, harness: str, session: str):
+        super().__init__(None)
+        self._harness = harness
+        self._session = _safe_session_id(session)
+
+    def save(self, state) -> None:
+        super().save(state)
+        if _safe_session_id(state.session_id) != self._session:
+            return
+        try:
+            engine_session_binding.record_drive(
+                self._harness, state.session_id, dt.datetime.now(dt.timezone.utc))
+        except Exception:
+            pass  # an unwritten binding leaves the gate on the previously most recent one (the harness id if none)
+
+
+def _is_followed_by_gate(harness: str, session: str) -> bool:
+    # The binding store always lives under the agent home; with --state-root the verb's
+    # state is not the gate's state either, so that case reports "not followed" as base did.
+    try:
+        return engine_session_binding.resolve(harness) == _safe_session_id(session)
+    except Exception:
+        return False
+
+
+def _fire_plugins(args, store: StateStore, directive: Directive) -> None:
+    """After a command runs, fire the matching plugin event on the (just-saved)
+    state so active plugins can observe, gate, and auto-retire. Central wiring —
+    the command bodies stay plugin-agnostic. Fires regardless of directive.ok
+    (a blocked resolve must still surface its publish nudge). A plugin-less session
+    skips entirely (no reload, no behavior change). Plugin faults never crash the
+    engine."""
+    event = plugins.event_for(args.command)
+    if event is None:
+        return
+    session = getattr(args, "session", None)
+    if not session:
+        return
+    try:
+        state = store.load(session)
+        if state is None or not plugins.active(state):
+            return
+        plugins.fire(event, state, directive)
+        store.save(state)
+    except Exception as exc:  # observability without aborting the directive
+        directive.data.setdefault("plugin_errors", []).append(str(exc))
 
