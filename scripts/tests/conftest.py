@@ -134,9 +134,19 @@ def _parent_session_outside_any_project(tmp_path_factory, monkeypatch):
 def _isolate_task_quality_ledger(tmp_path, monkeypatch):
     """The scorecard aggregates the real ledger into degradation flags, so a
     test resolve must never append to it."""
-    from agentctl import cli_common
+    from agentctl import cli_final
     log = tmp_path / "task-quality.jsonl"
-    monkeypatch.setattr(cli_common, "TASK_QUALITY_LOG", log)
+    monkeypatch.setattr(cli_final, "TASK_QUALITY_LOG", log)
+
+
+def patch_cli_name(monkeypatch, name, value):
+    """Patch `name` in every agentctl.cli_* module that holds it. A bare-name import is a
+    copy, so patching only the defining module leaves each reader's copy live."""
+    holders = [m for modname, m in sorted(sys.modules.items())
+               if modname.startswith("agentctl.cli_") and hasattr(m, name)]
+    assert holders, f"no agentctl.cli_* module holds {name}"
+    for module in holders:
+        monkeypatch.setattr(module, name, value)
 
 
 @pytest.fixture(autouse=True)

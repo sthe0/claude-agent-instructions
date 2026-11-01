@@ -705,9 +705,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     refusal = _replan_baseline_and_coverage_gates(ctx)
     if refusal is not None:
         return refusal
-    refusal = _replan_record_acceptance(ctx)
-    if refusal is not None:
-        return refusal
+    _replan_record_acceptance(ctx)
     apply = {"no_change": _replan_apply_no_change,
              "refinement": _replan_apply_refinement}.get(ctx.auth_kind, _replan_apply_substantive)
     return apply(ctx)

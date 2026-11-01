@@ -476,7 +476,7 @@ import ast  # noqa: E402
 import inspect  # noqa: E402
 
 import test_plan_delivery_gate_presentation as pres  # noqa: E402
-from agentctl import cli_common as _cli_common  # noqa: E402
+from agentctl import cli_replan as _cli_replan  # noqa: E402
 from agentctl import delivery as _delivery_mod  # noqa: E402
 from agentctl.state import Node  # noqa: E402
 
@@ -549,7 +549,7 @@ def test_stamp_nodes_match_cmd_replan_precondition():
     assert set(mod.STAMP_NODES) | set(_NOT_STAMP_NODES) == {n.value for n in Node}
     assert not set(mod.STAMP_NODES) & set(_NOT_STAMP_NODES)
     replan_phases = [
-        f for f in vars(_cli_common).values()
+        f for f in vars(_cli_replan).values()
         if inspect.isfunction(f) and (f.__name__ == "_cmd_replan" or "_ReplanContext" in str(inspect.signature(f)))
     ]
     assert len(replan_phases) >= 9, "the replan phase functions were not found"

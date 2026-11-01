@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, cli_common, cli_review
+from agentctl import cli, cli_review
 from agentctl import config as agentctl_config
 from agentctl import gates, plugins
 from agentctl.directive import Directive
@@ -216,7 +216,6 @@ def _spawn_env_with_later_pair_revise(make_env, *, compose=False, monkeypatch=No
     assert gates.whole_plan_by_shape(env.doc())
     if compose:
         env.record_all()
-        monkeypatch.setattr(cli_common, "_record_first_thinker_verdict", lambda *a, **k: None)
         monkeypatch.setattr(cli_review, "_record_first_thinker_verdict", lambda *a, **k: None)
         assert _compose(env).ok
     else:
