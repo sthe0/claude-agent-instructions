@@ -99,6 +99,7 @@ class Corpus:
             "schema": "principle/v1", "generality": 1,
             "grounded_in": "[" + ", ".join(grounded) + "]" if grounded is not None else None,
             "induced_from": "[" + ", ".join(induced) + "]" if induced else None,
+            "grounding_unjudged": f"{DATE} judge unavailable",
             "created": DATE, "last_verified": DATE,
         }) + "\n# Sample\n\n## Principle\n\nRun a check where its subject lives.\n\n"
              "## Goal class\n\nControls.\n\n## Refutation\n\nA counterexample.\n")

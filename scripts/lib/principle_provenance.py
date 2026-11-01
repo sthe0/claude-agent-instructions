@@ -14,6 +14,13 @@ no `induced_from`; its `principles/MEMORY.md` pointer lists the same slugs, the
 `regularity:` prefix dropped, after its `← `. A project principle's regularities
 resolve in the project tier first, then globally.
 
+The grounding judge reads each principle's link to its grounds. Writing a principle
+(`promote`, `restamp`) judges it and stamps `grounding_judged: <digest of the link>`; a judge
+that is down leaves `grounding_unjudged: <date> ...` instead, which only warns. Reading the
+corpus then decides by rule alone, with no model: a missing or stale stamp fails
+(`unjudged_link`), a retired `leaf/v1` leaf fails, a given ground not re-verified within
+the configured age warns (`stale_given`). `live_link_findings` asks the judge now.
+
 A project leaf never names a global regularity directly: its general aspect
 reaches Core as a sanitized case (case/v1, under `principles/cases/`) that is
 linked two-sided with its global regularities and cited one way by the project
@@ -27,10 +34,12 @@ import this module as `lib.principle_provenance` and call `pp.<fn>`.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import tempfile
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 from lib import leaf_forms
@@ -53,8 +62,10 @@ LEAVES_REL = Path("memory-global/leaves")
 CASES_DIR = Path("principles/cases")
 INDEX = "MEMORY.md"
 EXPERIENCE_SOURCE_KINDS = ("experience", "case")
-STAGED_SCOPES = ("memory-global/leaves/experience/", "memory-global/leaves/regularities/",
-                 "memory-global/leaves/principles/")
+JUDGED_FIELD = "grounding_judged"
+OVERRIDE_FIELD = "grounding_override"
+PENDING_FIELD = "grounding_unjudged"
+RETIRED_SCHEMA = "leaf/v1"
 GENERIC_DIR_NAMES = frozenset({"/", ".claude", "agent-memory"})
 MIN_IDENTIFIER_LEN = 6
 
@@ -83,6 +94,13 @@ ORDER_NO_QUOTE = "order_no_quote"
 ORDER_ON_PRINCIPLE = "order_on_principle"
 ORDER_NO_INTRODUCED = "order_no_introduced"
 GIVEN_SOURCE = "given_source"
+RETIRED_LEAF = "retired_leaf_schema"
+UNJUDGED_LINK = "unjudged_link"
+LINK_DEFECT = "link_defect"
+PENDING_JUDGEMENT = "pending_judgement"
+STALE_GIVEN = "stale_given"
+JUDGE_UNAVAILABLE = "judge_unavailable"
+WARNING_KINDS = frozenset({PENDING_JUDGEMENT, STALE_GIVEN, JUDGE_UNAVAILABLE})
 
 FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 DIGEST_RE = re.compile(re.escape(DIGEST_PREFIX) + r"[0-9a-f]{64}")
@@ -439,8 +457,8 @@ def promote_target_dir(leaves, project_root=None, area: str = "regularity") -> P
 
 def verify_corpus(root, project=None) -> list[Finding]:
     """The provenance findings of the leaves under `root` and, when given, of the project memory dir."""
-    leaves = Path(root) / LEAVES_REL
-    return unaccounted(load_corpus(leaves, project))
+    corpus = load_corpus(Path(root) / LEAVES_REL, project)
+    return unaccounted(corpus) + provenance_check_findings(corpus)
 
 
 def target_allowed(leaf_tier: str, target: Leaf) -> bool:
@@ -479,8 +497,13 @@ def cross_tier_enabled(project_root) -> bool:
     return project_root is not None
 
 
+def triggers_staged_check(rel) -> bool:
+    """Whether a staged path lies anywhere under the leaves tree."""
+    return str(rel).replace(os.sep, "/").startswith(LEAVES_REL.as_posix() + "/")
+
+
 def staged_triggers(paths) -> bool:
-    return any(str(p).startswith(STAGED_SCOPES) for p in paths)
+    return any(triggers_staged_check(p) for p in paths)
 
 
 def index_exempt(relpath) -> bool:
@@ -769,6 +792,181 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
         if found:
             report(CASE_LEAK, case, "carries project identifier(s): " + ", ".join(found))
     return findings
+
+
+# --------------------------------------------------------------------------
+# judgement of a principle's link to its grounds
+# --------------------------------------------------------------------------
+def _judge():
+    """The grounding judge, imported on first use: it imports this module."""
+    from agentctl import grounding_judge
+    return grounding_judge
+
+
+def live_runner():
+    """The real model runner, or None while the advisor is forced off (AGENTCTL_ADVISOR=0)."""
+    if os.environ.get("AGENTCTL_ADVISOR") == "0":
+        return None
+    from agentctl import advisor
+    return advisor.subprocess_runner
+
+
+def judge_cache_dir():
+    return _judge().cache_dir()
+
+
+def judged_principles(corpus: Corpus) -> list[Leaf]:
+    """The principles of the checked tiers that name grounds: the links a stamp covers."""
+    return [l for tier in checked_principle_tiers() for l in corpus.of("principle", tier)
+            if _grounded_or_empty(l.text)]
+
+
+def override_of(leaf: Leaf) -> str | None:
+    return leaf_forms.field(leaf_forms.frontmatter_of(leaf.text), OVERRIDE_FIELD) or None
+
+
+def stamp_current(leaf: Leaf, corpus: Corpus) -> bool:
+    """Whether the leaf's `grounding_judged` stamp is the digest of its link as it stands now."""
+    stamp = leaf_forms.field(leaf_forms.frontmatter_of(leaf.text), JUDGED_FIELD)
+    digest = hashlib.sha256(_judge().leaf_link_inputs(leaf, corpus).encode("utf-8")).hexdigest()
+    return bool(stamp) and stamp == digest
+
+
+def pending_is_warning(frontmatter: str) -> bool:
+    """A leaf marked `grounding_unjudged` waits for a judge that was down; it warns, it does not fail."""
+    return leaf_forms.field(frontmatter, PENDING_FIELD) is not None
+
+
+def stamp_frontmatter(record: dict) -> dict[str, str]:
+    """The stamp a judged record earns; nothing for an outage or a defect left standing."""
+    lines = dict(line.split(": ", 1) for line in _judge().stamp_lines(record))
+    return {JUDGED_FIELD: lines[JUDGED_FIELD]} if JUDGED_FIELD in lines else {}
+
+
+def override_frontmatter(reason: str | None) -> dict[str, str]:
+    return {OVERRIDE_FIELD: json.dumps(" ".join(reason.split()))} if reason and reason.strip() else {}
+
+
+def pending_frontmatter(today=None) -> dict[str, str]:
+    return {PENDING_FIELD: f"{(today or date.today()).isoformat()} judge unavailable"}
+
+
+def rewrite_judgement(text: str, fields: dict[str, str]) -> str:
+    """The leaf text with its judgement fields (stamp, pending marker, override) replaced by `fields`."""
+    for key in (JUDGED_FIELD, PENDING_FIELD, OVERRIDE_FIELD):
+        text = remove_field(text, key)
+    for key, value in fields.items():
+        text = set_field(text, key, value)
+    return text
+
+
+def given_ground(leaf: Leaf, corpus: Corpus) -> dict | None:
+    """A regularity as the currency rule reads a ground, or None when it is neither given nor
+    order-derived."""
+    ground, _grounds = _judge().leaf_link_fields(leaf, corpus)
+    if not ground.get("given") and field_value(leaf.text, ORDER_DERIVED):
+        ground = {**ground, "given": ORDER_DERIVED, "given_source": ""}
+    return ground if ground.get("given") else None
+
+
+def stale_given_grounds(principle: Leaf, corpus: Corpus, *, checked_paths=(), today=None) -> list[Leaf]:
+    """The given or order-derived regularities a principle cites that the age rule no longer vouches
+    for. Decided by rule, before and apart from the judge, so a judge that is down changes nothing."""
+    from agentctl import grounding
+    stale: list[Leaf] = []
+    for item in _grounded_or_empty(principle.text):
+        refs, _bad = grounding.parse_ground_refs(item)
+        if not refs or refs[0].kind != "regularity":
+            continue
+        tier = "project" if refs[0].tier == "project" else principle.tier
+        found = grounding.leaf_for(grounding.GroundRef(tier, "regularity", refs[0].slug), corpus)
+        if found is None or found.area != "regularity" or found in stale:
+            continue
+        ground = given_ground(found, corpus)
+        if ground is not None and not _judge().given_currency(ground, checked_paths=checked_paths,
+                                                              today=today):
+            stale.append(found)
+    return stale
+
+
+def stale_given_warnings(corpus: Corpus, *, checked_paths=(), today=None) -> list[Finding]:
+    citing: dict[Leaf, list[str]] = {}
+    for principle in judged_principles(corpus):
+        for ground in stale_given_grounds(principle, corpus, checked_paths=checked_paths, today=today):
+            citing.setdefault(ground, []).append(principle.slug)
+    return [Finding(STALE_GIVEN, ground.path,
+                    f"given ground not re-verified within {_judge().max_age_days()} days; "
+                    f"cited by {', '.join(slugs)}")
+            for ground, slugs in citing.items()]
+
+
+def retired_leaf_findings(corpus: Corpus) -> list[Finding]:
+    return [Finding(RETIRED_LEAF, leaf.path, f"`schema: {RETIRED_SCHEMA}` is retired; convert the leaf")
+            for leaf in corpus.items if leaf_forms.schema_of(leaf.text) == RETIRED_SCHEMA]
+
+
+def unjudged_findings(corpus: Corpus) -> list[Finding]:
+    findings = []
+    for leaf in judged_principles(corpus):
+        if stamp_current(leaf, corpus):
+            continue
+        waiting = pending_is_warning(leaf_forms.frontmatter_of(leaf.text))
+        findings.append(Finding(
+            PENDING_JUDGEMENT if waiting else UNJUDGED_LINK, leaf.path,
+            "the judge was down when this link was written; `restamp` it once it is up" if waiting
+            else f"no current `{JUDGED_FIELD}` stamp for this link; `restamp` it"))
+    return findings
+
+
+def provenance_check_findings(corpus: Corpus, *, checked_paths=(), today=None) -> list[Finding]:
+    """The findings a corpus earns from the grounding judgement, decided by rule alone: retired
+    forms and unjudged links fail; a pending mark and a stale given ground only warn
+    (`WARNING_KINDS`)."""
+    return (retired_leaf_findings(corpus) + unjudged_findings(corpus)
+            + stale_given_warnings(corpus, checked_paths=checked_paths, today=today))
+
+
+def live_link_findings(corpus: Corpus, *, runner, cache=None, today=None, checked_paths=()) -> list[Finding]:
+    """Judge every link now: a defect that no override waives fails, a judge that is down warns."""
+    findings = []
+    for leaf in judged_principles(corpus):
+        record = _judge().judge_leaf(leaf, corpus, runner=runner, cache=cache, today=today,
+                                     checked_paths=checked_paths)
+        if record.get("status") != "ok":
+            findings.append(Finding(JUDGE_UNAVAILABLE, leaf.path,
+                                    record.get("warning") or "grounding judge unavailable"))
+            continue
+        defects = list(record.get("link_defects") or []) + list(record.get("ground_defects") or [])
+        if defects and override_of(leaf) is None:
+            findings.append(Finding(LINK_DEFECT, leaf.path,
+                                    f"judged defective: {', '.join(defects)} — {record.get('reason') or ''}"))
+    return findings
+
+
+def promote_grounding_check(leaf: Leaf, corpus: Corpus, *, runner, override=None, cache=None, today=None,
+                            checked_paths=()) -> dict:
+    """What judging a principle's link adds to writing it: `problems` that refuse it, the judgement
+    `fields` to write, and `warnings`. A stale given ground refuses before the model is asked, so a
+    judge that is down cannot let it through; an outage warns and marks the leaf pending."""
+    stale = stale_given_grounds(leaf, corpus, checked_paths=checked_paths, today=today)
+    if stale and not override:
+        return {"problems": [f"grounding: ground {g.slug!r} is given and was not re-verified within "
+                             f"{_judge().max_age_days()} days; re-verify it or pass --grounding-override REASON"
+                             for g in stale],
+                "fields": {}, "warnings": []}
+    fields = override_frontmatter(override)
+    judged = Leaf(leaf.slug, leaf.path, leaf.tier, leaf.area, rewrite_judgement(leaf.text, fields))
+    record = _judge().judge_leaf(judged, corpus, runner=runner, cache=cache, today=today,
+                                 checked_paths=checked_paths)
+    if record.get("status") != "ok":
+        return {"problems": [], "fields": {**fields, **stamp_frontmatter(record), **pending_frontmatter(today)},
+                "warnings": [record.get("warning") or "grounding judge unavailable"]}
+    defects = list(record.get("link_defects") or []) + list(record.get("ground_defects") or [])
+    if defects and not override:
+        return {"problems": [f"grounding: the judge refused the link: {', '.join(defects)} — "
+                             f"{record.get('reason') or ''}; fix it or pass --grounding-override REASON"],
+                "fields": {}, "warnings": []}
+    return {"problems": [], "fields": {**fields, **stamp_frontmatter(record)}, "warnings": []}
 
 
 # --------------------------------------------------------------------------

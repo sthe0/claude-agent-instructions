@@ -16,10 +16,18 @@ project-side checks (orphan, stale and leaking cases) run through
 rules: its regularities are induced from its experience, its principles are grounded in
 regularities of the project tier first, then global.
 
---staged: run only when a staged path lies under experience/, regularities/ or principles/,
+Every principle that names grounds carries a `grounding_judged` stamp equal to the digest of
+its link as it stands; a leaf still on the retired `leaf/v1` schema, an unstamped link and a
+stale stamp are findings. A stale `given` ground or a judge that was down at promote time
+(`grounding_unjudged`) only warns.
+
+--judge: also ask the grounding judge about every link now (working tree only; a live model
+call; a judge that is down warns).
+
+--staged: run only when a staged path lies under memory-global/leaves/ (any leaf),
 then check the whole corpus as the git index holds it (a link has two sides, so
 a one-file check misses the side that was not staged; an unstaged edit or an
-untracked file is not part of the commit and is not read). Exit 1 on any finding.
+untracked file is not part of the commit and is not read). Exit 1 on any failure.
 """
 from __future__ import annotations
 
@@ -69,33 +77,42 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--staged", action="store_true")
     parser.add_argument("--project", type=Path, metavar="DIR",
                         help="also check this project's memory (the repo dir or its memory dir)")
+    parser.add_argument("--judge", action="store_true",
+                        help="also ask the grounding judge about every link now (a live model call; "
+                             "an unavailable judge warns and never fails)")
     args = parser.parse_args(argv)
     if args.project and args.staged:
         parser.error("--project checks the working tree; it cannot be combined with --staged")
+    if args.judge and args.staged:
+        parser.error("--judge is a live model call; it cannot be combined with --staged")
 
     project = pp.project_memory(args.project)
     if project is not None and not project.is_dir():
         parser.error(f"--project: no project memory directory at {project}")
 
     if args.staged and not pp.staged_triggers(_staged_paths(args.root)):
-        print(f"{NAME}: OK — no staged experience, regularity or principle leaf")
+        print(f"{NAME}: OK — no staged leaf")
         return 0
     leaves = args.root / pp.LEAVES_REL
     if not leaves.is_dir():
         print(f"{NAME}: OK — no {pp.LEAVES_REL}/ tree")
         return 0
     if args.staged:
-        findings = pp.unaccounted(_indexed_corpus(args.root))
+        corpus = _indexed_corpus(args.root)
+        findings = pp.unaccounted(corpus) + pp.provenance_check_findings(corpus)
     else:
         findings = pp.verify_corpus(args.root, project)
-    if not findings:
-        print(f"{NAME}: OK")
-        return 0
-    print(f"{NAME}: FAIL")
-    for f in findings:
-        shown = f.path.relative_to(args.root) if f.path.is_relative_to(args.root) else f.path
-        print(f"  {f.kind}: {shown} — {f.detail}")
-    return 1
+        if args.judge:
+            findings += pp.live_link_findings(
+                pp.load_corpus(leaves, project), runner=pp.live_runner(), cache=pp.judge_cache_dir())
+    failures = [f for f in findings if f.kind not in pp.WARNING_KINDS]
+    warnings = [f for f in findings if f.kind in pp.WARNING_KINDS]
+    print(f"{NAME}: {'FAIL' if failures else 'OK'}")
+    for label, group in (("", failures), ("warning: ", warnings)):
+        for f in group:
+            shown = f.path.relative_to(args.root) if f.path.is_relative_to(args.root) else f.path
+            print(f"  {label}{f.kind}: {shown} — {f.detail}")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

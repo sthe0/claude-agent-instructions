@@ -1297,6 +1297,17 @@ def cmd_promote(a) -> int:
         f"# {one_line(a.name)}\n\n"
         + body
     )
+    if a.principle:
+        judgement = pp.promote_grounding_check(
+            pp.Leaf(a.slug, path, tier, area, text), corpus, runner=pp.live_runner(),
+            override=a.grounding_override, cache=pp.judge_cache_dir(),
+            today=_dt.date.fromisoformat(a.date))
+        if judgement is not None:
+            if judgement["problems"]:
+                refuse(*judgement["problems"])
+            text = pp.rewrite_judgement(text, judgement["fields"])
+            for warning in judgement["warnings"]:
+                print(f"warning: {warning}", file=sys.stderr)
     index = dest_dir / "MEMORY.md"
     pointer = (f"- [{one_line(a.name)}]({a.slug}.md) — {one_line(a.description)} "
                f"← {', '.join(f'`{s}`' for s in source_links)}.\n")
@@ -1404,6 +1415,26 @@ def resolve_pair(corpus: pp.Corpus, tier: str, source_slug: str, target_slug: st
         refuse(f"{target_slug!r} is not a regularity (a project regularity or case for a "
                "project leaf) this leaf may name")
     return source, target
+
+
+def cmd_restamp(a) -> int:
+    """Judge a principle's link again and rewrite its stamp: the way out of a pending marker."""
+    corpus = provenance_corpus(a)
+    leaf = corpus.find(a.slug, provenance_tier(a))
+    if leaf is None or leaf.area != "principle":
+        refuse(f"{a.slug!r} is not a principle of this tier")
+    judgement = pp.promote_grounding_check(
+        leaf, corpus, runner=pp.live_runner(), override=a.grounding_override or pp.override_of(leaf),
+        cache=pp.judge_cache_dir())
+    if judgement is None:
+        return 0
+    if judgement["problems"]:
+        refuse(*judgement["problems"])
+    for warning in judgement["warnings"]:
+        print(f"warning: {warning}", file=sys.stderr)
+    commit_changes(a, [pp.Change(leaf.path, pp.rewrite_judgement(leaf.text, judgement["fields"]),
+                                 leaf.area)], "restamp")
+    return 0
 
 
 def cmd_link(a) -> int:
@@ -1553,11 +1584,12 @@ def cmd_provenance(a) -> int:
             print(f"{leaf.tier}\t{leaf.slug}\t{leaf.path}")
     if a.of and not a.check:
         return 0
-    findings = pp.unaccounted(corpus)
+    findings = pp.unaccounted(corpus) + pp.provenance_check_findings(corpus)
+    failures = [f for f in findings if f.kind not in pp.WARNING_KINDS]
     if a.check:
         for f in findings:
-            print(f"{f.kind}\t{f.path}\t{f.detail}")
-        return 1 if findings else 0
+            print(f"{'warning:' if f.kind in pp.WARNING_KINDS else ''}{f.kind}\t{f.path}\t{f.detail}")
+        return 1 if failures else 0
     print(f"provenance: {len(findings)} unaccounted item(s); --check lists them")
     return 0
 
@@ -1852,6 +1884,9 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--project-dir", metavar="D",
                     help="project repo dir (a memory dir holding experience/ or principles/ is "
                          "also accepted): write the project's principles/<slug>.md from its leaves")
+    pr.add_argument("--grounding-override", metavar="REASON",
+                    help="with --principle: accept a link the grounding judge or a stale given "
+                         "ground refuses, recording the reason in the leaf")
     pr.set_defaults(func=cmd_promote)
 
     def provenance_parser(name: str, help_text: str, func) -> argparse.ArgumentParser:
@@ -1883,6 +1918,12 @@ def build_parser() -> argparse.ArgumentParser:
     bf = provenance_parser("backfill", "stamp generalized_into on every leaf from the "
                                        "regularities' induced_from", cmd_backfill)
     bf.add_argument("--rule-derived", action="append", metavar="SLUG=REASON")
+
+    rs = provenance_parser("restamp", "judge a principle's link again and rewrite its stamp",
+                           cmd_restamp)
+    rs.add_argument("slug", metavar="SLUG")
+    rs.add_argument("--grounding-override", metavar="REASON",
+                    help="accept a defect the judge reports, recording the reason in the leaf")
 
     pv = provenance_parser("provenance", "report provenance links (read-only)",
                            cmd_provenance)
