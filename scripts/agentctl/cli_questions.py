@@ -5,20 +5,132 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from . import controls, plugins_premise, premise
+from . import controls, plugins_premise, premise, advisor
 from .directive import Directive
 from .dispatch import Runner
-from .plan import META_PART, PlanDoc, load_plan, plan_stage_digests, stage_part
-from .store import StateStore
-from .cli_common import (
-    _with_advisories,
-    _question_bag,
-    _bound_stage_key,
-    _bound_order_stage_key,
-    _materiality_doc,
-    _materiality_advisories,
-    cmd_question_enumerate_retired,
+from .plan import (
+    META_PART,
+    PlanDoc,
+    load_plan,
+    plan_stage_digests,
+    stage_part,
+    PlanError,
+    stage_norm_keys,
 )
+from .store import StateStore
+import sys
+from .cli_common import _with_advisories, _require, _bound_stage_key
+
+
+def _question_bag(store: StateStore, session_id: str):
+    """(state, bag) for the active premise bag, or (state, None) when the plugin is
+    not armed — the caller returns the not-active Directive, mirroring the ledger
+    verbs' `if bag is None` guard."""
+    state = _require(store, session_id)
+    return state, state.plugins.get("premise")
+
+
+def _bound_order_stage_key(
+    state, element: "premise.OrderElement", plan_path: str | None = None
+) -> str:
+    """The current binding of the stage an OrderElement is marked 'covered'
+    by — the value cmd_order_dispose stamps into `content_digest` (#123), the
+    order-coverage twin of `_bound_stage_key`. Bound to the stage's deliverable (its
+    interface token, `premise.order_binding_key`) rather than to a named field or the
+    whole definition: an order element cites a stage's OUTCOME, so an edit to HOW the
+    stage proceeds does not move it and an edit to what it hands over does. Returns "" when
+    `element.stage` is None or no plan has been submitted yet — the cases
+    premise.validate_order_elements exempts from the key-mismatch check.
+
+    `plan_path`, when given, is read INSTEAD of `state.plan_path` — the same
+    CORRECTED-plan escape `_bound_stage_key` documents: re-covering during a
+    blocked replan must stamp against `args.plan`, not the stale `state.plan_path`,
+    or the staleness check just added for OrderElement would deadlock replan with
+    no route out, the same defect #48(b) fixed for questions."""
+    if element.stage is None:
+        return ""
+    if plan_path is None:
+        plan_path = getattr(state, "plan_path", None)
+    if not plan_path:
+        return ""
+    doc = load_plan(plan_path)
+    keys = {s.index: stage_norm_keys(s) for s in doc.stages}
+    stage_keys = keys.get(element.stage)
+    if not stage_keys:
+        return ""
+    return premise.order_binding_key(stage_keys)
+
+
+def _materiality_doc(state, named_plan) -> "tuple[PlanDoc | None, str]":
+    """(plan a raised question's control is resolved against, refusal). Both empty
+    when no plan exists yet: 'does this control exist in this plan' is undecidable
+    before there is a plan, and refusing every pre-submission question would close
+    the channel exactly where a plan's construction raises the most of them.
+
+    A NAMED --plan that cannot be loaded refuses instead of skipping — otherwise
+    naming any unreadable path is a one-flag bypass of the whole check."""
+    if named_plan:
+        try:
+            return load_plan(named_plan), ""
+        except (OSError, PlanError) as exc:
+            return None, f"cannot load the plan named by --plan ({named_plan!r}): {exc}"
+    plan_path = getattr(state, "plan_path", None)
+    if not plan_path:
+        return None, ""
+    try:
+        return load_plan(plan_path), ""
+    except (OSError, PlanError):
+        return None, ""
+
+
+def _materiality_advisories(control: str, question: str, doc, state, runner) -> list[str]:
+    """The PERCEPTION half of the materiality check, warn-only. The engine has
+    already decided the rule half — the control resolves against this plan — and a
+    judge may not reopen it; all that is left is whether the answer could MOVE the
+    control, which no document decides.
+
+    A judged NO is surfaced; a fail-open False is not. The reason field is what
+    separates them, and here that distinction is the whole safety property: the
+    advisory asserts the plan's own controls are indifferent to this question, and
+    a False produced by a killed subprocess asserts nothing."""
+    try:
+        enabled = advisor.resolve_enabled(getattr(state, "weight_class", None))
+    except Exception:
+        return []
+    run = runner if runner is not None else advisor.subprocess_runner
+    try:
+        verdict, reason = advisor.judge_question_materiality(
+            control, question, run, enabled=enabled,
+            control_text=controls.control_text(
+                control, doc, grammars=controls.MATERIALITY_GRAMMARS),
+        )
+    except Exception:
+        return []
+    if verdict or reason:
+        return []
+    return [
+        f"advisory (never blocking): the judge reads {control!r} as unable to change "
+        f"its verdict on this question's answer — re-check that this is the control "
+        f"the question really bears on"
+    ]
+
+
+RETIRED_ENUMERATION_MESSAGE = (
+    "the standalone question enumeration is retired: every review act (unit, pair, stage, "
+    "whole plan) now returns the customer questions it found, and plan-review records each "
+    "with --customer-question as a `qrev-` candidate in the premise bag — disposition them "
+    "with `agentctl question-candidate-dispose`. Nothing was run and no state changed."
+)
+
+
+def cmd_question_enumerate_retired(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """The retired `question-enumerate`, `question-enumerate-worker` and
+    `question-enumerate-escape` commands. The names stay in the parser so a hand-typed
+    or scripted invocation meets this message, not an argparse 'invalid choice'; the
+    command exits 2 before reading or writing any state."""
+    command = getattr(args, "command", "question-enumerate")
+    print(f"agentctl {command}: {RETIRED_ENUMERATION_MESSAGE}", file=sys.stderr)
+    raise SystemExit(2)
 
 
 def cmd_question_raise(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

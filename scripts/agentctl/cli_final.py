@@ -14,10 +14,13 @@ from . import (
     solved_marker,
     task_accumulator,
     workspace_cleanup,
+    check_cache,
+    delivery_channel,
+    plan_resources,
 )
 from .config import Thresholds
 from .directive import Directive
-from .dispatch import Runner
+from .dispatch import Runner, subprocess_runner
 from .machine import transition
 from .state import (
     CriterionType,
@@ -28,37 +31,715 @@ from .state import (
     RESOLUTION_ASK_MARKER,
     Stage,
     StageStatus,
+    CheckKind,
+    Criterion,
+    LANDED_GIT_ERROR_EXIT,
+    SessionState,
+    landed_containment_script,
 )
 from .store import StateStore
+import json
+import os
+import shlex
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from lib import ask_evidence, transcript_turns
 from .cli_common import (
+    REPO_ROOT,
     _VALID_QUALITY_RATINGS,
-    _judge_bypassed_surface,
-    _acceptance_bypass_surface,
     _effort_cross_totals,
     _flush_order_effort,
     _record_effort_fire,
     _open_difficulty,
     _difficulty_cap_directive,
-    _disclose_backstop_crossings,
-    _disclose_agent_plan_conversions,
+    _BACKSTOP_CROSSED_EVENT,
     _log_gate,
-    _instructions_head,
-    _write_quality_row,
-    _diagnose_acceptance_rejection,
+    _run_check,
+    _VenueSnapshot,
+    _venue_tree_identity,
+    _check_definition_digest,
+    _cached_check_hit,
+    _resolve_or_refuse,
+    _refuse_missing_cwd,
     _diagnose_effort_divergence,
-    _disclose_landed_content_waivers,
+    _landed_check_result,
     _require,
     _finished_work_fire,
-    _disclose_finished_work,
+    _finished_work_data,
+    _present_plan_transcript,
     _cost_rows,
     _refresh_spend,
     _utcnow,
     _effort_now,
-    _evaluate_final_checks,
-    _landing_gate,
-    _resolution_ask_gate,
+    _write_check_log,
+    RESOLUTION_ASK_BLOCKER_PREFIX,
     _linked_children,
 )
+
+
+# Per-task quality ledger (quality-regression-tracking): one row per resolved
+# task, stamped with the instructions-repo HEAD so a quality drop can be
+# correlated back to an instruction-commit range. Same fixed-path/append-only
+# idiom as ~/.local/log/claude-spawn-costs.jsonl (spawn-specialist.py).
+TASK_QUALITY_LOG = Path.home() / ".local" / "log" / "claude-task-quality.jsonl"
+
+
+_GIT_HEAD_TIMEOUT_S = 5
+
+
+def _judge_bypassed_surface(state: SessionState) -> list[dict]:
+    """The recorded acceptance-judge bypasses as plain dicts, for verify-final and the
+    resolution summary to surface verbatim ([] when none)."""
+    return [
+        {"stage_index": b.stage_index, "kind": b.kind, "reviewer": b.reviewer, "note": b.note}
+        for b in state.judge_bypassed
+    ]
+
+
+def _acceptance_bypass_surface(state: SessionState) -> dict | None:
+    """The recorded plan-level acceptance bypass as a plain dict, for verify-final and
+    the resolution summary to surface verbatim (None when no bypass is in force).
+    Mirrors _judge_bypassed_surface's role but for the singular AcceptanceBypass —
+    see AcceptanceBypass's docstring for why resolution_blockers itself never reads
+    this field."""
+    b = state.acceptance_bypass
+    if b is None:
+        return None
+    return {"reason": b.reason, "reviewer": b.reviewer, "note": b.note}
+
+
+def _backstop_crossings(state: SessionState) -> list[dict]:
+    """The agent backstop crossings on record, for verify-final and the resolution summary
+    to surface verbatim ([] when none): every one of the task's, whichever session made it,
+    merged with this session's own history by (session, ts)."""
+    recorded = task_accumulator.get(state.task_id)["agent_backstop_crossings"]
+    seen = {task_accumulator.crossing_key(c) for c in recorded} - {None}
+    merged = [dict(c) for c in recorded]
+    for event in state.history:
+        if event.get("event") != _BACKSTOP_CROSSED_EVENT:
+            continue
+        key = task_accumulator.crossing_key(event)
+        if key is None or key not in seen:
+            merged.append(dict(event))
+    return merged
+
+
+def _disclose_backstop_crossings(state: SessionState, data: dict, detail: str) -> str:
+    """Put the crossings on `data` and, when there are any, name them in `detail`."""
+    crossings = _backstop_crossings(state)
+    data["agent_backstop_crossings"] = crossings
+    if not crossings:
+        return detail
+    named = ", ".join(
+        f"{c.get('decision')} ({c.get('axis')} {c.get('spent')}/{c.get('backstop')})"
+        for c in crossings)
+    return (f"{detail}; WARNING: {len(crossings)} agent decision(s) crossed a since-user backstop "
+            f"inside the autonomy boundary: {named} (see agent_backstop_crossings)")
+
+
+def _disclose_agent_plan_conversions(state: SessionState, data: dict, detail: str) -> str:
+    """Put the conversions the agent ran itself (`plan-convert-live --by agent`) on `data`
+    and, when there are any, name them in `detail`, so a plan changed in place under the
+    user's approval is never invisible at the close."""
+    agent_run = [dict(vars(c)) for c in state.plan_conversions if c.by == "agent"]
+    if not agent_run:
+        return detail
+    data["agent_plan_conversions"] = agent_run
+    named = ", ".join(
+        f"{c['direction']} {c['old_digest'][:12]} -> {c['new_digest'][:12]}" for c in agent_run)
+    return (f"{detail}; NOTE: {len(agent_run)} plan conversion(s) run by the agent, the content "
+            f"proved equal by the engine: {named} (see agent_plan_conversions)")
+
+
+def _instructions_head() -> str | None:
+    """Best-effort `git -C REPO_ROOT rev-parse HEAD` -> stripped stdout, or None
+    on any failure (git absent, not a repo, timeout). Never blocks resolution —
+    the ledger row simply carries instructions_head=null."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=_GIT_HEAD_TIMEOUT_S,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+def _write_quality_row(row: dict) -> None:
+    """Append one task-quality row to TASK_QUALITY_LOG. Fail-open like _log_gate:
+    an I/O error never blocks the resolve transition that already happened."""
+    try:
+        TASK_QUALITY_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with TASK_QUALITY_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+class _GitTreeProbe(check_cache.TreeProbe):
+    def __init__(self, snapshot: _VenueSnapshot):
+        self._run = snapshot.run
+        self._env_argv = snapshot.env_argv
+
+    def tree_exists(self, tree: str) -> bool:
+        return self._run(self._env_argv + ["cat-file", "-e", f"{tree}^{{tree}}"]).returncode == 0
+
+    def changed_paths(self, old: str, new: str) -> list[str] | None:
+        found = self._run(
+            self._env_argv + ["diff-tree", "-r", "-z", "--name-only", "--no-renames", old, new]
+        )
+        if found.returncode != 0:
+            return None
+        return [p for p in (found.stdout or "").split("\0") if p]
+
+
+def _resolve_final_or_refuse(state: SessionState, criterion: Criterion) -> tuple[str | None, str | None]:
+    """verify-final's counterpart to _resolve_or_refuse: resolves the
+    criterion's FINAL venue (SessionState.resolve_final_check_venue —
+    verify_venue_at_final when declared, else verify_venue) instead of its
+    execution venue, then applies the identical existence-refusal rule. Used
+    ONLY by cmd_verify_final for stage checks; cmd_dispatch and
+    cmd_record_result keep resolving crit.verify_venue via _resolve_or_refuse,
+    since during execution the delivery venue is the only tree the change
+    exists in at all."""
+    cwd = state.resolve_final_check_venue(criterion)
+    return cwd, _refuse_missing_cwd(state, cwd)
+
+
+def _diagnose_venue_refusal(
+    state: SessionState, store: StateStore, message: str,
+    div: effort.Divergence | None,
+) -> Directive:
+    """Route a verify-final venue refusal into the ordinary DIAGNOSING cycle
+    instead of stranding the session at VERIFYING — from VERIFYING, declare/
+    investigate/critique all refuse ("difficulty commands run only in the
+    DIAGNOSING cycle"), and only `reset --force` escaped. Mirrors the
+    final_check FAILURE branch below verbatim, `next` included: like a
+    stage/final_check FAILURE it directs the coordinator to `declare` and work
+    the difficulty through declare -> investigate -> critique -> replan. A venue
+    refusal is corrected by the replan (fixing the venue declaration), NOT by a
+    bare "recreate the venue and re-run verify-final" — that shortcut re-entered
+    verify-final from DIAGNOSING and crashed on the illegal transition, which is
+    why the token names the difficulty cycle, not a direct venue edit. No stage
+    is marked FAILED — `_resolve_or_refuse`'s refusal/failure split is preserved;
+    only the destination node changes. Only ever reached from VERIFYING
+    (cmd_verify_final's entry guard returns before here for any other node), so
+    the `diagnose` transition is always legal. `div` is the divergence already
+    computed by the caller (fire site 2's hoisted refresh_spend/divergence call) —
+    attached here exactly like record_result's failed branch, so a venue refusal
+    doesn't silently drop a live effort divergence just because it returns before
+    the plan's own end-of-function fire check."""
+    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
+    opened = _open_difficulty(state)
+    data = {}
+    if div is not None and gates.effort_active(state):
+        now = _utcnow()
+        data["effort_divergence"] = _record_effort_fire(state, div, now=now, store=store)
+    store.save(state)
+    if opened is None:
+        return _difficulty_cap_directive(state, message, data)
+    return Directive(
+        False, state.node, "declare", message,
+        marker="OVERCOME-DIFFICULTY",
+        data=data,
+    )
+
+
+def _diagnose_acceptance_rejection(
+    state: SessionState, store: StateStore, failing_ids: list[str],
+) -> Directive:
+    """Route a verify-final resolution refusal caused by a FAILING AcceptanceReview
+    verdict into the ordinary DIAGNOSING cycle, instead of stranding the session at
+    VERIFYING with no reachable difficulty cycle (declare/investigate/critique all
+    require DIAGNOSING; only `reject` reaches it, and only from RESOLUTION — a node
+    this session never gets to when acceptance already failed before every stage
+    finished being verified). Mirrors _diagnose_venue_refusal's transition/save/
+    Directive shape, and cmd_reject's declaration pre-seed (state.py Difficulty):
+    a customer rejection recorded after every stage already PASSED is categorically
+    the same event reject already handles at RESOLUTION — expected==pass, actual==
+    the failing verdict(s), mismatch==the order's customer rejected the delivery —
+    just reached one gate earlier, before an AcceptanceReview was ever able to pass.
+    No effort-divergence data is attached here (see this stage's Method note: doing
+    so would require hoisting refresh_spend/divergence earlier in cmd_verify_final
+    for a defense-in-depth nicety, not the core fix)."""
+    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
+    opened = _open_difficulty(state, declaration=Declaration(
+        expected="every [meta.order] requirement accepted (verdict pass)",
+        actual=f"requirement id(s) {failing_ids} recorded as fail",
+        mismatch="the order's customer rejected part of the delivery after every "
+                  "stage already PASSED",
+    ))
+    store.save(state)
+    if opened is None:
+        return _difficulty_cap_directive(
+            state, f"AcceptanceReview carries a non-pass verdict on requirement id(s) {failing_ids}")
+    return Directive(
+        False, state.node, "declare",
+        f"AcceptanceReview carries a non-pass verdict on requirement id(s) "
+        f"{failing_ids}; run overcome-difficulty — declare the divergence, then "
+        "investigate, then critique; replan is blocked until the cycle is complete",
+        marker="OVERCOME-DIFFICULTY",
+    )
+
+
+def _disclose_landed_content_waivers(state: SessionState, data: dict, detail: str) -> str:
+    """Name every stage whose recorded landing waives the content fact (verify-final
+    and resolve both surface them)."""
+    waivers = [{"stage": s.index, "reason": s.outcome.landed_content_waiver}
+               for s in state.stages if s.outcome.landed_content_waiver]
+    if not waivers:
+        return detail
+    data["landed_content_waivers"] = waivers
+    named = ", ".join(f"stage {w['stage']}: {w['reason']}" for w in waivers)
+    return (f"{detail}; NOTE: the landed check's content fact was waived by the user "
+            f"({named})")
+
+
+def _disclose_finished_work(state: SessionState, data: dict, detail: str) -> str:
+    """Put the finished-work fires and their retier records on `data` and, when there
+    are any, name them in `detail` (verify-final and resolve both surface them)."""
+    extra = _finished_work_data(state)
+    if not extra:
+        return detail
+    data.update(extra)
+    fires = extra["effort_finished_work"]
+    named = ", ".join(f"{f.get('scale')} {f.get('actual')}/{f.get('estimate')}" for f in fires)
+    return (f"{detail}; NOTE: {len(fires)} effort fire(s) were raised on finished work and recorded "
+            f"without a difficulty: {named} (see effort_finished_work, effort_retiers)")
+
+
+@dataclass
+class _FinalEntry:
+    """One check of a verify-final run, from planning to its recorded result."""
+    check_id: str
+    venue: str
+    label: str
+    spec: check_cache.CheckSpec | None = None
+    cwd: str | None = None
+    fail_tail: str = ""
+    landed_failure: str = ""
+    decision: str = ""
+    reason: str = ""
+    duration_s: float = 0.0
+    exit_code: int | None = None
+    ok: bool = True
+    error: str = ""
+    log_note: str = ""
+
+    def failure(self) -> str:
+        if self.spec is None:
+            return self.landed_failure
+        tail = f" {self.fail_tail}" if self.fail_tail else ""
+        if self.error:
+            return f"{self.label}: raised {self.error}{tail}"
+        return f"{self.label}: exit {self.exit_code} != {self.spec.expected_exit}{tail}{self.log_note}"
+
+
+def _write_fail_log(session_id: str, e: _FinalEntry, stdout: str, stderr: str) -> str:
+    return _write_check_log(
+        session_id, "verify-final", e.check_id.replace(":", "-"),
+        e.spec.command, e.venue, e.exit_code, stdout, stderr,
+    )
+
+
+def _log_final_events(
+    state: SessionState, entries: list[_FinalEntry], *, outcome: str, started: float, peak: int,
+) -> None:
+    counts = {check_cache.HIT: 0, check_cache.NARROWED: 0, check_cache.DEDUP: 0, check_cache.MISS: 0}
+    for e in entries:
+        if not e.decision:
+            continue
+        counts[e.decision] = counts.get(e.decision, 0) + 1
+        state.log(
+            "verify_final_check", check=e.check_id, venue=e.venue, decision=e.decision,
+            reason=e.reason, duration_s=round(e.duration_s, 3), exit=e.exit_code,
+        )
+    state.log(
+        "verify_final_run", outcome=outcome, duration_s=round(time.monotonic() - started, 3),
+        counts=counts, parallelism=peak,
+    )
+
+
+def _evaluate_final_checks(
+    state: SessionState, store: StateStore, runner: Runner | None,
+    div: effort.Divergence | None,
+) -> tuple[list[str], Directive | None]:
+    """Evaluate every measurable stage's verify_command, then every final_check, in
+    three phases. Plan: resolve venues, run landed checks, take each venue's tree
+    identity once, and decide per check (check_cache.decide) whether a cache serves it,
+    an earlier check of this run covers it, or it must run; a check that declared
+    `verify_reads` and missed the exact cache gets a narrowed lookup
+    (check_cache.narrow_misses). Run: the remaining checks, concurrently under the cap
+    and worker budget when the real runner is in use. Record: results in check order,
+    greens into the session cache, the verify_final_check / verify_final_run events.
+
+    Returns (failures, None), or ([], Directive) when a venue is refused — the
+    caller returns that directive as is."""
+    snapshots: dict[str, _VenueSnapshot] = {}
+    try:
+        return _evaluate_final_checks_in(state, store, runner, div, snapshots)
+    finally:
+        for snapshot in snapshots.values():
+            snapshot.close()
+
+
+def _evaluate_final_checks_in(
+    state: SessionState, store: StateStore, runner: Runner | None,
+    div: effort.Divergence | None, snapshots: dict[str, _VenueSnapshot],
+) -> tuple[list[str], Directive | None]:
+    started = time.monotonic()
+    entries: list[_FinalEntry] = []
+    tree_ids: dict[str, str | None] = {}
+
+    def tree_of(cwd: str | None) -> tuple[str | None, str | None]:
+        """(tree identity, raw tree sha) of a venue, computed once per venue directory."""
+        venue = cwd or str(REPO_ROOT)
+        if venue not in tree_ids:
+            snapshots[venue] = _VenueSnapshot(keep_objects=True)
+            tree_ids[venue] = _venue_tree_identity(cwd, runner, snapshots[venue])
+        return tree_ids[venue], snapshots[venue].tree
+
+    def refuse(check_id: str, cwd: str | None, message: str) -> tuple[list[str], Directive]:
+        entries.append(_FinalEntry(
+            check_id, cwd or str(REPO_ROOT), "", decision=check_cache.MISS, reason="refused",
+        ))
+        _log_final_events(state, entries, outcome="refused", started=started, peak=0)
+        return [], _diagnose_venue_refusal(state, store, message, div)
+
+    def landed_entry(check_id: str, spec, failure: str) -> tuple[_FinalEntry | None, str | None]:
+        # No re-freeze for a stage's landed check: verify-final re-checks the
+        # delivered_head its own record-result already froze, never a live re-derive.
+        t0 = time.monotonic()
+        ok, refusal, result = _landed_check_result(state, spec, runner)
+        if refusal:
+            return None, refusal
+        return _FinalEntry(
+            check_id, str(REPO_ROOT), "", decision=check_cache.MISS, reason="landed",
+            duration_s=time.monotonic() - t0, exit_code=result.returncode, ok=ok,
+            landed_failure=failure,
+        ), None
+
+    stage_commands = {
+        s.criterion.verify_command for s in state.stages
+        if not is_skipped(s) and plan_resources.runs_verify_command(s.criterion)
+    }
+    for stage in state.stages:
+        if is_skipped(stage):
+            continue
+        crit = stage.criterion
+        check_id = f"stage:{stage.index}"
+        if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
+            entry, refusal = landed_entry(check_id, crit.landed, (
+                f"stage {stage.index}: landed check — delivered commit not "
+                f"contained in {crit.landed.target!r} (or "
+                f"{crit.landed.remote}/{crit.landed.target})"
+            ))
+            if refusal:
+                return refuse(check_id, None, f"stage {stage.index} landed check refused: {refusal}")
+            entries.append(entry)
+            continue
+        if not plan_resources.runs_verify_command(crit):
+            continue
+        cwd, refusal = _resolve_final_or_refuse(state, crit)
+        if refusal:
+            return refuse(check_id, cwd, f"stage {stage.index} verify_command refused: {refusal}")
+        tree_id, tree_sha = tree_of(cwd)
+        definition = _check_definition_digest(crit)
+        identity = f"{tree_id}:{definition}" if tree_id is not None else None
+        outcome = stage.outcome
+        same_venue = cwd == state.resolve_check_venue(crit.verify_venue)
+        outcome_base = (
+            outcome.checked_tree_sha
+            if outcome.checked_tree_ok is True and same_venue
+            and (outcome.checked_tree_identity or "").endswith(f":{definition}")
+            else None
+        )
+        entries.append(_FinalEntry(
+            check_id, cwd or str(REPO_ROOT), f"stage {stage.index}", cwd=cwd,
+            fail_tail=f"({crit.verify_command})",
+            spec=check_cache.CheckSpec(
+                check_id, crit.verify_command, crit.expected_exit, cwd or str(REPO_ROOT), tree_id,
+                cacheable=True, outcome_hit=_cached_check_hit(stage, identity),
+                reads=crit.verify_reads, tree_sha=tree_sha, outcome_base_tree=outcome_base,
+            ),
+        ))
+    for number, fc in enumerate(state.final_check, 1):
+        check_id = f"final_check:{number}"
+        if fc.kind == CheckKind.LANDED.value:
+            label = fc.label or fc.landed.target
+            entry, refusal = landed_entry(check_id, fc.landed, (
+                f"final_check '{label}': landed check — delivered commit not "
+                f"contained in {fc.landed.target!r} (or "
+                f"{fc.landed.remote}/{fc.landed.target})"
+            ))
+            if refusal:
+                return refuse(check_id, None, f"final_check '{label}' refused: {refusal}")
+            entries.append(entry)
+            continue
+        cwd, refusal = _resolve_or_refuse(state, fc.venue)
+        if refusal:
+            return refuse(check_id, cwd, f"final_check '{fc.label or fc.command}' refused: {refusal}")
+        tree_id, tree_sha = tree_of(cwd)
+        entries.append(_FinalEntry(
+            check_id, cwd or str(REPO_ROOT), f"final_check '{fc.label or fc.command}'", cwd=cwd,
+            spec=check_cache.CheckSpec(
+                check_id, fc.command, fc.expected_exit, cwd or str(REPO_ROOT), tree_id,
+                cacheable=fc.cacheable or fc.command in stage_commands,
+                reads=fc.verify_reads, tree_sha=tree_sha,
+            ),
+        ))
+
+    def probe_for(spec: check_cache.CheckSpec) -> check_cache.TreeProbe | None:
+        snapshot = snapshots.get(spec.venue)
+        if snapshot is None or snapshot.env_argv is None:
+            return None
+        return _GitTreeProbe(snapshot)
+
+    decided = {d.spec.id: d for d in check_cache.narrow_misses(
+        check_cache.decide([e.spec for e in entries if e.spec is not None], state.check_cache),
+        state.check_cache, probe_for,
+    )}
+    to_run = [e for e in entries if e.spec is not None and decided[e.spec.id].decision == check_cache.MISS]
+
+    def run_one(e: _FinalEntry):
+        t0 = time.monotonic()
+        ok, result = _run_check(e.spec.command, e.spec.expected_exit, runner, cwd=e.cwd)
+        return ok, result.returncode, time.monotonic() - t0, "", result.stdout, result.stderr
+
+    def raised(exc: Exception):
+        return False, None, 0.0, f"{type(exc).__name__}: {exc}", "", ""
+
+    cap, budget, cpus = 1, 0, 1
+    if runner is None and len(to_run) > 1:
+        cap = check_cache.resolve_cap(Thresholds().verify_final_parallel_max())
+        if cap > 1:
+            cpus, load1 = check_cache.system_probe()
+            budget = check_cache.resolve_budget(cpus, load1)
+    results, peak = check_cache.run_bounded(
+        [check_cache.Job(check_cache.pytest_weight(e.spec.command, cpus), (lambda e=e: run_one(e))) for e in to_run],
+        cap=cap, budget=budget, on_error=raised,
+    )
+    ran = {e.check_id: r for e, r in zip(to_run, results)}
+
+    by_id = {e.check_id: e for e in entries}
+    now = time.time()
+    for e in entries:
+        if e.spec is None:
+            continue
+        d = decided[e.spec.id]
+        e.decision, e.reason = d.decision, d.reason
+        if d.decision == check_cache.MISS:
+            e.ok, e.exit_code, e.duration_s, e.error, stdout, stderr = ran[e.check_id]
+            if e.error:
+                e.reason = f"raised: {e.error}"
+            elif not e.ok and (stdout or stderr):
+                e.log_note = _write_fail_log(state.session_id, e, stdout, stderr)
+            if e.ok and e.spec.key is not None and e.spec.cacheable:
+                check_cache.store_green(
+                    state.check_cache, e.spec.key, at=now, label=e.label,
+                    tree=e.spec.tree_sha, definition=e.spec.definition,
+                )
+        elif d.decision == check_cache.NARROWED:
+            e.exit_code = None
+            check_cache.store_green(
+                state.check_cache, e.spec.key, at=now, label=e.label,
+                tree=e.spec.tree_sha, definition=e.spec.definition, derived=True,
+                reads=e.spec.reads,
+            )
+        elif d.decision == check_cache.HIT:
+            e.exit_code = None
+        else:
+            earlier = by_id[d.same_as]
+            if d.same_as in ran:
+                e.ok, e.exit_code, _, e.error, _, _ = ran[d.same_as]
+            else:
+                e.ok, e.exit_code, e.error = earlier.ok, earlier.exit_code, earlier.error
+            e.log_note = earlier.log_note
+    failures = [e.failure() for e in entries if not e.ok]
+    _log_final_events(
+        state, entries, outcome="failed" if failures else "passed", started=started, peak=peak,
+    )
+    return failures, None
+
+
+def _first_git_landed_remote_target(state: SessionState) -> tuple[str, str]:
+    """(remote, target) of the first landed check whose provider is git — a stage's own
+    criterion first, then the final_checks — else the repository default origin/main."""
+    for spec in [s.criterion.landed for s in state.stages if s.criterion.landed] + [
+        fc.landed for fc in state.final_check if fc.landed
+    ]:
+        if spec.provider == "git":
+            return spec.remote, spec.target
+    return "origin", "main"
+
+
+def _unlanded_branch_blockers(state: SessionState, runner: Runner | None) -> list[str]:
+    """Blockers when the plan's delivery worktree still holds commits trunk lacks.
+
+    Network-free (compares against the local remote-tracking ref) and run only through
+    the injected Runner. A delivery worktree that is gone — what land-branch.py leaves
+    after landing — or is not a git work tree yields nothing: the check is git-only.
+    Containment is `state.landed_containment_script`'s, the same ancestry / cherry /
+    squash-patch-id test the landed check applies, so resolve cannot call landed what the
+    landed check calls unlanded. A probe error blocks (fail closed); the plan-time
+    landing_waiver is the escape for a plan that deliberately lands nothing."""
+    worktree = state.delivery_worktree
+    if not worktree or not Path(worktree).is_dir():
+        return []
+    run = runner or subprocess_runner
+    inside = run(["git", "-C", worktree, "rev-parse", "--is-inside-work-tree"])
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        return []
+    remote, target = _first_git_landed_remote_target(state)
+    ref = f"{remote}/{target}"
+    git = f"git -C {shlex.quote(worktree)}"
+    err = LANDED_GIT_ERROR_EXIT
+    script = landed_containment_script(
+        git, "HEAD", shlex.quote(ref), f'$({git} merge-base "$R" HEAD) || exit {err}', err
+    )
+    probe = run(["bash", "-c", script])
+    if probe.returncode == 0:
+        return []
+    branch = run(["git", "-C", worktree, "rev-parse", "--abbrev-ref", "HEAD"])
+    name = branch.stdout.strip() if branch.returncode == 0 and branch.stdout.strip() else "HEAD"
+    if probe.returncode == 1:
+        return [
+            f"delivery branch {name!r} in {worktree} holds commits not on {ref} — land it "
+            f"first (`python3 scripts/land-branch.py`), then resolve; a plan that "
+            f"deliberately lands nothing declares [meta] landing_waiver via replan"
+        ]
+    return [
+        f"cannot tell whether delivery branch {name!r} in {worktree} has landed on {ref} "
+        f"(git exited {probe.returncode}: {probe.stderr.strip()[:200] or 'no message'}) — "
+        f"fix the repository state, or declare [meta] landing_waiver via replan"
+    ]
+
+
+def _landing_gate(state: SessionState, args, runner: Runner | None) -> tuple[list[str], dict]:
+    """The resolve-time landing blockers plus the record of how the gate was met.
+
+    The record is {waiver, waiver_source, override}: the waiver text and where it came
+    from ('plan' = [meta] landing_waiver, 'resolve' = --landing-waiver), and the
+    AGENTCTL_LANDING_GATE value when it overrode the gate — so a bypass is never silent.
+    A resolve-time waiver is accepted only when the plan has no git delivery venue: for a
+    delivery_worktree plan the waiver must come from the approved plan, because an actor
+    writing it after the outcome is known can excuse anything."""
+    env = os.environ.get("AGENTCTL_LANDING_GATE")
+    record = {"waiver": None, "waiver_source": None, "override": env if env in ("0", "1") else None}
+    if not gates.landing_gate_active(state):
+        return [], record
+    blockers: list[str] = []
+    plan_waiver = (state.landing_waiver or "").strip()
+    if plan_waiver:
+        record["waiver"], record["waiver_source"] = plan_waiver, "plan"
+    elif not gates.plan_asserts_landing(state):
+        if state.delivery_worktree:
+            blockers.append(
+                "plan declares neither a kind=landed check nor [meta] landing_waiver — "
+                "declare one via replan (a resolve-time --landing-waiver is refused for a "
+                "plan with a delivery_worktree)"
+            )
+        else:
+            given = getattr(args, "landing_waiver", None)
+            if given is not None and given.strip():
+                record["waiver"], record["waiver_source"] = given.strip(), "resolve"
+            else:
+                blockers.append(
+                    "plan declares no kind=landed check: "
+                    + ("--landing-waiver must be non-empty" if given is not None else
+                       "resolve needs --landing-waiver '<why nothing lands>'")
+                )
+    if not plan_waiver:
+        blockers.extend(_unlanded_branch_blockers(state, runner))
+    return blockers, record
+
+
+RESOLUTION_ASK_RULE_HINT = ("the marker must be inside an option label or description (not the question text), "
+                            "and the order must be land -> verify-final -> ask -> resolve with no "
+                            "verify-final between the ask and resolve")
+
+
+def _resolution_ask_gate(state: SessionState, args, *, channel_ok: bool = True) -> tuple[list[str], dict]:
+    """The resolve-time resolution-ask blockers plus the record of how the gate was met.
+
+    The 1-5 rating must be asked inside an AskUserQuestion that embeds
+    RESOLUTION_ASK_MARKER, was asked AFTER the session's latest verify-final stamp, and
+    was answered. Both ends are machine records — the engine's `verify_final` event and
+    the harness transcript — so the order is compared, not trusted to prose. The
+    transcript is derived from the session id, never supplied. The record is
+    {override, unverifiable}: the AGENTCTL_RESOLUTION_ASK_GATE value when it overrode
+    the gate, and the reason given when --resolution-ask-unverifiable stood in for an
+    unreadable transcript — so a bypass is never silent. `channel_ok` is False while
+    another resolve blocker stands, so the headless channel is asked only about a
+    resolve that can otherwise succeed."""
+    env = os.environ.get("AGENTCTL_RESOLUTION_ASK_GATE")
+    record = {"override": env if env in ("0", "1") else None, "unverifiable": None}
+    if not gates.resolution_ask_gate_active(state):
+        return [], record
+    prefix = RESOLUTION_ASK_BLOCKER_PREFIX
+    stamps = [h for h in state.history if h.get("event") == "verify_final"]
+    verified_at = stamps[-1].get("at") if stamps else None
+    if not isinstance(verified_at, (int, float)):
+        return [prefix + "no precise verify-final stamp is recorded for this session — "
+                         "re-run verify-final, then ask the resolution question; "
+                         + RESOLUTION_ASK_RULE_HINT], record
+    channel_text = (f"{RESOLUTION_ASK_MARKER} Resolve task {state.task_id!r} with quality "
+                    f"{getattr(args, 'quality', None)}?\n").encode("utf-8")
+    channel_result = delivery_channel.deliver("resolution_ask", channel_text) if channel_ok else None
+    if channel_result is not None:
+        delivery_channel.log_delivery(state, channel_result, plan_sha256=None)
+        if channel_result.answered:
+            return [], record
+        return [prefix + "the resolution question was delivered through the headless "
+                         "channel but it gave no `confirm` answer"], record
+    path = _present_plan_transcript(state.session_id)
+    scan = ask_evidence.ask_after_event(path, RESOLUTION_ASK_MARKER, verified_at)
+    given = getattr(args, "resolution_ask_unverifiable", None)
+    if scan is None:
+        reason = (given or "").strip()
+        if reason:
+            record["unverifiable"] = reason
+            return [], record
+        return [prefix + f"cannot locate or read the transcript of session {state.session_id!r}, "
+                         "so the resolution ask cannot be verified"
+                         + (" — --resolution-ask-unverifiable must be non-empty" if given is not None
+                            else " — pass --resolution-ask-unverifiable '<why the transcript is unavailable>'")], record
+    marked = scan.marked
+    escape_note = ("" if given is None else
+                   " (--resolution-ask-unverifiable is refused: the transcript is readable)")
+    if not marked:
+        return [prefix + f"no AskUserQuestion carrying the marker {RESOLUTION_ASK_MARKER!r} in an "
+                         "option label or description was found in this session's transcript — "
+                         "ask the resolution question (with the 1-5 rating) after verify-final"
+                         + escape_note], record
+    after = [ask.answered for ask in scan.after]
+    if not after and any(ask.ts is None for ask in marked):
+        return [prefix + f"a {RESOLUTION_ASK_MARKER!r} ask has a missing or unparsable timestamp "
+                         "in the transcript, so its order against verify-final cannot be "
+                         "established — ask the resolution question again; "
+                         + RESOLUTION_ASK_RULE_HINT + escape_note], record
+    if not after:
+        misplaced_after = [
+            inp for inp, ts, _ in transcript_turns.ask_user_question_calls(path)
+            if ts is not None and ts > verified_at
+            and not transcript_turns.has_marker_option(inp, RESOLUTION_ASK_MARKER)
+            and transcript_turns.has_marker_in_question_text(inp, RESOLUTION_ASK_MARKER)
+        ]
+        if misplaced_after:
+            return [prefix + f"the {RESOLUTION_ASK_MARKER!r} marker appears in the question "
+                             "text of an ask after verify-final, but it must be in an option "
+                             "label or description — re-ask with the marker placed inside an "
+                             "option; " + RESOLUTION_ASK_RULE_HINT + escape_note], record
+        return [prefix + f"the {RESOLUTION_ASK_MARKER!r} ask predates the latest verify-final — "
+                         "ask the resolution question again now that final verification has passed; "
+                         + RESOLUTION_ASK_RULE_HINT + escape_note], record
+    if not any(after):
+        return [prefix + f"the {RESOLUTION_ASK_MARKER!r} ask after verify-final has not been "
+                         "answered — resolve only after the user answers it" + escape_note], record
+    return [], record
 
 
 def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

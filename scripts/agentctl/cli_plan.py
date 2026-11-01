@@ -19,6 +19,8 @@ from . import (
     plugins_premise,
     runtime_host,
     solved_marker,
+    delivery_channel,
+    premise,
 )
 from .checkrun import format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
@@ -39,6 +41,7 @@ from .plan import (
     final_check_duplicate_warnings,
     verify_command_scope_warnings,
     whole_suite_warnings,
+    dropped_grants_report,
 )
 from .render import plan_render_stage_arg_type, plan_summary_text, render_plan_grants
 from .state import (
@@ -60,16 +63,16 @@ from .state import (
     Stage,
     Subject,
     WeightClass,
+    SessionState,
 )
 from .store import StateStore
-from .plan import dropped_grants_report
+import re
 from .cli_common import (
     _plan_file_sha256,
     _write_plan_version_snapshot,
     _flush_order_effort,
     _adopt_parent_difficulty,
     _adopt_norm_handoff,
-    _loop_self_check,
     _self_approve_detail,
     _agent_review_override,
     _review_baseline,
@@ -82,17 +85,129 @@ from .cli_common import (
     _submission_problems,
     _effort_fire_refusal,
     _require,
-    _register_plan_assumptions,
-    _record_plan_presentation,
-    _PLAN_PRESENTATION_STAGE_ANCHOR_RE,
-    _plan_presentation_skeleton,
+    _bound_stage_key,
     _present_plan_transcript,
-    _deliver_presentation_via_channel,
     _review_cycle_arrive,
     _evaluate_review_trigger,
     _cost_rows,
     _refresh_spend,
 )
+
+
+def _loop_self_check(state: SessionState, thresholds: Thresholds) -> dict | None:
+    """The ancestor-norm digest a deep child compares its own task against, or None.
+    The comparison is perception (is my task a re-framing of an ancestor's?) and stays
+    with the agent; the engine only decides *when* to ask and *what* to show."""
+    link = state.parent_link
+    threshold = thresholds.loop_sensitivity_depth
+    if link is None or state.recursion_depth < threshold:
+        return None
+    return {
+        "depth": state.recursion_depth,
+        "threshold": threshold,
+        "ancestors": [
+            {k: entry.get(k) for k in ("session", "stage_index", "title", "done_criterion")}
+            for entry in link.get("norm_lineage") or []
+        ],
+    }
+
+
+def _register_plan_assumptions(state, doc: "PlanDoc", plan_path: str) -> None:
+    """Record each typed `[[meta.assumption]]` as an `assumed` premise
+    (`assume-<id>`), stamped against the submitted plan. Upsert by id, so a
+    re-submission rewrites the same row instead of adding one; a session without the
+    premise bag has nothing to register into (the assumptions are then dropped
+    silently). Prose is never parsed. The key is re-stamped on every submission on
+    purpose: the plan itself re-declares the assumption each time, so a stage edit
+    never stales it the way it stales a premise the user or agent disposed."""
+    bag = state.plugins.get("premise")
+    if bag is None or not doc.meta.assumptions:
+        return
+    questions = premise.questions_from_dicts(bag.get("questions", []))
+    for a in doc.meta.assumptions:
+        qid = f"assume-{a.id}"
+        q = premise.Question(
+            id=qid, question=a.text, disposition="assumed", basis=a.basis, risk=a.risk,
+            target=f"stage:{a.stage}.method" if a.stage else "plan.goal",
+            own_research="declared as a typed [[meta.assumption]] in the submitted plan",
+        )
+        q.disposed_at_key = _bound_stage_key(state, q, plan_path)
+        questions = [x for x in questions if x.id != qid] + [q]
+    bag["questions"] = premise.questions_to_dicts(questions)
+
+
+# Kinds superseded by KIND ALONE, ignoring plan_path — see
+# _record_plan_presentation's docstring for why replan_diff differs from
+# essence/full. An explicit set, not an inline special case, so a future
+# kind must choose its supersede key deliberately rather than inherit one
+# by falling through an if/else.
+_SUPERSEDE_BY_KIND_ALONE = frozenset({PLAN_PRESENTATION_KIND_REPLAN_DIFF})
+
+
+def _record_plan_presentation(state: SessionState, presentation: PlanPresentation) -> None:
+    """Store a PlanPresentation — SUPERSEDE, not append. Mirrors
+    _record_stage_review's replace-then-append idiom: a later presentation
+    fully replaces the prior receipt for the same key, so
+    gates._plan_presentation_for's last-wins scan never has to choose between
+    a stale and a fresh receipt.
+
+    The supersede KEY splits by kind: essence/full supersede on
+    (plan_path, kind), unchanged since these kinds always present
+    state.plan_path — a session only ever runs one plan at a time, so the
+    path component never actually discriminates for them. replan_diff
+    (`_SUPERSEDE_BY_KIND_ALONE`) supersedes on kind ALONE: cmd_present_plan
+    resolves its target from `--plan`, which varies across replan attempts
+    against different candidate plan files, so keying on plan_path would let
+    a receipt for a path the session has since moved off linger forever
+    (unbounded rendering_text growth, and a stale entry surviving in
+    last-wins scans across paths) instead of being replaced the moment a
+    fresh diff is presented — only one proposed-diff receipt is ever
+    current, and a receipt for an abandoned path is dead by definition."""
+    if presentation.kind in _SUPERSEDE_BY_KIND_ALONE:
+        state.plan_presentations = [
+            p for p in state.plan_presentations if p.kind != presentation.kind
+        ]
+    else:
+        state.plan_presentations = [
+            p for p in state.plan_presentations
+            if not (p.plan_path == presentation.plan_path and p.kind == presentation.kind)
+        ]
+    state.plan_presentations.append(presentation)
+
+
+_PLAN_PRESENTATION_STAGE_ANCHOR_RE = re.compile(r"^\[stage (\d+)\]", re.MULTILINE)
+
+
+def _plan_presentation_skeleton(stages: list[Stage]) -> str:
+    """Deterministic `full`-rendering skeleton: one `[stage N] <title>` anchor
+    line per stage, in plan order. present-plan's completeness check parses
+    these same anchors back out of a submitted `full` rendering — the
+    coordinator fills in the body under each anchor but must not drop or
+    renumber one, or the completeness check rejects the rendering."""
+    lines = [f"[stage {s.index}] {s.title}" for s in stages]
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _deliver_presentation_via_channel(state: SessionState, presentation, raw: bytes) -> None:
+    """With a headless customer channel configured, hand the rendering to it and,
+    when it answers, write the `channel` delivery stamp for essence/replan_diff
+    (`full` is delivered and logged but backs no gate). No channel: nothing."""
+    result = delivery_channel.deliver(presentation.kind, raw)
+    if result is None:
+        return
+    delivery_channel.log_delivery(state, result, plan_sha256=presentation.plan_sha256)
+    if not result.answered or presentation.kind == PLAN_PRESENTATION_KIND_FULL:
+        return
+    state_file = config_root.resolve_agentctl_state_file(state.session_id)
+    if state_file is None:
+        return
+    delivery.write_stamp(state_file, delivery.DeliveryStamp(
+        plan_path=presentation.plan_path,
+        plan_sha256=presentation.plan_sha256,
+        rendering_sha256=presentation.rendering_sha256,
+        verified_ts=time.time(),
+        source=delivery.SOURCE_CHANNEL,
+    ))
 
 
 def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

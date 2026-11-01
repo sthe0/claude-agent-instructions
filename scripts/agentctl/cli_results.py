@@ -20,14 +20,15 @@ from .state import (
     StageReview,
     StageStatus,
     WeightClass,
+    SessionState,
 )
 from .store import StateStore
+from lib import ask_evidence, transcript_turns
 from .cli_common import (
     OBSERVATION_CONTRACT,
     _digest,
     _observation_sha256,
     _record_stage_review,
-    _record_bypass,
     _effort_cross_totals,
     _flush_order_effort,
     _record_effort_fire,
@@ -42,20 +43,173 @@ from .cli_common import (
     _cached_check_hit,
     _resolve_or_refuse,
     _diagnose_effort_divergence,
-    _freeze_delivered_head,
-    _landed_spec_for_stage,
-    _needs_delivered_head_freeze,
     _landed_check_result,
-    _content_waiver_blocker,
     _require,
     _finished_work_fire,
     _finished_work_data,
+    _present_plan_transcript,
     _cost_rows,
     _refresh_spend,
     _utcnow,
     _effort_now,
     _write_check_log,
 )
+
+
+def _record_bypass(state: SessionState, bypass: JudgeBypass) -> None:
+    """Append a JudgeBypass (never cleared by a later passing review) so verify-final
+    and the resolution summary can surface every acceptance pass that skipped a genuine
+    judge verdict. Deduplicated on (stage_index, kind, observation_sha256) — the third
+    key matters only for kind="fail_open" (override/killswitch always carry "" and so
+    dedupe exactly as before): a fail_open bypass is scoped to the OBSERVATION it waved
+    through (see gates.acceptance_review_blockers), so a second fail-open on a
+    DIFFERENT observation for the same stage records its own entry rather than being
+    silently absorbed by the first."""
+    if any(
+        b.stage_index == bypass.stage_index and b.kind == bypass.kind
+        and b.observation_sha256 == bypass.observation_sha256
+        for b in state.judge_bypassed
+    ):
+        return
+    state.judge_bypassed.append(bypass)
+
+
+def _freeze_delivered_head(state: SessionState, stage, runner: Runner | None) -> None:
+    """Best-effort `git rev-parse HEAD` at this stage's resolved verify venue,
+    stamped onto `stage.outcome.delivered_head` — the delivered-head freeze
+    `cmd_record_result` performs for every recorded stage, BEFORE that same
+    call dispatches any verification, so a `kind = "landed"` check whose
+    `delivered_stage` names THIS stage (a self-reference) already finds its
+    own frozen commit in place. Re-stamps on every record-result call for the
+    stage (a retried, previously-FAILED stage may deliver new commits) — but
+    once stamped, no landed check ever re-derives it: only this call site
+    writes the field, everyone else only reads it (SessionState.render_landed_command).
+    `delivered_base` (merge-base of HEAD and the landed spec's `<remote>/<target>`) is
+    stamped next to it: the lower bound of the range whose `Task:` trailer the check proves.
+    A changed head clears the landing `record-landing` recorded for the old one.
+    Fails open: an unresolvable venue or a git error leaves whatever was
+    already stamped (if anything) untouched, rather than clobbering it."""
+    cwd = state.resolve_check_venue(stage.criterion.verify_venue)
+    if not cwd:
+        return
+    spec = _landed_spec_for_stage(state, stage.index)
+    if spec is not None and spec.provider != "git":
+        _freeze_provider_token(stage, spec.provider, cwd)
+        return
+    run = runner or subprocess_runner
+    result = run(["git", "-C", cwd, "rev-parse", "HEAD"])
+    head = result.stdout.strip() if result.returncode == 0 else ""
+    if not head:
+        return
+    previous_head = stage.outcome.delivered_head
+    stage.outcome.delivered_head = head
+    if head != previous_head:
+        stage.outcome.landed_head = None
+        stage.outcome.landed_base = None
+        stage.outcome.landed_content_waiver = None
+    if spec is None or (head == previous_head and stage.outcome.delivered_base):
+        return
+    # The base is frozen with the head: a re-record on an unchanged head keeps the base
+    # computed before landing (afterwards HEAD is on trunk and the merge-base would
+    # collapse the task-proof range to empty). A merge-base equal to HEAD means HEAD is
+    # already on trunk (a legacy state frozen without a base, re-recorded after landing):
+    # stamping it would freeze that empty range, so the base stays unset.
+    base = run(["git", "-C", cwd, "merge-base", "HEAD", f"{spec.remote}/{spec.target}"])
+    if base.returncode == 0 and base.stdout.strip() and base.stdout.strip() != head:
+        stage.outcome.delivered_base = base.stdout.strip()
+
+
+def _freeze_provider_token(stage, provider: str, venue: str) -> None:
+    """Stamp the delivery token a non-git landed provider freezes at `venue` onto
+    `delivered_head`. Fails open like the git freeze: a missing or broken plugin, a
+    raising provider, or a provider that cannot freeze leaves the stamp untouched, so
+    render_landed_command refuses legibly instead of the stage failing."""
+    from .landed_providers import load_provider
+    try:
+        token = load_provider(provider).freeze(venue)
+    except (Exception, SystemExit):
+        return
+    if isinstance(token, str) and token:
+        stage.outcome.delivered_head = token
+
+
+def _landed_spec_for_stage(state: SessionState, stage_index: int):
+    """The first landed check in this plan — a stage's own criterion (a
+    self-reference) or a final_check — that names `stage_index` as its
+    `delivered_stage`, else None."""
+    for s in state.stages:
+        crit = s.criterion
+        if (crit.verify_kind == CheckKind.LANDED.value and crit.landed
+                and crit.landed.delivered_stage == stage_index):
+            return crit.landed
+    for fc in state.final_check:
+        if (fc.kind == CheckKind.LANDED.value and fc.landed
+                and fc.landed.delivered_stage == stage_index):
+            return fc.landed
+    return None
+
+
+def _needs_delivered_head_freeze(state: SessionState, stage_index: int) -> bool:
+    """True when SOME landed check in this plan names `stage_index` as its
+    `delivered_stage`. Freezing is the only case that matters; skipping it
+    otherwise keeps every plan with no landed check byte-identical to before
+    (no runner call record-result did not already make) — the regression an
+    unconditional freeze would otherwise introduce for every ordinary stage."""
+    return _landed_spec_for_stage(state, stage_index) is not None
+
+
+def _option_carries_waiver_marker(option: dict) -> bool:
+    return transcript_turns.has_marker_option({"questions": [{"options": [option]}]},
+                                              CONTENT_WAIVER_ASK_MARKER)
+
+
+def _chose_waiver_option(tool_input: dict, answers) -> bool:
+    """True iff some question offering both a marked and an unmarked option was answered
+    with the label of a marked one. A question whose options are all marked leaves no
+    way to decline, so it never consents."""
+    if not isinstance(answers, dict):
+        return False
+    for q in tool_input.get("questions") or []:
+        if not isinstance(q, dict):
+            continue
+        options = [o for o in q.get("options") or [] if isinstance(o, dict)]
+        marked = [o.get("label") for o in options if _option_carries_waiver_marker(o)]
+        if marked and len(marked) < len(options) and answers.get(q.get("question")) in marked:
+            return True
+    return False
+
+
+def _content_waiver_blocker(state: SessionState, stage_index: int) -> str | None:
+    """Why `--accept-content-loss` is refused for `stage_index`, else None. The stage
+    must have an earlier `record_landing` event (the waiver follows a recorded red), and
+    the user must have CHOSEN the marked option of an AskUserQuestion asked after the
+    latest `record_landing` event of ANY stage — so one answer licenses one waiver even
+    when one landing recorded several stages."""
+    if not any(h.get("event") == "record_landing" and h.get("stage") == stage_index
+               for h in state.history):
+        return (f"no earlier record_landing of stage {stage_index} is stamped: run "
+                "record-landing without --accept-content-loss first, then ask the user")
+    stamps = [h for h in state.history if h.get("event") == "record_landing"]
+    anchor = stamps[-1].get("at")
+    if not isinstance(anchor, (int, float)):
+        return ("the latest record_landing event is not stamped: run record-landing "
+                "without --accept-content-loss again, then ask the user")
+    path = _present_plan_transcript(state.session_id)
+    scan = ask_evidence.ask_after_event(path, CONTENT_WAIVER_ASK_MARKER, anchor)
+    if scan is None:
+        return (f"cannot locate or read the transcript of session {state.session_id!r}, so "
+                f"the {CONTENT_WAIVER_ASK_MARKER!r} answer cannot be verified")
+    after = [any(_chose_waiver_option(ask.tool_input, answers) for answers in ask.sole_answers)
+             for ask in scan.after if ask.answered]
+    if not after:
+        return (f"no answered AskUserQuestion carrying {CONTENT_WAIVER_ASK_MARKER!r} in an "
+                "option label or description was asked after the latest record_landing "
+                "of any stage")
+    if not any(after):
+        return (f"the {CONTENT_WAIVER_ASK_MARKER!r} ask after the latest record_landing was "
+                "not answered with an option carrying the marker (or its answer could not "
+                "be read), so the user did not consent to the waiver")
+    return None
 
 
 def cmd_record_landing(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

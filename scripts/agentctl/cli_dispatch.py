@@ -8,7 +8,7 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
-from lib import widening_targets
+from lib import widening_targets, kind_baselines, transcript_stops
 from . import (
     continuations,
     gates,
@@ -20,6 +20,9 @@ from . import (
     resources as _resources,
     runtime_host,
     workspace_cleanup,
+    child_runs,
+    effort,
+    config as agentctl_config,
 )
 from .directive import Directive
 from .dispatch import (
@@ -29,58 +32,1220 @@ from .dispatch import (
     dispatch_stage,
     permission_request_action,
     parse_marker,
+    LABEL_DECORATION,
 )
-from .plan import order_digest, _venue_for
-from .state import AGENT_ACTOR, CheckVenue, PermissionRequest
+from .plan import (
+    order_digest,
+    _venue_for,
+    PlanError,
+    entries_grants_sha256,
+    grants_sha256,
+    load_plan,
+    stage_reattest_digest,
+    _derive_stage_grants,
+)
+from .state import (
+    AGENT_ACTOR,
+    CheckVenue,
+    PermissionRequest,
+    CheckKind,
+    CriterionType,
+    Declaration,
+    Node,
+    ReattestStash,
+    SessionState,
+    Stage,
+    StageStatus,
+)
 from .store import StateStore
-from .cli_common import _refusal_vcs_resources, stage_branch_resources
+import hashlib
+import re
+import shlex
+from .machine import transition
 from .cli_common import (
     _digest,
-    _bash_rule_command_from_call,
     _plan_file_sha256,
-    _open_effort_fire,
-    _record_customer_stage_grants,
+    _load_prior_plan,
+    _ledgered_order_key,
+    _order_customer_id,
+    _difficulty_cap_directive,
     _log_gate,
+    _verify_command_result,
+    _resolve_or_refuse,
     _effort_fire_refusal,
-    _is_recursion_refusal,
-    _is_child_outside_project_refusal,
-    _GRANT_WIDENING_EXIT,
-    _HANDOFF_SHA_LINE_RE,
-    _loop_detected_line,
-    _is_grant_widening_refusal,
-    _parse_rule_lines,
+    _landed_check_result,
     _require,
     _park_node,
-    _park_blocked,
-    _continuation_worktree,
-    _try_reattest,
-    _EFFORT_BY_COST_TIER,
-    _dispatch_project_settings_path,
-    _parse_add_dir_spec,
-    _parse_transcript_path,
-    _parse_rule_line,
-    _rule_line_to_call,
-    _parse_resource_line,
-    _parse_resource_spec,
-    _self_grant_resources_for_rule,
-    _stage_grant_entries,
-    _stage_would_derive_grants,
-    _effective_stage_grants,
-    _effective_stage_grants_for_self_grant,
-    _consume_once_grants,
-    _classify_transcript_denials,
-    _diagnose_materialization_defect,
-    _child_norm_mismatch,
+    _fail_stage_into_diagnosing,
+    _verify_child_escalation,
     _open_norm_mismatch,
-    _repeat_norm_mismatch,
-    _covers_resource,
     EvidenceDirError,
-    evidence_dir_for,
+    _evidence_session_dir,
     _utcnow,
-    _begin_child_run,
-    _carry_hook_stamps,
-    _end_child_run,
+    _state_dir,
 )
+
+
+def _bash_rule_command_from_call(call: tuple[str, dict] | None) -> str | None:
+    """The parsed Bash rule's command text from a self-reported
+    `Rule: Bash(<command>:*)` call, or `None` for a non-Bash call (a
+    transcript denial row is Bash-only — see `_classify_transcript_
+    denials` — so a non-Bash call can never match one). Used to match a
+    self-reported PERMISSION-REQUEST against the specific transcript row
+    for the SAME denial, by checking that the row's own stored raw
+    command starts with this rule text — mirroring `_segment_covered`'s
+    wildcard-prefix semantics. Deliberately a PREFIX check, not a digest
+    equality check: the rule a child names is typically a narrower
+    stand-in for the actual invoked command (extra redirects, arguments a
+    `:*` wildcard was meant to admit), so a byte-identical match between
+    the rule's command and the transcript's raw command would almost
+    never hold even for the correct row."""
+    if call is None or call[0] != "Bash":
+        return None
+    command = call[1].get("command") if isinstance(call[1], dict) else None
+    return command if isinstance(command, str) and command.strip() else None
+
+
+def _open_effort_fire(state: SessionState) -> list[dict]:
+    """The open spend/wall-clock fire markers owed to the user for this session's order."""
+    key = _ledgered_order_key(state)
+    return list(order_approvals.get(key)["open_effort_fires"]) if key else []
+
+
+def _record_customer_stage_grants(state: SessionState, by: str, scope: str, entries: list[dict]) -> None:
+    """A customer's `--scope stage` grant widens the order's approved set for later
+    replans; a `once` grant is a single re-launch and never does."""
+    customer_id = _order_customer_id(state)
+    if scope != "stage" or not customer_id or by.strip().casefold() != customer_id.casefold():
+        return
+    try:
+        doc = load_plan(state.plan_path)
+    except (OSError, PlanError):
+        return
+    venue = _venue_for(doc)
+    key = order_digest(doc)
+    for entry in entries:
+        if "resource" in entry:
+            order_approvals.record_customer_grant(
+                key, resource=_resources.resource_from_dict(entry["resource"]), by=by,
+                at=dt.datetime.now(dt.timezone.utc).isoformat(),
+            )
+            continue
+        if "rule" in entry:
+            resolution = plan_resources.resolve_rule_grant(entry["rule"], venue)
+        else:
+            resolution = plan_resources.resolve_add_dir_grant(entry["path"], entry["mode"])
+        if resolution.status != "resolved":
+            continue
+        for resource in resolution.resources:
+            order_approvals.record_customer_grant(
+                key, resource=resource, by=by, at=dt.datetime.now(dt.timezone.utc).isoformat(),
+            )
+
+
+def _is_recursion_refusal(result) -> bool:
+    """spawn-specialist refuses at the recursion cap with returncode 3 and a
+    'max-recursion-depth=' stderr line (see spawn-specialist.py)."""
+    return getattr(result, "returncode", None) == 3 or (
+        "max-recursion-depth" in (getattr(result, "stderr", "") or "")
+    )
+
+
+_CHILD_OUTSIDE_PROJECT_EXIT = 2
+
+
+_CHILD_OUTSIDE_PROJECT_LINE_RE = re.compile(r"^Refusal:\s*child-outside-project\s*$", re.MULTILINE)
+
+
+def _is_child_outside_project_refusal(result) -> bool:
+    """spawn-specialist refuses a child whose start directory loads no project settings
+    while the parent runs in a project that registers hooks: exit 2 (also its generic
+    argument error) with a `Refusal: child-outside-project` stdout line, which is
+    what tells the two apart."""
+    return getattr(result, "returncode", None) == _CHILD_OUTSIDE_PROJECT_EXIT and bool(
+        _CHILD_OUTSIDE_PROJECT_LINE_RE.search(getattr(result, "stdout", "") or "")
+    )
+
+
+_GRANT_WIDENING_EXIT = 4
+
+
+_REFUSAL_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Refusal:\*{0,2}\s*grant-widening\s*$", re.MULTILINE)
+
+
+_HANDOFF_SHA_LINE_RE = re.compile(r"^[-*]?\s*\*{0,2}Handoff-sha256:\*{0,2}\s*(\S+)\s*$", re.MULTILINE)
+
+
+def _loop_detected_line(result) -> str | None:
+    """The `LOOP_DETECTED: ...` first stdout line of a norm-loop refusal
+    (spawn-specialist exit 3 before any child launched), else None."""
+    stdout = (getattr(result, "stdout", "") or "").lstrip()
+    if stdout.startswith("LOOP_DETECTED:"):
+        return stdout.splitlines()[0].strip()
+    return None
+
+
+def _is_grant_widening_refusal(result) -> bool:
+    """spawn-specialist refuses a delegation that would hold more authority than the
+    session was handed with exit 4 and a `Refusal: grant-widening` stdout line (exit 4
+    is also "claude not on PATH", so the line is the discriminator). A relaying
+    manager may hand the same block back inside its own `PERMISSION-REQUEST:` return
+    under any exit code, so the line alone decides in that form."""
+    stdout = getattr(result, "stdout", "") or ""
+    if not _REFUSAL_LINE_RE.search(stdout):
+        return False
+    if getattr(result, "returncode", None) == _GRANT_WIDENING_EXIT:
+        return True
+    return parse_marker(stdout)[0] == "PERMISSION-REQUEST"
+
+
+def _parse_rule_lines(body: str) -> list[str]:
+    """Every `Rule:` line of a PERMISSION-REQUEST block, in order; `_parse_rule_line`
+    returns only the last."""
+    rules = []
+    for line in body.splitlines():
+        m = _RULE_LINE_RE.match(line.strip())
+        if m and m.group(1).strip():
+            rules.append(m.group(1).strip().strip("`").strip())
+    return rules
+
+
+_REFUSAL_VCS_RESOURCE_RE = re.compile(
+    LABEL_DECORATION + r"Resource:\*{0,2}\s*`?vcs_ref\s+(commit|push|land)\s+([^\s:`]+):(\S+?)`?\s*$")
+
+
+def _refusal_vcs_resources(body: str) -> list:
+    """The `Resource: vcs_ref <op> <remote>:<ref>` lines of a grant-widening refusal: the
+    DR-P entries no `Rule:` line can name, which the user's answer must grant as resources."""
+    if not _REFUSAL_LINE_RE.search(body or ""):
+        return []
+    out = []
+    for line in body.splitlines():
+        m = _REFUSAL_VCS_RESOURCE_RE.match(line.strip())
+        if m:
+            try:
+                out.append(_resources.VcsRefResource(m.group(2), m.group(3), m.group(1)))
+            except ValueError:
+                continue
+    return out
+
+
+def _park_blocked(state: SessionState, store: StateStore, stage, marker, base: dict) -> Directive:
+    """Park the session at BLOCKED and escalate — for a spawn whose output is
+    malformed/unroutable (no marker, or a marker the engine cannot resolve)."""
+    _park_node(state)
+    reason = "malformed spawn output" if marker in (None, "MALFORMED") else f"marker {marker}"
+    state.log("dispatch_escalate", stage=stage.index, marker=marker)
+    store.save(state)
+    return Directive(
+        False, state.node, "escalate",
+        f"stage {stage.index} -> escalate ({reason})",
+        marker="ESCALATE", data=base,
+    )
+
+
+def _continuation_worktree(state: SessionState, stage: Stage) -> str | None:
+    """The shared worktree/branch a DEPENDENT spawn stage should continue, or
+    None for an independent stage (empty depends_on) or one whose dependencies
+    are all in-thread. A prior SPAWN stage's committed-but-un-landed work lives
+    in a branch dispatch never told the next developer about — this names it.
+
+    Prefers the plan's declared [meta] delivery_worktree (state.delivery_worktree);
+    falls back to the task_id-scoped default only when repo_root is known (a
+    relative worktree path with no anchor would be meaningless)."""
+    spawn = {s.index for s in state.stages if s.is_spawn()}
+    # Decided per edge, so several edges to one supplier never shadow each other: an
+    # edge continues if it says "continuation" or says nothing (the depends_on
+    # inference); a dependency with no edge at all keeps that inference too.
+    deliveries: dict[int, set] = {}
+    for sup in stage.supplies:
+        deliveries.setdefault(sup.on, set()).add(sup.delivery)
+    if not any(
+        deliveries.get(d, {None}) & {None, "continuation"}
+        for d in stage.depends_on if d in spawn
+    ):
+        return None
+    if state.delivery_worktree:
+        return state.delivery_worktree
+    if state.repo_root:
+        return f"{state.repo_root}/.claude/worktrees/{state.task_id}"
+    return None
+
+
+def _reattest_stash_for(state: SessionState, stage_index: int) -> ReattestStash | None:
+    """The most-recently-built ReattestStash entry for `stage_index`, or None.
+
+    Last-wins, mirroring gates._stage_review_for / _code_review_for — though in
+    practice cmd_replan's substantive branch replaces state.reattest_stash
+    wholesale each time, so at most one entry per stage_index ever exists at
+    once; the scan is written to match the family's convention rather than
+    because duplicates are expected."""
+    match = [r for r in state.reattest_stash if r.stage_index == stage_index]
+    return match[-1] if match else None
+
+
+def _try_reattest(
+    state: SessionState, stage: Stage, store: StateStore, runner: Runner | None,
+) -> Directive | None:
+    """Stage 6: re-arm a PASSED stage that a substantive replan re-armed, via a
+    fresh control re-run, instead of paying for a full specialist re-spawn.
+
+    Returns a terminal Directive on success. Returns None on ANY refusal, after
+    logging the specific failing condition via state.log("reattest_declined", ...)
+    — the caller (cmd_dispatch) falls through to the existing, unmodified dispatch
+    path on None, so refusal always degrades to a normal (byte-identical) dispatch
+    rather than stranding the session. The three conditions, checked in order:
+
+      1. a ReattestStash exists for this stage (built only for a stage that had a
+         prior PASSED outcome at replan time — see cmd_replan);
+      2. the replan that built the stash did not touch the stage's operative
+         surface (stash.operative_surface_matched), AND nothing has re-edited the
+         stage since (the live stage_reattest_digest still matches the digest
+         stashed at replan time — a plan edit made during the PLAN_READY window
+         is caught here rather than trusted stale);
+      3. the stage's own control — its verify_command/landed check, in its
+         declared venue — passes when RE-RUN NOW. Reuses the exact primitives
+         cmd_record_result uses for a measurable stage, so a re-attest pass is
+         held to the identical bar as a normal pass; a stale prior PASS is never
+         carried forward on faith.
+
+    Gate preservation: the code-review gate reads state.code_reviews directly
+    (keyed by stage_index, untouched by replan), so calling gates.code_review_
+    blockers here — exactly as cmd_record_result does — is naturally fresh with
+    no stash of its own; a stage cannot reach PASSED via this route that
+    couldn't reach PASSED via the normal one.
+    """
+    stash = _reattest_stash_for(state, stage.index)
+    if stash is None:
+        state.log("reattest_declined", stage=stage.index,
+                   reason="no prior PASSED outcome recorded for this stage")
+        return None
+    if gates.pending_renorm_stage_blockers(state, stage.index):
+        state.log("reattest_declined", stage=stage.index,
+                   reason="stage is bound to a norm-edit obligation whose file is unchanged")
+        return None
+    if not stash.operative_surface_matched:
+        state.log("reattest_declined", stage=stage.index,
+                   reason="replan touched the stage's operative surface "
+                          "(method/control criterion/expected result image/executor/done criterion)")
+        return None
+    if stage_reattest_digest(stage) != stash.reattest_digest:
+        state.log("reattest_declined", stage=stage.index,
+                   reason="stage was edited again after the re-attest stash was built")
+        return None
+
+    crit = stage.criterion
+    if crit.criterion_type == CriterionType.MEASURABLE.value and crit.verify_kind == CheckKind.LANDED.value:
+        ok, refusal, _result = _landed_check_result(state, crit.landed, runner)
+        if refusal:
+            state.log("reattest_declined", stage=stage.index,
+                       reason=f"landed check refused: {refusal}")
+            return None
+        if not ok:
+            state.log("reattest_declined", stage=stage.index,
+                       reason="control failed on re-run (landed check: delivered commit "
+                              "not (yet) contained in the declared target)")
+            return None
+    else:
+        cwd = None
+        if crit.verify_command and crit.criterion_type == CriterionType.MEASURABLE.value:
+            cwd, refusal = _resolve_or_refuse(state, crit.verify_venue)
+            if refusal:
+                state.log("reattest_declined", stage=stage.index,
+                           reason=f"verify_command refused: {refusal}")
+                return None
+        ok, result = _verify_command_result(stage, runner, cwd=cwd)
+        if not ok:
+            state.log("reattest_declined", stage=stage.index,
+                       reason=f"control failed on re-run (exit {result.returncode} != "
+                              f"expected {crit.expected_exit}: {crit.verify_command})")
+            return None
+
+    if stage.needs_control() and not (stash.prior_control or "").strip():
+        state.log("reattest_declined", stage=stage.index,
+                   reason="stage needs a control attestation but the stashed prior "
+                          "control is empty")
+        return None
+    if stage.needs_control() and gates.code_review_active(state):
+        crb = gates.code_review_blockers(state, stage)
+        if crb:
+            state.log("reattest_declined", stage=stage.index,
+                       reason=f"code review gate: {'; '.join(crb)}")
+            return None
+
+    # All three conditions hold: carry the prior Outcome AND control attestation
+    # forward instead of re-spawning to reproduce them — marking the record with
+    # an explicit [re_attested] tag so the saving is countable/auditable.
+    stage.outcome = stash.prior_outcome
+    stage.control = stash.prior_control
+    marker = "[re_attested]"
+    stage.outcome.actual = (
+        f"{stage.outcome.actual}\n{marker}" if stage.outcome.actual else marker
+    )
+    stage.outcome.status = StageStatus.PASSED.value
+    state.current_stage = None
+    state.node = transition(state.node, "verify")  # EXECUTING -> VERIFYING
+    state.log("reattest", stage=stage.index)
+    store.save(state)
+    if state.all_stages_settled():
+        return Directive(True, state.node, "verify_final",
+                          f"stage {stage.index} re-attested; all stages passed")
+    return Directive(True, state.node, "next_stage",
+                      f"stage {stage.index} re-attested; more stages ready")
+
+
+# cmd_dispatch's fallback when neither --effort nor a per-stage reasoning-effort
+# field (there is no such field on Actor, unlike cost_tier) supplies one. Mirrors
+# the cost_tier -> budget relationship one rung down: a stage costed "large"
+# is presumed to warrant deeper reasoning than one costed "small". Unmapped or
+# absent cost_tier falls through to the dict's .get default of "medium", same
+# as the --budget resolution just above.
+_EFFORT_BY_COST_TIER = {"small": "low", "medium": "medium", "large": "high"}
+
+
+def _dispatch_project_settings_path(state) -> str | None:
+    """Absolute path to the delivery venue's own `.claude/settings.local.json`,
+    when one exists — forwarded to a spawned developer so it inherits the same
+    project-scope Bash/tool grants an interactive session in that project
+    already has (see spawn-specialist.py's project_settings_permission_rules).
+
+    Resolved off the SAME venue cmd_dispatch already pins the child's cwd to
+    (resolve_check_venue(DELIVERY)) — the tree the spawned developer actually
+    writes in and runs commands in, not an unrelated repo_root. None when the
+    venue is unresolved or the file doesn't exist: dispatch then behaves
+    exactly as before this function existed (no --project-settings forwarded,
+    the child gets only the fleet-wide KIND_BASELINES["developer"] grant)."""
+    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+    if not venue:
+        return None
+    candidate = Path(venue) / ".claude" / "settings.local.json"
+    return str(candidate) if candidate.is_file() else None
+
+
+def _parse_add_dir_spec(spec: str) -> tuple[str, str] | None:
+    """Parse a `--add-dir 'PATH:MODE'` CLI spec into `(path, mode)`, or None on
+    any shape that doesn't parse — the caller turns that into a refusal rather
+    than guessing. Splits from the RIGHT so a path containing ':' (rare, but
+    not impossible) still parses correctly; MODE itself never contains ':'."""
+    if ":" not in spec:
+        return None
+    path, mode = spec.rsplit(":", 1)
+    if not path or mode not in ("read", "write"):
+        return None
+    return path, mode
+
+
+_TRANSCRIPT_PATH_RE = re.compile(r"^spawn-specialist: transcript=(.+)$")
+
+
+def _parse_transcript_path(stderr: str) -> str | None:
+    """The dispatched child's transcript path, read off the
+    `spawn-specialist: transcript=<path>` line spawn-specialist.py's own
+    `_announce_transcript` writes to its stderr on every launch -- the one
+    place this process learns the path today (RunResult carries no dedicated
+    field, and the cost-log ledger does not carry it either until stage 2).
+    The `<not-found-within-10s>` sentinel (and any other non-path text) reads
+    as "no transcript available", same as a missing line -- never mistaken
+    for a literal path."""
+    for line in reversed((stderr or "").splitlines()):
+        m = _TRANSCRIPT_PATH_RE.match(line.strip())
+        if m:
+            path = m.group(1).strip()
+            return path if path and not path.startswith("<") else None
+    return None
+
+
+_RULE_LINE_RE = re.compile(LABEL_DECORATION + r"Rule:\*{0,2}\s*(.*)$")
+
+
+def _parse_rule_line(body: str) -> str | None:
+    """The optional trailing `Rule: <rule>` line a specialist's PERMISSION-REQUEST
+    body may carry -- the self-reported fallback `cmd_dispatch` classifies a denial
+    against when the transcript-based classification above found nothing (the
+    child exited before spawn-specialist.py's announcer thread resolved a path,
+    or discovery timed out). Tolerates the markdown decoration a specialist's own
+    reply commonly wraps the line in -- a leading `-`/`*` list bullet and `**bold**`
+    around the `Rule:` label -- so `- **Rule:** `Bash(...)`` parses the same as a
+    bare `Rule: Bash(...)` line; an inline-code span around the value is also
+    unwrapped. Still refuses a line where "Rule:" is not the line's own label (mid-
+    sentence text is never mistaken for the marker). Returns the rule string, or
+    None if no such line is present."""
+    for line in reversed(body.splitlines()):
+        line = line.strip()
+        m = _RULE_LINE_RE.match(line)
+        if not m:
+            continue
+        rule = m.group(1).strip()
+        if len(rule) >= 2 and rule.startswith("`") and rule.endswith("`"):
+            rule = rule[1:-1].strip()
+        if rule:
+            return rule
+    return None
+
+
+def _rule_line_to_call(rule: str) -> tuple[str, dict] | None:
+    """Convert a `Bash(X:*)`/`Bash(X)`/`Edit(//abs/path)`-shaped permission-rule
+    string into the `(tool_name, tool_input)` pair `grants.grant_covers_call`
+    checks -- the inverse of how a derived/declared rule names a call. Unparseable
+    -> None, which `grant_covers_call`'s caller must treat as NOT covered."""
+    parsed = _grants.rule_program_and_arg(rule)
+    if parsed is None:
+        return None
+    tool, arg = parsed
+    if tool == "Bash":
+        return "Bash", {"command": _grants.bash_command_from_rule_arg(arg)}
+    if tool in ("Edit", "Write", "Read", "NotebookEdit"):
+        return tool, {"file_path": _grants.rule_file_path(arg)}
+    return None
+
+
+_RESOURCE_LINE_RE = re.compile(LABEL_DECORATION + r"Resource:\*{0,2}\s*(.*)$")
+
+
+_RESOURCE_SPEC_RE = re.compile(r"^(file|vcs_ref|specialist|service|dataset)\((.*)\)$")
+
+
+def _parse_resource_line(body: str) -> str | None:
+    """The optional trailing `Resource: <kind>(<args>)` line a specialist's
+    PERMISSION-REQUEST body may carry -- ADVISORY ONLY (REQ5 dispatch half):
+    it names what the specialist BELIEVES it needs, never what decides
+    self_grant on its own. Mirrors `_parse_rule_line`'s markdown-tolerance
+    (bullet/bold decoration, an inline-code-wrapped value) exactly, since a
+    specialist that decorates one line commonly decorates both."""
+    for line in reversed(body.splitlines()):
+        line = line.strip()
+        m = _RESOURCE_LINE_RE.match(line)
+        if not m:
+            continue
+        spec = m.group(1).strip()
+        if len(spec) >= 2 and spec.startswith("`") and spec.endswith("`"):
+            spec = spec[1:-1].strip()
+        if spec:
+            return spec
+    return None
+
+
+def _parse_resource_spec(text: str):
+    """Parse a `kind(arg, arg, ...)` resource spec into the matching
+    `resources.Resource` subclass, or `None` if it does not parse -- a
+    parse failure is never fatal (the line is advisory), it just means
+    there is nothing to cross-check the engine's own resolution against."""
+    m = _RESOURCE_SPEC_RE.match(text.strip())
+    if not m:
+        return None
+    kind, raw_args = m.group(1), m.group(2)
+    args = [a.strip() for a in raw_args.split(",")] if raw_args.strip() else []
+    try:
+        if kind == "file" and len(args) == 2:
+            return _resources.FileResource(args[0], args[1])
+        if kind == "vcs_ref" and len(args) == 3:
+            return _resources.VcsRefResource(args[0], args[1], args[2])
+        if kind == "specialist" and len(args) == 1:
+            return _resources.SpecialistResource(args[0])
+        if kind == "service" and len(args) == 2:
+            return _resources.ServiceResource(args[0], args[1])
+        if kind == "dataset" and len(args) == 2:
+            return _resources.DatasetResource(args[0], args[1])
+    except ValueError:
+        return None
+    return None
+
+
+def _self_grant_resources_for_rule(
+    state: "SessionState", coverage: "_grants.StageGrants", rule_line: str
+) -> tuple[list, str | None]:
+    """Resolve a PERMISSION-REQUEST's self-reported `Rule:` line to the
+    resource(s) it names, then check those resources against the UNION of
+    (a) `order_approvals.boundary_resources` -- the last user-approved
+    version's resources plus customer stage grants, keyed by
+    `plan.order_digest` -- the SAME resolution
+    `cmd_resolve_permission --by agent` uses, REQ5) and (b) the stage's own
+    EFFECTIVE (declared + derived) grants, each independently re-resolved to
+    resources rather than compared by rule TEXT -- a declared grant spelled
+    differently from the requested rule (e.g. a push rule naming a
+    different source ref for the same target) still counts, catching a case
+    the old string/rule-based `grants.grant_covers_call` would miss.
+
+    Returns `(resources, None)` when every resolved resource is covered
+    (dispatch may self_grant), or `([], reason_class)` otherwise --
+    `reason_class` names why, so a wildcard-tail rule and an out-of-scope
+    resource are both distinguishable in the returned Directive's data."""
+    if not state.plan_path:
+        return [], "no-plan"
+    if _open_effort_fire(state):
+        return [], "open-effort-fire"
+    try:
+        doc = load_plan(state.plan_path)
+    except (OSError, PlanError):
+        return [], "unloadable-plan"
+    venue = _venue_for(doc)
+    res = plan_resources.resolve_rule_grant(rule_line, venue)
+    if res.status != "resolved" or not res.resources:
+        return [], (res.reason_class or "contract-unresolved")
+    protected = _resources.protected_permission_surfaces(
+        repo_root=state.repo_root, delivery_worktree=state.delivery_worktree,
+        ledger_dir=str(order_approvals._root(None)),
+    )
+    approved: list = list(order_approvals.boundary_resources(order_digest(doc)))
+    for rule_grant in coverage.allow:
+        eff = plan_resources.resolve_rule_grant(rule_grant.rule, venue)
+        if eff.status == "resolved":
+            approved.extend(eff.resources)
+    for add_dir in coverage.add_dirs:
+        eff = plan_resources.resolve_add_dir_grant(add_dir.path, add_dir.mode)
+        approved.extend(eff.resources)
+    approved.extend(coverage.resources)
+    for requested in res.resources:
+        if not any(_covers_resource(appr, requested, protected) for appr in approved):
+            return [], "not-approved"
+    return res.resources, None
+
+
+def stage_branch_resources(state: SessionState, stage_index: int) -> list:
+    """DR-P's commit/push resources for one stage as frozen at approve beside the grant
+    entries (`plan.materialized_grant_entries`), so a spawn and `stage-grants` hand out
+    what the approval derived. Never derived live: a session that bound nothing, entries
+    failing their hash, a stage without a frozen block (a session bound before DR-P, whose
+    plan could not declare `branch`) and a malformed block all yield [] -- drift may
+    under-grant, never over-grant."""
+    stored = state.approved_grant_entries
+    if stored is None:
+        return []
+    if entries_grants_sha256(stored) != state.approved_grants_sha256:
+        return []
+    frozen = (stored.get(str(stage_index)) or {}).get("branch")
+    if not isinstance(frozen, dict):
+        return []
+    try:
+        return [_resources.resource_from_dict(d) for d in frozen.get("resources") or []]
+    except ValueError:
+        return []
+
+
+def _stage_grant_entries(
+    state: SessionState, stage_index: int,
+) -> tuple[list[dict], list[dict], list[dict], str | None, str | None]:
+    """Read one stage's declared + derived grant entries from the hash-verified plan
+    snapshot -- the shared read behind both `cmd_stage_grants`'s report and
+    `_effective_stage_grants`'s merged coverage object, so the two never drift on
+    when a grant becomes trustworthy (snapshot presence, `approved_grants_sha256`
+    re-hash gate over the live derivation code). Returns
+    (declared_entries, derived_entries, dropped, error, note).
+
+    `error` is None on a clean read; otherwise a short string naming what failed,
+    meant for a caller to surface VERBATIM rather than translate into a silently
+    empty grant set -- a plan that declared a grant nobody can currently read is a
+    materialization gap, not the same thing as a plan that declared none. Each
+    return statement below reports at most one failure and stops there, so one
+    unreadable stage/snapshot can never masquerade as "no grants" for a caller
+    that then proceeds to dispatch a child under an emptied-out coverage set.
+
+    `note` is None on every path except the legacy one below: it is advisory, never
+    a refusal condition, and never changes which entries are returned.
+
+    A session that never took a snapshot at all -- a plan approved before the
+    snapshot mechanism existed, or no plan approved yet -- is deliberately NOT an
+    error: it carries no grants, the same fail-open reading `grants_approval_
+    blockers` already gives the identical condition at approve time."""
+    declared_entries: list[dict] = []
+    derived_entries: list[dict] = []
+    dropped: list[dict] = []
+    snap_path = state.plan_snapshot_path
+    snap_hash = state.plan_snapshot_hash
+    if not snap_path:
+        return declared_entries, derived_entries, dropped, None, None
+    if not Path(snap_path).exists():
+        return declared_entries, derived_entries, dropped, (
+            f"approved-plan snapshot is missing on disk: {snap_path!r}"
+        ), None
+    if not snap_hash or hashlib.sha256(Path(snap_path).read_bytes()).hexdigest() != snap_hash:
+        return declared_entries, derived_entries, dropped, (
+            f"approved-plan snapshot hash mismatch at {snap_path!r}: the file on "
+            "disk no longer matches the bytes this session approved"
+        ), None
+    try:
+        snap_doc = _load_prior_plan(state, snap_path)
+    except (OSError, PlanError) as exc:
+        return declared_entries, derived_entries, dropped, (
+            f"cannot load approved-plan snapshot {snap_path!r}: {exc}"
+        ), None
+    snap_stage = next((s for s in snap_doc.stages if s.index == stage_index), None)
+    if snap_stage is None:
+        return declared_entries, derived_entries, dropped, (
+            f"stage {stage_index} not found in approved-plan snapshot {snap_path!r}"
+        ), None
+    declared = snap_stage.grants if getattr(snap_stage, "grants", None) \
+        else _grants.StageGrants()
+    declared_entries = [r.to_dict() for r in declared.allow] + \
+        [a.to_dict() for a in declared.add_dirs]
+    if state.approved_grant_entries is not None:
+        # The entries bound when the hash was (see `_bind_approved_grants`): what was
+        # approved, not a re-derivation against the engine code and venue filesystem of
+        # this moment. The hash stays the guard -- it must still cover them -- so state
+        # corruption or a hand-edited hash withholds the derived grants as before. Only
+        # a session bound before they were stored falls through to the re-derive-and-
+        # compare below.
+        if entries_grants_sha256(state.approved_grant_entries) != state.approved_grants_sha256:
+            return declared_entries, derived_entries, dropped, (
+                "derived-grants hash mismatch: the stored approved grant entries no "
+                "longer reproduce approved_grants_sha256 -- derived grants withheld"
+            ), None
+        stored = state.approved_grant_entries.get(str(stage_index)) or {}
+        return (declared_entries, list(stored.get("derived") or []),
+                list(stored.get("dropped") or []), None, None)
+    if not state.approved_grants_sha256:
+        # Legacy session (approved before grant hashing existed): derived grants
+        # stay withheld exactly as before -- there is no hash to trust them
+        # against -- but this is advisory, not an error, so it rides a `note`
+        # instead of `error` and never touches the returned entries.
+        return declared_entries, derived_entries, dropped, None, (
+            "derived grants unverified: session approved before grant hashing"
+        )
+    if grants_sha256(snap_doc) != state.approved_grants_sha256:
+        return declared_entries, derived_entries, dropped, (
+            "derived-grants hash mismatch: the live grant derivation no longer "
+            "reproduces approved_grants_sha256 (the materialization layer changed "
+            "since this plan was approved) -- derived grants withheld"
+        ), None
+    venue = _venue_for(snap_doc)
+    derived, dropped = _derive_stage_grants(snap_stage, venue)
+    derived_entries = [r.to_dict() for r in derived.allow] + \
+        [a.to_dict() for a in derived.add_dirs]
+    return declared_entries, derived_entries, dropped, None, None
+
+
+def _stage_would_derive_grants(state: SessionState, stage_index: int) -> bool:
+    """Best-effort, TRUST-INDEPENDENT probe for whether `stage_index`'s
+    approved-plan snapshot would derive any non-empty grant set -- used only to
+    decide whether a `_stage_grant_entries` read error is safe to dispatch
+    through (nothing to lose) or must refuse (something to lose). Deliberately
+    ignores `approved_grants_sha256`: the whole point is to answer "does this
+    stage have derived grants" even when the trust check that would normally
+    gate them is exactly what failed (a derived-grants hash mismatch). Returns
+    False on any failure to load the snapshot/stage -- a caller reaching for
+    this helper already has its own read error and a declared-grants check to
+    fall back on, so this never needs to fail closed on its own."""
+    snap_path = state.plan_snapshot_path
+    if not snap_path or not Path(snap_path).exists():
+        return False
+    try:
+        snap_doc = _load_prior_plan(state, snap_path)
+    except (OSError, PlanError):
+        return False
+    snap_stage = next((s for s in snap_doc.stages if s.index == stage_index), None)
+    if snap_stage is None:
+        return False
+    venue = _venue_for(snap_doc)
+    derived, _dropped = _derive_stage_grants(snap_stage, venue)
+    return not derived.is_empty()
+
+
+def _kind_baseline_rule_grants(kind: str, workdir: str | None = None) -> list[_grants.RuleGrant]:
+    """The fleet-wide baseline Bash rules `kind_baselines.KIND_BASELINES`
+    injects for `kind` (falling back to its own `"default"` baseline),
+    each wrapped as a `RuleGrant` with provenance `"baseline"` -- finding
+    S3: a call covered only by this baseline (never by a
+    declared/derived/runtime grant) must classify as a materialization
+    defect, not a planning miss, since the child's actual settings
+    genuinely carry it. `workdir`, when given, is expanded through
+    `kind_baselines.baseline_for_workdir` -- the same workdir-absolute script-rule
+    spelling `spawn-specialist.py` materializes into the child's `--settings`
+    (finding S9), so coverage here never lags what the child actually receives."""
+    baseline = kind_baselines.baseline_for_workdir(kind, workdir)
+    return [_grants.RuleGrant(rule=r, provenance="baseline") for r in baseline]
+
+
+def _effective_stage_grants(state: SessionState, stage_index: int) -> _grants.StageGrants:
+    """The merged declared + derived + unconsumed-runtime + kind-baseline grant
+    set for one stage -- what `grants.grant_covers_call` checks a denied call
+    against in `cmd_dispatch`. An entry dict carrying a "rule" key becomes a
+    RuleGrant; a "path"/"mode" pair becomes an AddDirGrant -- the same two
+    shapes `cmd_stage_grants` already reports separately by provenance. The
+    kind baseline is unioned in for a `spawn:*` stage only -- an in-thread
+    stage never spawns a child, so no baseline settings ever materialize for
+    it (finding S3).
+
+    Silent on a `_stage_grant_entries` read error -- callers that need to REFUSE
+    on one (`cmd_dispatch`) check `_stage_grant_entries` themselves before calling
+    this; this function's own signature and existing callers (`cmd_dispatch`'s
+    coverage object, `test_pra_review_catalogue.py`'s direct call) stay
+    unchanged, so an error here degrades to the same partial-entries reading the
+    error-carrying return already yields (declared/derived withheld precisely on
+    the failure paths that produce one)."""
+    declared_entries, derived_entries, _dropped, _error, _note = _stage_grant_entries(state, stage_index)
+    runtime_entries = [
+        e for e in state.runtime_grants.get(str(stage_index), [])
+        if not e.get("consumed")
+    ]
+    allow: list[_grants.RuleGrant] = []
+    add_dirs: list[_grants.AddDirGrant] = []
+    for e in declared_entries + derived_entries + runtime_entries:
+        if "rule" in e:
+            allow.append(_grants.RuleGrant.from_dict(e))
+        elif "path" in e and "mode" in e:
+            add_dirs.append(_grants.AddDirGrant.from_dict(e))
+    stage = state.stage(stage_index)
+    if stage.is_spawn():
+        # The SAME venue `cmd_dispatch` passes as the child's actual cwd
+        # (`child_cwd = state.resolve_check_venue(CheckVenue.DELIVERY.value)`)
+        # -- not a second, independently-reloaded reading of the approved-plan
+        # snapshot (the deleted `_stage_grant_venue`), which could drift from
+        # the child's real cwd whenever the snapshot's own `meta` lacked both
+        # `delivery_worktree` and `repo_root` (falling back to `"."`, resolved
+        # against the ENGINE's cwd rather than the child's) or had merely
+        # drifted from the state fields `_sync_venue_from_plan` keeps current.
+        venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+        allow.extend(_kind_baseline_rule_grants(stage.spawn_kind(), workdir=venue))
+    return _grants.StageGrants(
+        allow=allow, add_dirs=add_dirs, resources=stage_branch_resources(state, stage_index))
+
+
+def _effective_stage_grants_for_self_grant(state: SessionState, stage_index: int) -> _grants.StageGrants:
+    """The NARROWER grant set an agent self-grant (`resolve-permission --by
+    agent`, either call site) may draw on -- declared + derived +
+    kind-baseline grants exactly as `_effective_stage_grants` computes them,
+    but excluding two runtime-grant shapes `_effective_stage_grants` itself
+    correctly counts for ORDINARY coverage/denial classification (finding
+    #4, root cause: both self-grant call sites reused that broader function
+    unmodified):
+
+    - `scope: "once"` runtime grants -- a single-launch bypass the user
+      granted to get ONE re-launch past a denial, not a standing approval a
+      self-grant should be able to lean on for a DIFFERENT rule later.
+    - runtime grants the AGENT itself materialized (`granted_by ==
+      AGENT_ACTOR`, recorded at materialization time in
+      `cmd_resolve_permission`) -- counting these would let a self-grant
+      bootstrap an ever-widening loop of self-approvals with no user
+      decision anywhere in the chain.
+
+    A runtime entry with no `granted_by` at all (materialized before this
+    field existed, or via a path this function does not know about) is
+    treated as NOT agent-granted -- fail-toward-inclusion here mirrors
+    `_effective_stage_grants`'s own bias for ordinary coverage; the
+    scope-"once" exclusion above already blocks the one shape this project
+    actually reviewed as attacker-reachable (REQ5's test scenario)."""
+    declared_entries, derived_entries, _dropped, _error, _note = _stage_grant_entries(state, stage_index)
+    runtime_entries = [
+        e for e in state.runtime_grants.get(str(stage_index), [])
+        if not e.get("consumed")
+        and e.get("scope") != "once"
+        and (e.get("granted_by") or "").strip().casefold() != AGENT_ACTOR
+    ]
+    allow: list[_grants.RuleGrant] = []
+    add_dirs: list[_grants.AddDirGrant] = []
+    for e in declared_entries + derived_entries + runtime_entries:
+        if "rule" in e:
+            allow.append(_grants.RuleGrant.from_dict(e))
+        elif "path" in e and "mode" in e:
+            add_dirs.append(_grants.AddDirGrant.from_dict(e))
+    stage = state.stage(stage_index)
+    if stage.is_spawn():
+        venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+        allow.extend(_kind_baseline_rule_grants(stage.spawn_kind(), workdir=venue))
+    return _grants.StageGrants(
+        allow=allow, add_dirs=add_dirs, resources=stage_branch_resources(state, stage_index))
+
+
+def _consume_once_grants(state: SessionState, stage_index: int) -> None:
+    """Mark every `scope: "once"` runtime grant on this stage as consumed after
+    a dispatch that used it. A once-scoped grant exists to get a single denied
+    call past a single re-launch (`cmd_resolve_permission --scope once`); left
+    live it would silently widen every LATER launch of the same stage index
+    (a re-dispatch, a replan) beyond what that one approval covered, exactly
+    the un-scoped growth the "stage" scope already avoids by staying live only
+    for the stage's remaining launches. `scope: "stage"` and declared/derived
+    entries carry no "scope" key (or a different one) and are untouched."""
+    for entry in state.runtime_grants.get(str(stage_index), []):
+        if entry.get("scope") == "once" and not entry.get("consumed"):
+            entry["consumed"] = True
+
+
+def _split_words_with_spans(text: str) -> list[tuple[str, int, int]] | None:
+    """Split a single, separator-free command statement into its whitespace-
+    delimited words. Each entry is `(unquoted_value, start, end)`, where
+    `(start, end)` is the word's span in the ORIGINAL text, quotes and
+    backslash-escapes included -- so a caller can rewrite only the words it
+    actually changes and leave every other word's original spelling
+    (quoting, escaping) byte-identical. `None` on unbalanced quoting."""
+    n = len(text)
+    i = 0
+    words: list[tuple[str, int, int]] = []
+    while i < n:
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n:
+            break
+        start = i
+        buf: list[str] = []
+        while i < n and not text[i].isspace():
+            c = text[i]
+            if c in "'\"":
+                quote = c
+                i += 1
+                while i < n and text[i] != quote:
+                    if quote == '"' and text[i] == "\\" and i + 1 < n and text[i + 1] in ('"', "\\", "$", "`"):
+                        buf.append(text[i + 1])
+                        i += 2
+                        continue
+                    buf.append(text[i])
+                    i += 1
+                if i >= n:
+                    return None
+                i += 1
+                continue
+            if c == "\\" and i + 1 < n:
+                buf.append(text[i + 1])
+                i += 2
+                continue
+            buf.append(c)
+            i += 1
+        words.append(("".join(buf), start, i))
+    return words
+
+
+def _rebase_bash_command_to_venue(command: str, drifted_cwd: str, venue: str) -> str | None:
+    """Rewrite `command` as if it had been run from `venue` instead of
+    `drifted_cwd`: for each RELATIVE word that names a path actually existing
+    under `drifted_cwd`, replace just that word's span with that same path's
+    spelling relative to `venue`. Every other word -- verbs, flags, bare
+    arguments, and any word that is already an absolute path -- is left
+    byte-identical, quoting and escaping included. Returns None when:
+    `command` is not a single top-level statement (a compound command's
+    OTHER segment may be a genuine miss that this function has no way to
+    check -- see finding 1, round 4); it doesn't tokenize (unbalanced
+    quoting); or rebasing changed nothing (a no-op rewrite is never worth
+    re-checking against `coverage`).
+
+    An absolute word is skipped on purpose (finding 2, round 4): rewriting
+    `<venue>/scripts/x` to `scripts/x` would call a command covered under its
+    RELATIVE spelling even though the child actually typed the absolute one,
+    and `_segment_covered`'s own docstring says the two spellings are not
+    equivalent -- that would name the cwd as the cause when the real cause is
+    the absolute spelling, which a venue-launched child would still have hit.
+
+    Text rewrite, not path resolution, by design: `grants.grant_covers_call`
+    matches Bash rules against the LITERAL command string (round 3, see
+    `_segment_covered`), so the only way to ask "would this be covered from
+    the venue" is to produce the literal text a venue-launched child would
+    actually have typed, then run it through that same matcher. Editing
+    spans in place (rather than `shlex.split` + `shlex.join`, the prior
+    approach) is what keeps an unchanged word's original quoting intact --
+    `shlex.join` re-quotes by its own minimal-quoting heuristic, which drops
+    a literal quote a derived grant still expects (finding 3, round 4)."""
+    if _grants.top_level_segment_count(command) != 1:
+        return None
+    words = _split_words_with_spans(command)
+    if not words:
+        return None
+    real_drifted = os.path.realpath(drifted_cwd)
+    real_venue = os.path.realpath(venue)
+    edits: list[tuple[int, int, str]] = []
+    for word, start, end in words:
+        if os.path.isabs(word):
+            continue
+        candidate = os.path.realpath(os.path.join(real_drifted, word))
+        if not os.path.exists(candidate):
+            continue
+        rel = os.path.relpath(candidate, real_venue)
+        if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+            continue
+        edits.append((start, end, shlex.quote(rel)))
+    if not edits:
+        return None
+    rebased = command
+    for start, end, replacement in sorted(edits, key=lambda e: e[0], reverse=True):
+        rebased = rebased[:start] + replacement + rebased[end:]
+    return rebased
+
+
+def _classify_transcript_denials(
+    state: SessionState, stage: Stage, coverage: _grants.StageGrants, transcript_path: str | None,
+) -> None:
+    """After a dispatched child returns, classify every permission-denial stop its
+    transcript recorded against the stage's PRE-LAUNCH coverage set: covered ->
+    `materialization_defects` (the grant existed; --settings/--add-dir
+    materialization failed to carry it), uncovered -> either `cwd_drift` (a Bash
+    call denied only because the child ran it from a subdirectory of the stage
+    venue -- rebasing the command's path-like tokens back to the venue would make
+    it coverable under the SAME matcher) or `planning_misses` (a genuine miss
+    the child correctly worked around without asking). A stop already present in
+    any of the three ledgers by `tool_use_id` is never re-appended, so a later
+    PERMISSION-REQUEST self-report for the SAME call doesn't double-count it --
+    and a rescan of the same transcript never reclassifies a `cwd_drift` row.
+    No resolvable transcript (no `transcript_path`, or the file is absent -- the
+    common case until stage 2 wires `transcript_path` onto the cost-log ledger) is a
+    no-op; the `Rule:`-line self-reported fallback is `cmd_dispatch`'s job instead."""
+    if not transcript_path or not Path(transcript_path).exists():
+        return
+    known_ids = {m.get("tool_use_id") for m in state.materialization_defects} | \
+        {m.get("tool_use_id") for m in state.planning_misses} | \
+        {m.get("tool_use_id") for m in state.cwd_drift}
+    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+    for use in transcript_stops.parse_tool_uses(transcript_path):
+        if use.stop_kind != "permission-denial" or use.tool_use_id in known_ids:
+            continue
+        # Finding S4: a file-tool (Edit/Read/Write/NotebookEdit) add_dir
+        # materialization denial must classify the same way a Bash one does
+        # — not just Bash, which is all this loop checked before.
+        if use.tool_name == "Bash":
+            call_input = {"command": use.command}
+            call_text = use.command
+        else:
+            call_input = {"file_path": use.file_path}
+            call_text = use.file_path
+        row_base = {
+            "stage_index": stage.index, "tool_use_id": use.tool_use_id,
+            "tool_name": use.tool_name, "tool_input_digest": _digest(call_text),
+            # The raw command/path text itself, not just its digest -- needed
+            # so `cmd_dispatch`'s promotion logic (finding S2) can match a
+            # later self-reported Rule: line against this SPECIFIC row by
+            # prefix (`_bash_rule_command_from_call`), which a digest alone
+            # cannot support since the two texts are rarely byte-identical.
+            "command": call_text, "ts": _utcnow(),
+        }
+        if _grants.grant_covers_call(coverage, use.tool_name, call_input):
+            state.materialization_defects.append({**row_base, "evidence": "transcript"})
+            continue
+        if use.tool_name == "Bash" and use.cwd and venue and \
+                os.path.realpath(use.cwd) != os.path.realpath(venue):
+            rebased = _rebase_bash_command_to_venue(use.command, use.cwd, venue)
+            if rebased and _grants.grant_covers_call(coverage, "Bash", {"command": rebased}):
+                state.cwd_drift.append({**row_base, "cwd": use.cwd, "rebased_command": rebased})
+                continue
+        state.planning_misses.append({**row_base, "asked_user": False, "source": "transcript"})
+
+
+def _diagnose_materialization_defect(
+    state: SessionState, store: StateStore, stage: Stage, *, action: str, evidence: str,
+    data: dict | None = None,
+) -> Directive:
+    """Route a PERMISSION-REQUEST whose denied call WAS covered by the stage's
+    effective grant set into FAILED/DIAGNOSING -- the grant existed, materialization
+    into the child's --settings/--add-dir simply failed to carry it, so re-asking the
+    user (or re-dispatching unchanged) would only reproduce the same denial. The
+    Declaration is pre-framed from the grant/call/evidence triple instead of being left
+    for a human to write from scratch. The caller is responsible for having already
+    appended the triggering row to `state.materialization_defects` -- this function only
+    transitions and reports."""
+    opened = _fail_stage_into_diagnosing(
+        state, store, stage, event="materialization_defect", action=action, evidence=evidence,
+        note=f"permission request already covered by materialized grants ({evidence}): {action}",
+        declaration=Declaration(
+            expected=f"stage {stage.index}'s materialized grants should have covered: {action}",
+            actual=f"the child was denied and asked permission for: {action}",
+            mismatch="the effective grant set declares/derives coverage for this call, but "
+                     "the child's own --settings/--add-dir materialization failed to carry "
+                     "it through -- a materialization defect, not a planning miss.",
+        ))
+    if opened is None:
+        return _difficulty_cap_directive(
+            state, f"stage {stage.index} permission request was already covered by its "
+                   f"materialized grants ({evidence})")
+    return Directive(
+        False, state.node, "declare",
+        f"stage {stage.index} permission request was already covered by its "
+        f"materialized grants ({evidence}) -- this is a materialization defect, not "
+        "a planning miss; run overcome-difficulty (investigate why materialization "
+        "failed to carry the grant, then critique); no re-dispatch, no user ask",
+        marker="OVERCOME-DIFFICULTY", data=dict(data or {}),
+    )
+
+
+def _child_norm_mismatch(
+    state: SessionState, store: StateStore, stage: Stage, stderr: str,
+) -> tuple[dict | None, str]:
+    """`(record, "")` when the child this dispatch just ran holds, in its own state, a
+    live difficulty routed to this stage's norm; else `(None, reason)`.
+
+    The decision rests on the child's state record -- never on the REPLAN text -- and holds
+    only when all of these do: the transcript path the launch reported names the child's
+    session id (its stem) and that state loads; the child's handoff names this session and
+    this stage; one of its live difficulties -- the open one, or a suspended ancestor the
+    child opened a new difficulty over after routing it -- carries an `escalated_to` link
+    and a `parent` norm target whose baseline is the stage's current norm digest (a replan
+    of the stage since the spawn moves it, and the child's baseline is then stale); and its
+    declaration states all three of expected, actual and mismatch. The child's state is
+    only read, never written.
+
+    A rejection is `(None, reason)`, and the caller logs the reason. `(None, "")` is a
+    spawn with nothing to report -- no transcript, no readable state record, or a record
+    that holds no parent link -- whose REPLAN is the ordinary one and writes no row."""
+    if state.node != Node.EXECUTING.value:
+        return None, ""
+    path = _parse_transcript_path(stderr)
+    if path is None:
+        return None, ""
+    child_id = Path(path).stem
+    if not child_id or child_id == state.session_id:
+        return None, ""
+    try:
+        child = store.load(child_id)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return None, f"child state {child_id} is unreadable: {exc}"
+    if child is None or not child.parent_link:
+        return None, ""
+    return _verify_child_escalation(state, stage, child_id, child)
+
+
+def _repeat_norm_mismatch(
+    state: SessionState, store: StateStore, stage: Stage, mismatch: dict, base: dict,
+    standing: str, reason: str,
+) -> Directive:
+    """What a REPLAN gets when this session already holds a difficulty for the very child
+    difficulty it reports (`standing` is that difficulty's `open` or `closed` state): no
+    second record is opened, since the child cannot close its side and would otherwise
+    mint a new parent difficulty at every dispatch. The open one's directive is the one
+    `_open_norm_mismatch` gave; a closed one leaves the REPLAN's plain directive and says
+    why re-dispatching without a new fault would repeat it."""
+    ref = {"child_session": mismatch["child_session"], "child_uid": mismatch["child_uid"],
+           "stage_index": stage.index, "status": standing}
+    state.log("norm_mismatch_repeat", stage=stage.index, **ref)
+    store.save(state)
+    if standing == gates.ESCALATION_OPEN:
+        return Directive(
+            False, state.node, "investigate",
+            f"stage {stage.index}'s child reported the difficulty this session already "
+            "holds open for it -- continue overcome-difficulty on that record; no second "
+            "difficulty is opened",
+            marker="OVERCOME-DIFFICULTY",
+            data={**base, "norm_mismatch": mismatch, "escalation": ref},
+        )
+    return Directive(
+        False, state.node, "replan",
+        f"stage {stage.index}'s child repeats an escalation this session already adopted "
+        "and closed; the child's escalated difficulty is the one the closed record already "
+        "addressed, so no new difficulty is opened -- the stage's norm is what that record "
+        "changed",
+        marker="REPLAN", data={**base, "reason": reason, "escalation": ref},
+    )
+
+
+def _covers_resource(approved, requested, protected: list[str]) -> bool:
+    """`Resource.covers` dispatch that also threads `protected` through for a
+    `FileResource` pair -- the only kind whose `covers` accepts that kwarg
+    (resources.py's other four kinds have no path-containment notion to
+    protect). Kept here rather than in resources.py itself: `protected` is a
+    cli.py-computed, session-specific value (repo_root/delivery_worktree/
+    ledger dir), not a property of the resource pair alone."""
+    if isinstance(approved, _resources.FileResource):
+        return approved.covers(requested, protected=protected)
+    return approved.covers(requested)
+
+
+def evidence_dir_for(session_id: str, stage_index: int) -> Path:
+    """Durable per-stage evidence directory: `<evidence root>/<session>/stage-<N>/`.
+
+    `<evidence root>` is $AGENTCTL_EVIDENCE_ROOT when set (a TEST-ONLY override:
+    it skips only the scratch-root refusal below, grants.validate_add_dir still
+    applies to whatever it names), else `$XDG_STATE_HOME/agentctl-evidence` when
+    $XDG_STATE_HOME is set to an absolute path, else `~/.local/state/agentctl-
+    evidence` — deliberately NOT under `config_root.agentctl_state_dir()`
+    (`~/.claude[-agent]/agentctl/state`), which `widening_targets.
+    add_dir_under_protected_root` refuses outright, so a write add_dir onto the
+    evidence dir (see spawn-specialist.py's load_or_create_evidence_dir) would
+    have been refused at the root every stage's evidence lives under.
+
+    Session id is sanitized with store.safe_session_id — the same scheme session state
+    files are keyed by — so an adversarial session id cannot escape the
+    evidence tree. Raises EvidenceDirError instead of falling back to another
+    root when the resolved path is unusable — see the class docstring."""
+    return _evidence_session_dir(session_id, f"stage-{int(stage_index)}")
+
+
+def _spawn_would_link() -> bool:
+    """Whether the spawn `cmd_dispatch` is about to make can be linked at all — the kill
+    switch spawn-specialist consults. A dispatch that cannot link records no run: during the
+    blocking spawn the prompt hook would otherwise leave the gap to a run that is later
+    dropped."""
+    return agentctl_config.child_contour_linking_enabled()
+
+
+def _begin_child_run(store: StateStore, state: SessionState, stage) -> dict | None:
+    """Record the dispatch as an open child run and persist it BEFORE the blocking spawn,
+    so a hook or a second reader sees the interval while the child is still running. Runs a
+    dead dispatcher left open are closed first: the new run's child would otherwise be
+    attributed to the oldest of them. None when the spawn cannot be linked: nothing is
+    recorded."""
+    if not _spawn_would_link():
+        return None
+    state_dir = _state_dir(store)
+    if state_dir is not None:
+        child_runs.close_dead_runs(state.effort_child_runs, state_dir, state.session_id)
+    run = {
+        "child_session": None, "stage_index": stage.index, "started": _utcnow(),
+        "ended": None, "dispatcher_pid": os.getpid(),
+    }
+    state.effort_child_runs.append(run)
+    store.save(state)
+    return run
+
+
+def _carry_closed_runs(state: SessionState, fresh: SessionState, own: dict) -> None:
+    """Take over, for each run other than `own`, the close the hook or a reader saved into
+    the state file while the spawn ran. This process's copy predates it, and saving that
+    copy would reopen the run — letting a flush in between lower its watermark and the
+    re-close book the interval twice."""
+    saved = {(r.get("started"), r.get("dispatcher_pid"), r.get("stage_index")): r
+             for r in fresh.effort_child_runs if isinstance(r, dict)}
+    for run in state.effort_child_runs:
+        if run is own or run.get("ended") is not None:
+            continue
+        closed = saved.get((run.get("started"), run.get("dispatcher_pid"), run.get("stage_index")))
+        if closed is not None and closed.get("ended") is not None:
+            run["ended"] = closed["ended"]
+            run["child_session"] = closed.get("child_session")
+
+
+def _carry_hook_stamps(store: StateStore, state: SessionState) -> SessionState | None:
+    """Take over the keys the prompt hook owns (active minutes, last prompt, prompt count)
+    from the state file, which a prompt may have stamped while the blocking spawn ran — the
+    spawn's `state` predates them and saving it as is would overwrite them. Returns the
+    state read, None when it cannot be (nothing is carried; never an error)."""
+    try:
+        fresh = store.load(state.session_id)
+    except Exception:
+        return None
+    if effort.ACTUAL_MINUTES_KEY in fresh.effort_actuals:
+        state.effort_actuals[effort.ACTUAL_MINUTES_KEY] = fresh.effort_actuals[effort.ACTUAL_MINUTES_KEY]
+    state.last_user_prompt_ts = fresh.last_user_prompt_ts
+    state.user_prompt_count = fresh.user_prompt_count
+    return fresh
+
+
+def _end_child_run(store: StateStore, state: SessionState, run: dict,
+                   reported_session: str | None = None) -> None:
+    """Close `run` after the spawn returned or raised, and persist. The prompt stamps the
+    hook wrote into the state file during the run (active minutes, last prompt, prompt
+    count) are carried over first, because this process's `state` predates them; when that
+    state file cannot be read they are skipped, never allowed to fail the close — this runs
+    from a `finally`, and must neither mask the spawn's own exception nor lose the marker of
+    a child that finished. The run's child is the session the spawn reported if it is a
+    child of this stage, else the earliest unclaimed one found in the state directory. A
+    spawn that made no linked child was unlinked: its run is dropped."""
+    fresh = _carry_hook_stamps(store, state)
+    if fresh is not None:
+        _carry_closed_runs(state, fresh, run)
+    state_dir = _state_dir(store)
+    if state_dir is not None and not run.get("child_session"):
+        taken = {r.get("child_session") for r in state.effort_child_runs if r is not run}
+        if (reported_session and reported_session not in taken and child_runs.is_child_of(
+                state_dir, state.session_id, reported_session, run.get("stage_index"))):
+            run["child_session"] = reported_session
+        else:
+            run["child_session"] = child_runs.discover_child(
+                state_dir, state.session_id, run, state.effort_child_runs)
+    if run.get("child_session"):
+        run["ended"] = max(run["started"], _utcnow())
+    else:
+        state.effort_child_runs[:] = [r for r in state.effort_child_runs if r is not run]
+        # The hook left the part of each prompt gap inside this run to it (and noted it on
+        # the run in the file); the run is gone, so book it as the hook would have.
+        lost = child_runs.gap_loss_min(fresh.effort_child_runs if fresh is not None else (), run)
+        if lost:
+            actuals = state.effort_actuals
+            actuals[effort.ACTUAL_MINUTES_KEY] = float(
+                actuals.get(effort.ACTUAL_MINUTES_KEY) or 0.0) + lost
+    store.save(state)
 
 
 def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,

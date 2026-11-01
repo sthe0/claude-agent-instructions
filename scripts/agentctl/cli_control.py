@@ -22,6 +22,7 @@ from .state import (
     PlanFrame,
     StageStatus,
     WeightClass,
+    SessionState,
 )
 from .store import StateStore
 from .cli_common import (
@@ -32,8 +33,6 @@ from .cli_common import (
     _archive_difficulty,
     _autonomy_directive_data,
     _sync_venue_from_plan,
-    _plan_venue_pair,
-    _restore_current_stage,
     _require,
     _replan_class_data,
     _finished_work_data,
@@ -42,16 +41,84 @@ from .cli_common import (
     _verify_child_escalation,
     _open_norm_mismatch,
     RESOLUTION_ASK_BLOCKER_PREFIX,
-    _parent_link_summary,
-    _load_or_none,
     _linked_children,
-    _escalation_rows,
-    _run_step,
 )
 from .cli_plan import cmd_classify, cmd_plan, cmd_submit_plan
 from .cli_approval import cmd_approve, cmd_partition, cmd_next_stage
 from .cli_results import cmd_record_result
 from .cli_final import cmd_verify_final, cmd_resolve
+
+
+def _plan_venue_pair(path: str | None) -> tuple[str, str] | None:
+    """Read exactly the two [meta] fields _sync_venue_from_plan reads off a plan
+    file, as a plain pair — None on any read failure (absent path, unreadable or
+    unparseable file), distinct from a successful read of two empty fields.
+
+    Exists so cmd_push_subplan and cmd_pop_subplan compare the SAME two values
+    the venue-resolution seam actually uses, and can tell "the file could not be
+    read" apart from "the file has no venue declared" — the latter is the
+    majority plan shape, not an edge case, so collapsing it into None would make
+    the venue-substitution guard blind exactly where a plan is least specified."""
+    if not path:
+        return None
+    try:
+        doc = load_plan(path, strict=False)
+    except (OSError, PlanError):
+        return None
+    return (doc.meta.repo_root or "", doc.meta.delivery_worktree or "")
+
+
+def _restore_current_stage(state: SessionState) -> None:
+    """Derive state.current_stage from the restored stages' own status, rather
+    than trusting whatever the frame snapshotted or hardcoding None.
+
+    Mirrors _sync_venue_from_plan's derive-don't-trust reasoning: a pop can
+    restore a stage the earlier push left ACTIVE, mid-flight, while the frame's
+    own current_stage snapshot may already be None — a live wedge one buggy pop
+    can leave behind. Restoring that snapshot verbatim would keep the pointer
+    lost; the per-stage ACTIVE status is the authoritative record of what's in
+    flight, so the pointer is always recomputed from it instead. Fail-safe in
+    the ambiguous cases — zero or more than one ACTIVE stage — both yield None,
+    matching today's behaviour."""
+    active = [s for s in state.stages if s.outcome.status == StageStatus.ACTIVE.value]
+    state.current_stage = active[0].index if len(active) == 1 else None
+
+
+def _parent_link_summary(link: dict | None) -> dict | None:
+    if link is None:
+        return None
+    return {key: link.get(key) for key in ("parent_session", "stage_index", "depth", "norm_digest")}
+
+
+def _load_or_none(store: StateStore, session: str) -> SessionState | None:
+    try:
+        return store.load(session)
+    except Exception:
+        return None
+
+
+def _escalation_rows(owner: SessionState, parent: str, parent_state: SessionState | None) -> list[dict]:
+    """One row per difficulty of `owner` (open, suspended or closed) escalated to the norm
+    of `parent`: its uid, the stage, and `gates.escalation_status` read from the parent's
+    own state."""
+    rows: list[dict] = []
+    for rec in gates.escalation_records(owner):
+        target = gates.rec_field(rec, "escalated_to") or {}
+        if target.get("parent_session") != parent:
+            continue
+        rows.append({
+            "child_uid": gates.rec_field(rec, "uid"), "stage_index": target.get("stage_index"),
+            "status": gates.escalation_status(rec, parent_state, owner.session_id),
+        })
+    return rows
+
+
+def _run_step(fn, args, *, store: StateStore, runner: Runner | None, trace: list) -> Directive:
+    """Call a cmd_* function, append a compact crumb to `trace`, return its Directive."""
+    d = fn(args, store=store, runner=runner)
+    trace.append({"command": fn.__name__.removeprefix("cmd_"), "node": d.node,
+                  "action": d.action, "ok": d.ok})
+    return d
 
 
 def cmd_block(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

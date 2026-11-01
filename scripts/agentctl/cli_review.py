@@ -6,7 +6,15 @@ from __future__ import annotations
 import json
 import os
 import shlex
-from . import advisor, gates, protected_actions
+from . import (
+    advisor,
+    gates,
+    protected_actions,
+    carry_forward,
+    order_approvals,
+    plan_store,
+    task_accumulator,
+)
 from .directive import Directive
 from .dispatch import Runner
 from .plan import (
@@ -25,6 +33,17 @@ from .plan import (
     plan_interface_digests,
     plan_stage_digests,
     review_ids,
+    CONDITION_MARKERS,
+    ConcernFormatError,
+    PlanDoc,
+    SEVERITY_BLOCKING,
+    SEVERITY_NOTE,
+    customer_question_defect,
+    pair_binding,
+    pair_content,
+    parse_concern,
+    unit_currency_hash,
+    unit_node,
 )
 from .render import render_plan_md, render_stages_md
 from .state import (
@@ -39,52 +58,910 @@ from .state import (
     ProtectedGrantAcceptance,
     RiskAcceptance,
     StageReview,
+    AGENT_ACTOR,
+    CONCERN_FIXED,
+    CONCERN_RECORDED,
+    CONCERN_SUPERSEDED,
+    ConcernRecord,
+    PlanPairReview,
+    plan_review_scope_for_pair,
+    plan_review_scope_for_stage,
+    RequirementVerdict,
+    SessionState,
 )
 from .store import StateStore
+import datetime as dt
+import hashlib
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from .config import Thresholds
 from .cli_common import (
     _digest,
     _plan_file_sha256,
-    _plan_refs_problem,
-    _plan_file_bytes,
     _observation_sha256,
-    _normalize_reviewer_token,
     _record_stage_review,
-    _record_code_review,
+    _ledgered_order_key,
+    _difficulty_id,
+    _agent_self_decision_refusal,
+    _since_user_backstop_gate,
+    _record_backstop_crossing,
     _crossing_data,
-    _settle_override_decision,
-    _plan_review_override_refusal,
-    _review_vouch,
-    _record_first_thinker_verdict,
+    _plan_review_release_active,
+    _sync_release_anchor,
+    _autonomy_for,
+    _plan_from_snapshot,
     _review_baseline,
     _log_gate,
     _run_check,
     _require,
-    _count_review_round,
-    _record_review_questions,
+    _clear_since_user_decision,
     _note_round_release,
-    _ledger_scope,
-    _parse_review_concerns,
-    _parse_review_questions,
-    _question_data,
-    _changed_parts,
-    _plan_concern_severity,
-    _stamp_concern_plan,
-    _commit_concern_ledger,
-    _log_concerns_downgraded,
-    _cmd_plan_review_pair,
-    TOPOLOGICAL_COMPOSITION_REVIEWER,
-    _is_counted_review,
-    _next_record_seq,
-    _stamp_whole_plan_baseline,
-    _count_plan_review_round,
-    _count_review_act,
     _evaluate_review_trigger,
-    _pair_ledger_groups,
-    _ledger_concern,
-    _prior_row_diff,
-    _walk_target,
-    _parse_verdicts,
+    _utcnow,
 )
+
+
+ESCALATION_LEDGER_ENV = "AGENTCTL_ESCALATION_LEDGER"
+
+
+DEFAULT_ESCALATION_LEDGER = Path.home() / ".local" / "log" / "claude-plan-review-escalations.jsonl"
+
+
+def _plan_refs_problem(target: str) -> str | None:
+    """Why the references of the plan at `target` do not all resolve (the reference named),
+    or None when they do. A plan without references always resolves."""
+    try:
+        plan_store.visited_refs(target)
+    except PlanError as exc:
+        return str(exc)
+    return None
+
+
+def _plan_file_bytes(target: str | None) -> int | None:
+    """Byte size of a plan file, or None when there is no readable file.
+
+    Mirrors _plan_file_sha256's best-effort contract. cmd_plan_review logs this on
+    the plan_review history event so a round's fix size is computable as a byte
+    delta between consecutive events of the same family, without re-reading the
+    plan archive after the fact."""
+    if not target:
+        return None
+    try:
+        return Path(target).stat().st_size
+    except OSError:
+        return None
+
+
+# `--reviewer` is free text (30+ observed spellings of "thinker" alone), which makes a
+# reviewer-by-role query over history unanswerable without re-parsing every event by
+# hand. D9 capture: a best-effort canonical token alongside the untouched raw string —
+# never REPLACING it, since a normalization that destroys its input cannot be
+# re-derived when the mapping below turns out wrong (e.g. a new role appears).
+_REVIEWER_CANONICAL_TOKENS = (
+    "thinker", "developer", "code-reviewer", "planner", "tech-writer", "coordinator", "user",
+)
+
+
+def _normalize_reviewer_token(raw: str | None) -> str:
+    s = (raw or "").strip().lower()
+    if not s:
+        return ""
+    for token in _REVIEWER_CANONICAL_TOKENS:
+        if token in s:
+            return token
+    return "other"
+
+
+def _record_code_review(state: SessionState, review: CodeReview) -> None:
+    """Store a CodeReview, one per stage_index (last-wins). Unlike
+    _record_stage_review there is no automated judge path to protect a human
+    override from — every code-review record is code-reviewer/human-authored via
+    cmd_code_review, so a later record for the same stage always replaces the
+    prior one."""
+    state.code_reviews = [r for r in state.code_reviews if r.stage_index != review.stage_index]
+    state.code_reviews.append(review)
+
+
+def _consume_override_record(state: SessionState, scope: str) -> None:
+    """Spend the open difficulty record on the agent-authored override just recorded,
+    so it cannot discharge a second decision, and log which record it was for the
+    disclosure the user sees."""
+    did = _difficulty_id(state.difficulty)
+    if did is not None and did not in state.agent_ack_difficulty_ids:
+        state.agent_ack_difficulty_ids.append(did)
+    state.log("agent_review_override_record", scope=scope, difficulty_id=did)
+
+
+def _settle_override_decision(state: SessionState, review, scope: str,
+                              crossing: dict | None = None) -> None:
+    """What a recorded review does to the self-decision machinery. An agent-authored
+    override spends the record that earned it, and records the backstop crossing it
+    made, if any. A user's override restarts the since-user backstops, and so does the
+    release it ends: a non-agent override or an attested whole-plan pass leaves no
+    release event for a later record to be measured against."""
+    reviewer = (review.reviewer or "").strip()
+    if review.verdict == gates._PLAN_REVIEW_OVERRIDE:
+        if reviewer.casefold() == AGENT_ACTOR:
+            _consume_override_record(state, scope)
+            _record_backstop_crossing(state, crossing)
+            return
+        _clear_since_user_decision(state, reviewer)
+        state.review_release_difficulty_id = None
+    elif review.verdict == gates._PLAN_REVIEW_PASS and review.plan_sha256 and not scope:
+        state.review_release_difficulty_id = None
+
+
+def _review_trigger_record_open(state: SessionState) -> bool:
+    """True while the open difficulty record is the one a review-cost trigger opened and
+    that record is complete -- the trigger-cycle path to an agent-authored plan-review
+    override, in place of the round release."""
+    fire = state.review_trigger_fire
+    diff = state.difficulty
+    return (fire is not None and diff is not None
+            and diff.uid == fire.get("difficulty_uid") and diff.complete())
+
+
+def _plan_review_override_refusal(
+    state: SessionState, prev, reviewer: str, doc,
+) -> tuple[str | None, dict | None]:
+    """(refusal, crossing) of an override by `reviewer`: a refusal when it may not be
+    recorded, else None and the since-user backstop crossing an agent-authored one would
+    be (None below the backstop and for any other author). `prev` is the prior record
+    of the SAME scope and plan path (or None); `doc` is the plan under review (None when
+    it does not load). An override is the customer's escape from a reviewer's `revise`
+    deadlock: never by that reviewer itself, by the coordinator only while a
+    round/friction release names the decision as its own, and by the order's customer_id
+    when one is declared."""
+    if (prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE
+            and reviewer and reviewer == (prev.reviewer or "").strip()):
+        return (
+            f"override must come from a distinct reviewer: {reviewer!r} is the "
+            "reviewer whose 'revise' verdict it would override (the user is the "
+            "expected override author)"
+        ), None
+    crossing = None
+    order = doc.meta.order if doc is not None else None
+    if reviewer.casefold() == AGENT_ACTOR:
+        # The override never counts as a passing first verdict for the autonomy
+        # boundary (it is not written to the ledger).
+        release_live = _plan_review_release_active(state)
+        trigger_cycle = _review_trigger_record_open(state)
+        if not release_live and not trigger_cycle:
+            return (
+                "an agent-authored override is refused: it is available only once the "
+                "review-round or cross-axis friction release is active, or on the complete "
+                "difficulty record a review-cost trigger opened"
+            ), None
+        # The trigger's record opened at the fire, so it is fresh by construction; the
+        # release anchor, set at the first observation, may name that very record and
+        # would refuse it as predating the release.
+        release_active = release_live and not trigger_cycle
+        cause = "release" if release_active else "trigger"
+        if release_live:
+            _sync_release_anchor(state)
+        backstopped, crossing = _since_user_backstop_gate(
+            state, lambda: doc, decision="plan_review_override",
+            axis="review_rounds_since_user_decision",
+            backstop=Thresholds().review_round_backstop(),
+            what="recording a plan-review override",
+            cleared_by="a user approval, fire-acknowledgement, renegotiation or plan-review override")
+        if backstopped is not None:
+            return f"an agent-authored override is refused: {backstopped}", None
+        refused = _agent_self_decision_refusal(
+            state, state.review_release_difficulty_id if release_active else None,
+            event=f"the {cause}", decision="override")
+        if refused is not None:
+            return (
+                f"an agent-authored override is refused: {refused}. Run the reflection exit "
+                "first (declare, investigate, critique with differences_to_remove, normalize "
+                f"with a real factor) after the {cause}, then override"
+            ), None
+    elif order is not None and order.customer_id and reviewer != order.customer_id:
+        return (
+            f"override reviewer {reviewer!r} does not match order customer_id "
+            f"{order.customer_id!r}; record it as the customer of record, or correct --reviewer"
+        ), None
+    return None, crossing
+
+
+def _scope_stage(scope: str) -> "int | None":
+    """The stage a `stage:<n>` or `topo:unit:<n>` scope is about, else None."""
+    index = plan_review_scope_stage_index(scope)
+    if index is not None:
+        return index
+    pair = plan_review_pair_scope(scope)
+    if pair is not None and is_unit_id(pair):
+        node = unit_node(pair)
+        return node if isinstance(node, int) else None
+    return None
+
+
+def _review_vouch(state: SessionState, doc, scope: str) -> "tuple[int, bool] | None":
+    """`(stage, sole)` when a pass at `scope` reviews a stage `plan-review-delta` reports as
+    owed for `doc`: `sole` is True when that stage is the only thing owed, so its pass is the
+    whole review of the edit. None for any other scope. Read before the pass is stored,
+    while the delta still lists the stage."""
+    index = _scope_stage(scope)
+    if doc is None or index is None:
+        return None
+    whole_plan, owed = gates.plan_review_delta(state, doc)
+    if whole_plan or index not in owed:
+        return None
+    return index, owed == {index}
+
+
+def _record_first_thinker_verdict(state: SessionState, doc, review, scope: str,
+                                  *, vouch: "tuple[int, bool] | None" = None) -> None:
+    """Write the thinker's first verdict on the changed unresolved commands into the
+    order's ledger, once per (approved version, changed identities) key. A whole-plan pass,
+    or a stage-scoped one that is the whole review owed (`vouch` sole), is that verdict
+    for the whole key once every other stage holding a changed command has its own passing
+    first verdict (an override there is no pass); a stage-scoped pass beside other owed
+    stages is the first verdict only on that stage's own commands, under that stage's key.
+    An override or an unattested review never is."""
+    if doc is None or (scope and vouch is None) or not review.plan_sha256:
+        return
+    if review.verdict not in (gates._PLAN_REVIEW_PASS, gates._PLAN_REVIEW_REVISE):
+        return
+    key = _ledgered_order_key(state)
+    if key is None:
+        return
+    autonomy = _autonomy_for(state, doc)
+    verdict_key = autonomy["first_verdict_key"]
+    if vouch is not None:
+        recorded = order_approvals.get(key).get("first_thinker_verdicts") or {}
+        others_passed = gates.every_stage_vouched(
+            autonomy["first_verdict_stage_keys"], autonomy["unresolved_changed_commands"],
+            recorded, skip=vouch[0])
+        if not (vouch[1] and others_passed):
+            verdict_key = autonomy["first_verdict_stage_keys"].get(vouch[0])
+    if verdict_key is None:
+        return
+    order_approvals.record_first_thinker_verdict(key, verdict_key, {
+        "verdict": review.verdict, "plan_sha256": review.plan_sha256, "reviewer": review.reviewer,
+        **({"scope": scope} if scope else {}),
+    })
+
+
+def _count_review_round(state: SessionState, plan_sha256: str, *, thinker_record: bool = False) -> None:
+    """Count one review round of the task and mirror the new total into `state`.
+
+    `thinker_record=False` is a pairwise record: the accumulator adds a round only
+    when `plan_sha256` is not the version it last counted (one pairwise run over N
+    pairs, or a rerun on the same version, is one round). `thinker_record=True` is a
+    whole-plan or stage thinker spawn, a round in itself. The compare-and-increment
+    is the accumulator's own critical section, so this never reads the digest first.
+    An empty digest (unreadable plan) counts nothing — same fail-direction as
+    `_count_plan_review_round`."""
+    if not plan_sha256:
+        return
+    # The accumulator compares digests by equality: give it one digest per plan lineage
+    # (`plan-convert-live` links the forms of one plan), so a conversion is not a new version.
+    plan_sha256 = gates.plan_lineage_root(state, plan_sha256)
+    digest = {"force_digest" if thinker_record else "count_if_digest_differs": plan_sha256}
+    totals = task_accumulator.add(
+        state.task_id, "review_rounds", 1, session_id=state.session_id, now=_utcnow(),
+        mirror_axis="review_rounds_since_user_decision", **digest,
+    )
+    state.review_rounds = totals["per_axis_totals"]["review_rounds"]
+    _sync_release_anchor(state)
+
+
+def _record_review_questions(state: SessionState, review_id: str, questions: list[str]) -> list[str]:
+    """Upsert the customer questions one review act returned as premise candidates
+    `qrev-<review id>-<N>` — 'raised', addressed to the review id — and return the
+    ids that now stand for them, in order. The review id is `unit:<node>`, a pair
+    id, `stage:<n>` or `whole`, so a question is traceable to the act that raised it.
+
+    A statement already on file under the same review id keeps its row and the
+    disposition recorded against it (the thinker repeating a question on a
+    re-review is not new work for the coordinator); a new statement takes the next
+    unused number, so no earlier row is renumbered. Other review ids and the legacy
+    `qenum-` rows are never touched. Returns [] when the premise plugin is not armed
+    — the questions are then recorded nowhere, the same as every other premise verb,
+    and the recording directive says so (`customer_questions_unrecorded`)."""
+    bag = state.plugins.get("premise")
+    texts = [q.strip() for q in questions or [] if q and q.strip()]
+    if bag is None or not texts:
+        return []
+    candidates = bag.setdefault("candidates", [])
+    number = re.compile(re.escape(f"qrev-{review_id}-") + r"(\d+)")
+    ids: list[str] = []
+    for text in texts:
+        standing = next(
+            (c for c in candidates
+             if number.fullmatch(c.get("id") or "") and c.get("statement") == text), None)
+        if standing is None:
+            taken = [int(m.group(1)) for c in candidates
+                     if (m := number.fullmatch(c.get("id") or ""))]
+            standing = {"id": f"qrev-{review_id}-{max(taken, default=0) + 1}",
+                        "statement": text, "disposition": "raised", "reason": "",
+                        "question": "", "target": review_id}
+            candidates.append(standing)
+        ids.append(standing["id"])
+    state.log("review_questions_recorded", review=review_id, candidates=ids)
+    return ids
+
+
+def _append_escalation_ledger(rows: list[dict]) -> None:
+    """Append condition-4 gap-ledger lines. Fail-open like _write_quality_row: a
+    ledger I/O error never blocks the review record that already happened. The path
+    is resolved per call so a test (or operator) override takes effect immediately."""
+    if not rows:
+        return
+    path = Path(os.environ.get(ESCALATION_LEDGER_ENV) or DEFAULT_ESCALATION_LEDGER)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def _condition4_ledger_rows(
+    state: SessionState, doc: PlanDoc, target: str, review: PlanPairReview,
+    concerns: list[str], outcome: str,
+) -> list[dict]:
+    marker = CONDITION_MARKERS[3]
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    return [
+        {
+            "ts": now,
+            "session": state.session_id,
+            "plan_path": target,
+            "task_id": doc.meta.task_id,
+            "unit": review.pair,
+            "dependency_stage": review.service,
+            "condition": marker.rstrip(":"),
+            "concern": concern,
+            "concern_sha256": hashlib.sha256(concern.encode("utf-8")).hexdigest(),
+            "outcome": outcome,
+        }
+        for concern in concerns
+        if concern.lstrip().startswith(marker)
+    ]
+
+
+@dataclass
+class _ConcernPlan:
+    """What the severity rules made of one review record's concerns, before it is stored."""
+
+    parsed: list
+    parts: list
+    effective: list
+    verdict: str
+    part_digests: dict
+    regression_command: str
+    delta_changed_parts: list = field(default_factory=list)
+
+    @property
+    def bodies(self) -> list[str]:
+        return [pc.body for pc in self.parsed]
+
+    @property
+    def severities(self) -> list[str]:
+        return [pc.severity for pc in self.parsed]
+
+    @property
+    def downgraded(self) -> bool:
+        return any(
+            pc.severity == SEVERITY_BLOCKING and eff != gates.EFFECTIVE_BLOCKING
+            for pc, eff in zip(self.parsed, self.effective)
+        )
+
+
+def _ledger_scope(scope: str) -> str:
+    index = plan_review_scope_stage_index(scope) if scope else None
+    return plan_review_scope_for_stage(index) if index is not None else scope
+
+
+def _parse_review_concerns(state: SessionState, raw: list[str], verdict: str):
+    """Every `--concern` split into severity / restated id / body, or the refusal text.
+    Untagged, `blocking:` on a pass, and a `re:<id>` naming no ledger concern all refuse."""
+    parsed = []
+    for text in raw:
+        try:
+            pc = parse_concern(text)
+        except ConcernFormatError as e:
+            return None, str(e)
+        if pc.severity == SEVERITY_BLOCKING and verdict == gates._PLAN_REVIEW_PASS:
+            return None, (
+                f"a `pass` review cannot carry a blocking concern ({text[:80]!r}): "
+                f"write it as `{SEVERITY_NOTE}: ...` or record a `revise`"
+            )
+        if pc.restates and pc.restates not in state.concern_ledger:
+            return None, (
+                f"`re:{pc.restates}` names no recorded concern: a restatement cites the "
+                "stable id of an earlier concern (`data.concern_ids` of its plan-review record)"
+            )
+        parsed.append(pc)
+    return parsed, ""
+
+
+def _parse_review_questions(raw: list[str]):
+    """The `--customer-question` texts of one review, or the refusal text: a blank,
+    multi-line, field-syntax (`Q:` / `Customer questions:`) or `none` value is refused
+    before any record is written, never recorded as an unreadable candidate or dropped."""
+    for text in raw:
+        defect = customer_question_defect(text)
+        if defect:
+            return None, f"--customer-question {text.strip()[:80]!r}: {defect}"
+    return [text.strip() for text in raw], ""
+
+
+def _question_data(state: SessionState, args, question_ids: list[str]) -> dict:
+    """The directive fields for a review's customer questions: the candidate ids, and
+    `customer_questions_unrecorded` when questions were passed but the premise plugin
+    is not armed — they are recorded nowhere, which the caller must see. A review
+    that passed no question carries neither field, so its directive keeps the shape
+    callers had before reviews returned questions."""
+    data: dict = {}
+    passed = len(getattr(args, "customer_questions", None) or [])
+    if passed or question_ids:
+        data["customer_question_ids"] = question_ids
+    if passed and state.plugins.get("premise") is None:
+        data["customer_questions_unrecorded"] = passed
+    return data
+
+
+def _concern_parts(
+    body: str, own_parts, *, default_to_own: bool = True, after_marker: bool = False,
+) -> list[str]:
+    token = gates._concern_part_token(body, after_marker=after_marker)
+    if token is None:
+        return list(own_parts) if default_to_own else []
+    index = plan_review_scope_stage_index(token)
+    return [plan_review_scope_for_stage(index) if index is not None else token]
+
+
+def _changed_parts(parts, digests: dict, prev_digests: dict) -> list[str]:
+    """The parts whose current digest is missing or differs from the one a record stored."""
+    return [p for p in parts if digests.get(p) is None or prev_digests.get(p) != digests[p]]
+
+
+def _plan_concern_severity(
+    state: SessionState, doc, ledger_scope: str, own_parts, prev, parsed, verdict: str, *,
+    attested: bool, regression_command: str, evidence: bool, may_promote: bool,
+    judge_delta: bool = False,
+) -> _ConcernPlan:
+    """`judge_delta`: a topo row re-reviewed after a pass — when some of its own parts changed
+    since that pass, a blocking concern naming no changed part is recorded as advisory."""
+    digests = part_digest_map(doc) if doc is not None else {}
+    prev_digests = prev.part_digests if prev is not None else {}
+    delta_changed = (
+        _changed_parts(own_parts or (), digests, prev_digests)
+        if judge_delta and prev is not None and prev.verdict == gates._PLAN_REVIEW_PASS else []
+    )
+    open_parts = {
+        p for e in state.concern_ledger.values()
+        if e.scope == ledger_scope and gates.concern_unresolved(e, state, doc)
+        for p in e.parts
+    }
+    parts_by_concern, effective = [], []
+    for pc in parsed:
+        parts = _concern_parts(
+            pc.body, own_parts or tuple(digests), default_to_own=not delta_changed,
+            after_marker=bool(delta_changed),
+        )
+        changed = set(_changed_parts(
+            [p for p in parts if p in own_parts] if delta_changed else parts, digests, prev_digests))
+        target = state.concern_ledger.get(pc.restates) if pc.restates else None
+        dispositioned = target is not None and (
+            target.status == CONCERN_SUPERSEDED
+            or gates._concern_discharged(target.scope, target.local_id, target.text, state, doc)
+        )
+        differs = bool(regression_command) and (
+            target is None or regression_command not in target.regression_commands
+        )
+        parts_by_concern.append(parts)
+        effective.append(gates.effective_concern_severity(
+            pc.severity, parts, has_prev=prev is not None, changed=changed,
+            open_parts=open_parts, restates_dispositioned=dispositioned,
+            new_evidence=evidence or differs,
+            after_pass_on_changed=bool(delta_changed),
+            restates_open=target is not None and gates.concern_unresolved(target, state, doc),
+        ))
+    effective_verdict = verdict
+    if (verdict == gates._PLAN_REVIEW_REVISE and parsed and attested and may_promote
+            and gates.EFFECTIVE_BLOCKING not in effective):
+        reraised = _blocking_parts(parsed, parts_by_concern)
+        still_open = [
+            e for e in state.concern_ledger.values()
+            if e.scope == ledger_scope and gates.concern_unresolved(e, state, doc)
+            and _entry_stays_open(e, digests, reraised)
+        ]
+        if not still_open:
+            effective_verdict = gates._PLAN_REVIEW_PASS
+    return _ConcernPlan(parsed, parts_by_concern, effective, effective_verdict, digests,
+                        regression_command, delta_changed)
+
+
+def _blocking_parts(parsed, parts_by_concern) -> set[str]:
+    return {
+        p for pc, parts in zip(parsed, parts_by_concern)
+        if pc.severity == SEVERITY_BLOCKING for p in parts
+    }
+
+
+def _entry_stays_open(entry: ConcernRecord, digests: dict, reraised: set[str]) -> bool:
+    """An open concern survives a record unless a part it names changed since it was
+    last raised and the record does not re-raise that part as blocking."""
+    moved = _changed_parts(entry.parts, digests, entry.raise_digests)
+    return not moved or bool(reraised.intersection(entry.parts))
+
+
+def _stamp_concern_plan(review, cp: _ConcernPlan, raw_verdict: str) -> None:
+    review.concerns = cp.bodies
+    review.severities = cp.severities
+    review.effective_severities = cp.effective
+    review.raw_verdict = raw_verdict
+    review.part_digests = cp.part_digests
+    review.verdict = cp.verdict
+
+
+def _commit_concern_ledger(state: SessionState, review, cp: _ConcernPlan, ledger_scope: str,
+                           local_ids: list[str], seq: int, *, record_only: bool = False) -> list[str]:
+    """Close the scope's open concerns this record settles, register this record's own,
+    and return their stable ids. A pass/override supersedes every open concern; any other
+    record fixes one whose part changed since it was raised and that this record does not
+    re-raise, and refreshes the raise digests of one it does re-raise. A concern outside the
+    reviewer's own scope never opens. `record_only` registers the concerns as recorded
+    without touching the scope's open ones — for a record that does not become the scope's
+    authoritative review."""
+    settles_all = review.verdict in (gates._PLAN_REVIEW_PASS, gates._PLAN_REVIEW_OVERRIDE)
+    reraised = _blocking_parts(cp.parsed, cp.parts)
+    out_of_scope = set(getattr(review, "out_of_scope_concern_ids", []))
+    for entry in state.concern_ledger.values():
+        if record_only or entry.scope != ledger_scope or entry.status != CONCERN_OPEN:
+            continue
+        if settles_all:
+            entry.status = CONCERN_SUPERSEDED
+        elif _entry_stays_open(entry, cp.part_digests, reraised):
+            if reraised.intersection(entry.parts):
+                entry.raise_digests = {p: cp.part_digests.get(p, "") for p in entry.parts}
+        else:
+            entry.status = CONCERN_FIXED
+    prefix = plan_review_pair_scope(ledger_scope) or ledger_scope or "plan"
+    ids = []
+    for i, (pc, parts, eff) in enumerate(zip(cp.parsed, cp.parts, cp.effective)):
+        cid = f"{prefix}#{seq}.c{i}"
+        ids.append(cid)
+        opens = (eff == gates.EFFECTIVE_BLOCKING and not settles_all and not record_only
+                 and local_ids[i] not in out_of_scope)
+        state.concern_ledger[cid] = ConcernRecord(
+            id=cid, scope=ledger_scope, plan_path=review.plan_path, local_id=local_ids[i],
+            text=pc.body, severity=pc.severity, effective=eff, parts=list(parts),
+            raise_digests={p: cp.part_digests.get(p, "") for p in parts}, record_seq=seq,
+            status=CONCERN_OPEN if opens else CONCERN_RECORDED,
+            regression_commands=[cp.regression_command] if cp.regression_command else [],
+        )
+        target = state.concern_ledger.get(pc.restates) if pc.restates else None
+        if target is not None and cp.regression_command \
+                and cp.regression_command not in target.regression_commands:
+            target.regression_commands.append(cp.regression_command)
+    return ids
+
+
+def _log_concerns_downgraded(state: SessionState, cp: _ConcernPlan, scope: str, raw_verdict: str) -> None:
+    if cp.downgraded or cp.verdict != raw_verdict:
+        state.log("plan_review_concerns_downgraded", scope=scope, raw_verdict=raw_verdict,
+                  verdict=cp.verdict, severities=cp.severities, effective=cp.effective,
+                  **({"changed_parts": cp.delta_changed_parts} if cp.delta_changed_parts else {}))
+
+
+def _cmd_plan_review_pair(
+    args, state: SessionState, target: str, pair: str, *,
+    store: StateStore, runner: Runner | None,
+) -> Directive:
+    """The `--scope topo:<pair>` branch of cmd_plan_review.
+
+    Branches off BEFORE the whole-plan / stage terminal-pass machinery on purpose: a
+    pair record is judged only against a CURRENT same-pair record (gates.pair_status),
+    never against the nearest whole-plan pass, and it is written only to
+    state.plan_pair_reviews — never to plan_review, plan_review_passes or
+    plan_stage_reviews, and it never advances plan_review_rounds (it advances the
+    task's review_rounds, once per plan version — see _count_review_round). The binding is
+    recomputed here from a FRESH load of the evaluated plan, never taken from node
+    files materialized at spawn time or from state.stages."""
+    def refuse(msg: str) -> Directive:
+        return Directive(False, state.node, "noop", msg)
+
+    unsupported = [flag for flag, dest in (("--concern-id", "concern_ids"),
+                                           ("--findings-blocking", "findings_blocking"),
+                                           ("--findings-nonblocking", "findings_nonblocking"))
+                   if getattr(args, dest, None) is not None]
+    if unsupported:
+        return refuse(
+            f"not recorded for a 'topo:' scope: {', '.join(unsupported)} — a pair "
+            "concern is identified by its condition marker, and risk-accept does not "
+            "take a pair scope"
+        )
+    if getattr(args, "escalate_pairs", False) and not is_unit_id(pair):
+        return refuse(f"--escalate-pairs belongs to a unit review, not to pair {pair!r}")
+    try:
+        doc, _, live = load_plan_with_digest(target)
+        if is_unit_id(pair):
+            parse_unit(doc, pair)
+        else:
+            parse_pair(doc, pair)
+    except (OSError, PlanError, ValueError) as e:
+        return refuse(f"--scope 'topo:{pair}' cannot be recorded against {target}: {e}")
+    verdict = args.verdict
+    parsed, parse_error = _parse_review_concerns(state, list(getattr(args, "concerns", None) or []), verdict)
+    if parsed is None:
+        return refuse(parse_error)
+    question_texts, question_error = _parse_review_questions(
+        list(getattr(args, "customer_questions", None) or []))
+    if question_texts is None:
+        return refuse(question_error)
+    reviewer = (getattr(args, "reviewer", "") or "").strip()
+    note = (getattr(args, "note", "") or "").strip()
+    attested = (getattr(args, "plan_digest", None) or "").strip().lower()
+    if verdict == gates._PLAN_REVIEW_PASS and not attested:
+        return refuse(
+            f"a pass for pair {pair!r} needs --plan-digest: a reviewer that cannot attest "
+            "the plan bytes it read cannot bind a pair"
+        )
+    if attested and attested != live:
+        return refuse(
+            f"--plan-digest {attested!r} does not match a fresh load of {target!r} "
+            f"({live!r}): the reviewer read a different or stale plan; re-read the "
+            "current plan and re-run plan-review"
+        )
+    prev = state.plan_pair_reviews.get(pair)
+    if prev is not None and prev.plan_path != target:
+        prev = None
+    crossing = None
+    if verdict == gates._PLAN_REVIEW_OVERRIDE:
+        if not reviewer or not note:
+            return refuse("a pair override needs a non-empty --reviewer and --note")
+        refusal, crossing = _plan_review_override_refusal(state, prev, reviewer, doc)
+        if refusal:
+            return refuse(refusal)
+    regression_command = (getattr(args, "regression_command", "") or "").strip()
+    regression_exit: int | None = None
+    if verdict == gates._PLAN_REVIEW_REVISE and gates.pair_status(state, doc, target, pair) == "current":
+        if not regression_command:
+            return refuse(
+                f"a current pass for pair {pair!r} is overturned only by run-demonstrated "
+                "regression evidence: re-run with --regression-command that exits non-zero"
+            )
+        try:
+            _, result = _run_check(regression_command, 0, runner, cwd=state.repo_root)
+            regression_exit = result.returncode if result is not None else None
+        except Exception:  # noqa: BLE001 - a broken command is no evidence
+            regression_exit = None
+        if not regression_exit:
+            return refuse(
+                f"--regression-command did not demonstrate a regression (exit "
+                f"{regression_exit!r}): the current pass for pair {pair!r} stands"
+            )
+    ledger_scope = plan_review_scope_for_pair(pair)
+    # With no readable snapshot of the judged version the reviewer was told to judge the row
+    # whole, so no delta downgrade may apply.
+    delta_visible = prev is not None and _prior_row_diff(store, state, doc, prev, pair)["available"]
+    cp = _plan_concern_severity(
+        state, doc, ledger_scope, pair_part_tokens(pair), prev,
+        parsed, verdict, attested=bool(attested), regression_command=regression_command,
+        evidence=bool(regression_exit), may_promote=True, judge_delta=delta_visible,
+    )
+    concerns = cp.bodies
+    if is_unit_id(pair):
+        node_fields = {
+            "base": parse_unit(doc, pair), "service": "",
+            "unit_norm": unit_currency_hash(doc, pair),
+        }
+    else:
+        base, service = parse_pair(doc, pair)
+        node_fields = {
+            "base": base, "service": service, **pair_binding(doc, pair), **pair_content(doc, pair),
+        }
+    review = PlanPairReview(
+        pair=pair, verdict=verdict, reviewer=reviewer,
+        concerns=concerns, note=note, plan_path=target, plan_sha256=attested,
+        record_seq=_next_record_seq(state), **node_fields,
+    )
+    _stamp_concern_plan(review, cp, verdict)
+    review.concern_ids = _commit_concern_ledger(
+        state, review, cp, ledger_scope, [f"c{i}" for i in range(len(concerns))], review.record_seq)
+    ledger = []
+    if review.verdict == gates._PLAN_REVIEW_REVISE:
+        ledger = _condition4_ledger_rows(state, doc, target, review, concerns, "confirmed-gap")
+    elif verdict == gates._PLAN_REVIEW_OVERRIDE and prev is not None and prev.verdict == gates._PLAN_REVIEW_REVISE:
+        ledger = _condition4_ledger_rows(state, doc, target, prev, prev.concerns, "false-alarm")
+    vouch = _review_vouch(state, doc, ledger_scope)
+    state.plan_pair_reviews[pair] = review
+    released: list[str] = []
+    if getattr(args, "escalate_pairs", False):
+        released = carry_forward.release_holds(state, unit_node(pair))
+    _settle_override_decision(state, review, plan_review_scope_for_pair(pair), crossing)
+    _record_first_thinker_verdict(state, doc, review, ledger_scope, vouch=vouch)
+    question_ids = _record_review_questions(state, pair, question_texts)
+    if _is_counted_review(review.verdict, reviewer):
+        _count_review_round(state, live)
+    _count_review_act(state, review.verdict, reviewer)
+    _log_concerns_downgraded(state, cp, ledger_scope, verdict)
+    state.log("plan_pair_review", target=target, pair=pair, verdict=review.verdict,
+              raw_verdict=verdict, reviewer=reviewer, record_seq=review.record_seq,
+              concern_ids=review.concern_ids,
+              plan_sha256=attested, concerns=concerns, note=note,
+              regression_command=regression_command, regression_exit=regression_exit,
+              ledger_lines=len(ledger), escalated_pairs=released)
+    store.save(state)
+    _append_escalation_ledger(ledger)
+    status = gates.pair_status(state, doc, target, pair)
+    return Directive(
+        True, state.node, "continue",
+        f"pair review recorded for {pair!r} against {target} (verdict={verdict}); "
+        f"pair status: {status}"
+        + (f"; escalated to the pairs: {', '.join(released)}" if released else ""),
+        data={"pair": pair, "pair_status": status, "ledger_lines": len(ledger),
+              "escalated_pairs": released,
+              "concern_ids": review.concern_ids, **_question_data(state, args, question_ids),
+              **_crossing_data(crossing)},
+    )
+
+
+TOPOLOGICAL_COMPOSITION_REVIEWER = "topological-composition"
+
+
+def _is_counted_review(verdict: str, reviewer: str) -> bool:
+    """A reviewer's pass/revise is a review round; an override is a decision, and the
+    engine's own composition record is not a review at all."""
+    return (
+        verdict in (gates._PLAN_REVIEW_PASS, gates._PLAN_REVIEW_REVISE)
+        and reviewer != TOPOLOGICAL_COMPOSITION_REVIEWER
+    )
+
+
+def _next_record_seq(state) -> int:
+    state.next_record_seq += 1
+    return state.next_record_seq
+
+
+def _stamp_whole_plan_baseline(state, review: PlanReview, doc) -> None:
+    """Give a whole-plan record its place in the review-record order and, when its
+    plan loads, the per-pair binding hashes and per-unit and per-pair currency hashes
+    the walk-stale sets are later measured against. A plan whose pairs cannot be
+    enumerated leaves them unset, which the gate reads as every unit and pair being
+    stale."""
+    review.record_seq = _next_record_seq(state)
+    if doc is None:
+        return
+    try:
+        review.reviewed_pair_bindings = gates.pair_baseline_bindings(doc)
+        review.reviewed_pair_currency = gates.pair_baseline_currency(doc)
+        review.reviewed_unit_currency = gates.unit_baseline_currency(doc)
+    except PlanError:
+        review.reviewed_pair_bindings = None
+        review.reviewed_pair_currency = None
+        review.reviewed_unit_currency = None
+
+
+def _count_plan_review_round(state: SessionState, target: str) -> None:
+    """The post-approval round count of a whole-plan review (see the comment in
+    cmd_plan_review): once per plan VERSION, never for an unreadable plan."""
+    if state.approval is not None and state.approval.passed:
+        counted = _plan_file_sha256(target)
+        if counted and not gates.plan_digest_equivalent(
+                state, counted, state.plan_review_counted_digest):
+            state.plan_review_rounds += 1
+            state.plan_review_counted_digest = counted
+            _sync_release_anchor(state)
+
+
+def _count_review_act(state: SessionState, verdict: str, reviewer: str, *,
+                      stage_scope: str = "") -> None:
+    """One counted review record (a pass or revise by a real reviewer: not an override,
+    not a carried record, not the composition record) is one act of the open cycle. A
+    stage's own record also moves that stage's streak -- a pass ends it, a revise extends
+    it; whole-plan and pair records never do."""
+    if not _is_counted_review(verdict, reviewer):
+        return
+    if state.review_cycle_open:
+        state.review_cycle_acts += 1
+    if stage_scope:
+        if verdict == gates._PLAN_REVIEW_PASS:
+            state.review_stage_streaks.pop(stage_scope, None)
+            state.review_trigger_spent.pop(f"stage_streak:{stage_scope}", None)
+        else:
+            state.review_stage_streaks[stage_scope] = state.review_stage_streaks.get(stage_scope, 0) + 1
+
+
+def _pair_ledger_groups(state: SessionState, pair: str, target: str) -> "dict[int, list[ConcernRecord]]":
+    """The pair scope's ledger entries raised against `target`, grouped by the record that
+    raised them, each group in concern order — how a record taken before events carried
+    `concern_ids` is found."""
+    scope = plan_review_scope_for_pair(pair)
+    groups: dict[int, list[ConcernRecord]] = {}
+    for entry in state.concern_ledger.values():
+        if entry.scope == scope and entry.plan_path == target:
+            groups.setdefault(entry.record_seq, []).append(entry)
+    for group in groups.values():
+        group.sort(key=lambda e: (len(e.local_id), e.local_id))
+    return groups
+
+
+def _ledger_concern(entry: ConcernRecord, state: SessionState, doc) -> dict:
+    return {
+        "id": entry.id, "severity": entry.severity, "effective_severity": entry.effective,
+        "parts": list(entry.parts), "text": entry.text,
+        "unresolved": gates.concern_unresolved(entry, state, doc),
+    }
+
+
+def _prior_row_diff(store: StateStore, state: SessionState, doc, latest, pair: str) -> dict:
+    """The diff of the row's parts between the plan version a reviewer judged and `doc`.
+    The judged version of a carried record is the one its first carry started from
+    (`carried_from_sha`), not the version it was carried onto; with no readable snapshot of
+    it the row is `available: False` and the reviewer judges it whole."""
+    from .render import row_diff
+
+    judged = latest.carried_from_sha or latest.plan_sha256
+    old = _plan_from_snapshot(store, state, judged)
+    if old is None:
+        return {"available": False, "from_sha": judged, "text": ""}
+    return {"available": True, "from_sha": judged, "text": row_diff(old, doc, pair)}
+
+
+def _walk_target(args, state: SessionState) -> "str | None":
+    return getattr(args, "target", None) or state.plan_path
+
+
+def _parse_verdicts(raw_verdicts: list[str]) -> tuple[list[RequirementVerdict], list[str]]:
+    """Parse repeatable ``--verdict '<requirement_id>|<pass|fail|withdrawn>[|<note>]'`` specs
+    into typed RequirementVerdict objects. Returns ``(verdicts, errors)`` — a non-empty
+    ``errors`` list means the caller must reject with a failing Directive and record
+    nothing. Mirrors ``_parse_partition_units``'s pipe-delimited shape and
+    ``(parsed, errors)`` return contract.
+
+    ``withdrawn`` records that a requirement was retracted by the customer (its premise
+    was flawed, or the work demonstrated it was no longer wanted); it neither blocks
+    resolution nor counts as a delivered requirement. A note is MANDATORY for withdrawn:
+    the record must name who withdrew the requirement and why, so the ledger is not
+    silently missing a delivery.
+
+    Deliberately does NOT cross-check requirement ids against the order here — that
+    check is completeness, not parse well-formedness, and belongs to
+    ``gates.resolution_blockers`` (which re-reads the order fresh at resolution time
+    rather than at write time; see AcceptanceReview's docstring)."""
+    verdicts: list[RequirementVerdict] = []
+    errors: list[str] = []
+    seen: dict[str, int] = {}  # requirement id -> owning position (1-based)
+    for pos, spec in enumerate(raw_verdicts, start=1):
+        parts = spec.split("|")
+        if len(parts) < 2:
+            errors.append(
+                f"verdict {pos}: expected "
+                f"'<requirement_id>|<pass|fail|withdrawn>[|<note>]', got {spec!r}"
+            )
+            continue
+        req_id = parts[0].strip()
+        verdict = parts[1].strip()
+        note = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else ""
+        if not req_id:
+            errors.append(f"verdict {pos}: empty requirement id")
+        if verdict not in ("pass", "fail", "withdrawn"):
+            errors.append(
+                f"verdict {pos}: verdict must be 'pass', 'fail', or 'withdrawn', "
+                f"got {verdict!r}"
+            )
+        elif verdict == "withdrawn" and not note:
+            errors.append(
+                f"verdict {pos}: 'withdrawn' requires a note naming who withdrew the "
+                "requirement and why (format: '<id>|withdrawn|<note>')"
+            )
+        if req_id in seen:
+            errors.append(
+                f"verdict {pos}: requirement id {req_id!r} already verdicted at position "
+                f"{seen[req_id]} (one verdict per requirement)"
+            )
+        else:
+            seen[req_id] = pos
+        verdicts.append(RequirementVerdict(requirement_id=req_id, verdict=verdict, note=note))
+    return verdicts, errors
 
 
 def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

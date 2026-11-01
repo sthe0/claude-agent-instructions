@@ -11,420 +11,76 @@ Every command function has the signature cmd_x(args, *, store, runner) -> Direct
 from __future__ import annotations
 
 import argparse
-import copy
 import datetime as dt
-import hashlib
 import json
 import os
-import re
-import shlex
-import shutil
-import subprocess
 import sys
 import tempfile
-import time
-import tomllib
-from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
-
-from lib import argv_text, ask_evidence, config_root, engine_session_binding, hook_telemetry, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
-
-from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, delivery_channel, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
-from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
-from .classify import TRACKER_KEY_RE, Signals, classify
-from . import config as agentctl_config
+from lib import argv_text, engine_session_binding, hook_telemetry
+from . import (
+    gates,
+    grants as _grants,
+    order_approvals,
+    plan_convert,
+    plan_refs,
+    plan_resources,
+    plugins,
+    cli_session,
+    cli_questions,
+    cli_plan,
+    cli_review,
+    cli_approval,
+    cli_dispatch,
+    cli_results,
+    cli_difficulty,
+    cli_final,
+    cli_replan,
+    cli_control,
+    cli_mandate,
+)
 from .config import Thresholds
-from .partition import render_section, render_units, verdict
-from .directive import Directive, DIRECTIVE_ESCALATE_TO_USER
-from .dispatch import (
-    CHILD_EXHAUSTED,
-    CHILD_INFRA_FAILURE,
-    Runner,
-    dispatch_stage,
-    LABEL_DECORATION,
-    permission_request_action,
-    parse_marker,
-    subprocess_runner,
-)
-from .machine import transition
-from .plan import (
-    CONDITION_MARKERS,
-    META_PART,
-    ConcernFormatError,
-    PlanDoc,
-    PlanError,
-    SEVERITY_BLOCKING,
-    SEVERITY_NOTE,
-    acceptance_requirement_bindings,
-    change_tier,
-    changed_parts,
-    check_venue_warnings,
-    customer_question_defect,
-    entries_grants_sha256,
-    grants_sha256,
-    load_plan,
-    load_plan_with_digest,
-    materialized_grant_entries,
-    dropped_grants_report,
-    is_unit_id,
-    order_digest,
-    pair_binding,
-    pair_content,
-    pair_part_tokens,
-    parse_concern,
-    parse_pair,
-    parse_unit,
-    part_digest_map,
-    plan_has_any_grants,
-    plan_meta_digest,
-    plan_meta_element_key,
-    plan_interface_digests,
-    plan_meta_element_keys,
-    plan_stage_digests,
-    refined_grant_entries,
-    replan_class,
-    review_ids,
-    stage_norm_keys,
-    stage_part,
-    stage_question_key,
-    stage_reattest_digest,
-    unit_currency_hash,
-    unit_node,
-    verify_command_reachability_blockers,
-    cost_tier_floor_advisories,
-    final_check_duplicate_warnings,
-    verify_command_scope_warnings,
-    whole_suite_warnings,
-    _derive_stage_grants,
-    _venue_for,
-)
-from .render import (
-    build_site_prompt,
-    cmd_plan_grants,
-    cmd_plan_render,
-    plan_render_stage_arg_type,
-    plan_summary_text,
-    render_plan_grants,
-    render_plan_md,
-    render_stages_md,
-)
-from .submission import plan_size_blocks, plan_size_warnings, submission_advice, submission_violations
-from .state import (
-    _EXECUTION_NODES,
-    _MAX_PLAN_STACK,
-    Actor,
-    AcceptanceBypass,
-    AcceptanceReview,
-    AGENT_ACTOR,
-    AUTHORIZE_REPLAN_MARKER,
-    CheckKind,
-    CheckVenue,
-    CodeReview,
-    CONCERN_FIXED,
-    CONCERN_OPEN,
-    CONCERN_RECORDED,
-    CONCERN_SUPERSEDED,
-    ConcernRecord,
-    CONTENT_WAIVER_ASK_MARKER,
-    Critique,
-    Criterion,
-    CriterionType,
-    Declaration,
-    Difficulty,
-    canonical_failure_address,
-    canonical_normalization_destination,
-    EFFORT_FIRE_FINISHED_WORK,
-    FAILURE_ADDRESS_ALIASES,
-    FAILURE_ADDRESS_VALUES,
-    FinalCheck,
-    Investigation,
-    is_settled,
-    is_skipped,
-    JudgeBypass,
-    LANDED_GIT_ERROR_EXIT,
-    Partition,
-    PartitionUnit,
-    PARTITION_UNIT_MODES,
-    GateRecord,
-    Means,
-    Node,
-    Normalization,
-    NORMALIZATION_DESTINATION_ALIASES,
-    NORMALIZATION_DESTINATIONS,
-    NORMALIZATION_LEVELS,
-    Outcome,
-    PARENT_DIFFICULTY_ENV,
-    parse_parent_difficulty,
-    PermissionRequest,
-    PLAN_PRESENTATION_KIND_ESSENCE,
-    PLAN_PRESENTATION_KIND_FULL,
-    PLAN_PRESENTATION_KIND_REPLAN_DIFF,
-    PLAN_PRESENTATION_KINDS,
-    PLAN_PRESENTATION_RENDERING_CAP_BYTES,
-    PlanFrame,
-    PlanPairReview,
-    PlanPresentation,
-    PlanReview,
-    plan_review_concern_ids,
-    plan_review_pair_scope,
-    plan_review_scope_for_pair,
-    plan_review_scope_for_stage,
-    plan_review_scope_stage_index,
-    ProtectedGrantAcceptance,
-    ReattestStash,
-    RequirementVerdict,
-    RESOLUTION_ASK_MARKER,
-    RiskAcceptance,
-    Route,
-    SessionState,
-    SHOW_FULL_PLAN_MARKER,
-    Stage,
-    StageReview,
-    StageStatus,
-    Subject,
-    WeightClass,
-    landed_containment_script,
-)
+from .directive import Directive
+from .dispatch import subprocess_runner
+from .plan import load_plan, load_plan_with_digest, plan_meta_digest, plan_stage_digests
+from .render import cmd_plan_grants, cmd_plan_render
+from .state import canonical_normalization_destination, PARENT_DIFFICULTY_ENV, PermissionRequest
 from .store import FileStateStore, StateStore, safe_session_id as _safe_session_id
-
+# Re-exported: read as agentctl.cli.<name> by scripts/agentctl/plan_convert.py, scripts/mandate_cycle/driver.py, scripts/spawn-specialist.py, 43 test files.
 from .cli_common import (
-    _refusal_vcs_resources,
-    handoff_vcs_resources,
-    _REFUSAL_VCS_RESOURCE_RE,
-    stage_branch_resources,
     REPO_ROOT,
-    GATE_LOG,
-    TASK_QUALITY_LOG,
-    ESCALATION_LEDGER_ENV,
-    _VALID_QUALITY_RATINGS,
-    OBSERVATION_CONTRACT,
-    _digest,
-    _bash_rule_command_from_call,
-    _plan_file_sha256,
-    _plan_refs_problem,
-    _plan_file_bytes,
     _observation_sha256,
-    _normalize_reviewer_token,
     _record_stage_review,
-    _record_code_review,
-    _judge_bypassed_surface,
-    _acceptance_bypass_surface,
-    _record_bypass,
-    _load_prior_plan,
-    _write_plan_snapshot,
     _write_plan_version_snapshot,
     _read_plan_version_snapshot,
-    _snapshot_approved_plan,
-    _refresh_approved_grant_snapshot,
-    _approved_snapshot_doc,
-    _bind_approved_grants,
-    _replan_baseline_path,
-    _ORDER_EFFORT_SCALES,
     _ledgered_order_key,
     _effort_cross_totals,
-    _order_actual,
     _flush_order_effort,
-    _clear_open_fires_if_customer,
-    _open_effort_fire,
-    _record_effort_fire,
     _difficulty_id,
-    NESTED_DIFFICULTY_ORIGINS,
-    _open_difficulty,
-    _difficulty_cap_directive,
     _archive_difficulty,
-    _adopt_parent_difficulty,
     _adopt_norm_handoff,
-    _loop_self_check,
-    _agent_self_decision_refusal,
-    _record_backstop_crossing,
-    _crossing_data,
-    _backstop_crossings,
-    _disclose_backstop_crossings,
-    _disclose_agent_plan_conversions,
     _plan_review_release_active,
-    _sync_release_anchor,
-    _agent_fire_ack_refusal,
+    handoff_vcs_resources,
     _handoff_held,
-    _self_approve_detail,
     _autonomy_for,
-    _record_customer_stage_grants,
     _agent_review_override,
-    _settle_override_decision,
-    _TRIGGER_EXIT_FRESH_PASS,
-    _drop_agent_overrides,
-    _plan_review_override_refusal,
-    _review_vouch,
-    _record_first_thinker_verdict,
-    _kind_within_boundary,
-    _replan_kind,
     _baseline_plan_for_tier,
     _frozen_edge_stages,
-    _review_baseline,
-    _carry_records,
-    _autonomy_directive_data,
     _CRITERION_ENGINE_WRITTEN_FIELDS,
     _apply_refined_stage_fields,
-    _sync_venue_from_plan,
-    _plan_venue_pair,
-    _restore_current_stage,
-    _stamp_accepted_plan_digest,
-    _refresh_caches_from_plan_path,
     _log_gate,
-    _instructions_head,
-    _write_quality_row,
-    _attach_advisories,
-    _with_advisories,
-    _submission_advice,
     _submission_problems,
-    _run_check,
-    _verify_command_result,
     _VENUE_IDENTITY_GIT_TIMEOUT_S,
     _VenueSnapshot,
-    _GitTreeProbe,
     _venue_tree_identity,
-    _check_definition_digest,
-    _cached_check_hit,
-    _resolve_or_refuse,
-    _diagnose_venue_refusal,
-    _diagnose_acceptance_rejection,
-    _diagnose_effort_divergence,
-    _effort_fire_escalation_data,
-    _effort_fire_refusal,
-    _freeze_delivered_head,
-    _landed_spec_for_stage,
-    _needs_delivered_head_freeze,
     _landed_check_result,
-    _content_waiver_blocker,
-    _disclose_landed_content_waivers,
-    _is_recursion_refusal,
-    _is_child_outside_project_refusal,
-    _GRANT_WIDENING_EXIT,
-    _HANDOFF_SHA_LINE_RE,
-    _loop_detected_line,
-    _is_grant_widening_refusal,
-    _parse_rule_lines,
     _require,
-    _count_review_round,
-    _clear_since_user_decision,
-    _replan_class_data,
-    _effort_fire_window,
-    _finished_work_fire,
-    _finished_work_data,
-    _disclose_finished_work,
-    _park_node,
-    _park_blocked,
-    _MANDATE_NODE,
-    _mandate_by_refusal,
-    _mandate_view,
-    _enumeration_escape_counts,
-    _bound_stage_key,
-    _bound_order_stage_key,
-    _record_review_questions,
-    _register_plan_assumptions,
-    _record_plan_presentation,
-    _PLAN_PRESENTATION_STAGE_ANCHOR_RE,
-    _plan_presentation_skeleton,
     _present_plan_transcript,
-    _deliver_presentation_via_channel,
-    _note_round_release,
-    _ledger_scope,
-    _parse_review_concerns,
-    _parse_review_questions,
-    _question_data,
-    _changed_parts,
-    _plan_concern_severity,
-    _stamp_concern_plan,
-    _commit_concern_ledger,
-    _log_concerns_downgraded,
-    _cmd_plan_review_pair,
-    TOPOLOGICAL_COMPOSITION_REVIEWER,
-    _is_counted_review,
-    _next_record_seq,
-    _stamp_whole_plan_baseline,
-    _count_plan_review_round,
     _review_cycle_arrive,
-    _review_cycle_close,
-    _count_review_act,
-    _evaluate_review_trigger,
-    _pair_ledger_groups,
-    _ledger_concern,
-    _prior_row_diff,
-    _walk_target,
-    _parse_verdicts,
-    _skip_optional_problems,
-    _stranded_dependency_problems,
-    _mandate_basis_problems,
-    _parse_partition_units,
-    _continuation_worktree,
-    _try_reattest,
-    _EFFORT_BY_COST_TIER,
-    _dispatch_project_settings_path,
-    _parse_add_dir_spec,
-    _parse_transcript_path,
-    _parse_rule_line,
-    _rule_line_to_call,
-    _parse_resource_line,
-    _parse_resource_spec,
-    _self_grant_resources_for_rule,
-    _stage_grant_entries,
-    _stage_would_derive_grants,
-    _refresh_runtime_grant_titles,
-    _rekey_runtime_grants,
-    _effective_stage_grants,
-    _effective_stage_grants_for_self_grant,
-    _consume_once_grants,
-    _classify_transcript_denials,
-    _diagnose_materialization_defect,
-    _escalation_link,
-    _child_norm_mismatch,
-    _verify_child_escalation,
-    _open_norm_mismatch,
-    _repeat_norm_mismatch,
-    _covers_resource,
     EvidenceDirError,
-    evidence_dir_for,
-    _cost_rows,
     _descendant_sessions,
     _refresh_spend,
-    _credit_descendant_order_flush,
-    _utcnow,
-    _effort_now,
-    _begin_child_run,
-    _carry_hook_stamps,
-    _end_child_run,
-    _write_check_log,
-    _evaluate_final_checks,
-    _landing_gate,
     RESOLUTION_ASK_BLOCKER_PREFIX,
-    RESOLUTION_ASK_RULE_HINT,
-    _resolution_ask_gate,
-    _require_diagnosing,
-    _supersede_for_release,
-    _session_plan_paths,
-    _snapshot_norm_targets,
-    _normalize_record_fields,
-    _log_normalize_event,
-    _record_normalization_waiver,
-    _cmd_normalize_outside_diagnosing,
-    _resume_action,
-    _report_acceptance_staleness,
-    _replan_spelling_advisories,
-    _cmd_replan,
-    _parent_link_summary,
-    _load_or_none,
-    _linked_children,
-    _escalation_rows,
-    _run_step,
-    _ROOT,
-    _SESSION_COMMANDS,
-    _ARG_RESOLVE,
-    _ARG_FORWARD,
-    _ARG_DO_NOT_WRAP,
-    resolve_arg_text,
-    _inject_default_session,
-    _BindingStore,
-    _is_followed_by_gate,
-    _fire_plugins,
 )
 from .cli_session import (
     cmd_start,
@@ -450,12 +106,12 @@ from .cli_questions import (
     cmd_order_list,
     cmd_question_check,
     cmd_question_candidate_dispose,
-    _upsert_candidate,
-    _apply_enumeration_result,
-    cmd_question_enumerate,
-    cmd_question_enumerate_escape,
     cmd_question_enumerate_worker,
+    cmd_question_enumerate_escape,
+    cmd_question_enumerate,
 )
+# Re-exported: read as agentctl.cli.<name> by 4 test files.
+from .cli_questions import _bound_order_stage_key, _upsert_candidate, _apply_enumeration_result
 from .cli_plan import (
     cmd_classify,
     cmd_plan,
@@ -475,7 +131,24 @@ from .cli_review import (
     cmd_code_review,
     cmd_accept,
 )
+# Re-exported: read as agentctl.cli.<name> by scripts/review-cost-calibrate.py, 7 test files.
+from .cli_review import (
+    ESCALATION_LEDGER_ENV,
+    _changed_parts,
+    TOPOLOGICAL_COMPOSITION_REVIEWER,
+    _is_counted_review,
+    _count_plan_review_round,
+    _count_review_act,
+)
 from .cli_approval import cmd_approve, cmd_partition, cmd_partition_units, cmd_next_stage
+# Re-exported: read as agentctl.cli.<name> by 7 test files.
+from .cli_approval import (
+    _stamp_accepted_plan_digest,
+    _refresh_caches_from_plan_path,
+    _review_cycle_close,
+    _parse_partition_units,
+    _rekey_runtime_grants,
+)
 from .cli_dispatch import (
     cmd_dispatch,
     cmd_resolve_permission,
@@ -484,7 +157,28 @@ from .cli_dispatch import (
     cmd_stage_grants,
     cmd_grant_stats,
 )
+# Re-exported: read as agentctl.cli.<name> by scripts/spawn-specialist.py, 11 test files.
+from .cli_dispatch import (
+    _is_recursion_refusal,
+    _is_child_outside_project_refusal,
+    _parse_rule_lines,
+    _refusal_vcs_resources,
+    _continuation_worktree,
+    _parse_transcript_path,
+    _parse_rule_line,
+    _self_grant_resources_for_rule,
+    stage_branch_resources,
+    _stage_grant_entries,
+    _stage_would_derive_grants,
+    _effective_stage_grants,
+    _effective_stage_grants_for_self_grant,
+    _classify_transcript_denials,
+    _covers_resource,
+    evidence_dir_for,
+)
 from .cli_results import cmd_record_landing, cmd_record_result
+# Re-exported: read as agentctl.cli.<name> by 3 test files.
+from .cli_results import _freeze_delivered_head, _needs_delivered_head_freeze
 from .cli_difficulty import (
     cmd_declare,
     cmd_investigate,
@@ -493,8 +187,27 @@ from .cli_difficulty import (
     cmd_difficulty_open,
     cmd_difficulty_close,
 )
+# Re-exported: read as agentctl.cli.<name> by 1 test file.
+from .cli_difficulty import _session_plan_paths
 from .cli_final import cmd_verify_final, cmd_resolve, cmd_reject
+# Re-exported: read as agentctl.cli.<name> by 3 test files.
+from .cli_final import (
+    _backstop_crossings,
+    _disclose_backstop_crossings,
+    _GitTreeProbe,
+    RESOLUTION_ASK_RULE_HINT,
+)
 from .cli_replan import cmd_replan, cmd_fire_acknowledge, cmd_check_coverage, cmd_effort_check
+# Re-exported: read as agentctl.cli.<name> by 8 test files.
+from .cli_replan import (
+    _refresh_approved_grant_snapshot,
+    _approved_snapshot_doc,
+    _TRIGGER_EXIT_FRESH_PASS,
+    _drop_agent_overrides,
+    _kind_within_boundary,
+    _replan_kind,
+    _refresh_runtime_grant_titles,
+)
 from .cli_control import (
     cmd_block,
     cmd_unblock,
@@ -514,20 +227,6 @@ from .cli_mandate import (
     cmd_mandate_retry,
     cmd_mandate_stop,
     cmd_mandate_status,
-)
-from . import (
-    cli_session,
-    cli_questions,
-    cli_plan,
-    cli_review,
-    cli_approval,
-    cli_dispatch,
-    cli_results,
-    cli_difficulty,
-    cli_final,
-    cli_replan,
-    cli_control,
-    cli_mandate,
 )
 
 
@@ -684,6 +383,306 @@ COMMANDS = {
 #   _ARG_DO_NOT_WRAP  identifiers, slugs, digests, file paths, enum-like tokens.
 #                     Never prose, so a leading '@' carries no meaning; each entry
 #                     states why in one line.
+
+_ROOT = "<root>"  # sentinel subcommand key for the top-level parser's own options
+
+
+# Every subcommand that takes --session. Spelled out rather than derived: a
+# derivation would silently classify the next subcommand someone adds.
+_SESSION_COMMANDS = (
+    "start", "reset", "plugin-activate", "plugin-deactivate", "plugin-record",
+    "ledger-add", "ledger-check", "ledger-candidate", "ledger-dispose",
+    "ledger-enumerate", "question-raise", "question-research", "question-dispose",
+    "question-rebind", "question-retire", "question-list", "question-check",
+    "question-enumerate", "question-enumerate-worker", "question-enumerate-escape",
+    "question-candidate-dispose",
+    "order-raise", "order-dispose", "order-list", "classify", "plan",
+    "plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
+    "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
+    "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
+    "risk-accept", "accept-protected-grant", "stage-review", "code-review", "accept", "approve",
+    "partition", "partition-units", "next-stage", "dispatch", "resolve-permission", "stage-grants", "evidence-dir", "grant-stats",
+    "record-result", "record-landing", "declare",
+    "investigate", "critique", "normalize", "difficulty-open", "difficulty-close",
+    "verify-final", "resolve", "reject",
+    "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status", "children",
+    "adopt-escalation", "drive", "close", "push-subplan", "pop-subplan", "task-reset",
+    "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry", "mandate-stop", "mandate-status",
+    "workspace-register",
+)
+
+
+# (dest, subcommands that declare it)
+_RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("goal", ("start", "reset")),
+    ("done_criterion", ("start", "reset")),
+    ("note", ("plugin-record", "confirm-delivery", "plan-review", "stage-review", "code-review",
+              "accept", "question-enumerate-escape", "fire-acknowledge", "accept-protected-grant")),
+    ("statement", ("ledger-add", "ledger-candidate")),
+    ("source", ("ledger-add", "question-dispose")),
+    ("premises", ("ledger-add",)),
+    ("basis", ("ledger-add", "question-dispose", "risk-accept")),
+    ("reason", ("ledger-dispose", "question-retire", "question-candidate-dispose",
+                "order-dispose", "reject", "block", "task-reset", "replan")),
+    ("element", ("order-raise",)),
+    ("question", ("question-raise", "question-candidate-dispose")),
+    ("attempted", ("question-research",)),
+    ("answer", ("question-dispose",)),
+    ("derivation", ("question-dispose",)),
+    ("risk", ("question-dispose", "risk-accept")),
+    ("confirm_still_valid", ("question-rebind",)),
+    ("concerns", ("plan-review", "stage-review", "code-review")),
+    ("customer_questions", ("plan-review",)),
+    ("observation", ("stage-review", "record-result", "close")),
+    ("actual", ("record-result", "declare", "close")),
+    ("control", ("record-result", "close")),
+    ("expected", ("declare",)),
+    ("mismatch", ("declare",)),
+    ("localized_expectation", ("investigate",)),
+    ("localized_actual", ("investigate",)),
+    ("hypotheses", ("investigate",)),
+    ("functional_ground", ("critique",)),
+    ("replanning_task", ("critique",)),
+    ("invariants_to_preserve", ("critique",)),
+    ("differences_to_remove", ("critique",)),
+    ("factor", ("normalize",)),
+    ("normalize_factor", ("replan",)),
+    ("quality_note", ("resolve", "close")),
+    ("landing_waiver", ("resolve", "close")),
+    ("resolution_ask_unverifiable", ("resolve", "close")),
+    ("coverage_waiver", ("replan",)),
+    ("normalization_waiver", ("replan", "normalize")),
+    ("renegotiation_note", ("replan",)),
+    ("bypass_reason", ("accept",)),
+    ("reopen_reason", ("reset",)),
+    ("reopen_user_decision", ("reset",)),
+    ("rejection_text", ("present-plan",)),
+    ("accept_content_loss", ("record-landing",)),
+)
+
+
+# (dest, subcommands that declare it, why '@' means nothing here)
+_DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("state_root", (_ROOT,), "directory path the state store is rooted at"),
+    ("session", _SESSION_COMMANDS, "session id — the slug state is keyed by"),
+    ("task", ("start", "reset", "push-subplan", "task-reset"), "task slug, not a description"),
+    ("child", ("adopt-escalation",), "session id of the linked child"),
+    ("criterion_type", ("start", "reset"), "one of two fixed verification kinds"),
+    ("plugin", ("plugin-activate", "plugin-deactivate", "plugin-record"), "plugin registry name"),
+    ("phase", ("plugin-record",), "plugin phase name from a fixed vocabulary"),
+    ("attachment", ("plugin-record",), "ticket attachment id or URL, not a file to read"),
+    ("comment", ("plugin-record",), "ticket comment id or URL, not a file to read"),
+    ("tracker_key", ("plugin-activate", "classify", "drive"), "tracker issue key (ABC-123)"),
+    ("id", ("ledger-add", "ledger-candidate", "ledger-dispose", "question-raise",
+            "question-research", "question-dispose", "question-rebind", "question-retire",
+            "question-candidate-dispose", "order-raise", "order-dispose", "accept-protected-grant"),
+     "claim / question / order-element / protected-action id"),
+    ("claim", ("ledger-dispose",), "id of the grounding claim, not its text"),
+    ("artifact", ("ledger-enumerate",), "path to the deliverable being cross-checked"),
+    ("target", ("question-raise", "plan-review", "plan-review-walk", "plan-review-compose",
+                "plan-review-pair-history"),
+     "plan element address or plan file path"),
+    ("pair", ("plan-review-pair-history",), "review pair id (`<base>-<service>`) or unit id (`unit:<node>`) — an id, not narrative"),
+    ("control", ("question-raise",),
+     "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
+     "grammar-bound name, never the prose --control of record-result/close"),
+    ("plan", ("plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
+              "plan-seal", "plan-convert", "plan-review-delta", "submit-plan", "replan", "drive",
+              "push-subplan", "question-enumerate", "question-enumerate-worker",
+              "question-enumerate-escape", "question-dispose",
+              "question-rebind", "question-raise", "present-plan", "order-dispose"),
+     "plan file path"),
+    ("out", ("plan-convert",), "output directory path for the converted tree"),
+    ("field", ("plan-externalize",), "name of a plan field — an identifier, not narrative"),
+    ("meta_field", ("plan-externalize",), "name of a [meta] field — an identifier, not narrative"),
+    ("order_field", ("plan-externalize",),
+     "name of a [meta.order] field — an identifier, not narrative"),
+    ("corpus", ("plan-resources",), "directory/ies to scan for *.toml plans — file paths, not narrative"),
+    ("commands_file", ("plan-resources",), "path to a file of literal command lines — a file path"),
+    ("dump_commands", ("plan-resources",), "output file path for the collected command list"),
+    ("report_json", ("plan-resources",), "output file path for the JSON resolution report"),
+    ("digest", ("question-enumerate-worker",),
+     "plan content digest the launcher computed — the sidecar's key, passed down "
+     "verbatim rather than a narrative"),
+    ("stages", ("question-enumerate-worker",),
+     "comma-separated stage indices the launcher narrowed the pass to"),
+    ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
+    ("rendering_file", ("present-plan",), "path to the rendered presentation"),
+    ("mandate_id", ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry",
+                    "mandate-stop", "mandate-status"),
+     "mandate slug the state directory is keyed by"),
+    ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission",
+            "task-reset", "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry"),
+     "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
+     "identity token like any other --by, not free text)"),
+    # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
+    # for the @<path> partition (test_argv_text_call_sites.py's _is_candidate excludes any
+    # action with choices set), so classifying it would be a stale entry the moment it's added.
+    ("escape_reason", ("confirm-delivery",),
+     "one token from delivery.DELIVERY_ESCAPE_REASONS — the narrative half of "
+     "the escape is --note, which is RESOLVE"),
+    ("reviewer", ("plan-review", "stage-review", "code-review"), "reviewer name"),
+    ("plan_digest", ("plan-review",), "sha256 the review binds to"),
+    ("scope", ("plan-review", "risk-accept"), "'' or 'stage:<n>' or 'topo:<pair-or-unit>' — the review's binding, not narrative"),
+    ("concern_ids", ("plan-review",),
+     "explicit stable ids for --concern, positionally paired — ids, not narrative"),
+    ("concern_id", ("risk-accept",), "the concern id this acceptance answers — an id, not narrative"),
+    ("norm_targets", ("critique",),
+     "norm-target address (`stage:<n>` or a repo path) the critique must edit — an address, not narrative"),
+    ("code_ref", ("code-review", "record-result"), "commit / PR reference the verdict binds to"),
+    ("head", ("record-landing",), "commit the landing pushed — a revision, not narrative"),
+    ("base", ("record-landing",), "commit the landing was rebased onto — a revision, not narrative"),
+    ("unit", ("partition", "partition-units"), "'|'-delimited partition-unit record"),
+    ("author", ("accept", "risk-accept"), "acceptance author id — an identity token, not narrative"),
+    ("renegotiated_by", ("replan",), "who made the renegotiation decision — a name, not a narrative"),
+    ("verdict", ("accept",), "'|'-delimited requirement-verdict record"),
+    ("budget", ("dispatch",), "budget tier name"),
+    ("complexity", ("dispatch",), "complexity tier name"),
+    ("cost_log", ("record-result", "resolve", "verify-final", "replan", "effort-check", "submit-plan"),
+     "cost log file path (test override)"),
+    ("quality_by", ("resolve", "close"), "how the quality rating was obtained — a fixed token"),
+    ("confirmed_by", ("close",), "who confirmed — a name, not a narrative"),
+    ("approved_by", ("drive",), "who approved — a name, not a narrative"),
+    ("not_checked", ("code-review",),
+     "short axis name(s) or 'none' — a fixed-vocabulary token, not review narrative"),
+    ("rules", ("resolve-permission",),
+     "Bash/Edit/etc rule strings — grant syntax tokens, not narrative"),
+    ("add_dirs", ("resolve-permission",),
+     "'PATH:MODE' tokens — grant syntax, not narrative"),
+    ("regression_command", ("plan-review",),
+     "shell command run verbatim via the runner (terminal-pass evidence) — an "
+     "invocation string, not narrative prose for the @<path> convention"),
+    ("path", ("workspace-register",), "filesystem path of the workspace — a path, not narrative"),
+    ("ws_backend", ("workspace-register",), "workspace backend name from the registry — an identifier"),
+    ("ws_name", ("workspace-register",), "workspace/mount name the backend teardown is keyed by — an identifier"),
+)
+
+
+_ARG_RESOLVE: frozenset[tuple[str, str]] = frozenset(
+    (command, dest) for dest, commands in _RESOLVE_ROWS for command in commands
+)
+
+
+_ARG_FORWARD: frozenset[tuple[str, str]] = frozenset({
+    # dispatch's own process never reads this narrative text — it only hands it
+    # on to the spawned specialist's argv, which resolves it via the same
+    # lib.argv_text convention on its own side (see spawn-specialist.py /
+    # spawn-cursor-specialist.py's _WRAPPER_RESOLVE).
+    ("dispatch", "constraints"),
+})
+
+
+_ARG_DO_NOT_WRAP: dict[tuple[str, str], str] = {
+    (command, dest): reason
+    for dest, commands, reason in _DO_NOT_WRAP_ROWS
+    for command in commands
+}
+
+
+def resolve_arg_text(args: argparse.Namespace) -> None:
+    """Apply the `@<path>` convention in place to this command's RESOLVE arguments.
+
+    One pass over the parsed namespace before dispatch, so no cmd_* body sees an
+    unresolved reference and none has to remember to call the helper itself.
+
+    Deliberately not an argparse ``type=`` converter: a SystemExit raised inside a
+    converter is attributed to argparse's own error path rather than to the
+    convention, and an append action applies its converter per element — which
+    cannot preserve the None-vs-empty-list distinction the helpers guarantee.
+    """
+    for command, dest in _ARG_RESOLVE:
+        # A _ROOT entry belongs to the top-level parser, so it applies whatever
+        # subcommand ran. Matching only args.command would leave a root narrative
+        # option classified RESOLVE but never actually resolved — the silent
+        # false-green this partition exists to make impossible.
+        if command not in (args.command, _ROOT):
+            continue
+        value = getattr(args, dest)
+        # An append dest arrives as a list once given and as None when never
+        # given; both helpers pass None through unchanged.
+        setattr(
+            args,
+            dest,
+            argv_text.read_arg_text_list(value)
+            if isinstance(value, list)
+            else argv_text.read_arg_text(value),
+        )
+
+
+def _inject_default_session(argv: list[str], harness: str | None) -> list[str]:
+    """Return a copy of ``argv`` with ``--session <harness>`` appended when the
+    harness session id is known and the caller passed no --session of its own.
+
+    hook-state-gate.py receives only the HARNESS conversation session_id
+    (payload["session_id"] == $CLAUDE_CODE_SESSION_ID) and reads the state of the
+    engine session bound to it (lib/engine_session_binding.py, written by a verb
+    that saves state under an explicit --session), else of the harness id itself.
+    An omitted --session must default to the harness id — not stay unset and
+    fail the 30 required=True subcommands. Appending places the flag inside the
+    subparser's argument region (--session is a subcommand option); it is a
+    no-op when --session (either '--session X' or '--session=X') is already
+    present, or when the harness id is empty/None."""
+    if not harness:
+        return list(argv)
+    for tok in argv:
+        if tok == "--session" or tok.startswith("--session="):
+            return list(argv)
+    return list(argv) + ["--session", harness]
+
+
+class _BindingStore(FileStateStore):
+    """The default store of a verb run by a harness session: saving the state of the
+    session the verb was run on binds that session to the harness id, so the
+    production-edit gate (which sees only the harness id) follows the session the
+    coordinator drives. Query verbs save nothing and so never bind."""
+
+    def __init__(self, harness: str, session: str):
+        super().__init__(None)
+        self._harness = harness
+        self._session = _safe_session_id(session)
+
+    def save(self, state) -> None:
+        super().save(state)
+        if _safe_session_id(state.session_id) != self._session:
+            return
+        try:
+            engine_session_binding.record_drive(
+                self._harness, state.session_id, dt.datetime.now(dt.timezone.utc))
+        except Exception:
+            pass  # an unwritten binding leaves the gate on the previously most recent one (the harness id if none)
+
+
+def _is_followed_by_gate(harness: str, session: str) -> bool:
+    # The binding store always lives under the agent home; with --state-root the verb's
+    # state is not the gate's state either, so that case reports "not followed" as base did.
+    try:
+        return engine_session_binding.resolve(harness) == _safe_session_id(session)
+    except Exception:
+        return False
+
+
+def _fire_plugins(args, store: StateStore, directive: Directive) -> None:
+    """After a command runs, fire the matching plugin event on the (just-saved)
+    state so active plugins can observe, gate, and auto-retire. Central wiring —
+    the command bodies stay plugin-agnostic. Fires regardless of directive.ok
+    (a blocked resolve must still surface its publish nudge). A plugin-less session
+    skips entirely (no reload, no behavior change). Plugin faults never crash the
+    engine."""
+    event = plugins.event_for(args.command)
+    if event is None:
+        return
+    session = getattr(args, "session", None)
+    if not session:
+        return
+    try:
+        state = store.load(session)
+        if state is None or not plugins.active(state):
+            return
+        plugins.fire(event, state, directive)
+        store.save(state)
+    except Exception as exc:  # observability without aborting the directive
+        directive.data.setdefault("plugin_errors", []).append(str(exc))
+
 
 def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     """The agentctl parser. `allow_abbrev=False` is the exact-spelling form the own

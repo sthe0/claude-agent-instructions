@@ -9,7 +9,37 @@ from .directive import Directive, DIRECTIVE_ESCALATE_TO_USER
 from .dispatch import Runner
 from .state import AGENT_ACTOR
 from .store import StateStore
-from .cli_common import _MANDATE_NODE, _mandate_by_refusal, _mandate_view, _utcnow
+import datetime as dt
+from .cli_common import _utcnow
+
+
+_MANDATE_NODE = "(mandate-scoped)"
+
+
+def _mandate_by_refusal(args) -> Directive | None:
+    by = (args.by or "").strip()
+    if by and by.casefold() != AGENT_ACTOR:
+        return None
+    return Directive(
+        False, _MANDATE_NODE, "noop",
+        f"{args.command} is a user decision: --by must name the customer, not {AGENT_ACTOR!r}",
+        marker=DIRECTIVE_ESCALATE_TO_USER,
+        data={"mandate": args.mandate_id, "by": by},
+    )
+
+
+def _mandate_view(mandate: mandate_rules.Mandate, now: dt.datetime) -> dict:
+    spend = mandate_store.spend_now(mandate.id, now)
+    verdict_ = mandate_rules.gate(mandate, now, spend)
+    held, pid = mandate_store.probe_cycle(mandate.id)
+    return {
+        "mandate": mandate.to_dict(),
+        "spend": {"day_usd": spend.day_usd, "week_usd": spend.week_usd},
+        "may_start": verdict_.may_start,
+        "refusals": list(verdict_.reasons),
+        "cycle_running": held,
+        "cycle_pid": pid,
+    }
 
 
 def cmd_task_reset(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

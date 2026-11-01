@@ -15,42 +15,402 @@ from . import (
     plugins,
     resources as _resources,
     task_accumulator,
+    mandate_store,
 )
 from .partition import render_section, render_units, verdict
 from .directive import Directive
 from .dispatch import Runner
 from .machine import transition
-from .plan import PlanError, load_plan_with_digest, materialized_grant_entries, order_digest
-from .state import AGENT_ACTOR, is_skipped, Partition, GateRecord, Node, StageStatus
+from .plan import (
+    PlanError,
+    load_plan_with_digest,
+    materialized_grant_entries,
+    order_digest,
+    entries_grants_sha256,
+)
+from .state import (
+    AGENT_ACTOR,
+    is_skipped,
+    Partition,
+    GateRecord,
+    Node,
+    StageStatus,
+    is_settled,
+    PartitionUnit,
+    PARTITION_UNIT_MODES,
+    SessionState,
+    Stage,
+)
 from .store import StateStore
+import hashlib
+import json
+import sys
+from pathlib import Path
 from .cli_common import (
+    REPO_ROOT,
     _write_plan_snapshot,
     _snapshot_approved_plan,
-    _bind_approved_grants,
     _ORDER_EFFORT_SCALES,
     _ledgered_order_key,
     _order_actual,
     _flush_order_effort,
     _autonomy_for,
     _baseline_plan_for_tier,
-    _stamp_accepted_plan_digest,
-    _refresh_caches_from_plan_path,
+    _frozen_edge_stages,
+    _verdict_survives,
+    _apply_refined_stage_fields,
+    _sync_venue_from_plan,
     _log_gate,
     _with_advisories,
+    _submission_advice,
+    _submission_problems,
     _require,
     _clear_since_user_decision,
     _enumeration_escape_counts,
     _note_round_release,
-    _review_cycle_close,
     _evaluate_review_trigger,
-    _skip_optional_problems,
-    _stranded_dependency_problems,
-    _mandate_basis_problems,
-    _parse_partition_units,
-    _rekey_runtime_grants,
     _utcnow,
     _effort_now,
 )
+
+
+def _bind_approved_grants(state: SessionState, doc, entries: dict | None = None) -> None:
+    """Bind the effective grant set of `doc` to the session at approval: the entries
+    materialized once, and the hash of those entries. Dispatch reads the stored entries
+    (`_stage_grant_entries`) after re-checking them against the hash; re-deriving them
+    there made the grant set depend on the engine code and venue filesystem of the
+    moment (#338). None/None when `doc` did not load, so a prior approval's binding is
+    never carried over to unrelated bytes."""
+    if doc is None:
+        state.approved_grants_sha256 = None
+        state.approved_grant_entries = None
+        return
+    if entries is None:
+        entries = materialized_grant_entries(doc)
+    state.approved_grant_entries = entries
+    state.approved_grants_sha256 = entries_grants_sha256(entries)
+
+
+def _stamp_accepted_plan_digest(state: SessionState, plan_path: str) -> None:
+    """Record the sha256 of the ACCEPTED plan bytes on the session.
+
+    Called from the three submission seams' commands and nowhere else, and only past every
+    refusal path of the command that stamps — at approve that includes the plan_approval
+    gate itself, which sits BELOW the seam — so state.accepted_plan_digest always names
+    bytes the session actually took. Best-effort like its neighbours: an unreadable file
+    leaves the previous digest in place rather than raising out of a command that has
+    already decided to accept."""
+    try:
+        state.accepted_plan_digest = hashlib.sha256(Path(plan_path).read_bytes()).hexdigest()
+    except OSError:
+        return
+
+
+def _refresh_caches_from_plan_path(
+    state: SessionState,
+    *,
+    runner: Runner | None = None,
+    advice: list[str] | None = None,
+    baseline=None,
+) -> list[str]:
+    """SUBMISSION SEAM (c). Re-load state.plan_path, validate it at submission grade, and
+    — only if it is clean — refresh state.final_check plus each live stage's
+    prose/criterion fields from those bytes. Returns the violation list; [] == refreshed.
+
+    The seam's non-refusing channel is an OUT-PARAMETER rather than a second return value:
+    the violation list is what this function's caller branches on, and advice must never
+    become part of that decision. Pass a list to collect it; pass nothing (every caller
+    that has no Directive to hang it on) and the seam behaves exactly as before.
+
+    The seam is here rather than in `cmd_approve` directly because this is already the one
+    place that re-reads plan_path at approve time, and a second read would let the two
+    disagree. Nothing is mutated when the plan is dirty: the caller refuses with a
+    Directive and the session keeps the state it had, so a rejected approve is not also a
+    half-applied edit. The refusal must NOT be a raised PlanError — approve is where the
+    plan_approval gate is armed, and an exception escaping there strands the session at
+    PLAN_READY with no edge back.
+
+    Approve snapshots and hashes plan_path, but the plan-review cycle answers a
+    REVISE verdict by editing plan_path IN PLACE at PLAN_READY (deliberately
+    plan-mutable — see hook-state-gate.py's PLAN_MUTABLE_NODES), so the copy
+    cached at submit-plan can drift from the file approve is about to attest.
+    Without this refresh, plan_snapshot_hash matches the edited bytes while
+    dispatch/verify-final keep running the stale pre-review cache — the gate
+    attests to a plan it never actually executes.
+
+    Mutates each live stage IN PLACE via `_apply_refined_stage_fields`, which
+    never touches `outcome` — an unchanged stage's Outcome therefore survives
+    with no extra logic. A stage that is not carried (`stage_norm.stage_carried`: its
+    full definition changed, or a direct supplier's interface did) is a different
+    case: its recorded PASSED outcome no longer attests to the stage's current
+    criterion or inputs, so it is reset to PENDING for re-verification. Carry is
+    decided for every stage BEFORE `_apply_refined_stage_fields` mutates any —
+    comparing after would compare a stage against itself post-copy, which always
+    matches and would let a genuinely stale PASSED outcome survive unnoticed.
+
+    An absent plan_path still returns [] — "there is nothing to refresh" is not a
+    submission violation, and the plan_approval gate already refuses a session with no
+    plan artifact. A plan_path that is set but no longer LOADS is different: it is a
+    session whose approve is about to attest to bytes nobody can read, so it is reported
+    as a violation rather than swallowed. The old silent return let approve pass on the
+    stale pre-edit cache — the very "attests to a plan it never actually executes" failure
+    this function's own docstring names."""
+    if not state.plan_path:
+        return []
+    from .plan import PlanError, load_plan as _load
+    try:
+        refreshed = _load(state.plan_path)
+    except (OSError, PlanError) as exc:
+        return [f"cannot load the plan at {state.plan_path!r}: {exc}"]
+    # `baseline` is the last approved plan: a finished stage's unchanged edge is frozen
+    # against it, exactly as at replan, so approve judges the same exemption replan did.
+    violations = _submission_problems(refreshed, runner, state.weight_class,
+                                      _frozen_edge_stages(state, baseline, refreshed))
+    if violations:
+        return violations
+    if advice is not None:
+        advice.extend(_submission_advice(refreshed, runner, state.weight_class, state.plan_path))
+    # Decided for every stage BEFORE any is mutated: a consumer's verdict depends on its
+    # suppliers' pre-edit interfaces.
+    carried = {rs.index: _verdict_survives(state.stages, refreshed.stages, rs.index)
+               for rs in refreshed.stages}
+    declined_issues = gates.declined_issue_set(state)
+    declined_titles = gates.declined_title_set(state)
+    rebuilt: list[Stage] = []
+    for rs in refreshed.stages:
+        try:
+            cur = state.stage(rs.index)
+        except KeyError:
+            # An in-place edit may renumber or add a stage; the file is the plan, so the
+            # session's stage list is rebuilt from it and a stage the file no longer has
+            # leaves with it (an orphan SKIPPED stage would carry a decline for work that
+            # is no longer there).
+            rebuilt.append(rs)
+            continue
+        unchanged = carried[rs.index]
+        _apply_refined_stage_fields(cur, rs)
+        # One rule shared with the substantive-replan carry: a changed stage loses its
+        # settled status, a declined one included, and is offered again for a fresh choice.
+        if not unchanged and cur.outcome.status in (
+            StageStatus.PASSED.value, StageStatus.SKIPPED.value,
+        ):
+            cur.outcome.status = StageStatus.PENDING.value
+        rebuilt.append(cur)
+    for s in rebuilt:
+        s.outcome.declined = is_skipped(s) or (
+            not is_settled(s) and gates.is_declined_stage(s, declined_issues, declined_titles))
+    state.stages = rebuilt
+    state.final_check = refreshed.meta.final_check
+    _sync_venue_from_plan(state, refreshed)
+    # The digest is NOT stamped here. A clean submission is not yet an accepted plan at this
+    # seam: `cmd_approve` still has the plan_approval gate to compose, and a blocked approve
+    # must not leave the session naming bytes it refused. The stamp is the caller's, placed
+    # past that refusal.
+    return []
+
+
+def _review_cycle_close(state: SessionState) -> None:
+    """Approval ends the pre-approval review cycle, its streaks and the fire's bookkeeping."""
+    state.review_cycle_open = False
+    state.review_cycle_sha = ""
+    state.review_cycle_acts = 0
+    state.review_cycle_minutes_anchor = None
+    state.review_stage_streaks = {}
+    state.review_trigger_spent = {}
+    state.review_trigger_fire = None
+
+
+def _skip_optional_problems(
+    indices: list[int], doc: "PlanDoc | None", state: SessionState, *, by_agent: bool,
+) -> list[str]:
+    """Why `approve --skip-optional <indices>` cannot be honoured; [] when it can."""
+    if by_agent:
+        return ["--skip-optional is the customer's decision and cannot be made with --by agent"]
+    if doc is None:
+        return ["--skip-optional needs a loadable plan at plan_path"]
+    by_index = {s.index: s for s in doc.stages}
+    problems: list[str] = []
+    for index in indices:
+        stage = by_index.get(index)
+        if stage is None:
+            problems.append(f"stage {index} does not exist")
+        elif not stage.optional:
+            problems.append(f"stage {index} is not optional (only `optional = true` stages can be declined)")
+    if problems:
+        return problems
+    return _stranded_dependency_problems(doc, state, set(indices))
+
+
+def _stranded_dependency_problems(
+    doc: "PlanDoc", state: SessionState, newly_declined: set[int],
+) -> list[str]:
+    """Stages that stay live but depend on a declined stage and so could never become ready.
+
+    Declined = `newly_declined` plus every stage the session already holds SKIPPED. Run on
+    every approve that has any declined stage, not only on `--skip-optional`: a replan can
+    carry a SKIPPED stage forward and add a live optional stage that depends on it."""
+    declined = newly_declined | {s.index for s in state.stages if is_skipped(s)}
+    problems: list[str] = []
+    for stage in doc.stages:
+        stranded = sorted(d for d in stage.depends_on if d in declined)
+        if stage.index not in declined and stranded:
+            problems.append(
+                f"stage {stage.index} depends on declined stage(s) {stranded} — decline it too "
+                f"or keep them"
+            )
+    return problems
+
+
+def _mandate_basis_problems(plan_path, plan_data: bytes | None, approver: str) -> list[str]:
+    """Why the `mandate:<id>` approver may not approve the plan at `plan_path`, empty when it may.
+
+    The approval is the mandate's, for one item its running cycle took: `plan_data` -- the bytes
+    `cmd_approve` read once and snapshots -- is the item norm re-rendered from the inputs beside
+    the plan, the cycle lock is held, the cycle's start event and the item's taken event name this
+    plan's issue, directory and worktree, the worktree lies under the cycle's worktree root, the
+    cycle's repo is the repo this engine runs from, and the mandate's gate is open. Never raises."""
+    inputs_file, item_event, cycle_event = "norm.inputs.json", "item-taken", "cycle-start"
+    mandate_id = approver[len(mandate_rules.mandate_approver("")):]
+    mandate = mandate_store.load_mandate(mandate_id) if mandate_id else None
+    if mandate is None:
+        return [f"no mandate {mandate_id!r}"]
+    plan = Path(plan_path or "")
+    if plan_data is None:
+        return [f"the plan and {inputs_file} cannot be read beside it"]
+    try:
+        plan_text = plan_data.decode("utf-8")
+        inputs = json.loads((plan.parent / inputs_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [f"the plan and {inputs_file} cannot be read beside it"]
+    if not isinstance(inputs, dict):
+        return [f"{inputs_file} is not an object"]
+    held, _pid = mandate_store.probe_cycle(mandate_id)
+    if not held:
+        return ["no cycle holds the mandate's lock"]
+    events = mandate_store.read_events(mandate_id)
+    starts = [e for e in events if e.get("event") == cycle_event]
+    if not starts:
+        return ["the cycle recorded no start"]
+    start = starts[-1]
+    detail = start.get("detail") or {}
+    problems: list[str] = []
+    cycle_id = inputs.get("cycle_id")
+    if detail.get("cycle_id") != cycle_id:
+        problems.append("the inputs name a cycle that is not the running one")
+    if not detail.get("repo") or inputs.get("repo") != detail.get("repo"):
+        problems.append("the inputs' repo is not the cycle's repo")
+    elif os.path.realpath(detail["repo"]) != os.path.realpath(REPO_ROOT):
+        problems.append("the cycle's repo is not the repo this engine runs from")
+    root = detail.get("worktree_root")
+    worktree = inputs.get("worktree")
+    try:
+        under_root = bool(root) and isinstance(worktree, str) and os.path.commonpath(
+            [os.path.normpath(root), os.path.normpath(worktree)]) == os.path.normpath(root) \
+            and os.path.normpath(worktree) != os.path.normpath(root)
+    except ValueError:
+        under_root = False
+    if not under_root:
+        problems.append("the inputs' worktree is not under the cycle's worktree root")
+    taken = [
+        e for e in events
+        if e.get("event") == item_event
+        and (e.get("detail") or {}).get("cycle_id") == cycle_id
+        and (e.get("detail") or {}).get("issue") == inputs.get("issue")
+        and (e.get("detail") or {}).get("item_dir") == str(plan.parent)
+        and (e.get("detail") or {}).get("worktree") == worktree
+    ]
+    if not taken:
+        problems.append("the cycle recorded no item taken for this issue, directory and worktree")
+    now = mandate_store.utcnow()
+    started_at = mandate_rules.parse_ts(start.get("ts"))
+    elapsed = max(0.0, (now - started_at).total_seconds() / 60.0) if started_at else 0.0
+    gate_result = mandate_rules.gate(mandate, now, mandate_store.spend_now(mandate_id, now), elapsed)
+    return problems + mandate_rules.mandate_approval_problems(plan_text, inputs, mandate, gate_result)
+
+
+def _parse_partition_units(
+    raw_units: list[str], known_indices: set[int]
+) -> tuple[list[PartitionUnit], list[str]]:
+    """Parse repeatable ``--unit '<mode>|<stages csv>|<title>[|<ref>]'`` specs into
+    typed PartitionUnit objects, validating against the loaded plan. Returns
+    ``(units, errors)`` — a non-empty ``errors`` list means the caller must reject
+    with a failing Directive and record nothing.
+
+    Validation: mode ∈ PARTITION_UNIT_MODES; a non-empty title; ≥1 integer stage
+    index; every stage index exists in ``known_indices``; stage sets pairwise
+    disjoint across units (a stage belongs to at most one delivery unit — stages
+    left uncovered stay on the default single-PR path). ``ref`` is optional and
+    org-neutral (tracker key / issue URL / child session id, assigned at
+    materialization)."""
+    units: list[PartitionUnit] = []
+    errors: list[str] = []
+    seen_stages: dict[int, int] = {}  # stage index -> owning unit (1-based)
+    for pos, spec in enumerate(raw_units, start=1):
+        parts = spec.split("|")
+        if len(parts) < 3:
+            errors.append(
+                f"unit {pos}: expected '<mode>|<stages csv>|<title>[|<ref>]', got {spec!r}"
+            )
+            continue
+        mode = parts[0].strip()
+        stages_field = parts[1].strip()
+        title = parts[2].strip()
+        ref = parts[3].strip() if len(parts) >= 4 and parts[3].strip() else None
+        if mode not in PARTITION_UNIT_MODES:
+            errors.append(
+                f"unit {pos}: unknown mode {mode!r} (expected one of {', '.join(PARTITION_UNIT_MODES)})"
+            )
+        if not title:
+            errors.append(f"unit {pos}: empty title")
+        stages: list[int] = []
+        for tok in [t.strip() for t in stages_field.split(",") if t.strip()]:
+            try:
+                stages.append(int(tok))
+            except ValueError:
+                errors.append(f"unit {pos}: non-integer stage index {tok!r}")
+        if not stages:
+            errors.append(f"unit {pos}: no stage indices given")
+        for s in stages:
+            if s not in known_indices:
+                errors.append(f"unit {pos}: stage index {s} does not exist in the plan")
+            elif s in seen_stages:
+                errors.append(
+                    f"unit {pos}: stage index {s} already assigned to unit {seen_stages[s]} "
+                    "(units must be disjoint)"
+                )
+            else:
+                seen_stages[s] = pos
+        units.append(PartitionUnit(title=title, stages=stages, mode=mode, ref=ref))
+    return units, errors
+
+
+def _rekey_runtime_grants(state: SessionState, doc) -> None:
+    """A runtime grant is keyed by stage INDEX but was granted for a stage IDENTIFIED
+    by its title at grant time -- a replan can renumber stages (insert/remove before
+    it) without changing what the grant was actually about. Called on every approve
+    (fresh snapshot, fresh indices): for each stage index currently holding runtime
+    grants, re-key each entry to whichever new-snapshot stage has the SAME title it
+    was stamped with. Zero or several matches (title now shared or gone) drops the
+    entry with a stderr note rather than guessing."""
+    title_to_indices: dict[str, list[int]] = {}
+    for s in doc.stages:
+        title_to_indices.setdefault(s.title, []).append(s.index)
+    rekeyed: dict[str, list[dict]] = {}
+    for old_key, entries in state.runtime_grants.items():
+        for entry in entries:
+            title = entry.get("stage_title")
+            matches = title_to_indices.get(title, []) if title else []
+            if len(matches) != 1:
+                print(
+                    f"stage-grants: dropping runtime grant stamped for stage title "
+                    f"{title!r} (was stage {old_key}) -- {len(matches)} stages now "
+                    "match that title",
+                    file=sys.stderr,
+                )
+                continue
+            new_key = str(matches[0])
+            rekeyed.setdefault(new_key, []).append(entry)
+    state.runtime_grants = rekeyed
 
 
 def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Directive:

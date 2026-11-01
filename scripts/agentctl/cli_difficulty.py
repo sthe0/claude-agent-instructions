@@ -3,7 +3,7 @@
 Moved verbatim from cli.py; see cli.py for the command table."""
 from __future__ import annotations
 
-from . import gates, runtime_host
+from . import gates, runtime_host, exempt_paths
 from .directive import Directive
 from .dispatch import Runner
 from .state import (
@@ -19,10 +19,16 @@ from .state import (
     NORMALIZATION_DESTINATION_ALIASES,
     NORMALIZATION_DESTINATIONS,
     NORMALIZATION_LEVELS,
+    Difficulty,
+    SessionState,
 )
 from .store import StateStore
+import os
+import subprocess
+from dataclasses import asdict
+from lib import config_root
 from .cli_common import (
-    NESTED_DIFFICULTY_ORIGINS,
+    REPO_ROOT,
     _open_difficulty,
     _difficulty_cap_directive,
     _plan_review_release_active,
@@ -30,16 +36,284 @@ from .cli_common import (
     _log_gate,
     _attach_advisories,
     _require,
-    _escalation_link,
-    _require_diagnosing,
-    _supersede_for_release,
-    _snapshot_norm_targets,
     _normalize_record_fields,
     _log_normalize_event,
-    _record_normalization_waiver,
-    _cmd_normalize_outside_diagnosing,
-    _resume_action,
 )
+
+
+NESTED_DIFFICULTY_ORIGINS = ("replan", "normalize", "stage")
+
+
+def _escalation_link(difficulty, parent_link: dict | None) -> dict:
+    """The typed `escalated_to` link of `difficulty` to its session's parent: the parent
+    session, its stage and the norm digest the `parent` norm target was taken against;
+    empty when the record names no such target or the session has no parent. Shared by
+    `critique`, which routes the fault, and `difficulty-close`, which moves a nested
+    record's routing onto the record that resumes."""
+    parent_norm = next((t for t in difficulty.norm_targets
+                        if t.get("kind") == gates.NORM_TARGET_KIND_PARENT), None)
+    if parent_norm is None or not parent_link:
+        return {}
+    return {"parent_session": parent_link["parent_session"],
+            "stage_index": parent_link["stage_index"],
+            "norm_digest": parent_norm["baseline"]}
+
+
+def _release_reflection_open(state: SessionState) -> bool:
+    """True while a plan-review or cross-axis release is active at a node other than
+    DIAGNOSING and RESOLVED: the reflection exit's difficulty commands run there, without
+    the node moving, because the release is where the budget runs out -- not a failure."""
+    return (state.node not in (Node.DIAGNOSING.value, Node.RESOLVED.value)
+            and _plan_review_release_active(state))
+
+
+def _require_diagnosing(state: SessionState, *, admit_release: bool = False) -> Directive | None:
+    """`admit_release` lets the reflection exit's commands (declare, investigate,
+    critique, normalize) run outside DIAGNOSING while a plan-review release is active."""
+    if state.node != Node.DIAGNOSING.value and not (admit_release and _release_reflection_open(state)):
+        return Directive(
+            False, state.node, "noop",
+            f"difficulty commands run only in the DIAGNOSING cycle; node={state.node}",
+        )
+    if state.difficulty is None and _open_difficulty(state) is None:
+        return _difficulty_cap_directive(state, "a difficulty record cannot be opened")
+    return None
+
+
+def _supersede_for_release(state: SessionState) -> None:
+    """Under a plan-review release a re-declared difficulty is a fresh record, never the
+    earlier one's investigation, critique and normalization under a new declaration (its
+    id would change while its content did not). The replaced record is logged whole."""
+    old = state.difficulty
+    if old is None or (old.declaration is None and old.investigation is None
+                       and old.critique is None and old.normalization is None):
+        return
+    state.log("difficulty_superseded", uid=old.uid, record=asdict(old))
+    state.difficulty = Difficulty(level=old.level, parent_uid=old.parent_uid, origin=old.origin)
+
+
+# Test seam for `--norm-target` classification, mirroring exempt_paths.SCRATCH_ROOTS_ENV:
+# os.pathsep-separated directories that, when set and non-empty, REPLACE the whole root
+# set (the scratch exclusion included).
+NORM_ROOTS_ENV = "AGENTCTL_NORM_ROOTS"
+
+
+def _under_root(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _checkout_of(path: str) -> tuple[str, str, str] | None:
+    """(top level, git dir, common dir), as realpaths, of the checkout holding `path`;
+    None outside one."""
+    start = path if os.path.isdir(path) else os.path.dirname(path)
+    try:
+        run = subprocess.run(
+            ["git", "-C", start, "rev-parse", "--show-toplevel", "--absolute-git-dir",
+             "--git-common-dir"],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = run.stdout.splitlines()
+    if run.returncode != 0 or len(lines) != 3:
+        return None
+    top, git_dir, common = lines
+    if not os.path.isabs(common):
+        common = os.path.join(start, common)
+    return os.path.realpath(top), os.path.realpath(git_dir), os.path.realpath(common)
+
+
+def _is_memory_path(rp: str) -> bool:
+    if "/memory-global/" in rp or "/agent-memory/" in rp:
+        return True
+    roots = {os.path.realpath(str(r)) for r in config_root.projects_roots()}
+    roots.add(os.path.realpath(str(config_root.agent_home() / "projects")))
+    for root in roots:
+        if rp.startswith(root + os.sep):
+            parts = rp[len(root) + 1:].split(os.sep)
+            if len(parts) >= 3 and parts[0] and parts[1] == "memory":
+                return True
+    return False
+
+
+def _session_plan_paths(state: SessionState) -> set[str]:
+    """Every plan file this session has installed or submitted: a norm target must not be
+    one, since its bytes move with the plan rather than with a norm edit."""
+    paths = {state.plan_path, state.plan_snapshot_path,
+             *(f.plan_path for f in state.plan_stack),
+             *(e.get("plan") for e in state.history if isinstance(e, dict))}
+    return {os.path.realpath(p) for p in paths if p and isinstance(p, str)}
+
+
+def _norm_file_refusal(state: SessionState, target: str) -> str | None:
+    """Why `target` cannot be a file norm target, or None when it can. Classified on the
+    realpath, by the norm-bearing roots: a linked worktree of the instructions repo, a
+    memory root, and the agent home's skills/ and plans/."""
+    rp = os.path.realpath(target)
+    if not os.path.isfile(rp):
+        return f"--norm-target {target!r} is not an existing file"
+    if rp in _session_plan_paths(state):
+        return (f"--norm-target {target!r} is this session's own plan; name the stage "
+                f"norm instead as stage:<n>")
+    override = os.environ.get(NORM_ROOTS_ENV)
+    if override:
+        roots = [os.path.realpath(r) for r in override.split(os.pathsep) if r]
+        if any(_under_root(rp, r) for r in roots):
+            return None
+        return f"--norm-target {target!r} is under none of the {NORM_ROOTS_ENV} roots"
+    if any(_under_root(rp, os.path.realpath(r)) for r in exempt_paths._gate_scratch_roots()):
+        return f"--norm-target {target!r} is scratch, not a norm-bearing file"
+    own_repo = _checkout_of(str(REPO_ROOT))
+    here = _checkout_of(rp)
+    if own_repo is not None and here is not None and here[2] == own_repo[2]:
+        if here[1] != here[2]:
+            return None  # a linked worktree of the instructions repo
+        if "/memory-global/" not in rp:
+            return (f"--norm-target {target!r} is in the canonical instructions checkout, "
+                    f"which is read-only to sessions; name the same file in a linked "
+                    f"worktree")
+    if _is_memory_path(rp):
+        return None
+    for root in (config_root.skills_dir(), config_root.plans_dir()):
+        if _under_root(rp, os.path.realpath(str(root))):
+            return None
+    return (f"--norm-target {target!r} is not under a norm-bearing root (a linked worktree "
+            f"of the instructions repo, a memory root, or the agent home's skills/ or "
+            f"plans/)")
+
+
+def _snapshot_norm_targets(state: SessionState, targets: list[str]) -> tuple[list[dict], str | None]:
+    """The `norm_targets` entries for a normative critique's --norm-target values, or
+    the first refusal. A stage target is snapshotted from the live state's stage -- the
+    stage that actually ran, which refinement replans rebuild and `--renormalize` patches
+    -- never from a plan file, which is editable while DIAGNOSING. A stage the state does
+    not hold is refused, not read from the approved snapshot, which `--renormalize`
+    leaves on the approved bytes.
+
+    `parent` names the norm of the stage that spawned this session: it is snapshotted from
+    the adopted handoff (`parent_link.norm_digest`), needs a linked session, and stands
+    alone -- the child cannot edit that norm, it hands the fault back with REPLAN."""
+    entries: list[dict] = []
+    for raw in targets:
+        raw = (raw or "").strip()
+        if raw == gates.NORM_TARGET_PARENT:
+            if len(targets) != 1:
+                return [], (f"--norm-target {gates.NORM_TARGET_PARENT} stands alone: the norm of "
+                            f"the parent stage is not this session's to edit, so a fault "
+                            f"routed to it is handed back with REPLAN, not mixed with "
+                            f"targets this session's own replan would change")
+            link = state.parent_link
+            if link is None or not link.get("norm_digest"):
+                return [], (f"--norm-target {gates.NORM_TARGET_PARENT} names the norm of the "
+                            f"stage that spawned this session; this session holds no "
+                            f"norm handoff (it is not linked to a parent stage)")
+            entries.append({"target": gates.NORM_TARGET_PARENT,
+                            "kind": gates.NORM_TARGET_KIND_PARENT,
+                            "baseline": link["norm_digest"], "source": "critique"})
+            continue
+        if raw.startswith("stage:"):
+            try:
+                index = int(raw[len("stage:"):])
+            except ValueError:
+                return [], f"--norm-target {raw!r}: stage:<n> needs an integer stage index"
+            try:
+                stage = state.stage(index)
+            except KeyError:
+                return [], f"--norm-target {raw!r}: the current plan has no stage {index}"
+            entries.append({"target": f"stage:{index}", "kind": "stage",
+                            "baseline": gates.stage_norm_digest(stage), "source": "critique"})
+            continue
+        if not raw:
+            return [], "--norm-target must not be empty"
+        path = os.path.normpath(raw if os.path.isabs(raw) else os.path.abspath(raw))
+        refusal = _norm_file_refusal(state, path)
+        if refusal:
+            return [], refusal
+        entries.append({"target": path, "kind": "file",
+                        "baseline": gates.file_norm_digest(path), "source": "critique"})
+    return entries, None
+
+
+def _record_normalization_waiver(args, state: SessionState, store: StateStore,
+                                 waiver: str) -> Directive:
+    """`normalize --normalization-waiver <reason>` at DIAGNOSING: the open record is
+    declared to expose a genuinely one-off factor, so it carries the reason instead of a
+    Normalization. It is the only way a NESTED record closes (`difficulty-close`) without
+    a factor; the root record closes through `replan`'s own waiver, which `replan` itself
+    files on the record. Refused for the root record (the stored field would be inert
+    there: `replan` never reads it), for an empty reason, alongside a `--factor`, and for
+    a record that names norm targets -- those must be delivered by the closing plan, not
+    waived."""
+    d = state.difficulty
+    refusal = None
+    if not state.difficulty_stack:
+        refusal = ("the open record is the root difficulty, which closes through replan: "
+                   "pass --normalization-waiver to `replan`, not to normalize")
+    elif not waiver.strip():
+        refusal = "normalization waiver reason must not be empty"
+    elif (getattr(args, "factor", None) or "").strip():
+        refusal = ("normalize takes either --factor (the re-norming record) or "
+                   "--normalization-waiver (a one-off factor), not both")
+    elif d.norm_targets:
+        refusal = ("the difficulty record names norm target(s) the closing plan must "
+                   "change; a --normalization-waiver is not accepted for it")
+    if refusal:
+        _log_gate(state, "normalization_waiver", [refusal], passed=False)
+        return Directive(False, state.node, "normalize", refusal, data={"blockers": [refusal]})
+    d.normalization_waiver = waiver.strip()
+    state.log("normalization_waived", reason=d.normalization_waiver, uid=d.uid)
+    _log_gate(state, "normalization_waiver", [], passed=True)
+    store.save(state)
+    return Directive(True, state.node, "replan",
+                     "one-off factor recorded on the nested record as a normalization "
+                     "waiver; it may now difficulty-close")
+
+
+def _cmd_normalize_outside_diagnosing(args, state: SessionState, store: StateStore) -> Directive:
+    """The record-only sibling of cmd_normalize's DIAGNOSING branch -- runs at any
+    node from CLASSIFIED up to, but not including, RESOLVED (a RESOLVED session has
+    no further quality row or scorecard pass for the record to land on), touches no gate,
+    and logs the same `normalize` event shape with `in_diagnosis=False` so a reader
+    scanning history for the event still finds it. The one difficulty state it touches:
+    while a plan-review release is active and the open record is declared, investigated
+    and critiqued, the re-norming lands on that record (the reflection exit's record)."""
+    if state.node == Node.RESOLVED.value:
+        return Directive(False, state.node, "continue",
+                         "normalize outside a difficulty cannot record against a "
+                         "RESOLVED session")
+    if getattr(args, "normalization_waiver", None) is not None:
+        return Directive(False, state.node, "normalize",
+                         "--normalization-waiver applies to a difficulty being closed; "
+                         "outside a difficulty cycle there is nothing to waive")
+    error, factor = _normalize_record_fields(
+        getattr(args, "factor", None), getattr(args, "level", None), getattr(args, "destination", None))
+    if error:
+        return Directive(False, state.node, "normalize", error)
+    level = getattr(args, "level", None)
+    destination = canonical_normalization_destination(getattr(args, "destination", None))
+    record = state.difficulty
+    if (_release_reflection_open(state) and record is not None and record.declaration is not None
+            and record.investigation is not None and record.critique is not None):
+        record.normalization = Normalization(factor=factor, level=level, destination=destination)
+        _log_normalize_event(state, factor=factor, level=level, destination=destination,
+                             in_diagnosis=False)
+        store.save(state)
+        return Directive(True, state.node, "continue",
+                         "renorming recorded on the reflection record; an agent-authored "
+                         "plan-review override is now admitted with it")
+    _log_normalize_event(state, factor=factor, level=level, destination=destination, in_diagnosis=False)
+    store.save(state)
+    return Directive(True, state.node, "continue",
+                     "renorming recorded outside a difficulty cycle")
+
+
+def _resume_action(d: Difficulty) -> str:
+    if d.declaration is None:
+        return "declare"
+    if d.investigation is None:
+        return "investigate"
+    if d.critique is None:
+        return "critique"
+    return "replan"
 
 
 def cmd_declare(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
