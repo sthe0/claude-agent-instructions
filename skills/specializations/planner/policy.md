@@ -84,6 +84,8 @@ For a substantive plan, `[meta.order]` states the order this plan answers — th
 
 A narrowing chosen at authoring time — a requirement the plan deliberately does not cover — is not silently dropped: name it and why in the turn carrying the plan's essence (`CLAUDE.md` § Escalation to the user), the same discipline that governs any other cut against the order.
 
+**Derive the done criterion clause by clause from the order.** To achieve a done criterion in which a reviewer finds no unchecked clause, derive it from `[meta.order]` clause by clause: every requirement and constraint clause, its negatives and exemptions included, maps to a named test or final check. Do not write it per stage deliverable. *Difficulty removed:* a criterion written per stage deliverable left clauses added in later rounds without a deciding check; a review of an order's own draft found six such gaps.
+
 ## Order agreement
 
 *Difficulty removed:* a plan was built, reviewed and approved on an understanding of the order the user never confirmed, so a misread order surfaced only after the stages existed. Mechanism: [ADR-0014](../../../docs/adr/0014-order-agreement.md); verbs: [agentctl README](../../../scripts/agentctl/README.md) § The order phase.
