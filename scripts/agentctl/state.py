@@ -2035,6 +2035,11 @@ class Order:
     # (`gates.parent_norm_boundary`); every digest and key built from the order includes
     # it only when set, so a plan without it keeps the digests it had before the field.
     parent_norm: str | None = None
+    # Arms submission.py's resource-request check for the request-bearing spawned kinds
+    # (`plan_resources.RESOURCE_REQUEST_KINDS`). Opt-in like `requires_traceability`, and for
+    # the same reason: plans written before the convention carry no `[[meta.resource_request]]`
+    # rows. Rides in `order_place` only when true, so an unarmed order keeps its old key.
+    requires_resource_request: bool = False
     # The agent's understanding of the order, set down for the user to agree before any
     # stage is written: what the activity is, what the difficulty is in it, the user's
     # ideas as criticized proposals, and the constraints offered. Each is empty for an
@@ -2098,6 +2103,7 @@ class Order:
             requirements_dropped=requirements_dropped,
             requires_traceability=bool(d.get("requires_traceability", False)),
             parent_norm=parent_norm,
+            requires_resource_request=bool(d.get("requires_resource_request", False)),
             activity=str(d.get("activity", "")),
             difficulty=str(d.get("difficulty", "")),
             proposals=proposals,
@@ -2358,6 +2364,11 @@ class Stage:
     # `[[stage.amendments]]`: retrospective notes (see Amendment). Empty on every plan
     # authored before this field.
     amendments: list[Amendment] = field(default_factory=list)
+    # The branch a spawn:developer / spawn:tech-writer stage commits on (and a developer
+    # pushes): the stage's own `branch`, else `[meta] branch`, resolved once at plan load.
+    # None derives no commit/push resource and reports a dropped entry; None on every plan
+    # authored before this field.
+    branch: str | None = None
 
     @property
     def depends_on(self) -> list[int]:
@@ -2413,6 +2424,7 @@ class Stage:
                 optional=bool(d.get("optional", False)),
                 backlog_issue=d.get("backlog_issue"),
                 amendments=[Amendment(**a) for a in d.get("amendments", [])],
+                branch=d.get("branch"),
             )
         # legacy FLAT shape -> nested groups (migration shim)
         return cls(
@@ -2882,6 +2894,10 @@ class SessionState:
     materialization_defects: list[dict] = field(default_factory=list)
     settings_drift: list[dict] = field(default_factory=list)
     cwd_drift: list[dict] = field(default_factory=list)
+    # Stage index (as text) -> the request-vs-fact comparison of that stage's last dispatch:
+    # {"kind", "under", "over", "plan_sha"}; see agentctl/resource_estimation.py. An older
+    # state lacks the key and reads as the empty dict: no comparison was ever recorded.
+    resource_estimates: dict[str, dict] = field(default_factory=dict)
     # Norm-edit obligations admitted by a closing replan and still open (schema 47).
     # Entry: {"target": file path, "baseline": digest at critique time, "stage": index of
     # the lowest-index pending stage whose `renorms` names it, "depth": len(plan_stack)
@@ -3361,7 +3377,7 @@ SESSION_SCOPED_FIELDS = frozenset({
     "review_cycle_minutes_anchor", "review_stage_streaks", "review_trigger_fire",
     "review_trigger_spent", "renegotiations", "runtime_host", "reattest_stash",
     "declined_issues", "planning_misses", "materialization_defects",
-    "settings_drift", "cwd_drift", "pending_renorms", "difficulty_stack", "parent_difficulty",
+    "settings_drift", "cwd_drift", "resource_estimates", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",
     "order_draft_path", "order_draft_sha256", "order_reviews",
     "order_agreement_armed", "order_agreement_exemption",

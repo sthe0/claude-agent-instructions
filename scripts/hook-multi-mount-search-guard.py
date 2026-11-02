@@ -41,6 +41,8 @@ import re
 import shlex
 import sys
 
+from lib import hook_telemetry
+
 _RECURSIVE_ALWAYS = frozenset(["find", "rg", "fd", "du"])
 _GREP_VARIANTS = frozenset(["grep", "egrep", "fgrep", "zgrep"])
 _SEGMENT_OPS = frozenset(["&&", "||", ";", ";;", "|", "|&", "&"])
@@ -334,4 +336,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-multi-mount-search-guard"))

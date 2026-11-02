@@ -33,6 +33,7 @@ from agentctl.store import FileStateStore
 from lib import config_root
 from mandate_cycle import driver, notifiers
 from session_scope import registry as scopes
+from slow_selection import RUN_SLOW_OPTION
 
 ID = "core-debt"
 OWNER = "owner"
@@ -900,6 +901,22 @@ def test_the_suite_runs_under_the_conftest_auto_parallel_with_no_xdist_opt_out(e
     for argv in suites:
         opt_outs = [x for x in argv if x in ("no:xdist", "-n") or x.startswith("--dist")]
         assert opt_outs == [], argv
+
+
+def test_the_baseline_and_every_item_run_the_whole_slow_set(env):
+    """Slow selection runs every slow test on the baseline (its merge base is HEAD) but skips
+    unguarded ones on an item branch; a skip is not a pass, so both runs must force the full set."""
+    env.grant()
+    eligible(env, 1)
+    env.world.suites["item.xml"] = (["t1"], ["t2"])
+    env.world.suites["rerun.xml"] = (["t1", "t2"], [])
+    env.cycle()
+    suites = [c for c in env.world.calls_with("bash") if c[1].endswith("cap-run.sh")]
+    runs = {name: [c for c in suites if any(x.endswith(name) for x in c)]
+            for name in (driver.BASELINE_XML, "item.xml", "rerun.xml")}
+    assert all(runs.values()), runs
+    for argv in suites:
+        assert RUN_SLOW_OPTION in argv, argv
 
 
 def test_a_test_failing_on_the_baseline_does_not_count_against_the_item(env):
@@ -2161,7 +2178,9 @@ def test_the_installer_rejects_an_unknown_argument(box):
 
 # --- an item as a linked child of a mandate-approved parent session -----------------------
 
-OPEN_VERBS = ["start", "classify", "plan", "submit-plan", "approve", "partition", "next-stage"]
+OPEN_VERBS = [
+    "start", "classify", "plan", "order-raise", "submit-plan", "order-dispose", "approve", "partition", "next-stage",
+]
 DONE = "COMPLETED:\nFixed the issue.\n"
 APPROVER = rules.mandate_approver(ID)
 RATE_LIMIT = {"type": "assistant", "isApiErrorMessage": True, "error": "rate_limit", "timestamp": "2026-10-27T00:00:00Z"}
@@ -2584,7 +2603,7 @@ def test_a_parent_session_open_failure_is_a_spawn_error_and_opens_the_breaker(en
     assert env.spawner.calls == []
     mandate = store.load_mandate(ID)
     assert mandate.breaker_open and mandate.breaker_reason == "failed:spawn-error on #1"
-    assert env.world.engine_verbs() == OPEN_VERBS[:4]
+    assert env.world.engine_verbs() == OPEN_VERBS[:5]
 
 
 def test_an_approve_refusal_after_the_gate_closed_ends_as_a_limit_without_the_breaker(env):

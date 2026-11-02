@@ -12,6 +12,7 @@ from pathlib import Path
 
 from agentctl import cli
 from agentctl.dispatch import RunResult
+from conftest import patch_cli_name
 from session_fixtures import measurable_session as _measurable_session
 
 
@@ -397,8 +398,7 @@ def test_git_call_timeout_at_any_step_returns_none(tmp_path, monkeypatch):
             return RunResult(-1, stdout="", stderr="timed out after 30s")
         return real_runner(argv, timeout=timeout)
 
-    monkeypatch.setattr(cli, "subprocess_runner", timeout_on_write_tree)
-
+    patch_cli_name(monkeypatch, "subprocess_runner", timeout_on_write_tree)
     assert cli._venue_tree_identity(str(work), None) is None
     assert len(timeouts_seen) == 6
     assert all(t == cli._VENUE_IDENTITY_GIT_TIMEOUT_S for t in timeouts_seen)

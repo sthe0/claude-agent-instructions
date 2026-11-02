@@ -693,8 +693,23 @@ def test_field_tables_separate_string_fields_from_structured_ones():
     assert {"index", "depends_on", "supplies", "grants", "output_artifacts"} <= plan_refs.NON_STRING_FIELDS["stage"]
     assert {"goal", "done_criterion"} <= plan_refs.EXTERNALIZABLE_FIELDS["meta"]
     assert "order" in plan_refs.NON_STRING_FIELDS["meta"]
+    assert all("branch" in plan_refs.NON_STRING_FIELDS[k] for k in ("stage", "meta"))
     assert {"functional_place", "customer"} <= plan_refs.EXTERNALIZABLE_FIELDS["order"]
     assert "requirements" in plan_refs.NON_STRING_FIELDS["order"]
+
+
+@pytest.mark.parametrize("where", ["stage", "meta"])
+def test_a_branch_declared_as_a_reference_is_refused_by_position(tmp_path, where):
+    ref = _ref(tmp_path, "m.md", "feat-a\n")
+    if where == "stage":
+        index = _plan(tmp_path, _meta(), _stage(1, branch=ref))
+    else:
+        index = _plan(tmp_path, _meta(branch=ref), _stage(1))
+
+    err = _refusal(index)
+
+    assert err.ref_kind == "position"
+    assert "m.md" in str(err)
 
 
 def _keys_read_by_parse_plan(variable: str) -> set[str]:

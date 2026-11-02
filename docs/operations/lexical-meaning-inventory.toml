@@ -59,44 +59,70 @@ ground = "TRACKER_KEY_RE compiles the ABC-123 tracker-key shape pattern."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::cmd_classify::pattern.match"]
+[sites."scripts/agentctl/cli_plan.py::cmd_classify::pattern.match"]
 class = "structural"
 ground = "TRACKER_KEY_RE.match checks the ABC-123 key shape of the --tracker-key argument."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::cmd_present_plan::pattern.findall"]
+[sites."scripts/agentctl/cli_plan.py::cmd_present_plan::pattern.findall"]
 class = "structural"
 ground = "_PLAN_PRESENTATION_STAGE_ANCHOR_RE.findall extracts '[stage N]' anchors, the engine's own rendering syntax, to compare with the plan's stage indices."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::<module>::re.compile"]
+[sites."scripts/agentctl/cli_questions.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: legacy id shape qenum-N, '[stage N]' anchor line, 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line, kind(args) resource spec, and the 'Refusal: grant-widening', 'Refusal: child-outside-project' and 'Handoff-sha256:' label lines, all fixed engine/markdown syntax."
-hits = 9
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Compiles the legacy id shape qenum-N, fixed engine syntax."
+hits = 1
+hit_classes = ["structural"]
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_is_child_outside_project_refusal::pattern.search"]
+[sites."scripts/agentctl/cli_plan.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles the '[stage N]' anchor line and the '[R1]'/'[P1]'/'[K1]' order anchor, the engine's own plan- and order-presentation rendering syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli_plan.py::_order_anchor_problems::pattern.findall"]
+class = "structural"
+ground = "_ORDER_ANCHOR_RE.findall collects the '[R1]'/'[P1]'/'[K1]' anchors of the order rendering to compare them with the draft's ids by set membership; the engine's own rendering syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli_order.py::_order_draft_violations::re.fullmatch"]
+class = "structural"
+ground = "Checks an order item id has the form R<n>/P<n>/K<n> the rendering shows as an anchor; an identifier shape, not free-text meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli_dispatch.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: 'spawn-specialist: transcript=' stderr line, 'Rule:' label line, 'Resource:' label line, kind(args) resource spec, and the 'Refusal: grant-widening', 'Refusal: child-outside-project' and 'Handoff-sha256:' label lines and the 'Resource: vcs_ref <op> <remote>:<ref>' label line of a grant-widening refusal, all fixed engine/markdown syntax."
+hits = 8
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli_dispatch.py::_is_child_outside_project_refusal::pattern.search"]
 class = "structural"
 ground = "_CHILD_OUTSIDE_PROJECT_LINE_RE.search finds the 'Refusal: child-outside-project' label line spawn-specialist itself writes; a fixed engine label syntax."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_is_grant_widening_refusal::pattern.search"]
+[sites."scripts/agentctl/cli_dispatch.py::_is_grant_widening_refusal::pattern.search"]
 class = "structural"
 ground = "_REFUSAL_LINE_RE.search finds the 'Refusal: grant-widening' label line spawn-specialist itself writes; a fixed engine label syntax."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_parse_rule_lines::pattern.match"]
+[sites."scripts/agentctl/cli_dispatch.py::_parse_rule_lines::pattern.match"]
 class = "structural"
 ground = "_RULE_LINE_RE.match reads each 'Rule:' label line of a marker body, a fixed label syntax."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::cmd_dispatch::pattern.search"]
+[sites."scripts/agentctl/cli_dispatch.py::cmd_dispatch::pattern.search"]
 class = "structural"
 ground = "_HANDOFF_SHA_LINE_RE.search reads the 'Handoff-sha256:' label line spawn-specialist itself writes; a fixed engine label syntax."
 hits = 1
@@ -171,43 +197,43 @@ ground = "Splits the scrub array body into its upper-case environment variable n
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_parse_resource_line::pattern.match"]
+[sites."scripts/agentctl/cli_dispatch.py::_parse_resource_line::pattern.match"]
 class = "structural"
 ground = "_RESOURCE_LINE_RE.match reads the 'Resource:' label line of a marker body, a fixed label syntax."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_parse_resource_spec::pattern.match"]
+[sites."scripts/agentctl/cli_dispatch.py::_parse_resource_spec::pattern.match"]
 class = "structural"
 ground = "_RESOURCE_SPEC_RE.match parses the kind(args) resource-spec syntax."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_parse_rule_line::pattern.match"]
+[sites."scripts/agentctl/cli_dispatch.py::_parse_rule_line::pattern.match"]
 class = "structural"
 ground = "_RULE_LINE_RE.match reads the 'Rule:' label line of a marker body, a fixed label syntax."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_parse_transcript_path::pattern.match"]
+[sites."scripts/agentctl/cli_dispatch.py::_parse_transcript_path::pattern.match"]
 class = "structural"
 ground = "_TRANSCRIPT_PATH_RE.match reads the 'spawn-specialist: transcript=<path>' line the engine itself writes."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_upsert_candidate::pattern.match"]
+[sites."scripts/agentctl/cli_questions.py::_upsert_candidate::pattern.match"]
 class = "structural"
 ground = "_LEGACY_ENUMERATION_ID.match tests an id for the qenum-N identifier shape."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_record_review_questions::re.compile"]
+[sites."scripts/agentctl/cli_review.py::_record_review_questions::re.compile"]
 class = "structural"
 ground = "Compiles the engine's own candidate-id shape qrev-<review id>-<N> so the next unused number can be read off the ids already on file; the question text is never matched."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/agentctl/cli.py::_record_review_questions::pattern.fullmatch"]
+[sites."scripts/agentctl/cli_review.py::_record_review_questions::pattern.fullmatch"]
 class = "structural"
 ground = "The qrev-<review id>-<N> id pattern's .fullmatch tells this review's candidate rows from every other row by id shape, to find the standing row and the highest number; the statement is compared by equality, not by pattern."
 hits = 2
@@ -342,7 +368,14 @@ reviewed_by = "developer"
 
 [sites."scripts/agentctl/grants.py::<module>::re.compile"]
 class = "structural"
-ground = "_REDIRECT_MERGE_RE compiles the shell stream-merge redirect token pattern."
+ground = "_REDIRECT_MERGE_RE compiles the shell stream-merge redirect token pattern; _BRANCH_NAME_RE compiles the plain-git-branch-name character class."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/grants.py::_is_plain_branch_name::pattern.match"]
+class = "structural"
+ground = "_BRANCH_NAME_RE.match checks a plan-declared branch name is a plain ref-name token (no option-like or glob characters) before it becomes a VcsRef resource; syntax, not meaning."
 hits = 1
 reviewed_by = "developer"
 
@@ -1195,13 +1228,13 @@ ground = "WARN_RE matches the fixed output line format of lint-prose-length.py (
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/hook-si-freetext-answer.py::free_text_questions::pattern.findall"]
+[sites."scripts/lib/ask_evidence.py::parse_ask_answers::pattern.findall"]
 class = "structural"
-ground = "PAIR_RE.findall extracts '\"question\"=\"answer\"' pairs from the AskUserQuestion tool response, then compares answers to offered labels by set membership; tool-response syntax."
+ground = "PAIR_RE.findall extracts '\"question\"=\"answer\"' pairs from the AskUserQuestion tool response; tool-response syntax, the answers are then compared to offered labels by set membership."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/hook-si-freetext-answer.py::<module>::re.compile"]
+[sites."scripts/lib/ask_evidence.py::<module>::re.compile"]
 class = "structural"
 ground = "PAIR_RE matches the quoted question=answer pair format of the AskUserQuestion tool response; fixed structured syntax."
 hits = 1
@@ -2367,8 +2400,16 @@ reviewed_by = "developer"
 
 [sites."scripts/spawn-specialist.py::<module>::re.compile"]
 class = "structural"
-ground = "CONFIG_KEY_RE compiles the fixed config.md markdown table-row syntax."
-hits = 1
+ground = "CONFIG_KEY_RE compiles the fixed config.md markdown table-row syntax; _PUSH_RULE_BRANCH compiles the closed git ref-name character class a push rule may carry."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/spawn-specialist.py::push_allow_rules::pattern.match"]
+class = "structural"
+ground = "_PUSH_RULE_BRANCH.match checks a frozen remote and ref name against a closed character class before either is spliced into a harness rule; a syntax check, not a meaning call."
+hits = 2
+hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/spawn-specialist.py::parse_config_md::pattern.match"]
@@ -3022,4 +3063,95 @@ class = "structural"
 ground = "Splits a shell word on fixed shell punctuation into path candidates; tokenization, not meaning."
 hits = 2
 hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/advisor.py::_ce_prompt::re.sub"]
+class = "structural"
+ground = "Substitutes the fixed {begin}/{end}/{venue}/{branch}/{code} placeholders of the code-effects judge prompt template with run-time values; template filling, no meaning decided."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli_dispatch.py::_refusal_vcs_resources::pattern.match"]
+class = "structural"
+ground = "Matches the fixed 'Resource: vcs_ref <op> <remote>:<ref>' label line of a grant-widening refusal block the engine itself printed."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/cli_dispatch.py::_refusal_vcs_resources::pattern.search"]
+class = "structural"
+ground = "Detects the fixed 'Refusal: grant-widening' label line in a block the engine itself printed."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles: a git count flag (-N), the CDPATH-safe literal directory prefixes, the awk redirect/pipe/system/getline tokens, the shell -c and -s flag clusters and the heredoc header; all fixed shell syntax read by the resolver that feeds the permission hook, none classifies free-text meaning."
+hits = 6
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_awk::pattern.search"]
+class = "structural"
+ground = "Refuses an awk program containing a redirect, pipe, system or getline token: fixed awk syntax that makes the program write or run something."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_cd::pattern.match"]
+class = "structural"
+ground = "Recognizes a literal absolute or dot-relative cd operand, so a CDPATH lookup cannot re-base the directory; shell path syntax."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_git::pattern.match"]
+class = "structural"
+ground = "Recognizes a git count flag (-N) among the operands of a git subcommand; fixed command-line syntax."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_interpreter::pattern.fullmatch"]
+class = "structural"
+ground = "Recognizes the -c / -s flag clusters of a shell invocation; fixed command-line syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_interpreter::pattern.match"]
+class = "structural"
+ground = "Recognizes an interpreter program name against the shared INTERPRETER_RE; fixed program-name shape."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_program::pattern.match"]
+class = "structural"
+ground = "Recognizes an interpreter program name against the shared INTERPRETER_RE; fixed program-name shape."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_resolve_one::pattern.match"]
+class = "structural"
+ground = "Recognizes a leading NAME=value shell assignment through the shared BARE_ASSIGNMENT_RE; fixed shell syntax."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::_stdin_body_text::pattern.findall"]
+class = "structural"
+ground = "Reads the quote marks of a heredoc header (<<'EOF'); fixed shell syntax deciding whether the body is expanded."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/segment_resolver.py::code_source::pattern.match"]
+class = "structural"
+ground = "Recognizes an interpreter program name against the shared INTERPRETER_RE; fixed program-name shape."
+hits = 1
+hit_classes = ["structural"]
 reviewed_by = "developer"

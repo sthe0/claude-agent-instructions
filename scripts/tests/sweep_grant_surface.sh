@@ -22,6 +22,7 @@ SWEEP_FILES=(
     scripts/tests/test_grant_derivation.py
     scripts/tests/test_grant_snapshot_refresh.py
     scripts/tests/test_pra_review_catalogue.py
+    scripts/tests/test_resource_grant_replay.py
     scripts/tests/test_review_attestation_capability.py
     scripts/tests/test_spawn_autocompact_window.py
     scripts/tests/test_spawn_grants_integration.py

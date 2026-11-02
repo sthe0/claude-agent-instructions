@@ -156,6 +156,17 @@ CODE_PARTITIONS = [
         "them: the guarded decision drives a REFUSAL, not a warning.",
     ),
     (
+        "scripts/agentctl/segment_resolver.py (shell-command syntax)",
+        lambda f: f == "scripts/agentctl/segment_resolver.py",
+        "structural",
+        "keep",
+        "Shell-command syntax, never meaning: it splits a Bash line on the shell's own "
+        "operators and quoting, then resolves each segment against a closed allow-list "
+        "of (git subcommand, flag-shape) pairs and the contract table. Every miss "
+        "fails closed to `unresolved`, which costs one prompt and widens nothing, so a "
+        "token it fails to recognise can only under-resolve.",
+    ),
+    (
         "scripts/agentctl/**",
         lambda f: f.startswith("scripts/agentctl/"),
         "structural",
@@ -508,7 +519,7 @@ CODE_ID_OVERRIDES = {
         "Stop-block sink, so it inherits semantic-guarded rather than the file's "
         "structural default.",
     ),
-    ("scripts/agentctl/cli.py", "cmd_present_plan"): (
+    ("scripts/agentctl/cli_plan.py", "cmd_present_plan"): (
         "structural", "keep",
         "False pairing: the scope's regex (`^\\[stage (\\d+)\\]`) extracts a stage "
         "number from markdown headers — unrelated to the `plan_review_blockers()` "

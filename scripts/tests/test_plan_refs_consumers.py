@@ -25,7 +25,7 @@ INVENTORY = REPO / "docs" / "operations" / "plan-readers.md"
 DISPOSITIONS = {"resolves", "index-only", "not a plan"}
 POSITIVE_CONTROLS = {
     "scripts/agentctl/plan.py:load_plan_with_digest",
-    "scripts/agentctl/cli.py:_plan_file_sha256",
+    "scripts/agentctl/cli_common.py:_plan_file_sha256",
     "scripts/plan-review-topological.py:Driver.launch",
 }
 

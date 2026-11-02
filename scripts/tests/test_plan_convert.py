@@ -1317,7 +1317,7 @@ DISPOSITIONS = frozenset({
     "routed through plan_digest_equivalent", "audit only", "not a binding"})
 POSITIVE_CONTROLS = frozenset({
     "scripts/agentctl/gates.py:_plan_review_content_stale",
-    "scripts/agentctl/cli.py:_count_plan_review_round",
+    "scripts/agentctl/cli_review.py:_count_plan_review_round",
     "scripts/plan-review-topological.py:Driver.launch",
 })
 

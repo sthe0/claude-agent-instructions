@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import grants as _grants
 from . import resources as _resources
+from lib import kind_baselines as _kind_baselines
 from .directive import Directive
 from .plan import (
     PlanDoc,
@@ -134,13 +135,15 @@ class StageResources:
     stage_effects: list = field(default_factory=list)
 
 
-def compute_stage_resources(stage: Stage, venue: str | None) -> StageResources:
+def compute_stage_resources(
+    stage: Stage, venue: str | None, remote_head=_grants.LIVE_REMOTE_HEAD,
+) -> StageResources:
     """Compute the union of a stage's typed resources: effective (declared +
     derived) grants, its own spawn/landed shape, and its declared
     [[stage.effects]] (echoed through unresolved -- resolving a
     StageEffectDeclaration against a concrete call is `cli.py`'s job, since
     it needs the actual argv, not just the declaration)."""
-    effective = _effective_grants_for_stage(stage, venue)
+    effective = _effective_grants_for_stage(stage, venue, remote_head)
     out_resources: list = []
     out_unresolved: list = []
     for rule_grant in effective.allow:
@@ -154,6 +157,7 @@ def compute_stage_resources(stage: Stage, venue: str | None) -> StageResources:
         out_resources.extend(res.resources)
     out_resources.extend(_stage_spawn_resources(stage))
     out_resources.extend(_stage_landed_resources(stage))
+    out_resources.extend(effective.resources)
     return StageResources(
         stage_index=stage.index,
         resources=out_resources,
@@ -164,7 +168,197 @@ def compute_stage_resources(stage: Stage, venue: str | None) -> StageResources:
 
 def compute_plan_resources(doc: PlanDoc, *, venue: str | None = None) -> list[StageResources]:
     v = venue if venue is not None else _venue_for(doc)
-    return [compute_stage_resources(s, v) for s in doc.stages]
+    head = _grants.remote_head_branch(v) if any(s.is_spawn() for s in doc.stages) else None
+    return [compute_stage_resources(s, v, head) for s in doc.stages]
+
+
+@dataclass
+class StageResourceSet:
+    """The typed resources the plan sanctions a child of a stage to change, plus the
+    wildcard-tail Bash rules kept as text: their argv is unbounded, so only a call-time
+    match against the concrete call can decide them. A non-wildcard rule that does not
+    resolve is in neither list -- nothing sanctions it, so the call-time check falls
+    through to asking. What the child's permission mode adds on top (the workdir under
+    acceptEdits) is the spawn's to append, not the plan's."""
+    resources: list = field(default_factory=list)
+    rule_patterns: list = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "resources": [_resources.resource_to_dict(r) for r in self.resources],
+            "rule_patterns": list(self.rule_patterns),
+        }
+
+
+def resource_set_from_entries(
+    entries: "list[dict] | None", stage: Stage, venue: str | None,
+    branch_resources: "list | None" = None,
+) -> StageResourceSet:
+    """The set over grant entries in the `agentctl stage-grants` shape (`{"rule", ...}` or
+    `{"path", "mode", ...}`) plus the stage's own spawn/landed resources. Both callers hand
+    it the entries they already hold -- the stage-grants report and the spawn's engine
+    grants, runtime ones included -- so the set is one computation.
+
+    `branch_resources` are DR-P's commit/push resources as frozen at approve
+    (`plan.materialized_grant_entries`); None (a session bound before they were stored)
+    derives them from the repository as it is now."""
+    out = StageResourceSet()
+    for entry in entries or []:
+        if "rule" in entry:
+            res = resolve_rule_grant(entry["rule"], venue)
+            if res.status == "resolved":
+                out.resources.extend(res.resources)
+            elif res.reason_class == "wildcard-tail":
+                out.rule_patterns.append(entry["rule"])
+        elif "path" in entry and "mode" in entry:
+            out.resources.extend(resolve_add_dir_grant(entry["path"], entry["mode"]).resources)
+    out.resources.extend(_stage_spawn_resources(stage))
+    out.resources.extend(_stage_landed_resources(stage))
+    out.resources.extend(
+        _effective_grants_for_stage(stage, venue).resources if branch_resources is None
+        else branch_resources)
+    out.resources = list(dict.fromkeys(out.resources))
+    out.rule_patterns = list(dict.fromkeys(out.rule_patterns))
+    return out
+
+
+#: Spawned kinds that return a RESOURCE-REQUEST and whose stages an armed plan must carry one
+#: for: the kinds the launcher runs under `acceptEdits`, so their workdir is writable by the
+#: mode alone. The same tuple as the launcher's mode choice, by construction.
+RESOURCE_REQUEST_KINDS = _kind_baselines.ACCEPT_EDITS_TRUSTED_KINDS
+
+
+def add_workdir_write(resource_set: StageResourceSet, workdir: str) -> None:
+    """Add the write grant on `workdir` that `acceptEdits` gives a child, once. Shared by the
+    launcher (the handoff record) and the plan-time computation, so both name it alike."""
+    workdir_write = _resources.FileResource(workdir, "write")
+    if workdir_write not in resource_set.resources:
+        resource_set.resources.append(workdir_write)
+
+
+def plan_time_resource_set(
+    stage: Stage, venue: str | None, kind: str, remote_head=_grants.LIVE_REMOTE_HEAD,
+) -> tuple[StageResourceSet, set]:
+    """What a spawned `kind` child of `stage` may change, computed from the plan alone: the
+    stage's declared + derived grants, the kind baseline and, for a kind running under
+    `acceptEdits`, the venue as the workdir. The second member is the set of rule texts
+    those grants carry verbatim, for a rule that resolves to no typed resource. Pass
+    `remote_head` (read once per plan) to avoid a git call per stage."""
+    effective = _effective_grants_for_stage(stage, venue, remote_head)
+    entries = [{"rule": g.rule} for g in effective.allow]
+    entries += [{"rule": r} for r in _kind_baselines.baseline_for_workdir(kind, venue)]
+    entries += [{"path": d.path, "mode": d.mode} for d in effective.add_dirs]
+    held = resource_set_from_entries(entries, stage, venue, effective.resources)
+    if venue and kind in RESOURCE_REQUEST_KINDS:
+        add_workdir_write(held, venue)
+    return held, {e["rule"] for e in entries if "rule" in e}
+
+
+def _wildcard_prefix(rule: str) -> "tuple[str, str] | None":
+    """`(tool, command prefix)` of a `Bash(<prefix>:*)` rule, else None."""
+    parsed = _grants.rule_program_and_arg(rule)
+    if parsed is None or parsed[0] != "Bash" or not parsed[1].endswith(":*"):
+        return None
+    return parsed[0], _grants.bash_command_from_rule_arg(parsed[1])
+
+
+#: Characters that let a word extension of a held prefix run or read something other than
+#: the held command: separators, substitution, redirects, expansion, globs.
+_COMPOSING_CHARS = frozenset("$`;&|<>(){}*?\\\n\r")
+
+
+def _composes(text: str) -> bool:
+    """True when `text` carries a character the shell would act on: outside quotes any of
+    `_COMPOSING_CHARS` (an escaped space aside); inside double quotes only `$`, a backtick
+    or a backslash; inside single quotes nothing. An unterminated quote composes."""
+    quote = ""
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if quote == "'":
+            if c == "'":
+                quote = ""
+        elif quote == '"':
+            if c == '"':
+                quote = ""
+            elif c in "$`\\":
+                return True
+        elif c in "'\"":
+            quote = c
+        elif c == "\\" and text[i + 1:i + 2] == " ":
+            i += 1
+        elif c in _COMPOSING_CHARS:
+            return True
+        i += 1
+    return bool(quote)
+
+
+def narrower_than_pattern(rule: str, pattern: str) -> bool:
+    """True when `rule` is equal to, or a plain word-extension of, the wildcard-tail
+    `pattern`: same tool, and `rule`'s command (its own prefix when it carries a tail)
+    equals the pattern's prefix or continues it after a space with words that compose
+    nothing (no separator, substitution, redirect or glob). An exact rule counts too."""
+    pat = _wildcard_prefix(pattern)
+    parsed = _grants.rule_program_and_arg(rule)
+    if pat is None or parsed is None or parsed[0] != pat[0]:
+        return False
+    command = _grants.bash_command_from_rule_arg(parsed[1])
+    if command == pat[1]:
+        return True
+    return command.startswith(pat[1] + " ") and not _composes(command[len(pat[1]):])
+
+
+def uncovered_request_entries(
+    allow: "tuple[str, ...]", add_dirs: "tuple[tuple[str, str], ...]",
+    held: StageResourceSet, held_rules: set, venue: str | None,
+) -> list[str]:
+    """The request entries the stage's held set does not cover, as readable strings.
+
+    A rule held verbatim is covered. Any other is first validated by `grants.validate_rule`
+    (a compound command, a bare wrapper, a write-capable wildcard... is reported as
+    malformed, never graded). One resolving to typed resources is covered when each is
+    covered (`resources.covers`) by a held one; every other Bash rule, wildcard-tail or
+    exact, is covered when equal to or a plain word-extension of a held wildcard pattern.
+
+    A rule resolving to no resource at all (`Bash(cat /etc/shadow)`) is not covered by that
+    emptiness: the runtime hook (scripts/hook-resource-grant-check.py, "Decisions") allows a
+    segment that changes nothing only when it reads inside the record's resources or the
+    parent scratchpad, which a plan-time rule text cannot show; it needs a verbatim hold or
+    a held wildcard."""
+    def covered(want) -> bool:
+        return any(h.covers(want) for h in held.resources)
+
+    out: list[str] = []
+    for rule in allow:
+        if rule in held_rules:
+            continue
+        try:
+            _grants.validate_rule(rule)
+        except _grants.GrantValidationError as exc:
+            out.append(f"{rule} (malformed: {exc})")
+            continue
+        try:
+            res = resolve_rule_grant(rule, venue)
+        except ValueError as exc:
+            out.append(f"{rule!r} (malformed: {exc})")
+            continue
+        if res.status == "resolved" and res.resources:
+            if not all(covered(r) for r in res.resources):
+                out.append(rule)
+        elif not any(narrower_than_pattern(rule, p) for p in held.rule_patterns):
+            out.append(rule)
+    for path, mode in add_dirs:
+        if not os.path.isabs(path):  # the row parser already refuses this; guards direct callers
+            out.append(f"add_dir {path} ({mode}) (not absolute)")
+            continue
+        try:
+            want = _resources.FileResource(path, mode)
+        except ValueError:
+            out.append(f"add_dir {path} ({mode})")
+            continue
+        if not covered(want):
+            out.append(f"add_dir {path} ({mode})")
+    return out
 
 
 #: Elements whose text the engine itself executes verbatim; an unresolved command
@@ -191,13 +385,18 @@ def _unresolved_item(identity, origin: str, source: str, stage: "int | None" = N
     return item
 
 
-def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None = None) -> BoundaryView:
+def compute_boundary_view(
+    doc: PlanDoc, order_sha256: str, *, venue: str | None = None,
+    branch_resources: "dict[int, list] | None" = None,
+) -> BoundaryView:
     """`compute_plan_resources`' resources plus the engine-executed fixed texts
     (verify_command, negative_control, final_check commands) resolved directly as whole
     texts, with every unresolved identity carrying its origin. The DR-V rules derived
     from a verify_command are skipped: derivation drops segments it cannot read off
     the text, so only the direct resolution sees them. Each resolved resource is also
-    recorded in `resource_origins` with the plan element and text that produced it."""
+    recorded in `resource_origins` with the plan element and text that produced it.
+    `branch_resources` ({stage index: resources}) replaces the live DR-P derivation with
+    the ones a caller already froze, so the view cannot disagree with them."""
     v = venue if venue is not None else _venue_for(doc)
     view = BoundaryView(order_sha256=order_sha256)
 
@@ -213,8 +412,9 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
             view.unresolved.append(
                 _unresolved_item(res.identity or fallback, origin, source, stage))
 
+    head = _grants.remote_head_branch(v) if any(s.is_spawn() for s in doc.stages) else None
     for stage in doc.stages:
-        effective = _effective_grants_for_stage(stage, v)
+        effective = _effective_grants_for_stage(stage, v, head)
         for rule_grant in effective.allow:
             provenance = rule_grant.provenance
             if provenance == "derived:DR-V":
@@ -228,6 +428,8 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
             add(resolve_add_dir_grant(add_dir.path, add_dir.mode).resources, "add_dir", add_dir.path)
         add(_stage_spawn_resources(stage), "spawn", "")
         add(_stage_landed_resources(stage), "landed", "")
+        add(effective.resources if branch_resources is None
+            else branch_resources.get(stage.index, []), "branch", stage.branch or "")
         if runs_verify_command(stage.criterion):
             verify = stage.criterion.verify_command
             take(resolve_text(verify, v), "verify_command", verify, ("verify-command", verify),
@@ -259,15 +461,11 @@ def compute_boundary_view(doc: PlanDoc, order_sha256: str, *, venue: str | None 
 # command reached this module via a plan's declared grant or via a corpus scan.
 
 
-def _resource_to_dict(res: _resources.Resource) -> dict:
-    return dataclasses.asdict(res)
-
-
 def _resolution_to_dict(res: Resolution, *, label: str, label_key: str = "rule") -> dict:
     return {
         label_key: label,
         "status": res.status,
-        "resources": [_resource_to_dict(r) for r in res.resources],
+        "resources": [_resources.resource_to_dict(r) for r in res.resources],
         "reason_class": res.reason_class,
         "reason": res.reason,
         "identity": list(res.identity) if res.identity is not None else None,
@@ -291,8 +489,9 @@ def _plan_resources_json(doc: PlanDoc, venue: str | None) -> dict:
         stages[str(s.index)] = {
             "rules": rules,
             "add_dirs": add_dirs,
-            "spawn": [_resource_to_dict(r) for r in _stage_spawn_resources(s)],
-            "landed": [_resource_to_dict(r) for r in _stage_landed_resources(s)],
+            "spawn": [_resources.resource_to_dict(r) for r in _stage_spawn_resources(s)],
+            "landed": [_resources.resource_to_dict(r) for r in _stage_landed_resources(s)],
+            "branch": [_resources.resource_to_dict(r) for r in effective.resources],
             "stage_effects": [dataclasses.asdict(e) for e in (getattr(s, "effects", []) or [])],
         }
     return {"stages": stages}
@@ -312,6 +511,8 @@ def _render_plan_resources_text(data: dict) -> str:
             lines.append(f"- spawn -> specialist:{r['role']}")
         for r in stage["landed"]:
             lines.append(f"- landed -> vcs_ref:{r['remote']}/{r['ref']}/{r['op']}")
+        for r in stage.get("branch", []):
+            lines.append(f"- own branch -> vcs_ref:{r['remote']}/{r['ref']}/{r['op']}")
     return "\n".join(lines) + "\n"
 
 

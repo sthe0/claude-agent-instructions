@@ -26,7 +26,7 @@ from agentctl.state import (
     SCHEMA_VERSION, Actor, Criterion, LandedSpec, Means, Node, Principle, SessionState,
     Stage, StageStatus, Subject, Supply,
 )
-from conftest import STAGE_OBSERVATIONS
+from conftest import STAGE_OBSERVATIONS, patch_cli_name
 from test_re_attest import _dev_stage, _Mem, _reattest_stash, _runner
 from test_re_attest import _state as _reattest_state
 from test_subplan import _make_frame
@@ -75,7 +75,7 @@ def real_roots(tmp_path, monkeypatch):
     _git(canon, "commit", "-q", "-m", "init")
     wt = tmp_path / "wt"
     _git(canon, "worktree", "add", "-q", "-b", "wt-branch", str(wt))
-    monkeypatch.setattr(cli, "REPO_ROOT", canon)
+    patch_cli_name(monkeypatch, "REPO_ROOT", canon)
     return SimpleNamespace(scratch=scratch, home=home, canon=canon, wt=wt)
 
 
@@ -745,6 +745,7 @@ def _populated_stage():
         control="control",
         optional=True,
         backlog_issue="backlog-issue",
+        branch="own-branch",
     )
 
 
@@ -971,7 +972,7 @@ def test_child_subplan_verifies_and_resolves_with_a_parent_obligation_open(
 
 def test_verify_final_refusal_is_logged_as_a_gate(store, plans, norms, tmp_path, monkeypatch):
     gate_log = tmp_path / "gates.jsonl"
-    monkeypatch.setattr(cli, "GATE_LOG", gate_log)
+    patch_cli_name(monkeypatch, "GATE_LOG", gate_log)
     f = _norm_file(norms)
     _start(store, "d2", plans("base"))
     _pass(store, "d2", 1)

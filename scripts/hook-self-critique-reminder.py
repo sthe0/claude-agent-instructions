@@ -27,6 +27,8 @@ import re
 import sys
 from pathlib import Path
 
+from lib import hook_telemetry
+
 EXPERIENCE_PATH_RE = re.compile(r"(^|/)experience/[^/]+\.md$")
 SELF_CRITIQUE_HEADING_RE = re.compile(
     r"^(#{2,})\s+.*?(self[-\s]?critique|self[-\s]?критик)",
@@ -99,4 +101,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-self-critique-reminder"))

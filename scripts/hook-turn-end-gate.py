@@ -71,6 +71,7 @@ from typing import Any, Callable
 # Make the sibling shared detector and lib/ importable whether this hook is run
 # directly (scripts/ on sys.path[0]) or loaded via importlib in tests.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import hook_telemetry  # noqa: E402
 from lib import judge_ledger  # noqa: E402
 from lib.host_llm import JUDGE_CHILD_ENV_VAR  # noqa: E402
 
@@ -991,4 +992,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-turn-end-gate"))

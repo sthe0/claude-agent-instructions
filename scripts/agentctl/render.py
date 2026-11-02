@@ -32,7 +32,7 @@ from pathlib import Path
 from lib import kind_baselines
 from lib.spawn_ceiling import dispatch_prompt_ceiling_chars
 
-from . import plan_refs, plan_store, protected_actions
+from . import grants as _grants, plan_refs, plan_store, protected_actions
 from .config import PlanLimitError, plan_field_inline_limit, plan_size_limits
 from .directive import Directive
 from .plan import (
@@ -50,6 +50,8 @@ from .plan import (
     PlanDoc,
     PlanError,
     _build_supplies,
+    _effective_by_stage,
+    _remote_head_for,
     _stage_declared_and_derived_grants,
     _venue_for,
     consumers,
@@ -61,6 +63,7 @@ from .plan import (
     parse_pair,
     parse_plan,
     parse_unit,
+    plan_branch_resources,
     plan_coverage_entries,
     reliance_set,
     review_pairs,
@@ -91,6 +94,11 @@ def _no_venue_note(s, venue: str | None) -> str | None:
     return NO_VENUE_GRANTS_NOTE if relative else None
 
 
+def _branch_lines(grants) -> list[str]:
+    """DR-P's `op remote:ref` texts off a stage's grants object."""
+    return [f"{r.op} {r.remote}:{r.ref}" for r in grants.resources]
+
+
 def _grants_lines(s, venue: str | None) -> list[str]:
     """The `- **Grants (file-access scope):**` block for one stage, or `[]`
     when the stage has neither a declared nor a derived grant to show —
@@ -98,13 +106,16 @@ def _grants_lines(s, venue: str | None) -> list[str]:
     the whole-plan view can no longer omit the one detail (a stage's actual
     file-access scope) that a plan reviewer needs to audit without opening
     the single-stage brief for every stage in turn."""
-    declared_grants, derived_grants, _dropped = _stage_declared_and_derived_grants(s, venue)
+    declared_grants, derived_grants, dropped = _stage_declared_and_derived_grants(s, venue)
     declared_rules = [r.rule for r in declared_grants.allow]
     declared_dirs = [f"{a.path}:{a.mode}" for a in declared_grants.add_dirs]
     derived_rules = [r.rule for r in derived_grants.allow]
     derived_dirs = [f"{a.path}:{a.mode}" for a in derived_grants.add_dirs]
+    own_branch = _branch_lines(derived_grants)
+    branch_refused = [d for d in dropped if d.get("rule") == _grants.DR_P_RULE] if s.branch else []
     note = _no_venue_note(s, venue)
-    if not (declared_rules or declared_dirs or derived_rules or derived_dirs or note):
+    if not (declared_rules or declared_dirs or derived_rules or derived_dirs or note
+            or own_branch or branch_refused):
         return []
     out = ["- **Grants (file-access scope):**"]
     if note:
@@ -117,6 +128,10 @@ def _grants_lines(s, venue: str | None) -> list[str]:
         out.append(f"  - derived allow: {', '.join(derived_rules)}")
     if derived_dirs:
         out.append(f"  - derived add_dirs: {', '.join(derived_dirs)}")
+    if own_branch:
+        out.append(f"  - own branch (DR-P): {', '.join(own_branch)}")
+    for d in branch_refused:
+        out.append(f"  - own branch (DR-P) refused: {d['entry']} ({d['reason']})")
     return out
 
 
@@ -1916,8 +1931,10 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
     here — `cmd_plan_grants` builds that directly from `StageGrants.to_dict()`."""
     venue = _venue_for(doc)
     lines: list[str] = []
+    head = _remote_head_for(doc, venue=venue)
     for s in doc.stages:
-        declared, derived, dropped = _stage_declared_and_derived_grants(s, venue)
+        declared, derived, dropped = _stage_declared_and_derived_grants(s, venue, head)
+        dr_p = _branch_lines(derived)
         declared_rules = [r.rule for r in declared.allow]
         declared_dirs = [f"{a.path}:{a.mode}" for a in declared.add_dirs]
         dr_v = [r.rule for r in derived.allow if r.provenance == "derived:DR-V"]
@@ -1941,13 +1958,15 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
                 lines.append(f"  DR-E (in-venue edit): {', '.join(dr_e)}")
             if dr_r:
                 lines.append(f"  DR-R (outside-venue read): {', '.join(dr_r)}")
+            if dr_p:
+                lines.append(f"  DR-P (own branch): {', '.join(dr_p)}")
             for d in dropped:
                 lines.append(f"  dropped: {d['entry']} ({d['reason']})")
             for text in protected:
                 lines.append(f"  {text}")
             if note:
                 lines.append(f"  {note}")
-            if not (declared_rules or declared_dirs or dr_v or dr_o or dr_e or dr_r):
+            if not (declared_rules or declared_dirs or dr_v or dr_o or dr_e or dr_r or dr_p):
                 lines.append("  (no grants)")
         else:
             parts = [f"Stage {s.index} ({s.title}):"]
@@ -1959,6 +1978,8 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
                 parts.append("DR-O=[" + ", ".join(dr_o) + "]")
             if dr_r:
                 parts.append("DR-R=[" + ", ".join(dr_r) + "]")
+            if dr_p:
+                parts.append("DR-P=[" + ", ".join(dr_p) + "]")
             if dr_v:
                 parts.append(f"DR-V={len(dr_v)} derived")
             if dr_e:
@@ -2000,15 +2021,19 @@ def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:
     if fmt == "json":
         venue = _venue_for(doc)
         stages = {}
+        head = _remote_head_for(doc, venue=venue)
+        effective = _effective_by_stage(doc, venue=venue, head=head)
+        branch_by_stage = plan_branch_resources(doc, effective=effective)
         for s in doc.stages:
-            declared, derived, dropped = _stage_declared_and_derived_grants(s, venue)
+            declared, derived, dropped = _stage_declared_and_derived_grants(s, venue, head)
             stages[str(s.index)] = {
                 "declared": declared.to_dict(),
                 "derived": derived.to_dict(),
                 "dropped": dropped,
+                "branch_resources": branch_by_stage.get(s.index, []),
             }
         data = {
-            "grants_sha256": grants_sha256(doc),
+            "grants_sha256": grants_sha256(doc, effective=effective),
             "stages": stages,
             "shadow_problems": problems,
             "advisories": advisories,

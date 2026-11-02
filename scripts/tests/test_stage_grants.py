@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 from argparse import Namespace
 
-from agentctl import cli
+from agentctl import cli, cli_final
 from agentctl.state import Node, StageStatus
 from agentctl import plan as plan_mod
 from agentctl.dispatch import RunResult
@@ -526,6 +526,17 @@ def test_load_plan_refuses_declared_write_add_dir_on_home(fixtures_dir, tmp_path
         plan_mod.load_plan(plan_path)
 
 
+@pytest.mark.parametrize("value", ["true", "false"])
+def test_load_plan_refuses_a_plan_that_still_names_the_removed_runs_worktree_code_field(fixtures_dir, tmp_path, value):
+    plan_path = _write_plan_with_grants_block(
+        fixtures_dir, tmp_path,
+        f"[stage.grants]\nruns_worktree_code = {value}\n",
+        "plan_removed_runs_worktree_code.toml",
+    )
+    with pytest.raises(plan_mod.PlanError, match="runs_worktree_code was removed"):
+        plan_mod.load_plan(plan_path)
+
+
 def test_diff_plans_classifies_declared_grants_only_change_as_substantive(fixtures_dir, tmp_path):
     """(#6a) Two plans that are otherwise identical, differing ONLY by a
     declared `[stage.grants]` block added to stage 1, must classify as
@@ -553,6 +564,50 @@ def test_cmd_stage_grants_reports_declared_grant_through_full_submit_approve_flo
     declared = [e for e in entries if e.get("rule") == "Bash(git status:*)"]
     assert len(declared) == 1
     assert declared[0]["provenance"] == "declared"
+
+
+def test_stage_grants_push_resource_is_frozen_at_approve_not_read_at_spawn(
+    store, fixtures_dir, tmp_path,
+):
+    """DR-P reads `origin/HEAD` once, at approve, and `stage-grants` reports what that read
+    derived: moving the remote HEAD onto the plan's branch afterwards neither strips the
+    push the approval showed nor lets spawn derive a different set."""
+    import subprocess
+
+    from agentctl import resources as R
+
+    venue = store.root.parent
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(venue), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                       check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("commit", "-q", "--allow-empty", "-m", "c")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    text = (fixtures_dir / "plan_two_stage.toml").read_text().replace(
+        "[meta]\n", '[meta]\nbranch = "own-branch"\n', 1)
+    plan_path = tmp_path / "plan_with_branch.toml"
+    plan_path.write_text(text)
+    sid = "stage-grants-dr-p-frozen"
+    _to_executing(store, sid, fixtures_dir, plan_path=str(plan_path))
+    push = R.resource_to_dict(R.VcsRefResource("origin", "own-branch", "push"))
+    commit = R.resource_to_dict(R.VcsRefResource(".", "own-branch", "commit"))
+
+    before = cli.cmd_stage_grants(ns(session=sid, stage=1, json=True), store=store)
+    assert push in before.data["resources"] and commit in before.data["resources"]
+
+    git("update-ref", "refs/remotes/origin/own-branch", "HEAD")
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/own-branch")
+    after = cli.cmd_stage_grants(ns(session=sid, stage=1, json=True), store=store)
+    assert after.data["resources"] == before.data["resources"]
+
+    state = store.load(sid)
+    assert cli.stage_branch_resources(state, 1)
+    state.approved_grant_entries["1"]["branch"]["resources"].append(
+        R.resource_to_dict(R.VcsRefResource("origin", "extra", "push")))
+    assert cli.stage_branch_resources(state, 1) == []
 
 
 def test_cmd_stage_grants_unaffected_by_live_plan_path_edit_after_approval(store, fixtures_dir, tmp_path):
@@ -1086,7 +1141,7 @@ _SETTINGS_REFERENCE_RE = re.compile(r"settings[^/\s\"'`]*\.json")
 # test_settings_reference_classification_has_no_unclassified_hit until it is
 # added here too.
 SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
-    "agentctl/cli.py": "reader",
+    "agentctl/cli_dispatch.py": "reader",
     "agentctl/classify.py": "mention",
     "agentctl/exempt_paths.py": "mention",
     "agentctl/mandate.py": "mention",
@@ -1098,6 +1153,7 @@ SETTINGS_REFERENCE_CLASSIFICATION: dict[str, str] = {
     "hook-guard-canon-readonly.py": "mention",
     "hook-guard-permission-surface.py": "reader",
     "hook-prompt-reminders.py": "reader",
+    "hook-resource-grant-check.py": "reader",
     "install-reminder-hooks.sh": "writer",
     "lib/config_root.py": "mention",
     "lib/hook_fragments.py": "reader",
@@ -1232,7 +1288,7 @@ def test_cmd_resolve_quality_row_separates_asked_and_unasked_planning_misses(sto
 
     rows = [
         json.loads(line)
-        for line in cli.TASK_QUALITY_LOG.read_text(encoding="utf-8").splitlines()
+        for line in cli_final.TASK_QUALITY_LOG.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
     row = rows[-1]

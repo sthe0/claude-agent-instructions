@@ -13,6 +13,7 @@ from pathlib import Path
 from agentctl import plan as plan_mod
 from agentctl.grants import derive_stage_grants
 from agentctl.state import Actor, Criterion, Means, Stage, Subject
+from dr_p_dropped import validator_refusals
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "grant_plans"
 
@@ -109,21 +110,21 @@ def test_dr_v_proposes_redirect_merge_segment_as_one_segment():
     stage = _stage(verify_command="pytest -q 2>&1")
     grants, dropped = derive_stage_grants(stage, venue="/repo")
     assert "Bash(pytest -q 2>&1:*)" in _rules(grants)
-    assert not dropped
+    assert not validator_refusals(dropped)
 
 
 def test_dr_v_drops_unresolvable_segment():
     stage = _stage(verify_command="echo $FOO")
     grants, dropped = derive_stage_grants(stage, venue="/repo")
     assert not _rules(grants)
-    assert not dropped  # never proposed, so never appears as a validator refusal either
+    assert not validator_refusals(dropped)  # never proposed, so never appears as a validator refusal either
 
 
 def test_dr_v_absent_when_no_verify_command():
     stage = _stage(verify_command=None)
     grants, dropped = derive_stage_grants(stage, venue="/repo")
     assert not _rules(grants)
-    assert not dropped
+    assert not validator_refusals(dropped)
 
 
 def test_dr_v_drops_redirection_segment():
@@ -132,7 +133,7 @@ def test_dr_v_drops_redirection_segment():
     stage = _stage(verify_command="python3 -m pytest scripts/tests > out.txt")
     grants, dropped = derive_stage_grants(stage, venue="/repo")
     assert not _rules(grants)
-    assert not dropped
+    assert not validator_refusals(dropped)
 
 
 def test_dr_v_proposes_each_segment_of_a_cd_and_command_chain():
@@ -152,7 +153,7 @@ def test_dr_v_proposes_nothing_for_an_unbalanced_quote():
     stage = _stage(verify_command="echo 'unterminated")
     grants, dropped = derive_stage_grants(stage, venue="/repo")
     assert not _rules(grants)
-    assert not dropped
+    assert not validator_refusals(dropped)
 
 
 # --- DR-O: in-venue .py/.sh output_artifacts, tests/ excluded --------------
@@ -359,8 +360,8 @@ def test_self_grants_fixture_dr_o_derives_probe_and_guard_artifacts(tmp_path):
     derived2, dropped2 = derive_stage_grants(stage2, venue=venue)
     assert "Bash(python3 scripts/fixture_probe.py:*)" in _rules(derived1)
     assert "Bash(scripts/fixture_guard.sh:*)" in _rules(derived2)
-    assert not dropped1
-    assert not dropped2
+    assert not validator_refusals(dropped1)
+    assert not validator_refusals(dropped2)
 
 
 def test_settings_channel_output_fixture_dr_o_dropped_not_allowed(tmp_path):

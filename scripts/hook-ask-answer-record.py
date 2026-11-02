@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import hook_telemetry  # noqa: E402
 
 
 def _offered_questions(tool_input: dict) -> list[dict]:
@@ -84,4 +85,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-ask-answer-record"))

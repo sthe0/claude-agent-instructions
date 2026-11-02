@@ -9,6 +9,7 @@ Views:
   spawn-outcomes  malformed-spawn and re-spawn rates, baseline and delta check
   tool-usage      specialization spawns and skill / subagent invocations
   skill-usage     which user-invocable skills are actually used
+  hooks           decisions (deny / nudge / silent) per hook and engine gate
 
 The implementation of each view is scripts/lib/agent_report/<view>.py; the old
 per-report script names (agent-stats.py, cost-report.py, spawn-outcome-report.py,

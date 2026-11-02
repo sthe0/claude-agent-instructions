@@ -561,8 +561,14 @@ def test_a_plain_brief_over_the_limit_is_refused_before_launch(tmp_path, monkeyp
 def test_the_stage_brief_and_the_handoff_record_carry_the_closure_digest(plan, tmp_path):
     from agentctl import plan as plan_module
 
-    digest = plan_module.stage_closure_digest(plan_module.load_plan(str(plan)), 2)
-    state = SimpleNamespace(plan_path=str(plan), plan_snapshot_path=None, parent_link=None)
+    doc = plan_module.load_plan(str(plan))
+    digest = plan_module.stage_closure_digest(doc, 2)
+    state = SimpleNamespace(
+        plan_path=str(plan), plan_snapshot_path=None, parent_link=None,
+        approved_grant_entries=None, approved_grants_sha256=None,
+        stage=lambda index: next(s for s in doc.stages if s.index == index),
+        resolve_check_venue=lambda venue: str(tmp_path),
+    )
     store = SimpleNamespace(load=lambda session_id: state)
 
     record = _spawner().norm_handoff_record("session", 2, "developer", 1, None, store=store)
@@ -570,6 +576,25 @@ def test_the_stage_brief_and_the_handoff_record_carry_the_closure_digest(plan, t
     site = _site("dispatch-stage-brief", plan, tmp_path / "views", stage=2)
     assert f"Stage closure digest:** {digest}" in site.text
     assert record["closure_digest"] == digest
+
+
+def test_the_handoff_record_carries_the_launch_directory(plan, tmp_path):
+    from agentctl import plan as plan_module
+
+    doc = plan_module.load_plan(str(plan))
+    repo = tmp_path / "work"
+    state = SimpleNamespace(
+        plan_path=str(plan), plan_snapshot_path=None, parent_link=None,
+        approved_grant_entries=None, approved_grants_sha256=None,
+        stage=lambda index: next(s for s in doc.stages if s.index == index),
+        resolve_check_venue=lambda venue: str(tmp_path),
+    )
+    store = SimpleNamespace(load=lambda session_id: state)
+
+    record = _spawner().norm_handoff_record("session", 2, "developer", 1, None, store=store, workdir=str(repo))
+
+    assert record["launch_dir"] == str(repo)
+    assert "git_surface" not in record
 
 
 # --- the former inline trigger -----------------------------------------------------------

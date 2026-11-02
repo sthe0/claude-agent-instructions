@@ -1160,7 +1160,9 @@ def test_the_transcript_is_not_evidence_of_the_users_answer(
         raise AssertionError("order-agree read a transcript")
 
     _presented(ostore, tmp_path)
-    monkeypatch.setattr(cli, "_present_plan_transcript", read_a_transcript)
+    from agentctl import cli_common, cli_final, cli_plan, cli_results
+    for module in (cli, cli_common, cli_final, cli_plan, cli_results):
+        monkeypatch.setattr(module, "_present_plan_transcript", read_a_transcript)
     monkeypatch.setattr(ask_evidence, "ask_after_event", read_a_transcript)
 
     d = _agree(ostore)
@@ -1202,10 +1204,14 @@ def test_the_new_verbs_are_user_authority_verbs():
 # `plan_path` is where an act changes what the session executes. Every function in the engine
 # that assigns it either runs the agreement gate first, or states below why it need not.
 _PLAN_PATH_REASONS = {
-    "cli.py:cmd_push_subplan": "a sub-plan frame keeps the parent's agreement fields and does not carry the top-level order",
-    "cli.py:cmd_pop_subplan": "restores the frame it pushed, agreement fields included",
-    "cli.py:cmd_reset": "a reset clears the session, agreement included",
-    "cli.py:_renormalize_replan": "reached only from _cmd_replan, after its agreement refusal",
+    "cli_control.py:cmd_push_subplan": "a sub-plan frame keeps the parent's agreement fields and does not carry the top-level order",
+    "cli_control.py:cmd_pop_subplan": "restores the frame it pushed, agreement fields included",
+    "cli_session.py:cmd_reset": "a reset clears the session, agreement included",
+    "cli_replan.py:_renormalize_replan": "reached only from _replan_closure_gates, after its agreement refusal",
+    "cli_replan.py:_replan_norm_and_premise_gates": "a _cmd_replan phase that runs after _replan_closure_gates' agreement refusal",
+    "cli_replan.py:_replan_apply_no_change": "a _cmd_replan phase that runs after _replan_closure_gates' agreement refusal",
+    "cli_replan.py:_replan_apply_refinement": "a _cmd_replan phase that runs after _replan_closure_gates' agreement refusal",
+    "cli_replan.py:_replan_apply_substantive": "a _cmd_replan phase that runs after _replan_closure_gates' agreement refusal",
     "carry_forward.py:_restamp": "rebinds a review record's own plan_path, not the session's",
     "carry_forward.py:pair_records": "rebinds a pair record's own plan_path, not the session's",
 }

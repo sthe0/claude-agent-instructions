@@ -67,7 +67,10 @@ HEARTBEAT_S = 60.0
 SUMMARY_CHARS = 3000
 REASON_CHARS = 300
 DIGEST_EXCUSED_IDS = 10
-DEFAULT_SUITE = (sys.executable, "-m", "pytest", "-q", "scripts/tests")
+# --run-slow: on the baseline worktree the merge base equals HEAD, so slow selection runs every
+# slow test there, while an item branch skips the slow tests its diff does not guard; without the
+# flag such a skip reads as "passed on the baseline, not on the item" and fails the item.
+DEFAULT_SUITE = (sys.executable, "-m", "pytest", "-q", "--run-slow", "scripts/tests")
 GATE_SCRIPTS = ("scripts/verify-all.py", "scripts/lint-prose-length.py")
 
 EXIT_OK, EXIT_ERROR, EXIT_BUSY = 0, 1, 3
@@ -1206,7 +1209,9 @@ class Cycle:
                        "--done-criterion", "the item's check-item exits 0"]),
             ("classify", ["--architectural", "--changed-lines", str(self.bound), "--wall-clock-min", "60"]),
             ("plan", []),
+            ("order-raise", ["--id", "issue", "--element", f"Core issue #{number} is resolved"]),
             ("submit-plan", ["--plan", str(norm)]),
+            ("order-dispose", ["--id", "issue", "--as", "covered", "--stage", str(STAGE_INDEX)]),
             ("approve", ["--by", rules.mandate_approver(self.mid)]),
             ("partition", []),
             ("next-stage", []),

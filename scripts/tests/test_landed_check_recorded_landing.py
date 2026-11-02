@@ -34,7 +34,7 @@ from agentctl.state import (
     LandedSpec, Means, Node, Outcome, SessionState, Stage, StageStatus, Subject,
 )
 from agentctl.store import FileStateStore
-from conftest import STAGE_OBSERVATIONS
+from conftest import STAGE_OBSERVATIONS, patch_cli_name
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.com",
@@ -460,7 +460,8 @@ def transcripts(tmp_path, monkeypatch):
 @pytest.fixture
 def clock(monkeypatch):
     now = {"t": 1_000_000.0}
-    monkeypatch.setattr(cli, "time", SimpleNamespace(time=lambda: now["t"]))
+    frozen = SimpleNamespace(time=lambda: now["t"])
+    patch_cli_name(monkeypatch, "time", frozen)
     return now
 
 

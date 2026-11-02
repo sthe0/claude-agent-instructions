@@ -46,6 +46,8 @@ from agentctl.config import (  # the one definition of the child-contour kill sw
     CHILD_CONTOUR_LINKING_ENV,
     CHILD_CONTOUR_LINKING_KEY,
     child_contour_linking_enabled,
+    resource_grant_hook_enabled,
+    resource_grant_hook_timeout_s,
 )
 from agentctl.dispatch import parse_marker  # the one function the parent routes a spawn's stdout with
 from agentctl import norm_handoff  # the one definition of the handoff record the child engine adopts
@@ -77,6 +79,7 @@ from lib import shell_tokens
 from lib import spawn_prompt_files as _prompt_files  # the files a composed system prompt is made of, shared with the engine's ceiling check
 from lib.config_root import agent_home, harness_config_root, iter_transcripts, plans_dir, projects_roots, skills_dir, topo_units_root  # config-root resolver (isolated system root)
 from lib.kind_baselines import (  # re-exported below so `MOD.KIND_BASELINES` etc. keep working for importlib callers
+    ACCEPT_EDITS_TRUSTED_KINDS as _ACCEPT_EDITS_TRUSTED_KINDS,
     KIND_BASELINES,
     PLANNER_CHECK_ORDER_COVERAGE_RULE,
     PLANNER_LIST_DENIED_RULE,
@@ -344,6 +347,27 @@ def own_contour_brief_lines(args: argparse.Namespace, own_plan: "Path | None" = 
     ]
 
 
+def push_checkpoint_text(push_rules: "Sequence[str]") -> str:
+    """The checkpoint brief's push sentence, built from the same rules the child's
+    `--settings` carries (`push_allow_rules`), so the brief cannot name a push the child
+    may not run."""
+    if not push_rules:
+        return "Commit only: no push rule was granted for this stage. Never land. "
+    commands = ", ".join(f"`{rule[len('Bash('):-1]}`" for rule in push_rules)
+    return (
+        f"Push your own branch after each commit with exactly {commands}: the allow rule "
+        "matches only that spelling, so any other form (no operand, `HEAD:<ref>`, a flag) "
+        "stops on a permission prompt. Never push another branch and never land. "
+        "The rule was granted because the git config at launch could not remap this push "
+        "(`push.default=upstream`, `remote.<r>.push`, `push.followTags`, "
+        "`push.recurseSubmodules` were checked); do not change git config. Residual: it "
+        "does not pin the URL (`remote.<r>.pushurl`, `url.<base>.insteadOf`, "
+        "`url.<base>.pushInsteadOf`) or the code "
+        "the push runs (a `pre-push` hook, `core.hooksPath`, `core.sshCommand`), and "
+        "config changed after launch is not re-checked. "
+    )
+
+
 def assemble_prompt(
     args: argparse.Namespace,
     depth: int,
@@ -358,6 +382,7 @@ def assemble_prompt(
     site: "SitePrompt | None" = None,
     own_contour: bool = False,
     own_plan: "Path | None" = None,
+    push_rules: "Sequence[str]" = (),
 ) -> str:
     constraints = (argv_text.read_arg_text(args.constraints) or "").rstrip()
     done_criterion = argv_text.read_arg_text(args.done_criterion)
@@ -497,10 +522,8 @@ def assemble_prompt(
             "",
             "Commit each checkpoint as soon as its own control goes green — don't "
             "batch unrelated checkpoints into one commit. "
-            "In the Core repo the git-worktrees reaper backs up committed branches, so commit only. "
-            "Outside the Core repo, push the personal/ticket branch after each commit "
-            "where your grants allow it (never a shared/trunk branch); never land. "
-            "Keep evidence (test output, command logs, intermediate artifacts) in the "
+            + push_checkpoint_text(push_rules)
+            + "Keep evidence (test output, command logs, intermediate artifacts) in the "
             "durable evidence directory below, not under `/tmp` or another OS-temp "
             "scratch root — a scratch root can be swept before anyone reviews it.",
             "",
@@ -2121,6 +2144,8 @@ def _grant_key(entry: dict) -> tuple:
 
 
 def _grant_text(entry: dict) -> str:
+    if "resource" in entry:
+        return "vcs_ref {op} {remote}:{ref}".format(**entry["resource"])
     return entry["rule"] if entry.get("rule") else f"--add-dir {entry.get('path')}:{entry.get('mode')}"
 
 
@@ -2153,6 +2178,8 @@ def uncovered_grants(linked, stage_index: int, engine_grants: "list[dict]") -> "
         e for e in state.runtime_grants.get(str(stage_index), [])
         if not e.get("consumed") and (e.get("granted_by") or "").strip().casefold() != AGENT_ACTOR
     ]
+    granted_resources = [e for e in covering if "resource" in e]
+    covering = [e for e in covering if "resource" not in e]
     covering_keys = {_grant_key(e) for e in covering}
     venue = _venue_for(doc)
     protected = agentctl_resources.protected_permission_surfaces(
@@ -2182,7 +2209,72 @@ def uncovered_grants(linked, stage_index: int, engine_grants: "list[dict]") -> "
         ):
             continue
         out.append(entry)
+    covering_resources += agentctl_cli.handoff_vcs_resources(state.parent_link)
+    for entry in granted_resources:
+        try:
+            covering_resources.append(agentctl_resources.resource_from_dict(entry["resource"]))
+        except ValueError:
+            continue
+    for want in _stage_branch_resources(state, stage_index):
+        if not any(agentctl_cli._covers_resource(held, want, protected) for held in covering_resources):
+            out.append({"resource": agentctl_resources.resource_to_dict(want)})
     return out
+
+
+def _stage_branch_resources(state, stage_index: int) -> list:
+    """DR-P's commit/push resources of the stage the delegation hands a child, exactly as
+    frozen at approve; a session that froze none hands out none."""
+    from agentctl import cli as agentctl_cli
+    from agentctl import plan_resources
+    from agentctl import resources as agentctl_resources
+    from agentctl.state import CheckVenue
+
+    resource_set = plan_resources.resource_set_from_entries(
+        [], state.stage(stage_index), state.resolve_check_venue(CheckVenue.DELIVERY.value),
+        agentctl_cli.stage_branch_resources(state, stage_index))
+    return [r for r in resource_set.resources
+            if isinstance(r, agentctl_resources.VcsRefResource) and r.op in ("commit", "push")]
+
+
+# A branch name the rule text carries verbatim: no shell or rule metacharacter can reach it.
+_PUSH_RULE_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+
+
+def push_allow_rules(linked, stage_index: "int | None", kind: str) -> "list[str]":
+    """One exact `Bash(git push <remote> <branch>)` allow rule per frozen DR-P push resource of
+    the delegated stage. The resource-grant hook abstains on every line that may run git, so
+    the static allow list alone decides a push; without this rule a developer could not push
+    its own branch. Colon-less, so the harness matches only that spelling. A colon-less push
+    is remapped by `push.default=upstream` and by `remote.<r>.push`, so the rule is rendered
+    only while the venue's git config passes the resolver's own `_push_config_blocker`. A branch
+    whose name carries anything outside `_PUSH_RULE_BRANCH`, or a blocked config, gets no rule,
+    with the reason on stderr."""
+    if linked is None or stage_index is None or kind != "developer":
+        return []
+    from agentctl import segment_resolver
+    from agentctl.state import CheckVenue
+
+    state, _ = linked
+    venue = state.resolve_check_venue(CheckVenue.DELIVERY.value)
+    rules = []
+    for resource in _stage_branch_resources(state, stage_index):
+        if resource.op != "push":
+            continue
+        if not (_PUSH_RULE_BRANCH.match(resource.remote) and _PUSH_RULE_BRANCH.match(resource.ref)):
+            print(
+                f"note: no push rule for {resource.remote}/{resource.ref}: the name carries a "
+                "character outside [A-Za-z0-9._/-], which a rule text cannot carry safely",
+                file=sys.stderr,
+            )
+            continue
+        blocker = segment_resolver._push_config_blocker(venue, resource.remote, True)
+        if blocker is not None:
+            print(f"note: no push rule for {resource.remote}/{resource.ref}: {blocker}", file=sys.stderr)
+            continue
+        rule = f"Bash(git push {resource.remote} {resource.ref})"
+        grants.validate_rule(rule)
+        rules.append(rule)
+    return rules
 
 
 def grant_widening_refusal(linked, stage_index: int, kind: str, uncovered: "list[dict]") -> str:
@@ -2202,7 +2294,11 @@ def grant_widening_refusal(linked, stage_index: int, kind: str, uncovered: "list
         f"Session: {state.session_id}",
         f"Handoff-sha256: {state.parent_link.get('sha256')}",
     ]
-    lines += [f"Rule: {_grant_text(e)}" for e in uncovered]
+    lines += [f"Rule: {_grant_text(e)}" for e in uncovered if "resource" not in e]
+    lines += [
+        "Resource: vcs_ref {op} {remote}:{ref}".format(**e["resource"])
+        for e in uncovered if "resource" in e
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -2214,12 +2310,20 @@ def norm_handoff_record(
     engine_grants: "list[dict] | None",
     *,
     store,
+    workdir: "str | None" = None,
+    permission_mode: "str | None" = None,
 ) -> "dict | None":
     """The handoff record for the stage this spawn works for, or `None` when the
     session, its plan or the stage is unavailable (the spawn is then not linked).
     Writes nothing: the caller writes the record (`norm_handoff.write_record`) once the
     brief has assembled. Same in-process engine seam as
-    `load_engine_stage_grants`; never touches the parent session's state file."""
+    `load_engine_stage_grants`; never touches the parent session's state file.
+    `workdir` and `permission_mode` are where the child runs and the mode it was given:
+    only `acceptEdits` makes the whole workdir writable, so only then is it in the set."""
+    from agentctl import cli as agentctl_cli
+    from agentctl import plan_resources
+    from agentctl.state import CheckVenue
+
     state = store.load(session_id)
     if state is None:
         return None
@@ -2231,6 +2335,13 @@ def norm_handoff_record(
         closure = stage_closure_digest(doc, stage_index)
     except PlanError:
         closure = None
+    resource_set = plan_resources.resource_set_from_entries(
+        engine_grants, state.stage(stage_index), state.resolve_check_venue(CheckVenue.DELIVERY.value),
+        agentctl_cli.stage_branch_resources(state, stage_index),
+    )
+    if workdir and workdir_baseline_applies(kind, permission_mode, engine_grants):
+        plan_resources.add_workdir_write(resource_set, workdir)
+    resource_set = resource_set.to_dict()
     return norm_handoff.build_record(
         parent_session=session_id,
         stage_index=stage_index,
@@ -2240,6 +2351,9 @@ def norm_handoff_record(
         depth=depth,
         parent_lineage=(state.parent_link or {}).get("norm_lineage"),
         closure_digest=closure,
+        resources=resource_set["resources"],
+        rule_patterns=resource_set["rule_patterns"],
+        launch_dir=workdir or None,
     )
 
 
@@ -2271,6 +2385,81 @@ def own_contour_review_rule() -> str:
     """The rule that lets a linked child review its own plan; its reviewers are
     spawned unlinked."""
     return f"Bash({own_contour_review_command()}:*)"
+
+
+RESOURCE_GRANT_HOOK_MATCHER = "Bash|Edit|Write|MultiEdit|NotebookEdit|Read"
+
+
+def resource_grant_hook_command() -> str:
+    """`-I` keeps the hook off `PYTHONPATH`, the user site and the working directory: the hook runs
+    inside the child's cwd, where a planted module would otherwise shadow a stdlib import."""
+    return f"python3 -I {Path(SCRIPTS_DIR) / 'hook-resource-grant-check.py'}"
+
+
+def child_permission_settings(
+    kind: str,
+    plans_directory: "str | None",
+    project_settings: "str | None",
+    engine_grants: "list[dict] | None",
+    *,
+    workdir: "str | None",
+    evidence_dir: "str | None",
+    guard_exempt_paths,
+    read_dirs: "list[Path]",
+    own_session: "str | None",
+    push_rules: "Sequence[str]" = (),
+) -> dict:
+    """The child's `--settings` payload before the hook is registered: the kind baseline, the
+    stage grants, the read-only view directories, the exact own-branch push rules
+    (`push_allow_rules`) and, for a linked child (`own_session` set), the own-contour rules.
+    Raises `GrantShadowError` when a rule is shadowed by a deny. One builder
+    for the spawn and for the test support that rebuilds a child, so the record's
+    `permissions_allow` cannot drift from the settings the child really gets."""
+    settings = build_child_settings(
+        kind, plans_directory, project_settings, engine_grants,
+        workdir=workdir, evidence_dir=evidence_dir, guard_exempt_paths=guard_exempt_paths,
+    )
+    permissions = settings.setdefault("permissions", {})
+    for read_dir in read_dirs:
+        read_allow, read_deny = review_topo_view_permission_rules(read_dir)
+        permissions.setdefault("allow", []).extend(read_allow)
+        permissions.setdefault("deny", []).extend(read_deny)
+    if push_rules:
+        denies = permissions.get("deny", [])
+        _check_no_allow_fully_denied(
+            list(push_rules), denies, {rule: "push_allow_rules" for rule in push_rules},
+            {rule: "child settings" for rule in denies},
+        )
+        permissions.setdefault("allow", []).extend(push_rules)
+    if own_session is not None:
+        own_plan_rule = own_plan_allow_rule(own_session)
+        denies = permissions.get("deny", [])
+        _check_no_allow_fully_denied(
+            [own_plan_rule], denies, {own_plan_rule: "own_plan_allow_rule"},
+            {rule: "child settings" for rule in denies},
+        )
+        permissions.setdefault("allow", []).extend(
+            [own_contour_allow_rule(), own_contour_review_rule(), own_plan_rule]
+        )
+    return settings
+
+
+def attach_child_permission_surface(record: dict, settings: dict, add_dir_paths: "list[str]") -> None:
+    """Put on the handoff record what the harness will decide with: the child's final
+    `permissions.allow` and the directories it is started with. The resource-grant hook denies
+    only on a record that carries both."""
+    record["permissions_allow"] = list(settings.get("permissions", {}).get("allow", []))
+    record["add_dirs"] = list(add_dir_paths)
+
+
+def register_resource_grant_hook(settings: dict, timeout_s: int) -> None:
+    """Add the resource-grant PreToolUse hook to a linked child's `--settings`. The harness
+    kills a hook after `timeout_s` and falls through, so the hook's own judge budget is
+    derived from the same number."""
+    settings.setdefault("hooks", {}).setdefault("PreToolUse", []).append({
+        "matcher": RESOURCE_GRANT_HOOK_MATCHER,
+        "hooks": [{"type": "command", "command": resource_grant_hook_command(), "timeout": timeout_s}],
+    })
 
 
 def load_or_create_evidence_dir(
@@ -2379,18 +2568,25 @@ _APPROVED_NODES = frozenset({
 })
 
 
-def refresh_resumed_child_link(store, state, env_value: str) -> None:
-    """Replace the `parent_link` of a child resumed after the parent fixed the norm it
-    escalated with the handoff `env_value` now names, and require the child's plan to be
-    approved again: its approval covered the old norm. The node an approved session had
-    reached (or was parked from) returns to PLAN_READY. Runs before the child starts, so
-    the engine's own adoption (which keeps a link it holds) sees the renewed one."""
+def refresh_resumed_child_link(store, state, env_value: str, *, keep_approval: bool = False) -> None:
+    """Replace the `parent_link` of a resumed child with the handoff `env_value` now names.
+    After the parent fixed the norm the child escalated, the child's plan must be approved
+    again (its approval covered the old norm): the node an approved session had reached (or
+    was parked from) returns to PLAN_READY. With `keep_approval` (the norm is unchanged, only
+    the record's settings are renewed) the approval and the node stay. Runs before the child
+    starts, so the engine's own adoption (which keeps a link it holds) sees the renewed one."""
     adopted, reason = norm_handoff.verify_env_value(env_value)
     if adopted is None:
         raise ValueError(f"fresh handoff does not verify: {reason}")
     old = state.parent_link or {}
     state.parent_link = adopted
     state.recursion_depth = adopted["depth"]
+    if keep_approval:
+        state.log("norm_handoff_refreshed", parent_session=adopted["parent_session"],
+                  stage_index=adopted["stage_index"], old_norm_digest=old.get("norm_digest"),
+                  norm_digest=adopted["norm_digest"])
+        store.save(state)
+        return
     state.approval = GateRecord(state.approval.name)
     if state.node in _APPROVED_NODES:
         state.node = Node.PLAN_READY.value
@@ -2402,16 +2598,6 @@ def refresh_resumed_child_link(store, state, env_value: str) -> None:
               stage_index=adopted["stage_index"], old_norm_digest=old.get("norm_digest"),
               norm_digest=adopted["norm_digest"])
     store.save(state)
-
-
-def adopted_handoff_env_value(state) -> "str | None":
-    """The handoff value a resumed child's engine session adopted, or None when it holds
-    none yet. Exporting that value rather than a freshly written record keeps the env the
-    child reads equal to its own `parent_link`, which the engine never replaces."""
-    link = (state.parent_link if state is not None else None) or {}
-    if not (link.get("handoff") and link.get("sha256")):
-        return None
-    return norm_handoff.format_env_value(link["handoff"], link["sha256"])
 
 
 def _snapshot_transcripts(workdir: str) -> set[Path]:
@@ -2585,19 +2771,11 @@ def deregister_child_scope(
         )
 
 
-_ACCEPT_EDITS_TRUSTED_KINDS = ("developer", "tech-writer")
-"""Kinds `resolve_permission_mode` grants `acceptEdits` to unconditionally
-(unattended Read/Grep/Write is their whole point). Every other kind reaching
-`acceptEdits` gets there only because a `mode="write"` engine grant forced
-it — `write_grant_forces_accept_edits`/`write_grant_cwd_deny_rules` both key
-off this same set so the forcing condition and its cwd-wide deny counterweight
-never drift apart."""
-
-
 def write_grant_forces_accept_edits(kind: str, engine_grants: "list[dict] | None") -> bool:
     """True exactly when a `mode="write"` entry in `engine_grants` is the
     reason `resolve_permission_mode` returns `acceptEdits` for `kind` --
-    i.e. `kind` is not already trusted (`_ACCEPT_EDITS_TRUSTED_KINDS`) but
+    i.e. `kind` is not already trusted (`_ACCEPT_EDITS_TRUSTED_KINDS`, the
+    set granted `acceptEdits` unconditionally) but
     gets the wide mode anyway because of the grant. Shared with
     `build_child_settings` (via `write_grant_cwd_deny_rules`) so the mode
     that got forced and the deny rule narrowing it back down are computed
@@ -2605,6 +2783,13 @@ def write_grant_forces_accept_edits(kind: str, engine_grants: "list[dict] | None
     if kind in _ACCEPT_EDITS_TRUSTED_KINDS:
         return False
     return bool(engine_grants) and any(e.get("mode") == "write" for e in engine_grants)
+
+
+def workdir_baseline_applies(kind: str, permission_mode: str, engine_grants: "list[dict] | None") -> bool:
+    """True when the child can write its workdir by the resolved mode alone: `acceptEdits`
+    that no `mode="write"` grant forced (a forced one is narrowed back by
+    `write_grant_cwd_deny_rules`, so the workdir is not writable there)."""
+    return permission_mode == "acceptEdits" and not write_grant_forces_accept_edits(kind, engine_grants)
 
 
 def write_grant_cwd_deny_rules(
@@ -3041,8 +3226,8 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         engine_grants = load_engine_stage_grants(
             args.session, args.stage_index, args.kind, state_root=args.state_root
         )
-        if linked is not None and engine_grants:
-            uncovered = uncovered_grants(linked, args.stage_index, engine_grants)
+        if linked is not None:
+            uncovered = uncovered_grants(linked, args.stage_index, engine_grants or [])
             if uncovered:
                 print(grant_widening_refusal(linked, args.stage_index, args.kind, uncovered), end="")
                 log_refused(
@@ -3065,6 +3250,8 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
             log_refused("evidence-dir-refused", {"kind": args.kind, "stage_index": args.stage_index})
             return 2
 
+    permission_mode = resolve_permission_mode(args, engine_grants)
+
     # A spawn is linked when the engine can name the stage it works for: the child then
     # gets a norm handoff and a pre-assigned session id its own-contour channel is pinned
     # to. The record is only decided here and written once the brief assembles, so the
@@ -3086,7 +3273,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         try:
             handoff_record = norm_handoff_record(
                 args.session, args.stage_index, args.kind, depth_next, engine_grants,
-                store=handoff_store,
+                store=handoff_store, workdir=workdir, permission_mode=permission_mode,
             )
         except Exception as exc:
             print(f"warning: norm handoff unavailable, spawning unlinked: {exc}", file=sys.stderr)
@@ -3100,6 +3287,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         if child_linked else None
     )
     resumed_transcript: "Path | None" = None
+    resumed_state = None
     if resumed is not None:
         own_session, resumed_transcript, resumed_state = resumed
     else:
@@ -3130,14 +3318,14 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
     add_dir_argv = head_add_dir_argv + own_plan_add_dir_argv + grant_add_dir_argv
     add_dir_paths = _paths_from_add_dir_argv(add_dir_argv)
 
-    permission_mode = resolve_permission_mode(args, engine_grants)
-
     perms = permissions_digest(args.project_permissions)
     topo_bundle: "str | None" = None
     if topo_pair is not None:
         topo_bundle = site.text
         if topo_check_scripts:
             topo_bundle += "\n\n" + check_scripts_brief_section(topo_check_scripts)
+    push_rules = push_allow_rules(linked, args.stage_index, args.kind)
+
     def brief(own_contour: bool) -> str:
         return assemble_prompt(
             args,
@@ -3152,6 +3340,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
             site=site,
             own_contour=own_contour,
             own_plan=own_plan_path(own_session) if own_contour else None,
+            push_rules=push_rules,
         )
 
     try:
@@ -3165,21 +3354,56 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         return 2
     if prompt_only:
         return prompt
+
+    # The plan view directory the prompt names and, for --review-topo (whose
+    # plans-directory grant was withheld above), the directories of the plan's check
+    # scripts: Read allow + Edit deny, the same directional pair plans_permission_rules
+    # uses for its own read kinds.
+    read_dirs = [Path(d) for d in site.add_dirs] + topo_check_dirs
+
+    def settings_for(linked: bool) -> "dict | None":
+        """The child's `--settings` payload, or None after a refusal was logged. Built
+        before the handoff record is written: the record carries its `permissions.allow`."""
+        try:
+            return child_permission_settings(
+                args.kind,
+                None if topo_pair is not None else plans_directory,
+                args.project_settings,
+                engine_grants,
+                workdir=workdir,
+                evidence_dir=evidence_dir,
+                guard_exempt_paths=guard_exempt_paths,
+                read_dirs=read_dirs,
+                own_session=own_session if linked else None,
+                push_rules=push_rules,
+            )
+        except GrantShadowError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
+            return None
+
+    child_settings = settings_for(child_linked)
+    if child_settings is None:
+        return 2
+    if handoff_record is not None:
+        attach_child_permission_surface(handoff_record, child_settings, add_dir_paths)
     handoff_env_value: "str | None" = None
     norm_fixed = (
         resumed is not None and resumed_state is not None and resumed_state.parent_link is not None
         and resumed_state.parent_link.get("norm_digest") != handoff_record["norm_digest"]
     )
-    if resumed is not None and not norm_fixed and not args.dry_run:
-        handoff_env_value = adopted_handoff_env_value(resumed_state)
-    if handoff_record is not None and handoff_env_value is None and not args.dry_run:
+    # A resume under the same norm also gets a fresh record: the adopted one was written for
+    # an earlier spawn and may carry other settings than this child is started with.
+    if handoff_record is not None and not args.dry_run:
         # Written only now: a brief that cannot be assembled leaves no record behind. A
         # record that cannot be written makes the spawn unlinked -- brief included.
         try:
             path, sha = norm_handoff.write_record(handoff_store.root, handoff_record)
             handoff_env_value = norm_handoff.format_env_value(path, sha)
-            if norm_fixed:
-                refresh_resumed_child_link(handoff_store, resumed_state, handoff_env_value)
+            if resumed_state is not None and resumed_state.parent_link is not None:
+                refresh_resumed_child_link(
+                    handoff_store, resumed_state, handoff_env_value, keep_approval=not norm_fixed,
+                )
         except Exception as exc:
             print(f"warning: norm handoff not written, spawning unlinked: {exc}", file=sys.stderr)
             handoff_record, child_linked, own_session, resumed_transcript = None, False, None, None
@@ -3187,6 +3411,9 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
             add_dir_argv = head_add_dir_argv + grant_add_dir_argv
             add_dir_paths = _paths_from_add_dir_argv(add_dir_argv)
             prompt = brief(False)
+            child_settings = settings_for(False)
+            if child_settings is None:
+                return 2
     if child_linked and not args.dry_run:
         try:
             norm_handoff.write_child_session(
@@ -3231,48 +3458,8 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         )
         return 5
 
-    try:
-        child_settings = build_child_settings(
-            args.kind,
-            None if topo_pair is not None else plans_directory,
-            args.project_settings,
-            engine_grants,
-            workdir=workdir,
-            evidence_dir=evidence_dir,
-            guard_exempt_paths=guard_exempt_paths,
-        )
-    except GrantShadowError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
-        return 2
-
-    # The plan view directory the prompt names and, for --review-topo (whose
-    # plans-directory grant was withheld above), the directories of the plan's check
-    # scripts: Read allow + Edit deny, the same directional pair plans_permission_rules
-    # uses for its own read kinds.
-    read_dirs = [Path(d) for d in site.add_dirs] + topo_check_dirs
-    for read_dir in read_dirs:
-        read_allow, read_deny = review_topo_view_permission_rules(read_dir)
-        child_permissions = child_settings.setdefault("permissions", {})
-        child_permissions.setdefault("allow", []).extend(read_allow)
-        child_permissions.setdefault("deny", []).extend(read_deny)
-
-    if child_linked:
-        own_plan_rule = own_plan_allow_rule(own_session)
-        child_permissions = child_settings.setdefault("permissions", {})
-        child_denies = child_permissions.get("deny", [])
-        try:
-            _check_no_allow_fully_denied(
-                [own_plan_rule], child_denies, {own_plan_rule: "own_plan_allow_rule"},
-                {rule: "child settings" for rule in child_denies},
-            )
-        except GrantShadowError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            log_refused("grant-shadowed", {"kind": args.kind, "stage_index": args.stage_index})
-            return 2
-        child_permissions.setdefault("allow", []).extend(
-            [own_contour_allow_rule(), own_contour_review_rule(), own_plan_rule]
-        )
+    if child_linked and resource_grant_hook_enabled(constants=constants):
+        register_resource_grant_hook(child_settings, resource_grant_hook_timeout_s(constants))
 
     cmd = [
         "claude",
@@ -3324,6 +3511,9 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         # verbatim and note the stdin payload size separately.
         print(" ".join(repr(c) if " " in c else c for c in cmd))
         print(f"# stdin: <prompt {len(prompt)} chars>")
+        if handoff_record is not None:
+            print("\n=== norm handoff record (not written) ===")
+            print(json.dumps(handoff_record, sort_keys=True))
         return 0
 
     if shutil.which("claude") is None:

@@ -80,22 +80,22 @@ def _order_review_unbound(mp):
 
 def _order_anchor_unchecked(mp):
     """An order rendering is no longer held to show exactly the order's items as anchors."""
-    mp.setattr("agentctl.cli._order_anchor_problems", lambda doc, text: ([], []), raising=True)
+    mp.setattr("agentctl.cli_plan._order_anchor_problems", lambda doc, text: ([], []), raising=True)
 
 
 def _order_receipt_unbound(mp):
     """An order receipt is recorded without the understanding digest it stands for."""
-    mp.setattr("agentctl.cli._order_receipt_understanding", lambda digest: None, raising=True)
+    mp.setattr("agentctl.cli_plan._order_receipt_understanding", lambda digest: None, raising=True)
 
 
 def _order_stale_draft_presented(mp):
     """present-plan --kind order stops checking that the draft is the one order-submit recorded."""
-    mp.setattr("agentctl.cli._draft_is_submitted", lambda state, digest: True, raising=True)
+    mp.setattr("agentctl.cli_plan._draft_is_submitted", lambda state, digest: True, raising=True)
 
 
 def _agree_without_ask(mp):
     """order-agree stops requiring a recorded user answer choosing the marked option."""
-    mp.setattr("agentctl.cli._agreement_ask_answered", lambda state_file, since, marker: (True, True),
+    mp.setattr("agentctl.cli_order._agreement_ask_answered", lambda state_file, since, marker: (True, True),
                raising=True)
 
 
@@ -106,7 +106,7 @@ def _divergence_ignored(mp):
 
 def _challenge_not_recorded(mp):
     """A blocking `understanding:` concern is no longer taken up as a challenge."""
-    mp.setattr("agentctl.cli._record_understanding_challenges",
+    mp.setattr("agentctl.cli_review._record_understanding_challenges",
                lambda *a, **k: None, raising=True)
 
 
@@ -122,17 +122,17 @@ def _reraise_unmatched(mp):
 
 def _explicit_host_arms(mp):
     """Classify arms on whatever host was named, not on the host observed in the environment."""
-    mp.setattr("agentctl.cli._arming_host", lambda: "claude", raising=True)
+    mp.setattr("agentctl.cli_plan._arming_host", lambda: "claude", raising=True)
 
 
 def _depth_flag_exempts(mp):
     """A caller-supplied recursion depth on the session exempts it from the gate."""
-    mp.setattr("agentctl.cli._spawned_child", lambda state: state.recursion_depth >= 1, raising=True)
+    mp.setattr("agentctl.cli_plan._spawned_child", lambda state: state.recursion_depth >= 1, raising=True)
 
 
 def _headless_channel_ignored(mp):
     """A configured headless delivery channel no longer exempts the session."""
-    mp.setattr("agentctl.cli._headless_channel", lambda: False, raising=True)
+    mp.setattr("agentctl.cli_plan._headless_channel", lambda: False, raising=True)
 
 
 _SCRIPTS = Path(__file__).resolve().parent.parent
@@ -241,23 +241,23 @@ def _draft_coverage_rendered(mp):
 
 def _exemption_report_unchecked(mp):
     """present-plan --kind essence owes no exemption line from any session."""
-    mp.setattr("agentctl.cli._required_exemption_line", lambda state: "", raising=True)
+    mp.setattr("agentctl.cli_plan._required_exemption_line", lambda state: "", raising=True)
 
 
 def _exemption_asks_children(mp):
     """A child session with a host or hook reason is asked for the exemption line too."""
-    from agentctl import cli
+    from agentctl import cli_plan
 
     def asks(state):
         reason = state.order_agreement_exemption
-        return f"[order-exempt: {reason}]" if reason in cli._ROOT_REPORTED_EXEMPTIONS else ""
+        return f"[order-exempt: {reason}]" if reason in cli_plan._ROOT_REPORTED_EXEMPTIONS else ""
 
-    mp.setattr(cli, "_required_exemption_line", asks, raising=True)
+    mp.setattr(cli_plan, "_required_exemption_line", asks, raising=True)
 
 
 def _exemption_over_asks(mp):
     """An armed session, or one with no recorded reason, is asked for the line as well."""
-    mp.setattr("agentctl.cli._required_exemption_line",
+    mp.setattr("agentctl.cli_plan._required_exemption_line",
                lambda state: f"[order-exempt: {state.order_agreement_exemption}]", raising=True)
 
 
@@ -274,17 +274,17 @@ def _challenge_after_downgrade(mp):
     """Challenges are recorded only from the concerns that opened in the ledger."""
     import dataclasses
 
-    from agentctl import cli
+    from agentctl import cli_review
 
-    original = cli._record_understanding_challenges
+    original = cli_review._record_understanding_challenges
 
     def opened_only(state, review, cp, ids):
         kept = [(pc, cid) for pc, cid in zip(cp.parsed, ids)
-                if state.concern_ledger[cid].status == cli.CONCERN_OPEN]
+                if state.concern_ledger[cid].status == cli_review.CONCERN_OPEN]
         original(state, review, dataclasses.replace(cp, parsed=[pc for pc, _ in kept]),
                  [cid for _, cid in kept])
 
-    mp.setattr(cli, "_record_understanding_challenges", opened_only, raising=True)
+    mp.setattr(cli_review, "_record_understanding_challenges", opened_only, raising=True)
 
 
 def _agreed_forwarded_on_draft(mp):
@@ -323,7 +323,7 @@ def _digest_proposal_partial(mp):
 
 def _seam_unwired(mp):
     """order-submit stops checking the proposal tables for well-formedness."""
-    mp.setattr("agentctl.cli.order_understanding_violations", lambda meta: [], raising=True)
+    mp.setattr("agentctl.cli_order.order_understanding_violations", lambda meta: [], raising=True)
     mp.setattr("agentctl.submission._order_understanding_violations", lambda meta: [], raising=True)
 
 

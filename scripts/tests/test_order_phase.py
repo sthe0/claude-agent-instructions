@@ -531,7 +531,8 @@ def test_an_ordinary_markdown_link_is_accepted_beside_the_anchors(ostore, tmp_pa
 
 def test_present_order_keeps_the_writer_gate(ostore, tmp_path, monkeypatch):
     _ready(ostore, tmp_path)
-    monkeypatch.setattr(cli, "_present_plan_transcript", lambda sid: tmp_path / "no-witness.jsonl")
+    from agentctl import cli_plan
+    monkeypatch.setattr(cli_plan, "_present_plan_transcript", lambda sid: tmp_path / "no-witness.jsonl")
     (tmp_path / "no-witness.jsonl").write_text("", encoding="utf-8")
     monkeypatch.delenv("AGENTCTL_TECH_WRITER_GATE", raising=False)
 

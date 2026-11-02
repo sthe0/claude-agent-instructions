@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import hook_telemetry  # noqa: E402
 from lib.ask_evidence import parse_ask_answers  # noqa: E402
 
 
@@ -96,4 +97,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-si-freetext-answer"))

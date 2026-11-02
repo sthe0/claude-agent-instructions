@@ -86,6 +86,14 @@ expected_exit = 0
 
 
 @pytest.fixture(autouse=True)
+def _isolate_decision_log(tmp_path, monkeypatch):
+    """Decision telemetry (lib/hook_telemetry.py, cli._log_gate) appends one row per hook
+    or engine-gate evaluation to $AGENTCTL_DECISION_LOG; no test may append to the real log.
+    The env var reaches the hook and CLI subprocesses a test spawns."""
+    monkeypatch.setenv("AGENTCTL_DECISION_LOG", str(tmp_path / "decision-log.jsonl"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_delivery_channel(monkeypatch):
     """No test may run a delivery-channel command configured in the real
     ~/.claude-agent. The config-root environment stays real (many tests depend on
@@ -126,19 +134,30 @@ def _parent_session_outside_any_project(tmp_path_factory, monkeypatch):
 def _isolate_task_quality_ledger(tmp_path, monkeypatch):
     """The scorecard aggregates the real ledger into degradation flags, so a
     test resolve must never append to it."""
-    from agentctl import cli
-    monkeypatch.setattr(cli, "TASK_QUALITY_LOG", tmp_path / "task-quality.jsonl")
+    from agentctl import cli_final
+    log = tmp_path / "task-quality.jsonl"
+    monkeypatch.setattr(cli_final, "TASK_QUALITY_LOG", log)
+
+
+def patch_cli_name(monkeypatch, name, value):
+    """Patch `name` in every agentctl.cli_* module that holds it. A bare-name import is a
+    copy, so patching only the defining module leaves each reader's copy live."""
+    holders = [m for modname, m in sorted(sys.modules.items())
+               if modname.startswith("agentctl.cli_") and hasattr(m, name)]
+    assert holders, f"no agentctl.cli_* module holds {name}"
+    for module in holders:
+        monkeypatch.setattr(module, name, value)
 
 
 @pytest.fixture(autouse=True)
 def _isolate_gate_log(tmp_path, monkeypatch):
     """policy-scorecard reads the gate log as production telemetry, so no test may append
-    to the real one. The env var reaches subprocesses; cli.GATE_LOG is bound at import,
-    so it is patched as well."""
-    from agentctl import cli
+    to the real one. The env var reaches subprocesses; GATE_LOG is bound at import in
+    cli_common, which reads it."""
+    from agentctl import cli_common
     log = tmp_path / "gate-log.jsonl"
     monkeypatch.setenv("AGENTCTL_GATE_LOG", str(log))
-    monkeypatch.setattr(cli, "GATE_LOG", log)
+    monkeypatch.setattr(cli_common, "GATE_LOG", log)
 
 
 @pytest.fixture(autouse=True)
@@ -532,23 +551,23 @@ def _no_reported_order_exemption_by_default(request, monkeypatch):
     """Keep a classified session's recorded order-agreement exemption empty for the suite at
     large. Whether the answer hook is wired is a property of the machine, and an
     unwired one records an exemption that a root session's essence must then report
-    (`cli._required_exemption_line`); the many tests that present an essence on a fixture
+    (`cli_plan._required_exemption_line`); the many tests that present an essence on a fixture
     rendering are not about that line, and would pass or fail with the machine's settings.
     Arming itself is untouched, so the directive and the gate behave as before.
 
     The modules that own the exemption opt out and set the state they exercise."""
     if request.module.__name__ in _OWNS_ORDER_AGREEMENT_EXEMPTION:
         return
-    from agentctl import cli
+    from agentctl import cli_plan
 
-    arm = cli._arm_order_agreement
+    arm = cli_plan._arm_order_agreement
 
     def arm_without_reported_exemption(state):
         reason = arm(state)
         state.order_agreement_exemption = ""
         return reason
 
-    monkeypatch.setattr(cli, "_arm_order_agreement", arm_without_reported_exemption)
+    monkeypatch.setattr(cli_plan, "_arm_order_agreement", arm_without_reported_exemption)
 
 
 @pytest.fixture(autouse=True)

@@ -60,6 +60,18 @@
       "anchors": [
         {"module": "agentctl.state", "symbols": ["PlanFrame"]}
       ]
+    },
+    {
+      "id": "decision-telemetry",
+      "concept": "Decision telemetry: one row per hook or engine-gate evaluation in the decision log.",
+      "doc": {
+        "file": "docs/operations/decision-telemetry.md",
+        "section": "Hooks"
+      },
+      "object_glob": "scripts/lib/hook_telemetry.py",
+      "anchors": [
+        {"module": "lib.hook_telemetry", "symbols": ["run", "record", "decision_class", "is_test_run"]}
+      ]
     }
   ]
 }

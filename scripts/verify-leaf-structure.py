@@ -48,6 +48,7 @@ import sys
 from pathlib import Path
 
 import memory_dates as md
+from lib import hook_telemetry
 
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 SCHEMA_RE = re.compile(r"^schema\s*:\s*(.*?)\s*$", re.MULTILINE)
@@ -307,4 +308,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="verify-leaf-structure"))

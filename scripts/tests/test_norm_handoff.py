@@ -118,7 +118,8 @@ class _Launched(Exception):
         self.env = env
 
 
-def _spawn(monkeypatch, tmp_path, venued_fixtures_dir, session, *, stage_index=None):
+def _spawn(monkeypatch, tmp_path, venued_fixtures_dir, session, *, stage_index=None, kind="thinker",
+           extra_argv=()):
     """Drive `spawn-specialist.py main` up to the child launch. Returns `(rc, env)`:
     `env` is the environment the child `claude -p` would get (None when the wrapper
     refused or stopped before launching), `rc` the wrapper's return code in that case."""
@@ -129,7 +130,7 @@ def _spawn(monkeypatch, tmp_path, venued_fixtures_dir, session, *, stage_index=N
 
     monkeypatch.setattr(SPAWN.proc_tree, "launch_supervised", launch)
     argv = [
-        "--kind", "thinker", "--plan", str(venued_fixtures_dir / "plan_two_stage.toml"),
+        "--kind", kind, "--plan", str(venued_fixtures_dir / "plan_two_stage.toml"),
         "--done-criterion", "a verdict", "--criterion-type", "measurable",
         "--complexity", "medium", "--effort", "medium",
         "--session", session, "--state-root", str(tmp_path / "state"),
@@ -137,6 +138,7 @@ def _spawn(monkeypatch, tmp_path, venued_fixtures_dir, session, *, stage_index=N
     ]
     if stage_index is not None:
         argv += ["--stage-index", str(stage_index)]
+    argv += list(extra_argv)
     try:
         return SPAWN.main(argv), None
     except _Launched as launched:
@@ -180,13 +182,49 @@ def test_spawn_exports_norm_handoff(store, venued_fixtures_dir, tmp_path, monkey
     assert path.is_absolute() and path.parent.name == "handoffs"
 
 
+def test_spawn_call_site_hands_the_stage_resource_set_to_the_record(store, venued_fixtures_dir, tmp_path, monkeypatch):
+    _executing(store, "w2r", venued_fixtures_dir)
+    _, env = _spawn(monkeypatch, tmp_path, venued_fixtures_dir, "w2r", stage_index=1, kind="developer")
+    _, _, _, record = _read_exported(env[HANDOFF_ENV])
+    assert {"kind": "specialist", "role": "developer"} in record["resources"]
+    assert {"kind": "file", "path": str(tmp_path), "mode": "write"} in record["resources"]
+    assert record["rule_patterns"] == ["Bash(python3 mod.py:*)"]
+
+
+@pytest.mark.parametrize("mode", ["plan", "default"])
+def test_workdir_baseline_follows_the_resolved_permission_mode(store, venued_fixtures_dir, tmp_path, monkeypatch, mode):
+    """A developer spawned under a mode narrower than acceptEdits may not write its workdir,
+    so the record must not say it may."""
+    _executing(store, f"w2m-{mode}", venued_fixtures_dir)
+    _, env = _spawn(monkeypatch, tmp_path, venued_fixtures_dir, f"w2m-{mode}", stage_index=1,
+                    kind="developer", extra_argv=["--permission-mode", mode])
+    _, _, _, record = _read_exported(env[HANDOFF_ENV])
+    assert {"kind": "specialist", "role": "developer"} in record["resources"]
+    assert not any(r["kind"] == "file" and r["path"] == str(tmp_path) for r in record["resources"])
+
+
+def test_a_kind_forced_into_accept_edits_by_a_write_grant_gets_no_workdir_baseline(store, venued_fixtures_dir, tmp_path):
+    """write_grant_cwd_deny_rules denies Edit over the whole cwd for such a kind, so the
+    workdir is not writable for it even though the mode is acceptEdits."""
+    _executing(store, "w2f", venued_fixtures_dir)
+    forced = [{"path": "/elsewhere", "mode": "write"}]
+    thinker = SPAWN.norm_handoff_record("w2f", 1, "thinker", 1, forced, store=store,
+                                        workdir=str(tmp_path), permission_mode="acceptEdits")
+    developer = SPAWN.norm_handoff_record("w2f", 1, "developer", 1, forced, store=store,
+                                          workdir=str(tmp_path), permission_mode="acceptEdits")
+    workdir_entry = {"kind": "file", "path": str(tmp_path), "mode": "write"}
+    assert workdir_entry not in thinker["resources"]
+    assert workdir_entry in developer["resources"]
+
+
 def test_record_carries_exactly_the_documented_fields(store, venued_fixtures_dir, tmp_path, monkeypatch):
     _executing(store, "w2", venued_fixtures_dir)
     _, env = _spawn(monkeypatch, tmp_path, venued_fixtures_dir, "w2", stage_index=1)
     _, _, _, record = _read_exported(env[HANDOFF_ENV])
     assert set(record) == {"schema", "parent_session", "stage_index", "kind", "norm",
                            "norm_digest", "grants", "depth", "norm_lineage", "created_at",
-                           "closure_digest"}
+                           "closure_digest", "resources", "rule_patterns",
+                           "permissions_allow", "add_dirs", "launch_dir"}
     assert record["schema"] == "norm-handoff/v1"
     assert (record["parent_session"], record["stage_index"], record["kind"]) == ("w2", 1, "thinker")
     assert record["grants"] == []

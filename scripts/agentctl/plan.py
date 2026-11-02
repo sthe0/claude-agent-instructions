@@ -160,6 +160,7 @@ from lib import shell_tokens as _shell_tokens
 from lib import widening_targets as _widening_targets
 
 from . import grants as _grants
+from . import resources as _resources
 from .grants import AddDirGrant, RuleGrant, StageGrants
 from .landed_providers import PROVIDER_NAME_RE
 from .script_effects import StageEffectDeclaration
@@ -222,6 +223,9 @@ class PlanMeta:
     # so "this change lands nothing" is a decision the approved plan carries, not one the
     # resolving actor makes after the outcome is known. None = no waiver.
     landing_waiver: str | None = None
+    # The branch the plan's spawn:developer / spawn:tech-writer stages commit on, inherited
+    # by every stage that declares no `branch` of its own (Stage.branch). None = undeclared.
+    branch: str | None = None
     # Optional typed end-to-end checks run by verify-final after per-stage re-runs.
     # Absent => [] (back-compat). Parsed from top-level [[final_check]] tables.
     final_check: list[FinalCheck] = field(default_factory=list)
@@ -234,6 +238,25 @@ class PlanMeta:
     # registered at submit-plan as `assumed` premises. Not part of any digest: an
     # assumption is a record of a premise, never an input of the work.
     assumptions: "list[PlanAssumption]" = field(default_factory=list)
+    # The executor's own estimate of what a spawned stage needs, parsed from
+    # `[[meta.resource_request]]` rows and graded at submit-plan only when
+    # `[meta.order].requires_resource_request` arms it. In no digest: the check compares it
+    # to grants that are digested, so an edited request moves nothing the user approved.
+    resource_requests: "list[ResourceRequest]" = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ResourceRequest:
+    """One `[[meta.resource_request]]` row: the allow rules and added directories the
+    executor of `stage` (a spawned `kind`) says it needs, from the consult `consult_ref`
+    names. `defects` lists what the row could not be read as; the parse stays lenient and
+    submission.py refuses."""
+    kind: str
+    stage: "int | None"
+    consult_ref: str
+    allow: tuple[str, ...] = ()
+    add_dirs: tuple[tuple[str, str], ...] = ()
+    defects: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -267,6 +290,24 @@ class PlanError(Exception):
 
 
 _CHECK_VENUE_VALUES = {v.value for v in CheckVenue}
+
+
+def _opt_str(value: object) -> str | None:
+    """`str(value).strip()`, or None when `value` is falsy or blank."""
+    return (str(value).strip() or None) if value else None
+
+
+def _parse_branch(raw: object, context: str, *, strict: bool) -> str | None:
+    """A declared `branch`: a string, or absent. Anything else is refused on a strict load
+    (`branch = 123` must not become the branch name "123"); a baseline load reads it as
+    undeclared."""
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str):
+        if strict:
+            raise PlanError(f"{context} branch must be a string branch name, got {type(raw).__name__}")
+        return None
+    return _opt_str(raw)
 
 
 def _parse_check_venue(raw: object, context: str) -> str:
@@ -364,7 +405,8 @@ def _parse_stage_grants(raw: object, context: str, *, strict: bool) -> "StageGra
     Read-only baseline loads (strict=False) skip validation, matching every
     other field parsed here under that flag: a plan snapshot frozen before a
     grant became invalid (validator tightened after approval) must still
-    load for diffing, not raise."""
+    load for diffing, not raise. Removed fields (`permission_mode`,
+    `runs_worktree_code`) are refused on every load: no frozen plan carries them."""
     if not raw:
         return None
     if not isinstance(raw, dict):
@@ -388,6 +430,10 @@ def _parse_stage_grants(raw: object, context: str, *, strict: bool) -> "StageGra
         # is refused outright instead of being silently ignored.
         raise PlanError(
             f"{context}: grants.permission_mode is not a supported grant field — refused"
+        )
+    if "runs_worktree_code" in raw:
+        raise PlanError(
+            f"{context}: grants.runs_worktree_code was removed (the resource-grant hook never allows a line that may run git) — refused"
         )
     stage_grants = StageGrants(allow=allow, add_dirs=add_dirs)
     if strict:
@@ -611,6 +657,78 @@ def _parse_assumptions(raw: object) -> list[PlanAssumption]:
         )
         for a in raw if isinstance(a, dict) and str(a.get("id", "")).strip()
     ]
+
+
+_RESOURCE_REQUEST_KEYS = frozenset({"kind", "stage", "consult_ref", "allow", "add_dirs"})
+
+
+def _parse_resource_requests(raw: object) -> "list[ResourceRequest]":
+    """Lenient, like `_parse_assumptions`: a row that cannot be read keeps its readable
+    part and names what it lacks in `defects`; a value or row that is not a table is a
+    sentinel row carrying that defect, so submission refuses it rather than losing it."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return [ResourceRequest(kind="", stage=None, consult_ref="",
+                                defects=("'resource_request' is not an array of tables",))]
+    out: list[ResourceRequest] = []
+    seen: set[tuple] = set()
+    for row in raw:
+        if not isinstance(row, dict):
+            out.append(ResourceRequest(kind="", stage=None, consult_ref="",
+                                       defects=(f"row {row!r} is not a table",)))
+            continue
+        defects: list[str] = []
+        unknown = sorted(set(row) - _RESOURCE_REQUEST_KEYS)
+        if unknown:
+            defects.append(f"unknown key(s) {unknown} (known: {sorted(_RESOURCE_REQUEST_KEYS)})")
+        stage = row.get("stage")
+        if not isinstance(stage, int) or isinstance(stage, bool):
+            defects.append("'stage' is not an integer")
+            stage = None
+        kind = row.get("kind")
+        if not isinstance(kind, str) or not kind.strip():
+            defects.append("'kind' is missing")
+            kind = ""
+        kind = kind.strip()
+        ref = row.get("consult_ref")
+        if not isinstance(ref, str) or not ref.strip():
+            defects.append("'consult_ref' is missing")
+            ref = ""
+        ref = ref.strip()
+        allow_raw = row.get("allow", [])
+        if not isinstance(allow_raw, list):
+            allow_raw = []
+            defects.append("'allow' is not a list")
+        allow = [a.strip() for a in allow_raw if isinstance(a, str) and a.strip()]
+        if len(allow) != len(allow_raw):
+            defects.append("'allow' holds an entry that is not a rule string")
+        dirs_raw = row.get("add_dirs", [])
+        if not isinstance(dirs_raw, list):
+            dirs_raw = []
+            defects.append("'add_dirs' is not a list")
+        dirs: list[tuple[str, str]] = []
+        for d in dirs_raw:
+            path = d.get("path") if isinstance(d, dict) else d
+            mode = d.get("mode", "read") if isinstance(d, dict) else "read"
+            if not isinstance(path, str) or not path.strip() or mode not in ("read", "write"):
+                defects.append(f"'add_dirs' entry {d!r} is not a path or a {{path, mode}} table (mode read|write)")
+                continue
+            path = path.strip()
+            if not os.path.isabs(path):
+                defects.append(f"'add_dirs' path {path!r} is not absolute")
+                continue
+            dirs.append((path, mode))
+        key = (kind, stage)
+        if kind and stage is not None:
+            if key in seen:
+                defects.append(f"duplicate row for kind={kind!r} stage={stage}")
+            seen.add(key)
+        out.append(ResourceRequest(
+            kind=kind, stage=stage, consult_ref=ref,
+            allow=tuple(allow), add_dirs=tuple(dirs), defects=tuple(defects),
+        ))
+    return out
 
 
 def _parse_renorms(raw: object, context: str) -> list[str]:
@@ -1934,9 +2052,11 @@ def parse_plan(
         repo_root=str(m["repo_root"]) if m.get("repo_root") else None,
         delivery_worktree=str(m["delivery_worktree"]) if m.get("delivery_worktree") else None,
         landing_waiver=str(m["landing_waiver"]) if m.get("landing_waiver") else None,
+        branch=_parse_branch(m.get("branch"), "[meta]", strict=strict),
         final_check=final_checks,
         order=order,
         assumptions=_parse_assumptions(m.get("assumption")),
+        resource_requests=_parse_resource_requests(m.get("resource_request")),
     )
 
     is_substantive = meta.weight_class is not None and meta.weight_class.lower() == "substantive"
@@ -2142,6 +2262,7 @@ def parse_plan(
                 optional=raw_optional,
                 backlog_issue=raw_backlog_issue,
                 amendments=_parse_amendments(s.get("amendments"), stage_ctx),
+                branch=_parse_branch(s.get("branch"), stage_ctx, strict=strict) or meta.branch,
             )
         )
 
@@ -2618,6 +2739,7 @@ def order_place(meta) -> tuple:
         order.requirements_dropped,
         order.requires_traceability,
         *((order.parent_norm,) if order.parent_norm else ()),
+        *((("requires_resource_request",),) if order.requires_resource_request else ()),
         *_understanding_place(order),
     ),)
 
@@ -2637,6 +2759,7 @@ def order_extra_digest(meta: PlanMeta) -> str:
         meta.task_id,
         meta.delivery_worktree,
         *((("landing_waiver", meta.landing_waiver),) if meta.landing_waiver else ()),
+        *((("branch", meta.branch),) if meta.branch else ()),
     ))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -3951,14 +4074,17 @@ def venue_declaration_blockers(doc: PlanDoc) -> list[str]:
     ]
 
 
-def _derive_stage_grants(stage, venue: str | None):
+def _derive_stage_grants(
+    stage, venue: str | None, remote_head=_grants.LIVE_REMOTE_HEAD,
+):
     """`grants.derive_stage_grants` for a venue that may be undeclared. With no venue
     every relative `output_artifacts` / `material_refs` entry has nothing to be
     resolved against, so DR-O and DR-E (which need it) derive nothing; DR-V and DR-R
     read no venue and stay. Filtering the relative entries before the call, with a
-    root venue no absolute path is ever in, keeps `grants.py` untouched."""
+    root venue no absolute path is ever in, keeps `grants.py` untouched. `remote_head` is
+    DR-P's frozen `origin/HEAD` branch (see `grants.derive_stage_grants`)."""
     if venue is not None:
-        return _grants.derive_stage_grants(stage, venue=venue)
+        return _grants.derive_stage_grants(stage, venue=venue, remote_head=remote_head)
     anchored = dataclasses.replace(
         stage,
         output_artifacts=[a for a in stage.output_artifacts if os.path.isabs(a)],
@@ -3967,10 +4093,12 @@ def _derive_stage_grants(stage, venue: str | None):
             material_refs=[r for r in stage.subject.material_refs if os.path.isabs(r)],
         ),
     )
-    return _grants.derive_stage_grants(anchored, venue="/")
+    return _grants.derive_stage_grants(anchored, venue="/", remote_head=remote_head)
 
 
-def _stage_declared_and_derived_grants(s, venue: str | None):
+def _stage_declared_and_derived_grants(
+    s, venue: str | None, remote_head=_grants.LIVE_REMOTE_HEAD,
+):
     """A stage's declared grants (an empty `StageGrants` when the stage
     authors none) plus its derived grants and dropped-entry list — the one
     place that pairs a stage with the venue-scoped derivation (`_derive_stage_grants`,
@@ -3979,11 +4107,13 @@ def _stage_declared_and_derived_grants(s, venue: str | None):
     so no projection can drift from another on how a stage's effective grant set is
     computed."""
     declared = s.grants if getattr(s, "grants", None) else _grants.StageGrants()
-    derived, dropped = _derive_stage_grants(s, venue)
+    derived, dropped = _derive_stage_grants(s, venue, remote_head)
     return declared, derived, dropped
 
 
-def _effective_grants_for_stage(stage, venue: str | None) -> "StageGrants":
+def _effective_grants_for_stage(
+    stage, venue: str | None, remote_head=_grants.LIVE_REMOTE_HEAD,
+) -> "StageGrants":
     """DECLARED plus DERIVED, in that order — the set `grant_covers_call` checks an
     actual tool call against and the set `_grants_grew` compares across a replan.
     `derive_stage_grants` never sees the declared half (it derives from the stage's
@@ -3991,16 +4121,46 @@ def _effective_grants_for_stage(stage, venue: str | None) -> "StageGrants":
     grants.py, keeping that module's derivation pure of any notion of "already
     declared"."""
     declared = stage.grants if getattr(stage, "grants", None) else StageGrants()
-    derived, _dropped = _derive_stage_grants(stage, venue)
+    derived, _dropped = _derive_stage_grants(stage, venue, remote_head)
     return StageGrants(
         allow=list(declared.allow) + list(derived.allow),
         add_dirs=list(declared.add_dirs) + list(derived.add_dirs),
+        resources=list(derived.resources),
     )
 
 
-def _grants_effective_map(doc: PlanDoc, *, venue: str | None = None) -> dict[int, tuple]:
+def _effective_by_stage(
+    doc: PlanDoc, *, venue: str | None = None, head=_grants.LIVE_REMOTE_HEAD,
+) -> dict[int, "StageGrants"]:
+    """`{stage index: effective grants}` -- the one object every plan-level consumer reads,
+    DR-P's resources included. `head` is the `origin/HEAD` branch read once by the caller."""
     v = venue if venue is not None else _venue_for(doc)
-    return {s.index: _effective_grants_for_stage(s, v).effective_tuple() for s in doc.stages}
+    return {s.index: _effective_grants_for_stage(s, v, head) for s in doc.stages}
+
+
+def _grants_effective_map(
+    doc: PlanDoc, *, venue: str | None = None, head=_grants.LIVE_REMOTE_HEAD,
+) -> dict[int, tuple]:
+    """The rule/add_dir projection of `_effective_by_stage` (digest-stable)."""
+    return {i: g.effective_tuple()
+            for i, g in _effective_by_stage(doc, venue=venue, head=head).items()}
+
+
+def _remote_head_for(*docs: PlanDoc, venue: str | None) -> str | None:
+    """The `origin/HEAD` branch, read once, when any of `docs` has a spawn stage (the only
+    stages DR-P derives for); None otherwise or when unreadable."""
+    return _grants.remote_head_branch(venue) if any(
+        s.is_spawn() for d in docs for s in d.stages) else None
+
+
+def _branch_hash_part(by_stage: dict) -> str:
+    """The DR-P share of a grants digest: empty when no stage derives a resource, so a
+    plan without a declared `branch` keeps the digest it always had."""
+    part = tuple(
+        (int(idx), tuple(sorted(repr(sorted(d.items())) for d in dicts)))
+        for idx, dicts in sorted(by_stage.items(), key=lambda kv: int(kv[0])) if dicts
+    )
+    return repr(part) if part else ""
 
 
 def _grants_grew(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = False) -> bool:
@@ -4026,13 +4186,17 @@ def _grants_grew(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fa
     `grants.bash_rule_identity`; the caller sets it only when the autonomy boundary
     (`cli._kind_within_boundary`) will also judge the refinement."""
     shared_venue = _venue_for(new)
-    old_map = _grants_effective_map(old, venue=shared_venue)
-    new_map = _grants_effective_map(new, venue=shared_venue)
+    head = _remote_head_for(old, new, venue=shared_venue)
+    old_eff = _effective_by_stage(old, venue=shared_venue, head=head)
+    new_eff = _effective_by_stage(new, venue=shared_venue, head=head)
     old_stages = {s.index: s for s in old.stages}
     delta = norm_delta(old, new)
     for stage in new.stages:
-        new_rules, new_dirs = new_map[stage.index]
-        old_rules, old_dirs = old_map.get(stage.index, (frozenset(), frozenset()))
+        old_g = old_eff.get(stage.index, StageGrants())
+        if new_eff[stage.index].effective_resources() - old_g.effective_resources():
+            return True
+        new_rules, new_dirs = new_eff[stage.index].effective_tuple()
+        old_rules, old_dirs = old_g.effective_tuple()
         grown_rules = new_rules - old_rules
         criterion_only = (not delta.order_moved
                           and delta.elements.get(stage.index, frozenset())
@@ -4064,14 +4228,32 @@ def _derived_verify_rules(stage, venue: str | None) -> list:
 
 
 def plan_has_any_grants(doc: PlanDoc) -> bool:
-    """Whether ANY stage's effective (declared+derived) grant set is non-empty —
-    shared by the present-plan grants-block containment check and the approve
-    grants_sha256 binding check (both only fire on a plan that actually grants
-    something; a plan with zero grants anywhere needs neither)."""
-    return any(rules or dirs for rules, dirs in _grants_effective_map(doc).values())
+    """Whether ANY stage's effective grant set is non-empty -- a declared or derived rule
+    or add_dir, or a DR-P commit/push resource -- shared by the present-plan grants-block
+    containment check and the approve grants_sha256 binding check (both only fire on a
+    plan that actually grants something; a plan with zero grants anywhere needs neither).
+    A plan whose only grant is DR-P's push must show and bind it like one with rules."""
+    venue = _venue_for(doc)
+    head = _remote_head_for(doc, venue=venue)
+    return any(not g.is_empty() for g in _effective_by_stage(doc, venue=venue, head=head).values())
 
 
-def grants_sha256(doc: PlanDoc) -> str:
+def plan_branch_resources(
+    doc: PlanDoc, *, effective: "dict[int, StageGrants] | None" = None,
+) -> dict[int, list[dict]]:
+    """`{stage index: DR-P's commit/push resource dicts}` for the stages that derive any,
+    against the same `origin/HEAD` read `grants_sha256` hashes -- what the grants
+    renderings list so the approved digest's push content is visible. A caller holding
+    the `_effective_by_stage` result passes it instead of re-reading the repository."""
+    if effective is None:
+        venue = _venue_for(doc)
+        effective = _effective_by_stage(
+            doc, venue=venue, head=_remote_head_for(doc, venue=venue))
+    return {i: [_resources.resource_to_dict(r) for r in g.resources]
+            for i, g in effective.items() if g.resources}
+
+
+def grants_sha256(doc: PlanDoc, *, effective: "dict[int, StageGrants] | None" = None) -> str:
     """Stable sha256 hex digest of the plan's EFFECTIVE (declared+derived) grant set,
     one entry per stage index. `present-plan` stamps this onto the receipt and
     `approve` re-derives and compares it, so a materialization-layer change
@@ -4080,32 +4262,61 @@ def grants_sha256(doc: PlanDoc) -> str:
     `repr(...)`-then-sha256 style as the other digests in this module; the map is
     sorted by stage index and each stage's rule/add_dir tuples are themselves
     sorted (via `effective_tuple()`) so the digest never depends on iteration or
-    declaration order."""
+    declaration order. `effective` (`_effective_by_stage` against the head read for
+    `doc`) lets a caller that already derived the grants share them."""
+    venue = _venue_for(doc)
+    if effective is None:
+        effective = _effective_by_stage(
+            doc, venue=venue, head=_remote_head_for(doc, venue=venue))
     payload = repr(tuple(
         (idx, tuple(sorted(rules)), tuple(sorted(dirs)))
-        for idx, (rules, dirs) in sorted(_grants_effective_map(doc).items())
+        for idx, (rules, dirs) in sorted((i, g.effective_tuple()) for i, g in effective.items())
     ))
+    payload += _branch_hash_part(plan_branch_resources(doc, effective=effective))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def materialized_grant_entries(doc: PlanDoc, *, venue: str | None = None) -> dict[str, dict]:
-    """`{str(stage index): {"declared", "derived", "dropped"}}` -- the entry dicts a
-    dispatch hands a child, derived once against `doc`'s venue. Bound next to
+    """`{str(stage index): {"declared", "derived", "dropped", "branch"}}` -- the entry dicts
+    a dispatch hands a child, derived once against `doc`'s venue. Bound next to
     `grants_sha256` so the set the hash covers is the set dispatch reads, instead of a
-    re-derivation that depends on the engine code and venue filesystem of the moment."""
+    re-derivation that depends on the engine code and venue filesystem of the moment.
+
+    `branch` freezes DR-P: the `origin/HEAD` branch read once for the whole call
+    (`remote_head`) and the commit/push resources derived from it (`resources`), so a spawn
+    hands the child what the approval derived, even if the repository's HEAD moves between.
+    The `resources` are part of `grants_sha256`/`entries_grants_sha256` (only when some
+    stage derives any), so what the child is handed is what the user approved."""
     venue = venue if venue is not None else _venue_for(doc)
+    head = _grants.remote_head_branch(venue) if any(s.is_spawn() for s in doc.stages) else None
     entries: dict[str, dict] = {}
     for stage in doc.stages:
         declared = stage.grants if getattr(stage, "grants", None) else StageGrants()
-        derived, dropped = _derive_stage_grants(stage, venue)
+        derived, dropped = _derive_stage_grants(stage, venue, head)
+        branch_resources = derived.resources
         entries[str(stage.index)] = {
             "declared": [r.to_dict() for r in declared.allow]
             + [a.to_dict() for a in declared.add_dirs],
             "derived": [r.to_dict() for r in derived.allow]
             + [a.to_dict() for a in derived.add_dirs],
             "dropped": list(dropped),
+            "branch": {"remote_head": head,
+                       "resources": [_resources.resource_to_dict(r) for r in branch_resources]},
         }
     return entries
+
+
+def dropped_grants_report(doc: PlanDoc, *, venue: str | None = None) -> list[dict]:
+    """`[{"stage", "entry", "reason"[, "rule"]}]` for every derivation the validator or
+    DR-P refused (`rule` is set on DR-P's), in stage order. Advisory data: a dropped derived
+    entry is not a plan defect by itself, but the author otherwise sees only the grants
+    that survived."""
+    return [
+        {"stage": int(idx), "entry": d["entry"], "reason": d["reason"],
+         **({"rule": d["rule"]} if "rule" in d else {})}
+        for idx, stage_entries in materialized_grant_entries(doc, venue=venue).items()
+        for d in stage_entries["dropped"]
+    ]
 
 
 def _entry_key(entry: dict) -> tuple:
@@ -4139,7 +4350,24 @@ def entries_grants_sha256(entries: dict[str, dict]) -> str:
         (int(idx), *projection(s))
         for idx, s in sorted(entries.items(), key=lambda kv: int(kv[0]))
     ))
+    payload += _branch_hash_part({
+        idx: list((s.get("branch") or {}).get("resources") or []) for idx, s in entries.items()})
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _refined_branch(stored: dict, now: dict) -> dict:
+    """The DR-P block after a refinement: what `now` derives, limited to what the approval
+    stored (the plan's own growth never reaches here -- the diff layer classifies it
+    substantive). A moved `branch` therefore never keeps the old branch's resources, and
+    nothing the approval refused is admitted by a later live read of `origin/HEAD` or the
+    refs; `old` is deliberately not consulted, since it derives against that same live
+    state."""
+    frozen = stored.get("branch") or {}
+    admitted = {tuple(sorted(d.items())) for d in frozen.get("resources") or []}
+    return {
+        "remote_head": frozen.get("remote_head", now["branch"]["remote_head"]),
+        "resources": [d for d in now["branch"]["resources"] if tuple(sorted(d.items())) in admitted],
+    }
 
 
 def refined_grant_entries(
@@ -4180,8 +4408,14 @@ def refined_grant_entries(
         if s is None:
             out[idx] = n
             continue
+        branch = _refined_branch(s, n)
+        kept = {tuple(sorted(d.items())) for d in branch["resources"]}
+        held_branch = [f"{d['op']} {d['remote']}:{d['ref']} (DR-P)"
+                       for d in n["branch"]["resources"] if tuple(sorted(d.items())) not in kept]
+        if held_branch:
+            withheld.setdefault(idx, []).extend(held_branch)
         if o is not None and _effective_entry_keys(o) == _effective_entry_keys(n):
-            out[idx] = s
+            out[idx] = {**s, "branch": branch}
             continue
         admitted = {_entry_key(e) for e in s.get("derived") or []}
         if o is not None:
@@ -4190,11 +4424,12 @@ def refined_grant_entries(
             "declared": n["declared"],
             "derived": [e for e in n["derived"] if _entry_key(e) in admitted],
             "dropped": n["dropped"],
+            "branch": branch,
         }
         held = [e.get("rule") or f"{e['path']} ({e['mode']})" for e in n["derived"]
                 if _entry_key(e) not in admitted]
         if held:
-            withheld[idx] = held
+            withheld.setdefault(idx, []).extend(held)
     return out, withheld
 
 
@@ -4257,6 +4492,9 @@ def diff_plans(old: PlanDoc, new: PlanDoc, *, relax_verify_identity: bool = Fals
              # Same footing again: a stage's `renorms` is the consequence a normative
              # critique is bound to, so an edit of it must not diff as 'no_change'.
              *((("renorms", tuple(s.renorms)),) if s.renorms else ()),
+             # The branch DR-P derives the stage's commit/push resources from: an edit of it
+             # changes what the child may do, so it must not diff as 'no_change'.
+             *((("branch", s.branch),) if s.branch else ()),
              # The two cells the change-tier table found outside every change-decision
              # key (Core #74): `capability_required` is in neither `_structural_signature`
              # nor `stage_carry_key`, and a supply's `element`/`artifact` is read by no key
@@ -4388,6 +4626,7 @@ STAGE_LEAF_CLASS: dict[str, str] = {
     "output_artifacts": "I",
     "ephemeral_artifacts_waiver": "I",
     "renorms": "O",
+    "branch": "I",
     "outcome.status": "I",
     "outcome.declined": "I",
     "outcome.actual": "I",
@@ -4410,6 +4649,7 @@ STAGE_LEAF_CLASS: dict[str, str] = {
     "grants.add_dirs.path": "I",
     "grants.add_dirs.mode": "I",
     "grants.add_dirs.provenance": "I",
+    "grants.resources": "I",
     "effects.path": "I",
     "effects.sha256": "I",
     "effects.resolver": "I",

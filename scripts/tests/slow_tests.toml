@@ -28,7 +28,7 @@
 nodes = ["scripts/tests/test_review_exhaustion_reflection.py::test_rx_mutation_catalogue_kills_every_mutant"]
 guards = [
     "scripts/agentctl/gates.py",
-    "scripts/agentctl/cli.py",
+    "scripts/agentctl/cli*.py",
     "scripts/agentctl/task_accumulator.py",
     "scripts/tests/test_review_exhaustion_reflection.py",
     "scripts/tests/rx_mutation_control.py",
@@ -83,7 +83,7 @@ guards = [
     "scripts/agentctl/mandate_store.py",
     "scripts/agentctl/state.py",
     "scripts/agentctl/plan.py",
-    "scripts/agentctl/cli.py",
+    "scripts/agentctl/cli*.py",
     "scripts/agentctl/gates.py",
     "scripts/agentctl/classify.py",
     "scripts/agentctl/inline_class.py",

@@ -283,11 +283,11 @@ def test_default_judge_wraps_advisor_subprocess_runner(monkeypatch, tmp_path):
     assert json.loads(path.read_text()) == {_d1("disk full error", "disk full on node"): True}
     assert len(calls) == 2
     assert "disk full error" in calls[0][1] and "disk full on node" in calls[0][1]
-    assert calls[0][0] == calls[1][0] == min(advisor._BINARY_ASK_TIMEOUT_S, 7.0) == 7
+    assert calls[0][0] == calls[1][0] == min(advisor._SAME_DIFFICULTY_TIMEOUT_S, 7.0) == 7
 
     r = sj.judged_match("lock timeout error", ["lock timeout on db"], budget=budget(500))
     assert r.outcome == "match" and len(calls) == 4
-    assert calls[2][0] == calls[3][0] == min(advisor._BINARY_ASK_TIMEOUT_S, 500.0) == 185
+    assert calls[2][0] == calls[3][0] == min(advisor._SAME_DIFFICULTY_TIMEOUT_S, 500.0) == 185
 
 
 def test_corrupt_cache_reads_empty(monkeypatch, tmp_path):
@@ -330,7 +330,7 @@ def test_budget_exhaustion_counts_remaining_pairs_unjudged(monkeypatch, tmp_path
     budget = JudgeBudget(10, 1, clock=lambda: now[0])
     items = [f"disk issue {w}" for w in ("alpha", "beta", "gamma", "delta")]
     res = sj.judged_clusters(items, lambda t: t, judge=judge, budget=budget, k=3)
-    assert calls == [min(advisor._BINARY_ASK_TIMEOUT_S, 10)]
+    assert calls == [min(advisor._SAME_DIFFICULTY_TIMEOUT_S, 10)]
     assert res.stats.judged_calls == 1
     assert res.stats.unjudged_pairs == 5 and res.stats.unjudged_items == 2
     assert res.unjudged == [False, False, True, True]
@@ -339,7 +339,7 @@ def test_budget_exhaustion_counts_remaining_pairs_unjudged(monkeypatch, tmp_path
     now[0] = 0.0
     big = JudgeBudget(500, 1, clock=lambda: now[0])
     sj.judged_match("disk issue alpha", ["disk issue omega"], judge=judge, budget=big)
-    assert calls == [min(advisor._BINARY_ASK_TIMEOUT_S, 500)]
+    assert calls == [min(advisor._SAME_DIFFICULTY_TIMEOUT_S, 500)]
 
 
 def test_raising_judge_is_unjudged_and_not_cached(monkeypatch, tmp_path):

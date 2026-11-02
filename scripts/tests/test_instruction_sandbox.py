@@ -186,12 +186,19 @@ def test_real_build_resolves_under_core(real_build):
     assert f"ISB_CORE_SHA={_git(REPO, 'rev-parse', 'HEAD')}" in env
 
 
+def _worktrees_and_hooks_path(repo: Path) -> tuple:
+    """`git config --get` exits 1 when the key is unset, as it is in a fresh clone."""
+    hooks_path = subprocess.run(
+        ["git", "-C", str(repo), "config", "--local", "--get", "core.hooksPath"],
+        capture_output=True, text=True).stdout.strip()
+    return _git(repo, "worktree", "list"), hooks_path
+
+
 def test_build_leaves_source_registry_and_hookspath_unchanged(tmp_path, fake_home):
-    before = (_git(REPO, "worktree", "list"), _git(REPO, "config", "--local", "--get", "core.hooksPath"))
+    before = _worktrees_and_hooks_path(REPO)
     res = _run([str(SANDBOX), "--source", str(REPO), "--root", str(tmp_path / "r")], _base_env(fake_home))
     assert res.returncode == 0, res.stderr
-    after = (_git(REPO, "worktree", "list"), _git(REPO, "config", "--local", "--get", "core.hooksPath"))
-    assert after == before
+    assert _worktrees_and_hooks_path(REPO) == before
 
 
 @pytest.fixture

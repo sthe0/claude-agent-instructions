@@ -684,6 +684,8 @@ _STAGE_RESIDUAL_COVERAGE = {
                 "Question.target names it, inside here because flipping a required stage "
                 "to declinable changes what the stage IS to the customer",
     "backlog_issue": "the residual's own splice, same reason as its sibling `optional`",
+    "branch": "the residual's own splice — re-declaring the branch moves which VcsRef "
+              "commit/push resources the stage derives (DR-P), so it is not a re-sequencing",
     "control": "outside: the control attestation record-result stamps, same reason",
     "amendments.date": "outside: retrospective bookkeeping no change decision reads "
                        "(plan.STAGE_LEAF_CLASS class B)",
@@ -738,6 +740,10 @@ _STAGE_RESIDUAL_COVERAGE = {
     "grants.add_dirs.mode": "the residual's own splice, same reason as `grants.allow.rule`",
     "grants.add_dirs.provenance": "the residual's own splice, same reason as its sibling "
                                   "`grants.add_dirs.path`",
+    "grants.resources": "outside: derived at approve from the plan's declared branch "
+                        "field (grants.derive_stage_grants, DR-P) and compared by "
+                        "diff_plans from the derivation (never from this stored "
+                        "attribute), not a declared input a re-sequencing can move",
     "effects.path": "the residual's own splice — outside stage_question_key because "
                     "no Question.target names it, inside here because a declared "
                     "script-effect trust claim is part of what the stage's definition "
@@ -859,6 +865,24 @@ def test_renormalize_refuses_an_edit_to_the_plan_level(store, tmp_path, old, new
     assert store.load("rn").plan_path == plan
 
 
+def test_renormalize_refuses_an_edit_to_a_resource_request_allow_entry(store, tmp_path):
+    """A `[[meta.resource_request]]` row is plan material an executor could edit under
+    --renormalize to widen what the request says it needs; the meta residual carries it,
+    so an `allow` change is a refusal, not a re-sequencing."""
+    plan = _write_plan(tmp_path / "p.toml")
+    row = ('\n[[meta.resource_request]]\nkind = "developer"\nstage = 1\n'
+           'consult_ref = "c1"\nallow = ["Bash(git add:*)"]\nadd_dirs = []\n')
+    Path(plan).write_text(Path(plan).read_text(encoding="utf-8") + row, encoding="utf-8")
+    _approved(store, plan)
+
+    d = _renormalize(store, _edited(plan, tmp_path / "q.toml", 'allow = ["Bash(git add:*)"]',
+                                    'allow = ["Bash(git add:*)", "Bash(git commit:*)"]'))
+
+    assert d.ok is False, d.data
+    assert any("[meta] something" in b for b in d.data["blockers"]), d.data["blockers"]
+    assert store.load("rn").plan_path == plan
+
+
 def test_renormalize_refuses_a_stage_field_outside_the_question_key(store, tmp_path):
     """`cost_tier` is the concrete case must-fix 1 was found on: engine-consumed (the
     spawn budget, and the per-stage term of the effort-divergence estimate) but outside
@@ -879,7 +903,7 @@ def test_renormalize_refuses_a_stage_field_outside_the_question_key(store, tmp_p
     )
 
 
-def test_renormalize_refuses_an_output_artifacts_re_declaration(store, tmp_path):
+def test_renormalize_refuses_an_output_artifacts_re_declaration(store, tmp_path, monkeypatch):
     """`output_artifacts` is the residual's OTHER splice, and had no behavioral test of
     its own before this stage's review — only `cost_tier`'s case above did, so a revert
     of the `output_artifacts` line in `_renorm_stage_residual` would have stayed green.
@@ -891,7 +915,9 @@ def test_renormalize_refuses_an_output_artifacts_re_declaration(store, tmp_path)
     _approved(store, plan)
     # The plan's venue is a tmp dir, so a RELATIVE output artifact would resolve under
     # the OS-temp scratch root and be refused by the durability lint at submission
-    # (before the residual is reached). An absolute path under the repo is durable.
+    # (before the residual is reached). An absolute path under the repo is durable —
+    # unless the repo itself is a clone under /tmp, so the scratch roots are pinned away.
+    monkeypatch.setenv("AGENTCTL_SCRATCH_ROOTS", str(tmp_path / "scratch"))
     durable = Path(__file__).resolve().parents[1] / "agentctl" / "gates.py"
 
     d = _renormalize(store, _edited(plan, tmp_path / "q.toml",

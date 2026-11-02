@@ -522,10 +522,12 @@ def drive_user_text(plan_file, views, **_):
 
 
 STRUCTURAL_ONLY = {
-    "scripts/agentctl/cli.py:_venue_tree_identity.run": "a git command line",
+    "scripts/agentctl/advisor.py:judge_code_effects": "the code of a command line",
+    "scripts/agentctl/cli_common.py:_venue_tree_identity.run": "a git command line",
     "scripts/agentctl/mandate.py:<module>": "a table of script names",
     "scripts/gen_crutch_registry.py:<module>": "a table key",
     "scripts/measure-marker-extractor-latency.py:_one_call": "a fixed synthetic message",
+    "scripts/probe-hook-decision-semantics.py:_allow_cmd": "a fixed probe prompt",
     "scripts/probe-hook-decision-semantics.py:run_add_dir_read_cell": "a fixed probe prompt",
     "scripts/probe-hook-decision-semantics.py:run_add_dir_write_cell": "a fixed probe prompt",
     "scripts/probe-hook-decision-semantics.py:run_headless_cell": "a fixed probe prompt",

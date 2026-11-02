@@ -23,6 +23,8 @@ import json
 import re
 import sys
 
+from lib import hook_telemetry
+
 _TOOLS = frozenset({"Agent", "Task"})
 _FIELDS = ("prompt", "description")
 _SKILL_PATH = re.compile(r"skills/[\w./-]*SKILL\.md")
@@ -70,4 +72,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-guard-agent-specialist-stand-in"))

@@ -36,6 +36,7 @@ from pathlib import Path
 # guardian (hook-turn-end-gate.py) consumes the SAME detect() and cannot drift
 # from this advisory. Re-export the exact names the advisory's tests import.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import hook_telemetry  # noqa: E402
 from long_job_detect import (  # noqa: E402,F401
     NOHUP_RE,
     DEFAULT_ORCHESTRATORS,
@@ -91,4 +92,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-long-job-arm"))

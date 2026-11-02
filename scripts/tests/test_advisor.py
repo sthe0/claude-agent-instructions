@@ -1077,13 +1077,13 @@ class TestJudgeLandingDisciplineAsk:
 # hook's constant) is a NAMING defect, visible in the source and nowhere else.
 _JUDGE_TIMEOUT_CONSTANTS = {
     "judge_binary_ask": "_BINARY_ASK_TIMEOUT_S",
-    "judge_same_difficulty": "_BINARY_ASK_TIMEOUT_S",
+    "judge_same_difficulty": "_SAME_DIFFICULTY_TIMEOUT_S",
     "judge_published_attachment": "_PUBLISHED_ATTACHMENT_TIMEOUT_S",
     "judge_published_text_rules": "_PUBLISHED_TEXT_RULES_TIMEOUT_S",
-    "judge_feedback_signal": "_BINARY_ASK_TIMEOUT_S",
-    "judge_user_question": "_BINARY_ASK_TIMEOUT_S",
-    "judge_resolution_confirmation": "_BINARY_ASK_TIMEOUT_S",
-    "judge_outage_escalation": "_BINARY_ASK_TIMEOUT_S",
+    "judge_feedback_signal": "_FEEDBACK_SIGNAL_TIMEOUT_S",
+    "judge_user_question": "_USER_QUESTION_TIMEOUT_S",
+    "judge_resolution_confirmation": "_RESOLUTION_CONFIRMATION_TIMEOUT_S",
+    "judge_outage_escalation": "_OUTAGE_ESCALATION_TIMEOUT_S",
     "judge_silent_closure": "_SILENT_CLOSURE_TIMEOUT_S",
     "judge_deferring_disposition": "_DEFERRING_DISPOSITION_TIMEOUT_S",
     "judge_landing_discipline_ask": "_LANDING_DISCIPLINE_LAST_RESORT_TIMEOUT_S",

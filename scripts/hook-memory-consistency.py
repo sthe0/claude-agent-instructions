@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 import memory_dates as md
+from lib import hook_telemetry
 
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 VALID_TYPES = frozenset({"user", "feedback", "project", "reference"})
@@ -141,4 +142,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hook_telemetry.run(main, mechanism="hook-memory-consistency"))

@@ -58,12 +58,25 @@ def build_record(
     parent_lineage: list[dict] | None,
     created_at: str | None = None,
     closure_digest: str | None = None,
+    resources: list[dict] | None = None,
+    rule_patterns: list[str] | None = None,
+    permissions_allow: list[str] | None = None,
+    add_dirs: list[str] | None = None,
+    launch_dir: str | None = None,
 ) -> dict:
     """The handoff record. `parent_lineage` is the parent session's own
     `parent_link.norm_lineage` (None for a session nobody linked); the record's lineage
     extends it by the parent stage's own entry, so the last entry always names the
     stage this child was spawned for. `closure_digest` is the stage's
-    `plan.stage_closure_digest`: the plan content the stage's brief was built from."""
+    `plan.stage_closure_digest`: the plan content the stage's brief was built from.
+    `resources` and `rule_patterns` are the stage's `plan_resources.StageResourceSet.to_dict()`
+    halves: the typed resources the child may change and the wildcard-tail rules kept as text.
+    `permissions_allow` is the child's final `permissions.allow` (kind baselines included): the
+    resource-grant hook reads it to leave alone a call the harness already allows. `add_dirs` are the
+    directories the child was started with (`--add-dir`), which the harness treats as working directories.
+    Both keys are written only when given: a record without them says "unknown", which the hook reads
+    as "never deny", not as "empty". `launch_dir` is the directory the child was started in, where the
+    harness reads the project's settings from however far the child later `cd`s."""
     record = {
         "schema": HANDOFF_SCHEMA,
         "parent_session": parent_session,
@@ -72,10 +85,18 @@ def build_record(
         "norm": norm.to_dict(),
         "norm_digest": norm.norm_digest(),
         "grants": list(grants or []),
+        "resources": list(resources or []),
+        "rule_patterns": list(rule_patterns or []),
         "depth": depth,
         "norm_lineage": [*(parent_lineage or []), lineage_entry(parent_session, stage_index, norm)],
         "created_at": created_at or dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
     }
+    if permissions_allow is not None:
+        record["permissions_allow"] = list(permissions_allow)
+    if add_dirs is not None:
+        record["add_dirs"] = list(add_dirs)
+    if launch_dir is not None:
+        record["launch_dir"] = launch_dir
     if closure_digest is not None:
         record["closure_digest"] = closure_digest
     return record
@@ -107,6 +128,18 @@ def write_record(state_root: Path | str, record: dict) -> tuple[Path, str]:
             pass
         raise
     return final, sha
+
+
+def _optional_list(record: dict, key: str) -> "list | None":
+    """The record's list under `key`; None when the record does not carry the key (written before it
+    existed), which is not the same as an empty list."""
+    value = record.get(key)
+    return list(value) if isinstance(value, list) else None
+
+
+def state_root_of(handoff_path: Path | str) -> Path:
+    """The state root a handoff file lives under (the inverse of `write_record`'s layout)."""
+    return Path(handoff_path).parent.parent
 
 
 def verify_env_value(raw: str) -> tuple[dict | None, str | None]:
@@ -161,6 +194,11 @@ def verify_env_value(raw: str) -> tuple[dict | None, str | None]:
         "norm_digest": norm_digest,
         "norm": record["norm"],
         "grants": record.get("grants") or [],
+        "resources": record.get("resources") or [],
+        "rule_patterns": record.get("rule_patterns") or [],
+        "permissions_allow": _optional_list(record, "permissions_allow"),
+        "add_dirs": _optional_list(record, "add_dirs"),
+        "launch_dir": record.get("launch_dir") if isinstance(record.get("launch_dir"), str) else None,
         "depth": depth,
         "norm_lineage": lineage,
     }, None

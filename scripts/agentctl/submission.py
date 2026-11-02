@@ -60,8 +60,10 @@ import os
 import re
 
 from . import exempt_paths, grant_shadow
+from . import grants as _grants
 from .conditions import judge_restatement, restatement_prefilter
-from .plan import _declared_absolute_venue, venue_declaration_blockers
+from .plan import _declared_absolute_venue, _remote_head_for, venue_declaration_blockers
+from .plan_resources import RESOURCE_REQUEST_KINDS, plan_time_resource_set, uncovered_request_entries
 from .procedure import collapse_prefilter, judge_collapse
 from .result_image import echo_prefilter, judge_echo
 from .state import (
@@ -822,6 +824,71 @@ def _requirement_derivation_violations(order) -> list[str]:
     return out
 
 
+def _resource_request_armed(doc) -> bool:
+    order = doc.meta.order
+    return order is not None and "order" not in order.malformed and order.requires_resource_request
+
+
+def _resource_request_violations(doc) -> list[str]:
+    """For an armed plan, every request-bearing spawned stage needs its own
+    `[[meta.resource_request]]` row (kind + stage), and every entry of a row must be covered
+    by what that stage's child already holds: declared + derived grants, the kind baseline
+    and the workdir; the coverage rules are `uncovered_request_entries`'. Gated on `order.requires_resource_request`, the
+    same opt-in shape as `requires_traceability`: plans written before the request existed
+    are never held to it."""
+    if not _resource_request_armed(doc):
+        return []
+    venue = _declared_absolute_venue(doc.meta)
+    stages = {s.index: s for s in doc.stages}
+    head = _remote_head_for(doc, venue=venue)
+    out: list[str] = []
+    by_key: dict[tuple, list] = {}
+    for row in doc.meta.resource_requests:
+        by_key.setdefault((row.kind, row.stage), []).append(row)
+        label = f"[[meta.resource_request]] kind={row.kind!r} stage={row.stage!r}"
+        out.extend(f"{label}: {d}" for d in row.defects)
+        stage = stages.get(row.stage)
+        if stage is None:
+            if row.stage is not None:
+                out.append(f"{label}: no such stage")
+            continue
+        if stage.spawn_kind() != row.kind:
+            out.append(f"{label}: stage {stage.index} runs {stage.actor.executor!r}, not spawn:{row.kind}")
+            continue
+        held, held_rules = plan_time_resource_set(stage, venue, row.kind, head)
+        missing = uncovered_request_entries(row.allow, row.add_dirs, held, held_rules, venue)
+        if missing:
+            out.append(
+                f"{label}: not covered by the stage's grants (declared + derived + kind "
+                f"baseline + workdir): {'; '.join(missing)}. Declare the grant on the stage "
+                f"or drop the entry from the request"
+            )
+    for stage in doc.stages:
+        kind = stage.spawn_kind()
+        if kind in RESOURCE_REQUEST_KINDS and (kind, stage.index) not in by_key:
+            out.append(
+                f"stage {stage.index} (spawn:{kind}) has no [[meta.resource_request]] row: "
+                f"[meta.order] requires_resource_request is set, so the {kind} consult's "
+                f"RESOURCE-REQUEST for this stage must be recorded as a row "
+                f"{{kind, stage, consult_ref, allow, add_dirs}}"
+            )
+    return out
+
+
+def resource_request_advice(doc) -> list[str]:
+    """Armed plans only: a stage of a spawned kind outside `RESOURCE_REQUEST_KINDS` carries
+    no request, which is worth saying but never grounds to refuse."""
+    if not _resource_request_armed(doc):
+        return []
+    return [
+        f"stage {s.index} (spawn:{s.spawn_kind()}) is outside the request-bearing kinds "
+        f"({', '.join(RESOURCE_REQUEST_KINDS)}): its permission surface is not checked "
+        f"against an executor's request"
+        for s in doc.stages
+        if s.is_spawn() and s.spawn_kind() not in RESOURCE_REQUEST_KINDS
+    ]
+
+
 def _conditions_restatement(stage, judge_runner, judge_enabled: bool) -> str | None:
     """The violation for a `conditions` exhausted by restating `depends_on`, or None.
 
@@ -1170,6 +1237,7 @@ def submission_violations(
     out.extend(_order_understanding_violations(doc.meta))
     out.extend(_element_traceability_violations(doc))
     out.extend(_requirement_derivation_violations(doc.meta.order))
+    out.extend(_resource_request_violations(doc))
     out.extend(_landed_delivery_venue_violations(doc))
     out.extend(_landing_declaration_violations(doc))
     for stage in doc.stages:
@@ -1341,12 +1409,14 @@ def submission_advice(doc, *, judge_runner=None, judge_enabled: bool = True) -> 
     round trip on a coin flip, so an echo NEVER refuses: it names the stage, says what its
     image restates, and the submission proceeds.
 
-    Fail-open throughout: no runner, a disabled judge, or a judge that errors yields no
-    advice at all. Silence here is indistinguishable from the feature being absent.
+    The model-judged half is fail-open: no runner, a disabled judge, or a judge that
+    errors yields none of its advice, and that silence is indistinguishable from the
+    feature being absent. The resource-request advice is mechanical and needs no judge, so
+    it is returned either way.
     """
+    out: list[str] = resource_request_advice(doc)
     if not judge_enabled or judge_runner is None:
-        return []
-    out: list[str] = []
+        return out
     for stage in doc.stages:
         image = (stage.subject.result if stage.subject else "") or ""
         command = (stage.criterion.verify_command or "") if stage.criterion else ""

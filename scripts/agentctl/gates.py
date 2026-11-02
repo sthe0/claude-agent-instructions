@@ -49,6 +49,7 @@ from lib.spawn_prompt_files import composed_prompt_files, skill_path
 from . import advisor as _advisor
 from . import delivery
 from . import effort
+from . import resources as _resources
 from .config import Thresholds
 from .plan import (
     PlanError,
@@ -57,6 +58,7 @@ from .plan import (
     changed_parts,
     consumers,
     effects_place,
+    entries_grants_sha256,
     grants_place,
     grants_sha256,
     load_order_draft,
@@ -2927,7 +2929,9 @@ def plan_presentation_blockers(
     return _delivery_stamp_blocker(state, receipt, probe)
 
 
-def grants_approval_blockers(state: SessionState, target_plan: str | None) -> list[str]:
+def grants_approval_blockers(
+    state: SessionState, target_plan: str | None, *, entries: dict | None = None,
+) -> list[str]:
     """Precondition guardian for `approve`: when the target plan grants ANYTHING
     (plan_has_any_grants), the essence presentation receipt that plan_presentation_
     blockers already required must ALSO carry a grants_sha256 matching the plan's
@@ -2940,7 +2944,11 @@ def grants_approval_blockers(state: SessionState, target_plan: str | None) -> li
     []) whenever that receipt is missing or already stale, trusting the sibling
     guardian to report it. Fails OPEN on a plan that does not load and on a plan
     that grants nothing at all (a grants_sha256 comparison is meaningless with no
-    grants to bind). [] == may pass."""
+    grants to bind). [] == may pass.
+
+    `entries` are the materialized grant entries the caller will bind: the receipt is
+    checked against their hash, so the set checked is the set bound even if the
+    repository's `origin/HEAD` moves between two reads."""
     if not plan_presentation_active(state):
         return []
     if not target_plan:
@@ -2956,7 +2964,7 @@ def grants_approval_blockers(state: SessionState, target_plan: str | None) -> li
         return []  # plan_presentation_blockers already names this
     if _receipt_binding_blocker(receipt, target_plan, "plan presentation", state) is not None:
         return []  # ditto -- stale receipt already blocked elsewhere
-    current = grants_sha256(doc)
+    current = entries_grants_sha256(entries) if entries is not None else grants_sha256(doc)
     if getattr(receipt, "grants_sha256", None) != current:
         return [
             "the plan's grant set changed since it was presented (or the "
@@ -3959,6 +3967,7 @@ def _renorm_stage_residual(stage) -> tuple:
         stage.ephemeral_artifacts_waiver,
         stage.optional,
         stage.backlog_issue,
+        stage.branch,
         tuple(stage.renorms),
     )
 
@@ -3973,13 +3982,13 @@ def _meta_place(meta) -> tuple:
     approval spine keys on — passed as "a re-sequencing". So the totality claim is made
     here and the named rows keep only the job they are good at, naming the norm.
 
-    Hand-written, but for a narrower reason than `plan.order_place`'s: eight of these eleven
-    fields (`task_id` through `delivery_worktree`) are plain scalars or optional strings,
+    Hand-written, but for a narrower reason than `plan.order_place`'s: ten of these fourteen
+    fields (`task_id` through `branch`) are plain scalars or optional strings,
     already hashable and comparable as `meta.X` with no transformation at all — a
-    `dataclasses.fields` derivation could emit those as-is. Only three actually need custom
+    `dataclasses.fields` derivation could emit those as-is. Only four actually need custom
     handling: `final_check` and `order` are themselves compound structures, routed through
     `_final_check_surface`/`order_place` for the same reason those helpers exist, and
-    `assumptions` is a list, flattened inline to a tuple of its fields. The list
+    `assumptions` and `resource_requests` are lists, flattened inline to tuples of their fields. The list
     stays hand-written regardless, because a derived walk would still have to dispatch
     `final_check`/`order` away from the plain fields, and because the totality claim needs
     its own pin either way: `test_the_meta_residual_exhausts_plan_meta_s_field_set` goes
@@ -3998,9 +4007,14 @@ def _meta_place(meta) -> tuple:
         meta.repo_root,
         meta.delivery_worktree,
         meta.landing_waiver,
+        meta.branch,
         _final_check_surface(meta),
         order_place(meta),
         tuple((a.id, a.text, a.basis, a.risk, a.stage) for a in meta.assumptions),
+        tuple(
+            (r.kind, r.stage, r.consult_ref, tuple(r.allow), tuple(r.add_dirs))
+            for r in meta.resource_requests
+        ),
     )
 
 
@@ -4133,7 +4147,7 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
     for requested in resolved_plan.resources:
         if any(a.covers(requested, protected=protected) for a in approved):
             continue
-        data = _oa.resource_to_dict(requested)
+        data = _resources.resource_to_dict(requested)
         name = _resource_name(data)
         if name in seen:
             continue
@@ -4314,7 +4328,7 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
 
         seen: set[str] = set()
         for requested in resources:
-            data = _oa.resource_to_dict(requested)
+            data = _resources.resource_to_dict(requested)
             if data["kind"] == "specialist":
                 continue
             if any(held.covers(requested, protected=protected) for held in held_resources):

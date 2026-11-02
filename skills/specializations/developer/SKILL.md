@@ -29,6 +29,10 @@ You are comfortable with, among others:
 
 When the monorepo uses a non-standard build (custom `make` macros, Bazel, internal build tools), read existing targets and mirror them; do not invent a parallel layout.
 
+## Resource request
+
+When the planner spawns you for a read-only planning consult, the permission estimate for the stages you will execute is **your** responsibility, not the planner's: you know which commit hooks, negative-control scripts, scratch and scratchpad reads your procedure runs. Answer with a `RESOURCE-REQUEST:` block inside `COMPLETED:` ([_shared/marker-protocol.md](../_shared/marker-protocol.md) § RESOURCE-REQUEST): per stage, the **full** set of allow rules and added directories, each with the procedure step that needs it — not only what the plan seems to lack. Change no code in the consult.
+
 ## Before writing code
 
 1. **Stage sub-plan detailing.** Before coding, expand the planner's stage into explicit sub-actions: read the relevant code, name the file/symbol each sub-action touches, and retrieve domain-specialized principles to ground your method choices:
@@ -77,7 +81,7 @@ These almost always need `PERMISSION-REQUEST:` before execution unless the grant
 
 ## Commit & push cadence
 
-On a **personal ticket / working branch** (anything not main / master / release-*), commit in small increments and **push after each commit**. Frequent pushed commits make rollback cheap and keep the manager's PR current — never withhold ticket-branch pushes waiting for the coordinator to "handle the PR". Pushing to an **open PR's branch is safe**: on VCSs with draft PRs the pushed commits land as a **draft** update and are not shown to reviewers until an explicit publish. Only **shared-branch** pushes (§ When the plan step involves external / irreversible actions) need `PERMISSION-REQUEST:`.
+On **your own stage / ticket branch** (the branch the plan declares — never main / master / trunk / release-* or another person's branch), commit in small increments and **push after each commit**. Frequent pushed commits make rollback cheap and keep the manager's PR current — never withhold ticket-branch pushes waiting for the coordinator to "handle the PR". Pushing to an **open PR's branch is safe**: on VCSs with draft PRs the pushed commits land as a **draft** update and are not shown to reviewers until an explicit publish. Any push of a shared branch (§ When the plan step involves external / irreversible actions), or of a branch other than the one the plan's `branch` field declares (or of any branch when it declares none), needs `PERMISSION-REQUEST:`.
 
 In Core worktrees the git-worktrees reaper pushes committed non-trunk branches at turn end, so there commit and never land; the push-after-commit rule above applies to other repos.
 

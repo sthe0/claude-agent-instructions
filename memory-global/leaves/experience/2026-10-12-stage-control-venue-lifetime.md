@@ -6,7 +6,7 @@ schema: difficulty/v1
 generality: 0
 resolution_confirmed_by_user: "fedor (AskUserQuestion: 'Да — решено')"
 created: 2026-10-12
-last_verified: 2026-10-12
+last_verified: 2026-11-02
 generalized_into: [a-stage-control-is-re-evaluated-after-its-world-has-changed]
 ---
 
@@ -96,6 +96,16 @@ Review process note, the most expensive lesson here: the fix for the first revie
 ### 2026-10-10 — record-experience worktree routing (Core, 2026-10-10)
 - Where it arose: stage 1 verify_command of record-experience-no-canon-write
 - Working plan: /home/the0/.claude-agent/plans/record-experience-no-canon-write.toml
+
+
+### 2026-11-02 — resource-grants-executor-request: venue MOVED under a running suite (canon fast-forwarded mid-run)
+- Where it arose: verify-final final_check 'suite' pinned to the canon checkout, ~20 min run, 2026-11-02
+- Working plan: The final_check ran pytest scripts/tests + verify-all + lint in the canon /home/the0/claude-agent-instructions. At 13:11 a concurrent session's 'merge origin/main: Fast-forward' moved the canon 18b71dbd -> 21ace5ea while the run (13:03-13:23) was in progress; three tests (a mutation anchor, a settings-reference row, a plan-convert pinned control) failed because the incoming cli.py-split commits retargeted exactly those anchors - modules collected before the move met source files after it. Falsified the own-code hypothesis by re-running the three modules on the now-stable 21ace5ea (382 passed, and it contains 18b71dbd); replanned unchanged and re-ran verify-final green. New vector beside LIFETIME: the venue SURVIVES but is MUTATED mid-run by another session. Fix direction (not yet built): the suite gate should run in a frozen detached worktree at a pinned sha, or record HEAD at start and refuse-without-failing if HEAD moved by the end. First check on any surprising suite failure: 'git reflog -n5' of the venue against the run's start/end times.
+
+## Common core & variations
+**Common:** TODO — shared solution across contexts
+
+**Variations:** TODO — what differs per context
 
 ## Cost
 Not costed separately: the contexts keep the cost recorded in [2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan](2026-06-29-agentctl-verify-venue-worktree-needs-substantive-replan.md).

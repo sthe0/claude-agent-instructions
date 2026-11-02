@@ -35,6 +35,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
+from cli_module_anchor import anchor_target
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 RULES = "agentctl/mandate.py"
 STORE = "agentctl/mandate_store.py"
@@ -980,6 +982,14 @@ CATALOGUE: "dict[str, Mutant]" = {
         RULES, 'if rest.pop("mandate_id", None) != mandate.id:', 'if rest.pop("mandate_id", None) is None and False:',
         _ids(T_RULES, "test_mandate_approval_reads_and_strips_the_mandate_id_key"),
     ),
+    "driver-records-order": Mutant(
+        DRIVER,
+        '            ("order-raise", ["--id", "issue", "--element", f"Core issue #{number} is resolved"]),\n'
+        '            ("submit-plan", ["--plan", str(norm)]),\n'
+        '            ("order-dispose", ["--id", "issue", "--as", "covered", "--stage", str(STAGE_INDEX)]),\n',
+        '            ("submit-plan", ["--plan", str(norm)]),\n',
+        _ids(T_BASIS, "test_the_driver_parent_session_reaches_stage_one_executing_with_live_gate_arming"),
+    ),
 }
 
 
@@ -1037,7 +1047,7 @@ def run_mutant(name: str) -> int:
     try:
         with tempfile.TemporaryDirectory(prefix="mandate-mutant-") as tmp:
             subject = _copy_subject(Path(tmp))
-            target = subject / mutant.relpath
+            target = anchor_target(subject, mutant.relpath, mutant.anchor)
             source = target.read_text(encoding="utf-8")
             if source.count(mutant.anchor) != 1:
                 print(f"{name}: anchor matched {source.count(mutant.anchor)} times in {mutant.relpath}", file=sys.stderr)
