@@ -591,6 +591,17 @@ def _adopt_norm_handoff(state: SessionState, store: StateStore) -> None:
               norm_digest=adopted["norm_digest"])
 
 
+def _done_criterion_or_handoff(state: SessionState) -> str:
+    """The session's overall done criterion, else the done criterion of the parent stage
+    norm it was handed ('' for an unlinked session with none). A linked child that takes
+    the small-change path writes no plan to carry one, and the parent's norm is the order
+    it works under."""
+    if state.overall_done_criterion:
+        return state.overall_done_criterion
+    lineage = (state.parent_link or {}).get("norm_lineage") or []
+    return str(lineage[-1].get("done_criterion") or "") if lineage else ""
+
+
 def _agent_replans_fire_route(state: SessionState) -> dict | None:
     """The agent's own route for an unacknowledged `replans`-scale fire of a ledgered
     order: a planning-difficulty cycle, not a question to the user. None for every other

@@ -83,6 +83,7 @@ from .cli_common import (
     _flush_order_effort,
     _adopt_parent_difficulty,
     _adopt_norm_handoff,
+    _done_criterion_or_handoff,
     _self_approve_detail,
     _agent_review_override,
     _review_baseline,
@@ -533,7 +534,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
                 actor=Actor(executor="in_thread"),
                 criterion=Criterion(
                     criterion_type=state.overall_criterion_type,
-                    done_criterion=state.overall_done_criterion or "change applied and self-checked",
+                    done_criterion=_done_criterion_or_handoff(state) or "change applied and self-checked",
                 ),
             )
         ]

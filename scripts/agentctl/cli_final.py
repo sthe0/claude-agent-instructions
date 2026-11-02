@@ -48,6 +48,7 @@ from lib import ask_evidence, transcript_turns
 from .cli_common import (
     REPO_ROOT,
     _VALID_QUALITY_RATINGS,
+    _done_criterion_or_handoff,
     _effort_cross_totals,
     _flush_order_effort,
     _record_effort_fire,
@@ -1146,7 +1147,7 @@ def cmd_reject(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # captured; the coordinator refines it through declare -> investigate -> critique
     # (which the difficulty_blockers gate still requires complete before replan).
     opened = _open_difficulty(state, declaration=Declaration(
-        expected=state.overall_done_criterion or "delivery matches the user's approved intent",
+        expected=_done_criterion_or_handoff(state) or "delivery matches the user's approved intent",
         actual=reason,
         mismatch="user rejected the delivery at the resolution gate (delivered != approved intent)",
     ))

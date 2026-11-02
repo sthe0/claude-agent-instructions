@@ -44,6 +44,7 @@ from .state import (
     ReattestStash,
     SessionState,
     StageStatus,
+    WeightClass,
 )
 from .store import StateStore
 import hashlib
@@ -670,6 +671,7 @@ class _ReplanContext:
     echo_advice: list[str] = field(default_factory=list)
     diagnosing: bool = False
     replan_cause: dict = field(default_factory=dict)
+    planless: bool = False
 
 
 def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
@@ -684,7 +686,10 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     next one run, in the order the gates were written; the last applies the plan."""
     ctx = _ReplanContext(
         state=_require(store, args.session), store=store, args=args, runner=runner,
-        crossed=crossed, reopened=reopened, reopen_ignored=reopen_ignored)
+        crossed=crossed, reopened=reopened, reopen_ignored=reopen_ignored,
+        planless=args.plan is None)
+    if ctx.planless:
+        return _replan_planless(ctx)
     refusal = _replan_entry_gates(ctx)
     if refusal is not None:
         return refusal
@@ -775,7 +780,7 @@ def _replan_entry_gates(ctx: _ReplanContext) -> Directive | None:
         return Directive(False, state.node, "declare", "replan blocked by incomplete difficulty record",
                          data={"blockers": dblock})
 
-    if not state.plan_path:
+    if not state.plan_path and not ctx.planless:
         return Directive(False, state.node, "submit_plan", "no current plan to replan against")
     ctx.normalize_factor, ctx.normalize_level = normalize_factor, normalize_level
     return None
@@ -827,7 +832,7 @@ def _replan_renegotiation_gate(ctx: _ReplanContext) -> Directive | None:
                 data={"blockers": rrblock},
             )
         try:
-            order_doc = _load(args.plan, strict=False)
+            order_doc = None if ctx.planless else _load(args.plan, strict=False)
         except (OSError, PlanError):
             order_doc = None
         order = order_doc.meta.order if order_doc is not None else None
@@ -1642,6 +1647,61 @@ def _replan_apply_substantive(ctx: _ReplanContext) -> Directive:
         change_class=change_class, **replan_cause)
 
 
+def _replan_planless(ctx: _ReplanContext) -> Directive:
+    """The replan of a small-change session, which holds no plan to correct: it runs the
+    gates that govern leaving the DIAGNOSING cycle (effort fire, nested difficulty, a
+    complete difficulty record, the renegotiation ceiling, re-norming, the routed fault),
+    then re-arms the failed stage and returns to VERIFYING. It edits no norm, so a
+    difficulty record naming norm targets is refused: that fix is a plan's `renorms`."""
+    state, store, args = ctx.state, ctx.store, ctx.args
+    if state.weight_class != WeightClass.SMALL_CHANGE.value or state.plan_path:
+        return Directive(False, state.node, "replan",
+                         "replan needs --plan: only a small-change session that holds no plan "
+                         "replans without one")
+    if state.node != Node.DIAGNOSING.value:
+        return Directive(False, state.node, "replan",
+                         f"a plan-less replan closes a difficulty (node=DIAGNOSING); node={state.node}")
+    if getattr(args, "renormalize", False):
+        return Directive(False, state.node, "replan",
+                         "--renormalize reorders a plan's procedure; a plan-less replan has no plan")
+    refusal = _replan_entry_gates(ctx)
+    if refusal is not None:
+        return refusal
+    refusal = _replan_renegotiation_gate(ctx)
+    if refusal is not None:
+        return refusal
+    if state.difficulty is not None and state.difficulty.norm_targets:
+        return Directive(False, state.node, "replan",
+                         "a plan-less replan edits no norm, and the difficulty record names "
+                         "norm target(s); a plan that lists them in `renorms` is the way out",
+                         data={"blockers": [t.get("target", "") for t in state.difficulty.norm_targets]})
+    refusal = _replan_closure_gates(ctx)
+    if refusal is not None:
+        return refusal
+
+    if ctx.normalize_factor:
+        state.difficulty.normalization = Normalization(
+            factor=ctx.normalize_factor, level=ctx.normalize_level, destination=None)
+        _log_normalize_event(state, factor=ctx.normalize_factor, level=ctx.normalize_level,
+                             destination=None, in_diagnosis=True)
+    replan_cause = _replan_cause(state, getattr(args, "reason", None))
+    _flush_order_effort(state, store=store)
+    for s in state.stages:
+        if s.outcome.status == StageStatus.FAILED.value:
+            s.outcome.status = StageStatus.PENDING.value
+    _archive_difficulty(state, ctx.closing_waiver)
+    state.node = transition(state.node, "replan_refine")  # DIAGNOSING -> VERIFYING
+    state.current_stage = None
+    state.log("replan", kind="planless", exited_diagnosing=True,
+              change_class=effort.OPERATIVE_CLASS, **replan_cause)
+    _count_replan(state, effort.OPERATIVE_CLASS)
+    effort.rederive(state)
+    store.save(state)
+    return Directive(True, state.node, "next_stage",
+                     "difficulty worked through; no plan to correct — retry the re-armed stage",
+                     data=_replan_class_data(state))
+
+
 def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advice: list[str],
                           *, trigger_exit: str | None, **log_fields) -> Directive:
     """Re-arm the plan-approval gate and park the session at PLAN_READY after a replan
@@ -1698,6 +1758,8 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # Only on something to say: an unconditional setdefault would add an empty
     # `advisories` key to every replan Directive, which test_history_capture's
     # exact-equality pin reads as a changed contract.
+    if args.plan is None:
+        return d
     advisories = _replan_spelling_advisories(args.plan)
     if advisories:
         d.data.setdefault("advisories", []).extend(advisories)
@@ -1922,7 +1984,11 @@ def cmd_effort_check(args, *, store: StateStore, runner: Runner | None = None) -
 
 
 def register(sub, add):
-    sp = add("replan"); sp.add_argument("--session", required=True); sp.add_argument("--plan", required=True)
+    sp = add("replan"); sp.add_argument("--session", required=True)
+    sp.add_argument("--plan", default=None,
+                    help="the corrected plan file; omitted only by a small-change session, "
+                         "which holds no plan: it closes its difficulty and re-arms its "
+                         "failed stage with no plan to correct")
     sp.add_argument("--reason", default=None,
                     help="free-text cause for this replan, captured for history only; used "
                          "only when no active difficulty record supplies one (a bare "
