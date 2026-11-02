@@ -39,7 +39,7 @@ from xml.sax.saxutils import escape as xml_escape
 from agentctl import cost, dispatch, grants, inline_class, inline_git, mandate as rules, mandate_store as store, norm_handoff
 from agentctl.config import Thresholds
 from agentctl.dispatch import RunResult
-from lib import config_root, host_llm
+from lib import config_root, host_llm, transcript_cost
 from lib.runtime_models import HOST_CLAUDE
 from session_scope import registry as scopes
 
@@ -80,7 +80,9 @@ EXIT_OK, EXIT_ERROR, EXIT_BUSY = 0, 1, 3
 # plumbing should stop and be looked at.
 KIND_SPAWN_ERROR, KIND_INFRA = "spawn-error", "infra"
 VERDICT_LABEL = {"auto-ok": "ok", "auto-no": "no"}
-VERDICT_RE = re.compile(r"VERDICT:\s*(accept|reject)\b", re.IGNORECASE)
+VERDICT_RE = re.compile(r"^VERDICT:[ \t]*(accept|reject)[ \t]*$", re.MULTILINE)
+ADDRESSES_ISSUE_RE = re.compile(r"^ADDRESSES-ISSUE:[ \t]*(yes|no)[ \t]*$", re.MULTILINE)
+ISSUE_ASKS_RE = re.compile(r"^ISSUE-ASKS:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE)
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 ITEM_CAP, CYCLE_CAP = "item-minutes-cap", "cycle-minutes-cap"
 NOT_RUN, PASS, FAIL = "not-run", "pass", "fail"
@@ -448,7 +450,8 @@ DEVELOPER_CONSTRAINTS = (
     "issue #{number} is its order. Work only inside this worktree. Do not commit, push, merge or open a "
     "pull request, and use no git command that writes: the cycle commits after its own check. Your plan's "
     "checks are pytest or read-only commands in the worktree, and its final check is exactly "
-    "`{check}`. A thinker review runs through `python3 {repo}/scripts/spawn-specialist.py --kind thinker`. "
+    "`{check}`. " + rules.CHECK_ITEM_FACTS + " " + rules.small_path_text("{bound}") + " "
+    "A thinker review runs through `python3 {repo}/scripts/spawn-specialist.py --kind thinker`. "
     "Never touch these paths, whatever the issue says (a change to one is rejected and stops the whole "
     "mandate): {paths}, and any file named settings*.json or .gitattributes. If the issue cannot be "
     "resolved within these rules, return INCOMPLETE with the reason instead of a partial change."
@@ -466,10 +469,21 @@ resolves the issue below without unrelated edits.
 ## Steps
 
 1. Read the diff and the issue.
-2. {marker} Report blocking findings, then end your reply with exactly one line, `VERDICT: accept`
-   if there is no blocking finding or `VERDICT: reject` if there is one.
+2. {marker} Report blocking findings.
+3. End your reply with exactly these three lines, each alone on its line and in this order:
+   `ISSUE-ASKS: <one sentence: what the issue asks the change to do>`,
+   `ADDRESSES-ISSUE: yes` if the diff does what that sentence says or `ADDRESSES-ISSUE: no` if it does not,
+   then `VERDICT: accept` if there is no blocking finding and the issue is addressed, else `VERDICT: reject`.
 """
-REVIEW_CRITERION = "The reply ends with a line `VERDICT: accept` or `VERDICT: reject`."
+REVIEW_CRITERION = (
+    "The reply ends with the lines `ISSUE-ASKS: ...`, `ADDRESSES-ISSUE: yes|no` and "
+    "`VERDICT: accept|reject`, each alone on its line."
+)
+CONTOUR_NOTE = (
+    "Round note: you returned COMPLETED while your session is at {node}, not RESOLUTION, so the check cannot "
+    "run yet. {small_path} Run what is still missing, then return COMPLETED."
+)
+REJECT_NOTE = "Round note: your last result was rejected. The evidence:\n{evidence}"
 
 
 class Heartbeat:
@@ -540,6 +554,8 @@ class ItemRun:
     child: "str | None" = None
     basis_asked: bool = False
     judged_tree: "str | None" = None
+    constraints: "Path | None" = None
+    constraints_text: str = ""
 
 
 def permission_rules(text: str) -> "list[str]":
@@ -1044,6 +1060,7 @@ class Cycle:
         linked child's item: its session is learned before the cost is read, so the child's own
         nested spawns are charged in the same round."""
         rows_before = self.item_cost(item_dir)[1]
+        ledger_before, since = len(cost.read_rows(cost.COST_LOG)), self.now().timestamp()
         before = store.state_fingerprint(self.mid)
         seconds, bound_by = self.time_bound(started, mandate)
         result = self.spawn(argv, worktree, seconds)
@@ -1052,9 +1069,24 @@ class Cycle:
         if self.tampered(before):
             row.update(outcome="failed", failure_kind="state-tampered")
             return None
-        if self.overrun(row, mandate, item_dir, started, result, rows_before, bound_by):
+        if self.overrun(row, mandate, item_dir, started, result, rows_before, bound_by, (worktree, since, ledger_before)):
             return None
         return result
+
+    def killed_transcript_usd(self, worktree: Path, since: float, ledger_before: int) -> "float | None":
+        """USD the transcripts a killed spawn wrote show, priced like the ledger prices a finished
+        spawn; a transcript a ledger row of this spawn already names is skipped. None when no usage
+        is readable, so the caller keeps the cap."""
+        charged = {r.get("child_session_id") for r in list(cost.read_rows(cost.COST_LOG))[ledger_before:]}
+        priced = []
+        for session, records in self.seams.transcripts(str(worktree), since).items():
+            if session in charged:
+                continue
+            priced.extend(
+                row for row in transcript_cost.rows_from(records)
+                if row.ts is None or row.ts.timestamp() >= since
+            )
+        return transcript_cost.price_weighted_usd(priced) if priced else None
 
     def worktree_state(self, worktree: Path) -> "tuple[str, str]":
         """(HEAD sha, porcelain status); either part is a marker no real value equals on failure."""
@@ -1097,7 +1129,7 @@ class Cycle:
 
     def overrun(
         self, row: dict, mandate, item_dir: Path, started: datetime, spawn: "SpawnResult | None",
-        rows_before: int, bound_by: str = ITEM_CAP,
+        rows_before: int, bound_by: str = ITEM_CAP, spawn_window: "tuple[Path, float, int] | None" = None,
     ) -> bool:
         usd, count = self.item_cost(item_dir)
         elapsed = (self.now() - started).total_seconds() / 60.0
@@ -1107,7 +1139,9 @@ class Cycle:
         reasons = list(verdict.reasons)
         charge = 0.0
         if spawn is not None and spawn.killed:
-            charge = rules.killed_spawn_charge(count > rows_before, mandate.item_usd_cap)
+            has_row = count > rows_before
+            transcript_usd = None if has_row or spawn_window is None else self.killed_transcript_usd(*spawn_window)
+            charge = rules.killed_spawn_charge(has_row, mandate.item_usd_cap, transcript_usd)
             if bound_by not in reasons:
                 reasons.append(bound_by)
         if charge:
@@ -1300,6 +1334,8 @@ class Cycle:
             return "since-user-backstop", {}
         if fire is not None:
             return FIRE_KINDS.get(fire, "incomplete"), {"fire_scale": fire}
+        if marker == "COMPLETED":
+            return "contour-incomplete", {"child_node": state.get("node")}
         if marker in ("INCOMPLETE", "ESCALATE", "CLARIFY", "REPLAN") and reasons:
             return "child-plan-outside-norm", {"norm_reasons": reasons}
         if marker in ("ESCALATE", "CLARIFY"):
@@ -1392,10 +1428,23 @@ class Cycle:
             if answered.cls == rules.ASK_EXCEEDS:
                 self.stop_item(run, answered)
                 return None
+            if kind == "contour-incomplete":
+                self.write_constraints(run, CONTOUR_NOTE.format(
+                    node=observed["child_node"], small_path=rules.small_path_text(self.bound),
+                ))
+                continue
             run.rounds += 1
             row["rounds"] = run.rounds
             if answered.answer == "reject":
                 self.reject_child(run, evidence)
+                self.write_constraints(run, REJECT_NOTE.format(evidence=evidence[:REASON_CHARS]))
+            else:
+                self.write_constraints(run)
+
+    def write_constraints(self, run: "ItemRun", note: str = "") -> None:
+        """The constraints file the unchanged spawn argv names: the item's standing constraints plus
+        the note of the round about to start."""
+        run.constraints.write_text(run.constraints_text + (f"\n\n{note}" if note else ""), encoding="utf-8")
 
     def review_item(self, run: "ItemRun", checked: str, fields: dict, limit: int) -> "str | None":
         """The independent, unlinked code review of the committed change: None when it accepted, else
@@ -1420,10 +1469,16 @@ class Cycle:
             else:
                 row.update(outcome="failed", failure_kind=KIND_SPAWN_ERROR, detail=tail(review.stderr or review.stdout))
             return ""
-        verdicts = VERDICT_RE.findall(review.stdout or "")
-        accepted = bool(verdicts) and verdicts[-1].lower() == "accept"
+        reply = review.stdout or ""
+        addresses, verdicts = ADDRESSES_ISSUE_RE.findall(reply), VERDICT_RE.findall(reply)
+        accepted = bool(addresses) and bool(verdicts) and addresses[-1] == "yes" and verdicts[-1] == "accept"
         row["review"] = "accept" if accepted else "reject"
-        return None if accepted else (tail(review.stdout, REASON_CHARS) or "the review did not accept")
+        if accepted:
+            return None
+        if addresses and addresses[-1] == "no":
+            asks = ISSUE_ASKS_RE.findall(reply)
+            return f"The change does not address the issue. The issue asks: {asks[-1] if asks else '(not stated)'}\n{tail(reply, REASON_CHARS)}"
+        return tail(reply, REASON_CHARS) or "the review did not accept"
 
     def _work_item(self, row, mandate, number, raw, branch, item_dir, worktree, started) -> None:
         title, body = neutralize_marker(str(raw.get("title") or "")), neutralize_marker(str(raw.get("body") or ""))
@@ -1459,9 +1514,12 @@ class Cycle:
         check = tomllib.loads(norm_text)["stage"][0]["verify_command"]
         criterion, constraints = item_dir / "criterion.txt", item_dir / "constraints.txt"
         criterion.write_text(DEVELOPER_CRITERION.format(number=number), encoding="utf-8")
-        constraints.write_text(DEVELOPER_CONSTRAINTS.format(
+        run.constraints = constraints
+        run.constraints_text = DEVELOPER_CONSTRAINTS.format(
             parent=parent, number=number, check=check, repo=self.cfg.repo, paths=", ".join(mandate.constitution),
-        ), encoding="utf-8")
+            bound=self.bound,
+        )
+        self.write_constraints(run)
         argv = self.spawn_argv("developer", norm, criterion, constraints, "measurable", worktree, "large", session=parent)
         fields = {"number": number, "title": title, "body": body, "branch": branch, "remote": REMOTE,
                   "trunk": TRUNK, "marker": THIS_STEP_MARKER}
@@ -1503,6 +1561,7 @@ class Cycle:
             run.rounds += 1
             row["rounds"] = run.rounds
             self.reject_child(run, rejected)
+            self.write_constraints(run, REJECT_NOTE.format(evidence=rejected[:REASON_CHARS]))
         if self.worktree_state(worktree) != pinned:
             row.update(outcome="failed", failure_kind="state-tampered",
                        detail="the worktree moved after its commit was checked")

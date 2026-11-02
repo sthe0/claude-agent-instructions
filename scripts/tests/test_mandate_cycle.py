@@ -30,7 +30,7 @@ from agentctl import cost, inline_class, inline_git, mandate as rules, mandate_s
 from agentctl.config import Thresholds, parse_config_md
 from agentctl.dispatch import RunResult
 from agentctl.store import FileStateStore
-from lib import config_root
+from lib import config_root, transcript_cost
 from mandate_cycle import driver, notifiers
 from session_scope import registry as scopes
 from slow_selection import RUN_SLOW_OPTION
@@ -40,6 +40,13 @@ OWNER = "owner"
 BASE_SHA = "c" * 40
 TREE_SHA = "d" * 40
 DRIVER_SOURCE = Path(driver.__file__).read_text(encoding="utf-8")
+
+
+def review_reply(addresses="yes", verdict="accept", asks="The issue asks for the thing.", findings="No blocking findings."):
+    return f"COMPLETED:\n{findings}\nISSUE-ASKS: {asks}\nADDRESSES-ISSUE: {addresses}\nVERDICT: {verdict}\n"
+
+
+ACCEPT_REPLY = review_reply()
 
 
 class Clock:
@@ -236,7 +243,7 @@ class Spawner:
         self.calls: "list[dict]" = []
         self.live_scopes: "list[list[str]]" = []
         self.developer = lambda argv, cwd: driver.SpawnResult(0, "COMPLETED:\nFixed the issue.\n")
-        self.reviewer = lambda argv, cwd: driver.SpawnResult(0, "COMPLETED:\nNo blocking findings.\nVERDICT: accept\n")
+        self.reviewer = lambda argv, cwd: driver.SpawnResult(0, ACCEPT_REPLY)
 
     def __call__(self, argv, cwd, seconds):
         kind = argv[argv.index("--kind") + 1]
@@ -599,7 +606,7 @@ def test_a_commit_made_during_the_review_is_never_pushed(env):
 
     def reviewer(argv, cwd):
         env.world.head = MOVED
-        return driver.SpawnResult(0, "COMPLETED:\nNo blocking findings.\nVERDICT: accept\n")
+        return driver.SpawnResult(0, ACCEPT_REPLY)
 
     env.spawner.reviewer = reviewer
     env.cycle()
@@ -615,7 +622,7 @@ def test_a_file_changed_during_the_review_is_never_pushed(env):
 
     def reviewer(argv, cwd):
         env.world.status = " M scripts/foo.py"
-        return driver.SpawnResult(0, "COMPLETED:\nNo blocking findings.\nVERDICT: accept\n")
+        return driver.SpawnResult(0, ACCEPT_REPLY)
 
     env.spawner.reviewer = reviewer
     env.cycle()
@@ -2274,7 +2281,7 @@ def test_a_failed_check_item_is_rejected_by_the_mandate_and_the_child_resumed(en
 def test_a_review_reject_is_rejected_by_the_mandate_and_reviewed_again(env):
     env.grant()
     eligible(env, 1)
-    replies = ["COMPLETED:\nNot good.\nVERDICT: reject\n", "COMPLETED:\nFine now.\nVERDICT: accept\n"]
+    replies = [review_reply(verdict="reject", findings="Not good."), review_reply(findings="Fine now.")]
     env.spawner.reviewer = lambda argv, cwd: driver.SpawnResult(0, replies.pop(0))
     env.cycle()
     row = only_row(outcome="pr-opened", rounds=1, review="accept")
@@ -2664,7 +2671,7 @@ def _loop(env):
 
 def _incomplete(env):
     env.child["node"] = "EXECUTING"
-    return DONE
+    return "INCOMPLETE:\nStopped halfway.\n"
 
 
 @pytest.mark.parametrize("setup, outcome, reason", [
@@ -3032,3 +3039,292 @@ def test_check_item_is_red_on_an_unchanged_real_worktree(env):
     rc, out = run_check_item(env, worktree, ["check-item", "--item-dir", str(item_dir)])
     assert rc == 1 and out.startswith("check-item: red") and "no change against the base" in out, out
     assert git(worktree, "rev-parse", "HEAD") == base and git(worktree, "diff", "--cached") == ""
+
+
+def child_stage_brief(env, **issue):
+    """The stage brief spawn-specialist hands a linked child for the item norm, rendered as it is."""
+    import plan_site_fixture as fx
+    skills = env.tmp / "agent-home" / "skills"
+    skills.mkdir(parents=True, exist_ok=True)
+    (skills / "developer").symlink_to(fx.SCRIPTS.parent / "skills" / "specializations" / "developer")
+    item_dir = env.tmp / "item"
+    item_dir.mkdir()
+    norm = item_dir / "plan.toml"
+    fields = dict(issue=7, title="Fix the thing", body="Details from the owner.")
+    fields.update(issue)
+    norm.write_text(rules.item_norm_toml(
+        mandate=env.grant(), cycle_id="c1", base_sha=BASE_SHA, bound=BOUND, worktree=str(env.tmp / "wt"),
+        repo=str(env.tmp / "repo"), item_dir=str(item_dir), **fields,
+    ), encoding="utf-8")
+    spawner = fx.load_script("spawn-specialist.py", "spawn_specialist_mandate_brief")
+    return spawner.assembled_prompt(fx.specialist_argv(norm, "--stage-index", "1", "--view-root", str(env.tmp / "views")))
+
+
+def test_the_child_stage_brief_carries_the_issue_title_and_body(env):
+    brief = child_stage_brief(env, title="Fix the thing", body="Details from the owner.")
+    assert "Issue #7: Fix the thing" in brief
+    assert "Details from the owner." in brief
+
+
+def test_the_child_stage_brief_says_run_check_item_once_at_the_end(env):
+    brief = " ".join(child_stage_brief(env).split())
+    assert "check-item takes about an hour" in brief
+    assert "once, at the end, with exactly the command line of this stage" in brief
+    assert "until it is green" not in brief
+
+
+def constraints_text():
+    return driver.DEVELOPER_CONSTRAINTS.format(
+        parent="p-1", number=7, check="check-item --item-dir /x", repo="/repo", paths="scripts/a.py", bound=BOUND,
+    )
+
+
+def test_the_developer_constraints_say_run_check_item_once_without_extra_flags():
+    text = constraints_text()
+    assert "check-item takes about an hour" in text and "no extra flags" in text
+    assert "until it is green" not in text and "--run-slow" not in text
+
+
+def test_the_developer_constraints_say_completed_only_at_resolution():
+    text = constraints_text()
+    assert f"A change within {BOUND} lines needs no plan" in text
+    for verb in ("classify --changed-lines", "next-stage", "record-result --status passed", "verify-final"):
+        assert verb in text, verb
+    assert "return COMPLETED only once your session is at RESOLUTION" in text
+
+
+def assistant_record(message_id, usd_tokens, timestamp=None):
+    record = {"type": "assistant", "message": {"id": message_id, "model": "claude-opus-5-5", "usage": {"input_tokens": usd_tokens}}}
+    if timestamp:
+        record["timestamp"] = timestamp
+    return record
+
+
+def transcript_usd(*records):
+    return transcript_cost.price_weighted_usd(transcript_cost.rows_from(records))
+
+
+def test_a_killed_spawn_is_charged_its_transcript_usage(env):
+    env.grant(item_usd_cap=4.0)
+    eligible(env, 1)
+    written = [assistant_record("m1", 200_000), assistant_record("m2", 100_000)]
+    stale = assistant_record("m0", 5_000_000, "2020-01-01T00:00:00Z")
+    env.transcripts = lambda workdir, since: {"killed-session": [stale, *written]}
+    env.spawner.developer = lambda argv, cwd: driver.SpawnResult(-9, "", "", killed=True)
+    env.cycle()
+    expected = transcript_usd(*written)
+    assert 0 < expected < 4.0
+    assert [c["detail"]["cost_usd"] for c in events("overrun-charge")] == [pytest.approx(expected)]
+
+
+def test_a_killed_spawn_without_a_readable_transcript_is_charged_the_item_cap(env):
+    env.grant(item_usd_cap=4.0)
+    eligible(env, 1)
+    env.transcripts = lambda workdir, since: {"killed-session": [{"type": "user", "message": {"content": "hi"}}]}
+    env.spawner.developer = lambda argv, cwd: driver.SpawnResult(-9, "", "", killed=True)
+    env.cycle()
+    assert [c["detail"]["cost_usd"] for c in events("overrun-charge")] == [4.0]
+
+
+def test_a_killed_spawn_is_not_charged_a_transcript_already_charged_by_a_ledger_row(env):
+    env.grant(item_usd_cap=4.0)
+    eligible(env, 1)
+    charged, fresh = [assistant_record("c1", 900_000)], [assistant_record("f1", 100_000)]
+    env.transcripts = lambda workdir, since: {"charged-session": charged, "fresh-session": fresh}
+
+    def developer(argv, cwd):
+        row = {"ts": rules.format_ts(env.clock()), "cost_usd": 0.5, "plan_path": "/elsewhere/plan.toml", "child_session_id": "charged-session"}
+        with (env.tmp / "costs.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+        return driver.SpawnResult(-9, "", "", killed=True)
+
+    env.spawner.developer = developer
+    env.cycle()
+    assert [c["detail"]["cost_usd"] for c in events("overrun-charge")] == [pytest.approx(transcript_usd(*fresh))]
+
+
+def reviewer_says(env, *texts):
+    queue = list(texts)
+
+    def reviewer(argv, cwd):
+        return driver.SpawnResult(0, queue.pop(0) if len(queue) > 1 else queue[0])
+
+    env.spawner.reviewer = reviewer
+
+
+def test_the_review_brief_requires_issue_asks_and_addresses_issue_lines(env):
+    env.grant()
+    eligible(env, 1)
+    env.cycle()
+    brief = Path(env.plan_of(env.spawner.of("code-reviewer")[0]["argv"])).read_text(encoding="utf-8")
+    assert brief.index("ISSUE-ASKS:") < brief.index("ADDRESSES-ISSUE: yes") < brief.index("VERDICT: accept")
+    assert "each alone on its line" in " ".join(brief.split())
+
+
+@pytest.mark.parametrize("reply", [
+    "COMPLETED:\nLooks fine.\nVERDICT: accept\n",
+    "COMPLETED:\nLooks fine.\nADDRESSES-ISSUE: yes\n",
+    "COMPLETED:\nLooks fine.\n",
+])
+def test_a_review_without_an_addresses_issue_line_is_a_reject(env, reply):
+    env.grant()
+    eligible(env, 1)
+    reviewer_says(env, reply)
+    env.cycle()
+    row = item_rows()[0]
+    assert row["review"] == "reject" and row["outcome"] != "pr-opened"
+    assert env.world.calls_with("git", "push") == []
+
+
+def test_a_review_saying_the_diff_does_not_address_the_issue_is_a_settled_reject_with_evidence(env):
+    env.grant()
+    eligible(env, 1)
+    reviewer_says(env, review_reply(addresses="no", verdict="accept", asks="Add the missing flag."), ACCEPT_REPLY)
+    env.cycle()
+    row = only_row(outcome="pr-opened", rounds=1, review="accept")
+    assert row["asks"] == [{"kind": "review-reject", "class": "settled", "answer": "reject"}]
+    [rejection] = engine_flags(env, "reject")
+    assert "Add the missing flag." in flag(rejection, "--reason")
+
+
+@pytest.mark.parametrize("addresses, verdict, opens", [
+    ("yes", "accept", True), ("yes", "reject", False), ("no", "accept", False), ("no", "reject", False),
+])
+def test_only_addresses_issue_yes_and_verdict_accept_open_the_pr(env, addresses, verdict, opens):
+    env.grant()
+    eligible(env, 1)
+    reviewer_says(env, review_reply(addresses=addresses, verdict=verdict))
+    env.cycle()
+    assert (item_rows()[0]["outcome"] == "pr-opened") is opens
+    assert bool(env.world.calls_with("gh", "pr", "create")) is opens
+
+
+def test_a_quoted_addresses_issue_yes_followed_by_the_reviewers_own_no_is_a_reject(env):
+    env.grant()
+    eligible(env, 1)
+    reviewer_says(env, "COMPLETED:\nThe brief says:\nADDRESSES-ISSUE: yes\nISSUE-ASKS: x\nADDRESSES-ISSUE: no\nVERDICT: accept\n")
+    env.cycle()
+    assert item_rows()[0]["review"] == "reject" and env.world.calls_with("gh", "pr", "create") == []
+
+
+def test_a_quoted_verdict_accept_followed_by_the_reviewers_own_reject_is_a_reject(env):
+    env.grant()
+    eligible(env, 1)
+    reviewer_says(env, "COMPLETED:\nVERDICT: accept\nISSUE-ASKS: x\nADDRESSES-ISSUE: yes\nVERDICT: reject\n")
+    env.cycle()
+    assert item_rows()[0]["review"] == "reject" and env.world.calls_with("gh", "pr", "create") == []
+
+
+def test_an_addresses_issue_marker_inside_a_line_is_not_read(env):
+    env.grant()
+    eligible(env, 1)
+    reviewer_says(env, "COMPLETED:\nI would write ADDRESSES-ISSUE: yes and VERDICT: accept if it held.\n")
+    env.cycle()
+    assert item_rows()[0]["review"] == "reject" and env.world.calls_with("gh", "pr", "create") == []
+
+
+def constraints_seen(env):
+    seen = []
+    original = env.spawner.developer
+
+    def developer(argv, cwd):
+        seen.append(Path(argv[argv.index("--constraints") + 1].lstrip("@")).read_text(encoding="utf-8"))
+        return original(argv, cwd)
+
+    env.spawner.developer = developer
+    return seen
+
+
+def test_a_completed_child_below_resolution_is_resumed_with_a_contour_reminder(env):
+    env.grant()
+    eligible(env, 1)
+    env.child["node"] = "EXECUTING"
+    seen = constraints_seen(env)
+    original = env.spawner.developer
+
+    def developer(argv, cwd):
+        result = original(argv, cwd)
+        env.child["node"] = "RESOLUTION" if len(seen) > 1 else "EXECUTING"
+        return result
+
+    env.spawner.developer = developer
+    env.cycle()
+    row = only_row(outcome="pr-opened")
+    assert row["asks"] == [{"kind": "contour-incomplete", "class": "settled", "answer": "resume"}]
+    assert "Round note" not in seen[0]
+    assert "Round note" in seen[1] and "EXECUTING" in seen[1] and "record-result --status passed" in seen[1]
+    assert seen[1].startswith(seen[0])
+
+
+def advancing_developer(env, spend=0.0, minutes=30):
+    def developer(argv, cwd):
+        env.clock.advance(minutes=minutes)
+        if spend:
+            env.add_cost(spend, env.plan_of(argv))
+        return driver.SpawnResult(0, DONE)
+
+    env.spawner.developer = developer
+
+
+def test_a_contour_incomplete_resume_consumes_no_round_and_the_item_caps_stop_it(env):
+    env.grant()
+    eligible(env, 1)
+    env.child["node"] = "EXECUTING"
+    advancing_developer(env)
+    env.cycle()
+    row = item_rows()[0]
+    limit = Thresholds().effort_replan_absolute()
+    assert row["outcome"] == "overrun" and "item-minutes-cap" in row["overrun_reasons"]
+    assert row.get("rounds", 0) == 0 and len(env.spawner.of("developer")) > limit
+
+
+def test_a_contour_incomplete_resume_is_stopped_by_the_item_spend_cap(env):
+    env.grant(item_usd_cap=8.0)
+    eligible(env, 1)
+    env.child["node"] = "EXECUTING"
+    advancing_developer(env, spend=1.0, minutes=1)
+    env.cycle()
+    row = item_rows()[0]
+    assert row["outcome"] == "overrun" and "item-usd-cap" in row["overrun_reasons"]
+    assert row.get("rounds", 0) == 0 and len(env.spawner.of("developer")) > Thresholds().effort_replan_absolute()
+
+
+def test_a_reject_after_a_contour_resume_still_consumes_a_round(env):
+    env.grant()
+    eligible(env, 1)
+    seen = constraints_seen(env)
+    nodes = iter(["EXECUTING", "RESOLUTION", "RESOLUTION"])
+    original = env.spawner.developer
+
+    def developer(argv, cwd):
+        env.child["node"] = next(nodes)
+        return original(argv, cwd)
+
+    env.spawner.developer = developer
+    verdicts = iter([driver.ItemVerdict(failures=[("tests", "t2 failed")]), driver.ItemVerdict()])
+    env.check = lambda inputs: next(verdicts)
+    env.cycle()
+    row = only_row(outcome="pr-opened", rounds=1)
+    assert [a["kind"] for a in row["asks"]] == ["contour-incomplete", "check-failed"]
+    assert len(seen) == 3
+
+
+def test_the_round_constraints_carry_the_contour_reminder_and_the_reject_evidence(env):
+    env.grant()
+    eligible(env, 1)
+    seen = constraints_seen(env)
+    nodes = iter(["EXECUTING", "RESOLUTION", "RESOLUTION"])
+    original = env.spawner.developer
+
+    def developer(argv, cwd):
+        env.child["node"] = next(nodes)
+        return original(argv, cwd)
+
+    env.spawner.developer = developer
+    verdicts = iter([driver.ItemVerdict(failures=[("tests", "t2 failed")]), driver.ItemVerdict()])
+    env.check = lambda inputs: next(verdicts)
+    env.cycle()
+    base = seen[0]
+    assert all(text.startswith(base) for text in seen)
+    assert "not RESOLUTION" in seen[1] and "t2 failed" not in seen[1]
+    assert "tests: t2 failed" in seen[2] and "not RESOLUTION" not in seen[2]
