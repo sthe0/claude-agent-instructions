@@ -31,6 +31,7 @@ turn context (mirrors hook-resolution-reminder.py).
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -200,6 +201,19 @@ def _task_slug(prompt: str) -> str:
     return ("-".join(words)[:48]) or "session-task"
 
 
+def _is_spawned_session() -> bool:
+    try:
+        return int(os.environ.get("AGENT_RECURSION_DEPTH", "")) > 0
+    except ValueError:
+        return False
+
+
+def _task_id(session_id: str, prompt: str) -> str:
+    """A spawned specialist gets a task id of its own: every spawn from one prompt shares its slug."""
+    slug = _task_slug(prompt)
+    return f"{slug}-{session_id[:8]}" if _is_spawned_session() and session_id else slug
+
+
 def _autostart(session_id: str, prompt: str) -> bool:
     """Best-effort: create a session if none exists. Returns True on apparent success.
 
@@ -210,7 +224,7 @@ def _autostart(session_id: str, prompt: str) -> bool:
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "agentctl", "start",
-             "--session", session_id, "--task", _task_slug(prompt), "--if-absent"],
+             "--session", session_id, "--task", _task_id(session_id, prompt), "--if-absent"],
             cwd=str(SCRIPTS_DIR), capture_output=True, timeout=4, check=False,
         )
         return proc.returncode == 0
@@ -274,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
         if _autostart(session_id, prompt):
             _stamp_prompt_ts(session_id, time.time())
             print(
-                f"[engine-start] Auto-started agentctl session (task={_task_slug(prompt)}). "
+                f"[engine-start] Auto-started agentctl session (task={_task_id(session_id, prompt)}). "
                 f"Classify before any production edit: `agentctl classify --session {session_id} "
                 f"...` — the gate blocks edits until you do."
             )

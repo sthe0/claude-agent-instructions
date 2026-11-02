@@ -101,3 +101,50 @@ def test_main_empty_prompt_silent(tmp_path, monkeypatch, capsys):
     rc = mod.main()
     assert rc == 0
     assert capsys.readouterr().out.strip() == ""
+
+
+def _autostart_task(mod, monkeypatch, session_id: str, prompt: str) -> str:
+    seen: list[list[str]] = []
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda argv, **kw: seen.append(argv) or _Done())
+    assert mod._autostart(session_id, prompt)
+    argv = seen[0]
+    return argv[argv.index("--task") + 1]
+
+
+def test_a_spawned_specialist_session_gets_a_task_id_of_its_own(monkeypatch):
+    mod = _load_module()
+    monkeypatch.setenv("AGENT_RECURSION_DEPTH", "1")
+    task = _autostart_task(
+        mod, monkeypatch, "322a4d32-932d-4fe3-a363-3d762229d382", "Agent recursion depth 1 working plan"
+    )
+    assert task == "agent-recursion-depth-1-working-plan-322a4d32"
+
+
+def test_a_root_session_keeps_the_prompt_slug_task_id(monkeypatch):
+    mod = _load_module()
+    for depth in (None, "", "0", "x1"):
+        if depth is None:
+            monkeypatch.delenv("AGENT_RECURSION_DEPTH", raising=False)
+        else:
+            monkeypatch.setenv("AGENT_RECURSION_DEPTH", depth)
+        task = _autostart_task(mod, monkeypatch, "322a4d32-932d", "Agent recursion depth 1 working plan")
+        assert task == "agent-recursion-depth-1-working-plan", depth
+
+
+def test_two_spawned_sessions_with_one_prompt_do_not_share_an_accumulator(monkeypatch, tmp_path, capsys):
+    mod = _load_module()
+    _point_roots_at(monkeypatch, tmp_path)
+    monkeypatch.setenv("AGENT_RECURSION_DEPTH", "2")
+    first = _autostart_task(mod, monkeypatch, "aaaaaaaa-1111", "same prompt")
+    second = _autostart_task(mod, monkeypatch, "bbbbbbbb-2222", "same prompt")
+    assert first != second
+    monkeypatch.setattr(mod, "_autostart", lambda sid, prompt: True)
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(
+        json.dumps({"session_id": "cccccccc-3333", "prompt": "same prompt"})
+    ))
+    assert mod.main() == 0
+    assert "task=same-prompt-cccccccc" in capsys.readouterr().out
