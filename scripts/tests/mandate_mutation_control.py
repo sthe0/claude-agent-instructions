@@ -157,8 +157,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "user-authority-verbs": Mutant(
         WIDENING,
-        '"plugin-record", "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry",',
-        '"plugin-record",',
+        '"plugin-record", "mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume",\n    "mandate-retry",',
+        '"plugin-record",\n   ',
         _ids(T_CLI, "test_grant_extend_resume_and_retry_are_user_authority_verbs"),
     ),
     "cycle-minutes-cap": Mutant(
@@ -915,8 +915,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     "review-crash-fails-item": Mutant(
         DRIVER,
         '            else:\n                row.update(outcome="failed", failure_kind=KIND_SPAWN_ERROR, '
-        'detail=tail(review.stderr or review.stdout))\n            return ""\n        verdicts =',
-        '            else:\n                pass\n            return ""\n        verdicts =',
+        'detail=tail(review.stderr or review.stdout))\n            return ""\n        reply =',
+        '            else:\n                pass\n            return ""\n        reply =',
         _ids(
             T_CYCLE,
             "test_a_reviewer_that_crashed_fails_the_item_and_opens_the_breaker[exit-code]",

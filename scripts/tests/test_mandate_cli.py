@@ -377,7 +377,7 @@ def test_mandate_limits_is_a_user_authority_verb():
 
 
 def test_grant_extend_resume_and_retry_are_user_authority_verbs():
-    for verb in ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry"):
+    for verb in ("mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume", "mandate-retry"):
         assert verb in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS, verb
         call = ["python3", "scripts/agentctl-cli.py", verb, "--by", "alice"]
         assert widening_targets.agentctl_user_authority_call(call) == verb
