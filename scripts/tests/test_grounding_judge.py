@@ -442,6 +442,23 @@ def test_table_reads_table_grounds(tmp_path):
         {"ref": "regularity:reg-a", "statement": "A pure call repeats its result."}]
 
 
+def test_table_ground_resolves_corpus(tmp_path):
+    corpus = _corpus(tmp_path)
+    entry = {"tier": "global", "path": "principles/prin-a.md", "grounded_in": ["regularity:reg-a"]}
+    bare = _gj().table_grounds(entry, {})
+    assert bare == [{"ref": "regularity:reg-a"}]
+    grounds = _gj().table_grounds(entry, {}, corpus=corpus)
+    assert grounds[0]["statement"] == "A pure call repeats its result."
+
+
+def test_table_and_leaf_inputs_agree(tmp_path):
+    corpus = _corpus(tmp_path)
+    leaf = next(l for l in corpus.of("principle") if l.slug == "prin-a")
+    entry = {"tier": "global", "path": "principles/prin-a.md", "grounded_in": ["regularity:reg-a"],
+             "principle": "Cache the results of pure calls."}
+    assert _gj().table_link_inputs(entry, {}, corpus=corpus) == _gj().leaf_link_inputs(leaf, corpus)
+
+
 def test_table_reads_in_place_ground(tmp_path):
     corpus = _corpus(tmp_path)
     runner = Runner()

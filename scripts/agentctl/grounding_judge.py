@@ -181,7 +181,7 @@ def _stem(path) -> str:
     return Path(str(path)).stem
 
 
-def _table_ground(ref_text: str, data) -> dict:
+def _table_ground(ref_text: str, data, corpus=None) -> dict:
     refs, _bad = grounding.parse_ground_refs(ref_text)
     if not refs:
         return {"ref": ref_text}
@@ -197,13 +197,14 @@ def _table_ground(ref_text: str, data) -> dict:
                 return {"ref": ref.text(), **_pick(leaf, ("statement", "given", "given_source"))}
             if ref.kind == "ontology" and leaf.get("class") == "O":
                 return {"ref": ref.text(), **_pick(leaf, ("distinction", "adequacy"))}
-    return {"ref": ref.text()}
+    found = grounding.leaf_for(ref, corpus) if corpus is not None else None
+    return {"ref": ref.text(), **(_ground_of(found) if found is not None else {})}
 
 
-def table_grounds(entry, data) -> list[dict]:
+def table_grounds(entry, data, corpus=None) -> list[dict]:
     """The grounds the table names for `entry`, read from the table -- an in-place regularity as the
     table will write it, not as the corpus still holds it."""
-    return [_table_ground(ref, data) for ref in _norm_refs(_entry_refs(entry))]
+    return [_table_ground(ref, data, corpus) for ref in _norm_refs(_entry_refs(entry))]
 
 
 def _entry_refs(entry) -> list[str]:
@@ -219,12 +220,12 @@ def table_prescription(entry) -> dict:
             "question": entry_question(None, entry)}
 
 
-def table_link_inputs(entry, data) -> str:
-    return link_inputs(table_prescription(entry), table_grounds(entry, data))
+def table_link_inputs(entry, data, corpus=None) -> str:
+    return link_inputs(table_prescription(entry), table_grounds(entry, data, corpus))
 
 
-def table_link_digest(entry, data) -> str:
-    return hashlib.sha256(table_link_inputs(entry, data).encode("utf-8")).hexdigest()
+def table_link_digest(entry, data, corpus=None) -> str:
+    return hashlib.sha256(table_link_inputs(entry, data, corpus).encode("utf-8")).hexdigest()
 
 
 def table_candidates(data) -> list[dict]:
@@ -557,8 +558,8 @@ def judge_table(table_path, *, runner, cache=None, corpus=None, today=None, chec
     for tag, entry in table_entries(data):
         prescription = dict(table_prescription(entry), last_verified=_last_verified(entry, corpus))
         outcome = judge_grounding_link(
-            prescription, table_grounds(entry, data), candidates, runner=runner, cache=cache,
-            digest=table_link_digest(entry, data), today=today, checked_paths=checked_paths,
+            prescription, table_grounds(entry, data, corpus), candidates, runner=runner, cache=cache,
+            digest=table_link_digest(entry, data, corpus), today=today, checked_paths=checked_paths,
             context=_context_of(entry, corpus), question=entry_question(tag, entry),
             override=table_override(entry))
         links[tag] = table_record(outcome)
