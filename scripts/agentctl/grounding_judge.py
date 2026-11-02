@@ -211,7 +211,8 @@ def _entry_refs(entry) -> list[str]:
     """The refs an entry is grounded in; a class M entry also rests on the regularity it names."""
     refs = list(entry.get("grounded_in") or [])
     if entry.get("class") == "M" and entry.get("regularity"):
-        refs.append(f"regularity:{entry['regularity']}")
+        prefix = "project:" if entry.get("tier") == "project" else ""
+        refs.append(f"{prefix}regularity:{entry['regularity']}")
     return refs
 
 
