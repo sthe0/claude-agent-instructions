@@ -90,7 +90,7 @@ class MandateLimits:
     weekly_usd: float = 120.0
     max_items: int = 3
     item_usd_cap: float = 15.0
-    item_minutes_cap: float = 125.0
+    item_minutes_cap: float = 200.0
     cycle_minutes_cap: float = 375.0
     veto_window_hours: float = 24.0
 
@@ -215,6 +215,16 @@ def extended(mandate: Mandate, now: datetime, days: float) -> Mandate:
         raise MandateError(f"extension must be positive, got {days!r}")
     base = max(now, parse_ts(mandate.expires_at, strict=True))
     return replace(mandate, expires_at=format_ts(base + timedelta(days=days)))
+
+
+def with_limits(mandate: Mandate, changes: Mapping) -> Mandate:
+    """The mandate with only the named limits replaced; each new value must pass MandateLimits."""
+    unknown = sorted(set(changes) - set(LIMIT_FIELDS))
+    if unknown:
+        raise MandateError(f"not a limit: {', '.join(unknown)}")
+    changed = replace(mandate, **dict(changes))
+    changed.validate()
+    return changed
 
 
 def stopped(mandate: Mandate) -> Mandate:
@@ -683,10 +693,14 @@ def check_overrun(
     return OverrunVerdict(bool(reasons), tuple(reasons))
 
 
-def killed_spawn_charge(has_cost_row: bool, usd_cap: float) -> float:
+def killed_spawn_charge(has_cost_row: bool, usd_cap: float, transcript_usd: "float | None" = None) -> float:
     """What a killed spawn costs the spend windows: its cost row if it left one (counted
-    already), else the whole per-item cap."""
-    return 0.0 if has_cost_row else float(usd_cap)
+    already), else the usage its transcript shows, else the whole per-item cap."""
+    if has_cost_row:
+        return 0.0
+    if transcript_usd is not None:
+        return max(0.0, float(transcript_usd))
+    return float(usd_cap)
 
 
 def opens_breaker(outcome: str, failure_kind: str = "") -> bool:
@@ -768,7 +782,7 @@ ASK_KINDS = (
     "review-reject", "permission-covered", "permission-outside", "effort-fire-spend",
     "effort-fire-wall-clock", "effort-fire-replans", "since-user-backstop", "replan-ceiling",
     "review-backstop", "question-for-user", "norm-mismatch", "incomplete", "user-only-verb",
-    "loop-detected", "landing", "resolution", "acceptance", "account-limit",
+    "loop-detected", "landing", "resolution", "acceptance", "account-limit", "contour-incomplete",
 )
 
 
@@ -846,6 +860,11 @@ def classify_ask(kind, observed, mandate, *, rounds, rounds_limit) -> AskVerdict
         if denials >= 1:
             return exceeds("materialization-defect")
         return settled("resume") if under_limit else exceeds("rounds")
+    if kind == "contour-incomplete":
+        node = get("child_node", str)
+        if node is absent or node == "RESOLUTION":
+            return exceeds("observation:child_node")
+        return settled("resume")
     if kind == "permission-outside":
         return exceeds("permission-outside-mandate")
     if kind == "effort-fire-spend":
@@ -924,6 +943,22 @@ def mandate_approver(mandate_id: str) -> str:
     return f"{MANDATE_BASIS}:{mandate_id}"
 
 
+CHECK_ITEM_FACTS = (
+    "check-item takes about an hour: it runs the constitution check, org-neutral, the full suite against "
+    "the cycle baseline, the gate scripts and the size bound. While developing run targeted pytest only; "
+    "run check-item once, at the end, with exactly the command line the stage gives (no extra flags), and "
+    "once more after a red."
+)
+
+
+def small_path_text(bound) -> str:
+    return (
+        f"A change within {bound} lines needs no plan. Through the channel run `classify --changed-lines <n>`, "
+        "`next-stage`, edit, `record-result --status passed`, then `verify-final`; return COMPLETED only once "
+        "your session is at RESOLUTION."
+    )
+
+
 def item_norm_toml(*, mandate, issue, title, body, cycle_id, base_sha, bound, worktree, repo, item_dir) -> str:
     """The deterministic one-stage norm a cycle item runs under. The issue title and body are
     data: cut, then written as TOML basic strings, so no text of theirs can open a table."""
@@ -996,11 +1031,11 @@ def item_norm_toml(*, mandate, issue, title, body, cycle_id, base_sha, bound, wo
         'done_criterion = "(I1) The verify_command exits 0 and the negative_control exits 1."',
         field("material", f"(I1) The item worktree {worktree} at base {base_sha}: the files issue #{issue} concerns."),
         'material_refs = ["."]',
-        'knowledge = "(I1) The issue as the order states it; the repository\'s own instructions and tests; what check-item judges: constitution, org-neutral, the full suite against the cycle baseline, the gate scripts and the bound rule."',
+        field("knowledge", f"(I1) Issue #{issue}: {title}\n{body}\nThe repository's own instructions and tests. {CHECK_ITEM_FACTS}"),
         'knowledge_refs = ["."]',
         'means = "(I1) The repository\'s code, tests and tools inside the worktree; pytest; a thinker review through the granted spawn command."',
         field("method", f"(I1) Change only what the issue requires, only inside the worktree, and leave the change uncommitted: the cycle commits after its own check. A change over {bound} production lines is made under the child's own plan, approved on the parent norm, whose final check is this stage's verify_command."),
-        field("procedure", f"1. Read the issue and the code it names. 2. Classify the change; write a plan when it is over {bound} lines. 3. Edit and test inside the worktree. 4. Run the item check and fix until it is green. 5. Return COMPLETED."),
+        field("procedure", f"1. Read the issue and the code it names. 2. Classify the change; write a plan when it is over {bound} lines. {small_path_text(bound)} 3. Edit and test inside the worktree with targeted pytest. 4. Run the item check once, at the end, with exactly the command line of this stage; after a red, fix and run it once more. 5. Return COMPLETED."),
         field("preconditions", f"(I1) The cycle created the worktree at {base_sha} and stored the suite baseline of cycle {cycle_id}."),
         field("conditions", f"(I1) Work only inside {worktree}; no commit, no push, no git grant; the mandate's caps bound spend and time."),
         'invariants = "(I1) Files outside the worktree stay unchanged; the suite shows no regression against the cycle baseline; repo text stays English-only."',
