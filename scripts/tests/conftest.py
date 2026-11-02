@@ -553,12 +553,20 @@ def _no_reported_order_exemption_by_default(request, monkeypatch):
     unwired one records an exemption that a root session's essence must then report
     (`cli_plan._required_exemption_line`); the many tests that present an essence on a fixture
     rendering are not about that line, and would pass or fail with the machine's settings.
-    Arming itself is untouched, so the directive and the gate behave as before.
+    For the same reason the suite at large classifies as on a machine without the hook.
 
     The modules that own the exemption opt out and set the state they exercise."""
     if request.module.__name__ in _OWNS_ORDER_AGREEMENT_EXEMPTION:
         return
-    from agentctl import cli_plan
+    from agentctl import cli_plan, gates
+
+    # Arming itself must not follow the machine either: where the answer hook is wired (an
+    # installed machine, the suite gate's sandbox home) every substantive session the suite
+    # classifies would arm and be held at submit-plan. The modules that test arming wire the
+    # hook through hook_wiring.probe, which this replacement no longer consults, so they opt
+    # out above; test_ask_answer_record_hook owns the predicate itself.
+    if request.module.__name__ != "test_ask_answer_record_hook":
+        monkeypatch.setattr(gates, "answer_hook_registered", lambda: False)
 
     arm = cli_plan._arm_order_agreement
 
