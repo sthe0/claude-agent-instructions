@@ -1267,3 +1267,120 @@ def test_a_planless_replan_is_booked_as_an_operative_replan(store):
     assert effort.replan_count(state) == 1
     after = int(task_accumulator.get(sid).get("per_axis_totals", {}).get("replan_count", 0) or 0)
     assert after == before + 1
+
+
+def _seed_replan_ceiling(sid):
+    from agentctl import task_accumulator
+    from agentctl.config import Thresholds
+    thr = Thresholds().effort_replan_absolute()
+    task_accumulator.add(sid, "replan_count", thr, session_id=sid, now=None)
+    return thr
+
+
+def test_a_planless_replan_at_the_replan_ceiling_escalates_to_the_user(store):
+    from agentctl.directive import DIRECTIVE_ESCALATE_TO_USER
+    sid = "pl-ceiling"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    thr = _seed_replan_ceiling(sid)
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and d.action == "renegotiate"
+    assert d.marker == DIRECTIVE_ESCALATE_TO_USER
+    assert d.data["replan_count"] == thr
+    assert store.load(sid).node == Node.DIAGNOSING.value
+
+
+def test_an_agent_cannot_continue_a_planless_replan_past_the_ceiling(store):
+    sid = "pl-ceiling-agent"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    _seed_replan_ceiling(sid)
+    assert cli.cmd_replan(ns(session=sid, plan=None), store=store).action == "renegotiate"
+
+    d = cli.cmd_replan(ns(session=sid, plan=None, renegotiation_decision="continue",
+                          renegotiated_by="agent", renegotiation_note="keep going"), store=store)
+
+    assert d.ok is False and d.action == "renegotiate"
+    assert "renegotiation by the agent refused" in d.detail
+    assert "no user-approved version" in d.detail
+    state = store.load(sid)
+    assert state.node == Node.DIAGNOSING.value
+    assert state.renegotiations == []
+
+
+def test_the_user_can_continue_a_planless_replan_past_the_ceiling(store):
+    sid = "pl-ceiling-user"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    _seed_replan_ceiling(sid)
+
+    d = cli.cmd_replan(ns(session=sid, plan=None, renegotiation_decision="continue",
+                          renegotiated_by="user", renegotiation_note="keep going"), store=store)
+
+    assert d.ok is True and d.action == "next_stage"
+    state = store.load(sid)
+    assert state.node == Node.VERIFYING.value
+    assert [r["decision"] for r in state.renegotiations] == ["continue"]
+
+
+def test_a_planless_replan_is_refused_on_an_unacknowledged_effort_fire(store, monkeypatch):
+    monkeypatch.setenv("AGENTCTL_EFFORT", "1")
+    sid = "pl-effort-fire"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    state = store.load(sid)
+    state.effort_fires = [{"scale": "spend", "kind": "ratio", "actual": 12.5, "estimate": 3.0,
+                           "multiple": 4.17, "history_len": 0, "ts": 1.0}]
+    store.save(state)
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and d.action == "fire_acknowledge"
+    assert "effort-divergence fire" in d.detail
+    assert store.load(sid).node == Node.DIAGNOSING.value
+
+
+def test_a_planless_replan_is_refused_while_a_nested_difficulty_is_open(store):
+    sid = "pl-nested"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    assert cli.cmd_difficulty_open(ns(session=sid, origin="normalize"), store=store).ok is True
+    nested_uid = store.load(sid).difficulty.uid
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and d.action == "difficulty_close"
+    assert nested_uid in d.data["blockers"][0]
+    state = store.load(sid)
+    assert state.node == Node.DIAGNOSING.value
+    assert len(state.difficulty_stack) == 1
+
+
+def test_a_planless_replan_outside_diagnosing_is_refused(store):
+    sid = "pl-not-diagnosing"
+    cli.cmd_start(ns(session=sid, task=sid, goal="fix it", done_criterion="it is fixed",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=10, files=1,
+                        wall_clock_min=5, tracker_key=None, architectural=False,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    node = store.load(sid).node
+    assert node != Node.DIAGNOSING.value
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and "node=DIAGNOSING" in d.detail
+    assert store.load(sid).node == node
+
+
+def test_a_planless_replan_refuses_renormalize(store):
+    sid = "pl-renormalize"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+
+    d = cli.cmd_replan(ns(session=sid, plan=None, renormalize=True), store=store)
+
+    assert d.ok is False and "--renormalize" in d.detail
+    assert store.load(sid).node == Node.DIAGNOSING.value

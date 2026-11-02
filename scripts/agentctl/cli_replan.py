@@ -1755,11 +1755,11 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
         d.data["reopen_ignored"] = reopen_ignored
         d.detail += (f"; --reopen {reopen_ignored} ignored: not PASSED, so there is no "
                      "verdict to re-arm")
+    if args.plan is None:
+        return d
     # Only on something to say: an unconditional setdefault would add an empty
     # `advisories` key to every replan Directive, which test_history_capture's
     # exact-equality pin reads as a changed contract.
-    if args.plan is None:
-        return d
     advisories = _replan_spelling_advisories(args.plan)
     if advisories:
         d.data.setdefault("advisories", []).extend(advisories)
