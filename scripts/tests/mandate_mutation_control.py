@@ -1016,8 +1016,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "review-addresses-issue": Mutant(
         DRIVER,
-        'accepted = bool(addresses) and bool(verdicts) and addresses[-1] == "yes" and verdicts[-1] == "accept"',
-        'accepted = bool(verdicts) and verdicts[-1] == "accept"',
+        'accepted = addresses == "yes" and verdict == "accept"',
+        'accepted = verdict == "accept"',
         _ids(
             T_CYCLE,
             "test_a_review_saying_the_diff_does_not_address_the_issue_is_a_settled_reject_with_evidence",

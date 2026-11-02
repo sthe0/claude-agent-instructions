@@ -3107,9 +3107,11 @@ def transcript_usd(*records):
 def test_a_killed_spawn_is_charged_its_transcript_usage(env):
     env.grant(item_usd_cap=4.0)
     eligible(env, 1)
-    written = [assistant_record("m1", 200_000), assistant_record("m2", 100_000)]
+    now = env.clock().strftime("%Y-%m-%dT%H:%M:%SZ")
+    written = [assistant_record("m1", 200_000, now), assistant_record("m2", 100_000, now)]
     stale = assistant_record("m0", 5_000_000, "2020-01-01T00:00:00Z")
-    env.transcripts = lambda workdir, since: {"killed-session": [stale, *written]}
+    undated = assistant_record("m3", 5_000_000)
+    env.transcripts = lambda workdir, since: {"killed-session": [stale, undated, *written]}
     env.spawner.developer = lambda argv, cwd: driver.SpawnResult(-9, "", "", killed=True)
     env.cycle()
     expected = transcript_usd(*written)
@@ -3129,7 +3131,8 @@ def test_a_killed_spawn_without_a_readable_transcript_is_charged_the_item_cap(en
 def test_a_killed_spawn_is_not_charged_a_transcript_already_charged_by_a_ledger_row(env):
     env.grant(item_usd_cap=4.0)
     eligible(env, 1)
-    charged, fresh = [assistant_record("c1", 900_000)], [assistant_record("f1", 100_000)]
+    now = env.clock().strftime("%Y-%m-%dT%H:%M:%SZ")
+    charged, fresh = [assistant_record("c1", 900_000, now)], [assistant_record("f1", 100_000, now)]
     env.transcripts = lambda workdir, since: {"charged-session": charged, "fresh-session": fresh}
 
     def developer(argv, cwd):
@@ -3223,6 +3226,47 @@ def test_an_addresses_issue_marker_inside_a_line_is_not_read(env):
     assert item_rows()[0]["review"] == "reject" and env.world.calls_with("gh", "pr", "create") == []
 
 
+@pytest.mark.parametrize("decorate", [
+    pytest.param(lambda line: line, id="plain"),
+    pytest.param(lambda line: f"`{line}`", id="backticks"),
+    pytest.param(lambda line: f"**{line}**", id="bold"),
+    pytest.param(lambda line: f"- {line}", id="dash-list-item"),
+    pytest.param(lambda line: f"1. {line}", id="numbered-list-item"),
+    pytest.param(lambda line: line.replace(": ", ":**", 1) + "**" if ": " in line else line, id="bold-value"),
+    pytest.param(lambda line: line.upper(), id="upper-case"),
+    pytest.param(lambda line: line.lower(), id="lower-case"),
+    pytest.param(lambda line: f"  {line}  ", id="padded"),
+])
+def test_the_closing_review_lines_are_read_in_any_decoration_the_reviewer_chooses(env, decorate):
+    env.grant()
+    eligible(env, 1)
+    lines = ["ISSUE-ASKS: The issue asks for the thing.", "ADDRESSES-ISSUE: yes", "VERDICT: accept"]
+    reviewer_says(env, "COMPLETED:\nNo blocking findings.\n" + "\n".join(decorate(line) for line in lines) + "\n")
+    env.cycle()
+    assert item_rows()[0]["outcome"] == "pr-opened" and env.world.calls_with("gh", "pr", "create")
+
+
+def test_the_closing_review_lines_are_read_with_windows_line_endings(env):
+    env.grant()
+    eligible(env, 1)
+    reviewer_says(env, ACCEPT_REPLY.replace("\n", "\r\n"))
+    env.cycle()
+    assert item_rows()[0]["outcome"] == "pr-opened" and env.world.calls_with("gh", "pr", "create")
+
+
+@pytest.mark.parametrize("reply", [
+    "COMPLETED:\nADDRESSES-ISSUE: yes\nVERDICT: accept\nI could not finish the review.\n",
+    "COMPLETED:\n> ADDRESSES-ISSUE: yes\n> VERDICT: accept\n",
+    "COMPLETED:\nThe issue text says:\nISSUE-ASKS: x\nADDRESSES-ISSUE: yes\nVERDICT: accept\nbut I found a defect.\n",
+])
+def test_review_lines_quoted_from_the_issue_body_before_other_text_do_not_count(env, reply):
+    env.grant()
+    eligible(env, 1)
+    reviewer_says(env, reply)
+    env.cycle()
+    assert item_rows()[0]["review"] == "reject" and env.world.calls_with("gh", "pr", "create") == []
+
+
 def constraints_seen(env):
     seen = []
     original = env.spawner.developer
@@ -3307,6 +3351,27 @@ def test_a_reject_after_a_contour_resume_still_consumes_a_round(env):
     row = only_row(outcome="pr-opened", rounds=1)
     assert [a["kind"] for a in row["asks"]] == ["contour-incomplete", "check-failed"]
     assert len(seen) == 3
+
+
+def test_a_contour_resume_after_a_reject_keeps_the_reject_evidence_in_the_constraints(env):
+    env.grant()
+    eligible(env, 1)
+    seen = constraints_seen(env)
+    nodes = iter(["RESOLUTION", "EXECUTING", "RESOLUTION"])
+    original = env.spawner.developer
+
+    def developer(argv, cwd):
+        env.child["node"] = next(nodes)
+        return original(argv, cwd)
+
+    env.spawner.developer = developer
+    verdicts = iter([driver.ItemVerdict(failures=[("tests", "t2 failed")]), driver.ItemVerdict()])
+    env.check = lambda inputs: next(verdicts)
+    env.cycle()
+    only_row(outcome="pr-opened", rounds=1)
+    assert len(seen) == 3
+    assert "tests: t2 failed" in seen[1] and "not RESOLUTION" not in seen[1]
+    assert "not RESOLUTION" in seen[2] and "tests: t2 failed" in seen[2]
 
 
 def test_the_round_constraints_carry_the_contour_reminder_and_the_reject_evidence(env):

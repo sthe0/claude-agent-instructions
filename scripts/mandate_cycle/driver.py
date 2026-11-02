@@ -33,7 +33,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NamedTuple
 from xml.sax.saxutils import escape as xml_escape
 
 from agentctl import cost, dispatch, grants, inline_class, inline_git, mandate as rules, mandate_store as store, norm_handoff
@@ -80,9 +80,31 @@ EXIT_OK, EXIT_ERROR, EXIT_BUSY = 0, 1, 3
 # plumbing should stop and be looked at.
 KIND_SPAWN_ERROR, KIND_INFRA = "spawn-error", "infra"
 VERDICT_LABEL = {"auto-ok": "ok", "auto-no": "no"}
-VERDICT_RE = re.compile(r"^VERDICT:[ \t]*(accept|reject)[ \t]*$", re.MULTILINE)
-ADDRESSES_ISSUE_RE = re.compile(r"^ADDRESSES-ISSUE:[ \t]*(yes|no)[ \t]*$", re.MULTILINE)
-ISSUE_ASKS_RE = re.compile(r"^ISSUE-ASKS:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE)
+VERDICT_RE = re.compile(r"^VERDICT:[`*]*[ \t]*(accept|reject)$", re.IGNORECASE)
+ADDRESSES_ISSUE_RE = re.compile(r"^ADDRESSES-ISSUE:[`*]*[ \t]*(yes|no)$", re.IGNORECASE)
+ISSUE_ASKS_RE = re.compile(r"^ISSUE-ASKS:[`*]*[ \t]*(\S.*)$", re.IGNORECASE)
+LIST_MARKER_RE = re.compile(r"^(?:[-*+]|\d+[.)])[ \t]+")
+
+
+def closing_marker_lines(reply: str) -> "tuple[str | None, str | None, str | None]":
+    """(asks, addresses, verdict) read from the reply's last three non-empty lines, in the order the
+    review brief fixes; each is None when its line is absent there. A line may carry a list marker, wrapping
+    backticks or asterisks, a trailing CR, and any letter case; a marker anywhere else in the reply
+    (a quote of the issue text, a sentence) is not read."""
+    lines = []
+    for raw in (reply or "").splitlines():
+        line = LIST_MARKER_RE.sub("", raw.strip()).strip("`* \t")
+        if line:
+            lines.append(line)
+    last = lines[-3:] if len(lines) >= 3 else [""] * (3 - len(lines)) + lines
+    asks, addresses, verdict = (rx.match(line) for rx, line in zip((ISSUE_ASKS_RE, ADDRESSES_ISSUE_RE, VERDICT_RE), last))
+    return (
+        asks.group(1) if asks else None,
+        addresses.group(1).lower() if addresses else None,
+        verdict.group(1).lower() if verdict else None,
+    )
+
+
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 ITEM_CAP, CYCLE_CAP = "item-minutes-cap", "cycle-minutes-cap"
 NOT_RUN, PASS, FAIL = "not-run", "pass", "fail"
@@ -470,14 +492,19 @@ resolves the issue below without unrelated edits.
 
 1. Read the diff and the issue.
 2. {marker} Report blocking findings.
-3. End your reply with exactly these three lines, each alone on its line and in this order:
-   `ISSUE-ASKS: <one sentence: what the issue asks the change to do>`,
-   `ADDRESSES-ISSUE: yes` if the diff does what that sentence says or `ADDRESSES-ISSUE: no` if it does not,
-   then `VERDICT: accept` if there is no blocking finding and the issue is addressed, else `VERDICT: reject`.
+3. End your reply with exactly these three plain lines (no backticks, bold or list marker), each alone on
+   its line and in this order, nothing after them:
+
+ISSUE-ASKS: <one sentence: what the issue asks the change to do>
+ADDRESSES-ISSUE: yes
+VERDICT: accept
+
+   Write ADDRESSES-ISSUE: yes if the diff does what that sentence says and ADDRESSES-ISSUE: no if it does not.
+   Write VERDICT: accept if there is no blocking finding and the issue is addressed, else VERDICT: reject.
 """
 REVIEW_CRITERION = (
-    "The reply ends with the lines `ISSUE-ASKS: ...`, `ADDRESSES-ISSUE: yes|no` and "
-    "`VERDICT: accept|reject`, each alone on its line."
+    "The reply ends with the plain lines ISSUE-ASKS: ..., ADDRESSES-ISSUE: yes|no and "
+    "VERDICT: accept|reject, each alone on its line, nothing after them."
 )
 CONTOUR_NOTE = (
     "Round note: you returned COMPLETED while your session is at {node}, not RESOLUTION, so the check cannot "
@@ -534,6 +561,13 @@ class ParentSessionError(DriverError):
         self.verb = verb
 
 
+class SpawnWindow(NamedTuple):
+    """Where a spawn begins: the cost ledger's length and the clock, which bound the ledger rows and
+    transcripts that belong to it."""
+    ledger_rows: int
+    since: float
+
+
 @dataclass
 class ItemRun:
     """What the round loop of one item shares: its row, its inputs and the asks answered so far."""
@@ -556,6 +590,7 @@ class ItemRun:
     judged_tree: "str | None" = None
     constraints: "Path | None" = None
     constraints_text: str = ""
+    reject_note: str = ""
 
 
 def permission_rules(text: str) -> "list[str]":
@@ -1060,7 +1095,7 @@ class Cycle:
         linked child's item: its session is learned before the cost is read, so the child's own
         nested spawns are charged in the same round."""
         rows_before = self.item_cost(item_dir)[1]
-        ledger_before, since = len(cost.read_rows(cost.COST_LOG)), self.now().timestamp()
+        window = self.spawn_window()
         before = store.state_fingerprint(self.mid)
         seconds, bound_by = self.time_bound(started, mandate)
         result = self.spawn(argv, worktree, seconds)
@@ -1069,22 +1104,25 @@ class Cycle:
         if self.tampered(before):
             row.update(outcome="failed", failure_kind="state-tampered")
             return None
-        if self.overrun(row, mandate, item_dir, started, result, rows_before, bound_by, (worktree, since, ledger_before)):
+        if self.overrun(row, mandate, item_dir, started, result, rows_before, bound_by, (worktree, window)):
             return None
         return result
 
-    def killed_transcript_usd(self, worktree: Path, since: float, ledger_before: int) -> "float | None":
+    def spawn_window(self) -> SpawnWindow:
+        return SpawnWindow(len(cost.read_rows(cost.COST_LOG)), self.now().timestamp())
+
+    def killed_transcript_usd(self, worktree: Path, window: SpawnWindow) -> "float | None":
         """USD the transcripts a killed spawn wrote show, priced like the ledger prices a finished
         spawn; a transcript a ledger row of this spawn already names is skipped. None when no usage
         is readable, so the caller keeps the cap."""
-        charged = {r.get("child_session_id") for r in list(cost.read_rows(cost.COST_LOG))[ledger_before:]}
+        charged = {r.get("child_session_id") for r in list(cost.read_rows(cost.COST_LOG))[window.ledger_rows:]}
         priced = []
-        for session, records in self.seams.transcripts(str(worktree), since).items():
+        for session, records in self.seams.transcripts(str(worktree), window.since).items():
             if session in charged:
                 continue
             priced.extend(
                 row for row in transcript_cost.rows_from(records)
-                if row.ts is None or row.ts.timestamp() >= since
+                if row.ts is not None and row.ts.timestamp() >= window.since
             )
         return transcript_cost.price_weighted_usd(priced) if priced else None
 
@@ -1129,7 +1167,7 @@ class Cycle:
 
     def overrun(
         self, row: dict, mandate, item_dir: Path, started: datetime, spawn: "SpawnResult | None",
-        rows_before: int, bound_by: str = ITEM_CAP, spawn_window: "tuple[Path, float, int] | None" = None,
+        rows_before: int, bound_by: str = ITEM_CAP, spawn_window: "tuple[Path, SpawnWindow] | None" = None,
     ) -> bool:
         usd, count = self.item_cost(item_dir)
         elapsed = (self.now() - started).total_seconds() / 60.0
@@ -1342,15 +1380,15 @@ class Cycle:
             return "question-for-user", {"fire_scale": None}
         return "incomplete", {"fire_scale": None}
 
-    def spawn_records(self, run: "ItemRun", since: float, rows_before: int, plan_path: str, spawner) -> "list[dict]":
+    def spawn_records(self, run: "ItemRun", window: SpawnWindow, plan_path: str, spawner) -> "list[dict]":
         """The transcript of the spawn that just returned: the one its own ledger row names, else the
         fresh one the child resumed or ended last; a nested spawn's transcript is never the answer."""
         rows = list(cost.read_rows(cost.COST_LOG))
         mine = [
-            r for r in rows[rows_before:]
+            r for r in rows[window.ledger_rows:]
             if str(r.get("plan_path")) == plan_path and (spawner is None or r.get("spawner_session") == spawner)
         ]
-        found = self.seams.transcripts(str(run.worktree), since)
+        found = self.seams.transcripts(str(run.worktree), window.since)
         if mine and mine[-1].get("child_session_id") in found:
             return found[mine[-1]["child_session_id"]]
         nested = {r.get("child_session_id") for r in nested_spawn_rows(rows, run.child)}
@@ -1381,14 +1419,14 @@ class Cycle:
         mandate's rule. Returns the child's summary when the work passed, None when the item ended."""
         row, limit = run.row, Thresholds().effort_replan_absolute()
         while True:
-            rows_before, since = len(cost.read_rows(cost.COST_LOG)), self.now().timestamp()
+            window = self.spawn_window()
             result = self.spawn_checked(row, run.mandate, run.item_dir, run.started, argv, run.worktree, run)
             if result is None:
                 return None
             marker, _ = dispatch.parse_marker(result.stdout)
             summary = result.stdout.strip()[:SUMMARY_CHARS]
             if marker in (None, "MALFORMED", "CHILD_INFRA_FAILURE"):
-                records = self.spawn_records(run, since, rows_before, str(norm), run.parent)
+                records = self.spawn_records(run, window, str(norm), run.parent)
                 if rules.account_limited(marker, records):
                     self.stop_item(run, self.ask(run, "account-limit", {"account_limited": True}, limit))
                 else:
@@ -1429,17 +1467,20 @@ class Cycle:
                 self.stop_item(run, answered)
                 return None
             if kind == "contour-incomplete":
-                self.write_constraints(run, CONTOUR_NOTE.format(
-                    node=observed["child_node"], small_path=rules.small_path_text(self.bound),
-                ))
+                # A resume consumes no round and only the item caps bound it (the user's decision of
+                # 2026-11-02), so a child that never reaches RESOLUTION is stopped by the time or
+                # spend cap, not by a resume count.
+                contour = CONTOUR_NOTE.format(node=observed["child_node"], small_path=rules.small_path_text(self.bound))
+                self.write_constraints(run, "\n\n".join(note for note in (contour, run.reject_note) if note))
                 continue
             run.rounds += 1
             row["rounds"] = run.rounds
             if answered.answer == "reject":
                 self.reject_child(run, evidence)
-                self.write_constraints(run, REJECT_NOTE.format(evidence=evidence[:REASON_CHARS]))
+                run.reject_note = REJECT_NOTE.format(evidence=evidence[:REASON_CHARS])
             else:
-                self.write_constraints(run)
+                run.reject_note = ""
+            self.write_constraints(run, run.reject_note)
 
     def write_constraints(self, run: "ItemRun", note: str = "") -> None:
         """The constraints file the unchanged spawn argv names: the item's standing constraints plus
@@ -1453,7 +1494,7 @@ class Cycle:
         review_brief, review_criterion = run.item_dir / "review-brief.md", run.item_dir / "review-criterion.txt"
         review_brief.write_text(REVIEW_BRIEF.format(**fields), encoding="utf-8")
         review_criterion.write_text(REVIEW_CRITERION, encoding="utf-8")
-        rows_before, since = len(cost.read_rows(cost.COST_LOG)), self.now().timestamp()
+        window = self.spawn_window()
         review = self.spawn_checked(
             row, run.mandate, run.item_dir, run.started,
             self.spawn_argv("code-reviewer", review_brief, review_criterion, None, "acceptance-review", run.worktree, "medium"),
@@ -1463,21 +1504,20 @@ class Cycle:
             return ""
         marker, _ = dispatch.parse_marker(review.stdout)
         if marker in (None, "MALFORMED", "CHILD_INFRA_FAILURE"):
-            records = self.spawn_records(run, since, rows_before, str(review_brief), None)
+            records = self.spawn_records(run, window, str(review_brief), None)
             if rules.account_limited(marker, records):
                 self.stop_item(run, self.ask(run, "account-limit", {"account_limited": True}, limit))
             else:
                 row.update(outcome="failed", failure_kind=KIND_SPAWN_ERROR, detail=tail(review.stderr or review.stdout))
             return ""
         reply = review.stdout or ""
-        addresses, verdicts = ADDRESSES_ISSUE_RE.findall(reply), VERDICT_RE.findall(reply)
-        accepted = bool(addresses) and bool(verdicts) and addresses[-1] == "yes" and verdicts[-1] == "accept"
+        asks, addresses, verdict = closing_marker_lines(reply)
+        accepted = addresses == "yes" and verdict == "accept"
         row["review"] = "accept" if accepted else "reject"
         if accepted:
             return None
-        if addresses and addresses[-1] == "no":
-            asks = ISSUE_ASKS_RE.findall(reply)
-            return f"The change does not address the issue. The issue asks: {asks[-1] if asks else '(not stated)'}\n{tail(reply, REASON_CHARS)}"
+        if addresses == "no":
+            return f"The change does not address the issue. The issue asks: {asks or '(not stated)'}\n{tail(reply, REASON_CHARS)}"
         return tail(reply, REASON_CHARS) or "the review did not accept"
 
     def _work_item(self, row, mandate, number, raw, branch, item_dir, worktree, started) -> None:
@@ -1561,7 +1601,8 @@ class Cycle:
             run.rounds += 1
             row["rounds"] = run.rounds
             self.reject_child(run, rejected)
-            self.write_constraints(run, REJECT_NOTE.format(evidence=rejected[:REASON_CHARS]))
+            run.reject_note = REJECT_NOTE.format(evidence=rejected[:REASON_CHARS])
+            self.write_constraints(run, run.reject_note)
         if self.worktree_state(worktree) != pinned:
             row.update(outcome="failed", failure_kind="state-tampered",
                        detail="the worktree moved after its commit was checked")
