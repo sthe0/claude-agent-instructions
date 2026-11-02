@@ -3328,3 +3328,80 @@ def test_the_round_constraints_carry_the_contour_reminder_and_the_reject_evidenc
     assert all(text.startswith(base) for text in seen)
     assert "not RESOLUTION" in seen[1] and "t2 failed" not in seen[1]
     assert "tests: t2 failed" in seen[2] and "not RESOLUTION" not in seen[2]
+
+
+CHILD = "small-child"
+
+
+def link_small_path_child(env, monkeypatch):
+    """A real engine session linked to a parent stage whose norm is the item norm, as the spawner
+    links it: handoff record, child-session record, and the env the child process would carry."""
+    from argparse import Namespace
+    from agentctl import cli
+    from agentctl.plan import load_plan
+    from agentctl.stage_norm import StageNorm
+    root = config_root.agentctl_state_dir()
+    item_dir = env.tmp / "item"
+    item_dir.mkdir()
+    plan = item_dir / "plan.toml"
+    plan.write_text(rules.item_norm_toml(
+        mandate=env.grant(), issue=7, title="Fix the thing", body="Details.", cycle_id="c1", base_sha=BASE_SHA,
+        bound=BOUND, worktree=str(env.tmp / "wt"), repo=str(env.tmp / "repo"), item_dir=str(item_dir),
+    ), encoding="utf-8")
+    doc = load_plan(str(plan))
+    norm = StageNorm.from_stage(doc.stages[0], {}, doc=doc)
+    record = norm_handoff.build_record(
+        parent_session="parent-1", stage_index=1, kind="developer", norm=norm, grants=[], depth=1, parent_lineage=None,
+    )
+    path, sha = norm_handoff.write_record(root, record)
+    norm_handoff.write_child_session(root, "parent-1", 1, session=CHILD, workdir=str(env.tmp))
+    monkeypatch.setenv(norm_handoff.NORM_HANDOFF_ENV, norm_handoff.format_env_value(path, sha))
+    monkeypatch.setenv("AGENTCTL_OWN_SESSION", CHILD)
+    child_store = FileStateStore(root)
+
+    def ns(**kw):
+        return Namespace(session=CHILD, **kw)
+
+    cli.cmd_start(ns(task="child-task", goal="", done_criterion="", criterion_type="measurable",
+                     recursion_depth=0), store=child_store)
+    cli.cmd_classify(ns(chat=False, changed_lines=10, files=1, wall_clock_min=5, tracker_key=None,
+                        architectural=False, external_effect=False, new_dependency=False,
+                        public_api_change=False), store=child_store)
+    cli.cmd_next_stage(ns(), store=child_store)
+    return cli, ns, child_store, doc.stages[0].criterion.done_criterion
+
+
+def test_a_small_change_linked_child_walks_its_own_contour_to_resolution(env, monkeypatch):
+    cli, ns, child_store, _ = link_small_path_child(env, monkeypatch)
+    assert driver.real_child_state(CHILD)["node"] == "EXECUTING"
+    assert driver.Cycle.observe(None, None, "COMPLETED", "", driver.real_child_state(CHILD))[0] == "contour-incomplete"
+
+    cli.cmd_record_result(ns(status="passed", actual="edited", observation="ran the targeted tests: all passed, none failed"),
+                          store=child_store)
+    assert cli.cmd_verify_final(ns(), store=child_store).ok
+
+    state = driver.real_child_state(CHILD)
+    assert state["node"] == "RESOLUTION"
+    assert driver.Cycle.observe(None, None, "COMPLETED", "", state) == (None, {})
+
+
+def test_a_rejected_small_path_child_works_its_difficulty_and_replans_without_a_plan(env, monkeypatch):
+    cli, ns, child_store, done_criterion = link_small_path_child(env, monkeypatch)
+    cli.cmd_record_result(ns(status="passed", actual="edited", observation="ran the targeted tests: all passed, none failed"),
+                          store=child_store)
+    cli.cmd_verify_final(ns(), store=child_store)
+
+    rejected = cli.cmd_reject(ns(reason="the issue is not addressed", by="mandate-cycle"), store=child_store)
+    assert (rejected.node, rejected.action) == ("DIAGNOSING", "declare")
+    declaration = child_store.load(CHILD).difficulty.declaration
+    assert declaration.expected == done_criterion
+
+    cli.cmd_declare(ns(expected=declaration.expected, actual="not addressed", mismatch="m"), store=child_store)
+    cli.cmd_investigate(ns(localized_expectation="le", localized_actual="la", hypotheses=["h1", "h2"]), store=child_store)
+    cli.cmd_critique(ns(functional_ground="fg", replanning_task="rt", failure_address="not_applicable", norm_targets=None),
+                     store=child_store)
+    cli.cmd_normalize(ns(factor="reproducible cause", level="note"), store=child_store)
+    replanned = cli.cmd_replan(ns(plan=None), store=child_store)
+
+    assert replanned.ok and replanned.action == "next_stage"
+    assert driver.real_child_state(CHILD)["node"] == "VERIFYING"
