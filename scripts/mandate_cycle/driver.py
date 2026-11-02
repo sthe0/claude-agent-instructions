@@ -80,29 +80,28 @@ EXIT_OK, EXIT_ERROR, EXIT_BUSY = 0, 1, 3
 # plumbing should stop and be looked at.
 KIND_SPAWN_ERROR, KIND_INFRA = "spawn-error", "infra"
 VERDICT_LABEL = {"auto-ok": "ok", "auto-no": "no"}
-VERDICT_RE = re.compile(r"^VERDICT:[`*]*[ \t]*(accept|reject)$", re.IGNORECASE)
-ADDRESSES_ISSUE_RE = re.compile(r"^ADDRESSES-ISSUE:[`*]*[ \t]*(yes|no)$", re.IGNORECASE)
+VERDICT_RE = re.compile(r"^VERDICT:[`*]*[ \t]*[`*]*(accept|reject)$", re.IGNORECASE)
+ADDRESSES_ISSUE_RE = re.compile(r"^ADDRESSES-ISSUE:[`*]*[ \t]*[`*]*(yes|no)$", re.IGNORECASE)
 ISSUE_ASKS_RE = re.compile(r"^ISSUE-ASKS:[`*]*[ \t]*(\S.*)$", re.IGNORECASE)
 LIST_MARKER_RE = re.compile(r"^(?:[-*+]|\d+[.)])[ \t]+")
+# A line the review parser could read as one of the three keys once its decoration is stripped.
+REVIEW_KEY_LINE_RE = re.compile(r"^[\s`*+\-.)\d]*(?=(?:ISSUE-ASKS|ADDRESSES-ISSUE|VERDICT):)", re.IGNORECASE)
 
 
-def closing_marker_lines(reply: str) -> "tuple[str | None, str | None, str | None]":
-    """(asks, addresses, verdict) read from the reply's last three non-empty lines, in the order the
-    review brief fixes; each is None when its line is absent there. A line may carry a list marker, wrapping
-    backticks or asterisks, a trailing CR, and any letter case; a marker anywhere else in the reply
-    (a quote of the issue text, a sentence) is not read."""
-    lines = []
+def review_marker_lines(reply: str) -> "tuple[str | None, str | None, str | None]":
+    """(asks, addresses, verdict) from the last whole line of each key in the reply; None when a key has
+    none. A line may carry a list marker, wrapping backticks or asterisks, a trailing CR, and any letter
+    case; a key inside a sentence is not read. Untrusted text quoted into the brief cannot supply a line,
+    because `neutralize_marker` defangs its key lines."""
+    found: "dict[str, str]" = {}
     for raw in (reply or "").splitlines():
         line = LIST_MARKER_RE.sub("", raw.strip()).strip("`* \t")
-        if line:
-            lines.append(line)
-    last = lines[-3:] if len(lines) >= 3 else [""] * (3 - len(lines)) + lines
-    asks, addresses, verdict = (rx.match(line) for rx, line in zip((ISSUE_ASKS_RE, ADDRESSES_ISSUE_RE, VERDICT_RE), last))
-    return (
-        asks.group(1) if asks else None,
-        addresses.group(1).lower() if addresses else None,
-        verdict.group(1).lower() if verdict else None,
-    )
+        for name, rx in (("asks", ISSUE_ASKS_RE), ("addresses", ADDRESSES_ISSUE_RE), ("verdict", VERDICT_RE)):
+            match = rx.match(line)
+            if match:
+                found[name] = match.group(1)
+    asks, addresses, verdict = found.get("asks"), found.get("addresses"), found.get("verdict")
+    return asks, addresses.lower() if addresses else None, verdict.lower() if verdict else None
 
 
 SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -320,8 +319,10 @@ def tail(text: str, limit: int = 200) -> str:
 
 
 def neutralize_marker(text: str) -> str:
-    """A third-party-shaped string must not be able to claim the brief's step marker."""
-    return (text or "").replace("<<this step>>", "<this step>")
+    """A third-party-shaped string must not be able to claim the brief's step marker, nor to carry a line
+    the review parser would read as the reviewer's own ISSUE-ASKS / ADDRESSES-ISSUE / VERDICT line."""
+    text = (text or "").replace("<<this step>>", "<this step>")
+    return "".join(REVIEW_KEY_LINE_RE.sub(lambda m: f"> {m.group(0)}", line) for line in text.splitlines(keepends=True))
 
 
 @dataclass(frozen=True)
@@ -492,8 +493,9 @@ resolves the issue below without unrelated edits.
 
 1. Read the diff and the issue.
 2. {marker} Report blocking findings.
-3. End your reply with exactly these three plain lines (no backticks, bold or list marker), each alone on
-   its line and in this order, nothing after them:
+3. Make these three plain lines (no backticks, bold or list marker) your final verdict, each alone on its
+   line and in this order. Your skill's own closing lines (approve or changes-requested, Not checked, the
+   return marker) may follow them:
 
 ISSUE-ASKS: <one sentence: what the issue asks the change to do>
 ADDRESSES-ISSUE: yes
@@ -503,8 +505,8 @@ VERDICT: accept
    Write VERDICT: accept if there is no blocking finding and the issue is addressed, else VERDICT: reject.
 """
 REVIEW_CRITERION = (
-    "The reply ends with the plain lines ISSUE-ASKS: ..., ADDRESSES-ISSUE: yes|no and "
-    "VERDICT: accept|reject, each alone on its line, nothing after them."
+    "The reply carries the plain lines ISSUE-ASKS: ..., ADDRESSES-ISSUE: yes|no and "
+    "VERDICT: accept|reject as its final verdict, each alone on its line."
 )
 CONTOUR_NOTE = (
     "Round note: you returned COMPLETED while your session is at {node}, not RESOLUTION, so the check cannot "
@@ -1104,7 +1106,7 @@ class Cycle:
         if self.tampered(before):
             row.update(outcome="failed", failure_kind="state-tampered")
             return None
-        if self.overrun(row, mandate, item_dir, started, result, rows_before, bound_by, (worktree, window)):
+        if self.overrun(row, mandate, item_dir, started, result, rows_before, bound_by, worktree=worktree, window=window):
             return None
         return result
 
@@ -1167,7 +1169,8 @@ class Cycle:
 
     def overrun(
         self, row: dict, mandate, item_dir: Path, started: datetime, spawn: "SpawnResult | None",
-        rows_before: int, bound_by: str = ITEM_CAP, spawn_window: "tuple[Path, SpawnWindow] | None" = None,
+        rows_before: int, bound_by: str = ITEM_CAP, worktree: "Path | None" = None,
+        window: "SpawnWindow | None" = None,
     ) -> bool:
         usd, count = self.item_cost(item_dir)
         elapsed = (self.now() - started).total_seconds() / 60.0
@@ -1178,7 +1181,7 @@ class Cycle:
         charge = 0.0
         if spawn is not None and spawn.killed:
             has_row = count > rows_before
-            transcript_usd = None if has_row or spawn_window is None else self.killed_transcript_usd(*spawn_window)
+            transcript_usd = None if has_row or window is None else self.killed_transcript_usd(worktree, window)
             charge = rules.killed_spawn_charge(has_row, mandate.item_usd_cap, transcript_usd)
             if bound_by not in reasons:
                 reasons.append(bound_by)
@@ -1467,9 +1470,8 @@ class Cycle:
                 self.stop_item(run, answered)
                 return None
             if kind == "contour-incomplete":
-                # A resume consumes no round and only the item caps bound it (the user's decision of
-                # 2026-11-02), so a child that never reaches RESOLUTION is stopped by the time or
-                # spend cap, not by a resume count.
+                # A resume consumes no round: the item caps, not a resume count, bound a child that
+                # never reaches RESOLUTION.
                 contour = CONTOUR_NOTE.format(node=observed["child_node"], small_path=rules.small_path_text(self.bound))
                 self.write_constraints(run, "\n\n".join(note for note in (contour, run.reject_note) if note))
                 continue
@@ -1511,7 +1513,7 @@ class Cycle:
                 row.update(outcome="failed", failure_kind=KIND_SPAWN_ERROR, detail=tail(review.stderr or review.stdout))
             return ""
         reply = review.stdout or ""
-        asks, addresses, verdict = closing_marker_lines(reply)
+        asks, addresses, verdict = review_marker_lines(reply)
         accepted = addresses == "yes" and verdict == "accept"
         row["review"] = "accept" if accepted else "reject"
         if accepted:
