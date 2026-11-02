@@ -839,6 +839,22 @@ def test_an_ordinary_concern_opens_no_challenge(ostore, home, armed_env, tmp_pat
     assert ostore.load(SESSION).order_challenges == []
 
 
+@pytest.mark.parametrize("plant", [_exempt_host, _exempt_hook, _exempt_spawned, _exempt_channel])
+def test_an_exempt_session_opens_no_challenge_and_keeps_the_concern_ordinary(
+        ostore, armed_env, review_gate, monkeypatch, tmp_path, plant):
+    plant(monkeypatch, tmp_path)
+    _start(ostore)
+    assert _classify(ostore).ok and ostore.load(SESSION).order_agreement_armed is False
+    assert cli.cmd_plan(ns(session=SESSION), store=ostore).ok
+    plan = _plan(tmp_path)
+    assert cli.cmd_submit_plan(ns(session=SESSION, plan=plan), store=ostore).ok
+
+    d = _plan_review(ostore, concerns=["blocking: understanding: the second requirement is not what I ordered"])
+
+    assert ostore.load(SESSION).order_challenges == []
+    assert d.ok is False and any("revise" in b for b in _held_by_review(ostore, plan))
+
+
 def test_a_reraise_of_an_open_challenge_opens_nothing(ostore, home, armed_env, tmp_path):
     _agreed(ostore, home, tmp_path)
     challenge_id = _challenge(ostore, tmp_path)
