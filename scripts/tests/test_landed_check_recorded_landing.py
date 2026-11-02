@@ -28,13 +28,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from agentctl import cli, cli_results
+from agentctl import cli
 from agentctl.state import (
     Actor, CheckKind, Criterion, CriterionType, FinalCheck, LANDED_GIT_ERROR_EXIT,
     LandedSpec, Means, Node, Outcome, SessionState, Stage, StageStatus, Subject,
 )
 from agentctl.store import FileStateStore
-from conftest import STAGE_OBSERVATIONS
+from conftest import STAGE_OBSERVATIONS, patch_cli_name
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.com",
@@ -461,7 +461,7 @@ def transcripts(tmp_path, monkeypatch):
 def clock(monkeypatch):
     now = {"t": 1_000_000.0}
     frozen = SimpleNamespace(time=lambda: now["t"])
-    monkeypatch.setattr(cli_results, "time", frozen)
+    patch_cli_name(monkeypatch, "time", frozen)
     return now
 
 
