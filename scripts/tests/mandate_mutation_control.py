@@ -58,6 +58,9 @@ CLASSIFY = "agentctl/classify.py"
 T_INLINE = "tests/test_inline_class.py"
 T_INLINE_MEASURE = "tests/test_inline_measure.py"
 T_CLASSIFY = "tests/test_classify.py"
+HOOK_START = "hook-engine-start.py"
+T_HOOK_START = "tests/test_hook_engine_start.py"
+T_REPLAN = "tests/test_replan.py"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
 CONTROL_RED = 7
@@ -989,6 +992,65 @@ CATALOGUE: "dict[str, Mutant]" = {
         '            ("order-dispose", ["--id", "issue", "--as", "covered", "--stage", str(STAGE_INDEX)]),\n',
         '            ("submit-plan", ["--plan", str(norm)]),\n',
         _ids(T_BASIS, "test_the_driver_parent_session_reaches_stage_one_executing_with_live_gate_arming"),
+    ),
+    "spawned-task-id": Mutant(
+        HOOK_START,
+        'return f"{slug}-{session_id[:8]}" if _is_spawned_session() and session_id else slug',
+        "return slug",
+        _ids(
+            T_HOOK_START,
+            "test_a_spawned_specialist_session_gets_a_task_id_of_its_own",
+            "test_two_spawned_sessions_with_one_prompt_do_not_share_an_accumulator",
+        ),
+    ),
+    "item-norm-issue-text": Mutant(
+        RULES, "(I1) Issue #{issue}: {title}\\n{body}\\n", "(I1) Issue #{issue}\\n",
+        _ids(T_RULES, "test_the_item_norm_stage_knowledge_names_the_issue_title_and_body"),
+    ),
+    "killed-charge-transcript": Mutant(
+        RULES, "if transcript_usd is not None:", "if False:",
+        _ids(
+            T_RULES, "test_killed_spawn_charge_prefers_the_cost_row_then_transcript_usage_then_the_cap",
+        )
+        + _ids(T_CYCLE, "test_a_killed_spawn_is_charged_its_transcript_usage"),
+    ),
+    "review-addresses-issue": Mutant(
+        DRIVER,
+        'accepted = bool(addresses) and bool(verdicts) and addresses[-1] == "yes" and verdicts[-1] == "accept"',
+        'accepted = bool(verdicts) and verdicts[-1] == "accept"',
+        _ids(
+            T_CYCLE,
+            "test_a_review_saying_the_diff_does_not_address_the_issue_is_a_settled_reject_with_evidence",
+            "test_a_quoted_addresses_issue_yes_followed_by_the_reviewers_own_no_is_a_reject",
+        ),
+    ),
+    "boundary-stop-counted": Mutant(
+        RULES,
+        'elif row.get("outcome") not in ("declined", "overrun", "limit"):\n            run = []',
+        "else:\n            run = []",
+        _ids(T_RULES, "test_mandate_boundary_stops_never_grow_the_failure_streak_on_the_recorded_rows"),
+    ),
+    "contour-reminder": Mutant(
+        DRIVER,
+        'return "contour-incomplete", {"child_node": state.get("node")}',
+        'return "incomplete", {"fire_scale": None}',
+        _ids(T_CYCLE, "test_a_completed_child_below_resolution_is_resumed_with_a_contour_reminder"),
+    ),
+    "contour-resume-counts-round": Mutant(
+        DRIVER,
+        "                continue\n            run.rounds += 1\n",
+        "                pass\n            run.rounds += 1\n",
+        _ids(
+            T_CYCLE,
+            "test_a_contour_incomplete_resume_consumes_no_round_and_the_item_caps_stop_it",
+            "test_a_reject_after_a_contour_resume_still_consumes_a_round",
+        ),
+    ),
+    "planless-replan": Mutant(
+        CLI,
+        "if state.weight_class != WeightClass.SMALL_CHANGE.value or state.plan_path:",
+        "if False:",
+        _ids(T_REPLAN, "test_a_planless_replan_of_a_substantive_session_is_refused"),
     ),
 }
 
