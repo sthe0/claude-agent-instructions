@@ -78,6 +78,8 @@ def _to_plan_ready(store, sid, plan) -> None:
         store=store,
     )
     state = store.load(sid)
+    # Unarmed whatever the machine's settings say: these tests are about the presentation.
+    state.order_agreement_armed = False
     state.order_agreement_exemption = ""
     store.save(state)
     cli.cmd_plan(ns(session=sid), store=store)
