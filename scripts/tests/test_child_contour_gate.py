@@ -651,6 +651,19 @@ def test_linked_brief_names_own_contour(tmp_path, capsys):
         assert f"`{verb}`" in section, f"the brief's verb list lacks {verb!r}"
 
 
+def test_the_own_contour_brief_names_the_small_change_path_and_resolution_before_completed(tmp_path, capsys):
+    _parent_session(tmp_path / "home")
+    argv = _spawn_argv(tmp_path / "home", tmp_path, 1) + ["--dry-run"]
+    assert _load_spawn().main(argv) == 0
+    out = capsys.readouterr().out
+    section = out.split("## Your own engine contour", 1)[1].split("\n## ", 1)[0]
+    path = section.split("Small-change path:", 1)[1].split("\n\n", 1)[0]
+    flat = " ".join(path.split())
+    for needle in ("classify --changed-lines", "`next-stage`", "record-result --status passed", "verify-final"):
+        assert needle in flat, f"the small-change path lacks {needle!r}"
+    assert "Return `COMPLETED:` only once your session is at RESOLUTION" in flat
+
+
 def test_unlinked_spawn_unchanged(tmp_path, monkeypatch, capsys):
     _parent_session(tmp_path / "home")
     launched = _launch(monkeypatch, tmp_path, stage_index=None)

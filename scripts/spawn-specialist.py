@@ -318,6 +318,12 @@ def own_contour_brief_lines(args: argparse.Namespace, own_plan: "Path | None" = 
         "(an independent thinker's review), `approve --by agent`, `partition` (no "
         "flags), `next-stage`.",
         "",
+        "Small-change path: when your change is within the small-change bound, `classify "
+        "--changed-lines <n>` settles it without a plan — then `next-stage`, edit, "
+        "`record-result --status passed` and `verify-final`. Return `COMPLETED:` only "
+        "once your session is at RESOLUTION (`status` shows it); from any earlier node the "
+        "stage is not closed.",
+        "",
         *(
             [
                 f"Your plan file is `{own_plan}`: yours alone, writable while you plan and "
