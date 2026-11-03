@@ -131,6 +131,15 @@ def _effects_lines(s) -> list[str]:
     return out
 
 
+def principle_line(p) -> str:
+    """The stage's principle as one bullet; a grounding override is shown with its reason so the
+    reader of the stage (and of the essence) sees the norm it approves."""
+    override = f"; grounding override: {p.grounding_override}" if getattr(p, "grounding_override", "") else ""
+    return (f"- **Principle:** {p.statement} "
+            f"(source: {p.source}; derivation: {p.derivation}; "
+            f"confidence: {p.confidence}; refutation: {p.refutation}{override})")
+
+
 def _negative_control_lines(crit) -> list[str]:
     """The one-line rendering of a criterion's negative control or its waiver,
     shared between `render_plan_md` and `render_stage_brief` so the two views
@@ -305,12 +314,7 @@ def render_plan_md(doc: PlanDoc) -> str:
         if s.depends_on:
             lines.append(f"- **Depends on:** {', '.join(str(d) for d in sorted(s.depends_on))}")
         if s.principle is not None:
-            p = s.principle
-            lines.append(
-                f"- **Principle:** {p.statement} "
-                f"(source: {p.source}; derivation: {p.derivation}; "
-                f"confidence: {p.confidence}; refutation: {p.refutation})"
-            )
+            lines.append(principle_line(s.principle))
         lines.extend(_grants_lines(s, _venue_for(doc)))
         lines.extend(_amendment_lines(s))
         lines.append("")
@@ -537,12 +541,7 @@ def _stage_field_lines(
     lines.extend(_grants_lines(s, venue))
     lines.extend(_effects_lines(s))
     if s.principle is not None:
-        p = s.principle
-        lines.append(
-            f"- **Principle:** {p.statement} "
-            f"(source: {p.source}; derivation: {p.derivation}; "
-            f"confidence: {p.confidence}; refutation: {p.refutation})"
-        )
+        lines.append(principle_line(s.principle))
     lines.append("")
     return lines
 
@@ -1061,6 +1060,7 @@ def render_pair_review_bundle(
     if history is not None:
         lines.extend(_prior_review_section(history))
 
+    lines.extend(_grounding_verdict_section(doc))
     lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
     lines.append("")
 
@@ -1131,6 +1131,15 @@ def _unit_edge_lines(doc: PlanDoc, node: "int | str") -> list[str]:
     return lines
 
 
+def _grounding_verdict_section(doc: PlanDoc) -> list[str]:
+    """The grounding judge's cached verdicts on the plan's stages, for the reviewer; empty when the
+    judge is off or has judged nothing."""
+    from . import grounding_gate  # local: grounding_gate reads render
+
+    lines = grounding_gate.review_verdict_lines(doc)
+    return ["## Grounding verdicts", "", *lines, ""] if lines else []
+
+
 def render_unit_review_bundle(
     doc: PlanDoc, unit: str, *, plan_sha256: str, history: "dict | None" = None,
 ) -> str:
@@ -1172,6 +1181,7 @@ def render_unit_review_bundle(
     if history is not None:
         lines.extend(_prior_review_section(history, "unit"))
 
+    lines.extend(_grounding_verdict_section(doc))
     lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
     lines.append("")
 
@@ -1893,8 +1903,10 @@ def render_plan_generalizations(doc: PlanDoc, corpus) -> str:
     lines = [GENERALIZATIONS_HEADER]
     for leaf in generalization_candidates(corpus.items, doc.meta.task_id, cited):
         line = generalization_line(leaf)
-        lines.append(line if leaf.slug in cited else line + " (not cited by any stage)")
-        if principle_provenance.field_value(leaf.text, principle_provenance.ORDER_DERIVED):
+        order_derived = principle_provenance.field_value(leaf.text, principle_provenance.ORDER_DERIVED)
+        line = line if leaf.slug in cited else line + " (not cited by any stage)"
+        lines.append(line + " (unverified given)" if order_derived else line)
+        if order_derived:
             quote = principle_provenance.order_quote(leaf.text)
             if quote:
                 lines.append("  order quote: " + quote.replace("\n", "\n    "))

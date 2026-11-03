@@ -29,7 +29,7 @@ from pathlib import Path
 
 from lib import argv_text, ask_evidence, config_root, engine_session_binding, hook_telemetry, kind_baselines, transcript_stops, transcript_turns, widening_targets, writer_pass
 
-from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, delivery_channel, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, grounding, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
+from . import advisor, carry_forward, check_cache, child_runs, continuations, controls, cost, delivery, delivery_channel, effort, enumerate_sidecar, exempt_paths, gates, grant_shadow, grants as _grants, grounding, grounding_gate, ledger, mandate as mandate_rules, mandate_store, norm_handoff, order_approvals, permissions, plan_convert, plan_refs, plan_resources, plan_store, plugins, plugins_ledger, plugins_premise, premise, protected_actions, resources as _resources, runtime_host, solved_marker, task_accumulator, workspace_cleanup
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES, format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from . import config as agentctl_config
@@ -2059,7 +2059,7 @@ def _refresh_caches_from_plan_path(
     # against it, exactly as at replan, so approve judges the same exemption replan did.
     violations = _submission_problems(refreshed, runner, state.weight_class,
                                       _frozen_edge_stages(state, baseline, refreshed),
-                                      _grounding_exempt_stages(state, baseline, refreshed))
+                                      state=state, baseline=baseline)
     if violations:
         return violations
     if advice is not None:
@@ -2229,8 +2229,9 @@ def _submission_advice(
 
 
 def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
-                         frozen_edge_stages: frozenset[int] = frozenset(),
-                         grounding_exempt_stages: frozenset[int] = frozenset()) -> list[str]:
+                         frozen_edge_stages: frozenset[int] = frozenset(), *,
+                         state: SessionState | None = None, baseline=None,
+                         warnings: list[str] | None = None) -> list[str]:
     """The submission seam's REFUSING channel, with its judge resolved the way the advice
     channel's is — one place per channel, so no seam re-derives the enabled rule.
 
@@ -2256,7 +2257,11 @@ def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
     # A node over plan-stage-max-chars cannot be reviewed in one pair prompt, so every seam
     # that admits plan bytes to a session (submit-plan, approve after an in-place edit,
     # replan, renormalize) refuses it; a missing size limit refuses too (fails closed).
-    return (violations + _grounding_problems(doc, grounding_exempt_stages)
+    # The exempt set (finished stages whose principle is unchanged) is the one plan-review uses too; a
+    # judge that cannot look adds to `warnings` and never refuses.
+    exempt = grounding_gate.exempt_stages(state, doc, baseline)
+    return (violations + _grounding_problems(doc, exempt)
+            + grounding_gate.plan_problems(doc, exempt, runner=runner, enabled=enabled, warnings=warnings)
             + [f["message"] for f in plan_size_blocks(doc)])
 
 
@@ -4800,9 +4805,9 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # and a refusal cannot be computed after the return that acts on it. The binding itself
     # costs nothing; only a prefilter hit spends a judge call.
     run = runner if runner is not None else advisor.subprocess_runner
+    grounding_warnings: list[str] = []
     problems: list[str] = _submission_problems(
-        doc, run, state.weight_class,
-        grounding_exempt_stages=frozenset())
+        doc, run, state.weight_class, warnings=grounding_warnings)
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
@@ -4948,6 +4953,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     d.data.setdefault("advisories", []).extend(
         _submission_advice(doc, run, state.weight_class, plan_path)
     )
+    if grounding_warnings:
+        d.data["advisories"].extend(grounding_warnings)
     # Predsubmit check-run observation (C.2) — actually RUNS each stage's
     # verify_command in its declared venue, warn-only, same advisories channel.
     # Substantive-only, mirroring the reachability-blocker gate above: a
@@ -5232,6 +5239,13 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                     "essence rendering omits the new-generalizations block; stamping "
                     "nothing — paste this block into it verbatim and re-run",
                     data={"generalizations_block": generalizations_block},
+                )
+            if grounding_gate.essence_overrides_problems(_grants_doc, text):
+                return Directive(
+                    False, state.node, "noop",
+                    "essence rendering omits the grounding-overrides block; stamping "
+                    "nothing — paste this block into it verbatim and re-run",
+                    data={"overrides_block": grounding_gate.overrides_block(_grants_doc)},
                 )
 
         # Refuse to stamp a receipt for a plan `approve` would refuse on premise
@@ -6106,7 +6120,46 @@ def _evaluate_review_trigger(
     )
 
 
+def _grounding_pass_refusal(args, state: SessionState, store: StateStore, runner: Runner | None,
+                            warnings: list[str]) -> Directive | None:
+    """A refusal of a whole-plan or stage-scoped `pass` while a stage outside the exempt set (the one
+    submission uses) keeps a defective grounding the plan does not override. A judge that cannot look
+    adds a warning and refuses nothing; only an unverified given is refused by rule alone."""
+    if args.verdict != gates._PLAN_REVIEW_PASS:
+        return None
+    scope = (getattr(args, "scope", None) or "").strip()
+    stage_index = plan_review_scope_stage_index(scope) if scope else None
+    if scope and stage_index is None:
+        return None
+    target = getattr(args, "target", None) or state.plan_path
+    if not target:
+        return None
+    try:
+        doc = load_plan(target)
+    except (OSError, PlanError):
+        return None
+    exempt = grounding_gate.exempt_stages(state, doc, _baseline_plan_for_tier(store, state))
+    blockers = grounding_gate.review_pass_blockers(
+        doc, exempt, runner=runner, weight_class=state.weight_class, warnings=warnings, only=stage_index)
+    if not blockers:
+        return None
+    return Directive(False, state.node, "fix_plan",
+                     "plan-review refuses pass: a grounding defect stands (fix the source or keep it with "
+                     "[stage.principle] grounding_override = '<reason>'): " + "; ".join(blockers),
+                     data={"problems": blockers})
+
+
 def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record a thinker review of a plan version (`_record_plan_review`), after refusing a `pass` that
+    leaves an un-overridden grounding defect standing."""
+    state = _require(store, args.session)
+    warnings: list[str] = []
+    refusal = _grounding_pass_refusal(args, state, store, runner, warnings)
+    d = refusal if refusal is not None else _record_plan_review(args, store=store, runner=runner)
+    return _with_advisories(d, warnings)
+
+
+def _record_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Record a thinker review of a plan version, backing the plan-review gate.
 
     The COGNITION (the thinker's reasoning) happens in the thinker leaf; this only
@@ -12012,8 +12065,7 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
     # ones `new` was diffed and gated against.
     new, _new_plan_bytes, _new_plan_digest = load_plan_with_digest(args.plan)
     run = runner if runner is not None else advisor.subprocess_runner
-    submission = _submission_problems(new, run, state.weight_class,
-                                      grounding_exempt_stages=_grounding_exempt_stages(state, old, new))
+    submission = _submission_problems(new, run, state.weight_class, state=state, baseline=old)
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "renormalization blocked: the corrected plan does not meet "
@@ -12101,8 +12153,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     crossed: list[dict] = []
     reopened: list[int] = []
     reopen_ignored: list[int] = []
+    replan_warnings: list[str] = []
     d = _cmd_replan(args, store=store, runner=runner, crossed=crossed, reopened=reopened,
-                    reopen_ignored=reopen_ignored)
+                    reopen_ignored=reopen_ignored, warnings=replan_warnings)
     d.data.update(_crossing_data(crossed[0] if crossed else None))
     if reopened and d.ok:
         d.data["reopened_stages"] = reopened
@@ -12114,7 +12167,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # Only on something to say: an unconditional setdefault would add an empty
     # `advisories` key to every replan Directive, which test_history_capture's
     # exact-equality pin reads as a changed contract.
-    advisories = _replan_spelling_advisories(args.plan)
+    advisories = _replan_spelling_advisories(args.plan) + replan_warnings
     if advisories:
         d.data.setdefault("advisories", []).extend(advisories)
     _report_acceptance_staleness(d, args, store)
@@ -12157,10 +12210,12 @@ def _replan_spelling_advisories(plan_path: str) -> list[str]:
 def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 crossed: list[dict] | None = None,
                 reopened: list[int] | None = None,
-                reopen_ignored: list[int] | None = None) -> Directive:
+                reopen_ignored: list[int] | None = None,
+                warnings: list[str] | None = None) -> Directive:
     """`crossed`, when given, receives the backstop crossing a renegotiation applied;
     `reopened`, the indices of the PASSED stages an applied `--reopen` re-armed;
-    `reopen_ignored`, the `--reopen` indices that named a stage that is not PASSED."""
+    `reopen_ignored`, the `--reopen` indices that named a stage that is not PASSED;
+    `warnings`, the grounding judge's outage warnings for the submitted plan."""
     state = _require(store, args.session)
     from .plan import diff_plans, load_plan as _load
 
@@ -12486,7 +12541,7 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     submission = _submission_problems(
         new, run, state.weight_class,
         _frozen_edge_stages(state, baseline, new),
-        _grounding_exempt_stages(state, baseline, new))
+        state=state, baseline=baseline, warnings=warnings)
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "replan blocked: the corrected plan does not meet submission "
@@ -13157,6 +13212,28 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
     never transitions state — a pre-flight that mutated what it inspects would
     corrupt the very state a later real replan diffs against."""
     state = _require(store, args.session)
+    verdicts = _coverage_grounding_verdicts(args, state, store, runner)
+    d = _check_coverage(args, state)
+    if verdicts:
+        d.detail += "\ngrounding verdicts (the judge on each stage replan would judge):\n" + "\n".join(verdicts)
+        d.data["grounding_verdicts"] = verdicts
+    return d
+
+
+def _coverage_grounding_verdicts(args, state: SessionState, store: StateStore,
+                                 runner: Runner | None) -> list[str]:
+    """The grounding judge's verdict line for each stage of the incoming plan that replan would judge
+    (a judge that cannot look says so on the line). Nothing when the plan does not load."""
+    try:
+        new = load_plan(args.new)
+    except Exception:
+        return []
+    exempt = grounding_gate.exempt_stages(state, new, _baseline_plan_for_tier(store, state))
+    return grounding_gate.coverage_verdict_lines(
+        new, exempt, runner=runner, enabled=grounding_gate.judge_enabled(state.weight_class))
+
+
+def _check_coverage(args, state: SessionState) -> Directive:
     if not (state.difficulty and state.difficulty.critique):
         return Directive(True, state.node, "inspect", "no active critique; nothing to cover")
     old_path = _replan_baseline_path(state)

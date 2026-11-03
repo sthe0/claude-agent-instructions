@@ -729,6 +729,9 @@ _STAGE_RESIDUAL_COVERAGE = {
     "principle.derivation": "stage_question_key",
     "principle.confidence": "stage_question_key",
     "principle.refutation": "stage_question_key",
+    "principle.grounding_override": "the residual's own splice — no Question.target names "
+                                    "it, but it exempts the stage from the grounding "
+                                    "judge's refusal of a defective source",
     "grants.allow.rule": "the residual's own splice — outside stage_question_key because "
                         "no Question.target names it, inside here because a declared "
                         "grant is part of what the stage's definition authorizes a "

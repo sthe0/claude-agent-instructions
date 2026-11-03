@@ -1663,6 +1663,9 @@ class Principle:
     derivation: str = ""
     confidence: str = ""
     refutation: str = ""
+    # The reason the plan keeps a source the grounding judge found defective; shown in the stage and
+    # in the essence's "Grounding overrides" block so the user approves it.
+    grounding_override: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "Principle":

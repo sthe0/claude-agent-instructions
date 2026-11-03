@@ -44,6 +44,7 @@ LINK_DEFECTS = ("irrelevant", "insufficient", "scope_mismatch", "contradicting")
 GROUND_DEFECTS = ("defective_ground", "unverified_given", "inadequate_distinction", "prescriptive_knowledge")
 RULE_DEFECTS = ("unverified_given",)
 UNFAITHFUL_QUOTE = "unfaithful_quote"
+STATES_DEMAND = "states_demand"
 
 DIGEST_ONLY_FIELDS = ("id", "question")
 LINK_FIELDS = ("principle", "grounded_in", "statement", "rule_derived", "distinction", "adequacy",
@@ -86,8 +87,10 @@ _ONTOLOGY_QUESTION = (
 )
 _QUOTE_PROMPT = (
     "A statement is derived from a quotation of the user's order. Answer with one JSON object and "
-    'nothing else: {{"faithful": true|false, "reason": "<one sentence>"}}. "faithful" is true when the '
-    "quotation says what the statement attributes to it.\n\nQUOTATION:\n{quote}\n\nSTATEMENT:\n{statement}\n"
+    'nothing else: {{"faithful": true|false, "demand": true|false, "reason": "<one sentence>"}}. '
+    '"faithful" is true when the quotation says what the statement attributes to it. "demand" is true when '
+    "the quotation states a demand or wish of the user (what is to be done) rather than a fact about how "
+    "things are; only a factual statement may be generalized.\n\nQUOTATION:\n{quote}\n\nSTATEMENT:\n{statement}\n"
 )
 
 
@@ -262,6 +265,9 @@ def _ground_of(leaf) -> dict:
         out["distinction"] = _section(text, "## Distinction")
         out["adequacy"] = _section(text, "## Adequacy")
     return out
+
+
+ground_of = _ground_of
 
 
 def leaf_question(schema) -> str:
@@ -598,14 +604,17 @@ def _parse_quote_reply(text: str) -> dict:
     obj = _reply_object(text)
     if not isinstance(obj.get("faithful"), bool):
         raise ValueError("faithful is not a boolean")
+    if "demand" in obj and not isinstance(obj["demand"], bool):
+        raise ValueError("demand is not a boolean")
     return obj
 
 
 def order_quote_defects(quote, statement, *, runner) -> list[str]:
-    """[`unfaithful_quote`] when the quotation does not say what the statement attributes to it, else []."""
+    """`unfaithful_quote` when the quotation does not say what the statement attributes to it, and
+    `states_demand` when it states a demand rather than a fact (an absent `demand` reads as false)."""
     reply = _ask(QUOTE_JUDGE_NAME, _QUOTE_PROMPT.format(quote=quote, statement=statement), runner,
                  _parse_quote_reply)
-    return [] if reply["faithful"] else [UNFAITHFUL_QUOTE]
+    return ([] if reply["faithful"] else [UNFAITHFUL_QUOTE]) + ([STATES_DEMAND] if reply.get("demand") else [])
 
 
 def judge_order_quote(quote, statement, *, runner) -> dict:

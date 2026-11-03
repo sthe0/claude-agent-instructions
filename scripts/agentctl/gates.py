@@ -4016,6 +4016,9 @@ def _renorm_stage_residual(stage) -> tuple:
     * `renorms` — the norm files a re-norming stage edits. Same footing again: it binds a
       normative critique to its consequence, and moving it under the light path would
       re-route which stage owns an open norm-edit obligation.
+    * `principle.grounding_override` — the reason a stage keeps a principle source the
+      grounding judge found defective. It exempts the stage from that refusal, so adding
+      or editing one under the light path would admit a source the approval never saw.
 
     Deliberately outside, and the only things outside: `index` (the key both sides are
     matched ON, so a change there is an added/removed stage, refused above), and the
@@ -4038,6 +4041,7 @@ def _renorm_stage_residual(stage) -> tuple:
         stage.optional,
         stage.backlog_issue,
         tuple(stage.renorms),
+        stage.principle.grounding_override,
     )
 
 

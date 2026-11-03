@@ -119,6 +119,13 @@ def _printed(plan_path) -> str:
     return directive.detail
 
 
+def _overrides(plan_path) -> str:
+    from agentctl import grounding_gate
+    from agentctl.plan import load_plan
+
+    return grounding_gate.overrides_block(load_plan(plan_path))
+
+
 def _present(store, plan_path, rendering, tmp_path):
     from agentctl import cli
     from agentctl.state import PLAN_PRESENTATION_KIND_ESSENCE
@@ -197,7 +204,9 @@ def test_essence_without_block_refused(store, world):
 
     assert refused.ok is False
     assert "- regularity:reg-new — Every new thing is listed." in refused.data["generalizations_block"]
-    accepted = _present_again(store, plan, "## Essence\n\n" + grants + "\n" + _printed(plan), world.tmp)
+    accepted = _present_again(
+        store, plan, "## Essence\n\n" + grants + "\n" + _printed(plan) + "\n" + _overrides(plan),
+        world.tmp)
     assert accepted.ok is True, accepted.data
 
 
@@ -221,7 +230,9 @@ def test_empty_block_still_required(store, world):
 
     assert refused.ok is False
     assert "- none:" in refused.data["generalizations_block"]
-    accepted = _present_again(store, plan, "## Essence\n\n" + grants + "\n" + _printed(plan), world.tmp)
+    accepted = _present_again(
+        store, plan, "## Essence\n\n" + grants + "\n" + _printed(plan) + "\n" + _overrides(plan),
+        world.tmp)
     assert accepted.ok is True, accepted.data
 
 
