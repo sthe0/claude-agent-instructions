@@ -5,7 +5,7 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:what-a-change-does-not-carry-ends-with-its-authors-context]
-grounding_judged: 465854e6c4709937a8f38b04ccf28460e32dc0d75adc6f04e06b239265e798de
+grounding_judged: db6a2547914422fa1859ffabc09eb2ffc5b794c2ebeabd806c0f6b33d3e51846
 created: 2026-06-25
 last_verified: 2026-06-25
 ---

@@ -5,7 +5,7 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-recorded-remedy-is-absent-at-the-act-it-governs, regularity:a-two-valued-judge-absorbs-could-not-look, regularity:a-mechanism-green-in-isolation-can-lack-consumers-and-population]
-grounding_judged: 8f4d748c0afa57fbaa3b737537bd0dd274a811b714f2766d23eb0dc3361b8975
+grounding_judged: 322ea0a12b658cd51bf14b0a8faf0b87d1df49c1e9a6687b99449e91563f78a3
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-18
 last_verified: 2026-09-18

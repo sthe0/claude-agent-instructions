@@ -5,7 +5,7 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-generic-failure-message-names-a-surface-shared-by-many-causes, regularity:a-defect-is-cheapest-to-remove-at-the-moment-it-is-found, regularity:a-question-escalated-by-reflex-spends-the-users-attention-a-held-channel-would-have-saved]
-grounding_judged: 361c13868d6f58851050491c09ddc73a333b4c9a55deba7f0840c7636f94a54c
+grounding_judged: 2939e169a24e27cd032c47927a88ad55c1e219b2f66d2628261610ae340eef96
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-07-02
 last_verified: 2026-08-31

@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-judgement-call-contains-a-decidable-sub-decision, regularity:a-controls-defects-surface-only-when-it-is-executed, regularity:a-plan-checked-only-against-itself-passes-over-premises-it-leaves-unrecorded-and-parts-of-the-order-it-leaves-out]
-grounding_judged: bc0929263d8843e714679753f3c88888dd1b1bc14cffc053f995caf1393abf47
+grounding_judged: 3c6b72cb122df5a9d5e4122570dc82708652999004d573dbf4c48ad6f3fa5917
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-01
 last_verified: 2026-09-01

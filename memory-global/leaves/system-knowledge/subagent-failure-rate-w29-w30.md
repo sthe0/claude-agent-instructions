@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:the-policy-scorecard-subagent-failures-counter-counts-marker-text-in-any-tool-result-over-a-different-population, regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-two-valued-judge-absorbs-could-not-look, regularity:a-step-that-ran-is-not-thereby-a-step-that-worked]
-grounding_judged: b341d94a22d6b7eec92a38489b4dffdf3ba440b3a597a041fa8639b6114910c5
+grounding_judged: 774f1a7e511903b0da51efdb02a61c987ed2220c5b6d1d762c7735e3450914a5
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-07-28
 last_verified: 2026-07-28

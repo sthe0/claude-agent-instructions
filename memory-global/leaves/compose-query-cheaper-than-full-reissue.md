@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-remedy-named-in-prose-can-denote-a-cheap-query-or-an-expensive-rewalk, regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on, regularity:a-shared-resource-moves-under-others-action]
-grounding_judged: 0cc5275fdbb058c13f0426a0f0862a551c750f8868b3c8cab090879465da2cd0
+grounding_judged: 53ab693aaacc263963373fce033b77501fe32e97522a0b16df1791287e183345
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-10-02
 last_verified: 2026-10-02

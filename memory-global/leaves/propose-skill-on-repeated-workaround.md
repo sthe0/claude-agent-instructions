@@ -5,7 +5,7 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-repeated-hand-rolled-action-is-seen-by-no-trigger-that-reads-only-corrections-and-resolutions, regularity:a-recorded-remedy-is-absent-at-the-act-it-governs]
-grounding_judged: bd418a1e0295bd508d706476801fe9027330d6decf260aa98ec48bf5548b8bbc
+grounding_judged: 1c786f4e05b2ba37259ba7c0ca80be0f78ad864642b93e7eb2f0ba87998b7086
 grounding_override: The rule's specifics (where a promoted script lives, the shape of the offer) are procedure choices, not claims about how things are; the ground states the gap that motivates the trigger.
 created: 2026-09-02
 last_verified: 2026-09-02

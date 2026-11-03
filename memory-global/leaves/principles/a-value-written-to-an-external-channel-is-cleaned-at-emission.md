@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:a-value-emitted-to-an-external-channel-persists-beyond-recall]
-grounding_judged: 6e1ca5273b8fcfb24eec4baa54d26a32798c7e29a81bd339fcfc27bef15e5a84
+grounding_judged: a864f173e227792244ade91ba19610c47f98eeed0e46555b380a9a9e98e26cd0
 grounding_override: Stamp: the leaf is not edited in this conversion and its grounded_in is fixed as the leaf states it; the judge finds the listed grounds support the central rule but not every clause, which a later curator split of the leaf can address.
 created: 2026-10-21
 last_verified: 2026-10-21

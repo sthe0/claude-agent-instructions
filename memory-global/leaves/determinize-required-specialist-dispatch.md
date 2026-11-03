@@ -4,7 +4,7 @@ description: The review_dispatch plugin proactively names two engine-required, n
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-recorded-remedy-is-absent-at-the-act-it-governs, regularity:a-judgement-call-contains-a-decidable-sub-decision, regularity:a-two-valued-judge-absorbs-could-not-look, regularity:a-step-that-ran-is-not-thereby-a-step-that-worked]
-grounding_judged: 879de2b187622cf87eb998f1ccf2330f5c0c4a4ffabd0c09d69709ba1c9ae1d5
+grounding_judged: 9fe1268f0d52880645fc12e0ff3d7581c73796ee78ba3b235dffc2095b7dc587
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 type: reference
 created: 2026-07-22

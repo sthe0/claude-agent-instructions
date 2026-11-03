@@ -5,7 +5,7 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-fix-at-the-failing-site-leaves-siblings-of-the-same-form, regularity:a-reproducible-cause-left-unnormed-fails-again-at-its-next-occurrence, regularity:a-turn-ending-in-a-vague-invitation-leaves-the-user-no-defined-choice-to-act-on, regularity:a-question-escalated-by-reflex-spends-the-users-attention-a-held-channel-would-have-saved]
-grounding_judged: 08b132c4bd3d9a948958c24bd7a544ace92742df64ef9c3c8ef578f1fc85883c
+grounding_judged: 63c9a443606e09b1aeac996117b29f972a36d83c0994f16545d8ac628733ab62
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-04
 last_verified: 2026-09-04

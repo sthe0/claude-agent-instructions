@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-judgement-call-contains-a-decidable-sub-decision, regularity:a-format-varies-while-the-property-it-stands-for-holds, regularity:a-two-valued-judge-absorbs-could-not-look]
-grounding_judged: 201c720eaf91f1a41b9be7a7feb4c9919c4c45af50e19da34f87400067bce5b3
+grounding_judged: 3a5101506c6421c9934c69e413c90dc239932ce5af2358f6e5b0b8247a81e3d6
 created: 2026-07-22
 last_verified: 2026-10-01
 ---

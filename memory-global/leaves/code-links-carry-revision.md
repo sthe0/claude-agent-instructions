@@ -5,7 +5,8 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-coordinate-shifts-while-the-content-it-addressed-stays]
-grounding_judged: 3c334b1f9acf62b64484f28fc6646f972606014360f0cc417705bd46a4b82cb5
+grounding_judged: b46ad166c2728ffd2be38cbfdc1a0186c954d6b4c8da74cedc47e9af52c90ba9
+grounding_override: user-approved 2026-11-03: the judge finds part of the rule ungrounded (the reviewer-ask step and the file/directory exemption); the remaining grounds cannot be removed and no non-thin regularity covers the gap under the r11 revision rules, so the defect is recorded rather than papered over; the repair is a per-clause split of the leaf or a new regularity, tracked as a follow-up issue.
 created: 2026-07-21
 last_verified: 2026-07-21
 ---

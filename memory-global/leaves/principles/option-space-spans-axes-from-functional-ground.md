@@ -5,7 +5,8 @@ type: reference
 schema: principle/v1
 generality: 3
 grounded_in: [regularity:options-recalled-from-known-mechanisms-cluster-on-known-axes]
-grounding_judged: a7d6b978889a8f4fa208c5bdeb5dd495cf21a3ea9f994e5d4bcfa11017d93174
+grounding_judged: e8f6031e3d4bd64997506dbdd1b35b430d98df3f445d84b3d5c4cadebfbb7ec1
+grounding_override: user-approved 2026-11-03: the judge finds part of the rule ungrounded (the ontology ground function-place-difficulty and the dialectical-synthesis step; an ontology ground is not addable under r11); the remaining grounds cannot be removed and no non-thin regularity covers the gap under the r11 revision rules, so the defect is recorded rather than papered over; the repair is a per-clause split of the leaf or a new regularity, tracked as a follow-up issue.
 created: 2026-06-26
 last_verified: 2026-06-26
 ---

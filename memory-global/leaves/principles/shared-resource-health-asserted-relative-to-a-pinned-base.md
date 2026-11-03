@@ -5,8 +5,9 @@ type: reference
 schema: principle/v1
 generality: 2
 domain: development
-grounded_in: [regularity:a-shared-resource-moves-under-others-action]
-grounding_judged: d187ca8e28f39c7e802130875b1c3ed08c2fb6610d0c374cf91db5f506af665f
+grounded_in: [regularity:a-shared-resource-moves-under-others-action, regularity:a-controls-defects-surface-only-when-it-is-executed, regularity:a-fix-at-the-failing-site-leaves-siblings-of-the-same-form, regularity:a-coordinate-shifts-while-the-content-it-addressed-stays, regularity:a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on]
+grounding_judged: c2727417e0c7fc2647e31ca9db85d03b23220624da6918fd13439f83d718d625
+grounding_override: user-approved 2026-11-03: the judge finds a listed ground irrelevant (the control-defects and sibling-sites grounds); the r11 revision rules allow no ground removal, so the defect is recorded; an irrelevant ground only causes a spurious revisit on refutation; removal is tracked as a follow-up issue.
 created: 2026-08-11
 last_verified: 2026-08-11
 ---

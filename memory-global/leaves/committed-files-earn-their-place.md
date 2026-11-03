@@ -5,7 +5,7 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:what-a-change-does-not-carry-ends-with-its-authors-context, regularity:a-recorded-remedy-is-absent-at-the-act-it-governs, regularity:having-an-in-repo-caller-varies-independently-of-usefulness-to-other-developers, regularity:a-diff-that-outgrows-its-task-costs-reviewer-attention-by-the-whole-diff]
-grounding_judged: 4a5f825ed39d40491ee9cb7cce3b0a08d16969329d273ee05e12f526238094c8
+grounding_judged: a493ac0d9504ac55c108a2be87438be311c03b85b7b0441210865cf84a678d54
 created: 2026-07-13
 last_verified: 2026-10-06
 ---

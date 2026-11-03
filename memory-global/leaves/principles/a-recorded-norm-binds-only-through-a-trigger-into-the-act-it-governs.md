@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:a-recorded-remedy-is-absent-at-the-act-it-governs]
-grounding_judged: 0aa7a6356953096a4c62c279d025227f2c7a3ca3d4aabba39b0a7c3244b15c76
+grounding_judged: 44e23c359abb4e11867b530c882f066580a2414f99fae019b4d78b67f01b464d
 grounding_override: Stamp: the leaf is not edited in this conversion and its grounded_in is fixed as the leaf states it; the judge finds the listed grounds support the central rule but not every clause, which a later curator split of the leaf can address.
 domain: development
 created: 2026-10-12

@@ -4,8 +4,8 @@ description: git fetch/push to github silently hangs forever (no error) when SSH
 type: reference
 schema: principle/v1
 converted_from: leaf/v1
-grounded_in: [regularity:a-forwarded-agent-socket-of-a-dead-ssh-session-wedges-git-auth-silently, regularity:a-generic-failure-message-names-a-surface-shared-by-many-causes]
-grounding_judged: 8b76e20e296f78f60d2fa9e3ec8fd2458973b6d8ea91e34b5d09dd746d89fb08
+grounded_in: [regularity:a-forwarded-agent-socket-of-a-dead-ssh-session-wedges-git-auth-silently, regularity:a-generic-failure-message-names-a-surface-shared-by-many-causes, regularity:a-child-process-reads-its-parents-ambient-root, regularity:a-success-condition-edited-by-the-party-it-judges-gets-no-independent-read, regularity:a-non-hermetic-read-fails-independently-of-the-artifact]
+grounding_judged: aa97bdc9541b2204d7567ebb98fb99af844fc2ac879a4879abda066387076687
 created: 2026-07-03
 last_verified: 2026-07-03
 ---

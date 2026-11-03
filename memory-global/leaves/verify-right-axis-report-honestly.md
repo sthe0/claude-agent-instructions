@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-step-that-ran-is-not-thereby-a-step-that-worked, regularity:a-change-outside-the-state-its-consumers-read-is-unseen-by-them, regularity:a-fix-at-the-failing-site-leaves-siblings-of-the-same-form]
-grounding_judged: a9a402d134821b0b3a715261a0e5859284ac04d51fd5c4731771add7d7566b44
+grounding_judged: daf55595d6d7eaad8db8353b21d87e739b70e21a283eb00a902990d96c89ce42
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-15
 last_verified: 2026-10-26

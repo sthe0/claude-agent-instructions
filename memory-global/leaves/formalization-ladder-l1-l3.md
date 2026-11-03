@@ -3,8 +3,9 @@ name: formalization-ladder-l1-l3
 description: The L1-L3 formalization ladder for a reasoning/research deliverable — a criterion for when to climb and an explicit L3 refusal criterion — plus the honest enumeration residual the claim-provenance ledger cannot close.
 schema: principle/v1
 converted_from: leaf/v1
-grounded_in: [regularity:a-proof-assistant-checks-the-validity-of-formal-inference-steps-not-the-truth-of-an-empirical-measurement, regularity:a-judgement-call-contains-a-decidable-sub-decision]
-grounding_judged: c985b4d33113169564f092388a8a182f8c6615c1206b05028c675261cc310cb6
+grounded_in: [regularity:a-proof-assistant-checks-the-validity-of-formal-inference-steps-not-the-truth-of-an-empirical-measurement, regularity:a-judgement-call-contains-a-decidable-sub-decision, regularity:agentctl-ledger-gate-statement-text]
+grounding_judged: 39e3ad44a8104fea24219903017564fa542fb9fd9c327e2395f7890e8740c141
+grounding_override: user-approved 2026-11-03: the judge finds part of the rule ungrounded (L2 numeric recompute, and why a model rather than a regex finds the claims); the remaining grounds cannot be removed and no non-thin regularity covers the gap under the r11 revision rules, so the defect is recorded rather than papered over; the repair is a per-clause split of the leaf or a new regularity, tracked as a follow-up issue.
 type: reference
 created: 2026-07-14
 last_verified: 2026-07-28

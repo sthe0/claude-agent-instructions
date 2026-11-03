@@ -4,7 +4,7 @@ description: The premise plugin gates plan_approval on question provenance — e
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-plan-checked-only-against-itself-passes-over-premises-it-leaves-unrecorded-and-parts-of-the-order-it-leaves-out, regularity:incremental-repair-review-has-a-nonzero-finding-floor]
-grounding_judged: 4ad8a848678428de8dcecf8c192fcd531a4bc7ff6141aa8e52d01d75fc06778e
+grounding_judged: af326c15e13412540694dfc739219066938c20a491432d0b438efe3ce703f665
 type: reference
 created: 2026-07-20
 last_verified: 2026-08-26

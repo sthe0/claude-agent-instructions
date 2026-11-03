@@ -5,7 +5,7 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-success-condition-edited-by-the-party-it-judges-gets-no-independent-read, regularity:a-stage-control-is-re-evaluated-after-its-world-has-changed, regularity:a-controls-defects-surface-only-when-it-is-executed, regularity:a-coordinate-shifts-while-the-content-it-addressed-stays, regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-generic-failure-message-names-a-surface-shared-by-many-causes, regularity:a-shared-resource-moves-under-others-action, regularity:a-fix-at-the-failing-site-leaves-siblings-of-the-same-form, regularity:a-non-hermetic-read-fails-independently-of-the-artifact, regularity:a-mechanism-green-in-isolation-can-lack-consumers-and-population, regularity:a-format-varies-while-the-property-it-stands-for-holds]
-grounding_judged: fec526ec90c24d37fc8438b66683420145ee3becd8d8a201ce7b414c4ab52262
+grounding_judged: 7e886cb78b368e6962a77ed044963310dd475db17ffb460f02b8625f5cf02a60
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-08-31
 last_verified: 2026-10-03

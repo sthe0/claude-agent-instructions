@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-step-that-ran-is-not-thereby-a-step-that-worked, ontology:inline-class]
-grounding_judged: 3cc1fc24ba35554683c3b0dabfce0197e8134643d445a0af1c12c43c33ba75bb
+grounding_judged: 51e65daf6e17ff179f3949ce4f4825c9f7e53d0de015a57afe3a39cbcc2dcf4d
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-27
 last_verified: 2026-09-27

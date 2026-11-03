@@ -4,7 +4,7 @@ description: A PR's diff stays proportionate to what the task brings in (a porte
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-diff-that-outgrows-its-task-costs-reviewer-attention-by-the-whole-diff, regularity:a-change-outside-the-state-its-consumers-read-is-unseen-by-them, regularity:what-a-change-does-not-carry-ends-with-its-authors-context]
-grounding_judged: 60eb697c87dcddea0cceb1c46ba38236bed869df01a65e9b8b3eedcdecd6586f
+grounding_judged: 99e5852bcfeaead9b746e4bfbb863eebb5543a0036fceca8f6b4d36409fe6f05
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 type: feedback
 created: 2026-10-27

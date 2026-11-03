@@ -5,7 +5,7 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on]
-grounding_judged: fa7d8052ca3061ff47aa49279d9f9e1c522b8176f6ed8afcbcabbdcb9d374a73
+grounding_judged: 42cd734c66eaec61caa7cf23ec8d9f17962983ffc40261510db956fa79d8b534
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-04
 last_verified: 2026-10-21

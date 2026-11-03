@@ -6,7 +6,7 @@ last_verified: 2026-10-10
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-dispatcher-that-tracks-a-units-status-but-not-its-artifact-restarts-a-repeat-dispatch-from-nothing, regularity:a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on, regularity:a-controls-defects-surface-only-when-it-is-executed, regularity:a-remedy-named-in-prose-can-denote-a-cheap-query-or-an-expensive-rewalk, regularity:a-stage-control-is-re-evaluated-after-its-world-has-changed]
-grounding_judged: 642cdd9be1d5a2166d9b5188db48c242df53c73d0316d1a26ed1e6925de39693
+grounding_judged: 3d95fab28ecdbecec44b18cf9e138345b7f957893c8f0be95532ca042a4048fa
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 type: reference
 ---

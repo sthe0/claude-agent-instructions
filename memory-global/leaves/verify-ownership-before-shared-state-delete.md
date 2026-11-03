@@ -5,7 +5,7 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-suspended-session-owns-its-state-while-holding-no-live-process-foothold, regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-two-valued-judge-absorbs-could-not-look]
-grounding_judged: 5eeb7348b0fae3b6e45720107dd7986fd25f0a8fcaccc9f9d4ae4e6f2968c035
+grounding_judged: 04a7d6a373da3947cddafffcd1e618ebdf5541edef5be04fb40a26a8f91b7515
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-07-11
 last_verified: 2026-07-11

@@ -4,8 +4,9 @@ description: Committed work must reach its terminal VCS state — trunk/main —
 type: feedback
 schema: principle/v1
 converted_from: leaf/v1
-grounded_in: [regularity:a-change-outside-the-state-its-consumers-read-is-unseen-by-them, regularity:a-coordinate-shifts-while-the-content-it-addressed-stays]
-grounding_judged: 05a30af6d6ff0c8ffbf7e7e54bf7374ea895612a82c1154248ad60e6b0deeec2
+grounded_in: [regularity:a-change-outside-the-state-its-consumers-read-is-unseen-by-them, regularity:a-coordinate-shifts-while-the-content-it-addressed-stays, regularity:a-stage-control-is-re-evaluated-after-its-world-has-changed, regularity:a-shared-resource-moves-under-others-action, regularity:a-worktree-from-origin-main-with-one-cherry-pick-carries-only-that-commits-diff, regularity:a-credential-that-opens-a-pull-request-may-lack-the-right-to-merge-it]
+grounding_judged: 663c22a8c79f5056a95ee9f25383c3b558e0a39ae4299813bbe66f7f3e75948d
+grounding_override: user-approved 2026-11-03: the judge finds a listed ground irrelevant (the cherry-pick ground); the r11 revision rules allow no ground removal, so the defect is recorded; an irrelevant ground only causes a spurious revisit on refutation; removal is tracked as a follow-up issue. It also finds the ordering before verify-final and the cleanup step ungrounded, under the same follow-up.
 created: 2026-07-02
 last_verified: 2026-10-08
 ---

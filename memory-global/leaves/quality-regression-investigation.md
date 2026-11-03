@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:an-instruction-edit-degrades-task-quality-without-error-and-an-unstamped-quality-record-cannot-be-traced-to-it, regularity:text-loaded-into-every-session-is-paid-for-by-sessions-that-never-consult-it, regularity:a-judgement-call-contains-a-decidable-sub-decision]
-grounding_judged: a952cb14627151200386bdadc15f7f5376c6b5e4787afee8c6a48639859d423d
+grounding_judged: dbb93901725aa348cfebc06e2981b19cdd8a81a99d4e658a35dc4be64022b1f2
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 refs:
   - policy-effectiveness-tracking

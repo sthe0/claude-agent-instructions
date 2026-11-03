@@ -4,7 +4,7 @@ description: Conformance — whether the coordinator's actual behavior followed 
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-step-that-ran-is-not-thereby-a-step-that-worked, regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-judgement-call-contains-a-decidable-sub-decision]
-grounding_judged: 006925ad5d92de9cdc26981f44887e9d232a52022562fbea9091a7393174a0b1
+grounding_judged: 8299a0bbf72d556d81bdb5288bffc1f784fa804d7077ab9fcf3d171b3e44fbb7
 grounding_override: The judge's own reasoning finds every listed ground relevant to part of the rule and no ground wholly irrelevant; the defect label is a weak verdict.
 type: reference
 created: 2026-07-22

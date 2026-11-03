@@ -4,8 +4,8 @@ description: When a file or value is wrong, find what writes it before editing i
 type: reference
 schema: principle/v1
 generality: 2
-grounded_in: [regularity:a-generated-artifact-is-overwritten-by-its-writer]
-grounding_judged: 95ea3038c668fa93e892ecf9c7d40bce61950481a4a5edaa3a7669d83494b76c
+grounded_in: [regularity:a-generated-artifact-is-overwritten-by-its-writer, regularity:a-fix-at-the-failing-site-leaves-siblings-of-the-same-form, regularity:a-reproducible-cause-left-unnormed-fails-again-at-its-next-occurrence]
+grounding_judged: 8abf6989bc0770edd32847f71b9561e967620c6d696dc82fc41188ff37e41bf7
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

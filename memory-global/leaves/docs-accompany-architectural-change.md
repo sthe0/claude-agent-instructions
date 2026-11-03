@@ -5,7 +5,8 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:what-a-change-does-not-carry-ends-with-its-authors-context, regularity:a-change-outside-the-state-its-consumers-read-is-unseen-by-them]
-grounding_judged: 664933488a6a30f299018b8a9c5ab178805b6aba4cce89171ce90a3de20a7b38
+grounding_judged: 4e6a2829b12098a675eb8a3f223a33b0f4e796b153a46c35961205c838ce3c5b
+grounding_override: user-approved 2026-11-03: the judge finds part of the rule ungrounded (reaching the ADR from the README, and its tension with always-loaded cost); the remaining grounds cannot be removed and no non-thin regularity covers the gap under the r11 revision rules, so the defect is recorded rather than papered over; the repair is a per-clause split of the leaf or a new regularity, tracked as a follow-up issue.
 created: 2026-06-26
 last_verified: 2026-06-26
 ---

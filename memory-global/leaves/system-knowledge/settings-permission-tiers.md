@@ -7,7 +7,7 @@ last_verified: 2026-09-26
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:settings-base-json-is-merged-fleet-wide-without-prompt-and-admits-only-read-only-entries, regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-process-boundary-carries-only-what-is-passed-across-it]
-grounding_judged: 556749c9b1abd2390f79a773cfaf76bea3856c4006b6c39dfe8f114ffaa4333c
+grounding_judged: 270b384bd28830af7e15e8f86fb6ff7327e81c6c293aa892534007fec2245b28
 ---
 
 ## Difficulty

@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:an-unkeyed-or-unweighted-total-misranks-the-decision-it-feeds, regularity:a-judgement-call-contains-a-decidable-sub-decision, regularity:a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on]
-grounding_judged: 05a22ff001ea309a7c0b46aec424ea57141f0ee85f058dad3e4c983980b52d1b
+grounding_judged: 9b22c11d06776d801267a813ffda259c6df50287ff15f410e0268e1bcd742ae9
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-08-19
 last_verified: 2026-09-23

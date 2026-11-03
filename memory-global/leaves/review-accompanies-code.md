@@ -5,7 +5,7 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:what-a-change-does-not-carry-ends-with-its-authors-context, regularity:a-step-that-ran-is-not-thereby-a-step-that-worked, regularity:a-change-outside-the-state-its-consumers-read-is-unseen-by-them, regularity:a-coordinate-shifts-while-the-content-it-addressed-stays]
-grounding_judged: b92fb6538f7bdbed29973dc4a6ce548f445a33399da7f5851b59e22f2d6f32c3
+grounding_judged: 94a5227f7de5eb8d01a6280f719f229e3009907b216b0bf81d40da5885fc4cc7
 grounding_override: Seed leaf fixed as class P on the named ground; the rule applies to review-gated work only, which the leaf states in its own scope, so the judge scope_mismatch reads the rule wider than the leaf does.
 created: 2026-07-27
 last_verified: 2026-10-12

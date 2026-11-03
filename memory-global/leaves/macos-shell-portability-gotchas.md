@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:macos-ships-bsd-sed-and-bash-3-2-where-gnu-sed-syntax-empty-array-expansion-and-grep-q-under-pipefail-behave-otherwise, regularity:a-tool-relies-on-facilities-its-authors-host-supplies-unasked]
-grounding_judged: 720195d884d42f385d0f990b8577f0d4d9d832ebed58aa43041248f3508f4531
+grounding_judged: 924e13aeb350fc963941311aa08f970f337f5425d4d2f8d18af6be502ab0d0ab
 created: 2026-06-30
 last_verified: 2026-06-30
 ---

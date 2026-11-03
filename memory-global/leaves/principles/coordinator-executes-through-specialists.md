@@ -6,7 +6,7 @@ schema: principle/v1
 generality: 2
 domain: coordination
 grounded_in: [regularity:root-direct-edits-accumulate-context-and-skip-review]
-grounding_judged: 74c374169a1845d7d51b6b9da9ca3e38f06e1d693ff429c88045f465ebed83c8
+grounding_judged: 186afb808ec1493d88e5894206089f7307a4ec9e6a4a1b55af398d3ecf53fc21
 grounding_override: Stamp: the leaf is not edited in this conversion and its grounded_in is fixed as the leaf states it; the judge finds the listed grounds support the central rule but not every clause, which a later curator split of the leaf can address.
 created: 2026-06-26
 last_verified: 2026-06-26

@@ -4,8 +4,9 @@ description: Extend the mini-OD (Expected/Actual/Mismatch) discipline to any blo
 type: feedback
 schema: principle/v1
 converted_from: leaf/v1
-grounded_in: [regularity:a-blocker-not-stated-as-a-checkable-sentence-gets-neither-investigated-nor-asked-about, regularity:a-generic-failure-message-names-a-surface-shared-by-many-causes, regularity:a-question-escalated-by-reflex-spends-the-users-attention-a-held-channel-would-have-saved]
-grounding_judged: 20e0997d52daceaee572647dbd261f040711d11ab643a00305d319aaa5ac3a00
+grounded_in: [regularity:a-blocker-not-stated-as-a-checkable-sentence-gets-neither-investigated-nor-asked-about, regularity:a-generic-failure-message-names-a-surface-shared-by-many-causes, regularity:a-question-escalated-by-reflex-spends-the-users-attention-a-held-channel-would-have-saved, regularity:a-step-that-ran-is-not-thereby-a-step-that-worked, regularity:a-probe-observes-only-the-domain-it-reads]
+grounding_judged: 25e2104c5f68d2f57ffea32f698898ab5c3cebe92e349f00a79b4ae600481355
+grounding_override: user-approved 2026-11-03: the judge finds a listed ground irrelevant (the probe-domain and step-ran-versus-worked grounds); the r11 revision rules allow no ground removal, so the defect is recorded; an irrelevant ground only causes a spurious revisit on refutation; removal is tracked as a follow-up issue.
 created: 2026-09-03
 last_verified: 2026-09-03
 ---

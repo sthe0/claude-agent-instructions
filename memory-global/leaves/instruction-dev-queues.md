@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-value-emitted-to-an-external-channel-persists-beyond-recall, regularity:a-single-tracker-holding-both-backlog-and-reports-keeps-them-apart-only-by-a-label-the-digest-filters-on]
-grounding_judged: 603323d8509f84526570d8251373f40fcb422bfb00ef37a01081a66bac763ec2
+grounding_judged: 1090826efca3c3b7717160114cfd56cc4a3bf6bbeae4a74e3f9c58e6427244b4
 created: 2026-06-30
 last_verified: 2026-07-04
 ---

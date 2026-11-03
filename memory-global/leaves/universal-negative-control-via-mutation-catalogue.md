@@ -5,7 +5,7 @@ type: feedback
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-controls-defects-surface-only-when-it-is-executed, regularity:a-recorded-remedy-is-absent-at-the-act-it-governs]
-grounding_judged: e6af7e6e8e2e073f08998df8fd42db438fa032961d7a90f631140f7049eba146
+grounding_judged: b4d0aca8645663371a574cb3da83892bc5440b1d7dd7529c15ef780c37ed4202
 grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-04
 last_verified: 2026-09-04

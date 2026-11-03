@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 converted_from: leaf/v1
 grounded_in: [regularity:a-stage-control-is-re-evaluated-after-its-world-has-changed]
-grounding_judged: 92eca3dd2705a679005b5ecde35ae8d5673ad0ce69d320aa906ed68e8a0d15ac
+grounding_judged: e20ae82959bab64a1e0c654fe12ff8949e789830834691ffe7986cae46dbb34a
 created: 2026-09-22
 last_verified: 2026-09-22
 ---

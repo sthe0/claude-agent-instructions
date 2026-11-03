@@ -4,8 +4,9 @@ description: When the agentctl engine is not started or unavailable, walk the su
 type: reference
 schema: principle/v1
 converted_from: leaf/v1
-grounded_in: [regularity:a-recorded-remedy-is-absent-at-the-act-it-governs]
-grounding_judged: c85dc415ca43800f29a9e79a4ef07808350de76516e0abd5bd509712cdf5c5c7
+grounded_in: [regularity:a-recorded-remedy-is-absent-at-the-act-it-governs, regularity:a-step-that-ran-is-not-thereby-a-step-that-worked, regularity:a-controls-defects-surface-only-when-it-is-executed]
+grounding_judged: ae4501e03901a2d6b7e49276b7cfc5b875d172ffaf6a86b52a23ad03d479b297
+grounding_override: user-approved 2026-11-03: the judge finds part of the rule ungrounded (the five-step hand-walk and the case where the engine is not driving); the remaining grounds cannot be removed and no non-thin regularity covers the gap under the r11 revision rules, so the defect is recorded rather than papered over; the repair is a per-clause split of the leaf or a new regularity, tracked as a follow-up issue.
 created: 2026-07-02
 last_verified: 2026-07-02
 ---

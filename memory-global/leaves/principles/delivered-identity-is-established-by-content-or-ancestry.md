@@ -5,7 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:a-coordinate-shifts-while-the-content-it-addressed-stays, regularity:a-shared-resource-moves-under-others-action]
-grounding_judged: 50341b906223c9db35ae5190f3a3edc2551e0b4c9b4307824db9f29944132d8c
+grounding_judged: c7ce57fa60c2281aea8db9e9b1dc6fd947fba58ed58803a86a9e81efc08b6d81
 grounding_override: Stamp: the leaf is not edited in this conversion and its grounded_in is fixed as the leaf states it; the judge finds the listed grounds support the central rule but not every clause, which a later curator split of the leaf can address.
 domain: development
 created: 2026-10-12
