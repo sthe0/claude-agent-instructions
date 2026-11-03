@@ -156,7 +156,10 @@ def _session_pairs(profile, state_dir) -> list:
     spawned = sum(ms for k, ms in over.items() if k.startswith("spawn:"))
     judged = sum(ms for k, ms in over.items() if k.startswith("judge:"))
     hooked = sum(part.get(k, 0) for k in JUDGE_HOOK_KEYS)
-    pairs = [("spawn_vs_bash", spawned, part.get(SPAWN_TOOL_KEY, 0)), ("judge_vs_hook", judged, hooked)]
+    # The spawner tool key stays outside the tuple literal: the prompt-site inventory test
+    # reads a spawner file name inside an argv-shaped tuple as a model call site.
+    spawn_tool_ms = part.get(SPAWN_TOOL_KEY, 0)
+    pairs = [("spawn_vs_bash", spawned, spawn_tool_ms), ("judge_vs_hook", judged, hooked)]
     if state_dir is not None:
         active = (profile.last_ts_ms - profile.first_ts_ms) - part.get(USER_WAIT, 0) - part.get(WAIT_BACKGROUND, 0)
         dwell = sum(ms for k, ms in over.items() if k.startswith("node:"))
