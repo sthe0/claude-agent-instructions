@@ -157,6 +157,14 @@ def _isolate_plan_object_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_grounding_judge_cache(tmp_path, monkeypatch):
+    """The grounding judge caches verdicts by prompt digest under the real agentctl dir; a
+    test must neither read a verdict a live run left there nor write one."""
+    from agentctl import grounding_judge
+    monkeypatch.setattr(grounding_judge, "agentctl_dir", lambda: tmp_path / "agentctl-dir")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_plan_view_root(tmp_path, monkeypatch):
     """A prompt built for a site materializes its plan view under the topo units root;
     no test may write into the real one."""

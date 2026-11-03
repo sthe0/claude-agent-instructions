@@ -145,7 +145,7 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/cli.py`:`_refresh_approved_grant_snapshot` | not a binding | Re-hashes the approved snapshot to refresh the recorded snapshot hash; the snapshot is a copy the engine wrote. |
 | `scripts/agentctl/cli.py`:`_stamp_accepted_plan_digest` | not a binding | Writes the accepted digest from the file's bytes; `plan-convert-live` writes the converted root the same way. |
 | `scripts/agentctl/cli.py`:`cmd_present_plan` | not a binding | Binds a new receipt to the digest of the plan as it is now; the receipt is created here, not compared. |
-| `scripts/agentctl/cli.py`:`cmd_plan_review` | not a binding | An exact cross-check of the digest the reviewer attests against the plan file's bytes at record time; the staleness that follows is read through the callee that counts rounds. |
+| `scripts/agentctl/cli.py`:`_record_plan_review` | not a binding | An exact cross-check of the digest the reviewer attests against the plan file's bytes at record time; the staleness that follows is read through the callee that counts rounds. |
 | `scripts/agentctl/cli.py`:`cmd_dispatch` | not a binding | Compares the hashes of the settings files a spawn materializes, not a plan. |
 | `scripts/agentctl/cli.py`:`_stage_grant_entries` | not a binding | Checks the approved snapshot's bytes against the recorded snapshot hash, which `plan-convert-live` never rewrites (no new snapshot is written). |
 | `scripts/agentctl/gates.py`:`_file_sha256` | not a binding | The hashing helper itself. |

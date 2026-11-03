@@ -4041,7 +4041,7 @@ def _renorm_stage_residual(stage) -> tuple:
         stage.optional,
         stage.backlog_issue,
         tuple(stage.renorms),
-        stage.principle.grounding_override,
+        stage.principle.grounding_override if stage.principle else "",
     )
 
 
