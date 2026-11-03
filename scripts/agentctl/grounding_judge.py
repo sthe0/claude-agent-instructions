@@ -194,7 +194,9 @@ def _table_ground(ref_text: str, data, corpus=None) -> dict:
             if leaf.get("tier") != tier or _stem(leaf.get("path")) != ref.slug:
                 continue
             if ref.kind == "regularity" and leaf.get("class") in ("K", "G"):
-                return {"ref": ref.text(), **_pick(leaf, ("statement", "given", "given_source"))}
+                found = grounding.leaf_for(ref, corpus) if corpus is not None else None
+                verified = {"last_verified": _ground_of(found)["last_verified"]} if found is not None else {}
+                return {"ref": ref.text(), **_pick(leaf, ("statement", "given", "given_source")), **verified}
             if ref.kind == "ontology" and leaf.get("class") == "O":
                 return {"ref": ref.text(), **_pick(leaf, ("distinction", "adequacy"))}
     found = grounding.leaf_for(ref, corpus) if corpus is not None else None

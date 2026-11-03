@@ -451,6 +451,18 @@ def test_table_ground_resolves_corpus(tmp_path):
     assert grounds[0]["statement"] == "A pure call repeats its result."
 
 
+def test_table_given_ground_carries_last_verified(tmp_path):
+    corpus = _corpus(tmp_path)
+    data = __import__("tomllib").loads(TABLE)
+    entry = {"tier": "global", "path": "principles/prin-a.md", "grounded_in": ["regularity:given-a"]}
+    ground = _gj().table_grounds(entry, data, corpus=corpus)[0]
+    assert ground["given"] == "doc"
+    assert ground["last_verified"] == "2026-10-20"
+    assert _gj().given_currency(ground, today=TODAY) is True
+    bare = _gj().table_grounds(entry, data)[0]
+    assert "last_verified" not in bare
+
+
 def test_project_m_entry_names_its_regularity_at_project_tier():
     entry = {"tier": "project", "path": "leaves/m.md", "class": "M", "regularity": "reg-p", "grounded_in": []}
     assert _gj()._entry_refs(entry) == ["project:regularity:reg-p"]
