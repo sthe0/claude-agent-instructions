@@ -58,7 +58,7 @@ The retired form was enforced **only on opted-in leaves** and on new leaves; exi
 - A leaf opted into the retired form → the 3 sections were required (deny on any missing).
 - A leaf **without** the tag → grandfathered. For `system-knowledge/` the carried-over **difficulty-lead baseline** still applies (the `description` names the difficulty, OR the body leads with a `> **Difficulty/Затруднение …** ` blockquote) — this is the rule the retired `verify-difficulty-lead.py` enforced, now folded into the same verifier. For other dirs, only the existing type + index guarantee applies.
 
-The form is retired: convert a grandfathered leaf to the principle, regularity or ontology form when you next touch it.
+The form is retired: convert a grandfathered leaf to the `principle/v1`, `regularity/v1` or `ontology/v1` form when you next touch it. `verify-principle-provenance.py` reports a leaf still tagged with the retired schema as `retired_leaf_schema`, and a converted principle carries the `grounding_judged` stamp once the grounding judge accepts its link.
 
 ### What enforces it
 
@@ -70,7 +70,7 @@ The form is retired: convert a grandfathered leaf to the principle, regularity o
 
 ## See also
 
-- [[experience-leaf-schema]] — the `difficulty/v1` schema for experience leaves (out of scope for `leaf/v1`). It sits at generality 0 of the chain experience → regularity → principle; `leaf/v1` here is a separate, unrelated shape, not a point on that chain.
+- [[experience-leaf-schema]] — the `difficulty/v1` schema for experience leaves (out of scope for the retired `leaf/v1`). It sits at generality 0 of the chain experience → regularity → principle; the retired `leaf/v1` shape is separate and not a point on that chain.
 - [[regularity-leaf-schema]] — the `regularity/v1` schema (the knowledge layer induced from experience leaves).
 - [[principle-leaf-schema]] — the `principle/v1` schema (the norm layer, grounded in regularities via `grounded_in`).
 - [[memory-hierarchy]] — when to spin off `<subdir>/MEMORY.md` sub-indexes.

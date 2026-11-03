@@ -34,6 +34,8 @@ A regularity lives under `memory-global/leaves/regularities/` and carries `schem
 - `generality: <1–3>` — how widely the claim ranges (the ladder is in [principle-leaf-schema.md](principle-leaf-schema.md)).
 - `induced_from: [<slug>, …]` — provenance **down** to the `difficulty/v1` experience leaves, or the sanitized cases (`case/v1`), this regularity generalizes. The link is two-sided: each experience source lists the regularity in its `generalized_into`, and `record-experience.py link` / `unlink` keep both sides.
 - `rule_derived: <reason>` — instead of an experience source, for a regularity written from rules that no experience yet backs. A regularity needs one or the other: neither is `no_experience_source`; both is a stale mark.
+- `given: code | doc | measurement` with `given_source: <path or locator>` — a **given** regularity, system knowledge taken from a source rather than induced from incidents; it replaces `induced_from` and `## Induced from` with `## Given` (the source and how the fact was read from it). A given is presumed possibly stale or wrong: the grounding norm treats it as unverified until `last_verified` lies within `given-regularity-max-age-days` or the citing stage checks the claim against `given_source`.
+- `order_derived: <task>` with `introduced_by: <task>` — a regularity generalized from a **factual** statement in the user's order; the leaf carries the verbatim quote in `## Derived from order` (replacing `## Induced from`) and counts as an unverified given. A quote stating a demand stays a norm and is never generalized. `introduced_by` names the task that wrote the regularity; `promote --order-derived T --order-quote Q` writes both.
 - `domain:` — **optional**, the practice domain, orthogonal to `generality` (consumed by `record-experience.py search --domain`).
 - `created` / `last_verified` (required) — see [memory-temporal-frontmatter.md](memory-temporal-frontmatter.md).
 
@@ -50,7 +52,9 @@ A regularity lives under `memory-global/leaves/regularities/` and carries `schem
 
 **Held-out check before induction.** The recurrence count proves repetition, not generalization: a regularity authored from the cluster that produced it can overfit to those incidents. Before writing it, hold out one member context and check that the `## Generality` level still holds for it without a special case; if it holds only by narrowing, state the narrower class and record the outcome of the check as the opening line of `## Refutation`.
 
-**Project tier.** A project keeps its principles induced from its own leaves with `induced_from`; it holds no regularity layer. A project leaf reaches a global regularity only through a sanitized case, which the regularity lists in `induced_from`.
+**Grounding norm.** A stage's `[stage.principle].source` and a principle's `grounded_in` name knowledge only — `regularity:<slug>`, `ontology:<slug>`, experience leaves and cases — never another principle; a model judge checks each link both ways (see [principle-leaf-schema.md](principle-leaf-schema.md) and the planner's policy § Grounding norm). A refuted regularity puts every prescription resting on it in question.
+
+**Project tier.** A project keeps a regularity area of its own, `regularities/` beside its `principles/` and `experience/`, with the same schema and a `regularities/MEMORY.md` index. A project principle is grounded in project regularities as `project:regularity:<slug>` (resolved project-first, falling back to the global tier) and in project experience as singular knowledge. `record-experience.py promote --project-dir DIR` writes into it and `verify-principle-provenance.py --project` checks it. A global regularity reaches a project leaf only through a sanitized case, which the regularity lists in `induced_from`.
 
 ## See also
 

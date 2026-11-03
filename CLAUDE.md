@@ -185,7 +185,7 @@ You have three memory scopes. Pick by **purpose**, not by convenience.
 | **Global engineering** | `~/.claude-agent/memory-global/MEMORY.md` + `leaves/` + `leaves/experience/` + `leaves/system-knowledge/` | Cross-project engineering patterns, reasoning practices, runbooks, retrospectives, granted-permissions. English. |
 | **Project (local)** | `<project_cwd>/.claude/agent-memory/MEMORY.md` + leaves + `experience/` + `system-knowledge/` | Project-specific runbooks — product pipelines, ticket detail, repo conventions, prod naming. English. Shared via the project's git. |
 
-All three follow the same file shape: `MEMORY.md` as a short index, detail in leaf files, frontmatter `name` / `description` / `type` (`user` / `feedback` / `project` / `reference`) plus the temporal fields `created` / `last_verified` (required, tool-stamped) — see [memory-temporal-frontmatter.md](memory-global/leaves/memory-temporal-frontmatter.md). Sub-indexes: [memory-hierarchy.md](memory-global/leaves/memory-hierarchy.md); leaf shape (`schema: leaf/v1`): [leaf-schema.md](memory-global/leaves/leaf-schema.md).
+All three follow the same file shape: `MEMORY.md` as a short index, detail in leaf files, frontmatter `name` / `description` / `type` (`user` / `feedback` / `project` / `reference`) plus the temporal fields `created` / `last_verified` (required, tool-stamped) — see [memory-temporal-frontmatter.md](memory-global/leaves/memory-temporal-frontmatter.md). Sub-indexes: [memory-hierarchy.md](memory-global/leaves/memory-hierarchy.md); leaf shape (`ontology/v1`): [leaf-schema.md](memory-global/leaves/leaf-schema.md).
 
 If a fact qualifies for two scopes, write it to the **most specific** one.
 

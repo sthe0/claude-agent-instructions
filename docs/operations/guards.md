@@ -20,7 +20,7 @@ bash scripts/verify-layout-contract.sh # layout check — run separately (not in
 | [scripts/verify-readme.py](../../scripts/verify-readme.py) | The HTML-comment inventory sentinel tables (`<!-- inventory:skills:begin/end -->`, `<!-- inventory:specializations:begin/end -->`) exist in their registered file (`REGION_FILES` dict), match the filesystem, and have no stale rows. | Yes |
 | [scripts/verify-doc-concepts.py](../../scripts/verify-doc-concepts.py) | Every binding in `scripts/doc-bindings.json` resolves: the target file exists and contains the named heading. | Yes |
 | [scripts/verify-agentctl.py](../../scripts/verify-agentctl.py) | The coordination engine's schema, state-machine transitions, cognitive leaves, and gate guardian hooks stay consistent. | Yes |
-| [scripts/verify-leaf-structure.py](../../scripts/verify-leaf-structure.py) | Memory leaves that opt into the `leaf/v1` schema have the required sections (`## Difficulty`, `## Guidance`, `## See also`). | Yes |
+| [scripts/verify-leaf-structure.py](../../scripts/verify-leaf-structure.py) | Memory leaves that still opt into the retired `leaf/v1` schema have the required sections (`## Difficulty`, `## Guidance`, `## See also`). | Yes |
 | [scripts/verify-memory-index.py](../../scripts/verify-memory-index.py) | Every leaf pointer in `MEMORY.md` index files resolves to an existing file. | Yes |
 | [scripts/verify-experience-leaf.py](../../scripts/verify-experience-leaf.py) | Experience leaves (`difficulty/v1`) have required frontmatter fields including `resolution_confirmed_by_user`. | Yes |
 | [scripts/verify-language.py](../../scripts/verify-language.py) | Files in the repo that must stay English do not contain significant Russian text (and vice-versa for user-facing reply surfaces). | Yes |
