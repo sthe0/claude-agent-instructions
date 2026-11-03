@@ -40,7 +40,7 @@ State, here in the conversation, three things — at the **global** level, the w
 
 Do not yet try to explain the cause. Cause is what investigation will find. Declaration only fixes that there **is** a divergence and frames it.
 
-Record it: `agentctl declare --session <id> --expected … --actual … --mismatch …` (the engine refuses `investigate`/`critique`/`replan` until this exists). A small-change session holds no plan: its Expected is the done criterion it was handed (a linked child's norm) and it closes the difficulty with `replan` without `--plan`.
+Record it: `agentctl declare --session <id> --expected … --actual … --mismatch …` (the engine refuses `investigate`/`critique`/`replan` until this exists). A small-change session holds no plan: its Expected is the done criterion it was handed (a linked child's norm) and it closes the difficulty with `replan` without a plan (no `--plan`).
 
 ## 2. Investigation
 
