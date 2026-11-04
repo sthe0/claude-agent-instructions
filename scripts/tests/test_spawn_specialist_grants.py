@@ -970,3 +970,80 @@ def test_mutation_control_is_collected_and_discriminates():
     control = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(control)
     assert control.main() == 0
+
+
+# --- (F) the linked-spawn executor guard ------------------------------------
+
+
+@pytest.fixture
+def plans_and_stub_skills(monkeypatch, tmp_path):
+    """The plans dir must differ from the plan's venue (tmp_path) or its deny would void
+    the venue's own edit grant; the skills are stubs, so the spawn needs no installed home."""
+    skills = tmp_path / "skills"
+    for kind in ("developer", "code-reviewer", "thinker"):
+        (skills / kind).mkdir(parents=True)
+        (skills / kind / "SKILL.md").write_text(f"# {kind}\n", encoding="utf-8")
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    monkeypatch.setattr(MOD, "SKILLS_DIR", skills)
+    monkeypatch.setattr(MOD, "plans_dir", lambda: plans)
+    return plans
+
+
+def _dry_run_argv(sid: str, kind: str, plan_path: str, state_root: Path) -> list[str]:
+    return [
+        "--kind", kind, "--plan", plan_path, "--done-criterion", "tests green",
+        "--criterion-type", "measurable", "--complexity", "medium", "--effort", "high",
+        "--session", sid, "--stage-index", "1", "--state-root", str(state_root), "--dry-run",
+    ]
+
+
+def _plan_with_stage_one_executor(fixtures_dir, tmp_path, executor: str) -> str:
+    path = Path(_write_declared_grants_plan(fixtures_dir, tmp_path))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'executor = "spawn:developer"', f'executor = "{executor}"', 1),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+@pytest.mark.parametrize("executor", ["in_thread", "spawn:tech-writer"])
+def test_a_linked_executing_spawn_whose_kind_differs_from_the_stage_executor_is_refused(
+    store, venued_fixtures_dir, tmp_path, capsys, plans_and_stub_skills, executor,
+):
+    sid = f"spawn-guard-mismatch-{executor.replace(':', '-')}"
+    plan_path = _plan_with_stage_one_executor(venued_fixtures_dir, plans_and_stub_skills, executor)
+    _to_executing(store, sid, venued_fixtures_dir, plan_path=plan_path)
+
+    rc = MOD.main(_dry_run_argv(sid, "developer", plan_path, tmp_path / "state"))
+
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert f"`{executor}`, not `spawn:developer`" in err
+
+
+def test_a_linked_spawn_of_the_stage_executor_kind_hands_the_declared_grants_to_the_child(
+    store, venued_fixtures_dir, tmp_path, capsys, plans_and_stub_skills,
+):
+    sid = "spawn-guard-match"
+    plan_path = _plan_with_stage_one_executor(venued_fixtures_dir, plans_and_stub_skills, "spawn:developer")
+    _to_executing(store, sid, venued_fixtures_dir, plan_path=plan_path)
+
+    rc = MOD.main(_dry_run_argv(sid, "developer", plan_path, tmp_path / "state"))
+
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    assert "- `Bash(git status:*)` — declared" in captured.out
+
+
+def test_a_linked_review_spawn_is_not_refused_by_the_executor_guard(
+    store, venued_fixtures_dir, tmp_path, capsys, plans_and_stub_skills,
+):
+    sid = "spawn-guard-review"
+    plan_path = _plan_with_stage_one_executor(venued_fixtures_dir, plans_and_stub_skills, "in_thread")
+    _to_executing(store, sid, venued_fixtures_dir, plan_path=plan_path)
+
+    for kind in ("code-reviewer", "thinker"):
+        assert MOD.main(_dry_run_argv(sid, kind, plan_path, tmp_path / "state")) == 0
+    assert "is executed by" not in capsys.readouterr().err

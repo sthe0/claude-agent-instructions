@@ -1115,6 +1115,12 @@ MEMORY_WRITE_KINDS = ("curator",)
 # alongside its siblings and not a one-off literal buried in a function body.
 PROJECT_SETTINGS_KINDS = ("developer",)
 
+# Kinds that work read-only on a stage's norm and so need no stage grants of their own:
+# a spawn of one of these linked to a stage of another executor is legitimate. Every other
+# kind executes, and linked to a stage whose executor is not spawn:<kind> it would receive
+# an empty grant set (see `load_engine_stage_grants`) and fail later on every rule.
+REVIEW_KINDS = ("thinker", "code-reviewer")
+
 
 def plans_permission_rules(kind: str, plans_directory: Path) -> tuple[list[str], list[str]]:
     """(allow, deny) permission rules granting `kind` access to
@@ -2019,6 +2025,15 @@ def load_engine_stage_grants(
     if directive.data.get("executor") != f"spawn:{kind}":
         return None
     return directive.data.get("grants", [])
+
+
+def executor_of_stage(store, session_id: str, stage_index: int) -> "str | None":
+    """The executor the engine's state declares for the stage (`in_thread` or
+    `spawn:<kind>`), or `None` when the session or the stage cannot be read."""
+    try:
+        return store.load(session_id).stage(stage_index).actor.executor
+    except Exception:
+        return None
 
 
 def parent_difficulty_env_value(
@@ -3284,6 +3299,21 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         except Exception as exc:
             print(f"warning: norm handoff unavailable, spawning unlinked: {exc}", file=sys.stderr)
     child_linked = handoff_record is not None
+    if child_linked and args.kind not in REVIEW_KINDS:
+        stage_executor = executor_of_stage(handoff_store, args.session, args.stage_index)
+        if stage_executor is not None and stage_executor != f"spawn:{args.kind}":
+            print(
+                f"error: stage {args.stage_index} of session {args.session} is executed by "
+                f"`{stage_executor}`, not `spawn:{args.kind}`: a linked `{args.kind}` spawn would get "
+                "an empty grant set and fail on every rule outside the handoff. Fix the stage's "
+                "executor or spawn the kind it names.",
+                file=sys.stderr,
+            )
+            log_refused(
+                "executor-kind-mismatch",
+                {"kind": args.kind, "stage_index": args.stage_index, "executor": stage_executor},
+            )
+            return 2
     # A re-dispatch of the stage continues the previous child's engine session, so what
     # the root recorded on it between the two spawns reaches the child.
     resumed = (
