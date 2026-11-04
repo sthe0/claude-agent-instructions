@@ -484,12 +484,23 @@ def jump_to(subject, attention_payload, locator, runner=None) -> str:
     if subject is None:
         return NO_JUMP_TARGET
     harness = jump_harness(subject, attention_payload)
-    if harness is None:
-        return NO_JUMP_TARGET
-    target = locate.jump_target(locator, harness)
+    target = locate.jump_target(locator, harness) if harness is not None else None
+    if target is None and subject[0] == "task":
+        target = bound_jump_target(subject[1], locator)
     if target is None:
         return NO_JUMP_TARGET
     return jump_status(target, locate.jump(target, runner=runner))
+
+
+def bound_jump_target(engine_session: str, locator) -> dict | None:
+    """The first target among every session bound to a task. The overlay names the session with the newest
+    transcript, which may have no window while an older one of the same task has; it also has no row yet
+    before the first overlay read. Scans the binding files, so it runs only after the overlay's session failed."""
+    for harness in sorted(engine_session_binding.harness_sessions_driving(engine_session)):
+        target = locate.jump_target(locator, harness)
+        if target is not None:
+            return target
+    return None
 
 
 def reconcile(view: View, session_ids, harness_ids=()) -> View:
