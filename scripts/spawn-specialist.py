@@ -38,7 +38,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import NamedTuple, Sequence
+from typing import Mapping, NamedTuple, Sequence
 
 import proc_tree  # sibling module in scripts/; supervised launch + recursive teardown
 from agentctl import grants  # the sole validator every materialized rule/add_dir passes through
@@ -198,6 +198,18 @@ def build_child_lineage(inherited: "str | None", own_id: "str | None") -> str:
     if own_id and own_id not in ids:
         ids.append(own_id)
     return registry.format_lineage(ids)
+
+
+def build_child_env(environ: "Mapping[str, str]", depth_next: int, session_id: "str | None") -> dict:
+    """The environment a spawned child starts with: the parent's, whole, plus the spawn
+    markers. Everything else is inherited -- TMUX_PANE included, which is why pane
+    ownership cannot rest on that variable alone (agentctl.pane_title.owns_pane)."""
+    return {
+        **environ,
+        "AGENT_RECURSION_DEPTH": str(depth_next),
+        "CLAUDE_CODE_DISABLE_CRON": "1",
+        "AGENT_LINEAGE_IDS": build_child_lineage(environ.get("AGENT_LINEAGE_IDS", ""), session_id),
+    }
 
 
 def permissions_digest(project_file: Path | None) -> str:
@@ -3528,15 +3540,7 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         except OSError as exc:
             print(f"warning: own plan directory not created: {exc}", file=sys.stderr)
 
-    env = {
-        **os.environ,
-        "AGENT_RECURSION_DEPTH": str(depth_next),
-        "CLAUDE_CODE_DISABLE_CRON": "1",
-        "AGENT_LINEAGE_IDS": build_child_lineage(
-            os.environ.get("AGENT_LINEAGE_IDS", ""),
-            os.environ.get("CLAUDE_CODE_SESSION_ID"),
-        ),
-    }
+    env = build_child_env(os.environ, depth_next, os.environ.get("CLAUDE_CODE_SESSION_ID"))
     # Always overwritten: a value inherited from an ancestor names that ancestor's
     # difficulty, not the one this spawn's own session has open.
     env.pop(PARENT_DIFFICULTY_ENV, None)
