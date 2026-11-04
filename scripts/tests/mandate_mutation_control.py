@@ -1001,6 +1001,7 @@ CATALOGUE: "dict[str, Mutant]" = {
             T_HOOK_START,
             "test_a_spawned_specialist_session_gets_a_task_id_of_its_own",
             "test_two_spawned_sessions_with_one_prompt_do_not_share_an_accumulator",
+            "test_a_linked_child_whose_state_holds_the_spawners_norm_handoff_gets_a_task_id_of_its_own",
         ),
     ),
     "item-norm-issue-text": Mutant(

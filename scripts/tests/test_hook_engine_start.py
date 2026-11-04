@@ -148,3 +148,54 @@ def test_two_spawned_sessions_with_one_prompt_do_not_share_an_accumulator(monkey
     ))
     assert mod.main() == 0
     assert "task=same-prompt-cccccccc" in capsys.readouterr().out
+
+
+def _prompt(monkeypatch, session_id: str, prompt: str) -> None:
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(
+        json.dumps({"session_id": session_id, "prompt": prompt})
+    ))
+
+
+def test_a_linked_child_whose_state_holds_the_spawners_norm_handoff_gets_a_task_id_of_its_own(
+        monkeypatch, tmp_path):
+    from agentctl import norm_handoff
+    from agentctl.plan import load_plan
+    from agentctl.stage_norm import StageNorm
+    from conftest import spawn_handoff
+
+    mod = _load_module()
+    state_dir = _point_roots_at(monkeypatch, tmp_path)
+    doc = load_plan(str(Path(__file__).resolve().parent / "fixtures" / "plan_two_stage.toml"))
+    record = norm_handoff.build_record(
+        parent_session="parent-1", stage_index=1, kind="developer",
+        norm=StageNorm.from_stage(doc.stages[0], {}, doc=doc), grants=[], depth=1, parent_lineage=None,
+    )
+    session_id = "dddddddd-4444-4444-4444-444444444444"
+    monkeypatch.setenv(norm_handoff.NORM_HANDOFF_ENV, spawn_handoff(state_dir, record, session_id))
+    monkeypatch.setenv("AGENT_RECURSION_DEPTH", "1")
+    real_run = mod.subprocess.run
+    monkeypatch.setattr(mod.subprocess, "run", lambda argv, **kw: real_run(argv, **{**kw, "timeout": 120}))
+    _prompt(monkeypatch, session_id, "same prompt")
+    assert mod.main() == 0
+    state = json.loads((state_dir / f"{session_id}.json").read_text(encoding="utf-8"))
+    assert state["task_id"] == "same-prompt-dddddddd"
+    events = [entry.get("event") for entry in state["history"]]
+    assert events.index("norm_handoff") < events.index("start")
+
+
+def test_a_spawned_session_already_holding_a_start_event_keeps_its_task_id(monkeypatch, tmp_path, capsys):
+    mod = _load_module()
+    state_dir = _point_roots_at(monkeypatch, tmp_path)
+    monkeypatch.setenv("AGENT_RECURSION_DEPTH", "1")
+    session_id = "eeeeeeee-5555"
+    _write_state(state_dir, session_id, node="EXECUTING", weight_class="SMALL_CHANGE",
+                 task_id="spawner-task", history=[{"event": "start"}])
+
+    def no_autostart(sid, prompt):
+        raise AssertionError("a started session must not be started again")
+
+    monkeypatch.setattr(mod, "_autostart", no_autostart)
+    _prompt(monkeypatch, session_id, "same prompt")
+    assert mod.main() == 0
+    assert json.loads((state_dir / f"{session_id}.json").read_text(encoding="utf-8"))["task_id"] == "spawner-task"
+    assert "task=spawner-task" in capsys.readouterr().out
