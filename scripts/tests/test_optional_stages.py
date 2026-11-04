@@ -831,7 +831,7 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "`args.status == \"passed\"` is the incoming result's own verdict on the one stage "
         "being recorded (--status passed|failed), not a read of the plan's stage statuses"
     ),
-    ("agentctl/cli.py", "_grounding_exempt_stages"): (
+    ("agentctl/cli_common.py", "_grounding_exempt_stages"): (
         "asks which stages carry a recorded PASS whose principle the grounding check must not "
         "re-judge; a SKIPPED stage has no recorded pass, so PASSED is the exact set"
     ),
