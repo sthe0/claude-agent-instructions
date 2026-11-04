@@ -28,14 +28,14 @@ This was the single source of truth for the **ordinary-leaf** schema, now retire
 
 ### Frontmatter
 
-Standard auto-memory frontmatter plus the schema tag and temporal fields. The example below is the retired `leaf/v1` shape; a leaf written today carries `principle/v1`, `regularity/v1` or `ontology/v1` instead (the `schema:` value must stay bare, with no trailing comment):
+Standard auto-memory frontmatter plus the schema tag and temporal fields. The example below is the retired `leaf/v1` shape; a leaf written today carries `principle/v1`, `regularity/v1` or `ontology/v1` instead (the retired tag was `leaf/v1`; the `schema:` value must stay bare, with no trailing comment):
 
 ```
 ---
 name: <human title>
 description: <one line — used for recall; for system-knowledge, name the difficulty>
 type: reference | feedback
-schema: leaf/v1
+schema: <tag>
 created: <YYYY-MM-DD>          # required — date first recorded; see memory-temporal-frontmatter
 last_verified: <YYYY-MM-DD>    # required — date content last confirmed true; >= created
 ---
