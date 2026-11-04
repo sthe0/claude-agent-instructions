@@ -1131,10 +1131,9 @@ def _optional_third_stage_plan(
 
 
 @pytest.fixture
-def eng(tmp_path, monkeypatch):
+def eng(tmp_path):
     from test_replan_autonomy_boundary import Eng
 
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "agentctl-test-session")
     return Eng(tmp_path)
 
 

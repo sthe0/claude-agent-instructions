@@ -296,7 +296,8 @@ class Contour:
         self.root = _state_dir(self.home)
         self.store = FileStateStore(self.root)
         parent_plan = _parent_plan(tmp_path)
-        _cli(self.root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc")
+        _cli(self.root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc",
+             host="claude")
         _cli(self.root, "classify", session=PARENT, architectural=True,
              changed_lines=200, wall_clock_min=60, host="claude")
         _cli(self.root, "plan", session=PARENT)
@@ -317,7 +318,8 @@ class Contour:
         )
         self.handoff = spawn_handoff(self.root, record, CHILD)
         monkeypatch.setenv(HANDOFF_ENV, self.handoff)
-        _cli(self.root, "start", session=CHILD, task="child", goal="g", done_criterion="dc")
+        _cli(self.root, "start", session=CHILD, task="child", goal="g", done_criterion="dc",
+             host="claude")
         monkeypatch.delenv(HANDOFF_ENV)
 
     def own(self, *argv: str, session: str | None = CHILD, **env: str) -> subprocess.CompletedProcess:
@@ -392,7 +394,7 @@ def test_a_linked_small_change_childs_stage_takes_the_handoff_done_criterion(con
         grants=[], depth=1, parent_lineage=None,
     )
     monkeypatch.setenv(HANDOFF_ENV, spawn_handoff(contour.root, record, small))
-    _cli(contour.root, "start", session=small, task="small", goal="g")
+    _cli(contour.root, "start", session=small, task="small", goal="g", host="claude")
     monkeypatch.delenv(HANDOFF_ENV)
     _cli(contour.root, "classify", session=small, changed_lines=10, wall_clock_min=5, host="claude")
     criterion = contour.store.load(small).stage(1).criterion.done_criterion
@@ -567,7 +569,8 @@ def _parent_session(home: Path) -> FileStateStore:
     """A session at EXECUTING stage 1 of the shared two-stage fixture, in the state
     directory under `home` (the one a spawned child's engine and hooks resolve)."""
     root = _state_dir(home)
-    _cli(root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc")
+    _cli(root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc",
+         host="claude")
     _cli(root, "classify", session=PARENT, architectural=True, changed_lines=200,
          wall_clock_min=60, host="claude")
     _cli(root, "plan", session=PARENT)

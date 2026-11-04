@@ -54,7 +54,8 @@ def _isolated_env(monkeypatch):
 
 def _executing(store, sid, fixtures_dir):
     cli.cmd_start(ns(session=sid, task="escalation", goal="g", done_criterion="dc",
-                     criterion_type="measurable", recursion_depth=0), store=store)
+                     criterion_type="measurable", recursion_depth=0, host="claude"),
+                 store=store)
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
                         wall_clock_min=60, tracker_key=None, architectural=True,
                         external_effect=False, new_dependency=False,
