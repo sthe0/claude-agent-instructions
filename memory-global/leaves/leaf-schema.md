@@ -24,7 +24,7 @@ The distinction is inadequate if leaves that carry all three required sections s
 
 ## Guidance
 
-This is the single source of truth for the **ordinary-leaf** schema. It covers reference / feedback leaves and the `system-knowledge/` leaves. **Experience leaves use a different schema** (`schema: difficulty/v1`, see [experience-leaf-schema.md](experience-leaf-schema.md)) and are out of scope here.
+This was the single source of truth for the **ordinary-leaf** schema, now retired. It covered reference / feedback leaves and the `system-knowledge/` leaves. **Experience leaves use a different schema** (`schema: difficulty/v1`, see [experience-leaf-schema.md](experience-leaf-schema.md)) and are out of scope here.
 
 ### Frontmatter
 
@@ -45,7 +45,7 @@ The two required date fields (`created` / `last_verified`) are common to every l
 
 ### Required sections
 
-A leaf in the retired section form contained these three H2 headers (enforced by regex on `^## `); the principle, regularity and ontology forms keep the `## Difficulty` and `## See also` sections and replace the middle one:
+A leaf in the retired section form contained these three H2 headers (enforced by regex on `^## `); a leaf converted to the principle, regularity or ontology form keeps the `## Difficulty` and `## See also` sections and replaces the middle one:
 
 1. **`## Difficulty`** — the divergence between desired and actual state that this leaf removes; its functional ground. State it as the X in "to achieve X, do Y" — the goal the leaf serves; the Y is a norm and the knowledge behind it is a regularity (`regularity/v1`, [[regularity-leaf-schema]]), not part of this section. This is the section that makes the leaf applicable and prunable.
 2. **`## Guidance`** — the durable fact, rule, or runbook itself (the "do Y"). Carries the body that the leaf existed for before the schema. Cite sources for OS / binary / version-dependent claims with a `> verified by: …` line.

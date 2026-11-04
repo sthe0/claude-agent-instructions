@@ -62,4 +62,4 @@ A regularity lives under `memory-global/leaves/regularities/` and carries `schem
 - [principle-leaf-schema.md](principle-leaf-schema.md) — the norm layer: `principle/v1`, `grounded_in`, the goal class, provenance completeness and cases.
 - [experience-leaf-schema.md](experience-leaf-schema.md) — the `difficulty/v1` leaf a regularity is induced from.
 - [regularities/MEMORY.md](regularities/MEMORY.md) — the sub-index of regularity leaves.
-- [leaf-schema.md](leaf-schema.md) — the `leaf/v1` shape this schema leaf itself uses.
+- [leaf-schema.md](leaf-schema.md) — the retired `leaf/v1` shape (this schema leaf now uses `ontology/v1`).
