@@ -138,8 +138,44 @@ def test_out_of_window_parent_of_an_in_window_child_is_read_and_others_are_not(t
     names = {Path(p).name for p in opened}
     assert "parent.json" in names and "child.json" in names
     assert "far-away.json" not in names
-    assert set(rows_by_session(snapshot)) == {"child"}
-    assert rows_by_session(snapshot)["child"]["parent_session"] == "parent"
+    assert set(rows_by_session(snapshot)) == {"parent"}
+
+
+def _family():
+    return [
+        make_state("root", history=[event("approve", at(hours=1))]),
+        make_state("child", history=[event("approve", at(hours=1))],
+                   parent_link={"parent_session": "root", "stage_index": 1}),
+        make_state("grandchild", history=[event("approve", at(hours=1))],
+                   parent_link={"parent_session": "child", "stage_index": 1}),
+    ]
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"include_all": True}])
+def test_the_listing_shows_a_family_as_its_root(tmp_path, kwargs):
+    root = build_fixture_root(tmp_path, _family(), now=NOW)
+    assert set(rows_by_session(collect(root, **kwargs))) == {"root"}
+
+
+def test_a_pinned_child_is_listed_beside_its_root(tmp_path):
+    root = build_fixture_root(tmp_path, _family(), now=NOW)
+    assert set(rows_by_session(collect(root, sessions=["child"]))) == {"root", "child"}
+
+
+def test_a_child_whose_parent_has_no_file_stays_listed(tmp_path):
+    orphan = make_state("orphan", history=[event("approve", at(hours=1))],
+                        parent_link={"parent_session": "gone", "stage_index": 1})
+    root = build_fixture_root(tmp_path, [orphan], now=NOW)
+    assert set(rows_by_session(collect(root))) == {"orphan"}
+
+
+def test_a_parent_link_cycle_ends_the_walk_with_a_row(tmp_path):
+    sessions = [make_state("a", history=[event("approve", at(hours=1))],
+                           parent_link={"parent_session": "b", "stage_index": 1}),
+                make_state("b", history=[event("approve", at(hours=1))],
+                           parent_link={"parent_session": "a", "stage_index": 1})]
+    root = build_fixture_root(tmp_path, sessions, now=NOW)
+    assert rows_by_session(collect(root))
 
 
 def test_sidecar_files_are_not_tasks(tmp_path):
@@ -889,7 +925,7 @@ def test_collect_detail_and_cli_write_nothing_under_the_agent_home(tmp_path, cap
         assert cli.main(cli_args(root, "--all", "--detail")) == 0
     assert result["totals"]["root_counted"] is True
     assert result["harness_sessions"] == ["harness-9"] and len(result["children"]) == 1
-    assert {"parent", "child"} <= set(rows_by_session(snapshot))
+    assert "parent" in rows_by_session(snapshot) and "child" not in rows_by_session(snapshot)
     assert json.loads(capsys.readouterr().out)["tasks"]
 
 

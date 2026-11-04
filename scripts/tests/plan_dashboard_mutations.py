@@ -231,6 +231,7 @@ MUTATIONS = {
     "model-writes-state": (MODEL, "collect", _collect_then(_touch_state_file)),
     "model-locks": (MODEL, "collect", _collect_then(_lock_state_dir)),
     "model-drops-unreadable": (MODEL, "collect", _drops_unreadable),
+    "model-lists-children": (MODEL, "_listed_stems", lambda _original: lambda _summaries, wanted, _pinned: set(wanted)),
     "model-detail-writes": (MODEL, "detail", _detail_writes),
     "model-attribution-by-time": (MODEL, "attribute_spawn", _attribution_by_time),
     "model-estimate-unflagged": (MODEL, "phases", _estimate_unflagged),
