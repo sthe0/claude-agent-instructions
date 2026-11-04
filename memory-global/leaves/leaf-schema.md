@@ -28,7 +28,7 @@ This was the single source of truth for the **ordinary-leaf** schema, now retire
 
 ### Frontmatter
 
-Standard auto-memory frontmatter plus the schema tag and temporal fields. The example below is the retired `leaf/v1` shape; a leaf written today carries `principle/v1`, `regularity/v1` or `ontology/v1` instead (the retired tag was `leaf/v1`; the `schema:` value must stay bare, with no trailing comment):
+Standard auto-memory frontmatter plus the schema tag and temporal fields. The example below is a template: a leaf written today carries `principle/v1`, `regularity/v1` or `ontology/v1` as its tag; the retired `leaf/v1` tag is no longer written. The `schema:` value must stay bare, with no trailing comment:
 
 ```
 ---
@@ -65,7 +65,7 @@ The form is retired: convert a grandfathered leaf to the `principle/v1`, `regula
 `scripts/verify-leaf-structure.py` (subsumes the retired `verify-difficulty-lead.py`):
 
 - **Scope:** non-experience leaves under any `leaves/**` (INCLUDING `system-knowledge/`, EXCLUDING `experience/`) plus project `.claude/agent-memory/**` leaves. `MEMORY.md` and `.gitkeep` are skipped.
-- **Sections enforced per form** (the schema tag in the frontmatter decides; each section must be present, and for the two live forms non-empty): `leaf/v1` (retired, still checked while a leaf carries it) — `## Difficulty`, `## Guidance`, `## See also`; `regularity/v1` induced — `## Regularity`, `## Generality`, `## Refutation`, `## Induced from`; `regularity/v1` given (a `given:` field) — `## Regularity`, `## Given`, `## Refutation`; `ontology/v1` — `## Distinction`, `## Difficulty`, `## Adequacy`. A `principle/v1` leaf has no section check of its own here (its links are checked by `verify-principle-provenance.py`); it and a leaf with no schema both fall through to the grandfather rule above, so a `system-knowledge/` principle still gets the difficulty-lead baseline. The section lists live in `scripts/lib/leaf_forms.py`.
+- **Sections enforced per form** (the schema tag in the frontmatter decides; each section must be present, and for the two live forms non-empty): `leaf/v1` (retired, still checked while a leaf carries it) — `## Difficulty`, `## Guidance`, `## See also`; `regularity/v1` induced — `## Regularity`, `## Generality`, `## Refutation`, `## Induced from`; `regularity/v1` given (a `given:` field) — `## Regularity`, `## Given`, `## Refutation`; `ontology/v1` — `## Distinction`, `## Difficulty`, `## Adequacy`. A `principle/v1` leaf has no section check here (its links are checked by `verify-principle-provenance.py`); like a leaf with no schema, it falls through to the grandfather rule above, so a `system-knowledge/` principle still gets the difficulty-lead baseline. The section lists live in `scripts/lib/leaf_forms.py`.
 - **Modes:** default scan / `--staged` / `--hook` (PreToolUse, reads `tool_input.content`, exit 2 on violation) / `<path>` — mirroring `verify-experience-leaf.py`.
 - Wired into `verify-all.py` (staged-aware) and the PreToolUse verifier-hook list in `scripts/install-reminder-hooks.sh`.
 
