@@ -2733,6 +2733,15 @@ def test_a_childs_since_user_backstop_is_read_from_the_task_accumulator(env, axi
     assert driver.real_child_state("child-x")["since_user_backstop"] is True
 
 
+def test_the_driver_reads_the_child_accumulator_under_the_childs_own_task_id(env):
+    states = FileStateStore(config_root.agentctl_state_dir())
+    for session_id, task_id in (("child-a", "same-prompt-aaaaaaaa"), ("child-b", "same-prompt-bbbbbbbb")):
+        states.save(state_module.SessionState(session_id=session_id, task_id=task_id))
+    task_accumulator.add("same-prompt-bbbbbbbb", "review_rounds_since_user_decision", Thresholds().review_round_backstop())
+    assert driver.real_child_state("child-a")["since_user_backstop"] is False
+    assert driver.real_child_state("child-b")["since_user_backstop"] is True
+
+
 @pytest.mark.parametrize("returncode, stdout, stderr", [(1, "", "boom"), (0, "no marker, no verdict", "")],
                          ids=["exit-code", "no-marker"])
 def test_a_reviewer_that_crashed_fails_the_item_and_opens_the_breaker(env, returncode, stdout, stderr):
