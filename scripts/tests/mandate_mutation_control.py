@@ -1025,6 +1025,18 @@ CATALOGUE: "dict[str, Mutant]" = {
             "test_a_quoted_addresses_issue_yes_followed_by_the_reviewers_own_no_is_a_reject",
         ),
     ),
+    "addresses-issue-no-after-verdict": Mutant(
+        DRIVER,
+        'if ("addresses", "no") in rejecting:',
+        'if ("addresses", "no") in set(keyed[:last_verdict]):',
+        _ids(T_CYCLE, "test_an_addresses_issue_no_after_the_last_verdict_is_a_reject"),
+    ),
+    "review-any-reject-line": Mutant(
+        DRIVER,
+        "rejecting = set(keyed)",
+        "rejecting = set()",
+        _ids(T_CYCLE, "test_a_quoted_yes_and_accept_after_the_reviewers_own_no_and_reject_is_a_reject"),
+    ),
     "boundary-stop-counted": Mutant(
         RULES,
         'elif row.get("outcome") not in ("declined", "overrun", "limit"):\n            run = []',

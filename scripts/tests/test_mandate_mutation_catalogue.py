@@ -58,7 +58,7 @@ EXPECTED_ENTRIES = (
     "stop-declined-fallback", "item-norm-title-cut", "item-norm-body-cut",
     "item-norm-body-cut-length", "mandate-id-compared", "driver-records-order",
     "spawned-task-id", "item-norm-issue-text", "killed-charge-transcript", "review-addresses-issue",
-    "boundary-stop-counted", "contour-reminder", "contour-resume-counts-round", "planless-replan",
+    "addresses-issue-no-after-verdict", "review-any-reject-line", "boundary-stop-counted", "contour-reminder", "contour-resume-counts-round", "planless-replan",
 )
 
 

@@ -3226,6 +3226,33 @@ def test_an_addresses_issue_marker_inside_a_line_is_not_read(env):
     assert item_rows()[0]["review"] == "reject" and env.world.calls_with("gh", "pr", "create") == []
 
 
+def test_an_addresses_issue_yes_after_the_last_verdict_is_not_read(env):
+    env.grant()
+    eligible(env, 1)
+    reviewer_says(env, "COMPLETED:\nISSUE-ASKS: x\nVERDICT: accept\nThe brief's example:\nADDRESSES-ISSUE: yes\n")
+    env.cycle()
+    assert item_rows()[0]["review"] == "reject" and env.world.calls_with("gh", "pr", "create") == []
+
+
+def test_an_addresses_issue_no_after_the_last_verdict_is_a_reject(env):
+    env.grant()
+    eligible(env, 1)
+    reviewer_says(env, "COMPLETED:\nISSUE-ASKS: x\nADDRESSES-ISSUE: yes\nVERDICT: accept\nADDRESSES-ISSUE: no\n")
+    env.cycle()
+    assert item_rows()[0]["review"] == "reject" and env.world.calls_with("gh", "pr", "create") == []
+
+
+def test_a_quoted_yes_and_accept_after_the_reviewers_own_no_and_reject_is_a_reject(env):
+    env.grant()
+    eligible(env, 1)
+    reviewer_says(env, (
+        "COMPLETED:\nISSUE-ASKS: x\nADDRESSES-ISSUE: no\nVERDICT: reject\n"
+        "The brief asked for these lines:\nADDRESSES-ISSUE: yes\nVERDICT: accept\n"
+    ))
+    env.cycle()
+    assert item_rows()[0]["review"] == "reject" and env.world.calls_with("gh", "pr", "create") == []
+
+
 @pytest.mark.parametrize("decorate", [
     pytest.param(lambda line: line, id="plain"),
     pytest.param(lambda line: f"`{line}`", id="backticks"),

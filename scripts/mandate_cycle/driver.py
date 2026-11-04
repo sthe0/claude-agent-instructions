@@ -89,19 +89,36 @@ REVIEW_KEY_LINE_RE = re.compile(r"^[\s`*+\-.)\d]*(?=(?:ISSUE-ASKS|ADDRESSES-ISSU
 
 
 def review_marker_lines(reply: str) -> "tuple[str | None, str | None, str | None]":
-    """(asks, addresses, verdict) from the last whole line of each key in the reply; None when a key has
-    none. A line may carry a list marker, wrapping backticks or asterisks, a trailing CR, and any letter
-    case; a key inside a sentence is not read. Untrusted text quoted into the brief cannot supply a line,
+    """(asks, addresses, verdict) read from the whole key lines of the reply; None when a key has none.
+
+    The last VERDICT line wins, and the ADDRESSES-ISSUE line read is the last one before it, so a yes
+    reproduced after the reviewer's verdict is not read. Any `ADDRESSES-ISSUE: no` or `VERDICT: reject`
+    line anywhere in the reply still rejects: a reply that quotes a yes after its own no is a reject.
+    A line may carry a list marker, wrapping backticks or asterisks, a trailing CR, and any letter case;
+    a key inside a sentence is not read. Untrusted text quoted into the brief cannot supply a line,
     because `neutralize_marker` defangs its key lines."""
-    found: "dict[str, str]" = {}
+    keyed: "list[tuple[str, str]]" = []
     for raw in (reply or "").splitlines():
         line = LIST_MARKER_RE.sub("", raw.strip()).strip("`* \t")
         for name, rx in (("asks", ISSUE_ASKS_RE), ("addresses", ADDRESSES_ISSUE_RE), ("verdict", VERDICT_RE)):
             match = rx.match(line)
             if match:
-                found[name] = match.group(1)
-    asks, addresses, verdict = found.get("asks"), found.get("addresses"), found.get("verdict")
-    return asks, addresses.lower() if addresses else None, verdict.lower() if verdict else None
+                value = match.group(1)
+                keyed.append((name, value if name == "asks" else value.lower()))
+
+    def last(name: str, entries: "list[tuple[str, str]]") -> "str | None":
+        values = [value for key, value in entries if key == name]
+        return values[-1] if values else None
+
+    verdict_at = [i for i, (key, _) in enumerate(keyed) if key == "verdict"]
+    last_verdict = verdict_at[-1] if verdict_at else len(keyed)
+    addresses, verdict = last("addresses", keyed[:last_verdict]), last("verdict", keyed)
+    rejecting = set(keyed)
+    if ("addresses", "no") in rejecting:
+        addresses = "no"
+    if ("verdict", "reject") in rejecting:
+        verdict = "reject"
+    return last("asks", keyed), addresses, verdict
 
 
 SHA_RE = re.compile(r"[0-9a-f]{40}")
