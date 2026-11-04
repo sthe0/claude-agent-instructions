@@ -481,6 +481,18 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
     return []
 
 
+def planless_replan_refusal(state: SessionState) -> str | None:
+    """The reason a plan-less replan is refused at this node, or None at DIAGNOSING.
+    Kept here, not in the replan phases: those must not refuse on a node condition
+    (the plan-delivery hook derives its stamp nodes from `_cmd_replan`'s preconditions)."""
+    if state.node == Node.DIAGNOSING.value:
+        return None
+    msg = f"a plan-less replan closes a difficulty (node=DIAGNOSING); node={state.node}"
+    if state.node == Node.BLOCKED.value:
+        msg += "; the session is paused: run `agentctl unblock` first"
+    return msg
+
+
 def difficulty_blockers(state: SessionState) -> list[str]:
     """Precondition guardian for `replan` while in the DIAGNOSING sub-spine: the
     overcome-difficulty cycle (declaration -> investigation -> critique) must be

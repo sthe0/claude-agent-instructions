@@ -1375,6 +1375,42 @@ def test_a_planless_replan_outside_diagnosing_is_refused(store):
     assert store.load(sid).node == node
 
 
+def test_a_planless_replan_is_refused_at_executing_with_a_release_time_difficulty_record(store):
+    from agentctl import task_accumulator
+    sid = "pl-release-record"
+    cli.cmd_start(ns(session=sid, task=sid, goal="fix it", done_criterion="it is fixed",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=10, files=1,
+                        wall_clock_min=5, tracker_key=None, architectural=False,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    task_accumulator.add(sid, "review_rounds", _seed_replan_ceiling(sid), session_id=sid, now=None)
+    declared = cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
+    assert declared.ok is True, declared.detail
+    state = store.load(sid)
+    assert state.node == Node.EXECUTING.value and state.difficulty is not None
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and "node=DIAGNOSING" in d.detail
+    assert store.load(sid).node == Node.EXECUTING.value
+
+
+def test_a_planless_replan_of_a_paused_session_is_refused_and_names_unblock(store):
+    sid = "pl-paused"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    assert cli.cmd_block(ns(session=sid, reason="waiting"), store=store).ok is True
+    assert store.load(sid).node == Node.BLOCKED.value
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and "node=DIAGNOSING" in d.detail and "unblock" in d.detail
+    state = store.load(sid)
+    assert state.node == Node.BLOCKED.value and state.difficulty is not None
+
+
 def test_a_planless_replan_refuses_renormalize(store):
     sid = "pl-renormalize"
     _small_change_failed(store, sid)

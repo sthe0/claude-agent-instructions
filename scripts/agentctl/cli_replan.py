@@ -1658,9 +1658,9 @@ def _replan_planless(ctx: _ReplanContext) -> Directive:
         return Directive(False, state.node, "replan",
                          "replan needs --plan: only a small-change session that holds no plan "
                          "replans without one")
-    if state.node != Node.DIAGNOSING.value:
-        return Directive(False, state.node, "replan",
-                         f"a plan-less replan closes a difficulty (node=DIAGNOSING); node={state.node}")
+    node_refusal = gates.planless_replan_refusal(state)
+    if node_refusal is not None:
+        return Directive(False, state.node, "replan", node_refusal)
     if getattr(args, "renormalize", False):
         return Directive(False, state.node, "replan",
                          "--renormalize reorders a plan's procedure; a plan-less replan has no plan")
