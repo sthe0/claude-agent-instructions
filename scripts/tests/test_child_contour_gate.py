@@ -385,6 +385,20 @@ def test_own_channel_refuses_unlinked_session(contour):
     assert ghost.returncode == 2 and REFUSED in ghost.stderr and "no engine session" in ghost.stderr
 
 
+def test_a_linked_small_change_childs_stage_takes_the_handoff_done_criterion(contour, monkeypatch):
+    small = "small-child-s"
+    record = norm_handoff.build_record(
+        parent_session=PARENT, stage_index=1, kind="developer", norm=contour.norm,
+        grants=[], depth=1, parent_lineage=None,
+    )
+    monkeypatch.setenv(HANDOFF_ENV, spawn_handoff(contour.root, record, small))
+    _cli(contour.root, "start", session=small, task="small", goal="g")
+    monkeypatch.delenv(HANDOFF_ENV)
+    _cli(contour.root, "classify", session=small, changed_lines=10, wall_clock_min=5)
+    criterion = contour.store.load(small).stage(1).criterion.done_criterion
+    assert contour.norm.done_criterion and criterion == contour.norm.done_criterion
+
+
 def _agentctl_subcommands() -> set[str]:
     import argparse
 
