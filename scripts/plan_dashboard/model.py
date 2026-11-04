@@ -30,6 +30,7 @@ RETRY_PAUSE_S = 0.05
 DELIVERY_SUFFIX = ".delivery"
 DONE_STATUSES = frozenset({"PASSED", "SKIPPED"})
 REVIEW_EVENTS = frozenset({"plan_review", "plan_pair_review", "plan_review_compose"})
+_UNLINKED_SPAWN_TASK_PREFIX = "agent-recursion-depth-"
 
 CACHE_LOCK = threading.Lock()
 _LEDGER: dict = {}
@@ -517,9 +518,15 @@ def _mtime(path: Path) -> dt.datetime | None:
         return None
 
 
-def _listed_stems(summaries: dict, wanted: set, pinned: set) -> set:
+def _is_unlinked_spawn(row: dict) -> bool:
+    """A spawned child that recorded no parent: the spawn wrapper's first prompt line became its task id."""
+    return not row["parent_session"] and str(row["task_id"] or "").startswith(_UNLINKED_SPAWN_TASK_PREFIX)
+
+
+def _listed_stems(summaries: dict, wanted: set, pinned: set, include_all: bool) -> set:
     """The listing's rows: the root of each wanted task and each pinned task itself. A child shows only in
-    its root's detail; a child whose parent has no task to show stays listed, so its work never vanishes."""
+    its root's detail; a child whose parent has no task to show stays listed, so its work never vanishes.
+    An unlinked spawn is a child with no root to show it, so only `--all` and `--session` list it."""
     listed = pinned & summaries.keys()
     for stem in wanted:
         seen = {stem}
@@ -529,7 +536,8 @@ def _listed_stems(summaries: dict, wanted: set, pinned: set) -> set:
                 break
             seen.add(parent)
             stem = parent
-        listed.add(stem)
+        if include_all or not _is_unlinked_spawn(summaries[stem]):
+            listed.add(stem)
     return listed
 
 
@@ -565,7 +573,7 @@ def collect(state_root, *, now: dt.datetime, window_hours=24, include_all=False,
         row = summaries[stem] = _summary(stem, state, reason, moment, now, window, ledger)
         if state is None or include_all or stem in pinned or row["liveness"] in ("active", "idle"):
             wanted.add(stem)
-    tasks = [summaries[stem] for stem in _listed_stems(summaries, wanted, pinned)]
+    tasks = [summaries[stem] for stem in _listed_stems(summaries, wanted, pinned, include_all)]
     tasks.sort(key=lambda t: (t["last_activity"] or "", t["session_id"]), reverse=True)
     return {"schema": SCHEMA, "generated_at": _iso(now), "hostname": socket.gethostname(), "tasks": tasks}
 
