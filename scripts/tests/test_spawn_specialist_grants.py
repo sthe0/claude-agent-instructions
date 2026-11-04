@@ -920,6 +920,7 @@ def _main_guard_exempt_paths(tmp_path, monkeypatch, *flags: str):
 
     monkeypatch.setattr(MOD, "build_child_settings", fake_build_child_settings)
     monkeypatch.setattr(MOD, "log_refused", lambda *_args: None)
+    monkeypatch.setattr(MOD, "SKILLS_DIR", SCRIPT.parent.parent / "skills" / "specializations")
     rc = MOD.main([
         "--kind", "developer", "--plan", str(plan), "--done-criterion", "done",
         "--criterion-type", "measurable", "--complexity", "low", "--effort", "low",

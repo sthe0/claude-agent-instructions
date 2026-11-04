@@ -298,7 +298,7 @@ class Contour:
         parent_plan = _parent_plan(tmp_path)
         _cli(self.root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc")
         _cli(self.root, "classify", session=PARENT, architectural=True,
-             changed_lines=200, wall_clock_min=60)
+             changed_lines=200, wall_clock_min=60, host="claude")
         _cli(self.root, "plan", session=PARENT)
         _cli(self.root, "submit-plan", session=PARENT, plan=parent_plan)
         _cli(self.root, "approve", session=PARENT, by="user")
@@ -331,7 +331,7 @@ class Contour:
         digest = hashlib.sha256(Path(self.plan).read_bytes()).hexdigest()
         steps = [
             ("classify", "--architectural", "--changed-lines", "200",
-             "--wall-clock-min", "60"),
+             "--wall-clock-min", "60", "--host", "claude"),
             ("plan",),
             ("submit-plan", "--plan", self.plan),
             ("plan-review", "--verdict", "pass", "--reviewer", "thinker",
@@ -394,7 +394,7 @@ def test_a_linked_small_change_childs_stage_takes_the_handoff_done_criterion(con
     monkeypatch.setenv(HANDOFF_ENV, spawn_handoff(contour.root, record, small))
     _cli(contour.root, "start", session=small, task="small", goal="g")
     monkeypatch.delenv(HANDOFF_ENV)
-    _cli(contour.root, "classify", session=small, changed_lines=10, wall_clock_min=5)
+    _cli(contour.root, "classify", session=small, changed_lines=10, wall_clock_min=5, host="claude")
     criterion = contour.store.load(small).stage(1).criterion.done_criterion
     assert contour.norm.done_criterion and criterion == contour.norm.done_criterion
 
@@ -469,7 +469,7 @@ def test_own_channel_reaches_own_session(contour):
     assert result["node"] != "EXECUTING"
     classified = _expect_ok(
         contour.own("classify", "--architectural", "--changed-lines", "200",
-                    "--wall-clock-min", "60"),
+                    "--wall-clock-min", "60", "--host", "claude"),
         "own channel `classify`",
     )
     assert classified["node"] != "EXECUTING"
@@ -559,6 +559,7 @@ def _load_spawn():
     spec = importlib.util.spec_from_file_location("spawn_specialist_child_contour", SPAWN_SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.SKILLS_DIR = SCRIPTS.parent / "skills" / "specializations"
     return module
 
 
@@ -665,12 +666,10 @@ def test_linked_brief_names_own_contour(tmp_path, capsys):
         assert f"`{verb}`" in section, f"the brief's verb list lacks {verb!r}"
 
 
-def test_the_own_contour_brief_names_the_small_change_path_and_resolution_before_completed(tmp_path, capsys, monkeypatch):
+def test_the_own_contour_brief_names_the_small_change_path_and_resolution_before_completed(tmp_path, capsys):
     _parent_session(tmp_path / "home")
     argv = _spawn_argv(tmp_path / "home", tmp_path, 1) + ["--dry-run"]
-    spawn = _load_spawn()
-    monkeypatch.setattr(spawn, "SKILLS_DIR", SCRIPTS.parent / "skills" / "specializations")
-    assert spawn.main(argv) == 0
+    assert _load_spawn().main(argv) == 0
     out = capsys.readouterr().out
     section = out.split("## Your own engine contour", 1)[1].split("\n## ", 1)[0]
     path = section.split("Small-change path:", 1)[1].split("\n\n", 1)[0]

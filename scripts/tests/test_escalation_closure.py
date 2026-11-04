@@ -58,7 +58,7 @@ def _executing(store, sid, fixtures_dir):
     cli.cmd_classify(ns(session=sid, chat=False, changed_lines=200, files=5,
                         wall_clock_min=60, tracker_key=None, architectural=True,
                         external_effect=False, new_dependency=False,
-                        public_api_change=False), store=store)
+                        public_api_change=False, host="claude"), store=store)
     cli.cmd_plan(ns(session=sid), store=store)
     cli.cmd_submit_plan(ns(session=sid, plan=str(fixtures_dir / "plan_two_stage.toml")),
                         store=store)

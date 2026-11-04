@@ -60,7 +60,7 @@ EXPECTED_ENTRIES = (
     "spawned-task-id", "item-norm-issue-text", "killed-charge-transcript", "review-addresses-issue",
     "addresses-issue-no-after-verdict", "review-any-reject-line", "boundary-stop-counted",
     "contour-reminder", "contour-resume-counts-round", "planless-replan",
-    "planless-replan-node-gate", "spawn-executor-guard",
+    "spawn-executor-guard", "planless-replan-node-gate",
 )
 
 
