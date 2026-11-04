@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, effort
+from agentctl import cli, cli_dispatch, effort
 from agentctl.config import Thresholds
 from agentctl.dispatch import RunResult
 from agentctl.state import SessionState
@@ -360,7 +360,7 @@ def _dispatch(store):
 def test_dispatch_records_child_run_around_spawn(store, tmp_path, monkeypatch):
     _dispatch_ready(store, tmp_path)
     seen = {}
-    monkeypatch.setattr(cli, "dispatch_stage", _spawn_stub(store, seen))
+    monkeypatch.setattr(cli_dispatch, "dispatch_stage", _spawn_stub(store, seen))
     _dispatch(store)
     open_runs = seen["runs"] or []
     assert len(open_runs) == 1 and open_runs[0]["ended"] is None \
@@ -381,7 +381,7 @@ def test_dispatch_records_child_run_around_spawn(store, tmp_path, monkeypatch):
     )
 
     crash_seen = {}
-    monkeypatch.setattr(cli, "dispatch_stage",
+    monkeypatch.setattr(cli_dispatch, "dispatch_stage",
                         _spawn_stub(store, crash_seen, fail=True, child_id="D"))
     with pytest.raises(RuntimeError):
         _dispatch(store)
@@ -394,7 +394,7 @@ def test_dispatch_records_child_run_around_spawn(store, tmp_path, monkeypatch):
 def test_reported_child_session_wins_over_an_unrelated_linked_session(
         store, tmp_path, monkeypatch):
     _dispatch_ready(store, tmp_path)
-    monkeypatch.setattr(cli, "dispatch_stage", _spawn_stub(
+    monkeypatch.setattr(cli_dispatch, "dispatch_stage", _spawn_stub(
         store, {}, child_id="real", orphan="stray", report=True))
     _dispatch(store)
     named = store.load("P").effort_child_runs[0]["child_session"]
@@ -407,7 +407,7 @@ def test_reported_child_session_wins_over_an_unrelated_linked_session(
 def test_unreported_child_is_the_earliest_born_after_the_run_began(
         store, tmp_path, monkeypatch):
     _dispatch_ready(store, tmp_path)
-    monkeypatch.setattr(cli, "dispatch_stage", _spawn_stub(
+    monkeypatch.setattr(cli_dispatch, "dispatch_stage", _spawn_stub(
         store, {}, child_id="real", orphan="stray"))
     _dispatch(store)
     named = store.load("P").effort_child_runs[0]["child_session"]
@@ -421,7 +421,7 @@ def test_unreported_child_is_the_earliest_born_after_the_run_began(
 def test_unreadable_state_at_close_still_closes_the_run(
         store, tmp_path, monkeypatch, spawn_fails):
     _dispatch_ready(store, tmp_path)
-    monkeypatch.setattr(cli, "dispatch_stage", _spawn_stub(
+    monkeypatch.setattr(cli_dispatch, "dispatch_stage", _spawn_stub(
         store, {}, fail=spawn_fails, load_fails=True, monkeypatch=monkeypatch))
     if spawn_fails:
         with pytest.raises(RuntimeError, match="spawn crashed"):
@@ -438,7 +438,7 @@ def test_unreadable_state_at_close_still_closes_the_run(
 def test_unlinked_dispatch_records_no_child_run(store, tmp_path, monkeypatch):
     _dispatch_ready(store, tmp_path)
     seen = {}
-    monkeypatch.setattr(cli, "dispatch_stage", _spawn_stub(store, seen, make_child=False))
+    monkeypatch.setattr(cli_dispatch, "dispatch_stage", _spawn_stub(store, seen, make_child=False))
     _dispatch(store)
     runs = json.loads(store.path("P").read_text(encoding="utf-8")).get("effort_child_runs", [])
     assert runs == [], (
@@ -561,7 +561,7 @@ def _hooked_dispatch(store, monkeypatch, before_hook=lambda: None):
         store.save(stamped)
         hook._stamp_prompt_ts("P", time.time())
         return RunResult(0, stdout="COMPLETED: done\n", stderr="")
-    monkeypatch.setattr(cli, "dispatch_stage", stub)
+    monkeypatch.setattr(cli_dispatch, "dispatch_stage", stub)
     _dispatch(store)
     return store.load("P")
 
@@ -640,7 +640,7 @@ def test_prompt_stamped_by_the_hook_after_the_cli_saved_survives_the_close(
         store.save(stamped)
         hook._stamp_prompt_ts("P", time.time() + 1)
         return RunResult(0, stdout="COMPLETED: done\n", stderr="")
-    monkeypatch.setattr(cli, "dispatch_stage", stub)
+    monkeypatch.setattr(cli_dispatch, "dispatch_stage", stub)
     _dispatch(store)
     after = store.load("P")
     booked = after.effort_actuals["active_minutes"]
@@ -680,7 +680,7 @@ def _stamp_during_dispatch(store, monkeypatch, *, make_child, linking_off=False,
         if make_child:
             _child(store, "C", written=time.time() + 5, stage=stage.index)
         return RunResult(0, stdout="COMPLETED: done\n", stderr="")
-    monkeypatch.setattr(cli, "dispatch_stage", stub)
+    monkeypatch.setattr(cli_dispatch, "dispatch_stage", stub)
     _dispatch(store)
     return seen["runs"], store.load("P").effort_actuals["active_minutes"]
 

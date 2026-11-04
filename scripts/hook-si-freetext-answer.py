@@ -23,21 +23,12 @@ path. Advisory only: exit 0 always, never blocks.
 from __future__ import annotations
 
 import json
-import re
 import sys
+from pathlib import Path
 
-from lib import hook_telemetry
-
-PAIR_RE = re.compile(r'"([^"]*)"\s*=\s*"([^"]*)"')
-
-
-def _response_text(payload: dict) -> str:
-    resp = payload.get("tool_response")
-    if isinstance(resp, str):
-        return resp
-    if isinstance(resp, (dict, list)):
-        return json.dumps(resp)
-    return ""
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import hook_telemetry  # noqa: E402
+from lib.ask_evidence import parse_ask_answers  # noqa: E402
 
 
 def _question_labels(tool_input: dict) -> dict[str, set[str]]:
@@ -57,14 +48,14 @@ def _question_labels(tool_input: dict) -> dict[str, set[str]]:
     return labels
 
 
-def free_text_questions(tool_input: dict, response_text: str) -> list[str]:
+def free_text_questions(tool_input: dict, tool_response) -> list[str]:
     """Questions (by text) whose answer is not among that question's offered
     labels. Multi-select answers (comma-joined labels) are split and checked
     individually. A question absent from tool_input is skipped — its label
     set can't be correlated, so it is never flagged."""
     labels_by_question = _question_labels(tool_input)
     hits: list[str] = []
-    for question, answer in PAIR_RE.findall(response_text):
+    for question, answer in parse_ask_answers(tool_response).items():
         labels = labels_by_question.get(question)
         if labels is None:
             continue
@@ -89,11 +80,7 @@ def main() -> int:
     if not isinstance(tool_input, dict):
         return 0
 
-    response_text = _response_text(payload)
-    if not response_text:
-        return 0
-
-    hits = free_text_questions(tool_input, response_text)
+    hits = free_text_questions(tool_input, payload.get("tool_response"))
     if not hits:
         return 0
 

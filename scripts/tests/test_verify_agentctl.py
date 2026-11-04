@@ -107,7 +107,10 @@ def test_walker_ignores_unrelated_keys_and_reads():
 def _agentctl_copy(tmp_path, monkeypatch, mod, *, cli_edit=None, module_edit=None):
     root = tmp_path / "agentctl"
     root.mkdir()
-    for name, edit in (("cli.py", cli_edit), ("workspace_cleanup.py", module_edit)):
+    edits = {"cli_final.py": cli_edit, "workspace_cleanup.py": module_edit}
+    names = [p.name for p in mod.cli_module_paths()] + ["workspace_cleanup.py"]
+    for name in names:
+        edit = edits.get(name)
         text = (mod.AGENTCTL_ROOT / name).read_text(encoding="utf-8")
         if edit is not None:
             old, new = edit

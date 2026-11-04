@@ -10,6 +10,7 @@ VIEWS = {
     "tool-usage": "tool_usage",
     "skill-usage": "skill_usage",
     "hooks": "hooks",
+    "time-profile": "time_profile",
 }
 
 

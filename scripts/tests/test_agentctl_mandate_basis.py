@@ -31,7 +31,7 @@ from agentctl.plan import load_plan, order_digest
 from agentctl.stage_norm import StageNorm
 from agentctl.state import Node, PlanPresentation
 from agentctl.store import FileStateStore
-from conftest import declare_venue
+from conftest import declare_venue, patch_cli_name
 from mandate_cycle import driver
 from test_child_approval import _spliced, _with_stage_verify
 from test_child_contour_e2e import CHILD_CHECK, Scene
@@ -69,7 +69,7 @@ class World:
         else:
             self.repo = str(tmp_path / "repo")
             (tmp_path / "repo").mkdir()
-            monkeypatch.setattr(cli, "REPO_ROOT", Path(self.repo))
+            patch_cli_name(monkeypatch, "REPO_ROOT", Path(self.repo))
         self.worktree_root = tmp_path / "worktrees"
         self.worktree = self.worktree_root / f"{CYCLE_ID}-{ISSUE}"
         self.worktree.mkdir(parents=True)
@@ -143,9 +143,21 @@ def world(tmp_path, monkeypatch):
     built.close()
 
 
+LIVE_ARMED_KNOBS = (
+    "AGENTCTL_PREMISE", "AGENTCTL_CODE_REVIEW",
+    "AGENTCTL_STAGE_REVIEW", "AGENTCTL_ACCEPTANCE", "AGENTCTL_LANDING_GATE", "AGENTCTL_RESOLUTION_ASK_GATE",
+    "AGENTCTL_WORKSPACE_CLEANUP",
+)
+
+
 @pytest.fixture
 def engine_world(tmp_path, monkeypatch):
-    """A world whose cycle repo is the repo the real engine subprocess runs from."""
+    """A world whose cycle repo is the repo the real engine subprocess runs from, with the gates a
+    live session meets armed: conftest's force-off knobs are dropped (World itself forces plan review
+    and presentation on). AGENTCTL_ADVISOR stays '0':
+    unset, submit-plan and approve would run a real model call, and the advisor never blocks."""
+    for knob in LIVE_ARMED_KNOBS:
+        monkeypatch.delenv(knob, raising=False)
     built = World(tmp_path, monkeypatch, repo_is_engine=True)
     yield built
     built.close()
@@ -257,7 +269,7 @@ def _unbound_world(tmp_path, monkeypatch, name, *, record_cycle=True, inputs=Non
         world.inputs = {**world.inputs, **inputs}
         world.write_norm()
     if engine_repo:
-        monkeypatch.setattr(cli, "REPO_ROOT", Path(engine_repo))
+        patch_cli_name(monkeypatch, "REPO_ROOT", Path(engine_repo))
     world.parent_to_plan_ready()
     if release_lock:
         world.close()
@@ -384,12 +396,23 @@ def test_reject_by_mandate_moves_the_child_to_diagnosing_and_records_the_actor(s
     assert rows and rows[-1].get("by") == APPROVER and rows[-1].get("reason") == "check-item red: 2 failures", rows
 
 
-def test_the_driver_parent_session_reaches_stage_one_executing_on_the_real_engine(engine_world):
+def test_the_driver_records_the_issue_as_the_order_covered_by_the_item_stage(engine_world):
+    world = engine_world
+    cycle = driver.Cycle(driver.Config(mandate_id=MANDATE_ID, repo=Path(world.repo)), driver.Seams(), CYCLE_ID, write=False)
+    session = cycle.open_parent_session(ISSUE, world.item_dir / "norm.toml", world.worktree)
+    listed = _cli(world.root, "order-list", session=session)
+    elements = listed["data"]["order_elements"]
+    assert [(e["id"], e["disposition"]) for e in elements] == [("issue", "covered")], elements
+    assert elements[0]["element"] == f"Core issue #{ISSUE} is resolved" and elements[0]["stage"] == driver.STAGE_INDEX, elements
+
+
+def test_the_driver_parent_session_reaches_stage_one_executing_with_live_gate_arming(engine_world):
     world = engine_world
     cycle = driver.Cycle(driver.Config(mandate_id=MANDATE_ID, repo=Path(world.repo)), driver.Seams(), CYCLE_ID, write=False)
     session = cycle.open_parent_session(ISSUE, world.item_dir / "norm.toml", world.worktree)
     state = world.parent(session)
     assert state.node == "EXECUTING" and state.current_stage == driver.STAGE_INDEX, state.node
+    assert "premise" in state.plugins, state.plugins
     approvals = [h for h in state.history if h.get("event") == "approve"]
     assert approvals and approvals[-1].get("by") == APPROVER and approvals[-1].get("basis") == "mandate", approvals
 

@@ -111,6 +111,9 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
     ("hook-plan-delivery-gate.py",
      "writes the delivery stamp gates.plan_presentation_blockers requires; "
      "without it every approve refuses for want of a proof nothing can produce"),
+    ("hook-ask-answer-record.py",
+     "writes the answer ledger order-agree and order-challenge-dismiss require; "
+     "without it classify leaves the order-agreement gate unarmed"),
     ("hook-state-gate.py",
      "denies production Edit/Write before an execution node — the spine's "
      "non-skippable plan-approval gate"),

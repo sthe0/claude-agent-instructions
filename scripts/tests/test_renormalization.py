@@ -685,6 +685,8 @@ _STAGE_RESIDUAL_COVERAGE = {
                 "Question.target names it, inside here because flipping a required stage "
                 "to declinable changes what the stage IS to the customer",
     "backlog_issue": "the residual's own splice, same reason as its sibling `optional`",
+    "branch": "the residual's own splice — re-declaring the branch moves which VcsRef "
+              "commit/push resources the stage derives (DR-P), so it is not a re-sequencing",
     "control": "outside: the control attestation record-result stamps, same reason",
     "amendments.date": "outside: retrospective bookkeeping no change decision reads "
                        "(plan.STAGE_LEAF_CLASS class B)",
@@ -742,6 +744,10 @@ _STAGE_RESIDUAL_COVERAGE = {
     "grants.add_dirs.mode": "the residual's own splice, same reason as `grants.allow.rule`",
     "grants.add_dirs.provenance": "the residual's own splice, same reason as its sibling "
                                   "`grants.add_dirs.path`",
+    "grants.resources": "outside: derived at approve from the plan's declared branch "
+                        "field (grants.derive_stage_grants, DR-P) and compared by "
+                        "diff_plans from the derivation (never from this stored "
+                        "attribute), not a declared input a re-sequencing can move",
     "effects.path": "the residual's own splice — outside stage_question_key because "
                     "no Question.target names it, inside here because a declared "
                     "script-effect trust claim is part of what the stage's definition "
@@ -860,6 +866,24 @@ def test_renormalize_refuses_an_edit_to_the_plan_level(store, tmp_path, old, new
 
     assert d.ok is False, d.data
     assert any(expected in b for b in d.data["blockers"]), d.data["blockers"]
+    assert store.load("rn").plan_path == plan
+
+
+def test_renormalize_refuses_an_edit_to_a_resource_request_allow_entry(store, tmp_path):
+    """A `[[meta.resource_request]]` row is plan material an executor could edit under
+    --renormalize to widen what the request says it needs; the meta residual carries it,
+    so an `allow` change is a refusal, not a re-sequencing."""
+    plan = _write_plan(tmp_path / "p.toml")
+    row = ('\n[[meta.resource_request]]\nkind = "developer"\nstage = 1\n'
+           'consult_ref = "c1"\nallow = ["Bash(git add:*)"]\nadd_dirs = []\n')
+    Path(plan).write_text(Path(plan).read_text(encoding="utf-8") + row, encoding="utf-8")
+    _approved(store, plan)
+
+    d = _renormalize(store, _edited(plan, tmp_path / "q.toml", 'allow = ["Bash(git add:*)"]',
+                                    'allow = ["Bash(git add:*)", "Bash(git commit:*)"]'))
+
+    assert d.ok is False, d.data
+    assert any("[meta] something" in b for b in d.data["blockers"]), d.data["blockers"]
     assert store.load("rn").plan_path == plan
 
 

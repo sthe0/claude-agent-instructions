@@ -42,7 +42,7 @@ from conftest import declare_venue
 from plan_site_fixture import GROUNDED_SOURCE
 
 from agentctl import cli
-from agentctl.plan import PlanError, diff_plans, load_plan, order_place
+from agentctl.plan import UNDERSTANDING_FIELDS, PlanError, diff_plans, load_plan, order_place
 from agentctl.state import Node, Order
 from agentctl.submission import ORDER_REFUSAL_MARKERS, submission_violations, validate_submission
 
@@ -72,12 +72,27 @@ _NOT_REQUIRED: dict[str, str] = {
         "its omission would defeat the exact grandfather it exists to provide. See "
         "Order.requires_traceability in state.py."
     ),
+    "requires_resource_request": (
+        "not a part of the order the customer states -- it is the plan's own opt-in into "
+        "the resource-request grade (submission._resource_request_violations), exactly as "
+        "requires_traceability is for R3/R5: absence means 'authored before the request "
+        "existed', not 'missing'."
+    ),
     "parent_norm": (
         "not a part of the order the customer states -- it is the link a child plan "
         "declares to the parent stage whose norm it serves, and only a plan the engine "
         "spawned for a stage has one. Its absence means 'an ordinary order', not "
         "'missing'. See Order.parent_norm in state.py and gates.parent_norm_boundary."
     ),
+    "activity": (
+        "part of the UNDERSTANDING the agent states and the user agrees (activity, "
+        "difficulty, proposals, constraints), graded only where order-submit asks for it "
+        "(submission.order_understanding_completeness_violations); a plan submitted "
+        "without it is an ordinary order. Pinned in test_order_understanding.py."
+    ),
+    "difficulty": "part of the understanding; see `activity`.",
+    "proposals": "part of the understanding; see `activity`.",
+    "constraints": "part of the understanding; see `activity`.",
 }
 
 # THE PARAMETRIZATION. Derived from the type, never typed out beside it.
@@ -297,16 +312,23 @@ def test_order_place_exhausts_the_order_s_field_set():
     fields = {f.name for f in dataclasses.fields(Order)}
     # `parent_norm` rides only when set, so an order that omits it keeps the key it had
     # before the field existed: the full arity is read with it set, the base with it unset.
+    # The understanding fields ride as ONE grouped member and only when any is stated.
+    understanding_fields = len(UNDERSTANDING_FIELDS)
+    optional_members = 2 + understanding_fields  # parent_norm, requires_resource_request, plus the fields behind the group
     place = order_place(
         Namespace(order=Order(customer_id="u", customer="c", functional_place="p",
-                              parent_norm="0" * 64))
+                              parent_norm="0" * 64, requires_resource_request=True,
+                              activity="a"))
     )
     base = order_place(
         Namespace(order=Order(customer_id="u", customer="c", functional_place="p"))
     )
     assert len(place) == 1, "order_place contributes one element for a declared order"
-    assert len(base[0]) == len(fields) - 1, "an unset parent_norm adds no member to the key"
-    assert len(place[0]) == len(fields), (
+    assert len(base[0]) == len(fields) - optional_members, (
+        "an unset parent_norm, an unarmed requires_resource_request and an unstated "
+        "understanding add no member to the key"
+    )
+    assert len(place[0]) == len(fields) - understanding_fields + 1, (
         f"order_place carries {len(place[0])} member(s) for {len(fields)} Order field(s) "
         f"({sorted(fields)}). A field added to Order and not listed in order_place belongs "
         f"to NEITHER change-decision key: an edit to it moves no digest, so it re-arms "

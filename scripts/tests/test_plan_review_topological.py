@@ -97,6 +97,7 @@ class FakeEngine:
         self.status.update(status or {})
         self.calls: list = []
         self.events: list = []
+        self.agreement = None
 
     def verbs(self, verb):
         return [argv for argv, _ in self.calls if argv[0] == verb]
@@ -104,6 +105,8 @@ class FakeEngine:
     def run(self, argv, env, script=None):
         self.calls.append((list(argv), dict(env)))
         verb = argv[0]
+        if verb == "status":
+            return {"ok": True, "data": {"order_agreement": self.agreement}}
         if verb == "plan-review-walk":
             self.events.append(("walk",))
             levels = []
@@ -139,6 +142,7 @@ class RealEngine:
         self.monkeypatch = monkeypatch
         self.calls: list = []
         self.events: list = []
+        self.agreement = None
 
     def verbs(self, verb):
         return [argv for argv, _ in self.calls if argv[0] == verb]
@@ -892,9 +896,12 @@ def test_td17_every_agentctl_call_targets_the_plan_argument_not_the_session_plan
     rc, out = rig.run(plan="other.toml")
     assert rc == 0 and "COMPOSE: pass" in out
     verbs = {argv[0] for argv, _ in rig.engine.calls}
-    assert verbs == {"plan-review-walk", "plan-review", "plan-review-compose"}
+    assert verbs == {"status", "plan-review-walk", "plan-review", "plan-review-compose"}
     for argv, _ in rig.engine.calls:
-        assert flag(argv, "--session") == SID and flag(argv, "--target") == str(other)
+        assert flag(argv, "--session") == SID
+        if argv[0] == "status":
+            continue
+        assert flag(argv, "--target") == str(other)
         assert str(env.plan) not in argv
         if argv[0] == "plan-review":
             assert flag(argv, "--reviewer") == "thinker" and flag(argv, "--scope").startswith("topo:")

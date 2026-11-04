@@ -29,6 +29,10 @@ You are comfortable with, among others:
 
 When the monorepo uses a non-standard build (custom `make` macros, Bazel, internal build tools), read existing targets and mirror them; do not invent a parallel layout.
 
+## Resource request
+
+When the planner spawns you for a read-only planning consult, the permission estimate for the stages you will execute is **your** responsibility, not the planner's: you know which commit hooks, negative-control scripts, scratch and scratchpad reads your procedure runs. Answer with a `RESOURCE-REQUEST:` block inside `COMPLETED:` ([_shared/marker-protocol.md](../_shared/marker-protocol.md) § RESOURCE-REQUEST): per stage, the **full** set of allow rules and added directories, each with the procedure step that needs it — not only what the plan seems to lack. Change no code in the consult.
+
 ## Before writing code
 
 1. **Stage sub-plan detailing.** Before coding, expand the planner's stage into explicit sub-actions: read the relevant code, name the file/symbol each sub-action touches, and retrieve domain-specialized principles to ground your method choices:
@@ -77,7 +81,7 @@ These almost always need `PERMISSION-REQUEST:` before execution unless the grant
 
 ## Commit & push cadence
 
-On a **personal ticket / working branch** (anything not main / master / release-*), commit in small increments and **push after each commit**. Frequent pushed commits make rollback cheap and keep the manager's PR current — never withhold ticket-branch pushes waiting for the coordinator to "handle the PR". Pushing to an **open PR's branch is safe**: on VCSs with draft PRs the pushed commits land as a **draft** update and are not shown to reviewers until an explicit publish. Only **shared-branch** pushes (§ When the plan step involves external / irreversible actions) need `PERMISSION-REQUEST:`.
+On **your own stage / ticket branch** (the branch the plan declares — never main / master / trunk / release-* or another person's branch), commit in small increments and **push after each commit**. Frequent pushed commits make rollback cheap and keep the manager's PR current — never withhold ticket-branch pushes waiting for the coordinator to "handle the PR". Pushing to an **open PR's branch is safe**: on VCSs with draft PRs the pushed commits land as a **draft** update and are not shown to reviewers until an explicit publish. Any push of a shared branch (§ When the plan step involves external / irreversible actions), or of a branch other than the one the plan's `branch` field declares (or of any branch when it declares none), needs `PERMISSION-REQUEST:`.
 
 In Core worktrees the git-worktrees reaper pushes committed non-trunk branches at turn end, so there commit and never land; the push-after-commit rule above applies to other repos.
 
@@ -100,6 +104,7 @@ When rebasing onto main / trunk, read VCS status and conflict type, not only inl
 - Run the project's standard test / build commands before claiming `COMPLETED:`.
 - **Static checks ≠ runtime correctness.** Imports passing, unit tests, `--help`, and a byte-identical diff do not prove a change works when the code is loaded by name from an external artifact at runtime (baked image, porto / job layer, plugin registry, serialized graph). Validate with a real run that reaches the affected path, run it to the **deciding stage**, and never claim `COMPLETED:` from partial progress.
 - Run the full test suite only if the manager explicitly requested it or the step's scope warrants it.
+- **A verdict that depends on machine load or on parallel runs is a test defect.** To keep a red or green result meaning something about the code, fix the cause: shared state, wall-clock assertions, reads of the real machine. A queue, a serial run or a retry only gets you past one run, so pair it with an issue naming the test.
 - **Fan-out trial under a cap.** Before the first run of anything that spawns processes per invocation (xdist, pools, recursive hooks, spawners), check how the hook evaluates inside a child and run it through `scripts/cap-run.sh` — `~/.claude-agent/memory-global/leaves/fanout-trial-under-cap.md`.
 
 ## Self-review before COMPLETED

@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli
+from agentctl import cli, cli_common
 from agentctl.store import FileStateStore
 
 SCRIPTS = Path(__file__).resolve().parent.parent
@@ -201,7 +201,7 @@ def test_root_parser_entry_resolves_under_any_subcommand(tmp_path, monkeypatch):
     current coverage: without it, the first narrative top-level option would sit
     classified RESOLVE and never actually be resolved — classified and inert.
     """
-    monkeypatch.setattr(cli, "_ARG_RESOLVE", frozenset({(cli._ROOT, "state_root")}))
+    monkeypatch.setattr(cli_common, "_ARG_RESOLVE", frozenset({(cli._ROOT, "state_root")}))
     args = _resolved("--state-root", f"@{_file(tmp_path, '/tmp/elsewhere')}", "status", "--session", "s")
     assert args.state_root == "/tmp/elsewhere"
 
@@ -292,6 +292,7 @@ _WRAPPER_DO_NOT_WRAP: dict[str, dict[str, str]] = {
         "session": "engine session id — an opaque store key, not prose",
         "review_topo": "a unit selector — an integer stage index or the literal 'order', not prose",
         "review_topo_history": "path to the driver-written JSON history file, not prose",
+        "agreed_understanding": "a sha256 hex digest, not prose",
         "allow_child_outside_project": "an audit reason the operator types, only quoted in a notice and logged; no text on it is read for meaning or fetched from a file",
     },
     "spawn-cursor-specialist.py": {

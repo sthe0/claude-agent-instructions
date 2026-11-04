@@ -110,3 +110,20 @@ def test_wrapper_sigterm_reaps_claude_subtree(tmp_path):
             wrapper.kill()
             wrapper.wait(timeout=5)
         subprocess.run(["pkill", "-9", "-f", marker], capture_output=True)
+
+
+def _load_spawn_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("spawn_specialist_child_env", WRAPPER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_child_env_marks_depth_and_still_inherits_tmux_pane():
+    env = _load_spawn_module().build_child_env({"TMUX_PANE": "%1"}, 1, "s")
+    assert env["AGENT_RECURSION_DEPTH"] == "1"
+    assert env["TMUX_PANE"] == "%1"
+    assert env["CLAUDE_CODE_DISABLE_CRON"] == "1"
+    assert env["AGENT_LINEAGE_IDS"] == "s"

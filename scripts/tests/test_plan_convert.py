@@ -615,6 +615,7 @@ def test_the_user_authority_verb_set_differs_from_the_stage_five_set_by_the_live
 
     added_on_main_since = {
         "accept-protected-grant", "adopt-escalation", "mandate-retry", "record-landing",
+        "order-submit", "order-agree", "order-challenge-dismiss",
     }
 
     assert AGENTCTL_USER_AUTHORITY_VERBS - stage_five - added_on_main_since == {"plan-convert-live"}
@@ -1316,7 +1317,7 @@ DISPOSITIONS = frozenset({
     "routed through plan_digest_equivalent", "audit only", "not a binding"})
 POSITIVE_CONTROLS = frozenset({
     "scripts/agentctl/gates.py:_plan_review_content_stale",
-    "scripts/agentctl/cli.py:_count_plan_review_round",
+    "scripts/agentctl/cli_review.py:_count_plan_review_round",
     "scripts/plan-review-topological.py:Driver.launch",
 })
 

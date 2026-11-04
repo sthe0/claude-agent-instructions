@@ -564,8 +564,13 @@ def test_override_with_empty_customer_id_degrades_gracefully(store, tmp_path, ga
 def _run(state_root: Path, *args: str, gate: str = "1"):
     # The walks declare their tmp dir as the plan's venue; keep it out of the OS-temp
     # scratch roots so a relative output_artifacts entry anchored there is not refused.
+    # An empty config root: where the machine's settings wire the answer hook, classify would
+    # arm the order-agreement gate and hold every walk at submit-plan.
+    config = state_root.parent / "config"
+    config.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, AGENTCTL_PLAN_REVIEW=gate, AGENTCTL_ADVISOR="0",
-               AGENTCTL_SCRATCH_ROOTS=str(state_root.parent / "scratch-elsewhere"))
+               AGENTCTL_SCRATCH_ROOTS=str(state_root.parent / "scratch-elsewhere"),
+               CLAUDE_CONFIG_DIR=str(config))
     proc = subprocess.run(
         [sys.executable, "-m", "agentctl", "--state-root", str(state_root), *args],
         cwd=str(SCRIPTS_DIR), env=env, capture_output=True, text=True,

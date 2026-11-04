@@ -37,7 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import checkrun, cli, plugins, text_shape
+from agentctl import checkrun, cli, cli_difficulty, plugins, text_shape
 from agentctl import state as state_mod
 from agentctl.dispatch import RunResult
 from agentctl.plan import (
@@ -63,7 +63,7 @@ from agentctl.state import (
 )
 from agentctl.submission import submission_violations, validate_submission
 
-from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
+from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER, patch_cli_name
 from plan_site_fixture import GROUNDED_SOURCE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -401,7 +401,7 @@ def test_plan_digest_follows_an_in_place_edit_through_approve(tmp_path, store,
         seen.setdefault(gate, state.accepted_plan_digest)
         return real(state, gate, blockers, passed=passed)
 
-    monkeypatch.setattr(cli, "_log_gate", spy)
+    patch_cli_name(monkeypatch, "_log_gate", spy)
 
     # an empty approver: a blocker composed AFTER the refresh, so it exercises exactly the
     # window between seam (c) and the gate's refusal
@@ -410,7 +410,7 @@ def test_plan_digest_follows_an_in_place_edit_through_approve(tmp_path, store,
     assert seen["plan_approval"] == before
     assert store.load("dig-c").accepted_plan_digest == before
 
-    monkeypatch.setattr(cli, "_log_gate", real)
+    patch_cli_name(monkeypatch, "_log_gate", real)
     cli.cmd_approve(ns(session="dig-c", by="user"), store=store)
     after = store.load("dig-c").accepted_plan_digest
     assert after != before
@@ -803,7 +803,7 @@ def test_a_refused_replan_leaves_the_accepted_digest_unchanged(tmp_path, store,
         seen.setdefault(gate, state.accepted_plan_digest)
         return real(state, gate, blockers, passed=passed)
 
-    monkeypatch.setattr(cli, "_log_gate", spy)
+    patch_cli_name(monkeypatch, "_log_gate", spy)
 
     corrected = _write_plan(tmp_path / "corrected.toml", title="a different title")
     d = cli.cmd_replan(ns(session=sid, plan=corrected), store=store)
@@ -1107,7 +1107,10 @@ _DESTINATION_ALIASES = {
     "материал": "material", "средство": "tool", "норма": "norm",
     "способ": "method", "знание": "knowledge",
 }
-_AGENTCTL_PROSE_FILES = ("state.py", "gates.py", "plan.py", "cli.py")
+_AGENTCTL_PROSE_FILES = (
+    "state.py", "gates.py", "plan.py",
+    *sorted(p.name for p in (REPO_ROOT / "scripts" / "agentctl").glob("cli*.py")),
+)
 _ALIAS_TABLE_PREFIXES = ("FAILURE_ADDRESS_ALIASES = ", "NORMALIZATION_DESTINATION_ALIASES = ")
 
 
@@ -1161,7 +1164,7 @@ def test_destination_alias_leaves_an_unknown_or_absent_value_alone():
 
 def test_destination_alias_identity_canonicalizer_is_caught(tmp_path, store, monkeypatch):
     monkeypatch.setattr(state_mod, "canonical_normalization_destination", lambda v: v)
-    monkeypatch.setattr(cli, "canonical_normalization_destination", lambda v: v)
+    patch_cli_name(monkeypatch, "canonical_normalization_destination", lambda v: v)
     assert Normalization(factor="f", destination="знание").destination != "knowledge"
     _to_normalize_ready(store, "alias-mut", _write_plan(tmp_path / "plan.toml"))
     d = cli.cmd_normalize(

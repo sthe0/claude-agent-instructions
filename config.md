@@ -23,6 +23,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `difficulty-channel` | `github` | Channel for filing Core difficulties from non-author machines; auto-detected per machine. |
 | `advisor-mode` | `substantive` | When the agentctl advisory judge activates: `off` or `substantive`; `AGENTCTL_ADVISOR` overrides. |
 | `child-contour-linking` | `on` | Kill switch linking a spawned specialist into its own engine contour; `AGENTCTL_CHILD_LINKING` overrides. |
+| `task-title` | `on` | Kill switch for `classify --title` retitling the tmux pane of a top-level session; `AGENTCTL_TASK_TITLE` overrides. |
 | `principle-promotion-threshold` | `3` | Context-block count at which promote-scan flags an experience cluster for a regularity leaf. |
 | `skill-description-max-chars` | `850` | Character ceiling on a SKILL.md frontmatter `description:`. |
 | `always-loaded-surface-advisory-chars` | `80000` | Advisory-only ceiling on the aggregate always-loaded surface; never fails. |
@@ -54,5 +55,10 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `plan-field-inline-max-chars` | `3000` | Longest prose field a plan prints inline; longer ones are externalized (advisory). |
 | `reaper-pressure-free-percent` | `10` | Free-space percent below which `hook-reaper.py --on-pressure` runs a reaper before its 24-hour throttle. |
 | `given-regularity-max-age-days` | `180` | Age in days of a given regularity's `last_verified` beyond which the grounding judge reports `unverified_given`. |
+| `resource-grant-hook` | `on` | Kill switch for the resource-grant PreToolUse hook in a linked child; `AGENTCTL_RESOURCE_HOOK` overrides. |
+| `resource-grant-hook-timeout-s` | `20` | Seconds the harness gives the resource-grant PreToolUse hook before it kills it and falls through. |
+| `resource-grant-judge-timeout-s` | `15` | Seconds the opaque-code judge may run; at most `resource-grant-hook-timeout-s` minus 5. |
+| `resource-estimate-drift-repeat` | `2` | Distinct tasks in which one executor kind's resource request must under-estimate before self-diagnosis proposes an edit to that kind's skill. |
+| `time-profile-half-life-days` | `7` | Half-life in days of the session age weight in `agent-report.py time-profile`; a session this old counts half as much as one that just ended. |
 
 Per-machine values live uncommitted beside this file (`agent-identity.local`, `term-rulesets/*.toml`); see `docs/operations/config-rationale.md` and `docs/operations/org-portability.md`.

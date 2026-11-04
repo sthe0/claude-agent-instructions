@@ -545,3 +545,156 @@ def test_main_dry_run_only_filters(capsys):
     out = capsys.readouterr().out
     assert "add_dir:accept_edits_read_add_dir" in out
     assert "headless:" not in out
+
+
+# --- allow group: hook/settings builders ---------------------------------
+
+def test_allow_hook_script_allows_and_witnesses_start_and_end(tmp_path):
+    witness = tmp_path / "w.log"
+    hook = probe._allow_hook_script(tmp_path, witness)
+    proc = subprocess.run([sys.executable, str(hook)], input=json.dumps({"tool_name": "Read"}),
+                          capture_output=True, text=True, timeout=30)
+    out = json.loads(proc.stdout)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    phases = [(e["tool_name"], e["phase"]) for e in probe.read_witness(witness)]
+    assert phases == [("Read", "start"), ("Read", "end")]
+
+
+def test_allow_hook_script_sleeps_before_answering(tmp_path):
+    hook = probe._allow_hook_script(tmp_path, tmp_path / "w.log", sleep_s=0.3)
+    assert "time.sleep(0.3)" in hook.read_text()
+
+
+def test_settings_with_allow_hook_covers_every_granted_tool(tmp_path):
+    s = probe._settings_with_allow_hook(tmp_path / "h.py", timeout_s=7)
+    entry = s["hooks"]["PreToolUse"][0]
+    assert set(entry["matcher"].split("|")) == {"Bash", "Read", "Edit", "Write"}
+    assert entry["hooks"][0]["timeout"] == 7
+    assert "permissions" not in s
+
+
+def test_settings_with_allow_hook_baseline_has_no_hooks():
+    s = probe._settings_with_allow_hook(None, extra_perms={"deny": ["Read(//x/**)"]})
+    assert "hooks" not in s
+    assert s["permissions"] == {"deny": ["Read(//x/**)"]}
+
+
+def test_settings_with_allow_hook_baseline_without_perms_is_empty():
+    assert probe._settings_with_allow_hook(None) == {}
+
+
+def test_allow_cmd_omits_settings_when_empty_and_passes_add_dirs():
+    cmd = probe._allow_cmd("acceptEdits", {}, "0.1", add_dirs=("/a", "/b"))
+    assert "--settings" not in cmd
+    assert cmd[cmd.index("--permission-mode") + 1] == "acceptEdits"
+    assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--add-dir"] == ["/a", "/b"]
+
+
+def test_allow_cmd_default_mode_passes_no_permission_mode():
+    assert "--permission-mode" not in probe._allow_cmd("default", {"x": 1}, "0.1")
+
+
+# --- allow group: witness latency -----------------------------------------
+
+def test_hook_latencies_pairs_start_and_end():
+    entries = [
+        {"tool_name": "Bash", "phase": "start", "t": 10.0},
+        {"tool_name": "Bash", "phase": "end", "t": 10.25},
+        {"tool_name": "Read", "phase": "start", "t": 11.0},
+    ]
+    durations, unfinished = probe.hook_latencies(entries)
+    assert durations == [pytest.approx(0.25)]
+    assert unfinished == 1
+
+
+def test_read_witness_skips_garbage(tmp_path):
+    w = tmp_path / "w.log"
+    w.write_text('{"tool_name": "Bash", "phase": "start", "t": 1}\nnot json\n', encoding="utf-8")
+    assert probe.read_witness(w) == [{"tool_name": "Bash", "phase": "start", "t": 1}]
+    assert probe.read_witness(tmp_path / "absent.log") == []
+
+
+# --- allow group: tool-call pairing ---------------------------------------
+
+def _assistant_tool_use(tid, name, inp):
+    return json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": tid, "name": name, "input": inp}]}})
+
+
+def _user_tool_result(tid, content, is_error):
+    return json.dumps({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": tid, "content": content, "is_error": is_error}]}})
+
+
+def test_parse_tool_calls_pairs_results_by_id():
+    raw = "\n".join([
+        _assistant_tool_use("a", "Bash", {"command": "rm x"}),
+        _assistant_tool_use("b", "Bash", {"command": "mv y z"}),
+        _user_tool_result("b", "requires approval", True),
+        _user_tool_result("a", "", False),
+    ])
+    calls = probe.parse_tool_calls(raw)
+    assert [(c["input"]["command"], c["is_error"]) for c in calls] == [("rm x", False), ("mv y z", True)]
+    assert calls[1]["content"] == "requires approval"
+
+
+def test_parse_tool_calls_unanswered_call_has_none_outcome():
+    calls = probe.parse_tool_calls(_assistant_tool_use("a", "Read", {"file_path": "/f"}))
+    assert calls == [{"name": "Read", "input": {"file_path": "/f"}, "is_error": None, "content": None}]
+
+
+def test_parse_tool_calls_list_content_is_serialized():
+    raw = "\n".join([
+        _assistant_tool_use("a", "Read", {}),
+        _user_tool_result("a", [{"type": "text", "text": "MARK"}], False),
+    ])
+    assert "MARK" in probe.parse_tool_calls(raw)[0]["content"]
+
+
+# --- allow group: Q6 effects ----------------------------------------------
+
+def test_q6_effects_all_false_after_prepare(tmp_path):
+    probe.q6_prepare(tmp_path)
+    assert probe.q6_effects(tmp_path) == {k: False for k in ("mkdir", "touch", "cp", "mv", "sed", "rm")}
+
+
+def test_q6_effects_all_true_after_running_every_command(tmp_path):
+    probe.q6_prepare(tmp_path)
+    for _, command in probe.q6_commands(tmp_path):
+        subprocess.run(command, shell=True, check=True, timeout=30)
+    assert all(probe.q6_effects(tmp_path).values())
+
+
+def test_q6_commands_stay_inside_their_location(tmp_path):
+    for _, command in probe.q6_commands(tmp_path):
+        paths = [tok for tok in command.split() if tok.startswith("/")]
+        assert paths and all(p.startswith(str(tmp_path)) for p in paths)
+
+
+# --- allow group: planning and dry-run ------------------------------------
+
+def test_allow_plan_cells_unique_and_disjoint_from_default_plan():
+    allow = probe._allow_plan()
+    assert len(set(allow)) == len(allow)
+    assert not set(allow) & set(probe._plan())
+    assert all(c.startswith("allow:") for c in allow)
+
+
+def test_allow_plan_covers_every_question():
+    joined = " ".join(probe._allow_plan())
+    for q in ("q2_", "q3_", "q4_", "q5_", "q6_"):
+        assert q in joined
+
+
+def test_main_dry_run_only_allow_lists_allow_cells(capsys):
+    rc = probe.main(["--dry-run", "--only", "allow"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    for cell_id in probe._allow_plan():
+        assert cell_id in out
+    assert "headless:" not in out
+
+
+def test_main_dry_run_default_excludes_allow_cells(capsys):
+    probe.main(["--dry-run"])
+    assert "allow:" not in capsys.readouterr().out

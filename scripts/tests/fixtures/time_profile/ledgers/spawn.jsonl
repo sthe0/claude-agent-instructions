@@ -1,0 +1,4 @@
+{"event":"spawn","kind":"developer","duration_ms":10000,"spawner_session":"sess-a","child_session_id":"sess-c","transcript_path":"/x/sess-c.jsonl"}
+{"event":"spawn","kind":"developer","duration_ms":2500,"spawner_session":"sess-a","child_session_id":null}
+{"event":"spawn","kind":"thinker","duration_ms":4000,"spawner_session":"sess-a","child_session_id":"sess-gone"}
+{"event":"result","kind":"developer","duration_ms":99999,"spawner_session":"sess-a"}

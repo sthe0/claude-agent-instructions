@@ -51,7 +51,7 @@ call nobody approved.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from lib import widening_targets
 
@@ -260,10 +260,11 @@ class FileResource(Resource):
 
 @dataclass(frozen=True)
 class VcsRefResource(Resource):
-    """A version-control ref at a given `op` — `"push"` or `"land"`. `op`
-    is part of the identity: an approved `land` never covers a `push`
-    request and vice versa (revision 6, R1) — landing and force/plain
-    pushing are different real-world effects even against the same ref."""
+    """A version-control ref at a given `op` — `"push"`, `"land"` or `"commit"`
+    (a commit to the local repository, `remote` `"."`). `op` is part of the
+    identity: an approved `land` never covers a `push` request and vice versa
+    (revision 6, R1) — landing and force/plain pushing are different real-world
+    effects even against the same ref; a `commit` never covers either."""
 
     remote: str
     ref: str
@@ -326,3 +327,27 @@ class DatasetResource(Resource):
         if not isinstance(other, DatasetResource):
             return False
         return (self.system, self.locator) == (other.system, other.locator)
+
+
+_RESOURCE_CLASSES = {
+    cls.kind: cls for cls in (FileResource, VcsRefResource, SpecialistResource, ServiceResource, DatasetResource)
+}
+
+
+def resource_to_dict(resource: Resource) -> dict:
+    """A JSON-safe dict for any resource: every kind is a frozen dataclass whose fields
+    (`kind` included) are JSON-native strings, so a new kind serializes with no change here."""
+    return asdict(resource)
+
+
+def resource_from_dict(data: dict) -> Resource:
+    """The inverse of `resource_to_dict`. Raises `ValueError` on an unknown kind, a missing or
+    foreign field, or a value the class refuses; tolerant readers wrap this."""
+    kind = data.get("kind") if isinstance(data, dict) else None
+    cls = _RESOURCE_CLASSES.get(kind) if isinstance(kind, str) else None
+    if cls is None:
+        raise ValueError(f"unknown resource kind {data.get('kind') if isinstance(data, dict) else data!r}")
+    try:
+        return cls(**data)
+    except TypeError as exc:
+        raise ValueError(f"malformed {data['kind']} resource: {exc}") from exc

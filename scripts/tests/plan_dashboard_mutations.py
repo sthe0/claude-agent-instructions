@@ -804,6 +804,7 @@ TUI_MUTATIONS.update({
     "tui-jump-shell": (LOCATE, "_run", _jump_runner(shell=True, timeout=5)),
     "tui-jump-no-timeout": (LOCATE, "_run", _jump_runner(shell=False)),
     "tui-jump-session-ignored": (TUI, "jump_harness", _jump_session_as_task),
+    "tui-jump-bound-ignored": (TUI, "bound_jump_target", _always(None)),
     "tui-app-jump-unbound": (TUI_APP, "jump_from", _nothing),
     "tui-jump-writes-state": (TUI_APP, "jump_from", _state_written_on_refresh),
     "tui-root-transcript-unmarked": (TUI, "detail_tree", _root_estimate_dropped),

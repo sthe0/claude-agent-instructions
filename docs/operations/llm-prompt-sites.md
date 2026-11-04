@@ -55,6 +55,7 @@ asserts that no token of a node the row does not show reaches the captured argv 
 | `scripts/agentctl/advisor.py`:`_judge_user_text` | none | no plan content | the user's text |
 | `scripts/agentctl/advisor.py`:`judge_approval_ask` | none | no plan content | the ask text |
 | `scripts/agentctl/advisor.py`:`judge_binary_ask` | none | no plan content | the final text |
+| `scripts/agentctl/advisor.py`:`judge_code_effects` | none | no plan content | the code of a command line and its venue |
 | `scripts/agentctl/advisor.py`:`judge_deferring_disposition` | none | no plan content | the ask text |
 | `scripts/agentctl/advisor.py`:`judge_feedback_signal` | none | no plan content | the user's text |
 | `scripts/agentctl/advisor.py`:`judge_landing_discipline_ask` | none | no plan content | the ask text |
@@ -63,10 +64,11 @@ asserts that no token of a node the row does not show reaches the captured argv 
 | `scripts/agentctl/advisor.py`:`judge_published_text_rules` | none | no plan content | the published body |
 | `scripts/agentctl/advisor.py`:`judge_same_difficulty` | none | no plan content | two difficulty descriptions |
 | `scripts/agentctl/advisor.py`:`judge_silent_closure` | none | no plan content | the assistant text |
-| `scripts/agentctl/cli.py`:`_venue_tree_identity.run` | none | no plan content | a git command line |
+| `scripts/agentctl/cli_common.py`:`_venue_tree_identity.run` | none | no plan content | a git command line |
 | `scripts/agentctl/mandate.py`:`<module>` | none | no plan content | a list of script names, no call |
 | `scripts/gen_crutch_registry.py`:`<module>` | none | no plan content | a table key, no call |
 | `scripts/measure-marker-extractor-latency.py`:`_one_call` | none | no plan content | a fixed synthetic message |
+| `scripts/probe-hook-decision-semantics.py`:`_allow_cmd` | none | no plan content | a fixed probe prompt |
 | `scripts/probe-hook-decision-semantics.py`:`run_add_dir_read_cell` | none | no plan content | a fixed probe prompt |
 | `scripts/probe-hook-decision-semantics.py`:`run_add_dir_write_cell` | none | no plan content | a fixed probe prompt |
 | `scripts/probe-hook-decision-semantics.py`:`run_headless_cell` | none | no plan content | a fixed probe prompt |

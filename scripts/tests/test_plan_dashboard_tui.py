@@ -761,6 +761,27 @@ def test_a_nonzero_exit_shows_its_first_stderr_line():
     assert status == "window one failed: no such window"
 
 
+@pytest.mark.parametrize("subject, tried", [
+    (("task", "t1"), ["h-task", "h-old", "h-window"]),  # the overlay's session has no window
+    (("task", "unread"), ["h-old", "h-window"]),  # no overlay row yet
+])
+def test_a_task_jumps_through_any_bound_session_that_has_a_window(monkeypatch, subject, tried):
+    seen = []
+
+    def jump_target(harness):
+        seen.append(harness)
+        return JUMP_TARGET if harness == "h-window" else None
+
+    monkeypatch.setattr(tui.engine_session_binding, "harness_sessions_driving", lambda engine: ["h-window", "h-old"])
+    status = tui.jump_to(subject, OVERLAY, SimpleNamespace(NAME="fake", jump_target=jump_target), runner=JumpRecorder())
+    assert status.startswith("window one — return:") and seen == tried
+
+
+def test_a_session_row_never_borrows_a_window_from_the_bindings(monkeypatch):
+    monkeypatch.setattr(tui.engine_session_binding, "harness_sessions_driving", lambda engine: ["h-window"])
+    assert tui.jump_to(("session", "h"), OVERLAY, jump_locator(target=None)) == "no jump target"
+
+
 @pytest.mark.parametrize("key, step", [("down", 1), ("j", 1), ("up", -1), ("k", -1), ("x", 0)])
 def test_scroll_step(key, step):
     assert tui.scroll_step(key) == step

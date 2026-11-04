@@ -32,14 +32,17 @@ MAX_DEPTH = 8
 
 _SHA_RE = re.compile(r"[0-9a-f]{64}")
 
+# `branch` is a string but listed here on purpose: it is an input to the DR-P push grant, so
+# it must be spelled in the index the user approves, never behind a hash-pinned reference.
 NON_STRING_FIELDS: dict[str, frozenset[str]] = {
     "stage": frozenset({
         "index", "depends_on", "material_refs", "knowledge_refs", "guard_exempt_paths",
         "expected_exit", "landed", "principle", "supplies", "output_artifacts", "renorms",
-        "grants", "effects", "optional", "amendments",
+        "grants", "effects", "optional", "amendments", "branch",
     }),
-    "meta": frozenset({"order", "assumption"}),
-    "order": frozenset({"requirements", "requires_traceability", "coverage"}),
+    "meta": frozenset({"order", "assumption", "branch", "resource_request"}),
+    "order": frozenset({"requirements", "requires_traceability", "coverage",
+                        "requires_resource_request", "proposals", "constraints"}),
 }
 
 # Exactly the keys parse_plan and Order read (pinned by a test). `[meta] context` is not
@@ -57,7 +60,9 @@ EXTERNALIZABLE_FIELDS: dict[str, frozenset[str]] = {
         "task_id", "goal", "done_criterion", "criterion_type", "weight_class",
         "external_research", "repo_root", "delivery_worktree", "landing_waiver",
     }),
-    "order": frozenset({"customer_id", "customer", "functional_place", "parent_norm"}),
+    "order": frozenset({
+        "customer_id", "customer", "functional_place", "parent_norm", "activity", "difficulty",
+    }),
 }
 
 _NODE_KIND = {"meta": "meta", "meta.order": "order"}

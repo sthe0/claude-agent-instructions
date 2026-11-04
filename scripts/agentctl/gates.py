@@ -50,6 +50,7 @@ from lib.spawn_prompt_files import composed_prompt_files, skill_path
 from . import advisor as _advisor
 from . import delivery
 from . import effort
+from . import resources as _resources
 from .config import Thresholds
 from .plan import (
     PlanError,
@@ -58,8 +59,10 @@ from .plan import (
     changed_parts,
     consumers,
     effects_place,
+    entries_grants_sha256,
     grants_place,
     grants_sha256,
+    load_order_draft,
     load_plan,
     load_plan_with_digest,
     moved_interfaces,
@@ -80,12 +83,14 @@ from .plan import (
     stage_question_key,
     unit_currency_hash,
     unit_id,
+    understanding_digest,
+    understanding_parts,
     unit_node,
 )
 from .plan_resources import ENGINE_EXECUTED_ORIGINS
 from .round_release import RoundReleaseCounter, compute_cross_axis_ceiling
 from .stage_norm import StageNorm
-from .state import CONCERN_OPEN, EFFORT_FIRE_FINISHED_WORK, CriterionType, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
+from .state import CHALLENGE_OPEN, CONCERN_OPEN, EFFORT_FIRE_FINISHED_WORK, CriterionType, Node, PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, Route, SessionState, StageStatus, WeightClass
 from .state import plan_review_concern_ids as _plan_review_concern_ids
 from .state import plan_review_scope_for_stage as _plan_review_scope_for_stage
 from .state import plan_review_scope_stage_index as _plan_review_scope_stage_index
@@ -1426,6 +1431,48 @@ def _concern_discharged(scope: str, concern_id: str, concern_text: str, state: S
     )
 
 
+UNDERSTANDING_TOKEN = "understanding:"
+
+
+def understanding_challenged(state: SessionState, stable_id: str, text: str, restates: str = "") -> bool:
+    """Whether a reviewer's `understanding:` concern has been taken up as a challenge to the
+    agreed order, by its own id or by the id it re-raises. Such a concern blocks the agreement
+    gate instead of the plan review. Only that one token is ever excluded."""
+    if (not state.order_challenges
+            or _concern_part_token(text, after_marker=True) != UNDERSTANDING_TOKEN):
+        return False
+    return (stable_id in {c.id for c in state.order_challenges}
+            or challenge_for_restatement(state, restates) is not None)
+
+
+def challenge_for_restatement(state: SessionState, restates: str):
+    """The recorded challenge a chain of `re:` restatements starting at `restates` leads to,
+    or None."""
+    by_id = {c.id: c for c in state.order_challenges}
+    seen: set[str] = set()
+    current = restates
+    while current and current not in seen:
+        if current in by_id:
+            return by_id[current]
+        seen.add(current)
+        entry = state.concern_ledger.get(current)
+        current = entry.restates if entry is not None else ""
+    return None
+
+
+def _entry_understanding_challenged(state: SessionState, entry) -> bool:
+    return understanding_challenged(state, entry.id, entry.text, entry.restates)
+
+
+def _review_concern_challenged(state: SessionState, pr, index: int) -> bool:
+    # A whole-plan record keeps its ledger ids in `stable_ids`; its `concern_ids` are the local c<n>.
+    stable = getattr(pr, "stable_ids", None) or []
+    ids = stable if len(stable) == len(pr.concerns) else _plan_review_concern_ids(pr)
+    entry = state.concern_ledger.get(ids[index])
+    return understanding_challenged(
+        state, ids[index], pr.concerns[index], entry.restates if entry is not None else "")
+
+
 def concern_unresolved(entry, state: SessionState, doc) -> bool:
     """Whether a ledger entry is still open and no risk acceptance discharges it."""
     return entry.status == CONCERN_OPEN and not _concern_discharged(
@@ -1476,7 +1523,9 @@ def _plan_review_verdict_blockers(pr, *, state: SessionState | None = None, doc=
     blocking_ids = set(pr.in_scope_concern_ids) if classified else set(ids)
     relevant = [(cid, text, i) for i, (cid, text) in enumerate(zip(ids, pr.concerns))
                 if cid in blocking_ids]
-    unfinished = _open_prior_concerns(pr, state, doc)
+    relevant = [r for r in relevant if not _review_concern_challenged(state, pr, r[2])]
+    unfinished = [e for e in _open_prior_concerns(pr, state, doc)
+                  if not _entry_understanding_challenged(state, e)]
     if unfinished:
         held = ", ".join(e.id for e in unfinished)
         default = [
@@ -1695,7 +1744,7 @@ def _concern_names_part(text: str, part_name: str) -> bool:
 #: number is out-of-scope) and from an arbitrary word-colon prefix like `Risk:`/
 #: `Note:`, which _PLAN_REVIEW_PART_TOKEN_RE also matches syntactically but which
 #: names no engine-defined part.
-_PLAN_REVIEW_RECOGNIZED_NON_STAGE_PREFIXES = ("meta:", "order:")
+_PLAN_REVIEW_RECOGNIZED_NON_STAGE_PREFIXES = ("meta:", "order:", UNDERSTANDING_TOKEN)
 
 
 def _concern_part_token(text: str, *, after_marker: bool = False) -> "str | None":
@@ -1848,7 +1897,18 @@ def pair_status(state: SessionState, doc, plan_path: str, pair: str) -> str:
         if record.held and not is_unit_id(pair) and record.held == review_currency_hash(doc, pair):
             return "held"
         return stale
-    return "current" if record.verdict == _PLAN_REVIEW_PASS else record.verdict
+    if record.verdict == _PLAN_REVIEW_PASS or _revise_only_challenged(state, record):
+        return "current"
+    return record.verdict
+
+
+def _revise_only_challenged(state: SessionState, record) -> bool:
+    """Whether a `revise` record blocks on nothing but `understanding:` concerns the agreement
+    gate has taken up as challenges."""
+    if record.verdict != _PLAN_REVIEW_REVISE or not state.order_challenges:
+        return False
+    blocking = [i for i in range(len(record.concerns)) if concern_is_blocking(record, i)]
+    return bool(blocking) and all(_review_concern_challenged(state, record, i) for i in blocking)
 
 
 def _pair_staleness(record, doc, plan_path: str, pair: str) -> str:
@@ -2803,6 +2863,115 @@ def plan_presentation_active(state: SessionState) -> bool:
     return state.weight_class == WeightClass.SUBSTANTIVE.value
 
 
+def _order_review_binds(review, digest: str) -> bool:
+    return review.understanding_sha256 == digest
+
+
+def order_review_blockers(state: SessionState, path: str | None) -> list[str]:
+    """Why the order understanding at `path` has no standing review ([] == it has one).
+
+    The standing review is the LAST one recorded against the draft's current
+    understanding digest: a pass clears the gate, an override clears it only when its
+    reviewer is not one whose `revise` of the same understanding it overrides and it
+    carries a note, and a revise blocks. A review recorded against an earlier
+    understanding binds nothing — editing the activity, a requirement or a proposal
+    moves the digest and leaves every earlier verdict behind."""
+    if not path:
+        return ["no order draft to review: order-submit a draft first"]
+    try:
+        doc, _ = load_order_draft(path)
+    except (OSError, PlanError) as exc:
+        return [f"order draft {path!r} cannot be read: {exc}"]
+    digest = understanding_digest(doc)
+    bound = [r for r in state.order_reviews if _order_review_binds(r, digest)]
+    if not bound:
+        return [
+            f"no order review is bound to the current understanding ({digest[:12]}) of "
+            f"{path!r}; run plan-review --scope order --target {path} --verdict pass|revise"
+        ]
+    last = bound[-1]
+    if last.verdict == _PLAN_REVIEW_PASS:
+        return []
+    if last.verdict == _PLAN_REVIEW_OVERRIDE:
+        reviewer = (last.reviewer or "").strip()
+        if not reviewer or not (last.note or "").strip():
+            return ["the order review override needs a non-empty reviewer and note"]
+        if any(r.verdict == _PLAN_REVIEW_REVISE and (r.reviewer or "").strip() == reviewer
+               for r in bound):
+            return [
+                f"the order review override must come from a distinct reviewer: {reviewer!r} "
+                "issued the 'revise' it would override"
+            ]
+        return []
+    return [
+        f"the last order review of the current understanding ({digest[:12]}) is "
+        f"{last.verdict!r} by {last.reviewer!r}: revise the draft and review it again, or "
+        "override with a distinct reviewer and a note"
+    ]
+
+
+ANSWER_HOOK_BASENAME = "hook-ask-answer-record.py"
+
+
+def answer_hook_registered() -> bool:
+    """Whether the answer-record hook is wired where this session loads its settings. Only a
+    definite WIRED counts: an UNKNOWN probe cannot promise that agreement evidence will exist."""
+    try:
+        return getattr(hook_wiring.probe(ANSWER_HOOK_BASENAME), "status", None) == hook_wiring.WIRED
+    except Exception:
+        return False
+
+
+def order_agreement_active(state: SessionState, doc=None) -> bool:
+    """Whether the order-agreement gate applies: an armed substantive session working at the
+    top of its plan stack. A declared `parent_norm` without a `parent_link` does not deactivate
+    it; only arming (set once, by classify) and a pushed sub-plan frame do."""
+    return (
+        state.order_agreement_armed
+        and state.weight_class == WeightClass.SUBSTANTIVE.value
+        and not state.plan_stack
+    )
+
+
+def _agreement_divergence(agreed: "dict[str, str]", current: "dict[str, str]") -> list[str]:
+    """Every part of the understanding that differs between the agreed and the current one,
+    including parts that exist on one side only (an id whose text changed differs the same way)."""
+    return sorted(name for name in set(agreed) | set(current) if agreed.get(name) != current.get(name))
+
+
+def order_agreement_blockers(state: SessionState, doc) -> list[str]:
+    """Why the plan may not move on under the agreement gate ([] == it may): the user has
+    agreed no order understanding, the plan's understanding differs from the agreed one in a
+    named part, or a reviewer's challenge to the agreed order is still open. Inert unless the
+    gate is active for this session."""
+    if not order_agreement_active(state, doc):
+        return []
+    agreement = state.order_agreement
+    if agreement is None:
+        return [
+            "no agreed order understanding — the user has not agreed this session's order: "
+            "order-submit the draft, plan-review --scope order, present-plan --kind order, "
+            "then put the agreement ask to the user and run order-agree"
+        ]
+    blockers = []
+    if doc is not None:
+        differing = _agreement_divergence(agreement.parts, understanding_parts(doc))
+        if differing:
+            blockers.append(
+                f"understanding diverges from the agreed one ({agreement.understanding_sha256[:12]}): "
+                f"{', '.join(differing)} differ — restore them, or order-submit the new "
+                "understanding, have it reviewed and presented, and run order-agree again"
+            )
+    for challenge in state.order_challenges:
+        if challenge.status == CHALLENGE_OPEN:
+            blockers.append(
+                f"open challenge {challenge.id} to the agreed order, raised by "
+                f"{challenge.reviewer or 'a reviewer'}: {challenge.text[:200]} — the user "
+                "dismisses it (order-challenge-dismiss) or agrees a changed understanding"
+            )
+    return blockers
+
+
 def _plan_presentation_for(state: SessionState, kind: str):
     """The most-recently-recorded PlanPresentation for `kind`, or None.
 
@@ -2817,6 +2986,27 @@ def _plan_presentation_for(state: SessionState, kind: str):
     regardless."""
     match = [p for p in state.plan_presentations if p.kind == kind]
     return match[-1] if match else None
+
+
+def order_presentation_stale_reason(state: SessionState, receipt) -> str | None:
+    """Why an order receipt no longer stands for the submitted understanding (None ==
+    it does): it must name the submitted draft, its bytes, and carry the understanding
+    digest that order-submit recorded and the draft still has."""
+    stale = _receipt_binding_blocker(receipt, state.order_draft_path, "order presentation", state)
+    if stale is not None:
+        return stale
+    try:
+        doc, _ = load_order_draft(state.order_draft_path)
+    except (OSError, PlanError) as exc:
+        return f"order presentation is stale — the draft cannot be read: {exc}"
+    digest = understanding_digest(doc)
+    if receipt.understanding_sha256 != digest or state.order_draft_sha256 != digest:
+        return (
+            "order presentation is stale — the receipt, the submitted draft and the "
+            "draft's current understanding are not the same digest; re-run order-submit "
+            "and present-plan --kind order"
+        )
+    return None
 
 
 DELIVERY_HOOK_BASENAME = "hook-plan-delivery-gate.py"
@@ -3006,7 +3196,9 @@ def plan_presentation_blockers(
     return _delivery_stamp_blocker(state, receipt, probe)
 
 
-def grants_approval_blockers(state: SessionState, target_plan: str | None) -> list[str]:
+def grants_approval_blockers(
+    state: SessionState, target_plan: str | None, *, entries: dict | None = None,
+) -> list[str]:
     """Precondition guardian for `approve`: when the target plan grants ANYTHING
     (plan_has_any_grants), the essence presentation receipt that plan_presentation_
     blockers already required must ALSO carry a grants_sha256 matching the plan's
@@ -3019,7 +3211,11 @@ def grants_approval_blockers(state: SessionState, target_plan: str | None) -> li
     []) whenever that receipt is missing or already stale, trusting the sibling
     guardian to report it. Fails OPEN on a plan that does not load and on a plan
     that grants nothing at all (a grants_sha256 comparison is meaningless with no
-    grants to bind). [] == may pass."""
+    grants to bind). [] == may pass.
+
+    `entries` are the materialized grant entries the caller will bind: the receipt is
+    checked against their hash, so the set checked is the set bound even if the
+    repository's `origin/HEAD` moves between two reads."""
     if not plan_presentation_active(state):
         return []
     if not target_plan:
@@ -3035,7 +3231,7 @@ def grants_approval_blockers(state: SessionState, target_plan: str | None) -> li
         return []  # plan_presentation_blockers already names this
     if _receipt_binding_blocker(receipt, target_plan, "plan presentation", state) is not None:
         return []  # ditto -- stale receipt already blocked elsewhere
-    current = grants_sha256(doc)
+    current = entries_grants_sha256(entries) if entries is not None else grants_sha256(doc)
     if getattr(receipt, "grants_sha256", None) != current:
         return [
             "the plan's grant set changed since it was presented (or the "
@@ -4041,6 +4237,7 @@ def _renorm_stage_residual(stage) -> tuple:
         stage.ephemeral_artifacts_waiver,
         stage.optional,
         stage.backlog_issue,
+        stage.branch,
         tuple(stage.renorms),
         stage.principle.grounding_override if stage.principle else "",
     )
@@ -4056,13 +4253,13 @@ def _meta_place(meta) -> tuple:
     approval spine keys on — passed as "a re-sequencing". So the totality claim is made
     here and the named rows keep only the job they are good at, naming the norm.
 
-    Hand-written, but for a narrower reason than `plan.order_place`'s: eight of these eleven
-    fields (`task_id` through `delivery_worktree`) are plain scalars or optional strings,
+    Hand-written, but for a narrower reason than `plan.order_place`'s: ten of these fourteen
+    fields (`task_id` through `branch`) are plain scalars or optional strings,
     already hashable and comparable as `meta.X` with no transformation at all — a
-    `dataclasses.fields` derivation could emit those as-is. Only three actually need custom
+    `dataclasses.fields` derivation could emit those as-is. Only four actually need custom
     handling: `final_check` and `order` are themselves compound structures, routed through
     `_final_check_surface`/`order_place` for the same reason those helpers exist, and
-    `assumptions` is a list, flattened inline to a tuple of its fields. The list
+    `assumptions` and `resource_requests` are lists, flattened inline to tuples of their fields. The list
     stays hand-written regardless, because a derived walk would still have to dispatch
     `final_check`/`order` away from the plain fields, and because the totality claim needs
     its own pin either way: `test_the_meta_residual_exhausts_plan_meta_s_field_set` goes
@@ -4081,9 +4278,14 @@ def _meta_place(meta) -> tuple:
         meta.repo_root,
         meta.delivery_worktree,
         meta.landing_waiver,
+        meta.branch,
         _final_check_surface(meta),
         order_place(meta),
         tuple((a.id, a.text, a.basis, a.risk, a.stage) for a in meta.assumptions),
+        tuple(
+            (r.kind, r.stage, r.consult_ref, tuple(r.allow), tuple(r.add_dirs))
+            for r in meta.resource_requests
+        ),
     )
 
 
@@ -4216,7 +4418,7 @@ def autonomy_boundary(ledger_snapshot: dict, resolved_plan, first_verdicts: dict
     for requested in resolved_plan.resources:
         if any(a.covers(requested, protected=protected) for a in approved):
             continue
-        data = _oa.resource_to_dict(requested)
+        data = _resources.resource_to_dict(requested)
         name = _resource_name(data)
         if name in seen:
             continue
@@ -4397,7 +4599,7 @@ def parent_norm_boundary(parent_link: dict | None, order_parent_norm: str | None
 
         seen: set[str] = set()
         for requested in resources:
-            data = _oa.resource_to_dict(requested)
+            data = _resources.resource_to_dict(requested)
             if data["kind"] == "specialist":
                 continue
             if any(held.covers(requested, protected=protected) for held in held_resources):

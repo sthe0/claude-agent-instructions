@@ -32,6 +32,10 @@ Shared contract + the `CLARIFY:` / `PERMISSION-REQUEST:` formats live in [_share
 
 The published-text gate checks some of the numbered rules below against the final draft; [publish-rules.toml](publish-rules.toml) lists which, and a test keeps it in sync with this file — add, renumber or retitle a rule only together with its entry there.
 
+## Resource request
+
+When the planner spawns you for a read-only planning consult, the permission estimate for the stages you will execute is **your** responsibility: you know which files you read and write, and which checks you run. Answer with a `RESOURCE-REQUEST:` block inside `COMPLETED:` ([_shared/marker-protocol.md](../_shared/marker-protocol.md) § RESOURCE-REQUEST): per stage, the **full** set of allow rules and added directories, each with the procedure step that needs it. Edit no text in the consult.
+
 ## What to say, and in what order (macro-level — apply before the sentence rules)
 
 A polished sentence in the wrong place still loses the reader. Before touching lexicon, fix the **exposition order** and the **term density** — the two failures that make a technically-correct report read as "нейрослоп" (many words, much water, an answer the reader cannot dig out).

@@ -802,13 +802,17 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "dependency PASSED; approve refuses declining a stage something live depends on, so "
         "a dependency of a runnable stage is never SKIPPED"
     ),
-    ("agentctl/cli.py", "_refresh_caches_from_plan_path"): (
+    ("agentctl/cli_approval.py", "_refresh_caches_from_plan_path"): (
         "asks whether THIS stage's earlier PASS survives an edit of its own definition; a "
         "SKIPPED stage has no pass to invalidate and is reset by _apply_refined_stage_fields"
     ),
-    ("agentctl/cli.py", "_cmd_replan"): (
+    ("agentctl/cli_replan.py", "_replan_apply_substantive"): (
         "re-attest stash and substantive-replan carry: both ask whether a stage has a PASS "
         "outcome to reuse, and the carry arm names SKIPPED beside PASSED explicitly"
+    ),
+    ("agentctl/cli_replan.py", "_replan_submission_gates"): (
+        "asks which stages `--reopen` actually re-arms: only a stage that has a PASS to "
+        "invalidate, so PASSED is the exact set"
     ),
     ("agentctl/plugins_tracker.py", "_passed_artifact_stages"): (
         "asks which stages produced artifacts a ticket reader must be told about; a declined "
@@ -823,7 +827,7 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "at RESOLUTION `resolution_gate_open` takes over both paths. Fix is the one-line "
         "`in (\"PASSED\", \"SKIPPED\")`; remove this entry with it"
     ),
-    ("agentctl/cli.py", "cmd_record_result"): (
+    ("agentctl/cli_results.py", "cmd_record_result"): (
         "`args.status == \"passed\"` is the incoming result's own verdict on the one stage "
         "being recorded (--status passed|failed), not a read of the plan's stage statuses"
     ),
@@ -852,7 +856,7 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "the stage-completeness question in this function goes through all_stages_passed, "
         "which is the settled predicate under its legacy name"
     ),
-    ("agentctl/cli.py", "_replan_pending_indices"): (
+    ("agentctl/cli_replan.py", "_replan_pending_indices"): (
         "builds the pending set renorm_retention_blockers checks on replan: 'will this "
         "stage run again on the corrected plan?', not 'is the plan complete?'. A declined "
         "(SKIPPED) stage is counted as pending here and re-armed as a norm-retention "
@@ -860,24 +864,24 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "GAP in main's helper, filed as a Core issue rather than fixed in a merge; remove "
         "this entry with the `in (\"PASSED\", \"SKIPPED\")` fix"
     ),
-    ("agentctl/cli.py", "_frozen_stage_survives"): (
+    ("agentctl/cli_common.py", "_frozen_stage_survives"): (
         "asks whether a stage's PASSED verdict survives a replan whose carry key moved; a "
         "SKIPPED stage has no delivered work whose verdict could survive, so it is "
         "deliberately not settled-equivalent here"
     ),
-    ("agentctl/cli.py", "_passed_dependents_closure"): (
+    ("agentctl/cli_replan.py", "_passed_dependents_closure"): (
         "collects the stages holding a delivered verdict that a --reopen invalidates; "
         "a declined (SKIPPED) stage holds none, so only PASSED belongs in the closure"
     ),
-    ("agentctl/cli.py", "_frozen_stage_refusal"): (
+    ("agentctl/cli_replan.py", "_frozen_stage_refusal"): (
         "names the PASSED stages a non-substantive replan may not edit in an operative or "
         "interface leaf; a SKIPPED stage delivered nothing to protect"
     ),
-    ("agentctl/cli.py", "_frozen_edge_stages"): (
+    ("agentctl/cli_common.py", "_frozen_edge_stages"): (
         "exempts from the edge rule exactly the stages _frozen_stage_refusal freezes; a "
         "SKIPPED stage is not frozen, so its edges stay the author's to type"
     ),
-    ("agentctl/cli.py", "_renormalize_replan"): (
+    ("agentctl/cli_replan.py", "_renormalize_replan"): (
         "same pending-set question as _replan_pending_indices, asked inline while carrying "
         "norm targets across a replan; a SKIPPED stage is likewise counted as pending. "
         "KNOWN GAP shared with that helper, same Core issue, remove both entries together"
@@ -912,46 +916,53 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "n/a: builds the benchmark's own three-stage fixture state, none of it optional, so "
         "no SKIPPED stage can reach the write"
     ),
-    ("agentctl/cli.py", "cmd_approve"): (
+    ("agentctl/cli_approval.py", "cmd_approve"): (
         "n/a: the ONLY writer of SKIPPED, and only for stages the plan declares optional "
         "and the customer named in --skip-optional"
     ),
-    ("agentctl/cli.py", "cmd_reject"): (
+    ("agentctl/cli_final.py", "cmd_reject"): (
         "guarded: the default target is the last stage that is not SKIPPED, and an explicit "
         "--stage naming a SKIPPED stage is refused; FAILED is never written to a declined one"
     ),
-    ("agentctl/cli.py", "cmd_next_stage"): (
+    ("agentctl/cli_approval.py", "cmd_next_stage"): (
         "n/a: writes ACTIVE to ready[0], taken from ready_stages(), which lists PENDING "
         "stages only"
     ),
-    ("agentctl/cli.py", "cmd_record_result"): (
+    ("agentctl/cli_results.py", "cmd_record_result"): (
         "n/a: writes PASSED/FAILED to state.active_stage() (current_stage), which only "
         "next-stage sets, from ready_stages()"
     ),
-    ("agentctl/cli.py", "_try_reattest"): (
+    ("agentctl/cli_dispatch.py", "_try_reattest"): (
         "n/a: re-attests the stage under dispatch (current_stage), never a SKIPPED one; the "
         "stash it reads holds PASSED prior outcomes only"
     ),
-    ("agentctl/cli.py", "_fail_stage_into_diagnosing"): (
+    ("agentctl/cli_common.py", "_fail_stage_into_diagnosing"): (
         "n/a: receives the stage a spawn just ran (ACTIVE) from its caller"
     ),
-    ("agentctl/cli.py", "cmd_pop_subplan"): (
+    ("agentctl/cli_control.py", "cmd_pop_subplan"): (
         "guarded: marks the stage that opened the sub-plan PASSED unless it is SKIPPED, behind "
         "push-subplan, which refuses a SKIPPED originating stage (--originating-stage can "
         "name any stage)"
     ),
-    ("agentctl/cli.py", "_apply_refined_stage_fields"): (
+    ("agentctl/cli_common.py", "_apply_refined_stage_fields"): (
         "guarded: its only status write moves a SKIPPED stage whose refined definition is "
         "no longer optional back to PENDING (a required stage cannot be declined)"
     ),
-    ("agentctl/cli.py", "_refresh_caches_from_plan_path"): (
+    ("agentctl/cli_approval.py", "_refresh_caches_from_plan_path"): (
         "guarded: resets only a CHANGED stage (PASSED or SKIPPED) to PENDING and keeps its "
         "`declined` mark, which the agent's approve refuses; an unchanged declined stage "
         "keeps SKIPPED"
     ),
-    ("agentctl/cli.py", "_cmd_replan"): (
-        "guarded: FAILED stages go back to PENDING (a SKIPPED one is never FAILED, see "
-        "cmd_reject); the substantive carry copies the outcome of an unchanged PASSED or "
+    ("agentctl/cli_replan.py", "_replan_apply_no_change"): (
+        "guarded: only a `--reopen`ed (PASSED) or FAILED stage goes back to PENDING (a "
+        "SKIPPED one is never FAILED, see cmd_reject)"
+    ),
+    ("agentctl/cli_replan.py", "_replan_apply_refinement"): (
+        "guarded: only a `--reopen`ed (PASSED) or FAILED stage goes back to PENDING (a "
+        "SKIPPED one is never FAILED, see cmd_reject)"
+    ),
+    ("agentctl/cli_replan.py", "_replan_apply_substantive"): (
+        "guarded: the substantive carry copies the outcome of an unchanged PASSED or "
         "SKIPPED stage, and a changed one is left PENDING with `declined` set so only the "
         "customer's approve can re-offer it"
     ),
