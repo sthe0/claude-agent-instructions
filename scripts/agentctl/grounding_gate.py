@@ -100,9 +100,7 @@ def _ground_of_ref(ref, corpus, adr_dir) -> dict | None:
         return None
     if ref.kind == "regularity":
         return _ground_fields(PROV.given_ground(leaf, corpus) or GJ.ground_of(leaf))
-    front = leaf_forms.frontmatter_of(leaf.text)
-    return {"statement": leaf_forms.field(front, "description") or _body_head(leaf.text),
-            "last_verified": leaf_forms.field(front, "last_verified") or ""}
+    return _ground_fields(GJ.case_ground(leaf))
 
 
 def stage_grounds(stage, corpus, adr_dir=None) -> list[dict]:

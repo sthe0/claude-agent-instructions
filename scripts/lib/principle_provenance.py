@@ -671,6 +671,49 @@ def ontology_ground_target(item: str, corpus: Corpus, adr_dir=None) -> Path | No
     return target
 
 
+def tier_admits(principle_tier: str, item: str) -> bool:
+    """A `project:` ref is admitted only in a project principle: a global principle must not rest on project memory."""
+    return not (principle_tier != "project" and str(item).startswith("project:"))
+
+
+def knowledge_ground_target(item: str, corpus: Corpus, tier: str) -> Path | None:
+    """The regularity, experience or case leaf a `grounded_in` item names for a principle of `tier`, or
+    None when it names none of them (a principle ref included). A bare ref resolves in the
+    principle's own tier first, then global; `project:` is admitted in a project principle only."""
+    from agentctl import grounding
+
+    if not tier_admits(tier, item):
+        return None
+    explicit = str(item).startswith("project:")
+    kind, sep, slug = str(item).removeprefix("project:").partition(":")
+    if not sep or kind not in grounding.GROUND_KINDS or not slug or ":" in slug:
+        return None
+    ref = grounding.GroundRef("project" if explicit or tier == "project" else "global", kind, slug)
+    leaf = grounding.leaf_for(ref, corpus)
+    if leaf is None or not grounding.kind_matches(ref, leaf):
+        return None
+    return leaf.path
+
+
+def has_knowledge_ground(items, corpus: Corpus, tier: str) -> bool:
+    """Whether some item rests the principle on knowledge: a regularity, experience or case, or an ontology ground."""
+    adr_dir = corpus.leaves_dir.parent.parent / "docs" / "adr"
+    return any(knowledge_ground_target(item, corpus, tier) is not None
+               or (item.startswith(ONTOLOGY_PREFIXES) and ontology_ground_target(item, corpus, adr_dir) is not None)
+               for item in items)
+
+
+def knowledge_grounds(principle_text: str, corpus: Corpus, tier: str) -> dict[str, Leaf]:
+    """{ref text: leaf} over the regularity, experience and case grounds a principle's `grounded_in` resolves now."""
+    out: dict[str, Leaf] = {}
+    for item in _grounded_or_empty(principle_text):
+        target = knowledge_ground_target(item, corpus, tier)
+        leaf = next((l for l in corpus.items if l.path == target), None) if target is not None else None
+        if leaf is not None:
+            out[("project:" if leaf.tier == "project" else "") + f"{leaf.area}:{leaf.slug}"] = leaf
+    return out
+
+
 def unaccounted(corpus: Corpus) -> list[Finding]:
     findings: list[Finding] = []
 
@@ -725,7 +768,6 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
             report(STALE_MARK, target, f"has an experience source and a stale `{RULE_DERIVED}`")
 
     for tier in checked_principle_tiers():
-        regularity_slugs = {r.slug for t in fallback_tiers(tier) for r in corpus.of("regularity", t)}
         for principle in corpus.of("principle", tier):
             if field_value(principle.text, INDUCED) is not None and not generalization_target_ok(principle):
                 report(PRINCIPLE_INDUCED, principle,
@@ -735,20 +777,19 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
             except ValueError as exc:
                 report(BAD_STATUS, principle, str(exc))
                 continue
-            if not grounded:
+            if not has_knowledge_ground(grounded, corpus, tier):
                 report(UNGROUNDED_PRINCIPLE, principle,
-                       f"no `{GROUNDED}: [{REGULARITY_PREFIX}<slug>, ...]` naming a regularity")
+                       f"no `{GROUNDED}: [{REGULARITY_PREFIX}<slug>, ...]` item naming knowledge")
             for item in grounded:
                 if item.startswith(ONTOLOGY_PREFIXES):
                     if ontology_ground_target(item, corpus, corpus.leaves_dir.parent.parent / "docs" / "adr") is None:
                         report(UNKNOWN_ONTOLOGY, principle,
                                f"`{GROUNDED}` item {item!r} names no ontology/v1 leaf and no Core ADR")
                     continue
-                if not (item.startswith(REGULARITY_PREFIX)
-                        and item[len(REGULARITY_PREFIX):] in regularity_slugs):
+                if knowledge_ground_target(item, corpus, tier) is None:
                     report(UNKNOWN_REGULARITY, principle,
-                           f"`{GROUNDED}` item {item!r} is not `{REGULARITY_PREFIX}<slug>` of an "
-                           "existing regularity")
+                           f"`{GROUNDED}` item {item!r} names no existing regularity, experience or "
+                           "case (a principle is a norm, not a ground)")
 
     for leaf in corpus.items:
         if not field_value(leaf.text, ORDER_DERIVED):

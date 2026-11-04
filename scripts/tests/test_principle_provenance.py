@@ -797,3 +797,85 @@ def test_verifier_staged_reads_the_index_not_the_working_tree(tmp_path):
     w.exp("2026-01-01-sample", status=["sample-principle"])
     assert _run(VPP, ["--root", root]) == 0
     assert _run(VPP, ["--root", root, "--staged"]) == 1
+
+
+# --- knowledge grounds of a principle (ADR-0013 (h)/(i)) -----------------------------------------------
+
+
+def _principle_leaf(w: World, slug, items, tier="global") -> Path:
+    base = (w.project if tier == "project" else w.leaves) / "principles"
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / f"{slug}.md"
+    path.write_text(_fm({
+        "name": slug, "description": "a sample norm", "type": "reference",
+        "schema": "principle/v1", "generality": 1, pp.GROUNDED: pp.format_list(items),
+        "created": DATE, "last_verified": DATE,
+    }) + "\n# A norm\n\n## Principle\n\nRun a check where its subject lives.\n", encoding="utf-8")
+    return path
+
+
+def _kinds_of(w: World, path: Path) -> set[str]:
+    return {f.kind for f in pp.unaccounted(w.corpus(project=True)) if f.path == path}
+
+
+def test_provenance_accepts_project_regularity_ground(tmp_path):
+    w = World(tmp_path)
+    w.induced_leaf("proj-reg", induced=[], tier="project", rule_derived="r")
+    norm = _principle_leaf(w, "proj-norm", ["project:regularity:proj-reg"], tier="project")
+    assert not {pp.UNKNOWN_REGULARITY, pp.UNGROUNDED_PRINCIPLE} & _kinds_of(w, norm)
+
+
+def test_provenance_accepts_experience_and_case_ground(tmp_path):
+    w = World(tmp_path)
+    w.exp("an-experience")
+    w.case("a-case")
+    norm = _principle_leaf(w, "norm", ["experience:an-experience", "case:a-case"])
+    assert not {pp.UNKNOWN_REGULARITY, pp.UNGROUNDED_PRINCIPLE} & _kinds_of(w, norm)
+
+
+def test_provenance_resolves_bare_ref_in_principle_tier(tmp_path):
+    w = World(tmp_path)
+    w.induced_leaf("proj-only-reg", induced=[], tier="project", rule_derived="r")
+    w.induced_leaf("global-reg", induced=[], rule_derived="r")
+    norm = _principle_leaf(w, "proj-norm", ["regularity:proj-only-reg", "regularity:global-reg"],
+                           tier="project")
+    assert not {pp.UNKNOWN_REGULARITY, pp.UNGROUNDED_PRINCIPLE} & _kinds_of(w, norm), \
+        "BEHAVIOUR: a bare ref of a project principle did not resolve in its own tier, then global"
+
+
+def test_provenance_refuses_principle_ground(tmp_path):
+    w = World(tmp_path)
+    w.induced_leaf("good-reg", induced=[], rule_derived="r")
+    other = _principle_leaf(w, "other-norm", ["regularity:good-reg"])
+    norm = _principle_leaf(w, "norm", ["regularity:good-reg", "principle:other-norm"])
+    assert other.is_file()
+    assert pp.UNKNOWN_REGULARITY in _kinds_of(w, norm), \
+        "BEHAVIOUR: a principle ref was accepted as a ground"
+
+
+def test_provenance_refuses_unresolved_knowledge_ground(tmp_path):
+    w = World(tmp_path)
+    norm = _principle_leaf(w, "norm", ["regularity:no-such", "experience:no-such", "case:no-such"])
+    found = [f for f in pp.unaccounted(w.corpus()) if f.path == norm and f.kind == pp.UNKNOWN_REGULARITY]
+    assert len(found) == 3
+    assert pp.UNGROUNDED_PRINCIPLE in _kinds_of(w, norm), \
+        "BEHAVIOUR: a principle whose only items name no leaf was not reported ungrounded"
+
+
+def test_ungrounded_principle_means_no_knowledge_ref(tmp_path):
+    w = World(tmp_path)
+    w.induced_leaf("good-reg", induced=[], rule_derived="r")
+    _principle_leaf(w, "other-norm", ["regularity:good-reg"])
+    only_principle = _principle_leaf(w, "only-principle", ["principle:other-norm"])
+    mixed = _principle_leaf(w, "mixed", ["principle:other-norm", "regularity:good-reg"])
+    assert pp.UNGROUNDED_PRINCIPLE in _kinds_of(w, only_principle), \
+        "BEHAVIOUR: a principle resting on a principle ref alone passed as grounded"
+    assert pp.UNGROUNDED_PRINCIPLE not in _kinds_of(w, mixed)
+
+
+def test_provenance_refuses_project_ref_from_global_principle(tmp_path):
+    w = World(tmp_path)
+    w.induced_leaf("proj-reg", induced=[], tier="project", rule_derived="r")
+    norm = _principle_leaf(w, "global-norm", ["project:regularity:proj-reg"])
+    assert pp.UNKNOWN_REGULARITY in _kinds_of(w, norm), \
+        "BEHAVIOUR: a global principle rested on a project-tier ground"

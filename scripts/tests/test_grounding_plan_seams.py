@@ -451,3 +451,20 @@ def test_pass_allowed_judge_down(store, world):
 
     assert not _refused(allowed), allowed.detail
     assert any("grounding judge unavailable" in a for a in allowed.data.get("advisories", [])), allowed.data
+
+
+def test_plan_ground_reads_case_not_lessons(world):
+    from agentctl import grounding_gate
+    from lib import principle_provenance as pp
+
+    _put(world.leaves, "experience/exp-b.md", "difficulty/v1",
+         "## Difficulty\n\nDIFFICULTY-TEXT\n\n## Order & criterion\n\nORDER-TEXT\n\n"
+         "## Contexts\n\nLESSON-TEXT\n\n## Self-critique\n\nCRITIQUE-TEXT")
+    stage = SimpleNamespace(principle=SimpleNamespace(source="experience:exp-b"))
+
+    (ground,) = grounding_gate.stage_grounds(stage, pp.load_corpus(world.leaves))
+
+    assert ground["ref"] == "experience:exp-b"
+    assert "DIFFICULTY-TEXT" in ground["statement"]
+    assert "LESSON-TEXT" not in ground["statement"] and "CRITIQUE-TEXT" not in ground["statement"], \
+        "BEHAVIOUR: the stage judge was handed the lessons of an experience ground"

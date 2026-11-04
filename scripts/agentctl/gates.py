@@ -688,8 +688,8 @@ STEP_HINTS = {
             "open obligation, so a renamed rule is brought back to this path first",
     "picture": "write the experience leaf (or case) that records the instance and cite it in the "
                "induced_from of a regularity the rule is grounded in",
-    "condition": "refine or add the regularity: change a grounded regularity's claim, or "
-                 "ground the rule in a further regularity",
+    "condition": "refine or add the regularity: change a grounded regularity's claim or a cited "
+                 "experience or case's description, or ground the rule in a further regularity",
     "prescription": "rebuild the prescription: edit the rule file",
 }
 
@@ -742,8 +742,20 @@ def snapshot_tiers(target: str) -> tuple[str, ...]:
     return _grounding().fallback_tiers(where[1] if where else "global")
 
 
+SNAPSHOT_AREAS = ("experience", "case")
+
+
 def _ref_text(leaf) -> str:
-    return ("project:" if leaf.tier == "project" else "") + f"regularity:{leaf.slug}"
+    return ("project:" if leaf.tier == "project" else "") + f"{leaf.area}:{leaf.slug}"
+
+
+def knowledge_digest(leaf) -> str:
+    """What a ground states: a regularity's claim, or an experience or case's description of the
+    instance (never its lessons, which are norms and whose edit changes no ground)."""
+    if leaf.area == "regularity":
+        return regularity_digest(leaf.text)
+    from . import grounding_judge
+    return hashlib.sha256(grounding_judge.case_ground(leaf)["statement"].encode("utf-8")).hexdigest()
 
 
 def _load_tiers(target: str):
@@ -772,13 +784,6 @@ def snapshot_regularities(target: str) -> dict:
     return {ref: regularity_digest(leaf.text) for ref, leaf in _tier_regularities(target).items()}
 
 
-def _read_grounded(text: str) -> list[str]:
-    try:
-        return pp.read_grounded(text)
-    except ValueError:
-        return []
-
-
 def _read_induced(text: str) -> list[str] | None:
     """The refs of `induced_from`; None when the field cannot be parsed."""
     try:
@@ -797,16 +802,7 @@ def _current_grounds(target: str):
     if loaded is None:
         return None, {}
     corpus, tier, _tiers = loaded
-    grounding = _grounding()
-    grounded = {}
-    for item in _read_grounded(text):
-        if not item.startswith(pp.REGULARITY_PREFIX):
-            continue
-        ref = grounding.GroundRef(tier, "regularity", item[len(pp.REGULARITY_PREFIX):])
-        leaf = grounding.leaf_for(ref, corpus)
-        if leaf is not None and grounding.kind_matches(ref, leaf):
-            grounded[_ref_text(leaf)] = leaf
-    return corpus, grounded
+    return corpus, pp.knowledge_grounds(text, corpus, tier)
 
 
 def prescription_snapshot(target: str) -> dict | None:
@@ -828,6 +824,8 @@ def prescription_snapshot(target: str) -> dict | None:
         "regularities": digests,
         "sources": {ref: refs or [] for ref, refs in induced.items()},
     }
+    snapshot["grounds"] = {ref: knowledge_digest(leaf) for ref, leaf in grounded.items()
+                           if leaf.area in SNAPSHOT_AREAS}
     unparsed = sorted(ref for ref, refs in induced.items() if refs is None)
     if unparsed:
         snapshot["unparsed"] = unparsed
@@ -848,8 +846,11 @@ def condition_met(entry: dict, grounds=None) -> bool:
     snap = entry.get("prescription") or {}
     _corpus, grounded = grounds if grounds is not None else _current_grounds(entry["target"])
     joined = set(grounded) - set(snap.get("grounded_in", []))
-    changed = {ref for ref, leaf in grounded.items()
-               if snap.get("regularities", {}).get(ref) != regularity_digest(leaf.text)}
+    changed = {ref for ref, leaf in grounded.items() if leaf.area == "regularity"
+               and snap.get("regularities", {}).get(ref) != regularity_digest(leaf.text)}
+    recorded = snap.get("grounds", {})
+    changed |= {ref for ref, leaf in grounded.items() if leaf.area in SNAPSHOT_AREAS
+                and ref in recorded and recorded[ref] != knowledge_digest(leaf)}
     return bool(joined or changed)
 
 
@@ -859,7 +860,7 @@ def _picture_met(entry: dict, grounds) -> bool:
     unparsed = set((entry.get("prescription") or {}).get("unparsed", []))
     return any(item not in known
                and pp.resolve_source(item, corpus, leaf.tier) in pp.EXPERIENCE_SOURCE_KINDS
-               for ref, leaf in grounded.items() if ref not in unparsed
+               for ref, leaf in grounded.items() if leaf.area == "regularity" and ref not in unparsed
                for item in _read_induced(leaf.text) or [])
 
 

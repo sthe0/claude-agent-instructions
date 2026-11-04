@@ -382,3 +382,91 @@ def test_staged_trigger_any_leaves_path():
     assert pp.staged_triggers(["memory-global/leaves/memory-usage.md"])
     assert pp.triggers_staged_check("memory-global/leaves/system-knowledge/some-fact.md")
     assert not pp.staged_triggers(["scripts/lib/principle_provenance.py", "README.md"])
+
+
+# --------------------------------------------------------------------------
+# the three-step closure over experience and case grounds
+# --------------------------------------------------------------------------
+LESSON = "LESSON-MARK: do this next time."
+
+
+def _experience(difficulty="d1", order="o1", lessons=LESSON) -> str:
+    return ("---\nname: e\ndescription: the recurring difficulty\ntype: reference\nschema: difficulty/v1\n"
+            f"created: {DATE}\nlast_verified: {DATE}\n---\n# E\n\n## Difficulty\n\n{difficulty}\n\n"
+            f"## Order & criterion\n\n{order}\n\n## Contexts\n\n{lessons}\n\n## Cost\n\nc\n")
+
+
+def _case(mismatch="m1") -> str:
+    return ("---\nname: c\ndescription: a case\ntype: reference\nschema: case/v1\norigin_tier: project\n"
+            f"created: {DATE}\nlast_verified: {DATE}\n---\n# C\n\n## Aspect\n\na\n\n## Expected\n\ne\n\n"
+            f"## Actual\n\nx\n\n## Mismatch\n\n{mismatch}\n")
+
+
+def _prescription(grounded) -> str:
+    return ("---\nname: p\ndescription: d\ntype: reference\nschema: principle/v1\ngenerality: 2\n"
+            f"grounded_in: {pp.format_list(grounded)}\ncreated: {DATE}\nlast_verified: {DATE}\n---\n"
+            "# P\n\n## Principle\n\nrule v1\n")
+
+
+@pytest.fixture
+def mem(tmp_path, monkeypatch):
+    from agentctl import grounding
+    from test_refutation_closure import Memory, regularity_text
+
+    memory = Memory(tmp_path)
+    (memory.dirs["global"] / "principles" / "cases").mkdir()
+    monkeypatch.setattr(grounding, "engine_leaves_root", lambda: memory.dirs["global"])
+    memory.write("global", "regularities", "R1", regularity_text(induced=("e1",)))
+    memory.write("project", "regularities", "p1", regularity_text("project claim", ("e1",)))
+    memory.e1 = memory.write("global", "experience", "e1", _experience())
+    memory.px = memory.write("project", "experience", "px", _experience("project difficulty"))
+    memory.c1 = memory.write("global", "principles/cases", "c1", _case())
+    return memory
+
+
+def _entry(target: str) -> dict:
+    from agentctl import gates
+
+    return gates.renorm_record(target, gates.file_norm_digest(target), 1, 0, gates.prescription_snapshot(target))
+
+
+def test_closure_snapshot_reaches_project_and_experience_grounds(mem):
+    from agentctl import gates
+
+    rule = mem.write("project", "principles", "PP", _prescription(
+        ["project:regularity:p1", "experience:e1", "project:experience:px", "case:c1"]))
+    snap = gates.prescription_snapshot(rule)
+    assert snap["grounded_in"] == sorted(
+        ["project:regularity:p1", "experience:e1", "project:experience:px", "case:c1"]), \
+        "BEHAVIOUR: the snapshot lost a project or an experience or case ground"
+    assert set(snap["grounds"]) == {"experience:e1", "project:experience:px", "case:c1"}
+
+
+def test_closure_condition_tracks_case_not_lessons(mem):
+    """Only the description of an experience or case is a ground; its lessons are norms. A principle
+    resting on an experience or case alone cannot be picture-closed -- its refutation closes only by
+    adding a regularity to its grounds -- but a changed case description does meet the condition."""
+    from agentctl import gates
+
+    rule = mem.write("global", "principles", "P", _prescription(["experience:e1", "case:c1"]))
+    entry = _entry(rule)
+    assert gates.condition_met(entry) is False
+    mem.edit(mem.e1, _experience(lessons="LESSONS REWRITTEN entirely."))
+    assert gates.condition_met(entry) is False, "BEHAVIOUR: an edit of the lessons alone met the condition"
+    mem.edit(mem.e1, _experience(order="o2"))
+    assert gates.condition_met(entry) is True
+    mem.edit(mem.e1, _experience(difficulty="d2"))
+    assert gates.condition_met(entry) is True, "BEHAVIOUR: an edit of the case description did not"
+    mem.edit(mem.e1, _experience())
+    mem.edit(mem.c1, _case("m2"))
+    assert gates.condition_met(entry) is True, "BEHAVIOUR: a changed case ground did not meet the condition"
+
+
+def test_closure_older_snapshot_without_grounds_reads_unchanged(mem):
+    from agentctl import gates
+
+    rule = mem.write("global", "principles", "P", _prescription(["experience:e1"]))
+    entry = _entry(rule)
+    entry["prescription"].pop("grounds")
+    mem.edit(mem.e1, _experience(difficulty="d2"))
+    assert gates.condition_met(entry) is False

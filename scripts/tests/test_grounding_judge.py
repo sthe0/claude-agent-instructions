@@ -771,3 +771,30 @@ def test_cli_stamp_subcommand(tmp_path, capsys):
     assert capsys.readouterr().out.splitlines() == ["grounding_judged: abc"]
     assert _cli().main(["stamp", str(verdicts), "global:b.md"]) == 1
     assert capsys.readouterr().out == ""
+
+
+def test_leaf_link_reads_case_not_lessons(tmp_path):
+    from agentctl import grounding_judge as GJ
+    from lib import principle_provenance as pp
+
+    leaves = tmp_path / "leaves"
+    (leaves / "experience").mkdir(parents=True)
+    (leaves / "principles").mkdir()
+    (leaves / "experience" / "x1.md").write_text(
+        "---\nname: x1\ndescription: the recurring difficulty\ntype: reference\nschema: difficulty/v1\n"
+        "last_verified: 2026-10-21\n---\n# X\n\n## Difficulty\n\nDIFFICULTY-TEXT\n\n"
+        "## Order & criterion\n\nORDER-TEXT\n\n## Contexts\n\nLESSON-TEXT\n\n## Self-critique\n\nCRITIQUE-TEXT\n",
+        encoding="utf-8")
+    (leaves / "principles" / "pr.md").write_text(
+        "---\nname: pr\ndescription: d\ntype: reference\nschema: principle/v1\ngrounded_in: [experience:x1]\n"
+        "---\n# P\n\n## Principle\n\nrule\n", encoding="utf-8")
+    corpus = pp.load_corpus(leaves)
+    leaf = next(l for l in corpus.items if l.slug == "pr")
+
+    _prescription, grounds = GJ.leaf_link_fields(leaf, corpus)
+
+    (ground,) = grounds
+    assert ground["ref"] == "experience:x1"
+    assert "DIFFICULTY-TEXT" in ground["statement"] and "ORDER-TEXT" in ground["statement"]
+    assert "LESSON-TEXT" not in ground["statement"] and "CRITIQUE-TEXT" not in ground["statement"], \
+        "BEHAVIOUR: the judge was handed the lessons of an experience ground"

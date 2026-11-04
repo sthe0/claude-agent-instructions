@@ -250,6 +250,23 @@ def table_candidates(data) -> list[dict]:
 # --- the leaf side ----------------------------------------------------------------------------------
 
 
+CASE_SECTIONS_BY_SCHEMA = {
+    "difficulty/v1": ("## Difficulty", "## Order & criterion"),
+    "case/v1": ("## Aspect", "## Expected", "## Actual", "## Mismatch"),
+}
+
+
+def case_ground(leaf) -> dict:
+    """What an experience or case leaf is as a ground: the case it describes -- its description and the
+    sections that state the instance -- never its lessons, which are norms."""
+    front = leaf_forms.frontmatter_of(leaf.text)
+    parts = [leaf_forms.field(front, "description") or ""]
+    parts += [_section(leaf.text, heading)
+              for heading in CASE_SECTIONS_BY_SCHEMA.get(leaf_forms.field(front, "schema"), ())]
+    return {"statement": "\n\n".join(p for p in parts if p),
+            "last_verified": leaf_forms.field(front, "last_verified") or ""}
+
+
 def _ground_of(leaf) -> dict:
     text = leaf.text
     front = leaf_forms.frontmatter_of(text)
@@ -264,6 +281,8 @@ def _ground_of(leaf) -> dict:
     elif schema == leaf_forms.ONTOLOGY_SCHEMA:
         out["distinction"] = _section(text, "## Distinction")
         out["adequacy"] = _section(text, "## Adequacy")
+    elif schema in CASE_SECTIONS_BY_SCHEMA:
+        out.update(case_ground(leaf))
     return out
 
 
