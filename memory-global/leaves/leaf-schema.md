@@ -28,14 +28,14 @@ This was the single source of truth for the **ordinary-leaf** schema, now retire
 
 ### Frontmatter
 
-Standard auto-memory frontmatter plus the schema tag and temporal fields:
+Standard auto-memory frontmatter plus the schema tag and temporal fields. The example below is the retired `leaf/v1` shape; a leaf written today carries `principle/v1`, `regularity/v1` or `ontology/v1` instead:
 
 ```
 ---
 name: <human title>
 description: <one line — used for recall; for system-knowledge, name the difficulty>
 type: reference | feedback
-schema: principle/v1 | regularity/v1 | ontology/v1
+schema: leaf/v1                # retired; use principle/v1, regularity/v1 or ontology/v1
 created: <YYYY-MM-DD>          # required — date first recorded; see memory-temporal-frontmatter
 last_verified: <YYYY-MM-DD>    # required — date content last confirmed true; >= created
 ---
@@ -58,13 +58,14 @@ The retired form was enforced **only on opted-in leaves** and on new leaves; exi
 - A leaf opted into the retired form → the 3 sections were required (deny on any missing).
 - A leaf **without** the tag → grandfathered. For `system-knowledge/` the carried-over **difficulty-lead baseline** still applies (the `description` names the difficulty, OR the body leads with a `> **Difficulty/Затруднение …** ` blockquote) — this is the rule the retired `verify-difficulty-lead.py` enforced, now folded into the same verifier. For other dirs, only the existing type + index guarantee applies.
 
-The form is retired: convert a grandfathered leaf to the `principle/v1`, `regularity/v1` or `ontology/v1` form when you next touch it. `verify-principle-provenance.py` reports a leaf still tagged with the retired schema as `retired_leaf_schema`, and a converted principle carries the `grounding_judged` stamp once the grounding judge accepts its link.
+The form is retired: convert a grandfathered leaf to the `principle/v1`, `regularity/v1` or `ontology/v1` form when you next touch it. `verify-principle-provenance.py` reports a leaf still tagged with the retired schema as `retired_leaf_schema`, and a converted principle is grounded in knowledge, typically regularities, and carries the `grounding_judged` stamp once the grounding judge accepts its link.
 
 ### What enforces it
 
 `scripts/verify-leaf-structure.py` (subsumes the retired `verify-difficulty-lead.py`):
 
 - **Scope:** non-experience leaves under any `leaves/**` (INCLUDING `system-knowledge/`, EXCLUDING `experience/`) plus project `.claude/agent-memory/**` leaves. `MEMORY.md` and `.gitkeep` are skipped.
+- **Sections enforced per form** (the schema tag in the frontmatter decides; each section must be present, and for the two live forms non-empty): `leaf/v1` (retired, still checked while a leaf carries it) — `## Difficulty`, `## Guidance`, `## See also`; `regularity/v1` induced — `## Regularity`, `## Generality`, `## Refutation`, `## Induced from`; `regularity/v1` given (a `given:` field) — `## Regularity`, `## Given`, `## Refutation`; `ontology/v1` — `## Distinction`, `## Difficulty`, `## Adequacy`. A `principle/v1` leaf has no section check here (its links are checked by `verify-principle-provenance.py`); a leaf with no schema keeps the grandfather rule above. The section lists live in `scripts/lib/leaf_forms.py`.
 - **Modes:** default scan / `--staged` / `--hook` (PreToolUse, reads `tool_input.content`, exit 2 on violation) / `<path>` — mirroring `verify-experience-leaf.py`.
 - Wired into `verify-all.py` (staged-aware) and the PreToolUse verifier-hook list in `scripts/install-reminder-hooks.sh`.
 

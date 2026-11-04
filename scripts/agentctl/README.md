@@ -717,11 +717,11 @@ A generalization a plan introduces is listed in the essence's `New generalizatio
 
 A prescription renorm target is closed in three steps, picture, condition and prescription, recorded in `prescription_snapshot`; the cognition is in the overcome-difficulty skill.
 
-On the leaf side, `promote` and `record-experience.py restamp` call `judge_grounding_link` and stamp `grounding_judged`; a judge outage leaves `grounding_unjudged` (a warning that `record-experience.py restamp` clears). The seams are described next.
+On the leaf side, `promote` and `record-experience.py restamp` call `judge_grounding_link` and stamp `grounding_judged`; a judge outage leaves `grounding_unjudged` (a warning that `record-experience.py restamp` clears).
 
 ### The grounding judge at the plan seams
 
-`grounding.py` refuses a stage whose `[stage.principle].source` does not name knowledge; [`grounding_gate.py`](grounding_gate.py) carries the stage-16 judge ([`grounding_judge.py`](grounding_judge.py)) — does the cited knowledge support the principle — to every seam that admits or reviews plan bytes. It has two parts, kept apart.
+`grounding.py` refuses a stage whose `[stage.principle].source` does not name knowledge; [`grounding_gate.py`](grounding_gate.py) carries the grounding judge ([`grounding_judge.py`](grounding_judge.py)) — does the cited knowledge support the principle — to every seam that admits or reviews plan bytes. It has two parts, kept apart.
 
 **The rule part** is decided from the bytes and never waits on a model, so the advisor kill switch does not touch it. A cited ground that is an unverified given (a `given` regularity past `given_regularity_max_age_days`, or an order-derived one, unless the stage names the ground's `given_source` in `knowledge_refs`, `material_refs` or `verify_command`) is refused at submission whether or not a judge is reachable, and an override cannot waive it. An essence that omits the **Grounding overrides (for approval):** block is refused by `present-plan --kind essence`; the block is generated from the plan (`overrides_block`) and lists each `[stage.principle] grounding_override` with its reason, or says there is none.
 
