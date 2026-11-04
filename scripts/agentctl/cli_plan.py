@@ -16,6 +16,7 @@ from . import (
     gates,
     grant_shadow,
     plugins,
+    pane_title,
     plugins_premise,
     runtime_host,
     solved_marker,
@@ -506,6 +507,20 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
         public_api_change=bool(getattr(args, "public_api_change", False)),
     )
     result = classify(sig, thr)
+    raw_title = getattr(args, "title", None)
+    title, title_problem = ("", "")
+    if raw_title is not None:
+        title, title_problem = pane_title.normalize_title(raw_title)
+    owned, _ = pane_title.owns_pane(pane_title.read_env(), state, None)
+    titled = owned and result.weight_class != WeightClass.CHAT.value
+    if title_problem or (titled and not title):
+        detail = (
+            f"classify --title refused: {title_problem}" if title_problem else
+            f"classify needs --title '<{pane_title.TITLE_GUIDANCE}>' in a pane-owning session"
+        )
+        return Directive(False, state.node, "classify", detail)
+    if title:
+        state.task_title = title
     state.weight_class = result.weight_class
     state.route = result.route
     if sig.tracker_key and TRACKER_KEY_RE.match(sig.tracker_key):
@@ -517,6 +532,13 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     state.deliverable_kind = getattr(args, "deliverable_kind", "") or ""
     state.node = transition(state.node, "classify")
     state.log("classify", weight_class=result.weight_class, route=result.route, reasons=result.reasons)
+    if titled:
+        # Before the single save below: state.log only reaches disk through it. Fail-open --
+        # a failed retitle is logged and never changes the directive.
+        pane_title.set_pane_title(
+            pane_title.read_env(), title, run=pane_title.RUNNER,
+            log=lambda reason: state.log("pane_title_failed", reason=reason),
+        )
 
     if result.weight_class == WeightClass.SMALL_CHANGE.value:
         # carve-out: no plan-approval gate; auto-pass so ROUTED->EXECUTING is legal
@@ -1233,8 +1255,11 @@ def register(sub, add):
     sp.add_argument("--host", choices=runtime_host.HOSTS, default=None,
                     help="coordination host this session dispatches through (claude|cursor); "
                          "required (or ambient-detectable) at classify — sticky thereafter")
+    sp.add_argument("--title", default=None,
+                    help="2-5 words naming the task, in the dialogue language; retitles the "
+                         "tmux pane of a top-level session (required there unless --chat)")
 
-    sp = add("plan"); sp.add_argument("--session", required=True)
+    sp = add("plan");sp.add_argument("--session", required=True)
     sp = add("plan-render"); sp.add_argument("--plan", required=True,
         help="TOML plan to render to a markdown prose view on demand (a projection, "
              "never written to disk — the TOML is the single source of truth)")

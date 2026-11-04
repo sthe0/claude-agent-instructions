@@ -55,6 +55,33 @@ def child_contour_linking_enabled(
     return constants.get(CHILD_CONTOUR_LINKING_KEY) == "on"
 
 
+TASK_TITLE_KEY = "task-title"
+TASK_TITLE_ENV = "AGENTCTL_TASK_TITLE"
+
+
+def task_title_enabled(
+    env: Mapping[str, str] | None = None,
+    constants: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether `classify` titles the owning tmux pane with the task's short title.
+
+    AGENTCTL_TASK_TITLE `1` / `0` wins in both directions (any other value falls through);
+    otherwise config.md's `task-title` row decides, and only exactly `on` enables it.
+    Anything else -- another value, a missing row, an unreadable config.md -- is off."""
+    environ = os.environ if env is None else env
+    forced = environ.get(TASK_TITLE_ENV)
+    if forced == "1":
+        return True
+    if forced == "0":
+        return False
+    if constants is None:
+        try:
+            constants = parse_config_md()
+        except (OSError, UnicodeDecodeError):
+            return False
+    return constants.get(TASK_TITLE_KEY) == "on"
+
+
 RESOURCE_GRANT_HOOK_KEY = "resource-grant-hook"
 RESOURCE_GRANT_HOOK_ENV = "AGENTCTL_RESOURCE_HOOK"
 RESOURCE_GRANT_HOOK_TIMEOUT_KEY = "resource-grant-hook-timeout-s"

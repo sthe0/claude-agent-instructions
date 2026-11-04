@@ -169,6 +169,7 @@ def cmd_status(args, *, store: StateStore, runner: Runner | None = None) -> Dire
             "escalations": escalations,
             "weight_class": state.weight_class,
             "route": state.route,
+            "task_title": state.task_title or None,
             "current_stage": state.current_stage,
             "stages": [{"index": s.index, "status": s.outcome.status, "title": s.title} for s in state.stages],
             "approval_passed": state.approval.passed,
