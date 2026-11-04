@@ -669,8 +669,12 @@ def _decide_session(
         is_approval_ask=is_approval_ask,
     )
     essence_receipt_to_stamp = receipt if delivery_verified else None
+    # A marked ask certifies the presentation its marker names; an unmarked ask
+    # certifies the essence. The order and replan receipts are only ever set when
+    # the ask carries their marker, while a delivered essence stays verifiable
+    # forever, so the essence must come last.
     return decision, reason, sp, (
-        essence_receipt_to_stamp or replan_receipt_to_stamp or order_receipt_to_stamp
+        order_receipt_to_stamp or replan_receipt_to_stamp or essence_receipt_to_stamp
     )
 
 
