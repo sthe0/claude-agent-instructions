@@ -72,7 +72,7 @@ def test_schema_version_monotonic():
 def test_principle_has_no_statement_kind_field():
     """The dataclass exposes exactly the norm subfields — no statement_kind."""
     names = {f.name for f in dataclasses.fields(Principle)}
-    assert names == {"statement", "source", "derivation", "confidence", "refutation"}
+    assert names == {"statement", "source", "derivation", "confidence", "refutation", "grounding_override"}
     assert "statement_kind" not in names
 
 

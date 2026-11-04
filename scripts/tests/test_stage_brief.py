@@ -222,6 +222,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
     principle = Principle(
         statement="STATEMENT_V", source="SOURCE_V", derivation="DERIVATION_V",
         confidence="CONFIDENCE_V", refutation="REFUTATION_V",
+        grounding_override="GROUNDING_OVERRIDE_V",
     )
     criterion = Criterion(
         criterion_type="CRITERION_TYPE_V",
@@ -279,7 +280,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         "EXECUTOR_V", "CAPABILITY_V", "COST_TIER_V", "CRITERION_TYPE_V",
         "DONE_CRITERION_V", "VERIFY_COMMAND_V", "42", "OBSERVATION_V",
         "VERIFY_VENUE_V", "VERIFY_VENUE_AT_FINAL_V", "NEGATIVE_CONTROL_V", "VERIFY_READS_V", "STATEMENT_V", "SOURCE_V",
-        "DERIVATION_V", "CONFIDENCE_V", "REFUTATION_V", "CONDITIONS_V",
+        "DERIVATION_V", "CONFIDENCE_V", "REFUTATION_V", "GROUNDING_OVERRIDE_V", "CONDITIONS_V",
         "MATERIAL_REF_V", "KNOWLEDGE_V", "KNOWLEDGE_REF_V", "PROCEDURE_V", "PRECONDITIONS_V",
         "OUTPUT_ARTIFACT_V", "EPHEMERAL_ARTIFACTS_WAIVER_V", "CONTROL_V", "on stage 7", "ELEMENT_V", "ARTIFACT_V", "delivery: report",
         "GRANTS_RULE_V", "GRANTS_ADDDIR_V",
@@ -327,7 +328,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Criterion, "negative_control_waiver"),  # excluded: rendered only when no negative_control is set
         (Criterion, "verify_reads"),
         (Principle, "statement"), (Principle, "source"), (Principle, "derivation"),
-        (Principle, "confidence"), (Principle, "refutation"),
+        (Principle, "confidence"), (Principle, "refutation"), (Principle, "grounding_override"),
         (Supply, "on"), (Supply, "element"), (Supply, "artifact"), (Supply, "delivery"),
         (PlanMeta, "task_id"), (PlanMeta, "goal"), (PlanMeta, "done_criterion"),
         (PlanMeta, "criterion_type"), (PlanMeta, "weight_class"),

@@ -731,6 +731,7 @@ _STAGE_LEAF_COVERAGE: dict[str, frozenset[str]] = {
     "principle.derivation": frozenset({"apply_refined", "question_key"}),
     "principle.confidence": frozenset({"apply_refined", "question_key"}),
     "principle.refutation": frozenset({"apply_refined", "question_key"}),
+    "principle.grounding_override": frozenset({"apply_refined"}),
     "conditions": frozenset(_CD),
     "preconditions": frozenset(_CD),
     "knowledge": frozenset(_CD),
