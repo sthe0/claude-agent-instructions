@@ -104,6 +104,7 @@ When rebasing onto main / trunk, read VCS status and conflict type, not only inl
 - Run the project's standard test / build commands before claiming `COMPLETED:`.
 - **Static checks ≠ runtime correctness.** Imports passing, unit tests, `--help`, and a byte-identical diff do not prove a change works when the code is loaded by name from an external artifact at runtime (baked image, porto / job layer, plugin registry, serialized graph). Validate with a real run that reaches the affected path, run it to the **deciding stage**, and never claim `COMPLETED:` from partial progress.
 - Run the full test suite only if the manager explicitly requested it or the step's scope warrants it.
+- **A verdict that depends on machine load or on parallel runs is a test defect.** To keep a red or green result meaning something about the code, fix the cause: shared state, wall-clock assertions, reads of the real machine. A queue, a serial run or a retry only gets you past one run, so pair it with an issue naming the test.
 - **Fan-out trial under a cap.** Before the first run of anything that spawns processes per invocation (xdist, pools, recursive hooks, spawners), check how the hook evaluates inside a child and run it through `scripts/cap-run.sh` — `~/.claude-agent/memory-global/leaves/fanout-trial-under-cap.md`.
 
 ## Self-review before COMPLETED
