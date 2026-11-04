@@ -2313,6 +2313,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("attachment", ("plugin-record",), "ticket attachment id or URL, not a file to read"),
     ("comment", ("plugin-record",), "ticket comment id or URL, not a file to read"),
     ("tracker_key", ("plugin-activate", "classify", "drive"), "tracker issue key (ABC-123)"),
+    ("title", ("classify",), "one-line task label capped at 48 characters, never a file"),
     ("id", ("ledger-add", "ledger-candidate", "ledger-dispose", "question-raise",
             "question-research", "question-dispose", "question-rebind", "question-retire",
             "question-candidate-dispose", "order-raise", "order-dispose", "accept-protected-grant",
