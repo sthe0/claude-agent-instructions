@@ -1133,7 +1133,7 @@ class Cycle:
     def killed_transcript_usd(self, worktree: Path, window: SpawnWindow) -> "float | None":
         """USD the transcripts a killed spawn wrote show, priced like the ledger prices a finished
         spawn; a transcript a ledger row of this spawn already names is skipped. None when no usage
-        is readable, so the caller keeps the cap."""
+        is readable, so the caller keeps the cap; a row that prices to zero is not readable usage."""
         charged = {r.get("child_session_id") for r in list(cost.read_rows(cost.COST_LOG))[window.ledger_rows:]}
         priced = []
         for session, records in self.seams.transcripts(str(worktree), window.since).items():
@@ -1141,7 +1141,7 @@ class Cycle:
                 continue
             priced.extend(
                 row for row in transcript_cost.rows_from(records)
-                if row.ts is not None and row.ts.timestamp() >= window.since
+                if row.ts is not None and row.ts.timestamp() >= window.since and row.usd > 0
             )
         return transcript_cost.price_weighted_usd(priced) if priced else None
 

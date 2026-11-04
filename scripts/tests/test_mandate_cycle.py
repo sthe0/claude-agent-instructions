@@ -3128,6 +3128,18 @@ def test_a_killed_spawn_without_a_readable_transcript_is_charged_the_item_cap(en
     assert [c["detail"]["cost_usd"] for c in events("overrun-charge")] == [4.0]
 
 
+def test_a_killed_spawn_with_a_transcript_without_priced_usage_is_charged_the_item_cap(env):
+    env.grant(item_usd_cap=4.0)
+    eligible(env, 1)
+    now = env.clock().strftime("%Y-%m-%dT%H:%M:%SZ")
+    unpriced = [assistant_record("z1", 0, now), {**assistant_record("z2", 0, now), "message": {"id": "z2", "usage": {}}}]
+    assert list(transcript_cost.rows_from(unpriced)) and transcript_usd(*unpriced) == 0
+    env.transcripts = lambda workdir, since: {"killed-session": unpriced}
+    env.spawner.developer = lambda argv, cwd: driver.SpawnResult(-9, "", "", killed=True)
+    env.cycle()
+    assert [c["detail"]["cost_usd"] for c in events("overrun-charge")] == [4.0]
+
+
 def test_a_killed_spawn_is_not_charged_a_transcript_already_charged_by_a_ledger_row(env):
     env.grant(item_usd_cap=4.0)
     eligible(env, 1)
