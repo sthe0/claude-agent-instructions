@@ -700,6 +700,21 @@ def test_mandate_boundary_stops_never_grow_the_failure_streak_on_the_recorded_ro
         stopped = [attempt(317, kind="tests", ago=20), attempt(301, stop, "", ago=15), attempt(318, kind="tests", ago=10)]
         assert m.local_failure_streak(stopped, hours(25)) == 2, stop
 
+    r315 = {"ts": "2026-10-27T23:03:59Z", "issue": 315, "outcome": "failed", "failure_kind": "tests"}
+    r317 = {"ts": "2026-10-27T23:52:55Z", "issue": 317, "outcome": "failed", "failure_kind": "tests"}
+    r318 = {"ts": "2026-10-28T00:33:15Z", "issue": 318, "outcome": "failed", "failure_kind": "tests"}
+    r301 = {"ts": "2026-10-30T15:44:17Z", "issue": 301, "outcome": "declined", "failure_kind": ""}
+    granted = "2026-10-26T00:00:00Z"
+    for stop in ("declined", "overrun", "limit"):
+        for stamp in (r301["ts"], "2026-10-27T23:30:00Z", "2026-10-28T00:10:00Z"):
+            between = dict(r301, outcome=stop, ts=stamp)
+            two, three = [r315, between, r317], [r315, r317, between, r318]
+            assert not any(m.opens_breaker(row["outcome"], row["failure_kind"]) for row in three), stop
+            assert m.local_failure_run(two, granted) == [315, 317], (stop, stamp)
+            assert m.local_failure_streak(two, granted) == 2 < m.LOCAL_FAILURE_STREAK
+            assert m.local_failure_run(three, granted) == [315, 317, 318], (stop, stamp)
+            assert m.local_failure_streak(three, granted) == 3 == m.LOCAL_FAILURE_STREAK
+
 
 def test_a_pr_opened_row_resets_the_streak():
     rows = [attempt(1, ago=9), attempt(2, ago=8), attempt(3, "pr-opened", "", ago=7), attempt(4, ago=6)]
@@ -1240,8 +1255,26 @@ def test_the_item_norm_loads_strictly_with_the_item_dir_under_the_harness_config
     path.write_text(item_norm(item_dir=str(item_dir), body="y" * 10_000), encoding="utf-8")
     doc = plan.load_plan(path, strict=True)
     assert submission.submission_violations(doc, session_weight_class="substantive") == []
+    grants = doc.stages[0].grants
+    assert [g.rule for g in grants.allow] == [
+        "Bash(python3 -m pytest:*)", "Bash(python3 /r/scripts/spawn-specialist.py --kind thinker:*)",
+    ]
+    assert [(d.path, d.mode) for d in grants.add_dirs] == [("/w/item-7", "write")]
     inputs = dict(item_inputs(item_dir=str(item_dir), body="y" * 10_000), mandate_id=mandate().id)
     assert m.mandate_approval_problems(path.read_text(encoding="utf-8"), inputs, mandate(), m.GateResult(True)) == []
+
+
+def test_the_item_norm_under_the_harness_config_root_passes_the_mandate_approval_basis(tmp_path, monkeypatch):
+    root = tmp_path / "harness"
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(root))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    item_dir = root / "mandates" / "core-debt" / "items" / "7"
+    inputs = dict(item_inputs(item_dir=str(item_dir), body="y" * 10_000), mandate_id=mandate().id)
+    plan_text = item_norm(item_dir=str(item_dir), body="y" * 10_000)
+    assert m.mandate_approval_problems(plan_text, inputs, mandate(), m.GateResult(True)) == []
+    other_dir = dict(inputs, item_dir=str(root / "mandates" / "core-debt" / "items" / "8"))
+    assert m.mandate_approval_problems(plan_text, other_dir, mandate(), m.GateResult(True))
 
 
 def test_hostile_issue_text_cannot_change_the_item_norm_structure():

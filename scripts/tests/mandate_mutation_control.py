@@ -860,7 +860,10 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "approval-exact-norm": Mutant(
         RULES, "if plan_text != rendered:", "if False:",
-        _ids(T_RULES, "test_mandate_approval_requires_the_exact_item_norm_and_an_open_gate"),
+        _ids(
+            T_RULES, "test_mandate_approval_requires_the_exact_item_norm_and_an_open_gate",
+            "test_the_item_norm_under_the_harness_config_root_passes_the_mandate_approval_basis",
+        ),
     ),
     "approval-open-gate": Mutant(
         RULES, 'if not getattr(gate_result, "may_start", False):', "if False:",
@@ -870,7 +873,10 @@ CATALOGUE: "dict[str, Mutant]" = {
         RULES,
         "f'allow = [\"Bash(python3 -m pytest:*)\", {q(thinker)}]',",
         "f'allow = [\"Bash(python3 -m pytest:*)\", {q(thinker)}, \"Bash(git push:*)\"]',",
-        _ids(T_RULES, "test_the_item_norm_grants_are_the_fixed_literal"),
+        _ids(
+            T_RULES, "test_the_item_norm_grants_are_the_fixed_literal",
+            "test_the_item_norm_loads_strictly_with_the_item_dir_under_the_harness_config_root",
+        ),
     ),
     "account-limit-precedence": Mutant(
         RULES, 'if marker not in (None, "MALFORMED", "CHILD_INFRA_FAILURE"):', "if False:",
