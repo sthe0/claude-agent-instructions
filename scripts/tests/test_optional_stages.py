@@ -932,6 +932,10 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "n/a: re-attests the stage under dispatch (current_stage), never a SKIPPED one; the "
         "stash it reads holds PASSED prior outcomes only"
     ),
+    ("agentctl/cli_replan.py", "_replan_planless"): (
+        "guarded: re-arms (PENDING) only the stages whose status is FAILED, so a SKIPPED "
+        "stage keeps its status; a plan-less session holds no plan to declare one optional"
+    ),
     ("agentctl/cli_common.py", "_fail_stage_into_diagnosing"): (
         "n/a: receives the stage a spawn just ran (ACTIVE) from its caller"
     ),

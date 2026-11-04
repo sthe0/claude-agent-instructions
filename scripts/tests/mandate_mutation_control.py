@@ -61,6 +61,8 @@ T_CLASSIFY = "tests/test_classify.py"
 HOOK_START = "hook-engine-start.py"
 T_HOOK_START = "tests/test_hook_engine_start.py"
 T_REPLAN = "tests/test_replan.py"
+SPAWN = "spawn-specialist.py"
+T_SPAWN_GRANTS = "tests/test_spawn_specialist_grants.py"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
 CONTROL_RED = 7
@@ -1070,6 +1072,27 @@ CATALOGUE: "dict[str, Mutant]" = {
         "if state.weight_class != WeightClass.SMALL_CHANGE.value or state.plan_path:",
         "if False:",
         _ids(T_REPLAN, "test_a_planless_replan_of_a_substantive_session_is_refused"),
+    ),
+    "spawn-executor-guard": Mutant(
+        SPAWN,
+        'if stage_executor is not None and stage_executor != f"spawn:{args.kind}":',
+        "if False:",
+        _ids(
+            T_SPAWN_GRANTS,
+            "test_a_linked_executing_spawn_whose_kind_differs_from_the_stage_executor_is_refused[in_thread]",
+            "test_a_linked_executing_spawn_whose_kind_differs_from_the_stage_executor_is_refused[spawn:tech-writer]",
+        ),
+    ),
+    "planless-replan-node-gate": Mutant(
+        GATES,
+        'if state.node == Node.DIAGNOSING.value:\n        return None\n    msg = f"a plan-less replan',
+        'if True:\n        return None\n    msg = f"a plan-less replan',
+        _ids(
+            T_REPLAN,
+            "test_a_planless_replan_outside_diagnosing_is_refused",
+            "test_a_planless_replan_is_refused_at_executing_with_a_release_time_difficulty_record",
+            "test_a_planless_replan_of_a_paused_session_is_refused_and_names_unblock",
+        ),
     ),
 }
 

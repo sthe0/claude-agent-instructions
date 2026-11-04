@@ -3514,6 +3514,7 @@ def link_small_path_child(env, monkeypatch):
     norm_handoff.write_child_session(root, "parent-1", 1, session=CHILD, workdir=str(env.tmp))
     monkeypatch.setenv(norm_handoff.NORM_HANDOFF_ENV, norm_handoff.format_env_value(path, sha))
     monkeypatch.setenv("AGENTCTL_OWN_SESSION", CHILD)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CHILD)
     child_store = FileStateStore(root)
 
     def ns(**kw):

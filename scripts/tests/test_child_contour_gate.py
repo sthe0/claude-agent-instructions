@@ -568,7 +568,7 @@ def _parent_session(home: Path) -> FileStateStore:
     root = _state_dir(home)
     _cli(root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc")
     _cli(root, "classify", session=PARENT, architectural=True, changed_lines=200,
-         wall_clock_min=60)
+         wall_clock_min=60, host="claude")
     _cli(root, "plan", session=PARENT)
     _cli(root, "submit-plan", session=PARENT, plan=str(FIXTURE_PLAN))
     _cli(root, "approve", session=PARENT, by="user")
@@ -665,10 +665,12 @@ def test_linked_brief_names_own_contour(tmp_path, capsys):
         assert f"`{verb}`" in section, f"the brief's verb list lacks {verb!r}"
 
 
-def test_the_own_contour_brief_names_the_small_change_path_and_resolution_before_completed(tmp_path, capsys):
+def test_the_own_contour_brief_names_the_small_change_path_and_resolution_before_completed(tmp_path, capsys, monkeypatch):
     _parent_session(tmp_path / "home")
     argv = _spawn_argv(tmp_path / "home", tmp_path, 1) + ["--dry-run"]
-    assert _load_spawn().main(argv) == 0
+    spawn = _load_spawn()
+    monkeypatch.setattr(spawn, "SKILLS_DIR", SCRIPTS.parent / "skills" / "specializations")
+    assert spawn.main(argv) == 0
     out = capsys.readouterr().out
     section = out.split("## Your own engine contour", 1)[1].split("\n## ", 1)[0]
     path = section.split("Small-change path:", 1)[1].split("\n\n", 1)[0]
