@@ -1134,7 +1134,7 @@ def _optional_third_stage_plan(
 def eng(tmp_path, monkeypatch):
     from test_replan_autonomy_boundary import Eng
 
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "agentctl-test-session")
     return Eng(tmp_path)
 
 

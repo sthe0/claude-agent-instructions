@@ -893,6 +893,9 @@ def test_build_child_settings_guard_exempt_admits_a_write_grant_onto_that_file(t
     repo = _exempt_fixture(tmp_path)
     target = repo / _EXEMPT_REL
     monkeypatch.setattr(MOD, "_vcs_root", lambda _cwd: str(repo))
+    # A sandboxed run's tmp_path can sit under a `.claude-agent` directory, which makes any
+    # settings.json in the fixture a live-settings G-target the grant validator refuses.
+    monkeypatch.setattr(GRANTS.widening_targets, "is_live_settings", lambda _path: False)
     engine_grants = [
         {"path": str(repo / "proj"), "mode": "write", "provenance": "declared"},
         {"rule": _file_rule(target), "provenance": "derived:stage-3"},
