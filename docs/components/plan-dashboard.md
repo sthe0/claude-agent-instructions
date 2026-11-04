@@ -41,7 +41,7 @@ A task is classified by the first rule that matches:
 4. `idle` — the last activity is within `--window-hours` (default 24).
 5. `stale` — anything older.
 
-The default listing shows `active` and `idle` tasks. `--all` shows every task. `--session` adds the named tasks whatever their liveness. A task inside the window whose parent is outside it still brings its parent in; no other file outside the window is opened.
+The default listing shows `active` and `idle` tasks. `--all` shows every task. `--session` adds the named tasks whatever their liveness. The listing, `--all` included, holds root tasks only: a child stands in the `children` of its parent's detail, and a child that qualifies brings its root in, even a root outside the window, in its place. A child is listed only when `--session` names it or when its parent has no task file. No other file outside the window is opened.
 
 ### Phases and totals
 

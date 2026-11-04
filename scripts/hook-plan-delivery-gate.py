@@ -615,7 +615,17 @@ def _decide_session(
         if state is not None:
             presentation_active = _gates.plan_presentation_active(state)
             if presentation_active:
-                if not same_turn_denied and not observe_only:
+                # An ask carrying an [order-agree:<digest>] option is the
+                # order-agreement question by construction, never the
+                # plan-approval ask: the essence receipt (and its staleness)
+                # does not bind it, and the judge is not consulted. Without
+                # this, a plan edited after its essence was shown denied the
+                # order ask with "plan presentation is stale" although no
+                # plan approval was being asked for.
+                is_order_ask = has_marker_option(
+                    payload.get("tool_input") or {}, ORDER_AGREE_MARKER_PREFIX,
+                )
+                if not same_turn_denied and not observe_only and not is_order_ask:
                     if "verdict" not in ask_judged:
                         ask_judged["verdict"] = _judge_approval_ask(payload, budget)
                     is_approval_ask = ask_judged["verdict"]

@@ -517,6 +517,22 @@ def _mtime(path: Path) -> dt.datetime | None:
         return None
 
 
+def _listed_stems(summaries: dict, wanted: set, pinned: set) -> set:
+    """The listing's rows: the root of each wanted task and each pinned task itself. A child shows only in
+    its root's detail; a child whose parent has no task to show stays listed, so its work never vanishes."""
+    listed = pinned & summaries.keys()
+    for stem in wanted:
+        seen = {stem}
+        while (parent := summaries[stem]["parent_session"]):
+            parent = config_root.sanitize_session_id(parent)
+            if parent not in summaries or parent in seen:
+                break
+            seen.add(parent)
+            stem = parent
+        listed.add(stem)
+    return listed
+
+
 def collect(state_root, *, now: dt.datetime, window_hours=24, include_all=False, sessions=None,
             cost_log=None) -> dict:
     root = Path(state_root)
@@ -542,13 +558,14 @@ def collect(state_root, *, now: dt.datetime, window_hours=24, include_all=False,
         if parent:
             queue.append(config_root.sanitize_session_id(parent))
     ledger = _ledger(cost_log)
-    tasks = []
+    summaries, wanted = {}, set()
     for stem, (state, reason, moment) in loaded.items():
         if _is_sidecar(stem, state):
             continue
-        row = _summary(stem, state, reason, moment, now, window, ledger)
+        row = summaries[stem] = _summary(stem, state, reason, moment, now, window, ledger)
         if state is None or include_all or stem in pinned or row["liveness"] in ("active", "idle"):
-            tasks.append(row)
+            wanted.add(stem)
+    tasks = [summaries[stem] for stem in _listed_stems(summaries, wanted, pinned)]
     tasks.sort(key=lambda t: (t["last_activity"] or "", t["session_id"]), reverse=True)
     return {"schema": SCHEMA, "generated_at": _iso(now), "hostname": socket.gethostname(), "tasks": tasks}
 
