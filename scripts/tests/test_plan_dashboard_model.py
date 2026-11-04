@@ -169,6 +169,29 @@ def test_a_child_whose_parent_has_no_file_stays_listed(tmp_path):
     assert set(rows_by_session(collect(root))) == {"orphan"}
 
 
+def _unlinked_spawn_root(tmp_path):
+    spawn = make_state("spawn", history=[event("approve", at(hours=1))])
+    spawn.task_id = "agent-recursion-depth-1-working-plan"
+    child = make_state("child", history=[event("approve", at(hours=1))],
+                       parent_link={"parent_session": "spawn", "stage_index": 1})
+    plain = make_state("plain", history=[event("approve", at(hours=1))])
+    return build_fixture_root(tmp_path, [spawn, child, plain], now=NOW)
+
+
+def test_an_unlinked_spawn_and_its_child_stay_out_of_the_default_listing(tmp_path):
+    assert set(rows_by_session(collect(_unlinked_spawn_root(tmp_path)))) == {"plain"}
+
+
+def test_all_lists_an_unlinked_spawn_because_no_root_shows_its_work(tmp_path):
+    rows = rows_by_session(collect(_unlinked_spawn_root(tmp_path), include_all=True))
+    assert set(rows) == {"plain", "spawn"}
+
+
+def test_session_lists_an_unlinked_spawn_it_names(tmp_path):
+    rows = rows_by_session(collect(_unlinked_spawn_root(tmp_path), sessions=["spawn"]))
+    assert set(rows) == {"plain", "spawn"}
+
+
 def test_a_parent_link_cycle_ends_the_walk_with_a_row(tmp_path):
     sessions = [make_state("a", history=[event("approve", at(hours=1))],
                            parent_link={"parent_session": "b", "stage_index": 1}),
