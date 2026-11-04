@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import copy
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
@@ -11,7 +12,9 @@ import shlex
 import shutil
 import sys
 import tempfile
+import time
 import tomllib
+from contextlib import contextmanager
 from dataclasses import asdict, fields, replace
 from pathlib import Path
 from lib import argv_text, config_root, engine_session_binding, hook_telemetry
@@ -21,6 +24,7 @@ from . import (
     child_runs,
     cost,
     effort,
+    effort_segments,
     exempt_paths,
     gates,
     grants as _grants,
@@ -41,6 +45,7 @@ from .directive import Directive, DIRECTIVE_ESCALATE_TO_USER
 from .dispatch import Runner, subprocess_runner
 from .machine import transition
 from .plan import (
+    stage_carry_key,
     PlanDoc,
     PlanError,
     load_plan,
@@ -56,6 +61,9 @@ from .submission import (
     submission_violations,
 )
 from .state import (
+    frame_path,
+    new_stage_uid,
+    stage_uid_key,
     AGENT_ACTOR,
     CheckKind,
     Criterion,
@@ -393,6 +401,288 @@ def _flush_order_effort(state: SessionState, key: str | None = None, *,
         effort.SCALE_SPEND: actual[effort.SCALE_SPEND],
         effort.SCALE_WALL_CLOCK: actual[effort.SCALE_WALL_CLOCK],
     }
+    tables, armings = _effort_identity_payload(state)
+    order_approvals.flush_effort_identity(key, tables, armings)
+
+
+def _stage_identity_record(stage, uid: str | None = None) -> dict:
+    """What identity matching reads of a stage: the digest of its carry key without the edges,
+    and the edges, whose supplier indices `effort_segments.match_identities` resolves to
+    identities. JSON-safe, because the order ledger stores it."""
+    key = stage_carry_key(stage)
+    record = {
+        "index": stage.index,
+        "key": hashlib.sha256(repr(key[:1] + key[2:]).encode("utf-8")).hexdigest(),
+        "edges": [list(edge) for edge in key[1]],
+    }
+    if uid is not None:
+        record["uid"] = uid
+    return record
+
+
+def _effort_identity_payload(state: SessionState) -> tuple[dict, dict]:
+    """The identity tables of this session's frames and, per segment, the latest arming's entry
+    (None once it closed), for the order ledger. A migration arming carries nothing: its actual
+    is the old window's, which the order window already holds."""
+    tables = {}
+    frames = [(frame_path(state.plan_stack[:d]), f.stages) for d, f in enumerate(state.plan_stack)]
+    frames.append((frame_path(state.plan_stack), state.stages))
+    for path, stages in frames:
+        tables[path] = [
+            _stage_identity_record(s, state.stage_uids.get(stage_uid_key(path, s.index)))
+            for s in stages if stage_uid_key(path, s.index) in state.stage_uids
+        ]
+    latest: dict = {}
+    for arming in state.effort_segments.get("armings", []):
+        latest[arming["segment"]] = arming
+    armings: dict = {}
+    for segment, arming in latest.items():
+        if arming["budget_source"] in (effort_segments.SOURCE_STRETCH, effort_segments.SOURCE_WINDOW):
+            continue
+        armings[segment] = None if arming["closed_at"] is not None else {
+            "segment": segment,
+            "budget": arming["budget"],
+            "actual": effort_segments.arming_actual(arming),
+            "session": state.session_id,
+            "declared_tier": arming.get("declared_tier"),
+            "title": arming.get("title"),
+            "tier_ladder": arming.get("tier_ladder"),
+        }
+    return tables, armings
+
+
+def _carried_entries(state: SessionState, key: str) -> dict:
+    return {
+        segment: entry
+        for segment, entry in order_approvals.effort_identity(key)["armings"].items()
+        if entry.get("session") != state.session_id
+    }
+
+
+def _match_against_order(state: SessionState, key: str) -> dict:
+    """{new index: uid or None} of the live frame's stages against the order's identity table."""
+    path = frame_path(state.plan_stack)
+    previous = order_approvals.effort_identity(key)["stages"].get(path) or []
+    return effort_segments.match_identities(previous, [_stage_identity_record(s) for s in state.stages])
+
+
+def _carried_live_stage_blockers(state: SessionState, key: str | None) -> list[str]:
+    """A self-approval may not leave behind the stage an earlier session of the order left live:
+    its actual and budget would go with it."""
+    if key is None:
+        return []
+    matched = set(_match_against_order(state, key).values())
+    return [
+        f"--by agent refused: stage {entry.get('title')!r}, live in session {entry.get('session')} of "
+        "this order, has no match in this plan; only the customer's approval may drop it"
+        for segment, entry in _carried_entries(state, key).items()
+        if segment.startswith(effort_segments.STAGE_PREFIX)
+        and segment[len(effort_segments.STAGE_PREFIX):] not in matched
+    ]
+
+
+def _adopt_order_identities(state: SessionState, key: str | None, now: float) -> None:
+    """Take over, at a plan approval, what earlier sessions of the order left: matched stages
+    keep their identity, and an unsettled arming's actual and budget continue here as carried.
+    The opened_at is this instant, so a row written earlier never counts toward the arming."""
+    ledger = state.effort_segments
+    path = frame_path(state.plan_stack)
+    uids = {}
+    if key is not None:
+        uids = {index: uid for index, uid in _match_against_order(state, key).items() if uid}
+        for index, uid in uids.items():
+            state.stage_uids[stage_uid_key(path, index)] = uid
+    state.assign_stage_uids()
+    if key is None:
+        return
+    adopted = ledger.setdefault("adopted", [])
+    matched = set(uids.values())
+    dropped = []
+    for segment, entry in _carried_entries(state, key).items():
+        token = f"{entry.get('session')}:{segment}"
+        if token in adopted:
+            continue
+        if segment == effort_segments.PLANNING:
+            arming = effort_segments.open_arming_of(ledger, segment)
+        elif segment[len(effort_segments.STAGE_PREFIX):] in matched:
+            arming = effort_segments.open_arming(
+                ledger, segment, entry.get("budget"), effort_segments.SOURCE_CARRIED, now, "adoption")
+            for field_name in ("declared_tier", "title", "tier_ladder"):
+                arming[field_name] = entry.get(field_name)
+        else:
+            dropped.append(segment)
+            continue
+        if arming is None:
+            continue
+        carried = entry.get("actual") or {}
+        for scale in effort_segments.SCALES:
+            arming["carried"][scale] = arming["carried"].get(scale, 0.0) + float(carried.get(scale) or 0.0)
+        adopted.append(token)
+    if dropped:
+        order_approvals.flush_effort_identity(key, {}, dict.fromkeys(dropped))
+
+
+def _rematch_stage_uids(state: SessionState, new_stages) -> None:
+    """Re-key the live frame's identities to `new_stages`: a stage matched across indices keeps its
+    identity, any other gets a fresh one, so it starts from zero."""
+    path = frame_path(state.plan_stack)
+    previous = [_stage_identity_record(s, state.stage_uid(s.index))
+                for s in state.stages if state.stage_uid(s.index)]
+    matches = effort_segments.match_identities(
+        previous, [_stage_identity_record(s) for s in new_stages])
+    for s in state.stages:
+        state.stage_uids.pop(stage_uid_key(path, s.index), None)
+    for s in new_stages:
+        state.stage_uids[stage_uid_key(path, s.index)] = matches.get(s.index) or new_stage_uid()
+
+
+def _note_user_approved_tiers(state: SessionState) -> None:
+    approved = state.effort_segments.setdefault("approved_tiers", {})
+    for stage in state.stages:
+        uid = state.stage_uid(stage.index)
+        if uid is not None:
+            approved[uid] = effort._stage_tier(stage)
+
+
+def _ensure_planning_arming(state: SessionState, now: float) -> None:
+    ledger = state.effort_segments
+    if effort_segments.open_arming_of(ledger, effort_segments.PLANNING) is None:
+        effort_segments.open_arming(
+            ledger, effort_segments.PLANNING, None, effort_segments.SOURCE_UNBUDGETED, now, "classify")
+
+
+def _ensure_stage_arming(state: SessionState, stage, now: float, by: str) -> dict | None:
+    """The stage's open arming, opened if it has none: the budget is the tier of the last version
+    the user approved, else the declared one. While a migrated window is open it owns everything,
+    so nothing opens."""
+    ledger = state.effort_segments
+    if effort_segments.window_arming(ledger) is not None:
+        return None
+    uid = state.stage_uid(stage.index)
+    if uid is None:
+        state.assign_stage_uids()
+        uid = state.stage_uid(stage.index)
+    segment = effort_segments.stage_segment(uid)
+    arming = effort_segments.open_arming_of(ledger, segment)
+    if arming is not None:
+        return arming
+    thr = Thresholds()
+    closing = effort_segments.open_arming_of(ledger, effort_segments.CLOSING)
+    if closing is not None:
+        effort_segments.close_arming(ledger, closing["arming_id"], by, now, float(thr.effort_divergence_multiple()))
+    approved = ledger.get("approved_tiers", {}).get(uid)
+    tier = approved or effort._stage_tier(stage)
+    source = effort_segments.SOURCE_USER_APPROVED if approved else effort_segments.SOURCE_DECLARED
+    arming = effort_segments.open_arming(ledger, segment, effort.stage_budget(tier, thr), source, now, by)
+    arming["declared_tier"] = tier
+    arming["title"] = stage.title
+    arming["tier_ladder"] = effort.tier_ladder(thr)
+    return arming
+
+
+def _settle_stage_arming(state: SessionState, stage, act: str, now: float) -> dict | None:
+    """Settle `stage`'s arming at `act` and open what the interval after it belongs to: the next
+    stage, or the closing segment when none is pending at the top plan. Returns the retier record
+    the settlement produced. While a migrated window is open nothing opens or settles."""
+    ledger = state.effort_segments
+    if effort_segments.window_arming(ledger) is not None or not ledger.get("armings"):
+        return None
+    record = None
+    uid = state.stage_uid(stage.index)
+    arming = effort_segments.open_arming_of(ledger, effort_segments.stage_segment(uid)) if uid else None
+    if arming is not None:
+        record = effort_segments.close_arming(
+            ledger, arming["arming_id"], act, now, float(Thresholds().effort_divergence_multiple()))
+    ready = state.ready_stages()
+    if ready:
+        _ensure_stage_arming(state, ready[0], now, act)
+    elif not state.plan_stack and state.all_stages_settled():
+        if effort_segments.open_arming_of(ledger, effort_segments.CLOSING) is None:
+            effort_segments.open_arming(
+                ledger, effort_segments.CLOSING, None, effort_segments.SOURCE_UNBUDGETED, now, act)
+    return record
+
+
+def _second_current_stage_refusal(state: SessionState, candidate: int | None) -> Directive | None:
+    """The refusal of a writer of the current stage while another stage is ACTIVE."""
+    others = gates.other_active_stages(state, candidate)
+    if not others:
+        return None
+    return Directive(
+        False, state.node, "blocked",
+        f"stage {others[0]} is ACTIVE: one stage is current at a time; settle it before moving on",
+        data={"active_stage": others[0], "active_stages": others},
+    )
+
+
+@contextmanager
+def _state_lock(store: StateStore, session_id: str, *, wait_s: float = 2.0):
+    """Hold `<root>/<session>.lock`; yields False if it stays busy for `wait_s` or the store has
+    no directory, and the caller then does its work unjudged rather than wait on a dead holder."""
+    root = _state_dir(store)
+    if root is None:
+        yield False
+        return
+    deadline = time.monotonic() + wait_s
+    with open(Path(root) / f"{session_id}.lock", "a") as handle:
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    yield False
+                    return
+                time.sleep(0.02)
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def stamp_and_judge(session_id: str, now: float, *, store: StateStore) -> bool:
+    """The prompt boundary, for the hook: stamp it, book the gap through the ledger and judge, all
+    under the state lock in one save. False when the state does not load as a SessionState, for
+    the hook's raw patch to handle. True otherwise, including a failure past the load: nothing was
+    saved, the stamp did not move, and the next stamp books the gap once."""
+    try:
+        with _state_lock(store, session_id) as locked:
+            if not locked:
+                return True
+            try:
+                state = store.load(session_id)
+            except Exception:
+                return False
+            _stamp_loaded(state, store, session_id, now)
+            store.save(state)
+    except Exception:
+        return True
+    return True
+
+
+def _stamp_loaded(state: SessionState, store: StateStore, session_id: str, now: float) -> None:
+    previous = state.last_user_prompt_ts
+    state.last_user_prompt_ts = now
+    state.user_prompt_count = int(state.user_prompt_count or 0) + 1
+    if not isinstance(previous, (int, float)) or now <= previous or state.node == Node.BLOCKED.value:
+        return
+    root = _state_dir(store)
+    runs = state.effort_child_runs
+    if root is not None:
+        child_runs.close_dead_runs(runs, Path(root), session_id)
+    covered = effort.covered_seconds(effort.child_run_intervals(runs, now), previous, now)
+    cap = float(Thresholds().substantive_wall_clock_min)
+    elapsed = min(max(0.0, (now - previous) - covered) / 60.0, cap)
+    if covered > 0:
+        def lost(others) -> float:
+            others_covered = effort.covered_seconds(effort.child_run_intervals(others, now), previous, now)
+            return min(max(0.0, (now - previous) - others_covered) / 60.0, cap) - elapsed
+
+        child_runs.note_gap_loss(runs, previous, now, lost)
+    actuals = state.effort_actuals
+    actuals[effort.ACTUAL_MINUTES_KEY] = float(actuals.get(effort.ACTUAL_MINUTES_KEY) or 0.0) + elapsed
+    effort.book_gap_minutes(state, previous, now, elapsed)
+    effort.book_child_runs(state, now)
 
 
 def _order_customer_id(state: SessionState) -> str:
@@ -2039,6 +2329,7 @@ def _refresh_spend(state: SessionState, store: StateStore, rows: list[dict], pat
             _seed_linked_flush_baseline(state, store=store)
             if state.order_effort_flushed is not None:
                 _credit_descendant_order_flush(state, key, chains, booked)
+    effort.book_child_runs(state, _utcnow())
     return delta
 
 

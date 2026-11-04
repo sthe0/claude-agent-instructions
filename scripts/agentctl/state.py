@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shlex
+import time
 import uuid
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
@@ -27,7 +28,8 @@ from typing import ClassVar
 from .grants import StageGrants
 from .script_effects import StageEffectDeclaration
 
-SCHEMA_VERSION = 61  # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
+SCHEMA_VERSION = 62  # 62: stage_uids, effort_segments, effort_migrated (per-segment effort)
+                     # 34: PlanFrame gains parent_repo_root/parent_delivery_worktree/
                      # parent_venue_captured (pop-subplan venue-substitution guard)
                      # 35: PlanFrame also gains plugins/plugins_archive custody
                      # 36: Stage gains `grants` (declared [stage.grants]); SessionState
@@ -2765,6 +2767,17 @@ class SessionState:
     #                      after the plan that held them is gone, so sub-plan push/pop leave
     #                      it alone.
     effort_retiers: list[dict] = field(default_factory=list)
+    # Per-segment effort accounting (effort_segments.py).
+    #   stage_uids       engine-assigned stage identity, keyed by frame path plus index
+    #                    (stage_uid_key), so a sub-plan's stage 1 and the top plan's never
+    #                    share a key.
+    #   effort_segments  the ledger: {armings, seq, retier, approved_tiers,
+    #                    child_minutes_booked, child_mark}.
+    #   effort_migrated  {instant, armed} of a state first saved under schema 61; None for a
+    #                    state created at this schema or later.
+    stage_uids: dict = field(default_factory=dict)
+    effort_segments: dict = field(default_factory=dict)
+    effort_migrated: dict | None = None
     # Order-keyed effort custody (autonomy boundary). Only meaningful for a session
     # whose order has a user-approved version in order_approvals' ledger.
     #   order_effort_flushed  the actual spend/wall_clock already moved into the ledger
@@ -3340,11 +3353,80 @@ class SessionState:
             )
             for f in data.get("plan_stack", [])
         ]
-        return cls(**data)
+        pre_segments = (int(data.get("schema_version") or 0) < EFFORT_SEGMENTS_SCHEMA
+                        and not data.get("effort_migrated"))
+        state = cls(**data)
+        if pre_segments:
+            _migrate_to_effort_segments(state)
+        return state
 
     @classmethod
     def from_json(cls, text: str) -> "SessionState":
         return cls.from_dict(json.loads(text))
+
+    def assign_stage_uids(self) -> None:
+        """Give every stage of the live frame that has none an identity."""
+        path = frame_path(self.plan_stack)
+        for stage in self.stages:
+            self.stage_uids.setdefault(stage_uid_key(path, stage.index), new_stage_uid())
+
+    def stage_uid(self, index: int) -> str | None:
+        return self.stage_uids.get(stage_uid_key(frame_path(self.plan_stack), index))
+
+
+EFFORT_SEGMENTS_SCHEMA = 62
+
+
+def frame_path(stack) -> str:
+    """The frame a live stage list belongs to: the originating stages of `stack`, outermost
+    first ('' for the top plan)."""
+    return ".".join(str(frame.originating_stage) for frame in stack)
+
+
+def stage_uid_key(path: str, index: int) -> str:
+    return f"{path}#{index}"
+
+
+def new_stage_uid() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def _migrate_to_effort_segments(state: "SessionState") -> None:
+    """Bring an older state under the segment ledger, in memory: only a load whose state is
+    saved makes the instant stick, and a later load sees the stamp and keeps it. The state keeps
+    the schema version its file declared.
+
+    Only adds. The accumulated actuals, which never passed through `book`, seed the arming that
+    owns pre-instant work as booked; the watermarks stay, so a later refresh books the excess."""
+    from . import effort, effort_segments as segments
+
+    instant = time.time()
+    frames = state.plan_stack
+    armed = state.effort_baseline is not None or any(f.effort_baseline is not None for f in frames)
+    state.effort_migrated = {"instant": instant, "armed": armed}
+    for depth, frame in enumerate(frames):
+        path = frame_path(frames[:depth])
+        for stage in frame.stages:
+            state.stage_uids.setdefault(stage_uid_key(path, stage.index), new_stage_uid())
+    state.assign_stage_uids()
+
+    ledger = state.effort_segments
+    source = segments.SOURCE_WINDOW if armed else segments.SOURCE_STRETCH
+    owner = segments.open_arming(ledger, segments.PLANNING, None, source, 0.0,
+                                 segments.OPENED_BY_MIGRATION)
+    holders = [state.effort_actuals, *(f.effort_actuals for f in frames)]
+    usd = sum(float(h.get(effort.ACTUAL_SPEND_KEY) or 0.0) for h in holders)
+    minutes = sum(float(h.get(effort.ACTUAL_MINUTES_KEY) or 0.0) for h in holders)
+    run_minutes = effort.child_run_minutes(state, instant)
+    segments.book(ledger, instant, usd, minutes + run_minutes, "migration-seed")
+    ledger["child_minutes_booked"] = run_minutes
+    ledger["child_mark"] = instant
+    current = owner
+    if not armed:
+        segments.close_arming(ledger, owner["arming_id"], segments.OPENED_BY_MIGRATION, instant, 0.0)
+        current = segments.open_arming(ledger, segments.PLANNING, None, segments.SOURCE_UNBUDGETED,
+                                       instant, segments.OPENED_BY_MIGRATION)
+    effort.carry_open_fire(state, current)
 
 
 # Every SessionState field is in exactly one of the two sets below (pinned by
@@ -3373,6 +3455,7 @@ SESSION_SCOPED_FIELDS = frozenset({
     "code_reviews", "acceptance_review", "acceptance_bypass", "plan_presentations",
     "recursion_depth", "artifacts", "history", "plan_stack", "cost", "last_user_prompt_ts",
     "plan_submitted_ts", "tracker_key", "deliverable_kind", "task_title", "effort_subtree_seen",
+    "stage_uids", "effort_segments", "effort_migrated",
     "effort_child_runs", "user_prompt_count", "effort_crossings", "effort_retiers", "order_effort_flushed",
     "order_descendant_credited", "order_effort_base", "order_effort_frozen",
     "agent_ack_difficulty_ids", "renegotiation_ceiling_difficulty_id",

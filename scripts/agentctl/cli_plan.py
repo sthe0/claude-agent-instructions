@@ -101,7 +101,9 @@ from .cli_common import (
     _review_cycle_arrive,
     _evaluate_review_trigger,
     _cost_rows,
+    _ensure_planning_arming,
     _refresh_spend,
+    _utcnow,
     _order_agreement_refusal,
 )
 from .cli_order import _order_draft_violations
@@ -532,6 +534,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     state.deliverable_kind = getattr(args, "deliverable_kind", "") or ""
     state.node = transition(state.node, "classify")
     state.log("classify", weight_class=result.weight_class, route=result.route, reasons=result.reasons)
+    _ensure_planning_arming(state, _utcnow())
     if titled:
         # Before the single save below: state.log only reaches disk through it. Fail-open --
         # a failed retitle is logged and never changes the directive.
@@ -559,6 +562,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
                 ),
             )
         ]
+        state.assign_stage_uids()
         action, detail = "execute_in_thread", "small change: execute in-thread, then record-result"
     elif result.weight_class == WeightClass.CHAT.value:
         action, detail = "answer_in_thread", "chat: answer directly; terminal at ROUTED"

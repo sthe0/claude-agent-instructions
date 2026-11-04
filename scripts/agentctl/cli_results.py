@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 import time
-from . import advisor, cost, effort, gates, runtime_host
+from . import advisor, cost, effort, effort_segments, gates, runtime_host
 from .checkrun import NEGATIVE_CONTROL_REFUSED_EXIT_CODES
 from .config import Thresholds
 from .directive import Directive
@@ -50,6 +50,7 @@ from .cli_common import (
     _present_plan_transcript,
     _cost_rows,
     _refresh_spend,
+    _settle_stage_arming,
     _utcnow,
     _effort_now,
     _write_check_log,
@@ -648,6 +649,7 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         state.current_stage = None
         state.pending_renorms = gates.open_renorms(state)
         state.log("record_result", stage=stage.index, status="passed")
+        _settle_stage_arming(state, stage, effort_segments.ACT_PASSING_RECORD_RESULT, _utcnow())
         finished_fire = _finished_work_fire(state, div, store=store)
         if finished_fire is None and div is not None and gates.effort_active(state):
             now = _utcnow()

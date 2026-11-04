@@ -96,6 +96,8 @@ from .cli_common import (
     _review_cycle_arrive,
     _cost_rows,
     _refresh_spend,
+    _rematch_stage_uids,
+    _second_current_stage_refusal,
     _utcnow,
     _effort_now,
     _normalize_record_fields,
@@ -1565,6 +1567,9 @@ def _replan_apply_substantive(ctx: _ReplanContext) -> Directive:
     _prev_plan_sha256, _new_plan_sha256 = ctx.prev_plan_sha256, ctx.new_plan_sha256
     change_class = ctx.change_class
 
+    second_current = _second_current_stage_refusal(state, state.current_stage)
+    if second_current is not None:
+        return second_current
     # substantive: re-arm the plan-approval gate, reload stages, return to PLAN_READY.
     # #12: carry PASSED status forward for any stage whose FULL definition is
     # unchanged by the diff, so a substantive replan doesn't reset already-delivered
@@ -1628,6 +1633,7 @@ def _replan_apply_substantive(ctx: _ReplanContext) -> Directive:
             not is_settled(ns) and gates.is_declined_stage(ns, declined_issues, declined_titles)
         ):
             ns.outcome.declined = True
+    _rematch_stage_uids(state, new.stages)
     state.stages = new.stages
     _sync_venue_from_plan(state, new)
     state.final_check = new.meta.final_check

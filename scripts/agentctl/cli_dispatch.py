@@ -1209,6 +1209,13 @@ def _carry_hook_stamps(store: StateStore, state: SessionState) -> SessionState |
         state.effort_actuals[effort.ACTUAL_MINUTES_KEY] = fresh.effort_actuals[effort.ACTUAL_MINUTES_KEY]
     state.last_user_prompt_ts = fresh.last_user_prompt_ts
     state.user_prompt_count = fresh.user_prompt_count
+    # The stamp and a descendant's act book and judge on the file during the spawn.
+    state.effort_segments = fresh.effort_segments
+    state.effort_fires = fresh.effort_fires
+    state.effort_subtree_seen = fresh.effort_subtree_seen
+    state.effort_spend_seen = fresh.effort_spend_seen
+    state.effort_actuals = fresh.effort_actuals
+    state.order_effort_flushed = fresh.order_effort_flushed
     return fresh
 
 
@@ -1236,6 +1243,7 @@ def _end_child_run(store: StateStore, state: SessionState, run: dict,
                 state_dir, state.session_id, run, state.effort_child_runs)
     if run.get("child_session"):
         run["ended"] = max(run["started"], _utcnow())
+        effort.book_child_runs(state, _utcnow())
     else:
         state.effort_child_runs[:] = [r for r in state.effort_child_runs if r is not run]
         # The hook left the part of each prompt gap inside this run to it (and noted it on
@@ -1245,6 +1253,7 @@ def _end_child_run(store: StateStore, state: SessionState, run: dict,
             actuals = state.effort_actuals
             actuals[effort.ACTUAL_MINUTES_KEY] = float(
                 actuals.get(effort.ACTUAL_MINUTES_KEY) or 0.0) + lost
+            effort.book_gap_minutes(state, _utcnow(), _utcnow(), lost, effort.ORIGIN_RUN_LOST)
     store.save(state)
 
 

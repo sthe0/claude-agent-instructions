@@ -103,6 +103,7 @@ def _empty(order_sha256: str) -> dict:
         "effort_since_user_approval": {"spend": 0.0, "wall_clock": 0.0},
         "open_effort_fires": [],
         "first_thinker_verdicts": {},
+        "effort_identity": {"stages": {}, "armings": {}},
     }
 
 
@@ -158,6 +159,9 @@ def _coerce(raw: str, order_sha256: str) -> dict:
     first_verdicts = data.get("first_thinker_verdicts")
     if not isinstance(first_verdicts, dict):
         first_verdicts = {}
+    identity = data.get("effort_identity")
+    if not isinstance(identity, dict):
+        identity = {"stages": {}, "armings": {}}
     return {
         "schema_version": SCHEMA_VERSION,
         "order_sha256": data.get("order_sha256", order_sha256),
@@ -165,6 +169,7 @@ def _coerce(raw: str, order_sha256: str) -> dict:
         "effort_since_user_approval": effort_since,
         "open_effort_fires": open_fires,
         "first_thinker_verdicts": first_verdicts,
+        "effort_identity": identity,
     }
 
 
@@ -396,6 +401,32 @@ def flush_effort(
         data["effort_since_user_approval"]["wall_clock"] += float(wall_clock_delta)
         _write_atomic(path, data)
         return data
+
+
+def effort_identity(order_sha256: str, *, root: Path | None = None) -> dict:
+    return get(order_sha256, root=root)["effort_identity"]
+
+
+def flush_effort_identity(
+    order_sha256: str, stages: dict, armings: dict, *, root: Path | None = None
+) -> None:
+    """Keep a session's stage identities and unsettled armings under the order: `stages` replaces
+    the named frames; in `armings` an entry replaces its segment's and None removes it. Entries of
+    other sessions stay until a later session adopts them."""
+    path = _path(order_sha256, root)
+    with _FileLock(path):
+        data = _coerce(path.read_text(encoding="utf-8"), order_sha256) if path.exists() else _empty(order_sha256)
+        identity = data["effort_identity"]
+        before = json.dumps(identity, sort_keys=True)
+        identity.setdefault("stages", {}).update(stages)
+        held = identity.setdefault("armings", {})
+        for segment, entry in armings.items():
+            if entry is None:
+                held.pop(segment, None)
+            else:
+                held[segment] = entry
+        if json.dumps(identity, sort_keys=True) != before:
+            _write_atomic(path, data)
 
 
 def record_effort_fire(

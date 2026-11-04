@@ -65,7 +65,12 @@ from .cli_common import (
     _with_advisories,
     _submission_advice,
     _submission_problems,
+    _adopt_order_identities,
+    _carried_live_stage_blockers,
+    _ensure_stage_arming,
+    _note_user_approved_tiers,
     _require,
+    _second_current_stage_refusal,
     _clear_since_user_decision,
     _enumeration_escape_counts,
     _note_round_release,
@@ -562,6 +567,15 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                 f"--by {args.by!r} refused: outside the approved boundary -- "
                 + "; ".join(agent_autonomy.get("reason_texts") or agent_autonomy["reasons"])
             ]
+    _second_current = _second_current_stage_refusal(state, state.current_stage)
+    if _second_current is not None:
+        return _second_current
+    _identity_order = (
+        order_digest(_approved_doc)
+        if _approved_doc is not None and _approved_doc.meta.order is not None else None
+    )
+    if by_agent:
+        blockers = blockers + _carried_live_stage_blockers(state, _identity_order)
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
         fired = _evaluate_review_trigger(state, store, review_blockers)
@@ -621,6 +635,9 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if skip_optional:
         state.log("skip_optional", by=args.by, stages=skip_optional)
     effort.arm(state, now=_effort_now(store, state))  # opens the effort-divergence window — see effort.py's ARMED-ONLY
+    _adopt_order_identities(state, _identity_order, _utcnow())
+    if not by_agent:
+        _note_user_approved_tiers(state)
     # Fold this session's review-round counts into the cross-session task accumulator
     # (item B) BEFORE the reset-to-0 below — approval is the reset point, so this is
     # the last moment these session-local counts are readable.
@@ -861,6 +878,9 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
             )
         return Directive(False, state.node, "verify_final", "no ready stages; run verify-final if all passed")
     stage = ready[0]
+    second_current = _second_current_stage_refusal(state, stage.index)
+    if second_current is not None:
+        return second_current
     # pick the entry edge into EXECUTING from the current node
     if state.node == Node.PARTITIONED.value:
         event = "execute_approved"
@@ -881,6 +901,7 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
         state.node = transition(state.node, event)
     stage.outcome.status = StageStatus.ACTIVE.value
     state.current_stage = stage.index
+    _ensure_stage_arming(state, stage, _utcnow(), "next_stage")
     state.log("next_stage", stage=stage.index, executor=stage.actor.executor)
     store.save(state)
     action = "dispatch" if stage.is_spawn() else "execute_in_thread"

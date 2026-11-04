@@ -3114,6 +3114,13 @@ def stage_review_active(state: SessionState) -> bool:
     return state.weight_class == WeightClass.SUBSTANTIVE.value
 
 
+def other_active_stages(state: SessionState, candidate: int | None) -> list[int]:
+    """The ACTIVE stages of the live frame besides `candidate`. A parent of a sub-plan lives in its
+    frame, so an unfolded parent is never among them."""
+    return [s.index for s in state.stages
+            if s.outcome.status == StageStatus.ACTIVE.value and s.index != candidate]
+
+
 def effort_active(state: SessionState) -> bool:
     """Whether a firing `effort.divergence()` may ACT (transition the session into
     DIAGNOSING) — never whether effort.py accounts. arm/rederive/refresh_spend run
