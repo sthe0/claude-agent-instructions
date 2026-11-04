@@ -24,6 +24,7 @@ avoids re-deriving that plumbing rather than duplicating it.
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -991,6 +992,7 @@ def plans_and_stub_skills(monkeypatch, tmp_path):
     plans.mkdir()
     monkeypatch.setattr(MOD, "SKILLS_DIR", skills)
     monkeypatch.setattr(MOD, "plans_dir", lambda: plans)
+    monkeypatch.setattr(MOD, "COST_LOG", tmp_path / "costs.jsonl")
     return plans
 
 
@@ -1025,6 +1027,32 @@ def test_a_linked_executing_spawn_whose_kind_differs_from_the_stage_executor_is_
     err = capsys.readouterr().err
     assert rc == 2
     assert f"`{executor}`, not `spawn:developer`" in err
+    rows = [json.loads(line) for line in MOD.COST_LOG.read_text(encoding="utf-8").splitlines()]
+    assert [(r["event"], r["reason"], r["executor"]) for r in rows] == [
+        ("refused", "executor-kind-mismatch", executor)]
+
+
+def test_a_spawn_whose_handoff_record_fails_is_unlinked_and_not_refused_by_the_executor_guard(
+    store, venued_fixtures_dir, tmp_path, capsys, plans_and_stub_skills, monkeypatch,
+):
+    # Linking is on and the stage's executor is readable, so only the unlinked state
+    # (no handoff record) separates this spawn from the refused linked one.
+    sid = "spawn-guard-unlinked"
+    plan_path = _plan_with_stage_one_executor(venued_fixtures_dir, plans_and_stub_skills, "in_thread")
+    _to_executing(store, sid, venued_fixtures_dir, plan_path=plan_path)
+
+    def _no_record(*_a, **_kw):
+        raise RuntimeError("record unavailable")
+
+    monkeypatch.setattr(MOD, "norm_handoff_record", _no_record)
+
+    rc = MOD.main(_dry_run_argv(sid, "developer", plan_path, tmp_path / "state"))
+
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    assert "spawning unlinked" in captured.err
+    assert "is executed by" not in captured.err
+    assert not MOD.COST_LOG.exists()
 
 
 def test_a_linked_spawn_of_the_stage_executor_kind_hands_the_declared_grants_to_the_child(

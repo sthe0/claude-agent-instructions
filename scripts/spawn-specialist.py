@@ -1116,9 +1116,10 @@ MEMORY_WRITE_KINDS = ("curator",)
 PROJECT_SETTINGS_KINDS = ("developer",)
 
 # Kinds that work read-only on a stage's norm and so need no stage grants of their own:
-# a spawn of one of these linked to a stage of another executor is legitimate. Every other
-# kind executes, and linked to a stage whose executor is not spawn:<kind> it would receive
-# an empty grant set (see `load_engine_stage_grants`) and fail later on every rule.
+# a spawn of one of these linked to a stage of another executor is legitimate. A linked
+# `--session` + `--stage-index` spawn of any other kind whose stage executor is not
+# spawn:<kind> is refused: it would receive an empty grant set (see
+# `load_engine_stage_grants`) and fail later on every rule.
 REVIEW_KINDS = ("thinker", "code-reviewer")
 
 

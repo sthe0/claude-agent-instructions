@@ -484,7 +484,9 @@ def _acceptance_review_resolution_blockers(state: SessionState) -> list[str]:
 def planless_replan_refusal(state: SessionState) -> str | None:
     """The reason a plan-less replan is refused at this node, or None at DIAGNOSING.
     Kept here, not in the replan phases: those must not refuse on a node condition
-    (the plan-delivery hook derives its stamp nodes from `_cmd_replan`'s preconditions)."""
+    (the plan-delivery hook derives its stamp nodes from `_cmd_replan`'s preconditions).
+    That derivation does not see this check by design, not by evasion: a plan-less replan
+    has no plan to deliver, so there is no stamp whose nodes it could change."""
     if state.node == Node.DIAGNOSING.value:
         return None
     msg = f"a plan-less replan closes a difficulty (node=DIAGNOSING); node={state.node}"
