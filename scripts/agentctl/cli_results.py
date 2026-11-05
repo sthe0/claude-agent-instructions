@@ -42,11 +42,13 @@ from .cli_common import (
     _check_definition_digest,
     _cached_check_hit,
     _resolve_or_refuse,
-    _diagnose_effort_divergence,
     _landed_check_result,
     _require,
-    _finished_work_fire,
     _finished_work_data,
+    _judge_act,
+    judge_on_parent,
+    _log_gate,
+    _effort_fire_refusal,
     _present_plan_transcript,
     _cost_rows,
     _refresh_spend,
@@ -248,6 +250,13 @@ def cmd_record_landing(args, *, store: StateStore, runner: Runner | None = None)
 
 
 def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    directive = _record_result(args, store=store, runner=runner)
+    judge_on_parent(args.session, effort_segments.ACT_DESCENDANT_RECORD_RESULT, store=store,
+                    rows=_cost_rows(args))
+    return directive
+
+
+def _record_result(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     stage = state.active_stage()
     if stage is None:
@@ -270,6 +279,11 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
                 f"stage {stage.index} cannot pass: it is the re-norming stage of a "
                 "normative difficulty and the norm file is unchanged",
                 data={"blockers": renorm_block})
+        segment_fire = gates.open_fire_record(state)
+        if segment_fire is not None and segment_fire.get("arming_id") and gates.effort_active(state):
+            efblock = gates.effort_fire_blockers(state)
+            _log_gate(state, "effort_fire", efblock, passed=False)
+            return _effort_fire_refusal(state, "a passing record-result", efblock)
     actual = args.actual or ""
     stage.outcome.actual = actual
     passed = args.status == "passed"
@@ -628,7 +642,6 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
     _refresh_spend(state, store, _rows, state.plan_path)
     _flush_order_effort(state, store=store)
     _now = _effort_now(store, state)
-    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state, _now, store=store), now=_now)
     if effort.armed(state):
         _cross = _effort_cross_totals(state, _now, store=store)
         _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross, now=_now)
@@ -650,11 +663,6 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         state.pending_renorms = gates.open_renorms(state)
         state.log("record_result", stage=stage.index, status="passed")
         _settle_stage_arming(state, stage, effort_segments.ACT_PASSING_RECORD_RESULT, _utcnow())
-        finished_fire = _finished_work_fire(state, div, store=store)
-        if finished_fire is None and div is not None and gates.effort_active(state):
-            now = _utcnow()
-            fire = _record_effort_fire(state, div, now=now, store=store)
-            return _diagnose_effort_divergence(state, store, div, fire)
         store.save(state)
         if state.all_stages_settled():
             d = Directive(True, state.node, "verify_final", f"stage {stage.index} passed; all stages passed",
@@ -687,17 +695,14 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
             marker="ESCALATE",
             data={"failure_kind": failure_kind} if failure_kind else {},
         )
+    fire = _failing_result_fire(state, store)
     # enter the overcome-difficulty sub-spine: a fresh Difficulty record must be
     # worked through (declare -> investigate -> critique) before replan is allowed.
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
     opened = _open_difficulty(state)
     data = {"failure_kind": failure_kind} if failure_kind else {}
-    if div is not None and gates.effort_active(state):
-        # Already entering DIAGNOSING for the stage failure — attach the divergence
-        # instead of re-transitioning or opening a second Difficulty, but still honor
-        # divergence()'s CALLER OBLIGATION (record the fire so it doesn't re-trip).
-        now = _utcnow()
-        data["effort_divergence"] = _record_effort_fire(state, div, now=now, store=store)
+    if fire is not None:
+        data["effort_divergence"] = fire
     store.save(state)
     if opened is None:
         return _difficulty_cap_directive(state, f"stage {stage.index} failed", data)
@@ -708,6 +713,24 @@ def cmd_record_result(args, *, store: StateStore, runner: Runner | None = None) 
         marker="OVERCOME-DIFFICULTY",
         data=data,
     )
+
+
+def _failing_result_fire(state: SessionState, store: StateStore) -> dict | None:
+    """The fire a failing record-result raises: the stage's own judgment, or for a migrated
+    session before its switch the retained whole-window rule, joined to its window arming."""
+    window = effort_segments.window_arming(state.effort_segments)
+    if window is None:
+        return _judge_act(state, effort_segments.ACT_FAILING_RECORD_RESULT, store=store)
+    if not gates.effort_active(state):
+        return None
+    now = _effort_now(store, state)
+    div = effort.whole_window_divergence(
+        state, cross_session_totals=_effort_cross_totals(state, now, store=store), now=now)
+    if div is None:
+        return None
+    fire = _record_effort_fire(state, div, now=_utcnow(), store=store)
+    effort.carry_open_fire(state, window)
+    return fire
 
 
 def register(sub, add):

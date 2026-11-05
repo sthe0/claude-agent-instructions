@@ -46,6 +46,8 @@ from .state import (
     StageStatus,
 )
 from .store import StateStore
+from . import effort_segments
+from .cli_common import _judge_and_refuse
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -754,10 +756,9 @@ def _replan_entry_gates(ctx: _ReplanContext) -> Directive | None:
     # the fire data but never force a decision on it). Checked FIRST, ahead of
     # difficulty_blockers, since it is orthogonal to the declare/investigate/
     # critique/normalize cycle that difficulty_blockers governs.
-    efblock = gates.effort_fire_blockers(state)
-    _log_gate(state, "effort_fire", efblock, passed=not efblock)
-    if efblock:
-        return _effort_fire_refusal(state, "replan", efblock)
+    _fire_refusal = _judge_and_refuse(state, store, args, effort_segments.ACT_REPLAN, "replan")
+    if _fire_refusal is not None:
+        return _fire_refusal
 
     # precondition: a nested difficulty (difficulty-open) is a sub-cycle of the enclosing
     # one -- closed with difficulty-close, never swept away by the replan of its parent.
@@ -1737,7 +1738,7 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
     state = _require(store, args.session)
     if not state.effort_fires:
         return Directive(False, state.node, "noop", "no effort-divergence fire recorded")
-    last = state.effort_fires[-1]
+    last = gates.open_fire_record(state) or state.effort_fires[-1]
     if last.get("ack") is not None:
         return Directive(True, state.node, "noop", "fire already acknowledged", data={"fire": last})
     if last.get("disposition") == EFFORT_FIRE_FINISHED_WORK:
@@ -1774,6 +1775,9 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
         "ts": _utcnow(),
         "note": getattr(args, "note", None),
     }
+    _acked_arming = effort_segments.find_arming(state.effort_segments, last.get("arming_id"))
+    if _acked_arming is not None and _acked_arming["fire"]:
+        _acked_arming["fire"]["ack"] = last["ack"]
     state.log("fire_acknowledge", by=args.by, decision=decision)
     _record_backstop_crossing(state, crossing)
     _clear_since_user_decision(state, args.by)

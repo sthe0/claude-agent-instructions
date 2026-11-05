@@ -603,6 +603,17 @@ def _settle_stage_arming(state: SessionState, stage, act: str, now: float) -> di
     return record
 
 
+def _settle_agent_skipped_stages(state: SessionState) -> None:
+    """Settle each skipped stage still holding an open arming: an agent's skip, which has already
+    been judged, is settled only once the approval carrying it was not refused."""
+    ledger = state.effort_segments
+    for stage in state.stages:
+        uid = state.stage_uid(stage.index)
+        if uid and stage.outcome.status == StageStatus.SKIPPED.value and (
+                effort_segments.open_arming_of(ledger, effort_segments.stage_segment(uid))):
+            _settle_stage_arming(state, stage, effort_segments.ACT_AGENT_SKIP, _utcnow())
+
+
 def _second_current_stage_refusal(state: SessionState, candidate: int | None) -> Directive | None:
     """The refusal of a writer of the current stage while another stage is ACTIVE."""
     others = gates.other_active_stages(state, candidate)
@@ -657,7 +668,159 @@ def stamp_and_judge(session_id: str, now: float, *, store: StateStore) -> bool:
             store.save(state)
     except Exception:
         return True
+    judge_on_parent(session_id, effort_segments.ACT_DESCENDANT_STAMP, store=store, now=now)
     return True
+
+
+def _fire_floor(thr: Thresholds) -> dict:
+    return {
+        effort_segments.SCALE_USD: thr.effort_fire_floor_usd(),
+        effort_segments.SCALE_MINUTES: thr.effort_fire_floor_minutes(),
+    }
+
+
+def _record_arming_fire(state: SessionState, arming: dict, scales: list[str], *, now: float,
+                        store: StateStore | None) -> dict:
+    """The arming's fire record, gaining `scales`: one record per arming while it stands open. A
+    fire leaves every other stage's budget and the whole-window baselines alone. A ledgered order
+    owes the user the fire in every later session too (K3)."""
+    actual = effort_segments.arming_actual(arming)
+    budget = arming["budget"]
+    fire = next((f for f in state.effort_fires
+                 if f.get("arming_id") == arming["arming_id"] and f.get("ack") is None), None)
+    if fire is None:
+        first = scales[0]
+        segment = arming["segment"]
+        fire = {
+            "arming_id": arming["arming_id"],
+            "segment": segment,
+            "identity": segment.removeprefix(effort_segments.STAGE_PREFIX),
+            "title": arming.get("title"),
+            "scale": next(name for name, unit in effort.SEGMENT_SCALE.items() if unit == first),
+            "scales": [],
+            "kind": "ratio",
+            "budget": dict(budget),
+            "actual": actual[first],
+            "estimate": budget[first],
+            "multiple": actual[first] / budget[first],
+            "threshold_multiple": float(Thresholds().effort_divergence_multiple()),
+            "history_len": len(state.history),
+            "window_stages": [],
+            "ts": now,
+            "difficulty_id_at_fire": _difficulty_id(state.difficulty),
+            "replaced_baseline": {},
+        }
+        state.effort_fires.append(fire)
+    fire["scales"].extend(scales)
+    fire["arming_actual"] = actual
+    effort_segments.note_fire(arming, scales, now)
+    key = _ledgered_order_key(state)
+    if key is not None:
+        _flush_order_effort(state, key, store=store)
+        at = dt.datetime.now(dt.timezone.utc).isoformat()
+        for unit in scales:
+            scale = next(name for name, u in effort.SEGMENT_SCALE.items() if u == unit)
+            order_approvals.record_effort_fire(
+                key, scale=scale,
+                detail={"actual": actual[unit], "estimate": budget[unit], "multiple": actual[unit] / budget[unit]},
+                at=at,
+            )
+    return fire
+
+
+def _judge_act(state: SessionState, act: str, *, store: StateStore | None,
+               now: float | None = None) -> dict | None:
+    """Judge the current segment at `act`, a member of the declared judging tuples, and return
+    the fire it raised. While a migrated window is open only the whole-window rule acts."""
+    ledger = state.effort_segments
+    if not gates.effort_active(state) or effort_segments.window_arming(ledger) is not None:
+        return None
+    arming = effort_segments.current_arming(ledger)
+    if arming is None:
+        return None
+    at = now if now is not None else _utcnow()
+    thr = Thresholds()
+    fire = None
+    if effort_segments.replans_judged_at(arming["segment"], act):
+        div = effort.replans_divergence(
+            state, thr, cross_session_totals=_effort_cross_totals(state, at, store=store), now=at)
+        if div is not None:
+            fire = _record_effort_fire(state, div, now=at, store=store)
+    scales = effort_segments.scales_to_fire(
+        arming, act, float(thr.effort_divergence_multiple()), _fire_floor(thr))
+    if scales:
+        fire = _record_arming_fire(state, arming, scales, now=at, store=store)
+    return fire
+
+
+def _book_and_judge(state: SessionState, store: StateStore, args, act: str) -> dict | None:
+    """Refresh the ledger at `act` and judge; a raised fire is saved even if the act goes no further."""
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
+    fire = _judge_act(state, act, store=store)
+    if fire is not None:
+        store.save(state)
+    return fire
+
+
+def _judge_and_refuse(state: SessionState, store: StateStore, args, act: str, what: str) -> Directive | None:
+    """`_book_and_judge`, then the open-fire gate: the refusal to return, or None to proceed."""
+    _book_and_judge(state, store, args, act)
+    efblock = gates.effort_fire_blockers(state)
+    _log_gate(state, "effort_fire", efblock, passed=not efblock)
+    if not efblock:
+        return None
+    directive = _effort_fire_refusal(state, what, efblock, store=store)
+    store.save(state)
+    return directive
+
+
+def judge_on_parent(session_id: str, act: str, *, store: StateStore, rows: list[dict] | None = None,
+                    now: float | None = None) -> None:
+    """A linked descendant's act judges its parent's live segment on what it booked. Runs after
+    the child's own save and lock release; a busy parent lock leaves this act unjudged on the
+    parent's side, for the next one. Fails open: the child's act has already happened."""
+    try:
+        child = store.load(session_id)
+        link = child.parent_link if child is not None else None
+        parent_id = link.get("parent_session") if isinstance(link, dict) else None
+        if not parent_id:
+            return
+        with _state_lock(store, parent_id) as locked:
+            if not locked:
+                return
+            parent = store.load(parent_id)
+            if parent is None:
+                return
+            if act == effort_segments.ACT_DESCENDANT_STAMP:
+                _stamp_refresh(parent, store, now if now is not None else _utcnow())
+            else:
+                _refresh_spend(parent, store, rows if rows is not None else cost.read_rows(cost.COST_LOG),
+                               parent.plan_path)
+            arming = effort_segments.current_arming(parent.effort_segments)
+            judged = (effort_segments.ACT_SPAWNED_PLANNER_ACT
+                      if arming is not None and arming["segment"] == effort_segments.PLANNING else act)
+            _judge_act(parent, judged, store=store, now=now)
+            store.save(parent)
+    except Exception:
+        return
+
+
+def _stamp_refresh(state: SessionState, store: StateStore, now: float) -> None:
+    """A stamp's row refresh, bounded to the spawners active since the earliest open arming. A
+    migrated session before its switch and an empty ledger book no rows here."""
+    ledger = state.effort_segments
+    held = [a["opened_at"] for a in ledger.get("armings") or [] if a["closed_at"] is None]
+    if not held or effort_segments.window_arming(ledger) is not None:
+        return
+    _refresh_spend(state, store, cost.read_rows(cost.COST_LOG), state.plan_path, since=min(held), now=now)
+
+
+def _live_stage_spawned(state: SessionState) -> bool:
+    """Whether a child-run interval is open for the current stage."""
+    stage = state.active_stage()
+    return stage is not None and any(
+        run.get("stage_index") == stage.index and not isinstance(run.get("ended"), (int, float))
+        for run in state.effort_child_runs if isinstance(run, dict))
 
 
 def _stamp_loaded(state: SessionState, store: StateStore, session_id: str, now: float) -> None:
@@ -683,6 +846,9 @@ def _stamp_loaded(state: SessionState, store: StateStore, session_id: str, now: 
     actuals[effort.ACTUAL_MINUTES_KEY] = float(actuals.get(effort.ACTUAL_MINUTES_KEY) or 0.0) + elapsed
     effort.book_gap_minutes(state, previous, now, elapsed)
     effort.book_child_runs(state, now)
+    _stamp_refresh(state, store, now)
+    if not _live_stage_spawned(state):
+        _judge_act(state, effort_segments.ACT_STAMP, store=store, now=now)
 
 
 def _order_customer_id(state: SessionState) -> str:
@@ -885,10 +1051,10 @@ def _agent_replans_fire_route(state: SessionState) -> dict | None:
     """The agent's own route for an unacknowledged `replans`-scale fire of a ledgered
     order: a planning-difficulty cycle, not a question to the user. None for every other
     fire (spend/wall-clock stay the user's) and for a session with no user-approved order."""
-    if _ledgered_order_key(state) is None or not state.effort_fires:
+    if _ledgered_order_key(state) is None:
         return None
-    last = state.effort_fires[-1]
-    if last.get("ack") is not None or last.get("scale") != effort.SCALE_REPLANS:
+    last = gates.open_fire_record(state)
+    if last is None or last.get("scale") != effort.SCALE_REPLANS:
         return None
     return {
         "route": "agent_planning_difficulty_cycle",
@@ -1789,69 +1955,67 @@ def _refuse_missing_cwd(state: SessionState, cwd: str | None) -> str | None:
     )
 
 
-def _diagnose_effort_divergence(
-    state: SessionState, store: StateStore, div: "effort.Divergence", fire: dict,
-) -> Directive:
-    """Route a PASSING record-result or verify-final into DIAGNOSING instead of the
-    normal next_stage/verify_final/resolve Directive, because this session's actual
-    effort has diverged past its current plan's estimate (effort.py's divergence()).
-    No stage is marked FAILED — the work genuinely passed — and no user question is
-    ever asked at the fire: that would reinstate exactly the supervisory burden this
-    trigger exists to remove (effort.py's module docstring, opening paragraph). Mirrors
-    _diagnose_venue_refusal's shape (destination node + message only); the caller must
-    already have called effort.record_fire(state, div) — divergence()'s CALLER
-    OBLIGATION — and passes its return value through as `fire` so the pre-framed
-    declaration carries the numbers that triggered it, not just the scale name."""
-    state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
-    opened = _open_difficulty(state)
-    if opened is not None:
-        fire["difficulty_uid"] = opened.uid
-    store.save(state)
-    data = {"effort_divergence": fire}
-    route = _agent_replans_fire_route(state)
-    if route is not None:
-        data["agent_route"] = route
-    if opened is None:
-        return _difficulty_cap_directive(state, div.framing, data)
-    return Directive(
-        False, state.node, "declare", div.framing,
-        marker="OVERCOME-DIFFICULTY",
-        data=data,
-    )
-
-
 def _effort_fire_escalation_data(state: SessionState) -> dict:
-    """The fire-context payload attached to every gates.effort_fire_blockers refusal
-    (dispatch/replan/submit_plan) — the last (unacknowledged) entry of
-    state.effort_fires plus the identifiers a coordinator needs to call
-    `agentctl fire-acknowledge` against the right session. Shared by all three call
-    sites so the payload shape never drifts between them."""
-    fire = state.effort_fires[-1] if state.effort_fires else {}
+    """The fire-context payload attached to every gates.effort_fire_blockers refusal —
+    the open fire plus the identifiers a coordinator needs to call `agentctl
+    fire-acknowledge` against the right session. Shared by every refusal site so the
+    payload shape never drifts between them."""
+    fire = gates.open_fire_record(state) or (state.effort_fires[-1] if state.effort_fires else {})
     return {
         "task_id": state.task_id,
         "session_id": state.session_id,
         "scale": fire.get("scale"),
+        "scales": fire.get("scales"),
         "kind": fire.get("kind"),
         "actual": fire.get("actual"),
         "estimate": fire.get("estimate"),
         "multiple": fire.get("multiple"),
+        "arming_id": fire.get("arming_id"),
+        "identity": fire.get("identity"),
+        "title": fire.get("title"),
         "ts": fire.get("ts"),
     }
 
 
-def _effort_fire_refusal(state: SessionState, what: str, efblock: list[str]) -> Directive:
-    """The refusal `gates.effort_fire_blockers` produces at dispatch/replan/submit_plan.
-    A replans-scale fire of a ledgered order names the agent's planning-difficulty cycle;
-    every other fire is the user's decision."""
+def _enter_replans_diagnosis(state: SessionState) -> None:
+    """Move the session into DIAGNOSING so the agent's planning-difficulty cycle can run."""
+    if state.node == Node.EXECUTING.value:
+        state.node = transition(state.node, "verify")
+    if state.node == Node.VERIFYING.value:
+        state.node = transition(state.node, "diagnose")
+    elif state.node == Node.PLAN_READY.value:
+        state.node = transition(state.node, "review_trigger")
+    else:
+        return
+    opened = _open_difficulty(state)
+    fire = gates.open_fire_record(state)
+    if opened is not None and fire is not None:
+        fire["difficulty_uid"] = opened.uid
+
+
+def _effort_fire_refusal(state: SessionState, what: str, efblock: list[str], *,
+                         store: StateStore | None = None) -> Directive:
+    """The refusal `gates.effort_fire_blockers` produces. A replans-scale fire of a ledgered order
+    names the agent's planning-difficulty cycle, entered here when `store` lets it persist; a
+    linked child's fire goes to its parent as a norm divergence; every other fire is the user's."""
     data = {"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)}
     route = _agent_replans_fire_route(state)
     if route is None:
+        if state.parent_link:
+            return Directive(
+                False, state.node, "norm_mismatch",
+                f"{what} blocked by an unacknowledged effort-divergence fire; return it to the "
+                "parent stage as a norm divergence",
+                marker="REPLAN", data={**data, "norm_mismatch": True},
+            )
         return Directive(
             False, state.node, "fire_acknowledge",
             f"{what} blocked by an unacknowledged effort-divergence fire",
             marker=DIRECTIVE_ESCALATE_TO_USER, data=data,
         )
     data["agent_route"] = route
+    if store is not None:
+        _enter_replans_diagnosis(state)
     return Directive(
         False, state.node, "planning_difficulty",
         f"{what} blocked by an unacknowledged replans-scale effort-divergence fire; "
@@ -1917,22 +2081,11 @@ def _replan_class_data(state: SessionState) -> dict:
     return {"replan_classes": effort.replan_class_counts(state)}
 
 
-def _finished_work_fire(state: SessionState, div: "effort.Divergence | None", *,
-                        store: StateStore) -> dict | None:
-    """Record a spend/wall-clock fire raised while every stage is settled and return its
-    record, or None when it does not apply (the caller then routes the fire as usual).
-    Work that has finished has no remaining plan to correct, so the fire is recorded
-    with its retier records and the session proceeds instead of opening a difficulty."""
-    if (div is None or div.scale not in effort.RATIO_SCALES or not state.all_stages_settled()
-            or not gates.effort_active(state)):
-        return None
-    return _record_effort_fire(state, div, now=_utcnow(), store=store, finished_work=True)
-
-
 def _finished_work_data(state: SessionState) -> dict:
-    """The finished-work fires and their retier records, for a Directive's data."""
+    """The finished-work fires of an earlier session and every retier record, for a Directive's data."""
     fires = [f for f in state.effort_fires if f.get("disposition") == EFFORT_FIRE_FINISHED_WORK]
-    return {"effort_finished_work": fires, "effort_retiers": list(state.effort_retiers)} if fires else {}
+    retiers = [*state.effort_retiers, *(state.effort_segments.get("retier") or [])]
+    return {"effort_finished_work": fires, "effort_retiers": retiers} if fires or retiers else {}
 
 
 def _park_node(state: SessionState) -> None:
@@ -2309,11 +2462,17 @@ def _descendant_sessions(store: StateStore, parent: str, candidates) -> dict[str
     return chains
 
 
-def _refresh_spend(state: SessionState, store: StateStore, rows: list[dict], path: str | None) -> float:
+def _refresh_spend(state: SessionState, store: StateStore, rows: list[dict], path: str | None, *,
+                   since: float | None = None, now: float | None = None) -> float:
     """`effort.refresh_spend` over the ledger rows of this session AND of its linked
     descendants (effort.refresh_subtree_spend). The descendant scan runs only when a row
     names a spawner session other than this one, so a session whose ledger rows carry no
     foreign `spawner_session` returns exactly the base value.
+
+    `since` narrows the scan to the foreign spawners with a row written at or after it, and
+    drops the rows of the others from this pass as well: left in, they would read as this
+    session's own rows and lift its watermark past rows it has not booked. The high-water
+    marks tolerate the smaller total, and the next unbounded refresh books what is owed.
 
     The part of what is booked here for a descendant that the order window already holds
     is marked flushed in this session too (`_credit_descendant_order_flush`)."""
@@ -2321,6 +2480,10 @@ def _refresh_spend(state: SessionState, store: StateStore, rows: list[dict], pat
         spawner for row in rows
         if isinstance(spawner := row.get("spawner_session"), str) and spawner != state.session_id
     }
+    if since is not None:
+        recent = {row.get("spawner_session") for row in rows if effort.row_written_at(row) >= since}
+        rows = [row for row in rows if row.get("spawner_session") not in foreign - recent]
+        foreign &= recent
     chains = _descendant_sessions(store, state.session_id, foreign)
     delta, booked = effort.refresh_subtree_spend(state, rows, chains.keys(), path)
     if booked:
@@ -2329,7 +2492,7 @@ def _refresh_spend(state: SessionState, store: StateStore, rows: list[dict], pat
             _seed_linked_flush_baseline(state, store=store)
             if state.order_effort_flushed is not None:
                 _credit_descendant_order_flush(state, key, chains, booked)
-    effort.book_child_runs(state, _utcnow())
+    effort.book_child_runs(state, now if now is not None else _utcnow())
     return delta
 
 

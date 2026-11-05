@@ -62,10 +62,8 @@ from .cli_common import (
     _cached_check_hit,
     _resolve_or_refuse,
     _refuse_missing_cwd,
-    _diagnose_effort_divergence,
     _landed_check_result,
     _require,
-    _finished_work_fire,
     _finished_work_data,
     _present_plan_transcript,
     _cost_rows,
@@ -211,7 +209,6 @@ def _resolve_final_or_refuse(state: SessionState, criterion: Criterion) -> tuple
 
 def _diagnose_venue_refusal(
     state: SessionState, store: StateStore, message: str,
-    div: effort.Divergence | None,
 ) -> Directive:
     """Route a verify-final venue refusal into the ordinary DIAGNOSING cycle
     instead of stranding the session at VERIFYING — from VERIFYING, declare/
@@ -227,17 +224,10 @@ def _diagnose_venue_refusal(
     is marked FAILED — `_resolve_or_refuse`'s refusal/failure split is preserved;
     only the destination node changes. Only ever reached from VERIFYING
     (cmd_verify_final's entry guard returns before here for any other node), so
-    the `diagnose` transition is always legal. `div` is the divergence already
-    computed by the caller (fire site 2's hoisted refresh_spend/divergence call) —
-    attached here exactly like record_result's failed branch, so a venue refusal
-    doesn't silently drop a live effort divergence just because it returns before
-    the plan's own end-of-function fire check."""
+    the `diagnose` transition is always legal."""
     state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
     opened = _open_difficulty(state)
     data = {}
-    if div is not None and gates.effort_active(state):
-        now = _utcnow()
-        data["effort_divergence"] = _record_effort_fire(state, div, now=now, store=store)
     store.save(state)
     if opened is None:
         return _difficulty_cap_directive(state, message, data)
@@ -306,6 +296,8 @@ def _disclose_finished_work(state: SessionState, data: dict, detail: str) -> str
         return detail
     data.update(extra)
     fires = extra["effort_finished_work"]
+    if not fires:
+        return f"{detail}; NOTE: {len(extra['effort_retiers'])} settled stage(s) overspent (see effort_retiers)"
     named = ", ".join(f"{f.get('scale')} {f.get('actual')}/{f.get('estimate')}" for f in fires)
     return (f"{detail}; NOTE: {len(fires)} effort fire(s) were raised on finished work and recorded "
             f"without a difficulty: {named} (see effort_finished_work, effort_retiers)")
@@ -365,7 +357,6 @@ def _log_final_events(
 
 def _evaluate_final_checks(
     state: SessionState, store: StateStore, runner: Runner | None,
-    div: effort.Divergence | None,
 ) -> tuple[list[str], Directive | None]:
     """Evaluate every measurable stage's verify_command, then every final_check, in
     three phases. Plan: resolve venues, run landed checks, take each venue's tree
@@ -380,7 +371,7 @@ def _evaluate_final_checks(
     caller returns that directive as is."""
     snapshots: dict[str, _VenueSnapshot] = {}
     try:
-        return _evaluate_final_checks_in(state, store, runner, div, snapshots)
+        return _evaluate_final_checks_in(state, store, runner, snapshots)
     finally:
         for snapshot in snapshots.values():
             snapshot.close()
@@ -388,7 +379,7 @@ def _evaluate_final_checks(
 
 def _evaluate_final_checks_in(
     state: SessionState, store: StateStore, runner: Runner | None,
-    div: effort.Divergence | None, snapshots: dict[str, _VenueSnapshot],
+    snapshots: dict[str, _VenueSnapshot],
 ) -> tuple[list[str], Directive | None]:
     started = time.monotonic()
     entries: list[_FinalEntry] = []
@@ -407,7 +398,7 @@ def _evaluate_final_checks_in(
             check_id, cwd or str(REPO_ROOT), "", decision=check_cache.MISS, reason="refused",
         ))
         _log_final_events(state, entries, outcome="refused", started=started, peak=0)
-        return [], _diagnose_venue_refusal(state, store, message, div)
+        return [], _diagnose_venue_refusal(state, store, message)
 
     def landed_entry(check_id: str, spec, failure: str) -> tuple[_FinalEntry | None, str | None]:
         # No re-freeze for a stage's landed check: verify-final re-checks the
@@ -805,7 +796,6 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
     _refresh_spend(state, store, _cost_rows(args), state.plan_path)
     _flush_order_effort(state, store=store)
     _now = _effort_now(store, state)
-    div = effort.divergence(state, cross_session_totals=_effort_cross_totals(state, _now, store=store), now=_now)
     if effort.armed(state):
         _cross = _effort_cross_totals(state, _now, store=store)
         _ro_delta = effort.effective_deltas(state, cross_session_totals=_cross, now=_now)
@@ -817,7 +807,7 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
                     estimate=_ro_comparand[_ro_scale], now=_utcnow(),
                 )
     # Final-gate execution: see _evaluate_final_checks.
-    failures, refusal_directive = _evaluate_final_checks(state, store, runner, div)
+    failures, refusal_directive = _evaluate_final_checks(state, store, runner)
     if refusal_directive is not None:
         return refusal_directive
     if failures:
@@ -830,13 +820,6 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
         state.node = transition(state.node, "diagnose")  # VERIFYING -> DIAGNOSING
         opened = _open_difficulty(state)
         data = {"failures": failures}
-        if div is not None and gates.effort_active(state):
-            # Already entering DIAGNOSING for the failure — attach the divergence
-            # instead of re-transitioning or opening a second Difficulty, mirroring
-            # record_result's failed branch (still honoring divergence()'s CALLER
-            # OBLIGATION: record the fire so it doesn't re-trip).
-            now = _utcnow()
-            data["effort_divergence"] = _record_effort_fire(state, div, now=now, store=store)
         store.save(state)
         if opened is None:
             return _difficulty_cap_directive(
@@ -848,14 +831,6 @@ def cmd_verify_final(args, *, store: StateStore, runner: Runner | None = None) -
             "the cycle is complete",
             data=data,
         )
-    # Fire check on a clean pass (fire site 2) — the last point at which `diagnose`
-    # is still a legal transition (a contracted plan can reach here with no further
-    # record-result to fire from).
-    if _finished_work_fire(state, div, store=store) is None and div is not None and gates.effort_active(state):
-        now = _utcnow()
-        fire = _record_effort_fire(state, div, now=now, store=store)
-        return _diagnose_effort_divergence(state, store, div, fire)
-
     # Compute whole-plan cost rollup from already-attributed stage outcomes.
     # No second log read — record-result already stored the costs on each Outcome.
     rollup = cost.rollup_plan([], state.plan_path, state.stages)

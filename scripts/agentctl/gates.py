@@ -3140,6 +3140,27 @@ def effort_active(state: SessionState) -> bool:
     return state.weight_class == WeightClass.SUBSTANTIVE.value
 
 
+def open_fire_record(state: SessionState) -> dict | None:
+    """The un-acknowledged fire holding this session, latest first. A segment's fire holds while
+    its arming is open; of the records naming no arming (the replans scale, schema 61) only the
+    last one counts. A finished-work record holds nothing."""
+    armings = {a["arming_id"]: a for a in state.effort_segments.get("armings") or []}
+    legacy_seen = False
+    for fire in reversed(state.effort_fires):
+        arming_id = fire.get("arming_id")
+        if not arming_id:
+            if legacy_seen:
+                continue
+            legacy_seen = True
+        if fire.get("ack") is not None or fire.get("disposition") == EFFORT_FIRE_FINISHED_WORK:
+            continue
+        arming = armings.get(arming_id) if arming_id else None
+        if arming is not None and arming["closed_at"] is not None:
+            continue
+        return fire
+    return None
+
+
 def effort_fire_blockers(state: SessionState) -> list[str]:
     """INTERNAL command precondition, NOT a tool-intercepting gate (absent from
     GUARDIANS, like difficulty_blockers/normalization_blockers above) — [] == ok.
@@ -3151,17 +3172,15 @@ def effort_fire_blockers(state: SessionState) -> list[str]:
     unrelated failure Directive as a side-note (data["effort_divergence"]), and
     cmd_dispatch itself never looks at state.effort_fires at all — a still-executing
     session can be re-dispatched into another stage with the fire sitting unread.
-    This gate closes both: while the LAST entry in state.effort_fires carries no
-    "ack" key (appended only by `agentctl fire-acknowledge`), dispatch/replan/
-    submit_plan all refuse — converting the notification from a state flag a session
+    This gate closes both: while `open_fire_record` names a fire with no "ack" key
+    (appended only by `agentctl fire-acknowledge`), dispatch/replan/submit_plan, a passing
+    record-result and every self-approval and self-grant refuse — converting the notification from a state flag a session
     can silently ignore into a synchronous precondition the coordinator's own next
     action is blocked on, without disturbing effort_fires' append-only audit trail."""
     if not effort_active(state):
         return []
-    if not state.effort_fires:
-        return []
-    last = state.effort_fires[-1]
-    if last.get("ack") is not None or last.get("disposition") == EFFORT_FIRE_FINISHED_WORK:
+    last = open_fire_record(state)
+    if last is None:
         return []
     return [
         f"unacknowledged effort-divergence fire (scale={last.get('scale')!r}, "

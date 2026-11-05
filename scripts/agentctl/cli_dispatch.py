@@ -22,8 +22,10 @@ from . import (
     workspace_cleanup,
     child_runs,
     effort,
+    effort_segments,
     config as agentctl_config,
 )
+from .cli_common import _cost_rows, _judge_act, _judge_and_refuse, judge_on_parent
 from .directive import Directive
 from .dispatch import (
     CHILD_EXHAUSTED,
@@ -1244,6 +1246,7 @@ def _end_child_run(store: StateStore, state: SessionState, run: dict,
     if run.get("child_session"):
         run["ended"] = max(run["started"], _utcnow())
         effort.book_child_runs(state, _utcnow())
+        _judge_act(state, effort_segments.ACT_SPAWNED_PLANNER_RUN_END, store=store)
     else:
         state.effort_child_runs[:] = [r for r in state.effort_child_runs if r is not run]
         # The hook left the part of each prompt gap inside this run to it (and noted it on
@@ -1259,11 +1262,17 @@ def _end_child_run(store: StateStore, state: SessionState, run: dict,
 
 def cmd_dispatch(args, *, store: StateStore, runner: Runner | None = None,
                  perm_checker=None) -> Directive:
+    directive = _dispatch(args, store=store, runner=runner, perm_checker=perm_checker)
+    judge_on_parent(args.session, effort_segments.ACT_DESCENDANT_DISPATCH, store=store, rows=_cost_rows(args))
+    return directive
+
+
+def _dispatch(args, *, store: StateStore, runner: Runner | None = None,
+              perm_checker=None) -> Directive:
     state = _require(store, args.session)
-    efblock = gates.effort_fire_blockers(state)
-    _log_gate(state, "effort_fire", efblock, passed=not efblock)
-    if efblock:
-        return _effort_fire_refusal(state, "dispatch", efblock)
+    _fire_refusal = _judge_and_refuse(state, store, args, effort_segments.ACT_DISPATCH, "dispatch")
+    if _fire_refusal is not None:
+        return _fire_refusal
     try:
         host = runtime_host.require_bound_host(state)
     except runtime_host.HostAmbiguousError as exc:
@@ -1835,7 +1844,7 @@ def cmd_resolve_permission(args, *, store: StateStore, runner: Runner | None = N
         if scope not in ("once", "stage"):
             return Directive(False, state.node, "noop",
                               f"agent self-grant requires --scope once or stage, got {scope!r}")
-        if _open_effort_fire(state):
+        if _open_effort_fire(state) or gates.effort_fire_blockers(state):
             return Directive(False, state.node, "noop",
                               f"agent self-grant refused: {gates.AUTONOMY_REASON_OPEN_FIRE}",
                               data={"reason_class": "open-effort-fire"})

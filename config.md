@@ -34,6 +34,8 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `effort-stage-minutes-small` | `10` | Expected active minutes of a small-tier stage; also prices in-thread stages. |
 | `effort-stage-minutes-medium` | `25` | Expected active minutes of a medium-tier stage. |
 | `effort-stage-minutes-large` | `60` | Expected active minutes of a large-tier stage. |
+| `effort-fire-floor-usd` | `8.00` | Dollars a segment's actual must exceed its budget by, beside the multiple, before its spend scale fires. |
+| `effort-fire-floor-minutes` | `60` | Active minutes a segment's actual must exceed its budget by, beside the multiple, before its wall-clock scale fires. |
 | `effort-replan-absolute` | `5` | Replan count (and pre-approval review rounds) at which the effort trigger fires or the round release opens. |
 | `effort-replan-backstop` | `6` | Replans since the user's last decision after which the agent may no longer acknowledge an effort fire itself. |
 | `review-round-backstop` | `6` | Review rounds since the user's last decision after which the agent may no longer record a review override. |

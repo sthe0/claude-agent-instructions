@@ -42,11 +42,14 @@ from .state import (
     Stage,
 )
 from .store import StateStore
+from . import effort_segments
 import hashlib
 import json
 import sys
 from pathlib import Path
 from .cli_common import (
+    _judge_and_refuse,
+    _settle_agent_skipped_stages,
     _judge_order_agreement,
     REPO_ROOT,
     _write_plan_snapshot,
@@ -575,6 +578,10 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         if _approved_doc is not None and _approved_doc.meta.order is not None else None
     )
     if by_agent:
+        _fire_refusal = _judge_and_refuse(
+            state, store, args, effort_segments.ACT_APPROVE_BY_AGENT, "approve --by agent")
+        if _fire_refusal is not None:
+            return _fire_refusal
         blockers = blockers + _carried_live_stage_blockers(state, _identity_order)
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
@@ -614,6 +621,8 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     for s in state.stages:
         if not is_skipped(s):
             s.outcome.declined = False
+    if by_agent:
+        _settle_agent_skipped_stages(state)
     previous = (
         order_approvals.latest_user_approved_record(order_digest(_approved_doc))
         if _approved_doc is not None and _approved_doc.meta.order is not None else None

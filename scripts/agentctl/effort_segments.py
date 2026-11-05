@@ -73,6 +73,31 @@ PLANNING_JUDGING_ACTS = (
     ACT_SPAWNED_PLANNER_ACT,
     ACT_SPAWNED_PLANNER_RUN_END,
 )
+CLOSING_REPLANS_JUDGING_ACTS = (
+    ACT_SUBMIT_PLAN,
+    ACT_PLAN_REVIEW,
+    ACT_PRESENT_PLAN,
+    ACT_APPROVE_BY_AGENT,
+)
+
+
+def judging_acts_of(segment: str) -> tuple:
+    if segment == PLANNING:
+        return PLANNING_JUDGING_ACTS
+    if segment == CLOSING:
+        return ()
+    return LIVE_STAGE_JUDGING_ACTS
+
+
+def replans_judged_at(segment: str, act: str) -> bool:
+    """Whether `act` raises a replans-scale fire owed in `segment`. The replan verb never does: the
+    replan ceiling bounds that act itself, so the fire falls at the next act of its review cycle.
+    In closing only that cycle judges, and a spawned planner's acts never do."""
+    if act == ACT_REPLAN:
+        return False
+    if segment == CLOSING:
+        return act in CLOSING_REPLANS_JUDGING_ACTS
+    return act in LIVE_STAGE_JUDGING_ACTS or act in CLOSING_REPLANS_JUDGING_ACTS or act == ACT_STAMP
 
 
 def stage_segment(uid: str) -> str:
@@ -135,6 +160,12 @@ def window_arming(ledger: dict) -> dict | None:
         if arming["budget_source"] == SOURCE_WINDOW and arming["closed_at"] is None:
             return arming
     return None
+
+
+def current_arming(ledger: dict) -> dict | None:
+    """The most recently opened open arming: the segment an act happening now belongs to."""
+    held = [a for a in ledger.get("armings") or [] if a["closed_at"] is None]
+    return max(held, key=lambda a: (a["opened_at"], a["seq"])) if held else None
 
 
 def _crossed_multiple(arming: dict, multiple: float) -> list[str]:
@@ -373,3 +404,17 @@ def unfired_scales(arming: dict, crossed: list[str]) -> list[str]:
     """`crossed` less what the arming's fire already names: an arming fires once per scale."""
     fired = (arming.get("fire") or {}).get("scales") or ()
     return [scale for scale in crossed if scale not in fired]
+
+
+def scales_to_fire(arming: dict, act: str, multiple: float, floor: dict | None) -> list[str]:
+    """What `act` fires on `arming`: nothing outside its segment's judging acts or on a migrated
+    window, else the scales crossed and not yet fired."""
+    if act not in judging_acts_of(arming["segment"]) or arming["budget_source"] == SOURCE_WINDOW:
+        return []
+    return unfired_scales(arming, judge(arming, multiple, floor))
+
+
+def note_fire(arming: dict, scales: list[str], at: float) -> None:
+    fire = arming["fire"] or {"scales": [], "ack": None, "ts": at}
+    fire["scales"].extend(scale for scale in scales if scale not in fire["scales"])
+    arming["fire"] = fire

@@ -250,6 +250,20 @@ class Thresholds:
         except (KeyError, ValueError):
             return None
 
+    def _optional_float(self, key: str) -> float | None:
+        try:
+            return self._float(key)
+        except (KeyError, ValueError):
+            return None
+
+    def effort_fire_floor_usd(self) -> float | None:
+        """Dollars of excess over budget a segment's spend fire needs; None disarms the floor."""
+        return self._optional_float("effort-fire-floor-usd")
+
+    def effort_fire_floor_minutes(self) -> float | None:
+        """Active minutes of excess over budget a segment's wall-clock fire needs; None disarms the floor."""
+        return self._optional_float("effort-fire-floor-minutes")
+
     def review_cycle_acts(self) -> int | None:
         """Counted review acts in one pre-approval cycle at/above which the review trigger fires."""
         return self._optional_int("review-cycle-acts")

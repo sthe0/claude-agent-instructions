@@ -23,6 +23,8 @@ from . import (
     delivery_channel,
     premise,
 )
+from . import effort_segments
+from .cli_common import _book_and_judge, _judge_and_refuse
 from .checkrun import format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -607,11 +609,9 @@ def cmd_plan(args, *, store: StateStore, runner: Runner | None = None) -> Direct
 
 def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
-    efblock = gates.effort_fire_blockers(state)
-    _log_gate(state, "effort_fire", efblock, passed=not efblock)
-    if efblock:
-        return _effort_fire_refusal(state, "submit_plan", efblock)
-    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
+    _fire_refusal = _judge_and_refuse(state, store, args, effort_segments.ACT_SUBMIT_PLAN, "submit_plan")
+    if _fire_refusal is not None:
+        return _fire_refusal
     _flush_order_effort(state, store=store)
     plan_path = args.plan
     # #15: a resubmission — the coordinator revised the plan at PLAN_READY (after a
@@ -855,6 +855,7 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
         return _present_order(args, state, store=store)
     if not state.plan_path:
         return Directive(False, state.node, "noop", "no plan to present: submit a plan first")
+    _book_and_judge(state, store, args, effort_segments.ACT_PRESENT_PLAN)
 
     if getattr(args, "emit_skeleton", False):
         try:

@@ -185,8 +185,7 @@ class Eng:
         return str(path)
 
     def spend_fire(self, sid: str, plan: str, usd: float = 100.0):
-        d = self.run("record_result", session=sid, status="passed", actual="ok",
-                     control="reviewed: ok", observation=OBSERVATIONS[0],
+        d = self.run("record_result", session=sid, status="failed", actual="boom",
                      cost_log=self.cost_log(plan, usd))
         assert self.state(sid).effort_fires, d
         return d
@@ -777,8 +776,7 @@ def replans_fire(eng: Eng, sid: str = "a1", *, usd: float | None = None):
     agent_session(eng, sid, plan)
     eng.seed_replans(sid, Thresholds().effort_replan_absolute())
     flags = {"cost_log": eng.cost_log(plan, usd)} if usd is not None else {}
-    d = eng.run("record_result", session=sid, status="passed", actual="ok",
-                control="reviewed: ok", observation=OBSERVATIONS[0], **flags)
+    d = eng.run("record_result", session=sid, status="failed", actual="boom", **flags)
     assert eng.state(sid).effort_fires[-1]["scale"] == effort.SCALE_REPLANS, d
     return d
 

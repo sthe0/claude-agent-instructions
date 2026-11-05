@@ -593,11 +593,38 @@ def _framing(scale: str, kind: str, act: float, comparand: float, multiple: floa
     )
 
 
-def divergence(
+def replans_divergence(
     state: SessionState, thr: Thresholds | None = None, *,
     cross_session_totals: dict | None = None, now: float | None = None,
 ) -> Divergence | None:
-    """The scale on which this session has diverged past the multiple, or None.
+    """The replans-scale fire owed now, or None: the count at its absolute threshold, across the
+    task's sessions, and no earlier replans fire standing with no replan since it."""
+    if not armed(state):
+        return None
+    earlier = [f for f in state.effort_fires if f.get("scale") == SCALE_REPLANS]
+    if earlier:
+        start = int(earlier[-1].get("history_len") or 0)
+        if not any(h.get("event") == "replan" for h in state.history[start:]):
+            return None
+    thr = thr if thr is not None else Thresholds()
+    comparand = comparands(state, thr)[SCALE_REPLANS]
+    act = effective_deltas(state, cross_session_totals=cross_session_totals, now=now)[SCALE_REPLANS]
+    if comparand <= 0 or act < comparand:
+        return None
+    multiple = act / comparand
+    return Divergence(
+        scale=SCALE_REPLANS, kind="absolute", actual=act, estimate=comparand, multiple=multiple,
+        framing=_framing(SCALE_REPLANS, "absolute", act, comparand, multiple),
+    )
+
+
+def whole_window_divergence(
+    state: SessionState, thr: Thresholds | None = None, *,
+    cross_session_totals: dict | None = None, now: float | None = None,
+) -> Divergence | None:
+    """The scale on which this session has diverged past the multiple over its whole window, or
+    None. Only a migrated session before its switch acts on it, at a failing record-result; a
+    schema 62 session is judged per arming.
 
     Returns None — no fire — when any of these hold, and each is deliberate:
       * the session is not ARMED (no stored estimate or no baseline): only cmd_approve
@@ -697,6 +724,9 @@ def divergence(
         return d.multiple
 
     return max(candidates, key=lambda d: (_past_own_trigger(d), -SCALE_ORDER.index(d.scale)))
+
+
+divergence = whole_window_divergence
 
 
 # --- the writers --------------------------------------------------------------
