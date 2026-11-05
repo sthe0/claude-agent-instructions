@@ -40,7 +40,7 @@ REQUIRED_MECHANICS = {
         "two_session_carry", "reindexing", "late_row_retier_update", "migration_armings", "migration_seed",
         "closed_arming_late_booking", "pre_switch_booking_owner", "stamp_time_bound",
         "bounded_refresh_books_row_once", "migrated_stamp_leaves_rows", "window_arming_blocks_stage_armings",
-        "v61_open_fire_carrier",
+        "v61_open_fire_carrier", "session_floor", "parked_arming_resume",
     },
     4: {
         "unfold_budget_lazy_parent", "unfold_budget_unmarked_parent", "unfold_past_new_fire_point",
@@ -49,12 +49,13 @@ REQUIRED_MECHANICS = {
         "booking_before_judging_subplan_approve", "booking_before_closing", "planning_stamp_time_bound",
         "closing_arming_on_drop", "migrated_planning_arming_budget", "switch_closes_window_arming",
         "pre_answer_figures", "cycle_minutes_route_kept_under_window", "resolve_books_before_quality_row",
-        "pre_switch_no_line", "carried_line_versus_total",
+        "pre_switch_no_line", "carried_line_versus_total", "continuation_frame", "continuation_rematch",
+        "parked_two_live_protection", "user_approval_while_parked",
     },
     5: {
         *(f"readme_label:{label}" for label in (
             "Segments", "Armings", "Judging acts", "Spawned planner run end", "Planning fires", "Settlement",
-            "Floor", "Open-fire gate", "Unfold", "Disclosure", "Migration",
+            "Floor", "Open-fire gate", "Unfold", "Disclosure", "Migration", "Continuation",
         )),
         "rationale_anchor:#planning-fire-point-wall-clock",
         "rationale_anchor:#floor-not-binding-planning-spend",
@@ -195,6 +196,35 @@ def _test_id_problems(row, rid):
 def test_registry_structure():
     problems = structure_problems(load_registry())
     assert problems == []
+
+
+def layout_problems(text):
+    """Return the problems of the one-row-per-line layout: each row's quoted id is on exactly one line, the line
+    holding that row's test."""
+    registry = tomllib.loads(text)
+    lines = text.splitlines()
+    problems = []
+    for row in registry.get("rows", []):
+        rid, test = row.get("id", ""), row.get("test", "")
+        holders = [line for line in lines if f'"{rid}"' in line]
+        if len(holders) != 1:
+            problems.append(f"row id {rid} is quoted on {len(holders)} lines, not one")
+        elif f'test = "{test}"' not in holders[0]:
+            problems.append(f"row {rid}: its line does not hold test = \"{test}\"")
+    return problems
+
+
+def test_registry_structure_one_row_per_line():
+    assert layout_problems(REGISTRY_PATH.read_text(encoding="utf-8")) == []
+
+
+def test_registry_structure_layout_refuses_a_multi_line_row():
+    multi_line = (
+        '[[rows]]\nid = "r-x"\nsentence = "s"\nstage = 3\n'
+        'test = "scripts/tests/test_effort_segments.py::test_x"\nscales = "both"\n'
+    )
+    problems = layout_problems(multi_line)
+    assert problems and "r-x" in problems[0]
 
 
 def test_empty_registry_yields_problems_not_an_exception():
