@@ -121,9 +121,10 @@ def _load_spawn_module():
     return mod
 
 
-def test_child_env_marks_depth_and_still_inherits_tmux_pane():
-    env = _load_spawn_module().build_child_env({"TMUX_PANE": "%1"}, 1, "s")
+def test_child_env_marks_depth_and_drops_the_parents_tmux_pane():
+    env = _load_spawn_module().build_child_env({"TMUX_PANE": "%1", "TMUX": "/s,1,0"}, 1, "s")
     assert env["AGENT_RECURSION_DEPTH"] == "1"
-    assert env["TMUX_PANE"] == "%1"
+    assert "TMUX_PANE" not in env
+    assert env["TMUX"] == "/s,1,0"
     assert env["CLAUDE_CODE_DISABLE_CRON"] == "1"
     assert env["AGENT_LINEAGE_IDS"] == "s"
