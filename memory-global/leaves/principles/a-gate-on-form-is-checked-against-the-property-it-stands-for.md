@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 1
 grounded_in: [regularity:a-format-varies-while-the-property-it-stands-for-holds]
+grounding_judged: 44ed702a0cdad88820b1dc63ce224a27bf11292c2a943703d70446ba04658503
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

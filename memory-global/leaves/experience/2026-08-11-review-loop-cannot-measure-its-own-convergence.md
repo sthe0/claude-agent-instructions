@@ -8,7 +8,7 @@ resolution_confirmed_by_user: "user"
 refs: [/Users/the0/.claude-agent/plans/plan-convergence-evidence/cause-account.md, /Users/the0/.claude-agent/plans/plan-convergence-revision-log.md]
 created: 2026-08-11
 last_verified: 2026-09-27
-generalized_into: [incremental-repair-review-has-a-nonzero-finding-floor]
+generalized_into: [incremental-repair-review-has-a-nonzero-finding-floor, a-review-reads-the-artifact-so-defects-in-its-fit-to-the-machinery-that-executes-it-stay-invisible-to-review, a-record-that-does-not-retain-the-variables-a-hypothesis-relates-leaves-it-unanswerable]
 ---
 
 # A plan-review loop that records no finding data cannot measure its own convergence, and has no verb for 'the study cannot be done'

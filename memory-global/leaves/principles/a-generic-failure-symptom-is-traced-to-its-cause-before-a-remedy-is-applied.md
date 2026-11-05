@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:a-generic-failure-message-names-a-surface-shared-by-many-causes]
+grounding_judged: aa06b9ff938dc76e9f03b0874efc7d59f2a2a64c755118786548567fc6eb3bc7
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

@@ -2,7 +2,10 @@
 name: instructions-repo-layout
 description: Canonical layout of ~/claude-agent-instructions/ — global tree, runtime symlinks, and project-memory symlink. Prevents layout/disk mismatch when adding, moving, or deleting files.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: scripts/verify-layout-contract.sh
 created: 2026-06-26
 last_verified: 2026-08-26
 ---
@@ -10,6 +13,18 @@ last_verified: 2026-08-26
 ## Difficulty
 
 When disk disagrees with the canonical layout — a file exists but isn't in the contract, a symlink points to the wrong target, or a new script is placed in the wrong directory — resolving the mismatch requires knowing the authoritative layout. This leaf is that authority for the global tree, runtime symlinks, and per-project memory symlink.
+
+## Regularity
+
+The layout contract recorded in the leaf for ~/claude-agent-instructions/ lists: CLAUDE.md, config.md and README.md at the root; agents/ and agents-local/ (agents-local/ marked gitignored); skills/ with flat skills (overcome-difficulty, self-improvement, tracker-management) and a specializations/ container (planner, developer, thinker, yandex-cloud-expert, tech-writer); skills-local/ (marked gitignored); mcp-local/ (marked gitignored and registered into <config root>/.claude.json, and absent from the leaf's runtime-symlink table); cursor/ (rules, agents, scripts); memory-global/ with MEMORY.md and leaves/ (leaves/experience/ named YYYY-MM-DD-slug.md, leaves/system-knowledge/ with slug-only names); permissions/; docs/; scripts/ (setup, verification, hook and spawn scripts); githooks/ (pre-commit running verify-all.py --staged, commit-msg running verify-self-improvement-edit.py, post-commit push reminder). Per the leaf, after setup-symlinks.sh the $CLAUDE_AGENT_HOME directory (default ~/.claude-agent) holds symlinks CLAUDE.md, config.md, agents/ entries, skills/<flat> from skills/<name>/, skills/<specialization> flattened from skills/specializations/<name>/, skills/<local>.md from skills-local/*.md, and memory-global/, plus ~/.cursor/rules/claude-code-sync.mdc and ~/.cursor/agents/<name>.md. The leaf records the per-project shared memory as a symlink $CLAUDE_AGENT_HOME/projects/<cwd-hash>/memory pointing to <project_cwd>/.claude/agent-memory, created by scripts/setup-project-memory.sh. The leaf's tree places setup-project-memory.sh under scripts/ and project-specific scripts in each project's own .claude/scripts/.
+
+## Given
+
+Given from code: `scripts/verify-layout-contract.sh`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+scripts/verify-layout-contract.sh run on a clean checkout reports a mismatch between the tree and this layout, or setup-symlinks.sh produces a runtime path or source different from the table.
 
 ## Guidance
 
@@ -69,7 +84,7 @@ scripts/
   verify-self-improvement-edit.py      # commit-msg gate: requires review marker for self-improvement edits
   lint-prose-length.py                 # hard ceiling on CLAUDE.md / cursor mirror / SKILL.md / policy.md
   verify-experience-leaf.py            # require `resolution_confirmed_by_user` + (for schema:difficulty/v1) the difficulty-centric sections on `**/experience/*.md` (PreToolUse hook + verify-all)
-  verify-leaf-structure.py             # verify non-experience leaves: schema:leaf/v1 enforces ## Difficulty/Guidance/See also; grandfathered SK leaves keep the difficulty-lead baseline (subsumes verify-difficulty-lead.py)
+  verify-leaf-structure.py             # verify non-experience leaves: the old flat leaf form is retired, leaves declare a grounded schema and keep ## Difficulty/See also; grandfathered SK leaves keep the difficulty-lead baseline (subsumes verify-difficulty-lead.py)
   record-experience.py                 # generate / extend difficulty-centric experience leaves (search/new/extend/ticket); auto-maintains the experience/MEMORY.md sub-index (see memory-global/leaves/experience-leaf-schema.md)
   hook-self-critique-reminder.py       # PostToolUse Write: nudge to invoke `self-improvement` when an experience leaf has substantive § Self-critique
   hook-prompt-reminders.py             # UserPromptSubmit: self-improvement feedback, tracker / tracker-publish / ticket-plan-sync, experience-record, language, instructions-refresh and context-growth reminders

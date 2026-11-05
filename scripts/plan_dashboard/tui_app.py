@@ -554,7 +554,7 @@ class DashboardApp(App):
         try:
             snapshot = await in_daemon_thread(lambda: model.collect(
                 self.state_root, now=now, window_hours=self.window_hours, include_all=include_all,
-                sessions=self.sessions, cost_log=self.cost_log))
+                sessions=self.sessions, cost_log=self.cost_log, windowed=tui.attention.windowed_engines(self.locator)))
         except Exception as exc:
             self._failed(exc)
             return

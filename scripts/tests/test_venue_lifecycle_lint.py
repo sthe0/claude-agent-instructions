@@ -23,6 +23,7 @@ from agentctl.state import (
 from agentctl.store import FileStateStore
 
 from conftest import SUBSTANTIVE_ORDER
+from plan_site_fixture import GROUNDED_SOURCE
 
 
 def ns(**kw):
@@ -187,7 +188,7 @@ capability_required = "cap"
 
 [stage.principle]
 statement = "s"
-source = "s"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "d"
 confidence = "high"
 refutation = "r"

@@ -584,6 +584,137 @@ def test_case11_no_marker_ask_not_stamped(tmp_path):
     assert _stamp(tmp_path, "hk3") is None
 
 
+def test_case11_marked_order_ask_stamps_order_receipt_despite_delivered_essence(tmp_path):
+    from agentctl.plan import load_order_draft, understanding_digest
+    from agentctl.state import order_agree_marker
+    from test_order_phase import _draft
+    from test_plan_delivery_gate_judge import run_hook_answering
+
+    draft = _draft(tmp_path)
+    digest = understanding_digest(load_order_draft(draft)[0])
+    essence_text = "## Essence\n...plan essence...\n"
+    order_text = "## Order\n...the order as understood...\n"
+    essence = PlanPresentation(
+        plan_path="/plan.toml", kind="essence", plan_sha256="a" * 64,
+        rendering_sha256="b" * 64, rendering_text=essence_text, presented_ts=100.0,
+    )
+    order = PlanPresentation(
+        plan_path=str(draft), kind="order", plan_sha256=_sha256_file(draft),
+        rendering_sha256="c" * 64, rendering_text=order_text, presented_ts=200.0,
+        understanding_sha256=digest,
+    )
+    write_full_state(tmp_path, "hk4", node="PLAN_READY", plan_presentations=[essence, order])
+    state_file = tmp_path / "agentctl" / "state" / "hk4.json"
+    state = json.loads(state_file.read_text())
+    state["order_draft_path"] = str(draft)
+    state["order_draft_sha256"] = digest
+    state_file.write_text(json.dumps(state))
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt_entry(90.0),
+        text_only_entry(105.0, essence_text),
+        user_prompt_entry(110.0),
+        text_only_entry(205.0, order_text),
+        user_prompt_entry(210.0),
+    ])
+    payload = {
+        "tool_name": "AskUserQuestion", "session_id": "hk4", "transcript_path": str(t),
+        "tool_input": {"questions": [{"question": "Is this the order you gave?", "options": [
+            {"label": f"Yes, agreed {order_agree_marker(digest)}"}, {"label": "No"}]}]},
+    }
+
+    # The order-agreement question is not a plan-approval ask: the classifier says NO.
+    proc = run_hook_answering(payload, tmp_path, "NO")
+
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+    stamp = _stamp(tmp_path, "hk4")
+    assert stamp is not None
+    assert stamp.rendering_sha256 == "c" * 64
+
+
+def test_case11_marked_order_ask_allowed_when_essence_receipt_is_stale(tmp_path):
+    from agentctl.plan import load_order_draft, understanding_digest
+    from agentctl.state import order_agree_marker
+    from test_order_phase import _draft
+    from test_plan_delivery_gate_judge import run_hook_answering
+
+    draft = _draft(tmp_path)
+    digest = understanding_digest(load_order_draft(draft)[0])
+    plan = tmp_path / "plan.toml"
+    plan.write_text("index = 2\n")
+    essence_text = "## Essence\n...plan essence...\n"
+    order_text = "## Order\n...the order as understood...\n"
+    # The essence receipt binds a different plan hash: the plan was edited
+    # after its essence was shown, so the essence receipt is stale.
+    essence = PlanPresentation(
+        plan_path=str(plan), kind="essence", plan_sha256="a" * 64,
+        rendering_sha256="b" * 64, rendering_text=essence_text, presented_ts=100.0,
+    )
+    order = PlanPresentation(
+        plan_path=str(draft), kind="order", plan_sha256=_sha256_file(draft),
+        rendering_sha256="c" * 64, rendering_text=order_text, presented_ts=200.0,
+        understanding_sha256=digest,
+    )
+    write_full_state(tmp_path, "hk4s", node="PLAN_READY", plan_path=str(plan),
+                     plan_presentations=[essence, order])
+    state_file = tmp_path / "agentctl" / "state" / "hk4s.json"
+    state = json.loads(state_file.read_text())
+    state["order_draft_path"] = str(draft)
+    state["order_draft_sha256"] = digest
+    state_file.write_text(json.dumps(state))
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt_entry(90.0),
+        text_only_entry(105.0, essence_text),
+        user_prompt_entry(110.0),
+        text_only_entry(205.0, order_text),
+        user_prompt_entry(210.0),
+    ])
+    payload = {
+        "tool_name": "AskUserQuestion", "session_id": "hk4s", "transcript_path": str(t),
+        "tool_input": {"questions": [{"question": "Is this the order you gave?", "options": [
+            {"label": f"Yes, agreed {order_agree_marker(digest)}"}, {"label": "No"}]}]},
+    }
+
+    # The judge answering YES must not matter: an order-agreement ask is never
+    # the plan-approval ask, so the stale essence receipt does not bind it.
+    proc = run_hook_answering(payload, tmp_path, "YES")
+
+    assert proc.returncode == 0
+    assert not _is_deny(proc)
+    stamp = _stamp(tmp_path, "hk4s")
+    assert stamp is not None
+    assert stamp.rendering_sha256 == "c" * 64
+
+
+def test_stale_essence_receipt_still_denies_unmarked_approval_ask(tmp_path):
+    from test_plan_delivery_gate_judge import run_hook_answering
+
+    plan = tmp_path / "plan.toml"
+    plan.write_text("index = 2\n")
+    essence_text = "## Essence\n...plan essence...\n"
+    essence = PlanPresentation(
+        plan_path=str(plan), kind="essence", plan_sha256="a" * 64,
+        rendering_sha256="b" * 64, rendering_text=essence_text, presented_ts=100.0,
+    )
+    write_full_state(tmp_path, "hk4t", node="PLAN_READY", plan_path=str(plan),
+                     plan_presentations=[essence])
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt_entry(90.0),
+        text_only_entry(105.0, essence_text),
+        user_prompt_entry(110.0),
+    ])
+    payload = {
+        "tool_name": "AskUserQuestion", "session_id": "hk4t", "transcript_path": str(t),
+        "tool_input": {"questions": [{"question": "Approve the plan?", "options": [
+            {"label": "Yes"}, {"label": "No"}]}]},
+    }
+
+    proc = run_hook_answering(payload, tmp_path, "YES")
+
+    assert _is_deny(proc)
+    assert "stale" in proc.stdout + proc.stderr
+
+
 # --- case 12: essence and replan_diff receipts coexist; two replan_diff
 # presentations against different --plan targets collapse to one -----------------
 

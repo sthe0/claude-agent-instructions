@@ -2,7 +2,10 @@
 name: instructions-repo-git-sync
 description: "Operational reference for the instructions-repo git-sync install surface: the opt-in background-pull cron (and its systemd-timer fallback), the git-hooks installer (post-commit reminder, no auto-push), and the sync-instructions-repo.sh script table. Elaboration relocated out of self-improvement/policy.md; the firing sync/commit/push rules stay in that skill."
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: scripts/sync-instructions-repo.sh
 created: 2026-07-20
 last_verified: 2026-07-20
 ---
@@ -12,6 +15,18 @@ last_verified: 2026-07-20
 ## Difficulty
 
 Desired — when setting up or operating the sync surface of `~/claude-agent-instructions/`, know how to install the optional background pull, install the git hooks, and what each `sync-instructions-repo.sh` verb does. Actual — these install commands and the script table are pure operational reference (no rule that must *fire* while editing an instruction file), so carrying them inline in `skills/self-improvement/policy.md` spent that skill's line budget (it sat past the linter's WARN threshold) without earning salience. The firing rules — pull-then-re-read before editing, commit-then-push-only-after-confirm, the author-machine carve-out, no-push-rights, serving-checkout-stays-on-`main`, the `[self-improvement-reviewed]` marker — stay in `policy.md § Git sync`; this leaf holds only the reference the model reads on demand, not on every load.
+
+## Regularity
+
+For the instructions repo ~/claude-agent-instructions/, background auto-pull is not installed by default and setup-symlinks.sh does not enable it. scripts/install-sync-cron.sh adds the opt-in cron line */10 * * * * sync-instructions-repo.sh pull (log ~/.local/log/claude-agent-instructions-sync.log); scripts/install-sync-systemd-timer.sh is the user-timer alternative where crontab is forbidden. scripts/install-git-hooks.sh installs a post-commit hook that only reminds that a push needs user confirmation and does not auto-push. sync-instructions-repo.sh has the verbs pull (fetch plus rebase or ff-only), push (push if local commits exist) and sync (pull, then push); setup-symlinks.sh applies the runtime symlinks, setup-project-memory.sh links shared agent memory into a project tree, verify-instructions-sync.sh checks symlinks and drift, and verify-layout-contract.sh checks the tree against the layout contract. A cron pull does not perform the reconcile that policy.md requires at the start of a session that edits code or instructions.
+
+## Given
+
+Given from code: `scripts/sync-instructions-repo.sh`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+setup-symlinks.sh installs a background pull cron entry by default, or install-git-hooks.sh installs a post-commit hook that pushes automatically, or a listed script is absent from scripts/ or does what a different row of the table describes.
 
 ## Guidance
 

@@ -4,7 +4,8 @@ description: A review loop with a non-zero finding floor and a pass-required gat
 type: reference
 schema: principle/v1
 generality: 1
-grounded_in: [regularity:incremental-repair-review-has-a-nonzero-finding-floor]
+grounded_in: [regularity:incremental-repair-review-has-a-nonzero-finding-floor, regularity:a-review-reads-the-artifact-so-defects-in-its-fit-to-the-machinery-that-executes-it-stay-invisible-to-review, regularity:a-record-that-does-not-retain-the-variables-a-hypothesis-relates-leaves-it-unanswerable, regularity:effort-divergence-trigger]
+grounding_judged: b6278860ac8dc830c5bcd61c36b341a36891bcf7e503777fcd4f53f78a6686dd
 domain: coordination
 created: 2026-08-25
 last_verified: 2026-08-25

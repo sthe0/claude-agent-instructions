@@ -15,7 +15,10 @@ from . import (
     delivery,
     gates,
     grant_shadow,
+    grounding,
+    grounding_gate,
     plugins,
+    pane_title,
     plugins_premise,
     runtime_host,
     solved_marker,
@@ -94,6 +97,8 @@ from .cli_common import (
     _attach_advisories,
     _submission_advice,
     _submission_problems,
+    _generalizations_block,
+    _generalizations_missing,
     _effort_fire_refusal,
     _require,
     _bound_stage_key,
@@ -507,6 +512,20 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
         public_api_change=bool(getattr(args, "public_api_change", False)),
     )
     result = classify(sig, thr)
+    raw_title = getattr(args, "title", None)
+    title, title_problem = ("", "")
+    if raw_title is not None:
+        title, title_problem = pane_title.normalize_title(raw_title)
+    owned, _ = pane_title.owns_pane(pane_title.read_env(), state, None)
+    titled = owned and result.weight_class != WeightClass.CHAT.value
+    if title_problem or (titled and not title):
+        detail = (
+            f"classify --title refused: {title_problem}" if title_problem else
+            f"classify needs --title '<{pane_title.TITLE_GUIDANCE}>' in a pane-owning session"
+        )
+        return Directive(False, state.node, "classify", detail)
+    if title:
+        state.task_title = title
     state.weight_class = result.weight_class
     state.route = result.route
     if sig.tracker_key and TRACKER_KEY_RE.match(sig.tracker_key):
@@ -518,6 +537,13 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
     state.deliverable_kind = getattr(args, "deliverable_kind", "") or ""
     state.node = transition(state.node, "classify")
     state.log("classify", weight_class=result.weight_class, route=result.route, reasons=result.reasons)
+    if titled:
+        # Before the single save below: state.log only reaches disk through it. Fail-open --
+        # a failed retitle is logged and never changes the directive.
+        pane_title.set_pane_title(
+            pane_title.read_env(), title, run=pane_title.RUNNER,
+            log=lambda reason: state.log("pane_title_failed", reason=reason),
+        )
 
     if result.weight_class == WeightClass.SMALL_CHANGE.value:
         # carve-out: no plan-approval gate; auto-pass so ROUTED->EXECUTING is legal
@@ -633,7 +659,9 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # and a refusal cannot be computed after the return that acts on it. The binding itself
     # costs nothing; only a prefilter hit spends a judge call.
     run = runner if runner is not None else advisor.subprocess_runner
-    problems: list[str] = _submission_problems(doc, run, state.weight_class)
+    grounding_warnings: list[str] = []
+    problems: list[str] = _submission_problems(
+        doc, run, state.weight_class, warnings=grounding_warnings)
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
@@ -786,6 +814,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     d.data.setdefault("advisories", []).extend(
         _submission_advice(doc, run, state.weight_class, plan_path)
     )
+    if grounding_warnings:
+        d.data["advisories"].extend(grounding_warnings)
     # Predsubmit check-run observation (C.2) — actually RUNS each stage's
     # verify_command in its declared venue, warn-only, same advisories channel.
     # Substantive-only, mirroring the reachability-blocker gate above: a
@@ -809,6 +839,15 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
             "`approve` will refuse without a bound presentation + delivery proof"
         )
     return d
+
+
+def cmd_plan_generalizations(args, *, store=None, runner=None) -> Directive:
+    try:
+        doc = load_plan(args.plan)
+    except Exception as exc:
+        return Directive(False, "(render)", "noop", f"cannot load plan: {exc}")
+    block = _generalizations_block(doc)
+    return Directive(True, "(render)", "inspect", block, data={"generalizations_block": block})
 
 
 def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -980,6 +1019,22 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                     "essence rendering omits the grants block; stamping nothing — "
                     "paste this block into it verbatim and re-run",
                     data={"grants_block": compact_grants_block},
+                )
+        if _grants_doc is not None and grounding.is_substantive(_grants_doc):
+            generalizations_block = _generalizations_missing(_grants_doc, text)
+            if generalizations_block is not None:
+                return Directive(
+                    False, state.node, "noop",
+                    "essence rendering omits the new-generalizations block; stamping "
+                    "nothing — paste this block into it verbatim and re-run",
+                    data={"generalizations_block": generalizations_block},
+                )
+            if grounding_gate.essence_overrides_problems(_grants_doc, text):
+                return Directive(
+                    False, state.node, "noop",
+                    "essence rendering omits the grounding-overrides block; stamping "
+                    "nothing — paste this block into it verbatim and re-run",
+                    data={"overrides_block": grounding_gate.overrides_block(_grants_doc)},
                 )
 
         # Refuse to stamp a receipt for a plan `approve` would refuse on premise
@@ -1234,8 +1289,11 @@ def register(sub, add):
     sp.add_argument("--host", choices=runtime_host.HOSTS, default=None,
                     help="coordination host this session dispatches through (claude|cursor); "
                          "required (or ambient-detectable) at classify — sticky thereafter")
+    sp.add_argument("--title", default=None,
+                    help="2-5 words naming the task, in the dialogue language; retitles the "
+                         "tmux pane of a top-level session (required there unless --chat)")
 
-    sp = add("plan"); sp.add_argument("--session", required=True)
+    sp = add("plan");sp.add_argument("--session", required=True)
     sp = add("plan-render"); sp.add_argument("--plan", required=True,
         help="TOML plan to render to a markdown prose view on demand (a projection, "
              "never written to disk — the TOML is the single source of truth)")
@@ -1253,6 +1311,10 @@ def register(sub, add):
              "on demand (a projection, never written to disk)")
     sp.add_argument("--format", choices=["compact", "full", "json"], default="compact")
     # Session-free read, same reason as plan-render's suppressed --session above.
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-generalizations"); sp.add_argument("--plan", required=True,
+        help="TOML plan whose new-generalizations block (the regularities and principles it "
+             "introduces) to print; an essence must contain this block")
     sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp = add("plan-resources"); sp.add_argument("--plan", required=False, default=None,
         help="TOML plan whose per-stage typed resources (declared + derived rules, "

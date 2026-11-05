@@ -166,7 +166,8 @@ def _refresh_caches_from_plan_path(
     # `baseline` is the last approved plan: a finished stage's unchanged edge is frozen
     # against it, exactly as at replan, so approve judges the same exemption replan did.
     violations = _submission_problems(refreshed, runner, state.weight_class,
-                                      _frozen_edge_stages(state, baseline, refreshed))
+                                      _frozen_edge_stages(state, baseline, refreshed),
+                                      state=state, baseline=baseline)
     if violations:
         return violations
     if advice is not None:

@@ -1816,6 +1816,9 @@ class Principle:
     derivation: str = ""
     confidence: str = ""
     refutation: str = ""
+    # The reason the plan keeps a source the grounding judge found defective; shown in the stage and
+    # in the essence's "Grounding overrides" block so the user approves it.
+    grounding_override: str = ""
 
     @classmethod
     def from_dict(cls, d: dict) -> "Principle":
@@ -2716,6 +2719,9 @@ class SessionState:
     # '' on legacy states and on sessions where the coordinator did not pass
     # --deliverable-kind (absent key -> dataclass default via from_dict's cls(**data)).
     deliverable_kind: str = ""
+    # The short title of the task classify last registered (`classify --title`); '' on legacy
+    # states and when no title was given (absent key -> dataclass default via from_dict).
+    task_title: str = ""
     # Effort-divergence trigger (schema 25) — effort.py owns every read and write of
     # these; nothing else interprets them, and effort.py's module docstring is the
     # canonical statement of the mechanism (THE WINDOW; ARMED-ONLY, AND ARMED AT MOST
@@ -3369,7 +3375,7 @@ SESSION_SCOPED_FIELDS = frozenset({
     "protected_grant_acceptances", "review_rounds", "stage_reviews", "judge_bypassed",
     "code_reviews", "acceptance_review", "acceptance_bypass", "plan_presentations",
     "recursion_depth", "artifacts", "history", "plan_stack", "cost", "last_user_prompt_ts",
-    "plan_submitted_ts", "tracker_key", "deliverable_kind", "effort_subtree_seen",
+    "plan_submitted_ts", "tracker_key", "deliverable_kind", "task_title", "effort_subtree_seen",
     "effort_child_runs", "user_prompt_count", "effort_crossings", "effort_retiers", "order_effort_flushed",
     "order_descendant_credited", "order_effort_base", "order_effort_frozen",
     "agent_ack_difficulty_ids", "renegotiation_ceiling_difficulty_id",

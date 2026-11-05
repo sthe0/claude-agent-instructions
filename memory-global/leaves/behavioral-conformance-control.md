@@ -1,7 +1,11 @@
 ---
 name: behavioral-conformance-control
 description: Conformance — whether the coordinator's actual behavior followed the instructions and the plan's expected actions — is a first-class verification axis, checked at every step boundary and at resolution, not only reported when the user notices a gap.
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-step-that-ran-is-not-thereby-a-step-that-worked, regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-judgement-call-contains-a-decidable-sub-decision]
+grounding_judged: 8299a0bbf72d556d81bdb5288bffc1f784fa804d7077ab9fcf3d171b3e44fbb7
+grounding_override: The judge's own reasoning finds every listed ground relevant to part of the rule and no ground wholly irrelevant; the defect label is a weak verdict.
 type: reference
 created: 2026-07-22
 last_verified: 2026-07-22
@@ -10,6 +14,20 @@ last_verified: 2026-07-22
 ## Difficulty
 
 A task can satisfy every artifact-level check — the code compiles, the plan's stages are marked PASSED, the deliverable matches the spec — while silently diverging on the *behavior* axis: an instructed specialization was never spawned, a planned action was never taken, or an implicit precondition of an action went unmet (e.g. a plan reviewer recorded a verdict without ever being able to read the plan it signed off). Nothing controlled that divergence — not continuously during the task, not at resolution — so it surfaced only when the user happened to notice. A difficulty is a divergence between expected and actual state; the coordinator's own behavior is itself a verification object, and until now it had no owner.
+
+## Principle
+
+To catch divergence between the coordinator's actual behavior and the instructions and plan, treat every expected action and every implicit precondition of an action (that a reviewer read what it reviewed) as a conformance object, compare actual against expected at each step boundary and again at resolution, declare any mismatch at once as a difficulty, and mechanize the decidable slice (reviewer-attested plan digest, obligations ledger) while keeping this check as the perception net for the rest.
+
+## Goal class
+
+verifying coordinator behavior against instructions and plan
+
+## Grounded in
+
+- [[a-step-that-ran-is-not-thereby-a-step-that-worked]]
+- [[a-probe-observes-only-the-domain-it-reads]]
+- [[a-judgement-call-contains-a-decidable-sub-decision]]
 
 ## Guidance
 

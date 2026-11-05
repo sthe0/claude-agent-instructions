@@ -2,7 +2,11 @@
 name: docs-accompany-architectural-change
 description: An architectural change (ADR, new subsystem, changed coordination model) is not delivered until the canonical read-first surface (README) reflects it — symmetric to tests-accompany-code; a design record only the implementer can find does not count as documented
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:what-a-change-does-not-carry-ends-with-its-authors-context, regularity:a-change-outside-the-state-its-consumers-read-is-unseen-by-them]
+grounding_judged: 4e6a2829b12098a675eb8a3f223a33b0f4e796b153a46c35961205c838ce3c5b
+grounding_override: user-approved 2026-11-03: the judge finds part of the rule ungrounded (reaching the ADR from the README, and its tension with always-loaded cost); the remaining grounds cannot be removed and no non-thin regularity covers the gap under the r11 revision rules, so the defect is recorded rather than papered over; the repair is a per-clause split of the leaf or a new regularity, tracked as a follow-up issue.
 created: 2026-06-26
 last_verified: 2026-06-26
 ---
@@ -10,6 +14,19 @@ last_verified: 2026-06-26
 ## Difficulty
 
 When "done" is gated on a *measurable* criterion (tests green, PR merged), the human-facing documentation falls outside the definition of done and is silently skipped — the implementer carries the new mental model in their head and forgets that a future reader of the repo has only the README. An ADR or design doc written *during* the work documents the **decision**, but if nothing links it from the canonical read-first surface, the implemented architecture is invisible to anyone who does not already know the file path. This recurs (the user's "опять забыл"): the same omission lands every time an architectural change ships its code without updating its overview.
+
+## Principle
+
+To keep an architectural change discoverable after its implementer's context is gone, update the canonical read-first surface (top-level README and the relevant docs index) in the same delivery, so that a reader of the README alone can reach the change and its ADR.
+
+## Goal class
+
+documented architecture reachable from the read-first surface
+
+## Grounded in
+
+- [[what-a-change-does-not-carry-ends-with-its-authors-context]]
+- [[a-change-outside-the-state-its-consumers-read-is-unseen-by-them]]
 
 ## Guidance
 
@@ -29,3 +46,4 @@ When "done" is gated on a *measurable* criterion (tests green, PR merged), the h
 - [[tests-accompany-code]] — the symmetric default on the runtime axis (output accompanies the artifact it describes)
 - [[plan-activity-ontology]] — the README update is part of a stage's *result*/control-criterion, not optional polish
 - `README.md` § Maintaining this README — "when the cooperation model changes, update the affected sections"
+- regularity:what-a-change-does-not-carry-ends-with-its-authors-context — the regularity this rule rests on.

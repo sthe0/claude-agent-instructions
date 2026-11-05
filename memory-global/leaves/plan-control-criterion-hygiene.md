@@ -2,7 +2,11 @@
 name: plan-control-criterion-hygiene
 description: Seventeen plan-authoring norms for a stage's control criterion — declare the venue a check observes instead of hard-coding a `cd` into the verify_command; never let a criterion assert an unverified fact about current behaviour; take a criterion's number from an explicitly bounded invocation; never let a procedure step rewrite the criterion it is measured by; name the lifecycle state the criterion describes, because verify-final re-runs a criterion authored pre-merge in the post-merge world (both whole-plan merge/rollout and stage-to-stage cleanup transitions); sweep exact-shape criteria after ANY revision round, formal replan or ad-hoc; dry-run the verify_command's own script text against live repo state before submit_plan, because a broken check script is a distinct failure class from a false factual claim; make a multi-conjunct `&&`-chained verify_command localize its own failure, because an aggregate exit code turns even a genuinely transient flake into a full manual re-derivation before diagnosis can even start; bind a hand-copied mirror of a live-computed value to an import-and-compare test, not a frozen literal, because a merge race with unrelated trunk work can drift the mirror while the merge itself stays textually clean; never freeze an exact identifier (a test/function node id) for an artifact that does not exist yet at authoring time — reconcile it against what the implementing stage actually names, before verify-final runs it for real; never bind a criterion to whole-file identity of a file the stage does not exclusively own — scope the check to the one artifact the stage is actually responsible for, because verify-final re-runs the check after other legitimate, unrelated activity has touched the shared file; never bind a criterion to "the single most recent commit" (`git log -1`) touching a path — check the artifact's own current tracked/clean state directly, because a later, unrelated, legitimate commit (e.g. a DIAGNOSING-cycle repair for a different stage) becomes the new tip and silently falsifies a positional proxy that was never about the artifact at all; `stat` every literal file path a criterion names (grep target, output_artifact, material_ref) against the live repo tree before submit_plan — review checks the plan's internal logic but treats a quoted path as a given fact rather than a claim, so a flat-file/package layout the plan never matched (or a rename between authoring and execution) survives every review round untouched; never anchor a criterion's freshness/identity proof to mutable local scratch state (a local docker tag, a temp file, a local build cache) when a durable evidence record of the original run already exists — ordinary later, unrelated work on the same machine or in the same session can silently overwrite the scratch resource without ever touching the delivered artifact; never author a criterion as a bare match on a GENERIC diagnostic string (`Traceback`, `WARNING`, `error`) without first enumerating that string's benign, by-design producers inside the specific subject under test — grep the subject's own source for the emitter and either anchor/attribute around it or pick a different observable, because a program that logs a caught exception on purpose makes "never prints a traceback" a property it never had; never bind a reader-facing, dialogue-language deliverable's criterion to a raw internal-code/identifier literal (an English snake_case field value) when the same stage's own tech-writer pass is required to keep such codes out of the body — check the plain-language substance the identifier represents instead, because a correctly-polished draft can never satisfy a check demanding the literal code it was written to remove; and never freeze a literal file-scope allow-list at authoring time without a categorical exemption for the plan's own future memory-only commits, because every DIAGNOSING cycle the plan itself runs is designed to land a gate-exempt memory commit under the same `Task:` trailer, and a static enumeration has no way to have included a path that didn't exist when the plan was written.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-success-condition-edited-by-the-party-it-judges-gets-no-independent-read, regularity:a-stage-control-is-re-evaluated-after-its-world-has-changed, regularity:a-controls-defects-surface-only-when-it-is-executed, regularity:a-coordinate-shifts-while-the-content-it-addressed-stays, regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-generic-failure-message-names-a-surface-shared-by-many-causes, regularity:a-shared-resource-moves-under-others-action, regularity:a-fix-at-the-failing-site-leaves-siblings-of-the-same-form, regularity:a-non-hermetic-read-fails-independently-of-the-artifact, regularity:a-mechanism-green-in-isolation-can-lack-consumers-and-population, regularity:a-format-varies-while-the-property-it-stands-for-holds]
+grounding_judged: 7e886cb78b368e6962a77ed044963310dd475db17ffb460f02b8625f5cf02a60
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-08-31
 last_verified: 2026-10-03
 ---
@@ -46,6 +50,28 @@ The fourth norm is the one that makes the others enforceable rather than merely
 advisable: without it, an executor who notices a broken criterion "fixes" it in
 flight, and the plan silently stops being the thing the work was measured
 against.
+
+## Principle
+
+To achieve a stage check that goes red for the right reason and green for the right reason, and that the executor can run without repairing, author each control criterion against the state it will be re-run in: declare the venue instead of hard-coding a cd; assert no unverified fact about current behaviour or a live count; take any number from an explicitly bounded invocation; name the lifecycle state it describes and anchor past-state clauses to something immutable; sweep exact-shape criteria after every revision round; dry-run the verify_command's own script text and stat every path literal before submit_plan; make a multi-conjunct chain localize its own failure; bind mirrors of live-computed values to an import-and-compare test; never freeze an identifier of an artifact not yet built, whole-file identity of a shared file, the tip commit, mutable local scratch state, a bare generic diagnostic string, a raw internal code in reader-facing prose, or a literal file-scope allow-list without a categorical exemption for the plan's own memory commits; and never let a procedure step rewrite the criterion it is measured by.
+
+## Goal class
+
+stage control criteria that survive the interval between plan authoring and stage execution
+
+## Grounded in
+
+- [[a-success-condition-edited-by-the-party-it-judges-gets-no-independent-read]]
+- [[a-stage-control-is-re-evaluated-after-its-world-has-changed]]
+- [[a-controls-defects-surface-only-when-it-is-executed]]
+- [[a-coordinate-shifts-while-the-content-it-addressed-stays]]
+- [[a-probe-observes-only-the-domain-it-reads]]
+- [[a-generic-failure-message-names-a-surface-shared-by-many-causes]]
+- [[a-shared-resource-moves-under-others-action]]
+- [[a-fix-at-the-failing-site-leaves-siblings-of-the-same-form]]
+- [[a-non-hermetic-read-fails-independently-of-the-artifact]]
+- [[a-mechanism-green-in-isolation-can-lack-consumers-and-population]]
+- [[a-format-varies-while-the-property-it-stands-for-holds]]
 
 ## Guidance
 

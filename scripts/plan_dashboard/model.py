@@ -30,6 +30,7 @@ RETRY_PAUSE_S = 0.05
 DELIVERY_SUFFIX = ".delivery"
 DONE_STATUSES = frozenset({"PASSED", "SKIPPED"})
 REVIEW_EVENTS = frozenset({"plan_review", "plan_pair_review", "plan_review_compose"})
+_UNLINKED_SPAWN_TASK_PREFIX = "agent-recursion-depth-"
 
 CACHE_LOCK = threading.Lock()
 _LEDGER: dict = {}
@@ -517,11 +518,44 @@ def _mtime(path: Path) -> dt.datetime | None:
         return None
 
 
+def _is_unlinked_spawn(row: dict) -> bool:
+    """A spawned child that recorded no parent: the spawn wrapper's first prompt line became its task id."""
+    return not row["parent_session"] and str(row["task_id"] or "").startswith(_UNLINKED_SPAWN_TASK_PREFIX)
+
+
+def _listed_stems(summaries: dict, wanted: set, pinned: set, include_all: bool) -> set:
+    """The listing's rows: the root of each wanted task and each pinned task itself. A child shows only in
+    its root's detail; a child whose parent has no task to show stays listed, so its work never vanishes.
+    An unlinked spawn is a child with no root to show it, so only `--all` and `--session` list it."""
+    listed = pinned & summaries.keys()
+    for stem in wanted:
+        seen = {stem}
+        while (parent := summaries[stem]["parent_session"]):
+            parent = config_root.sanitize_session_id(parent)
+            if parent not in summaries or parent in seen:
+                break
+            seen.add(parent)
+            stem = parent
+        if include_all or not _is_unlinked_spawn(summaries[stem]):
+            listed.add(stem)
+    return listed
+
+
+def _qualifies_alone(state, row: dict, windowed) -> bool:
+    """Whether a task is listed for itself. Once the open windows are known they account for the work
+    a person left open, so beyond them only a task active right now earns a row."""
+    if windowed is None:
+        return state is None or row["liveness"] in ("active", "idle")
+    return row["liveness"] == "active"
+
+
 def collect(state_root, *, now: dt.datetime, window_hours=24, include_all=False, sessions=None,
-            cost_log=None) -> dict:
+            cost_log=None, windowed=None) -> dict:
+    """``windowed`` names the task each open window shows (``attention.windowed_engines``); each is
+    listed whatever its age or state. ``None`` means the windows are unknown."""
     root = Path(state_root)
     window = dt.timedelta(hours=window_hours)
-    pinned = {config_root.sanitize_session_id(s) for s in (sessions or ())}
+    pinned = {config_root.sanitize_session_id(s) for s in (*(sessions or ()), *(windowed or ()))}
     mtimes = {}
     try:
         for path in sorted(root.glob("*.json")):
@@ -542,13 +576,14 @@ def collect(state_root, *, now: dt.datetime, window_hours=24, include_all=False,
         if parent:
             queue.append(config_root.sanitize_session_id(parent))
     ledger = _ledger(cost_log)
-    tasks = []
+    summaries, wanted = {}, set()
     for stem, (state, reason, moment) in loaded.items():
         if _is_sidecar(stem, state):
             continue
-        row = _summary(stem, state, reason, moment, now, window, ledger)
-        if state is None or include_all or stem in pinned or row["liveness"] in ("active", "idle"):
-            tasks.append(row)
+        row = summaries[stem] = _summary(stem, state, reason, moment, now, window, ledger)
+        if include_all or stem in pinned or _qualifies_alone(state, row, windowed):
+            wanted.add(stem)
+    tasks = [summaries[stem] for stem in _listed_stems(summaries, wanted, pinned, include_all)]
     tasks.sort(key=lambda t: (t["last_activity"] or "", t["session_id"]), reverse=True)
     return {"schema": SCHEMA, "generated_at": _iso(now), "hostname": socket.gethostname(), "tasks": tasks}
 

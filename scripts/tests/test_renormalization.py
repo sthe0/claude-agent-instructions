@@ -72,6 +72,7 @@ from agentctl.state import (
 from agentctl.submission import submission_violations
 
 from conftest import SUBSTANTIVE_FINAL_CHECK, SUBSTANTIVE_ORDER
+from plan_site_fixture import GROUNDED_SOURCE
 from dataclass_domain import leaf_paths
 
 CORPUS = Path(__file__).resolve().parent / "fixtures" / "plan_corpus"
@@ -132,7 +133,7 @@ knowledge_refs = ["scripts/agentctl/plan.py"]
 knowledge = "how the loader stays lenient"
 [stage.principle]
 statement = "s"
-source = "src"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"
@@ -161,7 +162,7 @@ on = 1
 element = "result"
 [stage.principle]
 statement = "s"
-source = "src"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"
@@ -730,6 +731,9 @@ _STAGE_RESIDUAL_COVERAGE = {
     "principle.derivation": "stage_question_key",
     "principle.confidence": "stage_question_key",
     "principle.refutation": "stage_question_key",
+    "principle.grounding_override": "the residual's own splice — no Question.target names "
+                                    "it, but it exempts the stage from the grounding "
+                                    "judge's refusal of a defective source",
     "grants.allow.rule": "the residual's own splice — outside stage_question_key because "
                         "no Question.target names it, inside here because a declared "
                         "grant is part of what the stage's definition authorizes a "
@@ -1078,7 +1082,7 @@ on = 2
 element = "result"
 [stage.principle]
 statement = "s"
-source = "src"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"

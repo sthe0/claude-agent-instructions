@@ -36,6 +36,22 @@ If the search surfaces a precedent for the current task, two outcomes:
 
 If no precedent surfaces — no extra step; plan from scratch.
 
+### Grounding norm
+
+A stage rests on knowledge, never directly on a prescription. Its `[stage.principle].source` names only knowledge, each item as `[project:]<kind>:<slug>`, separated by `;`:
+
+- `regularity:<slug>` — a `regularity/v1` leaf (induced, given or order-derived), global or project tier;
+- `ontology:<slug>` — an `ontology/v1` leaf or an ADR stating a distinction;
+- `experience:<slug>` and `case:<slug>` — singular knowledge: one incident, one observation; cited alone or next to regularities, they do not become a regularity by being cited.
+
+The engine refuses any other item at every seam that admits plan bytes. A principle ref (`principle:<slug>`) is refused with the leaf's own `grounded_in` named, because a norm resting on another norm is superstructure, not a ground. A ref resolves by slug, corpus area and frontmatter `schema:`, never by reading the leaf; a project ref resolves in the project area first and falls back to the global one. A generalization staged in the delivery worktree resolves too, so a plan may cite a regularity it introduces.
+
+**Judging the link.** Resolving a ref proves the ground exists, not that the stage rests on it. A model grounding judge (fail open, as the advisor is) applies a two-way counterfactual test: refuting each listed ground must put the stage's principle in question and force a review of it (a review need not end in a change; a principle that stands on several grounds is legitimately overdetermined), and refuting any knowledge the principle really depends on must reach it through the list. It names a **link defect** — `irrelevant`, `insufficient`, `scope_mismatch`, `contradicting` — apart from a **ground defect** — a stale or wrong ground, `unverified_given`, `inadequate_distinction` for an ontology, `prescriptive_knowledge`. A defect refuses `submit-plan` and `plan-review --verdict pass` unless the link is fixed or the stage records a reason in `[stage.principle].grounding_override`. Overrides are listed in the essence under `Grounding overrides (for approval):`, so the user approves them with the plan. A judge that cannot look warns and never refuses; a PASSED stage whose principle is unchanged is not judged again.
+
+**Given and order-derived grounds.** System knowledge taken from code, documents or measurements is a `given` regularity, presumed possibly stale. A stage citing one is refused as `unverified_given` unless its `last_verified` lies within `given-regularity-max-age-days` or the stage checks the claim against its `given_source` (the path is among the stage's knowledge refs, material refs or `verify_command` tokens). An order-derived regularity is treated the same way.
+
+**Generalizing from the order.** An order quote that states a fact no regularity covers may be generalized into an `order_derived` regularity: the leaf keeps the verbatim quote in `## Derived from order`, its `introduced_by` names the task, and the essence lists it under `New generalizations` as an unverified given. A quote that states a demand stays a norm and is never generalized. `agentctl plan-generalizations --plan <plan>` prints the block the essence must carry; `present-plan --kind essence` refuses a rendering without it.
+
 ## Cost and resource assessment
 
 The Dimensions table under `SKILL.md` § Cost and resource assessment sizes a stage by **executor work volume** (implementation effort, means reused, ongoing resources, maintenance surface, stability). That table alone under-counts a stage whose deliverable must be **accepted by a reviewer**: each **review round** — a full declare → investigate → critique or plan-review cycle triggered by a rejected verdict — costs roughly as much active effort as a major stage of the plan itself, and a stage estimate that only sums executor steps misses it entirely.

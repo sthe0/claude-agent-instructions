@@ -581,11 +581,15 @@ def _exempt_root_with_plan(store, monkeypatch, tmp_path, plant):
 
 
 def _essence(store, tmp_path: Path, text: str):
+    from agentctl import grounding_gate
     from agentctl.plan import load_plan
     from agentctl.render import render_plan_grants
-    grants = render_plan_grants(load_plan(store.load(SESSION).plan_path), fmt="compact")
+    doc = load_plan(store.load(SESSION).plan_path)
+    grants = render_plan_grants(doc, fmt="compact")
     rendering = tmp_path / "essence.txt"
-    rendering.write_text(text + "\n" + grants, encoding="utf-8")
+    rendering.write_text(
+        "\n".join([text, grants, cli._generalizations_block(doc), grounding_gate.overrides_block(doc)]),
+        encoding="utf-8")
     return cli.cmd_present_plan(ns(session=SESSION, kind="essence", rendering_file=str(rendering),
                                    emit_skeleton=False, plan=None), store=store)
 

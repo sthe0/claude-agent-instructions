@@ -2,7 +2,11 @@
 name: propose-skill-on-repeated-workaround
 description: A second hand-rolled repeat of the same complex reusable action, with no skill/tool covering it, is itself a self-improvement trigger — independent of any user correction and independent of task resolution.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-repeated-hand-rolled-action-is-seen-by-no-trigger-that-reads-only-corrections-and-resolutions, regularity:a-recorded-remedy-is-absent-at-the-act-it-governs]
+grounding_judged: 1c786f4e05b2ba37259ba7c0ca80be0f78ad864642b93e7eb2f0ba87998b7086
+grounding_override: The rule's specifics (where a promoted script lives, the shape of the offer) are procedure choices, not claims about how things are; the ground states the gap that motivates the trigger.
 created: 2026-09-02
 last_verified: 2026-09-02
 ---
@@ -14,6 +18,19 @@ last_verified: 2026-09-02
 To achieve turning a complex, reusable, hand-rolled action into a tool *before* the user has to point it out, the agent must notice repetition of the action itself — not only wait for a user correction of its outcome. The two existing triggers both miss this case. `self-improvement` (CLAUDE.md § When the user corrects agent behavior) fires only on an explicit correction/rejection/principle-statement from the user. `systemic-pattern-scan` fires only at task resolution, and only if the closing self-critique for that task was actually written.
 
 A resolved project ticket hit both gaps in the same task. Two separate hand-rolled deploy-CLI invocations landed a wrong metadata field (once, then again two days later); each correction was a point-fix into a narrow reference leaf, never read as "this whole action needs a tool." The ticket resolved `fixed` with no experience leaf, so `systemic-pattern-scan`'s resolution-time hook never ran on it. A deployment-automation skill was authored five days later, on the **third** hit of the same wall — per the landing commit's own words: "several infrastructure skills lived in the source but weren't in the catalog, so the session blindly hand-rolled deploy commands." A second, independent instance in the same ticket: a live-traffic health-check script and a prod-request-sampling script were both hand-rolled into a ticket-scoped scratch area and never promoted to a reusable product-tree tool — even though an existing benchmarking tool was explicitly known to be the wrong shape for the job (wrong row-selection semantics) and was simply routed around, not fixed or named as superseded.
+
+## Principle
+
+To turn a complex reusable hand-rolled action into a tool before the user has to point it out, treat the second time the same multi-step action (roughly three or more ordered steps, a step with an easy-to-get-wrong field, a procedure touching shared or external state, or one that already has an informal write-up) is carried out by hand with no skill or tool covering it as a self-improvement trigger in its own right, and offer via AskUserQuestion to formalize it as a skill or tool (formalize / not now / backlog); on acceptance run self-improvement's normal two-beat flow; for a ticket-scoped measurement script reused a second time, promote it into a product-tree tool or name a fix to the existing tool instead of silently routing around it.
+
+## Goal class
+
+reusable tools created at the second repetition of a hand-rolled action
+
+## Grounded in
+
+- [[a-repeated-hand-rolled-action-is-seen-by-no-trigger-that-reads-only-corrections-and-resolutions]]
+- [[a-recorded-remedy-is-absent-at-the-act-it-governs]]
 
 ## Guidance
 

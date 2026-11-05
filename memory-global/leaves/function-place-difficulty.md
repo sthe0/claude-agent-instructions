@@ -2,7 +2,8 @@
 name: function-place-difficulty
 description: A difficulty is a symptom on the `морфология` (form) layer; its cause is a broken `функциональное место` (functional place) in the `организованность` (function layer) that place serves — the two are not 1:1, so reconstruct the functional place before optimizing the literal order.
 type: reference
-schema: leaf/v1
+schema: ontology/v1
+converted_from: leaf/v1
 created: 2026-07-13
 last_verified: 2026-07-13
 ---
@@ -15,6 +16,14 @@ The short pointer lives in CLAUDE.md's opening root-primitive paragraph; this le
 
 <!-- Language exception: морфология/функциональное место/организованность are the settled SMD source-ontology terms this leaf types; preserved verbatim for traceability. -->
 CLAUDE.md's root primitive names a difficulty as "a divergence between a desired and an actual state" — a natural-psychological framing that localizes the problem in the stated wish (the literal order). Taken at face value, this pulls the solver toward patching the морфология (the observable symptom) directly: satisfy the order as given. But an order is itself an object filling a **функциональное место** (functional place) — a position defined by the организованность (organized whole, function layer) it serves, not by its current filler. When that place is emptied or misfilled, the divergence a person reports is the symptom; the actual cause is the broken functional place, and the map between symptom and cause is **not 1:1** — the same symptom can mask different broken places, and the same broken place can surface as different symptoms. Optimizing the symptom without reconstructing the place risks solving the wrong problem well.
+
+## Distinction
+
+Separates the morphology of a difficulty (the observable material: the stated order, the literal wish, the surface divergence) from the functional place it is a filling of (a position in the organized whole it serves, which survives a change of its filler), and treats a need as a functional place that has lost its object-filling. The map between symptom and broken place is not one-to-one, so the task to solve is the one reconstructed from the place, which may differ from the literal order.
+
+## Adequacy
+
+The distinction is inadequate if, across a sample of reported divergences, satisfying the literal order as stated removes the divergence at its cause in essentially every case, so that reconstructing the functional place never changes the task; or if the same symptom never masks different broken places.
 
 ## Guidance
 

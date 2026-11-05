@@ -2,7 +2,10 @@
 name: macos-shell-portability-gotchas
 description: Three macOS-specific shell-portability traps that pass on Linux but break on macOS — BSD sed lacks GNU '\+', bash 3.2 errors on empty "${arr[@]}" under set -u, and 'cmd | grep -q' under pipefail spuriously fails via SIGPIPE.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:macos-ships-bsd-sed-and-bash-3-2-where-gnu-sed-syntax-empty-array-expansion-and-grep-q-under-pipefail-behave-otherwise, regularity:a-tool-relies-on-facilities-its-authors-host-supplies-unasked]
+grounding_judged: 924e13aeb350fc963941311aa08f970f337f5425d4d2f8d18af6be502ab0d0ab
 created: 2026-06-30
 last_verified: 2026-06-30
 ---
@@ -10,6 +13,19 @@ last_verified: 2026-06-30
 ## Difficulty
 
 A shell script (or its tests) written and verified on Linux silently misbehaves on macOS because macOS ships **BSD userland** and an ancient **bash 3.2.57** (`/usr/bin/env bash` → `/bin/bash`; Apple froze it pre-GPLv3). The symptoms look like product bugs but are portability traps; each cost real rediscovery time on the `project_entry` launcher subsystem (a past era's task-entry subsystem on this machine, 2026-06-30).
+
+## Principle
+
+To keep a shell script and its tests working on macOS as on Linux, write sed with -E and + instead of GNU \+, expand possibly-empty arrays as ${arr[@]+"${arr[@]}"}, capture a producer's output and then grep it instead of piping into grep -q under pipefail, self-locate a sourced file with ${BASH_SOURCE[0]:-$0}, and verify shell changes under /bin/bash 3.2 with set -uo pipefail and under zsh, not only the Linux or Homebrew bash 5 they were developed on.
+
+## Goal class
+
+shell scripts that run on macOS and Linux alike
+
+## Grounded in
+
+- [[macos-ships-bsd-sed-and-bash-3-2-where-gnu-sed-syntax-empty-array-expansion-and-grep-q-under-pipefail-behave-otherwise]]
+- [[a-tool-relies-on-facilities-its-authors-host-supplies-unasked]]
 
 ## Guidance
 

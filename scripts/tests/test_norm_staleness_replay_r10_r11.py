@@ -1,7 +1,8 @@
 """Replay of the real rating-after-landing plan revisions r10 -> r11 through the engine.
 
 The fixtures under `fixtures/norm_staleness_replay/` are cut from the two real plan files
-(prose shortened, every structural field kept; stage 6 verbatim). r10 -> r11 changes the
+(prose shortened, every structural field kept; stage 6 verbatim, except that every
+`[stage.principle].source` carries a resolvable knowledge ref instead of the original text). r10 -> r11 changes the
 third final check's command and stage 6's `verify_command` -- neither is part of a stage's
 interface. The walk that follows the replan must therefore re-review only what that edit
 reaches: the base unit (the final check list is part of the base), stage 6's unit, and the

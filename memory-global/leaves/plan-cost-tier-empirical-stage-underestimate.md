@@ -2,7 +2,11 @@
 name: plan-cost-tier-empirical-stage-underestimate
 description: A plan's per-stage cost_tier (small/medium/large, driving the wall-clock estimate the effort-divergence trigger compares against) undercounts a stage whose material bundles several independently-costly units of work — an empirical measurement campaign, or a multi-file engine-rewrite spanning several independently-verifiable slices plus a from-scratch cross-cutting test suite. The empirical case is fixed by bumping the tier to "large"; the multi-slice engine-rewrite case is NOT fixed by any tier bump — it must be decomposed into separate stages at authoring time.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-stage-bundling-several-independent-units-of-work-costs-more-than-any-single-cost-tier-prices, regularity:effort-divergence-trigger, regularity:agentctl-acceptance-judge-gate]
+grounding_judged: dd9002e4c8cbda8c8f327bd84170743b887ce41999eaa1694d344cf0dedb7887
+grounding_override: The judge cannot verify the given regularities effort-divergence-trigger and agentctl-acceptance-judge-gate, which are system facts read from code; the rule rests on them, so they stay as grounds.
 created: 2026-08-25
 last_verified: 2026-09-30
 ---
@@ -24,6 +28,20 @@ manufactures a spurious effort-divergence firing once the real number lands,
 forcing a `declare → investigate → critique → replan` cycle to correct an
 estimate that a slightly more careful authoring pass would have gotten right
 the first time.
+
+## Principle
+
+To achieve an effort-divergence trigger that fires only on a genuinely wrong norm, price each stage by what it actually costs in active wall-clock: tier a stage large (not medium) when its material work is a multi-variant or multi-repeat measurement campaign against a real harness, an acceptance_review stage carrying a judge-verdict gate that can bounce, or a stage expected to accumulate its own plan_review rounds; and decompose a stage that spans two or more files or subsystems with three or more independently verifiable slices (or pairs such a rewrite with a from-scratch test suite of a double-digit number of scenarios) into separate stages along the slice boundaries, chained by depends_on, instead of pricing it by tier.
+
+## Goal class
+
+plan cost estimates that match the stage's actual active wall-clock
+
+## Grounded in
+
+- [[a-stage-bundling-several-independent-units-of-work-costs-more-than-any-single-cost-tier-prices]]
+- [[effort-divergence-trigger]]
+- [[agentctl-acceptance-judge-gate]]
 
 ## Guidance
 

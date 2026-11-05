@@ -354,6 +354,12 @@ hits = 3
 hit_classes = ["structural", "structural", "structural"]
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/gates.py::regularity_digest::pattern.match"]
+class = "structural"
+ground = "Splits the `---` frontmatter block off a regularity before its provenance and stamp keys are dropped from the digest; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/gates.py::_remedy_tag_for_concern::pattern.match"]
 class = "structural"
 ground = "_REMEDY_TAG_PREFIX_RE.match reads the leading 'cut:/add:' protocol prefix of a concern."
@@ -1658,6 +1664,18 @@ hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/grounding.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles the `[project:]<kind>:<slug>` ground-reference grammar; fixed reference syntax resolved against the corpus, not free text."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/grounding.py::parse_ground_refs::pattern.match"]
+class = "structural"
+ground = "Parses one `;`-separated item as a ground reference; the grammar is fixed and a non-matching item is refused, never interpreted."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/lib/principle_provenance.py::<module>::re.compile"]
 class = "structural"
 ground = "Compiles the `---` frontmatter block, the `sha256:<64 hex>` digest shape and the backtick slug after the `← ` index-pointer arrow; fixed leaf grammar."
@@ -1731,7 +1749,7 @@ ground = "Tests the `sha256:<64 hex>` digest format of a case; a format check."
 hits = 1
 reviewed_by = "developer"
 
-[sites."scripts/lib/principle_provenance.py::_section_body::re.search"]
+[sites."scripts/lib/principle_provenance.py::section_body::re.search"]
 class = "structural"
 ground = "Finds a `## <name>` section heading and the next heading to cut a section body; markdown heading syntax."
 hits = 2
@@ -2031,9 +2049,9 @@ reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::<module>::re.compile"]
 class = "structural"
-ground = "Compile H2 (`## ` heading), FRONTMATTER (`---` block), CONTEXT_ID (`<n>:<12 hex>`), SLUG, REVISION (git ref charset), CONTEXTS_HEADING and SPLIT_MARKER_LINE patterns: fixed identifier, heading and marker syntax."
-hits = 7
-hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural"]
+ground = "Compile H2 (`## ` heading), FRONTMATTER (`---` block), CONTEXT_ID (`<n>:<12 hex>`), SLUG, TASK_ID (task-id charset), REVISION (git ref charset), CONTEXTS_HEADING and SPLIT_MARKER_LINE patterns: fixed identifier, heading and marker syntax."
+hits = 8
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::_id_list::pattern.fullmatch"]
@@ -2057,9 +2075,9 @@ reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::promote_problems::pattern.fullmatch"]
 class = "structural"
-ground = "Checks each named source slug against the fixed slug charset before looking it up in the corpus."
-hits = 1
-hit_classes = ["structural"]
+ground = "Checks each named source slug, and the --order-derived / --introduced-by task slugs, against the fixed slug charset before looking them up or writing them to frontmatter."
+hits = 2
+hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
 [sites."scripts/record-experience.py::cmd_promote::pattern.search"]
@@ -2710,18 +2728,6 @@ hits = 6
 hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
-[sites."scripts/verify-leaf-structure.py::_section_text::pattern.search"]
-class = "structural"
-ground = "SECTION_RE finds the next markdown '## ' heading to delimit a named section's body (fixed heading syntax)."
-hits = 1
-reviewed_by = "developer"
-
-[sites."scripts/verify-leaf-structure.py::_section_text::re.search"]
-class = "structural"
-ground = "Locates the '## <name>' heading line of a required section by its fixed heading syntax; the name is a schema constant, not free text."
-hits = 1
-reviewed_by = "developer"
-
 [sites."scripts/verify-leaf-structure.py::is_sk_leaf::pattern.search"]
 class = "structural"
 ground = "SK_PATH_RE matches the system-knowledge/<name>.md path shape."
@@ -3077,6 +3083,31 @@ hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "developer"
 
+[sites."scripts/lib/leaf_forms.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles the leading `---` frontmatter block pattern; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/leaf_forms.py::frontmatter_of::pattern.match"]
+class = "structural"
+ground = "Splits the `---` frontmatter block off a leaf; frontmatter syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/leaf_forms.py::field::re.search"]
+class = "structural"
+ground = "Finds the `<key>:` line of a leaf's frontmatter to read its value; the key is a schema constant, not free text."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/lib/leaf_forms.py::_section_text::re.search"]
+class = "structural"
+ground = "Locates the `## <name>` heading of a required section and the next `## ` heading that ends its body; the names are schema constants, fixed heading syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/advisor.py::_ce_prompt::re.sub"]
 class = "structural"
 ground = "Substitutes the fixed {begin}/{end}/{venue}/{branch}/{code} placeholders of the code-effects judge prompt template with run-time values; template filling, no meaning decided."
@@ -3129,6 +3160,13 @@ reviewed_by = "developer"
 [sites."scripts/agentctl/segment_resolver.py::_interpreter::pattern.fullmatch"]
 class = "structural"
 ground = "Recognizes the -c / -s flag clusters of a shell invocation; fixed command-line syntax."
+hits = 2
+hit_classes = ["structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/leaf_forms.py::_missing::pattern.match"]
+class = "structural"
+ground = "Splits the frontmatter block off a leaf before its sections are read; frontmatter syntax."
 hits = 2
 hit_classes = ["structural", "structural"]
 reviewed_by = "developer"

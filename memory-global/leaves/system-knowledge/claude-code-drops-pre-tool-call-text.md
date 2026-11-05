@@ -2,7 +2,10 @@
 name: claude-code-drops-pre-tool-call-text
 description: HISTORICAL (resolved 2026-07-21). On Claude Code terminal clients up to ~v2.1.211, assistant text emitted before a subsequent tool call in the same turn could be silently dropped from render — and often from the transcript too (non-deterministic; measured 2026-07-17 on v2.1.211: 7/1707 such entries survived). Re-measured FALSE on client 2.1.216 (2026-07-21): pre-tool-call text now renders and persists. The workaround hooks and the universal AskUserQuestion turn-split were retired; the current norm assumes a render-capable client. Kept as forensic record and as the provenance for that retirement.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: measurement
+given_source: https://github.com/anthropics/claude-code/issues/21751
 created: 2026-07-02
 last_verified: 2026-07-21
 ---
@@ -21,6 +24,18 @@ The original forensic evidence, preserved because it is why the fact existed:
 > verified by: transcript forensics 2026-07-04, session e00ff3b4 (linux): the failing turn's transcript showed only `thinking` + `tool_use` (AskUserQuestion) entries around the ask (entries 1350–1353) — a ~2500-char report emitted in the same message was absent; contrast entry 1358, an 85-char text block before a `Bash` tool_use in a *different* message, which WAS transcripted.
 > verified by: re-measurement 2026-07-17, v2.1.211 (1080 local transcripts / 133957 assistant entries): the "always absent from transcript" universal was REFUTED — 7 of 1707 AskUserQuestion entries carried a same-entry text block present in the transcript. The drop was real and common but not deterministic.
 > verified by: re-measurement 2026-07-21, client 2.1.216: pre-tool-call text renders and persists — the regression is fixed.
+
+## Regularity
+
+On Claude Code terminal clients up to about v2.1.211, assistant text emitted before a subsequent tool call in the same turn was often not rendered and often absent from the transcript, though not deterministically: a re-measurement on v2.1.211 on 2026-07-17 found 7 of 1707 AskUserQuestion entries that carried a same-entry text block present in the transcript. A controlled experiment on v2.1.198 (2026-07-02) had the user report not seeing the text above an AskUserQuestion, while the same content as a turn-final message rendered. A re-measurement on client 2.1.216 (2026-07-21) found pre-tool-call text rendered and persisted: the behaviour was a client regression fixed upstream (related issues anthropics/claude-code 21751, 74558, 24733). The plan-presentation two-turn flow now rests on the delivery gate's receipt binding to plan_sha256, not on this behaviour.
+
+## Given
+
+Given from measurement: `https://github.com/anthropics/claude-code/issues/21751`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+A live probe on client 2.1.216 or later in which text preceding a same-turn AskUserQuestion is not shown to the user or is missing from the transcript, would show the statement false for current clients.
 
 ## Guidance
 

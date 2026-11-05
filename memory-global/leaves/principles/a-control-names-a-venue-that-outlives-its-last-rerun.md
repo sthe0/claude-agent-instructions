@@ -4,7 +4,8 @@ description: A stage check's venue (worktree, repo_root, settings file, scaffold
 type: reference
 schema: principle/v1
 generality: 2
-grounded_in: [regularity:a-stage-control-is-re-evaluated-after-its-world-has-changed]
+grounded_in: [regularity:a-stage-control-is-re-evaluated-after-its-world-has-changed, regularity:a-coordinate-shifts-while-the-content-it-addressed-stays]
+grounding_judged: 1013f2400533bc4e483d9dde5af1030b0ea8e3b291e8ab4635ec090c0fe0e3bc
 domain: development
 created: 2026-10-12
 last_verified: 2026-10-12

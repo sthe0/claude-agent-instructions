@@ -87,7 +87,7 @@ def make_handler(state_root, *, window_hours=24, include_all=False, sessions=(),
     def snapshot() -> dict:
         return model.collect(state_root, now=dt.datetime.fromtimestamp(clock(), dt.timezone.utc),
                              window_hours=window_hours, include_all=include_all, sessions=sessions,
-                             cost_log=cost_log)
+                             cost_log=cost_log, windowed=attention.windowed_engines(locator))
 
     def overlay(current: dict) -> tuple[dict, list]:
         return attention.collect([t["session_id"] for t in current["tasks"]], locator, transcripts_root)

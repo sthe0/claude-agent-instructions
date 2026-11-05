@@ -2,7 +2,10 @@
 name: prompt-cache-1h-ttl-already-active
 description: Difficulty it removes — you suspect the 5-minute prompt-cache TTL is what forces the constant cache re-writes, and you go looking for an env var to extend it. Fact — the 1h TTL is already reachable with no env var (client-side gate keyed on querySource against a server-tunable allowlist that already contains the main REPL thread), the choice is fixed per session, and on this machine's 14-day corpus roughly 70% of sessions and half the cache-creation tokens are already 1h — so cache writes come from prefix INVALIDATION, not from TTL expiry.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: ~/.nvm/versions/node/*/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe
 created: 2026-08-24
 last_verified: 2026-08-24
 ---
@@ -20,6 +23,18 @@ so every turn pays to write the prefix again. That hypothesis points at an easy 
 The hypothesis is wrong, and acting on it wastes an env-var rollout on something already switched on
 for most sessions. Worse, it hides the real cause: the prefix is being **invalidated** (something
 near the front of the context changes), and no TTL setting can help with that.
+
+## Regularity
+
+In Claude Code client 2.1.241 (read from the installed bundle on 2026-08-24) the prompt-cache TTL is chosen by a client-side gate keyed on the request's querySource: FORCE_PROMPT_CACHING_5M gives 5m; ENABLE_PROMPT_CACHING_1H (or Bedrock plus ENABLE_PROMPT_CACHING_1H_BEDROCK) gives 1h; a client not logged in with subscription scopes, or an account using overage, gets 5m; otherwise the querySource is matched against the server-tunable allowlist tengu_prompt_cache_1h_config, whose built-in default is repl_main_thread*, sdk, auto_mode, memdir_relevance. The interactive main thread and headless claude -p are therefore on the allowlist with no env var, and the TTL is a per-session constant (only 5 of 1971 cache-creating sessions were mixed). Over 2787 transcripts (14 days, deduplicated by message.id) 49.3% of cache-creation tokens (128657201 of 260752004) and 63.8% of cache-creating steps (21579 of 33809) were 1h, with whole days at 0% and whole days at 100%; which condition flipped those days was not verified. For a session at 1h a 5-minute expiry cannot be the reason a prefix was written again, so those writes follow from the cached prefix changing between turns. The minified function names are renamed between builds, so the code is findable only by the literal string tengu_prompt_cache_1h_config.
+
+## Given
+
+Given from code: `~/.nvm/versions/node/*/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+A 1h session shows cache-creation tokens re-written on a turn where the cached prefix was byte-identical to the previous turn, or a client build's gate returns 5m for repl_main_thread on a logged-in subscription account without overage or the env override, or the measured 1h share over a fresh 14-day corpus counted by the stated rule differs materially from these figures without a change of client.
 
 ## Guidance
 

@@ -2,7 +2,10 @@
 name: committed-files-earn-their-place
 description: A file earns a place in the product repository by being useful to OTHER developers (not by having an in-repo caller), and then must document why it exists and when/how to use it; useful-only-to-us-later goes to the personal junk tree; a one-shot self-check of a single delivery stays uncommitted in the task's evidence dir
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:what-a-change-does-not-carry-ends-with-its-authors-context, regularity:a-recorded-remedy-is-absent-at-the-act-it-governs, regularity:having-an-in-repo-caller-varies-independently-of-usefulness-to-other-developers, regularity:a-diff-that-outgrows-its-task-costs-reviewer-attention-by-the-whole-diff]
+grounding_judged: a493ac0d9504ac55c108a2be87438be311c03b85b7b0441210865cf84a678d54
 created: 2026-07-13
 last_verified: 2026-10-06
 ---
@@ -10,6 +13,21 @@ last_verified: 2026-10-06
 ## Difficulty
 
 Helper scripts, data dumps, run logs, and other task-produced files get committed into the product tree by reflex, with no in-repo caller and no usage doc beyond a docstring. Two symmetric failures follow: a genuinely reusable helper is dropped (or buried in an evidence dir) because "nothing calls it", and a one-shot self-check or pipeline intermediate is committed as permanent product clutter a future reader cannot interpret. The wrong keep-criterion is "does something in the repo call it" — a file with no caller can still be the most useful thing another developer finds, and a file with a caller can still be task-local noise. (Trigger 1: a past ticket committed a job-success-assertion script to an internal project's scripts directory with no in-repo caller and no when/how doc. Trigger 2, 2026-10-06: an internal project's judge-calibration pipeline wrote its cross-stage run state — three raw generation logs totaling ~52 MB, plus basket/pool construction intermediates and per-run judge-score dumps — directly into a VCS-tracked product library `resources/` directory, via a `RESOURCES_DIR`-style constant in the pipeline's own CLI that every run writes through by default; caught only when the user asked whether the directory's files belonged in the shared repo, and named explicitly as a *recurring* pattern, not a one-off — meaning the 2026-07-13 re-norming below did not actually change commit-time behavior.)
+
+## Principle
+
+To keep the product repository free of task-local clutter while keeping genuinely reusable helpers, place every task-produced file in exactly one home by whether it is useful to other developers (commit it and document why it exists and when and how to use it), useful only to us later (the personal junk tree), or a one-shot self-check of a single delivery (the task's evidence directory, uncommitted), and apply the test at plan-authoring time as well as at commit and review.
+
+## Goal class
+
+deciding where task-produced files live
+
+## Grounded in
+
+- [[what-a-change-does-not-carry-ends-with-its-authors-context]]
+- [[a-recorded-remedy-is-absent-at-the-act-it-governs]]
+- [[having-an-in-repo-caller-varies-independently-of-usefulness-to-other-developers]]
+- [[a-diff-that-outgrows-its-task-costs-reviewer-attention-by-the-whole-diff]]
 
 ## Guidance
 

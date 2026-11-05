@@ -2,7 +2,11 @@
 name: investigate-cited-precedent
 description: When the user points at a specific prior success/precedent (ticket, run, commit, PR) as evidence, read HOW that precedent actually did it before theorizing from the current code snapshot — the present state may have diverged from the precedent's. This includes the **implicit** precedent — when the current task repeats or extends measurement/analysis work in a ticket that already holds prior runs, read those prior artifacts before reconstructing the method from first principles, even if the user never explicitly pointed at them — and the **self-invoked** precedent, where you reach for a prior case unprompted to settle a decision (which queue/venue/channel/tool to route to, or which system/codebase actually owns an entity under investigation) purely by topical or surface similarity, and must re-derive the governing rule or verify ownership directly instead of repeating the destination.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on, regularity:a-memory-leaf-describing-mutable-state-ages-while-its-live-source-moves, regularity:a-good-outcome-obtained-under-an-earlier-state-can-rest-on-ambient-defaults-and-a-destination-that-the-present-snapshot-no-longer-supplies]
+grounding_judged: fd78ac541eb6d315243da9a923f6404e700dca659a69a541d6afb004bd98a700
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-07-03
 last_verified: 2026-09-17
 ---
@@ -12,6 +16,20 @@ last_verified: 2026-09-17
 ## Difficulty
 
 When the user cites a concrete precedent ("we measured this in a past ticket", "this landed in commit X", "the green run did Y") as evidence that something is possible or was done differently, building a theory from the **current** code/state instead of reading how the precedent actually worked reaches wrong conclusions and wastes the user's attention. The present snapshot may have diverged from the precedent's state — an assert added since, a default changed, a refactor that moved the load-bearing line — so reasoning from "what the code says now" silently contradicts "what the cited run did then".
+
+## Principle
+
+To reach a correct conclusion about a task that a precedent bears on, read how that precedent actually did it (its ticket thread, run parameters, code state at the time, linked spec) before theorizing from the current snapshot, reconstruct the invariant the precedent relied on and check it against the current defaults, and when reaching for a precedent unprompted to settle a routing or ownership decision, re-derive the governing rule or verify ownership directly rather than repeat the precedent's destination.
+
+## Goal class
+
+conclusions that honour a cited, implicit or self-invoked precedent
+
+## Grounded in
+
+- [[a-held-view-of-a-source-keeps-looking-consistent-after-the-source-has-moved-on]]
+- [[a-memory-leaf-describing-mutable-state-ages-while-its-live-source-moves]]
+- [[a-good-outcome-obtained-under-an-earlier-state-can-rest-on-ambient-defaults-and-a-destination-that-the-present-snapshot-no-longer-supplies]]
 
 ## Guidance
 

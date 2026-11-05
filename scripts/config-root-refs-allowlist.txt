@@ -122,6 +122,8 @@ memory-global/leaves/autocompact-threshold-policy.md:60:0a742cea  # keep:legacy-
 scripts/README.md:108:a5f3990f  # keep:legacy-fallback — the install-reminder-hooks.sh row names the personal ~/.claude/settings.json as the prune-only file class, distinct from the agent-home file it also wires
 scripts/agentctl/README.md:1031:4ce7ac6c  # keep:harness-owned — states the harness's OWN root-resolution rule ($CLAUDE_CONFIG_DIR, else ~/.claude); the generic form would erase the very rule the line exists to state
 scripts/agentctl/README.md:1039:37b335ef  # keep:legacy-fallback — names the personal ~/.claude/settings.json as the prune-only file class, distinct from the agent-home file; same two-file distinction the scripts/README.md and docs/operations/guards.md entries above already carry
+memory-global/leaves/system-knowledge/harness-read-dedup.md:8:9b0f5590  # keep:harness-owned — given_source of a given regularity: the session transcript under the harness-owned ~/.claude/projects root, the primary source the statement is given from
+memory-global/leaves/system-knowledge/harness-read-dedup.md:21:ee9d4979  # keep:harness-owned — the given regularity's statement: names the harness-owned per-session file history under ~/.claude, the very thing the observation is about
 
 # --- Frozen data fixtures (glob form) ---
 # A committed byte-for-byte snapshot is not authored prose: its value IS its

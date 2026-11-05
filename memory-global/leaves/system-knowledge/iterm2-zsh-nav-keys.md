@@ -2,7 +2,10 @@
 name: iTerm2 + zsh text navigation keybindings
 description: Difficulty it removes — Option/Cmd+arrow / Home / End print escape sequences in the user's iTerm2 + zsh. Fact — both an iTerm profile setting (Option Key Sends Esc+ / Natural Text Editing) AND a zsh bindkey block are required, neither alone suffices; cat -v diagnoses which half is broken.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: measurement
+given_source: ~/Library/Preferences/com.googlecode.iterm2.plist
 created: 2026-05-29
 last_verified: 2026-06-24
 ---
@@ -12,6 +15,18 @@ last_verified: 2026-06-24
 ## Difficulty
 
 Option+←/→, ⌘+←/→, Home, End, Option+Backspace print literal characters (`Æ`, `^[b`, `^[[H`, …) into the prompt instead of performing word/line navigation. The cause is two-part and fixing only one half leaves the bug — the iTerm2 profile must send the right escape sequences AND zsh must have `bindkey` entries for them.
+
+## Regularity
+
+Observed on the user's Mac (iTerm2 with zsh, TERM=xterm-256color): Option+arrow, Cmd+arrow, Home, End and Option+Backspace printed literal characters at the prompt (the leaf lists Æ, ^[b and ^[[H) instead of navigating. Before the fix on 2026-05-29, defaults read com.googlecode.iterm2 piped to grep "Option Key Sends" showed = 0 for both of the user's profiles. The leaf reports the issue as resolved by two changes made together on that Mac: setting the iTerm2 profile values Option Key Sends and Right Option Key Sends to Esc+ (value 2), and adding a bindkey block to ~/.zshrc for the sequences the leaf lists (for example ^[[1;3D, ^[[1;5D, ^[[H, ^[[F, ^[[1~, ^[[4~, ^[OH, ^[OF, ^[^?); the leaf labels ^[[1;3D and ^[[1;3C in that block as the sequences of the iTerm2 Natural Text Editing preset, and gives the preset as one GUI route to the iTerm2 half of the fix. The leaf does not record testing either change alone. The leaf states, without recording an observation of them, that Normal mode (value 0) sends a macOS-native UTF-8 byte such as Æ, that zsh's default emacs keymap binds only the ^[b and ^[f Meta forms, and that iTerm2 overwrites its plist ~/Library/Preferences/com.googlecode.iterm2.plist on quit. As a diagnostic, the leaf reports that running cat -v and pressing the broken key shows the bytes iTerm2 sends: a printable character such as Æ is read by the leaf as the iTerm2 profile half being wrong, and a ^[... sequence as the zsh binding half being missing.
+
+## Given
+
+Given from measurement: `~/Library/Preferences/com.googlecode.iterm2.plist`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+On the user's Mac, setting only the iTerm2 profile to Esc+ with no bindkey entries (or only the bindkey block with Option Key Sends at 0) already makes Option+arrow navigate words, or cat -v shows ^[... for a key while the profile is at 0.
 
 ## Guidance
 

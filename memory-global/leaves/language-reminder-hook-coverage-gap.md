@@ -2,7 +2,10 @@
 name: language-reminder-hook-coverage-gap
 description: the language check in hook-prompt-reminders.py fires only on UserPromptSubmit — autonomous continuation turns (resuming after tool-only/task-notification turns, no fresh user prompt) get no language nudge and can silently lapse into English
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:the-language-reminder-in-hook-prompt-reminders-fires-only-when-a-new-user-prompt-arrives]
+grounding_judged: 16b6ef8e3b058d74cffc04b78e1515938cf2e798300a36646a5917c4325b891c
 created: 2026-08-25
 last_verified: 2026-09-14
 ---
@@ -16,6 +19,18 @@ Confirmed 2026-08-25 in a project session conducted entirely in Russian: after a
 **Second occurrence, 2026-08-26, same project, same turn shape:** a long autonomous git/bash cleanup sequence (no fresh user message in between) ended with a full outcome report composed entirely in English. This is exactly the second independent lapse this leaf's own Guidance named as the trigger to stop deferring and actually build the `Stop`-hook extension.
 
 **Third occurrence, 2026-09-14, a downstream project, same turn shape:** a resolution-gate wrap-up (recording a resolved ticket's result in memory, committing it, landing it to trunk) ran across several tool-only and `<task-notification>`-only turns with no fresh user message in between; the closing report and the following `Stop`-hook reply both landed entirely in English, in a session conducted entirely in Russian. The user caught it a third time ("почему не по-русски?"). [claude-agent-instructions#190](https://github.com/sthe0/claude-agent-instructions/issues/190) — filed after occurrence #2 with a complete implementation plan — was still sitting in `backlog`, unimplemented, when this occurrence happened; the user's occurrence-#2 decision to park it did not anticipate a third hit on the identical turn shape.
+
+## Principle
+
+To keep user-facing replies in the dialogue's established language on a turn that opened with tool results or task notifications rather than a fresh user message, re-check that language yourself before writing the text, since no automated reminder fires on that turn shape.
+
+## Goal class
+
+replies in the dialogue's language on continuation turns
+
+## Grounded in
+
+- [[the-language-reminder-in-hook-prompt-reminders-fires-only-when-a-new-user-prompt-arrives]]
 
 ## Guidance
 
