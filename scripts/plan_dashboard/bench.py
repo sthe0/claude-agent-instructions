@@ -61,7 +61,7 @@ def run(state_root, *, session=None, window_hours=24.0, cost_log=None, transcrip
     for mode in ("live", "all"):
         snapshots[mode], seconds[f"{mode} table"] = measure(lambda: model.collect(
             state_root, now=now, window_hours=window_hours, include_all=mode == "all", sessions=(),
-            cost_log=cost_log))
+            cost_log=cost_log, windowed=attention.windowed_engines(locator)))
     _, seconds["live overlay"] = measure(lambda: tui.read_attention(snapshots["live"], locator, transcripts_root))
     attention.clear_cache()
     _, seconds["all screen overlay"] = measure(

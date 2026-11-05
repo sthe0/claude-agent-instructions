@@ -236,6 +236,8 @@ MUTATIONS = {
     "model-lists-unlinked-spawns": (MODEL, "_is_unlinked_spawn", lambda _original: lambda _row: False),
     "model-all-hides-unlinked-spawns": (MODEL, "_listed_stems",
                                         lambda original: lambda rows, wanted, pinned, _all: original(rows, wanted, pinned, False)),
+    "model-windows-keep-idle": (MODEL, "_qualifies_alone", lambda original: lambda state, row, _windowed: original(state, row, None)),
+    "model-windows-unknown-hide-idle": (MODEL, "_qualifies_alone", lambda original: lambda state, row, _windowed: original(state, row, set())),
     "model-detail-writes": (MODEL, "detail", _detail_writes),
     "model-attribution-by-time": (MODEL, "attribute_spawn", _attribution_by_time),
     "model-estimate-unflagged": (MODEL, "phases", _estimate_unflagged),

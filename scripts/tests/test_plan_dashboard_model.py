@@ -192,6 +192,32 @@ def test_session_lists_an_unlinked_spawn_it_names(tmp_path):
     assert set(rows) == {"plain", "spawn"}
 
 
+def _window_root(tmp_path):
+    sessions = [make_state("on-window", history=[event("resolve", at(hours=30))]),
+                make_state("active", history=[event("approve", at(minutes=5))]),
+                make_state("idle", history=[event("approve", at(hours=2))])]
+    root = build_fixture_root(tmp_path, sessions, now=NOW)
+    for name in ("unreadable", "broken-window"):
+        (root.state_root / f"{name}.json").write_text("{", encoding="utf-8")
+        set_mtime(root.state_root / f"{name}.json", at(hours=2))
+    return root
+
+
+def test_a_windowed_listing_holds_each_window_and_what_is_active_now(tmp_path):
+    rows = rows_by_session(collect(_window_root(tmp_path), windowed={"on-window", "broken-window"}))
+    assert set(rows) == {"on-window", "broken-window", "active"}
+
+
+def test_all_still_lists_every_task_beside_the_windows(tmp_path):
+    rows = rows_by_session(collect(_window_root(tmp_path), windowed={"on-window"}, include_all=True))
+    assert {"on-window", "active", "idle", "unreadable", "broken-window"} <= set(rows)
+
+
+def test_unknown_windows_keep_the_idle_and_unreadable_rows(tmp_path):
+    rows = rows_by_session(collect(_window_root(tmp_path)))
+    assert set(rows) == {"active", "idle", "unreadable", "broken-window"}
+
+
 def test_a_parent_link_cycle_ends_the_walk_with_a_row(tmp_path):
     sessions = [make_state("a", history=[event("approve", at(hours=1))],
                            parent_link={"parent_session": "b", "stage_index": 1}),

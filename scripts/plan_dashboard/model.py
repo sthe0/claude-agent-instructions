@@ -541,11 +541,21 @@ def _listed_stems(summaries: dict, wanted: set, pinned: set, include_all: bool) 
     return listed
 
 
+def _qualifies_alone(state, row: dict, windowed) -> bool:
+    """Whether a task is listed for itself. Once the open windows are known they account for the work
+    a person left open, so beyond them only a task active right now earns a row."""
+    if windowed is None:
+        return state is None or row["liveness"] in ("active", "idle")
+    return row["liveness"] == "active"
+
+
 def collect(state_root, *, now: dt.datetime, window_hours=24, include_all=False, sessions=None,
-            cost_log=None) -> dict:
+            cost_log=None, windowed=None) -> dict:
+    """``windowed`` names the task each open window shows (``attention.windowed_engines``); each is
+    listed whatever its age or state. ``None`` means the windows are unknown."""
     root = Path(state_root)
     window = dt.timedelta(hours=window_hours)
-    pinned = {config_root.sanitize_session_id(s) for s in (sessions or ())}
+    pinned = {config_root.sanitize_session_id(s) for s in (*(sessions or ()), *(windowed or ()))}
     mtimes = {}
     try:
         for path in sorted(root.glob("*.json")):
@@ -571,7 +581,7 @@ def collect(state_root, *, now: dt.datetime, window_hours=24, include_all=False,
         if _is_sidecar(stem, state):
             continue
         row = summaries[stem] = _summary(stem, state, reason, moment, now, window, ledger)
-        if state is None or include_all or stem in pinned or row["liveness"] in ("active", "idle"):
+        if include_all or stem in pinned or _qualifies_alone(state, row, windowed):
             wanted.add(stem)
     tasks = [summaries[stem] for stem in _listed_stems(summaries, wanted, pinned, include_all)]
     tasks.sort(key=lambda t: (t["last_activity"] or "", t["session_id"]), reverse=True)
