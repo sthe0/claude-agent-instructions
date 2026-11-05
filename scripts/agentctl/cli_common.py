@@ -143,16 +143,28 @@ def _observation_sha256(observation: str) -> str:
 _AUTOMATED_JUDGE_REVIEWERS = (advisor.JUDGE_REVIEWER, "judge:haiku")
 
 
+def _bound_elsewhere(kept: StageReview, fresh: StageReview) -> bool:
+    """True when both reviews are bound to observation bytes and the bytes differ.
+    An unbound record (empty sha, e.g. persisted before binding existed) stays protected."""
+    return bool(kept.observation_sha256 and fresh.observation_sha256
+                and kept.observation_sha256 != fresh.observation_sha256)
+
+
 def _record_stage_review(state: SessionState, review: StageReview, *, from_judge: bool) -> None:
     """Store a StageReview, one per stage_index (last-wins). A judge verdict
-    (from_judge=True) NEVER clobbers a human/manual review already present for the
-    stage (e.g. an override): the automated cognition must not silently overwrite the
-    user's explicit escape. A manual record (from_judge=False, via cmd_stage_review)
-    always replaces."""
+    (from_judge=True) never clobbers a human/manual review of the SAME observation
+    (e.g. an override): the automated cognition must not silently overwrite the
+    user's explicit escape. A human review bound to OTHER observation bytes no longer
+    speaks for the observation being judged — the gate already reads it as stale — so
+    a judge verdict on the current bytes replaces it instead of leaving the gate stale
+    forever. A manual record (from_judge=False, via cmd_stage_review) always replaces."""
     existing = [r for r in state.stage_reviews if r.stage_index == review.stage_index]
     # Not a bare `!= advisor.JUDGE_REVIEWER`: persisted reviews keep the tag they were
     # written under, so a judge-tier rename would otherwise freeze old automated verdicts as "human".
-    if from_judge and existing and any(r.reviewer not in _AUTOMATED_JUDGE_REVIEWERS for r in existing):
+    if from_judge and any(
+        r.reviewer not in _AUTOMATED_JUDGE_REVIEWERS and not _bound_elsewhere(r, review)
+        for r in existing
+    ):
         return
     state.stage_reviews = [r for r in state.stage_reviews if r.stage_index != review.stage_index]
     state.stage_reviews.append(review)
