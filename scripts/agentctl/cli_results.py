@@ -45,6 +45,7 @@ from .cli_common import (
     _landed_check_result,
     _require,
     _finished_work_data,
+    _agent_replans_fire_route,
     _judge_act,
     judge_on_parent,
     _log_gate,
@@ -703,6 +704,9 @@ def _record_result(args, *, store: StateStore, runner: Runner | None = None) -> 
     data = {"failure_kind": failure_kind} if failure_kind else {}
     if fire is not None:
         data["effort_divergence"] = fire
+        route = _agent_replans_fire_route(state)
+        if route is not None:
+            data["agent_route"] = route
     store.save(state)
     if opened is None:
         return _difficulty_cap_directive(state, f"stage {stage.index} failed", data)
