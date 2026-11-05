@@ -27,6 +27,7 @@ from .state import (
 from .store import StateStore
 from .cli_common import (
     _settle_stage_arming,
+    _unfold_parent_budget,
     _utcnow,
     _VALID_QUALITY_RATINGS,
     OBSERVATION_CONTRACT,
@@ -301,6 +302,7 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     # parent's order window before the live plan changes, so only the child's own spend and
     # minutes reach the child's.
     _flush_order_effort(state, store=store)
+    _unfold_parent_budget(state, originating)
 
     frame = PlanFrame(
         plan_path=state.plan_path,

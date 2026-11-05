@@ -2201,6 +2201,9 @@ def parse_plan(
                 f"{stage_ctx}: backlog_issue {raw_backlog_issue!r} is not of the form "
                 f"\"<repo>#<n>\" (R8)"
             )
+        raw_lazy = s.get("lazy", False)
+        if not isinstance(raw_lazy, bool):
+            raise PlanError(f"{stage_ctx}: lazy must be a boolean (true/false), got {raw_lazy!r}")
         stages.append(
             Stage(
                 index=index,
@@ -2260,6 +2263,7 @@ def parse_plan(
                 grants=_parse_stage_grants(s.get("grants"), stage_ctx, strict=strict),
                 effects=_parse_stage_effects(s.get("effects"), stage_ctx),
                 optional=raw_optional,
+                lazy=raw_lazy,
                 backlog_issue=raw_backlog_issue,
                 amendments=_parse_amendments(s.get("amendments"), stage_ctx),
                 branch=_parse_branch(s.get("branch"), stage_ctx, strict=strict) or meta.branch,
@@ -2780,6 +2784,7 @@ def _structural_signature(doc: PlanDoc) -> dict:
                 *grants_place(s),
                 *effects_place(s),
                 *optional_place(s),
+                *lazy_place(s),
             )
             for s in doc.stages
         },
@@ -2793,10 +2798,16 @@ def optional_place(stage) -> tuple:
     return ((("optional", stage.backlog_issue),),) if stage.optional else ()
 
 
+def lazy_place(stage) -> tuple:
+    """`optional_place` for the lazy mark: empty for a stage not marked lazy."""
+    return ((("lazy", True),),) if stage.lazy else ()
+
+
 def optional_stages_place(doc: PlanDoc) -> tuple:
     """The plan-level counterpart of `optional_place`, spliced onto `plan_content_digest`."""
     marks = tuple(sorted((s.index, s.backlog_issue) for s in doc.stages if s.optional))
-    return (("optional_stages", marks),) if marks else ()
+    lazy = tuple(sorted(s.index for s in doc.stages if s.lazy))
+    return ((("optional_stages", marks),) if marks else ()) + ((("lazy_stages", lazy),) if lazy else ())
 
 
 # The absent form of the knowledge place: no local knowledge, no refs on either projection.
@@ -4654,6 +4665,7 @@ STAGE_LEAF_CLASS: dict[str, str] = {
     "effects.sha256": "I",
     "effects.resolver": "I",
     "optional": "I",
+    "lazy": "I",
     "backlog_issue": "I",
     "amendments.date": "B",
     "amendments.text": "B",

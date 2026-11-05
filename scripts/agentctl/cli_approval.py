@@ -72,6 +72,10 @@ from .cli_common import (
     _carried_live_stage_blockers,
     _ensure_stage_arming,
     _note_user_approved_tiers,
+    _close_armings_at_user_approval,
+    _open_armings_after_user_approval,
+    _settle_at_agent_approval,
+    _unmatched_live_stage_blockers,
     _require,
     _second_current_stage_refusal,
     _clear_since_user_decision,
@@ -582,7 +586,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             state, store, args, effort_segments.ACT_APPROVE_BY_AGENT, "approve --by agent")
         if _fire_refusal is not None:
             return _fire_refusal
-        blockers = blockers + _carried_live_stage_blockers(state, _identity_order)
+        blockers = blockers + _carried_live_stage_blockers(state, _identity_order) + _unmatched_live_stage_blockers(state)
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
         fired = _evaluate_review_trigger(state, store, review_blockers)
@@ -644,9 +648,14 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     if skip_optional:
         state.log("skip_optional", by=args.by, stages=skip_optional)
     effort.arm(state, now=_effort_now(store, state))  # opens the effort-divergence window — see effort.py's ARMED-ONLY
-    _adopt_order_identities(state, _identity_order, _utcnow())
-    if not by_agent:
+    _approved_at = _utcnow()
+    _closed_armings = [] if by_agent else _close_armings_at_user_approval(state, store, args, args.by, _approved_at)
+    _adopt_order_identities(state, _identity_order, _approved_at)
+    if by_agent:
+        _settle_at_agent_approval(state, _approved_at)
+    else:
         _note_user_approved_tiers(state)
+        _open_armings_after_user_approval(state, _closed_armings, _approved_at)
     # Fold this session's review-round counts into the cross-session task accumulator
     # (item B) BEFORE the reset-to-0 below — approval is the reset point, so this is
     # the last moment these session-local counts are readable.

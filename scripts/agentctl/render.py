@@ -306,6 +306,11 @@ def _optional_lines(s) -> list[str]:
     ]
 
 
+def _lazy_lines(s) -> list[str]:
+    """The lazy-stage marker, empty for a stage not marked lazy."""
+    return ["- **Lazy:** yes — a sub-plan unfolds it; its budget then is the planning fallback"] if s.lazy else []
+
+
 def render_plan_md(doc: PlanDoc) -> str:
     """Pure: a PlanDoc -> a markdown prose view. Renders every stage in order."""
     lines: list[str] = []
@@ -317,6 +322,7 @@ def render_plan_md(doc: PlanDoc) -> str:
         lines.append("")
         lines.append(f"- **Executor:** {s.actor.executor}")
         lines.extend(_optional_lines(s))
+        lines.extend(_lazy_lines(s))
         if s.actor.capability_required:
             lines.append(f"- **Capability required:** {s.actor.capability_required}")
         if s.subject.material:
@@ -508,6 +514,7 @@ def _stage_field_lines(
     lines.append("")
     lines.append(f"- **Executor:** {s.actor.executor}")
     lines.extend(_optional_lines(s))
+    lines.extend(_lazy_lines(s))
     if s.actor.capability_required:
         lines.append(f"- **Capability required:** {s.actor.capability_required}")
     if s.actor.cost_tier:

@@ -24,7 +24,7 @@ from . import (
     premise,
 )
 from . import effort_segments
-from .cli_common import _book_and_judge, _judge_and_refuse
+from .cli_common import _book_and_judge, _closing_arming_figures, _figures_instruction, _judge_and_refuse
 from .checkrun import format_observations, observe_stage_checks
 from .classify import TRACKER_KEY_RE, Signals, classify
 from .config import Thresholds
@@ -407,12 +407,14 @@ def _present_order(args, state: SessionState, *, store: StateStore) -> Directive
               rejection_text=getattr(args, "rejection_text", None))
     store.save(state)
     marker = order_agree_marker(digest)
+    figures = _closing_arming_figures(state)
     next_steps = [
         "arm a `sleep 2` background timer now (atomic with deferring the ask)",
         "emit THIS exact rendering as the turn's FINAL text message — zero "
         "tool calls after it",
         "next turn, open directly with the agreement AskUserQuestion (zero preceding "
-        f"text) carrying an option whose label or description embeds the literal marker {marker!r}",
+        f"text) carrying an option whose label or description embeds the literal marker {marker!r}"
+        f"{_figures_instruction(figures)}",
     ]
     return _attach_writer_gate(Directive(
         True, state.node, "continue",
@@ -423,6 +425,7 @@ def _present_order(args, state: SessionState, *, store: StateStore) -> Directive
             "understanding_sha256": presentation.understanding_sha256,
             "order_agree_marker": marker,
             "next_steps": next_steps,
+            "closing_arming": figures,
         },
     ), writer_gate)
 
@@ -851,11 +854,11 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
     hand-enumerate stages itself.
     """
     state = _require(store, args.session)
+    _book_and_judge(state, store, args, effort_segments.ACT_PRESENT_PLAN)
     if getattr(args, "kind", None) == PLAN_PRESENTATION_KIND_ORDER:
         return _present_order(args, state, store=store)
     if not state.plan_path:
         return Directive(False, state.node, "noop", "no plan to present: submit a plan first")
-    _book_and_judge(state, store, args, effort_segments.ACT_PRESENT_PLAN)
 
     if getattr(args, "emit_skeleton", False):
         try:
@@ -1075,6 +1078,7 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
               rejection_text=getattr(args, "rejection_text", None))
     _deliver_presentation_via_channel(state, presentation, raw)
     store.save(state)
+    figures = _closing_arming_figures(state)
 
     if kind == PLAN_PRESENTATION_KIND_ESSENCE:
         # essence is the only kind that feeds an approval ask (full is
@@ -1089,7 +1093,7 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             "tool calls after it",
             "next turn, open directly with the approval AskUserQuestion (zero "
             "preceding text) carrying an option whose label or description "
-            f"embeds the literal marker {SHOW_FULL_PLAN_MARKER!r}",
+            f"embeds the literal marker {SHOW_FULL_PLAN_MARKER!r}{_figures_instruction(figures)}",
         ]
         detail = (
             "presentation receipt recorded (kind=essence). Next: "
@@ -1100,6 +1104,7 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             "plan_sha256": presentation.plan_sha256,
             "show_full_plan_marker": SHOW_FULL_PLAN_MARKER,
             "next_steps": next_steps,
+            "closing_arming": figures,
         }
         override = _agent_review_override(state)
         if override is not None:
@@ -1117,7 +1122,8 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             "tool calls after it",
             "next turn, open directly with the replan-authorization "
             "AskUserQuestion (zero preceding text) carrying an option whose "
-            f"label or description embeds the literal marker {AUTHORIZE_REPLAN_MARKER!r}",
+            f"label or description embeds the literal marker {AUTHORIZE_REPLAN_MARKER!r}"
+            f"{_figures_instruction(figures)}",
         ]
         detail = (
             "presentation receipt recorded (kind=replan_diff). Next: "
@@ -1128,6 +1134,7 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
             "plan_sha256": presentation.plan_sha256,
             "authorize_replan_marker": AUTHORIZE_REPLAN_MARKER,
             "next_steps": next_steps,
+            "closing_arming": figures,
         }
         return _with_writer_gate(Directive(True, state.node, "continue", detail, data=data))
 
@@ -1136,7 +1143,12 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
         f"presentation receipt recorded (kind={kind}); emit this exact rendering "
         "as the turn's FINAL text message so the delivery hook can verify it "
         "actually reached the user",
-        data={"rendering_sha256": presentation.rendering_sha256, "plan_sha256": presentation.plan_sha256},
+        data={
+            "rendering_sha256": presentation.rendering_sha256,
+            "plan_sha256": presentation.plan_sha256,
+            "closing_arming": figures,
+            "next_steps": [f"before any approval ask{_figures_instruction(figures)}"],
+        },
     ))
 
 

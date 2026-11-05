@@ -28,6 +28,8 @@ SOURCE_WINDOW = "migrated-window"
 SOURCE_USER_APPROVED = "user-approved"
 SOURCE_DECLARED = "agent-declared"
 SOURCE_CARRIED = "carried"
+SOURCE_FALLBACK = "fallback"
+SOURCE_FALLBACK_CAPPED = "fallback-capped"
 
 OPENED_BY_MIGRATION = "migration"
 TIER_ABOVE_LADDER = "above_large"
@@ -49,6 +51,9 @@ ACT_DESCENDANT_DISPATCH = "descendant-dispatch"
 ACT_DESCENDANT_STAMP = "descendant-stamp"
 ACT_SPAWNED_PLANNER_ACT = "spawned-planner-act"
 ACT_SPAWNED_PLANNER_RUN_END = "spawned-planner-run-end"
+ACT_APPROVE_BY_USER = "approve-by-user"
+ACT_FIRE_ACK_BY_USER = "fire-acknowledge-by-user"
+ACT_ORDER_AGREE = "order-agree"
 
 LIVE_STAGE_JUDGING_ACTS = (
     ACT_FAILING_RECORD_RESULT,
@@ -168,6 +173,22 @@ def current_arming(ledger: dict) -> dict | None:
     return max(held, key=lambda a: (a["opened_at"], a["seq"])) if held else None
 
 
+def add_review_term(arming: dict, term: dict) -> None:
+    """Join one review's term to the arming's budget; `review_terms` keeps their sum apart."""
+    terms = arming["review_terms"] or {}
+    for scale in SCALES:
+        arming["budget"][scale] = arming["budget"].get(scale, 0.0) + term[scale]
+        terms[scale] = terms.get(scale, 0.0) + term[scale]
+    arming["review_terms"] = terms
+
+
+def remove_review_term(arming: dict, term: dict) -> None:
+    terms = arming["review_terms"]
+    for scale in SCALES:
+        arming["budget"][scale] -= term[scale]
+        terms[scale] -= term[scale]
+
+
 def _crossed_multiple(arming: dict, multiple: float) -> list[str]:
     budget = arming.get("budget")
     if not budget or arming["budget_source"] == SOURCE_WINDOW:
@@ -198,6 +219,7 @@ def _retier_record(arming: dict, crossed: list[str], multiple: float, act: str, 
         "title": arming.get("title"),
         "declared_tier": arming.get("declared_tier"),
         "observed_tier": _observed_tiers(arming, actual),
+        "budget_source": arming["budget_source"],
         "budget": dict(arming["budget"]),
         "actual": actual,
         "multiple": multiple,

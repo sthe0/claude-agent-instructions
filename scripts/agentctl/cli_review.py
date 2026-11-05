@@ -87,6 +87,7 @@ from .config import Thresholds
 from . import effort_segments
 from .cli_common import (
     _book_and_judge,
+    _note_mandated_review,
     _digest,
     _plan_file_sha256,
     _observation_sha256,
@@ -1155,8 +1156,10 @@ def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) ->
     useful as a path/content-hash-bound record), but a stage-scoped review REFUSES:
     it cannot confirm the named stage even exists without parsing the plan."""
     state = _require(store, args.session)
-    _book_and_judge(state, store, args, effort_segments.ACT_PLAN_REVIEW)
     scope = (getattr(args, "scope", None) or "").strip()
+    if scope != ORDER_REVIEW_SCOPE and getattr(args, "target", None) not in (None, state.plan_path):
+        _note_mandated_review(state)
+    _book_and_judge(state, store, args, effort_segments.ACT_PLAN_REVIEW)
     if scope == ORDER_REVIEW_SCOPE:
         return _cmd_order_review(args, state, store=store)
     target = getattr(args, "target", None) or state.plan_path

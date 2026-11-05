@@ -87,7 +87,12 @@ from .cli_common import (
     _with_advisories,
     _submission_advice,
     _submission_problems,
+    _clear_open_fires_if_customer,
     _effort_fire_escalation_data,
+    _fire_directive_figures,
+    _note_mandated_review,
+    _renew_arming,
+    _settle_mandated_review,
     _effort_fire_refusal,
     _require,
     _clear_since_user_decision,
@@ -188,15 +193,6 @@ def _approved_snapshot_doc(state: SessionState):
         return _load_prior_plan(state, snap_path, strict=False)
     except (OSError, PlanError):
         return None
-
-
-def _clear_open_fires_if_customer(state: SessionState, by: str) -> None:
-    """A customer-authored acknowledgement is the only act that discharges the open
-    user-owed fire marker of the order (an agent-authored one never does)."""
-    key = _ledgered_order_key(state)
-    customer_id = _order_customer_id(state)
-    if key is not None and customer_id and by.strip().casefold() == customer_id.casefold():
-        order_approvals.clear_effort_fires(key)
 
 
 def _agent_fire_ack_refusal(
@@ -426,6 +422,7 @@ def _count_replan(state: SessionState, change_class: str) -> None:
     total the agent self-decision backstop reads — when it is operative. A no_change,
     bookkeeping or check-only replan changes nothing the work runs under, so it spends
     none of the budget those totals bound (the same split `effort.replan_count` makes)."""
+    _settle_mandated_review(state, change_class == effort.OPERATIVE_CLASS)
     if change_class != effort.OPERATIVE_CLASS:
         return
     task_accumulator.add(
@@ -756,6 +753,7 @@ def _replan_entry_gates(ctx: _ReplanContext) -> Directive | None:
     # the fire data but never force a decision on it). Checked FIRST, ahead of
     # difficulty_blockers, since it is orthogonal to the declare/investigate/
     # critique/normalize cycle that difficulty_blockers governs.
+    _note_mandated_review(state)
     _fire_refusal = _judge_and_refuse(state, store, args, effort_segments.ACT_REPLAN, "replan")
     if _fire_refusal is not None:
         return _fire_refusal
@@ -1760,7 +1758,8 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
                 False, state.node, "fire_acknowledge",
                 f"fire-acknowledge by the agent refused: {refusal}",
                 marker=DIRECTIVE_ESCALATE_TO_USER,
-                data={"effort_fire": _effort_fire_escalation_data(state), "reason": refusal},
+                data={"effort_fire": _effort_fire_escalation_data(state), "reason": refusal,
+                      **(_fire_directive_figures(state) if last.get("arming_id") else {})},
             )
         state.agent_ack_difficulty_ids.append(_difficulty_id(state.difficulty))
         # The replans-scale fire rebased every scale's baseline; the spend / wall-clock
@@ -1778,6 +1777,8 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
     _acked_arming = effort_segments.find_arming(state.effort_segments, last.get("arming_id"))
     if _acked_arming is not None and _acked_arming["fire"]:
         _acked_arming["fire"]["ack"] = last["ack"]
+    if not by_agent and decision != "abandon" and _acked_arming is not None and _acked_arming["closed_at"] is None:
+        _renew_arming(state, store, args, _acked_arming, effort_segments.ACT_FIRE_ACK_BY_USER, args.by)
     state.log("fire_acknowledge", by=args.by, decision=decision)
     _record_backstop_crossing(state, crossing)
     _clear_since_user_decision(state, args.by)

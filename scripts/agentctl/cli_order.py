@@ -26,7 +26,7 @@ from .state import (
 )
 from .store import StateStore
 from .submission import order_understanding_completeness_violations, order_understanding_violations
-from .cli_common import _require
+from .cli_common import _renew_order_agreement, _require
 
 
 def _order_draft_violations(meta) -> list[str]:
@@ -187,6 +187,7 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
     )
     state.order_agreement = agreement
     state.order_agreement_history.append(agreement)
+    _renew_order_agreement(state, store, args)
     if previous is None or previous.understanding_sha256 != digest:
         for challenge in state.order_challenges:
             if challenge.status == CHALLENGE_OPEN:

@@ -2363,6 +2363,8 @@ class Stage:
     # "not optional".
     optional: bool = False
     backlog_issue: str | None = None
+    # A stage to be unfolded by a sub-plan: its budget at the unfold is planning's fallback.
+    lazy: bool = False
     # `[[stage.amendments]]`: retrospective notes (see Amendment). Empty on every plan
     # authored before this field.
     amendments: list[Amendment] = field(default_factory=list)
@@ -2425,6 +2427,7 @@ class Stage:
                 effects=[StageEffectDeclaration.from_dict(e) for e in d.get("effects", [])],
                 optional=bool(d.get("optional", False)),
                 backlog_issue=d.get("backlog_issue"),
+                lazy=bool(d.get("lazy", False)),
                 amendments=[Amendment(**a) for a in d.get("amendments", [])],
                 branch=d.get("branch"),
             )

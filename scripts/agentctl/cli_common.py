@@ -439,7 +439,8 @@ def _effort_identity_payload(state: SessionState) -> tuple[dict, dict]:
     for segment, arming in latest.items():
         if arming["budget_source"] in (effort_segments.SOURCE_STRETCH, effort_segments.SOURCE_WINDOW):
             continue
-        armings[segment] = None if arming["closed_at"] is not None else {
+        settled = arming["closed_at"] is not None and segment != effort_segments.PLANNING
+        armings[segment] = None if settled else {
             "segment": segment,
             "budget": arming["budget"],
             "actual": effort_segments.arming_actual(arming),
@@ -503,7 +504,7 @@ def _adopt_order_identities(state: SessionState, key: str | None, now: float) ->
         if token in adopted:
             continue
         if segment == effort_segments.PLANNING:
-            arming = effort_segments.open_arming_of(ledger, segment)
+            arming = next((a for a in reversed(ledger["armings"]) if a["segment"] == segment), None)
         elif segment[len(effort_segments.STAGE_PREFIX):] in matched:
             arming = effort_segments.open_arming(
                 ledger, segment, entry.get("budget"), effort_segments.SOURCE_CARRIED, now, "adoption")
@@ -519,7 +520,24 @@ def _adopt_order_identities(state: SessionState, key: str | None, now: float) ->
             arming["carried"][scale] = arming["carried"].get(scale, 0.0) + float(carried.get(scale) or 0.0)
         adopted.append(token)
     if dropped:
+        _settle_carried_drops(state, key, dropped, now)
         order_approvals.flush_effort_identity(key, {}, dict.fromkeys(dropped))
+
+
+def _settle_carried_drops(state: SessionState, key: str, dropped: list[str], now: float) -> None:
+    """A carried stage this approval leaves unmatched settles here: only a user-approved version
+    gets this far with one, so it is a drop, kept as a line and a retier record at the multiple."""
+    ledger = state.effort_segments
+    entries = _carried_entries(state, key)
+    for segment in dropped:
+        entry = entries[segment]
+        arming = effort_segments.open_arming(
+            ledger, segment, entry.get("budget"), effort_segments.SOURCE_CARRIED, now, "adoption")
+        for field_name in ("declared_tier", "title", "tier_ladder"):
+            arming[field_name] = entry.get(field_name)
+        for scale in effort_segments.SCALES:
+            arming["carried"][scale] = float((entry.get("actual") or {}).get(scale) or 0.0)
+        _close_at_multiple(ledger, arming, effort_segments.ACT_APPROVE_BY_USER, now)
 
 
 def _rematch_stage_uids(state: SessionState, new_stages) -> None:
@@ -537,18 +555,292 @@ def _rematch_stage_uids(state: SessionState, new_stages) -> None:
 
 
 def _note_user_approved_tiers(state: SessionState) -> None:
-    approved = state.effort_segments.setdefault("approved_tiers", {})
+    ledger = state.effort_segments
+    approved = ledger.setdefault("approved_tiers", {})
+    lazy = ledger.setdefault("lazy_marks", {})
     for stage in state.stages:
         uid = state.stage_uid(stage.index)
         if uid is not None:
             approved[uid] = effort._stage_tier(stage)
+            lazy[uid] = stage.lazy
+
+
+def _renew_order_agreement(state: SessionState, store: StateStore, args) -> None:
+    """An order agreement is a user approval concerning the live segment."""
+    arming = effort_segments.current_arming(state.effort_segments)
+    if arming is not None:
+        _renew_arming(state, store, args, arming, effort_segments.ACT_ORDER_AGREE,
+                      _order_customer_id(state) or "user")
+
+
+def _planning_fallback(thr: Thresholds) -> dict:
+    """Planning's budget before an estimate is agreed: on wall-clock the fire point lands on
+    review-cycle-active-minutes, on spend two medium stages. An unset minutes key leaves that
+    scale unbudgeted, so it never fires."""
+    budget = {effort_segments.SCALE_USD: 2.0 * float(thr.budget_usd_float("medium"))}
+    minutes = thr.review_cycle_active_minutes()
+    if minutes is not None:
+        budget[effort_segments.SCALE_MINUTES] = float(minutes) / float(thr.effort_divergence_multiple())
+    return budget
 
 
 def _ensure_planning_arming(state: SessionState, now: float) -> None:
     ledger = state.effort_segments
-    if effort_segments.open_arming_of(ledger, effort_segments.PLANNING) is None:
+    if not state.plan_stack and effort_segments.open_arming_of(ledger, effort_segments.PLANNING) is None:
         effort_segments.open_arming(
             ledger, effort_segments.PLANNING, None, effort_segments.SOURCE_UNBUDGETED, now, "classify")
+
+
+def _close_at_multiple(ledger: dict, arming: dict, act: str, now: float) -> dict | None:
+    return effort_segments.close_arming(
+        ledger, arming["arming_id"], act, now, float(Thresholds().effort_divergence_multiple()))
+
+
+def _acknowledge_arming_fire(state: SessionState, arming: dict, by: str, act: str, now: float) -> None:
+    """A user act closing a fired arming decides its fire: the record closes as acknowledged."""
+    fire = arming.get("fire")
+    if not fire or fire.get("ack") is not None:
+        return
+    ack = {"by": by, "decision": "continue", "ts": now, "note": f"closed by {act}"}
+    fire["ack"] = ack
+    for records in (state.effort_fires, *(frame.effort_fires for frame in state.plan_stack)):
+        for record in records:
+            if record.get("arming_id") == arming["arming_id"] and record.get("ack") is None:
+                record["ack"] = ack
+    _clear_open_fires_if_customer(state, by)
+
+
+def _clear_open_fires_if_customer(state: SessionState, by: str) -> None:
+    """A customer-authored acknowledgement is the only act that discharges the open
+    user-owed fire marker of the order (an agent-authored one never does)."""
+    key = _ledgered_order_key(state)
+    customer_id = _order_customer_id(state)
+    if key is not None and customer_id and by.strip().casefold() == customer_id.casefold():
+        order_approvals.clear_effort_fires(key)
+
+
+def _close_at_user_act(state: SessionState, arming: dict, act: str, by: str, now: float) -> dict | None:
+    _acknowledge_arming_fire(state, arming, by, act, now)
+    return _close_at_multiple(state.effort_segments, arming, act, now)
+
+
+def _next_arming_terms(state: SessionState, arming: dict, thr: Thresholds) -> tuple:
+    """(budget, source, tier) of the arming a user act opens after `arming`, in its segment."""
+    segment = arming["segment"]
+    if segment == effort_segments.PLANNING:
+        return _planning_fallback(thr), effort_segments.SOURCE_FALLBACK, None
+    ledger = state.effort_segments
+    uid = segment.removeprefix(effort_segments.STAGE_PREFIX)
+    unfold = ledger.get("unfolds", {}).get(uid)
+    if unfold:
+        return dict(unfold["budget"]), unfold["source"], None
+    approved = ledger.get("approved_tiers", {}).get(uid)
+    if approved:
+        return effort.stage_budget(approved, thr), effort_segments.SOURCE_USER_APPROVED, approved
+    stage = next((s for s in state.stages if state.stage_uid(s.index) == uid), None)
+    tier = effort._stage_tier(stage) if stage is not None else arming.get("declared_tier")
+    return effort.stage_budget(tier, thr), effort_segments.SOURCE_DECLARED, tier
+
+
+def _renew_arming(state: SessionState, store: StateStore, args, arming: dict, act: str, by: str) -> dict | None:
+    """A user act that approves no plan version, on the segment it concerns: book, close the
+    arming, open the next from zero. A migrated window or the closing segment opens nothing."""
+    ledger = state.effort_segments
+    if effort_segments.window_arming(ledger) is not None or arming["segment"] == effort_segments.CLOSING:
+        return None
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
+    now = _utcnow()
+    _close_at_user_act(state, arming, act, by, now)
+    thr = Thresholds()
+    budget, source, tier = _next_arming_terms(state, arming, thr)
+    renewed = effort_segments.open_arming(ledger, arming["segment"], budget, source, now, act)
+    renewed["declared_tier"] = tier
+    renewed["title"] = arming.get("title")
+    renewed["tier_ladder"] = effort.tier_ladder(thr)
+    return renewed
+
+
+def _close_armings_at_user_approval(state: SessionState, store: StateStore, args, by: str, now: float) -> list[dict]:
+    """Book, then close what a plan approval by the user decides: every open arming but closing's.
+    Returns them; `_open_armings_after_user_approval` opens what follows once the version's tiers
+    are recorded."""
+    ledger = state.effort_segments
+    if effort_segments.window_arming(ledger) is not None or not ledger.get("armings"):
+        return []
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
+    decided = [a for a in ledger["armings"]
+               if a["closed_at"] is None and a["segment"] != effort_segments.CLOSING]
+    closed = []
+    for arming in decided:
+        if _live_under_its_subplan(state, arming):
+            _acknowledge_arming_fire(state, arming, by, effort_segments.ACT_APPROVE_BY_USER, now)
+        else:
+            _close_at_user_act(state, arming, effort_segments.ACT_APPROVE_BY_USER, by, now)
+            closed.append(arming)
+    return closed
+
+
+def _live_under_its_subplan(state: SessionState, arming: dict) -> bool:
+    """A parent the user did not mark lazy is a stage at work, not a stage being planned: its
+    arming outlives its sub-plan's approval and settles with its last sub-stage."""
+    segment = arming["segment"]
+    if not segment.startswith(effort_segments.STAGE_PREFIX):
+        return False
+    uid = segment.removeprefix(effort_segments.STAGE_PREFIX)
+    unfold = state.effort_segments.get("unfolds", {}).get(uid)
+    if unfold and unfold["source"] == effort_segments.SOURCE_FALLBACK:
+        return False
+    live = {state.stage_uid(s.index) for s in state.stages}
+    return uid in state.stage_uids.values() and uid not in live
+
+
+def _open_armings_after_user_approval(state: SessionState, closed: list[dict], now: float) -> None:
+    """A stage still live in the approved version continues under a new arming; a dropped, skipped
+    or unfolded one is settled. With nothing pending at the top plan, closing opens."""
+    live = {state.stage_uid(s.index): s for s in state.stages if not is_skipped(s)}
+    for arming in closed:
+        stage = live.get(arming["segment"].removeprefix(effort_segments.STAGE_PREFIX))
+        if stage is not None:
+            _ensure_stage_arming(state, stage, now, effort_segments.ACT_APPROVE_BY_USER)
+    ledger = state.effort_segments
+    if (closed and not state.plan_stack and state.all_stages_settled()
+            and effort_segments.open_arming_of(ledger, effort_segments.CLOSING) is None):
+        effort_segments.open_arming(ledger, effort_segments.CLOSING, None, effort_segments.SOURCE_UNBUDGETED,
+                                    now, effort_segments.ACT_APPROVE_BY_USER)
+
+
+def _settle_at_agent_approval(state: SessionState, now: float) -> None:
+    """A self-approval that passed its judgment settles planning and a lazily unfolded parent."""
+    ledger = state.effort_segments
+    if effort_segments.window_arming(ledger) is not None:
+        return
+    segments = [effort_segments.PLANNING,
+                *(effort_segments.stage_segment(uid) for uid in ledger.get("unfolds", {}))]
+    for segment in segments:
+        arming = effort_segments.open_arming_of(ledger, segment)
+        if arming is not None and not _live_under_its_subplan(state, arming):
+            _close_at_multiple(ledger, arming, effort_segments.ACT_APPROVE_BY_AGENT, now)
+
+
+def _unmatched_live_stage_blockers(state: SessionState) -> list[str]:
+    """A self-approval may not leave behind the stage live in this session: only the customer may
+    drop it. A parent in an outer frame keeps its identity, so it is not unmatched."""
+    ledger = state.effort_segments
+    if effort_segments.window_arming(ledger) is not None:
+        return []
+    known = set(state.stage_uids.values())
+    return [
+        f"--by agent refused: live stage {a.get('title')!r} has no match in this plan; "
+        "only the customer's approval may drop it"
+        for a in ledger.get("armings") or []
+        if a["closed_at"] is None and a["segment"].startswith(effort_segments.STAGE_PREFIX)
+        and a["segment"].removeprefix(effort_segments.STAGE_PREFIX) not in known
+    ]
+
+
+def _live_stage_arming(state: SessionState) -> dict | None:
+    ledger = state.effort_segments
+    if effort_segments.window_arming(ledger) is not None:
+        return None
+    arming = effort_segments.current_arming(ledger)
+    if arming is None or not arming["segment"].startswith(effort_segments.STAGE_PREFIX) or not arming["budget"]:
+        return None
+    return arming
+
+
+def _note_mandated_review(state: SessionState) -> bool:
+    """The review a replan mandates joins the live stage's budget at the first act of that replan,
+    before the review's spend is booked. One stands pending until a replan is accepted, so no
+    number of reviews or refused attempts adds a second. Returns whether it added one."""
+    arming = _live_stage_arming(state)
+    if arming is None or arming.get("review_term_pending"):
+        return False
+    effort_segments.add_review_term(arming, effort.stage_budget(effort._REVIEW_TIER, Thresholds()))
+    arming["review_term_pending"] = True
+    return True
+
+
+def _settle_mandated_review(state: SessionState, mandated: bool) -> None:
+    """The replan accepted: its term stands, or is withdrawn from a replan owing no review."""
+    arming = _live_stage_arming(state)
+    if arming is None or not arming.get("review_term_pending"):
+        return
+    if not mandated:
+        effort_segments.remove_review_term(arming, effort.stage_budget(effort._REVIEW_TIER, Thresholds()))
+    arming["review_term_pending"] = False
+
+
+def _unfold_parent_budget(state: SessionState, parent_index: int) -> None:
+    """A sub-plan unfolds the parent: its arming and actual stay, its budget becomes planning's.
+    Only a lazy mark the user approved loosens it; otherwise it is min(tier, fallback) per scale.
+    Once per identity: a second unfold replaces nothing."""
+    ledger = state.effort_segments
+    uid = state.stage_uid(parent_index)
+    unfolds = ledger.setdefault("unfolds", {})
+    arming = effort_segments.open_arming_of(ledger, effort_segments.stage_segment(uid)) if uid else None
+    if arming is None or uid in unfolds or effort_segments.window_arming(ledger) is not None:
+        return
+    thr = Thresholds()
+    fallback = _planning_fallback(thr)
+    if ledger.get("lazy_marks", {}).get(uid):
+        budget, source = fallback, effort_segments.SOURCE_FALLBACK
+    else:
+        tier = effort.stage_budget(arming.get("declared_tier") or effort._stage_tier(state.stage(parent_index)), thr)
+        budget = {scale: min(tier[scale], fallback.get(scale, tier[scale])) for scale in effort_segments.SCALES}
+        source = effort_segments.SOURCE_FALLBACK_CAPPED
+    unfolds[uid] = {"budget": dict(budget), "source": source}
+    terms = arming["review_terms"] or {}
+    arming["budget"] = {scale: budget.get(scale, 0.0) + terms.get(scale, 0.0) for scale in budget}
+    arming["budget_source"] = source
+    arming["declared_tier"] = None
+    arming["tier_ladder"] = effort.tier_ladder(thr)
+
+
+def _closing_arming_figures(state: SessionState) -> dict | None:
+    """What a deciding ask must show: the arming the answer would close, against its budget on
+    both scales, and any open fire. Reads booked records only. A migrated window has no budget of
+    its own and the closing segment none at all, so those print their actual alone."""
+    ledger = state.effort_segments
+    arming = effort_segments.window_arming(ledger) or effort_segments.current_arming(ledger)
+    if arming is None:
+        return None
+    actual = effort_segments.arming_actual(arming)
+    budget = arming.get("budget")
+    fire = gates.open_fire_record(state)
+    parts = []
+    for scale, label, unit, digits in (
+            (effort_segments.SCALE_USD, "spend", "USD", 2), (effort_segments.SCALE_MINUTES, "wall-clock", "min", 1)):
+        of = f" of {budget[scale]:.{digits}f}" if budget and budget.get(scale) else " (no budget)"
+        parts.append(f"{label} {actual[scale]:.{digits}f}{of} {unit}")
+    text = f"{arming.get('title') or arming['segment']} ({arming['budget_source']}): " + ", ".join(parts)
+    if fire is not None:
+        text += f"; open fire on {', '.join(fire.get('scales') or [fire.get('scale')])}"
+    return {
+        "arming_id": arming["arming_id"],
+        "segment": arming["segment"],
+        "title": arming.get("title"),
+        "budget": budget,
+        "budget_source": arming["budget_source"],
+        "actual": actual,
+        "open_fire": fire,
+        "text": text,
+    }
+
+
+def _figures_instruction(figures: dict | None) -> str:
+    if figures is None:
+        return ""
+    return f"; state these figures in the ask: {figures['text']}"
+
+
+def _fire_directive_figures(state: SessionState) -> dict:
+    """The data and next_steps a directive raising or refusing on a spend or wall-clock fire adds:
+    the fire is the user's to decide, and the ask states what it decides on."""
+    figures = _closing_arming_figures(state)
+    if figures is None:
+        return {}
+    return {"closing_arming": figures,
+            "next_steps": [f"ask the user about this fire{_figures_instruction(figures)}"]}
 
 
 def _ensure_stage_arming(state: SessionState, stage, now: float, by: str) -> dict | None:
@@ -570,10 +862,13 @@ def _ensure_stage_arming(state: SessionState, stage, now: float, by: str) -> dic
     closing = effort_segments.open_arming_of(ledger, effort_segments.CLOSING)
     if closing is not None:
         effort_segments.close_arming(ledger, closing["arming_id"], by, now, float(thr.effort_divergence_multiple()))
+    unfold = ledger.get("unfolds", {}).get(uid)
     approved = ledger.get("approved_tiers", {}).get(uid)
-    tier = approved or effort._stage_tier(stage)
-    source = effort_segments.SOURCE_USER_APPROVED if approved else effort_segments.SOURCE_DECLARED
-    arming = effort_segments.open_arming(ledger, segment, effort.stage_budget(tier, thr), source, now, by)
+    tier = None if unfold else approved or effort._stage_tier(stage)
+    budget = dict(unfold["budget"]) if unfold else effort.stage_budget(tier, thr)
+    source = (unfold["source"] if unfold
+              else effort_segments.SOURCE_USER_APPROVED if approved else effort_segments.SOURCE_DECLARED)
+    arming = effort_segments.open_arming(ledger, segment, budget, source, now, by)
     arming["declared_tier"] = tier
     arming["title"] = stage.title
     arming["tier_ladder"] = effort.tier_ladder(thr)
@@ -600,7 +895,19 @@ def _settle_stage_arming(state: SessionState, stage, act: str, now: float) -> di
         if effort_segments.open_arming_of(ledger, effort_segments.CLOSING) is None:
             effort_segments.open_arming(
                 ledger, effort_segments.CLOSING, None, effort_segments.SOURCE_UNBUDGETED, now, act)
+    elif state.plan_stack and state.all_stages_settled():
+        _settle_unfolded_parent(state, act, now)
     return record
+
+
+def _settle_unfolded_parent(state: SessionState, act: str, now: float) -> None:
+    """The parent settles with its last sub-stage, so it is judged at no later act."""
+    frame = state.plan_stack[-1]
+    uid = state.stage_uids.get(stage_uid_key(frame_path(state.plan_stack[:-1]), frame.originating_stage))
+    ledger = state.effort_segments
+    arming = effort_segments.open_arming_of(ledger, effort_segments.stage_segment(uid)) if uid else None
+    if arming is not None:
+        _close_at_multiple(ledger, arming, act, now)
 
 
 def _settle_agent_skipped_stages(state: SessionState) -> None:
@@ -1518,6 +1825,7 @@ def _apply_refined_stage_fields(cur, refined) -> None:
     cur.actor.guard_exempt_paths = list(refined.actor.guard_exempt_paths)
     cur.supplies = list(refined.supplies)
     cur.optional = refined.optional
+    cur.lazy = refined.lazy
     cur.backlog_issue = refined.backlog_issue
     cur.branch = refined.branch
     cur.amendments = list(refined.amendments)
@@ -2001,6 +2309,7 @@ def _effort_fire_refusal(state: SessionState, what: str, efblock: list[str], *,
     data = {"blockers": efblock, "effort_fire": _effort_fire_escalation_data(state)}
     route = _agent_replans_fire_route(state)
     if route is None:
+        data.update(_fire_directive_figures(state))
         if state.parent_link:
             return Directive(
                 False, state.node, "norm_mismatch",
