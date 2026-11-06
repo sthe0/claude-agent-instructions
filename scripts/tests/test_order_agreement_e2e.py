@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -41,6 +42,24 @@ def root(tmp_path):
     return config
 
 
+# Every `claude` these tests' subprocesses look up — in practice the grounding judge's — resolves
+# to this directory's stub: a fixed answer instead of a live model, whose verdict varies run to run.
+# The stubs/judge-defect twin and the value `none` (no stub on PATH) are for running this file by
+# hand to show the stub decides the outcome (from the repository root):
+#   PATH=$PWD/scripts/tests/stubs/judge-defect:$PATH pytest <this file>    # passes: the stub wins
+#   E2E_JUDGE_STUB_DIR=none PATH=$PWD/scripts/tests/stubs/judge-defect:$PATH pytest <this file>
+#                                                                          # fails on the grounding refusal
+_STUB_SETTING = os.environ.get("E2E_JUDGE_STUB_DIR", "")
+JUDGE_STUB_DIR = _STUB_SETTING if _STUB_SETTING == "none" else str(
+    Path(_STUB_SETTING).resolve() if _STUB_SETTING
+    else Path(__file__).resolve().parent / "stubs" / "judge-pass")
+
+
+def _judge_path(inherited: str) -> str:
+    stub = "" if JUDGE_STUB_DIR == "none" else JUDGE_STUB_DIR
+    return os.pathsep.join(p for p in (stub, inherited) if p)
+
+
 @pytest.fixture
 def env(root, tmp_path):
     base = {k: v for k, v in os.environ.items()
@@ -49,11 +68,14 @@ def env(root, tmp_path):
         **base, "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(root),
         "CLAUDE_CODE_SESSION_ID": HARNESS, "CLAUDE_PUBLISHED_TEXT_GATE": "0",
         "AGENTCTL_EDIT_LEDGER": str(tmp_path / "edit-log.jsonl"),
-        # The model judges (grounding, advisor) are not under test here; with a reachable model
-        # their sampled verdict refused the fixture plan at submit-plan, so the result depended
-        # on the machine. Off is the same path a judge that cannot be reached takes.
-        "AGENTCTL_ADVISOR": "0",
+        "PATH": _judge_path(os.environ.get("PATH", "")),
     }
+
+
+@pytest.mark.skipif(JUDGE_STUB_DIR == "none", reason="the stub is switched off")
+def test_the_judges_claude_is_the_stub(env):
+    found = shutil.which("claude", path=env["PATH"])
+    assert found and Path(found).resolve() == (Path(JUDGE_STUB_DIR) / "claude").resolve()
 
 
 class Cli:
