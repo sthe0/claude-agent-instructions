@@ -240,6 +240,20 @@ def test_judge_ledger_call_keeps_its_line_when_the_source_helper_raises(tmp_path
     assert [row["kind"] for row in _rows(ledger)] == ["call"]
 
 
+def test_judge_ledger_imports_and_writes_its_line_when_the_telemetry_layer_cannot_be_imported(tmp_path):
+    ledger = tmp_path / "judge.jsonl"
+    code = ("import sys\nsys.modules['lib.telemetry.live'] = None\n"
+            f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
+            "from lib import judge_ledger\n"
+            "judge_ledger.call('binary_ask', timed_out=False, duration=0.1, returncode=0, prompt_chars=4)\n")
+    script = tmp_path / "judge_without_live.py"
+    script.write_text(code, encoding="utf-8")
+    env = {**os.environ, "AGENTCTL_JUDGE_LEDGER": str(ledger)}
+    done = subprocess.run([sys.executable, str(script)], env=env, capture_output=True, text=True, timeout=60)
+    assert (done.returncode, done.stderr) == (0, "")
+    assert [row["kind"] for row in _rows(ledger)] == ["call"]
+
+
 def test_judge_ledger_call_keeps_its_line_without_the_telemetry_layer(tmp_path, monkeypatch):
     from lib import judge_ledger
     ledger = tmp_path / "judge.jsonl"

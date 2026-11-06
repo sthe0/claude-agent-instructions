@@ -391,14 +391,13 @@ def test_prune_then_resume_with_a_smaller_spool_then_prune_keeps_the_new_spool(w
 
 def test_a_stored_offset_of_another_generation_does_not_make_a_new_spool_replayed(world):
     _ended_replayed_spool(world, "G", events=4)
-    old_generation, old_offset = [tuple(r) for r in query(
-        "SELECT generation, byte_offset FROM spool_offsets WHERE spool = 'G'")][0]
+    old_generation = query("SELECT generation FROM spool_offsets WHERE spool = 'G'")[0][0]
     assert importer.prune(70, NOW)["spools_removed"] == 1
     world.live_event("G", "command", "cli:status", STATUS)
     live.end_marker_path("G").write_text("")
     store.transact(lambda conn: conn.execute(
-        "INSERT INTO spool_offsets (spool, generation, byte_offset) VALUES ('G', ?, ?)", (old_generation, old_offset)))
-    assert emit.spool_path("G").stat().st_size <= old_offset
+        "INSERT INTO spool_offsets (spool, generation, byte_offset) VALUES ('G', ?, 1)", (old_generation,)))
+    assert emit.spool_path("G").stat().st_size > 1
     conn = store.open_readonly()
     try:
         assert sync.unreplayed_bytes(conn, "G") == emit.spool_path("G").stat().st_size
