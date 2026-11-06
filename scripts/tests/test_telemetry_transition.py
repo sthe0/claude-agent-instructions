@@ -121,6 +121,24 @@ def test_phase_at_uses_events_when_live_else_transcript_reconstruction(world):
         conn.close()
 
 
+def test_phase_at_ignores_imported_command_rows_of_a_session_that_later_has_live_events(world):
+    world.state("M", [start_entry(0, node="CLASSIFIED"), start_entry(10, "plan", node="PLANNING"),
+                      start_entry(20, "submit-plan", node="PLAN_READY")])
+    world.run()
+    conn = store.open_readonly()
+    try:
+        assert phases.phase_at("M", at(15), conn=conn) == "planning"
+    finally:
+        conn.close()
+    world.live_event("M", "command", "cli:approve", {"node_before": "PLAN_READY", "node_after": "EXECUTING"})
+    world.replay("M")
+    conn = store.open_readonly()
+    try:
+        assert phases.phase_at("M", at(15), conn=conn) == "other"
+    finally:
+        conn.close()
+
+
 # --- time profile reading the record ------------------------------------------------------------
 
 def _profile(world, **kw):

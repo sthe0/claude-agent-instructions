@@ -485,5 +485,5 @@ def _cli_import(tmp_path: Path, gate_mib: int, name: str) -> float:
 
 def test_gate_log_read_in_bounded_memory(tmp_path):
     baseline = _cli_import(tmp_path, 0, "small")
-    large = _cli_import(tmp_path, 64, "large")
+    large = _cli_import(tmp_path, 256, "large")
     assert large - baseline <= 32
