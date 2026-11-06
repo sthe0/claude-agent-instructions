@@ -21,6 +21,9 @@ def tables_root(tmp_path, monkeypatch):
     shutil.copytree(TELEMETRY_DIR / "tables", root / "tables")
     shutil.copy(TELEMETRY_DIR / "tables.snapshot.json", root / "tables.snapshot.json")
     monkeypatch.setenv(tables.ROOT_ENV, str(root))
+    # These tests check table semantics, not the fail-open deadline: the first insert also
+    # creates the schema, which can exceed the 0.25 s deadline on a loaded machine.
+    monkeypatch.setattr(store, "DEADLINE_S", 30.0)
     return root
 
 
