@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import datetime as dt
+import time
 from pathlib import Path
 
 import pytest
@@ -17,9 +18,12 @@ from agentctl.state import (
     Actor, Criterion, CriterionType, GateRecord, Means, Outcome, SessionState, Stage, Subject,
 )
 from lib import transcript_cost
-from plan_dashboard import model
+from plan_dashboard import model, snapshot
 from plan_dashboard_fixtures import build_fixture_root, set_mtime
 
+# The dashboard's clock runs an hour ahead in tests: a file written by a test is always past its mtime step,
+# so what a test reads from the caches does not depend on how fast the machine ran it.
+ONE_HOUR_NS = 3_600_000_000_000
 NOW = dt.datetime(2026, 10, 22, 12, 0, tzinfo=dt.timezone.utc)
 MILLION = 1_000_000
 RATE = transcript_cost.token_cost({"input_tokens": MILLION}, "claude-sonnet-5-5")
@@ -72,6 +76,7 @@ def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "no-home"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "home"))
     monkeypatch.delenv("CLAUDE_AGENT_HOME", raising=False)
+    monkeypatch.setattr(snapshot, "now_ns", lambda: time.time_ns() + ONE_HOUR_NS)
     model.clear_cache()
     yield
     model.clear_cache()

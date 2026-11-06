@@ -81,16 +81,31 @@ def restart(root, tmp_path) -> Path:
     return path
 
 
+CTIME_TICKS: dict[int, int] = {}
+
+
+@pytest.fixture(autouse=True)
+def ticking_ctime(monkeypatch):
+    """A ctime that moves with every ``rewrite`` whatever the file system's tick: the identity of a file
+    rewritten at its old size and mtime then differs, as it does on a file system with a fine clock."""
+    CTIME_TICKS.clear()
+    real = store.identity_of
+
+    def identity(st):
+        dev, ino, size, mtime_ns, ctime_ns = real(st)
+        return (dev, ino, size, mtime_ns, ctime_ns + CTIME_TICKS.get(ino, 0))
+
+    monkeypatch.setattr(store, "identity_of", identity)
+    yield
+    CTIME_TICKS.clear()
+
+
 def rewrite(path: Path, text: str, *, mtime_ns: int) -> None:
-    """Write ``text`` with the mtime ``mtime_ns``, until the file's ctime differs from what it was: a rewrite
-    of the same size under the same mtime then differs only in ctime."""
-    before = os.stat(path).st_ctime_ns if path.exists() else None
-    for _ in range(500):
-        path.write_text(text, encoding="utf-8")
-        os.utime(path, ns=(mtime_ns, mtime_ns))
-        if before is None or os.stat(path).st_ctime_ns != before:
-            return
-    raise AssertionError("the ctime of a rewritten file did not move")
+    """Write ``text`` with the mtime ``mtime_ns`` and a later ctime than the file had."""
+    path.write_text(text, encoding="utf-8")
+    os.utime(path, ns=(mtime_ns, mtime_ns))
+    ino = os.stat(path).st_ino
+    CTIME_TICKS[ino] = CTIME_TICKS.get(ino, 0) + 1
 
 
 def edit(path: Path, old: str, new: str) -> None:
@@ -259,6 +274,44 @@ def test_a_change_between_two_refreshes_shows_on_the_next_one(root, tmp_path, ki
     assert observe(root) == after
 
 
+def watch(root, kind: str) -> None:
+    """The cycle's stat of the kind's source, as it is after a change made since the source was read."""
+    if kind == "ledger":
+        store.OBSERVED.ledger(root.cost_log)
+        return
+    path = {"state": state_path(root), "binding": bindings_dir(root) / f"{HARNESS}.json",
+            "transcript": transcript_path(root)}[kind]
+    store.OBSERVED.note(kind, path, os.stat(path))
+
+
+@pytest.mark.parametrize("change", ["change", "same-size"])
+@pytest.mark.parametrize("kind", ["state", "binding", "transcript", "ledger"])
+def test_a_value_read_before_its_source_changed_is_not_saved_under_the_identity_it_changed_to(
+        root, tmp_path, kind, change):
+    """The race of a read and its stat: a value read under one identity, a write, then the stat that the
+    snapshot records. The next start must show the new content, never the value of the old read."""
+    observe, before, mutate, after = SCENARIOS[kind, change](root)
+    read = read_all(root)
+    assert observe(root) == before
+    mutate()
+    watch(root, kind)
+    path = tmp_path / "cache" / store.CACHE_DIRNAME / store.FILE_NAME
+    tui.write_snapshot(path, SELECTION, tui.snapshot_section(read, EMPTY_MARKS, {}, NOW))
+    attention.clear_cache()
+    model.clear_cache()
+    assert tui.restore_snapshot(path, SELECTION) is not None
+    assert observe(root) == after
+
+
+def test_only_values_read_under_a_recorded_identity_are_exported():
+    cache = store.IdentityCache("state")
+    cache.put("/a", (1, 2, 3, 4, 5), "a")
+    cache.put("/b", (1, 2, 3, 4, 5), "b")
+    cache.put("/c", (1, 2, 3, 4, 5), "c")
+    identities = {"/a": (1, 2, 3, 4, 5), "/b": (1, 2, 4, 4, 5)}
+    assert store.export_values(cache, identities) == {"/a": "a"}
+
+
 # --- the resolution step ------------------------------------------------------------------------------
 
 def blind_to_the_clock(monkeypatch, st):
@@ -308,6 +361,26 @@ def test_an_unsettled_source_is_not_recorded_in_the_snapshot(tmp_path, monkeypat
         monkeypatch.setattr(store, "now_ns", lambda: st.st_mtime_ns + offset)
         store.OBSERVED.note("state", path, st)
         assert (str(path) in {item["path"] for item in store.OBSERVED.sources()}) is recorded
+
+
+def test_a_ledger_read_inside_the_step_is_finished_from_its_offset_never_read_from_the_start(root, monkeypatch):
+    mtime = os.stat(root.cost_log).st_mtime_ns
+    clock = [mtime + store.MTIME_STEP_NS - 1]
+    monkeypatch.setattr(store, "now_ns", lambda: clock[0])
+    bases = []
+    real = model._extend_sums
+    monkeypatch.setattr(model, "_extend_sums", lambda path, base: (bases.append(base and base["offset"]), real(path, base))[1])
+    assert spawn_cost_of(root) == 1.5
+    with open(root.cost_log, "a", encoding="utf-8") as handle:
+        handle.write(ledger_row(1.0))
+    os.utime(root.cost_log, ns=(mtime, mtime))
+    assert spawn_cost_of(root) == 2.5
+    clock[0] = mtime + store.MTIME_STEP_NS
+    assert spawn_cost_of(root) == 2.5
+    assert spawn_cost_of(root) == 2.5
+    assert bases[0] is None and bases[1] > 0
+    first_offset = bases[1]
+    assert len(bases) == 3 and bases[2] > first_offset
 
 
 # --- the binding scan ------------------------------------------------------------------------------------
@@ -412,7 +485,8 @@ def test_the_snapshot_follows_the_contract(root, tmp_path):
     save(root, path)
     tui.write_snapshot(path, store.selection_key(False, 24, ()), tui.snapshot_section(read_all(root), EMPTY_MARKS, {}, NOW))
     document = read_snapshot(path)
-    assert document is not None and set(document) == {"version", "body_sha256", "sections", "sources"}
+    assert document is not None and (
+        set(document) == set(CONTRACT["snapshot"]["schema"]) | {"sections", "code", "sources_sha256"})
     assert set(document["sections"]) == {SELECTION, store.selection_key(False, 24, ())}
     wanted = set(CONTRACT["snapshot"]["schema"]["sources"][0])
     assert document["sources"] and {kind for kind in (s["kind"] for s in document["sources"])} <= set(store.SOURCE_KINDS)
@@ -455,6 +529,52 @@ def test_a_failed_write_leaves_the_old_snapshot_and_no_temporary_file(root, tmp_
     assert path.read_bytes() == before and os.listdir(path.parent) == [store.FILE_NAME]
 
 
+def test_a_write_removes_the_temporaries_a_killed_writer_left(root, tmp_path):
+    path = tmp_path / "cache" / store.FILE_NAME
+    path.parent.mkdir()
+    for pid in (1, 2):
+        (path.parent / f"{store.FILE_NAME}.tmp-{pid}").write_text("half", encoding="utf-8")
+    save(root, path)
+    assert os.listdir(path.parent) == [store.FILE_NAME]
+
+
+@pytest.fixture
+def code_files(tmp_path, monkeypatch):
+    files = [tmp_path / "one.py", tmp_path / "two.py"]
+    for number, file in enumerate(files):
+        file.write_text(f"VALUE = {number}\n", encoding="utf-8")
+    monkeypatch.setattr(store, "CODE_FILES", tuple(files))
+    store.code_version.cache_clear()
+    yield files
+    monkeypatch.undo()
+    store.code_version.cache_clear()
+
+
+def test_the_code_version_follows_the_content_of_every_module_that_makes_the_values(code_files):
+    first = store.code_version()
+    for file in code_files:
+        file.write_text(file.read_text(encoding="utf-8") + "# edited\n", encoding="utf-8")
+        store.code_version.cache_clear()
+        second = store.code_version()
+        assert second != first
+        first = second
+
+
+def test_every_module_that_makes_the_stored_values_is_part_of_the_code_version():
+    named = {file.name for file in store.CODE_FILES}
+    assert {"model.py", "attention.py", "snapshot.py", "tui.py", "tui_app.py", "locate.py",
+            Path(store.engine_session_binding.__file__).name} <= named
+
+
+def test_a_snapshot_written_by_other_code_is_absent_after_the_code_changed(root, tmp_path, code_files):
+    path = tmp_path / store.FILE_NAME
+    store.write(path, {SELECTION: {"marks": EMPTY_MARKS}}, [])
+    assert store.load(path) is not None
+    code_files[0].write_text("VALUE = 'fixed'\n", encoding="utf-8")
+    store.code_version.cache_clear()
+    assert store.load(path) is None
+
+
 def damage(path: Path, how: str) -> None:
     document = json.loads(path.read_text(encoding="utf-8"))
     text = path.read_text(encoding="utf-8")
@@ -470,6 +590,15 @@ def damage(path: Path, how: str) -> None:
         section = next(iter(document["sections"].values()))
         section["snapshot"]["tasks"][0]["goal"] = "someone else's goal"
         path.write_text(json.dumps(document), encoding="utf-8")
+    elif how == "foreign-code":
+        path.write_text(json.dumps({**document, "code": "0" * 64}), encoding="utf-8")
+    elif how == "old-shape":
+        document.pop("code")
+        document.pop("sources_sha256")
+        path.write_text(json.dumps(document), encoding="utf-8")
+    elif how == "tampered-sources":
+        document["sources"][0]["size"] += 1
+        path.write_text(json.dumps(document), encoding="utf-8")
     elif how == "bad-source":
         document["sources"][0].pop("ino")
         path.write_text(json.dumps(document), encoding="utf-8")
@@ -481,7 +610,8 @@ def damage(path: Path, how: str) -> None:
 
 
 @pytest.mark.parametrize("how", ["missing", "damaged", "half-written", "foreign-version", "boolean-version",
-                                 "tampered", "bad-source", "unreadable"])
+                                 "tampered", "bad-source", "unreadable", "foreign-code", "old-shape",
+                                 "tampered-sources"])
 def test_a_snapshot_that_cannot_be_trusted_is_absent(root, tmp_path, how):
     path = tmp_path / store.FILE_NAME
     save(root, path)

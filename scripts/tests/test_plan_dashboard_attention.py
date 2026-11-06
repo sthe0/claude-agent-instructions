@@ -249,15 +249,22 @@ def test_the_locator_is_asked_about_permission_only_for_tails_without_a_pending_
 
 def test_a_batch_of_marks_is_read_on_a_pool(tmp_path, monkeypatch):
     paths = [put(SimpleNamespace(transcripts_root=tmp_path), f"h-{n}", IDLE) for n in range(16)]
-    real, pause = attention.read_tail, 0.1
+    real = attention.read_tail
+    together = threading.Barrier(attention.POOL_WORKERS)
+    overlapped = []
 
-    def slow(path):
-        time.sleep(pause)
+    def meet(path):
+        # a read passes only once POOL_WORKERS reads are in flight at the same time; on a serial loop the
+        # barrier breaks after its own (hang-guard) timeout
+        try:
+            together.wait(timeout=30)
+            overlapped.append(path)
+        except threading.BrokenBarrierError:
+            pass
         return real(path)
-    monkeypatch.setattr(attention, "read_tail", slow)
-    started = time.monotonic()
+    monkeypatch.setattr(attention, "read_tail", meet)
     computed = attention.marks([(p.stem, p) for p in paths], None)
-    assert time.monotonic() - started < 16 * pause / 3
+    assert len(overlapped) >= attention.POOL_WORKERS
     assert [m["waiting"] for m in computed] == ["idle"] * 16
 
 

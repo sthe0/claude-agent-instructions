@@ -10,6 +10,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -37,7 +38,7 @@ from plan_dashboard_support import (  # noqa: E402,F401
 )
 
 SIZE = (150, 40)
-PILOT_DEADLINE_S = 30
+PILOT_DEADLINE_S = 120
 
 
 class Clock:
@@ -1259,7 +1260,8 @@ def hold(monkeypatch, module, name, tag=None):
     return release, calls
 
 
-async def until(pilot, condition, seconds=2.0):
+async def until(pilot, condition, seconds=PILOT_DEADLINE_S / 4):
+    """Wait for ``condition``; ``seconds`` is a hang guard, never the time the event is expected to take."""
     for _ in range(int(seconds / 0.1)):
         if condition():
             return True
@@ -1434,7 +1436,7 @@ def test_all_mode_reads_the_marks_of_the_rows_in_view_only_and_each_once_per_cha
         assert table_cells(app, row_of(app, BULK[0]))["wait"] == "…"
         assert table_cells(app, row_of(app, BULK[450]))["wait"] == "?"
         app.query_one(DataTable).move_cursor(row=300, animate=False)
-        assert await until(pilot, lambda: BULK[300] in reads, seconds=5.0)
+        assert await until(pilot, lambda: BULK[300] in reads)
         await settle(app, pilot)
         scrolled = reads[len(first):]
         assert set(scrolled) <= in_view(app) and not set(scrolled) & set(first)
@@ -1460,7 +1462,7 @@ def test_the_all_mode_counter_counts_the_live_set_like_live_mode(tmp_path):
         assert live_head.endswith("waiting: 3")
         await pilot.press("a")
         await settle(app, pilot)
-        assert await until(pilot, lambda: table_cells(app, row_of(app, STALE))["wait"] == "Q", seconds=5.0)
+        assert await until(pilot, lambda: table_cells(app, row_of(app, STALE))["wait"] == "Q")
         assert str(app.query_one("#overview-head").render()).endswith("waiting: 3")
         assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
 
@@ -1503,7 +1505,7 @@ def test_a_pending_question_shows_on_the_next_overlay_pass_while_the_order_read_
             append_fixture_transcript(root, ALPHA, [ASKING[1]])
             await pilot.press("r")
             assert await until(pilot, lambda: calls)
-            assert await until(pilot, lambda: table_cells(app, row_of(app, ALPHA))["wait"] == "Q", seconds=5.0)
+            assert await until(pilot, lambda: table_cells(app, row_of(app, ALPHA))["wait"] == "Q")
             assert not release.is_set()
         finally:
             release.set()
@@ -1618,13 +1620,27 @@ def test_the_old_marking_is_gone_from_every_wait_cell_once_the_live_check_has_la
     run(scenario, root, snapshot_path=path, locator=attention_locator())
 
 
-@pytest.mark.parametrize("damage", ["absent", "garbage"])
+def alter_snapshot(path, how) -> None:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if how == "foreign-code":
+        document["code"] = "0" * 64
+    elif how == "old-shape":
+        document.pop("code")
+        document.pop("sources_sha256")
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+
+@pytest.mark.parametrize("damage", ["absent", "garbage", "foreign-code", "old-shape"])
 def test_a_start_without_a_usable_snapshot_paints_from_the_live_read(tmp_path, stream, damage):
     root = attention_root(tmp_path)
     path = snapshot_file(tmp_path)
     if damage == "garbage":
         path.parent.mkdir(parents=True)
         path.write_text("{half a snapsh", encoding="utf-8")
+    elif damage != "absent":
+        leave_a_snapshot(root, path, locator=attention_locator())
+        alter_snapshot(path, damage)
+        drain(stream)
 
     async def scenario(app, pilot):
         assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
@@ -1635,6 +1651,63 @@ def test_a_start_without_a_usable_snapshot_paints_from_the_live_read(tmp_path, s
     assert len(painted) == 1 and painted[0]["from_snapshot"] is False
 
 
+@pytest.mark.parametrize("fails", ["restore", "paint"])
+def test_a_snapshot_that_raises_while_it_is_restored_or_painted_is_treated_as_absent(
+        tmp_path, monkeypatch, stream, fails):
+    root = attention_root(tmp_path)
+    path = snapshot_file(tmp_path)
+    leave_a_snapshot(root, path, locator=attention_locator())
+    drain(stream)
+
+    def raises(*args, **kwargs):
+        raise RuntimeError("a snapshot of another shape")
+
+    if fails == "restore":
+        monkeypatch.setattr(tui, "restore_snapshot", raises)
+    else:
+        real = tui_app.show_table
+        failed = []
+
+        def draws_once_then_fails(*args, **kwargs):
+            if not failed:
+                failed.append(1)
+                raises()
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(tui_app, "show_table", draws_once_then_fails)
+
+    async def scenario(app, pilot):
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
+        assert not app.old_ids and app.stored is None and app.old_cleared
+
+    run(scenario, root, snapshot_path=path, locator=attention_locator())
+    painted = [e for e in drain(stream) if e["ev"] == "rows_painted"]
+    assert len(painted) == 1 and painted[0]["from_snapshot"] is False
+
+
+def test_the_header_counters_of_a_start_from_a_snapshot_wear_the_old_marking_until_the_live_check_lands(
+        tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    path = snapshot_file(tmp_path)
+    leave_a_snapshot(root, path, locator=attention_locator())
+    release, calls = hold(monkeypatch, model, "collect")
+    seen = {}
+
+    async def scenario(app, pilot):
+        try:
+            assert await until(pilot, lambda: app.rows_noted and calls)
+            seen["held"] = str(app.query_one("#overview-head").render())
+        finally:
+            release.set()
+        await settle(app, pilot)
+        seen["live"] = str(app.query_one("#overview-head").render())
+
+    run_unsettled(scenario, root, snapshot_path=path, locator=attention_locator())
+    old = tui.OLD_MARK
+    assert re.search(rf"{old}\d+ active +{old}\d+ idle +{old}\d+ total +waiting: {old}\d+$", seen["held"]), seen["held"]
+    assert old not in seen["live"] and seen["live"].endswith("waiting: 3")
+
+
 @pytest.mark.parametrize("how", ["quit key", "sigterm"])
 def test_the_snapshot_is_written_at_a_clean_exit_and_announced_after_it(tmp_path, stream, how):
     root = attention_root(tmp_path)
@@ -1643,7 +1716,8 @@ def test_the_snapshot_is_written_at_a_clean_exit_and_announced_after_it(tmp_path
     ended, unhandled = [], []
 
     async def auto_pilot(pilot):
-        assert await until(pilot, lambda: app.old_cleared, seconds=20.0)
+        await settle(app, pilot)
+        assert await until(pilot, lambda: app.old_cleared)
         ended.append(time.monotonic_ns())
         if how == "sigterm":
             os.kill(os.getpid(), signal.SIGTERM)

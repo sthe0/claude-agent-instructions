@@ -30,7 +30,8 @@ PILOT_TESTS = TESTS / "test_plan_dashboard_tui_app.py"
 WEB_TESTS = TESTS / "test_plan_dashboard_web.py"
 DOM_TESTS = TESTS / "test_plan_dashboard_web_dom.py"
 WORKERS = 4
-RUN_TIMEOUT_S = 900
+RUN_TIMEOUT_S = 1800
+HUNG = -9
 PILOT_MUTATIONS = sorted(name for name, (module, _, _) in mutations.TUI_MUTATIONS.items()
                          if module == mutations.TUI_APP)
 STDLIB_TUI_MUTATIONS = sorted(set(mutations.TUI_MUTATIONS) - set(PILOT_MUTATIONS))
@@ -58,7 +59,7 @@ def run_tests(test_file: Path, mutation: str) -> subprocess.CompletedProcess:
                               timeout=RUN_TIMEOUT_S)
     except subprocess.TimeoutExpired as hung:
         out = hung.output.decode() if isinstance(hung.output, bytes) else (hung.output or "")
-        return subprocess.CompletedProcess(command, -9, f"{out}\nTIMEOUT after {RUN_TIMEOUT_S}s, mutation: {mutation or 'none'}", "")
+        return subprocess.CompletedProcess(command, HUNG, f"{out}\nTIMEOUT after {RUN_TIMEOUT_S}s, mutation: {mutation or 'none'}", "")
 
 
 def run_all(test_file: Path, names: list[str]) -> dict[str, subprocess.CompletedProcess]:
@@ -110,15 +111,31 @@ def snapshot_pilot_results():
     return run_all(PILOT_TESTS, list(SNAPSHOT_PILOT_NAMES))
 
 
+def assert_not_hung(result):
+    """A run that hit the hang guard says nothing about the tests: it is neither the red nor the green the
+    catalogue looks for, and fails as its own outcome."""
+    if result.returncode == HUNG:
+        pytest.fail(f"no verdict, the run hung (hang guard {RUN_TIMEOUT_S}s):\n{result.stdout[-1000:]}", pytrace=False)
+
+
 def assert_green(result):
+    assert_not_hung(result)
     assert result.returncode == 0, result.stdout[-2000:]
     assert "plan-dashboard mutation: none" in result.stdout
 
 
 def assert_red(name, result, what):
+    assert_not_hung(result)
     assert f"plan-dashboard mutation: {name} applied" in result.stdout, result.stdout[-2000:]
     assert result.returncode == 1, f"{name} left the {what} green:\n{result.stdout[-2000:]}"
     assert "FAILED" in result.stdout
+
+
+@pytest.mark.parametrize("judge", [lambda r: assert_green(r), lambda r: assert_red("m", r, "tests")], ids=["green", "red"])
+def test_a_run_that_hit_the_hang_guard_is_its_own_outcome_neither_red_nor_green(judge):
+    hung = subprocess.CompletedProcess([], HUNG, "plan-dashboard mutation: m applied\nFAILED x\nTIMEOUT", "")
+    with pytest.raises(pytest.fail.Exception, match="the run hung"):
+        judge(hung)
 
 
 def test_the_model_tests_are_green_with_no_mutation(results):
