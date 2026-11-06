@@ -13,6 +13,7 @@ import sys
 import textwrap
 from pathlib import Path
 
+from conftest import path_with_arc_stub
 from session_scope import registry
 
 HOOK = Path(__file__).resolve().parent.parent / "hook-scope-track.py"
@@ -63,7 +64,7 @@ def _make_arc_stub(bin_dir: Path, root: Path) -> None:
 def run_hook(payload: dict, home: Path, bin_dir: str, lineage: "str | None" = None) -> subprocess.CompletedProcess:
     # bin_dir first so a stub shadows the real binary; /usr/bin:/bin kept so the
     # stub's own "#!/usr/bin/env bash" shebang can still resolve bash.
-    env = {"HOME": str(home), "PATH": f"{bin_dir}:/usr/bin:/bin"}
+    env = {"HOME": str(home), "PATH": path_with_arc_stub(bin_dir)}
     if lineage is not None:
         env["AGENT_LINEAGE_IDS"] = lineage
     return subprocess.run(
