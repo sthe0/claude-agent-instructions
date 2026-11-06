@@ -1,0 +1,2 @@
+#!/bin/sh
+cat >/dev/null; echo '{"defects": [], "reason": "e2e stub"}'
