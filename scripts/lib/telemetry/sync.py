@@ -333,23 +333,15 @@ def _session_role(sess_event: "dict | None", spawn: "dict | None") -> str:
     return "root"
 
 
-def _materialize_session(conn, origin: str, session: str, subagents: "list[str]", artifacts) -> None:
-    events = [(r[0], r[1], r[2], _fields(r[3])) for r in conn.execute(
+def _session_events(conn, session: str) -> list:
+    return [(r[0], r[1], r[2], _fields(r[3])) for r in conn.execute(
         "SELECT event_id, kind, time, fields FROM events WHERE session_id = ? ORDER BY time, event_id", (session,))]
-    if not events:
-        return
-    sess_event = next((f for _, kind, _, f in events if kind == "session"), None)
-    spawn_row = conn.execute(
-        "SELECT session_id, time, fields FROM events WHERE kind = 'spawn' AND child_session_id = ? "
-        "ORDER BY time LIMIT 1", (session,)).fetchone()
-    spawn = _fields(spawn_row[2]) if spawn_row else None
-    parent = (sess_event or {}).get("parent_session") or (spawn_row[0] if spawn_row else None)
-    role = _session_role(sess_event, spawn)
-    depth = (sess_event or {}).get("depth")
-    if depth is None:
-        depth = 1 if parent else 0
-    conn.execute(_SESSION_UPSERT, (session, origin, parent, role, tables.validate("roles", role), depth, events[0][2]))
 
+
+def _file_task_rows(conn, origin: str, session: str) -> None:
+    """The task rows a session's events open, abandon, weigh and resolve. Run for every session of a
+    sync before any session's contours, so a child filed in the same sync finds its parent's row."""
+    events = _session_events(conn, session)
     for event_id, kind, moment, fields in events:
         if kind == "task" and fields.get("action") == "open" and fields.get("task_id"):
             conn.execute(
@@ -368,6 +360,23 @@ def _materialize_session(conn, origin: str, session: str, subagents: "list[str]"
         if fields.get("node_after") == "RESOLVED":
             conn.execute("UPDATE tasks SET status = 'resolved', ended_at = ? WHERE epoch = ? AND status = 'open'",
                          (moment, epoch))
+
+
+def _materialize_session(conn, origin: str, session: str, subagents: "list[str]", artifacts) -> None:
+    events = _session_events(conn, session)
+    if not events:
+        return
+    sess_event = next((f for _, kind, _, f in events if kind == "session"), None)
+    spawn_row = conn.execute(
+        "SELECT session_id, time, fields FROM events WHERE kind = 'spawn' AND child_session_id = ? "
+        "ORDER BY time LIMIT 1", (session,)).fetchone()
+    spawn = _fields(spawn_row[2]) if spawn_row else None
+    parent = (sess_event or {}).get("parent_session") or (spawn_row[0] if spawn_row else None)
+    role = _session_role(sess_event, spawn)
+    depth = (sess_event or {}).get("depth")
+    if depth is None:
+        depth = 1 if parent else 0
+    conn.execute(_SESSION_UPSERT, (session, origin, parent, role, tables.validate("roles", role), depth, events[0][2]))
 
     first_open = conn.execute(
         "SELECT t.origin, t.task_id, t.epoch FROM events e JOIN tasks t ON t.epoch = e.event_id "
@@ -432,9 +441,11 @@ def materialize(sessions: "list[str]") -> dict:
     def work(conn):
         origin = conn.execute("SELECT value FROM meta WHERE key = 'origin'").fetchone()[0]
         for session in targets:
+            _file_task_rows(conn, origin, session)
+        for session in targets:
             subagents, artifacts = extras[session]
             _materialize_session(conn, origin, session, subagents, artifacts)
-            if head and session in needing_head:
+            if head:
                 conn.execute(
                     "UPDATE sessions SET core_head = ?, dirty = ?, harness_version = COALESCE(harness_version, ?) "
                     "WHERE session_id = ? AND core_head IS NULL", (head, dirty, versions.get(session), session))
