@@ -282,9 +282,12 @@ def test_sync_attaches_live_events_of_session_running_before_pr1_to_its_imported
         "opened_at": "2026-11-01T00:00:00+00:00"}])["inserted"] == 1
     assert store.attach_session_task("old", origin, "task-old", epoch)["committed"] is True
     live.emit_event("old", "judge", "judge:advisor", {"verdict": "pass", "again": True})
+    live.emit_event("kid", "note", "telemetry:test", {})
     second = sync.run()
 
     assert second["unattached"] == 0
+    kid = query("SELECT task_origin, task_id, task_epoch FROM sessions WHERE session_id = 'kid'")
+    assert [(row["task_origin"], row["task_id"], row["task_epoch"]) for row in kid] == [(origin, "task-old", epoch)]
     rows = query("SELECT * FROM contours WHERE parent_session = 'old' OR contour_id = 'old'")
     assert {(row["task_origin"], row["task_id"], row["task_epoch"]) for row in rows} == {
         (origin, "task-old", epoch)}

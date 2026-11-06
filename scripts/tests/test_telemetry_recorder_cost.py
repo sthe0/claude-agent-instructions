@@ -195,6 +195,18 @@ def _committed(session: str) -> bool:
         return False
 
 
+def test_session_end_hook_is_registered_by_the_installer_for_session_end_with_no_matcher():
+    import ast
+    installer = (SCRIPTS / "install-reminder-hooks.sh").read_text(encoding="utf-8")
+    body = installer.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    desired = next(ast.literal_eval(node.value) for node in ast.parse(body).body
+                   if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "DESIRED" for t in node.targets))
+
+    rows = [row for row in desired if row[2].split()[0] == "hook-telemetry-session-end.py"]
+
+    assert len(rows) == 1 and rows[0][0] == "SessionEnd" and rows[0][1] is None
+
+
 def test_any_sync_delivers_idle_spool_without_end_marker_past_ttl(monkeypatch):
     now = at(50_000)
     freeze(monkeypatch, now)
@@ -432,6 +444,22 @@ def test_deferred_replay_visit_writes_no_sync_commit(monkeypatch):
 
     assert outcome["visited"] == ["locked"] and outcome["deferred"] == ["locked"] and outcome["committed"] == []
     assert commits("locked") == [] and events("locked", kind="note") == []
+
+
+def test_deferred_visit_of_an_ended_session_with_recorded_events_writes_no_sync_commit(monkeypatch):
+    emit_at(monkeypatch, "ended", at(490), 2)
+    assert store.replay("ended")["drained"]
+    emit_at(monkeypatch, "ended", at(495), 2)
+    end_marker("ended")
+    freeze(monkeypatch, at(5_000))
+    monkeypatch.setattr(store, "DEADLINE_S", 0.2)
+    monkeypatch.setattr(sync, "BUDGET_S", 0.0)
+
+    with held("ended.lock"):
+        outcome = sync.run()
+
+    assert outcome["visited"] == ["ended"] and outcome["deferred"] == ["ended"] and outcome["committed"] == []
+    assert commits("ended") == [] and len(deferred_rows()) == 1
 
 
 def test_session_end_sync_commits_own_spool_already_committed_before_E(monkeypatch):
