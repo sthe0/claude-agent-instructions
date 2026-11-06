@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "fedor.solovyev@gmail.com"
 refs: [gates.py:420-461, cli.py:1924-1954]
 created: 2026-07-21
-last_verified: 2026-10-06
+last_verified: 2026-11-05
 generalized_into: [a-two-valued-judge-absorbs-could-not-look]
 ---
 
@@ -40,12 +40,18 @@ record-result --status passed --observation X (judge runs, fails open, no verdic
 ### 2026-10-06 — 2026-10-06 — judge revise x5 on a green stage, user-sanctioned override (#292)
 - Where it arose: Core ticket #292 (landed check after rebase landing), substantive session, 2-stage plan; stage 1 revise 5x on shifting grounds, stage 2 once
 - Working plan: Asked the user via AskUserQuestion, then stage-review --verdict override --reviewer user with the observation bytes identical to record-result; posted the precedent to #204. Stage 2 passed on retry with raw command output in the observation.
+
+### 2026-11-05 — judge pass blocked by an old user override bound to earlier observation bytes
+- Where it arose: Core-adjacent task iterm-ccgram-telegram (tmux/ccgram topic naming), stage 2: the user had recorded a stage-review override on the first observation; I rewrote the observation, the acceptance judge ran and returned pass on the new bytes, yet the gate still reported the stage stale
+- Working plan: Root cause in cli_common._record_stage_review: a judge verdict never replaced a human/override StageReview of the same stage, even when that review was bound to a DIFFERENT observation_sha256 (already stale for the gate). Workaround used that day: stage-review --verdict pass --reviewer judge:acceptance with the logged judge verdict quoted in --note. Engine fix landed 2026-11-06 (Core main 03d7f8c6, task judge-supersedes-stale-review): a judge verdict on the current bytes replaces a human review bound to other bytes; a human review of the same bytes, or an unbound one (empty sha), stays protected. After 03d7f8c6 the workaround is unnecessary.
 ## Common core & variations
 **Common:** The acceptance gate binds to the --observation bytes alone. Whatever goes into --actual is invisible to the judge, so a rich --actual plus a thin --observation reads to the judge exactly like an unverified claim.
 
 **Variations:** Distinct from the nested-claude-unavailable context above: here the judge RAN and returned a substantive 'revise' — 'the observation only confirms a command succeeded and an issue was created, but doesn't describe the actual content'. The fix is not a manual stage-review but a better observation: restate the artifact's own content against each element of the stage's expected_result_image. A second, unrelated trap followed immediately — the retry's judge subprocess exited non-zero (fail-open), which stores NO verdict yet still blocks as 'stale'; re-running the identical record-result command a second time succeeded, so a fail-open judge failure is worth one plain retry before reaching for stage-review.
 
 The 2026-10-04 context is a THIRD, structurally different failure mode from the first two: not a stale comparison (mechanically escapable via sha-binding) and not a single thin-observation miss (escapable by writing a richer observation) but a judge that runs successfully and keeps finding genuine-sounding but NON-CONVERGING objections — 6/6 stages in one session needed a human override, 0/6 converged by revising the artifact or the observation. This has no mechanical escape by construction: `stage-review --verdict override` by an accountable human, after reading the raw evidence, is the only working exit once a second `revise` lands on different grounds than the first. Candidate self-improvement finding (not yet actioned — flagged for root/self-improvement review): a 6/6-override rate in one session is strong enough evidence to warrant checking whether `advisor.acceptance_judge`'s prompt or model needs recalibration (e.g. it may be optimizing for finding SOME objection every round rather than converging toward a stable pass/fail bar) — see `docs/operations/advisor-timeout-calibration.md` for the sibling timeout-calibration precedent of treating the advisor's own parameters as tunable, not fixed. A second, smaller finding at the same gate: `agentctl record-result` surfaces only ONE blocking gate per call (e.g. the code-review gate, then separately the acceptance-judge gate) even when both are already failing on the same stage, costing extra round-trips to discover the second blocker only after clearing the first.
+
+The 2026-11-05 context is a FOURTH mode, and the first one fixed in the engine rather than escaped: the judge produced a valid fresh `pass`, but `_record_stage_review` refused to let it replace a human override bound to the PREVIOUS observation bytes, so the stale human record kept the gate stale. Signal: the session log shows a judge `pass`, the gate still says stale, and `stage_reviews` holds a non-judge reviewer whose `observation_sha256` differs from the current observation. Fixed in Core `03d7f8c6` (2026-11-06): a judge verdict on the current bytes replaces a human review of other bytes; a human review of the same bytes, or one with no sha, stays protected.
 
 ## Cost
 Not recorded — this leaf was salvaged from an abandoned worktree well after the originating
