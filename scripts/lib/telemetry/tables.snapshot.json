@@ -1,0 +1,46 @@
+{
+  "loss_modes": {
+    "1": {
+      "members": [
+        "disk_full",
+        "drop_marker_unwritable",
+        "partial_session_before_first_live_event",
+        "process_killed_before_emit",
+        "record_corrupt_rebuilt",
+        "rejected_line",
+        "spool_append_failed",
+        "sync_deferred",
+        "torn_event"
+      ],
+      "retired": []
+    }
+  },
+  "phases": {
+    "1": {
+      "members": [
+        "difficulty",
+        "execution",
+        "landing",
+        "order",
+        "other",
+        "plan_review",
+        "planning",
+        "resolution",
+        "verification"
+      ],
+      "retired": []
+    }
+  },
+  "roles": {
+    "1": {
+      "members": [
+        "agent-tool",
+        "judge",
+        "linked-child",
+        "root",
+        "spawned-child"
+      ],
+      "retired": []
+    }
+  }
+}

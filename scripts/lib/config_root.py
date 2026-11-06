@@ -256,6 +256,29 @@ def decision_log() -> Path:
     return agentctl_dir() / "decision-log.jsonl"
 
 
+def telemetry_dir() -> Path:
+    """Directory of the telemetry record and its spools (``<root>/telemetry``)."""
+    return agent_home() / "telemetry"
+
+
+def telemetry_db() -> Path:
+    """The telemetry record (``<root>/telemetry/telemetry.sqlite``). Honors an
+    ``$AGENTCTL_TELEMETRY_DB`` override so a test run never opens the real record."""
+    override = os.environ.get("AGENTCTL_TELEMETRY_DB")
+    if override:
+        return Path(override).expanduser()
+    return telemetry_dir() / "telemetry.sqlite"
+
+
+def telemetry_spool_dir() -> Path:
+    """Per-session spool directory (``<root>/telemetry/spool``). Honors an
+    ``$AGENTCTL_TELEMETRY_SPOOL`` override so a test run never writes a real spool."""
+    override = os.environ.get("AGENTCTL_TELEMETRY_SPOOL")
+    if override:
+        return Path(override).expanduser()
+    return telemetry_dir() / "spool"
+
+
 def canon_roots_file() -> Path:
     """Machine-local list of extra canon-read-only path roots, one per line
     (``<root>/canon-roots.local`` — see hook-guard-canon-readonly.py). Org-

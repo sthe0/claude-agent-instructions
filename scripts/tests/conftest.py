@@ -19,7 +19,38 @@ if TESTS_DIR not in sys.path:
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import host_llm, judge_ledger  # noqa: E402
 from _xdist_auto import pytest_configure, pytest_terminal_summary  # noqa: E402,F401
-from slow_selection import pytest_addoption, pytest_collection_modifyitems  # noqa: E402,F401
+from slow_selection import pytest_addoption as _slow_addoption  # noqa: E402
+from slow_selection import pytest_collection_modifyitems  # noqa: E402,F401
+
+NO_SKIP_OPTION = "--telemetry-no-skip"
+
+
+class _NoSkipGuard:
+    """With --telemetry-no-skip a run that skipped or xfailed any test exits non-zero,
+    so a check naming tests cannot go green on tests that never ran."""
+
+    def __init__(self):
+        self.enabled = False
+        self.not_run = 0
+
+    def pytest_configure(self, config):
+        self.enabled = bool(config.getoption(NO_SKIP_OPTION))
+
+    def pytest_runtest_logreport(self, report):
+        if report.skipped:
+            self.not_run += 1
+
+    def pytest_sessionfinish(self, session, exitstatus):
+        if self.enabled and self.not_run and session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+def pytest_addoption(parser, pluginmanager):
+    _slow_addoption(parser, pluginmanager)
+    parser.addoption(NO_SKIP_OPTION, action="store_true", default=False,
+                     help="exit non-zero when any collected test is skipped or xfailed")
+    if not pluginmanager.has_plugin("telemetry-no-skip"):
+        pluginmanager.register(_NoSkipGuard(), "telemetry-no-skip")
 
 # The plan-level places a SUBSTANTIVE plan owes the submission seam, as TOML an author
 # would write. Every fixture plan in the suite that expects to SUBMIT CLEAN splices these
@@ -91,6 +122,16 @@ def _isolate_decision_log(tmp_path, monkeypatch):
     or engine-gate evaluation to $AGENTCTL_DECISION_LOG; no test may append to the real log.
     The env var reaches the hook and CLI subprocesses a test spawns."""
     monkeypatch.setenv("AGENTCTL_DECISION_LOG", str(tmp_path / "decision-log.jsonl"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_telemetry(tmp_path, monkeypatch):
+    """The telemetry record and its spool (lib/telemetry) live under the config root; no
+    test may open the live record or append to a live spool. The env vars reach the hook
+    and CLI subprocesses a test spawns."""
+    monkeypatch.setenv("AGENTCTL_TELEMETRY_DB", str(tmp_path / "telemetry-record" / "telemetry.sqlite"))
+    monkeypatch.setenv("AGENTCTL_TELEMETRY_SPOOL", str(tmp_path / "telemetry-record" / "spool"))
+    monkeypatch.delenv("AGENTCTL_TELEMETRY_FAULT", raising=False)
 
 
 @pytest.fixture(autouse=True)

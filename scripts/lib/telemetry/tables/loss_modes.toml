@@ -1,0 +1,37 @@
+version = 1
+
+[[members]]
+name = "spool_append_failed"
+since = 1
+
+[[members]]
+name = "torn_event"
+since = 1
+
+[[members]]
+name = "rejected_line"
+since = 1
+
+[[members]]
+name = "disk_full"
+since = 1
+
+[[members]]
+name = "record_corrupt_rebuilt"
+since = 1
+
+[[members]]
+name = "partial_session_before_first_live_event"
+since = 1
+
+[[members]]
+name = "process_killed_before_emit"
+since = 1
+
+[[members]]
+name = "drop_marker_unwritable"
+since = 1
+
+[[members]]
+name = "sync_deferred"
+since = 1
