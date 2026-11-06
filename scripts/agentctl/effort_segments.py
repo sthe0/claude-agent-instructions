@@ -354,7 +354,15 @@ def book(ledger: dict, written_ts: float, usd: float, minutes: float, origin: st
     it. A booking older than the ledger's session_floor is not booked. From the floor on every
     write time has an owner; an uncovered one is a handoff the engine failed to make, booked to
     the nearest arming under a logged warning so the spend is not lost. A ledger
-    holding no session_floor takes no such bound and books nothing before its first span."""
+    holding no session_floor takes no such bound and books nothing before its first span.
+
+    Contract change from stage 3, which asserted that every write time at or after the floor is
+    covered: `book` runs on the stamp and refresh paths of every user act, and an assertion
+    there would block the user's act over an accounting gap. The gap is logged and the spend
+    kept in the ledger, near where it was written, instead of being lost or crashing the act.
+    One engine path that can leave such a gap: a settling act whose stage held the interval
+    while no stage is ready yet and some are unsettled (a pending stage waiting on a supplier
+    still running); the interval stays uncovered until the next stage is armed."""
     floor = ledger.get("session_floor")
     if floor is not None and written_ts < floor:
         return None

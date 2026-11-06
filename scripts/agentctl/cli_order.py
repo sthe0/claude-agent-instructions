@@ -63,12 +63,26 @@ def _planning_open(state: SessionState) -> bool:
             and effort_segments.open_arming_of(ledger, effort_segments.PLANNING) is not None)
 
 
-def _planning_estimate_refusal(state: SessionState, doc) -> str | None:
+def _agreed_before_migration(state: SessionState, doc) -> bool:
+    """Whether the draft is the very understanding the user agreed before this session's
+    migration instant: such an order predates the estimate table and is never asked for it again
+    just to be presented."""
+    agreed = state.order_agreement
+    migrated = state.effort_migrated
+    return (agreed is not None and bool(migrated) and agreed.at < migrated["instant"]
+            and agreed.understanding_sha256 == understanding_digest(doc))
+
+
+def _planning_estimate_refusal(state: SessionState, doc, *, agreeing: bool = False) -> str | None:
     """The refusal of an order draft that is to be put to the user or agreed before the plan's
     first approval and lacks any of the estimate's three parts, or None. Only presence is
     graded: what the derivation says is the reviewer's to judge. An order put or agreed after the
-    first approval carries no estimate and is not refused for lacking one."""
+    first approval carries no estimate and is not refused for lacking one; an order agreed before
+    the session's migration may be put again unchanged without it, but a new agreement of it
+    (`agreeing`) needs the table like any other."""
     if not _planning_open(state):
+        return None
+    if not agreeing and _agreed_before_migration(state, doc):
         return None
     order = doc.meta.order
     estimate = order.planning_estimate if order is not None else None
@@ -202,7 +216,7 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
         return refuse("cannot record the agreement: " + "; ".join(blockers), blockers=blockers)
     doc, _ = load_order_draft(path)
     digest = understanding_digest(doc)
-    no_estimate = _planning_estimate_refusal(state, doc)
+    no_estimate = _planning_estimate_refusal(state, doc, agreeing=True)
     if no_estimate is not None:
         return refuse("cannot record the agreement: " + no_estimate)
     receipt = gates._plan_presentation_for(state, PLAN_PRESENTATION_KIND_ORDER)

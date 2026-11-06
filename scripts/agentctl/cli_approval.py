@@ -485,14 +485,9 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                          "requirements (edit it and re-run approve)",
                          data={"problems": submission})
     # The continuation of every live stage is decided again against the approved plan, on the
-    # bytes now in plan_path. A self-approval refused for it returns before anything is saved,
-    # so the refresh above (and the review trigger's save below) leave no trace on the session.
+    # bytes now in plan_path; a self-approval is refused for it only after the act has judged
+    # the live segment (A19), see below.
     _continuation = _continuation_at_approval(state)
-    if args.by and args.by.strip().casefold() == AGENT_ACTOR and _continuation is not None \
-            and not _continuation.ok:
-        return Directive(False, state.node, "await_user_approval",
-                         "cannot approve --by agent: a live stage has no clean continuation in this plan",
-                         data={"blockers": _continuation_blockers(_continuation)})
     # Read plan_path's bytes ONCE and derive `_approved_doc`, the digest stamped
     # below (seam (c)) and the snapshot written near the end of this function from
     # that SAME buffer -- three separate reads of the same file (`load_plan`, then
@@ -600,6 +595,10 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             state, store, args, effort_segments.ACT_APPROVE_BY_AGENT, "approve --by agent")
         if _fire_refusal is not None:
             return _fire_refusal
+        if _continuation is not None and not _continuation.ok:
+            return Directive(False, state.node, "await_user_approval",
+                             "cannot approve --by agent: a live stage has no clean continuation in this plan",
+                             data={"blockers": _continuation_blockers(_continuation)})
         blockers = blockers + _carried_live_stage_blockers(state, _identity_order)
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:

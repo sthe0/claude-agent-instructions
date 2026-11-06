@@ -791,7 +791,13 @@ def _switch_budget(state: SessionState, thr: Thresholds) -> dict:
     window was judged against less the tier budgets that estimate priced for the stages pending
     or live now, per scale and never below zero. A stage the switching approval dropped is not
     pending and one it added was never priced, so neither subtracts; a re-tiered stage subtracts
-    the tier it was priced at."""
+    the tier it was priced at.
+
+    Known limits, both affecting only the disclosed planning figure of a migrated session (which
+    calibration excludes): the stash is keyed by stage identity, so a pending stage the switching
+    replan renumbered or rewired gets a fresh identity and subtracts nothing (its tier counts
+    twice in the total); and the stash covers the live frame only, so a push or pop of a
+    sub-plan while the window is open leaves the outer frames' stages unpriced."""
     priced = (state.effort_migrated or {}).get("priced") or {}
     estimate = priced.get("estimate") or {}
     stash = priced.get("stages") or {}
@@ -1089,7 +1095,15 @@ def _effort_disclosure(state: SessionState, *, project_switch: bool = False) -> 
     switch = _switch_budget(state, Thresholds()) if (
         project_switch and effort_segments.window_arming(ledger) is not None) else None
     lines = []
+    waiting = {uid for stage in state.stages
+               if stage.outcome.status == StageStatus.PENDING.value
+               and (uid := state.stage_uid(stage.index))}
     for entry in effort_segments.timeline(ledger):
+        stage_uid = entry["segment"].removeprefix(effort_segments.STAGE_PREFIX)
+        if (entry["segment"].startswith(effort_segments.STAGE_PREFIX) and stage_uid in waiting
+                and not any(effort_segments.open_span_of(a) or any(effort_segments.arming_actual(a).values())
+                            for a in entry["armings"])):
+            continue
         projected = switch is not None and entry["segment"] == effort_segments.PLANNING
         lines.append(_effort_line(entry["segment"], entry["armings"],
                                   budget=switch if projected else None, projected=projected))

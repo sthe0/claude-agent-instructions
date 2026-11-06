@@ -1042,6 +1042,20 @@ def test_breach_edited_in_at_plan_ready_refused(eng):
     assert_refused(eng, plan, uid, held, None)
 
 
+def test_continuation_refusal_of_a_self_approval_comes_after_judging_the_live_stage(eng):
+    plan, uid, held, _ = live_replan(eng, build_plan(REWORDED, stage_block(2), ADDED))
+    breach = build_plan(REWORDED, stage_block(2), stage_block(3, title="Add docs", deps=[2], outputs=["mod.py"]))
+    Path(plan).write_text(declare_venue(breach, eng.tmp), encoding="utf-8")
+    eng.review(plan)
+    eng.book(usd=1000.0, uid=uid)
+    refused = eng.run("approve", session="s", by="agent")
+    assert refused["ok"] is False
+    state = eng.state()
+    assert state.node == "PLAN_READY"
+    [fire] = [f for f in state.effort_fires if f.get("arming_id") == held["arming_id"]]
+    assert seg.SCALE_USD in fire["scales"] and gates.open_fire_record(state) is not None
+
+
 ADDED_LAST = stage_block(4, title="Add docs", deps=[3])
 PREPARE_AHEAD = build_plan(
     stage_block(1, title="Prepare", result="prepared", done="prepared", outputs=[]),

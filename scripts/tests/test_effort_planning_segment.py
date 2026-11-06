@@ -389,6 +389,29 @@ def test_late_reviewer_rows_fire_at_approve_by_agent(eng):
     judged_planning(eng, "p")
 
 
+def test_late_reviewer_rows_fire_at_plan_review(eng):
+    plan = eng.plan_ready("p")
+    eng.child("c", "p")
+    eng.row(OVERSPENT_USD, spawner="c", sid="p")
+    assert planning_of(eng.state("p"))["booked"][seg.SCALE_USD] == 0.0
+    eng.review(plan, "p")
+    assert planning_of(eng.state("p"))["booked"][seg.SCALE_USD] == OVERSPENT_USD
+    judged_planning(eng, "p")
+
+
+def test_planner_run_end_judged_at_next_approve_by_agent(eng):
+    eng.plan_ready("p")
+    eng.child("c", "p")
+    eng.row(OVERSPENT_USD, spawner="c", sid="p")
+    assert fires_of(eng.state("c")) == [] and planning_of(eng.state("p"))["booked"][seg.SCALE_USD] == 0.0
+    refused = eng.run("approve", session="p", by="agent")
+    state = eng.state("p")
+    assert refused["ok"] is False and state.node != "APPROVED" and planning_of(state) is not None
+    assert planning_of(state)["booked"][seg.SCALE_USD] == OVERSPENT_USD
+    judged_planning(eng, "p")
+    assert retiers(state) == []
+
+
 def test_approve_by_agent_at_the_planning_fire_point_fires_and_is_refused(eng):
     eng.plan_ready()
     eng.book(usd=OVERSPENT_USD)
@@ -595,6 +618,62 @@ def test_order_revision_opens_no_arming_and_judges_nothing(ostore, armed_env, tm
     assert len(planning_armings(state)) == count and fires_of(state) == []
 
 
+def spawned_planner_rows(ostore, tmp_path, usd):
+    """A spawned planner that wrote cost rows past the fallback's fire point and made no engine act."""
+    _start(ostore, session="planner")
+    child = ostore.load("planner")
+    child.parent_link = {"parent_session": SESSION}
+    ostore.save(child)
+    with open(tmp_path / "costs.jsonl", "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"plan_path": None, "stage_index": 1, "cost_usd": usd, "ts": time.time(),
+                                 "spawner_session": "planner"}) + "\n")
+
+
+def test_planner_run_end_then_order_submit_judges_nothing(ostore, armed_env, tmp_path):
+    _start(ostore)
+    assert _classify(ostore).ok
+    spawned_planner_rows(ostore, tmp_path, OVERSPENT_USD)
+    assert _submit(ostore, _draft(tmp_path)).ok
+    state = ostore.load(SESSION)
+    assert planning_of(state)["booked"][seg.SCALE_USD] == 0.0
+    assert fires_of(state) == [] and gates.open_fire_record(state) is None
+    revised = _draft(tmp_path, replace={"difficulty": 'difficulty = "release by hand twice a week"'},
+                     name="revised.toml")
+    assert _submit(ostore, revised).ok
+    state = ostore.load(SESSION)
+    assert fires_of(state) == [] and len(planning_armings(state)) == 1
+
+
+def test_planner_run_end_then_order_agree_writes_retier_no_fire(ostore, home, armed_env, tmp_path):
+    path = _presented(ostore, tmp_path)
+    spawned_planner_rows(ostore, tmp_path, OVERSPENT_USD)
+    assert _user_answers(_marker_of(path)) == 1
+    agreed = _agree(ostore)
+    assert agreed.ok, agreed.detail
+    state = ostore.load(SESSION)
+    closed, opened = planning_armings(state)
+    assert closed["booked"][seg.SCALE_USD] == OVERSPENT_USD and closed["closed_by"] == seg.ACT_ORDER_AGREE
+    assert [r["segment"] for r in retiers(state)] == [seg.PLANNING]
+    assert fires_of(state) == [] and gates.open_fire_record(state) is None
+    assert opened["budget"] == ESTIMATE and opened["booked"][seg.SCALE_USD] == 0.0
+
+
+def test_order_agreement_past_the_fallback_fire_point_writes_retier_no_fire(ostore, home, armed_env, tmp_path):
+    path = _presented(ostore, tmp_path)
+    state = ostore.load(SESSION)
+    planning_of(state)["booked"][seg.SCALE_USD] = OVERSPENT_USD
+    ostore.save(state)
+    assert _user_answers(_marker_of(path)) == 1
+    assert _agree(ostore).ok
+    state = ostore.load(SESSION)
+    closed, opened = planning_armings(state)
+    assert closed["booked"][seg.SCALE_USD] == OVERSPENT_USD
+    [record] = retiers(state)
+    assert record["segment"] == seg.PLANNING and record["arming_id"] == closed["arming_id"]
+    assert fires_of(state) == [] and gates.open_fire_record(state) is None
+    assert opened["budget"] == ESTIMATE and opened["booked"] == {seg.SCALE_USD: 0.0, seg.SCALE_MINUTES: 0.0}
+
+
 def test_order_agreement_after_the_first_approval_is_accepted_without_an_estimate(ostore, home, armed_env, tmp_path):
     _agreed(ostore, home, tmp_path)
     state = ostore.load(SESSION)
@@ -630,7 +709,56 @@ def test_order_agreed_before_migration_is_judged_on_the_fallback_from_its_migrat
     held["booked"][seg.SCALE_USD] = OVERSPENT_USD
     fire = cli_common._judge_act(state, seg.ACT_SUBMIT_PLAN, store=ostore)
     assert fire is not None and planning_of(state)["budget"] == FALLBACK
-    assert planning_of(state)["budget_source"] == seg.SOURCE_UNBUDGETED or planning_of(state)["budget"] == FALLBACK
+    assert planning_of(state)["budget_source"] == seg.SOURCE_FALLBACK
+
+
+def agreed_bare_before_migration(ostore, home, tmp_path):
+    """An order agreed with no estimate table (as every order agreed before the change was), its
+    session then migrated while still planning."""
+    _agreed(ostore, home, tmp_path)
+    state = ostore.load(SESSION)
+    seg.close_arming(state.effort_segments, planning_of(state)["arming_id"], "approve-by-user", time.time(), 5.0)
+    ostore.save(state)
+    bare = _draft(tmp_path, omit=(ESTIMATE_LINE,), replace={"difficulty": 'difficulty = "release by hand"'},
+                  name="bare.toml")
+    assert _submit(ostore, bare).ok and _review(ostore).ok
+    assert _present(ostore, tmp_path).ok
+    _confirm_delivery(ostore)
+    assert _user_answers(_marker_of(bare)) == 1
+    assert _agree(ostore).ok
+    state = migrated(ostore, home)
+    assert planning_of(state) is not None
+    return bare
+
+
+def test_order_agreed_before_migration_loads_keeps_its_digest_and_is_not_refused_at_present(
+        ostore, home, armed_env, tmp_path):
+    bare = agreed_bare_before_migration(ostore, home, tmp_path)
+    state = ostore.load(SESSION)
+    assert state.order_agreement.understanding_sha256 == understanding_digest(load_order_draft(bare)[0])
+    assert state.effort_migrated["instant"] > state.order_agreement.at
+    presented = _present(ostore, tmp_path)
+    assert presented.ok, presented.detail
+
+
+def test_order_agreed_before_migration_is_refused_when_its_understanding_changed(
+        ostore, home, armed_env, tmp_path):
+    agreed_bare_before_migration(ostore, home, tmp_path)
+    changed = _draft(tmp_path, omit=(ESTIMATE_LINE,), replace={"difficulty": 'difficulty = "release by hand, twice"'},
+                     name="changed.toml")
+    assert _submit(ostore, changed).ok and _review(ostore).ok
+    refused = _present(ostore, tmp_path)
+    assert refused.ok is False and "planning estimate" in refused.detail
+
+
+def test_re_agreeing_an_order_agreed_before_migration_without_the_table_is_refused(
+        ostore, home, armed_env, tmp_path):
+    agreed_bare_before_migration(ostore, home, tmp_path)
+    assert _present(ostore, tmp_path).ok
+    history = len(ostore.load(SESSION).order_agreement_history)
+    refused = _agree(ostore)
+    assert refused.ok is False and "planning estimate" in refused.detail
+    assert len(ostore.load(SESSION).order_agreement_history) == history
 
 
 def test_migrated_session_with_an_unagreed_order_is_refused_without_the_table_and_judged_on_the_fallback(

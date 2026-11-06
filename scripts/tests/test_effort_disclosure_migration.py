@@ -11,8 +11,8 @@ from agentctl import cli_common, cli_final, effort, gates
 from agentctl import effort_segments as seg
 from agentctl.store import FileStateStore
 from test_effort_armings_approvals import (
-    FALLBACK, LARGE, MEDIUM, Eng, _env, armings_of, eng, open_of, plan_text, renew, retiers,
-    with_added_stage, without_stage_one, without_stage_two)
+    FALLBACK, LARGE, MEDIUM, Eng, _env, armings_of, eng, open_of, parked, plan_text, renew, retiers,
+    settle_ahead_and_resume, with_added_stage, without_stage_one, without_stage_two)
 
 USD, MIN = seg.SCALE_USD, seg.SCALE_MINUTES
 PLANNING_LINE, CLOSING_LINE = "planning", "closing"
@@ -201,6 +201,19 @@ def test_dropped_stage_keeps_its_line_and_a_never_current_stage_has_none(eng):
     assert second not in [line["identity"] for line in shown["lines"]]
     counted = [line["budget"] for line in shown["lines"] if line["kind"] != "closing"]
     assert shown["total"]["budget"] == {scale: sum(b[scale] for b in counted) for scale in seg.SCALES}
+
+
+def test_a_parked_pending_stage_with_no_booking_gets_no_line_until_it_resumes(eng):
+    uid, live, ahead = parked(eng)
+    state = eng.state()
+    assert [line["identity"] for line in disclosure_of(eng)["lines"]].count(uid) == 1
+    open_of(state, uid)["booked"] = {USD: 0.0, MIN: 0.0}
+    eng.store.save(state)
+    identities = [line["identity"] for line in disclosure_of(eng)["lines"]]
+    assert uid not in identities
+    assert state.stage_uid(1) in identities
+    settle_ahead_and_resume(eng)
+    assert uid in [line["identity"] for line in disclosure_of(eng)["lines"]]
 
 
 def test_planning_armings_sum_into_one_line(eng):
