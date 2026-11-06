@@ -78,6 +78,9 @@
 "scripts/agent_commit_trailer.py" ={ disposition = "not-canon", category = "not-canon", reason = "prints a commit trailer; `git commit` appears in prose only" }
 "scripts/agentctl/cli.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }
 "scripts/agentctl/answer_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only answer ledger beside the session state file in the agentctl state dir" }
+"scripts/lib/telemetry/live.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session spool, epoch sidecar and end marker under the telemetry spool dir in the state tree; no tracked file" }
+"scripts/lib/telemetry/recorder.py" = { disposition = "not-canon", category = "not-canon", reason = "creates the spool dir under the state tree and starts the detached sweep; no tracked file" }
+"scripts/lib/telemetry/sync.py" = { disposition = "not-canon", category = "not-canon", reason = "removes drained spools' lock files under the telemetry spool dir in the state tree; no tracked file" }
 "scripts/agentctl/cli_common.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }
 "scripts/agentctl/cli_final.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }
 "scripts/agentctl/cli_review.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }

@@ -3,6 +3,11 @@
 # Currently runs verify-all.py in --staged mode (see scripts/verify-all.py).
 # Bypass with `git commit --no-verify` only when truly necessary; the gate exists
 # because past sessions broke the rules and nobody noticed until the user pointed.
+# The run is timed and recorded as a telemetry `precommit` event (fail-open).
 set -e
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-exec python3 "$REPO_ROOT/scripts/verify-all.py" --staged
+STARTED="$(python3 "$REPO_ROOT/scripts/telemetry.py" now 2>/dev/null || true)"
+STATUS=0
+python3 "$REPO_ROOT/scripts/verify-all.py" --staged || STATUS=$?
+python3 "$REPO_ROOT/scripts/telemetry.py" emit-precommit --started "${STARTED:-0}" --exit "$STATUS" >/dev/null 2>&1 || true
+exit "$STATUS"

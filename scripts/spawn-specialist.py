@@ -76,6 +76,7 @@ from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
 from agentctl import tool_contracts  # the one parser of an interpreter call's script operand
 from lib import shell_tokens
+from lib.telemetry import live  # the spawn event; fail-open, a no-op under AGENTCTL_TELEMETRY=off
 from lib import spawn_prompt_files as _prompt_files  # the files a composed system prompt is made of, shared with the engine's ceiling check
 from lib.config_root import agent_home, harness_config_root, iter_transcripts, plans_dir, projects_roots, skills_dir, topo_units_root  # config-root resolver (isolated system root)
 from lib.kind_baselines import (  # re-exported below so `MOD.KIND_BASELINES` etc. keep working for importlib callers
@@ -3707,6 +3708,12 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         **_spawn_tags(),
         **({"child_outside_project_override": child_project_override} if child_project_override else {}),
     })
+    live.emit_event(
+        args.session or os.environ.get(OWN_SESSION_ENV) or os.environ.get("CLAUDE_CODE_SESSION_ID"),
+        "spawn", "spawn", {
+            "role": "spawned-child", "kind": args.kind, "depth": depth_next, "stage_index": args.stage_index,
+            "cost_usd": cost_usd, "duration_ms": duration_ms, "return_marker": routed_marker,
+            "child_session_id": child_session_id})
 
     # Soft-warn (no kill, no exit-code change): realized cost exceeding a
     # multiple of the tier LABEL is a cheap calibration signal that the tier's

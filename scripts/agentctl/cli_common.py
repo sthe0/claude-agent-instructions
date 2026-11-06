@@ -15,6 +15,7 @@ import tomllib
 from dataclasses import asdict, fields, replace
 from pathlib import Path
 from lib import argv_text, config_root, engine_session_binding, hook_telemetry
+from lib.telemetry import live
 from . import (
     advisor,
     carry_forward,
@@ -1204,27 +1205,33 @@ def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bo
     block rate has a real denominator. The call also appends one engine row to the
     decision log (docs/operations/decision-telemetry.md)."""
     try:
-        _append_jsonl(config_root.decision_log(), hook_telemetry.decision_row(
-            f"engine:{gate}", "engine", "silent" if passed else "deny", state.session_id, layer="engine"))
+        hook_telemetry.record(f"engine:{gate}", "engine", "silent" if passed else "deny",
+                              state.session_id, layer="engine")
     except Exception:
         pass
-    _append_jsonl(GATE_LOG, {
+    row = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "session": state.session_id,
         "node": state.node,
         "gate": gate,
         "blockers": list(blockers),
         "passed": passed,
-    })
+    }
+    backref = _append_jsonl(GATE_LOG, row)
+    live.emit_event(state.session_id, "gate", f"gate:{gate}", {
+        "session": state.session_id, "verb": live.current_verb(), "gate": gate,
+        "outcome": "pass" if passed else "refuse", "time": row["ts"],
+    }, backref)
 
 
-def _append_jsonl(path: Path, row: dict) -> None:
+def _append_jsonl(path: Path, row: dict) -> "tuple[str, int, str] | None":
+    """Append one JSON line; its back-reference, or None when the write failed."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return live.append_line(path, (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8"),
+                                mode=0o666)
     except OSError:
-        pass
+        return None
 
 
 def _attach_advisories(d: Directive, kind: str, payload: dict, runner: Runner | None,

@@ -353,6 +353,56 @@ def insert_rows(table: str, rows, deadline_s: "float | None" = None) -> dict:
     return _guarded(run, deferred, failed)
 
 
+def transact(work, deadline_s: "float | None" = None) -> dict:
+    """Run `work(conn)` in one write transaction under the call's deadline, for the sync's
+    updates (a task row's status, a contour's task key) that INSERT OR IGNORE cannot express.
+    Returns {committed, deferred, failed, value}: value is what `work` returned when
+    committed, a failure inside `work` rolls everything back and is reported as failed.
+    Never raises."""
+    outcome = {"committed": False, "deferred": False, "failed": False, "value": None}
+    deadline = _Deadline(deadline_s)
+
+    def run():
+        conn = _open(deadline)
+        try:
+            _begin(conn, deadline)
+            try:
+                outcome["value"] = work(conn)
+                conn.execute("COMMIT")
+            except BaseException:
+                _rollback(conn)
+                raise
+        finally:
+            conn.close()
+        outcome["committed"] = True
+        return outcome
+
+    def deferred():
+        outcome["deferred"] = True
+        return outcome
+
+    def failed():
+        outcome["failed"] = True
+        return outcome
+
+    return _guarded(run, deferred, failed)
+
+
+def attach_session_task(session_id: str, task_origin: str, task_id: str, task_epoch: str,
+                        deadline_s: "float | None" = None) -> dict:
+    """Name the task row (origin, task_id, epoch) a session attaches to, creating the session's
+    row when it has none: the importer's call for a session already running when live
+    emission began, read by the sync that attaches that session's contour and live events.
+    Returns transact's outcome."""
+    def work(conn):
+        conn.execute(
+            "INSERT INTO sessions (session_id, task_origin, task_id, task_epoch) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (session_id) DO UPDATE SET task_origin = excluded.task_origin, "
+            "task_id = excluded.task_id, task_epoch = excluded.task_epoch",
+            (session_id, task_origin, task_id, task_epoch))
+    return transact(work, deadline_s)
+
+
 # --- spool replay ------------------------------------------------------------------
 
 def _inode(stat: os.stat_result) -> int:
