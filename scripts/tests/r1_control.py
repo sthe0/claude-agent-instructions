@@ -9,7 +9,8 @@ that no test run still reaches the launcher and that the fix lost or broke no te
   control  [--base-ids FILE]                 plain pytest on this tree, canary included
   gate                                       suite-gate.py run on this tree's HEAD, canary included
   verify   --report FILE                     judge a report; exit 0 accepted, 1 refused
-  search-selftest                            the .arc search must find a planted .arc
+  search-selftest                            the .arc search finds a planted .arc, the stub arc answers as the
+                                             suite expects, verify refuses each way of reaching the launcher
 
 Every run: fresh HOME and TMPDIR under the state directory, the launcher recorder around the whole
 command, a free-space guard before it and a watchdog during it, a search for ``.arc`` under the
@@ -71,8 +72,9 @@ TREE_TOKEN = "<tree>"
 
 
 def normalize_id(node: str) -> str:
-    """A parametrized id may carry the checkout's path; the base tree and the delivery tree differ there."""
-    return node.replace(str(BASE_TREE), TREE_TOKEN).replace(str(REPO), TREE_TOKEN)
+    """A parametrized id may carry the checkout's path or the run's sandbox root; both differ between runs."""
+    node = node.replace(str(BASE_TREE), TREE_TOKEN).replace(str(REPO), TREE_TOKEN)
+    return re.sub(re.escape(str(STATE / "work")) + r"/r1-[A-Za-z0-9_]+", "<run-root>", node)
 
 
 def parse_junit(path: Path) -> dict[str, str]:
@@ -142,6 +144,43 @@ def find_arc(root: Path) -> list[dict]:
     return sorted(found, key=lambda e: e["path"])
 
 
+def _stub_answers() -> list[str]:
+    """What the stub arc does for each invocation the suite makes; empty when it behaves."""
+    stub = str(HERE / "stubs" / "arc")
+    wrong = []
+    for args, want_code, want_out in ((["--version"], 0, "arc (test stub)"), (["--is-launcher"], 0, ""),
+                                      (["status"], 1, "")):
+        done = subprocess.run([stub, *args], capture_output=True, text=True, timeout=10, cwd="/")
+        if done.returncode != want_code or (want_out and done.stdout.strip() != want_out):
+            wrong.append(f"stub arc {' '.join(args)}: exit {done.returncode}, stdout {done.stdout.strip()!r}")
+    return wrong
+
+
+def _verdicts_selftest() -> list[str]:
+    """`verify` must accept a canary-only entry and refuse each way a test can still reach the launcher."""
+    canary = "scripts/tests/canary_arc_launcher.py::test_launcher_run_downloads_nothing"
+    allow = [{"test": canary, "path_part": "test_launcher_run_downloads_no", "reason": "seeded on purpose"}]
+    good = {"launcher_records": [{"pid": 1, "test": canary + " (call)", "args": "--version"}],
+            "canary_outcome": "passed", "arc_paths": [{"path": "x/test_launcher_run_downloads_no0/home/.arc", "bytes": 1}],
+            "new_failures": [], "new_skips": [], "lost_ids": [], "flaky": [], "exit": 0, "wall_s": 10,
+            "gate": {"status": "PASS"}}
+    foreign = {"pid": 2, "test": "scripts/tests/test_x.py::test_y (call)", "args": "status"}
+    mutations = {
+        "a launcher record from another test": {"launcher_records": good["launcher_records"] + [foreign]},
+        "no launcher record at all": {"launcher_records": []},
+        "an .arc outside the allow-list": {"arc_paths": good["arc_paths"] + [{"path": "x/test_y0/home/.arc", "bytes": 1}]},
+        "a new failure that did not flip": {"new_failures": ["scripts/tests/test_x.py::test_y"]},
+        "a lost id": {"lost_ids": ["scripts/tests/test_x.py::test_y"]},
+        "an aborted run": {"aborted": "free space"},
+        "a gate over its limit": {"wall_s": GATE_LIMIT_S},
+    }
+    problems = [f"a good entry was refused: {p}" for p in verify_entry("gate", good, canary, {}, allow)]
+    for label, change in mutations.items():
+        if not verify_entry("gate", {**good, **change}, canary, {}, allow):
+            problems.append(f"verify accepted {label}")
+    return problems
+
+
 def search_selftest() -> int:
     with tempfile.TemporaryDirectory(prefix="r1-search-selftest-") as tmp:
         root = Path(tmp)
@@ -150,9 +189,16 @@ def search_selftest() -> int:
         (root / "b").mkdir()
         (root / "b" / "link").symlink_to(root / "a")
         paths = [e["path"] for e in find_arc(root)]
-        ok = paths == ["a/home/.arc"]
-        print(f"search-selftest: found {paths}, want ['a/home/.arc'] (a symlink to it is not followed)")
-        return 0 if ok else 1
+    print(f"search-selftest: found {paths}, want ['a/home/.arc'] (a symlink to it is not followed)")
+    problems = [] if paths == ["a/home/.arc"] else ["the .arc search missed or over-followed"]
+    ids = [f"t.py::test_x[{STATE}/work/r1-{token}/gatebox/home/.arc-{tree}]"
+           for token, tree in (("ab12_c", BASE_TREE), ("zz99", REPO))]
+    if normalize_id(ids[0]) != normalize_id(ids[1]):
+        problems.append("a test id that names the run's sandbox root or the checkout differs between runs")
+    problems += _stub_answers() + _verdicts_selftest()
+    for line in problems:
+        print("search-selftest: FAIL:", line)
+    return 1 if problems else 0
 
 
 # ── running ───────────────────────────────────────────────────────────────
@@ -449,11 +495,8 @@ def verify_entry(name: str, sec: dict, canary_id: str, deleted: dict, allowlist:
         problems.append(f"{name}: {len(lost)} test id(s) lost without a deletion reason, first {lost[0]}")
     if sec.get("aborted") or sec.get("exit") is None:
         problems.append(f"{name}: run aborted ({sec.get('aborted')!r})")
-    if name == "gate":
-        if sec.get("wall_s", GATE_LIMIT_S) >= GATE_LIMIT_S:
-            problems.append(f"gate: wall time {sec.get('wall_s')} s, want under {GATE_LIMIT_S}")
-        if (sec.get("gate") or {}).get("status") != "PASS":
-            problems.append(f"gate: suite-gate status {(sec.get('gate') or {}).get('status')!r}, want PASS")
+    if name == "gate" and sec.get("wall_s", GATE_LIMIT_S) >= GATE_LIMIT_S:
+        problems.append(f"gate: wall time {sec.get('wall_s')} s, want under {GATE_LIMIT_S}")
     return problems
 
 
@@ -470,7 +513,8 @@ def cmd_verify(args) -> int:
     for line in problems:
         print("REFUSED:", line)
     if not problems:
-        notes = {n: {"now_passing": len(s["now_passing"]), "flaky": s["flaky"], "wall_s": s["wall_s"]}
+        notes = {n: {"now_passing": len(s["now_passing"]), "flaky": s["flaky"], "wall_s": s["wall_s"],
+                     "gate_status": (s.get("gate") or {}).get("status")}
                  for n, s in report["entries"].items()}
         print("ACCEPTED:", json.dumps(notes))
     return 1 if problems else 0
@@ -492,6 +536,9 @@ def cmd_summarize(args) -> int:
         print(f"{key}: {section.get(key, [])[:args.top]}")
     for arc in section.get("arc_paths", [])[:args.top]:
         print(f".arc {arc['bytes']} B  {arc['path']}")
+    for key in args.show:
+        value = section.get(key)
+        print(f"{key}: {str(value)[:args.width]}")
     return 0
 
 
@@ -515,6 +562,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--file", required=True)
     s.add_argument("--entry")
     s.add_argument("--top", type=int, default=10)
+    s.add_argument("--show", action="append", default=[], metavar="KEY")
+    s.add_argument("--width", type=int, default=600)
     b = sub.add_parser("baseline")
     b.add_argument("--entry", choices=("plain", "gate"), required=True)
     b.add_argument("--tree", default=str(BASE_TREE))
