@@ -42,16 +42,20 @@ def root(tmp_path):
     return config
 
 
-# The grounding judge in these tests reaches this directory's `claude`: a fixed answer instead
-# of a live model, whose verdict varies run to run. `none` puts no stub on PATH (negative control).
+# Every `claude` these tests' subprocesses look up — in practice the grounding judge's — resolves
+# to this directory's stub: a fixed answer instead of a live model, whose verdict varies run to run.
+# The stubs/judge-defect twin and the value `none` (no stub on PATH) are for running this file by
+# hand to show the stub decides the outcome:
+#   PATH=scripts/tests/stubs/judge-defect:$PATH pytest <this file>    # passes: the stub wins
+#   E2E_JUDGE_STUB_DIR=none PATH=scripts/tests/stubs/judge-defect:$PATH pytest <this file>
+#                                                                     # fails on the grounding refusal
 JUDGE_STUB_DIR = os.environ.get(
     "E2E_JUDGE_STUB_DIR", str(Path(__file__).resolve().parent / "stubs" / "judge-pass"))
 
 
 def _judge_path(inherited: str) -> str:
-    if JUDGE_STUB_DIR == "none":
-        return inherited
-    return JUDGE_STUB_DIR + os.pathsep + inherited
+    stub = "" if JUDGE_STUB_DIR == "none" else JUDGE_STUB_DIR
+    return os.pathsep.join(p for p in (stub, inherited) if p)
 
 
 @pytest.fixture
@@ -68,7 +72,8 @@ def env(root, tmp_path):
 
 @pytest.mark.skipif(JUDGE_STUB_DIR == "none", reason="the stub is switched off")
 def test_the_judges_claude_is_the_stub(env):
-    assert shutil.which("claude", path=env["PATH"]) == str(Path(JUDGE_STUB_DIR) / "claude")
+    found = shutil.which("claude", path=env["PATH"])
+    assert found and Path(found).resolve() == (Path(JUDGE_STUB_DIR) / "claude").resolve()
 
 
 class Cli:
