@@ -873,6 +873,10 @@ def _protected_sync_rows(conn) -> set:
     triggers = sorted((sync._parse(r[1]), r[0]) for r in conn.execute(
         "SELECT event_id, time FROM events WHERE kind = ?", (sync.TRIGGER_START,)))
     for session in sessions:
+        if sync.unreplayed_bytes(conn, session) > 0:
+            keep.update(r[0] for r in conn.execute(
+                "SELECT event_id FROM events WHERE kind = ? AND json_extract(fields, '$.session') = ?",
+                (sync.SYNC_DEFERRED, session)))
         ended = sorted((sync._parse(r[1]), r[0]) for r in conn.execute(
             "SELECT event_id, time FROM events WHERE kind = ? AND json_extract(fields, '$.kind') = 'session_end' "
             "AND json_extract(fields, '$.session') = ?", (sync.TRIGGER_START, session)))
@@ -888,11 +892,7 @@ def _protected_sync_rows(conn) -> set:
         commits = sorted((sync._parse(r[1]), r[0]) for r in conn.execute(
             "SELECT event_id, time FROM events WHERE kind = ? AND json_extract(fields, '$.session') = ?",
             (sync.SYNC_COMMIT, session)))
-        keep.update(i for t, i in commits[:0] or [c for c in commits if c[0] >= end][:1])
-        if sync.unreplayed_bytes(conn, session) > 0:
-            keep.update(r[0] for r in conn.execute(
-                "SELECT event_id FROM events WHERE kind = ? AND json_extract(fields, '$.session') = ?",
-                (sync.SYNC_DEFERRED, session)))
+        keep.update(i for _, i in [c for c in commits if c[0] >= end][:1])
     return keep
 
 
