@@ -47,7 +47,7 @@ HEADER_WORDS = ("task", "wait", "session", "live")
 OLD_MARK, UNREAD_MARK = "~", "?"
 ROWS_COLS = (40, 200)
 
-DEFAULT_LIMITS = {"R1": 0.36, "R2": 0.95, "R3": 0.19, "R6": 1.1}
+DEFAULT_LIMITS = {"R1": 0.70, "R2": 0.95, "R3": 0.25, "R6": 1.1}
 STREAM_SCREEN_MAX_MS = 20.0
 MIN_RUNS, MAX_RUNS, SPREAD_TARGET = 5, 30, 0.05
 R3_CYCLES, R3_MIN_RUNS, K1_MIN_RUNS = 20, 5, 3

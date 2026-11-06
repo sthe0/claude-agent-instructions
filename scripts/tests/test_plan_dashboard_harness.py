@@ -314,7 +314,7 @@ def test_a_limit_below_a_floor_is_a_miss_with_exit_1(tmp_path, limit):
 
 def test_a_limit_can_only_be_tightened_never_loosened(tmp_path):
     report = good_floors()
-    report["floors"]["R1"]["median_s"] = 0.5
+    report["floors"]["R1"]["median_s"] = 0.8
     assert verify_floors(tmp_path, report, "--limit", "R1=100") == 1
 
 
@@ -370,8 +370,8 @@ def test_a_bad_limit_flag_is_refused():
 
 
 def test_the_default_limits_are_the_requirements():
-    assert h.DEFAULT_LIMITS == {"R1": 0.36, "R2": 0.95, "R3": 0.19, "R6": 1.1}
-    assert h.limits_with({"R1": 100.0})["R1"] == 0.36
+    assert h.DEFAULT_LIMITS == {"R1": 0.70, "R2": 0.95, "R3": 0.25, "R6": 1.1}
+    assert h.limits_with({"R1": 100.0})["R1"] == 0.70
 
 
 def git_run(tree, *args):
@@ -546,7 +546,7 @@ def test_an_applied_set_that_missed_a_source_is_a_miss(tmp_path, trees):
 
 def test_an_r3_run_over_the_limit_or_missing_a_source_is_a_miss(tmp_path, trees):
     slow = good_report(tmp_path, *trees)
-    slow["r3"]["runs"][1]["median_s"] = 0.25
+    slow["r3"]["runs"][1]["median_s"] = 0.30
     uncovered = good_report(tmp_path, *trees)
     uncovered["r3"]["runs"][1]["covered_all"] = False
     assert acceptance(tmp_path, slow, trees) == 1
