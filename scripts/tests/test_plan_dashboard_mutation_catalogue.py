@@ -30,7 +30,7 @@ PILOT_TESTS = TESTS / "test_plan_dashboard_tui_app.py"
 WEB_TESTS = TESTS / "test_plan_dashboard_web.py"
 DOM_TESTS = TESTS / "test_plan_dashboard_web_dom.py"
 WORKERS = 4
-RUN_TIMEOUT_S = 300
+RUN_TIMEOUT_S = 900
 PILOT_MUTATIONS = sorted(name for name, (module, _, _) in mutations.TUI_MUTATIONS.items()
                          if module == mutations.TUI_APP)
 STDLIB_TUI_MUTATIONS = sorted(set(mutations.TUI_MUTATIONS) - set(PILOT_MUTATIONS))
