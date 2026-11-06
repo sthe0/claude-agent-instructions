@@ -87,6 +87,7 @@ from typing import Callable, Iterator
 
 from agentctl.config import CONFIG_MD, parse_config_md
 from lib import config_root, engine_session_binding, judge_ledger, shell_tokens, transcript_cost, transcript_turns
+from lib.telemetry import phases
 
 SKIP_REASONS = ("empty", "no_timestamps", "unparseable")
 
@@ -156,6 +157,7 @@ class ProfileRun:
     skipped: list = field(default_factory=list)
     reparsed: list = field(default_factory=list)
     ctx: "Ctx | None" = None
+    source: str = "transcripts"
 
 
 def conservation_error_ms(profile: SessionProfile) -> int:
@@ -664,50 +666,10 @@ def refresh_ledgers(state_dir: Path | None, paths: dict) -> Ledgers:
 # ------------------------------------------------------------------ node dwell, core sha
 
 
-def _transition_targets() -> dict:
-    try:
-        from agentctl.machine import TRANSITIONS
-    except ImportError:
-        return {}
-    return {event: to for event, (_, to) in TRANSITIONS.items()}
-
-
 def node_dwell(state_path: Path, window: tuple | None = None) -> dict | None:
-    """Per-node dwell from consecutive history `ts` of one agentctl state file.
-
-    Events carry no node, so the node is replayed through the engine's transition
-    table. A gap with an untimed event inside it is dropped rather than guessed.
-    `window` is (lo_ms, hi_ms): each gap is clipped to it, so a harness session counts
-    only the dwell that fell inside its own transcript.
-    """
-    data = _read_json(state_path)
-    history = data.get("history") if isinstance(data, dict) else None
-    if not isinstance(history, list):
-        return None
-    targets = _transition_targets()
-    node = "CLASSIFIED"
-    dwell: dict = {}
-    timed = untimed = 0
-    prev_ts = prev_node = None
-    gap_untimed = False
-    for event in history:
-        if not isinstance(event, dict):
-            continue
-        node = event["node"] if isinstance(event.get("node"), str) else targets.get(event.get("event"), node)
-        ts = _epoch_or_iso_ms(event.get("ts"))
-        if ts is None:
-            untimed += 1
-            gap_untimed = True
-            continue
-        timed += 1
-        if prev_ts is not None and not gap_untimed and ts >= prev_ts:
-            lo, hi = prev_ts, ts
-            if window is not None:
-                lo, hi = max(lo, window[0]), min(hi, window[1])
-            if hi > lo:
-                dwell[prev_node] = dwell.get(prev_node, 0) + hi - lo
-        prev_ts, prev_node, gap_untimed = ts, node, False
-    return {"dwell": dwell, "timed": timed, "untimed": untimed}
+    """Per-node dwell of one agentctl state file; the phase-boundary definition is
+    telemetry/phases.py's, shared with the record's event-derived shares."""
+    return phases.node_dwell(state_path, window)
 
 
 def load_commit_index(repo_root: Path) -> list:
@@ -780,6 +742,8 @@ class Ctx:
     reparsed: list = field(default_factory=list)
     board: dict | None = None
     rank_board: Callable | None = None
+    record: object | None = None
+    record_sessions: int = 0
 
     def sha_at(self, ts_ms: int) -> str | None:
         if self.commit_index is None:
@@ -865,9 +829,14 @@ def _node_part(session_id: str, ctx: Ctx, window: tuple) -> dict | None:
     if ctx.agentctl_state_dir is None:
         return None
     merged = None
+    from_record = False
     for engine_id in _engine_sessions(session_id, ctx.agentctl_state_dir):
-        state_path = ctx.agentctl_state_dir / f"{config_root.sanitize_session_id(engine_id)}.json"
-        part = node_dwell(state_path, window) if state_path.is_file() else None
+        part = phases.events_node_dwell(ctx.record, engine_id, window) if ctx.record is not None else None
+        if part is not None:
+            from_record = True
+        else:
+            state_path = ctx.agentctl_state_dir / f"{config_root.sanitize_session_id(engine_id)}.json"
+            part = node_dwell(state_path, window) if state_path.is_file() else None
         if part is None:
             continue
         if merged is None:
@@ -876,6 +845,8 @@ def _node_part(session_id: str, ctx: Ctx, window: tuple) -> dict | None:
             merged["dwell"][name] = merged["dwell"].get(name, 0) + ms
         merged["timed"] += part["timed"]
         merged["untimed"] += part["untimed"]
+    if from_record:
+        ctx.record_sessions += 1
     return merged
 
 
@@ -924,8 +895,15 @@ def profile_all(
     policy_ledger=None,
     repo_root=None,
     commit_index=None,
+    source: str = "auto",
 ) -> ProfileRun:
-    """Profile every main-session transcript under `projects_root` (default: all roots)."""
+    """Profile every main-session transcript under `projects_root` (default: all roots).
+
+    `source` is where node dwell comes from: `auto` reads the telemetry record when one exists
+    (never creating it) and each session it holds command events for, the engine state files for
+    the rest; `transcripts` forces the state-file path and never opens the record."""
+    if source not in ("auto", "transcripts"):
+        raise ValueError(f"source must be 'auto' or 'transcripts', got {source!r}")
     root = Path(state_dir).expanduser() if state_dir else default_state_dir()
     ledgers = refresh_ledgers(root, {
         "judge": Path(judge_ledger_path) if judge_ledger_path else judge_ledger.ledger_path(),
@@ -939,16 +917,25 @@ def profile_all(
         commit_index=commit_index,
         cache=SessionCache(root / "sessions"),
     )
+    if source == "auto":
+        from lib.telemetry import store
+        ctx.record = store.open_readonly()
     paths = sorted(Path(projects_root).glob("*/*.jsonl")) if projects_root else config_root.iter_transcripts()
     run = ProfileRun()
-    for path in paths:
-        try:
-            result = profile_session(path, ctx)
-        except Exception as exc:
-            result = Skipped(Path(path).stem, str(path), "unparseable", f"{type(exc).__name__}: {exc}")
-        (run.skipped if isinstance(result, Skipped) else run.profiles).append(result)
+    try:
+        for path in paths:
+            try:
+                result = profile_session(path, ctx)
+            except Exception as exc:
+                result = Skipped(Path(path).stem, str(path), "unparseable", f"{type(exc).__name__}: {exc}")
+            (run.skipped if isinstance(result, Skipped) else run.profiles).append(result)
+    finally:
+        if ctx.record is not None:
+            ctx.record.close()
+            ctx.record = None
     run.reparsed = ctx.reparsed
     run.ctx = ctx
+    run.source = "record" if ctx.record_sessions else "transcripts"
     return run
 
 

@@ -114,9 +114,10 @@ def test_rows_store_the_table_version_they_were_validated_against(tables_root):
     store.insert_rows("token_usage", [{"message_id": "m1", "role": "root", "phase": "planning"}])
     usage = _row("token_usage", message_id="m1")
     assert (usage["role_table_version"], usage["phase_table_version"]) == (2, 1)
+    shipped_version = tables.load("loss_modes").version
     tables.add_member("loss_modes", "bespoke_loss")
     store.insert_rows("losses", [{"session_id": "s", "loss_mode": "bespoke_loss", "count": 1}])
-    assert _row("losses", session_id="s", loss_mode="bespoke_loss")["loss_mode_table_version"] == 2
+    assert _row("losses", session_id="s", loss_mode="bespoke_loss")["loss_mode_table_version"] == shipped_version + 1
 
 
 def test_table_version_bumped_on_every_add_or_retire_and_recorded_in_snapshot_history(tables_root):

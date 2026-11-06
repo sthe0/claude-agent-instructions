@@ -1,4 +1,4 @@
-version = 1
+version = 3
 
 [[members]]
 name = "spool_append_failed"
@@ -35,3 +35,11 @@ since = 1
 [[members]]
 name = "sync_deferred"
 since = 1
+
+[[members]]
+name = "source_truncated"
+since = 2
+
+[[members]]
+name = "malformed_source_line"
+since = 3

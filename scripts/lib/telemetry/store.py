@@ -28,6 +28,7 @@ import os
 import re
 import sqlite3
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -388,19 +389,34 @@ def transact(work, deadline_s: "float | None" = None) -> dict:
     return _guarded(run, deferred, failed)
 
 
-def attach_session_task(session_id: str, task_origin: str, task_id: str, task_epoch: str,
-                        deadline_s: "float | None" = None) -> dict:
-    """Name the task row (origin, task_id, epoch) a session attaches to, creating the session's
-    row when it has none: the importer's call for a session already running when live
-    emission began, read by the sync that attaches that session's contour and live events.
-    Returns transact's outcome."""
-    def work(conn):
-        conn.execute(
-            "INSERT INTO sessions (session_id, task_origin, task_id, task_epoch) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT (session_id) DO UPDATE SET task_origin = excluded.task_origin, "
-            "task_id = excluded.task_id, task_epoch = excluded.task_epoch",
-            (session_id, task_origin, task_id, task_epoch))
-    return transact(work, deadline_s)
+def attach_session_task(conn: sqlite3.Connection, session_id: str, task_key: "tuple[str, str, str]") -> None:
+    """Name the task row `task_key` = (origin, task_id, epoch) a session attaches to: the
+    importer's call, inside its own transaction, for a session already running when live
+    emission began. Writes the key only where the session's key is null, and inserts the
+    session row when it has none, so a row the sync wrote before the import gets the key too."""
+    task_origin, task_id, task_epoch = task_key
+    conn.execute(
+        "INSERT INTO sessions (session_id, task_origin, task_id, task_epoch) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT (session_id) DO UPDATE SET "
+        "task_origin = CASE WHEN task_id IS NULL THEN excluded.task_origin ELSE task_origin END, "
+        "task_epoch = CASE WHEN task_id IS NULL THEN excluded.task_epoch ELSE task_epoch END, "
+        "task_id = CASE WHEN task_id IS NULL THEN excluded.task_id ELSE task_id END",
+        (session_id, task_origin, task_id, task_epoch))
+
+
+def open_readonly() -> "sqlite3.Connection | None":
+    """A read-only connection to an existing record, None when there is none or it cannot be
+    read. Never creates the record, its directory or its migrations."""
+    record = config_root.telemetry_db()
+    if not record.exists():
+        return None
+    try:
+        conn = sqlite3.connect("file:" + urllib.parse.quote(str(record)) + "?mode=ro", uri=True,
+                               timeout=DEADLINE_S, isolation_level=None)
+        conn.execute("SELECT 1 FROM events LIMIT 1")
+        return conn
+    except sqlite3.Error:
+        return None
 
 
 # --- spool replay ------------------------------------------------------------------

@@ -280,7 +280,7 @@ def test_sync_attaches_live_events_of_session_running_before_pr1_to_its_imported
     assert store.insert_rows("tasks", [{
         "origin": origin, "task_id": "task-old", "epoch": epoch, "status": "open", "synthetic": 0,
         "opened_at": "2026-11-01T00:00:00+00:00"}])["inserted"] == 1
-    assert store.attach_session_task("old", origin, "task-old", epoch)["committed"] is True
+    assert store.transact(lambda conn: store.attach_session_task(conn, "old", (origin, "task-old", epoch)))["committed"] is True
     live.emit_event("old", "judge", "judge:advisor", {"verdict": "pass", "again": True})
     live.emit_event("kid", "note", "telemetry:test", {})
     second = sync.run()
