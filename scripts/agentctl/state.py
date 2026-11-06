@@ -3414,6 +3414,7 @@ def _migrate_to_effort_segments(state: "SessionState") -> None:
     state.assign_stage_uids()
 
     ledger = state.effort_segments
+    ledger["session_floor"] = 0.0
     source = segments.SOURCE_WINDOW if armed else segments.SOURCE_STRETCH
     owner = segments.open_arming(ledger, segments.PLANNING, None, source, 0.0,
                                  segments.OPENED_BY_MIGRATION)

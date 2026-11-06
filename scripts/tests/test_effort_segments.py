@@ -135,6 +135,14 @@ def armings(state: SessionState, segment: str | None = None) -> list[dict]:
     return [a for a in held if segment is None or a["segment"] == segment]
 
 
+def backdate(state: SessionState, arming: dict, ts: float) -> None:
+    """Move an arming's first start (and, for the ledger's earliest, the session floor) back."""
+    arming["opened_at"] = ts
+    arming["spans"][0]["start"] = ts
+    ledger = state.effort_segments
+    ledger["session_floor"] = min(ledger["session_floor"], ts)
+
+
 def stage_arming(state: SessionState, index: int) -> dict:
     return seg.open_arming_of(state.effort_segments, seg.stage_segment(state.stage_uid(index)))
 
@@ -402,20 +410,19 @@ def test_an_order_less_plan_carries_nothing(eng):
 def test_stage_arming_opens_at_the_engines_selection(eng):
     eng.approved("s", eng.write(with_order()))
     state = eng.state("s")
-    assert [a["segment"] for a in armings(state)] == [seg.PLANNING]
+    assert [a["segment"] for a in armings(state)] == [seg.PLANNING, seg.stage_segment(state.stage_uid(1))]
+    first = stage_arming(state, 1)
+    assert first["opened_by"] == seg.ACT_APPROVE_BY_USER and first["title"] == "Scaffold module"
+    planning = armings(state, seg.PLANNING)[0]
+    assert planning["spans"][-1]["end"] == first["spans"][0]["start"] == first["opened_at"]
     eng.run("partition", session="s")
     eng.run("next_stage", session="s")
-    state = eng.state("s")
-    arming = stage_arming(state, 1)
-    assert arming["opened_by"] == "next_stage" and arming["title"] == "Scaffold module"
+    assert armings(eng.state("s")) == armings(state)
 
 
 def test_arming_opens_at_selection_with_the_user_approved_or_declared_tier(eng):
-    eng.approved("s", eng.write(with_order()))
-    state = eng.state("s")
-    uid = state.stage_uid(1)
-    state.effort_segments["approved_tiers"][uid] = "large"
-    eng.store.save(state)
+    large = with_order().replace('executor = "spawn:developer"', 'executor = "spawn:developer"\ncost_tier = "large"', 1)
+    eng.approved("s", eng.write(large))
     eng.run("partition", session="s")
     eng.run("next_stage", session="s")
     state = eng.state("s")
@@ -437,8 +444,8 @@ def test_stage_actual_includes_linked_descendant_rows_and_minutes(eng):
     now = time.time()
     state.effort_child_runs = [{"started": now - 600, "ended": now, "stage_index": 1,
                                 "child_session": "child", "dispatcher_pid": 1}]
-    armings(state, seg.PLANNING)[0]["opened_at"] = now - 800
-    stage_arming(state, 1)["opened_at"] = now - 700
+    backdate(state, armings(state, seg.PLANNING)[0], now - 800)
+    backdate(state, stage_arming(state, 1), now - 700)
     effort.refresh_subtree_spend(state, [row(plan, 4.0, now - 5, spawner="child")], ["child"], plan)
     effort.book_child_runs(state, now)
     actual = seg.arming_actual(stage_arming(state, 1))
@@ -484,8 +491,8 @@ def test_gap_after_settlement_books_to_the_next_current_segment(eng):
     state = eng.state("s")
     settled = seg.find_arming(state.effort_segments, armings(state, seg.stage_segment(first_uid))[0]["arming_id"])
     settled_at = settled["closed_at"]
-    armings(state, seg.PLANNING)[0]["opened_at"] = settled_at - 400
-    settled["opened_at"] = settled_at - 300
+    backdate(state, armings(state, seg.PLANNING)[0], settled_at - 400)
+    backdate(state, settled, settled_at - 300)
     state.last_user_prompt_ts = settled_at - 60
     eng.store.save(state)
     assert stamp_and_judge("s", settled_at + 60, store=eng.store)
@@ -543,7 +550,8 @@ def test_conservation_over_planning_replanned_unfolded_stages_and_closing(eng):
     plan = eng.write(with_order())
     eng.open("s", plan)
     state = eng.state("s")
-    state.effort_segments["armings"][0]["opened_at"] -= 1000
+    planning_arming = state.effort_segments["armings"][0]
+    backdate(state, planning_arming, planning_arming["opened_at"] - 1000)
     eng.store.save(state)
     rows = []
 
@@ -608,6 +616,166 @@ def test_conservation_over_planning_replanned_unfolded_stages_and_closing(eng):
     assert conserved["total"]["usd"] == sum(r["cost_usd"] for r in rows) == 15.0
     assert sum(a["usd"] for a in conserved["segments"].values()) == 15.0
     assert [line["segment"] for line in seg.timeline(state.effort_segments)][0] == seg.PLANNING
+
+
+def test_row_at_the_first_approval_instant_books_to_the_first_stage_and_the_one_before_to_planning():
+    ledger = {"session_floor": 100.0}
+    planning = seg.open_arming(ledger, seg.PLANNING, None, seg.SOURCE_UNBUDGETED, 100.0, "t")
+    seg.close_arming(ledger, planning["arming_id"], "t", 200.0, 5.0)
+    first = seg.open_arming(ledger, "stage:a", {"usd": 1.0, "minutes": 10.0}, seg.SOURCE_DECLARED, 200.0, "t")
+    assert seg.book(ledger, 199.999, 1.0, 0.0, "row") is planning
+    assert seg.book(ledger, 200.0, 2.0, 0.0, "row") is first
+    assert planning["booked"]["usd"] == 1.0 and first["booked"]["usd"] == 2.0
+    assert seg.conserve(ledger)["total"]["usd"] == 3.0
+
+
+def test_parked_arming_spans_own_rows_by_write_time():
+    ledger = {"session_floor": 100.0}
+    budget = {"usd": 1.0, "minutes": 10.0}
+    live = seg.open_arming(ledger, "stage:l", budget, seg.SOURCE_DECLARED, 100.0, "t")
+    seg.book(ledger, 110.0, 1.0, 0.0, "r1")
+    seg.park_arming(ledger, live["arming_id"], 120.0)
+    ahead = seg.open_arming(ledger, "stage:n", budget, seg.SOURCE_DECLARED, 120.0, "t")
+    assert seg.current_arming(ledger) is ahead
+    assert seg.book(ledger, 115.0, 2.0, 0.0, "r1-booked-during-the-parking") is live
+    assert seg.book(ledger, 120.0, 0.0, 0.0, "at-the-parking-instant") is ahead
+
+    seg.close_arming(ledger, ahead["arming_id"], "t", 140.0, 5.0)
+    resumed = seg.resume_arming(ledger, live["arming_id"], 140.0)
+    assert resumed is live
+    assert [(s["start"], s["end"], s["end_act"]) for s in live["spans"]] == [
+        (100.0, 120.0, "parked"), (140.0, None, None)]
+    assert seg.book(ledger, 130.0, 4.0, 0.0, "r2-written-during-the-parking") is ahead
+    assert seg.book(ledger, 150.0, 8.0, 0.0, "r3-written-after-the-resume") is live
+    assert live["booked"]["usd"] == 1.0 + 2.0 + 8.0 and ahead["booked"]["usd"] == 4.0
+    assert seg.current_arming(ledger) is seg.book(ledger, 160.0, 0.0, 0.0, "at-the-act-instant")
+
+    kept = [dict(s) for s in live["spans"]]
+    seg.park_arming(ledger, live["arming_id"], 170.0)
+    seg.resume_arming(ledger, live["arming_id"], 180.0)
+    assert len(live["spans"]) == 3 and live["spans"][0] == kept[0]
+    assert live["spans"][1]["start"] == kept[1]["start"] and live["spans"][1]["end"] == 170.0
+    assert live["spans"][2] == {"start": 180.0, "end": None, "end_act": None}
+    assert seg.conserve(ledger)["total"]["usd"] == 15.0
+
+
+def test_handoff_resumes_parked_arming_through_engine_acts(eng):
+    from agentctl.cli_common import _refresh_spend, _rematch_stage_uids
+
+    plan = eng.write(with_order())
+    eng.executing("s", plan)
+    eng.passed("s", 1)
+    state = eng.state("s")
+    live_uid = state.stage_uid(2)
+    live = stage_arming(state, 2)
+    assert live is not None and live["opened_by"] == seg.ACT_PASSING_RECORD_RESULT
+    rows = []
+
+    def write(usd):
+        rows.append(row(plan, usd, time.time()))
+
+    write(1.0)
+
+    new = load_plan(eng.write(with_order(inserted_ahead())), strict=False)
+    _rematch_stage_uids(state, new.stages)
+    state.stages = new.stages
+    state.stage(2).outcome.status = StageStatus.PASSED.value
+    eng.store.save(state)
+    state = eng.state("s")
+    assert state.stage_uid(3) == live_uid and state.ready_stages()[0].index == 1
+
+    eng.run("next_stage", session="s")
+    state = eng.state("s")
+    ahead = stage_arming(state, 1)
+    assert ahead["opened_by"] == "next_stage"
+    live = seg.find_arming(state.effort_segments, live["arming_id"])
+    parked_at = ahead["opened_at"]
+    assert live["closed_at"] is None and live["spans"][0]["end"] == parked_at
+    assert live["spans"][0]["end_act"] == "parked"
+    write(2.0)
+
+    eng.passed("s", 1)
+    state = eng.state("s")
+    live = seg.find_arming(state.effort_segments, live["arming_id"])
+    ahead = seg.find_arming(state.effort_segments, ahead["arming_id"])
+    assert len(live["spans"]) == 2 and live["spans"][1]["end"] is None
+    assert live["spans"][1]["start"] == ahead["closed_at"] == ahead["spans"][0]["end"]
+    assert ahead["spans"][0]["start"] == parked_at
+    assert [a["arming_id"] for a in armings(state, seg.stage_segment(live_uid))] == [live["arming_id"]]
+    write(4.0)
+
+    before = armings(state)
+    eng.run("next_stage", session="s")
+    assert armings(eng.state("s")) == before, "selecting the handed-to stage opens nothing"
+
+    state = eng.state("s")
+    _refresh_spend(state, eng.store, rows, plan)
+    live = seg.find_arming(state.effort_segments, live["arming_id"])
+    ahead = seg.find_arming(state.effort_segments, ahead["arming_id"])
+    assert live["booked"]["usd"] == 1.0 + 4.0 and ahead["booked"]["usd"] == 2.0
+    conserved = seg.conserve(state.effort_segments)
+    assert conserved["total"]["usd"] == sum(r["cost_usd"] for r in rows) == 7.0
+
+
+def test_user_approved_drop_of_armed_stage_closes_its_arming():
+    budget = {"usd": 1.0, "minutes": 10.0}
+
+    def drop_with(follower):
+        ledger = {"session_floor": 100.0}
+        before = seg.open_arming(ledger, "stage:k", budget, seg.SOURCE_DECLARED, 100.0, "t")
+        seg.close_arming(ledger, before["arming_id"], "t", 150.0, 5.0)
+        dropped = seg.open_arming(ledger, "stage:a", budget, seg.SOURCE_DECLARED, 150.0, "t")
+        seg.close_arming(ledger, dropped["arming_id"], seg.ACT_APPROVE_BY_USER, 200.0, 5.0)
+        next_arming = seg.open_arming(ledger, *follower, 200.0, seg.ACT_APPROVE_BY_USER)
+        assert seg.book(ledger, 160.0, 1.0, 0.0, "ra-booked-after-the-drop") is dropped
+        assert seg.book(ledger, 210.0, 2.0, 0.0, "rb") is next_arming
+        assert dropped["closed_at"] == 200.0
+        assert [(s["end"], s["end_act"]) for s in dropped["spans"]] == [(200.0, "closed")]
+        assert not [a for a in ledger["armings"] if a["segment"] == "stage:a" and a["closed_at"] is None]
+        assert seg.conserve(ledger)["total"]["usd"] == 3.0
+
+    drop_with(("stage:b", budget, seg.SOURCE_DECLARED))
+    drop_with((seg.CLOSING, None, seg.SOURCE_UNBUDGETED))
+
+
+def test_user_approved_drop_of_a_parked_stage_closes_it_and_opens_nothing():
+    budget = {"usd": 1.0, "minutes": 10.0}
+    ledger = {"session_floor": 100.0}
+    parked = seg.open_arming(ledger, "stage:l", budget, seg.SOURCE_DECLARED, 100.0, "t")
+    seg.park_arming(ledger, parked["arming_id"], 120.0)
+    active = seg.open_arming(ledger, "stage:n", budget, seg.SOURCE_DECLARED, 120.0, "t")
+    seg.close_arming(ledger, parked["arming_id"], seg.ACT_APPROVE_BY_USER, 200.0, 5.0)
+    assert parked["closed_at"] == 200.0
+    assert [(s["end"], s["end_act"]) for s in parked["spans"]] == [(120.0, "parked")]
+    assert seg.current_arming(ledger) is active
+    assert seg.book(ledger, 210.0, 1.0, 0.0, "after-the-drop") is active
+    assert not [a for a in ledger["armings"] if a["segment"] == seg.CLOSING]
+    assert not [a for a in ledger["armings"] if a["segment"] == "stage:l" and a["closed_at"] is None]
+
+
+def test_two_sessions_same_plan_path_carried_arming_counts_interval_row_once(eng):
+    from agentctl.cli_common import _flush_order_effort, _refresh_spend
+
+    plan = eng.write(with_order())
+    eng.executing("s1", plan)
+    first = eng.state("s1")
+    carried_from = stage_arming(first, 1)["opened_at"]
+    between = row(plan, 3.0, time.time())
+    _refresh_spend(first, eng.store, [between], plan)
+    _flush_order_effort(first, store=eng.store)
+    eng.store.save(first)
+
+    eng.open("s2", plan)
+    assert eng.run("approve", session="s2", by="agent")["ok"]
+    second = eng.state("s2")
+    floor = second.effort_segments["session_floor"]
+    adopted = stage_arming(second, 1)
+    assert carried_from < between["ts"] < floor
+    assert floor == armings(second, seg.PLANNING)[0]["opened_at"] != adopted["opened_at"]
+    _refresh_spend(second, eng.store, [between], plan)
+    assert total(second)["usd"] == 0.0
+    assert total(first)["usd"] == 3.0
+    assert total(first)["usd"] + total(second)["usd"] == between["cost_usd"]
 
 
 # --- the single current stage -----------------------------------------------------------

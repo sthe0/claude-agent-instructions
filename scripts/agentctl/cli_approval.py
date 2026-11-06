@@ -70,7 +70,8 @@ from .cli_common import (
     _submission_problems,
     _adopt_order_identities,
     _carried_live_stage_blockers,
-    _ensure_stage_arming,
+    _hand_on_after_approval,
+    _select_stage_arming,
     _note_user_approved_tiers,
     _close_armings_at_user_approval,
     _open_armings_after_user_approval,
@@ -656,6 +657,9 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     else:
         _note_user_approved_tiers(state)
         _open_armings_after_user_approval(state, _closed_armings, _approved_at)
+    _hand_on_after_approval(
+        state, _approved_at,
+        effort_segments.ACT_APPROVE_BY_AGENT if by_agent else effort_segments.ACT_APPROVE_BY_USER)
     # Fold this session's review-round counts into the cross-session task accumulator
     # (item B) BEFORE the reset-to-0 below — approval is the reset point, so this is
     # the last moment these session-local counts are readable.
@@ -919,7 +923,7 @@ def cmd_next_stage(args, *, store: StateStore, runner: Runner | None = None) -> 
         state.node = transition(state.node, event)
     stage.outcome.status = StageStatus.ACTIVE.value
     state.current_stage = stage.index
-    _ensure_stage_arming(state, stage, _utcnow(), "next_stage")
+    _select_stage_arming(state, stage, _utcnow())
     state.log("next_stage", stage=stage.index, executor=stage.actor.executor)
     store.save(state)
     action = "dispatch" if stage.is_spawn() else "execute_in_thread"

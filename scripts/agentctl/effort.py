@@ -892,7 +892,8 @@ def refresh_spend(state: SessionState, rows: list[dict], path: str | None) -> fl
     state.effort_actuals[ACTUAL_SPEND_KEY] = (
         float(state.effort_actuals.get(ACTUAL_SPEND_KEY) or 0.0) + delta
     )
-    state.effort_spend_seen[key] = max(total, seen)
+    if total > 0.0 or key in state.effort_spend_seen:
+        state.effort_spend_seen[key] = max(total, seen)
     return delta
 
 

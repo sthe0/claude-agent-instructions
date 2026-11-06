@@ -122,7 +122,9 @@ def arming_actual(arming: dict) -> dict:
 
 
 def open_arming(ledger: dict, segment: str, budget: dict | None, budget_source: str,
-                at: float, by: str) -> dict:
+                at: float, by: str, spanned: bool = True) -> dict:
+    """Open an arming. Its first span starts at `at` unless `spanned` is False: an adopted
+    arming holds no span until `resume_arming` starts one at the handoff."""
     seq = int(ledger.get("seq") or 0) + 1
     ledger["seq"] = seq
     arming = {
@@ -138,8 +140,51 @@ def open_arming(ledger: dict, segment: str, budget: dict | None, budget_source: 
         "booked": _amounts(),
         "fire": None,
         "closed_at": None,
+        "spans": [_span(at)] if spanned else [],
     }
     ledger.setdefault("armings", []).append(arming)
+    return arming
+
+
+def _span(start: float) -> dict:
+    return {"start": float(start), "end": None, "end_act": None}
+
+
+def spans_of(arming: dict) -> list[dict]:
+    """The arming's spans: append-only, so a park and a resume lose no history. An arming
+    saved before spans existed reads as one span from its opening to its closing."""
+    spans = arming.get("spans")
+    if spans is None:
+        spans = arming["spans"] = [{"start": arming["opened_at"], "end": arming["closed_at"],
+                                    "end_act": None}]
+    return spans
+
+
+def open_span_of(arming: dict) -> dict | None:
+    spans = spans_of(arming)
+    return spans[-1] if spans and spans[-1]["end"] is None else None
+
+
+def park_arming(ledger: dict, arming_id: str, at: float) -> None:
+    """End the arming's open span: it owns no booking written from `at` until it resumes."""
+    span = open_span_of(_get(ledger, arming_id))
+    if span is not None:
+        span["end"] = float(at)
+        span["end_act"] = "parked"
+
+
+def resume_arming(ledger: dict, arming_id: str, at: float) -> dict:
+    """Start a new span at `at`, unless the arming already holds an open one."""
+    arming = _get(ledger, arming_id)
+    if open_span_of(arming) is None:
+        spans_of(arming).append(_span(at))
+    return arming
+
+
+def _get(ledger: dict, arming_id: str) -> dict:
+    arming = find_arming(ledger, arming_id)
+    if arming is None:
+        raise KeyError(arming_id)
     return arming
 
 
@@ -168,9 +213,11 @@ def window_arming(ledger: dict) -> dict | None:
 
 
 def current_arming(ledger: dict) -> dict | None:
-    """The most recently opened open arming: the segment an act happening now belongs to."""
-    held = [a for a in ledger.get("armings") or [] if a["closed_at"] is None]
-    return max(held, key=lambda a: (a["opened_at"], a["seq"])) if held else None
+    """The open arming holding the latest-started open span: the segment an act happening now
+    belongs to. A parked arming, and an adopted one not yet resumed, is never current."""
+    held = [(open_span_of(a)["start"], a["seq"], a) for a in ledger.get("armings") or []
+            if a["closed_at"] is None and open_span_of(a) is not None]
+    return max(held, key=lambda h: h[:2])[2] if held else None
 
 
 def add_review_term(arming: dict, term: dict) -> None:
@@ -232,9 +279,11 @@ def _retier_record(arming: dict, crossed: list[str], multiple: float, act: str, 
 def close_arming(ledger: dict, arming_id: str, act: str, at: float, multiple: float) -> dict | None:
     """Close the arming; returns its retier record when its actual reached `multiple` times
     its budget on either scale (never for an unbudgeted or migrated-window arming)."""
-    arming = find_arming(ledger, arming_id)
-    if arming is None:
-        raise KeyError(arming_id)
+    arming = _get(ledger, arming_id)
+    span = open_span_of(arming)
+    if span is not None:
+        span["end"] = float(at)
+        span["end_act"] = "closed"
     arming["closed_at"] = float(at)
     arming["closed_by"] = act
     crossed = _crossed_multiple(arming, multiple)
@@ -266,32 +315,39 @@ def retier_after_late_booking(ledger: dict, arming: dict, multiple: float) -> di
 
 
 def _owner_at(ledger: dict, ts: float) -> dict | None:
+    """The arming whose span covers `ts`: the innermost one, the span that started latest (the
+    later-opened arming on a tie), an open span covering every later time. After the last span
+    ended, the arming that ended last owns the trailing time. None inside a gap or before
+    the first span."""
     armings = ledger.get("armings") or []
-    if not armings:
-        return None
     window = window_arming(ledger)
     if window is not None:
         return window
-    if ts < min(a["opened_at"] for a in armings):
-        return None
-    covering = [
-        a for a in armings
-        if a["opened_at"] <= ts and (a["closed_at"] is None or ts < a["closed_at"])
-    ]
+    covering = [(span["start"], a["seq"], a) for a in armings for span in spans_of(a)
+                if span["start"] <= ts and (span["end"] is None or ts < span["end"])]
     if covering:
-        return max(covering, key=lambda a: (a["opened_at"], a["seq"]))
-    later = [a for a in armings if a["opened_at"] > ts]
-    if later:
-        return min(later, key=lambda a: (a["opened_at"], a["seq"]))
-    return max(armings, key=lambda a: (a["closed_at"], a["seq"]))
+        return max(covering, key=lambda c: c[:2])[2]
+    if any(open_span_of(a) is not None for a in armings):
+        return None
+    ended = [(span["end"], a["seq"], a) for a in armings for span in spans_of(a)]
+    if ended and ts >= max(e[0] for e in ended):
+        return max(ended, key=lambda e: e[:2])[2]
+    return None
 
 
 def book(ledger: dict, written_ts: float, usd: float, minutes: float, origin: str) -> dict | None:
-    """Add a booking to the arming current at its write time and return that arming, a closed
-    one included: a row written while it was current and ingested later still belongs to it.
-    A booking older than the ledger's earliest opened_at has no owner and is not booked."""
+    """Add a booking to the arming whose span covers its write time and return that arming, a
+    closed one included: a row written while it was current and ingested later still belongs to
+    it. A booking older than the ledger's session_floor is not booked. From the floor on every
+    write time has an owner; an uncovered one is a handoff the engine failed to make. A ledger
+    holding no session_floor takes no such bound and books nothing before its first span."""
+    floor = ledger.get("session_floor")
+    if floor is not None and written_ts < floor:
+        return None
     arming = _owner_at(ledger, written_ts)
     if arming is None:
+        assert floor is None or not ledger.get("armings"), (
+            f"write time {written_ts} at or after session_floor {floor} is covered by no span")
         return None
     arming["booked"][SCALE_USD] += float(usd)
     arming["booked"][SCALE_MINUTES] += float(minutes)
@@ -309,11 +365,14 @@ def book_interval(ledger: dict, start: float, end: float, minutes: float, origin
         arming = book(ledger, end, 0.0, minutes, origin)
         return [arming] if arming else []
     edges = {
-        edge for arming in ledger.get("armings") or ()
-        for edge in (arming["opened_at"], arming["closed_at"])
+        edge for arming in ledger.get("armings") or () for span in spans_of(arming)
+        for edge in (span["start"], span["end"])
         if edge is not None
         and start + CLOCK_SKEW_TOLERANCE_S < edge < end - CLOCK_SKEW_TOLERANCE_S
     }
+    floor = ledger.get("session_floor")
+    if floor is not None and start + CLOCK_SKEW_TOLERANCE_S < floor < end - CLOCK_SKEW_TOLERANCE_S:
+        edges.add(floor)
     points = [start, *sorted(edges), end]
     booked = []
     for lo, hi in zip(points, points[1:]):

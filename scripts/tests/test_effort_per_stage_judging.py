@@ -354,11 +354,12 @@ def test_open_fire_refuses_every_self_grant(eng):
 def test_a_fire_stays_open_until_the_customer_acknowledges_it(eng):
     executing_overspent(eng, usd=30.0)
     eng.run("dispatch", session="s")
-    assert gates.open_fire_record(eng.state("s")) is not None
+    fired = gates.open_fire_record(eng.state("s"))
+    assert fired is not None
     eng.run("fire_acknowledge", session="s", by="user", decision="continue")
     state = eng.state("s")
     assert gates.open_fire_record(state) is None
-    assert stage_arming(state, 1)["fire"]["ack"]
+    assert seg.find_arming(state.effort_segments, fired["arming_id"])["fire"]["ack"]
 
 
 def test_open_fire_carries_into_a_later_session_of_the_same_order():
@@ -729,22 +730,54 @@ def test_stamp_refresh_loads_only_spawners_since_lower_bound(eng, monkeypatch):
     assert "old" not in loaded
 
 
+def cost_row(plan, usd, ts, spawner=None):
+    return {"plan_path": plan, "stage_index": 1, "cost_usd": usd, "ts": ts, "spawner_session": spawner}
+
+
 def test_bounded_then_unbounded_refresh_books_older_descendant_row_once(eng):
     eng.executing("s")
     state = eng.state("s")
-    state.parent_link = None
     plan = state.plan_path
-    older = {"plan_path": plan, "stage_index": 1, "cost_usd": 2.0,
-             "ts": "2020-01-01T00:00:00+00:00", "spawner_session": "s"}
-    rows = [older]
+    floor = state.effort_segments["session_floor"]
+    older = cost_row(plan, 2.0, floor + 10, spawner="descendant")
+    later = cost_row(plan, 1.0, floor + 20)
+    rows = [older, later]
+    cli_common._refresh_spend(state, eng.store, rows, plan, since=floor + 15)
+    assert sum(state.effort_spend_seen.values()) == pytest.approx(1.0)
+    assert stage_arming(state, 1)["booked"][seg.SCALE_USD] == pytest.approx(1.0)
     cli_common._refresh_spend(state, eng.store, rows, plan)
-    seen = sum(state.effort_spend_seen.values())
-    cli_common._refresh_spend(state, eng.store, rows, plan, since=cli_common._utcnow())
+    assert sum(state.effort_spend_seen.values()) == pytest.approx(3.0)
     cli_common._refresh_spend(state, eng.store, rows, plan)
-    assert sum(state.effort_spend_seen.values()) == seen
-    later = {**older, "cost_usd": 1.0, "ts": "2099-01-01T00:00:00+00:00"}
-    cli_common._refresh_spend(state, eng.store, [older, later], plan)
-    assert sum(state.effort_spend_seen.values()) == pytest.approx(seen + 1.0)
+    assert sum(state.effort_spend_seen.values()) == pytest.approx(3.0)
+    assert seg.conserve(state.effort_segments)["total"][seg.SCALE_USD] == pytest.approx(3.0)
+    pre_floor_row_books_nowhere_after_a_reset_with_the_plan_path_kept(eng)
+
+
+def pre_floor_row_books_nowhere_after_a_reset_with_the_plan_path_kept(eng):
+    eng.executing("s1")
+    first = eng.state("s1")
+    plan = first.plan_path
+    before_reset = cost_row(plan, 5.0, first.effort_segments["session_floor"])
+    cli_common._refresh_spend(first, eng.store, [before_reset], plan)
+    eng.store.save(first)
+    eng.run("start", session="s2", task="task-s2", goal="g", done_criterion="dc")
+    eng.run("classify", session="s2", architectural=True, changed_lines=200, wall_clock_min=60)
+    eng.run("plan", session="s2")
+    eng.run("submit_plan", session="s2", plan=plan)
+    assert eng.run("approve", session="s2", by="user")["ok"]
+    second = eng.state("s2")
+    floor = second.effort_segments["session_floor"]
+    assert before_reset["ts"] < floor
+    cli_common._refresh_spend(second, eng.store, [before_reset], plan)
+    assert seg.conserve(second.effort_segments)["total"][seg.SCALE_USD] == 0.0
+    assert sum(second.effort_spend_seen.values()) == 0.0
+    assert second.effort_fires == []
+    after_reset = cost_row(plan, 0.5, floor + 1)
+    cli_common._refresh_spend(second, eng.store, [before_reset, after_reset], plan)
+    assert seg.conserve(second.effort_segments)["total"][seg.SCALE_USD] == pytest.approx(0.5)
+    total = (seg.conserve(first.effort_segments)["total"][seg.SCALE_USD]
+             + seg.conserve(second.effort_segments)["total"][seg.SCALE_USD])
+    assert total == pytest.approx(5.5)
 
 
 def test_migrated_stamp_leaves_rows_to_next_act(eng):

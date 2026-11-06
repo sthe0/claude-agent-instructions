@@ -71,6 +71,7 @@ from .state import (
     Difficulty,
     canonical_normalization_destination,
     EFFORT_FIRE_FINISHED_WORK,
+    is_settled,
     is_skipped,
     LANDED_GIT_ERROR_EXIT,
     Node,
@@ -485,7 +486,8 @@ def _carried_live_stage_blockers(state: SessionState, key: str | None) -> list[s
 def _adopt_order_identities(state: SessionState, key: str | None, now: float) -> None:
     """Take over, at a plan approval, what earlier sessions of the order left: matched stages
     keep their identity, and an unsettled arming's actual and budget continue here as carried.
-    The opened_at is this instant, so a row written earlier never counts toward the arming."""
+    An adopted stage arming holds no span: it owns no write time of this session until the
+    handoff that reaches its segment resumes it."""
     ledger = state.effort_segments
     path = frame_path(state.plan_stack)
     uids = {}
@@ -507,7 +509,8 @@ def _adopt_order_identities(state: SessionState, key: str | None, now: float) ->
             arming = next((a for a in reversed(ledger["armings"]) if a["segment"] == segment), None)
         elif segment[len(effort_segments.STAGE_PREFIX):] in matched:
             arming = effort_segments.open_arming(
-                ledger, segment, entry.get("budget"), effort_segments.SOURCE_CARRIED, now, "adoption")
+                ledger, segment, entry.get("budget"), effort_segments.SOURCE_CARRIED, now, "adoption",
+                spanned=False)
             for field_name in ("declared_tier", "title", "tier_ladder"):
                 arming[field_name] = entry.get(field_name)
         else:
@@ -532,7 +535,8 @@ def _settle_carried_drops(state: SessionState, key: str, dropped: list[str], now
     for segment in dropped:
         entry = entries[segment]
         arming = effort_segments.open_arming(
-            ledger, segment, entry.get("budget"), effort_segments.SOURCE_CARRIED, now, "adoption")
+            ledger, segment, entry.get("budget"), effort_segments.SOURCE_CARRIED, now, "adoption",
+            spanned=False)
         for field_name in ("declared_tier", "title", "tier_ladder"):
             arming[field_name] = entry.get(field_name)
         for scale in effort_segments.SCALES:
@@ -587,6 +591,7 @@ def _planning_fallback(thr: Thresholds) -> dict:
 def _ensure_planning_arming(state: SessionState, now: float) -> None:
     ledger = state.effort_segments
     if not state.plan_stack and effort_segments.open_arming_of(ledger, effort_segments.PLANNING) is None:
+        ledger.setdefault("session_floor", float(now))
         effort_segments.open_arming(
             ledger, effort_segments.PLANNING, None, effort_segments.SOURCE_UNBUDGETED, now, "classify")
 
@@ -650,10 +655,11 @@ def _renew_arming(state: SessionState, store: StateStore, args, arming: dict, ac
         return None
     _refresh_spend(state, store, _cost_rows(args), state.plan_path)
     now = _utcnow()
+    held = effort_segments.open_span_of(arming) is not None
     _close_at_user_act(state, arming, act, by, now)
     thr = Thresholds()
     budget, source, tier = _next_arming_terms(state, arming, thr)
-    renewed = effort_segments.open_arming(ledger, arming["segment"], budget, source, now, act)
+    renewed = effort_segments.open_arming(ledger, arming["segment"], budget, source, now, act, spanned=held)
     renewed["declared_tier"] = tier
     renewed["title"] = arming.get("title")
     renewed["tier_ladder"] = effort.tier_ladder(thr)
@@ -695,18 +701,39 @@ def _live_under_its_subplan(state: SessionState, arming: dict) -> bool:
 
 
 def _open_armings_after_user_approval(state: SessionState, closed: list[dict], now: float) -> None:
-    """A stage still live in the approved version continues under a new arming; a dropped, skipped
-    or unfolded one is settled. With nothing pending at the top plan, closing opens."""
+    """A stage still live in the approved version continues under a new arming (holding no span
+    when the closed one was parked); a dropped, skipped or unfolded one is settled. What the
+    interval goes to next is `_hand_on_after_approval`'s."""
     live = {state.stage_uid(s.index): s for s in state.stages if not is_skipped(s)}
     for arming in closed:
         stage = live.get(arming["segment"].removeprefix(effort_segments.STAGE_PREFIX))
         if stage is not None:
-            _ensure_stage_arming(state, stage, now, effort_segments.ACT_APPROVE_BY_USER)
+            spans = effort_segments.spans_of(arming)
+            held = bool(spans) and spans[-1]["end_act"] == "closed"
+            _ensure_stage_arming(state, stage, now, effort_segments.ACT_APPROVE_BY_USER, spanned=held)
+
+
+def _hand_on_after_approval(state: SessionState, now: float, act: str) -> None:
+    """A plan approval hands the interval to the segment the selection takes next when no span is
+    held (planning just closed, or a stage dropped), when closing holds it (a replan added a stage
+    after it), or when the sub-plan's unfolded parent holds it and the first sub-stage has no
+    arming yet. A stage's own live arming, renewed or not, keeps the interval; the selection
+    parks it if another stage must run first."""
     ledger = state.effort_segments
-    if (closed and not state.plan_stack and state.all_stages_settled()
+    if effort_segments.window_arming(ledger) is not None or not ledger.get("armings"):
+        return
+    holder = effort_segments.current_arming(ledger)
+    ready = state.ready_stages()
+    if ready:
+        target = effort_segments.open_arming_of(
+            ledger, effort_segments.stage_segment(state.stage_uid(ready[0].index) or ""))
+        under_parent = holder is not None and _live_under_its_subplan(state, holder) and target is None
+        if holder is None or holder["segment"] == effort_segments.CLOSING or under_parent:
+            _ensure_stage_arming(state, ready[0], now, act)
+    elif (not state.plan_stack and state.all_stages_settled() and holder is None
             and effort_segments.open_arming_of(ledger, effort_segments.CLOSING) is None):
-        effort_segments.open_arming(ledger, effort_segments.CLOSING, None, effort_segments.SOURCE_UNBUDGETED,
-                                    now, effort_segments.ACT_APPROVE_BY_USER)
+        effort_segments.open_arming(
+            ledger, effort_segments.CLOSING, None, effort_segments.SOURCE_UNBUDGETED, now, act)
 
 
 def _settle_at_agent_approval(state: SessionState, now: float) -> None:
@@ -843,51 +870,82 @@ def _fire_directive_figures(state: SessionState) -> dict:
             "next_steps": [f"ask the user about this fire{_figures_instruction(figures)}"]}
 
 
-def _ensure_stage_arming(state: SessionState, stage, now: float, by: str) -> dict | None:
-    """The stage's open arming, opened if it has none: the budget is the tier of the last version
-    the user approved, else the declared one. While a migrated window is open it owns everything,
-    so nothing opens."""
+def _ensure_stage_arming(state: SessionState, stage, now: float, by: str, *, uid: str | None = None,
+                         spanned: bool = True) -> dict | None:
+    """The stage's open arming, holding the interval from `now`: one with no open span (parked,
+    or adopted from an earlier session) resumes under its own id, one already holding it is
+    left, and a stage with none gets one opened, its budget the tier of the last version the user
+    approved, else the declared one. `uid` names a stage of an outer frame. `spanned=False`
+    opens it holding no span. While a migrated window is open it owns everything, so nothing
+    opens."""
     ledger = state.effort_segments
     if effort_segments.window_arming(ledger) is not None:
         return None
-    uid = state.stage_uid(stage.index)
+    if uid is None:
+        uid = state.stage_uid(stage.index)
     if uid is None:
         state.assign_stage_uids()
         uid = state.stage_uid(stage.index)
     segment = effort_segments.stage_segment(uid)
     arming = effort_segments.open_arming_of(ledger, segment)
-    if arming is not None:
+    if arming is not None and (not spanned or effort_segments.open_span_of(arming) is not None):
         return arming
     thr = Thresholds()
     closing = effort_segments.open_arming_of(ledger, effort_segments.CLOSING)
     if closing is not None:
-        effort_segments.close_arming(ledger, closing["arming_id"], by, now, float(thr.effort_divergence_multiple()))
+        _close_at_multiple(ledger, closing, by, now)
+    if arming is not None:
+        return effort_segments.resume_arming(ledger, arming["arming_id"], now)
     unfold = ledger.get("unfolds", {}).get(uid)
     approved = ledger.get("approved_tiers", {}).get(uid)
     tier = None if unfold else approved or effort._stage_tier(stage)
     budget = dict(unfold["budget"]) if unfold else effort.stage_budget(tier, thr)
     source = (unfold["source"] if unfold
               else effort_segments.SOURCE_USER_APPROVED if approved else effort_segments.SOURCE_DECLARED)
-    arming = effort_segments.open_arming(ledger, segment, budget, source, now, by)
+    arming = effort_segments.open_arming(ledger, segment, budget, source, now, by, spanned=spanned)
     arming["declared_tier"] = tier
     arming["title"] = stage.title
     arming["tier_ladder"] = effort.tier_ladder(thr)
     return arming
 
 
+def _select_stage_arming(state: SessionState, stage, now: float) -> None:
+    """The selection makes the armed stage current and opens nothing. Only when a replan put
+    another stage first does the stage holding the interval go back to PENDING with its arming
+    parked, and the selected stage's arming resume or open in its place."""
+    ledger = state.effort_segments
+    if effort_segments.window_arming(ledger) is not None:
+        return
+    uid = state.stage_uid(stage.index)
+    arming = effort_segments.open_arming_of(ledger, effort_segments.stage_segment(uid)) if uid else None
+    if arming is not None and effort_segments.open_span_of(arming) is not None:
+        return
+    holder = effort_segments.current_arming(ledger)
+    if (holder is not None and holder["segment"].startswith(effort_segments.STAGE_PREFIX)
+            and not _live_under_its_subplan(state, holder)):
+        effort_segments.park_arming(ledger, holder["arming_id"], now)
+    _ensure_stage_arming(state, stage, now, "next_stage")
+
+
 def _settle_stage_arming(state: SessionState, stage, act: str, now: float) -> dict | None:
-    """Settle `stage`'s arming at `act` and open what the interval after it belongs to: the next
-    stage, or the closing segment when none is pending at the top plan. Returns the retier record
-    the settlement produced. While a migrated window is open nothing opens or settles."""
+    """Settle `stage`'s arming at `act`. When it held the interval, hand it on at the same instant:
+    to the next stage (resumed if parked or adopted, else opened), or to closing when none is
+    pending at the top plan. An arming holding no span (parked) hands nothing on. Returns the
+    retier record the settlement produced. While a migrated window is open nothing opens or
+    settles."""
     ledger = state.effort_segments
     if effort_segments.window_arming(ledger) is not None or not ledger.get("armings"):
         return None
     record = None
+    held = False
     uid = state.stage_uid(stage.index)
     arming = effort_segments.open_arming_of(ledger, effort_segments.stage_segment(uid)) if uid else None
     if arming is not None:
+        held = effort_segments.open_span_of(arming) is not None
         record = effort_segments.close_arming(
             ledger, arming["arming_id"], act, now, float(Thresholds().effort_divergence_multiple()))
+    if not held:
+        return record
     ready = state.ready_stages()
     if ready:
         _ensure_stage_arming(state, ready[0], now, act)
@@ -901,13 +959,30 @@ def _settle_stage_arming(state: SessionState, stage, act: str, now: float) -> di
 
 
 def _settle_unfolded_parent(state: SessionState, act: str, now: float) -> None:
-    """The parent settles with its last sub-stage, so it is judged at no later act."""
-    frame = state.plan_stack[-1]
-    uid = state.stage_uids.get(stage_uid_key(frame_path(state.plan_stack[:-1]), frame.originating_stage))
+    """The parent settles with its last sub-stage, at the same instant, and the interval goes to
+    what follows it in its frame: its next ready stage, or closing when it was the last at the top
+    plan. A parent that was the last of a sub-plan itself settles in turn."""
     ledger = state.effort_segments
-    arming = effort_segments.open_arming_of(ledger, effort_segments.stage_segment(uid)) if uid else None
-    if arming is not None:
-        _close_at_multiple(ledger, arming, act, now)
+    for depth in range(len(state.plan_stack), 0, -1):
+        frame = state.plan_stack[depth - 1]
+        outer_path = frame_path(state.plan_stack[:depth - 1])
+        uid = state.stage_uids.get(stage_uid_key(outer_path, frame.originating_stage))
+        arming = effort_segments.open_arming_of(ledger, effort_segments.stage_segment(uid)) if uid else None
+        if arming is not None:
+            _close_at_multiple(ledger, arming, act, now)
+        passed = {s.index for s in frame.stages
+                  if s.outcome.status == StageStatus.PASSED.value or s.index == frame.originating_stage}
+        ready = [s for s in frame.stages if s.outcome.status == StageStatus.PENDING.value
+                 and all(d in passed for d in s.depends_on)]
+        if ready:
+            _ensure_stage_arming(state, ready[0], now, act, uid=state.stage_uids.get(
+                stage_uid_key(outer_path, ready[0].index)))
+            return
+        if any(not is_settled(s) and s.index != frame.originating_stage for s in frame.stages):
+            return
+        if depth == 1 and effort_segments.open_arming_of(ledger, effort_segments.CLOSING) is None:
+            effort_segments.open_arming(
+                ledger, effort_segments.CLOSING, None, effort_segments.SOURCE_UNBUDGETED, now, act)
 
 
 def _settle_agent_skipped_stages(state: SessionState) -> None:
@@ -1113,13 +1188,13 @@ def judge_on_parent(session_id: str, act: str, *, store: StateStore, rows: list[
 
 
 def _stamp_refresh(state: SessionState, store: StateStore, now: float) -> None:
-    """A stamp's row refresh, bounded to the spawners active since the earliest open arming. A
-    migrated session before its switch and an empty ledger book no rows here."""
+    """A stamp's row refresh, bounded to the spawners active since the session's classify time. A
+    migrated session (floor 0.0 would exclude nothing) and an empty ledger book no rows here."""
     ledger = state.effort_segments
-    held = [a["opened_at"] for a in ledger.get("armings") or [] if a["closed_at"] is None]
-    if not held or effort_segments.window_arming(ledger) is not None:
+    floor = ledger.get("session_floor")
+    if not floor or state.effort_migrated or effort_segments.window_arming(ledger) is not None:
         return
-    _refresh_spend(state, store, cost.read_rows(cost.COST_LOG), state.plan_path, since=min(held), now=now)
+    _refresh_spend(state, store, cost.read_rows(cost.COST_LOG), state.plan_path, since=floor, now=now)
 
 
 def _live_stage_spawned(state: SessionState) -> bool:
@@ -2783,8 +2858,15 @@ def _refresh_spend(state: SessionState, store: StateStore, rows: list[dict], pat
     session's own rows and lift its watermark past rows it has not booked. The high-water
     marks tolerate the smaller total, and the next unbounded refresh books what is owed.
 
+    A row written before the ledger's `session_floor` (the classify time; 0.0 on a migrated
+    ledger, which excludes nothing) is left out of the totals and the watermarks: it was booked
+    by the session that held it, or by none.
+
     The part of what is booked here for a descendant that the order window already holds
     is marked flushed in this session too (`_credit_descendant_order_flush`)."""
+    floor = state.effort_segments.get("session_floor")
+    if floor:
+        rows = [row for row in rows if effort.row_written_at(row) >= floor]
     foreign = {
         spawner for row in rows
         if isinstance(spawner := row.get("spawner_session"), str) and spawner != state.session_id
