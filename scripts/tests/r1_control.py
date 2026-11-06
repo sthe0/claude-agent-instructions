@@ -50,7 +50,7 @@ RECORDER = HERE / "arc_launcher_recorder.py"
 CANARY_FILE = "scripts/tests/canary_arc_launcher.py"
 CANARY_ID = CANARY_FILE + "::test_launcher_run_downloads_nothing"
 
-START_FREE_GB = 80
+START_FREE_GB = 60
 ABORT_FREE_GB = 15
 GATE_LIMIT_S = 1800
 FLIP_ATTEMPTS = 3
