@@ -15,6 +15,9 @@ is not a share of anything.
 
   --half-life D     half-life in days (default: config.md `time-profile-half-life-days`)
   --by-sha          the same figures per Core sha
+  --source S        `auto` (default): engine-node dwell comes from the telemetry record for each
+                    session it holds command events for, from the engine state files for the
+                    rest; `transcripts` forces the state-file path and never opens the record
   --format json     machine-readable
   --uncertainty     per heavy component: reconstruction interval, cross-source agreement,
                     coverage and an instrument / wait verdict; --format md (default) | json;
@@ -74,8 +77,8 @@ def _payload_of(agg: time_profile.Aggregate, run) -> dict:
     }
 
 
-def build_payload(run, half_life: float | None, by_sha: bool) -> dict:
-    payload = _payload_of(time_profile.aggregate(run.profiles, half_life_days=half_life), run)
+def build_payload(run, half_life: float | None, by_sha: bool, now_ms: int | None = None) -> dict:
+    payload = _payload_of(time_profile.aggregate(run.profiles, half_life_days=half_life, now_ms=now_ms), run)
     if by_sha:
         payload["groups"] = [
             {"core_sha": sha, **group.to_dict()}

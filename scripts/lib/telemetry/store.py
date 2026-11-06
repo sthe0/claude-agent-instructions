@@ -54,7 +54,7 @@ ENUM_COLUMNS = {
     "token_usage": {"role": ("roles", "role_table_version"), "phase": ("phases", "phase_table_version")},
     "losses": {"loss_mode": ("loss_modes", "loss_mode_table_version")},
 }
-_INTERNAL_TABLES = frozenset({"meta", "schema_migrations", "spool_offsets", "sqlite_sequence"})
+_INTERNAL_TABLES = frozenset({"meta", "schema_migrations", "spool_offsets", "import_offsets", "sqlite_sequence"})
 
 _clock = time.monotonic
 _sleep = time.sleep

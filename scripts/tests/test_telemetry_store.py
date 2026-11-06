@@ -382,7 +382,7 @@ def test_fts5_probe_falls_back_to_plain_table(monkeypatch):
 
 def test_migration_1_creates_the_r1_tables_and_columns():
     conn = store.open_record()
-    assert store.applied_migrations(conn) == [1]
+    assert store.applied_migrations(conn)[0] == 1
     conn.close()
     expected = {
         "tasks": {"origin", "task_id", "epoch", "status", "weight_class", "synthetic", "opened_at", "ended_at"},
