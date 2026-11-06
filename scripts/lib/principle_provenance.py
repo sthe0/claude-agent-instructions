@@ -478,8 +478,8 @@ def induced_leaves(corpus: Corpus) -> list[Leaf]:
 
 def grounded_regularities(principle: Leaf) -> list[str]:
     """The regularity slugs a principle's `grounded_in` names (prefix dropped)."""
-    return [s[len(REGULARITY_PREFIX):] for s in _grounded_or_empty(principle.text)
-            if s.startswith(REGULARITY_PREFIX)]
+    bare = [s.removeprefix("project:") for s in _grounded_or_empty(principle.text)]
+    return [s[len(REGULARITY_PREFIX):] for s in bare if s.startswith(REGULARITY_PREFIX)]
 
 
 def pointer_expected(leaf: Leaf) -> list[str]:
