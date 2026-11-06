@@ -45,12 +45,14 @@ def root(tmp_path):
 # Every `claude` these tests' subprocesses look up — in practice the grounding judge's — resolves
 # to this directory's stub: a fixed answer instead of a live model, whose verdict varies run to run.
 # The stubs/judge-defect twin and the value `none` (no stub on PATH) are for running this file by
-# hand to show the stub decides the outcome:
-#   PATH=scripts/tests/stubs/judge-defect:$PATH pytest <this file>    # passes: the stub wins
-#   E2E_JUDGE_STUB_DIR=none PATH=scripts/tests/stubs/judge-defect:$PATH pytest <this file>
-#                                                                     # fails on the grounding refusal
-JUDGE_STUB_DIR = os.environ.get(
-    "E2E_JUDGE_STUB_DIR", str(Path(__file__).resolve().parent / "stubs" / "judge-pass"))
+# hand to show the stub decides the outcome (from the repository root):
+#   PATH=$PWD/scripts/tests/stubs/judge-defect:$PATH pytest <this file>    # passes: the stub wins
+#   E2E_JUDGE_STUB_DIR=none PATH=$PWD/scripts/tests/stubs/judge-defect:$PATH pytest <this file>
+#                                                                          # fails on the grounding refusal
+_STUB_SETTING = os.environ.get("E2E_JUDGE_STUB_DIR", "")
+JUDGE_STUB_DIR = _STUB_SETTING if _STUB_SETTING == "none" else str(
+    Path(_STUB_SETTING).resolve() if _STUB_SETTING
+    else Path(__file__).resolve().parent / "stubs" / "judge-pass")
 
 
 def _judge_path(inherited: str) -> str:
