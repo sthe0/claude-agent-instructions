@@ -30,7 +30,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `memory-index-max-bytes` | `24000` | UTF-8 bytes cap on `memory-global/MEMORY.md` (harness truncates at 25000); see memory-index-max-bytes-derivation.md. |
 | `phase3-due-sessions-floor` | `30` | Minimum scanned sessions before a Phase-3 firing verdict counts as evidence. |
 | `phase3-due-data-window-days` | `14` | Minimum days since the Phase-3 baseline stamp before its verdict is trusted. |
-| `effort-divergence-multiple` | `5.0` | Actual-to-estimated effort ratio at which a passing result is routed to DIAGNOSING (spend, wall-clock). |
+| `effort-divergence-multiple` | `5.0` | Ratio of a segment's actual to its own budget at which, beside the floor, its spend or wall-clock scale fires; planning and each stage are judged separately. |
 | `effort-stage-minutes-small` | `10` | Expected active minutes of a small-tier stage; also prices in-thread stages. |
 | `effort-stage-minutes-medium` | `25` | Expected active minutes of a medium-tier stage. |
 | `effort-stage-minutes-large` | `60` | Expected active minutes of a large-tier stage. |
@@ -44,7 +44,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `review-parallel-max` | `6` | Cap on concurrent pair-reviewer spawns within one topological-review level. |
 | `verify-final-parallel-max` | `2` | Cap on checks `verify-final` runs at once (1 = serial); also bounded by the free-CPU worker budget. |
 | `review-cycle-acts` | `20` | Counted review acts in one pre-approval cycle at which PLAN_READY routes into DIAGNOSING. |
-| `review-cycle-active-minutes` | `77` | Active minutes in one pre-approval review cycle at which PLAN_READY routes into DIAGNOSING. |
+| `review-cycle-active-minutes` | `77` | Active minutes in one pre-approval review cycle at which PLAN_READY routes into DIAGNOSING (only while a migrated window arming is open); also fixes the planning fallback's wall-clock fire point. |
 | `review-stage-nonpass-streak` | `3` | Consecutive non-passing stage-scoped reviews of one stage at which PLAN_READY routes into DIAGNOSING. |
 | `root-bash-call-max-min` | `2` | Longest foreground Bash call the root makes; longer ones run with `run_in_background`. |
 | `root-silent-max-min` | `25` | Longest stretch the root stays silent to the user while specialists are in flight. |
