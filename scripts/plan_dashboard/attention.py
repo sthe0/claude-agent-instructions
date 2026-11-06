@@ -42,7 +42,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from lib import config_root, engine_session_binding
-from plan_dashboard import locate
+from plan_dashboard import locate, snapshot
 
 CHAT_MAX_ENTRIES = 40
 CHAT_TEXT_MAX = 2000
@@ -65,13 +65,16 @@ def clear_cache() -> None:
         _CACHE.clear()
     with _MARKS_LOCK:
         _MARKS.clear()
+    snapshot.reset()
 
 
 class Tail:
-    """What a transcript's tail says, kept between incremental reads."""
+    """What a transcript's tail says, kept between incremental reads. ``ident`` is the identity of the file
+    when it was read, None while that read may not have seen the whole of its last tick."""
 
-    def __init__(self, inode: int):
+    def __init__(self, inode: int, ident: tuple | None = None):
         self.inode = inode
+        self.ident = ident
         self.offset = 0
         self.partial = b""
         self.chat: collections.deque = collections.deque(maxlen=CHAT_MAX_ENTRIES)
@@ -81,12 +84,46 @@ class Tail:
         self.last_ts: str | None = None
 
     def copy(self) -> "Tail":
-        copy = Tail(self.inode)
+        copy = Tail(self.inode, self.ident)
         copy.offset, copy.partial = self.offset, self.partial
         copy.chat = collections.deque(self.chat, maxlen=CHAT_MAX_ENTRIES)
         copy.pending = dict(self.pending)
         copy.state, copy.state_ts, copy.last_ts = self.state, self.state_ts, self.last_ts
         return copy
+
+    def to_json(self) -> dict:
+        return {"inode": self.inode, "offset": self.offset, "partial": self.partial.decode("latin-1"),
+                "chat": list(self.chat), "pending": self.pending, "state": self.state,
+                "state_ts": self.state_ts, "last_ts": self.last_ts}
+
+    @classmethod
+    def from_json(cls, data: dict, ident: tuple) -> "Tail":
+        tail = cls(data["inode"], ident)
+        tail.offset, tail.partial = data["offset"], data["partial"].encode("latin-1")
+        tail.chat.extend(data["chat"])
+        tail.pending = dict(data["pending"])
+        tail.state, tail.state_ts, tail.last_ts = data["state"], data["state_ts"], data["last_ts"]
+        return tail
+
+
+def export_tails() -> dict[str, dict]:
+    """The tails whose file identity is known, by path, for the snapshot."""
+    with _LOCK:
+        return {key: tail.to_json() for key, tail in _CACHE.items() if tail.ident is not None}
+
+
+def seed_tails(tails, identities: dict[str, tuple]) -> None:
+    """Adopt snapshot ``tails`` (path → ``Tail.to_json``) under the identities the snapshot recorded for
+    their files; a malformed entry is skipped."""
+    for key, data in (tails or {}).items():
+        if key not in identities:
+            continue
+        try:
+            tail = Tail.from_json(data, identities[key])
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+        with _LOCK:
+            _CACHE.setdefault(key, tail)
 
 
 def _items(message: dict) -> list:
@@ -198,13 +235,20 @@ def read_tail(path) -> Tail | None:
     except OSError:
         return None
     key = str(path)
+    ident = snapshot.identity_of(stat)
+    snapshot.OBSERVED.note("transcript", key, stat)
     with _LOCK:
         cached = seen = _CACHE.get(key)
-    if cached is not None and (cached.inode != stat.st_ino or stat.st_size < cached.offset):
-        cached = None
-    if cached is not None and stat.st_size == cached.offset:
+    if cached is not None and cached.ident is not None and snapshot.same_identity("transcript", cached.ident, ident):
         return cached
+    # a file that did not grow was rewritten in place (its identity moved, or the last read was not settled
+    # and may have missed a second write of its tick): it is read from the start
+    if cached is not None and (cached.inode != stat.st_ino or stat.st_size <= cached.offset):
+        cached = None
+    read_ns = snapshot.now_ns()
     tail = Tail(stat.st_ino) if cached is None else cached.copy()
+    tail.ident = ident if snapshot.settled(stat, read_ns) else None
+    snapshot.OBSERVED.note_read(key)
     try:
         with open(path, "rb") as handle:
             if cached is None:
@@ -229,12 +273,7 @@ def read_tail(path) -> Tail | None:
 def transcript_index(transcripts_root) -> dict[str, list[Path]]:
     """Every main-session transcript by session id, from one listing: a reader of many tasks lists the
     transcript roots once rather than once per candidate session."""
-    roots = [Path(transcripts_root)] if transcripts_root is not None else config_root.projects_roots()
-    paths = sorted((path for root in roots for path in root.glob("*/*.jsonl")), key=str)
-    index: dict[str, list[Path]] = {}
-    for path in paths:
-        index.setdefault(path.stem, []).append(path)
-    return index
+    return snapshot.TRANSCRIPTS.index(snapshot.transcript_roots(transcripts_root))
 
 
 def find_transcript(harness_session: str, locator, transcripts_root, transcripts=None) -> Path | None:
@@ -266,7 +305,7 @@ def bind_session(engine_session: str, locator, transcripts_root, index=None,
     """``(harness session, its transcript, every session recorded as driving the task)``; ``index`` is a
     ``harness_index`` and ``transcripts`` a ``transcript_index`` shared by a read of many tasks."""
     if index is None:
-        index = engine_session_binding.harness_index()
+        index = snapshot.harness_index()
     bound = list(index.get(config_root.sanitize_session_id(engine_session), [])) if engine_session else []
     best = None
     for candidate in dict.fromkeys([engine_session, *bound]):
@@ -303,22 +342,29 @@ def permission_needed(tail: Tail | None) -> bool:
     return tail is not None and not tail.pending
 
 
-def _mark_key(harness_session: str | None, path: Path) -> tuple | None:
+def _mark_key(harness_session: str | None, path: Path) -> tuple[tuple, bool] | None:
+    """``((identity, session), settled)`` of the transcript; a mark under an unsettled key is not kept."""
     try:
         stat = os.stat(path)
     except OSError:
         return None
-    return (stat.st_mtime_ns, stat.st_size, harness_session)
+    snapshot.OBSERVED.note("transcript", str(path), stat)
+    return (snapshot.identity_of(stat), harness_session), snapshot.settled(stat)
+
+
+def _same_mark_key(kept: tuple, key: tuple) -> bool:
+    return kept[1] == key[1] and snapshot.same_identity("transcript", kept[0], key[0])
 
 
 def _attend(harness_session: str | None, path: Path | None, locator, stamp=None) -> tuple[dict, Tail | None]:
-    """A transcript's mark, from ``_MARKS`` while its mtime, size and session hold. The locator's
+    """A transcript's mark, from ``_MARKS`` while its identity and session hold. The locator's
     answer is reused only while its ``stamp`` (an ``inputs_stamp`` read before the mark) holds too;
     with no stamp the transcript-decided part is reused and the locator is asked again."""
-    key = _mark_key(harness_session, path) if path is not None else None
+    found = _mark_key(harness_session, path) if path is not None else None
+    key, trusted = found if found is not None else (None, False)
     with _MARKS_LOCK:
         entry = _MARKS.get(str(path)) if key is not None else None
-    if entry is not None and entry.key == key:
+    if entry is not None and _same_mark_key(entry.key, key):
         tail = entry.tail
     else:
         tail = read_tail(path) if key is not None else None
@@ -331,7 +377,10 @@ def _attend(harness_session: str | None, path: Path | None, locator, stamp=None)
             permission = locate.permission_wait(locator, harness_session)
     if key is not None and tail is not None:
         with _MARKS_LOCK:
-            _MARKS[str(path)] = _Mark(key, tail, stamp, permission)
+            if trusted:
+                _MARKS[str(path)] = _Mark(key, tail, stamp, permission)
+            else:
+                _MARKS.pop(str(path), None)
     waiting, since = waiting_state(tail, permission)
     return {"waiting": waiting, "harness_session": harness_session, "since": since}, tail
 
@@ -369,7 +418,7 @@ def collect(engine_sessions, locator, transcripts_root) -> tuple[dict, list[dict
     """``(overlays by task id, session rows)`` for the listed tasks, from one scan of the binding files
     and one listing of the transcripts, with the marks read by ``marks``."""
     stamp = locate.inputs_stamp(locator)
-    index, transcripts = engine_session_binding.harness_index(), transcript_index(transcripts_root)
+    index, transcripts = snapshot.harness_index(), transcript_index(transcripts_root)
     targets, represented = {}, set()
     for engine in engine_sessions:
         harness, path, bound = bind_session(engine, locator, transcripts_root, index, transcripts)

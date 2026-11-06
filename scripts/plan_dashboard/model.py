@@ -22,8 +22,10 @@ from types import SimpleNamespace
 
 from agentctl import child_runs, cost, effort
 from lib import config_root, engine_session_binding, transcript_cost
+from plan_dashboard import snapshot
 
 SCHEMA = "plan-dashboard/v1"
+LEDGER_ANCHOR_BYTES = 64
 ACTIVE_WINDOW = dt.timedelta(minutes=30)
 HISTORY_TAIL = 20
 RETRY_PAUSE_S = 0.05
@@ -34,6 +36,7 @@ _UNLINKED_SPAWN_TASK_PREFIX = "agent-recursion-depth-"
 
 CACHE_LOCK = threading.Lock()
 _LEDGER: dict = {}
+_SUMS: dict = {}
 _TRANSCRIPTS: dict = {}
 _CHILDREN: dict = {}
 
@@ -45,8 +48,10 @@ class UnknownSession(KeyError):
 def clear_cache() -> None:
     with CACHE_LOCK:
         _LEDGER.clear()
+        _SUMS.clear()
         _TRANSCRIPTS.clear()
         _CHILDREN.clear()
+    snapshot.STATES.clear()
 
 
 def _dict(value) -> dict:
@@ -107,18 +112,51 @@ def _read_state(path: Path) -> tuple[dict | None, str | None]:
     return None, reason
 
 
-def _ledger(cost_log) -> dict:
-    path = Path(cost_log) if cost_log is not None else cost.COST_LOG
+def _ledger_path(cost_log) -> Path:
+    return Path(cost_log) if cost_log is not None else cost.COST_LOG
+
+
+def _stat_ledger(path: Path):
+    """``(stat, None)``; ``(None, True)`` for an absent ledger (nothing was ever spent); ``(None, False)`` for
+    one that exists but cannot be examined (its figures are unknown)."""
     try:
-        st = path.stat()
+        return path.stat(), None
+    except FileNotFoundError:
+        return None, True
     except OSError:
-        return {"rows": [], "by_session": {}, "by_plan": {}}
-    key = (str(path), st.st_ino, st.st_size, st.st_mtime_ns)
+        return None, False
+
+
+def _rows_of(data: bytes):
+    for line in data.split(b"\n"):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line.decode("utf-8"))
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            yield row
+
+
+def _ledger(cost_log) -> dict:
+    """Every row of the ledger by owner, for a task's detail. ``unread`` marks a ledger that exists but
+    could not be read: its rows are unknown, not none."""
+    path = _ledger_path(cost_log)
+    st, absent = _stat_ledger(path)
+    if st is None:
+        return {"rows": [], "by_session": {}, "by_plan": {}, "unread": not absent}
+    ident = snapshot.identity_of(st)
     with CACHE_LOCK:
         entry = _LEDGER.get("entry")
-        if entry is not None and entry["key"] == key:
+        if entry is not None and entry["path"] == str(path) and snapshot.same_identity("ledger", entry["ident"], ident):
             return entry
-        rows = [r for r in cost.read_rows(path) if isinstance(r, dict)]
+        read_ns = snapshot.now_ns()
+        try:
+            rows = list(_rows_of(path.read_bytes()))
+        except OSError:
+            return {"rows": [], "by_session": {}, "by_plan": {}, "unread": True}
+        snapshot.OBSERVED.note_read(str(path))
         by_session: dict = {}
         by_plan: dict = {}
         for row in rows:
@@ -126,8 +164,12 @@ def _ledger(cost_log) -> dict:
                 by_session.setdefault(row["spawner_session"], []).append(row)
             elif row.get("plan_path"):
                 by_plan.setdefault(row["plan_path"], []).append(row)
-        entry = {"key": key, "rows": rows, "by_session": by_session, "by_plan": by_plan}
-        _LEDGER["entry"] = entry
+        entry = {"path": str(path), "ident": ident, "rows": rows, "by_session": by_session, "by_plan": by_plan,
+                 "unread": False}
+        if snapshot.settled(st, read_ns):
+            _LEDGER["entry"] = entry
+        else:
+            _LEDGER.pop("entry", None)
         return entry
 
 
@@ -136,6 +178,71 @@ def _owned_spawn_rows(ledger: dict, session_id: str, plan_path) -> list[dict]:
     if plan_path:
         rows.extend(ledger["by_plan"].get(plan_path, []))
     return rows
+
+
+def _anchor(path: Path, offset: int) -> str:
+    with open(path, "rb") as fh:
+        fh.seek(max(offset - LEDGER_ANCHOR_BYTES, 0))
+        return hashlib.sha256(fh.read(min(LEDGER_ANCHOR_BYTES, offset))).hexdigest()
+
+
+def _extend_sums(path: Path, base: dict | None) -> dict:
+    """The spend sums of the ledger: ``base``'s plus the complete lines appended since its offset (the
+    ledger is append-only), or all of it. Reads only the new bytes."""
+    offset = base["offset"] if base else 0
+    by_session = dict(base["by_session"]) if base else {}
+    by_plan = dict(base["by_plan"]) if base else {}
+    with open(path, "rb") as fh:
+        fh.seek(offset)
+        data = fh.read()
+    complete = data[: data.rfind(b"\n") + 1]
+    for row in _rows_of(complete):
+        amount = row.get("cost_usd")
+        amount = amount if isinstance(amount, (int, float)) and not isinstance(amount, bool) else 0.0
+        if row.get("spawner_session"):
+            by_session[row["spawner_session"]] = by_session.get(row["spawner_session"], 0.0) + amount
+        elif row.get("plan_path"):
+            by_plan[row["plan_path"]] = by_plan.get(row["plan_path"], 0.0) + amount
+    offset += len(complete)
+    return {"offset": offset, "anchor": _anchor(path, offset), "by_session": by_session, "by_plan": by_plan}
+
+
+def _ledger_sums(cost_log) -> dict:
+    """What each session and plan spent, ``unread`` when the ledger exists and cannot be read. A change
+    that only appends is read from where the last read stopped; any other change reads all of it again."""
+    path = _ledger_path(cost_log)
+    st, absent = _stat_ledger(path)
+    if st is None:
+        return {"by_session": {}, "by_plan": {}, "unread": not absent}
+    ident = snapshot.identity_of(st)
+    with CACHE_LOCK:
+        entry = _SUMS.get("entry")
+        mine = entry is not None and entry["path"] == str(path)
+        if mine and snapshot.same_identity("ledger", entry["ident"], ident):
+            return entry
+        appended = (mine and entry["ident"][1] == st.st_ino and st.st_size > entry["offset"]
+                    and entry["ident"][2] <= st.st_size)
+        read_ns = snapshot.now_ns()
+        try:
+            base = entry if appended and _anchor(path, entry["offset"]) == entry["anchor"] else None
+            sums = _extend_sums(path, base)
+        except OSError:
+            _SUMS.pop("entry", None)
+            return {"by_session": {}, "by_plan": {}, "unread": True}
+        snapshot.OBSERVED.note_read(str(path))
+        entry = {"path": str(path), "ident": ident, **sums, "unread": False}
+        if snapshot.settled(st, read_ns):
+            _SUMS["entry"] = entry
+        else:
+            _SUMS.pop("entry", None)
+        return entry
+
+
+def _spend(sums: dict, session_id: str, plan_path) -> float | None:
+    """What a task's spawns cost; None when the ledger could not be read."""
+    if sums["unread"]:
+        return None
+    return sums["by_session"].get(session_id, 0.0) + (sums["by_plan"].get(plan_path, 0.0) if plan_path else 0.0)
 
 
 def _read_from(path: Path, offset: int) -> bytes:
@@ -416,15 +523,16 @@ def totals(*, wall_clock_s, spawn_cost_usd, root_cost_usd, root_counted: bool, s
     """``root_shared_with`` lists the other tasks that ran in the same conversation(s) as the
     task, whose transcript rows may then sit in this task's last open window; null when no
     transcript was read."""
-    cost_usd = spawn_cost_usd + (root_cost_usd or 0.0)
+    spawn_known = spawn_cost_usd is not None
+    cost_usd = (spawn_cost_usd or 0.0) + (root_cost_usd or 0.0) if spawn_known or root_counted else None
     return {
         "wall_clock_s": wall_clock_s,
-        "spawn_cost_usd": round(spawn_cost_usd, 6),
+        "spawn_cost_usd": round(spawn_cost_usd, 6) if spawn_known else None,
         "root_cost_usd": round(root_cost_usd, 6) if root_counted else None,
-        "cost_usd": round(cost_usd, 6),
+        "cost_usd": round(cost_usd, 6) if cost_usd is not None else None,
         "estimate": {"wall_clock_s": False, "spawn_cost_usd": False,
                      "root_cost_usd": root_counted, "cost_usd": root_counted},
-        "partial": not root_counted,
+        "partial": not (root_counted and spawn_known),
         "root_counted": root_counted,
         "root_shared_with": sorted(shared_with) if root_counted and shared_with is not None else None,
     }
@@ -450,64 +558,83 @@ def _age_band(age: dt.timedelta, window: dt.timedelta) -> str:
     return "idle" if age <= window else "stale"
 
 
-def _liveness(state: dict, last: dt.datetime, now: dt.datetime, window: dt.timedelta) -> str:
-    if state.get("node") == "RESOLVED":
+def _liveness(digest: dict, last: dt.datetime, now: dt.datetime, window: dt.timedelta) -> str:
+    if digest["node"] == "RESOLVED":
         return "resolved"
-    if state.get("node") == "CLASSIFIED" and not state.get("weight_class") and not state.get("plan_path"):
+    if digest["node"] == "CLASSIFIED" and not digest["weight_class"] and not digest["plan_path"]:
         return "stub"
-    live_run = any(
-        isinstance(run, dict) and run.get("ended") is None and child_runs.pid_alive(run.get("dispatcher_pid"))
-        for run in _list(state.get("effort_child_runs"))
-    )
+    live_run = any(child_runs.pid_alive(pid) for pid in digest["open_run_pids"])
     return "active" if live_run else _age_band(now - last, window)
 
 
-def _summary(stem: str, state: dict | None, reason, mtime, now, window, ledger) -> dict:
-    if state is None:
-        last = mtime
+def _digest(stem: str, state: dict, mtime: dt.datetime) -> dict:
+    """What a state file contributes to its row, apart from the clock, the processes and the ledger: JSON
+    all through, so it can sit in the snapshot."""
+    first, last = _activity(state, mtime)
+    stages = [s for s in _list(state.get("stages")) if isinstance(s, dict)]
+    open_record = _dict(state.get("difficulty"))
+    return {
+        "owner": state.get("session_id"), "plan_path": state.get("plan_path"), "node": state.get("node"),
+        "weight_class": state.get("weight_class"),
+        "open_run_pids": [run.get("dispatcher_pid") for run in _list(state.get("effort_child_runs"))
+                          if isinstance(run, dict) and run.get("ended") is None],
+        "first": first.isoformat() if first else None, "last": last.isoformat(),
+        "row": {
+            "session_id": state.get("session_id") or stem, "task_id": state.get("task_id"),
+            "goal": state.get("goal"), "node": state.get("node"), "weight_class": state.get("weight_class"),
+            "current_stage": state.get("current_stage"),
+            "stages_done": sum(1 for s in stages if _dict(s.get("outcome")).get("status") in DONE_STATUSES),
+            "stages_total": len(stages),
+            "open_difficulty": _title(open_record) if open_record else None,
+            "difficulties": {"open": 1 if open_record else 0,
+                             "stacked": len(_list(state.get("difficulty_stack"))),
+                             "closed": len(_list(state.get("closed_difficulties")))},
+            # replan_count reads only ``.history``; a state file is not rebuilt into a SessionState
+            # (a legacy file with missing keys would not load), so a stand-in carries the history.
+            "replans": effort.replan_count(SimpleNamespace(history=_list(state.get("history")))),
+            "review_rounds": state.get("review_rounds") or 0,
+            "plan_review_rounds": state.get("plan_review_rounds") or 0,
+            "effort": {"estimate": state.get("effort_estimate"), "actuals": _dict(state.get("effort_actuals"))},
+            "parent_session": _dict(state.get("parent_link")).get("parent_session"),
+        },
+    }
+
+
+def _load_digest(path, mtime: dt.datetime) -> dict:
+    """``{"digest", "reason"}`` of one state file: the digest None, with the reason, when it stays unparsable."""
+    state, reason = _read_state(Path(path))
+    return {"digest": None if state is None else _digest(Path(path).stem, state, mtime), "reason": reason}
+
+
+def _summary(stem: str, entry: dict, mtime: dt.datetime, now: dt.datetime, window, sums: dict) -> dict:
+    digest = entry["digest"]
+    if digest is None:
         return {
             "session_id": stem, "task_id": None, "goal": None, "node": None, "weight_class": None,
-            "liveness": _age_band(now - last, window),
+            "liveness": _age_band(now - mtime, window),
             "current_stage": None, "stages_done": None, "stages_total": None,
             "open_difficulty": None, "difficulties": None, "replans": None, "review_rounds": None,
             "plan_review_rounds": None, "effort": None, "parent_session": None,
-            "last_activity": _iso(last), "readable": False, "reason": reason, "totals": None,
+            "last_activity": _iso(mtime), "readable": False, "reason": entry["reason"], "totals": None,
         }
-    first, last = _activity(state, mtime)
-    session_id = state.get("session_id") or stem
-    stages = [s for s in _list(state.get("stages")) if isinstance(s, dict)]
-    open_record = _dict(state.get("difficulty"))
-    spawn = _spent(_owned_spawn_rows(ledger, session_id, state.get("plan_path")))
+    first = dt.datetime.fromisoformat(digest["first"]) if digest["first"] else None
+    last = dt.datetime.fromisoformat(digest["last"])
+    row = digest["row"]
     return {
-        "session_id": session_id, "task_id": state.get("task_id"), "goal": state.get("goal"),
-        "node": state.get("node"), "weight_class": state.get("weight_class"),
-        "liveness": _liveness(state, last, now, window),
-        "current_stage": state.get("current_stage"),
-        "stages_done": sum(1 for s in stages if _dict(s.get("outcome")).get("status") in DONE_STATUSES),
-        "stages_total": len(stages),
-        "open_difficulty": _title(open_record) if open_record else None,
-        "difficulties": {"open": 1 if open_record else 0,
-                         "stacked": len(_list(state.get("difficulty_stack"))),
-                         "closed": len(_list(state.get("closed_difficulties")))},
-        # replan_count reads only ``.history``; a state file is not rebuilt into a SessionState
-        # (a legacy file with missing keys would not load), so a stand-in carries the history.
-        "replans": effort.replan_count(SimpleNamespace(history=_list(state.get("history")))),
-        "review_rounds": state.get("review_rounds") or 0,
-        "plan_review_rounds": state.get("plan_review_rounds") or 0,
-        "effort": {"estimate": state.get("effort_estimate"), "actuals": _dict(state.get("effort_actuals"))},
-        "parent_session": _dict(state.get("parent_link")).get("parent_session"),
-        "last_activity": _iso(last), "readable": True, "reason": None,
-        "totals": totals(wall_clock_s=_seconds(first, last), spawn_cost_usd=spawn,
+        **row, "liveness": _liveness(digest, last, now, window), "last_activity": _iso(last),
+        "readable": True, "reason": None,
+        "totals": totals(wall_clock_s=_seconds(first, last),
+                         spawn_cost_usd=_spend(sums, row["session_id"], digest["plan_path"]),
                          root_cost_usd=None, root_counted=False),
     }
 
 
-def _is_sidecar(stem: str, state: dict | None) -> bool:
+def _is_sidecar(stem: str, entry: dict) -> bool:
     """A JSON file in the state directory that is not a task: the engine's delivery record
     (``<session>.delivery.json``) or any file naming another session than its own."""
     if stem.endswith(DELIVERY_SUFFIX):
         return True
-    owner = _dict(state).get("session_id")
+    owner = (entry["digest"] or {}).get("owner")
     return isinstance(owner, str) and config_root.sanitize_session_id(owner) != stem
 
 
@@ -556,32 +683,33 @@ def collect(state_root, *, now: dt.datetime, window_hours=24, include_all=False,
     root = Path(state_root)
     window = dt.timedelta(hours=window_hours)
     pinned = {config_root.sanitize_session_id(s) for s in (*(sessions or ()), *(windowed or ()))}
-    mtimes = {}
-    try:
-        for path in sorted(root.glob("*.json")):
-            if (moment := _mtime(path)) is not None:
-                mtimes[path.stem] = (path, moment)
-    except OSError:
-        pass
-    queue = [stem for stem, (_, moment) in mtimes.items()
+    read_ns = snapshot.now_ns()
+    listing = dict(sorted(snapshot.scan(root, ".json").items()))
+    snapshot.OBSERVED.scanned("state", {path: (st, read_ns) for path, st in listing.values()})
+    snapshot.STATES.prune({path for path, _ in listing.values()})
+    mtimes = {stem: (path, st, dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc))
+              for stem, (path, st) in listing.items()}
+    queue = [stem for stem, (_, _, moment) in mtimes.items()
              if include_all or stem in pinned or now - moment <= window]
     loaded: dict = {}
     while queue:
         stem = queue.pop()
         if stem in loaded or stem not in mtimes:
             continue
-        path, moment = mtimes[stem]
-        loaded[stem] = (*_read_state(path), moment)
-        parent = _dict(_dict(loaded[stem][0]).get("parent_link")).get("parent_session")
+        path, st, moment = mtimes[stem]
+        entry = snapshot.STATES.fetch(path, st, lambda p, moment=moment: _load_digest(p, moment))
+        loaded[stem] = (entry, moment)
+        parent = ((entry["digest"] or {}).get("row") or {}).get("parent_session")
         if parent:
             queue.append(config_root.sanitize_session_id(parent))
-    ledger = _ledger(cost_log)
+    sums = _ledger_sums(cost_log)
+    snapshot.OBSERVED.ledger(_ledger_path(cost_log))
     summaries, wanted = {}, set()
-    for stem, (state, reason, moment) in loaded.items():
-        if _is_sidecar(stem, state):
+    for stem, (entry, moment) in loaded.items():
+        if _is_sidecar(stem, entry):
             continue
-        row = summaries[stem] = _summary(stem, state, reason, moment, now, window, ledger)
-        if include_all or stem in pinned or _qualifies_alone(state, row, windowed):
+        row = summaries[stem] = _summary(stem, entry, moment, now, window, sums)
+        if include_all or stem in pinned or _qualifies_alone(entry["digest"], row, windowed):
             wanted.add(stem)
     tasks = [summaries[stem] for stem in _listed_stems(summaries, wanted, pinned, include_all)]
     tasks.sort(key=lambda t: (t["last_activity"] or "", t["session_id"]), reverse=True)
@@ -636,17 +764,21 @@ def child_index(state_root, *, since: float | None = None) -> dict[str, list[dic
             st = path.stat()
         except OSError:
             continue
-        key = (st.st_mtime_ns, st.st_size)
+        key = snapshot.identity_of(st)
         with CACHE_LOCK:
             cached = _CHILDREN.get(path)
-        if cached is not None and cached[0] == key:
+        if cached is not None and snapshot.same_identity("state", cached[0], key):
             link = cached[1]
         elif cached is None and floor is not None and st.st_mtime < floor:
             continue
         else:
+            read_ns = snapshot.now_ns()
             link = _child_link(path)
             with CACHE_LOCK:
-                _CHILDREN[path] = (key, link)
+                if snapshot.settled(st, read_ns):
+                    _CHILDREN[path] = (key, link)
+                else:
+                    _CHILDREN.pop(path, None)
         if link is not None:
             index.setdefault(link[0], []).append(dict(link[1]))
     return index
@@ -687,7 +819,8 @@ def detail(state_root, session_id, *, cost_log=None, transcripts_root=None, chil
     sid = state.get("session_id") or session_id
     mtime = _mtime(path) or dt.datetime.fromtimestamp(0, dt.timezone.utc)
     first, last = _activity(state, mtime)
-    spawn_rows = _owned_spawn_rows(_ledger(cost_log), sid, state.get("plan_path"))
+    ledger = _ledger(cost_log)
+    spawn_rows = _owned_spawn_rows(ledger, sid, state.get("plan_path"))
     linked = _is_linked_child(state)
     usage_rows = _usage_rows(sid, transcripts_root, linked_child=linked)
     tree = phases(state, spawn_rows, usage_rows)
@@ -711,7 +844,7 @@ def detail(state_root, session_id, *, cost_log=None, transcripts_root=None, chil
         "repo_root": state.get("repo_root"),
         "harness_sessions": sorted(harness_sessions),
         "readable": True, "reason": None,
-        "totals": totals(wall_clock_s=_seconds(first, last), spawn_cost_usd=_spent(spawn_rows),
+        "totals": totals(wall_clock_s=_seconds(first, last), spawn_cost_usd=None if ledger["unread"] else _spent(spawn_rows),
                          root_cost_usd=root_cost, root_counted=usage_rows is not None, shared_with=shared),
         "phases": tree,
     }

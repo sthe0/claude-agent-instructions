@@ -26,7 +26,7 @@ from types import SimpleNamespace
 import pytest
 
 from lib import config_root, engine_session_binding
-from plan_dashboard import attention, locate, model, web
+from plan_dashboard import attention, locate, model, snapshot, web
 from plan_dashboard_fixtures import build_fixture_root, read_only_guard, set_mtime
 from plan_dashboard_support import ALPHA, BETA, NOW, at, event, iso, isolated_home, make_state  # noqa: F401
 
@@ -217,19 +217,20 @@ def test_one_collect_reads_each_binding_file_once_and_lists_the_transcripts_once
     for harness in list(bindings)[::3]:
         put(root, harness, IDLE, age_minutes=4)
     engines = sorted({engine for driven in bindings.values() for engine in driven})
+    directories = [d for d in root.transcripts_root.iterdir() if d.is_dir()]
+    for directory in directories:
+        os.utime(directory, ns=(1_000_000_000, 1_000_000_000))
     reads, listings = [], []
-    real_read, real_glob = engine_session_binding._read, Path.glob
+    real_read, real_names = engine_session_binding._read, snapshot.TranscriptListing._names
     monkeypatch.setattr(engine_session_binding, "_read", lambda path: reads.append(path.name) or real_read(path))
-
-    def counting_glob(self, pattern, *args, **kwargs):
-        if self == root.transcripts_root:
-            listings.append(pattern)
-        return real_glob(self, pattern, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "glob", counting_glob)
+    monkeypatch.setattr(snapshot.TranscriptListing, "_names",
+                        staticmethod(lambda directory: listings.append(Path(directory).name) or real_names(directory)))
     overlays, _ = attention.collect(engines, None, root.transcripts_root)
     assert sorted(reads) == sorted(f"{harness}.json" for harness in bindings)
-    assert listings == ["*/*.jsonl"]
+    assert sorted(listings) == sorted(d.name for d in directories)
+    listings.clear()
+    attention.collect(engines, None, root.transcripts_root)
+    assert listings == []
     assert {engine for engine, row in overlays.items() if row["waiting"] == "idle"}
     for engine in engines:
         assert overlays[engine] == overlay(root, engine=engine)

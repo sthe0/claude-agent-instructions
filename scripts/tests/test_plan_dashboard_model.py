@@ -724,7 +724,7 @@ def twenty_task_root(tmp_path):
     return build_fixture_root(tmp_path, sessions, ledger_rows=LEDGER, now=NOW)
 
 
-def test_second_collect_opens_neither_the_ledger_nor_out_of_window_state(tmp_path):
+def test_second_collect_opens_no_unchanged_source_and_never_an_out_of_window_state(tmp_path):
     root = twenty_task_root(tmp_path)
     with recorded_opens() as first:
         collect(root)
@@ -733,7 +733,8 @@ def test_second_collect_opens_neither_the_ledger_nor_out_of_window_state(tmp_pat
     assert str(root.cost_log) in first and str(root.cost_log) not in second
     for opened in (first, second):
         assert not [p for p in opened if Path(p).name.startswith("out-")]
-    assert len([p for p in second if Path(p).name.startswith("in-")]) == 10
+    assert len([p for p in first if Path(p).name.startswith("in-")]) == 10
+    assert not [p for p in second if Path(p).name.startswith("in-")]
 
 
 def test_ledger_is_read_again_when_it_changes(tmp_path):
