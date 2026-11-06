@@ -313,7 +313,7 @@ class _FakeProc:
         return json.dumps({"result": "COMPLETED: done", "cost_usd": 0.5}), ""
 
 
-def _run_spawn(monkeypatch, tmp_path, session: str, child: str) -> None:
+def _run_spawn(monkeypatch, tmp_path, session: str, child: str, cost_log: "Path | None" = None) -> None:
     mod = _load_spawner()
     monkeypatch.setattr(mod.proc_tree, "launch_supervised", lambda cmd, **kw: _FakeProc())
     monkeypatch.setattr(mod.proc_tree, "install_teardown", lambda p: None)
@@ -321,7 +321,10 @@ def _run_spawn(monkeypatch, tmp_path, session: str, child: str) -> None:
     monkeypatch.setattr(mod, "_snapshot_transcripts", lambda *a, **k: set())
     monkeypatch.setattr(mod, "_discover_transcript_path", lambda *a, **k: None)
     monkeypatch.setattr(mod, "permissions_digest", lambda *a, **k: "")
-    monkeypatch.setattr(mod, "log_cost_entry", lambda entry: None)
+    if cost_log is None:
+        monkeypatch.setattr(mod, "log_cost_entry", lambda entry: None)
+    else:
+        monkeypatch.setattr(mod, "COST_LOG", cost_log)
     monkeypatch.setattr(mod, "deregister_child_scope", lambda *a, **k: None)
     monkeypatch.setattr(mod, "resolve_child_session_id", lambda *a, **k: child)
     monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/claude")
