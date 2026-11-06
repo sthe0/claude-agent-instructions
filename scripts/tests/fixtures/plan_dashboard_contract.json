@@ -1,0 +1,50 @@
+{
+ "contract_version": 1,
+ "about": "What the timing harness (scripts/tests/plan_dashboard_harness.py) and the dashboard agree on. The harness reads this file and never imports the dashboard; the dashboard's events test and the harness tests read it too.",
+ "snapshot": {
+  "path_rule": "${XDG_CACHE_HOME:-$HOME/.cache}/plan-dashboard/snapshot.json",
+  "temp_name": "snapshot.json.tmp-<pid>",
+  "layout": "one file with one section per row selection",
+  "schema": {
+   "version": 1,
+   "body_sha256": "sha256 of the sections body; a mismatch makes the file absent",
+   "sources": [{"path": "str", "kind": "state|binding|transcript|ledger", "dev": "int", "ino": "int", "size": "int", "mtime_ns": "int", "ctime_ns": "int"}]
+  },
+  "absent_when": ["missing", "damaged", "half-written", "foreign version", "unreadable"],
+  "written_on": "a clean exit, the quit key or SIGTERM: the dashboard writes the snapshot atomically (temporary name, then rename), emits snapshot_written, then exits",
+  "harness_save_run": "the harness ends a save run with SIGTERM and copies the snapshot only after snapshot_written; a run that emits no snapshot_written is a failed save run",
+  "tmux_listing": "the tmux window listing is re-listed on every cycle and is never served from the snapshot"
+ },
+ "screen": {
+  "columns_header": ["task", "wait", "session", "live"],
+  "wait_column": "the cell under the header 'wait', from its header offset to the next header's offset",
+  "old_marking": {"text": "~", "where": "wait cell", "meaning": "the value on screen came from the snapshot and the live check has not replaced it yet"},
+  "unread_marking": {"text": "?", "where": "wait cell", "meaning": "the figure has not been read yet"},
+  "confirmed_row": "a row whose wait cell holds neither '~' nor '?'",
+  "header_text": "total",
+  "row_marks": {"choice": "Q", "permission": "!", "idle": "…"},
+  "first_rows": "the first moment a line under the header carries a live-state word (active, idle, stale, done) in the 'live' column"
+ },
+ "events": {
+  "transport": "JSON lines {ev, t_ns, ...payload} written to the named pipe PATH under tui --events PATH (not stderr: Textual draws on fd 2); t_ns is time.monotonic_ns()",
+  "vocabulary": {
+   "rows_painted": {"new_only": false, "payload": {"from_snapshot": "bool, false in the old code", "rows": "int"}},
+   "mark_painted": {"new_only": false, "payload": {"task": "session id"}},
+   "mark_confirmed": {"new_only": false, "payload": {"task": "session id", "applied": "[path...] in the new code, 'all' in the old code"}, "rule": "emitted only after the live check read that task's changed sources; applied lists every source of that task read so far"},
+   "live_check_end": {"new_only": false, "payload": {"applied": "[path...] in the new code, 'all' in the old code"}},
+   "cycle_start": {"new_only": false, "payload": {"cycle": "int"}},
+   "cycle_end": {"new_only": false, "payload": {"cycle": "int", "applied": "[path...] in the new code, 'all' in the old code"}},
+   "first_screen_confirmed": {"new_only": true, "payload": {}, "rule": "every row of the first screen shows a value the live check confirmed"},
+   "last_old_cleared": {"new_only": true, "payload": {}, "rule": "the last row of the whole table lost its old marking"},
+   "snapshot_written": {"new_only": true, "payload": {"path": "str"}}
+  },
+  "old_code": "with every mark read live, the old code emits rows_painted{from_snapshot:false}, mark_painted and mark_confirmed{applied:'all'} for each task at the same moment, live_check_end{applied:'all'}, cycle_start and cycle_end{applied:'all'}"
+ },
+ "source_to_task": {
+  "state": "the task named in the state file",
+  "binding": "the tasks its harness session drives (the binding file's driven list)",
+  "transcript": "the tasks its harness session drives (the binding file's driven list), plus the task of the same name",
+  "ledger": "every task",
+  "tmux_listing": "every task"
+ }
+}

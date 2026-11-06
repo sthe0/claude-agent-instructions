@@ -73,6 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot.add_argument("--chat", metavar="ID", default=None)
     console = sub.add_parser("tui", parents=[shared_parser(), locator_parser()])
     console.add_argument("--once", action="store_true")
+    console.add_argument("--events", type=Path, default=None, metavar="PATH",
+                         help="write the moment stream to the named pipe PATH (timing harness)")
     console.add_argument("--interval", type=float, default=tui.DEFAULT_INTERVAL_S)
     page = sub.add_parser("web", parents=[shared_parser(), locator_parser()])
     page.add_argument("--port", type=int, default=DEFAULT_PORT)

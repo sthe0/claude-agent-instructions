@@ -28,9 +28,10 @@ from textual.binding import Binding  # noqa: E402
 from textual.containers import VerticalScroll  # noqa: E402
 from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane, Tree  # noqa: E402
 
-from plan_dashboard import locate, model, tui  # noqa: E402
+from plan_dashboard import events, locate, model, tui  # noqa: E402
 
 TICK_S = 0.5
+KEPT_CYCLES = 4
 CHAT_LOADING = "loading chat…"
 TREE_LOADING = "loading…"
 KEYS = (
@@ -43,6 +44,27 @@ KEY_ACTION_OWNERS = {"key": "global", "tree_key": "tree", "chat_key": "chat"}
 
 def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
+
+
+def note(app: "DashboardApp", ev: str, **payload) -> None:
+    """Stamp ``ev`` when the screen next repaints, so the stream and the screen agree to within a frame."""
+    if events.enabled():
+        app.call_after_refresh(lambda: events.emit(ev, **payload))
+
+
+def cycle_of(app: "DashboardApp", snapshot: dict) -> int | None:
+    return next((number for held, number in app.cycles if held is snapshot), None)
+
+
+def note_marks(app: "DashboardApp", overlay: dict | None) -> None:
+    """Every mark read is live here: each task's mark is painted and confirmed at the same moment."""
+    if overlay is None or not events.enabled():
+        return
+    for task, mark in (overlay.get("tasks") or {}).items():
+        if isinstance(mark, dict) and task not in app.confirmed:
+            app.confirmed.add(task)
+            note(app, "mark_painted", task=task)
+            note(app, "mark_confirmed", task=task, applied="all")
 
 
 def read_in_flight(app: "DashboardApp", group: str) -> bool:
@@ -224,6 +246,8 @@ async def read_overlay_for(app: "DashboardApp", snapshot: dict, issued_all: bool
     overlay, error, sessions = await in_daemon_thread(read)
     app.activity.update(sessions)
     overlay_ready(app, overlay, error, issued_all)
+    if (cycle := cycle_of(app, snapshot)) is not None:
+        note(app, "cycle_end", cycle=cycle, applied="all")
 
 
 def overlay_ready(app: "DashboardApp", overlay: dict | None, error: Exception | None, issued_all: bool) -> None:
@@ -231,6 +255,11 @@ def overlay_ready(app: "DashboardApp", overlay: dict | None, error: Exception | 
         app.overlay = overlay
     if app.snapshot is not None:
         show_table(app, app.snapshot, app.read_at, issued_all)
+    if overlay is not None:
+        note_marks(app, overlay)
+        if not app.live_check_ended:
+            app.live_check_ended = True
+            note(app, "live_check_end", applied="all")
     if error is not None and title_is_current(app, issued_all):
         show_read_error(app, error)
 
@@ -310,6 +339,7 @@ async def read_marks_for(app: "DashboardApp", ids: list[str], order) -> None:
     if computed is not None:
         app.marks.update(computed)
         show_marks(app, ids)
+        note_marks(app, {"tasks": computed})
     elif title_is_current(app, app.view.include_all):
         show_read_error(app, error)
 
@@ -511,6 +541,11 @@ class DashboardApp(App):
         self.marks: dict = {}
         self.marked: set = set()
         self.cursor_chosen = False
+        self.cycle = 0
+        self.cycles: list[tuple[dict, int]] = []
+        self.confirmed: set = set()
+        self.live_check_ended = False
+        self.rows_noted = False
 
     def check_action(self, action: str, parameters) -> bool:
         if action in KEY_ACTION_OWNERS:
@@ -547,9 +582,11 @@ class DashboardApp(App):
             return
         self._loading = True
         self.last_collect = self.clock()
-        self.run_worker(self._load(), group="collect")
+        self.cycle += 1
+        events.emit("cycle_start", cycle=self.cycle)
+        self.run_worker(self._load(self.cycle), group="collect")
 
-    async def _load(self) -> None:
+    async def _load(self, cycle: int) -> None:
         now, include_all = self.last_collect, self.view.include_all
         try:
             snapshot = await in_daemon_thread(lambda: model.collect(
@@ -559,7 +596,11 @@ class DashboardApp(App):
             self._failed(exc)
             return
         self.snapshot, self.read_at = snapshot, now
+        self.cycles = [*self.cycles[-(KEPT_CYCLES - 1):], (snapshot, cycle)]
         show_table(self, snapshot, now, include_all)
+        if not self.rows_noted:
+            self.rows_noted = True
+            note(self, "rows_painted", from_snapshot=False, rows=len(snapshot["tasks"]))
         self._finish_load()
         start_order_read(self, snapshot, include_all)
 
@@ -643,7 +684,10 @@ def main(argv=None) -> int:
     cli = _load_cli()
     parser = argparse.ArgumentParser(parents=[cli.shared_parser(), cli.locator_parser()])
     parser.add_argument("--interval", type=float, default=tui.DEFAULT_INTERVAL_S)
+    parser.add_argument("--events", type=Path, default=None)
     args = parser.parse_args(argv)
+    if args.events:
+        events.enable_path(args.events)
     DashboardApp(state_root=args.state_root, cost_log=args.cost_log, transcripts_root=args.transcripts_root,
                  window_hours=args.window_hours, include_all=args.include_all, sessions=args.sessions,
                  interval=args.interval, locator=locate.select_or_none(args.plugin_dir, args.locator)).run()

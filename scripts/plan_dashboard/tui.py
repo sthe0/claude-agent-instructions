@@ -639,6 +639,8 @@ def launch_argv(args) -> list[str]:
             "--interval", str(args.interval), "--cost-log", str(args.cost_log)]
     if args.include_all:
         argv.append("--all")
+    if getattr(args, "events", None):
+        argv += ["--events", str(args.events)]
     for session in args.sessions:
         argv += ["--session", session]
     if args.transcripts_root is not None:
