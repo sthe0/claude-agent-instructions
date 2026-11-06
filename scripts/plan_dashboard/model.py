@@ -218,10 +218,13 @@ def _ledger_sums(cost_log) -> dict:
     with CACHE_LOCK:
         entry = _SUMS.get("entry")
         mine = entry is not None and entry["path"] == str(path)
-        if mine and snapshot.same_identity("ledger", entry["ident"], ident):
+        same = mine and snapshot.same_identity("ledger", entry["ident"], ident)
+        if same and entry["settled"]:
             return entry
-        appended = (mine and entry["ident"][1] == st.st_ino and st.st_size > entry["offset"]
-                    and entry["ident"][2] <= st.st_size)
+        # the ledger is append-only: a read inside the mtime step that left the identity as it was is
+        # finished from its offset (an append changes the size), not read from the start
+        appended = (mine and entry["ident"][1] == st.st_ino and entry["ident"][2] <= st.st_size
+                    and (st.st_size > entry["offset"] or same))
         read_ns = snapshot.now_ns()
         try:
             base = entry if appended and _anchor(path, entry["offset"]) == entry["anchor"] else None
@@ -230,19 +233,18 @@ def _ledger_sums(cost_log) -> dict:
             _SUMS.pop("entry", None)
             return {"by_session": {}, "by_plan": {}, "unread": True}
         snapshot.OBSERVED.note_read(str(path))
-        entry = {"path": str(path), "ident": ident, **sums, "unread": False}
-        if snapshot.settled(st, read_ns):
-            _SUMS["entry"] = entry
-        else:
-            _SUMS.pop("entry", None)
+        entry = _SUMS["entry"] = {"path": str(path), "ident": ident, **sums, "unread": False,
+                                  "settled": snapshot.settled(st, read_ns)}
         return entry
 
 
 def export_sums(identities) -> dict | None:
-    """The kept ledger sums for the snapshot, when the ledger's identity is among ``identities``."""
+    """The kept ledger sums for the snapshot, when the ledger's recorded identity is the one they were read
+    under (a spawn may have appended between the read and the stat the snapshot records)."""
     with CACHE_LOCK:
         entry = _SUMS.get("entry")
-    if entry is None or entry["path"] not in identities:
+    if (entry is None or not entry["settled"] or entry["path"] not in identities
+            or tuple(entry["ident"]) != tuple(identities[entry["path"]])):
         return None
     return {key: entry[key] for key in ("path", "offset", "anchor", "by_session", "by_plan")}
 
@@ -255,7 +257,7 @@ def seed_sums(data, identities: dict[str, tuple]) -> None:
     try:
         entry = {"path": str(data["path"]), "ident": tuple(identities[data["path"]]), "offset": int(data["offset"]),
                  "anchor": str(data["anchor"]), "by_session": dict(data["by_session"]),
-                 "by_plan": dict(data["by_plan"]), "unread": False}
+                 "by_plan": dict(data["by_plan"]), "unread": False, "settled": True}
     except (KeyError, TypeError, ValueError):
         return
     with CACHE_LOCK:

@@ -205,16 +205,20 @@ def waiting_count(snapshot: dict, attention_payload) -> int:
     return tasks + sum(1 for row in _session_rows(attention_payload) if row.get("waiting") in NEEDS_YOU)
 
 
-def overview_header(snapshot: dict, now: dt.datetime, attention_payload=None, counted=None) -> str:
+def overview_header(snapshot: dict, now: dt.datetime, attention_payload=None, counted=None,
+                    old=frozenset()) -> str:
     """The line above the table: host, time, how many listed tasks are active, idle, in all, and
     how many rows wait for the user, counted from ``counted`` when given (all mode counts the live
-    overlay, not the marks it shows)."""
+    overlay, not the marks it shows). ``old`` names the figures that still come from a snapshot: ``counts``
+    (active, idle, total) and ``waiting``; each is shown behind ``~`` until a live read replaces it."""
     tasks = snapshot["tasks"]
     counts = {band: sum(1 for t in tasks if t["liveness"] == band) for band in ("active", "idle")}
     clock = f"{now:%Y-%m-%d %H:%M:%S %Z}".strip()
     waiting = waiting_count(snapshot, attention_payload if counted is None else counted)
-    return (f"{snapshot['hostname']}  {clock}  {counts['active']} active  {counts['idle']} idle  {len(tasks)} total"
-            f"  waiting: {waiting}")
+    mark = {name: OLD_MARK if name in old else "" for name in ("counts", "waiting")}
+    return (f"{snapshot['hostname']}  {clock}  {mark['counts']}{counts['active']} active  "
+            f"{mark['counts']}{counts['idle']} idle  {mark['counts']}{len(tasks)} total"
+            f"  waiting: {mark['waiting']}{waiting}")
 
 
 def task_row(task: dict, now: dt.datetime, attention_payload=None, old=frozenset()) -> dict:
@@ -635,10 +639,9 @@ def write_snapshot(path, key: str, section: dict) -> Path:
     caches hold (the next start seeds them); sections of other selections stay as rows and marks only."""
     sources = snapshot_store.OBSERVED.sources()
     identities = snapshot_store.identities_of(sources)
-    paths = set(identities)
-    values = {"state": snapshot_store.export_values(snapshot_store.STATES, paths),
-              "binding": snapshot_store.export_values(snapshot_store.BINDINGS.files, paths),
-              "tails": {p: tail for p, tail in attention.export_tails().items() if p in paths},
+    values = {"state": snapshot_store.export_values(snapshot_store.STATES, identities),
+              "binding": snapshot_store.export_values(snapshot_store.BINDINGS.files, identities),
+              "tails": attention.export_tails(identities),
               "ledger": model.export_sums(identities)}
     kept = snapshot_store.load(path)
     others = {name: {k: v for k, v in other.items() if k != "values"}

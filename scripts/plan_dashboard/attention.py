@@ -106,10 +106,11 @@ class Tail:
         return tail
 
 
-def export_tails() -> dict[str, dict]:
-    """The tails whose file identity is known, by path, for the snapshot."""
+def export_tails(identities: dict[str, tuple]) -> dict[str, dict]:
+    """The tails read under the very identity the snapshot records for their file, by path."""
     with _LOCK:
-        return {key: tail.to_json() for key, tail in _CACHE.items() if tail.ident is not None}
+        return {key: tail.to_json() for key, tail in _CACHE.items()
+                if tail.ident is not None and key in identities and tuple(tail.ident) == tuple(identities[key])}
 
 
 def seed_tails(tails, identities: dict[str, tuple]) -> None:

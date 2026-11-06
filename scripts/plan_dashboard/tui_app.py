@@ -155,6 +155,15 @@ def counted_marks(app: "DashboardApp") -> dict | None:
     return app.overlay if app.overlay is not None else app.stored
 
 
+def header_old(app: "DashboardApp", shown: dict) -> frozenset[str]:
+    """The header figures still taken from the snapshot: the counts while the rows drawn are the stored ones,
+    the waiting figure until the live overlay is read."""
+    if app.stored is None:
+        return frozenset()
+    return frozenset(name for name, stored in (("waiting", app.overlay is None), ("counts", shown is not app.snapshot))
+                     if stored)
+
+
 def stored_marks(app: "DashboardApp") -> dict | None:
     """The snapshot's marks of the rows still behind ``~``; None when the start had no snapshot."""
     if app.stored is None:
@@ -424,8 +433,8 @@ def show_table(app: "DashboardApp", snapshot: dict, now: dt.datetime, issued_all
     last read: the table waits for neither."""
     marks = shown_marks(app)
     rows = tui.overview_rows(snapshot, now, marks, app.activity, app.old_ids)
-    app.query_one("#overview-head", Static).update(Text(tui.overview_header(snapshot, now, marks,
-                                                                            counted_marks(app))))
+    app.query_one("#overview-head", Static).update(Text(tui.overview_header(
+        snapshot, now, marks, counted_marks(app), header_old(app, snapshot))))
     ids = tuple(row["session_id"] for row in rows)
     app.view = tui.reconcile(app.view, ids, (row["session_id"] for row in rows if row["kind"] == "session"))
     table = app.query_one(DataTable)
@@ -448,6 +457,16 @@ def paint_stored(app: "DashboardApp", section: dict) -> None:
     show_table(app, stored, now, app.view.include_all)
     app.rows_noted = True
     note(app, "rows_painted", from_snapshot=True, rows=len(app.view.session_ids))
+
+
+def forget_snapshot(app: "DashboardApp") -> None:
+    """Treat a snapshot that failed to restore or paint as absent: what it painted and what it seeded go, and
+    the start reads everything live."""
+    app.stored, app.activity, app.old_ids, app.rows_noted = None, {}, frozenset(), False
+    app.query_one(DataTable).clear()
+    app.query_one("#overview-head", Static).update("")
+    tui.attention.clear_cache()
+    model.clear_cache()
 
 
 def show_tree_loading(app: "DashboardApp") -> None:
@@ -670,9 +689,11 @@ class DashboardApp(App):
     async def _start(self) -> None:
         """Paint the rows the snapshot holds for this selection, behind ``~``, then read live."""
         key = snapshot_store.selection_key(self.view.include_all, self.window_hours, self.sessions)
-        section, _ = await in_daemon_thread(lambda: attempt(lambda: tui.restore_snapshot(self.snapshot_path, key)))
+        section, error = await in_daemon_thread(lambda: attempt(lambda: tui.restore_snapshot(self.snapshot_path, key)))
         if section is not None:
-            paint_stored(self, section)
+            error = attempt(lambda: paint_stored(self, section))[1]
+        if error is not None:
+            forget_snapshot(self)
         self.started = True
         self.reload()
 

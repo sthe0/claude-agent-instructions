@@ -12,7 +12,8 @@ asked again every cycle.
 
 The snapshot is one JSON file, ``${XDG_CACHE_HOME:-$HOME/.cache}/plan-dashboard/snapshot.json``::
 
-    {"version": 1, "body_sha256": sha256 of "sections", "sections": {<selection>: section},
+    {"version": 1, "code": code_version(), "body_sha256": sha256 of "sections", "sources_sha256": sha256 of
+     "sources", "sections": {<selection>: section},
      "sources": [{"path", "kind", "dev", "ino", "size", "mtime_ns", "ctime_ns"}, ...]}
 
 ``sources`` lists the settled identities of the state, binding and ledger files and the watched transcripts as
@@ -23,6 +24,7 @@ a missing, damaged, half-written, foreign-version or unreadable file is read as 
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -34,11 +36,16 @@ from pathlib import Path
 from lib import config_root, engine_session_binding
 
 VERSION = 1
-MTIME_STEP_NS = 1_000_000
+# Coarser than the kernel's timestamp tick (4-10 ms before Linux 6.13) and than coarse file systems
+# (1-2 s): a write inside this window of a read may leave the identity as it was.
+MTIME_STEP_NS = 2_000_000_000
 CACHE_DIRNAME = "plan-dashboard"
 FILE_NAME = "snapshot.json"
 SOURCE_KINDS = ("state", "binding", "transcript", "ledger")
 IDENTITY_KEYS = ("dev", "ino", "size", "mtime_ns", "ctime_ns")
+CODE_FILES = (*(Path(__file__).with_name(name) for name in (
+    "model.py", "attention.py", "snapshot.py", "tui.py", "tui_app.py", "locate.py")),
+    Path(engine_session_binding.__file__))
 MISS = object()
 
 _LOCK = threading.Lock()
@@ -241,13 +248,14 @@ class BindingScan:
         driven = {stem: self.files.fetch(path, st, _driven) for stem, (path, st) in sorted(found.items())}
         self.files.prune({path for path, _ in found.values()})
         key = fingerprint((str(self.directory()), *((stem, identity_of(st)) for stem, (_, st) in sorted(found.items()))))
-        if self.memo is None or self.memo[0] != key:
+        memo = self.memo
+        if memo is None or memo[0] != key:
             index: dict[str, list[str]] = {}
             for stem, engines in driven.items():
                 for engine in engines:
                     index.setdefault(engine, []).append(stem)
-            self.memo = (key, index, driven)
-        return self.memo[1], self.memo[2]
+            memo = self.memo = (key, index, driven)
+        return memo[1], memo[2]
 
     def driven(self) -> dict[str, list[str]]:
         """The engine sessions each harness session drives, as of the last ``read``."""
@@ -262,9 +270,11 @@ class BindingScan:
 BINDINGS = BindingScan()
 
 
-def export_values(cache: IdentityCache, paths) -> dict:
-    """The values of ``cache`` for the ``paths`` whose identity the snapshot records as settled."""
-    return {path: value for path, (_, value) in cache.entries().items() if path in paths}
+def export_values(cache: IdentityCache, identities: dict[str, tuple]) -> dict:
+    """The values of ``cache`` whose file the snapshot records under the very identity the value was read
+    under: a value read before the file moved on must not be saved under the identity it moved to."""
+    return {path: value for path, (ident, value) in cache.entries().items()
+            if path in identities and tuple(ident) == tuple(identities[path])}
 
 
 def seed_values(cache: IdentityCache, values, identities: dict[str, tuple]) -> None:
@@ -393,16 +403,39 @@ def default_path(environ=None) -> Path:
     return Path(base) / CACHE_DIRNAME / FILE_NAME
 
 
-def body_sha256(sections) -> str:
-    body = json.dumps(sections, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+def body_sha256(body) -> str:
+    text = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+@functools.lru_cache(maxsize=1)
+def code_version() -> str:
+    """A hash of the modules that compute what the snapshot stores (state digests, tails, sums, row shape).
+    A snapshot written by other code is read as absent: its values are kept for as long as a file's identity
+    holds, so values another computation made would otherwise outlive the fix of that computation. An
+    unreadable module gives a version no other process shares."""
+    digest = hashlib.sha256()
+    for path in CODE_FILES:
+        try:
+            digest.update(path.name.encode("utf-8") + b"\0" + path.read_bytes() + b"\0")
+        except OSError:
+            return f"unreadable-{os.urandom(8).hex()}"
+    return digest.hexdigest()
+
+
+def _remove_stale_temporaries(path: Path) -> None:
+    for stale in path.parent.glob(f"{path.name}.tmp-*"):
+        stale.unlink(missing_ok=True)
 
 
 def write(path, sections: dict, sources: list[dict]) -> Path:
-    """Write the snapshot atomically: a temporary name beside it, flushed to disk, then renamed over it."""
+    """Write the snapshot atomically: a temporary name beside it, flushed to disk, then renamed over it.
+    ``body_sha256`` covers the sections, as the contract says; ``sources_sha256`` covers the identities."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    document = {"version": VERSION, "body_sha256": body_sha256(sections), "sections": sections, "sources": sources}
+    document = {"version": VERSION, "code": code_version(), "body_sha256": body_sha256(sections),
+                "sources_sha256": body_sha256(sources), "sections": sections, "sources": sources}
+    _remove_stale_temporaries(path)
     temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}")
     try:
         with open(temporary, "w", encoding="utf-8") as handle:
@@ -423,16 +456,18 @@ def _valid_source(item) -> bool:
 
 def load(path) -> dict | None:
     """The snapshot at ``path``, or None when it is missing, unreadable, half-written, of another version or
-    its ``sections`` do not match ``body_sha256``."""
+    written by other code, or its sections or sources do not match their hashes."""
     try:
         document = json.loads(Path(path).read_bytes())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     if not isinstance(document, dict) or document.get("version") != VERSION or isinstance(document.get("version"), bool):
+        return None
+    if document.get("code") != code_version():
         return None
     sections, sources = document.get("sections"), document.get("sources")
     if not isinstance(sections, dict) or not isinstance(sources, list) or not all(map(_valid_source, sources)):
         return None
-    if document.get("body_sha256") != body_sha256(sections):
+    if document.get("body_sha256") != body_sha256(sections) or document.get("sources_sha256") != body_sha256(sources):
         return None
     return document
