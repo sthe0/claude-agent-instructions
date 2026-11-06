@@ -76,7 +76,9 @@ from .cli_common import (
     _close_armings_at_user_approval,
     _open_armings_after_user_approval,
     _settle_at_agent_approval,
-    _unmatched_live_stage_blockers,
+    _apply_continuation_at_approval,
+    _continuation_at_approval,
+    _continuation_blockers,
     _require,
     _second_current_stage_refusal,
     _clear_since_user_decision,
@@ -480,6 +482,15 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
                          "cannot approve: the plan at plan_path does not meet submission "
                          "requirements (edit it and re-run approve)",
                          data={"problems": submission})
+    # The continuation of every live stage is decided again against the approved plan, on the
+    # bytes now in plan_path. A self-approval refused for it returns before anything is saved,
+    # so the refresh above (and the review trigger's save below) leave no trace on the session.
+    _continuation = _continuation_at_approval(state)
+    if args.by and args.by.strip().casefold() == AGENT_ACTOR and _continuation is not None \
+            and not _continuation.ok:
+        return Directive(False, state.node, "await_user_approval",
+                         "cannot approve --by agent: a live stage has no clean continuation in this plan",
+                         data={"blockers": _continuation_blockers(_continuation)})
     # Read plan_path's bytes ONCE and derive `_approved_doc`, the digest stamped
     # below (seam (c)) and the snapshot written near the end of this function from
     # that SAME buffer -- three separate reads of the same file (`load_plan`, then
@@ -587,7 +598,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
             state, store, args, effort_segments.ACT_APPROVE_BY_AGENT, "approve --by agent")
         if _fire_refusal is not None:
             return _fire_refusal
-        blockers = blockers + _carried_live_stage_blockers(state, _identity_order) + _unmatched_live_stage_blockers(state)
+        blockers = blockers + _carried_live_stage_blockers(state, _identity_order)
     _log_gate(state, "plan_approval", blockers, passed=not blockers)
     if blockers:
         fired = _evaluate_review_trigger(state, store, review_blockers)
@@ -650,6 +661,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         state.log("skip_optional", by=args.by, stages=skip_optional)
     effort.arm(state, now=_effort_now(store, state))  # opens the effort-divergence window — see effort.py's ARMED-ONLY
     _approved_at = _utcnow()
+    _apply_continuation_at_approval(state, _continuation)
     _closed_armings = [] if by_agent else _close_armings_at_user_approval(state, store, args, args.by, _approved_at)
     _adopt_order_identities(state, _identity_order, _approved_at)
     if by_agent:

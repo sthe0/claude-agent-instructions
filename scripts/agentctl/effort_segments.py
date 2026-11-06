@@ -12,7 +12,10 @@ module and save.
 """
 from __future__ import annotations
 
+import logging
 from collections import Counter
+
+LOG = logging.getLogger(__name__)
 
 PLANNING = "planning"
 CLOSING = "closing"
@@ -335,20 +338,32 @@ def _owner_at(ledger: dict, ts: float) -> dict | None:
     return None
 
 
+def _nearest_arming(ledger: dict, ts: float) -> dict:
+    """The arming with a span closest to `ts`, the later-opened one on a tie."""
+    def gap(span):
+        end = span["end"] if span["end"] is not None else ts
+        return max(span["start"] - ts, ts - end, 0.0)
+    return min(((gap(span), -a["seq"], a) for a in ledger["armings"] for span in spans_of(a)),
+               key=lambda c: c[:2])[2]
+
+
 def book(ledger: dict, written_ts: float, usd: float, minutes: float, origin: str) -> dict | None:
     """Add a booking to the arming whose span covers its write time and return that arming, a
     closed one included: a row written while it was current and ingested later still belongs to
     it. A booking older than the ledger's session_floor is not booked. From the floor on every
-    write time has an owner; an uncovered one is a handoff the engine failed to make. A ledger
+    write time has an owner; an uncovered one is a handoff the engine failed to make, booked to
+    the nearest arming under a logged warning so the spend is not lost. A ledger
     holding no session_floor takes no such bound and books nothing before its first span."""
     floor = ledger.get("session_floor")
     if floor is not None and written_ts < floor:
         return None
     arming = _owner_at(ledger, written_ts)
     if arming is None:
-        assert floor is None or not ledger.get("armings"), (
-            f"write time {written_ts} at or after session_floor {floor} is covered by no span")
-        return None
+        if floor is None or not ledger.get("armings"):
+            return None
+        arming = _nearest_arming(ledger, written_ts)
+        LOG.warning("write time %s at or after session_floor %s is covered by no span; booked to "
+                    "the nearest arming %s", written_ts, floor, arming["arming_id"])
     arming["booked"][SCALE_USD] += float(usd)
     arming["booked"][SCALE_MINUTES] += float(minutes)
     origins = arming.setdefault("origins", {})
@@ -422,14 +437,17 @@ def _identity_key(record: dict, supplier_uid: dict) -> tuple:
     return (_freeze(record["key"]), tuple(edges))
 
 
-def match_identities(prev: list[dict], new: list[dict]) -> dict[int, str | None]:
+def match_identities(prev: list[dict], new: list[dict],
+                     pinned: dict[int, str] | None = None) -> dict[int, str | None]:
     """Each new stage's prior identity, by new index; None means a fresh identity.
 
     A record is {uid (prev only), index, key, edges: [(supplier_index, *edge_rest)]}: `key` is
     the stage's definition without its edges. Suppliers resolve first, so the identity key
     compared holds supplier identities, never indices: a stage survives reindexing, and a
     stage whose supplier got a fresh identity, or whose key two prior or two new stages share,
-    gets a fresh one."""
+    gets a fresh one. `pinned` ({new index: uid}) fixes a stage's identity before its consumers
+    resolve, so they keep theirs; a pinned uid is no other stage's match."""
+    pinned = pinned or {}
     prev_uid = {r["index"]: r["uid"] for r in prev}
     prev_counts: Counter = Counter()
     prev_by_key: dict[tuple, str] = {}
@@ -453,7 +471,12 @@ def match_identities(prev: list[dict], new: list[dict]) -> dict[int, str | None]
         new_counts = Counter(keys.values())
         for record in ready:
             key = keys[record["index"]]
-            uid = prev_by_key.get(key) if prev_counts[key] == 1 and new_counts[key] == 1 else None
+            if record["index"] in pinned:
+                uid = pinned[record["index"]]
+            else:
+                uid = prev_by_key.get(key) if prev_counts[key] == 1 and new_counts[key] == 1 else None
+                if uid in pinned.values():
+                    uid = None
             resolved[record["index"]] = uid
             tokens[record["index"]] = uid if uid is not None else f"fresh:{record['index']}"
         pending = [r for r in pending if r["index"] not in resolved]

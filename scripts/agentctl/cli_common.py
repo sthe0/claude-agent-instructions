@@ -24,6 +24,7 @@ from . import (
     child_runs,
     cost,
     effort,
+    effort_continuation,
     effort_segments,
     exempt_paths,
     gates,
@@ -544,18 +545,120 @@ def _settle_carried_drops(state: SessionState, key: str, dropped: list[str], now
         _close_at_multiple(ledger, arming, effort_segments.ACT_APPROVE_BY_USER, now)
 
 
-def _rematch_stage_uids(state: SessionState, new_stages) -> None:
-    """Re-key the live frame's identities to `new_stages`: a stage matched across indices keeps its
-    identity, any other gets a fresh one, so it starts from zero."""
+def _venues(state: SessionState) -> tuple:
+    return tuple(v for v in (state.repo_root, state.delivery_worktree) if v)
+
+
+def _continuation_old_records(state: SessionState) -> list[dict]:
+    """The approved plan of the live frame as the continuation rule reads it: identity, settled
+    status by identity, normalized outputs and the check each stage promises."""
+    venues = _venues(state)
+    records = []
+    for s in state.stages:
+        uid = state.stage_uid(s.index)
+        if uid is None:
+            continue
+        records.append({
+            "index": s.index, "uid": uid, "title": s.title, "settled": is_settled(s),
+            "outputs": [effort_continuation.normalize(e, venues) for e in s.output_artifacts],
+            "record": _stage_identity_record(s, uid),
+            "check": [s.criterion.done_criterion, s.criterion.verify_command],
+        })
+    return records
+
+
+def _continuation_new_records(state: SessionState, stages) -> list[dict]:
+    venues = _venues(state)
+    return [{
+        "index": s.index, "title": s.title,
+        "outputs": [effort_continuation.normalize(e, venues) for e in s.output_artifacts],
+        "record": _stage_identity_record(s),
+        "check": [s.criterion.done_criterion, s.criterion.verify_command],
+    } for s in stages]
+
+
+def _continuation_base(state: SessionState) -> list[dict]:
+    """The approved plan the next approval is decided against: the first replan since an approval
+    records it, and later replans and edits at PLAN_READY keep reading it."""
+    stored = state.effort_segments.get("continuation_base")
+    if stored and stored["path"] == frame_path(state.plan_stack):
+        return stored["stages"]
+    return _continuation_old_records(state)
+
+
+def _live_stage_uids(state: SessionState, old: list[dict]) -> set:
+    ledger = state.effort_segments
+    if effort_segments.window_arming(ledger) is not None:
+        return set()
+    armed = {a["segment"].removeprefix(effort_segments.STAGE_PREFIX)
+             for a in ledger.get("armings") or []
+             if a["closed_at"] is None and a["segment"].startswith(effort_segments.STAGE_PREFIX)}
+    return armed & {o["uid"] for o in old}
+
+
+def continuation_decision(state: SessionState, new_stages) -> tuple:
+    """(decision, the old records it was made against) for `new_stages` in the live frame. A live
+    stage with no readable approved-plan snapshot to check against breaks the check."""
+    old = _continuation_base(state)
+    live = _live_stage_uids(state, old)
+    decision = effort_continuation.decide(old, _continuation_new_records(state, new_stages), live)
+    snapshot = state.plan_snapshot_path
+    if live and not (snapshot and Path(snapshot).is_file()):
+        decision.breaches.append(
+            "no readable approved-plan snapshot to check the live stage's continuation against")
+    return decision, old
+
+
+def _rekey_stage_uids(state: SessionState, stages, matches: dict) -> None:
+    """The live frame's identities for `stages`: a matched stage keeps its identity, any other
+    keeps one it was already given this round or gets a fresh one, so it starts from zero."""
     path = frame_path(state.plan_stack)
-    previous = [_stage_identity_record(s, state.stage_uid(s.index))
-                for s in state.stages if state.stage_uid(s.index)]
-    matches = effort_segments.match_identities(
-        previous, [_stage_identity_record(s) for s in new_stages])
+    known = {o["uid"] for o in _continuation_base(state)}
+    given = {s.index: state.stage_uids.get(stage_uid_key(path, s.index)) for s in stages}
     for s in state.stages:
         state.stage_uids.pop(stage_uid_key(path, s.index), None)
-    for s in new_stages:
-        state.stage_uids[stage_uid_key(path, s.index)] = matches.get(s.index) or new_stage_uid()
+    for s in stages:
+        kept = given[s.index] if given[s.index] not in known else None
+        state.stage_uids[stage_uid_key(path, s.index)] = matches.get(s.index) or kept or new_stage_uid()
+
+
+def _rematch_stage_uids(state: SessionState, new_stages, decision=None) -> None:
+    """Re-key the live frame's identities to `new_stages` under the continuation decision."""
+    if decision is None:
+        decision, _ = continuation_decision(state, new_stages)
+    _rekey_stage_uids(state, new_stages, decision.matches)
+
+
+def _store_continuation_base(state: SessionState, old: list[dict]) -> None:
+    ledger = state.effort_segments
+    stored = ledger.get("continuation_base")
+    if not stored or stored["path"] != frame_path(state.plan_stack):
+        ledger["continuation_base"] = {"path": frame_path(state.plan_stack), "stages": old}
+
+
+def _continuation_at_approval(state: SessionState):
+    """The decision an approval of the bytes now in `state.stages` rests on, or None when no
+    replan since the last approval left a base to decide against."""
+    stored = state.effort_segments.get("continuation_base")
+    if not stored or stored["path"] != frame_path(state.plan_stack):
+        return None
+    return continuation_decision(state, state.stages)[0]
+
+
+def _continuation_blockers(decision) -> list[str]:
+    if decision is None:
+        return []
+    return [f"--by agent refused: {reason}; only the customer's approval may drop or move it"
+            for reason in decision.reasons()]
+
+
+def _apply_continuation_at_approval(state: SessionState, decision) -> None:
+    """An approval decided against the base re-keys the identities to its decision, so a stage the
+    edited bytes reindexed keeps its arming, and ends the base."""
+    if decision is None:
+        return
+    _rekey_stage_uids(state, state.stages, decision.matches)
+    state.effort_segments.pop("continuation_base", None)
 
 
 def _note_user_approved_tiers(state: SessionState) -> None:
@@ -747,22 +850,6 @@ def _settle_at_agent_approval(state: SessionState, now: float) -> None:
         arming = effort_segments.open_arming_of(ledger, segment)
         if arming is not None and not _live_under_its_subplan(state, arming):
             _close_at_multiple(ledger, arming, effort_segments.ACT_APPROVE_BY_AGENT, now)
-
-
-def _unmatched_live_stage_blockers(state: SessionState) -> list[str]:
-    """A self-approval may not leave behind the stage live in this session: only the customer may
-    drop it. A parent in an outer frame keeps its identity, so it is not unmatched."""
-    ledger = state.effort_segments
-    if effort_segments.window_arming(ledger) is not None:
-        return []
-    known = set(state.stage_uids.values())
-    return [
-        f"--by agent refused: live stage {a.get('title')!r} has no match in this plan; "
-        "only the customer's approval may drop it"
-        for a in ledger.get("armings") or []
-        if a["closed_at"] is None and a["segment"].startswith(effort_segments.STAGE_PREFIX)
-        and a["segment"].removeprefix(effort_segments.STAGE_PREFIX) not in known
-    ]
 
 
 def _live_stage_arming(state: SessionState) -> dict | None:

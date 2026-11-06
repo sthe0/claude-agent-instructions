@@ -104,6 +104,8 @@ from .cli_common import (
     _cost_rows,
     _refresh_spend,
     _rematch_stage_uids,
+    _store_continuation_base,
+    continuation_decision,
     _second_current_stage_refusal,
     _utcnow,
     _effort_now,
@@ -671,6 +673,8 @@ class _ReplanContext:
     echo_advice: list[str] = field(default_factory=list)
     diagnosing: bool = False
     replan_cause: dict = field(default_factory=dict)
+    continuation: Any = None
+    continuation_base: Any = None
 
 
 def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
@@ -708,6 +712,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     if refusal is not None:
         return refusal
     _replan_record_acceptance(ctx)
+    ctx.continuation, ctx.continuation_base = continuation_decision(ctx.state, ctx.new.stages)
+    if not ctx.continuation.ok:
+        ctx.auth_kind = "substantive"
     apply = {"no_change": _replan_apply_no_change,
              "refinement": _replan_apply_refinement}.get(ctx.auth_kind, _replan_apply_substantive)
     return apply(ctx)
@@ -1040,6 +1047,11 @@ def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
             )
             replan_data = {"blockers": prblock, "plan_review_round_release": round_release,
                            "review_delta": delta}
+            changed = continuation_decision(state, review_doc.stages)[0].check_changed if review_doc else []
+            if changed:
+                replan_data["check_changed"] = changed
+                message += (f"; check_changed: stage(s) {changed} change the done_criterion or "
+                            "verify_command of a live stage, so the review must judge that check")
         return Directive(False, state.node, "plan_review", message, data=replan_data)
     ctx.gate_state, ctx.carry_change, ctx.trigger_exit = gate_state, carry_change, trigger_exit
     return None
@@ -1632,7 +1644,8 @@ def _replan_apply_substantive(ctx: _ReplanContext) -> Directive:
             not is_settled(ns) and gates.is_declined_stage(ns, declined_issues, declined_titles)
         ):
             ns.outcome.declined = True
-    _rematch_stage_uids(state, new.stages)
+    _store_continuation_base(state, ctx.continuation_base)
+    _rematch_stage_uids(state, new.stages, ctx.continuation)
     state.stages = new.stages
     _sync_venue_from_plan(state, new)
     state.final_check = new.meta.final_check
@@ -1644,11 +1657,11 @@ def _replan_apply_substantive(ctx: _ReplanContext) -> Directive:
     return _replan_to_plan_ready(
         state, store, new, echo_advice, trigger_exit=trigger_exit, kind="substantive", plan=args.plan,
         prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
-        change_class=change_class, **replan_cause)
+        change_class=change_class, continuation=ctx.continuation, **replan_cause)
 
 
 def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advice: list[str],
-                          *, trigger_exit: str | None, **log_fields) -> Directive:
+                          *, trigger_exit: str | None, continuation=None, **log_fields) -> Directive:
     """Re-arm the plan-approval gate and park the session at PLAN_READY after a replan
     that needs the plan approved again, logging `log_fields` as the `replan` event. The
     approved plan picks the next stage afresh, so no stage stays current. `trigger_exit`
@@ -1656,6 +1669,10 @@ def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advi
     state.current_stage = None
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
+    if continuation is not None and continuation.check_changed:
+        log_fields["check_changed"] = list(continuation.check_changed)
+    if continuation is not None and not continuation.ok:
+        log_fields["continuation_breaches"] = continuation.reasons()
     state.log("replan", **log_fields)
     _count_replan(state, log_fields["change_class"])
     effort.rederive(state)  # re-derive AFTER logging so this replan is counted
@@ -1673,7 +1690,11 @@ def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advi
         **({"review_trigger_exit": _trigger_exit_text(trigger_exit, override)}
            if trigger_exit is not None else {}),
     }
-    if autonomy["action"] == "self_approve":
+    if continuation is not None and not continuation.ok:
+        directive_data["continuation_breaches"] = continuation.reasons()
+    if continuation is not None and continuation.check_changed:
+        directive_data["check_changed"] = list(continuation.check_changed)
+    if autonomy["action"] == "self_approve" and (continuation is None or continuation.ok):
         return _with_advisories(Directive(
             True, state.node, "self_approve",
             _self_approve_detail(autonomy, replan=True),
