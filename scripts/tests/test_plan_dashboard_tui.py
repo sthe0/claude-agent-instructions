@@ -992,10 +992,11 @@ def test_textual_importers_sees_every_import_form_and_nothing_else(tmp_path):
     assert found == {"plain.py", "from_import.py", "dotted.py", "inside.py"}
 
 
-def test_textual_is_imported_only_by_the_app_and_its_test():
+def test_textual_is_imported_only_by_the_app_the_start_probe_and_the_app_test():
     checked = [*sorted((SCRIPTS / "plan_dashboard").glob("*.py")), SCRIPTS / "plan-dashboard.py",
                *sorted(TESTS.glob("*plan_dashboard*.py"))]
-    assert {p.name for p in support.textual_importers(checked)} == {"tui_app.py", "test_plan_dashboard_tui_app.py"}
+    assert {p.name for p in support.textual_importers(checked)} == {
+        "tui_app.py", "test_plan_dashboard_tui_app.py", "plan_dashboard_start_probe.py"}
 
 
 def run_app_tests(tmp_path, require: bool):

@@ -1,0 +1,336 @@
+{
+ "code_read_sites": [
+  "scripts/plan_dashboard/attention.py:197: stat = os.stat(path)",
+  "scripts/plan_dashboard/attention.py:209: with open(path, \"rb\") as handle:",
+  "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+  "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+  "scripts/plan_dashboard/attention.py:256: mtime = match.stat().st_mtime",
+  "scripts/plan_dashboard/attention.py:277: key = (path.stat().st_mtime, candidate)",
+  "scripts/plan_dashboard/attention.py:308: stat = os.stat(path)",
+  "scripts/plan_dashboard/events.py:25: enable(os.open(path, os.O_WRONLY))",
+  "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+  "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+  "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+  "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)",
+  "scripts/plan_dashboard/locate.py:197: def jump(target: dict, *, runner=None) -> subprocess.CompletedProcess:",
+  "scripts/plan_dashboard/locate.py:203: except subprocess.TimeoutExpired:",
+  "scripts/plan_dashboard/locate.py:204: return subprocess.CompletedProcess(argv, TIMEOUT_RETURNCODE, \"\", f\"timed out after {JUMP_TIMEOUT_S} s\")",
+  "scripts/plan_dashboard/locate.py:206: return subprocess.CompletedProcess(argv, NOT_FOUND_RETURNCODE, \"\", str(exc))",
+  "scripts/plan_dashboard/model.py:100: data = json.loads(path.read_text(encoding=\"utf-8\"))",
+  "scripts/plan_dashboard/model.py:113: st = path.stat()",
+  "scripts/plan_dashboard/model.py:142: with open(path, \"rb\") as fh:",
+  "scripts/plan_dashboard/model.py:152: st = os.stat(path)",
+  "scripts/plan_dashboard/model.py:210: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+  "scripts/plan_dashboard/model.py:516: return dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc)",
+  "scripts/plan_dashboard/model.py:561: for path in sorted(root.glob(\"*.json\")):",
+  "scripts/plan_dashboard/model.py:600: text = path.read_text(encoding=\"utf-8\")",
+  "scripts/plan_dashboard/model.py:632: paths = sorted(Path(state_root).glob(\"*.json\"))",
+  "scripts/plan_dashboard/model.py:636: st = path.stat()",
+  "scripts/plan_dashboard/model.py:680: if not path.exists():",
+  "scripts/plan_dashboard/publish.py:116: data = json.loads(Path(path).read_text(encoding=\"utf-8\"))",
+  "scripts/plan_dashboard/publish.py:135: with open(lock_path, \"a\") as handle:",
+  "scripts/plan_dashboard/publish.py:166: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+  "scripts/plan_dashboard/publish.py:196: (subprocess, \"Popen\"), (os, \"system\")]",
+  "scripts/plan_dashboard/tui.py:555: return path.stat().st_mtime if path is not None else None",
+  "scripts/plan_dashboard/web.py:42: return INDEX.read_bytes()",
+  "scripts/plan_dashboard/web.py:139: if store.safe_session_id(session_id) != session_id or not (state_root / f\"{session_id}.json\").is_file():",
+  "scripts/plan-dashboard.py:178: return subprocess.call(tui.launch_argv(args))"
+ ],
+ "enumerated": {
+  "cycles_traced": 0,
+  "seconds": 305.2,
+  "strace_calls": 2500452
+ },
+ "exec_kinds": [
+  "python3",
+  "uv"
+ ],
+ "kinds": {
+  "binding": {
+   "duplicated_reads": [],
+   "example": "<agent>/agentctl/engine-session-bindings/00177943-7575-4602-8b68-215a853b0ca6.json",
+   "files": true,
+   "read_sites": [],
+   "traced_files": 9177
+  },
+  "ledger": {
+   "duplicated_reads": [],
+   "example": "<home>/.local/log/claude-spawn-costs.jsonl",
+   "files": true,
+   "read_sites": [],
+   "traced_files": 1
+  },
+  "locator_listing": {
+   "duplicated_reads": [],
+   "example": "<home>/.ccgram/events.jsonl",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+    "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+    "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+    "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)",
+    "scripts/plan_dashboard/locate.py:197: def jump(target: dict, *, runner=None) -> subprocess.CompletedProcess:",
+    "scripts/plan_dashboard/locate.py:203: except subprocess.TimeoutExpired:",
+    "scripts/plan_dashboard/locate.py:204: return subprocess.CompletedProcess(argv, TIMEOUT_RETURNCODE, \"\", f\"timed out after {JUMP_TIMEOUT_S} s\")",
+    "scripts/plan_dashboard/locate.py:206: return subprocess.CompletedProcess(argv, NOT_FOUND_RETURNCODE, \"\", str(exc))"
+   ],
+   "traced_files": 2
+  },
+  "other:<agent>": {
+   "duplicated_reads": [],
+   "example": "<agent>",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:197: stat = os.stat(path)",
+    "scripts/plan_dashboard/attention.py:209: with open(path, \"rb\") as handle:",
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/attention.py:256: mtime = match.stat().st_mtime",
+    "scripts/plan_dashboard/attention.py:277: key = (path.stat().st_mtime, candidate)",
+    "scripts/plan_dashboard/attention.py:308: stat = os.stat(path)",
+    "scripts/plan_dashboard/events.py:25: enable(os.open(path, os.O_WRONLY))",
+    "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+    "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+    "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+    "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)"
+   ],
+   "traced_files": 1
+  },
+  "other:<agent>/agentctl/engine-session-bindings": {
+   "duplicated_reads": [],
+   "example": "<agent>/agentctl/engine-session-bindings",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:197: stat = os.stat(path)",
+    "scripts/plan_dashboard/attention.py:209: with open(path, \"rb\") as handle:",
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/attention.py:256: mtime = match.stat().st_mtime",
+    "scripts/plan_dashboard/attention.py:277: key = (path.stat().st_mtime, candidate)",
+    "scripts/plan_dashboard/attention.py:308: stat = os.stat(path)",
+    "scripts/plan_dashboard/events.py:25: enable(os.open(path, os.O_WRONLY))",
+    "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+    "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+    "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+    "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)"
+   ],
+   "traced_files": 1
+  },
+  "other:<agent>/agentctl/state": {
+   "duplicated_reads": [],
+   "example": "<agent>/agentctl/state",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:197: stat = os.stat(path)",
+    "scripts/plan_dashboard/attention.py:209: with open(path, \"rb\") as handle:",
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/attention.py:256: mtime = match.stat().st_mtime",
+    "scripts/plan_dashboard/attention.py:277: key = (path.stat().st_mtime, candidate)",
+    "scripts/plan_dashboard/attention.py:308: stat = os.stat(path)",
+    "scripts/plan_dashboard/events.py:25: enable(os.open(path, os.O_WRONLY))",
+    "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+    "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+    "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+    "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)"
+   ],
+   "traced_files": 1
+  },
+  "other:<agent>/plan-dashboard-plugins/locators": {
+   "duplicated_reads": [],
+   "example": "<agent>/plan-dashboard-plugins/locators",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:197: stat = os.stat(path)",
+    "scripts/plan_dashboard/attention.py:209: with open(path, \"rb\") as handle:",
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/attention.py:256: mtime = match.stat().st_mtime",
+    "scripts/plan_dashboard/attention.py:277: key = (path.stat().st_mtime, candidate)",
+    "scripts/plan_dashboard/attention.py:308: stat = os.stat(path)",
+    "scripts/plan_dashboard/events.py:25: enable(os.open(path, os.O_WRONLY))",
+    "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+    "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+    "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+    "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)"
+   ],
+   "traced_files": 2
+  },
+  "other:<agent>/projects": {
+   "duplicated_reads": [],
+   "example": "<agent>/projects",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:197: stat = os.stat(path)",
+    "scripts/plan_dashboard/attention.py:209: with open(path, \"rb\") as handle:",
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/attention.py:256: mtime = match.stat().st_mtime",
+    "scripts/plan_dashboard/attention.py:277: key = (path.stat().st_mtime, candidate)",
+    "scripts/plan_dashboard/attention.py:308: stat = os.stat(path)",
+    "scripts/plan_dashboard/events.py:25: enable(os.open(path, os.O_WRONLY))",
+    "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+    "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+    "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+    "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)"
+   ],
+   "traced_files": 225
+  },
+  "other:<home>": {
+   "duplicated_reads": [],
+   "example": "<home>",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:197: stat = os.stat(path)",
+    "scripts/plan_dashboard/attention.py:209: with open(path, \"rb\") as handle:",
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/attention.py:256: mtime = match.stat().st_mtime",
+    "scripts/plan_dashboard/attention.py:277: key = (path.stat().st_mtime, candidate)",
+    "scripts/plan_dashboard/attention.py:308: stat = os.stat(path)",
+    "scripts/plan_dashboard/events.py:25: enable(os.open(path, os.O_WRONLY))",
+    "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+    "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+    "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+    "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)"
+   ],
+   "traced_files": 1
+  },
+  "other:<home>/.local": {
+   "duplicated_reads": [],
+   "example": "<home>/.local/bin/uv",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:197: stat = os.stat(path)",
+    "scripts/plan_dashboard/attention.py:209: with open(path, \"rb\") as handle:",
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/attention.py:256: mtime = match.stat().st_mtime",
+    "scripts/plan_dashboard/attention.py:277: key = (path.stat().st_mtime, candidate)",
+    "scripts/plan_dashboard/attention.py:308: stat = os.stat(path)",
+    "scripts/plan_dashboard/events.py:25: enable(os.open(path, os.O_WRONLY))",
+    "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+    "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+    "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+    "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)"
+   ],
+   "traced_files": 2
+  },
+  "other:<home>/.python-version": {
+   "duplicated_reads": [],
+   "example": "<home>/.python-version",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:197: stat = os.stat(path)",
+    "scripts/plan_dashboard/attention.py:209: with open(path, \"rb\") as handle:",
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/attention.py:256: mtime = match.stat().st_mtime",
+    "scripts/plan_dashboard/attention.py:277: key = (path.stat().st_mtime, candidate)",
+    "scripts/plan_dashboard/attention.py:308: stat = os.stat(path)",
+    "scripts/plan_dashboard/events.py:25: enable(os.open(path, os.O_WRONLY))",
+    "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+    "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+    "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+    "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)"
+   ],
+   "traced_files": 1
+  },
+  "other:<home>/.python-versions": {
+   "duplicated_reads": [],
+   "example": "<home>/.python-versions",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:197: stat = os.stat(path)",
+    "scripts/plan_dashboard/attention.py:209: with open(path, \"rb\") as handle:",
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/attention.py:256: mtime = match.stat().st_mtime",
+    "scripts/plan_dashboard/attention.py:277: key = (path.stat().st_mtime, candidate)",
+    "scripts/plan_dashboard/attention.py:308: stat = os.stat(path)",
+    "scripts/plan_dashboard/events.py:25: enable(os.open(path, os.O_WRONLY))",
+    "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+    "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+    "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+    "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)"
+   ],
+   "traced_files": 1
+  },
+  "other:<home>/pyproject.toml": {
+   "duplicated_reads": [],
+   "example": "<home>/pyproject.toml",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:197: stat = os.stat(path)",
+    "scripts/plan_dashboard/attention.py:209: with open(path, \"rb\") as handle:",
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/attention.py:256: mtime = match.stat().st_mtime",
+    "scripts/plan_dashboard/attention.py:277: key = (path.stat().st_mtime, candidate)",
+    "scripts/plan_dashboard/attention.py:308: stat = os.stat(path)",
+    "scripts/plan_dashboard/events.py:25: enable(os.open(path, os.O_WRONLY))",
+    "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+    "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+    "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+    "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)"
+   ],
+   "traced_files": 1
+  },
+  "other:<home>/uv.toml": {
+   "duplicated_reads": [],
+   "example": "<home>/uv.toml",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:197: stat = os.stat(path)",
+    "scripts/plan_dashboard/attention.py:209: with open(path, \"rb\") as handle:",
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/attention.py:256: mtime = match.stat().st_mtime",
+    "scripts/plan_dashboard/attention.py:277: key = (path.stat().st_mtime, candidate)",
+    "scripts/plan_dashboard/attention.py:308: stat = os.stat(path)",
+    "scripts/plan_dashboard/events.py:25: enable(os.open(path, os.O_WRONLY))",
+    "scripts/plan_dashboard/locate.py:45: for path in sorted(directory.glob(\"*.py\")) if directory.is_dir() else []:",
+    "scripts/plan_dashboard/locate.py:94: (socket, \"getaddrinfo\"), (subprocess, \"Popen\"), (os, \"system\"), (os, \"posix_spawn\")]",
+    "scripts/plan_dashboard/locate.py:138: return path if path.is_file() else None",
+    "scripts/plan_dashboard/locate.py:194: return subprocess.run(argv, shell=False, timeout=JUMP_TIMEOUT_S, capture_output=True, text=True)"
+   ],
+   "traced_files": 1
+  },
+  "state": {
+   "duplicated_reads": [],
+   "example": "<agent>/agentctl/state/00177943-7575-4602-8b68-215a853b0ca6.json",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/model.py:210: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/model.py:561: for path in sorted(root.glob(\"*.json\")):",
+    "scripts/plan_dashboard/model.py:632: paths = sorted(Path(state_root).glob(\"*.json\"))",
+    "scripts/plan_dashboard/web.py:139: if store.safe_session_id(session_id) != session_id or not (state_root / f\"{session_id}.json\").is_file():"
+   ],
+   "traced_files": 16366
+  },
+  "transcript": {
+   "duplicated_reads": [],
+   "example": "<agent>/projects/-/187e5ff5-f9d4-4e89-86d8-a3eb6534fe21.jsonl",
+   "files": true,
+   "read_sites": [
+    "scripts/plan_dashboard/attention.py:233: paths = sorted((path for root in roots for path in root.glob(\"*/*.jsonl\")), key=str)",
+    "scripts/plan_dashboard/attention.py:250: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))",
+    "scripts/plan_dashboard/model.py:210: matches = sorted(Path(transcripts_root).glob(f\"*/{name}.jsonl\"))"
+   ],
+   "traced_files": 14145
+  }
+ },
+ "non_file_sources": {
+  "tmux_listing": {
+   "exec_kinds_seen": [
+    "python3",
+    "uv"
+   ],
+   "executed": false,
+   "stands_in": "locator_listing: the locator plugin lists the bridge windows from a file"
+  }
+ },
+ "version": 1
+}
