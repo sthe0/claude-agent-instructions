@@ -108,7 +108,7 @@ from .cli_common import (
     _utcnow,
     _order_agreement_refusal,
 )
-from .cli_order import _order_draft_violations
+from .cli_order import _order_draft_violations, _planning_estimate_refusal
 
 
 def _loop_self_check(state: SessionState, thresholds: Thresholds) -> dict | None:
@@ -367,6 +367,9 @@ def _present_order(args, state: SessionState, *, store: StateStore) -> Directive
             f"order draft {path} is no longer fit to put to the user: " + "; ".join(problems),
             data={"problems": problems},
         )
+    no_estimate = _planning_estimate_refusal(state, doc)
+    if no_estimate is not None:
+        return Directive(False, state.node, "noop", f"order draft {path} cannot be presented: {no_estimate}")
     blockers = gates.order_review_blockers(state, path)
     _log_gate(state, "order_review", blockers, passed=not blockers)
     if blockers:

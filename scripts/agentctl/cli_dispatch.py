@@ -25,7 +25,7 @@ from . import (
     effort_segments,
     config as agentctl_config,
 )
-from .cli_common import _cost_rows, _judge_act, _judge_and_refuse, judge_on_parent
+from .cli_common import _cost_rows, _judge_act, _judge_and_refuse, _refresh_spend, judge_on_parent
 from .directive import Directive
 from .dispatch import (
     CHILD_EXHAUSTED,
@@ -1246,6 +1246,9 @@ def _end_child_run(store: StateStore, state: SessionState, run: dict,
     if run.get("child_session"):
         run["ended"] = max(run["started"], _utcnow())
         effort.book_child_runs(state, _utcnow())
+        current = effort_segments.current_arming(state.effort_segments)
+        if current is not None and current["segment"] == effort_segments.PLANNING:
+            _refresh_spend(state, store, _cost_rows(argparse.Namespace()), state.plan_path)
         _judge_act(state, effort_segments.ACT_SPAWNED_PLANNER_RUN_END, store=store)
     else:
         state.effort_child_runs[:] = [r for r in state.effort_child_runs if r is not run]

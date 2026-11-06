@@ -49,6 +49,7 @@ from lib.spawn_prompt_files import composed_prompt_files, skill_path
 from . import advisor as _advisor
 from . import delivery
 from . import effort
+from . import effort_segments
 from . import resources as _resources
 from .config import Thresholds
 from .plan import (
@@ -2293,6 +2294,8 @@ def review_trigger(state: SessionState | None, thr: Thresholds | None = None) ->
     Three triggers, checked in this order: `cycle_acts` (counted review acts in the open
     pre-approval cycle), `cycle_minutes` (booked active minutes since the cycle's anchor),
     `stage_streak` (consecutive non-passing counted reviews of one stage's own record).
+    `cycle_minutes` is retired except while a migrated window arming is open: planning's
+    wall-clock is judged by the planning arming's own budget (`effort`), not by this row.
     A row that is missing or not an integer disarms its trigger. A trigger that already
     fired on this evidence (`review_trigger_spent`) stays quiet: the acts trigger counts
     the acts since its last fire, the streak trigger fires again only on a larger value,
@@ -2317,7 +2320,9 @@ def review_trigger(state: SessionState | None, thr: Thresholds | None = None) ->
                     "threshold": acts_row, "stage": None}
         minutes_row = thr.review_cycle_active_minutes()
         anchor = state.review_cycle_minutes_anchor
-        if minutes_row is not None and anchor is not None and spent.get("cycle_minutes") != anchor:
+        window_open = effort_segments.window_arming(state.effort_segments) is not None
+        if (window_open and minutes_row is not None and anchor is not None
+                and spent.get("cycle_minutes") != anchor):
             elapsed = round(review_booked_minutes(state) - anchor, 3)
             if elapsed >= minutes_row:
                 return {"trigger": "cycle_minutes", "value": elapsed,

@@ -1946,6 +1946,38 @@ class Constraint:
         return cls(id=str(d.get("id", "")), text=str(d.get("text", "")))
 
 
+def _positive_number(raw) -> float | None:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    return value if value > 0 and value == value and value != float("inf") else None
+
+
+@dataclass
+class PlanningEstimate:
+    """The agent's estimate of the planning segment, set down in the order draft: active
+    minutes, dollars and the text deriving both. A number that is absent or not a positive
+    number reads as None and an absent derivation as empty, so this lenient type never
+    refuses a draft; `missing()` is what the order verbs refuse on. The engine reads the
+    derivation only for presence, never for what it says."""
+    active_minutes: float | None = None
+    usd: float | None = None
+    derivation: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PlanningEstimate":
+        raw = d.get("derivation")
+        return cls(
+            active_minutes=_positive_number(d.get("active_minutes")),
+            usd=_positive_number(d.get("usd")),
+            derivation=raw.strip() if isinstance(raw, str) else "",
+        )
+
+    def missing(self) -> list[str]:
+        return [name for name, value in (("active_minutes", self.active_minutes), ("usd", self.usd),
+                                         ("derivation", self.derivation)) if not value]
+
+
 def _typed_table_list(raw, cls, name: str, malformed: list[str]) -> list:
     """The entries of `raw` that are tables, built as `cls`; a non-list value, or a bare
     sentence among the tables, is recorded in `malformed` under `name` and degrades to
@@ -2051,6 +2083,13 @@ class Order:
     difficulty: str = ""
     proposals: list[Proposal] = field(default_factory=list)
     constraints: list[Constraint] = field(default_factory=list)
+    # The estimate of the planning segment (`[meta.order.planning_estimate]`). None for an
+    # order that carries no such table; it joins the understanding digest only when present,
+    # so every digest agreed before the table existed keeps its value. Not a dataclass field
+    # (ClassVar default, set per instance by `from_dict`): the order's field set is exactly the
+    # set of parts a plan must state, and an estimate is required only before the first
+    # approval, at the seams that check it.
+    planning_estimate: ClassVar[PlanningEstimate | None] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Order":
@@ -2095,7 +2134,14 @@ class Order:
         proposals = _typed_table_list(d.get("proposals"), Proposal, "proposals", malformed)
         constraints = _typed_table_list(d.get("constraints"), Constraint, "constraints", malformed)
 
-        return cls(
+        raw_estimate = d.get("planning_estimate")
+        estimate: PlanningEstimate | None = None
+        if isinstance(raw_estimate, dict):
+            estimate = PlanningEstimate.from_dict(raw_estimate)
+        elif raw_estimate is not None:
+            malformed.append("planning_estimate")
+
+        order = cls(
             customer_id=str(d.get("customer_id", "")),
             customer=str(d.get("customer", "")),
             functional_place=str(d.get("functional_place", "")),
@@ -2111,6 +2157,8 @@ class Order:
             proposals=proposals,
             constraints=constraints,
         )
+        order.planning_estimate = estimate
+        return order
 
 
 @dataclass

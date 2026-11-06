@@ -681,25 +681,32 @@ def _renew_order_agreement(state: SessionState, store: StateStore, args) -> None
 
 
 def _planning_fallback(thr: Thresholds) -> dict:
-    """Planning's budget before an estimate is agreed: on wall-clock the fire point lands on
-    review-cycle-active-minutes, on spend two medium stages. An unset minutes key leaves that
-    scale unbudgeted, so it never fires."""
-    budget = {effort_segments.SCALE_USD: 2.0 * float(thr.budget_usd_float("medium"))}
-    minutes = thr.review_cycle_active_minutes()
-    if minutes is not None:
-        budget[effort_segments.SCALE_MINUTES] = float(minutes) / float(thr.effort_divergence_multiple())
-    return budget
+    return effort.planning_fallback(thr)
 
 
 def _ensure_planning_arming(state: SessionState, now: float) -> None:
     ledger = state.effort_segments
     if not state.plan_stack and effort_segments.open_arming_of(ledger, effort_segments.PLANNING) is None:
         ledger.setdefault("session_floor", float(now))
-        effort_segments.open_arming(
-            ledger, effort_segments.PLANNING, None, effort_segments.SOURCE_UNBUDGETED, now, "classify")
+        thr = Thresholds()
+        opened = effort_segments.open_arming(
+            ledger, effort_segments.PLANNING, _planning_fallback(thr),
+            effort_segments.SOURCE_FALLBACK, now, "classify")
+        opened["tier_ladder"] = effort.tier_ladder(thr)
+
+
+def _budget_migrated_planning(arming: dict) -> None:
+    """The planning arming a migration opened for a still-planning session carries no budget on
+    the ledger; at its first judging or closing act it takes the configuration fallback, which
+    it is judged against from its own opening instant."""
+    if (arming["segment"] == effort_segments.PLANNING and arming["budget"] is None
+            and arming["budget_source"] == effort_segments.SOURCE_UNBUDGETED):
+        arming["budget"] = _planning_fallback(Thresholds())
+        arming["budget_source"] = effort_segments.SOURCE_FALLBACK
 
 
 def _close_at_multiple(ledger: dict, arming: dict, act: str, now: float) -> dict | None:
+    _budget_migrated_planning(arming)
     return effort_segments.close_arming(
         ledger, arming["arming_id"], act, now, float(Thresholds().effort_divergence_multiple()))
 
@@ -736,6 +743,11 @@ def _next_arming_terms(state: SessionState, arming: dict, thr: Thresholds) -> tu
     """(budget, source, tier) of the arming a user act opens after `arming`, in its segment."""
     segment = arming["segment"]
     if segment == effort_segments.PLANNING:
+        agreed = state.effort_segments.get("agreed_estimate") if state.order_agreement is not None else None
+        if agreed:
+            return ({effort_segments.SCALE_USD: float(agreed["usd"]),
+                     effort_segments.SCALE_MINUTES: float(agreed["active_minutes"])},
+                    effort_segments.SOURCE_AGREED, None)
         return _planning_fallback(thr), effort_segments.SOURCE_FALLBACK, None
     ledger = state.effort_segments
     uid = segment.removeprefix(effort_segments.STAGE_PREFIX)
@@ -1210,6 +1222,7 @@ def _judge_act(state: SessionState, act: str, *, store: StateStore | None,
     at = now if now is not None else _utcnow()
     thr = Thresholds()
     fire = None
+    _budget_migrated_planning(arming)
     if effort_segments.replans_judged_at(arming["segment"], act):
         div = effort.replans_divergence(
             state, thr, cross_session_totals=_effort_cross_totals(state, at, store=store), now=at)

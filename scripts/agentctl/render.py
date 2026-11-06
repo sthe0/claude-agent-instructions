@@ -226,11 +226,11 @@ def _proposal_lines(proposals, indent: str = "  ") -> list[str]:
 
 
 def render_order_understanding_md(doc: PlanDoc) -> list[str]:
-    """The order's activity, difficulty, proposals and constraints — the part of the
-    understanding `render_order_md` leaves out (it already prints the customer, the
-    functional place and the requirements with derivations) — as raw lines. Each field
-    appears only when the order states it, so an order without them renders as before;
-    `[]` when it states none."""
+    """The order's activity, difficulty, proposals, constraints and planning estimate (with its
+    derivation) — the part of the understanding `render_order_md` leaves out (it already prints
+    the customer, the functional place and the requirements with derivations) — as raw lines.
+    Each field appears only when the order states it, so an order without them renders as
+    before; `[]` when it states none."""
     order = doc.meta.order
     if order is None:
         return []
@@ -245,6 +245,12 @@ def render_order_understanding_md(doc: PlanDoc) -> list[str]:
     if order.constraints:
         lines.append("- **Constraints:**")
         lines.extend(f"  - **{c.id or '(no id)'}**: {c.text}" for c in order.constraints)
+    estimate = order.planning_estimate
+    if estimate is not None:
+        minutes = f"{estimate.active_minutes:g}" if estimate.active_minutes else "*(none)*"
+        usd = f"{estimate.usd:.2f}" if estimate.usd else "*(none)*"
+        lines.append(f"- **Planning estimate:** {minutes} active minutes, {usd} USD")
+        lines.append(f"  - **Derivation:** {estimate.derivation or '*(none)*'}")
     return ["## Order understanding", "", *lines, ""] if lines else []
 
 

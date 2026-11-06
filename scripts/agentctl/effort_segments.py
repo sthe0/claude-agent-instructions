@@ -31,6 +31,7 @@ SOURCE_WINDOW = "migrated-window"
 SOURCE_USER_APPROVED = "user-approved"
 SOURCE_DECLARED = "agent-declared"
 SOURCE_CARRIED = "carried"
+SOURCE_AGREED = "agreed-estimate"
 SOURCE_FALLBACK = "fallback"
 SOURCE_FALLBACK_CAPPED = "fallback-capped"
 

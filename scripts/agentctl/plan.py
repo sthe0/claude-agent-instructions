@@ -2611,8 +2611,21 @@ def stage_interface_digest(doc: PlanDoc, stage: Stage) -> str:
 UNDERSTANDING_FIELDS = ("activity", "difficulty", "proposals", "constraints")
 
 
+def _understanding_stated(order) -> bool:
+    return bool(order.activity or order.difficulty or order.proposals or order.constraints)
+
+
 def _understanding_empty(order) -> bool:
-    return not (order.activity or order.difficulty or order.proposals or order.constraints)
+    return not (_understanding_stated(order) or order.planning_estimate is not None)
+
+
+def _estimate_member(order) -> tuple:
+    """The planning estimate as a member of the understanding's keys, empty when the order
+    carries no table — which keeps every key and digest an estimate-less order had."""
+    estimate = order.planning_estimate
+    if estimate is None:
+        return ()
+    return ((estimate.active_minutes, estimate.usd, estimate.derivation),)
 
 
 def _understanding_place(order) -> tuple:
@@ -2628,6 +2641,7 @@ def _understanding_place(order) -> tuple:
         order.difficulty,
         tuple((p.id, p.text, p.verdict, p.critique, tuple(p.against)) for p in order.proposals),
         tuple((c.id, c.text) for c in order.constraints),
+        *_estimate_member(order),
     ),)
 
 
@@ -2635,8 +2649,8 @@ def _understanding_scope(order) -> tuple:
     """The understanding's scope-bearing half for `order_scope`: which proposals exist and
     what became of each, and which constraints bind. Adding, removing or re-verdicting
     either changes what the plan is for; re-wording a proposal, a critique or a constraint
-    does not."""
-    if _understanding_empty(order):
+    does not. The planning estimate is wording of the agent's own, not scope."""
+    if not _understanding_stated(order):
         return ()
     return ((
         tuple(sorted((p.id, p.verdict) for p in order.proposals)),
@@ -2671,6 +2685,8 @@ def understanding_parts(doc: PlanDoc) -> dict[str, str]:
         values[f"P:{p.id}"] = (p.text, p.verdict, p.critique, tuple(sorted(p.against)))
     for c in order.constraints:
         values[f"K:{c.id}"] = c.text
+    if order.planning_estimate is not None:
+        values["planning_estimate"] = _estimate_member(order)[0]
     return {
         name: hashlib.sha256(repr((name, value)).encode("utf-8")).hexdigest()
         for name, value in values.items()

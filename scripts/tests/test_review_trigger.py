@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from agentctl import cli, config, effort, gates
+from agentctl import cli, config, effort, effort_segments, gates
 from agentctl.config import Thresholds
 from agentctl.state import SessionState
 
@@ -40,6 +40,12 @@ def cycle(**kw) -> SessionState:
 
 def book(state: SessionState, minutes: float) -> None:
     state.effort_actuals = {**(state.effort_actuals or {}), effort.ACTUAL_MINUTES_KEY: minutes}
+
+
+def open_window(state: SessionState) -> None:
+    """A migrated session's window arming: the one case the minutes trigger still judges."""
+    effort_segments.open_arming(state.effort_segments, effort_segments.PLANNING, None,
+                                effort_segments.SOURCE_WINDOW, 0.0, "migration")
 
 
 def review(state: SessionState, verdict: str = "revise", reviewer: str = "thinker", *, stage: str = "") -> None:
@@ -99,6 +105,7 @@ def test_acts_trigger_fires_at_its_row_not_below():
 
 def test_minutes_trigger_fires_at_its_row_not_below():
     state = cycle(review_cycle_minutes_anchor=10.0)
+    open_window(state)
     book(state, 39.9)
     assert gates.review_trigger(state, thr()) is None
     book(state, 40.0)
@@ -146,6 +153,7 @@ def test_a_fired_acts_trigger_waits_for_a_full_row_of_new_acts():
 
 def test_a_fired_minutes_trigger_stays_quiet_for_the_cycle():
     state = cycle(review_trigger_spent={"cycle_minutes": 0.0})
+    open_window(state)
     book(state, 500)
     assert gates.review_trigger(state, thr()) is None
     state.review_cycle_minutes_anchor = 500.0

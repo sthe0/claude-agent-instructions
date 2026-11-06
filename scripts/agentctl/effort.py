@@ -831,6 +831,17 @@ def book_child_runs(state: SessionState, now: float) -> None:
     ledger["child_mark"] = end
 
 
+def planning_fallback(thr: Thresholds) -> dict:
+    """Planning's budget before an estimate is agreed: on wall-clock the fire point lands on
+    review-cycle-active-minutes, on spend two medium stages. An unset minutes key leaves that
+    scale unbudgeted, so it never fires."""
+    budget = {effort_segments.SCALE_USD: 2.0 * float(thr.budget_usd_float("medium"))}
+    minutes = thr.review_cycle_active_minutes()
+    if minutes is not None:
+        budget[effort_segments.SCALE_MINUTES] = float(minutes) / float(thr.effort_divergence_multiple())
+    return budget
+
+
 def stage_budget(tier: str, thr: Thresholds) -> dict:
     return {
         effort_segments.SCALE_USD: _tier_estimate(SCALE_SPEND, tier, thr),
