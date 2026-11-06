@@ -74,7 +74,8 @@ TREE_TOKEN = "<tree>"
 def normalize_id(node: str) -> str:
     """A parametrized id may carry the checkout's path or the run's sandbox root; both differ between runs."""
     node = node.replace(str(BASE_TREE), TREE_TOKEN).replace(str(REPO), TREE_TOKEN)
-    return re.sub(re.escape(str(STATE / "work")) + r"/r1-[A-Za-z0-9_]+", "<run-root>", node)
+    return re.sub(re.escape(str(STATE / "work")) + r"/r1-[A-Za-z0-9_]+(?:/gatebox|/instruction-sandbox\.[A-Za-z0-9_]+)?",
+                  "<run-root>", node)
 
 
 def parse_junit(path: Path) -> dict[str, str]:
@@ -191,8 +192,8 @@ def search_selftest() -> int:
         paths = [e["path"] for e in find_arc(root)]
     print(f"search-selftest: found {paths}, want ['a/home/.arc'] (a symlink to it is not followed)")
     problems = [] if paths == ["a/home/.arc"] else ["the .arc search missed or over-followed"]
-    ids = [f"t.py::test_x[{STATE}/work/r1-{token}/gatebox/home/.arc-{tree}]"
-           for token, tree in (("ab12_c", BASE_TREE), ("zz99", REPO))]
+    ids = [f"t.py::test_x[{STATE}/work/r1-{token}/{box}/home/.arc-{tree}]"
+           for token, box, tree in (("ab12_c", "gatebox", BASE_TREE), ("zz99", "instruction-sandbox.Q1w2e3", REPO))]
     if normalize_id(ids[0]) != normalize_id(ids[1]):
         problems.append("a test id that names the run's sandbox root or the checkout differs between runs")
     problems += _stub_answers() + _verdicts_selftest()
