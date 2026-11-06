@@ -15,7 +15,7 @@ Subcommand ``publish`` keeps one status message per machine up to date through t
 machine-local publisher plugin: ``--dry-run`` prints the digest, ``--check-publisher`` runs the
 plugin's local health check, ``--once`` and ``--watch`` send (exit 6: no usable plugin; exit 1:
 a failed send, repeated failures in ``--watch``, a busy lock or an unsavable state). Subcommand
-``bench`` times the console's reads on the live state against budgets (``--budget-live-table`` and
+``bench`` times the console's reads on the live state against budgets (``--budget-refresh`` and
 the like; exit 1 when any read is over, 2 for a ``--session`` it cannot find). The shared
 options (state root, window, selection, ledger, transcripts) come from one parent parser so
 later views reuse them. Exit code 3: a ``--session`` that names no state file, in ``snapshot``,

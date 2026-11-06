@@ -428,6 +428,8 @@ def test_later_reads_take_only_the_appended_bytes_and_keep_a_partial_line(tmp_pa
 def test_an_unchanged_transcript_is_not_opened_again(tmp_path, monkeypatch):
     path = tmp_path / "t.jsonl"
     path.write_bytes(lines_of(IDLE))
+    long_ago = time.time() - 60
+    os.utime(path, (long_ago, long_ago))
     first = attention.read_tail(path)
     opened = []
     real_open = open

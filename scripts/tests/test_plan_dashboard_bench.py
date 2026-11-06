@@ -20,7 +20,8 @@ _spec = importlib.util.spec_from_file_location("plan_dashboard_cli", SCRIPTS / "
 cli = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cli)
 
-MEASURES = ["live table", "live overlay", "all table", "all screen overlay", "detail"]
+MEASURES = ["refresh", "live overlay", "all table", "all screen overlay", "detail"]
+ROOMY = dict.fromkeys(MEASURES, 2.0)
 
 
 @pytest.fixture
@@ -35,7 +36,9 @@ def one_second_reads(monkeypatch):
 
 
 def run(root, **options):
+    """The default budgets are replaced by ``ROOMY`` ones, so that a one-second read is within every budget."""
     lines = []
+    options["budgets"] = {**ROOMY, **options.get("budgets", {})}
     with read_only_guard(root.home.parent):
         code = bench.run(root.state_root, cost_log=root.cost_log, transcripts_root=root.transcripts_root, now=NOW,
                          out=lines.append, **options)
@@ -43,8 +46,17 @@ def run(root, **options):
 
 
 def test_the_default_budgets_are_pinned():
-    assert bench.BUDGETS == {"live table": 4.0, "live overlay": 4.0, "all table": 15.0, "all screen overlay": 4.0,
+    assert bench.BUDGETS == {"refresh": 0.25, "live overlay": 4.0, "all table": 15.0, "all screen overlay": 4.0,
                              "detail": 5.0}
+
+
+def test_a_refresh_is_the_live_table_read_a_second_time_on_warm_caches(root, monkeypatch):
+    calls = []
+    real = bench.model.collect
+    monkeypatch.setattr(bench.model, "collect", lambda *args, **kwargs: calls.append(kwargs["include_all"]) or real(
+        *args, **kwargs))
+    run(root)
+    assert calls == [False, True, False]
 
 
 def test_the_all_screen_overlay_is_the_consoles_first_screen_read_on_a_cold_mark_cache(root, monkeypatch):
@@ -78,7 +90,7 @@ def test_a_measure_is_ok_up_to_and_including_its_budget():
 def test_every_measure_within_budget_prints_one_ok_line_each_and_the_volume(root, one_second_reads):
     code, lines = run(root)
     assert code == 0
-    assert lines == [f"{name}: 1.0s (budget {bench.BUDGETS[name]:g}s) ok" for name in MEASURES] + [
+    assert lines == [f"{name}: 1.0s (budget {ROOMY[name]:g}s) ok" for name in MEASURES] + [
         "volume: 2 tasks, 0 binding files"]
 
 
