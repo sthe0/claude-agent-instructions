@@ -2,7 +2,10 @@
 name: regex-not-for-semantic-classification
 description: Any lexical matcher (regex, keyword list, token overlap, similarity ratio) that decides a question of free-text MEANING (a hard block, a classification, a dedup or clustering join) determinizes a perception task at the wrong structural level and false-positives on paraphrase/meta-text; demote it to a high-recall candidate generator and let a fail-open model judge decide, mirroring agentctl/advisor.py::judge_binary_ask.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-judgement-call-contains-a-decidable-sub-decision, regularity:a-format-varies-while-the-property-it-stands-for-holds, regularity:a-two-valued-judge-absorbs-could-not-look]
+grounding_judged: 3a5101506c6421c9934c69e413c90dc239932ce5af2358f6e5b0b8247a81e3d6
 created: 2026-07-22
 last_verified: 2026-10-01
 ---
@@ -14,6 +17,20 @@ The norm covers every decision of meaning, not only a hard block: a classificati
 A hard-enforcement gate (a Stop-hook block, a PreToolUse deny) that decides whether a piece of free text carries a given natural-language MEANING — "is this agent-behavior feedback?", "is this an un-diagnosed outage escalation?" — by matching a regex/keyword lexicon against the raw text is determinizing a **perception** task at the wrong structural level. A regex can recognize a token co-occurrence; it cannot tell a genuine correction from an analytical discussion that merely *mentions* the same words, or a live escalation from a meta-description of how the escalation gate works. Two such gates false-positived on the agent's own read-only analytical prose about `CLAUDE.md`: a self-improvement turn-guardian fired because its feedback-signal regex matched a corrective-sounding phrase co-occurring with a second-person pronoun in a passage that was analyzing, not receiving, feedback; an escalation-diagnosis guardian fired because its two-regex conjunction (failure words + a question frame) matched a **meta-description of how the hook itself works**, not a real outage escalation. Both blocks were false positives on paraphrase/meta-text — exactly the failure mode a regex cannot avoid because meaning, not shape, is what the classification actually turns on.
 
 This is a sharpening of the system's own root principle ("separate rule from perception; determinize the rule at its proper structural level" — `CLAUDE.md` preamble): a regex classifying free-text meaning and driving a hard block violates the very principle it is meant to serve, because the *perception* half (does this text mean X?) has been left inside the *rule* half (regex match → block).
+
+## Principle
+
+To avoid false blocks and wrong joins on paraphrase and meta-text, do not let a regex, keyword list, token overlap or similarity ratio decide a question of free-text meaning; demote it to a high-recall candidate generator and let a fail-open model judge decide, mirroring advisor.py judge_binary_ask (any failure to answer yields no block, or keep-and-flag for a join), while leaving regexes that read command syntax, tool-invocation shape or file paths as legitimate and grounding scope or effect in the tool's contract.
+
+## Goal class
+
+deciding free-text meaning without false positives
+
+## Grounded in
+
+- [[a-judgement-call-contains-a-decidable-sub-decision]]
+- [[a-format-varies-while-the-property-it-stands-for-holds]]
+- [[a-two-valued-judge-absorbs-could-not-look]]
 
 ## Guidance
 
@@ -99,3 +116,4 @@ The honest bound is a blind spot, stated in the tool's `--help` as well: a keywo
 - `agentctl/advisor.py::judge_binary_ask` — the in-repo fail-open prefilter→model→YES/NO template this leaf's recipe mirrors.
 - `CLAUDE.md` preamble, "Separate rule from perception; determinize the rule at its proper structural level" — the root principle this leaf sharpens for the semantic/content case.
 - `skills/self-improvement/SKILL.md` § "Structural form before prose" — the tie-breaker rule (extend an existing mechanism rather than invent prose) this leaf's recipe follows.
+- regularity:a-judgement-call-contains-a-decidable-sub-decision — the regularity this rule rests on.

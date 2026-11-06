@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:a-name-from-position-or-an-empty-variable-designates-a-foreign-object, regularity:a-shared-resource-moves-under-others-action]
+grounding_judged: 63c5838cf6c41cd336fbacc038181112b790ab3b26f61378344607c21951f145
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

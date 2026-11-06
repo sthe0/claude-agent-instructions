@@ -9,6 +9,7 @@ from . import (
     advisor,
     carry_forward,
     grant_shadow,
+    grounding_gate,
     order_approvals,
     plugins,
     premise,
@@ -521,7 +522,7 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
     # ones `new` was diffed and gated against.
     new, _new_plan_bytes, _new_plan_digest = load_plan_with_digest(args.plan)
     run = runner if runner is not None else advisor.subprocess_runner
-    submission = _submission_problems(new, run, state.weight_class)
+    submission = _submission_problems(new, run, state.weight_class, state=state, baseline=old)
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "renormalization blocked: the corrected plan does not meet "
@@ -649,6 +650,7 @@ class _ReplanContext:
     crossed: list[dict] | None
     reopened: list[int] | None
     reopen_ignored: list[int] | None
+    warnings: list[str] | None = None
     normalize_factor: str = ""
     normalize_level: Any = None
     agent_acked_difficulty: bool = False
@@ -680,16 +682,18 @@ class _ReplanContext:
 def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
                 crossed: list[dict] | None = None,
                 reopened: list[int] | None = None,
-                reopen_ignored: list[int] | None = None) -> Directive:
+                reopen_ignored: list[int] | None = None,
+                warnings: list[str] | None = None) -> Directive:
     """`crossed`, when given, receives the backstop crossing a renegotiation applied;
     `reopened`, the indices of the PASSED stages an applied `--reopen` re-armed;
-    `reopen_ignored`, the `--reopen` indices that named a stage that is not PASSED.
+    `reopen_ignored`, the `--reopen` indices that named a stage that is not PASSED;
+    `warnings`, the grounding judge's outage warnings for the submitted plan.
 
     Every phase but the last either refuses with a Directive or returns None to let the
     next one run, in the order the gates were written; the last applies the plan."""
     ctx = _ReplanContext(
         state=_require(store, args.session), store=store, args=args, runner=runner,
-        crossed=crossed, reopened=reopened, reopen_ignored=reopen_ignored)
+        crossed=crossed, reopened=reopened, reopen_ignored=reopen_ignored, warnings=warnings)
     refusal = _replan_entry_gates(ctx)
     if refusal is not None:
         return refusal
@@ -1076,9 +1080,11 @@ def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
     # `_load(args.plan)` used to be a separate read from the digest stamp and the
     # snapshot write, leaving a window for a concurrent edit to desynchronize them.
     new, _new_plan_bytes, _new_plan_digest = load_plan_with_digest(args.plan)
+    baseline = _baseline_plan_for_tier(store, state)
     submission = _submission_problems(
         new, run, state.weight_class,
-        _frozen_edge_stages(state, _baseline_plan_for_tier(store, state), new))
+        _frozen_edge_stages(state, baseline, new),
+        state=state, baseline=baseline, warnings=ctx.warnings)
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "replan blocked: the corrected plan does not meet submission "
@@ -1104,7 +1110,6 @@ def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
     # stages depending on it. Refused before anything is written. Without a known old
     # side there is no tier, and the replan routes as it did before the tier existed.
     tier = None
-    baseline = _baseline_plan_for_tier(store, state)
     if baseline is not None:
         tier = change_tier(baseline, new)
     change_class = replan_class(tier)
@@ -1711,8 +1716,9 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     crossed: list[dict] = []
     reopened: list[int] = []
     reopen_ignored: list[int] = []
+    replan_warnings: list[str] = []
     d = _cmd_replan(args, store=store, runner=runner, crossed=crossed, reopened=reopened,
-                    reopen_ignored=reopen_ignored)
+                    reopen_ignored=reopen_ignored, warnings=replan_warnings)
     d.data.update(_crossing_data(crossed[0] if crossed else None))
     if reopened and d.ok:
         d.data["reopened_stages"] = reopened
@@ -1724,7 +1730,7 @@ def cmd_replan(args, *, store: StateStore, runner: Runner | None = None) -> Dire
     # Only on something to say: an unconditional setdefault would add an empty
     # `advisories` key to every replan Directive, which test_history_capture's
     # exact-equality pin reads as a changed contract.
-    advisories = _replan_spelling_advisories(args.plan)
+    advisories = _replan_spelling_advisories(args.plan) + replan_warnings
     if advisories:
         d.data.setdefault("advisories", []).extend(advisories)
     _report_acceptance_staleness(d, args, store)
@@ -1830,6 +1836,28 @@ def cmd_check_coverage(args, *, store: StateStore, runner: Runner | None = None)
     never transitions state — a pre-flight that mutated what it inspects would
     corrupt the very state a later real replan diffs against."""
     state = _require(store, args.session)
+    verdicts = _coverage_grounding_verdicts(args, state, store, runner)
+    d = _check_coverage(args, state)
+    if verdicts:
+        d.detail += "\ngrounding verdicts (the judge on each stage replan would judge):\n" + "\n".join(verdicts)
+        d.data["grounding_verdicts"] = verdicts
+    return d
+
+
+def _coverage_grounding_verdicts(args, state: SessionState, store: StateStore,
+                                 runner: Runner | None) -> list[str]:
+    """The grounding judge's verdict line for each stage of the incoming plan that replan would judge
+    (a judge that cannot look says so on the line). Nothing when the plan does not load."""
+    try:
+        new = load_plan(args.new)
+    except Exception:
+        return []
+    exempt = grounding_gate.exempt_stages(state, new, _baseline_plan_for_tier(store, state))
+    return grounding_gate.coverage_verdict_lines(
+        new, exempt, runner=runner, enabled=grounding_gate.judge_enabled(state.weight_class))
+
+
+def _check_coverage(args, state: SessionState) -> Directive:
     if not (state.difficulty and state.difficulty.critique):
         return Directive(True, state.node, "inspect", "no active critique; nothing to cover")
     old_path = _replan_baseline_path(state)

@@ -2,7 +2,10 @@
 name: ssh-stale-forwarded-agent-sock-hang
 description: git fetch/push to github silently hangs forever (no error) when SSH_AUTH_SOCK points through ~/.ssh/ssh_auth_sock to a forwarded agent socket of a dead ssh session — the handshake completes and auth wedges at the agent query; fix env -u SSH_AUTH_SOCK (key is on disk), heals on the user's next login.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-forwarded-agent-socket-of-a-dead-ssh-session-wedges-git-auth-silently, regularity:a-generic-failure-message-names-a-surface-shared-by-many-causes, regularity:a-child-process-reads-its-parents-ambient-root, regularity:a-success-condition-edited-by-the-party-it-judges-gets-no-independent-read, regularity:a-non-hermetic-read-fails-independently-of-the-artifact]
+grounding_judged: aa97bdc9541b2204d7567ebb98fb99af844fc2ac879a4879abda066387076687
 created: 2026-07-03
 last_verified: 2026-07-03
 ---
@@ -11,6 +14,19 @@ last_verified: 2026-07-03
 
 ## Difficulty
 `git fetch`/`push` to github.com hangs indefinitely with **zero output** — not a timeout error, a silent wedge — even though TCP to the remote connects fine. Diagnosis is misleading: it looks like a network/proxy problem. The real cause: `SSH_AUTH_SOCK` points (via the login-refreshed symlink `~/.ssh/ssh_auth_sock`) to a **forwarded agent socket of an ssh session that has died** (`/tmp/ssh-*/agent.*`). The socket still accepts connections, so ssh completes the transport handshake and then blocks forever inside the agent query at the publickey step (`ssh -vv` stalls right after `Next authentication method: publickey`; `ssh-add -l` also hangs). Cost paid on 2026-07-03: ~10 min isolating this from a suspected git/proxy/wrapper issue mid-task.
+
+## Principle
+
+To get a git fetch or push to github to proceed when SSH_AUTH_SOCK points at a dead session's forwarded agent socket, confirm the wedge with `timeout 5 ssh-add -l`, run the operation under `env -u SSH_AUTH_SOCK` (the identity is an on-disk key), run the engine itself under `env -u SSH_AUTH_SOCK` when a plan's check embeds a git fetch rather than rewriting the check, and leave ~/.ssh/ssh_auth_sock alone because the user's login machinery owns and refreshes it.
+
+## Goal class
+
+git auth over ssh not wedged by a stale forwarded agent
+
+## Grounded in
+
+- [[a-forwarded-agent-socket-of-a-dead-ssh-session-wedges-git-auth-silently]]
+- [[a-generic-failure-message-names-a-surface-shared-by-many-causes]]
 
 ## Guidance
 - Signature check (fast): `timeout 5 ssh-add -l` — a hang (exit 124) rather than an instant listing/refusal confirms a wedged agent socket.

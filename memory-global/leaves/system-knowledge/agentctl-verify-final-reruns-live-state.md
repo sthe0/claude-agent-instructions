@@ -2,7 +2,10 @@
 name: agentctl-verify-final-reruns-live-state
 description: agentctl verify-final re-executes every stage's own verify_command against CURRENT live state, not a historical snapshot from when that stage originally ran — a stage-level exact-count/fact assertion goes permanently stale once later, legitimate, out-of-plan activity changes that fact.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-stage-control-is-re-evaluated-after-its-world-has-changed]
+grounding_judged: e20ae82959bab64a1e0c654fe12ff8949e789830834691ffe7986cae46dbb34a
 created: 2026-09-22
 last_verified: 2026-09-22
 ---
@@ -25,6 +28,18 @@ comment-cleanup task, 2026-09-22): a first
 count" fix were both wrong, and the actual re-run-against-live-state
 behavior was found only by directly `exec()`-ing the extracted verify_command
 body against the live ticket.
+
+## Principle
+
+To keep verify-final passable after legitimate out-of-plan activity, author each stage verify_command to assert only facts the stage itself produces and that stay true once true, and put invariants about the plan's final state, including exact totals, solely in final_check.
+
+## Goal class
+
+verify-final that stays passable once the plan has run
+
+## Grounded in
+
+- [[a-stage-control-is-re-evaluated-after-its-world-has-changed]]
 
 ## Guidance
 

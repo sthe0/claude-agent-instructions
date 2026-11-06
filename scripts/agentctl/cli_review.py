@@ -9,6 +9,7 @@ import shlex
 from . import (
     advisor,
     gates,
+    grounding_gate,
     protected_actions,
     carry_forward,
     order_approvals,
@@ -110,6 +111,8 @@ from .cli_common import (
     _note_round_release,
     _evaluate_review_trigger,
     _utcnow,
+    _baseline_plan_for_tier,
+    _with_advisories,
 )
 
 
@@ -1127,10 +1130,46 @@ def _cmd_order_review(args, state: SessionState, *, store: StateStore) -> Direct
         },
     )
 
-
+def _grounding_pass_refusal(args, state: SessionState, store: StateStore, runner: Runner | None,
+                            warnings: list[str]) -> Directive | None:
+    """A refusal of a whole-plan or stage-scoped `pass` while a stage outside the exempt set (the one
+    submission uses) keeps a defective grounding the plan does not override. A judge that cannot look
+    adds a warning and refuses nothing; only an unverified given is refused by rule alone."""
+    if args.verdict != gates._PLAN_REVIEW_PASS:
+        return None
+    scope = (getattr(args, "scope", None) or "").strip()
+    stage_index = plan_review_scope_stage_index(scope) if scope else None
+    if scope and stage_index is None:
+        return None
+    target = getattr(args, "target", None) or state.plan_path
+    if not target:
+        return None
+    try:
+        doc = load_plan(target)
+    except (OSError, PlanError):
+        return None
+    exempt = grounding_gate.exempt_stages(state, doc, _baseline_plan_for_tier(store, state))
+    blockers = grounding_gate.review_pass_blockers(
+        doc, exempt, runner=runner, weight_class=state.weight_class, warnings=warnings, only=stage_index)
+    if not blockers:
+        return None
+    return Directive(False, state.node, "fix_plan",
+                     "plan-review refuses pass: a grounding defect stands (fix the source or keep it with "
+                     "[stage.principle] grounding_override = '<reason>'): " + "; ".join(blockers),
+                     data={"problems": blockers})
 
 
 def cmd_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Record a thinker review of a plan version (`_record_plan_review`), after refusing a `pass` that
+    leaves an un-overridden grounding defect standing."""
+    state = _require(store, args.session)
+    warnings: list[str] = []
+    refusal = _grounding_pass_refusal(args, state, store, runner, warnings)
+    d = refusal if refusal is not None else _record_plan_review(args, store=store, runner=runner)
+    return _with_advisories(d, warnings)
+
+
+def _record_plan_review(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Record a thinker review of a plan version, backing the plan-review gate.
 
     The COGNITION (the thinker's reasoning) happens in the thinker leaf; this only

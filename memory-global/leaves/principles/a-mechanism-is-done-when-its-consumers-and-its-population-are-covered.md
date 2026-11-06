@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:a-mechanism-green-in-isolation-can-lack-consumers-and-population]
+grounding_judged: d814ab765ea778f4731b19bd3cd20d43e798cb74dd4c536dbf4406e035b6a56f
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

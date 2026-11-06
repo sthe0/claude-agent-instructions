@@ -29,6 +29,8 @@ from . import (
     exempt_paths,
     gates,
     grants as _grants,
+    grounding,
+    grounding_gate,
     norm_handoff,
     order_approvals,
     plan_refs,
@@ -45,6 +47,7 @@ from .config import Thresholds
 from .directive import Directive, DIRECTIVE_ESCALATE_TO_USER
 from .dispatch import Runner, subprocess_runner
 from .machine import transition
+from .render import render_plan_generalizations
 from .plan import (
     stage_carry_key,
     PlanDoc,
@@ -150,16 +153,28 @@ def _observation_sha256(observation: str) -> str:
 _AUTOMATED_JUDGE_REVIEWERS = (advisor.JUDGE_REVIEWER, "judge:haiku")
 
 
+def _bound_elsewhere(kept: StageReview, fresh: StageReview) -> bool:
+    """True when both reviews are bound to observation bytes and the bytes differ.
+    An unbound record (empty sha, e.g. persisted before binding existed) stays protected."""
+    return bool(kept.observation_sha256 and fresh.observation_sha256
+                and kept.observation_sha256 != fresh.observation_sha256)
+
+
 def _record_stage_review(state: SessionState, review: StageReview, *, from_judge: bool) -> None:
     """Store a StageReview, one per stage_index (last-wins). A judge verdict
-    (from_judge=True) NEVER clobbers a human/manual review already present for the
-    stage (e.g. an override): the automated cognition must not silently overwrite the
-    user's explicit escape. A manual record (from_judge=False, via cmd_stage_review)
-    always replaces."""
+    (from_judge=True) never clobbers a human/manual review of the SAME observation
+    (e.g. an override): the automated cognition must not silently overwrite the
+    user's explicit escape. A human review bound to OTHER observation bytes no longer
+    speaks for the observation being judged — the gate already reads it as stale — so
+    a judge verdict on the current bytes replaces it instead of leaving the gate stale
+    forever. A manual record (from_judge=False, via cmd_stage_review) always replaces."""
     existing = [r for r in state.stage_reviews if r.stage_index == review.stage_index]
     # Not a bare `!= advisor.JUDGE_REVIEWER`: persisted reviews keep the tag they were
     # written under, so a judge-tier rename would otherwise freeze old automated verdicts as "human".
-    if from_judge and existing and any(r.reviewer not in _AUTOMATED_JUDGE_REVIEWERS for r in existing):
+    if from_judge and any(
+        r.reviewer not in _AUTOMATED_JUDGE_REVIEWERS and not _bound_elsewhere(r, review)
+        for r in existing
+    ):
         return
     state.stage_reviews = [r for r in state.stage_reviews if r.stage_index != review.stage_index]
     state.stage_reviews.append(review)
@@ -2005,6 +2020,56 @@ def _frozen_edge_stages(state: SessionState, baseline, new) -> frozenset[int]:
                      and s.supplies == old[s.index])
 
 
+def _grounding_exempt_stages(state: SessionState, baseline, new) -> frozenset[int]:
+    """PASSED stages whose `[stage.principle]` `new` leaves as `baseline` had it: finished
+    work is not re-judged, an edited principle is. With no baseline every PASSED stage is
+    exempt; with no state none is."""
+    if state is None:
+        return frozenset()
+    passed = {s.index for s in state.stages
+              if s.outcome.status == StageStatus.PASSED.value}
+    if baseline is None:
+        return frozenset(passed)
+    old = {s.index: s.principle for s in baseline.stages}
+    return frozenset(s.index for s in new.stages
+                     if s.index in passed and s.index in old and s.principle == old[s.index])
+
+
+def _grounding_inputs(doc) -> dict:
+    meta = doc.meta
+    project = Path(meta.repo_root) / ".claude" / "agent-memory" if meta.repo_root else None
+    staged = Path(meta.delivery_worktree) / "memory-global" / "leaves" if meta.delivery_worktree else None
+    return {
+        "global_leaves": grounding.engine_leaves_root(),
+        "project_root": project if project is not None and project.is_dir() else None,
+        "staged_leaves": staged if staged is not None and staged.is_dir() else None,
+        "task_id": meta.task_id or None,
+    }
+
+
+def _generalizations_block(doc) -> str:
+    corpus = grounding.load_ground_corpus(**_grounding_inputs(doc))
+    return render_plan_generalizations(doc, corpus)
+
+
+def _generalizations_missing(doc, text: str) -> str | None:
+    """The new-generalizations block when `text` does not contain it, else None."""
+    block = _generalizations_block(doc)
+    return None if block.strip() in text else block
+
+
+def _grounding_problems(doc, grounding_exempt_stages: frozenset[int] = frozenset()) -> list[str]:
+    if not grounding.is_substantive(doc):
+        return []
+    inputs = _grounding_inputs(doc)
+    if not Path(inputs["global_leaves"]).is_dir():
+        return [f"grounding: the engine's leaves root {inputs['global_leaves']} is not a "
+                "directory, so no [stage.principle].source can be resolved"]
+    return grounding.grounding_violations(
+        doc, corpus=grounding.load_ground_corpus(**inputs),
+        exempt_stages=grounding_exempt_stages)
+
+
 def _plan_from_snapshot(store: StateStore, state: SessionState, digest: str):
     """The plan version `digest` parsed from its stored snapshot, or None when no readable
     snapshot of it exists or it does not parse."""
@@ -2336,7 +2401,9 @@ def _submission_advice(
 
 
 def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
-                         frozen_edge_stages: frozenset[int] = frozenset()) -> list[str]:
+                         frozen_edge_stages: frozenset[int] = frozenset(), *,
+                         state: SessionState | None = None, baseline=None,
+                         warnings: list[str] | None = None) -> list[str]:
     """The submission seam's REFUSING channel, with its judge resolved the way the advice
     channel's is — one place per channel, so no seam re-derives the enabled rule.
 
@@ -2362,7 +2429,12 @@ def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
     # A node over plan-stage-max-chars cannot be reviewed in one pair prompt, so every seam
     # that admits plan bytes to a session (submit-plan, approve after an in-place edit,
     # replan, renormalize) refuses it; a missing size limit refuses too (fails closed).
-    return violations + [f["message"] for f in plan_size_blocks(doc)]
+    # The exempt set (finished stages whose principle is unchanged) is the one plan-review uses too; a
+    # judge that cannot look adds to `warnings` and never refuses.
+    exempt = grounding_gate.exempt_stages(state, doc, baseline)
+    return (violations + _grounding_problems(doc, exempt)
+            + grounding_gate.plan_problems(doc, exempt, runner=runner, enabled=enabled, warnings=warnings)
+            + [f["message"] for f in plan_size_blocks(doc)])
 
 
 def _run_check(command: str, expected_exit: int, runner: Runner | None, cwd: str | None = None):
@@ -3353,7 +3425,7 @@ _SESSION_COMMANDS = (
     "question-candidate-dispose",
     "order-raise", "order-dispose", "order-submit", "order-agree", "order-challenge-dismiss",
     "order-list", "classify", "plan",
-    "plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
+    "plan-render", "plan-grants", "plan-generalizations", "plan-resources", "plan-digest", "plan-externalize",
     "plan-seal", "plan-convert", "plan-convert-live", "submit-plan", "present-plan", "confirm-delivery", "plan-review",
     "plan-review-delta", "plan-review-walk", "plan-review-compose", "plan-review-pair-history",
     "risk-accept", "accept-protected-grant", "stage-review", "code-review", "accept", "approve",
@@ -3445,7 +3517,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("control", ("question-raise",),
      "structured control address matched against controls.MATERIALITY_GRAMMARS — a "
      "grammar-bound name, never the prose --control of record-result/close"),
-    ("plan", ("plan-render", "plan-grants", "plan-resources", "plan-digest", "plan-externalize",
+    ("plan", ("plan-render", "plan-grants", "plan-generalizations", "plan-resources", "plan-digest", "plan-externalize",
               "plan-seal", "plan-convert", "plan-review-delta", "submit-plan", "replan", "drive",
               "push-subplan", "question-enumerate", "question-enumerate-worker",
               "question-enumerate-escape", "question-dispose",

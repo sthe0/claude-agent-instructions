@@ -8,16 +8,24 @@ with no experience source carries a `rule_derived:` reason instead. The two
 sides mirror each other, and the regularity's `regularities/MEMORY.md` pointer
 lists the same sources after its `← `.
 
-A global principle (principle/v1, the norm layer) is not induced: it carries
+A principle (principle/v1, the norm layer, either tier) is not induced: it carries
 `grounded_in: [regularity:<slug>, ...]` naming the regularities it rests on and
 no `induced_from`; its `principles/MEMORY.md` pointer lists the same slugs, the
-`regularity:` prefix dropped, after its `← `.
+`regularity:` prefix dropped, after its `← `. A project principle's regularities
+resolve in the project tier first, then globally.
+
+The grounding judge reads each principle's link to its grounds. Writing a principle
+(`promote`, `restamp`) judges it and stamps `grounding_judged: <digest of the link>`; a judge
+that is down leaves `grounding_unjudged: <date> ...` instead, which only warns. Reading the
+corpus then decides by rule alone, with no model: a missing or stale stamp fails
+(`unjudged_link`), a retired `leaf/v1` leaf fails, a given ground not re-verified within
+the configured age warns (`stale_given`). `live_link_findings` asks the judge now.
 
 A project leaf never names a global regularity directly: its general aspect
 reaches Core as a sanitized case (case/v1, under `principles/cases/`) that is
 linked two-sided with its global regularities and cited one way by the project
-leaf. Project-only generalizations live in the project's own `principles/`,
-which keep `induced_from` (the project tier is grandfathered).
+leaf. Project-only generalizations are regularities in the project's own
+`regularities/`, induced from project experience like the global ones.
 
 Every rule is a module-level function, called by its global name at call time,
 so each can be replaced in-process by a test of the rule it decides. Callers
@@ -26,15 +34,22 @@ import this module as `lib.principle_provenance` and call `pp.<fn>`.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import tempfile
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
+
+from lib import leaf_forms
 
 FIELD = "generalized_into"
 INDUCED = "induced_from"
 GROUNDED = "grounded_in"
+INTRODUCED_BY = "introduced_by"
+ORDER_DERIVED = "order_derived"
+ORDER_SECTION_TITLE = "Derived from order"
 REGULARITY_PREFIX = "regularity:"
 RULE_DERIVED = "rule_derived"
 SOURCE_DIGEST = "source_digest"
@@ -47,8 +62,10 @@ LEAVES_REL = Path("memory-global/leaves")
 CASES_DIR = Path("principles/cases")
 INDEX = "MEMORY.md"
 EXPERIENCE_SOURCE_KINDS = ("experience", "case")
-STAGED_SCOPES = ("memory-global/leaves/experience/", "memory-global/leaves/regularities/",
-                 "memory-global/leaves/principles/")
+JUDGED_FIELD = "grounding_judged"
+OVERRIDE_FIELD = "grounding_override"
+PENDING_FIELD = "grounding_unjudged"
+RETIRED_SCHEMA = "leaf/v1"
 GENERIC_DIR_NAMES = frozenset({"/", ".claude", "agent-memory"})
 MIN_IDENTIFIER_LEN = 6
 
@@ -70,7 +87,20 @@ ORPHAN_CASE = "orphan_case"
 CASE_LEAK = "case_leak"
 UNGROUNDED_PRINCIPLE = "ungrounded_principle"
 UNKNOWN_REGULARITY = "unknown_regularity"
+UNKNOWN_ONTOLOGY = "unknown_ontology"
+ONTOLOGY_PREFIXES = ("ontology:", "project:ontology:")
 PRINCIPLE_INDUCED = "principle_induced_from"
+ORDER_NO_QUOTE = "order_no_quote"
+ORDER_ON_PRINCIPLE = "order_on_principle"
+ORDER_NO_INTRODUCED = "order_no_introduced"
+GIVEN_SOURCE = "given_source"
+RETIRED_LEAF = "retired_leaf_schema"
+UNJUDGED_LINK = "unjudged_link"
+LINK_DEFECT = "link_defect"
+PENDING_JUDGEMENT = "pending_judgement"
+STALE_GIVEN = "stale_given"
+JUDGE_UNAVAILABLE = "judge_unavailable"
+WARNING_KINDS = frozenset({PENDING_JUDGEMENT, STALE_GIVEN, JUDGE_UNAVAILABLE})
 
 FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 DIGEST_RE = re.compile(re.escape(DIGEST_PREFIX) + r"[0-9a-f]{64}")
@@ -83,7 +113,7 @@ class Leaf:
     slug: str
     path: Path
     tier: str  # 'global' | 'project'
-    area: str  # 'experience' | 'regularity' | 'principle' | 'case' | 'other'
+    area: str  # 'experience' | 'regularity' | 'principle' | 'ontology' | 'case' | 'other'
     text: str
 
 
@@ -101,7 +131,16 @@ class Finding:
     detail: str
 
 
-_AREA_PRIORITY = ("experience", "case", "regularity", "principle", "other")
+_AREA_PRIORITY = ("experience", "case", "regularity", "principle", "ontology", "other")
+
+
+def fallback_tiers(tier: str) -> tuple[str, ...]:
+    """The tiers a name of `tier` resolves in, first match wins: a project name falls back to global."""
+    return ("project", "global") if tier == "project" else ("global",)
+
+
+def checked_principle_tiers() -> tuple[str, ...]:
+    return ("global", "project")
 
 
 @dataclass
@@ -116,8 +155,7 @@ class Corpus:
     items: list[Leaf] = field(default_factory=list)
 
     def find(self, slug: str, tier: str = "global") -> Leaf | None:
-        tiers = ("project", "global") if tier == "project" else ("global",)
-        for t in tiers:
+        for t in fallback_tiers(tier):
             hits = [l for l in self.items if l.slug == slug and l.tier == t]
             if hits:
                 return min(hits, key=lambda l: _AREA_PRIORITY.index(l.area))
@@ -139,17 +177,8 @@ class Corpus:
         return _build(self.leaves_dir, self.project_root, files)
 
 
-def _area(rel: Path, tier: str) -> str:
-    parts = rel.parts
-    if len(parts) == 2 and parts[0] == "experience":
-        return "experience"
-    if tier == "global" and len(parts) == 3 and parts[:2] == CASES_DIR.parts:
-        return "case"
-    if tier == "global" and len(parts) == 2 and parts[0] == "regularities":
-        return "regularity"
-    if len(parts) == 2 and parts[0] == "principles":
-        return "principle"
-    return "other"
+def _area(rel: Path, tier: str, text: str = "") -> str:
+    return leaf_forms.area_of(rel, tier, text)
 
 
 def _build(leaves_dir: Path, project_root: Path | None, files: dict[Path, str]) -> Corpus:
@@ -164,7 +193,7 @@ def _build(leaves_dir: Path, project_root: Path | None, files: dict[Path, str]) 
                 rel = path.relative_to(base)
             except ValueError:
                 continue
-            items.append(Leaf(path.stem, path, tier, _area(rel, tier), text))
+            items.append(Leaf(path.stem, path, tier, _area(rel, tier, text), text))
             break
     return Corpus(leaves_dir, project_root, files, items)
 
@@ -312,10 +341,10 @@ def clear_rule_mark(text: str) -> str:
 # --------------------------------------------------------------------------
 def target_of(slug: str, corpus: Corpus, tier: str = "global") -> Leaf | None:
     """What a leaf of `tier` names: a global leaf a global regularity; a project leaf
-    a project principle, a case, or (refused later) a global regularity or principle."""
+    a project regularity, a case, or (refused later) a global regularity or principle."""
     if tier == "project":
         for leaf in corpus.items:
-            if leaf.slug == slug and leaf.tier == "project" and leaf.area == "principle":
+            if leaf.slug == slug and leaf.tier == "project" and leaf.area == "regularity":
                 return leaf
         for area in ("case", "regularity", "principle"):
             for leaf in corpus.items:
@@ -357,15 +386,79 @@ def rule_mark_state(target: Leaf, corpus: Corpus) -> str:
     kinds = [resolve_source(s, corpus, target.tier) for s in _induced_or_empty(target.text)]
     has_experience = any(k in EXPERIENCE_SOURCE_KINDS for k in kinds)
     marked = bool(field_value(target.text, RULE_DERIVED))
+    from_order = bool(field_value(target.text, ORDER_DERIVED)) or leaf_forms.given_provenance(target.text) is not None
     if has_experience and marked:
         return "stale"
-    if not has_experience and not marked:
+    if not (has_experience or marked or from_order):
         return "missing"
     return "ok"
 
 
-def promote_sources_ok(kinds, rule_derived) -> bool:
-    return bool(rule_derived) or any(k in EXPERIENCE_SOURCE_KINDS for k in kinds)
+def promote_sources_ok(kinds, rule_derived, order_derived=None) -> bool:
+    return (bool(rule_derived) or bool(order_derived)
+            or any(k in EXPERIENCE_SOURCE_KINDS for k in kinds))
+
+
+def order_kind_ok(kind: str) -> bool:
+    """Order provenance yields knowledge, so only a regularity may carry it."""
+    return kind == "regularity"
+
+
+def order_introduced_by(order_derived, introduced_by):
+    """The `introduced_by` value promote writes (the given one, else the order's task); the
+    reader of a written leaf is `introduced_by()`."""
+    return introduced_by or order_derived or None
+
+
+def introduced_by(text: str) -> str | None:
+    return field_value(text, INTRODUCED_BY) or None
+
+
+def order_quote(text: str) -> str | None:
+    """The body of the `## Derived from order` section, outer newlines trimmed; None when the
+    section is absent or holds only blank lines."""
+    body = section_body(text, ORDER_SECTION_TITLE)
+    return body.strip("\n") if body and body.strip() else None
+
+
+def render_order_section(quote: str, date: str) -> str:
+    """The chunk a promoted regularity carries: a dated line, then the section whose whole
+    body is the quote."""
+    return f"Generalized from an order on {date}.\n\n## {ORDER_SECTION_TITLE}\n\n{quote}\n"
+
+
+def order_introduced_problems(text: str) -> list[str]:
+    if field_value(text, ORDER_DERIVED) and not introduced_by(text):
+        return [f"an order-derived leaf carries no `{INTRODUCED_BY}`"]
+    return []
+
+
+PROJECT_MEMORY_REL = Path(".claude/agent-memory")
+
+
+def project_memory(project_dir) -> Path | None:
+    """The project memory dir for a repo dir (its `.claude/agent-memory`), or the memory dir itself
+    when `experience/`, `regularities/` or `principles/` sits directly under it (a repo with no
+    `.claude/agent-memory` but such a top-level folder is taken to be one)."""
+    if not project_dir:
+        return None
+    base = Path(project_dir).resolve()
+    nested = base / PROJECT_MEMORY_REL
+    if nested.is_dir() or not any((base / d).is_dir() for d in ("experience", "regularities", "principles")):
+        return nested
+    return base
+
+
+def promote_target_dir(leaves, project_root=None, area: str = "regularity") -> Path:
+    """Where a promoted leaf of `area` goes: under the project memory when one is given, else the global leaves."""
+    base = Path(project_root) if project_root is not None else Path(leaves)
+    return base / ("regularities" if area == "regularity" else "principles")
+
+
+def verify_corpus(root, project=None) -> list[Finding]:
+    """The provenance findings of the leaves under `root` and, when given, of the project memory dir."""
+    corpus = load_corpus(Path(root) / LEAVES_REL, project)
+    return unaccounted(corpus) + provenance_check_findings(corpus)
 
 
 def target_allowed(leaf_tier: str, target: Leaf) -> bool:
@@ -373,21 +466,25 @@ def target_allowed(leaf_tier: str, target: Leaf) -> bool:
                 and target.area in ("regularity", "principle"))
 
 
+def generalization_target_ok(leaf: Leaf) -> bool:
+    """Only a regularity (either tier) is induced from experience; a principle is grounded instead."""
+    return leaf.area == "regularity"
+
+
 def induced_leaves(corpus: Corpus) -> list[Leaf]:
-    """The leaves that carry `induced_from`: every regularity and each project principle."""
-    return [l for l in corpus.items
-            if l.area == "regularity" or (l.area == "principle" and l.tier == "project")]
+    """The leaves that carry `induced_from`: every regularity."""
+    return [l for l in corpus.items if generalization_target_ok(l)]
 
 
 def grounded_regularities(principle: Leaf) -> list[str]:
-    """The regularity slugs a global principle's `grounded_in` names (prefix dropped)."""
-    return [s[len(REGULARITY_PREFIX):] for s in _grounded_or_empty(principle.text)
-            if s.startswith(REGULARITY_PREFIX)]
+    """The regularity slugs a principle's `grounded_in` names (prefix dropped)."""
+    bare = [s.removeprefix("project:") for s in _grounded_or_empty(principle.text)]
+    return [s[len(REGULARITY_PREFIX):] for s in bare if s.startswith(REGULARITY_PREFIX)]
 
 
 def pointer_expected(leaf: Leaf) -> list[str]:
     """What the leaf's index pointer lists after its arrow."""
-    if leaf.area == "principle" and leaf.tier == "global":
+    if leaf.area == "principle":
         return grounded_regularities(leaf)
     return _induced_or_empty(leaf.text)
 
@@ -400,8 +497,13 @@ def cross_tier_enabled(project_root) -> bool:
     return project_root is not None
 
 
+def triggers_staged_check(rel) -> bool:
+    """Whether a staged path lies anywhere under the leaves tree."""
+    return str(rel).replace(os.sep, "/").startswith(LEAVES_REL.as_posix() + "/")
+
+
 def staged_triggers(paths) -> bool:
-    return any(str(p).startswith(STAGED_SCOPES) for p in paths)
+    return any(triggers_staged_check(p) for p in paths)
 
 
 def index_exempt(relpath) -> bool:
@@ -481,7 +583,7 @@ def origin_tier_ok(value) -> bool:
     return value == ORIGIN_TIER
 
 
-def _section_body(text: str, name: str) -> str | None:
+def section_body(text: str, name: str) -> str | None:
     m = re.search(rf"^##[ \t]+{re.escape(name)}[ \t]*$", text, re.MULTILINE)
     if not m:
         return None
@@ -490,7 +592,7 @@ def _section_body(text: str, name: str) -> str | None:
 
 
 def case_section_error(text: str) -> str | None:
-    missing = [n for n in CASE_SECTIONS if not (_section_body(text, n) or "").strip()]
+    missing = [n for n in CASE_SECTIONS if not (section_body(text, n) or "").strip()]
     if missing:
         return "case is missing or has empty section(s): " + ", ".join(f"## {n}" for n in missing)
     return None
@@ -554,6 +656,64 @@ def experiences_of(target: Leaf, corpus: Corpus) -> list[Leaf]:
     return out
 
 
+def ontology_ground_target(item: str, corpus: Corpus, adr_dir=None) -> Path | None:
+    """The ontology/v1 leaf or Core ADR an `ontology:<slug>` ground item names, or None when it names
+    neither or names a leaf of another kind. Resolution is the grounding gate's own."""
+    from agentctl import grounding
+
+    refs, bad = grounding.parse_ground_refs(item)
+    if bad or len(refs) != 1 or refs[0].kind != grounding.ONTOLOGY_KIND:
+        return None
+    adr_dir = grounding.engine_adr_dir() if adr_dir is None else adr_dir
+    target = grounding.ontology_target(refs[0], corpus, adr_dir)
+    if target is None or not grounding.ontology_kind_ok(target, corpus, adr_dir):
+        return None
+    return target
+
+
+def tier_admits(principle_tier: str, item: str) -> bool:
+    """A `project:` ref is admitted only in a project principle: a global principle must not rest on project memory."""
+    return not (principle_tier != "project" and str(item).startswith("project:"))
+
+
+def knowledge_ground_target(item: str, corpus: Corpus, tier: str) -> Path | None:
+    """The regularity, experience or case leaf a `grounded_in` item names for a principle of `tier`, or
+    None when it names none of them (a principle ref included). A bare ref resolves in the
+    principle's own tier first, then global; `project:` is admitted in a project principle only."""
+    from agentctl import grounding
+
+    if not tier_admits(tier, item):
+        return None
+    explicit = str(item).startswith("project:")
+    kind, sep, slug = str(item).removeprefix("project:").partition(":")
+    if not sep or kind not in grounding.GROUND_KINDS or not slug or ":" in slug:
+        return None
+    ref = grounding.GroundRef("project" if explicit or tier == "project" else "global", kind, slug)
+    leaf = grounding.leaf_for(ref, corpus)
+    if leaf is None or not grounding.kind_matches(ref, leaf):
+        return None
+    return leaf.path
+
+
+def has_knowledge_ground(items, corpus: Corpus, tier: str) -> bool:
+    """Whether some item rests the principle on knowledge: a regularity, experience or case, or an ontology ground."""
+    adr_dir = corpus.leaves_dir.parent.parent / "docs" / "adr"
+    return any(knowledge_ground_target(item, corpus, tier) is not None
+               or (item.startswith(ONTOLOGY_PREFIXES) and ontology_ground_target(item, corpus, adr_dir) is not None)
+               for item in items)
+
+
+def knowledge_grounds(principle_text: str, corpus: Corpus, tier: str) -> dict[str, Leaf]:
+    """{ref text: leaf} over the regularity, experience and case grounds a principle's `grounded_in` resolves now."""
+    out: dict[str, Leaf] = {}
+    for item in _grounded_or_empty(principle_text):
+        target = knowledge_ground_target(item, corpus, tier)
+        leaf = next((l for l in corpus.items if l.path == target), None) if target is not None else None
+        if leaf is not None:
+            out[("project:" if leaf.tier == "project" else "") + f"{leaf.area}:{leaf.slug}"] = leaf
+    return out
+
+
 def unaccounted(corpus: Corpus) -> list[Finding]:
     findings: list[Finding] = []
 
@@ -571,8 +731,7 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
             continue
         for slug in status:
             if not principle_exists(slug, corpus, leaf.tier):
-                noun = "principle" if leaf.tier == "project" else "regularity"
-                report(UNKNOWN_PRINCIPLE, leaf, f"names unknown {noun} {slug!r}")
+                report(UNKNOWN_PRINCIPLE, leaf, f"names unknown regularity {slug!r}")
                 continue
             target = target_of(slug, corpus, leaf.tier)
             if target is None:
@@ -608,28 +767,48 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
         elif state == "stale":
             report(STALE_MARK, target, f"has an experience source and a stale `{RULE_DERIVED}`")
 
-    regularity_slugs = {r.slug for r in corpus.of("regularity", "global")}
-    for principle in corpus.of("principle", "global"):
-        if field_value(principle.text, INDUCED) is not None:
-            report(PRINCIPLE_INDUCED, principle,
-                   f"a principle names its regularities in `{GROUNDED}`, not `{INDUCED}`")
-        try:
-            grounded = read_grounded(principle.text)
-        except ValueError as exc:
-            report(BAD_STATUS, principle, str(exc))
+    for tier in checked_principle_tiers():
+        for principle in corpus.of("principle", tier):
+            if field_value(principle.text, INDUCED) is not None and not generalization_target_ok(principle):
+                report(PRINCIPLE_INDUCED, principle,
+                       f"a principle names its regularities in `{GROUNDED}`, not `{INDUCED}`")
+            try:
+                grounded = read_grounded(principle.text)
+            except ValueError as exc:
+                report(BAD_STATUS, principle, str(exc))
+                continue
+            if not has_knowledge_ground(grounded, corpus, tier):
+                report(UNGROUNDED_PRINCIPLE, principle,
+                       f"no `{GROUNDED}: [{REGULARITY_PREFIX}<slug>, ...]` item naming knowledge")
+            for item in grounded:
+                if item.startswith(ONTOLOGY_PREFIXES):
+                    if ontology_ground_target(item, corpus, corpus.leaves_dir.parent.parent / "docs" / "adr") is None:
+                        report(UNKNOWN_ONTOLOGY, principle,
+                               f"`{GROUNDED}` item {item!r} names no ontology/v1 leaf and no Core ADR")
+                    continue
+                if knowledge_ground_target(item, corpus, tier) is None:
+                    report(UNKNOWN_REGULARITY, principle,
+                           f"`{GROUNDED}` item {item!r} names no existing regularity, experience or "
+                           "case (a principle is a norm, not a ground)")
+
+    for leaf in corpus.items:
+        if not field_value(leaf.text, ORDER_DERIVED):
             continue
-        if not grounded:
-            report(UNGROUNDED_PRINCIPLE, principle,
-                   f"no `{GROUNDED}: [{REGULARITY_PREFIX}<slug>, ...]` naming a regularity")
-        for item in grounded:
-            if not (item.startswith(REGULARITY_PREFIX)
-                    and item[len(REGULARITY_PREFIX):] in regularity_slugs):
-                report(UNKNOWN_REGULARITY, principle,
-                       f"`{GROUNDED}` item {item!r} is not `{REGULARITY_PREFIX}<slug>` of an "
-                       "existing regularity")
+        if not order_kind_ok(leaf.area):
+            report(ORDER_ON_PRINCIPLE, leaf,
+                   f"`{ORDER_DERIVED}` belongs to a regularity only (found on {leaf.area})")
+        if order_quote(leaf.text) is None:
+            report(ORDER_NO_QUOTE, leaf, f"no quote under `## {ORDER_SECTION_TITLE}`")
+        for problem in order_introduced_problems(leaf.text):
+            report(ORDER_NO_INTRODUCED, leaf, problem)
+
+    for leaf in corpus.of("regularity"):
+        for problem in leaf_forms.given_source_problems(
+                leaf.text, leaf_forms.given_source_root(leaf.tier, leaf.path)):
+            report(GIVEN_SOURCE, leaf, problem)
 
     for leaf in index_mismatches(corpus):
-        field_name = GROUNDED if leaf.area == "principle" and leaf.tier == "global" else INDUCED
+        field_name = GROUNDED if leaf.area == "principle" else INDUCED
         report(INDEX_MISMATCH, leaf, f"its {INDEX} pointer lists other sources than `{field_name}`")
 
     cross = cross_tier_enabled(corpus.project_root)
@@ -654,6 +833,181 @@ def unaccounted(corpus: Corpus) -> list[Finding]:
         if found:
             report(CASE_LEAK, case, "carries project identifier(s): " + ", ".join(found))
     return findings
+
+
+# --------------------------------------------------------------------------
+# judgement of a principle's link to its grounds
+# --------------------------------------------------------------------------
+def _judge():
+    """The grounding judge, imported on first use: it imports this module."""
+    from agentctl import grounding_judge
+    return grounding_judge
+
+
+def live_runner():
+    """The real model runner, or None while the advisor is forced off (AGENTCTL_ADVISOR=0)."""
+    if os.environ.get("AGENTCTL_ADVISOR") == "0":
+        return None
+    from agentctl import advisor
+    return advisor.subprocess_runner
+
+
+def judge_cache_dir():
+    return _judge().cache_dir()
+
+
+def judged_principles(corpus: Corpus) -> list[Leaf]:
+    """The principles of the checked tiers that name grounds: the links a stamp covers."""
+    return [l for tier in checked_principle_tiers() for l in corpus.of("principle", tier)
+            if _grounded_or_empty(l.text)]
+
+
+def override_of(leaf: Leaf) -> str | None:
+    return leaf_forms.field(leaf_forms.frontmatter_of(leaf.text), OVERRIDE_FIELD) or None
+
+
+def stamp_current(leaf: Leaf, corpus: Corpus) -> bool:
+    """Whether the leaf's `grounding_judged` stamp is the digest of its link as it stands now."""
+    stamp = leaf_forms.field(leaf_forms.frontmatter_of(leaf.text), JUDGED_FIELD)
+    digest = hashlib.sha256(_judge().leaf_link_inputs(leaf, corpus).encode("utf-8")).hexdigest()
+    return bool(stamp) and stamp == digest
+
+
+def pending_is_warning(frontmatter: str) -> bool:
+    """A leaf marked `grounding_unjudged` waits for a judge that was down; it warns, it does not fail."""
+    return leaf_forms.field(frontmatter, PENDING_FIELD) is not None
+
+
+def stamp_frontmatter(record: dict) -> dict[str, str]:
+    """The stamp a judged record earns; nothing for an outage or a defect left standing."""
+    lines = dict(line.split(": ", 1) for line in _judge().stamp_lines(record))
+    return {JUDGED_FIELD: lines[JUDGED_FIELD]} if JUDGED_FIELD in lines else {}
+
+
+def override_frontmatter(reason: str | None) -> dict[str, str]:
+    return {OVERRIDE_FIELD: json.dumps(" ".join(reason.split()))} if reason and reason.strip() else {}
+
+
+def pending_frontmatter(today=None) -> dict[str, str]:
+    return {PENDING_FIELD: f"{(today or date.today()).isoformat()} judge unavailable"}
+
+
+def rewrite_judgement(text: str, fields: dict[str, str]) -> str:
+    """The leaf text with its judgement fields (stamp, pending marker, override) replaced by `fields`."""
+    for key in (JUDGED_FIELD, PENDING_FIELD, OVERRIDE_FIELD):
+        text = remove_field(text, key)
+    for key, value in fields.items():
+        text = set_field(text, key, value)
+    return text
+
+
+def given_ground(leaf: Leaf, corpus: Corpus) -> dict | None:
+    """A regularity as the currency rule reads a ground, or None when it is neither given nor
+    order-derived."""
+    ground, _grounds = _judge().leaf_link_fields(leaf, corpus)
+    if not ground.get("given") and field_value(leaf.text, ORDER_DERIVED):
+        ground = {**ground, "given": ORDER_DERIVED, "given_source": ""}
+    return ground if ground.get("given") else None
+
+
+def stale_given_grounds(principle: Leaf, corpus: Corpus, *, checked_paths=(), today=None) -> list[Leaf]:
+    """The given or order-derived regularities a principle cites that the age rule no longer vouches
+    for. Decided by rule, before and apart from the judge, so a judge that is down changes nothing."""
+    from agentctl import grounding
+    stale: list[Leaf] = []
+    for item in _grounded_or_empty(principle.text):
+        refs, _bad = grounding.parse_ground_refs(item)
+        if not refs or refs[0].kind != "regularity":
+            continue
+        tier = "project" if refs[0].tier == "project" else principle.tier
+        found = grounding.leaf_for(grounding.GroundRef(tier, "regularity", refs[0].slug), corpus)
+        if found is None or found.area != "regularity" or found in stale:
+            continue
+        ground = given_ground(found, corpus)
+        if ground is not None and not _judge().given_currency(ground, checked_paths=checked_paths,
+                                                              today=today):
+            stale.append(found)
+    return stale
+
+
+def stale_given_warnings(corpus: Corpus, *, checked_paths=(), today=None) -> list[Finding]:
+    citing: dict[Leaf, list[str]] = {}
+    for principle in judged_principles(corpus):
+        for ground in stale_given_grounds(principle, corpus, checked_paths=checked_paths, today=today):
+            citing.setdefault(ground, []).append(principle.slug)
+    return [Finding(STALE_GIVEN, ground.path,
+                    f"given ground not re-verified within {_judge().max_age_days()} days; "
+                    f"cited by {', '.join(slugs)}")
+            for ground, slugs in citing.items()]
+
+
+def retired_leaf_findings(corpus: Corpus) -> list[Finding]:
+    return [Finding(RETIRED_LEAF, leaf.path, f"`schema: {RETIRED_SCHEMA}` is retired; convert the leaf")
+            for leaf in corpus.items if leaf_forms.schema_of(leaf.text) == RETIRED_SCHEMA]
+
+
+def unjudged_findings(corpus: Corpus) -> list[Finding]:
+    findings = []
+    for leaf in judged_principles(corpus):
+        if stamp_current(leaf, corpus):
+            continue
+        waiting = pending_is_warning(leaf_forms.frontmatter_of(leaf.text))
+        findings.append(Finding(
+            PENDING_JUDGEMENT if waiting else UNJUDGED_LINK, leaf.path,
+            "the judge was down when this link was written; `restamp` it once it is up" if waiting
+            else f"no current `{JUDGED_FIELD}` stamp for this link; `restamp` it"))
+    return findings
+
+
+def provenance_check_findings(corpus: Corpus, *, checked_paths=(), today=None) -> list[Finding]:
+    """The findings a corpus earns from the grounding judgement, decided by rule alone: retired
+    forms and unjudged links fail; a pending mark and a stale given ground only warn
+    (`WARNING_KINDS`)."""
+    return (retired_leaf_findings(corpus) + unjudged_findings(corpus)
+            + stale_given_warnings(corpus, checked_paths=checked_paths, today=today))
+
+
+def live_link_findings(corpus: Corpus, *, runner, cache=None, today=None, checked_paths=()) -> list[Finding]:
+    """Judge every link now: a defect that no override waives fails, a judge that is down warns."""
+    findings = []
+    for leaf in judged_principles(corpus):
+        record = _judge().judge_leaf(leaf, corpus, runner=runner, cache=cache, today=today,
+                                     checked_paths=checked_paths)
+        if record.get("status") != "ok":
+            findings.append(Finding(JUDGE_UNAVAILABLE, leaf.path,
+                                    record.get("warning") or "grounding judge unavailable"))
+            continue
+        defects = list(record.get("link_defects") or []) + list(record.get("ground_defects") or [])
+        if defects and override_of(leaf) is None:
+            findings.append(Finding(LINK_DEFECT, leaf.path,
+                                    f"judged defective: {', '.join(defects)} — {record.get('reason') or ''}"))
+    return findings
+
+
+def promote_grounding_check(leaf: Leaf, corpus: Corpus, *, runner, override=None, cache=None, today=None,
+                            checked_paths=()) -> dict:
+    """What judging a principle's link adds to writing it: `problems` that refuse it, the judgement
+    `fields` to write, and `warnings`. A stale given ground refuses before the model is asked, so a
+    judge that is down cannot let it through; an outage warns and marks the leaf pending."""
+    stale = stale_given_grounds(leaf, corpus, checked_paths=checked_paths, today=today)
+    if stale and not override:
+        return {"problems": [f"grounding: ground {g.slug!r} is given and was not re-verified within "
+                             f"{_judge().max_age_days()} days; re-verify it or pass --grounding-override REASON"
+                             for g in stale],
+                "fields": {}, "warnings": []}
+    fields = override_frontmatter(override)
+    judged = Leaf(leaf.slug, leaf.path, leaf.tier, leaf.area, rewrite_judgement(leaf.text, fields))
+    record = _judge().judge_leaf(judged, corpus, runner=runner, cache=cache, today=today,
+                                 checked_paths=checked_paths)
+    if record.get("status") != "ok":
+        return {"problems": [], "fields": {**fields, **stamp_frontmatter(record), **pending_frontmatter(today)},
+                "warnings": [record.get("warning") or "grounding judge unavailable"]}
+    defects = list(record.get("link_defects") or []) + list(record.get("ground_defects") or [])
+    if defects and not override:
+        return {"problems": [f"grounding: the judge refused the link: {', '.join(defects)} — "
+                             f"{record.get('reason') or ''}; fix it or pass --grounding-override REASON"],
+                "fields": {}, "warnings": []}
+    return {"problems": [], "fields": {**fields, **stamp_frontmatter(record)}, "warnings": []}
 
 
 # --------------------------------------------------------------------------

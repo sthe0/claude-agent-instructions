@@ -615,7 +615,7 @@ def once(state_root, *, window_hours, include_all, sessions, cost_log, transcrip
     ``waiting: N`` count, then each ``--session``'s detail tree.
     Raises ``NoSuchSession`` for a ``--session`` that names no task."""
     snapshot = model.collect(state_root, now=now, window_hours=window_hours, include_all=include_all,
-                             sessions=sessions, cost_log=cost_log)
+                             sessions=sessions, cost_log=cost_log, windowed=attention.windowed_engines(locator))
     missing = missing_sessions(snapshot, sessions)
     if missing:
         raise NoSuchSession(missing)

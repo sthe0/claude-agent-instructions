@@ -2,7 +2,10 @@
 name: agentctl-ask-gates
 description: "The three Ask gates of agentctl (resolution ask, content-waiver ask, plan-approval ask): per gate the marker the AskUserQuestion must carry, the preceding event it must follow, the escape, the verb and call sites, how evaluations are logged and what code is shared; the test of 'one parameterized ask-evidence gate' (verdict: partial) and a keep/merge/fix decision per gate with real-session counts"
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: scripts/agentctl/cli.py
 created: 2026-10-26
 last_verified: 2026-10-26
 ---
@@ -16,6 +19,18 @@ half, by `approve`). They look like one rule with three parameters (marker, prec
 a reader trimming the engine is tempted to fold them into one gate. The code shows how far that holds: two
 of them scan the same transcript for the same shape; the third judges a different object. The gate log also
 counts only two of the three, and the third (plan approval) is split between the log and the judge ledger.
+
+## Regularity
+
+agentctl has three gates that depend on the user having been asked a question, and they are not one parameterized gate. resolution_ask (cli.py _resolution_ask_gate) and content_waiver_ask (cli.py _content_waiver_blocker) both reduce to "an answered AskUserQuestion with a marker in an option, timestamped after an engine-recorded event", with markers [resolution-ask] and [content-waiver-ask], but read the transcript through two separate parsers; only the resolution gate has an escape (--resolution-ask-unverifiable, honoured when the transcript cannot be read). approval_ask (scripts/hook-plan-delivery-gate.py) does not reduce to that predicate: it identifies the ask through a fail-open model judge behind a lexical prefilter, requires the [show-full-plan] marker as an option, fires before the ask is asked, and binds the presentation receipt to plan_sha256. The gate log counts the resolution ask (folded into the resolution label) and plan approval (a plan_approval row merged from approve blockers, plus plan_delivery rows in the judge ledger); the content-waiver ask has no gate-log label. Measured at cutoff 2026-10-26 over real sessions, resolution refused 40 of 1106 evaluations and plan_approval 518 of 4505.
+
+## Given
+
+Given from code: `scripts/agentctl/cli.py`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+Reading scripts/agentctl/cli.py, scripts/agentctl/gates.py and scripts/hook-plan-delivery-gate.py shows the approval ask judged by a plain marker walk after an engine event (so the three do reduce to one predicate), the content-waiver ask logging under a gate-log label, or measure.py gatecounts --family ask at the cutoff returning counts different from 1106/40 and 4505/518.
 
 ## Guidance
 

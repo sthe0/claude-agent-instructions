@@ -2,7 +2,10 @@
 name: DeepSeek v4 API specifics
 description: Difficulty it removes — you need to call DeepSeek v4 but don't know the model ids, how to toggle thinking-mode, or the reasoning_effort levels. Fact — model identifiers, thinking-mode parameter shape (extra_body), and reasoning_effort levels for DeepSeek's OpenAI-compatible API as of 2026-05.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: doc
+given_source: https://api-docs.deepseek.com/guides/thinking_mode
 created: 2026-05-29
 last_verified: 2026-06-24
 ---
@@ -12,6 +15,18 @@ last_verified: 2026-06-24
 ## Difficulty
 
 You need to call DeepSeek v4 but don't know the current model IDs, how to toggle thinking mode, or what values `reasoning_effort` accepts — documentation is sparse and the legacy model aliases (`deepseek-chat`, `deepseek-reasoner`) are misleading.
+
+## Regularity
+
+DeepSeek's OpenAI-compatible chat-completions API at https://api.deepseek.com/v1 (checked 2026-05-29) exposes the model ids deepseek-v4-pro and deepseek-v4-flash; the legacy aliases deepseek-chat and deepseek-reasoner map to v4-flash non-thinking and v4-flash thinking. Thinking mode is on by default for both v4 models and is toggled through extra_body={"thinking": {"type": "enabled"}} (or "disabled"), not through the OpenAI Responses-API reasoning parameter. reasoning_effort accepts "high" (the default for regular requests) and "max".
+
+## Given
+
+Given from doc: `https://api-docs.deepseek.com/guides/thinking_mode`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+A call to https://api.deepseek.com/v1 with extra_body thinking type disabled still returns reasoning output, or the API rejects deepseek-v4-pro / deepseek-v4-flash as unknown models, or reasoning_effort accepts a level other than high and max, or the legacy aliases map to different models.
 
 ## Guidance
 

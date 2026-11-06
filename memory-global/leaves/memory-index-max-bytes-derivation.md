@@ -2,7 +2,10 @@
 name: memory-index-max-bytes derivation
 description: Why memory-global/MEMORY.md is capped at 24000 UTF-8 bytes — harness truncation mechanics, 1000-byte margin sizing, byte-unit choice, and why no companion line-count key is needed.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: measurement
+given_source: memory-global/MEMORY.md
 created: 2026-10-23
 last_verified: 2026-10-23
 ---
@@ -12,6 +15,18 @@ last_verified: 2026-10-23
 ## Difficulty
 
 The `memory-index-max-bytes` key in `config.md` (ceiling: 24000, unit: UTF-8 bytes) is authoritative only because it is derived, not asserted. Without the derivation a future editor cannot tell whether the ceiling, the unit, or the margin are tunable or load-bearing — and may change them in ways that cause silent truncation of `memory-global/MEMORY.md` by the harness. Recording the derivation in an on-demand leaf keeps the always-loaded surface lean while preserving the reasoning.
+
+## Regularity
+
+The installed client bundle truncates memory-global/MEMORY.md silently, with no error and no log, when the file exceeds either of two independent caps in function Yqr(e) on the AutoMem context-assembly path: rxe = 25000 (bytes or JavaScript string length) and Doe = 200 lines. On 2026-07-23 a sentinel probe returned a marker at line 150 verbatim and found a marker at line 240 absent. The pre-commit gate (core.hooksPath=githooks running verify-all --staged) cannot see an uncommitted write, and memory writes are exempt from the production-edit gate, so truncation is live from the write itself, before any commit. The largest single pointer the index has carried, 756 bytes in commit 776dbf8 on 2026-08-31, pushed the file to 25533 bytes and silently dropped its last two pointers. UTF-8 byte length is at least UTF-16 code-unit length for every Unicode scalar value (checked over all 1 112 064 values), so a byte-measured gate is no looser than the harness whether rxe compares bytes or string length. At about 240 bytes per line the byte cap binds near 100 lines, about half the line cap. The ceiling in config.md key memory-index-max-bytes is 24000 UTF-8 bytes, 1000 below the harness cap, with its WARN at 90 percent (21600 bytes). Sub-indexes are read on demand and are not truncated by the harness.
+
+## Given
+
+Given from measurement: `memory-global/MEMORY.md`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+A MEMORY.md of more than 25000 bytes or 200 lines is loaded into a session in full, or a marker placed past line 200 is returned by the AutoMem path; or the pre-commit gate is found to see uncommitted writes.
 
 ## Guidance
 

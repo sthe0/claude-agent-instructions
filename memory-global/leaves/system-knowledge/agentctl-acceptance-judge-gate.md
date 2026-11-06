@@ -2,7 +2,10 @@
 name: agentctl-acceptance-judge-gate
 description: "How agentctl's acceptance-judge gate on record-result --status passed actually works: a sonnet model (medium tier, lean isolation kept, since 2026-10-01; haiku before) compares --observation against stage.subject.result, verdicts live in state.stage_reviews (not an 'advisor' key); the predicted short-observation mitigation is now falsified; a FOURTH occurrence measured 20 blocks on 7 of 8 stages of one plan; a FIFTH occurrence post-R4-fix converged via resubmission instead of needing an override, suggesting specific-clause gaps converge while qualitative-adequacy gaps still goalpost-move; revise verdicts are not kept in engine history; a mitigation moved the judge to sonnet on 2026-10-01"
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: scripts/agentctl/cli.py
 created: 2026-08-26
 last_verified: 2026-10-01
 ---
@@ -13,6 +16,18 @@ last_verified: 2026-10-01
 `revise` verdict on the next, with no obvious CLI-level explanation, and searching engine state
 for an "advisor" key to find the reasoning found nothing — costing time re-deriving where the
 judge's verdict and its stated reason actually live.
+
+## Regularity
+
+In agentctl's record-result --status passed (scripts/agentctl/cli.py, around lines 4080-4200), the acceptance judge is a sonnet-model call (reviewer tag "judge:acceptance"; reviews recorded before 2026-10-01 carry "judge:haiku") that compares the submitted --observation against stage.subject.result, the stage's declared expected result. Its verdict is appended to the flat list state.stage_reviews, not to an "advisor" key, and only the latest StageReview of a stage is read by gates.acceptance_review_blockers. A genuine "revise" verdict blocks the pass; a judge call that fails (timeout, exception, unparseable output) records a JudgeBypass(kind="fail_open") and lets the pass proceed. Resubmitting observations that answer each stated gap has converged only when the gap named a specific missing clause; across the first four recorded occurrences (2026-08-26 to 2026-09-24), where the gaps were qualitative adequacy complaints, it did not converge and clearance came through stage-review --verdict override, which is available for every stage the gate can deadlock and is recorded in state.judge_bypassed. Every verdict is written to state.log as an acceptance_judge_verdict entry.
+
+## Given
+
+Given from code: `scripts/agentctl/cli.py`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+Read scripts/agentctl/cli.py cmd_record_result and gates.py acceptance_review_blockers: a verdict stored under a top-level advisor key, a judge that compares against something other than stage.subject.result, a failed judge call that blocks the pass instead of recording a fail_open bypass, or a stage the gate can deadlock on where stage-review --verdict override is refused, would show the statement false.
 
 ## Guidance
 

@@ -2,7 +2,11 @@
 name: verify-ownership-before-shared-state-delete
 description: Before deleting shared state (worktrees, mounts, branches, scope files), "no live process foothold" is not "no owner" — a suspended/resumable session still owns its state across idle gaps; check the durable session record (transcripts / scope registry), not only live-process state.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-suspended-session-owns-its-state-while-holding-no-live-process-foothold, regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-two-valued-judge-absorbs-could-not-look]
+grounding_judged: 04a7d6a373da3947cddafffcd1e618ebdf5541edef5be04fb40a26a8f91b7515
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-07-11
 last_verified: 2026-07-11
 ---
@@ -12,6 +16,20 @@ last_verified: 2026-07-11
 ## Difficulty
 
 To decide whether a shared, task-scoped resource — a git worktree, a checked-out mount, a personal branch, a `session_scope` record — is abandoned and safe to delete, the tempting oracle is **live-process state**: `readlink /proc/<pid>/cwd`, an open-fd scan, "is any running process sitting inside it?". This oracle is **incomplete**, and its failure is silent and destructive: a paused or resumable agent session owns its worktree/mount/branch across an **idle gap** during which it holds *no* live foothold — no running process, no cwd, no open fd. Judged on live state alone, such a resource reads as ownerless and gets force-removed (`git worktree remove --force`, an `rm`, a scope-file delete) **out from under a still-live owner** that will later resume and find its work destroyed. Ground: this session's user correction **"А ты смотрел транскрипты активных сессий?"** ("did you look at the transcripts of the active sessions?") after the agent judged worktrees abandoned on `/proc/<pid>/cwd` absence alone.
+
+## Principle
+
+To avoid destroying state a suspended but resumable session still owns, before deleting a shared task-scoped resource (worktree, mount, branch, scope file) treat the absence of a live process foothold as insufficient evidence of no owner and cross-check the durable ownership record (the session_scope registry and the session transcripts); bias the classifier fail-safe, so that unproven absence of an owner, unknown age or unproven cleanliness means KEEP, with a diff snapshot dead-lettered rather than uncommitted work discarded.
+
+## Goal class
+
+shared state not deleted out from under a live owner
+
+## Grounded in
+
+- [[a-suspended-session-owns-its-state-while-holding-no-live-process-foothold]]
+- [[a-probe-observes-only-the-domain-it-reads]]
+- [[a-two-valued-judge-absorbs-could-not-look]]
 
 ## Guidance
 

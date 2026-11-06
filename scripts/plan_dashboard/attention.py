@@ -356,6 +356,15 @@ def _session_fields(entry: dict, overlay: dict) -> dict:
             "waiting": overlay["waiting"], "since": overlay["since"]}
 
 
+def windowed_engines(locator) -> set[str] | None:
+    """The task each session the locator lists shows: the one it drove last, else its own id.
+    ``None`` when the locator lists none, so the windows are unknown rather than all closed."""
+    entries = locate.sessions(locator)
+    if not entries:
+        return None
+    return {engine_session_binding.resolve(e["harness_session"]) or e["harness_session"] for e in entries}
+
+
 def collect(engine_sessions, locator, transcripts_root) -> tuple[dict, list[dict]]:
     """``(overlays by task id, session rows)`` for the listed tasks, from one scan of the binding files
     and one listing of the transcripts, with the marks read by ``marks``."""

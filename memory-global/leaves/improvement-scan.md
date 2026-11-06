@@ -2,7 +2,10 @@
 name: improvement-scan
 description: The standing, mechanized producer/skill pair for proactive self-improvement scanning — three producers (backlog reconciliation, session telemetry pattern detection, external-source reading), their distinct resume schemes, and the report-only boundary the CLI deliberately does not cross.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: scripts/improvement-scan.py
 created: 2026-08-28
 last_verified: 2026-10-20
 ---
@@ -22,6 +25,18 @@ never-auto-select). `scripts/improvement-scan.py` separates the two: the
 script owns the rule part; the `improvement-scan` skill
 (`skills/improvement-scan/SKILL.md`) supplies the perception part at each seam
 the script's own closed vocabularies gate.
+
+## Regularity
+
+scripts/improvement-scan.py is a standing producer set for proactive self-improvement scanning. Its `backlog` producer diffs the Core+Org backlog against a frozen PriorBoard snapshot; its `telemetry` producer reads append-only session ledgers through an mtime-gated LedgerCursor; its `sources` producer reads user-curated external feeds through a SeenCursor that advances only after the model's claims for the entries are accepted; its `loss` subcommand ranks the board by min/week from distinct sessions showing an item's signature; and its `report` subcommand renders every stored Finding cost-first. The resume schemes differ because the inputs differ: the backlog is a live, externally mutated list (so a baseline diff is needed to tell a closed-then-reopened item from an untouched one), a ledger only grows (so a position cursor suffices), and a feed is a sliding window (so an entry is either seen or new). No producer and no report renderer files a difficulty, dispatches a specialist or picks an item to work on; scripts/tests/test_improvement_scan.py asserts this through ast_purity.impure_names. The SessionStart due-hook in scripts/hook-session-due.py only counts already-stored open findings and prints a reminder naming the skill; it runs no producer.
+
+## Given
+
+Given from code: `scripts/improvement-scan.py`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+Reading scripts/improvement-scan.py and scripts/hook-session-due.py finds a producer, the report renderer or the due-hook that files a difficulty, dispatches a specialist, selects an item to work on, or runs a producer; or finds that the backlog, telemetry or sources producer resumes by a different scheme than the one named.
 
 ## Guidance
 

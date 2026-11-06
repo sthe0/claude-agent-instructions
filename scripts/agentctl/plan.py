@@ -2103,6 +2103,7 @@ def parse_plan(
                     derivation=str(raw_principle.get("derivation", "")),
                     confidence=str(raw_principle["confidence"]),
                     refutation=str(raw_principle["refutation"]),
+                    grounding_override=str(raw_principle.get("grounding_override", "")),
                 )
             else:
                 # Read-only baseline: a snapshot frozen before a subfield became
@@ -2113,6 +2114,7 @@ def parse_plan(
                     derivation=str(raw_principle.get("derivation", "")),
                     confidence=str(raw_principle.get("confidence", "")),
                     refutation=str(raw_principle.get("refutation", "")),
+                    grounding_override=str(raw_principle.get("grounding_override", "")),
                 )
         stage_ctx = f"stage {index}"
         crit_type = str(s.get("criterion_type", CriterionType.MEASURABLE.value))
@@ -3099,7 +3101,8 @@ _ELEMENT_FIELDS: dict[str, tuple[str, ...] | None] = {
                   "criterion.verify_reads"),
     "done_criterion": ("criterion.done_criterion",),
     "principle": ("principle.statement", "principle.source", "principle.derivation",
-                  "principle.confidence", "principle.refutation"),
+                  "principle.confidence", "principle.refutation",
+                  "principle.grounding_override"),
     "conditions": ("conditions",),
     "preconditions": ("preconditions",),
     "control": _WHOLE_STAGE_DEFINITION,
@@ -4643,6 +4646,7 @@ STAGE_LEAF_CLASS: dict[str, str] = {
     "principle.derivation": "O",
     "principle.confidence": "O",
     "principle.refutation": "O",
+    "principle.grounding_override": "O",
     "conditions": "O",
     "preconditions": "O",
     "knowledge": "O",

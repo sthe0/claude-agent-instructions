@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:a-controls-defects-surface-only-when-it-is-executed]
+grounding_judged: 3f9b8ced16fd6cb1456336f4e513193290257151a3719e73e2506a1360fa4493
 created: 2026-08-11
 last_verified: 2026-08-11
 ---

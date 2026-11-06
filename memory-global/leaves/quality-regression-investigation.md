@@ -2,7 +2,11 @@
 name: quality-regression-investigation
 description: Runbook for the task-quality tracking loop — how the 1-5 rating is proposed and confirmed at the resolution gate, the rating rubric, the in-flight signal inventory, and the investigation procedure (commit shortlist → hypothesis → fix ladder) when the scorecard flags a quality degradation after instruction edits.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:an-instruction-edit-degrades-task-quality-without-error-and-an-unstamped-quality-record-cannot-be-traced-to-it, regularity:text-loaded-into-every-session-is-paid-for-by-sessions-that-never-consult-it, regularity:a-judgement-call-contains-a-decidable-sub-decision]
+grounding_judged: dbb93901725aa348cfebc06e2981b19cdd8a81a99d4e658a35dc4be64022b1f2
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 refs:
   - policy-effectiveness-tracking
   - autocompact-threshold-policy
@@ -21,6 +25,20 @@ functional ground. Without a per-task quality series stamped with the instructio
 HEAD, the degradation is invisible until the user complains — and by then nobody can
 say WHICH commit range caused it, so the fix is guesswork and the instructions either
 bloat back or stay broken.
+
+## Principle
+
+To make an instruction-edit quality regression attributable and reversible, rate every resolved task 1-5 (agent-proposed, user-confirmed in the [resolution-ask]) into a ledger row stamped with the instructions-repo HEAD, and when the scorecard flags a degradation shortlist the commits in the range with the helper script, form a hypothesis per commit, check it against the ledger's instructions_head values, and fix by the ladder: mechanize the lost rule, then restore its salience without growth, then re-add prose within the ceilings.
+
+## Goal class
+
+attributing and fixing quality degradation caused by instruction edits
+
+## Grounded in
+
+- [[an-instruction-edit-degrades-task-quality-without-error-and-an-unstamped-quality-record-cannot-be-traced-to-it]]
+- [[text-loaded-into-every-session-is-paid-for-by-sessions-that-never-consult-it]]
+- [[a-judgement-call-contains-a-decidable-sub-decision]]
 
 ## Guidance
 

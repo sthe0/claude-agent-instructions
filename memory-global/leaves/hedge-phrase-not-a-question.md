@@ -2,7 +2,10 @@
 name: hedge-phrase-not-a-question
 description: Ending a turn with a vague invitation ("вы решите", "просто скажите", "let me know if...") instead of a posed AskUserQuestion or explicit open question reads as closure but leaves the user nothing to click on.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-turn-ending-in-a-vague-invitation-leaves-the-user-no-defined-choice-to-act-on]
+grounding_judged: 78351e91bbcb68034f1e6a8911e753c1850eb6eff251f3a3657bc5dd2cd78c66
 created: 2026-09-02
 last_verified: 2026-09-02
 ---
@@ -16,6 +19,18 @@ The short rule lives in CLAUDE.md § Escalation to the user; this leaf carries t
 Ending a turn with "вы решите" / "просто скажите" / "let me know if..." / "just say the word" substitutes a vague invitation for the actual defined-set choice the moment calls for. It reads as closure to the model — the turn ends with something that has the shape of a handoff — but it leaves the user nothing to click and no stated recommended option, so they must reopen the conversation to learn what the choice even was. A hedge phrase feels like deference but functions as silence at a decision point: the same "what's next?" gap a posed-but-unclicked prose question leaves, except a bare invitation carries no question shape at all, so it does not read as a question to catch structurally.
 
 Concrete pattern (found 2026-09-02 across 6 sessions' transcripts, user-reported): the user had to explicitly ask "должен ли я что-то сказать" or "что дальше?" after turns that ended this way — the hedge phrase gave them no defined choice to react to, only an open-ended invitation that reads as if the ball is in their court while giving them nothing concrete to act on.
+
+## Principle
+
+To give the user a decision they can act on at a decision point, pose the real choice as an AskUserQuestion with a recommended option marked (or, if no defined set exists, ask the specific open question), and never end the turn with a vague invitation such as 'let me know if' or 'you decide'.
+
+## Goal class
+
+turn endings that present a concrete choice at a decision point
+
+## Grounded in
+
+- [[a-turn-ending-in-a-vague-invitation-leaves-the-user-no-defined-choice-to-act-on]]
 
 ## Guidance
 

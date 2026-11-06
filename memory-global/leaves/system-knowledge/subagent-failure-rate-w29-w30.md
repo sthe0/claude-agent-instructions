@@ -1,8 +1,12 @@
 ---
 name: subagent-failure-rate-w29-w30
-description: The policy-scorecard `subagent_failures` counter does not measure sub-agent failures — it matches `MALFORMED:|INCOMPLETE:|ESCALATE:` in ANY tool_result text (93.3% of W30 hits came from Read/Bash reading the marker-protocol source), while its denominator counts native Agent tool uses, so the ratio can and does exceed 1. The measured W29→W30 rise (1.83→2.65 per spawn) is entirely artefactual; against the spawn-cost ledger's exact per-spawn records the genuine rate FELL 20.7%→9.1% and process-level failure fell 16.5%→3.1%. Do not calibrate a flag threshold against this counter until it is fixed.
+description: Difficulty — the policy-scorecard `subagent_failures` counter does not measure sub-agent failures — it matches `MALFORMED:|INCOMPLETE:|ESCALATE:` in ANY tool_result text (93.3% of W30 hits came from Read/Bash reading the marker-protocol source), while its denominator counts native Agent tool uses, so the ratio can and does exceed 1. The measured W29→W30 rise (1.83→2.65 per spawn) is entirely artefactual; against the spawn-cost ledger's exact per-spawn records the genuine rate FELL 20.7%→9.1% and process-level failure fell 16.5%→3.1%. Do not calibrate a flag threshold against this counter until it is fixed.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:the-policy-scorecard-subagent-failures-counter-counts-marker-text-in-any-tool-result-over-a-different-population, regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-two-valued-judge-absorbs-could-not-look, regularity:a-step-that-ran-is-not-thereby-a-step-that-worked]
+grounding_judged: 774f1a7e511903b0da51efdb02a61c987ed2220c5b6d1d762c7735e3450914a5
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-07-28
 last_verified: 2026-07-28
 ---
@@ -218,6 +222,21 @@ investigate.
 > then 10 (W28), 1393 (W29), 40 (W30) — 2.04% and 0.04% of those weeks' total messages. There is no
 > mid-window migration confound; the legacy residue is far too small to move any figure here, and an
 > aggregation rooted there alone returns essentially nothing for W29–W30.
+
+## Principle
+
+To measure how often spawned specialists fail, count failures and spawns from the same exact per-spawn record (the spawn-cost ledger rows with event == spawn, carrying return_marker, malformed, exit_code and kind) rather than matching marker text in transcripts; report MALFORMED (protocol-parse hygiene) on its own axis; treat a failures-per-spawn value above 1 as an invariant violation to assert in code; and do not calibrate a failure-rate flag threshold against the current subagent_failures counter, shipping any such flag report-only until the counter is fixed.
+
+## Goal class
+
+valid sub-agent failure-rate measurement
+
+## Grounded in
+
+- [[the-policy-scorecard-subagent-failures-counter-counts-marker-text-in-any-tool-result-over-a-different-population]]
+- [[a-probe-observes-only-the-domain-it-reads]]
+- [[a-two-valued-judge-absorbs-could-not-look]]
+- [[a-step-that-ran-is-not-thereby-a-step-that-worked]]
 
 ## Guidance
 

@@ -1,8 +1,11 @@
 ---
 name: agentctl-stage-vector-staleness
-description: A plan edited in place at PLAN_READY that ADDS or REMOVES stages leaves agentctl's runtime stage vector stale — approve refreshes existing stages only. Re-run submit-plan after any stage-count change, before approving.
+description: Difficulty — a plan edited in place at PLAN_READY that ADDS or REMOVES stages leaves agentctl's runtime stage vector stale — approve refreshes existing stages only. Re-run submit-plan after any stage-count change, before approving.
 type: reference
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:approve-refreshes-only-stages-already-in-the-runtime-stage-vector]
+grounding_judged: cf32e446db722ee3dd96c9a5e152c04c16aa0de2fca06bed656c40978aa2eb14
 created: 2026-08-19
 last_verified: 2026-08-19
 ---
@@ -34,6 +37,18 @@ stages 9 and 10 and was told "stage index N does not exist in the plan". Had par
 not named them, dispatch would have run 8 of 10 stages and `verify-final` would have
 attested to a truncated plan. Filed as Core backlog
 [#126](https://github.com/sthe0/claude-agent-instructions/issues/126).
+
+## Principle
+
+To keep agentctl's runtime stage vector equal to the plan file, re-run agentctl submit-plan from PLAN_READY after any plan edit that changes the stage count, before approve; detect a short vector by comparing len(state.stages) with the plan's stage count.
+
+## Goal class
+
+agreement between the runtime stage vector and the approved plan
+
+## Grounded in
+
+- [[approve-refreshes-only-stages-already-in-the-runtime-stage-vector]]
 
 ## Guidance
 

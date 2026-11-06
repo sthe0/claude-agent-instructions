@@ -2,7 +2,11 @@
 name: recurring-normalize-factor-is-architecture-signal
 description: Two or more normalize cycles naming factors in the same underlying category means the earlier re-norming was cosmetic (an instance patch, not a cause fix) — the replanning task must surface a structural alternative to the user as an explicit option, not another patch.
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-fix-at-the-failing-site-leaves-siblings-of-the-same-form, regularity:a-reproducible-cause-left-unnormed-fails-again-at-its-next-occurrence, regularity:a-turn-ending-in-a-vague-invitation-leaves-the-user-no-defined-choice-to-act-on, regularity:a-question-escalated-by-reflex-spends-the-users-attention-a-held-channel-would-have-saved]
+grounding_judged: 63c9a443606e09b1aeac996117b29f972a36d83c0994f16545d8ac628733ab62
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-04
 last_verified: 2026-09-04
 ---
@@ -14,6 +18,21 @@ last_verified: 2026-09-04
 `agentctl normalize` records a reproducible factor and blocks `replan` until it exists, but nothing checks whether the newly named factor is *actually new* — a fresh instance of an old, still-unaddressed category slips through the gate exactly as cleanly as a genuinely novel cause. Each cycle looks locally correct (a real factor, honestly named, duly recorded) while the series as a whole is diagnosing the wrong thing: not "this specific defect" but "this coupling keeps producing defects," and the gate has no way to see the series, only the single factor in front of it.
 
 Concrete precedent: a monitoring-alert ticket for infrastructure availability. The plan's test procedures mutated real production state (an on-disk availability-state file, a live infrastructure-events list) and sent messages through the user's real messaging chat during test execution, wrapped in an ever-more-elaborate stash/simulate/restore/trap apparatus. One review round named and fixed a batch of point-defects in that apparatus. The next round found four new ones in the *same* apparatus, and its own closing note said explicitly that none of the four blockers required architectural reconsideration — all four were fixed with point patches. A further round found another defect in the same category: a false notification into the real chat, again via the same live-state-crosses-into-test-execution mechanism. Seventeen rounds in, the coordinator had never surfaced "isolate test state/fixtures from production state and the real chat entirely" as a named, user-facing alternative to "patch the apparatus again" — each round's own "one more round" authorization implicitly foreclosed it by framing continuation as the only live option.
+
+## Principle
+
+To avoid closing a category-level difficulty with another instance-level patch, check each factor before naming it in normalize against the factors already normalized in the same task (a model judgment of same underlying coupling, never a string match); if it belongs to an earlier category, say in the critique that the earlier normalize patched an instance, name the structural alternative that removes the coupling, and put that alternative to the user as an explicit option beside 'patch again' via AskUserQuestion.
+
+## Goal class
+
+closing a recurring difficulty at its cause
+
+## Grounded in
+
+- [[a-fix-at-the-failing-site-leaves-siblings-of-the-same-form]]
+- [[a-reproducible-cause-left-unnormed-fails-again-at-its-next-occurrence]]
+- [[a-turn-ending-in-a-vague-invitation-leaves-the-user-no-defined-choice-to-act-on]]
+- [[a-question-escalated-by-reflex-spends-the-users-attention-a-held-channel-would-have-saved]]
 
 ## Guidance
 

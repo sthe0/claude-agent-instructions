@@ -469,6 +469,18 @@ def sessions_locator(entries, **hooks):
     return fake(sessions=lambda: entries, **hooks)
 
 
+def test_a_window_shows_the_task_it_drove_last_else_its_own_id(tmp_path):
+    make_root(tmp_path, bindings={H_A: [ALPHA, BETA]})
+    entries = [{"harness_session": H_A, "cwd": None, "name": None},
+               {"harness_session": H_FREE, "cwd": None, "name": None}]
+    assert attention.windowed_engines(sessions_locator(entries)) == {BETA, H_FREE}
+
+
+@pytest.mark.parametrize("locator", [None, fake(), fake(sessions=lambda: [])], ids=["none", "no-hook", "no-sessions"])
+def test_no_listed_session_means_the_windows_are_unknown(locator):
+    assert attention.windowed_engines(locator) is None
+
+
 def test_unbound_sessions_get_a_row_and_bound_ones_do_not(tmp_path):
     root = make_root(tmp_path, bindings={H_A: [ALPHA]})
     put(root, H_A, IDLE)
@@ -596,7 +608,7 @@ def test_the_overlay_leaves_the_pinned_snapshot_alone_and_does_not_move_with_the
         assert get(located, "/api/snapshot")[1] == plain_snapshot
         assert get(located, "/api/attention")[1] != plain_attention
         located_digest = json.loads(get(located, "/api/attention")[1])["digest"]
-    with serving(root, locator=ROUTE_LOCATOR, clock=lambda: FIXED_NOW + 3600) as later:
+    with serving(root, locator=ROUTE_LOCATOR, clock=lambda: FIXED_NOW + 60) as later:
         assert json.loads(get(later, "/api/attention")[1])["digest"] == located_digest
 
 

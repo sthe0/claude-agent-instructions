@@ -2,7 +2,10 @@
 name: cursor-agent-cli-spawn
 description: Difficulty it removes — you need a headless agent spawn inside Cursor where claude -p is unavailable. Fact — Cursor Agent CLI (agent -p), API key file ~/.cursor_api_key, Linux install via curl|gunzip|bash, wrapped by spawn-cursor-escape.py.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: scripts/spawn-cursor-escape.py
 created: 2026-06-03
 last_verified: 2026-07-30
 ---
@@ -12,6 +15,18 @@ last_verified: 2026-07-30
 ## Difficulty
 
 You need a headless agent spawn inside Cursor (e.g. `overcome-difficulty` recursive escape) but `claude -p` is unavailable — the Cursor sandbox does not expose the Claude Code CLI. A plain `claude -p` call fails with command-not-found or permission denied.
+
+## Regularity
+
+Inside Cursor, where the Claude Code CLI is not exposed, a headless agent spawn goes through the Cursor Agent CLI: on Linux it is installed with "curl -fsSL https://cursor.com/install | gunzip | bash" (the install URL serves a gzip-compressed script), giving the binary ~/.local/bin/agent (with possibly a cursor-agent symlink). The API key is read from the env var CURSOR_API_KEY or the file ~/.cursor_api_key, and unattended runs take the flags --trust, --force and --approve-mcps. scripts/spawn-cursor-escape.py wraps the overcome-difficulty recursive escape (returning RESOLVED:, INVESTIGATION: or LOOP_DETECTED:) and scripts/spawn-cursor-specialist.py wraps specialization spawns with the same return markers; both enforce the recursion cap from config.md and write a cost log at ~/.local/log/cursor-spawn-costs.jsonl. A Cursor-bound agentctl session (runtime_host=cursor) dispatches spawn stages through spawn-cursor-specialist.py, and the wrappers refuse when AGENTCTL_RUNTIME_HOST names the other host. A smoke on 2026-07-30 with agent 2026.07.23-e383d2b exited 0 with "RESOLVED: ping".
+
+## Given
+
+Given from code: `scripts/spawn-cursor-escape.py`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+Running the install pipeline without gunzip successfully, finding no CURSOR_API_KEY or ~/.cursor_api_key reading in scripts/spawn-cursor-escape.py, or a wrapper smoke on a current agent version failing to return the marker, would show the statement false.
 
 ## Guidance
 

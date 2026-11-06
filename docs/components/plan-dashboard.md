@@ -41,7 +41,7 @@ A task is classified by the first rule that matches:
 4. `idle` — the last activity is within `--window-hours` (default 24).
 5. `stale` — anything older.
 
-The default listing shows `active` and `idle` tasks. `--all` shows every task. `--session` adds the named tasks whatever their liveness. A task inside the window whose parent is outside it still brings its parent in; no other file outside the window is opened.
+With a locator that lists sessions, each listed session is an open window: the default listing shows the task each window drove last (or the session's own task), whatever its age or state, plus the tasks active in the last 30 minutes. Two windows that drove the same task share its row. A task file that cannot be read and belongs to no window, and an idle task, show only under `--all`. Without such a locator the default listing shows `active` and `idle` tasks and unreadable files. `--all` shows every task. `--session` adds the named tasks whatever their liveness. The listing, `--all` included, holds root tasks only: a child stands in the `children` of its parent's detail, and a child that qualifies brings its root in, even a root outside the window, in its place. A child is listed only when `--session` names it or when its parent has no task file. A spawned child that recorded no parent, whose task id starts with `agent-recursion-depth-`, has no root to show it, so only `--all` and `--session` list it. No other file outside the window is opened.
 
 ### Phases and totals
 

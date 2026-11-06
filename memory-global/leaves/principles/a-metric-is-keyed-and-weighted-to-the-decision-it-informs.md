@@ -5,6 +5,7 @@ type: reference
 schema: principle/v1
 generality: 2
 grounded_in: [regularity:an-unkeyed-or-unweighted-total-misranks-the-decision-it-feeds]
+grounding_judged: 5cea1726748a7e7cae6fa3996b5d4758fa79a347c27f708f473305a7dc77bd9c
 created: 2026-10-21
 last_verified: 2026-10-21
 ---

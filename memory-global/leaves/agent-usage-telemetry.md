@@ -2,7 +2,10 @@
 name: agent-usage-telemetry
 description: The opt-in cross-installation usage rollup — how a machine emits an anonymized counts-only aggregate to a per-channel tracking sink and how the aggregator pulls them; the consent contract, the exact emitted schema, what is never emitted, the two sink ids, and the private-sink reachability constraint.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: code
+given_source: scripts/usage-digest.py
 created: 2026-07-13
 last_verified: 2026-07-13
 ---
@@ -10,6 +13,18 @@ last_verified: 2026-07-13
 ## Difficulty
 
 The local usage report (`agent-stats.py`, see [[solved-by-007-marker-and-usage-stats]]) answers "how much is this system used *on this machine*", but a single machine's usage was invisible to any other — there was no way to see usage across a fleet of installations "in one place", including installations that never touch any particular org's internal tracker. A naive cross-machine rollup would either ship other installations' data without consent or leak task ids / tracker keys / paths into a shared surface. The mechanism must collect a fleet-wide rollup while (1) never emitting anything from a machine that did not opt in and (2) never emitting anything but anonymized counts.
+
+## Regularity
+
+The command scripts/usage-digest.py emit posts a usage/v1 aggregate only when usage_telemetry=on is set in the machine-local agent-identity.local file; with the key absent or not equal to on it prints "opt-in OFF; nothing emitted" and posts nothing. When on, it posts one fenced-JSON comment per closed ISO week to the channel's tracking sink, holding only counts and an anonymized id: period (YYYY-Www), installation_id (salted sha256 of the fully qualified host name plus a per-machine usage_salt), channel, n_invocations, n_resolved, n_quality_rated, n_marked_precedents, mean_quality, total_cost_usd, n_spawns. A WHITELIST in the script refuses any field outside that set and assert_counts_only raises on task ids, tracker keys, paths, prompts or commit messages. The pull side keeps the latest comment per (installation_id, period), sums the disjoint weekly rows, and weights the fleet mean quality by n_quality_rated. A private GitHub sink is reachable only by the operator's own fleet and accounts granted access to that repo, so the rollup covers that fleet and not arbitrary forks; the in-code USAGE_SINK_GITHUB constant ships empty.
+
+## Given
+
+Given from code: `scripts/usage-digest.py`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+Running usage-digest.py emit with usage_telemetry absent or not on posts any bytes to a sink; or a posted payload contains a field outside the WHITELIST or a task id, tracker key or path; or an arbitrary external fork with no granted credential can post to the private sink.
 
 ## Guidance
 

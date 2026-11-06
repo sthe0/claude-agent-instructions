@@ -242,3 +242,32 @@ def test_judge_verdict_does_not_clobber_human_review():
         )
 
         assert state.stage_reviews == [kept]
+
+
+def test_judge_verdict_keeps_human_review_of_the_same_observation():
+    kept = StageReview(stage_index=1, verdict="override", reviewer="user", note="n",
+                       observation_sha256="a" * 64)
+    state = _bare_state(kept)
+
+    cli._record_stage_review(
+        state,
+        StageReview(stage_index=1, verdict="pass", reviewer=advisor.JUDGE_REVIEWER,
+                    observation_sha256="a" * 64),
+        from_judge=True,
+    )
+
+    assert state.stage_reviews == [kept]
+
+
+def test_judge_verdict_replaces_human_review_bound_to_older_observation():
+    # A user override bound to earlier observation bytes is already stale for the gate;
+    # keeping it made a fresh judge pass on the rewritten observation unrecordable.
+    old = StageReview(stage_index=1, verdict="override", reviewer="user", note="n",
+                      observation_sha256="a" * 64)
+    fresh = StageReview(stage_index=1, verdict="pass", reviewer=advisor.JUDGE_REVIEWER,
+                        observation_sha256="b" * 64)
+    state = _bare_state(old)
+
+    cli._record_stage_review(state, fresh, from_judge=True)
+
+    assert state.stage_reviews == [fresh]

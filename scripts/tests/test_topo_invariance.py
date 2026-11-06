@@ -23,7 +23,11 @@ so it:
 The fixture declares no venue, and the one divergence from origin/main is the Grants
 line of `EXPECTED_RENDER_PLAN_MD` / `EXPECTED_RENDER_STAGES_MD`: origin/main derived
 `Bash(python3 mod.py:*)` and `Edit(//./mod.py)` against the process cwd, the delivered
-tree derives no in-venue grant and says so. Every other literal is unchanged from the origin/main capture.
+tree derives no in-venue grant and says so. The other divergence is the `principle` key of
+`EXPECTED_STAGE1_KEYS` / `EXPECTED_STAGE2_KEYS`: the principle element now also digests the
+new `principle.grounding_override` field (listed in `_ELEMENT_FIELDS["principle"]`), so its
+digest differs from the origin/main capture even for a stage that declares no principle.
+Every other literal is unchanged from the origin/main capture.
 """
 from __future__ import annotations
 
@@ -97,7 +101,7 @@ EXPECTED_STAGE1_KEYS = {
     "method": "db283606671d29b294faadca4e7df0ac587ba0eadcbb3ae9aa035bb64140e33f",
     "order": "41c468d063eacb2316e1b592d80690a00986913a0c0823eadc9db4059d0c0d5d",
     "preconditions": "0df4d6a1f321d289d957288ee418f09448981d251ea59ed01099947946f0b30f",
-    "principle": "f44d9a6c8e645981fe22a84c27f9849be17f6630e09576eeaee560cc0e897a08",
+    "principle": "724cd00edb1422fe756caba4705e592de7a9af37f542198e043a68900b430ee1",
     "procedure": "907b7e0c97698d6453dcec4c3658a5eb3c7442f4c6ea9968c1b263561d4ec41b",
     "requirements": "41c468d063eacb2316e1b592d80690a00986913a0c0823eadc9db4059d0c0d5d",
     "result": "5647b5160d3ecb70c383d4c4a141d0de4d19dd5780e2eeb88dba9511a463a8dd",
@@ -118,7 +122,7 @@ EXPECTED_STAGE2_KEYS = {
     "method": "db283606671d29b294faadca4e7df0ac587ba0eadcbb3ae9aa035bb64140e33f",
     "order": "e67d637c67e1b805d5a61ea3a726f35922e63bf66a86cda6a778d504c3666bf7",
     "preconditions": "0df4d6a1f321d289d957288ee418f09448981d251ea59ed01099947946f0b30f",
-    "principle": "f44d9a6c8e645981fe22a84c27f9849be17f6630e09576eeaee560cc0e897a08",
+    "principle": "724cd00edb1422fe756caba4705e592de7a9af37f542198e043a68900b430ee1",
     "procedure": "907b7e0c97698d6453dcec4c3658a5eb3c7442f4c6ea9968c1b263561d4ec41b",
     "requirements": "e67d637c67e1b805d5a61ea3a726f35922e63bf66a86cda6a778d504c3666bf7",
     "result": "ef43a015b4af7a4218c892bf0bde2c1774d176eb2e3b026e0ab326893341664a",

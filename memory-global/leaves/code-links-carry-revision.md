@@ -2,7 +2,11 @@
 name: code-links-carry-revision
 description: A deliverable that cites a code identifier or path via a link pins the link to a concrete revision — the default for both the developer (who writes such a link) and the reviewer (who rejects a line-anchored link that is not revision-pinned); file/dir-level links are drift-proof and exempt
 type: feedback
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-coordinate-shifts-while-the-content-it-addressed-stays]
+grounding_judged: b46ad166c2728ffd2be38cbfdc1a0186c954d6b4c8da74cedc47e9af52c90ba9
+grounding_override: user-approved 2026-11-03: the judge finds part of the rule ungrounded (the reviewer-ask step and the file/directory exemption); the remaining grounds cannot be removed and no non-thin regularity covers the gap under the r11 revision rules, so the defect is recorded rather than papered over; the repair is a per-clause split of the leaf or a new regularity, tracked as a follow-up issue.
 created: 2026-07-21
 last_verified: 2026-07-21
 ---
@@ -10,6 +14,18 @@ last_verified: 2026-07-21
 ## Difficulty
 
 A code link that names a line or an identifier without a pinned revision rots: the branch it points at moves, the lines drift, or the target is deleted, and a future reader following the link lands on the wrong code — or nothing — with no signal that the reference went stale. The link reads as authoritative long after it stopped being true. Nothing mechanically couples the link to the bytes it was written against, so the discipline lives only in prose.
+
+## Principle
+
+To keep a cited code reference resolving to the exact bytes cited, pin every line-anchored code link in a deliverable to a concrete revision (a revision-tagged URL or a commit-SHA permalink), and have the reviewer ask for the revision on any line-anchored link without one; file- and directory-level links need no pin.
+
+## Goal class
+
+durable code references in deliverables
+
+## Grounded in
+
+- [[a-coordinate-shifts-while-the-content-it-addressed-stays]]
 
 ## Guidance
 
@@ -30,4 +46,4 @@ Any VCS host with an immutable revision/commit addressing scheme qualifies; use 
 - [[code-comment-discipline]] — the *in-code* reference rule (don't cite callers/issues in code); this leaf is the *deliverable-facing* reference rule.
 - `~/.claude-agent/skills/specializations/tech-writer/SKILL.md` § How you write — the code-reference **formatting-tier** rule (a repo entity with a link target renders as a plain link *without* backticks; revision-pinning here and the link/backtick tiering there are two facets of one code-reference discipline).
 - [[tests-accompany-code]] — the same symmetric author-writes / reviewer-rejects shape on the testing axis.
-- [[leaf-schema]] — this leaf's `leaf/v1` structure.
+- [[leaf-schema]] — the retired `leaf/v1` section shape this leaf was converted from.

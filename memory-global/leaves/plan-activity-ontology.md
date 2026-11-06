@@ -2,7 +2,8 @@
 name: plan-activity-ontology
 description: The 8-element activity-structure ontology a plan must cover, mapped to concrete agentctl/plan.py fields; substantive-only requirement; recursive sub-ordering as the genesis of composite (multi-stage) plans.
 type: reference
-schema: leaf/v1
+schema: ontology/v1
+converted_from: leaf/v1
 created: 2026-06-25
 last_verified: 2026-08-06
 ---
@@ -12,6 +13,14 @@ last_verified: 2026-08-06
 ## Difficulty
 
 A plan stated as a free list of steps silently omits the constituents that decide whether the activity can actually be *performed* and *verified*: what is transformed and into what; by which immutable means and method; under which conditions and which properties must stay unchanged; by which actor holding which capability; and on the strength of which refutable principle the transformation was chosen. The machine TOML validator (`agentctl/plan.py`) and this prose leaf — a now-retired standalone markdown-plan validator once existed alongside them — historically named only a subset and drifted apart, so an author could satisfy the *shape* while leaving the activity under-specified. Functional ground: **a plan is the image of removing a difficulty; an incomplete image is unrealizable or unverifiable.** This leaf fixes the complete element set and where each element lives in the schema, so neither surface can quietly drop one.
+
+## Distinction
+
+Separates the constituents of an activity that a plan must cover, so that a plan stated as a free list of steps cannot silently omit one: the order, the material and its result, the knowledge the method needs, the control criterion (objective control versus subjective acceptance), the means (immutable during the transformation) and the method, the conditions and the preserved invariants, the actor with its capability, the refutable principle (always a norm), and the multi-stage graph in which any element that is not a given becomes the order of a service sub-plan. Each element is mapped to a field of the typed model in agentctl state.py and plan.py, which is canonical.
+
+## Adequacy
+
+The distinction is inadequate if a plan that fills every field of every element can still be unrealizable or unverifiable for lack of a constituent the set does not name, if a stage is found whose real constituent fits no element and no supply edge, or if the same constituent can be filed under two elements with different consequences for validation.
 
 ## Guidance
 
@@ -41,7 +50,7 @@ A plan has a `[meta]` head and one or more `[[stage]]` blocks; each stage is a f
 
 ### Weight gating (substantive-only)
 
-The full element set is **mandatory for substantive plans** (`meta.weight_class = "substantive"`) and optional/lighter for `small_change` / `chat`. When `weight_class` is absent, treat the plan **leniently** (new fields optional) so legacy plans keep parsing — strictness applies only where substantive is declared. This mirrors the `schema:leaf/v1` grandfathering: opt-in enforcement, grandfather the rest. See [[leaf-schema]].
+The full element set is **mandatory for substantive plans** (`meta.weight_class = "substantive"`) and optional/lighter for `small_change` / `chat`. When `weight_class` is absent, treat the plan **leniently** (new fields optional) so legacy plans keep parsing — strictness applies only where substantive is declared. This mirrors the grandfathering of the retired section form of ordinary leaves: opt-in enforcement, grandfather the rest. See [[leaf-schema]].
 
 ### Element 3 splits an objective control from a subjective acceptance
 
@@ -64,7 +73,7 @@ The control criterion (element #3) is normally a per-plan text the manager check
 
 Material and method must be chosen by *inference*, not "from the ceiling". State the principle, its **source** (where the regularity comes from), its **confidence**, and what observation would **refute** it. This is the same epistemics already required of rules and memory ("name the difficulty", "cite the source for version-dependent claims", "any principle is potentially refutable") applied to the choice of transformation. It ties to the planner's existing "no numbers/claims without a source" rule.
 
-**Where element 7 draws on the memory.** The memory holds two layers behind it ([ADR-0013](../../docs/adr/0013-regularity-vs-principle.md)). A **regularity** (`regularity/v1`, [regularity-leaf-schema.md](regularity-leaf-schema.md)) is knowledge — a claim about how things are, induced from experience and refuted by a contradicting observation; it is the natural `source` of a stage principle's grounding. A **principle** leaf (`principle/v1`, [principle-leaf-schema.md](principle-leaf-schema.md)) is the norm: it names the **goal class** it serves, cites the regularities it rests on in `grounded_in`, and fails by not reaching that goal class. Ground a stage's `Source:` in the highest-ranked principle that fits, and when the stage's own claim is a statement of how things are, cite the regularity rather than restating it as a norm.
+**Where element 7 draws on the memory.** The memory holds two layers behind it ([ADR-0013](../../docs/adr/0013-regularity-vs-principle.md)). A **regularity** (`regularity/v1`, [regularity-leaf-schema.md](regularity-leaf-schema.md)) is knowledge — a claim about how things are, induced from experience and refuted by a contradicting observation; it is the natural `source` of a stage principle's grounding. A **principle** leaf (`principle/v1`, [principle-leaf-schema.md](principle-leaf-schema.md)) is the norm: it names the **goal class** it serves, cites the regularities it rests on in `grounded_in`, and fails by not reaching that goal class. A stage's `Source:` names only knowledge, never a principle: a regularity (induced, given or `order_derived`), an `ontology/v1` leaf or ADR stating a distinction (`ontology:<slug>`), or **singular knowledge** — an experience leaf (`difficulty/v1`) or a case, one incident that stands alone or next to regularities. The highest-ranked principle that fits is applied through its `grounded_in`, and a grounding judge checks each link both ways (see [planner policy](../../skills/specializations/planner/policy.md) § Grounding norm).
 
 <!-- Language exception: сущее/должное/знание/норма/принцип are the settled SMD source-ontology terms this passage uses; preserved verbatim for traceability. -->
 **The principle (element 7) is always a норма (должное).** `принцип` is the *most general* member of the norm-series (цель→план→программа→метод→подход→принцип) — the norm from which a whole family of goals/plans/methods is derived. A norm is **never checked for truth**; it is shown *adequate-or-not* to the goals it grounds. So element 7 carries **no** a-priori tag typing it знание-vs-норма (ADR-0004 dropped that `statement_kind` field as a category error): what element 7 carries is *used as* a норма, which is a statement about the functional place it occupies, not about what the statement is in itself. Nothing here denies it a знание reading — the stage's own знание place is element 2' (`stage.knowledge`), and a statement can occupy that place in one stage and ground a norm in another. The сущее/должное character of a **fault** is a POST-HOC product of критика at difficulty closure, not a label the norm wears in advance (see the closure routing below).
@@ -129,7 +138,7 @@ The actor must have the **whole** plan before it, to be guided by it — not onl
 
 ## See also
 
-- [[leaf-schema]] — the `leaf/v1` shape this leaf itself follows; the opt-in-enforcement / grandfather pattern reused for weight gating.
+- [[leaf-schema]] — the retired `leaf/v1` shape (this leaf now uses `ontology/v1`); the opt-in-enforcement / grandfather pattern reused for weight gating.
 - [[experience-leaf-schema]] — the `difficulty/v1` schema; the difficulty graph (cycles allowed) that recursive sub-ordering mirrors (order → plan → difficulty → induced order → …).
 - [[partition-markers]] — M1–M4 decide whether a substantive plan ships as one PR or several (delivery partition); orthogonal to this element-completeness axis.
 - [[coordinator-objective]] — the objective function a plan's choices are weighed against.

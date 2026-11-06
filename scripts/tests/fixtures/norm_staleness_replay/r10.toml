@@ -172,7 +172,7 @@ grants = { allow = ["Bash(python3 -m pytest:*)", "Bash(git add:*)", "Bash(git co
 
 [stage.principle]
 statement = "A verdict must cover the evidence domain it claims."
-source = "memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "A landed check that freezes HEAD of whatever tree the stage ran in claims more than its evidence."
 confidence = "high"
 refutation = "Refuted if a landed check goes green for a range with no Task trailer."
@@ -212,7 +212,7 @@ element = "material"
 
 [stage.principle]
 statement = "Org-specific mechanics attach to Core through a typed plugin seam."
-source = "docs/operations/org-portability.md"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "The decision is mechanical for the org's VCS but Core may not name the org."
 confidence = "high"
 refutation = "Refuted if Core gains an org-specific identifier."
@@ -252,7 +252,7 @@ element = "material"
 
 [stage.principle]
 statement = "An escape hatch from a gate must be declared before the work it excuses and every use counted."
-source = "scripts/agentctl/submission.py negative_control_waiver"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "A resolve-time waiver is written by the actor the gate constrains after the outcome is known."
 confidence = "high"
 refutation = "Refuted if a substantive session resolves with neither a landed check nor a landing_waiver."
@@ -292,7 +292,7 @@ element = "material"
 
 [stage.principle]
 statement = "An ordering of two recorded events is a rule, decided by the records, not by prose discipline."
-source = "CLAUDE.md preamble"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "Both ends of the order are already machine records."
 confidence = "high"
 refutation = "Refuted if a substantive resolve --quality succeeds with no marked ask after verify-final."
@@ -332,7 +332,7 @@ element = "material"
 
 [stage.principle]
 statement = "A nudge must fire at the moment its action is due."
-source = "scripts/hook-resolution-reminder.py"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "A nudge gated on RESOLUTION arrives after landing is due."
 confidence = "high"
 refutation = "Refuted if a session at VERIFYING with an unlanded branch gets no landing nudge."
@@ -391,7 +391,7 @@ element = "knowledge"
 
 [stage.principle]
 statement = "A norm stated on several surfaces must be changed on all of them or it re-emerges from the unchanged one; a test of prose decides presence, not meaning."
-source = "User correction 2026-10-08; memory-global/leaves/principles/verdict-covers-the-evidence-domain-it-claims.md; the surface list from a repo-wide grep of the bundling phrases (2026-10-08)."
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "The coordinator reads CLAUDE.md, the landing leaf, the quality leaf and the cursor mirror at the resolution moment; each currently prescribes the bundled ask, so leaving any one unchanged keeps producing it. Pinning anchors and forbidden phrases per surface makes a silent regression visible, while the claim stays honest about deciding only presence."
 confidence = "high"
 refutation = "Refuted if, after landing, a resolution turn following these surfaces still offers land/push and the rating in one AskUserQuestion."
@@ -431,7 +431,7 @@ element = "material"
 
 [stage.principle]
 statement = "A rule that neither the author nor the reviewer is asked to apply is applied by neither."
-source = "This task's own history; CLAUDE.md preamble."
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "Adding the question to both roles makes its absence a reviewable concern."
 confidence = "medium"
 refutation = "Refuted if a later plan still carries an unargued waiver the reviewer does not raise."
@@ -466,7 +466,7 @@ element = "material"
 
 [stage.principle]
 statement = "A change is delivered when it is on trunk and in the checkout every session reads."
-source = "memory-global/leaves/landing-discipline.md"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "Sessions load the engine from the canonical checkout, so a change only on a branch alters no future resolution."
 confidence = "high"
 refutation = "Refuted if the next substantive resolve accepts --quality without a marked ask."
@@ -510,7 +510,7 @@ element = "material"
 
 [stage.principle]
 statement = "An org's VCS facts are decided by an org-side plugin behind a neutral seam."
-source = "org/vcs/storage-changes-land-on-trunk.md"
+source = "regularity:a-controls-defects-surface-only-when-it-is-executed"
 derivation = "the PR status query already exposes the merged fact the seam needs."
 confidence = "medium"
 refutation = "Refuted if the provider reports a merged trunk PR as not landed."

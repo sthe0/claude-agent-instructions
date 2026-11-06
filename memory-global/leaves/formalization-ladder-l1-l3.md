@@ -1,7 +1,11 @@
 ---
 name: formalization-ladder-l1-l3
 description: The L1-L3 formalization ladder for a reasoning/research deliverable — a criterion for when to climb and an explicit L3 refusal criterion — plus the honest enumeration residual the claim-provenance ledger cannot close.
-schema: leaf/v1
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-proof-assistant-checks-the-validity-of-formal-inference-steps-not-the-truth-of-an-empirical-measurement, regularity:a-judgement-call-contains-a-decidable-sub-decision, regularity:agentctl-ledger-gate-statement-text]
+grounding_judged: 39e3ad44a8104fea24219903017564fa542fb9fd9c327e2395f7890e8740c141
+grounding_override: user-approved 2026-11-03: the judge finds part of the rule ungrounded (L2 numeric recompute, and why a model rather than a regex finds the claims); the remaining grounds cannot be removed and no non-thin regularity covers the gap under the r11 revision rules, so the defect is recorded rather than papered over; the repair is a per-clause split of the leaf or a new regularity, tracked as a follow-up issue.
 type: reference
 created: 2026-07-14
 last_verified: 2026-07-28
@@ -10,6 +14,19 @@ last_verified: 2026-07-28
 ## Difficulty
 
 A reasoning/research task can be "verified" at wildly different depths, and both extremes fail. Verify too shallow — accept prose because it reads confidently — and fabricated claims (a decision, a judgment, a number invented by proximity and presented as fact) ship as conclusions. Verify too deep — reach for LEAN / calculus of constructions / combinatory logic on an *empirical* claim — and effort is spent trying to prove the unprovable: a load or cost measurement has no formal derivation to check, so a proof engine adds ceremony without adding grounding. Without a stated ladder *and a stop rule*, the agent oscillates between ungrounded confidence and over-formalization, and cannot say which rung a given claim actually needs.
+
+## Principle
+
+To verify a reasoning or research deliverable at the depth it needs, ground every load-bearing claim in a closed claim ledger (L1), recompute numeric derivations from their measured inputs (L2), and refuse full formalization (L3) for empirical claims such as load, cost or latency measurements; leave the discovery of which claims are load-bearing to the model, not to a regex.
+
+## Goal class
+
+proportionate verification depth of reasoning and research deliverables
+
+## Grounded in
+
+- [[a-proof-assistant-checks-the-validity-of-formal-inference-steps-not-the-truth-of-an-empirical-measurement]]
+- [[a-judgement-call-contains-a-decidable-sub-decision]]
 
 ## Guidance
 

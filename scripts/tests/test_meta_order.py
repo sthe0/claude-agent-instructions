@@ -39,6 +39,7 @@ from pathlib import Path
 import pytest
 
 from conftest import declare_venue
+from plan_site_fixture import GROUNDED_SOURCE
 
 from agentctl import cli
 from agentctl.plan import UNDERSTANDING_FIELDS, PlanError, diff_plans, load_plan, order_place
@@ -170,7 +171,7 @@ knowledge_refs = ["scripts/agentctl/plan.py"]
 knowledge = "where a submission requirement may bind"
 [stage.principle]
 statement = "s"
-source = "src"
+source = '""" + GROUNDED_SOURCE + """'
 derivation = "der"
 confidence = "high"
 refutation = "r"

@@ -2,7 +2,10 @@
 name: Cursor CLI permission rules use their own five-token notation
 description: Difficulty it removes — Claude Code permission rules copied into a Cursor CLI config never match, and a project .cursor/cli.json without permissions.deny is rejected outright. Fact — Cursor CLI knows only Shell / Read / Write / WebFetch / Mcp, requires both allow and deny, and validates the project config on every invocation.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: doc
+given_source: https://cursor.com/docs/cli/reference/permissions
 created: 2026-07-31
 last_verified: 2026-07-31
 ---
@@ -17,6 +20,18 @@ verbatim. They are not interchangeable: Cursor silently ignores every rule whose
 it does not know (so the agent keeps prompting for actions that look allow-listed), and a
 **project** `.cursor/cli.json` whose `permissions` object omits `deny` is rejected before
 the session starts, with a Zod-style `invalid_type … path: ["permissions","deny"]` dump.
+
+## Regularity
+
+Cursor CLI recognizes exactly five permission tokens, Shell(commandBase), Read(pathOrGlob), Write(pathOrGlob), WebFetch(domain) and Mcp(server:tool), documented at https://cursor.com/docs/cli/reference/permissions; there is no Edit token (Write covers all file mutation), WebFetch takes a bare domain without a "domain:" prefix, and Mcp does not take the mcp__server__tool form. Cursor silently ignores any rule whose tool name it does not know (Bash, Edit, Glob, Grep, Task, WebSearch, TodoWrite), so Claude Code rules copied verbatim never match and the agent keeps prompting. Cursor documents commandBase as the first token of the command line, so a multi-token prefix such as Shell(git remote:*) may not match, which costs a confirmation prompt, whereas a widened Shell(git:*) grants every subcommand. A project <repo>/.cursor/cli.json whose permissions object omits deny is rejected before the session starts with a Zod-style invalid_type error at path ["permissions","deny"], while the global ~/.cursor/cli-config.json tolerates a missing deny; running cursor-agent --version in the project directory validates the project config.
+
+## Given
+
+Given from doc: `https://cursor.com/docs/cli/reference/permissions`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+Cursor's permissions reference listing a sixth token or an Edit token, a Claude Code Bash(...) rule taking effect in a Cursor CLI config, or a project .cursor/cli.json without permissions.deny loading without error, would show the statement false.
 
 ## Guidance
 

@@ -2,6 +2,11 @@
 name: universal-negative-control-via-mutation-catalogue
 description: A universally-quantified control claim ("no narrowing passes", "nothing widens the gate") is discharged by a committed mutation catalogue over the subject, not by enumerating more input axes
 type: feedback
+schema: principle/v1
+converted_from: leaf/v1
+grounded_in: [regularity:a-probe-observes-only-the-domain-it-reads, regularity:a-controls-defects-surface-only-when-it-is-executed, regularity:a-recorded-remedy-is-absent-at-the-act-it-governs]
+grounding_judged: b4d0aca8645663371a574cb3da83892bc5440b1d7dd7529c15ef780c37ed4202
+grounding_override: The leaf bundles several clauses resting on different regularities; across two judge rounds the judge alternately names a missing ground and then an irrelevant one among the added grounds, so no single grounded_in satisfies both; the repair is a per-clause split of the leaf, a content change outside this in-place conversion.
 created: 2026-09-04
 last_verified: 2026-09-04
 ---
@@ -16,7 +21,22 @@ When a test suite has to establish a **universal negative** about a piece of cod
 
 A corollary, from the same task: **an ad-hoc mutation/injection script written during a review round is a committed artifact by default, not scratch** ([[committed-files-earn-their-place]]) — if a script was worth running once to measure a control gap, it is worth the next reviewer's time, and leaving it in `/tmp` guarantees the next round reinvents it (or worse, doesn't, and the same class of gap reopens unmeasured).
 
+## Principle
+
+To discharge a universally-quantified negative control claim over code (no narrowing, widening or bypass survives), require a committed in-suite mutation catalogue of the known-dangerous mutations of the subject, each asserting that at least one named control goes RED, which only grows as mutations are found, rather than enlarging the input corpus; an ad-hoc mutation or injection script written during a review round is a committed artifact by default, not scratch.
+
+## Goal class
+
+universal negative control claims discharged
+
+## Grounded in
+
+- [[a-probe-observes-only-the-domain-it-reads]]
+- [[a-controls-defects-surface-only-when-it-is-executed]]
+- [[a-recorded-remedy-is-absent-at-the-act-it-governs]]
+
 ## See also
 
 - [[committed-files-earn-their-place]] — the general committed-vs-scratch keep-criterion this corollary specializes.
 - [[plan-control-criterion-hygiene]] — the universally-quantified-done-criterion twin on the planning side.
+- regularity:a-probe-observes-only-the-domain-it-reads — the regularity this rule rests on.

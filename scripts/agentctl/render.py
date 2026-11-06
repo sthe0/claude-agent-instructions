@@ -29,7 +29,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from lib import kind_baselines
+from lib import kind_baselines, principle_provenance
 from lib.spawn_ceiling import dispatch_prompt_ceiling_chars
 
 from . import grants as _grants, plan_refs, plan_store, protected_actions
@@ -146,6 +146,15 @@ def _effects_lines(s) -> list[str]:
     for e in s.effects:
         out.append(f"  - {e.path} (resolver: {e.resolver}, sha256: {e.sha256})")
     return out
+
+
+def principle_line(p) -> str:
+    """The stage's principle as one bullet; a grounding override is shown with its reason so the
+    reader of the stage (and of the essence) sees the norm it approves."""
+    override = f"; grounding override: {p.grounding_override}" if getattr(p, "grounding_override", "") else ""
+    return (f"- **Principle:** {p.statement} "
+            f"(source: {p.source}; derivation: {p.derivation}; "
+            f"confidence: {p.confidence}; refutation: {p.refutation}{override})")
 
 
 def _negative_control_lines(crit) -> list[str]:
@@ -368,12 +377,7 @@ def render_plan_md(doc: PlanDoc) -> str:
         if s.depends_on:
             lines.append(f"- **Depends on:** {', '.join(str(d) for d in sorted(s.depends_on))}")
         if s.principle is not None:
-            p = s.principle
-            lines.append(
-                f"- **Principle:** {p.statement} "
-                f"(source: {p.source}; derivation: {p.derivation}; "
-                f"confidence: {p.confidence}; refutation: {p.refutation})"
-            )
+            lines.append(principle_line(s.principle))
         lines.extend(_grants_lines(s, _venue_for(doc)))
         lines.extend(_amendment_lines(s))
         lines.append("")
@@ -601,12 +605,7 @@ def _stage_field_lines(
     lines.extend(_grants_lines(s, venue))
     lines.extend(_effects_lines(s))
     if s.principle is not None:
-        p = s.principle
-        lines.append(
-            f"- **Principle:** {p.statement} "
-            f"(source: {p.source}; derivation: {p.derivation}; "
-            f"confidence: {p.confidence}; refutation: {p.refutation})"
-        )
+        lines.append(principle_line(s.principle))
     lines.append("")
     return lines
 
@@ -1166,6 +1165,7 @@ def render_pair_review_bundle(
     if history is not None:
         lines.extend(_prior_review_section(history))
 
+    lines.extend(_grounding_verdict_section(doc))
     lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
     lines.append("")
 
@@ -1263,6 +1263,15 @@ def _unit_edge_lines(doc: PlanDoc, node: "int | str") -> list[str]:
     return lines
 
 
+def _grounding_verdict_section(doc: PlanDoc) -> list[str]:
+    """The grounding judge's cached verdicts on the plan's stages, for the reviewer; empty when the
+    judge is off or has judged nothing."""
+    from . import grounding_gate  # local: grounding_gate reads render
+
+    lines = grounding_gate.review_verdict_lines(doc)
+    return ["## Grounding verdicts", "", *lines, ""] if lines else []
+
+
 def render_unit_review_bundle(
     doc: PlanDoc, unit: str, *, plan_sha256: str, history: "dict | None" = None,
     agreed_understanding: "str | None" = None,
@@ -1307,6 +1316,7 @@ def render_unit_review_bundle(
     if history is not None:
         lines.extend(_prior_review_section(history, "unit"))
 
+    lines.extend(_grounding_verdict_section(doc))
     lines.append(f"{PLAN_DIGEST_MARKER} {plan_sha256}")
     lines.append("")
 
@@ -2010,6 +2020,58 @@ def render_plan_grants(doc: PlanDoc, fmt: str = "compact") -> str:
                 parts.append("(no grants)")
             lines.append(" ".join(parts))
     return "\n".join(lines).rstrip() + "\n"
+
+
+GENERALIZATIONS_HEADER = "New generalizations (for approval):"
+EMPTY_GENERALIZATIONS_LINE = "- none: no leaf stamped with this plan's task id is staged"
+# area of a generalization leaf -> the section holding its statement
+_STATEMENT_SECTION = {"regularity": "Regularity", "principle": "Principle"}
+
+
+def introduced_by_plan(leaf_text: str, task_id) -> bool:
+    return bool(task_id) and principle_provenance.introduced_by(leaf_text) == task_id
+
+
+def generalization_candidates(leaves, task_id, cited=()) -> list:
+    """Every regularity or principle leaf of the corpus the plan introduces, cited by a stage
+    or not, in slug order. `cited` (the slugs the stages cite) does not filter: an introduced
+    leaf no stage cites still joins the corpus on approval."""
+    found = [leaf for leaf in leaves
+             if leaf.area in _STATEMENT_SECTION and introduced_by_plan(leaf.text, task_id)]
+    return sorted(found, key=lambda leaf: (leaf.slug, leaf.tier, leaf.area))
+
+
+def generalization_line(leaf) -> str:
+    body = principle_provenance.section_body(leaf.text, _STATEMENT_SECTION[leaf.area]) or ""
+    paragraphs = [p for p in body.strip().split("\n\n") if p.strip()]
+    statement = " ".join(paragraphs[0].split()) if paragraphs else "(no statement section)"
+    prefix = "project:" if leaf.tier == "project" else ""
+    return f"- {prefix}{leaf.area}:{leaf.slug} — {statement}"
+
+
+def render_plan_generalizations(doc: PlanDoc, corpus) -> str:
+    """The generalizations the plan introduces, generated from the corpus the submission seam
+    loads (staged leaves included) and never hand-maintained: present-plan requires this
+    block's text inside an essence, so an introduced leaf cannot be left out of the approval."""
+    from . import grounding  # local: grounding -> submission -> render is a cycle at import time
+
+    # cited is matched by bare slug: a same-slug leaf of another area or tier counts as cited too
+    cited = {ref.slug
+             for stage in doc.stages if stage.principle is not None
+             for ref in grounding.parse_ground_refs(stage.principle.source)[0]}
+    lines = [GENERALIZATIONS_HEADER]
+    for leaf in generalization_candidates(corpus.items, doc.meta.task_id, cited):
+        line = generalization_line(leaf)
+        order_derived = principle_provenance.field_value(leaf.text, principle_provenance.ORDER_DERIVED)
+        line = line if leaf.slug in cited else line + " (not cited by any stage)"
+        lines.append(line + " (unverified given)" if order_derived else line)
+        if order_derived:
+            quote = principle_provenance.order_quote(leaf.text)
+            if quote:
+                lines.append("  order quote: " + quote.replace("\n", "\n    "))
+    if len(lines) == 1:
+        lines.append(EMPTY_GENERALIZATIONS_LINE)
+    return "\n".join(lines) + "\n"
 
 
 def cmd_plan_grants(args, *, store=None, runner=None) -> Directive:

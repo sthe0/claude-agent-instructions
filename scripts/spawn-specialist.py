@@ -201,11 +201,14 @@ def build_child_lineage(inherited: "str | None", own_id: "str | None") -> str:
 
 
 def build_child_env(environ: "Mapping[str, str]", depth_next: int, session_id: "str | None") -> dict:
-    """The environment a spawned child starts with: the parent's, whole, plus the spawn
-    markers. Everything else is inherited -- TMUX_PANE included, which is why pane
-    ownership cannot rest on that variable alone (agentctl.pane_title.owns_pane)."""
+    """The environment a spawned child starts with: the parent's, plus the spawn markers,
+    minus TMUX_PANE. A child runs headless and owns no pane, yet a hook that finds the
+    variable acts for that pane: ccgram's SessionStart binds the window to the child
+    whenever the spawner was detached from the parent `claude`, which hides the nesting
+    from ccgram's own process-ancestry check."""
+    inherited = {name: value for name, value in environ.items() if name != "TMUX_PANE"}
     return {
-        **environ,
+        **inherited,
         "AGENT_RECURSION_DEPTH": str(depth_next),
         "CLAUDE_CODE_DISABLE_CRON": "1",
         "AGENT_LINEAGE_IDS": build_child_lineage(environ.get("AGENT_LINEAGE_IDS", ""), session_id),

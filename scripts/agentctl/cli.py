@@ -67,6 +67,11 @@ from .cli_common import (
     _agent_review_override,
     _baseline_plan_for_tier,
     _frozen_edge_stages,
+    _grounding_exempt_stages,
+    _grounding_inputs,
+    _generalizations_block,
+    _generalizations_missing,
+    _grounding_problems,
     _CRITERION_ENGINE_WRITTEN_FIELDS,
     _apply_refined_stage_fields,
     _log_gate,
@@ -126,6 +131,7 @@ from .cli_plan import (
     cmd_plan,
     cmd_submit_plan,
     cmd_present_plan,
+    cmd_plan_generalizations,
     cmd_confirm_delivery,
 )
 from .cli_review import (
@@ -271,6 +277,7 @@ COMMANDS = {
     "plan": cmd_plan,
     "plan-render": cmd_plan_render,
     "plan-grants": cmd_plan_grants,
+    "plan-generalizations": cmd_plan_generalizations,
     "plan-resources": plan_resources.cmd_plan_resources,
     "plan-digest": plan_refs.cmd_plan_digest,
     "plan-externalize": plan_refs.cmd_plan_externalize,

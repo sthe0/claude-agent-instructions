@@ -2,7 +2,10 @@
 name: effort-divergence-trigger
 description: The engine enters the difficulty cycle by itself when actual effort runs past the current plan's re-derived estimate by the configured multiple — four scales, a window opening at plan approval, and a terminal that diagnoses rather than asking.
 type: reference
-schema: leaf/v1
+schema: regularity/v1
+converted_from: leaf/v1
+given: doc
+given_source: scripts/agentctl/README.md
 created: 2026-08-05
 last_verified: 2026-09-27
 ---
@@ -16,6 +19,18 @@ The one-clause rule lives in CLAUDE.md § When the work is stuck; the engine-sid
 A task can run many times over its own plan and **nothing in the system notices**. The only detector is the user's attention — the resource the whole coordination machinery exists to spend less of. So the failure is self-concealing in exactly the wrong direction: the more the work overruns, the more supervision it silently demands, and the overrun that most needs a re-plan is the one nobody is counting.
 
 A plan is a **norm**. Running far past it is not merely expensive; it is evidence that the norm is missing something essential about the real situation. That is a [[function-place-difficulty]] — a symptom whose cause is a broken functional place, not a number to push back into range by working harder.
+
+## Regularity
+
+In the agentctl engine the effort-divergence trigger compares actual effort against the estimate re-derived from the current plan on four scales: spend and wall-clock as ratios (counting linked descendants), replans as an absolute count, and interactions as accounting only. Its window opens at plan approval (actual minus a baseline snapshotted at approve), so a session that never passes approve is not measured and effort spent while planning is invisible to it. At the fire site, except a spend or wall-clock fire on finished work, the engine moves to DIAGNOSING and seeds a pre-framed difficulty without asking the user. A replans-scale fire on a user-approved order is owned by the agent, while spend and wall-clock fires stay with the user. The estimate is declared by the same actor it constrains, and review rounds are not one of its scales.
+
+## Given
+
+Given from doc: `scripts/agentctl/README.md`. The statement is taken as known from that source, not induced from recorded experience.
+
+## Refutation
+
+Reading scripts/agentctl and its README shows a fifth scale, a window that opens at session start rather than at approve, a fire site that asks the user instead of entering DIAGNOSING, or an estimate not derived from the current plan.
 
 ## Guidance
 

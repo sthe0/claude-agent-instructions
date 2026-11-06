@@ -15,6 +15,8 @@ from . import (
     delivery,
     gates,
     grant_shadow,
+    grounding,
+    grounding_gate,
     plugins,
     pane_title,
     plugins_premise,
@@ -96,6 +98,8 @@ from .cli_common import (
     _attach_advisories,
     _submission_advice,
     _submission_problems,
+    _generalizations_block,
+    _generalizations_missing,
     _effort_fire_refusal,
     _require,
     _bound_stage_key,
@@ -664,7 +668,9 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # and a refusal cannot be computed after the return that acts on it. The binding itself
     # costs nothing; only a prefilter hit spends a judge call.
     run = runner if runner is not None else advisor.subprocess_runner
-    problems: list[str] = _submission_problems(doc, run, state.weight_class)
+    grounding_warnings: list[str] = []
+    problems: list[str] = _submission_problems(
+        doc, run, state.weight_class, warnings=grounding_warnings)
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
@@ -817,6 +823,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     d.data.setdefault("advisories", []).extend(
         _submission_advice(doc, run, state.weight_class, plan_path)
     )
+    if grounding_warnings:
+        d.data["advisories"].extend(grounding_warnings)
     # Predsubmit check-run observation (C.2) — actually RUNS each stage's
     # verify_command in its declared venue, warn-only, same advisories channel.
     # Substantive-only, mirroring the reachability-blocker gate above: a
@@ -840,6 +848,15 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
             "`approve` will refuse without a bound presentation + delivery proof"
         )
     return d
+
+
+def cmd_plan_generalizations(args, *, store=None, runner=None) -> Directive:
+    try:
+        doc = load_plan(args.plan)
+    except Exception as exc:
+        return Directive(False, "(render)", "noop", f"cannot load plan: {exc}")
+    block = _generalizations_block(doc)
+    return Directive(True, "(render)", "inspect", block, data={"generalizations_block": block})
 
 
 def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
@@ -1012,6 +1029,22 @@ def cmd_present_plan(args, *, store: StateStore, runner: Runner | None = None) -
                     "essence rendering omits the grants block; stamping nothing — "
                     "paste this block into it verbatim and re-run",
                     data={"grants_block": compact_grants_block},
+                )
+        if _grants_doc is not None and grounding.is_substantive(_grants_doc):
+            generalizations_block = _generalizations_missing(_grants_doc, text)
+            if generalizations_block is not None:
+                return Directive(
+                    False, state.node, "noop",
+                    "essence rendering omits the new-generalizations block; stamping "
+                    "nothing — paste this block into it verbatim and re-run",
+                    data={"generalizations_block": generalizations_block},
+                )
+            if grounding_gate.essence_overrides_problems(_grants_doc, text):
+                return Directive(
+                    False, state.node, "noop",
+                    "essence rendering omits the grounding-overrides block; stamping "
+                    "nothing — paste this block into it verbatim and re-run",
+                    data={"overrides_block": grounding_gate.overrides_block(_grants_doc)},
                 )
 
         # Refuse to stamp a receipt for a plan `approve` would refuse on premise
@@ -1297,6 +1330,10 @@ def register(sub, add):
              "on demand (a projection, never written to disk)")
     sp.add_argument("--format", choices=["compact", "full", "json"], default="compact")
     # Session-free read, same reason as plan-render's suppressed --session above.
+    sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
+    sp = add("plan-generalizations"); sp.add_argument("--plan", required=True,
+        help="TOML plan whose new-generalizations block (the regularities and principles it "
+             "introduces) to print; an essence must contain this block")
     sp.add_argument("--session", required=False, default=None, help=argparse.SUPPRESS)
     sp = add("plan-resources"); sp.add_argument("--plan", required=False, default=None,
         help="TOML plan whose per-stage typed resources (declared + derived rules, "

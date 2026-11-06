@@ -2,7 +2,8 @@
 name: inline-class
 description: What makes a change inline (the "small change" class) - absence of choice and risk, one cohesive change, a bound on hand-written production lines - which paths are counted, how to measure, and what the check does not cover.
 type: reference
-schema: leaf/v1
+schema: ontology/v1
+converted_from: leaf/v1
 created: 2026-10-26
 last_verified: 2026-10-26
 ---
@@ -12,6 +13,14 @@ last_verified: 2026-10-26
 ## Difficulty
 
 The class exists so a change with no choice and no risk is made in-thread, without a plan gate. It used to be defined by proxies (a file count, a raw changed-line count) that generated files and tests dominate: a one-line fix across two files could not be inline, while a design change hidden in one file could. To keep the in-thread path for exactly the changes that need no plan, the class is defined by its functional ground (no choice, no risk), with a size backstop measured over the lines a reviewer weighs.
+
+## Distinction
+
+Separates an inline change (the "small change" class, made in-thread without a plan gate) from a change that needs a plan. The ground is functional: a change is inline only when it holds no choice and no risk (one obvious solution with no design decision, reversible, no external or irreversible effect, no public-contract change, no new dependency, one cohesive change) and sits under a backstop bound of small-change-max-lines hand-written production lines. The size is counted as added plus deleted lines of production files, excluding tests (by path pattern), generated files (by the linguist-generated attribute in .gitattributes) and every leaf under memory-global/leaves/; a counted binary file always exceeds the bound. The definition is held once in scripts/agentctl/inline_class.py. The distinction is by choice-and-risk first and size second, not by proxies such as file count or raw changed-line count.
+
+## Adequacy
+
+The distinction is inadequate if changes the definition classes as inline are found, on review, to have carried a design choice, a public-contract change or an irreversible effect that a plan gate would have caught; or if changes it classes as needing a plan are routinely found to hold no choice and no risk, so that the size backstop (not the choice-and-risk criteria) is what separates them; or if the counted-line measure from scripts/inline-measure.py is dominated by lines a reviewer does not weigh.
 
 ## Guidance
 

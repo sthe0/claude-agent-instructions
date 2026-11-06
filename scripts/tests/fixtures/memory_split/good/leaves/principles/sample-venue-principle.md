@@ -7,6 +7,7 @@ generality: 1
 grounded_in: [regularity:sample-venue-regularity]
 created: 2026-10-12
 last_verified: 2026-10-12
+grounding_unjudged: 2026-10-12 judge unavailable
 ---
 
 # Run a control where its subject lives
