@@ -261,3 +261,36 @@ def test_judge_ledger_call_keeps_its_line_without_the_telemetry_layer(tmp_path, 
     monkeypatch.setattr(judge_ledger, "live", None)
     judge_ledger.call("binary_ask", timed_out=False, duration=0.1, returncode=0, prompt_chars=4)
     assert [row["kind"] for row in _rows(ledger)] == ["call"]
+
+
+def test_engine_landing_and_spawn_start_when_the_telemetry_layer_cannot_be_imported(tmp_path):
+    gate_log = tmp_path / "gate-log.jsonl"
+    code = textwrap.dedent(f"""
+        import importlib.util, sys
+        sys.modules['lib.telemetry.live'] = None
+        sys.path.insert(0, {str(SCRIPTS)!r})
+        from agentctl import cli_common
+        assert cli_common.live is None
+        cli_common._append_jsonl(__import__('pathlib').Path({str(gate_log)!r}), {{"gate": "g"}})
+        for name in ("land-branch", "spawn-specialist"):
+            spec = importlib.util.spec_from_file_location(name.replace("-", "_"), {str(SCRIPTS)!r} + "/" + name + ".py")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            assert module.live is None, name
+    """)
+    script = tmp_path / "start_without_live.py"
+    script.write_text(code, encoding="utf-8")
+    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=120)
+    assert (done.returncode, done.stderr) == (0, "")
+    assert [row["gate"] for row in _rows(gate_log)] == ["g"]
+
+
+def test_a_landing_event_is_a_no_op_when_the_telemetry_layer_is_missing(monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("land_branch_no_live", SCRIPTS / "land-branch.py")
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    module.live = None
+    module._emit_landing("start", "s", {"branch": "b"})

@@ -15,7 +15,10 @@ import tomllib
 from dataclasses import asdict, fields, replace
 from pathlib import Path
 from lib import argv_text, config_root, engine_session_binding, hook_telemetry
-from lib.telemetry import live
+try:
+    from lib.telemetry import live
+except Exception:  # telemetry must never stop the engine from starting
+    live = None
 from . import (
     advisor,
     carry_forward,
@@ -1218,18 +1221,28 @@ def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bo
         "passed": passed,
     }
     backref = _append_jsonl(GATE_LOG, row)
-    live.emit_event(state.session_id, "gate", f"gate:{gate}", {
-        "session": state.session_id, "verb": live.current_verb(), "gate": gate,
-        "outcome": "pass" if passed else "refuse", "time": row["ts"],
-    }, backref)
+    try:
+        live.emit_event(state.session_id, "gate", f"gate:{gate}", {
+            "session": state.session_id, "verb": live.current_verb(), "gate": gate,
+            "outcome": "pass" if passed else "refuse", "time": row["ts"],
+        }, backref)
+    except Exception:  # telemetry is fail-open; `live` is None when it could not be imported
+        pass
 
 
 def _append_jsonl(path: Path, row: dict) -> "tuple[str, int, str] | None":
     """Append one JSON line; its back-reference, or None when the write failed."""
+    data = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        return live.append_line(path, (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8"),
-                                mode=0o666)
+        if live is not None:
+            return live.append_line(path, data, mode=0o666)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666)
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
+        return None
     except OSError:
         return None
 
