@@ -53,6 +53,7 @@ CANARY_ID = CANARY_FILE + "::test_launcher_run_downloads_nothing"
 START_FREE_GB = 80
 ABORT_FREE_GB = 15
 GATE_LIMIT_S = 1800
+FLIP_ATTEMPTS = 3
 PLAIN_TIMEOUT_S = 3400
 SCRUB = ("CLAUDE_CODE_SESSION_ID", "AGENT_LINEAGE_IDS", "CLAUDE_CODE_MESSAGING_SOCKET",
          "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_POLICY_LEDGER", "CLAUDE_PROJECT_PLUGIN_DIR",
@@ -182,6 +183,26 @@ def _verdicts_selftest() -> list[str]:
     return problems
 
 
+def _flip_selftest() -> list[str]:
+    """A failure that flips in the unchanged tree on a later rerun is flaky; one that never does is not."""
+    test = "scripts/tests/test_x.py::test_y"
+    calls = {"base": 0}
+
+    def rerun_flipping_late(tree, files):
+        if tree == BASE_TREE:
+            calls["base"] += 1
+            return {test: "failed" if calls["base"] == 3 else "passed"}
+        return {test: "failed"}
+
+    problems = []
+    if flaky_ids([test], {test: "passed"}, {test: "failed"}, rerun_flipping_late) != [test]:
+        problems.append("a failure that flips in the unchanged tree on the last rerun was not called flaky")
+    steady = lambda tree, files: {test: "failed" if tree != BASE_TREE else "passed"}  # noqa: E731
+    if flaky_ids([test], {test: "passed"}, {test: "failed"}, steady):
+        problems.append("a failure that reproduces here and never fails in the unchanged tree was called flaky")
+    return problems
+
+
 def search_selftest() -> int:
     with tempfile.TemporaryDirectory(prefix="r1-search-selftest-") as tmp:
         root = Path(tmp)
@@ -196,7 +217,7 @@ def search_selftest() -> int:
            for token, box, tree in (("ab12_c", "gatebox", BASE_TREE), ("zz99", "instruction-sandbox.Q1w2e3", REPO))]
     if normalize_id(ids[0]) != normalize_id(ids[1]):
         problems.append("a test id that names the run's sandbox root or the checkout differs between runs")
-    problems += _stub_answers() + _verdicts_selftest()
+    problems += _stub_answers() + _verdicts_selftest() + _flip_selftest()
     for line in problems:
         print("search-selftest: FAIL:", line)
     return 1 if problems else 0
@@ -395,17 +416,27 @@ def baseline_ids(entry: str) -> dict[str, str]:
     return {normalize_id(node): outcome for node, outcome in ids.items()}
 
 
-def flaky_ids(candidates: list[str], base: dict[str, str], now: dict[str, str]) -> list[str]:
-    """Candidates that flip on a rerun of their whole file: the unchanged tree's outcome differs from the
-    baseline's, or this tree's differs from the run that failed them. A failure the change causes does
-    neither: it reproduces here and passes in the unchanged tree."""
-    known = sorted(i for i in candidates if i in base)
-    if not known or not BASE_TREE.is_dir():
-        return []
-    files = sorted({i.split("::")[0] for i in known})
-    in_base = run_plain(BASE_TREE, "flip-rerun-base", False, select=files)["outcomes"]
-    in_here = run_plain(REPO, "flip-rerun-here", False, select=files)["outcomes"]
-    return [i for i in known if in_base.get(i) != base[i] or in_here.get(i) != now.get(i)]
+def rerun_files(tree: Path, files: list[str]) -> dict[str, str]:
+    if not tree.is_dir():
+        raise Refused(f"no tree at {tree} to rerun {len(files)} file(s) in")
+    return run_plain(tree, "flip-rerun", False, select=files)["outcomes"]
+
+
+def flaky_ids(candidates: list[str], base: dict[str, str], now: dict[str, str], rerun=rerun_files) -> list[str]:
+    """Candidates that flip when their whole file is rerun, up to FLIP_ATTEMPTS times: the unchanged tree's
+    outcome differs from the baseline's, or this tree's differs from the run that failed them. A failure the
+    change causes never flips: it reproduces here and passes in the unchanged tree every time."""
+    pending = {i for i in candidates if i in base}
+    flaky: list[str] = []
+    for _ in range(FLIP_ATTEMPTS):
+        if not pending:
+            break
+        files = sorted({i.split("::")[0] for i in pending})
+        in_base, in_here = rerun(BASE_TREE, files), rerun(REPO, files)
+        flipped = {i for i in pending if in_base.get(i) != base[i] or in_here.get(i) != now.get(i)}
+        flaky += sorted(flipped)
+        pending -= flipped
+    return sorted(flaky)
 
 
 def entry_section(run: dict, base: dict[str, str], gate_info: dict | None = None) -> dict:
