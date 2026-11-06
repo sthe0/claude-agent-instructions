@@ -126,7 +126,6 @@ class Eng:
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
     monkeypatch.setattr(cost, "COST_LOG", tmp_path / "costs.jsonl")
 

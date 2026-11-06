@@ -613,12 +613,16 @@ def _live_stage_uids(state: SessionState, old: list[dict]) -> set:
 
 def continuation_decision(state: SessionState, new_stages) -> tuple:
     """(decision, the old records it was made against) for `new_stages` in the live frame. A live
-    stage with no readable approved-plan snapshot to check against breaks the check."""
+    stage that has booked effort and has no readable approved-plan snapshot to check against
+    breaks the check; a stage armed but not yet worked owes no continuation."""
     old = _continuation_base(state)
     live = _live_stage_uids(state, old)
     decision = effort_continuation.decide(old, _continuation_new_records(state, new_stages), live)
     snapshot = state.plan_snapshot_path
-    if live and not (snapshot and Path(snapshot).is_file()):
+    spent = {a["segment"].removeprefix(effort_segments.STAGE_PREFIX)
+             for a in state.effort_segments.get("armings") or []
+             if a["closed_at"] is None and any(effort_segments.arming_actual(a).values())}
+    if live & spent and not (snapshot and Path(snapshot).is_file()):
         decision.breaches.append(
             "no readable approved-plan snapshot to check the live stage's continuation against")
     return decision, old

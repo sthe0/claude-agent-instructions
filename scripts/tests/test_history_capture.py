@@ -368,6 +368,10 @@ def test_no_refusal_seven_command_directives_pinned_under_pre_d9_argument_shapes
         rendering_file=rendering_file,
         emit_skeleton=False,
     ), store=store)
+    # r2-ask-shows-figures: a full presentation also carries the closing arming figures
+    assert {"closing_arming", "next_steps"} <= set(d.data)
+    d.data.pop("closing_arming")
+    d.data.pop("next_steps")
     assert d == cli.Directive(
         ok=True,
         node="VERIFYING",

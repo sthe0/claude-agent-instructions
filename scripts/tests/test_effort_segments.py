@@ -122,7 +122,6 @@ def eng(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _no_ambient_harness_session(monkeypatch):
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
 
 
