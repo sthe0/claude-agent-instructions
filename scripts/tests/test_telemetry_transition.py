@@ -4,15 +4,18 @@ reading the record, and `check-profile-unchanged` against stage 1's frozen input
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import stat
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
 from lib import config_root, time_profile
-from lib.telemetry import emit, importer, phases, store, sync
+from lib.telemetry import emit, importer, live, phases, profile_check, store, sync
 from telemetry_import_support import (
-    BASE, DAY, Frozen, at, bash_call, bash_result, line, prompt, reply, session_lines, world)  # noqa: F401
+    BASE, DAY, Frozen, _gz_tar, at, bash_call, bash_result, line, prompt, reply, session_lines, world)  # noqa: F401
 from telemetry_live_support import query
 
 NOW = BASE + timedelta(days=200)
@@ -162,6 +165,31 @@ def test_time_profile_reports_record_as_source(world):
     run = _profile(world, source="auto")
     assert run.source == "record"
     assert run.profiles and run.profiles[0].session_id == "sess"
+
+
+def _planning_ms(run) -> int:
+    return run.profiles[0].overlays["node:PLANNING"]
+
+
+def _state_file_with_earlier_plan(world) -> None:
+    world.state("sess", [start_entry(0, node="CLASSIFIED"), start_entry(30, "plan", node="PLANNING"),
+                         start_entry(120, "submit-plan", node="PLAN_READY")])
+
+
+def test_time_profile_prefers_record_events_of_a_session_without_a_recorded_loss(world):
+    _profiled_world(world)
+    world.run()
+    _state_file_with_earlier_plan(world)
+    run = _profile(world, source="auto")
+    assert run.source == "record" and _planning_ms(run) == 60_000
+
+
+def test_time_profile_reads_the_state_file_of_a_session_with_a_recorded_loss(world):
+    _profiled_world(world)
+    world.run()
+    store.transact(lambda conn: store.add_loss(conn, "sess", "torn_event", 1))
+    _state_file_with_earlier_plan(world)
+    assert _planning_ms(_profile(world, source="auto")) == 90_000
 
 
 def test_time_profile_falls_back_to_transcripts_without_record(world):
@@ -333,6 +361,112 @@ def test_prune_keeps_sync_deferred_row_while_its_spool_holds_unreplayed_bytes(wo
     assert row["event_id"] not in _remaining_sync()
 
 
+STATUS = {"node_before": "ROUTED", "node_after": "ROUTED"}
+
+
+def _ended_replayed_spool(world, session: str, events: int = 1) -> None:
+    for _ in range(events):
+        world.live_event(session, "command", "cli:status", {**STATUS, "pad": "x" * 200})
+    world.replay(session)
+    live.end_marker_path(session).write_text("")
+
+
+def _spool_files(session: str) -> list:
+    return [p for p in (emit.spool_path(session), live.end_marker_path(session), live.epoch_path(session))
+            if p.exists()]
+
+
+def test_prune_then_resume_with_a_smaller_spool_then_prune_keeps_the_new_spool(world):
+    _ended_replayed_spool(world, "R", events=4)
+    assert importer.prune(70, NOW)["spools_removed"] == 1
+    assert not _spool_files("R")
+    world.live_event("R", "command", "cli:status", STATUS)
+    live.end_marker_path("R").write_text("")
+    assert emit.spool_path("R").stat().st_size < 4 * 200
+    assert importer.prune(70, NOW)["spools_removed"] == 0
+    assert emit.spool_path("R").exists()
+    world.replay("R")
+    assert world.count("events", "session_id = 'R'") == 5
+
+
+def test_a_stored_offset_of_another_generation_does_not_make_a_new_spool_replayed(world):
+    _ended_replayed_spool(world, "G", events=4)
+    old_generation, old_offset = [tuple(r) for r in query(
+        "SELECT generation, byte_offset FROM spool_offsets WHERE spool = 'G'")][0]
+    assert importer.prune(70, NOW)["spools_removed"] == 1
+    world.live_event("G", "command", "cli:status", STATUS)
+    live.end_marker_path("G").write_text("")
+    store.transact(lambda conn: conn.execute(
+        "INSERT INTO spool_offsets (spool, generation, byte_offset) VALUES ('G', ?, ?)", (old_generation, old_offset)))
+    assert emit.spool_path("G").stat().st_size <= old_offset
+    conn = store.open_readonly()
+    try:
+        assert sync.unreplayed_bytes(conn, "G") == emit.spool_path("G").stat().st_size
+    finally:
+        conn.close()
+    assert importer.prune(70, NOW)["spools_removed"] == 0
+    assert emit.spool_path("G").exists()
+
+
+def test_prune_removes_the_offset_row_and_both_sidecars_with_the_spool(world):
+    _ended_replayed_spool(world, "P")
+    live.write_epoch("P", "task-p", "epoch-p")
+    assert world.count("spool_offsets", "spool = 'P'") == 1 and live.epoch_path("P").exists()
+    assert importer.prune(70, NOW)["spools_removed"] == 1
+    assert not _spool_files("P") and world.count("spool_offsets", "spool = 'P'") == 0
+
+
+def test_prune_never_removes_a_lock_file(world):
+    _ended_replayed_spool(world, "L")
+    lock = config_root.telemetry_spool_dir() / "L.lock"
+    assert lock.exists()
+    assert importer.prune(70, NOW)["spools_removed"] == 1
+    assert lock.exists()
+
+
+def test_prune_leaves_a_spool_whose_lock_another_process_holds(world):
+    _ended_replayed_spool(world, "H")
+    with store.spool_lock("H") as held:
+        assert held
+        assert sync.prune_spool("H", 0.05) is False
+    assert emit.spool_path("H").exists()
+    assert sync.prune_spool("H") is True
+
+
+def test_a_stale_end_marker_does_not_make_a_resumed_session_eligible(world):
+    _ended_replayed_spool(world, "S")
+    old = emit.spool_path("S").stat().st_mtime - 3600
+    os.utime(live.end_marker_path("S"), (old, old))
+    world.live_event("S", "command", "cli:status", STATUS)
+    world.replay("S")
+    assert sync.is_eligible("S") is False
+    assert importer.prune(70, NOW)["spools_removed"] == 0
+    assert emit.spool_path("S").exists()
+
+
+def test_the_hooks_own_decision_event_after_the_end_marker_keeps_the_session_ended(world):
+    _ended_replayed_spool(world, "D")
+    marked = live.end_marker_path("D").stat().st_mtime
+    world.live_event("D", "decision", "hook:hook-telemetry-session-end", {})
+    assert emit.spool_path("D").stat().st_mtime - marked < sync.END_GRACE_S
+    assert sync.is_eligible("D") is True
+
+
+def test_an_idle_spool_past_the_ttl_is_eligible_without_a_marker(world):
+    world.live_event("T", "command", "cli:status", STATUS)
+    old = emit.spool_path("T").stat().st_mtime - sync.LIVE_TTL_S - 10
+    os.utime(emit.spool_path("T"), (old, old))
+    assert sync.is_eligible("T") is True
+
+
+def test_write_epoch_creates_the_sidecar_owner_only_and_leaves_no_temp_file(world):
+    live.write_epoch("W", "task-w", "epoch-w")
+    path = live.epoch_path("W")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert live.read_epoch("W")["epoch"] == "epoch-w"
+    assert [p.name for p in path.parent.iterdir() if p.name.endswith(".tmp")] == []
+
+
 # --- sync, import, sync ---------------------------------------------------------------------------
 
 def test_real_sync_import_sync_attaches_running_session_to_imported_row(world):
@@ -403,6 +537,14 @@ def test_check_profile_unchanged_reads_transcripts_only_up_to_reference_time(fro
 def test_check_profile_unchanged_uses_reference_half_life(frozen):
     assert frozen.reference["half_life_days"] == frozen.half_life == 30.0
     assert frozen.check()[0] == 0
+
+
+def test_a_snapshot_member_named_outside_the_projects_root_is_refused_before_anything_is_written(tmp_path):
+    snapshot = tmp_path / "snapshot.tar.gz"
+    _gz_tar(snapshot, [("/__escape/outside.jsonl", line({"timestamp": at(0)}))])
+    with pytest.raises(profile_check.PremiseError):
+        profile_check.extract_transcripts(snapshot, tmp_path / "projects", 10**15)
+    assert not Path("/__escape").exists() and not any((tmp_path / "projects").rglob("*.jsonl"))
 
 
 def test_check_profile_unchanged_exits_2_when_session_set_differs(frozen):

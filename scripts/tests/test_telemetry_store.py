@@ -445,6 +445,58 @@ def test_newline_terminated_unparsable_line_counted_once_as_torn():
     assert sorted(r[0] for r in _query("SELECT event_id FROM events")) == sorted([first, last])
 
 
+BAD_BUT_JSON = [
+    {"event_id": ["a"], "kind": "tick", "time": "2026-01-01T00:00:00+00:00"},
+    {"event_id": "e1", "kind": 7, "time": "2026-01-01T00:00:00+00:00"},
+    {"event_id": "e2", "kind": "tick", "time": "yesterday"},
+    {"event_id": "e3", "kind": "tick", "time": "2026-01-01T00:00:00+00:00", "fields": [1]},
+    {"event_id": "e4", "kind": "tick", "time": "2026-01-01T00:00:00+00:00", "session_id": {"x": 1}},
+    {"event_id": "e5", "kind": "tick", "time": "2026-01-01T00:00:00+00:00", "backref": {"path": 1}},
+    {"event_id": "e6", "kind": "tick", "time": "2026-01-01T00:00:00+00:00", "fields": {"source_key": 3}},
+    {"event_id": "\ud800", "kind": "tick", "time": "2026-01-01T00:00:00+00:00"},
+]
+
+
+def test_a_parsable_line_with_unusable_fields_is_one_loss_and_never_rolls_back_its_batch():
+    first = emit.emit("bad", "tick", {})
+    with open(emit.spool_path("bad"), "ab") as spool:
+        for event in BAD_BUT_JSON:
+            spool.write(b"\n" + json.dumps(event).encode() + b"\n")
+    last = emit.emit("bad", "tick", {})
+    result = store.replay("bad")
+    assert (result["inserted"], result["torn"], result["drained"], result["failed"]) == (
+        2, len(BAD_BUT_JSON), True, False)
+    again = store.replay("bad")
+    assert (again["inserted"], again["torn"], again["drained"]) == (0, 0, True)
+    assert _query("SELECT count FROM losses WHERE session_id = 'bad' AND loss_mode = 'torn_event'")[0][0] == len(
+        BAD_BUT_JSON)
+    assert sorted(r[0] for r in _query("SELECT event_id FROM events")) == sorted([first, last])
+
+
+def test_open_readonly_closes_its_connection_when_the_open_fails(monkeypatch):
+    _create_record()
+    closed = []
+    real = sqlite3.connect
+
+    class Failing:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, *args):
+            raise sqlite3.OperationalError("boom")
+
+        def close(self):
+            closed.append(True)
+            self.conn.close()
+
+        def __getattr__(self, name):
+            return getattr(self.conn, name)
+
+    monkeypatch.setattr(sqlite3, "connect", lambda *a, **k: Failing(real(*a, **k)))
+    assert store.open_readonly() is None
+    assert closed == [True]
+
+
 def test_spool_generation_change_restarts_at_offset_zero_without_duplicates(monkeypatch):
     monkeypatch.setattr(store, "_inode", lambda stat: 1)
     old = _emit_many("gen", 3)

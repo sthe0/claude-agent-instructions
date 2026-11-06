@@ -16,12 +16,13 @@ from lib import hook_telemetry
 SCRIPTS = Path(__file__).resolve().parents[1]
 
 
-def _script(tmp_path: Path, body: str, *, wrapped: bool) -> Path:
+def _script(tmp_path: Path, body: str, *, wrapped: bool, prelude: str = "") -> Path:
     call = ('sys.exit(hook_telemetry.run(main, mechanism="hook-x"))' if wrapped
             else "sys.exit(main())")
     path = tmp_path / ("wrapped.py" if wrapped else "bare.py")
     path.write_text(
         f"import json, os, sys\nsys.path.insert(0, {str(SCRIPTS)!r})\n"
+        + prelude +
         "from lib import hook_telemetry\n"
         + textwrap.dedent(body) + f"\nif __name__ == '__main__':\n    {call}\n",
         encoding="utf-8")
@@ -199,3 +200,50 @@ def test_record_writes_a_bounded_single_line(tmp_path, monkeypatch):
     hook_telemetry.record("m" * 5000, "e", "silent", "s" * 5000, layer="arc")
     (line,) = log.read_text().splitlines()
     assert len(line.encode()) < 2048 and json.loads(line)["layer"] == "arc"
+
+
+def test_a_telemetry_layer_that_cannot_be_imported_changes_nothing_and_the_decision_row_stays(tmp_path):
+    body, _ = HOOKS["deny_json"]
+    bare = _run(_script(tmp_path, body, wrapped=False), tmp_path / "unused.jsonl")
+    log = tmp_path / "log.jsonl"
+    wrapped = _run(_script(tmp_path, body, wrapped=True, prelude="sys.modules['lib.telemetry.live'] = None\n"), log)
+    assert (wrapped.stdout, wrapped.returncode, wrapped.stderr) == (bare.stdout, bare.returncode, "")
+    assert [row["decision"] for row in _rows(log)] == ["deny"]
+
+
+def test_record_keeps_the_decision_row_when_the_emit_raises(tmp_path, monkeypatch):
+    from lib.telemetry import live
+    log = tmp_path / "log.jsonl"
+    monkeypatch.setenv("AGENTCTL_DECISION_LOG", str(log))
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("no spool")
+    monkeypatch.setattr(live, "emit_event", broken)
+    hook_telemetry.record("hook-x", "PreToolUse", "deny", "s1")
+    assert [row["decision"] for row in _rows(log)] == ["deny"]
+
+
+def test_judge_ledger_call_keeps_its_line_when_the_source_helper_raises(tmp_path, monkeypatch):
+    from lib import judge_ledger
+    ledger = tmp_path / "judge.jsonl"
+    monkeypatch.setenv("AGENTCTL_JUDGE_LEDGER", str(ledger))
+
+    real, calls = judge_ledger.current_source, []
+
+    def broken():
+        calls.append(1)
+        if len(calls) > 1:
+            raise RuntimeError("no source")
+        return real()
+    monkeypatch.setattr(judge_ledger, "current_source", broken)
+    judge_ledger.call("binary_ask", timed_out=False, duration=0.1, returncode=0, prompt_chars=4)
+    assert [row["kind"] for row in _rows(ledger)] == ["call"]
+
+
+def test_judge_ledger_call_keeps_its_line_without_the_telemetry_layer(tmp_path, monkeypatch):
+    from lib import judge_ledger
+    ledger = tmp_path / "judge.jsonl"
+    monkeypatch.setenv("AGENTCTL_JUDGE_LEDGER", str(ledger))
+    monkeypatch.setattr(judge_ledger, "live", None)
+    judge_ledger.call("binary_ask", timed_out=False, duration=0.1, returncode=0, prompt_chars=4)
+    assert [row["kind"] for row in _rows(ledger)] == ["call"]

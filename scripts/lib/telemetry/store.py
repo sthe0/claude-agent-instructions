@@ -30,6 +30,8 @@ import sqlite3
 import time
 import urllib.parse
 import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from lib import config_root
@@ -410,12 +412,15 @@ def open_readonly() -> "sqlite3.Connection | None":
     record = config_root.telemetry_db()
     if not record.exists():
         return None
+    conn = None
     try:
         conn = sqlite3.connect("file:" + urllib.parse.quote(str(record)) + "?mode=ro", uri=True,
                                timeout=DEADLINE_S, isolation_level=None)
         conn.execute("SELECT 1 FROM events LIMIT 1")
         return conn
     except sqlite3.Error:
+        if conn is not None:
+            conn.close()
         return None
 
 
@@ -486,26 +491,64 @@ def _read_prefix(fd: int, offset: int) -> "tuple[list[bytes], int]":
         chunk *= 4
 
 
+def _is_str(value) -> bool:
+    """A str SQLite can bind: a lone surrogate from a JSON escape cannot be encoded."""
+    if not isinstance(value, str):
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _is_text(value) -> bool:
+    return _is_str(value) and bool(value)
+
+
+def _is_time(value) -> bool:
+    """A time the sync will later parse (ISO 8601, convertible to UTC)."""
+    if not _is_text(value):
+        return False
+    try:
+        datetime.fromisoformat(value).astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return False
+    return True
+
+
+def _valid_backref(backref) -> bool:
+    return (isinstance(backref, dict) and _is_text(backref.get("path")) and "\0" not in backref["path"]
+            and isinstance(backref.get("offset"), int) and not isinstance(backref["offset"], bool)
+            and backref["offset"] >= 0 and _is_str(backref.get("sha256")))
+
+
+def _valid_event(event) -> bool:
+    """Every field a replay binds into a row has the type and form that insert accepts, so a
+    parsed line that passes cannot fail the transaction that carries it."""
+    if not isinstance(event, dict) or not all(_is_text(event.get(k)) for k in ("event_id", "kind")):
+        return False
+    if not _is_time(event.get("time")):
+        return False
+    if "session_id" in event and not _is_text(event["session_id"]):
+        return False
+    if "provenance" in event and not _is_text(event["provenance"]):
+        return False
+    if event.get("backref") is not None and not _valid_backref(event["backref"]):
+        return False
+    fields = event.get("fields", {})
+    if not isinstance(fields, dict):
+        return False
+    return all(fields.get(k) is None or _is_str(fields[k]) for k in ("source_key", "child_session_id"))
+
+
 def _parse_event(raw: bytes) -> "dict | None":
+    """The event a spool line holds, or None when the line is not one a replay can file."""
     try:
         event = json.loads(raw)
-    except ValueError:
+        return event if _valid_event(event) else None
+    except (ValueError, RecursionError):
         return None
-    if not isinstance(event, dict):
-        return None
-    for key in ("event_id", "kind", "time"):
-        if not isinstance(event.get(key), str) or not event[key]:
-            return None
-    if "session_id" in event and not isinstance(event["session_id"], str):
-        return None
-    backref = event.get("backref")
-    if backref is not None and not (
-            isinstance(backref, dict) and isinstance(backref.get("path"), str)
-            and isinstance(backref.get("offset"), int) and isinstance(backref.get("sha256"), str)):
-        return None
-    if not isinstance(event.get("fields", {}), dict):
-        return None
-    return event
 
 
 def _insert_live_event(conn: sqlite3.Connection, event: dict, spool_session: str, origin: str) -> "tuple[int, int]":
@@ -534,7 +577,8 @@ def _insert_live_event(conn: sqlite3.Connection, event: dict, spool_session: str
     return inserted, superseded
 
 
-def _add_loss(conn: sqlite3.Connection, session_id: str, loss_mode: str, count: int) -> None:
+def add_loss(conn: sqlite3.Connection, session_id: str, loss_mode: str, count: int) -> None:
+    """Add `count` to the session's loss of one enumerated mode, inside the caller's transaction."""
     version = tables.validate("loss_modes", loss_mode)
     conn.execute(
         "INSERT INTO losses (session_id, loss_mode, loss_mode_table_version, count) VALUES (?, ?, ?, ?) "
@@ -568,7 +612,7 @@ def _apply_prefix(conn, spool, generation, new_offset, lines, origin, deadline) 
             inserted += added
             superseded += removed
         if torn:
-            _add_loss(conn, spool, "torn_event", torn)
+            add_loss(conn, spool, "torn_event", torn)
         _upsert_offset(conn, spool, generation, new_offset)
         conn.execute("COMMIT")
     except BaseException:
@@ -591,6 +635,37 @@ def _acquire_lock(spool: str, deadline: _Deadline) -> int:
     except BaseException:
         os.close(fd)
         raise
+
+
+@contextmanager
+def spool_lock(spool: str, deadline_s: "float | None" = None):
+    """Hold the spool's replay lock (the one `replay` takes) for the body; yields True, or False
+    when the lock was not obtained before the deadline or could not be opened. Whoever deletes a
+    spool does so under it, so no replay reads the file mid-removal. The lock file itself is
+    never removed: a second process could hold a lock on the unlinked inode while a third
+    locks a fresh one."""
+    try:
+        fd = _acquire_lock(spool, _Deadline(deadline_s))
+    except (_Deferred, OSError):
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        os.close(fd)
+
+
+def spool_state(spool: str) -> "tuple[int, str | None] | None":
+    """(size, generation) of the spool file now at the spool's path, read through one descriptor;
+    None when there is no file. The generation is None while the file holds no complete line."""
+    try:
+        fd = os.open(emit.spool_path(spool), os.O_RDONLY)
+    except OSError:
+        return None
+    try:
+        return os.fstat(fd).st_size, _generation(fd)
+    finally:
+        os.close(fd)
 
 
 def _drain(conn: sqlite3.Connection, fd: int, spool: str, result: dict, deadline: _Deadline) -> None:

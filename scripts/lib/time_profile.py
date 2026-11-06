@@ -224,6 +224,11 @@ def _epoch_or_iso_ms(value) -> int | None:
     return _ts_ms(value)
 
 
+def epoch_or_iso_ms(value) -> int | None:
+    """Public form of the engine-history timestamp reader, for the telemetry importer."""
+    return _epoch_or_iso_ms(value)
+
+
 _PUNCTUATION = frozenset("();<>|&")
 _WRAPPERS = frozenset({"env", "time", "nohup", "exec", "command", "sudo", "nice"})
 _SKIPPED_PROGRAMS = frozenset({"cd", "export", "set", "source", ".", "true"})
@@ -704,6 +709,11 @@ def _sha_at(index: list, ts_ms: int) -> str | None:
         if stamp <= cutoff:
             return sha
     return None
+
+
+def sha_at(index: list, ts_ms: int) -> str | None:
+    """Public form of the commit lookup, for the telemetry importer."""
+    return _sha_at(index, ts_ms)
 
 
 # ---------------------------------------------------------------------- session cache

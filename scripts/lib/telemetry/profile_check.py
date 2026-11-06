@@ -63,7 +63,7 @@ def _verify(path: Path, expected, label: str) -> None:
 
 
 def _ms(stamp) -> "int | None":
-    return time_profile._epoch_or_iso_ms(stamp)
+    return time_profile.epoch_or_iso_ms(stamp)
 
 
 def _reference_ms(premises: dict) -> int:
@@ -93,7 +93,11 @@ def _is_session_member(name: str) -> bool:
 
 def _destination(projects: Path, name: str) -> Path:
     parts = PurePosixPath(name).parts
-    return projects / "__".join(parts[:-1]) / parts[-1]
+    destination = projects / "__".join(parts[:-1]) / parts[-1]
+    root = projects.resolve()
+    if root not in destination.resolve().parents:
+        raise PremiseError(f"transcripts snapshot member {name!r} escapes its directory")
+    return destination
 
 
 def _copy_member(source, destination: Path, cut_ms: "int | None") -> bool:

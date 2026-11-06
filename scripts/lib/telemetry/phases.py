@@ -62,7 +62,7 @@ def phase_of_node(node) -> str:
 
 def _ms(value) -> "int | None":
     from lib import time_profile
-    return time_profile._epoch_or_iso_ms(value)
+    return time_profile.epoch_or_iso_ms(value)
 
 
 def _read_json(path):
@@ -265,7 +265,17 @@ def phase_at(session_id: str, timestamp, *, conn=None) -> str:
     return OTHER
 
 
+def has_recorded_loss(conn, session_id: str) -> bool:
+    """The record holds a loss for the session (a torn or dropped event, a part of its history
+    recorded before live emission began, ...): its events are not the whole of what happened."""
+    return conn.execute("SELECT 1 FROM losses WHERE session_id = ? AND count > 0 LIMIT 1",
+                        (session_id,)).fetchone() is not None
+
+
 def events_node_dwell(conn, session_id: str, window: "tuple | None" = None) -> "dict | None":
-    """Per-node dwell of a session from the record's command events, None when it has none."""
+    """Per-node dwell of a session from the record's command events, None when it has none or
+    when the record holds a loss for the session (the caller then reads the engine state file)."""
+    if has_recorded_loss(conn, session_id):
+        return None
     points = event_points([(t, f) for t, f, _ in _rows(conn, session_id, "command")])
     return dwell_from_points(points, window) if points else None

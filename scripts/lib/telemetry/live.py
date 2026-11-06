@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -75,16 +76,20 @@ def write_epoch(session_id: str, task_id: str, epoch: str, resolved: bool = Fals
     stem = emit.session_file_stem(session_id)
     if stem is None or not enabled():
         return
+    tmp = None
     try:
         emit.ensure_private_dir(spool_dir())
         path = epoch_path(stem)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps({"task_id": task_id, "epoch": epoch, "resolved": bool(resolved)}),
-                       encoding="utf-8")
-        os.chmod(tmp, emit.PRIVATE_FILE_MODE)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"task_id": task_id, "epoch": epoch, "resolved": bool(resolved)}))
         os.replace(tmp, path)
     except OSError:
-        pass
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def recorder_total() -> float:

@@ -76,7 +76,7 @@ def _commit_index() -> list:
 
 
 def _iso(value) -> str:
-    ms = _tp()._epoch_or_iso_ms(value)
+    ms = _tp().epoch_or_iso_ms(value)
     return "" if ms is None else datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="milliseconds")
 
 
@@ -129,7 +129,7 @@ class _Run:
     def head_at(self, ms) -> "str | None":
         if self.commit_index is None:
             self.commit_index = _commit_index()
-        return None if ms is None else _tp()._sha_at(self.commit_index, ms)
+        return None if ms is None else _tp().sha_at(self.commit_index, ms)
 
 
 def _commit(run: _Run, work) -> dict:
@@ -293,9 +293,9 @@ def _contour_consumer(build, role: str, parent_of):
                 continue
             parent = parent_of(part)
             if part["kind"] == "spawn_cost":
-                conn.execute(sync._SESSION_UPSERT, (part["child"], run.origin, parent, role,
+                conn.execute(sync.SESSION_UPSERT, (part["child"], run.origin, parent, role,
                                                     tables.validate("roles", role), 1, part["time"] or None))
-            sync._put_contour(conn, line.event_id, parent, role, None)
+            sync.put_contour(conn, line.event_id, parent, role, None)
         return 0
     return handle
 
@@ -425,9 +425,9 @@ def _batch_work(run, unit, generation, batch, end_offset, pending_loss):
         added = unit.handler(conn, run, unit, good)
         malformed = len(batch) - len(good)
         if malformed and unit.primary:
-            store._add_loss(conn, unit.fallback_session, "malformed_source_line", malformed)
+            store.add_loss(conn, unit.fallback_session, "malformed_source_line", malformed)
         if pending_loss:
-            store._add_loss(conn, unit.fallback_session, "source_truncated", 1)
+            store.add_loss(conn, unit.fallback_session, "source_truncated", 1)
         last = batch[-1]
         conn.execute(_OFFSET_UPSERT, (unit.path, generation, unit.consumer, end_offset, last.start, last.sha))
         return {"added": added, "malformed": malformed if unit.primary else 0}
@@ -578,7 +578,7 @@ class _Session:
         self.times = {}
         previous = -1
         for index, entry in self.history:
-            ms = _tp()._epoch_or_iso_ms(entry.get("ts"))
+            ms = _tp().epoch_or_iso_ms(entry.get("ts"))
             self.times[index] = (ms, previous if ms is None else ms)
             previous = previous if ms is None else ms
         self.entry_ids = {index: store.imported_row_id(path, index, hashlib.sha256(_canonical(entry)).hexdigest())
@@ -601,7 +601,7 @@ def _plan_sessions(run: _Run) -> "tuple[list, list, dict]":
         elif not is_child and not (session in opened or spool_opening):
             entry = _Session(session, path, state, True)
             chosen.append(entry)
-            cut = _tp()._epoch_or_iso_ms(first_live.get(session) or spool_first)
+            cut = _tp().epoch_or_iso_ms(first_live.get(session) or spool_first)
             partial_losses[session] = sum(
                 1 for index, _ in entry.history if cut is None or (entry.times[index][1] is not None
                                                                     and entry.times[index][1] < cut))
@@ -664,7 +664,7 @@ def _write_identity(conn, run: _Run, owner: _Session, key, parent_key) -> None:
     first_ms = next((owner.times[i][0] for i, _ in owner.history if owner.times[i][0] is not None), None)
     started = _iso(first_ms / 1000) if first_ms is not None else None
     depth = owner.state.get("recursion_depth")
-    conn.execute(sync._SESSION_UPSERT, (owner.session, run.origin, owner.parent, role, tables.validate("roles", role),
+    conn.execute(sync.SESSION_UPSERT, (owner.session, run.origin, owner.parent, role, tables.validate("roles", role),
                                         depth if depth is not None else (1 if owner.linked else 0), started))
     if owner.linked:
         conn.execute("UPDATE sessions SET role = ?, role_table_version = ? WHERE session_id = ?",
@@ -677,11 +677,11 @@ def _write_identity(conn, run: _Run, owner: _Session, key, parent_key) -> None:
                              (head, owner.session)).rowcount:
         conn.execute("INSERT OR IGNORE INTO session_head_marks (session_id, derived) VALUES (?, 1)", (owner.session,))
     if not owner.linked:
-        sync._put_contour(conn, owner.session, None, "root", key)
+        sync.put_contour(conn, owner.session, None, "root", key)
     else:
-        sync._put_contour(conn, owner.session, owner.parent, role, attach)
-    for contour_id in sync._subagent_contours(owner.session):
-        sync._put_contour(conn, contour_id, owner.session, "agent-tool", attach)
+        sync.put_contour(conn, owner.session, owner.parent, role, attach)
+    for contour_id in sync.subagent_contours(owner.session):
+        sync.put_contour(conn, contour_id, owner.session, "agent-tool", attach)
 
 
 def _import_history(run: _Run) -> None:
@@ -840,7 +840,7 @@ def rebuild(include_transcripts: bool = False) -> dict:
     if lost:
         def work(conn):
             for session, count in lost.items():
-                store._add_loss(conn, session, "record_corrupt_rebuilt", count)
+                store.add_loss(conn, session, "record_corrupt_rebuilt", count)
         store.transact(work, BATCH_DEADLINE_S)
     report["live_only_lost"] = None if before is None else lost
     report["rebuilt_sessions"] = sorted(lost)
@@ -864,26 +864,26 @@ def _protected_sync_rows(conn) -> set:
     sessions = {r[0] for r in conn.execute(
         "SELECT DISTINCT json_extract(fields, '$.session') FROM events WHERE kind IN (?, ?, ?)",
         (sync.SYNC_COMMIT, sync.SYNC_DEFERRED, sync.TRIGGER_START)) if r[0]}
-    triggers = sorted((sync._parse(r[1]), r[0]) for r in conn.execute(
+    triggers = sorted((sync.parse_time(r[1]), r[0]) for r in conn.execute(
         "SELECT event_id, time FROM events WHERE kind = ?", (sync.TRIGGER_START,)))
     for session in sessions:
         if sync.unreplayed_bytes(conn, session) > 0:
             keep.update(r[0] for r in conn.execute(
                 "SELECT event_id FROM events WHERE kind = ? AND json_extract(fields, '$.session') = ?",
                 (sync.SYNC_DEFERRED, session)))
-        ended = sorted((sync._parse(r[1]), r[0]) for r in conn.execute(
+        ended = sorted((sync.parse_time(r[1]), r[0]) for r in conn.execute(
             "SELECT event_id, time FROM events WHERE kind = ? AND json_extract(fields, '$.kind') = 'session_end' "
             "AND json_extract(fields, '$.session') = ?", (sync.TRIGGER_START, session)))
         if ended:
             end = ended[0][0]
             keep.add(ended[0][1])
         else:
-            last = sorted(sync._parse(r[0]) for r in conn.execute("SELECT time FROM events WHERE session_id = ?", (session,)))
+            last = sorted(sync.parse_time(r[0]) for r in conn.execute("SELECT time FROM events WHERE session_id = ?", (session,)))
             if not last:
                 continue
             end = last[-1] + timedelta(seconds=sync.LIVE_TTL_S)
         keep.update(i for t, i in triggers if t >= end)
-        commits = sorted((sync._parse(r[1]), r[0]) for r in conn.execute(
+        commits = sorted((sync.parse_time(r[1]), r[0]) for r in conn.execute(
             "SELECT event_id, time FROM events WHERE kind = ? AND json_extract(fields, '$.session') = ?",
             (sync.SYNC_COMMIT, session)))
         keep.update(i for _, i in [c for c in commits if c[0] >= end][:1])
@@ -903,7 +903,7 @@ def prune(days: "int | None" = None, now: "datetime | None" = None) -> dict:
         for event_id, moment, session, kind in conn.execute("SELECT event_id, time, session_id, kind FROM events"):
             if (session == sync.SYNC_SESSION or kind == "decision") and event_id not in keep:
                 try:
-                    old = sync._parse(moment) < cutoff
+                    old = sync.parse_time(moment) < cutoff
                 except ValueError:
                     continue
                 if old:
@@ -914,17 +914,7 @@ def prune(days: "int | None" = None, now: "datetime | None" = None) -> dict:
     out = store.transact(work, BATCH_DEADLINE_S)
     if out["committed"]:
         result["events_removed"] = out["value"]
-    ro = store.open_readonly()
-    if ro is not None:
-        try:
-            for stem in sync.spool_stems():
-                if sync.unreplayed_bytes(ro, stem) == 0 and sync.is_eligible(stem):
-                    for path in (emit.spool_path(stem), config_root.telemetry_spool_dir() / (stem + ".lock")):
-                        try:
-                            path.unlink()
-                        except OSError:
-                            continue
-                    result["spools_removed"] += 1
-        finally:
-            ro.close()
+    for stem in sync.spool_stems():
+        if sync.prune_spool(stem, BATCH_DEADLINE_S):
+            result["spools_removed"] += 1
     return result

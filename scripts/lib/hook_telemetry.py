@@ -28,7 +28,11 @@ import tempfile
 from datetime import datetime, timezone
 
 from lib import config_root
-from lib.telemetry import live
+
+try:
+    from lib.telemetry import live
+except Exception:
+    live = None
 
 SILENT, NUDGE, DENY = "silent", "nudge", "deny"
 
@@ -81,15 +85,33 @@ def decision_event_fields(row: dict) -> dict:
     return {key: row[key] for key in ("mechanism", "event", "decision", "layer", "test")}
 
 
+def _append_row(path, data: bytes):
+    """Append `data` to the decision log with one O_APPEND write; its back-reference when the
+    telemetry layer is importable, else None."""
+    if live is not None:
+        return live.append_line(path, data)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    return None
+
+
 def record(mechanism: str, event: str, decision: str, session: str, *, layer: str = "core") -> None:
     row = decision_row(mechanism, event, decision, session, layer=layer)
     try:
         path = config_root.decision_log()
         path.parent.mkdir(parents=True, exist_ok=True)
-        backref = live.append_line(path, (json.dumps(row) + chr(10)).encode("utf-8"))
+        backref = _append_row(path, (json.dumps(row) + chr(10)).encode("utf-8"))
     except OSError:
         return
-    live.emit_event(session, "decision", f"hook:{row['mechanism']}", decision_event_fields(row), backref)
+    if live is None:
+        return
+    try:
+        live.emit_event(session, "decision", f"hook:{row['mechanism']}", decision_event_fields(row), backref)
+    except Exception:
+        pass
 
 
 class _RecordingStdin:

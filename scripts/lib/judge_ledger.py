@@ -54,7 +54,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lib import config_root
-from lib.telemetry import live
+
+try:
+    from lib.telemetry import live
+except Exception:
+    live = None
 
 # Every judge name a call site passes to set_current_judge / begin_attributed_call, plus the
 # name subprocess_runner files an unclaimed call under; a judge event's source key is
@@ -417,12 +421,17 @@ def call(
         raised=raised,
         prompt_chars=prompt_chars,
     )
-    live.emit_event(
-        current_source(), "judge", f"judge:{judge}",
-        {"judge": judge, "timed_out": bool(timed_out), "duration": duration, "returncode": returncode,
-         "prompt_chars": prompt_chars, "invocation_id": current_invocation_id()},
-        backref,
-    )
+    if live is None:
+        return
+    try:
+        live.emit_event(
+            current_source(), "judge", f"judge:{judge}",
+            {"judge": judge, "timed_out": bool(timed_out), "duration": duration, "returncode": returncode,
+             "prompt_chars": prompt_chars, "invocation_id": current_invocation_id()},
+            backref,
+        )
+    except Exception:
+        pass
 
 
 def final(*, has_directive: bool) -> None:

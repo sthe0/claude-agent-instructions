@@ -35,6 +35,7 @@ BACKOFF_FIRST_S = 1.0
 BACKOFF_MAX_S = 30.0
 LATENCY_S = 600.0
 LIVE_TTL_S = live.LIVE_TTL_S
+END_GRACE_S = 30.0
 SYNC_SESSION = live.SYNC_SESSION
 SOURCE_KEY = "telemetry:sync"
 TRIGGER_START = "trigger.start"
@@ -56,7 +57,7 @@ def _iso(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
-def _parse(text: str) -> datetime:
+def parse_time(text: str) -> datetime:
     return datetime.fromisoformat(text).astimezone(timezone.utc)
 
 
@@ -102,30 +103,66 @@ def spool_stems() -> "list[str]":
 
 
 def unreplayed_bytes(conn, stem: str) -> int:
-    try:
-        size = emit.spool_path(stem).stat().st_size
-    except OSError:
+    """Bytes of the spool file now at the stem's path that the record has not replayed. The stored
+    offset counts only for the generation it was taken in (and while it fits the file), exactly
+    as replay reads it: a spool recreated after a prune is unreplayed whole."""
+    state = store.spool_state(stem)
+    if state is None:
         return 0
-    row = conn.execute("SELECT byte_offset FROM spool_offsets WHERE spool = ?", (stem,)).fetchone()
-    return max(0, size - (row[0] if row else 0))
+    size, generation = state
+    row = conn.execute("SELECT generation, byte_offset FROM spool_offsets WHERE spool = ?", (stem,)).fetchone()
+    if row is None or row[0] != generation or row[1] > size:
+        return size
+    return size - row[1]
 
 
 def is_eligible(stem: str, now: "datetime | None" = None) -> bool:
-    """The session counts as ended: an end marker exists, or none does and the spool's last
-    append is older than LIVE_TTL_S."""
-    if live.end_marker_path(stem).exists():
-        return True
+    """The session counts as ended: its end marker is current, or the spool's last append is
+    older than LIVE_TTL_S. A marker is current while the spool has not been appended to more than
+    END_GRACE_S after the marker's last write (the SessionEnd hooks themselves still record a
+    decision event after it); a resumed session appends later, and its stale marker is ignored."""
     try:
-        mtime = emit.spool_path(stem).stat().st_mtime
+        spooled = emit.spool_path(stem).stat().st_mtime
     except OSError:
-        return False
-    return ((now or _now()).timestamp() - mtime) > LIVE_TTL_S
+        spooled = None
+    try:
+        marked = live.end_marker_path(stem).stat().st_mtime
+    except OSError:
+        marked = None
+    if marked is not None and (spooled is None or spooled <= marked + END_GRACE_S):
+        return True
+    return spooled is not None and ((now or _now()).timestamp() - spooled) > LIVE_TTL_S
+
+
+def prune_spool(stem: str, deadline_s: "float | None" = None) -> bool:
+    """Remove an ended, fully replayed spool together with its offset row, end marker and epoch
+    sidecar, in one step under the spool's replay lock; True when it was removed. Both
+    conditions are re-read under the lock, so a session that resumed or appended since the caller
+    looked keeps its spool, and no replay can interleave. An emitter that opened the file before
+    the lock and writes after the unlink is not excluded (emitters take no lock); the window is
+    one open-to-write interval of a session that is by the conditions idle. Lock files stay."""
+    def work(conn):
+        if unreplayed_bytes(conn, stem) > 0 or not is_eligible(stem):
+            return False
+        conn.execute("DELETE FROM spool_offsets WHERE spool = ?", (stem,))
+        for path in (emit.spool_path(stem), live.end_marker_path(stem), live.epoch_path(stem)):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return True
+
+    with store.spool_lock(stem, deadline_s) as held:
+        if not held:
+            return False
+        outcome = store.transact(work, deadline_s)
+    return bool(outcome["committed"] and outcome["value"])
 
 
 # --- the latency rule -----------------------------------------------------------------
 
 def _times(conn, sql: str, args: tuple) -> "list[datetime]":
-    return sorted(_parse(row[0]) for row in conn.execute(sql, args))
+    return sorted(parse_time(row[0]) for row in conn.execute(sql, args))
 
 
 def latency_marks(conn, session_id: str) -> "tuple[datetime | None, datetime | None, datetime | None]":
@@ -191,10 +228,10 @@ def _task_key_for(conn, session: str, moment: str, explicit_epoch: "str | None")
         row = conn.execute("SELECT origin, task_id, epoch FROM tasks WHERE epoch = ?", (explicit_epoch,)).fetchone()
         if row:
             return tuple(row)
-    opens = [(_parse(r[1]), r[0]) for r in conn.execute(
+    opens = [(parse_time(r[1]), r[0]) for r in conn.execute(
         "SELECT event_id, time FROM events WHERE session_id = ? AND kind = 'task' "
         "AND json_extract(fields, '$.action') = 'open'", (session,))]
-    stamp = _parse(moment)
+    stamp = parse_time(moment)
     before = [(t, i) for t, i in opens if t <= stamp]
     if before:
         row = conn.execute("SELECT origin, task_id, epoch FROM tasks WHERE epoch = ?", (max(before)[1],)).fetchone()
@@ -263,7 +300,7 @@ def _harness_version(session: str) -> "str | None":
     return None
 
 
-def _subagent_contours(session: str) -> "list[str]":
+def subagent_contours(session: str) -> "list[str]":
     ids = []
     for root in config_root.projects_roots():
         for path in sorted(root.glob(f"*/{session}/subagents/*.jsonl")):
@@ -296,7 +333,7 @@ def _artifact_texts(session: str) -> "list[tuple[str, str]]":
 
 # --- materialization ------------------------------------------------------------------
 
-_SESSION_UPSERT = (
+SESSION_UPSERT = (
     "INSERT INTO sessions (session_id, origin, parent_session, role, role_table_version, depth, started_at) "
     "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session_id) DO UPDATE SET "
     "origin = COALESCE(sessions.origin, excluded.origin), "
@@ -315,7 +352,7 @@ _CONTOUR_UPSERT = (
     "task_id = CASE WHEN contours.task_id IS NULL THEN excluded.task_id ELSE contours.task_id END")
 
 
-def _put_contour(conn, contour_id: str, parent: "str | None", role: str, key) -> None:
+def put_contour(conn, contour_id: str, parent: "str | None", role: str, key) -> None:
     key = key or (None, None, None)
     weight = None
     if key[2]:
@@ -376,7 +413,7 @@ def _materialize_session(conn, origin: str, session: str, subagents: "list[str]"
     depth = (sess_event or {}).get("depth")
     if depth is None:
         depth = 1 if parent else 0
-    conn.execute(_SESSION_UPSERT, (session, origin, parent, role, tables.validate("roles", role), depth, events[0][2]))
+    conn.execute(SESSION_UPSERT, (session, origin, parent, role, tables.validate("roles", role), depth, events[0][2]))
 
     first_open = conn.execute(
         "SELECT t.origin, t.task_id, t.epoch FROM events e JOIN tasks t ON t.epoch = e.event_id "
@@ -394,18 +431,18 @@ def _materialize_session(conn, origin: str, session: str, subagents: "list[str]"
     session_key = tuple(session_key) if session_key and session_key[1] is not None else None
 
     if parent is None:
-        _put_contour(conn, session, None, "root", session_key)
+        put_contour(conn, session, None, "root", session_key)
     elif spawn_row is None:
-        _put_contour(conn, session, parent, role, session_key)
+        put_contour(conn, session, parent, role, session_key)
     for event_id, kind, moment, fields in events:
         if kind == "spawn":
             child_role = fields.get("role") if fields.get("role") in ("linked-child", "spawned-child") else "spawned-child"
-            _put_contour(conn, event_id, session, child_role,
+            put_contour(conn, event_id, session, child_role,
                          _task_key_for(conn, session, moment, fields.get("task_epoch")))
         elif kind == "judge":
-            _put_contour(conn, event_id, session, "judge", _task_key_for(conn, session, moment, fields.get("task_epoch")))
+            put_contour(conn, event_id, session, "judge", _task_key_for(conn, session, moment, fields.get("task_epoch")))
     for contour_id in subagents:
-        _put_contour(conn, contour_id, session, "agent-tool", session_key)
+        put_contour(conn, contour_id, session, "agent-tool", session_key)
     for kind, text in artifacts:
         _put_artifact(conn, kind, text, session_key, events[-1][2])
 
@@ -436,7 +473,7 @@ def materialize(sessions: "list[str]") -> dict:
         conn.close()
     head, dirty = _canon_state() if needing_head else (None, None)
     versions = {s: _harness_version(s) for s in needing_head} if head else {}
-    extras = {s: (_subagent_contours(s), _artifact_texts(s)) for s in targets}
+    extras = {s: (subagent_contours(s), _artifact_texts(s)) for s in targets}
 
     def work(conn):
         origin = conn.execute("SELECT value FROM meta WHERE key = 'origin'").fetchone()[0]
@@ -456,13 +493,6 @@ def materialize(sessions: "list[str]") -> dict:
 
 
 # --- the sync -------------------------------------------------------------------------
-
-def _prune(stem: str) -> None:
-    try:
-        (live.spool_dir() / (stem + ".lock")).unlink()
-    except OSError:
-        pass
-
 
 def _replay_all(stems: "list[str]", budget_s: float) -> dict:
     """First pass one attempt per spool; then only the unsuccessful ones are retried with
@@ -537,8 +567,5 @@ def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
         if conn is not None:
             conn.close()
     filed = materialize([s for s in stems if s not in deferred])
-    for stem in stems:
-        if stem not in deferred and is_eligible(stem):
-            _prune(stem)
     return {"kind": kind, "visited": stems, "committed": committed, "deferred": deferred,
             "unattached": filed["unattached"]}
