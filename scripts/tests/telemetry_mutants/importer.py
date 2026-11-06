@@ -159,9 +159,11 @@ MUTANTS = [
      "replacement": "if True:",
      "tests": [_I + "test_tail_cut_then_append_imports_the_new_lines",
                _I + "test_growth_past_old_offset_with_changed_tail_rereads_from_zero"]},
+    # The replacement reads only the test's decoy root; unguarded it would extract into and scan the real projects dir.
     {"name": "profile_check_reads_live_transcripts", "file": _PROFILE_CHECK,
      "anchor": 'projects = scratch / "projects"',
-     "replacement": 'projects = __import__("lib.config_root", fromlist=["x"]).projects_roots()[0]',
+     "replacement": 'live = __import__("lib.config_root", fromlist=["x"]).projects_roots()[0]\n'
+                    '    projects = live if "live-projects" in str(live) else scratch / "projects"',
      "tests": [_T + "test_check_profile_unchanged_reads_the_snapshot_not_live_transcripts"]},
     {"name": "profile_check_cuts_at_whole_second", "file": _PROFILE_CHECK,
      "anchor": "pinned_ms + CUT_SLACK_MS",

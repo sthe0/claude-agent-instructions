@@ -12,7 +12,7 @@ import pytest
 from lib import config_root, time_profile
 from lib.telemetry import emit, importer, phases, store, sync
 from telemetry_import_support import (
-    BASE, DAY, Frozen, at, bash_call, bash_result, line, prompt, reply, world)  # noqa: F401
+    BASE, DAY, Frozen, at, bash_call, bash_result, line, prompt, reply, session_lines, world)  # noqa: F401
 from telemetry_live_support import query
 
 NOW = BASE + timedelta(days=200)
@@ -380,7 +380,7 @@ def test_check_profile_unchanged_refuses_a_snapshot_with_another_sha256(frozen):
 def test_check_profile_unchanged_reads_the_snapshot_not_live_transcripts(frozen, tmp_path, monkeypatch):
     live_projects = tmp_path / "live-projects"
     (live_projects / "proj").mkdir(parents=True)
-    (live_projects / "proj" / "decoy.jsonl").write_bytes(b"".join(line(o) for o in (prompt(5), reply(9))))
+    (live_projects / "proj" / "decoy.jsonl").write_bytes(b"".join(line(o) for o in session_lines(10 * DAY)))
     monkeypatch.setattr(config_root, "projects_roots", lambda: [live_projects])
     monkeypatch.setattr(config_root, "iter_transcripts", lambda pattern="*/*.jsonl": sorted(live_projects.glob(pattern)))
     code, report = frozen.check()
