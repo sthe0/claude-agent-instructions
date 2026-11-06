@@ -2,8 +2,10 @@
 
 A mutant is a one-place edit of the code under test (see `telemetry_mutants/`): the file,
 an anchor that occurs exactly once in it, its replacement, and the tests that must fail.
-`--mutant NAME` copies `scripts/` to a scratch directory, applies the edit there (the real
-tree is never touched), runs the named tests in a child pytest and reports by exit code:
+`--mutant NAME` copies the tree (without `.git`) to a scratch directory, applies the edit there
+(the real tree is never touched), runs the named tests in a child pytest and reports by exit
+code. The whole tree is copied, not only `scripts/`: the tests read `config.md`, `githooks/` and
+the skill files, and a test that fails on the copy for want of them would read as a kill:
 
     0  the mutant survived (the named tests stayed green): the test suite is too weak
     3  the mutant was killed (a named test failed)
@@ -92,8 +94,8 @@ def _run_tests(scratch: Path, test_ids: list) -> str:
 
 def _scratch_copy(root: Path, parent: Path) -> Path:
     scratch = parent / "tree"
-    shutil.copytree(Path(root) / "scripts", scratch / "scripts",
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    shutil.copytree(Path(root), scratch,
+                    ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))
     return scratch
 
 
