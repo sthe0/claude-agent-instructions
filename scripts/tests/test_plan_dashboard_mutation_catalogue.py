@@ -34,6 +34,14 @@ RUN_TIMEOUT_S = 300
 PILOT_MUTATIONS = sorted(name for name, (module, _, _) in mutations.TUI_MUTATIONS.items()
                          if module == mutations.TUI_APP)
 STDLIB_TUI_MUTATIONS = sorted(set(mutations.TUI_MUTATIONS) - set(PILOT_MUTATIONS))
+SNAPSHOT_TESTS = TESTS / "test_plan_dashboard_snapshot.py"
+SNAPSHOT_NAMES = (
+    "snapshot-checksum-ignored", "cache-same-size-rewrite-missed", "unread-cost-zero", "old-marking-dropped",
+    "jump-uses-snapshot-window", "mark-confirmed-from-snapshot", "overlay-waits-on-order-read",
+    "binding-scan-uncached", "binding-cache-never-invalidated", "source-state-cached-forever",
+    "source-binding-cached-forever", "source-transcript-cached-forever", "source-ledger-cached-forever")
+SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-read")
+SNAPSHOT_STDLIB_NAMES = tuple(name for name in SNAPSHOT_NAMES if name not in SNAPSHOT_PILOT_NAMES)
 REQUIRED = os.environ.get("PLAN_DASHBOARD_REQUIRE_TEXTUAL") == "1"
 
 
@@ -90,6 +98,18 @@ def pilot_results():
     return run_all(PILOT_TESTS, PILOT_MUTATIONS)
 
 
+@pytest.fixture(scope="module")
+def snapshot_results():
+    return run_all(SNAPSHOT_TESTS, list(SNAPSHOT_STDLIB_NAMES))
+
+
+@pytest.fixture(scope="module")
+def snapshot_pilot_results():
+    if not (REQUIRED or pilot_interpreter_has_textual()):
+        pytest.skip("textual is not importable here; run this file under the uv command of docs/components/plan-dashboard.md")
+    return run_all(PILOT_TESTS, list(SNAPSHOT_PILOT_NAMES))
+
+
 def assert_green(result):
     assert result.returncode == 0, result.stdout[-2000:]
     assert "plan-dashboard mutation: none" in result.stdout
@@ -144,3 +164,23 @@ def test_the_pilot_tests_are_green_with_no_mutation(pilot_results):
 @pytest.mark.parametrize("name", PILOT_MUTATIONS)
 def test_a_console_mutation_turns_a_pilot_test_red(name, pilot_results):
     assert_red(name, pilot_results[name], "pilot tests")
+
+
+def test_the_snapshot_family_is_the_registered_one():
+    assert set(SNAPSHOT_NAMES) == set(mutations.SNAPSHOT_MUTATIONS) and len(set(SNAPSHOT_NAMES)) == len(SNAPSHOT_NAMES)
+    assert set(SNAPSHOT_PILOT_NAMES) == {name for name, (module, _, _) in mutations.SNAPSHOT_MUTATIONS.items()
+                                         if module == mutations.TUI_APP}
+
+
+def test_the_snapshot_tests_are_green_with_no_mutation(snapshot_results):
+    assert_green(snapshot_results[""])
+
+
+@pytest.mark.parametrize("name", SNAPSHOT_STDLIB_NAMES)
+def test_a_snapshot_mutation_turns_a_snapshot_test_red(name, snapshot_results):
+    assert_red(name, snapshot_results[name], "snapshot tests")
+
+
+@pytest.mark.parametrize("name", SNAPSHOT_PILOT_NAMES)
+def test_a_snapshot_mutation_turns_a_pilot_test_red(name, snapshot_pilot_results):
+    assert_red(name, snapshot_pilot_results[name], "pilot tests")

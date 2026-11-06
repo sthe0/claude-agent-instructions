@@ -10,6 +10,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -26,7 +27,8 @@ else:
 from textual.containers import VerticalScroll  # noqa: E402
 from textual.widgets import DataTable, Header, Static, TabbedContent, Tabs, Tree  # noqa: E402
 
-from plan_dashboard import attention, locate, model, tui  # noqa: E402
+from plan_dashboard import attention, events, locate, model, tui  # noqa: E402
+from plan_dashboard import snapshot as snapshot_store  # noqa: E402
 from plan_dashboard import tui_app  # noqa: E402
 from plan_dashboard.tui_app import CHAT_LOADING, DashboardApp  # noqa: E402
 from plan_dashboard_fixtures import build_fixture_root, read_only_guard  # noqa: E402
@@ -1489,3 +1491,177 @@ def test_the_table_shows_before_the_ordering_read_and_the_cursor_survives_the_re
         assert table_ids(app)[app.query_one(DataTable).cursor_row] == chosen
 
     run(scenario, root, locator=attention_locator())
+
+
+def test_a_pending_question_shows_on_the_next_overlay_pass_while_the_order_read_is_held(tmp_path, monkeypatch):
+    root = attention_root(tmp_path, alpha=WORKING)
+
+    async def scenario(app, pilot):
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == ""
+        release, calls = hold(monkeypatch, tui, "read_order")
+        try:
+            append_fixture_transcript(root, ALPHA, [ASKING[1]])
+            await pilot.press("r")
+            assert await until(pilot, lambda: calls)
+            assert await until(pilot, lambda: table_cells(app, row_of(app, ALPHA))["wait"] == "Q", seconds=5.0)
+            assert not release.is_set()
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
+
+    run(scenario, root, locator=attention_locator())
+
+
+# --- the snapshot: a start from it, the moments it reports, its write at exit --------------------
+
+@pytest.fixture
+def stream():
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(read_fd, False)
+    events.enable(write_fd)
+    yield read_fd
+    events.disable()
+    os.close(read_fd)
+    os.close(write_fd)
+
+
+def drain(read_fd) -> list[dict]:
+    try:
+        data = os.read(read_fd, 1 << 20)
+    except BlockingIOError:
+        return []
+    return [json.loads(entry) for entry in data.decode("utf-8").splitlines()]
+
+
+def snapshot_file(tmp_path) -> Path:
+    return tmp_path / "cache" / snapshot_store.CACHE_DIRNAME / snapshot_store.FILE_NAME
+
+
+def run_unsettled(scenario, root, **options):
+    """``run`` without the wait for the reads to end: for a scenario that holds one of them."""
+    app = make_app(root, **options)
+
+    async def main():
+        async with app.run_test(size=SIZE) as pilot:
+            await scenario(app, pilot)
+
+    asyncio.run(asyncio.wait_for(main(), PILOT_DEADLINE_S))
+    return app
+
+
+async def nothing(app, pilot):
+    return None
+
+
+def leave_a_snapshot(root, path, **options) -> None:
+    """A dashboard run to its end and written out, then every cache forgotten: the next start is a new process."""
+    app = run(nothing, root, snapshot_path=path, **options)
+    assert app.save_snapshot() == path
+    attention.clear_cache()
+    model.clear_cache()
+
+
+def test_a_start_from_a_snapshot_shows_old_rows_and_confirms_each_task_after_its_sources_were_read(
+        tmp_path, monkeypatch, stream):
+    root = attention_root(tmp_path)
+    path = snapshot_file(tmp_path)
+    leave_a_snapshot(root, path, locator=attention_locator())
+    alpha_state = root.state_root / f"{ALPHA}.json"
+    alpha_state.write_text(alpha_state.read_text(encoding="utf-8").replace('"node": "EXECUTING"', '"node": "PLAN_READY"', 1),
+                           encoding="utf-8")
+    drain(stream)
+    got: list[dict] = []
+    release, calls = hold(monkeypatch, model, "collect")
+
+    async def scenario(app, pilot):
+        try:
+            assert await until(pilot, lambda: app.rows_noted and calls and not got.extend(drain(stream)) and
+                               any(e["ev"] == "rows_painted" for e in got))
+            assert not release.is_set()
+            assert table_cells(app, row_of(app, ALPHA))["wait"] == "~Q"
+            assert table_cells(app, row_of(app, BETA))["wait"] == "~…"
+            assert table_cells(app, row_of(app, ALPHA))["node"] == "EXECUTING"
+            assert [e["ev"] for e in got if e["ev"] != "cycle_start"] == ["rows_painted"]
+            painted = next(e for e in got if e["ev"] == "rows_painted")
+            assert painted["from_snapshot"] is True and painted["rows"] == len(table_ids(app))
+        finally:
+            release.set()
+        await settle(app, pilot)
+        got.extend(drain(stream))
+
+    run_unsettled(scenario, root, snapshot_path=path, locator=attention_locator())
+    names = [e["ev"] for e in got]
+    confirmed = {e["task"]: e for e in got if e["ev"] == "mark_confirmed"}
+    assert {ALPHA, BETA} <= set(confirmed)
+    for once in ("rows_painted", "live_check_end", "first_screen_confirmed", "last_old_cleared"):
+        assert names.count(once) == 1, once
+    last_confirmed = max(i for i, name in enumerate(names) if name == "mark_confirmed")
+    assert names.index("live_check_end") < names.index("first_screen_confirmed") <= names.index("last_old_cleared")
+    assert last_confirmed < names.index("last_old_cleared")
+    for task, entry in confirmed.items():
+        assert names.index("mark_painted") < names.index("last_old_cleared") and entry["applied"] is not None
+    assert str(alpha_state) in confirmed[ALPHA]["applied"] and str(alpha_state) not in confirmed[BETA]["applied"]
+    cycle_end = next(e for e in got if e["ev"] == "cycle_end")
+    assert str(alpha_state) in cycle_end["applied"]
+
+
+def test_the_old_marking_is_gone_from_every_wait_cell_once_the_live_check_has_landed(tmp_path, stream):
+    root = attention_root(tmp_path)
+    path = snapshot_file(tmp_path)
+    leave_a_snapshot(root, path, locator=attention_locator())
+
+    async def scenario(app, pilot):
+        assert tui.OLD_MARK not in "".join(table_cells(app, i)["wait"] for i in range(len(table_ids(app))))
+        assert app.old_ids == frozenset() and app.old_cleared
+
+    run(scenario, root, snapshot_path=path, locator=attention_locator())
+
+
+@pytest.mark.parametrize("damage", ["absent", "garbage"])
+def test_a_start_without_a_usable_snapshot_paints_from_the_live_read(tmp_path, stream, damage):
+    root = attention_root(tmp_path)
+    path = snapshot_file(tmp_path)
+    if damage == "garbage":
+        path.parent.mkdir(parents=True)
+        path.write_text("{half a snapsh", encoding="utf-8")
+
+    async def scenario(app, pilot):
+        assert table_cells(app, row_of(app, ALPHA))["wait"] == "Q"
+        assert not app.old_ids
+
+    run(scenario, root, snapshot_path=path, locator=attention_locator())
+    painted = [e for e in drain(stream) if e["ev"] == "rows_painted"]
+    assert len(painted) == 1 and painted[0]["from_snapshot"] is False
+
+
+@pytest.mark.parametrize("how", ["quit key", "sigterm"])
+def test_the_snapshot_is_written_at_a_clean_exit_and_announced_after_it(tmp_path, stream, how):
+    root = attention_root(tmp_path)
+    path = snapshot_file(tmp_path)
+    app = make_app(root, snapshot_path=path, locator=attention_locator())
+    ended, unhandled = [], []
+
+    async def auto_pilot(pilot):
+        assert await until(pilot, lambda: app.old_cleared, seconds=20.0)
+        ended.append(time.monotonic_ns())
+        if how == "sigterm":
+            os.kill(os.getpid(), signal.SIGTERM)
+            await pilot.pause(10)
+        else:
+            await pilot.press("q")
+
+    previous = signal.signal(signal.SIGTERM, lambda *args: unhandled.append(1))
+    try:
+        tui_app.run_app(app, headless=True, size=SIZE, auto_pilot=auto_pilot)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    got = drain(stream)
+    assert unhandled == [] and ended
+    assert got[-1]["ev"] == "snapshot_written" and got[-1]["path"] == str(path) and got[-1]["t_ns"] > ended[0]
+    assert [e["ev"] for e in got].count("snapshot_written") == 1
+    document = snapshot_store.load(path)
+    key = snapshot_store.selection_key(False, app.window_hours, ())
+    assert document is not None and set(document["sections"]) == {key}
+    assert os.listdir(path.parent) == [snapshot_store.FILE_NAME]
+    assert {item["kind"] for item in document["sources"]} >= {"state", "transcript"}

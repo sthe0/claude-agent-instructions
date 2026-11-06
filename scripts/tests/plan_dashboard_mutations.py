@@ -12,6 +12,10 @@ what ``web.page_bytes`` returns, killed by ``test_plan_dashboard_web_dom.py``. P
 ``test_plan_dashboard_publish.py``. ATTENTION_MUTATIONS is the attention overlay's and the session
 locator's family, killed by ``test_plan_dashboard_attention.py``.
 
+SNAPSHOT_MUTATIONS is the snapshot's and the identity-keyed caches' family, killed by
+``test_plan_dashboard_snapshot.py``; the two rows that target ``tui_app`` (``mark-confirmed-from-snapshot``,
+``overlay-waits-on-order-read``) are killed by the pilot file.
+
 ``test_plan_dashboard_mutation_catalogue.py`` runs every MUTATIONS row in a subprocess and asserts
 the model tests go red, every other TUI_MUTATIONS row likewise against the console tests, and the
 ``tui_app`` row against the pilot file where textual is importable; to add a mutation, add a row
@@ -961,13 +965,90 @@ WEB_PAGE_MUTATIONS.update({
 })
 
 
+def _checksum_unchecked(original):
+    def mutated(path):
+        store = importlib.import_module(SNAPSHOT)
+        real = store.body_sha256
+        try:
+            stored = json.loads(Path(path).read_bytes()).get("body_sha256")
+            store.body_sha256 = lambda sections: stored
+        except (OSError, ValueError, AttributeError):
+            pass
+        try:
+            return original(path)
+        finally:
+            store.body_sha256 = real
+    return mutated
+
+
+def _unread_ledger_is_empty(original):
+    def mutated(sums, session_id, plan_path):
+        return original({**sums, "unread": False}, session_id, plan_path)
+    return mutated
+
+
+def _stored_marks_confirmed(original):
+    def mutated(app, section):
+        original(app, section)
+        for task in section["marks"].get("tasks") or {}:
+            importlib.import_module("plan_dashboard.events").emit("mark_confirmed", task=task, applied=[])
+    return mutated
+
+
+def _overlay_waits_on_the_order_read(original):
+    def mutated(app, snapshot, issued_all):
+        tui_app = importlib.import_module(TUI_APP)
+        if tui_app.read_in_flight(app, "overlay"):
+            return
+
+        async def after_the_order_read():
+            while tui_app.read_in_flight(app, "order"):
+                await importlib.import_module("asyncio").sleep(0.05)
+            await tui_app.read_overlay_for(app, snapshot, issued_all)
+
+        app.run_worker(after_the_order_read(), group="overlay", exclusive=True)
+    return mutated
+
+
+def _identity_of_kind(kind, same):
+    def wrap(original):
+        def mutated(source_kind, cached, live):
+            return same if source_kind == kind else original(source_kind, cached, live)
+        return mutated
+    return wrap
+
+
+def _settled_at_once(original):
+    def mutated(st, read_ns=None):
+        return True
+    return mutated
+
+
+SNAPSHOT = "plan_dashboard.snapshot"
+SNAPSHOT_MUTATIONS = {
+    "snapshot-checksum-ignored": (SNAPSHOT, "load", _checksum_unchecked),
+    "cache-same-size-rewrite-missed": (SNAPSHOT, "settled", _settled_at_once),
+    "unread-cost-zero": (MODEL, "_spend", _unread_ledger_is_empty),
+    "old-marking-dropped": (TUI, "old_marking", lambda _original: lambda cell: cell),
+    "jump-uses-snapshot-window": (TUI, "bound_jump_target", _always(None)),
+    "mark-confirmed-from-snapshot": (TUI_APP, "paint_stored", _stored_marks_confirmed),
+    "overlay-waits-on-order-read": (TUI_APP, "start_overlay_read", _overlay_waits_on_the_order_read),
+    "binding-scan-uncached": (SNAPSHOT, "same_identity", _identity_of_kind("binding", False)),
+    "binding-cache-never-invalidated": (SNAPSHOT, "fingerprint", _always(0)),
+    "source-state-cached-forever": (SNAPSHOT, "same_identity", _identity_of_kind("state", True)),
+    "source-binding-cached-forever": (SNAPSHOT, "same_identity", _identity_of_kind("binding", True)),
+    "source-transcript-cached-forever": (SNAPSHOT, "same_identity", _identity_of_kind("transcript", True)),
+    "source-ledger-cached-forever": (SNAPSHOT, "same_identity", _identity_of_kind("ledger", True)),
+}
+
+
 def pytest_configure(config):
     global applied
     name = os.environ.get(ENV) or config.getoption("--plan-dashboard-mutation")
     if not name:
         return
     known = {**MUTATIONS, **TUI_MUTATIONS, **WEB_MUTATIONS, **WEB_PAGE_MUTATIONS, **PUBLISH_MUTATIONS,
-             **ATTENTION_MUTATIONS}
+             **ATTENTION_MUTATIONS, **SNAPSHOT_MUTATIONS}
     if name not in known:
         raise pytest.UsageError(f"{ENV}={name!r} is not a known mutation; known: {sorted(known)}")
     module_name, attr, wrapper = known[name]
