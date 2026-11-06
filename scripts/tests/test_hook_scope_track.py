@@ -61,10 +61,12 @@ def _make_arc_stub(bin_dir: Path, root: Path) -> None:
     )
 
 
-def run_hook(payload: dict, home: Path, bin_dir: str, lineage: "str | None" = None) -> subprocess.CompletedProcess:
+def run_hook(payload: dict, home: Path, bin_dir: str, lineage: "str | None" = None,
+             path: "str | None" = None) -> subprocess.CompletedProcess:
     # bin_dir first so a stub shadows the real binary; /usr/bin:/bin kept so the
-    # stub's own "#!/usr/bin/env bash" shebang can still resolve bash.
-    env = {"HOME": str(home), "PATH": path_with_arc_stub(bin_dir)}
+    # stub's own "#!/usr/bin/env bash" shebang can still resolve bash. `path` replaces
+    # the whole PATH for a test that needs a binary to be absent.
+    env = {"HOME": str(home), "PATH": path if path is not None else path_with_arc_stub(bin_dir)}
     if lineage is not None:
         env["AGENT_LINEAGE_IDS"] = lineage
     return subprocess.run(
@@ -212,7 +214,8 @@ def test_vcs_none_when_neither_git_nor_arc_available(tmp_path):
     plain = tmp_path / "plainsubpath"
     plain.mkdir()
 
-    proc = run_hook(bash_payload("s1", str(plain)), home, str(bin_dir))
+    # Only the empty bin_dir: neither git nor arc (stub or real launcher) can be found.
+    proc = run_hook(bash_payload("s1", str(plain)), home, str(bin_dir), path=str(bin_dir))
     assert proc.returncode == 0
 
     rec = _record(home, "s1")
