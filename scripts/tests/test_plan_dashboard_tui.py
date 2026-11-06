@@ -772,13 +772,13 @@ def test_a_task_jumps_through_any_bound_session_that_has_a_window(monkeypatch, s
         seen.append(harness)
         return JUMP_TARGET if harness == "h-window" else None
 
-    monkeypatch.setattr(tui.engine_session_binding, "harness_sessions_driving", lambda engine: ["h-window", "h-old"])
+    monkeypatch.setattr(tui.snapshot_store, "harness_sessions_driving", lambda engine: ["h-window", "h-old"])
     status = tui.jump_to(subject, OVERLAY, SimpleNamespace(NAME="fake", jump_target=jump_target), runner=JumpRecorder())
     assert status.startswith("window one — return:") and seen == tried
 
 
 def test_a_session_row_never_borrows_a_window_from_the_bindings(monkeypatch):
-    monkeypatch.setattr(tui.engine_session_binding, "harness_sessions_driving", lambda engine: ["h-window"])
+    monkeypatch.setattr(tui.snapshot_store, "harness_sessions_driving", lambda engine: ["h-window"])
     assert tui.jump_to(("session", "h"), OVERLAY, jump_locator(target=None)) == "no jump target"
 
 

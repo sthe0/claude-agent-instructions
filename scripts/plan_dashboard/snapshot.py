@@ -168,24 +168,41 @@ class Observed:
         with _LOCK:
             self.read.add(path)
 
+    def _changed(self, now: dict) -> set[str]:
+        changed = set(self.read)
+        reference = self.base if self.base is not None else self.previous
+        if reference is not None:
+            changed |= {path for path, (kind, ident) in now.items()
+                        if path not in reference or not same_identity(kind, reference[path][1], ident)}
+            changed |= {path for path in reference if path not in now}
+        return changed
+
+    def _now(self) -> dict:
+        return {path: (kind, ident) for kind, items in self.current.items() for path, (ident, _) in items.items()}
+
     def take(self) -> list[str]:
-        """The paths created or changed since the last call, and every path read since: sorted. A first call
-        with no snapshot behind it reports only what was read."""
+        """The paths created, changed or deleted since the observation before the last one, and every path read
+        since the last call: sorted. The observation is then rotated, so that a poll made at any moment of a
+        cycle is covered by the report of that cycle. With no snapshot behind it a first call reports only
+        what was read."""
         with _LOCK:
-            transcripts = {p: v for p, v in self.current["transcript"].items() if p in self.touched}
-            self.current["transcript"] = transcripts
-            now = {path: (kind, ident) for kind, items in self.current.items() for path, (ident, _) in items.items()}
-            changed = set(self.read)
-            reference = self.base if self.base is not None else self.previous
-            if reference is not None:
-                changed |= {path for path, (kind, ident) in now.items()
-                            if path not in reference or not same_identity(kind, reference[path][1], ident)}
+            self.current["transcript"] = {p: v for p, v in self.current["transcript"].items() if p in self.touched}
+            now = self._now()
+            changed = self._changed(now)
             self.base, self.previous, self.read, self.touched = self.previous, now, set(), set()
             return sorted(changed)
 
+    def peek(self) -> list[str]:
+        """What ``take`` would report, without rotating anything."""
+        with _LOCK:
+            return sorted(self._changed(self._now()))
+
     def kinds(self) -> dict[str, str]:
         with _LOCK:
-            return {path: kind for kind, items in self.current.items() for path in items}
+            out = {path: kind for earlier in (self.base, self.previous) if earlier
+                   for path, (kind, _) in earlier.items()}
+            out.update({path: kind for kind, items in self.current.items() for path in items})
+            return out
 
     def sources(self) -> list[dict]:
         with _LOCK:
@@ -232,12 +249,35 @@ class BindingScan:
             self.memo = (key, index, driven)
         return self.memo[1], self.memo[2]
 
+    def driven(self) -> dict[str, list[str]]:
+        """The engine sessions each harness session drives, as of the last ``read``."""
+        memo = self.memo
+        return memo[2] if memo is not None else {}
+
     def clear(self) -> None:
         self.files.clear()
         self.memo = None
 
 
 BINDINGS = BindingScan()
+
+
+def export_values(cache: IdentityCache, paths) -> dict:
+    """The values of ``cache`` for the ``paths`` whose identity the snapshot records as settled."""
+    return {path: value for path, (_, value) in cache.entries().items() if path in paths}
+
+
+def seed_values(cache: IdentityCache, values, identities: dict[str, tuple]) -> None:
+    """Adopt snapshot ``values`` (path → value) under the identities the snapshot recorded for their files."""
+    if not isinstance(values, dict):
+        return
+    for path, value in values.items():
+        if path in identities and cache.get(path, identities[path]) is MISS:
+            cache.put(path, identities[path], value)
+
+
+def identities_of(sources) -> dict[str, tuple]:
+    return {item["path"]: tuple(item[key] for key in IDENTITY_KEYS) for item in sources}
 
 
 def harness_index() -> dict[str, list[str]]:

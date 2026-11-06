@@ -10,8 +10,9 @@ import dataclasses
 import datetime as dt
 from pathlib import Path
 
-from lib import config_root, engine_session_binding
+from lib import config_root
 from plan_dashboard import attention, locate, model
+from plan_dashboard import snapshot as snapshot_store
 
 SESSION_ID_WIDTH = 8
 TASK_ID_WIDTH = 24
@@ -26,6 +27,7 @@ NO_VALUE = "—"
 UNREAD = "unread"
 MARK_MARGIN = 20
 WAIT_MARKS = {"choice": "Q", "permission": "!", "idle": "…", UNREAD: "?"}
+OLD_MARK = "~"
 WAIT_STYLES = {"choice": "bold yellow", "permission": "bold red", "idle": "cyan"}
 NEEDS_YOU = ("choice", "permission")
 JUMP_KEY = "g"
@@ -172,6 +174,12 @@ def wait_mark(waiting) -> str:
     return WAIT_MARKS.get(waiting, "")
 
 
+def old_marking(cell: str) -> str:
+    """``cell`` of a wait column as the screen shows a mark that comes from the snapshot and has not been
+    read again: behind ``~``."""
+    return OLD_MARK + cell
+
+
 def row_style(waiting, liveness) -> str:
     """A rich style for a row: a session that needs the user stands out whatever its liveness, an idle
     one is quieter, and anything not active fades."""
@@ -209,11 +217,12 @@ def overview_header(snapshot: dict, now: dt.datetime, attention_payload=None, co
             f"  waiting: {waiting}")
 
 
-def task_row(task: dict, now: dt.datetime, attention_payload=None) -> dict:
-    """A task's row of the overview table, as ``overview_rows`` describes it."""
+def task_row(task: dict, now: dt.datetime, attention_payload=None, old=frozenset()) -> dict:
+    """A task's row of the overview table, as ``overview_rows`` describes it; its mark is behind ``~`` while
+    its id is in ``old``."""
     sid = task["session_id"]
     waiting = _waiting_of(attention_payload, sid)
-    mark = wait_mark(waiting)
+    mark = old_marking(wait_mark(waiting)) if sid in old else wait_mark(waiting)
     since = _since(now, task["last_activity"])
     age = "?" if since is None else f"{since} ago"
     if not task["readable"]:
@@ -230,21 +239,23 @@ def task_row(task: dict, now: dt.datetime, attention_payload=None) -> dict:
             "style": row_style(waiting, task["liveness"])}
 
 
-def overview_rows(snapshot: dict, now: dt.datetime, attention_payload=None, activity=None) -> list[dict]:
+def overview_rows(snapshot: dict, now: dt.datetime, attention_payload=None, activity=None,
+                  old=frozenset()) -> list[dict]:
     """One row per task, newest last activity first (``last_activity``), then one per session the locator
     knows that no task owns, newest transcript first. A row is its ``session_id`` (a session row's harness
     id), the ``cells`` of ``OVERVIEW_COLUMNS``, its ``kind`` (``task`` or ``session``), ``waiting`` and
     ``style``. A session whose harness id is a listed task's id is that task's row, never a second one: all
     mode draws its first table before it knows which tasks represent the live overlay's sessions."""
     activity = activity or {}
-    rows = [task_row(task, now, attention_payload) for task in activity_order(snapshot["tasks"], activity)]
+    rows = [task_row(task, now, attention_payload, old) for task in activity_order(snapshot["tasks"], activity)]
     listed = {row["session_id"] for row in rows}
     sessions = sorted((e for e in _session_rows(attention_payload) if e["harness_session"] not in listed),
                       key=lambda e: activity.get(e["harness_session"], float("-inf")), reverse=True)
     for entry in sessions:
         harness, waiting = entry["harness_session"], entry.get("waiting")
         since = _since(now, entry.get("since"))
-        cells = (NO_VALUE, wait_mark(waiting), entry.get("name") or harness, NO_VALUE, NO_VALUE, NO_VALUE, NO_VALUE,
+        mark = old_marking(wait_mark(waiting)) if harness in old else wait_mark(waiting)
+        cells = (NO_VALUE, mark, entry.get("name") or harness, NO_VALUE, NO_VALUE, NO_VALUE, NO_VALUE,
                  NO_VALUE, NO_VALUE if since is None else f"{since} ago", NO_VALUE, NO_VALUE,
                  one_line(entry.get("cwd")))
         rows.append({"session_id": harness, "cells": cells, "kind": "session", "waiting": waiting,
@@ -496,7 +507,7 @@ def bound_jump_target(engine_session: str, locator) -> dict | None:
     """The first target among every session bound to a task. The overlay names the session with the newest
     transcript, which may have no window while an older one of the same task has; it also has no row yet
     before the first overlay read. Scans the binding files, so it runs only after the overlay's session failed."""
-    for harness in sorted(engine_session_binding.harness_sessions_driving(engine_session)):
+    for harness in sorted(snapshot_store.harness_sessions_driving(engine_session)):
         target = locate.jump_target(locator, harness)
         if target is not None:
             return target
@@ -560,7 +571,7 @@ def _mtime(path) -> float | None:
 def read_order(snapshot: dict, transcripts_root) -> Order:
     """The ordering key's inputs for ``snapshot``'s tasks: one binding scan, one transcript listing and a
     stat per bound transcript; no transcript content and no locator call."""
-    index, transcripts = engine_session_binding.harness_index(), attention.transcript_index(transcripts_root)
+    index, transcripts = snapshot_store.harness_index(), attention.transcript_index(transcripts_root)
     activity, represented = {}, set()
     for task in snapshot["tasks"]:
         sid = task["session_id"]

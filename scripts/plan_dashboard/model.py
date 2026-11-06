@@ -238,6 +238,30 @@ def _ledger_sums(cost_log) -> dict:
         return entry
 
 
+def export_sums(identities) -> dict | None:
+    """The kept ledger sums for the snapshot, when the ledger's identity is among ``identities``."""
+    with CACHE_LOCK:
+        entry = _SUMS.get("entry")
+    if entry is None or entry["path"] not in identities:
+        return None
+    return {key: entry[key] for key in ("path", "offset", "anchor", "by_session", "by_plan")}
+
+
+def seed_sums(data, identities: dict[str, tuple]) -> None:
+    """Adopt snapshot ledger sums under the identity the snapshot recorded for the ledger; a malformed
+    entry is skipped."""
+    if not isinstance(data, dict) or data.get("path") not in identities:
+        return
+    try:
+        entry = {"path": str(data["path"]), "ident": tuple(identities[data["path"]]), "offset": int(data["offset"]),
+                 "anchor": str(data["anchor"]), "by_session": dict(data["by_session"]),
+                 "by_plan": dict(data["by_plan"]), "unread": False}
+    except (KeyError, TypeError, ValueError):
+        return
+    with CACHE_LOCK:
+        _SUMS.setdefault("entry", entry)
+
+
 def _spend(sums: dict, session_id: str, plan_path) -> float | None:
     """What a task's spawns cost; None when the ledger could not be read."""
     if sums["unread"]:
@@ -310,7 +334,7 @@ def _transcript_paths(session_id: str, transcripts_root, *, linked_child: bool =
     names = [config_root.sanitize_session_id(session_id)]
     if not linked_child:
         names += [config_root.sanitize_session_id(h)
-                  for h in engine_session_binding.harness_sessions_driving(session_id)]
+                  for h in snapshot.harness_sessions_driving(session_id)]
     found: dict[str, Path] = {}
     for name in dict.fromkeys(names):
         if transcripts_root is not None:
@@ -825,7 +849,7 @@ def detail(state_root, session_id, *, cost_log=None, transcripts_root=None, chil
     usage_rows = _usage_rows(sid, transcripts_root, linked_child=linked)
     tree = phases(state, spawn_rows, usage_rows)
     root_cost = sum(item["root_cost_usd"] for item in tree) if usage_rows is not None else None
-    harness_sessions = engine_session_binding.harness_sessions_driving(sid)
+    harness_sessions = snapshot.harness_sessions_driving(sid)
     shared = [] if linked else _co_driven(root, harness_sessions, sid)
     if children is None:
         children = child_index(root)
