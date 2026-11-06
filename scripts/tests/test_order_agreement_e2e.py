@@ -48,6 +48,7 @@ def env(root, tmp_path):
     return {
         **base, "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(root),
         "CLAUDE_CODE_SESSION_ID": HARNESS, "CLAUDE_PUBLISHED_TEXT_GATE": "0",
+        "AGENTCTL_LIVE_JUDGES": "0",
         "AGENTCTL_EDIT_LEDGER": str(tmp_path / "edit-log.jsonl"),
     }
 

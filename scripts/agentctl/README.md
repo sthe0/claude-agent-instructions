@@ -649,6 +649,8 @@ The whole-plan claim enumeration cross-check (`advisor.enumerate_claims`, behind
 
 `_attach_advisories` is the single chokepoint that resolves `enabled` via `advisor.resolve_enabled(weight_class)`, threading each call site's session `weight_class` through rather than re-deriving the rule per site: `AGENTCTL_ADVISOR` env overrides in both directions (`1` forces on, `0` forces off); absent the env override, the advisor is on iff config.md's `advisor-mode` key (`off` | `substantive`, shipped `substantive`) is `substantive` **and** the session's `weight_class` is `SUBSTANTIVE` — auto-activation is scoped to substantive work only, and a missing/unreadable `advisor-mode` key fails closed (off).
 
+`AGENTCTL_LIVE_JUDGES=0` is a test-only kill switch on `advisor.subprocess_runner`, the one runner every live model judge (advisor, acceptance, grounding) goes through: it returns a non-zero result without launching a model, so each judge takes its fail-open "no verdict" path. Tests that run `agentctl-cli.py` as a subprocess set it in the child env (the in-process conftest fixtures cannot reach a child).
+
 ## Pane title
 
 `classify --title '<2–5 words naming the task, in the dialogue language>'` records `state.task_title` (shown by `status`) and runs `tmux select-pane -t $TMUX_PANE -T '✳ <title>'`, so the iTerm tab and the ccgram Telegram topic follow the task. The code is [`pane_title.py`](pane_title.py).
