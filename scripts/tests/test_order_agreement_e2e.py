@@ -49,6 +49,10 @@ def env(root, tmp_path):
         **base, "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(root),
         "CLAUDE_CODE_SESSION_ID": HARNESS, "CLAUDE_PUBLISHED_TEXT_GATE": "0",
         "AGENTCTL_EDIT_LEDGER": str(tmp_path / "edit-log.jsonl"),
+        # The model judges (grounding, advisor) are not under test here; with a reachable model
+        # their sampled verdict refused the fixture plan at submit-plan, so the result depended
+        # on the machine. Off is the same path a judge that cannot be reached takes.
+        "AGENTCTL_ADVISOR": "0",
     }
 
 
