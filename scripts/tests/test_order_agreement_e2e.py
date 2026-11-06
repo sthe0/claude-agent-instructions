@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -41,6 +42,18 @@ def root(tmp_path):
     return config
 
 
+# The grounding judge in these tests reaches this directory's `claude`: a fixed answer instead
+# of a live model, whose verdict varies run to run. `none` puts no stub on PATH (negative control).
+JUDGE_STUB_DIR = os.environ.get(
+    "E2E_JUDGE_STUB_DIR", str(Path(__file__).resolve().parent / "stubs" / "judge-pass"))
+
+
+def _judge_path(inherited: str) -> str:
+    if JUDGE_STUB_DIR == "none":
+        return inherited
+    return JUDGE_STUB_DIR + os.pathsep + inherited
+
+
 @pytest.fixture
 def env(root, tmp_path):
     base = {k: v for k, v in os.environ.items()
@@ -49,7 +62,13 @@ def env(root, tmp_path):
         **base, "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(root),
         "CLAUDE_CODE_SESSION_ID": HARNESS, "CLAUDE_PUBLISHED_TEXT_GATE": "0",
         "AGENTCTL_EDIT_LEDGER": str(tmp_path / "edit-log.jsonl"),
+        "PATH": _judge_path(os.environ.get("PATH", "")),
     }
+
+
+@pytest.mark.skipif(JUDGE_STUB_DIR == "none", reason="the stub is switched off")
+def test_the_judges_claude_is_the_stub(env):
+    assert shutil.which("claude", path=env["PATH"]) == str(Path(JUDGE_STUB_DIR) / "claude")
 
 
 class Cli:
