@@ -19,7 +19,20 @@ if TESTS_DIR not in sys.path:
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import host_llm, judge_ledger  # noqa: E402
 from _xdist_auto import pytest_configure, pytest_terminal_summary  # noqa: E402,F401
-from slow_selection import pytest_addoption, pytest_collection_modifyitems  # noqa: E402,F401
+import slow_selection  # noqa: E402
+from slow_selection import pytest_addoption  # noqa: E402,F401
+
+
+def pytest_collection_modifyitems(config, items):
+    """The arc launcher canary runs only under ARC_CANARY_RUN=1, even when its file is named
+    on the command line (pytest_ignore_collect is not consulted for such paths), so it never
+    runs as an ordinary suite member."""
+    if os.environ.get("ARC_CANARY_RUN") != "1":
+        dropped = [i for i in items if i.path.name == "canary_arc_launcher.py"]
+        if dropped:
+            items[:] = [i for i in items if i not in dropped]
+            config.hook.pytest_deselected(items=dropped)
+    slow_selection.pytest_collection_modifyitems(config, items)
 
 # The plan-level places a SUBSTANTIVE plan owes the submission seam, as TOML an author
 # would write. Every fixture plan in the suite that expects to SUBMIT CLEAN splices these
