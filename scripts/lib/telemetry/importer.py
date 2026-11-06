@@ -31,7 +31,6 @@ import json
 import os
 import re
 import resource
-import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -808,32 +807,27 @@ def _report(stats: _Stats, ro) -> dict:
 
 # --- rebuild --------------------------------------------------------------------------------
 
-def _live_counts(record: Path) -> "dict | None":
+def _live_counts() -> "dict | None":
     """Live events per session in an existing record, None when it cannot be read."""
-    if not record.exists():
+    if not store.record_exists():
         return {}
-    try:
-        conn = sqlite3.connect(f"file:{record}?mode=ro", uri=True, timeout=1.0)
-        try:
-            return {r[0]: r[1] for r in conn.execute(
-                "SELECT session_id, COUNT(*) FROM events WHERE provenance = 'live' GROUP BY session_id")}
-        finally:
-            conn.close()
-    except sqlite3.Error:
+    conn = store.open_readonly()
+    if conn is None:
         return None
+    try:
+        return {r[0]: r[1] for r in conn.execute(
+            "SELECT session_id, COUNT(*) FROM events WHERE provenance = 'live' GROUP BY session_id")}
+    except Exception:
+        return None
+    finally:
+        conn.close()
 
 
 def rebuild(include_transcripts: bool = False) -> dict:
     """Move the record aside, build a new one with the same origin from the spools and the sources,
     and report the sessions whose live-only events did not come back."""
-    record = config_root.telemetry_db()
-    before = _live_counts(record)
-    if record.exists():
-        aside = record.with_name(f"{record.name}.corrupt-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}")
-        for suffix in ("", "-wal", "-shm"):
-            part = record.with_name(record.name + suffix)
-            if part.exists():
-                os.replace(part, aside.with_name(aside.name + suffix))
+    before = _live_counts()
+    store.move_record_aside(datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"))
     report = run_import(include_transcripts, replay_all_spools=True)
     ro = store.open_readonly()
     lost = {}

@@ -419,6 +419,24 @@ def open_readonly() -> "sqlite3.Connection | None":
         return None
 
 
+def record_exists() -> bool:
+    return config_root.telemetry_db().exists()
+
+
+def move_record_aside(stamp: str) -> bool:
+    """Rename the record and its WAL files to `<name>.corrupt-<stamp>[-wal|-shm]`; False when
+    there was no record. The origin side file stays, so a rebuilt record keeps its origin."""
+    record = config_root.telemetry_db()
+    if not record.exists():
+        return False
+    aside = f"{record.name}.corrupt-{stamp}"
+    for suffix in ("", "-wal", "-shm"):
+        part = record.with_name(record.name + suffix)
+        if part.exists():
+            os.replace(part, record.with_name(aside + suffix))
+    return True
+
+
 # --- spool replay ------------------------------------------------------------------
 
 def _inode(stat: os.stat_result) -> int:

@@ -145,7 +145,8 @@
 "scripts/lib/semantic_join.py" = { disposition = "not-canon", category = "not-canon", reason = "join cache under ~/.local, written atomically" }
 "scripts/lib/telemetry/emit.py" = { disposition = "exempt", category = "exempt-config-root", reason = "creates the telemetry spool directory and appends session spools and drop markers under the config root" }
 "scripts/lib/telemetry/tables.py" = { disposition = "not-canon", category = "not-canon", reason = "add_member/retire_member rewrite the enumeration tables of a tables root chosen by the caller (a test copy, or the shipped tables on an explicit maintenance call); the record itself is under the config root" }
-"scripts/lib/telemetry/importer.py" = { disposition = "not-canon", category = "not-canon", reason = "rebuild moves the record aside and prune removes drained spools, both under the config root; no tracked file" }
+"scripts/lib/telemetry/store.py" = { disposition = "not-canon", category = "not-canon", reason = "move_record_aside renames the record and its WAL files to a `.corrupt-<stamp>` name under the config root; no tracked file" }
+"scripts/lib/telemetry/importer.py" = { disposition = "not-canon", category = "not-canon", reason = "prune removes drained spools under the config root; no tracked file" }
 "scripts/lib/telemetry/profile_check.py" = { disposition = "not-canon", category = "not-canon", reason = "extracts the frozen snapshots into a scratch directory it creates and removes; no tracked file" }
 "scripts/telemetry.py" = { disposition = "not-canon", category = "not-canon", reason = "writes the import stats file the caller names; no tracked file" }
 "scripts/lib/shell_tokens.py" ={ disposition = "not-canon", category = "not-canon", reason = "tokenizer that recognises `git apply`/`git commit` in command strings; writes no file" }
