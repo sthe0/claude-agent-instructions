@@ -582,12 +582,13 @@ def read_order(snapshot: dict, transcripts_root) -> Order:
     return Order(activity, index, transcripts, frozenset(represented))
 
 
-def session_activity(attention_payload, order: Order) -> dict:
-    """Each session row's transcript mtime, the key the session rows are sorted by."""
+def session_activity(attention_payload, transcripts: dict) -> dict:
+    """Each session row's transcript mtime (``transcripts`` is a ``transcript_index``), the key the session
+    rows are sorted by."""
     activity = {}
     for row in _session_rows(attention_payload):
         harness = row["harness_session"]
-        mtime = _mtime(attention.find_transcript(harness, None, None, order.transcripts))
+        mtime = _mtime(attention.find_transcript(harness, None, None, transcripts))
         if mtime is not None:
             activity[harness] = mtime
     return activity
@@ -608,6 +609,60 @@ def all_screen_overlay(snapshot: dict, locator, transcripts_root, rows: int) -> 
     order = read_order(snapshot, transcripts_root)
     ids = [t["session_id"] for t in activity_order(snapshot["tasks"], order.activity)[:rows]]
     return read_marks(ids, order, locator, transcripts_root)
+
+
+def stored_ids(snapshot: dict, marks: dict) -> set[str]:
+    """Every row id of a stored table: its tasks and the harness ids of its session rows."""
+    return {t["session_id"] for t in snapshot["tasks"]} | {e["harness_session"] for e in marks.get("sessions") or ()}
+
+
+def snapshot_section(snapshot: dict, marks: dict, activity: dict, now: dt.datetime) -> dict:
+    """What a snapshot stores of the screen last shown: its rows' data, the marks on them and the activity
+    that sorted them."""
+    return {"snapshot": snapshot, "marks": marks, "activity": activity, "read_at": now.isoformat()}
+
+
+def _section_usable(section) -> bool:
+    try:
+        stored_ids(section["snapshot"], section["marks"])
+        return isinstance(section["activity"], dict) and isinstance(section["marks"].get("tasks"), dict)
+    except (KeyError, TypeError, AttributeError):
+        return False
+
+
+def write_snapshot(path, key: str, section: dict) -> Path:
+    """Write ``section`` as the snapshot's section for selection ``key``, with the values of the sources the
+    caches hold (the next start seeds them); sections of other selections stay as rows and marks only."""
+    sources = snapshot_store.OBSERVED.sources()
+    identities = snapshot_store.identities_of(sources)
+    paths = set(identities)
+    values = {"state": snapshot_store.export_values(snapshot_store.STATES, paths),
+              "binding": snapshot_store.export_values(snapshot_store.BINDINGS.files, paths),
+              "tails": {p: tail for p, tail in attention.export_tails().items() if p in paths},
+              "ledger": model.export_sums(identities)}
+    kept = snapshot_store.load(path)
+    others = {name: {k: v for k, v in other.items() if k != "values"}
+              for name, other in ((kept or {}).get("sections") or {}).items()
+              if name != key and isinstance(other, dict) and _section_usable(other)}
+    return snapshot_store.write(path, {**others, key: {**section, "values": values}}, sources)
+
+
+def restore_snapshot(path, key: str) -> dict | None:
+    """The stored section for selection ``key``, or None when the snapshot is absent or has none usable; the
+    caches are seeded from its values first, so the live check reads only what changed since."""
+    document = snapshot_store.load(path)
+    section = ((document or {}).get("sections") or {}).get(key)
+    if not isinstance(section, dict) or not _section_usable(section):
+        return None
+    values = section.get("values")
+    if isinstance(values, dict):
+        identities = snapshot_store.identities_of(document["sources"])
+        snapshot_store.seed_values(snapshot_store.STATES, values.get("state"), identities)
+        snapshot_store.seed_values(snapshot_store.BINDINGS.files, values.get("binding"), identities)
+        attention.seed_tails(values.get("tails"), identities)
+        model.seed_sums(values.get("ledger"), identities)
+        snapshot_store.OBSERVED.seed(document["sources"])
+    return section
 
 
 def read_chat(target, locator, transcripts_root) -> dict | None:

@@ -376,6 +376,13 @@ def applied_by_task(changed, kinds: dict[str, str], driven: dict[str, list[str]]
     return out
 
 
+def observation(rotate: bool = True) -> tuple[list[str], dict[str, str], dict[str, list[str]]]:
+    """``(changed, kinds, driven)`` for a report of ``applied``: what was created, changed, deleted or read
+    (``Observed.take``, or ``peek`` without ``rotate``), each path's kind and the binding scan's drive map."""
+    changed = OBSERVED.take() if rotate else OBSERVED.peek()
+    return changed, OBSERVED.kinds(), BINDINGS.driven()
+
+
 def selection_key(include_all: bool, window_hours, sessions) -> str:
     return f"{'all' if include_all else 'live'}:{float(window_hours):g}:{','.join(sorted(map(str, sessions or ())))}"
 

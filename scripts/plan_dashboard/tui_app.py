@@ -14,6 +14,7 @@ import asyncio
 import dataclasses
 import datetime as dt
 import importlib.util
+import signal
 import sys
 import threading
 from pathlib import Path
@@ -29,6 +30,7 @@ from textual.containers import VerticalScroll  # noqa: E402
 from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane, Tree  # noqa: E402
 
 from plan_dashboard import events, locate, model, tui  # noqa: E402
+from plan_dashboard import snapshot as snapshot_store  # noqa: E402
 
 TICK_S = 0.5
 KEPT_CYCLES = 4
@@ -56,15 +58,44 @@ def cycle_of(app: "DashboardApp", snapshot: dict) -> int | None:
     return next((number for held, number in app.cycles if held is snapshot), None)
 
 
-def note_marks(app: "DashboardApp", overlay: dict | None) -> None:
-    """Every mark read is live here: each task's mark is painted and confirmed at the same moment."""
+def note_marks(app: "DashboardApp", overlay: dict | None, seen) -> None:
+    """Each task's mark is painted and, the same moment, confirmed: the read that produced it has read every
+    source of the task that changed (``seen`` is ``snapshot.observation()``, and ``applied`` the task's share)."""
     if overlay is None or not events.enabled():
         return
-    for task, mark in (overlay.get("tasks") or {}).items():
-        if isinstance(mark, dict) and task not in app.confirmed:
-            app.confirmed.add(task)
-            note(app, "mark_painted", task=task)
-            note(app, "mark_confirmed", task=task, applied="all")
+    changed, kinds, driven = seen
+    tasks = [task for task, mark in (overlay.get("tasks") or {}).items()
+             if isinstance(mark, dict) and task not in app.confirmed]
+    applied = snapshot_store.applied_by_task(changed, kinds, driven, tasks)
+    for task in tasks:
+        app.confirmed.add(task)
+        note(app, "mark_painted", task=task)
+        note(app, "mark_confirmed", task=task, applied=applied[task])
+
+
+def unconfirmed(app: "DashboardApp", ids) -> list[str]:
+    """The rows among ``ids`` whose wait cell the live check has not confirmed: all of them before the first
+    overlay read; after it the rows still behind ``~``, and in all mode the task rows no mark was read for."""
+    if app.overlay is None:
+        return list(ids)
+    live = app.overlay.get("tasks") or {}
+    return [sid for sid in ids if sid in app.old_ids
+            or (app.view.include_all and sid not in live and sid not in app.marked
+                and sid not in app.view.harness_ids)]
+
+
+def note_confirmed(app: "DashboardApp") -> None:
+    """Say once that the first screen, then once that the whole table, shows confirmed values."""
+    if app.old_cleared:
+        return
+    table = app.query_one(DataTable)
+    first = tui.rows_in_view(app.view.session_ids, round(table.scroll_offset.y), table.size.height, 0)
+    if not app.first_confirmed and (first or not app.view.session_ids) and not unconfirmed(app, first):
+        app.first_confirmed = True
+        note(app, "first_screen_confirmed")
+    if app.first_confirmed and not unconfirmed(app, visible_ids(app)):
+        app.old_cleared = True
+        note(app, "last_old_cleared")
 
 
 def read_in_flight(app: "DashboardApp", group: str) -> bool:
@@ -76,6 +107,8 @@ def read_in_flight(app: "DashboardApp", group: str) -> bool:
 
 
 def refresh_if_due(app: "DashboardApp") -> None:
+    if not app.started:
+        return
     if tui.due(app.clock(), app.last_collect, app.interval) and not read_in_flight(app, "collect"):
         app.reload()
     if app.view.tab == "detail" and tui.due(app.clock(), app.last_detail_read, app.interval) \
@@ -117,17 +150,33 @@ def read_overlay(app: "DashboardApp", snapshot: dict) -> tuple[dict | None, Exce
 
 
 def counted_marks(app: "DashboardApp") -> dict | None:
-    """What the header's waiting counter counts: the live overlay, in all mode too."""
-    return app.overlay
+    """What the header's waiting counter counts: the live overlay, in all mode too; until it is read, the
+    marks stored in the snapshot."""
+    return app.overlay if app.overlay is not None else app.stored
+
+
+def stored_marks(app: "DashboardApp") -> dict | None:
+    """The snapshot's marks of the rows still behind ``~``; None when the start had no snapshot."""
+    if app.stored is None:
+        return None
+    return {"tasks": {task: mark for task, mark in (app.stored.get("tasks") or {}).items() if task in app.old_ids},
+            "sessions": [] if app.overlay is not None else list(app.stored.get("sessions") or ())}
 
 
 def shown_marks(app: "DashboardApp") -> dict | None:
     """The marks the rows show: the live overlay in live mode; in all mode the marks read for rows in view
-    with the live overlay winning for the live set."""
+    with the live overlay winning for the live set. A row not yet read again shows the snapshot's mark."""
+    stored = stored_marks(app)
     if not app.view.include_all:
-        return app.overlay
+        if stored is None:
+            return app.overlay
+        live = app.overlay or {}
+        return {"tasks": {**stored["tasks"], **(live.get("tasks") or {})},
+                "sessions": list(live["sessions"]) if app.overlay is not None else stored["sessions"]}
     represented = app.order.represented if app.order is not None else frozenset()
-    return tui.shown_payload(app.overlay, app.marks, represented)
+    computed = {**((stored or {}).get("tasks") or {}), **app.marks}
+    live = app.overlay if app.overlay is not None else {"sessions": (stored or {}).get("sessions") or []}
+    return tui.shown_payload(live, computed, represented)
 
 
 def read_chat_of(app: "DashboardApp", target) -> tuple[dict | None, Exception | None]:
@@ -237,31 +286,42 @@ def start_overlay_read(app: "DashboardApp", snapshot: dict, issued_all: bool) ->
 
 
 async def read_overlay_for(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
-    order = app.order
-
     def read():
         overlay, error = read_overlay(app, snapshot)
-        return overlay, error, tui.session_activity(overlay, order) if order is not None else {}
+        sessions = tui.session_activity(overlay, tui.attention.transcript_index(app.transcripts_root))
+        return overlay, error, sessions, snapshot_store.observation()
 
-    overlay, error, sessions = await in_daemon_thread(read)
+    overlay, error, sessions, seen = await in_daemon_thread(read)
+    app.session_activity = sessions
     app.activity.update(sessions)
-    overlay_ready(app, overlay, error, issued_all)
+    overlay_ready(app, overlay, error, issued_all, seen)
     if (cycle := cycle_of(app, snapshot)) is not None:
-        note(app, "cycle_end", cycle=cycle, applied="all")
+        note(app, "cycle_end", cycle=cycle, applied=seen[0])
 
 
-def overlay_ready(app: "DashboardApp", overlay: dict | None, error: Exception | None, issued_all: bool) -> None:
+def overlay_ready(app: "DashboardApp", overlay: dict | None, error: Exception | None, issued_all: bool,
+                  seen) -> None:
     if overlay is not None:
         app.overlay = overlay
+        app.old_ids = app.old_ids - confirmed_by(app, overlay)
     if app.snapshot is not None:
         show_table(app, app.snapshot, app.read_at, issued_all)
     if overlay is not None:
-        note_marks(app, overlay)
+        note_marks(app, overlay, seen)
         if not app.live_check_ended:
             app.live_check_ended = True
-            note(app, "live_check_end", applied="all")
+            note(app, "live_check_end", applied=seen[0])
+        note_confirmed(app)
     if error is not None and title_is_current(app, issued_all):
         show_read_error(app, error)
+
+
+def confirmed_by(app: "DashboardApp", overlay: dict) -> set[str]:
+    """The old rows an overlay read replaces: in live mode every row, since the table lists the live set and
+    a row the overlay has no mark for shows ``?``; in all mode the live set's tasks and session rows."""
+    if not app.view.include_all:
+        return set(app.old_ids)
+    return set(overlay.get("tasks") or {}) | {row["harness_session"] for row in overlay.get("sessions") or ()}
 
 
 def show_read_error(app: "DashboardApp", error: Exception) -> None:
@@ -269,8 +329,9 @@ def show_read_error(app: "DashboardApp", error: Exception) -> None:
 
 
 def start_order_read(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
-    """After the table is shown: the index read and stat behind the ordering key, then the re-sort, then the
-    marks. A newer table's read replaces an older one's, whose order would sort rows that are gone."""
+    """After the table is shown: the index read and stat behind the ordering key, then the re-sort. A newer
+    table's read replaces an older one's, whose order would sort rows that are gone. The marks of the live set
+    are read on their own, not after this: a pending question must show whatever the index read costs."""
     app.run_worker(read_order_for(app, snapshot, issued_all), group="order", exclusive=True)
     app.run_worker(in_daemon_thread(lambda: warm_child_index(app, snapshot)), group="children", exclusive=True)
 
@@ -290,13 +351,12 @@ def order_ready(app: "DashboardApp", snapshot: dict, order, error: Exception | N
     if snapshot is not app.snapshot:
         return
     if order is not None:
-        app.order, app.activity, app.marked = order, dict(order.activity), set()
+        app.order, app.activity, app.marked = order, {**order.activity, **app.session_activity}, set()
         if not app.cursor_chosen:
             app.view = tui.unanchored(app.view)
         show_table(app, snapshot, app.read_at, issued_all)
     elif title_is_current(app, issued_all):
         show_read_error(app, error)
-    start_overlay_read(app, snapshot, issued_all)
     start_marks_read(app)
 
 
@@ -332,14 +392,17 @@ def read_marks_of(app: "DashboardApp", ids: list[str], order) -> dict:
 
 
 async def read_marks_for(app: "DashboardApp", ids: list[str], order) -> None:
-    computed, error = await in_daemon_thread(lambda: attempt(lambda: read_marks_of(app, ids, order)))
+    computed, error, seen = await in_daemon_thread(
+        lambda: (*attempt(lambda: read_marks_of(app, ids, order)), snapshot_store.observation(rotate=False)))
     if order is not app.order:
         return
     app.marked.update(ids)
     if computed is not None:
         app.marks.update(computed)
+        app.old_ids = app.old_ids - set(ids)
         show_marks(app, ids)
-        note_marks(app, {"tasks": computed})
+        note_marks(app, {"tasks": computed}, seen)
+        note_confirmed(app)
     elif title_is_current(app, app.view.include_all):
         show_read_error(app, error)
 
@@ -351,7 +414,7 @@ def show_marks(app: "DashboardApp", ids) -> None:
     marks = shown_marks(app)
     for task in app.snapshot["tasks"]:
         if task["session_id"] in wanted and task["session_id"] in present:
-            row = tui.task_row(task, app.read_at, marks)
+            row = tui.task_row(task, app.read_at, marks, app.old_ids)
             for column, cell in zip(tui.OVERVIEW_COLUMNS, row_cells(row)):
                 table.update_cell(row["session_id"], column, cell)
 
@@ -360,7 +423,7 @@ def show_table(app: "DashboardApp", snapshot: dict, now: dt.datetime, issued_all
     """Rows, header and sub-title of ``snapshot`` with the marks as last read, sorted by the activity as
     last read: the table waits for neither."""
     marks = shown_marks(app)
-    rows = tui.overview_rows(snapshot, now, marks, app.activity)
+    rows = tui.overview_rows(snapshot, now, marks, app.activity, app.old_ids)
     app.query_one("#overview-head", Static).update(Text(tui.overview_header(snapshot, now, marks,
                                                                             counted_marks(app))))
     ids = tuple(row["session_id"] for row in rows)
@@ -375,6 +438,16 @@ def show_table(app: "DashboardApp", snapshot: dict, now: dt.datetime, issued_all
         app.sub_title = f"{mode_title(app.view.include_all, len(ids))}, read {now:%H:%M:%S}"
         if app.chat_error is not None:
             app.sub_title += f"; read failed: {app.chat_error}"
+
+
+def paint_stored(app: "DashboardApp", section: dict) -> None:
+    """Paint the table the snapshot stored, every wait cell behind ``~`` until the live check replaces it."""
+    stored, now = section["snapshot"], app.clock()
+    app.stored, app.activity = section["marks"], dict(section["activity"])
+    app.old_ids = frozenset(tui.stored_ids(stored, app.stored))
+    show_table(app, stored, now, app.view.include_all)
+    app.rows_noted = True
+    note(app, "rows_painted", from_snapshot=True, rows=len(app.view.session_ids))
 
 
 def show_tree_loading(app: "DashboardApp") -> None:
@@ -519,8 +592,18 @@ class DashboardApp(App):
         Binding(key, f"chat_key('{key}')", priority=True, show=False) for key in sorted(tui.CHAT_KEYS)]
 
     def __init__(self, *, state_root, cost_log, transcripts_root=None, window_hours=24.0, include_all=False,
-                 sessions=(), interval=tui.DEFAULT_INTERVAL_S, clock=utc_now, locator=None):
+                 sessions=(), interval=tui.DEFAULT_INTERVAL_S, clock=utc_now, locator=None, snapshot_path=None):
+        """``snapshot_path`` names the snapshot file the start paints from and the exit writes; None keeps
+        the dashboard from reading or writing any."""
         super().__init__()
+        self.snapshot_path = snapshot_path
+        self.started = snapshot_path is None
+        self.stored: dict | None = None
+        self.old_ids: frozenset = frozenset()
+        self.session_activity: dict = {}
+        self.snapshot_all = include_all
+        self.first_confirmed = False
+        self.old_cleared = False
         self.state_root, self.cost_log, self.transcripts_root = state_root, cost_log, transcripts_root
         self.window_hours, self.sessions, self.interval, self.clock = window_hours, list(sessions), interval, clock
         self.locator = locator
@@ -570,8 +653,43 @@ class DashboardApp(App):
         table = self.query_one(DataTable)
         for name in tui.OVERVIEW_COLUMNS:
             table.add_column(name, key=name)
-        self.reload()
+        if self.snapshot_path is None:
+            self.reload()
+        else:
+            self.install_sigterm()
+            self.run_worker(self._start(), group="start")
         self.set_interval(max(min(self.interval, TICK_S), 0.05), self._tick)
+
+    def install_sigterm(self) -> None:
+        """SIGTERM ends the app like the quit key, so the snapshot is written on the way out."""
+        try:
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, self.exit)
+        except (NotImplementedError, RuntimeError, ValueError):
+            pass
+
+    async def _start(self) -> None:
+        """Paint the rows the snapshot holds for this selection, behind ``~``, then read live."""
+        key = snapshot_store.selection_key(self.view.include_all, self.window_hours, self.sessions)
+        section, _ = await in_daemon_thread(lambda: attempt(lambda: tui.restore_snapshot(self.snapshot_path, key)))
+        if section is not None:
+            paint_stored(self, section)
+        self.started = True
+        self.reload()
+
+    def save_snapshot(self) -> Path | None:
+        """Write the snapshot of the screen last shown; nothing when no live read has landed yet, so a start
+        that was cut short keeps the earlier snapshot."""
+        if self.snapshot_path is None or self.snapshot is None or self.snapshot_all != self.view.include_all:
+            return None
+        key = snapshot_store.selection_key(self.snapshot_all, self.window_hours, self.sessions)
+        section = tui.snapshot_section(self.snapshot, shown_marks(self) or {"tasks": {}, "sessions": []},
+                                       self.activity, self.read_at)
+        try:
+            path = tui.write_snapshot(self.snapshot_path, key, section)
+        except OSError:
+            return None
+        events.emit("snapshot_written", path=str(path))
+        return path
 
     def _tick(self) -> None:
         refresh_if_due(self)
@@ -595,7 +713,7 @@ class DashboardApp(App):
         except Exception as exc:
             self._failed(exc)
             return
-        self.snapshot, self.read_at = snapshot, now
+        self.snapshot, self.read_at, self.snapshot_all = snapshot, now, include_all
         self.cycles = [*self.cycles[-(KEPT_CYCLES - 1):], (snapshot, cycle)]
         show_table(self, snapshot, now, include_all)
         if not self.rows_noted:
@@ -603,6 +721,7 @@ class DashboardApp(App):
             note(self, "rows_painted", from_snapshot=False, rows=len(snapshot["tasks"]))
         self._finish_load()
         start_order_read(self, snapshot, include_all)
+        start_overlay_read(self, snapshot, include_all)
 
     def _finish_load(self) -> None:
         self._loading = False
@@ -688,10 +807,18 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.events:
         events.enable_path(args.events)
-    DashboardApp(state_root=args.state_root, cost_log=args.cost_log, transcripts_root=args.transcripts_root,
-                 window_hours=args.window_hours, include_all=args.include_all, sessions=args.sessions,
-                 interval=args.interval, locator=locate.select_or_none(args.plugin_dir, args.locator)).run()
+    app = DashboardApp(state_root=args.state_root, cost_log=args.cost_log, transcripts_root=args.transcripts_root,
+                       window_hours=args.window_hours, include_all=args.include_all, sessions=args.sessions,
+                       interval=args.interval, locator=locate.select_or_none(args.plugin_dir, args.locator),
+                       snapshot_path=snapshot_store.default_path())
+    run_app(app)
     return 0
+
+
+def run_app(app: DashboardApp, **run_options) -> None:
+    """Run ``app`` to its exit (the quit key or SIGTERM), then write its snapshot."""
+    app.run(**run_options)
+    app.save_snapshot()
 
 
 if __name__ == "__main__":
