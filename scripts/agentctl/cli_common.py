@@ -766,7 +766,12 @@ def _renew_arming(state: SessionState, store: StateStore, args, arming: dict, ac
     """A user act that approves no plan version, on the segment it concerns: book, close the
     arming, open the next from zero. A migrated window or the closing segment opens nothing."""
     ledger = state.effort_segments
-    if effort_segments.window_arming(ledger) is not None or arming["segment"] == effort_segments.CLOSING:
+    if effort_segments.window_arming(ledger) is not None:
+        if act == effort_segments.ACT_FIRE_ACK_BY_USER or (
+                act == effort_segments.ACT_ORDER_AGREE and not state.all_stages_settled()):
+            _switch_window(state, store, args, by, act)
+        return None
+    if arming["segment"] == effort_segments.CLOSING:
         return None
     _refresh_spend(state, store, _cost_rows(args), state.plan_path)
     now = _utcnow()
@@ -779,6 +784,54 @@ def _renew_arming(state: SessionState, store: StateStore, args, arming: dict, ac
     renewed["title"] = arming.get("title")
     renewed["tier_ladder"] = effort.tier_ladder(thr)
     return renewed
+
+
+def _switch_budget(state: SessionState, thr: Thresholds) -> dict:
+    """The planning line's budget at a migrated session's switch: the whole-plan estimate the
+    window was judged against less the tier budgets that estimate priced for the stages pending
+    or live now, per scale and never below zero. A stage the switching approval dropped is not
+    pending and one it added was never priced, so neither subtracts; a re-tiered stage subtracts
+    the tier it was priced at."""
+    priced = (state.effort_migrated or {}).get("priced") or {}
+    estimate = priced.get("estimate") or {}
+    stash = priced.get("stages") or {}
+    left = {effort_segments.SCALE_USD: float(estimate.get(effort.SCALE_SPEND) or 0.0),
+            effort_segments.SCALE_MINUTES: float(estimate.get(effort.SCALE_WALL_CLOCK) or 0.0)}
+    for stage in state.stages:
+        uid = state.stage_uid(stage.index)
+        entry = stash.get(uid) if uid else None
+        if entry is None or is_settled(stage):
+            continue
+        tier, spawn = entry
+        tier_budget = effort.stage_budget(tier, thr)
+        if spawn:
+            left[effort_segments.SCALE_USD] -= tier_budget[effort_segments.SCALE_USD]
+        left[effort_segments.SCALE_MINUTES] -= tier_budget[effort_segments.SCALE_MINUTES]
+    return {scale: max(0.0, value) for scale, value in left.items()}
+
+
+def _refresh_priced_stash(state: SessionState) -> None:
+    """An approval by the agent moves the window's estimate to the approved plan: what it priced is
+    what the switch later takes out of the planning line."""
+    if state.effort_migrated and effort_segments.window_arming(state.effort_segments) is not None:
+        state.effort_migrated["priced"] = effort.priced_snapshot(state)
+
+
+def _switch_window(state: SessionState, store: StateStore, args, by: str, act: str) -> None:
+    """The user decides a migrated session's whole-window judgment: book, give the window arming
+    the A9 budget and close it (the window rule has no retier record), then hand the interval to
+    the live stage, opened from zero, or to closing when none is pending."""
+    ledger = state.effort_segments
+    window = effort_segments.window_arming(ledger)
+    if window is None:
+        return
+    _refresh_spend(state, store, _cost_rows(args), state.plan_path)
+    now = _utcnow()
+    window["budget"] = _switch_budget(state, Thresholds())
+    _acknowledge_arming_fire(state, window, by, act, now)
+    effort_segments.close_arming(
+        ledger, window["arming_id"], act, now, float(Thresholds().effort_divergence_multiple()))
+    _hand_on_after_approval(state, now, act)
 
 
 def _close_armings_at_user_approval(state: SessionState, store: StateStore, args, by: str, now: float) -> list[dict]:
@@ -951,6 +1004,108 @@ def _closing_arming_figures(state: SessionState) -> dict | None:
         "open_fire": fire,
         "text": text,
     }
+
+
+def _scale_sum(armings: list[dict], pick) -> dict:
+    return {scale: sum(float(pick(a)[scale]) for a in armings) for scale in effort_segments.SCALES}
+
+
+def _budget_sum(armings: list[dict]) -> dict | None:
+    budgets = [a["budget"] for a in armings if a.get("budget")]
+    if not budgets:
+        return None
+    return {scale: sum(float(b.get(scale) or 0.0) for b in budgets) for scale in effort_segments.SCALES}
+
+
+def _multiples(actual: dict, budget: dict | None) -> dict | None:
+    if not budget:
+        return None
+    return {scale: (actual[scale] / budget[scale] if budget.get(scale) else None)
+            for scale in effort_segments.SCALES}
+
+
+_FIGURE_UNITS = ((effort_segments.SCALE_USD, "spend", "USD", 2), (effort_segments.SCALE_MINUTES, "wall-clock", "min", 1))
+
+
+def _line_text(line: dict) -> str:
+    parts = []
+    for scale, label, unit, digits in _FIGURE_UNITS:
+        piece = f"{label} {line['actual'][scale]:.{digits}f}"
+        if line["budget"] is not None:
+            piece += f" of {line['budget'].get(scale, 0.0):.{digits}f}"
+            multiple = line["multiple"][scale]
+            piece += f" ({multiple:.2f}x)" if multiple is not None else ""
+        parts.append(f"{piece} {unit}")
+    carried = ""
+    if any(line["carried"][scale] for scale in effort_segments.SCALES):
+        carried = ", carried " + "/".join(f"{line['carried'][s]:.{d}f}" for s, _, _, d in _FIGURE_UNITS)
+    source = f" [{line['budget_source']}]" if line["budget_source"] else ""
+    count = f", {line['armings']} arming{'s' if line['armings'] != 1 else ''}"
+    flag = " (projected)" if line.get("projected") else ""
+    return f"{line['title']}{source}{flag}: " + ", ".join(parts) + carried + count
+
+
+def _effort_line(segment: str, armings: list[dict], *, budget: dict | None = None,
+                 projected: bool = False) -> dict:
+    """One segment's R6 line: its armings' actuals (carried plus booked) against their summed
+    budgets, the carried part shown, the closing segment's actual alone. `budget` replaces the
+    sum for the migrated planning line the switch has not yet booked."""
+    closing = segment == effort_segments.CLOSING
+    actual = _scale_sum(armings, effort_segments.arming_actual)
+    carried = _scale_sum(armings, lambda a: a["carried"])
+    own = None if closing else (budget if budget is not None else _budget_sum(armings))
+    sources = []
+    for arming in armings:
+        if arming["budget_source"] not in sources:
+            sources.append(arming["budget_source"])
+    title = next((a["title"] for a in armings if a.get("title")), None)
+    line = {
+        "segment": segment,
+        "identity": segment.removeprefix(effort_segments.STAGE_PREFIX),
+        "title": title or segment,
+        "kind": "closing" if closing else "planning" if segment == effort_segments.PLANNING else "stage",
+        "armings": len(armings),
+        "budget": own,
+        "budget_source": None if closing else armings[-1]["budget_source"],
+        "budget_sources": [] if closing else sources,
+        "actual": actual,
+        "carried": carried,
+        "multiple": _multiples(actual, own),
+    }
+    if projected:
+        line["projected"] = True
+    line["text"] = _line_text(line)
+    return line
+
+
+def _effort_disclosure(state: SessionState, *, project_switch: bool = False) -> dict | None:
+    """R6: per-segment lines, planning first and closing last, then the session total. Reads
+    booked records only; it never judges. The total's actual sums booked parts (`conserve`), its
+    budget the lines of planning and the stages. `project_switch` shows a migrated window's
+    planning line with the budget the switch would give it."""
+    ledger = state.effort_segments
+    if not ledger.get("armings"):
+        return None
+    switch = _switch_budget(state, Thresholds()) if (
+        project_switch and effort_segments.window_arming(ledger) is not None) else None
+    lines = []
+    for entry in effort_segments.timeline(ledger):
+        projected = switch is not None and entry["segment"] == effort_segments.PLANNING
+        lines.append(_effort_line(entry["segment"], entry["armings"],
+                                  budget=switch if projected else None, projected=projected))
+    booked = effort_segments.conserve(ledger)["total"]
+    budgeted = [line["budget"] for line in lines if line["budget"] is not None]
+    budget = ({scale: sum(b.get(scale, 0.0) for b in budgeted) for scale in effort_segments.SCALES}
+              if budgeted else None)
+    total = {"actual": booked, "budget": budget, "multiple": _multiples(booked, budget)}
+    migrated = state.effort_migrated is not None
+    return {"lines": lines, "total": total, "migrated": migrated,
+            "text": [line["text"] for line in lines] + [
+                "total: " + ", ".join(
+                    f"{label} {booked[scale]:.{digits}f}"
+                    + (f" of {budget[scale]:.{digits}f}" if budget else "") + f" {unit}"
+                    for scale, label, unit, digits in _FIGURE_UNITS)
+                + ("; migrated session (excluded from calibration)" if migrated else "")]}
 
 
 def _figures_instruction(figures: dict | None) -> str:
@@ -1309,6 +1464,9 @@ def _stamp_loaded(state: SessionState, store: StateStore, session_id: str, now: 
     previous = state.last_user_prompt_ts
     state.last_user_prompt_ts = now
     state.user_prompt_count = int(state.user_prompt_count or 0) + 1
+    planning = effort_segments.open_arming_of(state.effort_segments, effort_segments.PLANNING)
+    if planning is not None:
+        _budget_migrated_planning(planning)
     if not isinstance(previous, (int, float)) or now <= previous or state.node == Node.BLOCKED.value:
         return
     root = _state_dir(store)

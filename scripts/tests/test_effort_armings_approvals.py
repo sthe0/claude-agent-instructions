@@ -775,8 +775,9 @@ def test_present_plan_data_shows_closing_arming_figures_before_approve(eng):
 
     plain = eng.plan_ready(sid="plain")
     eng.review(plain, sid="plain")
-    assert shows_figures(eng.present(plain, "essence", sid="plain"))["budget"] is None
-    assert shows_figures(eng.present(plain, "full", sid="plain"))["budget"] is None
+    fallback = {seg.SCALE_USD: 6.0, seg.SCALE_MINUTES: 15.4}
+    assert shows_figures(eng.present(plain, "essence", sid="plain"))["budget"] == fallback
+    assert shows_figures(eng.present(plain, "full", sid="plain"))["budget"] == fallback
 
     eng.executing()
     eng.book(usd=2.0)

@@ -76,6 +76,8 @@ from .cli_common import (
     _close_armings_at_user_approval,
     _open_armings_after_user_approval,
     _settle_at_agent_approval,
+    _refresh_priced_stash,
+    _switch_window,
     _apply_continuation_at_approval,
     _continuation_at_approval,
     _continuation_blockers,
@@ -666,8 +668,10 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
     _adopt_order_identities(state, _identity_order, _approved_at)
     if by_agent:
         _settle_at_agent_approval(state, _approved_at)
+        _refresh_priced_stash(state)
     else:
         _note_user_approved_tiers(state)
+        _switch_window(state, store, args, args.by, effort_segments.ACT_APPROVE_BY_USER)
         _open_armings_after_user_approval(state, _closed_armings, _approved_at)
     _hand_on_after_approval(
         state, _approved_at,

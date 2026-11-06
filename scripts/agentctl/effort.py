@@ -849,6 +849,18 @@ def stage_budget(tier: str, thr: Thresholds) -> dict:
     }
 
 
+def priced_snapshot(state: SessionState) -> dict:
+    """What the current approved plan's estimate priced: the estimate itself and, per live-frame
+    stage identity, its tier and whether it was priced on the spend scale. A migrated window is
+    judged against it, so the switch can take the stages it prices out of the planning budget."""
+    stages = {}
+    for stage in state.stages:
+        uid = state.stage_uid(stage.index)
+        if uid is not None and not is_skipped(stage):
+            stages[uid] = [_stage_tier(stage), bool(stage.is_spawn())]
+    return {"estimate": dict(state.effort_estimate or {}), "stages": stages}
+
+
 def tier_ladder(thr: Thresholds) -> list:
     return [[tier, stage_budget(tier, thr)] for tier in _RETIER_TIERS]
 

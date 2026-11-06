@@ -3460,6 +3460,8 @@ def _migrate_to_effort_segments(state: "SessionState") -> None:
         for stage in frame.stages:
             state.stage_uids.setdefault(stage_uid_key(path, stage.index), new_stage_uid())
     state.assign_stage_uids()
+    if armed:
+        state.effort_migrated["priced"] = effort.priced_snapshot(state)
 
     ledger = state.effort_segments
     ledger["session_floor"] = 0.0
