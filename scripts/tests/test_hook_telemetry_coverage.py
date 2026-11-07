@@ -15,7 +15,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[1]
 INSTALLER = SCRIPTS / "install-reminder-hooks.sh"
 ENTRY_RE = re.compile(r'^\s*\("(\w+)",\s*(?:None|"[^"]*"),\s*"([^"]+)",\s*\d+\)', re.MULTILINE)
-EVENTS = {"UserPromptSubmit", "PreToolUse", "PostToolUse", "SessionStart", "Stop"}
+EVENTS = {"UserPromptSubmit", "PreToolUse", "PostToolUse", "SessionStart", "SessionEnd", "Stop"}
 FIELDS = {"ts", "mechanism", "event", "decision", "session", "test", "layer"}
 
 
@@ -23,8 +23,8 @@ def registered_entries() -> list[tuple[str, str]]:
     return ENTRY_RE.findall(INSTALLER.read_text(encoding="utf-8"))
 
 
-def test_the_installer_registers_the_43_entries():
-    assert len(registered_entries()) == 43
+def test_the_installer_registers_the_44_entries():
+    assert len(registered_entries()) == 44
 
 
 @pytest.mark.parametrize("event,command", registered_entries(),

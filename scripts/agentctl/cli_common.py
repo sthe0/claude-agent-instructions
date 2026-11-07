@@ -18,6 +18,10 @@ from contextlib import contextmanager
 from dataclasses import asdict, fields, replace
 from pathlib import Path
 from lib import argv_text, config_root, engine_session_binding, hook_telemetry
+try:
+    from lib.telemetry import live
+except Exception:  # telemetry must never stop the engine from starting
+    live = None
 from . import (
     advisor,
     carry_forward,
@@ -2319,27 +2323,50 @@ def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bo
     block rate has a real denominator. The call also appends one engine row to the
     decision log (docs/operations/decision-telemetry.md)."""
     try:
-        _append_jsonl(config_root.decision_log(), hook_telemetry.decision_row(
-            f"engine:{gate}", "engine", "silent" if passed else "deny", state.session_id, layer="engine"))
+        decision = hook_telemetry.decision_row(
+            f"engine:{gate}", "engine", "silent" if passed else "deny", state.session_id, layer="engine")
+        decision_backref = _append_jsonl(config_root.decision_log(), decision)
     except Exception:
-        pass
-    _append_jsonl(GATE_LOG, {
+        decision_backref = None
+    if decision_backref is not None:  # an event only for a row that reached the decision log
+        try:
+            live.emit_event(state.session_id, "decision", f"hook:{decision['mechanism']}",
+                            hook_telemetry.decision_event_fields(decision), decision_backref)
+        except Exception:  # telemetry is fail-open
+            pass
+    row = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "session": state.session_id,
         "node": state.node,
         "gate": gate,
         "blockers": list(blockers),
         "passed": passed,
-    })
+    }
+    backref = _append_jsonl(GATE_LOG, row)
+    try:
+        live.emit_event(state.session_id, "gate", f"gate:{gate}", {
+            "session": state.session_id, "verb": live.current_verb(), "gate": gate,
+            "outcome": "pass" if passed else "refuse", "time": row["ts"],
+        }, backref)
+    except Exception:  # telemetry is fail-open; `live` is None when it could not be imported
+        pass
 
 
-def _append_jsonl(path: Path, row: dict) -> None:
+def _append_jsonl(path: Path, row: dict) -> "tuple[str, int, str] | None":
+    """Append one JSON line; its back-reference, or None when the write failed."""
+    data = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        if live is not None:
+            return live.append_line(path, data, mode=0o666)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666)
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
+        return None
     except OSError:
-        pass
+        return None
 
 
 def _attach_advisories(d: Directive, kind: str, payload: dict, runner: Runner | None,
@@ -3501,6 +3528,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("task", ("start", "reset", "push-subplan", "task-reset"), "task slug, not a description"),
     ("child", ("adopt-escalation",), "session id of the linked child"),
     ("criterion_type", ("start", "reset"), "one of two fixed verification kinds"),
+    ("continue_epoch", ("reset",), "event id of the open task row to continue — an id, not narrative"),
     ("plugin", ("plugin-activate", "plugin-deactivate", "plugin-record"), "plugin registry name"),
     ("phase", ("plugin-record",), "plugin phase name from a fixed vocabulary"),
     ("attachment", ("plugin-record",), "ticket attachment id or URL, not a file to read"),

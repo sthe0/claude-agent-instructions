@@ -33,7 +33,8 @@ existing (untouched) ``runner(...)`` call, and ``subprocess_runner`` reads it
 back with ``take_current_judge()`` — consume-once, so the carrier attributes
 one call and never leaks a stale name onto the next.
 
-This module imports the standard library and ``lib.config_root`` only, and
+This module imports the standard library, ``lib.config_root`` and ``lib.telemetry.live``
+(which itself imports only emit, config_root and the standard library), and
 config_root is itself stdlib-only. That is load-bearing, not incidental: each
 hook imports this module FIRST and wraps its every later import in a
 try/except reporting through ``import_failed()`` below, so these two modules
@@ -43,6 +44,7 @@ residue does not grow.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -52,6 +54,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lib import config_root
+
+try:
+    from lib.telemetry import live
+except Exception:
+    live = None
+
+# Every judge name a call site passes to set_current_judge / begin_attributed_call, plus the
+# name subprocess_runner files an unclaimed call under; a judge event's source key is
+# "judge:" plus one of these.
+JUDGE_NAMES = frozenset({
+    "enumerate_claims", "judge", "acceptance_judge", "binary_ask", "same_difficulty",
+    "published_attachment", "published_text_rules", "feedback_signal", "user_question",
+    "resolution_confirmation", "outage_escalation", "silent_closure", "deferring_disposition",
+    "landing_discipline", "question_materiality", "approval_ask", "code_effects",
+    "grounding_link", "order_quote", "unattributed",
+})
 
 # Ceiling on one ledger line. NOT an atomicity mechanism — O_APPEND is what
 # keeps concurrent writers from interleaving, and PIPE_BUF (4096) governs pipes,
@@ -188,7 +206,9 @@ def _source_from_payload(payload) -> str:
     return "manual"
 
 
-def _write(kind: str, **fields) -> None:
+def _write(kind: str, **fields) -> "tuple[str, int, str] | None":
+    """Append one ledger line; returns its back-reference (path, offset, sha256), None when
+    the write failed."""
     # EVERYTHING is inside the try, serialization and path resolution included:
     # a ledger write must never be the reason a hook fails open in a NEW way —
     # the hooks this module instruments already fail open on their own account,
@@ -211,11 +231,13 @@ def _write(kind: str, **fields) -> None:
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         try:
             _write_all(fd, encoded)
+            end = os.lseek(fd, 0, os.SEEK_CUR)
             os.fsync(fd)
         finally:
             os.close(fd)
+        return str(path), end - len(encoded), hashlib.sha256(encoded).hexdigest()
     except Exception:
-        pass
+        return None
 
 
 def _encode(record: dict) -> bytes:
@@ -390,7 +412,7 @@ def call(
     subprocess_runner sent this judge — always known here since
     subprocess_runner is the sole call site, unlike ``decided`` where a
     budget/killswitch/no_text/no_runner stage never built a prompt at all."""
-    _write(
+    backref = _write(
         "call",
         judge=judge,
         timed_out=bool(timed_out),
@@ -399,6 +421,17 @@ def call(
         raised=raised,
         prompt_chars=prompt_chars,
     )
+    if live is None:
+        return
+    try:
+        live.emit_event(
+            current_source(), "judge", f"judge:{judge}",
+            {"judge": judge, "timed_out": bool(timed_out), "duration": duration, "returncode": returncode,
+             "prompt_chars": prompt_chars, "invocation_id": current_invocation_id()},
+            backref,
+        )
+    except Exception:
+        pass
 
 
 def final(*, has_directive: bool) -> None:

@@ -15,6 +15,9 @@ is not a share of anything.
 
   --half-life D     half-life in days (default: config.md `time-profile-half-life-days`)
   --by-sha          the same figures per Core sha
+  --source S        `auto` (default): engine-node dwell comes from the telemetry record for each
+                    session it holds command events for, from the engine state files for the
+                    rest; `transcripts` forces the state-file path and never opens the record
   --format json     machine-readable
   --uncertainty     per heavy component: reconstruction interval, cross-source agreement,
                     coverage and an instrument / wait verdict; --format md (default) | json;
@@ -74,8 +77,8 @@ def _payload_of(agg: time_profile.Aggregate, run) -> dict:
     }
 
 
-def build_payload(run, half_life: float | None, by_sha: bool) -> dict:
-    payload = _payload_of(time_profile.aggregate(run.profiles, half_life_days=half_life), run)
+def build_payload(run, half_life: float | None, by_sha: bool, now_ms: int | None = None) -> dict:
+    payload = _payload_of(time_profile.aggregate(run.profiles, half_life_days=half_life, now_ms=now_ms), run)
     if by_sha:
         payload["groups"] = [
             {"core_sha": sha, **group.to_dict()}
@@ -240,6 +243,9 @@ def main(argv: list[str] | None = None, *, run=None) -> int:
                              "board items carry `mechanism` (stage 4)")
     parser.add_argument("--half-life", type=float, metavar="D", help="half-life in days (default: from config.md)")
     parser.add_argument("--by-sha", action="store_true", help="also group the figures per Core sha")
+    parser.add_argument("--source", choices=("auto", "transcripts"), default="auto",
+                        help="auto (default): read the telemetry record when one exists and report the source; "
+                             "transcripts: force the transcript / engine-state path and ignore the record")
     parser.add_argument("--check", action="store_true", help="verify the data is sound; exit 1 if not")
     parser.add_argument("--max-skip-fraction", type=float, default=DEFAULT_MAX_SKIP_FRACTION,
                         help=f"--check fails above this skipped fraction (default {DEFAULT_MAX_SKIP_FRACTION})")
@@ -252,7 +258,8 @@ def main(argv: list[str] | None = None, *, run=None) -> int:
         parser.error("--uncertainty renders --format md (default) or json")
     if args.format == "md" and not args.uncertainty:
         parser.error("--format md is only for --uncertainty")
-    run = run if run is not None else time_profile.profile_all()
+    source_known = run is None
+    run = run if run is not None else time_profile.profile_all(source=args.source)
     if args.uncertainty:
         report = uncertainty_payload(run, args.half_life)
         md = render_uncertainty_md(report)
@@ -260,6 +267,8 @@ def main(argv: list[str] | None = None, *, run=None) -> int:
         print(json.dumps(_rounded(report), indent=2, sort_keys=True) if args.format == "json" else md)
         return 0
     payload = build_payload(run, args.half_life, args.by_sha)
+    if source_known:
+        payload["source"] = run.source
     if args.check:
         problems = check(run, payload, args.max_skip_fraction)
         print(f"profiled: {len(run.profiles)}, skipped: {len(run.skipped)}")
@@ -272,7 +281,7 @@ def main(argv: list[str] | None = None, *, run=None) -> int:
     if args.format == "json":
         print(json.dumps(_rounded(payload), indent=2, sort_keys=True))
     else:
-        print(render_text(payload))
+        print(render_text(payload) + (f"\nsource: {payload['source']}" if "source" in payload else ""))
     return 0
 
 

@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 # Re-exported: read as agentctl.cli.<name> by tests.
 from lib import hook_telemetry
+from lib.telemetry import recorder
 from . import (
     gates,
     grants as _grants,
@@ -385,12 +386,14 @@ def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
         else FileStateStore(Path(args.state_root) if args.state_root else None)
     )
     fn = COMMANDS[args.command]
+    recording = recorder.begin(args.command, session, store)
     try:
         directive = fn(args, store=store)
     except Exception as exc:  # surface as a failed directive, not a traceback
         directive = Directive(False, "(error)", "error", str(exc))
     else:
         _fire_plugins(args, store, directive)
+    recorder.finish(recording, args, store, directive)
     if harness and session and session != harness and not _is_followed_by_gate(harness, session):
         print(
             f"agentctl: warning: --session {session!r} differs from "

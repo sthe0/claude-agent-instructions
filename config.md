@@ -62,5 +62,6 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `resource-grant-judge-timeout-s` | `15` | Seconds the opaque-code judge may run; at most `resource-grant-hook-timeout-s` minus 5. |
 | `resource-estimate-drift-repeat` | `2` | Distinct tasks in which one executor kind's resource request must under-estimate before self-diagnosis proposes an edit to that kind's skill. |
 | `time-profile-half-life-days` | `7` | Half-life in days of the session age weight in `agent-report.py time-profile`; a session this old counts half as much as one that just ended. |
+| `telemetry-prune-retention-days` | `70` | Age in days beyond which `telemetry.py prune` deletes sync and decision rows of the telemetry record; per-task aggregate rows are never pruned. |
 
 Per-machine values live uncommitted beside this file (`agent-identity.local`, `term-rulesets/*.toml`); see `docs/operations/config-rationale.md` and `docs/operations/org-portability.md`.

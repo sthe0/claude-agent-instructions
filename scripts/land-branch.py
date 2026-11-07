@@ -99,6 +99,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -106,6 +107,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lib import instruction_smoke_gate as gate  # noqa: E402
 from lib import suite_gate  # noqa: E402
+try:
+    from lib.telemetry import live  # noqa: E402
+except Exception:  # telemetry must never stop a landing
+    live = None
+
+
+def _emit_landing(phase: str, session, payload: dict) -> None:
+    """One landing event; fail-open, a no-op when the telemetry layer could not be imported."""
+    try:
+        live.emit_landing(phase, session, payload)
+    except Exception:
+        pass
 
 AGENTCTL_CLI = Path(__file__).resolve().parent / "agentctl-cli.py"
 
@@ -473,10 +486,16 @@ def _do_land(repo_root, assessment: Assessment, smoke_timeout=gate.DEFAULT_TIMEO
     remote, branch, trunk, sha = (
         assessment.remote, assessment.branch, assessment.trunk, assessment.branch_sha
     )
+    began = time.perf_counter()
+    _emit_landing("start", session, {"branch": branch, "tip": sha, "trunk": trunk, "remote": remote})
 
     refusal, remote_tip = _fetch_tip(repo_root, assessment)
     if refusal is None:
+        suite_began = time.perf_counter()
         refusal, suite_line = _suite_gate(repo_root, assessment, remote_tip, suite_timeout, suite_waiver, suite_runner)
+        _emit_landing("suite_gate", session, {
+            "branch": branch, "tip": sha, "outcome": "refused" if refusal else "passed",
+            "duration_s": round(time.perf_counter() - suite_began, 3)})
     if refusal is None:
         print(suite_line)
         refusal, smoke_line = _smoke_gate(
@@ -487,7 +506,11 @@ def _do_land(repo_root, assessment: Assessment, smoke_timeout=gate.DEFAULT_TIMEO
         return 2
     print(smoke_line)
 
+    push_began = time.perf_counter()
     push_landing = _git(["push", remote, f"{branch}:{trunk}"], repo_root)
+    _emit_landing("attempt", session, {
+        "branch": branch, "tip": sha, "outcome": "pushed" if push_landing.returncode == 0 else "failed",
+        "duration_s": round(time.perf_counter() - push_began, 3)})
     if push_landing.returncode != 0:
         print(
             f"[land-branch] push {branch}:{trunk} to {remote} FAILED (nothing else "
@@ -537,6 +560,9 @@ def _do_land(repo_root, assessment: Assessment, smoke_timeout=gate.DEFAULT_TIMEO
         _cleanup_local_branch(repo_root, branch)
 
     if recorded and delete_ok and branch_f_ok:
+        _emit_landing("landed", session, {
+            "branch": branch, "tip": sha, "pushed_head": sha, "fetched_base": remote_tip,
+            "duration_s": round(time.perf_counter() - began, 3)})
         print(f"[land-branch] landed {branch} onto {trunk} ({sha})")
         return 0
     return 3

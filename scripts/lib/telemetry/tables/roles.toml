@@ -1,0 +1,21 @@
+version = 1
+
+[[members]]
+name = "root"
+since = 1
+
+[[members]]
+name = "linked-child"
+since = 1
+
+[[members]]
+name = "spawned-child"
+since = 1
+
+[[members]]
+name = "judge"
+since = 1
+
+[[members]]
+name = "agent-tool"
+since = 1

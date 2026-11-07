@@ -1,0 +1,37 @@
+version = 1
+
+[[members]]
+name = "order"
+since = 1
+
+[[members]]
+name = "planning"
+since = 1
+
+[[members]]
+name = "plan_review"
+since = 1
+
+[[members]]
+name = "execution"
+since = 1
+
+[[members]]
+name = "verification"
+since = 1
+
+[[members]]
+name = "difficulty"
+since = 1
+
+[[members]]
+name = "landing"
+since = 1
+
+[[members]]
+name = "resolution"
+since = 1
+
+[[members]]
+name = "other"
+since = 1
