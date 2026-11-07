@@ -1,0 +1,10 @@
+#!/bin/sh
+# Stand-in for the arc launcher in tests. The real launcher, run under a fresh HOME,
+# downloads a release (tens of GB) before it answers; this one answers as arc does for a
+# directory that is not inside any mount, and touches nothing.
+case "${1-}" in
+    --version) echo "arc (test stub)"; exit 0 ;;
+    --is-launcher) exit 0 ;;
+esac
+echo "stub launcher: unsupported invocation" >&2
+exit 1

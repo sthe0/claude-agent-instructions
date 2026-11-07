@@ -1,0 +1,96 @@
+{
+ "base": "f35e45333e7319fbf7bc12f5b08bf8edb456b18b",
+ "canary_id": "scripts/tests/canary_arc_launcher.py::test_launcher_run_downloads_nothing",
+ "commit": "a5652d1ab6e0ae421507478e02dbc49f1165323c",
+ "deleted_tests": {},
+ "entries": {
+  "gate": {
+   "aborted": "",
+   "arc_paths": [
+    {
+     "bytes": 189371278,
+     "path": "tmp/pytest-of-the0/pytest-0/test_launcher_run_downloads_no0/home/.arc"
+    }
+   ],
+   "canary_outcome": "passed",
+   "exit": 0,
+   "flaky": [
+    "scripts/tests/test_order_agreement_e2e.py::test_a_headless_session_is_exempt_and_takes_a_plan_without_agreement"
+   ],
+   "gate": {
+    "baseline_cache": "hit",
+    "gate_exit": 1,
+    "new_failures": [
+     "scripts/tests/test_host_llm.py::test_probe_ancestor_walk_finds_planted_project_context",
+     "scripts/tests/test_leaf_forms.py::test_given_source_root_global_is_core_repo",
+     "scripts/tests/test_order_agreement_e2e.py::test_a_cursor_session_is_exempt_and_takes_a_plan_without_agreement",
+     "scripts/tests/test_order_agreement_e2e.py::test_a_headless_session_is_exempt_and_takes_a_plan_without_agreement",
+     "scripts/tests/test_order_agreement_e2e.py::test_a_linked_child_is_exempt_and_takes_a_plan_without_agreement"
+    ],
+    "status": "FAIL",
+    "unconfirmed": [
+     "scripts/tests/test_order_agreement_e2e.py::test_an_edited_constraint_is_refused_at_every_act_that_takes_a_plan"
+    ]
+   },
+   "launcher_records": [
+    {
+     "args": "--version",
+     "pid": "4117806",
+     "test": "scripts/tests/canary_arc_launcher.py::test_launcher_run_downloads_nothing (call)"
+    },
+    {
+     "args": "root",
+     "pid": "4162663",
+     "test": "scripts/tests/test_ledger_stamp.py::test_hook_now_ledgers_memory_write_while_touched_paths_stays_empty (call)"
+    }
+   ],
+   "lost_ids": [],
+   "new_failures": [
+    "scripts/tests/test_order_agreement_e2e.py::test_a_headless_session_is_exempt_and_takes_a_plan_without_agreement"
+   ],
+   "new_skips": [],
+   "now_passing": [
+    "scripts/tests/test_order_agreement_e2e.py::test_a_challenge_blocks_approval_until_the_user_dismisses_it",
+    "scripts/tests/test_order_agreement_e2e.py::test_a_new_agreement_closes_an_open_challenge",
+    "scripts/tests/test_order_agreement_e2e.py::test_a_sub_plan_is_not_held_to_the_parents_agreement"
+   ],
+   "other_phase_launcher_records": 0,
+   "total_ids": 15861,
+   "wall_s": 1644.0
+  },
+  "plain": {
+   "aborted": "",
+   "arc_paths": [
+    {
+     "bytes": 189371282,
+     "path": "tmp/pytest-of-the0/pytest-443/test_launcher_run_downloads_no0/home/.arc"
+    }
+   ],
+   "canary_outcome": "passed",
+   "exit": 1,
+   "flaky": [
+    "scripts/tests/test_order_agreement_e2e.py::test_a_cursor_session_is_exempt_and_takes_a_plan_without_agreement",
+    "scripts/tests/test_order_agreement_e2e.py::test_a_linked_child_is_exempt_and_takes_a_plan_without_agreement",
+    "scripts/tests/test_order_agreement_e2e.py::test_a_sub_plan_is_not_held_to_the_parents_agreement"
+   ],
+   "launcher_records": [
+    {
+     "args": "--version",
+     "pid": "3150825",
+     "test": "scripts/tests/canary_arc_launcher.py::test_launcher_run_downloads_nothing (call)"
+    }
+   ],
+   "lost_ids": [],
+   "new_failures": [
+    "scripts/tests/test_order_agreement_e2e.py::test_a_cursor_session_is_exempt_and_takes_a_plan_without_agreement",
+    "scripts/tests/test_order_agreement_e2e.py::test_a_linked_child_is_exempt_and_takes_a_plan_without_agreement",
+    "scripts/tests/test_order_agreement_e2e.py::test_a_sub_plan_is_not_held_to_the_parents_agreement"
+   ],
+   "new_skips": [],
+   "now_passing": [],
+   "total_ids": 15861,
+   "wall_s": 999.9
+  }
+ },
+ "schema": 1
+}
