@@ -45,6 +45,10 @@ class _NoSkipGuard:
         self.enabled = False
         self.not_run = 0
 
+    def pytest_addoption(self, parser):
+        parser.addoption(NO_SKIP_OPTION, action="store_true", default=False,
+                         help="exit non-zero when any collected test is skipped or xfailed")
+
     def pytest_configure(self, config):
         self.enabled = bool(config.getoption(NO_SKIP_OPTION))
 
@@ -57,10 +61,10 @@ class _NoSkipGuard:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
-@pytest.hookimpl(specname="pytest_addoption")
-def _telemetry_addoption(parser, pluginmanager):
-    parser.addoption(NO_SKIP_OPTION, action="store_true", default=False,
-                     help="exit non-zero when any collected test is skipped or xfailed")
+def pytest_addhooks(pluginmanager):
+    # This conftest's pytest_addoption must stay slow_selection's own function
+    # (test_slow_selection pins that), so the no-skip option rides on a separate plugin;
+    # pytest_addoption is historic, so a plugin registered here still adds its option.
     if not pluginmanager.has_plugin("telemetry-no-skip"):
         pluginmanager.register(_NoSkipGuard(), "telemetry-no-skip")
 
