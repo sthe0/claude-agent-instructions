@@ -225,7 +225,12 @@ def _open(deadline: _Deadline) -> sqlite3.Connection:
         raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
     record = config_root.telemetry_db()
     emit.ensure_private_dir(record.parent)
-    os.close(os.open(record, os.O_RDWR | os.O_CREAT, RECORD_MODE))
+    # Create the file owner-only, but never open an existing one: closing any descriptor of
+    # the record drops every POSIX lock this process holds on it, a held reader's included.
+    try:
+        os.close(os.open(record, os.O_RDWR | os.O_CREAT | os.O_EXCL, RECORD_MODE))
+    except FileExistsError:
+        pass
     conn = sqlite3.connect(str(record), timeout=0, isolation_level=None)
     try:
         _set_busy(conn, deadline.busy_ms())

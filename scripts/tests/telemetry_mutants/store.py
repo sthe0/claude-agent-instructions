@@ -147,4 +147,8 @@ MUTANTS = [
      "anchor": '            result["deferred"] = True\n            return',
      "replacement": '            result["deferred"] = True\n            result["drained"] = True\n            return',
      "tests": [_STORE_TESTS + "test_replay_stopped_at_deadline_returns_not_drained"]},
+    {"name": "open_touches_existing_record", "file": _STORE_FILE,
+     "anchor": "os.O_RDWR | os.O_CREAT | os.O_EXCL, RECORD_MODE",
+     "replacement": "os.O_RDWR | os.O_CREAT, RECORD_MODE",
+     "tests": [_STORE_TESTS + "test_read_write_open_keeps_a_held_reader_locks"]},
 ]

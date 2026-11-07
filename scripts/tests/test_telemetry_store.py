@@ -5,6 +5,8 @@ import fcntl
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import threading
 import uuid
 from pathlib import Path
@@ -109,6 +111,35 @@ def test_record_created_owner_only_under_config_root(tmp_path, monkeypatch):
     assert oct(store._side_file(record).stat().st_mode & 0o777) == oct(0o600)
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     conn.close()
+
+
+_OTHER_WRITER = """
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1], isolation_level=None)
+conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('other-writer', 'x')")
+conn.close()
+"""
+
+
+def test_read_write_open_keeps_a_held_reader_locks():
+    """POSIX drops every fcntl lock a process holds on a file when it closes ANY descriptor
+    of that file. A read-write open that touches the existing record outside SQLite thus
+    cancels the locks of a reader the same process holds, and another process closing its
+    connection then deletes -wal and -shm under that reader."""
+    _create_record()
+    record = config_root.telemetry_db()
+    reader = store.open_readonly()
+    assert reader is not None
+    try:
+        reader.execute("SELECT count(*) FROM meta").fetchone()
+        writer = store.open_record()
+        assert writer is not None
+        writer.close()
+        subprocess.run([sys.executable, "-c", _OTHER_WRITER, str(record)], check=True, timeout=60)
+        assert Path(str(record) + "-shm").exists(), "-shm deleted under a held reader"
+        assert reader.execute("SELECT value FROM meta WHERE key = 'other-writer'").fetchone()[0] == "x"
+    finally:
+        reader.close()
 
 
 def test_origin_id_created_once_and_kept_in_side_file():
