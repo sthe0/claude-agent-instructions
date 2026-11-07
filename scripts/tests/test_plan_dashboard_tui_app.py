@@ -864,6 +864,34 @@ def test_a_failing_attention_or_chat_read_keeps_the_task_table_and_names_the_err
     run(scenario, root, locator=attention_locator())
 
 
+def test_a_failed_marks_read_stays_named_when_the_order_read_lands_after_it(tmp_path, monkeypatch):
+    """The order read applies a table, which rebuilds the title; a read failure named before it must survive
+    that, and go only when a later read of the same kind succeeds."""
+    root = attention_root(tmp_path)
+    real = tui.read_attention
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("locator down")
+
+    async def scenario(app, pilot):
+        monkeypatch.setattr(tui, "read_attention", boom)
+        release, calls = hold(monkeypatch, tui, "read_order")
+        try:
+            await pilot.press("r")
+            assert await until(pilot, lambda: calls and not tui_app.read_in_flight(app, "overlay"))
+            assert "read failed: locator down" in app.sub_title and not release.is_set()
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert "live: " in app.sub_title and "read failed: locator down" in app.sub_title
+        monkeypatch.setattr(tui, "read_attention", real)
+        await pilot.press("r")
+        await settle(app, pilot)
+        assert "live: " in app.sub_title and "read failed" not in app.sub_title
+
+    run(scenario, root, locator=attention_locator())
+
+
 def test_the_chat_is_read_only_while_the_chat_tab_is_open(tmp_path, monkeypatch):
     root = attention_root(tmp_path)
     _, reads = gate_chat_reads(monkeypatch, None)

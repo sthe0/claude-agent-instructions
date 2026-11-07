@@ -258,6 +258,8 @@ def mode_title(include_all: bool, count: int) -> str:
 
 def announce_loading(app: "DashboardApp", include_all: bool) -> None:
     """Say at once that the list is being read again: listing every task takes seconds."""
+    for kind in ("overlay", "order", "marks"):
+        note_read(app, kind, None)
     app.sub_title = f"loading {'all' if include_all else 'live'} tasks…"
 
 
@@ -279,11 +281,9 @@ async def read_chat_for(app: "DashboardApp", target) -> None:
 def chat_ready(app: "DashboardApp", target, chat: dict | None, error: Exception | None) -> None:
     if not chat_is_current(app.view.chat, target) or app.view.tab != "chat":
         return
-    app.chat_error = error
+    show_read_error(app, "chat", error)
     if chat is not None:
         show_chat(app.query_one("#chat-scroll", VerticalScroll), app.query_one("#chat-body", Static), chat)
-    elif error is not None:
-        app.sub_title = f"{app.sub_title.split('; read failed')[0]}; read failed: {error}"
 
 
 def start_overlay_read(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
@@ -310,6 +310,8 @@ async def read_overlay_for(app: "DashboardApp", snapshot: dict, issued_all: bool
 
 def overlay_ready(app: "DashboardApp", overlay: dict | None, error: Exception | None, issued_all: bool,
                   seen) -> None:
+    if title_is_current(app, issued_all):
+        note_read(app, "overlay", error)
     if overlay is not None:
         app.overlay = overlay
         app.old_ids = app.old_ids - confirmed_by(app, overlay)
@@ -321,8 +323,6 @@ def overlay_ready(app: "DashboardApp", overlay: dict | None, error: Exception | 
             app.live_check_ended = True
             note(app, "live_check_end", applied=seen[0])
         note_confirmed(app)
-    if error is not None and title_is_current(app, issued_all):
-        show_read_error(app, error)
 
 
 def confirmed_by(app: "DashboardApp", overlay: dict) -> set[str]:
@@ -333,8 +333,24 @@ def confirmed_by(app: "DashboardApp", overlay: dict) -> set[str]:
     return set(overlay.get("tasks") or {}) | {row["harness_session"] for row in overlay.get("sessions") or ()}
 
 
-def show_read_error(app: "DashboardApp", error: Exception) -> None:
-    app.sub_title = f"{app.sub_title.split('; read failed')[0]}; read failed: {error}"
+def note_read(app: "DashboardApp", kind: str, error: Exception | None) -> None:
+    """Keep the failure of the last ``kind`` read, or drop it when that read succeeded: every table that is
+    shown rebuilds the sub-title, so a failure lives here, not in the title text, until a read of its own
+    kind succeeds."""
+    app.read_errors.pop(kind, None)
+    if error is not None:
+        app.read_errors[kind] = error
+
+
+def read_failure_suffix(app: "DashboardApp") -> str:
+    """The sub-title's ``; read failed: …`` part: the failure noted last."""
+    return f"; read failed: {next(reversed(app.read_errors.values()))}" if app.read_errors else ""
+
+
+def show_read_error(app: "DashboardApp", kind: str, error: Exception | None) -> None:
+    """Note the outcome of a ``kind`` read (``error`` None: it succeeded) and show it in the sub-title now."""
+    note_read(app, kind, error)
+    app.sub_title = app.sub_title.split("; read failed")[0] + read_failure_suffix(app)
 
 
 def start_order_read(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
@@ -364,9 +380,10 @@ def order_ready(app: "DashboardApp", snapshot: dict, order, error: Exception | N
         app.activity, app.marked = {**order.activity, **app.session_activity}, set()
         if not app.cursor_chosen:
             app.view = tui.unanchored(app.view)
+        note_read(app, "order", None)
         show_table(app, snapshot, app.read_at, issued_all)
     elif title_is_current(app, issued_all):
-        show_read_error(app, error)
+        show_read_error(app, "order", error)
     start_marks_read(app)
 
 
@@ -417,10 +434,11 @@ async def read_marks_for(app: "DashboardApp", ids: list[str], order) -> None:
         app.marks.update(computed)
         app.old_ids = app.old_ids - set(ids)
         show_marks(app, ids)
+        show_read_error(app, "marks", None)
         note_marks(app, {"tasks": computed}, seen)
         note_confirmed(app)
     elif title_is_current(app, app.view.include_all):
-        show_read_error(app, error)
+        show_read_error(app, "marks", error)
 
 
 def show_marks(app: "DashboardApp", ids) -> None:
@@ -451,9 +469,7 @@ def show_table(app: "DashboardApp", snapshot: dict, now: dt.datetime, issued_all
     if ids:
         table.move_cursor(row=app.view.cursor)
     if title_is_current(app, issued_all):
-        app.sub_title = f"{mode_title(app.view.include_all, len(ids))}, read {now:%H:%M:%S}"
-        if app.chat_error is not None:
-            app.sub_title += f"; read failed: {app.chat_error}"
+        app.sub_title = f"{mode_title(app.view.include_all, len(ids))}, read {now:%H:%M:%S}{read_failure_suffix(app)}"
 
 
 def paint_stored(app: "DashboardApp", section: dict) -> None:
@@ -516,8 +532,8 @@ def detail_ready(app: "DashboardApp", task: str, detail: dict | None, error: Exc
                  now: dt.datetime) -> None:
     if app.view.selected != task:
         return
+    show_read_error(app, "detail", error)
     if error is not None:
-        app.sub_title = f"{app.sub_title.split('; read failed')[0]}; read failed: {error}"
         return
     nodes = tui.detail_tree(detail, now) if detail is not None else tui.missing_detail_tree()
     shown = task if detail is not None else None
@@ -640,7 +656,7 @@ class DashboardApp(App):
         self.tree_task: str | None = None
         self.overlay: dict | None = None
         self.last_chat_read: dt.datetime | None = None
-        self.chat_error: Exception | None = None
+        self.read_errors: dict[str, Exception] = {}
         self.snapshot: dict | None = None
         self.read_at: dt.datetime | None = None
         self.last_detail_read: dt.datetime | None = None
@@ -780,7 +796,9 @@ class DashboardApp(App):
         if self.view.tab != self.query_one(TabbedContent).active:
             self.query_one(TabbedContent).active = self.view.tab
         if (self.view.chat, self.view.tab) != (previous.chat, previous.tab):
-            self.chat_error = None  # a read failure belongs to the chat it was read for, not to later reloads
+            note_read(self, "chat", None)  # a failure belongs to the chat it was read for, not to later reloads
+        if (self.view.selected, self.view.tab) != (previous.selected, previous.tab):
+            note_read(self, "detail", None)
         if self.view.chat != previous.chat:
             clear_chat(self.query_one("#chat-body", Static), self.view.chat)
             start_chat_read(self)
