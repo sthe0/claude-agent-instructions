@@ -151,4 +151,8 @@ MUTANTS = [
      "anchor": "os.O_RDWR | os.O_CREAT | os.O_EXCL, RECORD_MODE",
      "replacement": "os.O_RDWR | os.O_CREAT, RECORD_MODE",
      "tests": [_STORE_TESTS + "test_read_write_open_keeps_a_held_reader_locks"]},
+    {"name": "readonly_record_reaches_sqlite", "file": _STORE_FILE,
+     "anchor": "if not os.access(record, os.W_OK):",
+     "replacement": "if False:",
+     "tests": ["scripts/tests/test_telemetry_dual_write.py::test_task_runs_to_end_with_record_readonly"]},
 ]

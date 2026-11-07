@@ -230,7 +230,10 @@ def _open(deadline: _Deadline) -> sqlite3.Connection:
     try:
         os.close(os.open(record, os.O_RDWR | os.O_CREAT | os.O_EXCL, RECORD_MODE))
     except FileExistsError:
-        pass
+        # Refuse a read-only record before SQLite opens it: SQLite would fall back to a
+        # read-only open, and that state outlives the connection for the whole process.
+        if not os.access(record, os.W_OK):
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(record))
     conn = sqlite3.connect(str(record), timeout=0, isolation_level=None)
     try:
         _set_busy(conn, deadline.busy_ms())
