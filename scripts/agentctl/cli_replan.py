@@ -47,6 +47,8 @@ from .state import (
     StageStatus,
 )
 from .store import StateStore
+from . import effort_segments
+from .cli_common import _judge_and_refuse
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -86,7 +88,12 @@ from .cli_common import (
     _with_advisories,
     _submission_advice,
     _submission_problems,
+    _clear_open_fires_if_customer,
     _effort_fire_escalation_data,
+    _fire_directive_figures,
+    _note_mandated_review,
+    _renew_arming,
+    _settle_mandated_review,
     _effort_fire_refusal,
     _require,
     _clear_since_user_decision,
@@ -97,6 +104,10 @@ from .cli_common import (
     _review_cycle_arrive,
     _cost_rows,
     _refresh_spend,
+    _rematch_stage_uids,
+    _store_continuation_base,
+    continuation_decision,
+    _second_current_stage_refusal,
     _utcnow,
     _effort_now,
     _normalize_record_fields,
@@ -185,15 +196,6 @@ def _approved_snapshot_doc(state: SessionState):
         return _load_prior_plan(state, snap_path, strict=False)
     except (OSError, PlanError):
         return None
-
-
-def _clear_open_fires_if_customer(state: SessionState, by: str) -> None:
-    """A customer-authored acknowledgement is the only act that discharges the open
-    user-owed fire marker of the order (an agent-authored one never does)."""
-    key = _ledgered_order_key(state)
-    customer_id = _order_customer_id(state)
-    if key is not None and customer_id and by.strip().casefold() == customer_id.casefold():
-        order_approvals.clear_effort_fires(key)
 
 
 def _agent_fire_ack_refusal(
@@ -423,6 +425,7 @@ def _count_replan(state: SessionState, change_class: str) -> None:
     total the agent self-decision backstop reads — when it is operative. A no_change,
     bookkeeping or check-only replan changes nothing the work runs under, so it spends
     none of the budget those totals bound (the same split `effort.replan_count` makes)."""
+    _settle_mandated_review(state, change_class == effort.OPERATIVE_CLASS)
     if change_class != effort.OPERATIVE_CLASS:
         return
     task_accumulator.add(
@@ -672,6 +675,8 @@ class _ReplanContext:
     echo_advice: list[str] = field(default_factory=list)
     diagnosing: bool = False
     replan_cause: dict = field(default_factory=dict)
+    continuation: Any = None
+    continuation_base: Any = None
 
 
 def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
@@ -711,6 +716,9 @@ def _cmd_replan(args, *, store: StateStore, runner: Runner | None = None,
     if refusal is not None:
         return refusal
     _replan_record_acceptance(ctx)
+    ctx.continuation, ctx.continuation_base = continuation_decision(ctx.state, ctx.new.stages)
+    if not ctx.continuation.ok:
+        ctx.auth_kind = "substantive"
     apply = {"no_change": _replan_apply_no_change,
              "refinement": _replan_apply_refinement}.get(ctx.auth_kind, _replan_apply_substantive)
     return apply(ctx)
@@ -756,10 +764,10 @@ def _replan_entry_gates(ctx: _ReplanContext) -> Directive | None:
     # the fire data but never force a decision on it). Checked FIRST, ahead of
     # difficulty_blockers, since it is orthogonal to the declare/investigate/
     # critique/normalize cycle that difficulty_blockers governs.
-    efblock = gates.effort_fire_blockers(state)
-    _log_gate(state, "effort_fire", efblock, passed=not efblock)
-    if efblock:
-        return _effort_fire_refusal(state, "replan", efblock)
+    _note_mandated_review(state)
+    _fire_refusal = _judge_and_refuse(state, store, args, effort_segments.ACT_REPLAN, "replan")
+    if _fire_refusal is not None:
+        return _fire_refusal
 
     # precondition: a nested difficulty (difficulty-open) is a sub-cycle of the enclosing
     # one -- closed with difficulty-close, never swept away by the replan of its parent.
@@ -1043,6 +1051,11 @@ def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
             )
             replan_data = {"blockers": prblock, "plan_review_round_release": round_release,
                            "review_delta": delta}
+            changed = continuation_decision(state, review_doc.stages)[0].check_changed if review_doc else []
+            if changed:
+                replan_data["check_changed"] = changed
+                message += (f"; check_changed: stage(s) {changed} change the done_criterion or "
+                            "verify_command of a live stage, so the review must judge that check")
         return Directive(False, state.node, "plan_review", message, data=replan_data)
     ctx.gate_state, ctx.carry_change, ctx.trigger_exit = gate_state, carry_change, trigger_exit
     return None
@@ -1570,6 +1583,9 @@ def _replan_apply_substantive(ctx: _ReplanContext) -> Directive:
     _prev_plan_sha256, _new_plan_sha256 = ctx.prev_plan_sha256, ctx.new_plan_sha256
     change_class = ctx.change_class
 
+    second_current = _second_current_stage_refusal(state, state.current_stage)
+    if second_current is not None:
+        return second_current
     # substantive: re-arm the plan-approval gate, reload stages, return to PLAN_READY.
     # #12: carry PASSED status forward for any stage whose FULL definition is
     # unchanged by the diff, so a substantive replan doesn't reset already-delivered
@@ -1633,6 +1649,8 @@ def _replan_apply_substantive(ctx: _ReplanContext) -> Directive:
             not is_settled(ns) and gates.is_declined_stage(ns, declined_issues, declined_titles)
         ):
             ns.outcome.declined = True
+    _store_continuation_base(state, ctx.continuation_base)
+    _rematch_stage_uids(state, new.stages, ctx.continuation)
     state.stages = new.stages
     _sync_venue_from_plan(state, new)
     state.final_check = new.meta.final_check
@@ -1644,11 +1662,11 @@ def _replan_apply_substantive(ctx: _ReplanContext) -> Directive:
     return _replan_to_plan_ready(
         state, store, new, echo_advice, trigger_exit=trigger_exit, kind="substantive", plan=args.plan,
         prev_plan_sha256=_prev_plan_sha256, plan_sha256=_new_plan_sha256,
-        change_class=change_class, **replan_cause)
+        change_class=change_class, continuation=ctx.continuation, **replan_cause)
 
 
 def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advice: list[str],
-                          *, trigger_exit: str | None, **log_fields) -> Directive:
+                          *, trigger_exit: str | None, continuation=None, **log_fields) -> Directive:
     """Re-arm the plan-approval gate and park the session at PLAN_READY after a replan
     that needs the plan approved again, logging `log_fields` as the `replan` event. The
     approved plan picks the next stage afresh, so no stage stays current. `trigger_exit`
@@ -1656,6 +1674,10 @@ def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advi
     state.current_stage = None
     state.approval = GateRecord("plan_approval", armed=True, passed=False)
     state.node = Node.PLAN_READY.value
+    if continuation is not None and continuation.check_changed:
+        log_fields["check_changed"] = list(continuation.check_changed)
+    if continuation is not None and not continuation.ok:
+        log_fields["continuation_breaches"] = continuation.reasons()
     state.log("replan", **log_fields)
     _count_replan(state, log_fields["change_class"])
     effort.rederive(state)  # re-derive AFTER logging so this replan is counted
@@ -1673,7 +1695,11 @@ def _replan_to_plan_ready(state: SessionState, store: StateStore, new, echo_advi
         **({"review_trigger_exit": _trigger_exit_text(trigger_exit, override)}
            if trigger_exit is not None else {}),
     }
-    if autonomy["action"] == "self_approve":
+    if continuation is not None and not continuation.ok:
+        directive_data["continuation_breaches"] = continuation.reasons()
+    if continuation is not None and continuation.check_changed:
+        directive_data["check_changed"] = list(continuation.check_changed)
+    if autonomy["action"] == "self_approve" and (continuation is None or continuation.ok):
         return _with_advisories(Directive(
             True, state.node, "self_approve",
             _self_approve_detail(autonomy, replan=True),
@@ -1737,7 +1763,7 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
     state = _require(store, args.session)
     if not state.effort_fires:
         return Directive(False, state.node, "noop", "no effort-divergence fire recorded")
-    last = state.effort_fires[-1]
+    last = gates.open_fire_record(state) or state.effort_fires[-1]
     if last.get("ack") is not None:
         return Directive(True, state.node, "noop", "fire already acknowledged", data={"fire": last})
     if last.get("disposition") == EFFORT_FIRE_FINISHED_WORK:
@@ -1759,7 +1785,8 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
                 False, state.node, "fire_acknowledge",
                 f"fire-acknowledge by the agent refused: {refusal}",
                 marker=DIRECTIVE_ESCALATE_TO_USER,
-                data={"effort_fire": _effort_fire_escalation_data(state), "reason": refusal},
+                data={"effort_fire": _effort_fire_escalation_data(state), "reason": refusal,
+                      **(_fire_directive_figures(state) if last.get("arming_id") else {})},
             )
         state.agent_ack_difficulty_ids.append(_difficulty_id(state.difficulty))
         # The replans-scale fire rebased every scale's baseline; the spend / wall-clock
@@ -1774,6 +1801,11 @@ def cmd_fire_acknowledge(args, *, store: StateStore, runner: Runner | None = Non
         "ts": _utcnow(),
         "note": getattr(args, "note", None),
     }
+    _acked_arming = effort_segments.find_arming(state.effort_segments, last.get("arming_id"))
+    if _acked_arming is not None and _acked_arming["fire"]:
+        _acked_arming["fire"]["ack"] = last["ack"]
+    if not by_agent and decision != "abandon" and _acked_arming is not None and _acked_arming["closed_at"] is None:
+        _renew_arming(state, store, args, _acked_arming, effort_segments.ACT_FIRE_ACK_BY_USER, args.by)
     state.log("fire_acknowledge", by=args.by, decision=decision)
     _record_backstop_crossing(state, crossing)
     _clear_since_user_decision(state, args.by)

@@ -160,6 +160,14 @@ def _stamp_prompt_ts(session_id: str, now: float) -> None:
     if p is None:
         return
     try:
+        from agentctl import cli_common  # noqa: PLC0415 — hook survives its absence
+        from agentctl.store import FileStateStore  # noqa: PLC0415
+
+        if cli_common.stamp_and_judge(session_id, now, store=FileStateStore(p.parent)):
+            return
+    except Exception:
+        pass
+    try:
         data = json.loads(p.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return

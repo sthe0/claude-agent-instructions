@@ -8,7 +8,7 @@ import re
 import time
 from pathlib import Path
 from lib import ask_evidence, config_root
-from . import answer_ledger, delivery, gates
+from . import answer_ledger, delivery, effort_segments, gates
 from .directive import Directive
 from .dispatch import Runner
 from .plan import PlanError, load_order_draft, understanding_digest, understanding_parts
@@ -26,7 +26,7 @@ from .state import (
 )
 from .store import StateStore
 from .submission import order_understanding_completeness_violations, order_understanding_violations
-from .cli_common import _require
+from .cli_common import _renew_order_agreement, _require
 
 
 def _order_draft_violations(meta) -> list[str]:
@@ -53,6 +53,60 @@ def _order_draft_violations(meta) -> list[str]:
                     f"[{letter}<number>] anchors of its rendering"
                 )
     return problems
+
+
+def _planning_open(state: SessionState) -> bool:
+    """Whether the session has not yet had its plan's first approval: the planning segment's
+    arming is open, and no migrated window stands in for it."""
+    ledger = state.effort_segments
+    return (not state.plan_stack and effort_segments.window_arming(ledger) is None
+            and effort_segments.open_arming_of(ledger, effort_segments.PLANNING) is not None)
+
+
+def _agreed_before_migration(state: SessionState, doc) -> bool:
+    """Whether the draft is the very understanding the user agreed before this session's
+    migration instant: such an order predates the estimate table and is never asked for it again
+    just to be presented."""
+    agreed = state.order_agreement
+    migrated = state.effort_migrated
+    return (agreed is not None and bool(migrated) and agreed.at < migrated["instant"]
+            and agreed.understanding_sha256 == understanding_digest(doc))
+
+
+def _planning_estimate_refusal(state: SessionState, doc, *, agreeing: bool = False) -> str | None:
+    """The refusal of an order draft that is to be put to the user or agreed before the plan's
+    first approval and lacks any of the estimate's three parts, or None. Only presence is
+    graded: what the derivation says is the reviewer's to judge. An order put or agreed after the
+    first approval carries no estimate and is not refused for lacking one; an order agreed before
+    the session's migration may be put again unchanged without it, but a new agreement of it
+    (`agreeing`) needs the table like any other."""
+    if not _planning_open(state):
+        return None
+    if not agreeing and _agreed_before_migration(state, doc):
+        return None
+    order = doc.meta.order
+    estimate = order.planning_estimate if order is not None else None
+    missing = estimate.missing() if estimate is not None else ["active_minutes", "usd", "derivation"]
+    if not missing:
+        return None
+    return (
+        f"the order draft states no usable planning estimate: {', '.join(missing)} missing from "
+        "[meta.order.planning_estimate]. Before the plan's first approval the order carries "
+        "{ active_minutes = <positive number>, usd = <positive number>, derivation = \"<how both "
+        "follow from the work planning needs>\" }, so planning has a budget the user agrees with the order"
+    )
+
+
+def _record_agreed_estimate(state: SessionState, doc) -> None:
+    """The estimate an agreement before the first approval puts to planning, kept in the effort
+    ledger for the arming that agreement opens (and the renewals after it)."""
+    order = doc.meta.order
+    estimate = order.planning_estimate if order is not None else None
+    if estimate is None or estimate.missing() or not _planning_open(state):
+        return
+    state.effort_segments["agreed_estimate"] = {
+        "active_minutes": estimate.active_minutes, "usd": estimate.usd, "derivation": estimate.derivation,
+    }
 
 
 def _session_has_agreement(state: SessionState) -> bool:
@@ -162,6 +216,9 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
         return refuse("cannot record the agreement: " + "; ".join(blockers), blockers=blockers)
     doc, _ = load_order_draft(path)
     digest = understanding_digest(doc)
+    no_estimate = _planning_estimate_refusal(state, doc, agreeing=True)
+    if no_estimate is not None:
+        return refuse("cannot record the agreement: " + no_estimate)
     receipt = gates._plan_presentation_for(state, PLAN_PRESENTATION_KIND_ORDER)
     if receipt is None:
         return refuse("no order presentation recorded: present-plan --kind order first")
@@ -187,6 +244,8 @@ def cmd_order_agree(args, *, store: StateStore, runner: Runner | None = None) ->
     )
     state.order_agreement = agreement
     state.order_agreement_history.append(agreement)
+    _record_agreed_estimate(state, doc)
+    _renew_order_agreement(state, store, args)
     if previous is None or previous.understanding_sha256 != digest:
         for challenge in state.order_challenges:
             if challenge.status == CHALLENGE_OPEN:

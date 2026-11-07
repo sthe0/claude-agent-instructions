@@ -148,7 +148,7 @@ enumerator finds and says why each one is routed or exempt. A test
 | `scripts/agentctl/cli_plan.py`:`_present_order` | not a binding | Compares the order draft's understanding digest with the one `order-submit` recorded, so a changed draft is refused; the receipt it then creates is bound to that digest, not compared against a plan version. |
 | `scripts/agentctl/cli_review.py`:`_attested_digest_refusal` | not a binding | The exact cross-check of the digest a reviewer attests against the reviewed file's bytes at record time, shared by the plan scopes and `--scope order`; it compares nothing recorded earlier. |
 | `scripts/agentctl/cli_review.py`:`_record_plan_review` | not a binding | An exact cross-check of the digest the reviewer attests against the plan file's bytes at record time; the staleness that follows is read through the callee that counts rounds. |
-| `scripts/agentctl/cli_dispatch.py`:`cmd_dispatch` | not a binding | Compares the hashes of the settings files a spawn materializes, not a plan. |
+| `scripts/agentctl/cli_dispatch.py`:`_dispatch` | not a binding | Compares the hashes of the settings files a spawn materializes, not a plan. |
 | `scripts/agentctl/cli_dispatch.py`:`_stage_grant_entries` | not a binding | Checks the approved snapshot's bytes against the recorded snapshot hash, which `plan-convert-live` never rewrites (no new snapshot is written). |
 | `scripts/agentctl/gates.py`:`_file_sha256` | not a binding | The hashing helper itself. |
 | `scripts/agentctl/gates.py`:`file_norm_digest` | not a binding | Hashes a norm file, not a plan. |
