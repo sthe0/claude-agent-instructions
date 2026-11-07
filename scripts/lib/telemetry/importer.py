@@ -515,7 +515,33 @@ def _import_transcripts(run: _Run) -> None:
 
 # --- engine state history -------------------------------------------------------------------
 
+_HISTORY_FIELDS = ("event", "node", "ts", "weight_class")
+
+
+def _project_state(data: dict) -> dict:
+    """The part of one engine state the history import reads. A history entry keeps its position
+    (a non-dict entry becomes None) and the digest of the whole entry, so imported row ids stay
+    those of the full entry; everything else in the state file is dropped right after parsing."""
+    history, digests = [], []
+    for entry in data["history"]:
+        if isinstance(entry, dict):
+            history.append({k: entry[k] for k in _HISTORY_FIELDS if k in entry})
+            digests.append(hashlib.sha256(_canonical(entry)).hexdigest())
+        else:
+            history.append(None)
+            digests.append(None)
+    link = data.get("parent_link")
+    if isinstance(link, dict):
+        link = {"parent_session": link.get("parent_session")} if link else {}
+    else:
+        link = bool(link)
+    return {"session_id": data["session_id"], "history": history, "entry_digests": digests, "parent_link": link,
+            "recursion_depth": data.get("recursion_depth"), "task_id": data.get("task_id"),
+            "weight_class": data.get("weight_class")}
+
+
 def _load_states() -> dict:
+    """session -> (path, projected state), reading the state files one at a time."""
     states = {}
     try:
         paths = sorted(config_root.agentctl_state_dir().glob("*.json"))
@@ -527,7 +553,7 @@ def _load_states() -> dict:
         except (OSError, ValueError):
             continue
         if isinstance(data, dict) and isinstance(data.get("session_id"), str) and isinstance(data.get("history"), list):
-            states[data["session_id"]] = (path, data)
+            states[data["session_id"]] = (path, _project_state(data))
     return states
 
 
@@ -581,8 +607,9 @@ class _Session:
             ms = _tp().epoch_or_iso_ms(entry.get("ts"))
             self.times[index] = (ms, previous if ms is None else ms)
             previous = previous if ms is None else ms
-        self.entry_ids = {index: store.imported_row_id(path, index, hashlib.sha256(_canonical(entry)).hexdigest())
-                          for index, entry in self.history}
+        self.by_index = dict(self.history)
+        self.entry_ids = {index: store.imported_row_id(path, index, state["entry_digests"][index])
+                          for index, _ in self.history}
 
 
 def _plan_sessions(run: _Run) -> "tuple[list, list, dict]":
@@ -618,7 +645,7 @@ def _assign_epochs(roots: list) -> "tuple[dict, dict]":
     task_state, session_epoch, facts = {}, {}, {}
     for ms, session, index in merged:
         owner = by_session[session]
-        entry = dict(owner.history)[index]
+        entry = owner.by_index[index]
         if index == opening[session]:
             current = task_state.get(owner.task_id)
             if entry.get("event") == "start" or current is None or current["resolved"]:

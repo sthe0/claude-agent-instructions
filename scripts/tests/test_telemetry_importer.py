@@ -462,10 +462,10 @@ def test_importer_retries_undrained_spool_replay(world, monkeypatch):
 
 # --- bounded memory ---------------------------------------------------------------------------------
 
-def _cli_import(tmp_path: Path, gate_mib: int, name: str) -> float:
-    """Peak RSS of `telemetry.py import` over a gate log of `gate_mib` MiB of 1 KiB lines. The log is written
-    in chunks: a child's ru_maxrss inherits the high-water mark of the parent at fork, so a parent holding
-    the whole log in memory would show it as the child's."""
+def _cli_import(tmp_path: Path, gate_mib: int, name: str, states: int = 0) -> float:
+    """Peak RSS of `telemetry.py import` over a gate log of `gate_mib` MiB of 1 KiB lines and `states` engine
+    state files of 512 KiB each. The log is written in chunks: a child's ru_maxrss inherits the high-water mark
+    of the parent at fork, so a parent holding the whole log in memory would show it as the child's."""
     home = tmp_path / name
     (home / "log").mkdir(parents=True)
     chunk = line({"pad": "x" * 1000}) * 1024
@@ -473,12 +473,21 @@ def _cli_import(tmp_path: Path, gate_mib: int, name: str) -> float:
         for _ in range(gate_mib):
             handle.write(chunk)
     del chunk
+    state_dir = home / "cfg" / "agentctl" / "state"
+    state_dir.mkdir(parents=True)
+    for number in range(states):
+        session = f"S{number:04d}"
+        steps = [{"ts": at(0), "event": "start", "pad": "y" * (256 * 1024)}, {"ts": at(10), "event": "plan"}]
+        (state_dir / f"{session}.json").write_text(json.dumps(
+            {"session_id": session, "task_id": session, "history": steps, "ballast": "z" * (256 * 1024)}))
     env = {**os.environ, "HOME": str(home), "CLAUDE_CONFIG_DIR": str(home / "cfg"),
            "AGENTCTL_GATE_LOG": str(home / "gate.jsonl"), "AGENTCTL_DECISION_LOG": str(home / "decision.jsonl"),
            "AGENTCTL_JUDGE_LEDGER": str(home / "judge.jsonl"), "AGENTCTL_TELEMETRY_DB": str(home / "t.sqlite"),
            "AGENTCTL_TELEMETRY_SPOOL": str(home / "spool")}
-    done = subprocess.run([sys.executable, str(SCRIPTS / "telemetry.py"), "import"], env=env, capture_output=True,
-                          text=True, timeout=600, cwd=str(SCRIPTS))
+    # Through a shell that forks the importer rather than exec-ing it: a process exec'd straight from pytest
+    # starts its ru_maxrss at pytest's own high-water mark (about 120 MiB), which would hide any growth below it.
+    done = subprocess.run(["/bin/sh", "-c", '"$0" "$1" import; exit $?', sys.executable, str(SCRIPTS / "telemetry.py")],
+                          env=env, capture_output=True, text=True, timeout=600, cwd=str(SCRIPTS))
     assert done.returncode == 0, done.stderr[-500:]
     return json.loads(done.stdout.splitlines()[-1])["peak_rss_mib"]
 
@@ -487,3 +496,11 @@ def test_gate_log_read_in_bounded_memory(tmp_path):
     baseline = _cli_import(tmp_path, 0, "small")
     large = _cli_import(tmp_path, 256, "large")
     assert large - baseline <= 32
+
+
+def test_engine_state_read_in_bounded_memory(tmp_path):
+    """128 state files of 512 KiB (half in a history entry, half beside the history) are 64 MiB held whole;
+    keeping only the fields the history import reads stays well under 32 MiB of growth."""
+    baseline = _cli_import(tmp_path, 0, "small")
+    large = _cli_import(tmp_path, 0, "large", states=128)
+    assert large - baseline < 32
