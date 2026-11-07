@@ -242,10 +242,14 @@ def read_tail(path) -> Tail | None:
         cached = seen = _CACHE.get(key)
     if cached is not None and cached.ident is not None and snapshot.same_identity("transcript", cached.ident, ident):
         return cached
-    # a file that did not grow was rewritten in place (its identity moved, or the last read was not settled
-    # and may have missed a second write of its tick): it is read from the start
-    if cached is not None and (cached.inode != stat.st_ino or stat.st_size <= cached.offset):
-        cached = None
+    # a transcript is append-only: a file that shrank, or kept its size while its identity moved, was rewritten
+    # in place and is read from the start; a read that was not settled and found the size unchanged is
+    # finished from its offset (zero bytes) and only re-judged for settledness
+    if cached is not None:
+        unchanged_unsettled = cached.ident is None and stat.st_size == cached.offset
+        if cached.inode != stat.st_ino or stat.st_size < cached.offset or (
+                stat.st_size == cached.offset and not unchanged_unsettled):
+            cached = None
     read_ns = snapshot.now_ns()
     tail = Tail(stat.st_ino) if cached is None else cached.copy()
     tail.ident = ident if snapshot.settled(stat, read_ns) else None

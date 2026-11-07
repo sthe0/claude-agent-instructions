@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -320,11 +321,17 @@ def blind_to_the_clock(monkeypatch, st):
     monkeypatch.setattr(store, "identity_of", lambda s: (s.st_dev, s.st_ino, s.st_size, 0, 0))
 
 
+def stamp(path) -> int:
+    """The later of a file's mtime and ctime: the moment it last changed, whoever set its mtime."""
+    st = os.stat(path)
+    return max(st.st_mtime_ns, st.st_ctime_ns)
+
+
 def test_a_file_read_within_one_step_of_its_mtime_is_read_again_next_cycle(tmp_path, monkeypatch):
     path = tmp_path / "state.json"
     path.write_text("a", encoding="utf-8")
     blind_to_the_clock(monkeypatch, None)
-    monkeypatch.setattr(store, "now_ns", lambda: os.stat(path).st_mtime_ns + store.MTIME_STEP_NS - 1)
+    monkeypatch.setattr(store, "now_ns", lambda: stamp(path) + store.MTIME_STEP_NS - 1)
     cache, reads = store.IdentityCache("state"), []
 
     def load(p):
@@ -340,7 +347,7 @@ def test_a_file_read_within_one_step_of_its_mtime_is_read_again_next_cycle(tmp_p
 def test_a_file_read_a_step_after_its_mtime_is_served_from_the_cache(tmp_path, monkeypatch):
     path = tmp_path / "state.json"
     path.write_text("a", encoding="utf-8")
-    monkeypatch.setattr(store, "now_ns", lambda: os.stat(path).st_mtime_ns + store.MTIME_STEP_NS)
+    monkeypatch.setattr(store, "now_ns", lambda: stamp(path) + store.MTIME_STEP_NS)
     cache, reads = store.IdentityCache("state"), []
 
     def load(p):
@@ -358,14 +365,14 @@ def test_an_unsettled_source_is_not_recorded_in_the_snapshot(tmp_path, monkeypat
     st = os.stat(path)
     for offset, recorded in ((store.MTIME_STEP_NS - 1, False), (store.MTIME_STEP_NS, True)):
         store.OBSERVED.reset()
-        monkeypatch.setattr(store, "now_ns", lambda: st.st_mtime_ns + offset)
+        monkeypatch.setattr(store, "now_ns", lambda: stamp(path) + offset)
         store.OBSERVED.note("state", path, st)
         assert (str(path) in {item["path"] for item in store.OBSERVED.sources()}) is recorded
 
 
 def test_a_ledger_read_inside_the_step_is_finished_from_its_offset_never_read_from_the_start(root, monkeypatch):
     mtime = os.stat(root.cost_log).st_mtime_ns
-    clock = [mtime + store.MTIME_STEP_NS - 1]
+    clock = [stamp(root.cost_log) + store.MTIME_STEP_NS - 1]
     monkeypatch.setattr(store, "now_ns", lambda: clock[0])
     bases = []
     real = model._extend_sums
@@ -374,13 +381,70 @@ def test_a_ledger_read_inside_the_step_is_finished_from_its_offset_never_read_fr
     with open(root.cost_log, "a", encoding="utf-8") as handle:
         handle.write(ledger_row(1.0))
     os.utime(root.cost_log, ns=(mtime, mtime))
+    clock[0] = stamp(root.cost_log) + store.MTIME_STEP_NS - 1
     assert spawn_cost_of(root) == 2.5
-    clock[0] = mtime + store.MTIME_STEP_NS
+    clock[0] = stamp(root.cost_log) + store.MTIME_STEP_NS
     assert spawn_cost_of(root) == 2.5
     assert spawn_cost_of(root) == 2.5
     assert bases[0] is None and bases[1] > 0
     first_offset = bases[1]
     assert len(bases) == 3 and bases[2] > first_offset
+
+
+def test_a_transcript_read_inside_the_step_that_did_not_grow_is_finished_from_its_offset_never_parsed_again(
+        root, monkeypatch):
+    path = transcript_path(root)
+    clock = [stamp(path) + store.MTIME_STEP_NS - 1]
+    monkeypatch.setattr(store, "now_ns", lambda: clock[0])
+    starts, real = [], attention._first_read
+    monkeypatch.setattr(attention, "_first_read", lambda handle, size: (starts.append(size), real(handle, size))[1])
+    first = attention.read_tail(path)
+    assert first.ident is None and len(starts) == 1
+    second = attention.read_tail(path)
+    assert len(starts) == 1 and second.ident is None
+    assert second.offset == first.offset and second.last_ts == first.last_ts
+    clock[0] = stamp(path) + store.MTIME_STEP_NS
+    third = attention.read_tail(path)
+    assert len(starts) == 1 and third.ident is not None
+    assert attention.read_tail(path) is third
+
+
+def test_a_transcript_that_shrank_or_kept_its_size_under_a_moved_identity_is_read_from_the_start(root):
+    path = transcript_path(root)
+    attention.read_tail(path)
+    starts, real = [], attention._first_read
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(attention, "_first_read", lambda handle, size: (starts.append(size), real(handle, size))[1])
+        text = path.read_text(encoding="utf-8")
+        rewrite(path, text, mtime_ns=os.stat(path).st_mtime_ns)
+        attention.read_tail(path)
+        assert len(starts) == 1
+        rewrite(path, text[: len(text) // 2], mtime_ns=os.stat(path).st_mtime_ns)
+        attention.read_tail(path)
+        assert len(starts) == 2
+
+
+def test_a_read_ten_milliseconds_after_the_last_change_is_not_settled(tmp_path, monkeypatch):
+    path = tmp_path / "state.json"
+    path.write_text("a", encoding="utf-8")
+    ten_milliseconds = 10_000_000
+    assert ten_milliseconds < store.MTIME_STEP_NS
+    assert not store.settled(os.stat(path), stamp(path) + ten_milliseconds)
+    monkeypatch.setattr(store, "now_ns", lambda: stamp(path) + ten_milliseconds)
+    cache, reads = store.IdentityCache("state"), []
+
+    def load(p):
+        reads.append(p)
+        return Path(p).read_text(encoding="utf-8")
+
+    assert cache.fetch(path, os.stat(path), load) == "a" and cache.fetch(path, os.stat(path), load) == "a"
+    assert len(reads) == 2
+
+
+def test_a_file_whose_ctime_is_newer_than_its_restored_mtime_is_not_settled_until_a_step_after_the_ctime():
+    st = SimpleNamespace(st_mtime_ns=1_000, st_ctime_ns=50 * store.MTIME_STEP_NS)
+    assert not store.settled(st, st.st_ctime_ns + store.MTIME_STEP_NS - 1)
+    assert store.settled(st, st.st_ctime_ns + store.MTIME_STEP_NS)
 
 
 # --- the binding scan ------------------------------------------------------------------------------------
@@ -529,13 +593,44 @@ def test_a_failed_write_leaves_the_old_snapshot_and_no_temporary_file(root, tmp_
     assert path.read_bytes() == before and os.listdir(path.parent) == [store.FILE_NAME]
 
 
+def a_dead_pid() -> int:
+    child = subprocess.Popen([sys.executable, "-I", "-c", "pass"])
+    child.wait()
+    return child.pid
+
+
 def test_a_write_removes_the_temporaries_a_killed_writer_left(root, tmp_path):
     path = tmp_path / "cache" / store.FILE_NAME
     path.parent.mkdir()
-    for pid in (1, 2):
-        (path.parent / f"{store.FILE_NAME}.tmp-{pid}").write_text("half", encoding="utf-8")
+    for suffix in (a_dead_pid(), a_dead_pid(), "not-a-pid"):
+        (path.parent / f"{store.FILE_NAME}.tmp-{suffix}").write_text("half", encoding="utf-8")
     save(root, path)
     assert os.listdir(path.parent) == [store.FILE_NAME]
+
+
+def test_a_write_leaves_the_temporary_of_a_live_writer_alone(root, tmp_path):
+    path = tmp_path / "cache" / store.FILE_NAME
+    path.parent.mkdir()
+    live = path.parent / f"{store.FILE_NAME}.tmp-{os.getppid()}"
+    live.write_text("being written", encoding="utf-8")
+    save(root, path)
+    assert live.read_text(encoding="utf-8") == "being written"
+    assert sorted(os.listdir(path.parent)) == sorted([store.FILE_NAME, live.name])
+
+
+def test_a_failure_while_clearing_stale_temporaries_leaves_no_temporary_of_this_process(root, tmp_path, monkeypatch):
+    path = tmp_path / "cache" / store.FILE_NAME
+    path.parent.mkdir()
+    own = path.parent / f"{store.FILE_NAME}.tmp-{os.getpid()}"
+    own.write_text("half", encoding="utf-8")
+
+    def fails(_):
+        raise OSError("a directory that cannot be listed")
+
+    monkeypatch.setattr(store, "_remove_stale_temporaries", fails)
+    with pytest.raises(OSError):
+        save(root, path)
+    assert not own.exists() and not path.exists()
 
 
 @pytest.fixture
@@ -543,7 +638,7 @@ def code_files(tmp_path, monkeypatch):
     files = [tmp_path / "one.py", tmp_path / "two.py"]
     for number, file in enumerate(files):
         file.write_text(f"VALUE = {number}\n", encoding="utf-8")
-    monkeypatch.setattr(store, "CODE_FILES", tuple(files))
+    monkeypatch.setattr(store, "code_files", lambda: tuple(files))
     store.code_version.cache_clear()
     yield files
     monkeypatch.undo()
@@ -560,10 +655,61 @@ def test_the_code_version_follows_the_content_of_every_module_that_makes_the_val
         first = second
 
 
-def test_every_module_that_makes_the_stored_values_is_part_of_the_code_version():
-    named = {file.name for file in store.CODE_FILES}
-    assert {"model.py", "attention.py", "snapshot.py", "tui.py", "tui_app.py", "locate.py",
-            Path(store.engine_session_binding.__file__).name} <= named
+def repo_modules_loaded_by(*modules: str) -> set[str]:
+    """The files under ``scripts/`` a fresh interpreter has loaded after importing ``modules``: what the
+    interpreter itself says those modules pull in."""
+    program = (
+        "import sys, json; sys.path.insert(0, sys.argv[1])\n"
+        "for name in sys.argv[2:]: __import__(name)\n"
+        "print(json.dumps(sorted(m.__file__ for m in list(sys.modules.values())"
+        " if getattr(m, '__file__', None) and m.__file__.startswith(sys.argv[1]))))\n")
+    done = subprocess.run([sys.executable, "-I", "-c", program, str(store.SCRIPTS), *modules],
+                          capture_output=True, text=True, check=True)
+    return {Path(name).resolve().relative_to(store.SCRIPTS).as_posix() for name in json.loads(done.stdout)}
+
+
+def derived() -> set[str]:
+    return {file.relative_to(store.SCRIPTS).as_posix() for file in store.code_files()}
+
+
+def test_the_code_version_covers_every_repo_module_the_values_pass_through():
+    assert {"agentctl/effort.py", "lib/transcript_cost.py", "lib/engine_session_binding.py",
+            "plan_dashboard/model.py", "plan_dashboard/attention.py", "plan_dashboard/tui.py",
+            "plan_dashboard/snapshot.py", "plan_dashboard/locate.py", "plan_dashboard/tui_app.py"} <= derived()
+
+
+def test_the_derived_code_files_include_every_module_an_interpreter_loads_for_the_dashboard_modules():
+    loaded = repo_modules_loaded_by("plan_dashboard.model", "plan_dashboard.attention", "plan_dashboard.tui",
+                                    "plan_dashboard.snapshot", "plan_dashboard.locate")
+    assert loaded - {"plan_dashboard/__init__.py", "lib/__init__.py", "agentctl/__init__.py"} <= derived()
+
+
+def test_the_derived_code_files_follow_relative_and_nested_imports(tmp_path, monkeypatch):
+    package = tmp_path / "pkg"
+    (package / "sub").mkdir(parents=True)
+    for name, text in {"root.py": "from . import sibling\n", "sibling.py": "def f():\n    from .sub import leaf\n",
+                       "sub/__init__.py": "", "sub/leaf.py": "import pkg.other\n", "other.py": "",
+                       "unrelated.py": ""}.items():
+        (package / name).write_text(text, encoding="utf-8")
+    monkeypatch.setattr(store, "SCRIPTS", tmp_path)
+    monkeypatch.setattr(store, "CODE_ROOTS", ("pkg.root",))
+    monkeypatch.setattr(store, "code_files", store.code_files.__wrapped__)
+    assert {file.relative_to(tmp_path).as_posix() for file in store.code_files()} == {
+        "pkg/root.py", "pkg/sibling.py", "pkg/sub/__init__.py", "pkg/sub/leaf.py", "pkg/other.py"}
+
+
+def test_a_missing_or_unparsable_code_file_gives_a_version_no_other_process_shares(tmp_path, monkeypatch):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "root.py").write_text("def broken(:\n", encoding="utf-8")
+    monkeypatch.setattr(store, "SCRIPTS", tmp_path)
+    monkeypatch.setattr(store, "code_files", store.code_files.__wrapped__)
+    versions = []
+    for roots in (("pkg.root",), ("pkg.missing",)):
+        monkeypatch.setattr(store, "CODE_ROOTS", roots)
+        store.code_version.cache_clear()
+        versions.append(store.code_version())
+    store.code_version.cache_clear()
+    assert all(version.startswith("unreadable-") for version in versions)
 
 
 def test_a_snapshot_written_by_other_code_is_absent_after_the_code_changed(root, tmp_path, code_files):

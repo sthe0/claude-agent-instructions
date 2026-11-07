@@ -1662,8 +1662,25 @@ def test_a_snapshot_that_raises_while_it_is_restored_or_painted_is_treated_as_ab
     def raises(*args, **kwargs):
         raise RuntimeError("a snapshot of another shape")
 
+    cache_sizes = {}
+
+    def sizes() -> dict:
+        return {"states": len(snapshot_store.STATES.entries()), "tails": len(attention._CACHE),
+                "sums": len(model._SUMS)}
+
     if fails == "restore":
-        monkeypatch.setattr(tui, "restore_snapshot", raises)
+        real_forget = tui_app.forget_snapshot
+
+        def raises_once_the_caches_are_seeded(*args, **kwargs):
+            cache_sizes["seeded"] = sizes()
+            raises()
+
+        def forgets_and_counts(app):
+            real_forget(app)
+            cache_sizes["forgotten"] = sizes()
+
+        monkeypatch.setattr(snapshot_store.OBSERVED, "seed", raises_once_the_caches_are_seeded)
+        monkeypatch.setattr(tui_app, "forget_snapshot", forgets_and_counts)
     else:
         real = tui_app.show_table
         failed = []
@@ -1683,6 +1700,9 @@ def test_a_snapshot_that_raises_while_it_is_restored_or_painted_is_treated_as_ab
     run(scenario, root, snapshot_path=path, locator=attention_locator())
     painted = [e for e in drain(stream) if e["ev"] == "rows_painted"]
     assert len(painted) == 1 and painted[0]["from_snapshot"] is False
+    if fails == "restore":
+        assert cache_sizes["seeded"]["states"] > 0 and cache_sizes["seeded"]["tails"] > 0
+        assert cache_sizes["forgotten"] == {"states": 0, "tails": 0, "sums": 0}
 
 
 def test_the_header_counters_of_a_start_from_a_snapshot_wear_the_old_marking_until_the_live_check_lands(

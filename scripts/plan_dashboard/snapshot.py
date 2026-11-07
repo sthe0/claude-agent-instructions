@@ -4,8 +4,9 @@ Difficulty removed: the old code read every state file, scanned about nine thous
 re-parsed a ledger of tens of megabytes on each refresh, so the first rows came after seconds and the
 marks after minutes. Here a source is read again only when its *identity* — device, inode, size, mtime and
 ctime in nanoseconds — differs from the identity it was read under. A file whose mtime lies within one
-resolution step (``MTIME_STEP_NS``) of its read is *unconfirmed*: a second write in the same tick would leave
-its identity unchanged, so it is read again on the next cycle and never written to the snapshot as recorded.
+resolution step (``MTIME_STEP_NS``) of its read — by the later of its mtime and ctime — is *unconfirmed*: a
+second write in the same tick would leave its identity unchanged, so it is read again on the next cycle and
+never written to the snapshot as recorded.
 
 ``SOURCE_KINDS`` are the kinds of file the dashboard reads; the locator's listing is not among them and is
 asked again every cycle.
@@ -24,6 +25,7 @@ a missing, damaged, half-written, foreign-version or unreadable file is read as 
 """
 from __future__ import annotations
 
+import ast
 import functools
 import hashlib
 import json
@@ -43,9 +45,8 @@ CACHE_DIRNAME = "plan-dashboard"
 FILE_NAME = "snapshot.json"
 SOURCE_KINDS = ("state", "binding", "transcript", "ledger")
 IDENTITY_KEYS = ("dev", "ino", "size", "mtime_ns", "ctime_ns")
-CODE_FILES = (*(Path(__file__).with_name(name) for name in (
-    "model.py", "attention.py", "snapshot.py", "tui.py", "tui_app.py", "locate.py")),
-    Path(engine_session_binding.__file__))
+SCRIPTS = Path(__file__).resolve().parent.parent
+CODE_ROOTS = tuple(f"plan_dashboard.{name}" for name in ("model", "attention", "snapshot", "tui", "tui_app", "locate"))
 MISS = object()
 
 _LOCK = threading.Lock()
@@ -60,8 +61,10 @@ def identity_of(st) -> tuple:
 
 
 def settled(st, read_ns: int | None = None) -> bool:
-    """Whether a read at ``read_ns`` saw ``st``'s file after its mtime tick had passed."""
-    return (now_ns() if read_ns is None else read_ns) - st.st_mtime_ns >= MTIME_STEP_NS
+    """Whether a read at ``read_ns`` saw ``st``'s file a step after it last changed: a writer that restores an
+    old mtime (``cp -p``, ``rsync -t``, ``utime``) still moves the ctime."""
+    changed = max(st.st_mtime_ns, st.st_ctime_ns)
+    return (now_ns() if read_ns is None else read_ns) - changed >= MTIME_STEP_NS
 
 
 def same_identity(kind: str, cached, live) -> bool:
@@ -408,23 +411,82 @@ def body_sha256(body) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _repo_module_file(dotted: str) -> Path | None:
+    base = SCRIPTS.joinpath(*dotted.split("."))
+    for candidate in (base.with_suffix(".py"), base / "__init__.py"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _imported_names(path: Path) -> set[str]:
+    """Every dotted module name ``path`` imports, at any depth, relative imports resolved against its package
+    and each ``from X import y`` also naming ``X.y`` (``y`` may be a submodule)."""
+    package = path.relative_to(SCRIPTS).parent.parts
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_bytes())):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = package[: len(package) - (node.level - 1)] if node.level else ()
+            module = ".".join((*base, *([node.module] if node.module else [])))
+            names.add(module)
+            names.update(f"{module}.{alias.name}" for alias in node.names)
+    return {".".join(parts[:end]) for parts in (name.split(".") for name in names if name) for end in range(1, len(parts) + 1)}
+
+
+@functools.lru_cache(maxsize=1)
+def code_files() -> tuple[Path, ...]:
+    """The repo modules whose code makes what the snapshot stores: ``CODE_ROOTS`` and every module under
+    ``scripts/`` they import, transitively. Derived from the imports, so a helper a stored value passes
+    through (an effort count, a timestamp parser) is covered without anyone listing it."""
+    found: dict[Path, None] = {}
+    pending = [_repo_module_file(name) or SCRIPTS.joinpath(*name.split(".")).with_suffix(".py") for name in CODE_ROOTS]
+    while pending:
+        path = pending.pop()
+        if path in found:
+            continue
+        found[path] = None
+        for name in _imported_names(path):
+            module = _repo_module_file(name)
+            if module is not None and module not in found:
+                pending.append(module)
+    return tuple(sorted(found))
+
+
 @functools.lru_cache(maxsize=1)
 def code_version() -> str:
     """A hash of the modules that compute what the snapshot stores (state digests, tails, sums, row shape).
     A snapshot written by other code is read as absent: its values are kept for as long as a file's identity
     holds, so values another computation made would otherwise outlive the fix of that computation. An
-    unreadable module gives a version no other process shares."""
+    unreadable or unparsable module gives a version no other process shares."""
     digest = hashlib.sha256()
-    for path in CODE_FILES:
-        try:
-            digest.update(path.name.encode("utf-8") + b"\0" + path.read_bytes() + b"\0")
-        except OSError:
-            return f"unreadable-{os.urandom(8).hex()}"
+    try:
+        for path in code_files():
+            name = path.relative_to(SCRIPTS).as_posix()
+            digest.update(name.encode("utf-8") + b"\0" + path.read_bytes() + b"\0")
+    except (OSError, SyntaxError, ValueError):
+        return f"unreadable-{os.urandom(8).hex()}"
     return digest.hexdigest()
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def _remove_stale_temporaries(path: Path) -> None:
+    """Remove the temporaries of writers that were killed; another console's temporary, still being written
+    by a live process, stays."""
     for stale in path.parent.glob(f"{path.name}.tmp-*"):
+        pid = stale.name.rpartition("-")[2]
+        if pid.isdigit() and int(pid) != os.getpid() and _pid_alive(int(pid)):
+            continue
         stale.unlink(missing_ok=True)
 
 
@@ -435,9 +497,9 @@ def write(path, sections: dict, sources: list[dict]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     document = {"version": VERSION, "code": code_version(), "body_sha256": body_sha256(sections),
                 "sources_sha256": body_sha256(sources), "sections": sections, "sources": sources}
-    _remove_stale_temporaries(path)
     temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}")
     try:
+        _remove_stale_temporaries(path)
         with open(temporary, "w", encoding="utf-8") as handle:
             json.dump(document, handle, separators=(",", ":"))
             handle.flush()
