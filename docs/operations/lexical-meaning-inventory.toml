@@ -3193,3 +3193,31 @@ ground = "Recognizes an interpreter program name against the shared INTERPRETER_
 hits = 1
 hit_classes = ["structural"]
 reviewed_by = "developer"
+
+[sites."scripts/lib/telemetry/importer.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles _BASH_EXIT, the fixed 'Exit code <digits>' line the harness writes into a failed Bash tool result; a machine-written token, not prose."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/telemetry/importer.py::_tool_exit::pattern.search"]
+class = "structural"
+ground = "_BASH_EXIT.search reads the exit status digits out of the harness's fixed 'Exit code N' line in a tool result; fixed machine syntax."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/telemetry/store.py::<module>::re.compile"]
+class = "structural"
+ground = "Compiles _MIGRATION_FILE, the 'NNN_name.sql' file-name shape of the record's schema migrations; fixed file-name syntax."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
+[sites."scripts/lib/telemetry/store.py::_migration_files::pattern.match"]
+class = "structural"
+ground = "_MIGRATION_FILE.match picks migration files by their 'NNN_name.sql' name and reads the version number; fixed file-name syntax."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"

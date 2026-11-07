@@ -1208,10 +1208,17 @@ def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bo
     block rate has a real denominator. The call also appends one engine row to the
     decision log (docs/operations/decision-telemetry.md)."""
     try:
-        hook_telemetry.record(f"engine:{gate}", "engine", "silent" if passed else "deny",
-                              state.session_id, layer="engine")
+        decision = hook_telemetry.decision_row(
+            f"engine:{gate}", "engine", "silent" if passed else "deny", state.session_id, layer="engine")
+        decision_backref = _append_jsonl(config_root.decision_log(), decision)
     except Exception:
-        pass
+        decision_backref = None
+    if decision_backref is not None:  # an event only for a row that reached the decision log
+        try:
+            live.emit_event(state.session_id, "decision", f"hook:{decision['mechanism']}",
+                            hook_telemetry.decision_event_fields(decision), decision_backref)
+        except Exception:  # telemetry is fail-open
+            pass
     row = {
         "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
         "session": state.session_id,
@@ -2400,6 +2407,7 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("task", ("start", "reset", "push-subplan", "task-reset"), "task slug, not a description"),
     ("child", ("adopt-escalation",), "session id of the linked child"),
     ("criterion_type", ("start", "reset"), "one of two fixed verification kinds"),
+    ("continue_epoch", ("reset",), "event id of the open task row to continue — an id, not narrative"),
     ("plugin", ("plugin-activate", "plugin-deactivate", "plugin-record"), "plugin registry name"),
     ("phase", ("plugin-record",), "plugin phase name from a fixed vocabulary"),
     ("attachment", ("plugin-record",), "ticket attachment id or URL, not a file to read"),

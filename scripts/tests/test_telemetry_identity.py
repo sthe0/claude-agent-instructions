@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from agentctl import runtime_host
 from agentctl.state import SessionState
 from agentctl.store import FileStateStore
 from lib import config_root, marker_extract
@@ -24,6 +25,9 @@ def _live_env(monkeypatch):
     verdict must not depend on machine load."""
     monkeypatch.setattr(store, "DEADLINE_S", 30.0)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    # The engine binds a host at start; with the session id unset, pin it so the verdict
+    # does not depend on whether this machine has a runnable Cursor CLI.
+    monkeypatch.setattr(runtime_host, "detect_host", lambda: runtime_host.HOST_CLAUDE)
     monkeypatch.delenv(live.SYNTHETIC_ENV, raising=False)
     monkeypatch.delenv(live.SWITCH_ENV, raising=False)
     no_background_sweep(monkeypatch)

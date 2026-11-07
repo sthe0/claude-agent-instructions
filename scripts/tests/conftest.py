@@ -32,8 +32,7 @@ if os.environ.get("PATH", "").split(os.pathsep)[:1] != [ARC_STUB_DIR]:
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import host_llm, judge_ledger  # noqa: E402
 from _xdist_auto import pytest_configure, pytest_terminal_summary  # noqa: E402,F401
-from slow_selection import pytest_addoption as _slow_addoption  # noqa: E402
-from slow_selection import pytest_collection_modifyitems  # noqa: E402,F401
+from slow_selection import pytest_addoption, pytest_collection_modifyitems  # noqa: E402,F401
 
 NO_SKIP_OPTION = "--telemetry-no-skip"
 
@@ -58,8 +57,8 @@ class _NoSkipGuard:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
-def pytest_addoption(parser, pluginmanager):
-    _slow_addoption(parser, pluginmanager)
+@pytest.hookimpl(specname="pytest_addoption")
+def _telemetry_addoption(parser, pluginmanager):
     parser.addoption(NO_SKIP_OPTION, action="store_true", default=False,
                      help="exit non-zero when any collected test is skipped or xfailed")
     if not pluginmanager.has_plugin("telemetry-no-skip"):
@@ -150,12 +149,14 @@ def _isolate_decision_log(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_telemetry(tmp_path, monkeypatch):
+def _isolate_telemetry(tmp_path_factory, monkeypatch):
     """The telemetry record and its spool (lib/telemetry) live under the config root; no
     test may open the live record or append to a live spool. The env vars reach the hook
-    and CLI subprocesses a test spawns."""
-    monkeypatch.setenv("AGENTCTL_TELEMETRY_DB", str(tmp_path / "telemetry-record" / "telemetry.sqlite"))
-    monkeypatch.setenv("AGENTCTL_TELEMETRY_SPOOL", str(tmp_path / "telemetry-record" / "spool"))
+    and CLI subprocesses a test spawns. The directory sits outside the test's own tmp_path,
+    which some tests snapshot to prove a command wrote nothing there."""
+    record_dir = tmp_path_factory.mktemp("telemetry-record")
+    monkeypatch.setenv("AGENTCTL_TELEMETRY_DB", str(record_dir / "telemetry.sqlite"))
+    monkeypatch.setenv("AGENTCTL_TELEMETRY_SPOOL", str(record_dir / "spool"))
     monkeypatch.delenv("AGENTCTL_TELEMETRY_FAULT", raising=False)
 
 
