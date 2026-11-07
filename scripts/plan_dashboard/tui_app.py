@@ -360,7 +360,8 @@ def order_ready(app: "DashboardApp", snapshot: dict, order, error: Exception | N
     if snapshot is not app.snapshot:
         return
     if order is not None:
-        app.order, app.activity, app.marked = order, {**order.activity, **app.session_activity}, set()
+        app.order, app.order_all = order, issued_all
+        app.activity, app.marked = {**order.activity, **app.session_activity}, set()
         if not app.cursor_chosen:
             app.view = tui.unanchored(app.view)
         show_table(app, snapshot, app.read_at, issued_all)
@@ -378,7 +379,7 @@ def visible_ids(app: "DashboardApp") -> list[str]:
 def marks_due(app: "DashboardApp") -> list[str]:
     """The task rows in view whose marks this reload has not read yet; only all mode reads marks by row,
     and a live-set row has its mark from the live overlay."""
-    if not app.view.include_all or app.order is None:
+    if not app.view.include_all or app.order is None or not app.order_all:
         return []
     live = (app.overlay or {}).get("tasks") or {}
     return [sid for sid in visible_ids(app)
@@ -401,10 +402,16 @@ def read_marks_of(app: "DashboardApp", ids: list[str], order) -> dict:
 
 
 async def read_marks_for(app: "DashboardApp", ids: list[str], order) -> None:
-    computed, error, seen = await in_daemon_thread(
-        lambda: (*attempt(lambda: read_marks_of(app, ids, order)), snapshot_store.observation(rotate=False)))
-    if order is not app.order:
-        return
+    while True:
+        computed, error, seen = await in_daemon_thread(
+            lambda: (*attempt(lambda: read_marks_of(app, ids, order)), snapshot_store.observation(rotate=False)))
+        if order is app.order:
+            break
+        # A newer order's own start of this group was refused while this read ran, so the rows it brought
+        # into view are read here, by the same worker, instead of staying unread until the next scroll.
+        order, ids = app.order, marks_due(app)
+        if not ids:
+            return
     app.marked.update(ids)
     if computed is not None:
         app.marks.update(computed)
@@ -639,6 +646,7 @@ class DashboardApp(App):
         self.last_detail_read: dt.datetime | None = None
         self.tree_read_for: str | None = None
         self.order: tui.Order | None = None
+        self.order_all = False
         self.activity: dict = {}
         self.marks: dict = {}
         self.marked: set = set()

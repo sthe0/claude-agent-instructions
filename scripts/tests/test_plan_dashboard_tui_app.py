@@ -1453,6 +1453,52 @@ def test_all_mode_reads_the_marks_of_the_rows_in_view_only_and_each_once_per_cha
     run(scenario, root)
 
 
+def test_all_mode_reads_no_marks_before_its_own_order_is_read(tmp_path, monkeypatch):
+    root = bulk_root(tmp_path)
+    reads = count_tail_reads(monkeypatch)
+
+    async def scenario(app, pilot):
+        release, calls = hold(monkeypatch, tui, "read_order")
+        try:
+            await pilot.press("a")
+            assert await until(pilot, lambda: calls and table_ids(app)[:len(BULK)] == BULK)
+            app.query_one(DataTable).move_cursor(row=3, animate=False)
+            await pilot.pause()
+            await pilot.pause()
+            assert [sid for sid in reads if sid in BULK] == []
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert await until(pilot, lambda: table_cells(app, row_of(app, BULK[0]))["wait"] == "…")
+        read_ids = [sid for sid in reads if sid in BULK]
+        assert read_ids and len(read_ids) == len(set(read_ids))
+
+    run(scenario, root)
+
+
+def test_a_marks_read_for_a_replaced_order_is_redone_for_the_new_one(tmp_path, monkeypatch):
+    root = bulk_root(tmp_path)
+    monkeypatch.setattr(tui_app, "TICK_S", 3600.0)
+
+    async def scenario(app, pilot):
+        release, calls = hold(monkeypatch, tui_app, "read_marks_of")
+        try:
+            await pilot.press("a")
+            assert await until(pilot, lambda: calls)
+            first_order = app.order
+            await pilot.press("r")
+            assert await until(pilot, lambda: app.order is not first_order)
+            await pilot.pause()
+            await pilot.pause()
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert await until(pilot, lambda: table_cells(app, row_of(app, BULK[0]))["wait"] == "…")
+        assert len(calls) == 2
+
+    run(scenario, root)
+
+
 def test_the_all_mode_counter_counts_the_live_set_like_live_mode(tmp_path):
     root = attention_root(tmp_path)
     write_fixture_transcript(root, STALE, ASKING)
