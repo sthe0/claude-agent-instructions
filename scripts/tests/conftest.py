@@ -16,10 +16,35 @@ TESTS_DIR = str(Path(__file__).resolve().parent)
 if TESTS_DIR not in sys.path:
     sys.path.insert(0, TESTS_DIR)
 
+ARC_STUB_DIR = str(Path(__file__).resolve().parent / "stubs")
+
+
+def path_with_arc_stub(*leading: str, system: str = "/usr/bin:/bin") -> str:
+    """A PATH for a test that builds its own: the test's `leading` stub directories, then the
+    stub arc's, then `system`. A literal PATH that reaches the real launcher in a fresh HOME
+    makes it download a release."""
+    return os.pathsep.join(p for p in (*leading, ARC_STUB_DIR, system) if p)
+
+
+if os.environ.get("PATH", "").split(os.pathsep)[:1] != [ARC_STUB_DIR]:
+    os.environ["PATH"] = path_with_arc_stub(system=os.environ.get("PATH", ""))
+
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import host_llm, judge_ledger  # noqa: E402
 from _xdist_auto import pytest_configure, pytest_terminal_summary  # noqa: E402,F401
 from slow_selection import pytest_addoption, pytest_collection_modifyitems  # noqa: E402,F401
+
+
+@pytest.hookimpl(specname="pytest_collection_modifyitems")
+def pytest_drop_arc_canary_unless_requested(config, items):
+    """The arc launcher canary runs only under ARC_CANARY_RUN=1, even when its file is named
+    on the command line (pytest_ignore_collect is not consulted for such paths), so it never
+    runs as an ordinary suite member."""
+    if os.environ.get("ARC_CANARY_RUN") != "1":
+        dropped = [i for i in items if i.path.name == "canary_arc_launcher.py"]
+        if dropped:
+            items[:] = [i for i in items if i not in dropped]
+            config.hook.pytest_deselected(items=dropped)
 
 # The plan-level places a SUBSTANTIVE plan owes the submission seam, as TOML an author
 # would write. Every fixture plan in the suite that expects to SUBMIT CLEAN splices these
