@@ -13,6 +13,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -1833,3 +1834,114 @@ def test_the_snapshot_is_written_at_a_clean_exit_and_announced_after_it(tmp_path
     assert document is not None and set(document["sections"]) == {key}
     assert os.listdir(path.parent) == [snapshot_store.FILE_NAME]
     assert {item["kind"] for item in document["sources"]} >= {"state", "transcript"}
+
+
+LAUNCHER_HANG_GUARD_S = 300
+
+
+def real_uv_environment(cache_home: Path) -> dict:
+    """The environment of a real start: the user's own home and uv cache, only the snapshot's cache moved."""
+    import pwd
+    import shutil
+
+    if shutil.which("uv") is None:
+        pytest.fail("the launcher test needs uv on PATH")
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    env = {**os.environ, "HOME": home, "XDG_CACHE_HOME": str(cache_home), "TERM": "xterm-256color"}
+    uv_cache = subprocess.run(["uv", "cache", "dir"], capture_output=True, text=True, check=True,
+                              env={**os.environ, "HOME": home}).stdout.strip()
+    env["UV_CACHE_DIR"] = uv_cache
+    return env
+
+
+def run_launcher_until_sigterm_settles(argv, env, *, group: bool, times: int = 1):
+    """Start ``argv`` on a pty, send SIGTERM once the first live read has landed and return the events seen
+    and the exit status. It waits on the event stream and the process; only the hang guard is a time."""
+    import fcntl
+    import pty
+    import select
+    import struct
+    import termios
+
+    fifo = Path(env["XDG_CACHE_HOME"]).parent / "events.fifo"
+    os.mkfifo(fifo)
+    events_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    argv = [str(fifo) if a == "<events>" else a for a in argv]
+    pid, master = pty.fork()
+    if pid == 0:
+        try:
+            os.chdir(Path(__file__).resolve().parents[2])
+            os.execvpe(argv[0], argv, env)
+        finally:
+            os._exit(127)
+    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 150, 0, 0))
+    seen, partial, sent, status = [], b"", False, None
+    deadline = time.monotonic() + LAUNCHER_HANG_GUARD_S
+    open_fds = {master, events_fd}
+    try:
+        while status is None:
+            if time.monotonic() > deadline:
+                pytest.fail(f"hang guard: no exit after {LAUNCHER_HANG_GUARD_S} s; events {[e['ev'] for e in seen]}")
+            ready, _, _ = select.select(sorted(open_fds), [], [], 0.05)
+            for fd in ready:
+                try:
+                    data = os.read(fd, 1 << 16)
+                except OSError:
+                    data = b""
+                if not data:
+                    open_fds.discard(fd)
+                elif fd == events_fd:
+                    partial += data
+                    *lines, partial = partial.split(b"\n")
+                    seen += [json.loads(line) for line in lines]
+            if not sent and any(e["ev"] == "cycle_end" for e in seen):
+                sent = True
+                for _ in range(times):
+                    (os.killpg if group else os.kill)(pid, signal.SIGTERM)
+            if status is None:
+                done, raw = os.waitpid(pid, os.WNOHANG)
+                if done:
+                    status = os.waitstatus_to_exitcode(raw)
+        while True:
+            try:
+                data = os.read(events_fd, 1 << 16)
+            except OSError:
+                break
+            if not data:
+                break
+            partial += data
+            *lines, partial = partial.split(b"\n")
+            seen += [json.loads(line) for line in lines]
+    finally:
+        for fd in (master, events_fd):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            pass
+        if status is None:
+            os.waitpid(pid, 0)
+    return seen, status
+
+
+@pytest.mark.parametrize("target, times", [("launcher alone", 1), ("process group", 1),
+                                           ("launcher alone", 3), ("process group", 3)])
+def test_the_launcher_passes_a_sigterm_on_and_the_snapshot_is_written(tmp_path, target, times):
+    root = console_root(tmp_path)
+    cache_home = tmp_path / "cache" / "xdg"
+    cache_home.mkdir(parents=True)
+    launcher = Path(__file__).resolve().parents[1] / "plan-dashboard.py"
+    argv = [sys.executable, str(launcher), "tui", "--events", "<events>", "--all",
+            "--state-root", str(root.state_root), "--cost-log", str(root.cost_log),
+            "--transcripts-root", str(root.transcripts_root)]
+    got, status = run_launcher_until_sigterm_settles(argv, real_uv_environment(cache_home),
+                                                     group=target == "process group", times=times)
+    names = [e["ev"] for e in got]
+    assert status == 0, (status, names)
+    assert names.count("snapshot_written") == 1 and names[-1] == "snapshot_written", names
+    path = snapshot_store.default_path({"XDG_CACHE_HOME": str(cache_home)})
+    assert snapshot_store.load(path) is not None
+    assert os.listdir(path.parent) == [snapshot_store.FILE_NAME]

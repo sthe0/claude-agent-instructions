@@ -639,6 +639,7 @@ class DashboardApp(App):
         the dashboard from reading or writing any."""
         super().__init__()
         self.snapshot_path = snapshot_path
+        self.replaced_signals: dict = {}
         self.started = snapshot_path is None
         self.stored: dict | None = None
         self.old_ids: frozenset = frozenset()
@@ -704,10 +705,23 @@ class DashboardApp(App):
         self.set_interval(max(min(self.interval, TICK_S), 0.05), self._tick)
 
     def install_sigterm(self) -> None:
-        """SIGTERM ends the app like the quit key, so the snapshot is written on the way out."""
+        """SIGTERM, SIGHUP and SIGINT end the app like the quit key, so the snapshot is written on the way out.
+
+        A plain handler, not the loop's: it stays in place after the loop is gone, so a repeated request
+        while the snapshot is written is absorbed instead of killing the process by the default action.
+        """
         try:
-            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, self.exit)
-        except (NotImplementedError, RuntimeError, ValueError):
+            loop = asyncio.get_running_loop()
+
+            def ask_to_exit(signum, frame) -> None:
+                try:
+                    loop.call_soon_threadsafe(self.exit)
+                except RuntimeError:
+                    pass
+
+            for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+                self.replaced_signals[sig] = signal.signal(sig, ask_to_exit)
+        except (RuntimeError, ValueError):
             pass
 
     async def _start(self) -> None:
@@ -864,8 +878,12 @@ def main(argv=None) -> int:
 
 def run_app(app: DashboardApp, **run_options) -> None:
     """Run ``app`` to its exit (the quit key or SIGTERM), then write its snapshot."""
-    app.run(**run_options)
-    app.save_snapshot()
+    try:
+        app.run(**run_options)
+        app.save_snapshot()
+    finally:
+        for sig, handler in app.replaced_signals.items():
+            signal.signal(sig, handler)
 
 
 if __name__ == "__main__":

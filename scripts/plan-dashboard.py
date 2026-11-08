@@ -25,9 +25,12 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -175,7 +178,66 @@ def run_tui(args) -> int:
     if shutil.which("uv") is None:
         print("interactive console needs uv; use 'plan-dashboard.py tui --once'", file=sys.stderr)
         return EXIT_NEEDS_UV
-    return subprocess.call(tui.launch_argv(args))
+    return run_until_exit(tui.launch_argv(args))
+
+
+def process_tree(root_pid: int) -> list[int]:
+    """The live processes below ``root_pid``, read from /proc (none where /proc is missing)."""
+    parent = {}
+    for entry in os.listdir("/proc") if os.path.isdir("/proc") else ():
+        if entry.isdigit():
+            try:
+                with open(f"/proc/{entry}/stat", encoding="utf-8") as stat:
+                    parent[int(entry)] = int(stat.read().rsplit(")", 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                continue
+    found, frontier = [], {root_pid}
+    while frontier:
+        frontier = {pid for pid, ppid in parent.items() if ppid in frontier}
+        found += sorted(frontier)
+    return found
+
+
+def run_until_exit(argv: list[str]) -> int:
+    """Run ``argv`` and return its exit status, passing a termination request on to it.
+
+    SIGTERM, SIGHUP and SIGINT reach the child and everything below it once (uv may or may not forward a
+    signal, and the app must hear it either way); a repeated request is the same request and is not sent
+    again. The launcher leaves only when the child and the processes that were below it are gone, so
+    what the app writes on its way out is finished before this process ends.
+    """
+    child = subprocess.Popen(argv)
+    asked: list[int] = []
+    below: list[int] = []
+
+    def pass_on(signum, frame) -> None:
+        if asked:
+            return
+        asked.append(signum)
+        below.extend(process_tree(child.pid))
+        for pid in [child.pid, *below]:
+            try:
+                os.kill(pid, signum)
+            except OSError:
+                pass
+
+    previous = {sig: signal.signal(sig, pass_on) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    try:
+        status = child.wait()
+        while any(os.path.exists(f"/proc/{pid}") and not _is_zombie(pid) for pid in below):
+            time.sleep(0.02)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    return 128 - status if status < 0 else status
+
+
+def _is_zombie(pid: int) -> bool:
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
+            return stat.read().rsplit(")", 1)[1].split()[0] == "Z"
+    except (OSError, IndexError):
+        return True
 
 
 def run_web(args) -> int:
