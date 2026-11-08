@@ -1057,6 +1057,13 @@ def _protocol_lines(history: "dict | None", noun: str) -> list[str]:
             f"{CONDITION_MARKERS[0]} stage:3 <concern>`."
         )
     lines.append(
+        "  - A concern about a plan check (a demand for a stronger, extra or different check) "
+        "starts with `check:` right after its marker and part token "
+        f"(`{SEVERITY_BLOCKING}: {CONDITION_MARKERS[1]} stage:3 check: req:R4 <concern>`) and "
+        "cites with `req:<id>` each order requirement the check fails to decide. A check "
+        "concern that cites no order requirement is recorded as advisory."
+    )
+    lines.append(
         f"- after the concerns, a line `{CUSTOMER_QUESTIONS_MARKER}` followed by one "
         f"`{CUSTOMER_QUESTION_MARKER} <question>` line per question only the customer can "
         f"decide (a choice or a fact this {noun} depends on and the plan does not settle), or "

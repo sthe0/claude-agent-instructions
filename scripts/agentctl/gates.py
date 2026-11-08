@@ -1713,14 +1713,14 @@ def _plan_review_baseline(pr) -> dict:
 #: free-text meaning — the permitted case under
 #: regex-not-for-semantic-classification.md, not the forbidden one.
 _PLAN_REVIEW_PART_TOKEN_RE = re.compile(
-    r"^\s*(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
+    r"^\s*(?:(?:cut|add):\s*)?(?:check:\s*)?([A-Za-z]+:\d*)"
 )
 
 #: The same token, additionally accepted right after the reviewer's `C<n>:` marker
 #: (`blocking: C1: stage:3 ...`). Only the topological pair/unit path asks for it, and only
 #: while the delta rule applies (a pass on a row with changed parts).
 _PLAN_REVIEW_MARKED_PART_TOKEN_RE = re.compile(
-    r"^\s*(?:[Cc][1-4]:\s*)?(?:(?:cut|add):\s*)?([A-Za-z]+:\d*)"
+    r"^\s*(?:[Cc][1-4]:\s*)?(?:(?:cut|add):\s*)?(?:check:\s*)?([A-Za-z]+:\d*)"
 )
 
 
@@ -1801,6 +1801,35 @@ def classify_concerns(scope: str, ids: list[str], concerns: list[str]) -> "tuple
     return in_scope, out_of_scope
 
 
+#: Protocol tokens the engine defines for a concern about a plan check: the subject token
+#: `check:` right after the condition marker and optional part token
+#: (`C2: stage:3 check: req:R4 ...`), and one `req:<id>` per order requirement the check
+#: fails to decide. Parsing them is the permitted token case of
+#: regex-not-for-semantic-classification.md; whether a concern IS about a check is the
+#: reviewer's perception, written down as the token.
+_CHECK_CONCERN_RE = re.compile(
+    r"^\s*(?:[Cc][1-4]:\s*)?(?:(?:cut|add):\s*)?(?:(?:meta|order|stage):\d*\s+)?check:(?:\s|$)",
+    re.IGNORECASE,
+)
+_CITED_REQUIREMENT_RE = re.compile(r"(?<![\w:])req:([A-Za-z0-9_][A-Za-z0-9_.\-]*)")
+
+
+def check_concern_anchored(body: str, requirement_ids) -> bool:
+    """Whether a concern may hold the plan: True unless it is a `check:` concern that
+    cites no `req:<id>` of the plan's order requirements.
+
+    A concern that is not about a plan check, and any concern of a plan whose order
+    carries no requirements (`requirement_ids` empty: nothing to anchor to), is anchored.
+    Pure: reads only its arguments."""
+    ids = frozenset(requirement_ids or ())
+    if not ids:
+        return True
+    text = " ".join((body or "").split())
+    if _CHECK_CONCERN_RE.match(text) is None:
+        return True
+    return any(m.rstrip(".-") in ids for m in _CITED_REQUIREMENT_RE.findall(text))
+
+
 EFFECTIVE_BLOCKING = "blocking"
 EFFECTIVE_ADVISORY = "advisory"
 
@@ -1809,6 +1838,7 @@ def effective_concern_severity(
     severity: str, parts, *, has_prev: bool, changed, open_parts,
     restates_dispositioned: bool, new_evidence: bool,
     after_pass_on_changed: bool = False, restates_open: bool = False,
+    unanchored_check: bool = False,
 ) -> str:
     """The severity a reviewer-written concern is recorded with: `blocking`, or
     `advisory` when the freeze rules apply, or `note` as written.
@@ -1828,9 +1858,14 @@ def effective_concern_severity(
     changed since: the review judges the delta, so a blocking concern stays blocking only
     when it names a changed part, sits on a part with an open blocker, or `restates_open`
     — it re-raises an open blocker. One naming no part at all is downgraded here, where
-    the rule above would keep it blocking."""
+    the rule above would keep it blocking.
+
+    `unanchored_check` — the concern is about a plan check and cites no requirement of the
+    plan's order (`check_concern_anchored`): it is advisory ahead of every rule above."""
     if severity != SEVERITY_BLOCKING:
         return severity
+    if unanchored_check:
+        return EFFECTIVE_ADVISORY
     if after_pass_on_changed and has_prev and not new_evidence:
         if restates_open or any(p in open_parts for p in parts):
             return EFFECTIVE_BLOCKING

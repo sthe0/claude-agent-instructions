@@ -553,6 +553,8 @@ def _plan_concern_severity(
         if e.scope == ledger_scope and gates.concern_unresolved(e, state, doc)
         for p in e.parts
     }
+    order = doc.meta.order if doc is not None else None
+    requirement_ids = [r.id for r in order.requirements] if order is not None else []
     parts_by_concern, effective = [], []
     for pc in parsed:
         parts = _concern_parts(
@@ -576,6 +578,7 @@ def _plan_concern_severity(
             new_evidence=evidence or differs,
             after_pass_on_changed=bool(delta_changed),
             restates_open=target is not None and gates.concern_unresolved(target, state, doc),
+            unanchored_check=not gates.check_concern_anchored(pc.body, requirement_ids),
         ))
     effective_verdict = verdict
     if (verdict == gates._PLAN_REVIEW_REVISE and parsed and attested and may_promote
