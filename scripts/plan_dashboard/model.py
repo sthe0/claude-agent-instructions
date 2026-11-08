@@ -131,6 +131,7 @@ def _rows_of(data: bytes):
     for line in data.split(b"\n"):
         if not line.strip():
             continue
+        snapshot.check_stop()
         try:
             row = json.loads(line.decode("utf-8"))
         except ValueError:
@@ -147,6 +148,7 @@ def _ledger(cost_log) -> dict:
     if st is None:
         return {"rows": [], "by_session": {}, "by_plan": {}, "unread": not absent}
     ident = snapshot.identity_of(st)
+    snapshot.check_stop()
     with CACHE_LOCK:
         entry = _LEDGER.get("entry")
         if entry is not None and entry["path"] == str(path) and snapshot.same_identity("ledger", entry["ident"], ident):
@@ -215,6 +217,7 @@ def _ledger_sums(cost_log) -> dict:
     if st is None:
         return {"by_session": {}, "by_plan": {}, "unread": not absent}
     ident = snapshot.identity_of(st)
+    snapshot.check_stop()
     with CACHE_LOCK:
         entry = _SUMS.get("entry")
         mine = entry is not None and entry["path"] == str(path)
@@ -240,9 +243,11 @@ def _ledger_sums(cost_log) -> dict:
 
 def export_sums(identities) -> dict | None:
     """The kept ledger sums for the snapshot, when the ledger's recorded identity is the one they were read
-    under (a spawn may have appended between the read and the stat the snapshot records)."""
-    with CACHE_LOCK:
-        entry = _SUMS.get("entry")
+    under (a spawn may have appended between the read and the stat the snapshot records).
+
+    Takes no lock: a read holds ``CACHE_LOCK`` across its file I/O, and the snapshot at exit must not wait for
+    it. The entry is replaced whole, never changed in place, so the last one published is read as it is."""
+    entry = _SUMS.get("entry")
     if (entry is None or not entry["settled"] or entry["path"] not in identities
             or tuple(entry["ident"]) != tuple(identities[entry["path"]])):
         return None
@@ -303,6 +308,7 @@ def _read_transcript(path: Path) -> list:
     for raw in complete.split(b"\n"):
         if b'"usage"' not in raw:
             continue
+        snapshot.check_stop()
         try:
             obj = json.loads(raw.decode("utf-8"))
         except ValueError:
@@ -324,6 +330,7 @@ def _read_transcript(path: Path) -> list:
 
 
 def transcript_usage(path) -> list:
+    snapshot.check_stop()
     with CACHE_LOCK:
         return list(_read_transcript(Path(path)))
 
@@ -798,6 +805,7 @@ def child_index(state_root, *, since: float | None = None) -> dict[str, list[dic
         elif cached is None and floor is not None and st.st_mtime < floor:
             continue
         else:
+            snapshot.check_stop()
             read_ns = snapshot.now_ns()
             link = _child_link(path)
             with CACHE_LOCK:

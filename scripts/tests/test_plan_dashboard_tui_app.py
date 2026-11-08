@@ -1836,6 +1836,68 @@ def test_the_snapshot_is_written_at_a_clean_exit_and_announced_after_it(tmp_path
     assert {item["kind"] for item in document["sources"]} >= {"state", "transcript"}
 
 
+SHUTDOWN_HANG_GUARD_S = 30
+
+
+def test_shutdown_does_not_wait_on_an_in_flight_read(tmp_path, monkeypatch, stream):
+    root = attention_root(tmp_path)
+    path = snapshot_file(tmp_path)
+    app = make_app(root, snapshot_path=path, locator=attention_locator())
+    stalled, guards, gave_up = [], [], []
+
+    async def auto_pilot(pilot):
+        await settle(app, pilot)
+        assert await until(pilot, lambda: app.old_cleared)
+        release, calls = hold(monkeypatch, model, "_extend_sums")
+        stalled.append((release, calls))
+        guard = threading.Timer(SHUTDOWN_HANG_GUARD_S, lambda: (gave_up.append(1), release.set()))
+        guards.append(guard)
+        guard.start()
+        with open(root.cost_log, "a", encoding="utf-8") as ledger:
+            ledger.write(json.dumps({"spawner_session": ALPHA, "stage_index": 1, "cost_usd": 0.5}) + "\n")
+        app.reload(force=True)
+        assert await until(pilot, lambda: calls)
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        await pilot.pause(10)
+
+    previous = signal.signal(signal.SIGTERM, lambda *args: None)
+    try:
+        tui_app.run_app(app, headless=True, size=SIZE, auto_pilot=auto_pilot)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        for guard in guards:
+            guard.cancel()
+        stalled[0][0].set()
+    assert gave_up == [], "the exit waited on the held read until the hang guard let it go"
+    assert len(stalled[0][1]) == 1
+    got = drain(stream)
+    assert [e["ev"] for e in got].count("snapshot_written") == 1 and got[-1]["ev"] == "snapshot_written"
+    assert app.return_code == 0
+    assert snapshot_store.load(path) is not None
+
+
+def test_a_read_that_the_exit_stopped_ends_without_an_outcome_and_without_a_traceback(monkeypatch):
+    tracebacks = []
+    monkeypatch.setattr(threading, "excepthook", tracebacks.append)
+
+    async def main():
+        before = set(threading.enumerate())
+        task = asyncio.ensure_future(tui_app.in_daemon_thread(snapshot_store.check_stop))
+        await asyncio.sleep(0)
+        for thread in set(threading.enumerate()) - before:
+            thread.join(SHUTDOWN_HANG_GUARD_S)
+        outcome = task.done()
+        task.cancel()
+        return outcome
+
+    snapshot_store.STOP.set()
+    try:
+        assert asyncio.run(main()) is False
+    finally:
+        snapshot_store.STOP.clear()
+    assert tracebacks == []
+
+
 LAUNCHER_HANG_GUARD_S = 300
 
 

@@ -698,6 +698,90 @@ def test_the_derived_code_files_follow_relative_and_nested_imports(tmp_path, mon
         "pkg/root.py", "pkg/sibling.py", "pkg/sub/__init__.py", "pkg/sub/leaf.py", "pkg/other.py"}
 
 
+def test_a_read_ends_at_its_next_source_once_the_app_is_leaving(tmp_path):
+    source = tmp_path / "source.json"
+    source.write_text("{}", encoding="utf-8")
+    loaded = []
+    store.STOP.set()
+    try:
+        with pytest.raises(store.Stopped):
+            store.IdentityCache("state").fetch(source, source.stat(), loaded.append)
+    finally:
+        store.STOP.clear()
+    assert loaded == [] and not issubclass(store.Stopped, Exception)
+
+
+BLOCKS_WITH_AN_IMPORT = '''
+import top
+if cond:
+    import in_if
+else:
+    import in_else
+try:
+    import in_try
+except ImportError:
+    import in_except
+else:
+    import in_try_else
+finally:
+    import in_finally
+try:
+    pass
+except* OSError:
+    import in_except_star
+with ctx:
+    import in_with
+for item in items:
+    import in_for
+else:
+    import in_for_else
+while cond:
+    import in_while
+else:
+    import in_while_else
+class Holder:
+    import in_class
+    def method(self):
+        import in_method
+        def inner():
+            import in_inner
+async def coroutine():
+    async with ctx:
+        import in_async_with
+    async for item in items:
+        import in_async_for
+match value:
+    case 1:
+        import in_case
+x = lambda: (yield)
+'''
+
+
+def test_the_imports_of_a_module_are_found_in_every_kind_of_block(tmp_path, monkeypatch):
+    import ast
+
+    source = tmp_path / "pkg" / "module.py"
+    source.parent.mkdir()
+    source.write_text(BLOCKS_WITH_AN_IMPORT, encoding="utf-8")
+    monkeypatch.setattr(store, "SCRIPTS", tmp_path)
+    everywhere = {alias.name for node in ast.walk(ast.parse(BLOCKS_WITH_AN_IMPORT)) if isinstance(node, ast.Import)
+                  for alias in node.names}
+    assert len(everywhere) == 19 and store._imported_names(source) == everywhere
+
+
+def test_the_imports_found_in_the_blocks_are_the_imports_a_walk_of_every_node_finds_in_every_repo_module():
+    import ast
+
+    for path in store.SCRIPTS.rglob("*.py"):
+        try:
+            tree = ast.parse(path.read_bytes())
+        except SyntaxError:
+            continue
+        in_blocks = [node for node in store._statements(tree.body) if isinstance(node, (ast.Import, ast.ImportFrom))]
+        everywhere = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+        assert sorted(map(ast.dump, in_blocks)) == sorted(map(ast.dump, everywhere)), path
+
+
 def test_a_missing_or_unparsable_code_file_gives_a_version_no_other_process_shares(tmp_path, monkeypatch):
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "root.py").write_text("def broken(:\n", encoding="utf-8")

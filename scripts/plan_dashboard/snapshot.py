@@ -50,6 +50,19 @@ CODE_ROOTS = tuple(f"plan_dashboard.{name}" for name in ("model", "attention", "
 MISS = object()
 
 _LOCK = threading.Lock()
+STOP = threading.Event()
+
+
+class Stopped(BaseException):
+    """Raised in a read thread that finds ``STOP`` set: the app is leaving, nobody waits for the result.
+    Not an ``Exception``: a read's own ``except Exception`` must not turn it into a failed source."""
+
+
+def check_stop() -> None:
+    """Called between the sources of a read, so a read that is still going when the app starts to leave ends at
+    the next source instead of competing with the snapshot write for the interpreter."""
+    if STOP.is_set():
+        raise Stopped
 
 
 def now_ns() -> int:
@@ -93,6 +106,7 @@ class IdentityCache:
 
     def fetch(self, path, st, load):
         """The cached value, else ``load(path)``, kept only when the file was settled when read."""
+        check_stop()
         key, ident = str(path), identity_of(st)
         value = self.get(key, ident)
         if value is not MISS:
@@ -123,6 +137,7 @@ def scan(root, suffix: str) -> dict[str, tuple[str, os.stat_result]]:
     try:
         with os.scandir(root) as listing:
             for entry in listing:
+                check_stop()
                 if not entry.name.endswith(suffix):
                     continue
                 try:
@@ -392,6 +407,7 @@ def applied_by_task(changed, kinds: dict[str, str], driven: dict[str, list[str]]
 def observation(rotate: bool = True) -> tuple[list[str], dict[str, str], dict[str, list[str]]]:
     """``(changed, kinds, driven)`` for a report of ``applied``: what was created, changed, deleted or read
     (``Observed.take``, or ``peek`` without ``rotate``), each path's kind and the binding scan's drive map."""
+    check_stop()
     changed = OBSERVED.take() if rotate else OBSERVED.peek()
     return changed, OBSERVED.kinds(), BINDINGS.driven()
 
@@ -419,12 +435,22 @@ def _repo_module_file(dotted: str) -> Path | None:
     return None
 
 
+def _statements(nodes):
+    """The statements of ``nodes`` and, below them, those of every block (``body``, ``orelse``, ``finalbody``,
+    ``handlers``, ``cases``). An import is a statement, so a walk of the blocks finds every import that a walk
+    of every node finds, without visiting the expressions, which are most of the tree."""
+    for node in nodes:
+        yield node
+        for block in ("body", "orelse", "finalbody", "handlers", "cases"):
+            yield from _statements(getattr(node, block, ()))
+
+
 def _imported_names(path: Path) -> set[str]:
     """Every dotted module name ``path`` imports, at any depth, relative imports resolved against its package
     and each ``from X import y`` also naming ``X.y`` (``y`` may be a submodule)."""
     package = path.relative_to(SCRIPTS).parent.parts
     names: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_bytes())):
+    for node in _statements(ast.parse(path.read_bytes()).body):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
@@ -501,7 +527,7 @@ def write(path, sections: dict, sources: list[dict]) -> Path:
     try:
         _remove_stale_temporaries(path)
         with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump(document, handle, separators=(",", ":"))
+            handle.write(json.dumps(document, separators=(",", ":")))
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)

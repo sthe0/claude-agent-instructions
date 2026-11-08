@@ -216,6 +216,8 @@ async def in_daemon_thread(work):
     def run() -> None:
         try:
             outcome = (True, work())
+        except snapshot_store.Stopped:
+            return
         except Exception as exc:
             outcome = (False, exc)
         deliver(loop, future, outcome)
@@ -693,7 +695,12 @@ class DashboardApp(App):
         yield Static("", id="status")
         yield Footer()
 
+    def exit(self, *args, **kwargs) -> None:
+        snapshot_store.STOP.set()
+        super().exit(*args, **kwargs)
+
     def on_mount(self) -> None:
+        snapshot_store.STOP.clear()
         table = self.query_one(DataTable)
         for name in tui.OVERVIEW_COLUMNS:
             table.add_column(name, key=name)

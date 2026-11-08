@@ -250,6 +250,7 @@ def read_tail(path) -> Tail | None:
         if cached.inode != stat.st_ino or stat.st_size < cached.offset or (
                 stat.st_size == cached.offset and not unchanged_unsettled):
             cached = None
+    snapshot.check_stop()
     read_ns = snapshot.now_ns()
     tail = Tail(stat.st_ino) if cached is None else cached.copy()
     tail.ident = ident if snapshot.settled(stat, read_ns) else None
