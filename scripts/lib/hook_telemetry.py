@@ -21,6 +21,8 @@ Stdlib and config_root only, like judge_ledger: a hook imports this first.
 """
 from __future__ import annotations
 
+import errno
+import hashlib
 import json
 import os
 import sys
@@ -85,25 +87,33 @@ def decision_event_fields(row: dict) -> dict:
     return {key: row[key] for key in ("mechanism", "event", "decision", "layer", "test")}
 
 
-def _append_row(path, data: bytes):
-    """Append `data` to the decision log with one O_APPEND write; its back-reference when the
-    telemetry layer is importable, else None."""
-    if live is not None:
-        return live.append_line(path, data)
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+def append_decision_row(path, row: bytes, mode: int = 0o600) -> "tuple[str, int, str]":
+    """Append one encoded row to the decision log and return its back-reference
+    (path, offset, sha256 of `row`), in the form live.append_line returns.
+
+    A write that failed on a full disk can leave a row without its newline; the next row
+    would be glued onto it and both lost to a JSON reader. So when the file's last byte is
+    not a newline, one newline goes in front of the row, inside the same single O_APPEND
+    write. A short write raises OSError(ENOSPC) instead of passing as success. OSError
+    propagates; each writer keeps its own fail-open."""
+    os.makedirs(os.path.dirname(str(path)) or ".", exist_ok=True)
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT | os.O_APPEND, mode)
     try:
-        os.write(fd, data)
+        size = os.fstat(fd).st_size
+        torn = size > 0 and os.pread(fd, 1, size - 1) != b"\n"
+        data = (b"\n" if torn else b"") + row
+        if os.write(fd, data) < len(data):
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), str(path))
+        end = os.lseek(fd, 0, os.SEEK_CUR)
     finally:
         os.close(fd)
-    return None
+    return str(path), end - len(row), hashlib.sha256(row).hexdigest()
 
 
 def record(mechanism: str, event: str, decision: str, session: str, *, layer: str = "core") -> None:
     row = decision_row(mechanism, event, decision, session, layer=layer)
     try:
-        path = config_root.decision_log()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        backref = _append_row(path, (json.dumps(row) + chr(10)).encode("utf-8"))
+        backref = append_decision_row(config_root.decision_log(), (json.dumps(row) + chr(10)).encode("utf-8"))
     except OSError:
         return
     if live is None:
