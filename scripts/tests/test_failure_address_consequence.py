@@ -167,7 +167,9 @@ def _fail_and_investigate(store, sid):
 def _critique(store, sid, address, targets=None):
     return cli.cmd_critique(
         ns(session=sid, functional_ground="fg", replanning_task="rt",
-           failure_address=address, norm_targets=targets), store=store)
+           failure_address=address, norm_targets=targets, cause_category="implementation_defect",
+           machinery_induced="false", mechanism="none", functional_place="verification"),
+        store=store)
 
 
 def _normalize(store, sid):

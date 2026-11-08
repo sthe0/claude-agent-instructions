@@ -1,4 +1,4 @@
-"""The structured cause of a difficulty: four fields stated at `agentctl critique`.
+"""The structured cause of a difficulty: four fields stated when the critique is recorded.
 
 `cause_category` names what kind of cause it was, `machinery_induced` whether the agent
 system's own process caused the rework, `mechanism` which mechanism of the registry did, and

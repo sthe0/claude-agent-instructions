@@ -213,6 +213,7 @@ elif label == "critique":
         invariants_to_preserve=state.difficulty.critique.invariants_to_preserve,
         differences_to_remove=state.difficulty.critique.differences_to_remove,
         failure_address=state.difficulty.critique.failure_address,
+        **cause,
     )''',
         '    state.log("critique")',
         1, "critique",

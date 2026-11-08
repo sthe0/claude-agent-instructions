@@ -48,6 +48,10 @@ def _investigate(store, sid, hypotheses=("h1", "h2")):
                                   hypotheses=list(hypotheses)), store=store)
 
 
+CAUSE_FLAGS = dict(cause_category="implementation_defect", machinery_induced="false",
+                   mechanism="none", functional_place="verification")
+
+
 def _critique(store, sid, *, norm_fault=True):
     """A `normative` critique names stage 1 as the norm at fault, so the closing replan
     must carry a different stage-1 norm; `norm_fault=False` is for a replan that only adds
@@ -55,11 +59,11 @@ def _critique(store, sid, *, norm_fault=True):
     if not norm_fault:
         return cli.cmd_critique(ns(session=sid, functional_ground="fg",
                                    replanning_task="rt",
-                                   failure_address="resource"), store=store)
+                                   failure_address="resource", **CAUSE_FLAGS), store=store)
     return cli.cmd_critique(ns(session=sid, functional_ground="fg",
                                replanning_task="rt",
                                failure_address="normative",
-                               norm_targets=["stage:1"]), store=store)
+                               norm_targets=["stage:1"], **CAUSE_FLAGS), store=store)
 
 
 def _normalize(store, sid, *, factor="reproducible cause", level="note"):

@@ -12,6 +12,10 @@ applies the spool to a SQLite record exactly once.
 | `emit.py` | `emit(session_id, kind, fields, backref=None)`: one `O_APPEND` write of `"\n" + JSON + "\n"` to `<config root>/telemetry/spool/<session>.jsonl`. Assigns the event id (UUIDv7). Never raises, never imports sqlite3; a failed append is counted in `<session>.drops`. |
 | `store.py` | The only module that opens the record (`telemetry.sqlite`, WAL, mode 0600 in a 0700 directory). Creates it, applies `migrations/NNN_name.sql` in order, keeps the origin id (also in `<record>.origin`), and exposes `replay`, `insert_rows`, `origin_id`, `imported_row_id`. |
 | `tables.py` + `tables/*.toml` + `tables.snapshot.json` | Open enumerations (`roles`, `phases`, `loss_modes`, `categories`, `severity`, `places`, `registry`). A member is added or retired (never deleted) by `add_member` / `retire_member`, each bumping the table version by 1 and recording the new state in the snapshot, so a stored version stays resolvable. Rows store the version they were validated against. A member may carry extra attributes (`Member.attrs`): the `severity` bands and cases, and every `registry` entry. |
+| `cause.py` | The structured cause of a critique (`validate_cause`, `complete_cause`): the rules between `cause_category`, `machinery_induced`, `mechanism` and `functional_place`, checked against the tables with no member list in code. Stdlib and `tables` only. |
+| `importer.py` | Fills the record from what predates live emission: the gate log, decision log, judge ledger, spawn/cost ledger, engine histories (`import:*` sources) and, with `--transcripts`, session transcripts as a fallback. Also `rebuild` (new record, same origin, from the spools and sources) and `prune`. |
+| `phases.py` | The one definition of a task's phase at a time: from live events when the session has any, else from the transcript reconstruction. `scripts/lib/time_profile.py` reads the record through it and falls back to transcripts when there is no record, and, for one session, to its engine state file when the record holds a loss for it. |
+| `profile_check.py` | `check-profile-unchanged`: recomputes the time-profile aggregate from a frozen transcript snapshot, pinned clock and frozen ledgers and compares it with the stored reference. |
 
 **Mechanism registry** (`tables/registry.toml`). One entry per mechanism that emits an event: every hook of
 `install-reminder-hooks.sh`, every engine gate, one `judge:<name>` per `judge_ledger.JUDGE_NAMES` (with
@@ -24,9 +28,22 @@ plan-review cycle, the effort trigger, the landing path and telemetry itself. `c
 categories of a critique and `severity.toml` the severity bands and cases of a difficulty's duration.
 `scripts/tests/test_telemetry_registry.py` derives the expected entries from the live sources, so a new hook, gate,
 judge or command fails there until it is registered.
-| `importer.py` | Fills the record from what predates live emission: the gate log, decision log, judge ledger, spawn/cost ledger, engine histories (`import:*` sources) and, with `--transcripts`, session transcripts as a fallback. Also `rebuild` (new record, same origin, from the spools and sources) and `prune`. |
-| `phases.py` | The one definition of a task's phase at a time: from live events when the session has any, else from the transcript reconstruction. `scripts/lib/time_profile.py` reads the record through it and falls back to transcripts when there is no record, and, for one session, to its engine state file when the record holds a loss for it. |
-| `profile_check.py` | `check-profile-unchanged`: recomputes the time-profile aggregate from a frozen transcript snapshot, pinned clock and frozen ledgers and compares it with the stored reference. |
+
+**Structured cause** (`cause.py`, table `causes`, migration `004_cause_fields.sql`). `agentctl critique` takes four
+required flags: `--cause-category` (a `categories` member), `--machinery-induced true|false`, `--mechanism` (a
+`registry` id, or `none` exactly when the cause was not machinery-induced) and `--functional-place` (a `places`
+member, or `none`; omitted for a machinery-induced cause, whose place is the registry entry's). `other` needs
+`--cause-note`. `unknown` is a mechanism only an imported row may carry, with a place other than `none`. A critique
+that breaks a rule is refused with the violated fields named; a retired member is refused on a new critique, while a
+stored row stays valid because each enumerated field is stored with the version of its table. The record is kept on
+the difficulty (`Difficulty.cause`, absent on records written before the flags existed) and on the history line, and
+emitted as a `critique` event under `cli:critique`; the sync files one `causes` row per such event, keyed by the
+event id, with the three table versions, the note and the record origin. The place vocabulary is one list:
+`agentctl/mandate.py` names its item place (`ITEM_PLACE`) as a constant because that module reads no file, and
+`test_registry_places_and_mandate_vocabulary_are_one_list` holds it to a live `places` member.
+`test_telemetry_cause.py` also scans every git-tracked file under `scripts/`, `skills/`, `docs/`, `cursor/` plus
+`CLAUDE.md` and `README.md` (`CRITIQUE_SCAN_TREE`) and fails on a call of `agentctl critique` — a fenced line, an
+inline code span or a Python argv list — that does not show the four cause flags.
 
 **Import.** `python3 scripts/telemetry.py import [--transcripts] [--all] [--max-rss-mib N] [--stats-json F]`.
 Each source is read in streaming batches of 1000 lines; a batch and its offset commit in one
@@ -83,7 +100,7 @@ emit argument inside their `try`.
 **Run it.** `python3 scripts/telemetry.py sync --session <id> [--budget S]`,
 `python3 scripts/telemetry.py path`.
 
-**Tests.** `scripts/tests/test_telemetry_{tables,store,hook_isolation,mutation_catalogue,importer,transition}.py`
+**Tests.** `scripts/tests/test_telemetry_{tables,store,hook_isolation,mutation_catalogue,importer,transition,registry,cause}.py`
 (run with `--telemetry-no-skip` to fail on any skip) and the mutation control
 `scripts/tests/telemetry_mutation_control.py` (`--control`, `--mutant NAME`; mutants live in
 `scripts/tests/telemetry_mutants/`).
