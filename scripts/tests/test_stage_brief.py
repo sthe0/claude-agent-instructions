@@ -315,6 +315,7 @@ def test_render_stage_brief_covers_every_populated_field(tmp_path):
         (Stage, "control"), (Stage, "knowledge"), (Stage, "preconditions"),
         (Stage, "grants"), (Stage, "effects"), (Stage, "optional"), (Stage, "backlog_issue"),
         (Stage, "branch"), (PlanMeta, "branch"),
+        (Stage, "lazy"),  # excluded: a planning-mode mark shown by plan-render, not stage material
         (Subject, "material"), (Subject, "result"), (Subject, "invariants"),
         (Subject, "material_refs"), (Subject, "knowledge_refs"),
         (Means, "means"), (Means, "method"), (Means, "procedure"),

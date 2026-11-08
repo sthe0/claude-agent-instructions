@@ -16,10 +16,69 @@ TESTS_DIR = str(Path(__file__).resolve().parent)
 if TESTS_DIR not in sys.path:
     sys.path.insert(0, TESTS_DIR)
 
+ARC_STUB_DIR = str(Path(__file__).resolve().parent / "stubs")
+
+
+def path_with_arc_stub(*leading: str, system: str = "/usr/bin:/bin") -> str:
+    """A PATH for a test that builds its own: the test's `leading` stub directories, then the
+    stub arc's, then `system`. A literal PATH that reaches the real launcher in a fresh HOME
+    makes it download a release."""
+    return os.pathsep.join(p for p in (*leading, ARC_STUB_DIR, system) if p)
+
+
+if os.environ.get("PATH", "").split(os.pathsep)[:1] != [ARC_STUB_DIR]:
+    os.environ["PATH"] = path_with_arc_stub(system=os.environ.get("PATH", ""))
+
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import host_llm, judge_ledger  # noqa: E402
 from _xdist_auto import pytest_configure, pytest_terminal_summary  # noqa: E402,F401
 from slow_selection import pytest_addoption, pytest_collection_modifyitems  # noqa: E402,F401
+
+NO_SKIP_OPTION = "--telemetry-no-skip"
+
+
+class _NoSkipGuard:
+    """With --telemetry-no-skip a run that skipped or xfailed any test exits non-zero,
+    so a check naming tests cannot go green on tests that never ran."""
+
+    def __init__(self):
+        self.enabled = False
+        self.not_run = 0
+
+    def pytest_addoption(self, parser):
+        parser.addoption(NO_SKIP_OPTION, action="store_true", default=False,
+                         help="exit non-zero when any collected test is skipped or xfailed")
+
+    def pytest_configure(self, config):
+        self.enabled = bool(config.getoption(NO_SKIP_OPTION))
+
+    def pytest_runtest_logreport(self, report):
+        if report.skipped:
+            self.not_run += 1
+
+    def pytest_sessionfinish(self, session, exitstatus):
+        if self.enabled and self.not_run and session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+def pytest_addhooks(pluginmanager):
+    # This conftest's pytest_addoption must stay slow_selection's own function
+    # (test_slow_selection pins that), so the no-skip option rides on a separate plugin;
+    # pytest_addoption is historic, so a plugin registered here still adds its option.
+    if not pluginmanager.has_plugin("telemetry-no-skip"):
+        pluginmanager.register(_NoSkipGuard(), "telemetry-no-skip")
+
+
+@pytest.hookimpl(specname="pytest_collection_modifyitems")
+def pytest_drop_arc_canary_unless_requested(config, items):
+    """The arc launcher canary runs only under ARC_CANARY_RUN=1, even when its file is named
+    on the command line (pytest_ignore_collect is not consulted for such paths), so it never
+    runs as an ordinary suite member."""
+    if os.environ.get("ARC_CANARY_RUN") != "1":
+        dropped = [i for i in items if i.path.name == "canary_arc_launcher.py"]
+        if dropped:
+            items[:] = [i for i in items if i not in dropped]
+            config.hook.pytest_deselected(items=dropped)
 
 # The plan-level places a SUBSTANTIVE plan owes the submission seam, as TOML an author
 # would write. Every fixture plan in the suite that expects to SUBMIT CLEAN splices these
@@ -91,6 +150,18 @@ def _isolate_decision_log(tmp_path, monkeypatch):
     or engine-gate evaluation to $AGENTCTL_DECISION_LOG; no test may append to the real log.
     The env var reaches the hook and CLI subprocesses a test spawns."""
     monkeypatch.setenv("AGENTCTL_DECISION_LOG", str(tmp_path / "decision-log.jsonl"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_telemetry(tmp_path_factory, monkeypatch):
+    """The telemetry record and its spool (lib/telemetry) live under the config root; no
+    test may open the live record or append to a live spool. The env vars reach the hook
+    and CLI subprocesses a test spawns. The directory sits outside the test's own tmp_path,
+    which some tests snapshot to prove a command wrote nothing there."""
+    record_dir = tmp_path_factory.mktemp("telemetry-record")
+    monkeypatch.setenv("AGENTCTL_TELEMETRY_DB", str(record_dir / "telemetry.sqlite"))
+    monkeypatch.setenv("AGENTCTL_TELEMETRY_SPOOL", str(record_dir / "spool"))
+    monkeypatch.delenv("AGENTCTL_TELEMETRY_FAULT", raising=False)
 
 
 @pytest.fixture(autouse=True)

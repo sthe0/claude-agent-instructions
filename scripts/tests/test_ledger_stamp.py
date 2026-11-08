@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from conftest import path_with_arc_stub
 from agentctl import edit_ledger
 from agentctl.exempt_paths import is_engine_exempt, is_ledger_noise, scratch_roots
 from session_scope import registry
@@ -274,7 +275,7 @@ def test_hook_now_ledgers_memory_write_while_touched_paths_stays_empty(tmp_path)
     scratch = tmp_path / "scratchroot"
     env = {
         "HOME": str(home),
-        "PATH": "/usr/bin:/bin",  # no git/arc stub needed: repo isn't a VCS root either way
+        "PATH": path_with_arc_stub(),
         "AGENTCTL_EDIT_LEDGER": str(ledger_path),
         "AGENTCTL_SCRATCH_ROOTS": str(scratch),
         "CLAUDE_CODE_SESSION_ID": "root-session",

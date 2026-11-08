@@ -7,7 +7,7 @@ import argparse
 import copy
 import json
 from pathlib import Path
-from . import effort, gates
+from . import effort, effort_segments, gates
 from .directive import Directive
 from .dispatch import Runner
 from .machine import transition
@@ -26,6 +26,9 @@ from .state import (
 )
 from .store import StateStore
 from .cli_common import (
+    _settle_stage_arming,
+    _unfold_parent_budget,
+    _utcnow,
     _VALID_QUALITY_RATINGS,
     OBSERVATION_CONTRACT,
     _ledgered_order_key,
@@ -299,6 +302,7 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     # parent's order window before the live plan changes, so only the child's own spend and
     # minutes reach the child's.
     _flush_order_effort(state, store=store)
+    _unfold_parent_budget(state, originating)
 
     frame = PlanFrame(
         plan_path=state.plan_path,
@@ -404,6 +408,7 @@ def cmd_push_subplan(args, *, store: StateStore, runner: Runner | None = None) -
     state.order_agreement_history = []
     state.order_challenges = []
     state.log("push_subplan", child_plan=child_plan, originating_stage=originating, depth=len(state.plan_stack))
+    state.assign_stage_uids()
     store.save(state)
     return Directive(
         True, state.node, "classify",
@@ -517,6 +522,7 @@ def cmd_pop_subplan(args, *, store: StateStore, runner: Runner | None = None) ->
         if not is_skipped(orig):
             orig.outcome.status = StageStatus.PASSED.value
             orig.control = f"satisfied by sub-plan {child_task_id}"
+            _settle_stage_arming(state, orig, effort_segments.ACT_SUBPLAN_POP, _utcnow())
     except KeyError:
         pass
     _restore_current_stage(state)

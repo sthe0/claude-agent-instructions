@@ -685,6 +685,10 @@ _STAGE_RESIDUAL_COVERAGE = {
                 "Question.target names it, inside here because flipping a required stage "
                 "to declinable changes what the stage IS to the customer",
     "backlog_issue": "the residual's own splice, same reason as its sibling `optional`",
+    "lazy": "outside: a lazy stage is the unfolded parent whose fallback budget applies "
+            "until it unfolds; the mark is compared by plan.order_place's `lazy_stages` "
+            "(gates, order_place comparison above the stage loop), so a change to it is "
+            "refused there, not re-sequenced here",
     "branch": "the residual's own splice — re-declaring the branch moves which VcsRef "
               "commit/push resources the stage derives (DR-P), so it is not a re-sequencing",
     "control": "outside: the control attestation record-result stamps, same reason",

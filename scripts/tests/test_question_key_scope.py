@@ -140,6 +140,9 @@ _UNCLAIMED_STAGE_LEAVES = {
     "optional": "whether the customer may decline the stage at approval: an approval "
                 "surface, not a place an answer can rest on — no target names it; "
                 "covered instead by gates._renorm_stage_residual",
+    "lazy": "whether the stage is an unfolded parent carrying the fallback budget until "
+            "it unfolds: a planning-mode mark no target names; compared plan-wide by "
+            "plan.order_place's `lazy_stages`",
     "backlog_issue": "the backlog issue an optional stage traces to in place of an "
                      "order requirement, same exclusion as its sibling `optional`",
     "branch": "the branch a developer stage commits and pushes (DR-P): a grant "

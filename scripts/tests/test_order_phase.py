@@ -96,6 +96,10 @@ _LINES = {
         ']'
     ),
     "constraints": 'constraints = [{ id = "K1", text = "no new dependency" }]',
+    "planning_estimate": (
+        'planning_estimate = { active_minutes = 12, usd = 4.5, '
+        'derivation = "one reviewed plan of a few stages" }'
+    ),
 }
 
 

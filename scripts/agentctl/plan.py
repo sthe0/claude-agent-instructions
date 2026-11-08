@@ -2203,6 +2203,9 @@ def parse_plan(
                 f"{stage_ctx}: backlog_issue {raw_backlog_issue!r} is not of the form "
                 f"\"<repo>#<n>\" (R8)"
             )
+        raw_lazy = s.get("lazy", False)
+        if not isinstance(raw_lazy, bool):
+            raise PlanError(f"{stage_ctx}: lazy must be a boolean (true/false), got {raw_lazy!r}")
         stages.append(
             Stage(
                 index=index,
@@ -2262,6 +2265,7 @@ def parse_plan(
                 grants=_parse_stage_grants(s.get("grants"), stage_ctx, strict=strict),
                 effects=_parse_stage_effects(s.get("effects"), stage_ctx),
                 optional=raw_optional,
+                lazy=raw_lazy,
                 backlog_issue=raw_backlog_issue,
                 amendments=_parse_amendments(s.get("amendments"), stage_ctx),
                 branch=_parse_branch(s.get("branch"), stage_ctx, strict=strict) or meta.branch,
@@ -2609,8 +2613,21 @@ def stage_interface_digest(doc: PlanDoc, stage: Stage) -> str:
 UNDERSTANDING_FIELDS = ("activity", "difficulty", "proposals", "constraints")
 
 
+def _understanding_stated(order) -> bool:
+    return bool(order.activity or order.difficulty or order.proposals or order.constraints)
+
+
 def _understanding_empty(order) -> bool:
-    return not (order.activity or order.difficulty or order.proposals or order.constraints)
+    return not (_understanding_stated(order) or order.planning_estimate is not None)
+
+
+def _estimate_member(order) -> tuple:
+    """The planning estimate as a member of the understanding's keys, empty when the order
+    carries no table — which keeps every key and digest an estimate-less order had."""
+    estimate = order.planning_estimate
+    if estimate is None:
+        return ()
+    return ((estimate.active_minutes, estimate.usd, estimate.derivation),)
 
 
 def _understanding_place(order) -> tuple:
@@ -2626,6 +2643,7 @@ def _understanding_place(order) -> tuple:
         order.difficulty,
         tuple((p.id, p.text, p.verdict, p.critique, tuple(p.against)) for p in order.proposals),
         tuple((c.id, c.text) for c in order.constraints),
+        *_estimate_member(order),
     ),)
 
 
@@ -2633,8 +2651,8 @@ def _understanding_scope(order) -> tuple:
     """The understanding's scope-bearing half for `order_scope`: which proposals exist and
     what became of each, and which constraints bind. Adding, removing or re-verdicting
     either changes what the plan is for; re-wording a proposal, a critique or a constraint
-    does not."""
-    if _understanding_empty(order):
+    does not. The planning estimate is wording of the agent's own, not scope."""
+    if not _understanding_stated(order):
         return ()
     return ((
         tuple(sorted((p.id, p.verdict) for p in order.proposals)),
@@ -2669,6 +2687,8 @@ def understanding_parts(doc: PlanDoc) -> dict[str, str]:
         values[f"P:{p.id}"] = (p.text, p.verdict, p.critique, tuple(sorted(p.against)))
     for c in order.constraints:
         values[f"K:{c.id}"] = c.text
+    if order.planning_estimate is not None:
+        values["planning_estimate"] = _estimate_member(order)[0]
     return {
         name: hashlib.sha256(repr((name, value)).encode("utf-8")).hexdigest()
         for name, value in values.items()
@@ -2782,6 +2802,7 @@ def _structural_signature(doc: PlanDoc) -> dict:
                 *grants_place(s),
                 *effects_place(s),
                 *optional_place(s),
+                *lazy_place(s),
             )
             for s in doc.stages
         },
@@ -2795,10 +2816,16 @@ def optional_place(stage) -> tuple:
     return ((("optional", stage.backlog_issue),),) if stage.optional else ()
 
 
+def lazy_place(stage) -> tuple:
+    """`optional_place` for the lazy mark: empty for a stage not marked lazy."""
+    return ((("lazy", True),),) if stage.lazy else ()
+
+
 def optional_stages_place(doc: PlanDoc) -> tuple:
     """The plan-level counterpart of `optional_place`, spliced onto `plan_content_digest`."""
     marks = tuple(sorted((s.index, s.backlog_issue) for s in doc.stages if s.optional))
-    return (("optional_stages", marks),) if marks else ()
+    lazy = tuple(sorted(s.index for s in doc.stages if s.lazy))
+    return ((("optional_stages", marks),) if marks else ()) + ((("lazy_stages", lazy),) if lazy else ())
 
 
 # The absent form of the knowledge place: no local knowledge, no refs on either projection.
@@ -4658,6 +4685,7 @@ STAGE_LEAF_CLASS: dict[str, str] = {
     "effects.sha256": "I",
     "effects.resolver": "I",
     "optional": "I",
+    "lazy": "I",
     "backlog_issue": "I",
     "amendments.date": "B",
     "amendments.text": "B",

@@ -49,15 +49,14 @@ def _write_cost_log(path, rows):
 
 
 def _fire_a_session(store, venued_fixtures_dir, tmp_path, sid):
-    """Drive a session through fire site 1 (record-result overrun) so it lands in
+    """Drive a session through a failing record-result over its stage budget so it lands in
     DIAGNOSING with exactly one unacknowledged entry in state.effort_fires."""
     plan = str(venued_fixtures_dir / "plan_two_stage.toml")
     _to_executing_stage1(store, sid, plan)
     cost_log = tmp_path / "costs.jsonl"
     _write_cost_log(cost_log, [{"plan_path": plan, "stage_index": 1, "cost_usd": 100.0}])
     d = cli.cmd_record_result(
-        ns(session=sid, status="passed", actual="ok", control="reviewed: ok",
-           observation=STAGE_OBSERVATIONS[0], cost_log=str(cost_log)),
+        ns(session=sid, status="failed", actual="boom", cost_log=str(cost_log)),
         store=store,
     )
     assert d.node == Node.DIAGNOSING.value
@@ -127,7 +126,7 @@ def test_fire_acknowledge_continue_clears_the_gate_without_moving_the_node(store
     assert len(state.effort_fires) == 1  # append-only: the record itself is never dropped
 
     # the gate is now clear: a dispatch attempt no longer carries the fire marker
-    d2 = cli.cmd_dispatch(ns(session=sid), store=store)
+    d2 = cli.cmd_dispatch(ns(session=sid, dry_run=True), store=store)
     assert d2.marker != "ESCALATE_TO_USER"
 
 
@@ -265,7 +264,7 @@ def test_dispatch_and_submit_plan_and_replan_all_unblocked_once_acknowledged(sto
     # regardless of the fire gate (unrelated, pre-existing TransitionError) —
     # the real "resubmit while diagnosing" path is cmd_replan, exercised below.
     for cmd, kwargs in (
-        (cli.cmd_dispatch, {}),
+        (cli.cmd_dispatch, {"dry_run": True}),
         (cli.cmd_replan, {"plan": plan}),
     ):
         d = cmd(ns(session=sid, **kwargs), store=store)

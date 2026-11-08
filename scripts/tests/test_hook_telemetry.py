@@ -16,12 +16,13 @@ from lib import hook_telemetry
 SCRIPTS = Path(__file__).resolve().parents[1]
 
 
-def _script(tmp_path: Path, body: str, *, wrapped: bool) -> Path:
+def _script(tmp_path: Path, body: str, *, wrapped: bool, prelude: str = "") -> Path:
     call = ('sys.exit(hook_telemetry.run(main, mechanism="hook-x"))' if wrapped
             else "sys.exit(main())")
     path = tmp_path / ("wrapped.py" if wrapped else "bare.py")
     path.write_text(
         f"import json, os, sys\nsys.path.insert(0, {str(SCRIPTS)!r})\n"
+        + prelude +
         "from lib import hook_telemetry\n"
         + textwrap.dedent(body) + f"\nif __name__ == '__main__':\n    {call}\n",
         encoding="utf-8")
@@ -199,3 +200,97 @@ def test_record_writes_a_bounded_single_line(tmp_path, monkeypatch):
     hook_telemetry.record("m" * 5000, "e", "silent", "s" * 5000, layer="arc")
     (line,) = log.read_text().splitlines()
     assert len(line.encode()) < 2048 and json.loads(line)["layer"] == "arc"
+
+
+def test_a_telemetry_layer_that_cannot_be_imported_changes_nothing_and_the_decision_row_stays(tmp_path):
+    body, _ = HOOKS["deny_json"]
+    bare = _run(_script(tmp_path, body, wrapped=False), tmp_path / "unused.jsonl")
+    log = tmp_path / "log.jsonl"
+    wrapped = _run(_script(tmp_path, body, wrapped=True, prelude="sys.modules['lib.telemetry.live'] = None\n"), log)
+    assert (wrapped.stdout, wrapped.returncode, wrapped.stderr) == (bare.stdout, bare.returncode, "")
+    assert [row["decision"] for row in _rows(log)] == ["deny"]
+
+
+def test_record_keeps_the_decision_row_when_the_emit_raises(tmp_path, monkeypatch):
+    from lib.telemetry import live
+    log = tmp_path / "log.jsonl"
+    monkeypatch.setenv("AGENTCTL_DECISION_LOG", str(log))
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("no spool")
+    monkeypatch.setattr(live, "emit_event", broken)
+    hook_telemetry.record("hook-x", "PreToolUse", "deny", "s1")
+    assert [row["decision"] for row in _rows(log)] == ["deny"]
+
+
+def test_judge_ledger_call_keeps_its_line_when_the_source_helper_raises(tmp_path, monkeypatch):
+    from lib import judge_ledger
+    ledger = tmp_path / "judge.jsonl"
+    monkeypatch.setenv("AGENTCTL_JUDGE_LEDGER", str(ledger))
+
+    real, calls = judge_ledger.current_source, []
+
+    def broken():
+        calls.append(1)
+        if len(calls) > 1:
+            raise RuntimeError("no source")
+        return real()
+    monkeypatch.setattr(judge_ledger, "current_source", broken)
+    judge_ledger.call("binary_ask", timed_out=False, duration=0.1, returncode=0, prompt_chars=4)
+    assert [row["kind"] for row in _rows(ledger)] == ["call"]
+
+
+def test_judge_ledger_imports_and_writes_its_line_when_the_telemetry_layer_cannot_be_imported(tmp_path):
+    ledger = tmp_path / "judge.jsonl"
+    code = ("import sys\nsys.modules['lib.telemetry.live'] = None\n"
+            f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
+            "from lib import judge_ledger\n"
+            "judge_ledger.call('binary_ask', timed_out=False, duration=0.1, returncode=0, prompt_chars=4)\n")
+    script = tmp_path / "judge_without_live.py"
+    script.write_text(code, encoding="utf-8")
+    env = {**os.environ, "AGENTCTL_JUDGE_LEDGER": str(ledger)}
+    done = subprocess.run([sys.executable, str(script)], env=env, capture_output=True, text=True, timeout=60)
+    assert (done.returncode, done.stderr) == (0, "")
+    assert [row["kind"] for row in _rows(ledger)] == ["call"]
+
+
+def test_judge_ledger_call_keeps_its_line_without_the_telemetry_layer(tmp_path, monkeypatch):
+    from lib import judge_ledger
+    ledger = tmp_path / "judge.jsonl"
+    monkeypatch.setenv("AGENTCTL_JUDGE_LEDGER", str(ledger))
+    monkeypatch.setattr(judge_ledger, "live", None)
+    judge_ledger.call("binary_ask", timed_out=False, duration=0.1, returncode=0, prompt_chars=4)
+    assert [row["kind"] for row in _rows(ledger)] == ["call"]
+
+
+def test_engine_landing_and_spawn_start_when_the_telemetry_layer_cannot_be_imported(tmp_path):
+    gate_log = tmp_path / "gate-log.jsonl"
+    code = textwrap.dedent(f"""
+        import importlib.util, sys
+        sys.modules['lib.telemetry.live'] = None
+        sys.path.insert(0, {str(SCRIPTS)!r})
+        from agentctl import cli_common
+        assert cli_common.live is None
+        cli_common._append_jsonl(__import__('pathlib').Path({str(gate_log)!r}), {{"gate": "g"}})
+        for name in ("land-branch", "spawn-specialist"):
+            spec = importlib.util.spec_from_file_location(name.replace("-", "_"), {str(SCRIPTS)!r} + "/" + name + ".py")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            assert module.live is None, name
+    """)
+    script = tmp_path / "start_without_live.py"
+    script.write_text(code, encoding="utf-8")
+    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=120)
+    assert (done.returncode, done.stderr) == (0, "")
+    assert [row["gate"] for row in _rows(gate_log)] == ["g"]
+
+
+def test_a_landing_event_is_a_no_op_when_the_telemetry_layer_is_missing(monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("land_branch_no_live", SCRIPTS / "land-branch.py")
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    module.live = None
+    module._emit_landing("start", "s", {"branch": "b"})

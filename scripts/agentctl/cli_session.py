@@ -475,6 +475,9 @@ def register(sub, add):
     sp.add_argument("--criterion-type", dest="criterion_type", default=CriterionType.MEASURABLE.value)
     sp.add_argument("--recursion-depth", dest="recursion_depth", type=int, default=0)
     sp.add_argument("--force", action="store_true")
+    sp.add_argument("--continue-epoch", dest="continue_epoch", default=None,
+                    help="the telemetry task epoch this reset carries on instead of opening a new "
+                         "task row (the epoch id the session's `.epoch` sidecar names)")
     sp.add_argument("--reopen-reason", dest="reopen_reason", default="",
                     help="why a task that already RESOLVED is being re-entered — required by "
                          "gates.resolved_reentry_blockers, because reset is the only way back "

@@ -257,6 +257,9 @@ DESIRED = [
     ("PreToolUse",       "Write", "verify-experience-leaf.py --hook", 5),
     # Reject a Write that would carry a git conflict marker into any file.
     ("PreToolUse",       "Write", "verify-no-conflict-markers.py --hook", 5),
+    # Telemetry self-filling trigger: writes the session's end marker and starts the record's
+    # sync detached (own session, output discarded), then returns. Prints nothing, exits 0.
+    ("SessionEnd",       None,    "hook-telemetry-session-end.py",   5),
 ]
 
 with open(settings_path, encoding="utf-8") as fh:

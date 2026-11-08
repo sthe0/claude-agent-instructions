@@ -30,10 +30,12 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `memory-index-max-bytes` | `24000` | UTF-8 bytes cap on `memory-global/MEMORY.md` (harness truncates at 25000); see memory-index-max-bytes-derivation.md. |
 | `phase3-due-sessions-floor` | `30` | Minimum scanned sessions before a Phase-3 firing verdict counts as evidence. |
 | `phase3-due-data-window-days` | `14` | Minimum days since the Phase-3 baseline stamp before its verdict is trusted. |
-| `effort-divergence-multiple` | `5.0` | Actual-to-estimated effort ratio at which a passing result is routed to DIAGNOSING (spend, wall-clock). |
+| `effort-divergence-multiple` | `5.0` | Ratio of a segment's actual to its own budget at which, beside the floor, its spend or wall-clock scale fires; planning and each stage are judged separately. |
 | `effort-stage-minutes-small` | `10` | Expected active minutes of a small-tier stage; also prices in-thread stages. |
 | `effort-stage-minutes-medium` | `25` | Expected active minutes of a medium-tier stage. |
 | `effort-stage-minutes-large` | `60` | Expected active minutes of a large-tier stage. |
+| `effort-fire-floor-usd` | `8.00` | Dollars a segment's actual must exceed its budget by, beside the multiple, before its spend scale fires. |
+| `effort-fire-floor-minutes` | `60` | Active minutes a segment's actual must exceed its budget by, beside the multiple, before its wall-clock scale fires. |
 | `effort-replan-absolute` | `5` | Replan count (and pre-approval review rounds) at which the effort trigger fires or the round release opens. |
 | `effort-replan-backstop` | `6` | Replans since the user's last decision after which the agent may no longer acknowledge an effort fire itself. |
 | `review-round-backstop` | `6` | Review rounds since the user's last decision after which the agent may no longer record a review override. |
@@ -42,7 +44,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `review-parallel-max` | `6` | Cap on concurrent pair-reviewer spawns within one topological-review level. |
 | `verify-final-parallel-max` | `2` | Cap on checks `verify-final` runs at once (1 = serial); also bounded by the free-CPU worker budget. |
 | `review-cycle-acts` | `20` | Counted review acts in one pre-approval cycle at which PLAN_READY routes into DIAGNOSING. |
-| `review-cycle-active-minutes` | `77` | Active minutes in one pre-approval review cycle at which PLAN_READY routes into DIAGNOSING. |
+| `review-cycle-active-minutes` | `77` | Active minutes in one pre-approval review cycle at which PLAN_READY routes into DIAGNOSING (only while a migrated window arming is open); also fixes the planning fallback's wall-clock fire point. |
 | `review-stage-nonpass-streak` | `3` | Consecutive non-passing stage-scoped reviews of one stage at which PLAN_READY routes into DIAGNOSING. |
 | `root-bash-call-max-min` | `2` | Longest foreground Bash call the root makes; longer ones run with `run_in_background`. |
 | `root-silent-max-min` | `25` | Longest stretch the root stays silent to the user while specialists are in flight. |
@@ -60,5 +62,6 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `resource-grant-judge-timeout-s` | `15` | Seconds the opaque-code judge may run; at most `resource-grant-hook-timeout-s` minus 5. |
 | `resource-estimate-drift-repeat` | `2` | Distinct tasks in which one executor kind's resource request must under-estimate before self-diagnosis proposes an edit to that kind's skill. |
 | `time-profile-half-life-days` | `7` | Half-life in days of the session age weight in `agent-report.py time-profile`; a session this old counts half as much as one that just ended. |
+| `telemetry-prune-retention-days` | `70` | Age in days beyond which `telemetry.py prune` deletes sync and decision rows of the telemetry record; per-task aggregate rows are never pruned. |
 
 Per-machine values live uncommitted beside this file (`agent-identity.local`, `term-rulesets/*.toml`); see `docs/operations/config-rationale.md` and `docs/operations/org-portability.md`.

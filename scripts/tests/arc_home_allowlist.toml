@@ -1,0 +1,11 @@
+# Tests allowed to leave an `.arc` directory under the sandbox root of a recorded run
+# (scripts/tests/r1_control.py verify). Any other `.arc` there means a test reached the real
+# launcher in a fresh HOME, which downloads a release of tens of gigabytes.
+#
+# `path_part` is a substring of the leftover path (pytest's per-test directory name, cut to
+# 30 characters); `reason` is required.
+
+[[allow]]
+test = "scripts/tests/canary_arc_launcher.py::test_launcher_run_downloads_nothing"
+path_part = "test_launcher_run_downloads_no"
+reason = "The canary seeds its sandbox HOME with a copy of an installed release on purpose, so the launcher it runs has nothing to download."

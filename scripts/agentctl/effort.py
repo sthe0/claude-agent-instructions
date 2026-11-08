@@ -137,7 +137,9 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass
+from datetime import datetime
 
+from . import effort_segments
 from .child_runs import pid_alive
 from .config import Thresholds
 from .state import EFFORT_FIRE_FINISHED_WORK, SessionState, WeightClass, is_skipped
@@ -591,11 +593,38 @@ def _framing(scale: str, kind: str, act: float, comparand: float, multiple: floa
     )
 
 
-def divergence(
+def replans_divergence(
     state: SessionState, thr: Thresholds | None = None, *,
     cross_session_totals: dict | None = None, now: float | None = None,
 ) -> Divergence | None:
-    """The scale on which this session has diverged past the multiple, or None.
+    """The replans-scale fire owed now, or None: the count at its absolute threshold, across the
+    task's sessions, and no earlier replans fire standing with no replan since it."""
+    if not armed(state):
+        return None
+    earlier = [f for f in state.effort_fires if f.get("scale") == SCALE_REPLANS]
+    if earlier:
+        start = int(earlier[-1].get("history_len") or 0)
+        if not any(h.get("event") == "replan" for h in state.history[start:]):
+            return None
+    thr = thr if thr is not None else Thresholds()
+    comparand = comparands(state, thr)[SCALE_REPLANS]
+    act = effective_deltas(state, cross_session_totals=cross_session_totals, now=now)[SCALE_REPLANS]
+    if comparand <= 0 or act < comparand:
+        return None
+    multiple = act / comparand
+    return Divergence(
+        scale=SCALE_REPLANS, kind="absolute", actual=act, estimate=comparand, multiple=multiple,
+        framing=_framing(SCALE_REPLANS, "absolute", act, comparand, multiple),
+    )
+
+
+def whole_window_divergence(
+    state: SessionState, thr: Thresholds | None = None, *,
+    cross_session_totals: dict | None = None, now: float | None = None,
+) -> Divergence | None:
+    """The scale on which this session has diverged past the multiple over its whole window, or
+    None. Only a migrated session before its switch acts on it, at a failing record-result; a
+    schema 62 session is judged per arming.
 
     Returns None — no fire — when any of these hold, and each is deliberate:
       * the session is not ARMED (no stored estimate or no baseline): only cmd_approve
@@ -697,6 +726,9 @@ def divergence(
     return max(candidates, key=lambda d: (_past_own_trigger(d), -SCALE_ORDER.index(d.scale)))
 
 
+divergence = whole_window_divergence
+
+
 # --- the writers --------------------------------------------------------------
 # rederive / arm / refresh_spend are the ONLY writers of the estimate, the baseline and
 # the spend accumulator respectively. record_fire is the fire SITE's writer (cli.py), kept
@@ -727,6 +759,129 @@ def arm(state: SessionState, thr: Thresholds | None = None, *, now: float | None
     return state.effort_estimate
 
 
+SEGMENT_SCALE = {SCALE_SPEND: effort_segments.SCALE_USD, SCALE_WALL_CLOCK: effort_segments.SCALE_MINUTES}
+ORIGIN_ROW = "row"
+ORIGIN_CHILD_RUN = "child-run"
+ORIGIN_PROMPT_GAP = "prompt-gap"
+ORIGIN_RUN_LOST = "run-lost"
+
+
+def row_written_at(row: dict) -> float:
+    """A cost row's write time in epoch seconds; an unreadable one is treated as written now,
+    which only an open arming covers."""
+    value = row.get("ts")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value).timestamp()
+        except ValueError:
+            pass
+    return float("inf")
+
+
+def _late_row_retier(state: SessionState, armings, thr: Thresholds | None = None) -> None:
+    closed = [arming for arming in armings if arming and arming["closed_at"] is not None]
+    if not closed:
+        return
+    thr = thr if thr is not None else Thresholds()
+    for arming in closed:
+        effort_segments.retier_after_late_booking(
+            state.effort_segments, arming, float(thr.effort_divergence_multiple()))
+
+
+def _book_rows_above(state: SessionState, rows: list[dict], seen: float) -> None:
+    """Book each row's part above the watermark `seen`, by the row's write time."""
+    running = 0.0
+    booked = []
+    for row in rows:
+        value = row.get("cost_usd")
+        if not isinstance(value, (int, float)):
+            continue
+        above = running + float(value) - max(running, seen)
+        running += float(value)
+        if above > 0:
+            booked.append(effort_segments.book(
+                state.effort_segments, row_written_at(row), above, 0.0, ORIGIN_ROW))
+    _late_row_retier(state, booked)
+
+
+def book_gap_minutes(state: SessionState, start: float, end: float, minutes: float,
+                     origin: str = ORIGIN_PROMPT_GAP) -> None:
+    """Book the minutes of an interval, split at the arming boundaries inside it."""
+    _late_row_retier(state, effort_segments.book_interval(
+        state.effort_segments, start, end, minutes, origin))
+
+
+def book_child_runs(state: SessionState, now: float) -> None:
+    """Book the child-run minutes not yet in the ledger: `child_run_minutes` less what was
+    booked, over the stretch of runs since the last mark. A run open at the mark is booked up
+    to `now` and its closure adds only the rest."""
+    ledger = state.effort_segments
+    done = float(ledger.get("child_minutes_booked") or 0.0)
+    delta = child_run_minutes(state, now) - done
+    if delta <= 0:
+        return
+    mark = float(ledger.get("child_mark") or 0.0)
+    intervals = [(lo, hi) for lo, hi in child_run_intervals(state.effort_child_runs, now) if hi > mark]
+    start = max(mark, min(lo for lo, _ in intervals)) if intervals else mark
+    end = max(hi for _, hi in intervals) if intervals else now
+    book_gap_minutes(state, start, end, delta, ORIGIN_CHILD_RUN)
+    ledger["child_minutes_booked"] = done + delta
+    ledger["child_mark"] = end
+
+
+def planning_fallback(thr: Thresholds) -> dict:
+    """Planning's budget before an estimate is agreed: on wall-clock the fire point lands on
+    review-cycle-active-minutes, on spend two medium stages. An unset minutes key leaves that
+    scale unbudgeted, so it never fires."""
+    budget = {effort_segments.SCALE_USD: 2.0 * float(thr.budget_usd_float("medium"))}
+    minutes = thr.review_cycle_active_minutes()
+    if minutes is not None:
+        budget[effort_segments.SCALE_MINUTES] = float(minutes) / float(thr.effort_divergence_multiple())
+    return budget
+
+
+def stage_budget(tier: str, thr: Thresholds) -> dict:
+    return {
+        effort_segments.SCALE_USD: _tier_estimate(SCALE_SPEND, tier, thr),
+        effort_segments.SCALE_MINUTES: _tier_estimate(SCALE_WALL_CLOCK, tier, thr),
+    }
+
+
+def priced_snapshot(state: SessionState) -> dict:
+    """What the current approved plan's estimate priced: the estimate itself and, per live-frame
+    stage identity, its tier and whether it was priced on the spend scale. A migrated window is
+    judged against it, so the switch can take the stages it prices out of the planning budget."""
+    stages = {}
+    for stage in state.stages:
+        uid = state.stage_uid(stage.index)
+        if uid is not None and not is_skipped(stage):
+            stages[uid] = [_stage_tier(stage), bool(stage.is_spawn())]
+    return {"estimate": dict(state.effort_estimate or {}), "stages": stages}
+
+
+def tier_ladder(thr: Thresholds) -> list:
+    return [[tier, stage_budget(tier, thr)] for tier in _RETIER_TIERS]
+
+
+def carry_open_fire(state: SessionState, arming: dict) -> None:
+    """Carry a schema 61 open spend or wall-clock fire in `arming`, the planning-segment arming
+    current after the stamping load. A replans-scale record stays where it is."""
+    for fires in (state.effort_fires, *(f.effort_fires for f in state.plan_stack)):
+        last = fires[-1] if fires else None
+        if (last is None or last.get("ack") is not None or last.get("arming_id")
+                or last.get("scale") not in SEGMENT_SCALE
+                or last.get("disposition") == EFFORT_FIRE_FINISHED_WORK):
+            continue
+        last["arming_id"] = arming["arming_id"]
+        fire = arming["fire"] or {"scales": [], "ack": None, "ts": last.get("ts")}
+        scale = SEGMENT_SCALE[last["scale"]]
+        if scale not in fire["scales"]:
+            fire["scales"].append(scale)
+        arming["fire"] = fire
+
+
 def refresh_spend(state: SessionState, rows: list[dict], path: str | None) -> float:
     """Book any cost-ledger spend not yet accumulated under `path`. Returns the delta.
 
@@ -755,11 +910,13 @@ def refresh_spend(state: SessionState, rows: list[dict], path: str | None) -> fl
         if isinstance(value, (int, float)):
             total += float(value)
     seen = float(state.effort_spend_seen.get(key) or 0.0)
+    _book_rows_above(state, [row for row in rows if row.get("plan_path") == key], seen)
     delta = max(0.0, total - seen)
     state.effort_actuals[ACTUAL_SPEND_KEY] = (
         float(state.effort_actuals.get(ACTUAL_SPEND_KEY) or 0.0) + delta
     )
-    state.effort_spend_seen[key] = max(total, seen)
+    if total > 0.0 or key in state.effort_spend_seen:
+        state.effort_spend_seen[key] = max(total, seen)
     return delta
 
 
@@ -804,6 +961,7 @@ def refresh_subtree_spend(
             totals[row["spawner_session"]] = totals.get(row["spawner_session"], 0.0) + float(value)
     for session in sorted(totals):
         seen = float(state.effort_subtree_seen.get(session) or 0.0)
+        _book_rows_above(state, [row for row in rows if row.get("spawner_session") == session], seen)
         gain = max(0.0, totals[session] - seen)
         state.effort_subtree_seen[session] = max(totals[session], seen)
         if not gain:

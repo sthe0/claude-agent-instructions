@@ -481,25 +481,6 @@ def test_session_without_children_keeps_base_spend(store, fixtures_dir, tmp_path
     )
 
 
-def test_spend_divergence_fires_on_subtree_overrun(store, fixtures_dir, tmp_path):
-    plan = str(fixtures_dir / "plan_two_stage.toml")
-    _link(store, "C", "P")
-    _to_executing_stage1(store, "P", plan)
-    armed_estimate = store.load("P").effort_estimate[effort.SCALE_SPEND]
-    overrun = 2 * armed_estimate * Thresholds().effort_divergence_multiple()
-    log = _write_cost_log(tmp_path / "costs.jsonl", [_row("C", overrun, "/c/plan.toml")])
-    d = cli.cmd_record_result(
-        ns(session="P", status="passed", actual="ok", control="reviewed: ok",
-           observation=STAGE_OBSERVATIONS[0], cost_log=log),
-        store=store,
-    )
-    assert d.node == Node.DIAGNOSING.value, (
-        f"BEHAVIOUR: {overrun} spent by a linked child against a {armed_estimate} spend "
-        f"estimate fires the spend scale on the parent, node is {d.node}"
-    )
-    assert d.data["effort_divergence"]["scale"] == effort.SCALE_SPEND
-
-
 def test_spawn_specialist_writes_spawner_session(monkeypatch, tmp_path):
     cost_log = tmp_path / "spawn-costs.jsonl"
     monkeypatch.setattr(SPAWN_MOD, "COST_LOG", cost_log)

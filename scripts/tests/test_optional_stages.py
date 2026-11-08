@@ -827,7 +827,7 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "at RESOLUTION `resolution_gate_open` takes over both paths. Fix is the one-line "
         "`in (\"PASSED\", \"SKIPPED\")`; remove this entry with it"
     ),
-    ("agentctl/cli_results.py", "cmd_record_result"): (
+    ("agentctl/cli_results.py", "_record_result"): (
         "`args.status == \"passed\"` is the incoming result's own verdict on the one stage "
         "being recorded (--status passed|failed), not a read of the plan's stage statuses"
     ),
@@ -863,6 +863,10 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "target; the mismatch is caught only late, at pending_renorm_final_blockers. KNOWN "
         "GAP in main's helper, filed as a Core issue rather than fixed in a merge; remove "
         "this entry with the `in (\"PASSED\", \"SKIPPED\")` fix"
+    ),
+    ("agentctl/cli_common.py", "_settle_unfolded_parent"): (
+        "finds the next ready stage of the parent's frame exactly as ready_stages() does: "
+        "a SKIPPED stage never satisfies a dependency, so only PASSED belongs in the set"
     ),
     ("agentctl/cli_common.py", "_frozen_stage_survives"): (
         "asks whether a stage's PASSED verdict survives a replan whose carry key moved; a "
@@ -928,7 +932,7 @@ ALLOWED_STATUS_WRITE_SITES: "dict[tuple[str, str], str]" = {
         "n/a: writes ACTIVE to ready[0], taken from ready_stages(), which lists PENDING "
         "stages only"
     ),
-    ("agentctl/cli_results.py", "cmd_record_result"): (
+    ("agentctl/cli_results.py", "_record_result"): (
         "n/a: writes PASSED/FAILED to state.active_stage() (current_stage), which only "
         "next-stage sets, from ready_stages()"
     ),
