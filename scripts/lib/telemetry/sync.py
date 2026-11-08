@@ -41,6 +41,8 @@ SOURCE_KEY = "telemetry:sync"
 TRIGGER_START = "trigger.start"
 SYNC_COMMIT = "sync.commit"
 SYNC_DEFERRED = "sync.deferred"
+WAITING_PER_SYNC = 50
+CURSOR_KEY = "materialize_cursor"
 HARNESS_VERSION_ENV = "AGENTCTL_HARNESS_VERSION"
 CORE_ROOT = Path(__file__).resolve().parents[3]
 GIT_TIMEOUT_S = 5.0
@@ -220,17 +222,24 @@ def _fields(raw) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _task_key_for(conn, session: str, moment: str, explicit_epoch: "str | None"):
+def _task_opens(conn, session: str) -> "list[tuple[datetime, str]]":
+    """(time, event id) of every event of `session` that opens a task."""
+    return [(parse_time(r[1]), r[0]) for r in conn.execute(
+        "SELECT event_id, time FROM events WHERE session_id = ? AND kind = 'task' "
+        "AND json_extract(fields, '$.action') = 'open'", (session,))]
+
+
+def _task_key_for(conn, session: str, moment: str, explicit_epoch: "str | None", opens=None):
     """(origin, task_id, epoch) the event of `session` at `moment` belongs to: the epoch it
     names, else the session's task row whose opening event is the latest at or before the event,
-    else the session row's own task key, else None."""
+    else the session row's own task key, else None. A caller attributing many events of one
+    session passes `opens` (from _task_opens) read once, instead of a re-read per event."""
     if explicit_epoch:
         row = conn.execute("SELECT origin, task_id, epoch FROM tasks WHERE epoch = ?", (explicit_epoch,)).fetchone()
         if row:
             return tuple(row)
-    opens = [(parse_time(r[1]), r[0]) for r in conn.execute(
-        "SELECT event_id, time FROM events WHERE session_id = ? AND kind = 'task' "
-        "AND json_extract(fields, '$.action') = 'open'", (session,))]
+    if opens is None:
+        opens = _task_opens(conn, session)
     stamp = parse_time(moment)
     before = [(t, i) for t, i in opens if t <= stamp]
     if before:
@@ -255,9 +264,10 @@ def events_of_task(conn, task_origin: str, task_id: str, epoch: str) -> "list[st
     if opener:
         sessions.add(opener[0])
     for session in sessions:
+        opens = _task_opens(conn, session)
         for event_id, moment, raw in conn.execute(
                 "SELECT event_id, time, fields FROM events WHERE session_id = ?", (session,)).fetchall():
-            if _fields(raw).get("task_epoch") is None and _task_key_for(conn, session, moment, None) == target:
+            if _fields(raw).get("task_epoch") is None and _task_key_for(conn, session, moment, None, opens) == target:
                 chosen.add(event_id)
     return sorted(chosen)
 
@@ -434,13 +444,16 @@ def _materialize_session(conn, origin: str, session: str, subagents: "list[str]"
         put_contour(conn, session, None, "root", session_key)
     elif spawn_row is None:
         put_contour(conn, session, parent, role, session_key)
+    opens = _task_opens(conn, session)
     for event_id, kind, moment, fields in events:
+        if kind not in ("spawn", "judge"):
+            continue
+        key = _task_key_for(conn, session, moment, fields.get("task_epoch"), opens)
         if kind == "spawn":
             child_role = fields.get("role") if fields.get("role") in ("linked-child", "spawned-child") else "spawned-child"
-            put_contour(conn, event_id, session, child_role,
-                         _task_key_for(conn, session, moment, fields.get("task_epoch")))
-        elif kind == "judge":
-            put_contour(conn, event_id, session, "judge", _task_key_for(conn, session, moment, fields.get("task_epoch")))
+            put_contour(conn, event_id, session, child_role, key)
+        else:
+            put_contour(conn, event_id, session, "judge", key)
     for contour_id in subagents:
         put_contour(conn, contour_id, session, "agent-tool", session_key)
     for kind, text in artifacts:
@@ -454,19 +467,70 @@ def _put_artifact(conn, kind: str, text: str, key, moment: str) -> None:
                  "VALUES (?, ?, ?, ?, ?, ?, ?)", (digest, kind, *key, text, moment))
 
 
+def _unfiled(conn) -> "list[str]":
+    """Sessions whose spool was replayed and that have events but no sessions row yet: a sync
+    that stopped between replay and filing left them behind."""
+    return sorted(r[0] for r in conn.execute(
+        "SELECT spool FROM spool_offsets o WHERE spool != ? "
+        "AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.session_id = o.spool) "
+        "AND EXISTS (SELECT 1 FROM events e WHERE e.session_id = o.spool)", (SYNC_SESSION,)))
+
+
+def _waiting(conn) -> "list[str]":
+    """Sessions owning a contour still without a task: the parent of such a contour, or the
+    root contour itself. A task row the importer opened since may now be its home."""
+    waiting = {r[0] for r in conn.execute(
+        "SELECT DISTINCT parent_session FROM contours WHERE task_id IS NULL AND parent_session IS NOT NULL")}
+    waiting |= {r[0] for r in conn.execute("SELECT contour_id FROM contours WHERE task_id IS NULL AND role = 'root'")}
+    return sorted(waiting)
+
+
+def _parents(conn, session: str) -> "set[str]":
+    """The session that spawned `session`, as its own session event or a spawn event names it."""
+    found = {r[0] for r in conn.execute(
+        "SELECT session_id FROM events WHERE kind = 'spawn' AND child_session_id = ?", (session,))}
+    for (raw,) in conn.execute("SELECT fields FROM events WHERE session_id = ? AND kind = 'session'", (session,)):
+        parent = _fields(raw).get("parent_session")
+        if parent:
+            found.add(parent)
+    return found
+
+
+def _rotation(pool: "list[str]", cursor: "str | None", cap: int) -> "list[str]":
+    """The first `cap` sessions of the sorted `pool`, starting after `cursor` and wrapping."""
+    after = [s for s in pool if cursor is None or s > cursor]
+    before = [s for s in pool if cursor is not None and s <= cursor]
+    return (after + before)[:cap]
+
+
 def materialize(sessions: "list[str]") -> dict:
-    """Idempotently file the rows the replayed events of `sessions` imply, plus every contour
-    still without a task (a task row the importer opened since may now be its home). Returns
-    {committed, unattached}. The session's HEAD, dirty flag and harness version are captured
-    only for a row that has none, so a later sync never rewrites them."""
+    """Idempotently file the rows the replayed events of `sessions` imply, plus a bounded share of
+    the sessions still waiting. Returns {committed, unattached} and, when a write did not commit,
+    the session it stopped at as `failed_session`.
+
+    The write lock stays short at any record size: each session is filed in its own transaction
+    (first every target's task rows, so a child finds its parent's row, then every target's
+    session and contour rows), and a call takes the replayed sessions and their parents, then at
+    most WAITING_PER_SYNC others. Those come first from the unfiled sessions (replayed, with
+    events, no sessions row), then in rotation from the waiting ones (owning a contour without a
+    task), starting after the session id kept in meta under CURSOR_KEY and wrapping; the cursor is
+    advanced before filing, so a session that fails is passed over, not retried at every sync.
+    Every waiting session is thus visited within ceil(waiting / WAITING_PER_SYNC) syncs. The
+    session's HEAD, dirty flag and harness version are captured only for a row that has none, so
+    a later sync never rewrites them."""
     conn = store.open_record()
     if conn is None:
         return {"committed": False, "unattached": None}
     try:
-        waiting = {r[0] for r in conn.execute(
-            "SELECT DISTINCT parent_session FROM contours WHERE task_id IS NULL AND parent_session IS NOT NULL")}
-        waiting |= {r[0] for r in conn.execute("SELECT contour_id FROM contours WHERE task_id IS NULL AND role = 'root'")}
-        targets = sorted(set(sessions) | waiting)
+        forced = set(sessions)
+        for session in sessions:
+            forced |= _parents(conn, session)
+        forced.discard(SYNC_SESSION)
+        unfiled = [s for s in _unfiled(conn) if s not in forced][:WAITING_PER_SYNC]
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (CURSOR_KEY,)).fetchone()
+        pool = [s for s in _waiting(conn) if s not in forced and s not in unfiled]
+        rotated = _rotation(pool, row[0] if row else None, WAITING_PER_SYNC - len(unfiled))
+        targets = sorted(forced) + unfiled + rotated
         needing_head = {s for s in targets if not conn.execute(
             "SELECT core_head FROM sessions WHERE session_id = ? AND core_head IS NOT NULL", (s,)).fetchone()}
     finally:
@@ -475,21 +539,40 @@ def materialize(sessions: "list[str]") -> dict:
     versions = {s: _harness_version(s) for s in needing_head} if head else {}
     extras = {s: (subagent_contours(s), _artifact_texts(s)) for s in targets}
 
-    def work(conn):
-        origin = conn.execute("SELECT value FROM meta WHERE key = 'origin'").fetchone()[0]
-        for session in targets:
-            _file_task_rows(conn, origin, session)
-        for session in targets:
-            subagents, artifacts = extras[session]
-            _materialize_session(conn, origin, session, subagents, artifacts)
-            if head:
-                conn.execute(
-                    "UPDATE sessions SET core_head = ?, dirty = ?, harness_version = COALESCE(harness_version, ?) "
-                    "WHERE session_id = ? AND core_head IS NULL", (head, dirty, versions.get(session), session))
-        return unattached_contour_count(conn)
+    def advance(conn):
+        if rotated:
+            conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET "
+                         "value = excluded.value", (CURSOR_KEY, rotated[-1]))
+        return conn.execute("SELECT value FROM meta WHERE key = 'origin'").fetchone()[0]
 
-    outcome = store.transact(work)
-    return {"committed": outcome["committed"], "unattached": outcome["value"]}
+    started = store.transact(advance)
+    if not started["committed"]:
+        return {"committed": False, "unattached": None}
+    origin = started["value"]
+
+    def file_rows(conn, session):
+        _file_task_rows(conn, origin, session)
+
+    def file_session(conn, session):
+        subagents, artifacts = extras[session]
+        _materialize_session(conn, origin, session, subagents, artifacts)
+        if head:
+            conn.execute(
+                "UPDATE sessions SET core_head = ?, dirty = ?, harness_version = COALESCE(harness_version, ?) "
+                "WHERE session_id = ? AND core_head IS NULL", (head, dirty, versions.get(session), session))
+
+    for step in (file_rows, file_session):
+        for session in targets:
+            outcome = store.transact(lambda conn, s=session: step(conn, s))
+            if not outcome["committed"]:
+                return {"committed": False, "unattached": None, "failed_session": session}
+    conn = store.open_record()
+    if conn is None:
+        return {"committed": True, "unattached": None}
+    try:
+        return {"committed": True, "unattached": unattached_contour_count(conn)}
+    finally:
+        conn.close()
 
 
 # --- the sync -------------------------------------------------------------------------
@@ -567,5 +650,7 @@ def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
         if conn is not None:
             conn.close()
     filed = materialize([s for s in stems if s not in deferred])
+    if filed.get("failed_session"):
+        _write_own(SYNC_DEFERRED, {"session": filed["failed_session"], "phase": "materialize"})
     return {"kind": kind, "visited": stems, "committed": committed, "deferred": deferred,
             "unattached": filed["unattached"]}

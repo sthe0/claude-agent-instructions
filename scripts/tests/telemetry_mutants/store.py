@@ -14,6 +14,9 @@ _STORE_TESTS = "scripts/tests/test_telemetry_store.py::"
 _TABLES_TESTS = "scripts/tests/test_telemetry_tables.py::"
 _HOOK_TESTS = "scripts/tests/test_telemetry_hook_isolation.py::"
 _CATALOGUE_TESTS = "scripts/tests/test_telemetry_mutation_catalogue.py::"
+_SYNC_FILE = "scripts/lib/telemetry/sync.py"
+_SQL_10_FILE = "scripts/lib/telemetry/migrations/010_event_lookup_indexes.sql"
+_SCALE_TESTS = "scripts/tests/test_telemetry_sync_scale.py::"
 
 _EXACTLY_ONCE = _STORE_TESTS + "test_replay_is_exactly_once_under_retried_concurrent_and_interrupted_delivery"
 _LOCK_DEADLINE = _STORE_TESTS + "test_lock_wait_and_busy_wait_share_one_deadline_then_deferred"
@@ -155,4 +158,22 @@ MUTANTS = [
      "anchor": "if not os.access(record, os.W_OK):",
      "replacement": "if False:",
      "tests": ["scripts/tests/test_telemetry_dual_write.py::test_task_runs_to_end_with_record_readonly"]},
+    {"name": "materialize_in_one_transaction", "file": _SYNC_FILE,
+     "anchor": "    for step in (file_rows, file_session):\n"
+               "        for session in targets:\n",
+     "replacement": "    for step in [lambda conn, _s: [f(conn, s) for f in (file_rows, file_session) for s in targets]]:\n"
+                    "        for session in targets[:1]:\n",
+     "tests": [_SCALE_TESTS + "test_each_write_transaction_files_at_most_one_session_and_a_call_takes_at_most_the_cap"]},
+    {"name": "task_opens_read_per_event", "file": _SYNC_FILE,
+     "anchor": 'fields.get("task_epoch"), opens)',
+     "replacement": 'fields.get("task_epoch"), None)',
+     "tests": [_SCALE_TESTS + "test_task_opens_of_a_session_are_read_once_per_materialize_session_call"]},
+    {"name": "migration_10_missing_kind_index", "file": _SQL_10_FILE,
+     "anchor": "CREATE INDEX events_kind_time ON events (kind, time);\n",
+     "replacement": "",
+     "tests": [_SCALE_TESTS + "test_latency_and_task_epoch_reads_search_an_index_not_scan_events"]},
+    {"name": "materialize_cursor_not_advanced", "file": _SYNC_FILE,
+     "anchor": '"value = excluded.value", (CURSOR_KEY, rotated[-1]))',
+     "replacement": '"value = meta.value", (CURSOR_KEY, rotated[-1]))',
+     "tests": [_SCALE_TESTS + "test_rotation_visits_every_waiting_session_within_ceil_n_over_cap_calls"]},
 ]
