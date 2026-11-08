@@ -28,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from lib import config_root
-from lib.telemetry import emit, live, store, tables
+from lib.telemetry import cause, emit, live, store, tables
 
 BUDGET_S = 120.0
 BACKOFF_FIRST_S = 1.0
@@ -454,10 +454,32 @@ def _materialize_session(conn, origin: str, session: str, subagents: "list[str]"
             put_contour(conn, event_id, session, child_role, key)
         else:
             put_contour(conn, event_id, session, "judge", key)
+    _file_causes(conn, origin, session, events)
     for contour_id in subagents:
         put_contour(conn, contour_id, session, "agent-tool", session_key)
     for kind, text in artifacts:
         _put_artifact(conn, kind, text, session_key, events[-1][2])
+
+
+_CAUSE_INSERT = (
+    "INSERT OR IGNORE INTO causes (cause_id, session, difficulty_index, cause_category, cause_category_table_version, "
+    "machinery_induced, mechanism, mechanism_table_version, functional_place, functional_place_table_version, "
+    "cause_note, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+
+
+def _file_causes(conn, origin: str, session: str, events: list) -> None:
+    """One causes row per critique event that carries a structured cause, keyed by the event's id.
+    The table versions are the ones the event was stamped with: a member retired since stays valid."""
+    for event_id, kind, _, fields in events:
+        if kind != "critique" or not all(fields.get(k) is not None for k in cause.CAUSE_FIELDS):
+            continue
+        versions = [fields.get(column) for _, column in cause.VERSION_FIELDS.values()]
+        if not all(isinstance(v, int) for v in versions):
+            continue
+        conn.execute(_CAUSE_INSERT, (
+            event_id, session, fields.get("difficulty_index"), fields["cause_category"], versions[0],
+            1 if fields["machinery_induced"] else 0, fields["mechanism"], versions[1], fields["functional_place"],
+            versions[2], fields.get(cause.NOTE_FIELD), origin))
 
 
 def _put_artifact(conn, kind: str, text: str, key, moment: str) -> None:

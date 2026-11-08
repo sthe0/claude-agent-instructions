@@ -27,8 +27,10 @@ import os
 import subprocess
 from dataclasses import asdict
 from lib import config_root
+from lib.telemetry import cause as cause_lib
 from .cli_common import (
     REPO_ROOT,
+    live,
     _open_difficulty,
     _difficulty_cap_directive,
     _plan_review_release_active,
@@ -356,6 +358,24 @@ def cmd_investigate(args, *, store: StateStore, runner: Runner | None = None) ->
                      "investigation recorded; state the functional ground + replanning task (critique)")
 
 
+def _structured_cause(args) -> "tuple[dict, list[str]]":
+    """(the cause to record, violated rules) of the four cause flags of `critique`. A flag left
+    out is a violation by name; getattr defaults keep an in-process caller's Namespace working."""
+    given = {
+        "cause_category": getattr(args, "cause_category", None),
+        "machinery_induced": cause_lib.parse_machinery_flag(getattr(args, "machinery_induced", None)),
+        "mechanism": getattr(args, "mechanism", None),
+        "functional_place": getattr(args, "functional_place", None),
+        cause_lib.NOTE_FIELD: getattr(args, "cause_note", None),
+    }
+    absent = [n for n in cause_lib.CAUSE_FIELDS if given[n] is None and not (
+        n == "functional_place" and given["machinery_induced"] is True)]
+    if absent:
+        return {}, [f"{n}: required (--{n.replace('_', '-')})" for n in absent]
+    complete, violated = cause_lib.complete_cause(given)
+    return complete or {}, violated
+
+
 def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     state = _require(store, args.session)
     bad = _require_diagnosing(state, admit_release=True)
@@ -388,6 +408,11 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
         return Directive(False, state.node, "critique",
                          "--norm-target names the norm of a normative fault; it is "
                          f"refused with --failure-address {failure_address!r}")
+    cause, violated = _structured_cause(args)
+    if violated:
+        return Directive(False, state.node, "critique",
+                         "the critique needs a valid structured cause: " + "; ".join(violated),
+                         data={"cause_violations": violated})
     snapshots, refusal = _snapshot_norm_targets(state, norm_targets)
     if refusal:
         return Directive(False, state.node, "critique", refusal)
@@ -411,6 +436,7 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
         differences_to_remove=list(getattr(args, "differences_to_remove", None) or []),
         failure_address=failure_address,
     )
+    state.difficulty.cause = cause
     state.log(
         "critique",
         functional_ground=state.difficulty.critique.functional_ground,
@@ -418,8 +444,13 @@ def cmd_critique(args, *, store: StateStore, runner: Runner | None = None) -> Di
         invariants_to_preserve=state.difficulty.critique.invariants_to_preserve,
         differences_to_remove=state.difficulty.critique.differences_to_remove,
         failure_address=state.difficulty.critique.failure_address,
+        **cause,
     )
     store.save(state)
+    if live is not None:
+        live.emit_event(state.session_id, "critique", "cli:critique",
+                        {**cause, "difficulty_index": len(state.closed_difficulties),
+                         "difficulty_uid": state.difficulty.uid})
     # Consult (never fire) the same gate cmd_replan enforces: the record now has all
     # three sections, but the gate also shape-checks them (>=2 distinct hypotheses,
     # non-placeholder declaration fields). Announcing "replan unblocked" without
@@ -633,6 +664,21 @@ def register(sub, add):
                          "stage) names that stage's norm instead: the session hands the "
                          "fault back with REPLAN and the parent's dispatch verifies the "
                          "record")
+    sp.add_argument("--cause-category", dest="cause_category", default=None,
+                    help="what kind of cause the difficulty had: a member of the categories "
+                         "table (`other` needs --cause-note)")
+    sp.add_argument("--machinery-induced", dest="machinery_induced", default=None,
+                    choices=["true", "false"],
+                    help="true when the agent system's own process caused the rework")
+    sp.add_argument("--mechanism", default=None,
+                    help="the registry mechanism that caused it when --machinery-induced is "
+                         "true; `none` otherwise")
+    sp.add_argument("--functional-place", dest="functional_place", default=None,
+                    help="the place whose filling should have caught it (a member of the "
+                         "places table; `none` when no place is implicated); derived from the "
+                         "registry entry of a machinery-induced --mechanism when omitted")
+    sp.add_argument("--cause-note", dest="cause_note", default=None,
+                    help="free-text note on the cause (required with --cause-category other)")
     sp = add("normalize"); sp.add_argument("--session", required=True)
     sp.add_argument("--factor", default=None,
                     help="the reproducible cause the difficulty exposed, being re-normed "

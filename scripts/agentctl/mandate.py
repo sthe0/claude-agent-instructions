@@ -924,7 +924,11 @@ def mandate_approver(mandate_id: str) -> str:
     return f"{MANDATE_BASIS}:{mandate_id}"
 
 
-def item_norm_toml(*, mandate, issue, title, body, cycle_id, base_sha, bound, worktree, repo, item_dir) -> str:
+ITEM_PLACE = "mandate_cycle"  # a member of lib/telemetry/tables/places.toml; this module reads no file
+
+
+def item_norm_toml(*, mandate, issue, title, body, cycle_id, base_sha, bound, worktree, repo, item_dir,
+                   place: str = ITEM_PLACE) -> str:
     """The deterministic one-stage norm a cycle item runs under. The issue title and body are
     data: cut, then written as TOML basic strings, so no text of theirs can open a table."""
 
@@ -968,6 +972,7 @@ def item_norm_toml(*, mandate, issue, title, body, cycle_id, base_sha, bound, wo
         field("customer_id", mandate_approver(mandate.id)),
         field("customer", f"The standing mandate {mandate.id}, granted by the user (ADR-0008). Cycle {cycle_id} took Core issue #{issue} from the mandate's debt queue."),
         field("functional_place", f"Core issue #{issue}: {title}. The issue body states what is wrong now:\n{body}"),
+        field("place", place),
         "requires_traceability = true",
         "",
         "[[meta.order.requirements]]",
