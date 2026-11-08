@@ -946,7 +946,7 @@ def test_tui_once_needs_no_uv(tmp_path, capsys, monkeypatch):
 def test_interactive_tui_without_uv_exits_4(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(cli.shutil, "which", lambda name: None)
     called = []
-    monkeypatch.setattr(cli.subprocess, "call", lambda argv: called.append(argv) or 0)
+    monkeypatch.setattr(cli, "run_until_exit", lambda argv: called.append(argv) or 0)
     assert cli.main(cli_args(console_root(tmp_path))) == 4
     captured = capsys.readouterr()
     assert captured.err == "interactive console needs uv; use 'plan-dashboard.py tui --once'\n"
@@ -957,7 +957,7 @@ def test_interactive_tui_runs_the_app_with_uv(tmp_path, monkeypatch):
     root = console_root(tmp_path)
     monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/uv")
     called = []
-    monkeypatch.setattr(cli.subprocess, "call", lambda argv: called.append(argv) or 7)
+    monkeypatch.setattr(cli, "run_until_exit", lambda argv: called.append(argv) or 7)
     extra = ("--interval", "3", "--all", "--window-hours", "6", "--session", ALPHA)
     assert cli.main(cli_args(root, *extra)) == 7
     argv = called[0]
