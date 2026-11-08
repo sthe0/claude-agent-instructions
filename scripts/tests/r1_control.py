@@ -7,8 +7,9 @@ that no test run still reaches the launcher and that the fix lost or broke no te
 
   baseline --entry plain|gate [--tree DIR]   unchanged code (default tree: the throwaway base worktree)
   control  [--base-ids FILE]                 plain pytest on this tree, canary included
+  control  --no-baseline                     the same run judged for R1 only, into report-r1only.json
   gate                                       suite-gate.py run on this tree's HEAD, canary included
-  verify   --report FILE                     judge a report; exit 0 accepted, 1 refused
+  verify   --report FILE [--r1-only]         judge a report; exit 0 accepted, 1 refused
   search-selftest                            the .arc search finds a planted .arc, the stub arc answers as the
                                              suite expects, verify refuses each way of reaching the launcher
 
@@ -17,7 +18,8 @@ command, a free-space guard before it and a watchdog during it, a search for ``.
 sandbox root before the root is removed. Outcomes come from junit xml, so plain pytest and the gate
 are read the same way. ``verify`` reads only the report; ``control`` and ``gate`` write their section
 of it, with the differences from the baseline already computed (the flip rerun needs a tree to run
-in). State: $R1_STATE_DIR, default ~/.local/state/disk-guard/r1.
+in). State: $R1_STATE_DIR, default ~/.local/state/disk-guard/r1. A ``baseline`` run that aborted or
+gave no outcomes never replaces the stored entry; it goes to baseline-ids.aborted.json instead.
 """
 from __future__ import annotations
 
@@ -51,6 +53,9 @@ CANARY_FILE = "scripts/tests/canary_arc_launcher.py"
 CANARY_ID = CANARY_FILE + "::test_launcher_run_downloads_nothing"
 
 START_FREE_GB = 60
+# A baseline-free run is one plain pytest with the fix in place, no flip reruns: it needs headroom
+# over the abort floor, not room for a launcher download.
+NO_BASELINE_START_FREE_GB = 25
 ABORT_FREE_GB = 15
 GATE_LIMIT_S = 1800
 FLIP_ATTEMPTS = 3
@@ -229,9 +234,9 @@ def free_gb(path: Path) -> float:
     return shutil.disk_usage(path).free / 2**30
 
 
-def require_free(path: Path) -> None:
-    if free_gb(path) < START_FREE_GB:
-        raise Refused(f"only {free_gb(path):.0f} GB free under {path}; need {START_FREE_GB} GB before a run")
+def require_free(path: Path, floor_gb: int = START_FREE_GB) -> None:
+    if free_gb(path) < floor_gb:
+        raise Refused(f"only {free_gb(path):.0f} GB free under {path}; need {floor_gb} GB before a run")
 
 
 def run_env(root: Path, canary: bool) -> dict[str, str]:
@@ -269,11 +274,11 @@ def read_records(log: Path) -> list[dict]:
 
 
 def measured_run(label: str, inner: list[str], cwd: Path, canary: bool, limit_s: int,
-                 junit_names: tuple[str, ...] = ("junit.xml",)) -> dict:
+                 junit_names: tuple[str, ...] = ("junit.xml",), start_free_gb: int = START_FREE_GB) -> dict:
     """Run `inner` under the recorder in a fresh sandbox root; return what was observed."""
     work = STATE / "work"
     work.mkdir(parents=True, exist_ok=True)
-    require_free(work)
+    require_free(work, start_free_gb)
     root = Path(tempfile.mkdtemp(prefix="r1-", dir=work))
     try:
         (root / "home").mkdir()
@@ -314,9 +319,10 @@ def pytest_inner(select: list[str], canary: bool) -> list[str]:
     return ["sh", "-c", script]
 
 
-def run_plain(tree: Path, label: str, canary: bool, select: list[str] | None = None) -> dict:
+def run_plain(tree: Path, label: str, canary: bool, select: list[str] | None = None,
+              start_free_gb: int = START_FREE_GB) -> dict:
     return measured_run(label, pytest_inner(select or ["scripts/tests"], canary), tree, canary, PLAIN_TIMEOUT_S,
-                        junit_names=("junit.xml", "junit-canary.xml"))
+                        junit_names=("junit.xml", "junit-canary.xml"), start_free_gb=start_free_gb)
 
 
 def head(tree: Path, ref: str = "HEAD") -> str:
@@ -391,24 +397,37 @@ def _load(path: Path) -> dict:
 
 
 def _save(path: Path, data: dict) -> None:
+    """Write through a sibling temp file and rename it, so a reader never sees half a file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+    os.replace(tmp, path)
 
 
 def cmd_baseline(args) -> int:
+    """Store the run as the entry's baseline only when it finished with outcomes; a stored baseline
+    measures code that may be gone, so an aborted or empty run must not replace it."""
     tree = Path(args.tree)
     tip = head(tree)
     run = run_plain(tree, "baseline-plain", False) if args.entry == "plain" else run_gate("baseline", tree, tip)
-    store = _load(STATE / "baseline-ids.json")
-    store[args.entry] = {"commit": tip, "tree": str(tree), "wall_s": run["wall_s"], "exit": run["exit"],
-                         "aborted": run["aborted"], "ids": run["outcomes"],
-                         "launcher_records": run["launcher_records"], "arc_paths": run["arc_paths"],
-                         "inner": run["inner"]}
-    _save(STATE / "baseline-ids.json", store)
+    entry = {"commit": tip, "tree": str(tree), "wall_s": run["wall_s"], "exit": run["exit"],
+             "aborted": run["aborted"], "ids": run["outcomes"],
+             "launcher_records": run["launcher_records"], "arc_paths": run["arc_paths"],
+             "inner": run["inner"]}
     counts = {o: sum(1 for v in run["outcomes"].values() if v == o) for o in sorted(set(run["outcomes"].values()))}
     print(f"baseline {args.entry}: exit {run['exit']} {run['aborted']}, {run['wall_s']} s, {counts}, "
           f"{len(run['launcher_records'])} launcher record(s), {len(run['arc_paths'])} .arc path(s)")
-    return 0 if run["outcomes"] and not run["aborted"] else 1
+    if not run["outcomes"] or run["aborted"]:
+        failed = _load(STATE / "baseline-ids.aborted.json")
+        failed[args.entry] = entry
+        _save(STATE / "baseline-ids.aborted.json", failed)
+        print(f"baseline {args.entry}: run aborted or produced no outcomes; stored entry kept, "
+              f"this run written to baseline-ids.aborted.json", file=sys.stderr)
+        return 1
+    store = _load(STATE / "baseline-ids.json")
+    store[args.entry] = entry
+    _save(STATE / "baseline-ids.json", store)
+    return 0
 
 
 def baseline_ids(entry: str) -> dict[str, str]:
@@ -459,7 +478,27 @@ def _write_section(name: str, section: dict, deleted: list[str], commit: str, ba
     _save(STATE / "report.json", report)
 
 
+def r1_only_section(run: dict) -> dict:
+    """What R1 needs from a run, with no baseline diff: who reached the launcher, what .arc was left."""
+    return {"baseline": "none", "wall_s": run["wall_s"], "exit": run["exit"], "aborted": run["aborted"],
+            "launcher_records": run["launcher_records"], "arc_paths": run["arc_paths"],
+            "total_ids": len(run["outcomes"]), "canary_outcome": run["outcomes"].get(CANARY_ID, "absent")}
+
+
+def cmd_control_no_baseline() -> int:
+    run = run_plain(REPO, "control-plain", True, start_free_gb=NO_BASELINE_START_FREE_GB)
+    section = r1_only_section(run)
+    _save(STATE / "report-r1only.json",
+          {"schema": 1, "commit": head(REPO), "canary_id": CANARY_ID, "entries": {"plain": section}})
+    print(json.dumps({k: (v if not isinstance(v, list) else len(v)) for k, v in section.items()}, indent=1))
+    return 0
+
+
 def cmd_control(args) -> int:
+    if args.no_baseline:
+        if args.deleted:
+            raise Refused("--deleted needs a baseline diff; it has no effect with --no-baseline")
+        return cmd_control_no_baseline()
     base = baseline_ids("plain")
     if not base:
         raise Refused("no plain baseline in baseline-ids.json; run `baseline --entry plain` first")
@@ -504,7 +543,8 @@ def allowed_arc(path: str, allowlist: list[dict]) -> str:
     return ""
 
 
-def verify_entry(name: str, sec: dict, canary_id: str, deleted: dict, allowlist: list[dict]) -> list[str]:
+def r1_problems(name: str, sec: dict, canary_id: str, allowlist: list[dict]) -> list[str]:
+    """R1 itself: only the canary reached the launcher, it passed, the run finished, no stray .arc."""
     problems = []
     test_name = canary_id.split("::", 1)[-1]
     foreign = [r for r in sec.get("launcher_records", []) if test_name not in r.get("test", "")]
@@ -517,6 +557,18 @@ def verify_entry(name: str, sec: dict, canary_id: str, deleted: dict, allowlist:
     for entry in sec.get("arc_paths", []):
         if not allowed_arc(entry["path"], allowlist):
             problems.append(f"{name}: .arc left under the sandbox root: {entry['path']} ({entry.get('bytes')} bytes)")
+    if sec.get("aborted") or sec.get("exit") is None:
+        problems.append(f"{name}: run aborted ({sec.get('aborted')!r})")
+    return problems
+
+
+def verify_entry(name: str, sec: dict, canary_id: str, deleted: dict, allowlist: list[dict]) -> list[str]:
+    problems = r1_problems(name, sec, canary_id, allowlist)
+    if sec.get("baseline") == "none":
+        problems.append(f"{name}: section was made without a baseline; only `verify --r1-only` judges it")
+    missing = [k for k in ("new_failures", "new_skips", "lost_ids", "flaky") if k not in sec]
+    if missing:
+        problems.append(f"{name}: section malformed, no baseline diff fields {missing}")
     flaky = set(sec.get("flaky", []))
     for key in ("new_failures", "new_skips"):
         left = [i for i in sec.get(key, []) if i not in flaky]
@@ -525,8 +577,6 @@ def verify_entry(name: str, sec: dict, canary_id: str, deleted: dict, allowlist:
     lost = [i for i in sec.get("lost_ids", []) if not deleted.get(i)]
     if lost:
         problems.append(f"{name}: {len(lost)} test id(s) lost without a deletion reason, first {lost[0]}")
-    if sec.get("aborted") or sec.get("exit") is None:
-        problems.append(f"{name}: run aborted ({sec.get('aborted')!r})")
     if name == "gate" and sec.get("wall_s", GATE_LIMIT_S) >= GATE_LIMIT_S:
         problems.append(f"gate: wall time {sec.get('wall_s')} s, want under {GATE_LIMIT_S}")
     return problems
@@ -537,17 +587,28 @@ def cmd_verify(args) -> int:
         report = json.loads(Path(args.report).read_text())
         allowlist = tomllib.loads(ALLOWLIST.read_text()).get("allow", []) if ALLOWLIST.exists() else []
         entries = report["entries"]
-        problems = [] if set(entries) == {"plain", "gate"} else [f"report holds entries {sorted(entries)}, want plain and gate"]
-        for name, sec in sorted(entries.items()):
-            problems += verify_entry(name, sec, report["canary_id"], report.get("deleted_tests", {}), allowlist)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+        if args.r1_only:
+            problems = [] if set(entries) == {"plain"} else [f"report holds entries {sorted(entries)}, want plain only"]
+            plain = entries.get("plain", {})
+            if plain.get("baseline") != "none":
+                problems.append("plain: section carries a baseline diff; `--r1-only` judges only a baseline-free run")
+            problems += r1_problems("plain", plain, report["canary_id"], allowlist)
+        else:
+            problems = [] if set(entries) == {"plain", "gate"} else [f"report holds entries {sorted(entries)}, want plain and gate"]
+            for name, sec in sorted(entries.items()):
+                problems += verify_entry(name, sec, report["canary_id"], report.get("deleted_tests", {}), allowlist)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         problems = [f"report unreadable or malformed: {exc!r}"]
     for line in problems:
         print("REFUSED:", line)
     if not problems:
-        notes = {n: {"now_passing": len(s["now_passing"]), "flaky": s["flaky"], "wall_s": s["wall_s"],
-                     "gate_status": (s.get("gate") or {}).get("status")}
-                 for n, s in report["entries"].items()}
+        if args.r1_only:
+            notes = {n: {"wall_s": s["wall_s"], "total_ids": s.get("total_ids"), "baseline": "none"}
+                     for n, s in report["entries"].items()}
+        else:
+            notes = {n: {"now_passing": len(s.get("now_passing", [])), "flaky": s["flaky"], "wall_s": s["wall_s"],
+                         "gate_status": (s.get("gate") or {}).get("status")}
+                     for n, s in report["entries"].items()}
         print("ACCEPTED:", json.dumps(notes))
     return 1 if problems else 0
 
@@ -603,8 +664,11 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("gate")
     for p in (c, g):
         p.add_argument("--deleted", action="append", default=[], metavar="ID=REASON")
+    c.add_argument("--no-baseline", action="store_true",
+                   help="judge R1 only: no baseline diff, no flip rerun; writes report-r1only.json")
     v = sub.add_parser("verify")
     v.add_argument("--report", required=True)
+    v.add_argument("--r1-only", action="store_true", help="judge a `control --no-baseline` report")
     sub.add_parser("search-selftest")
     i = sub.add_parser("_gate-inner")
     i.add_argument("--mode", required=True)

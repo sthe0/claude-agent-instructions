@@ -1,0 +1,28 @@
+{
+ "canary_id": "scripts/tests/canary_arc_launcher.py::test_launcher_run_downloads_nothing",
+ "commit": "0000000000000000000000000000000000000000",
+ "entries": {
+  "plain": {
+   "aborted": "",
+   "arc_paths": [],
+   "baseline": "none",
+   "canary_outcome": "passed",
+   "exit": 0,
+   "launcher_records": [
+    {
+     "args": "--version",
+     "pid": "3150825",
+     "test": "scripts/tests/canary_arc_launcher.py::test_launcher_run_downloads_nothing (call)"
+    },
+    {
+     "args": "root",
+     "pid": "4162663",
+     "test": "scripts/tests/test_ledger_stamp.py::test_hook_now_ledgers_memory_write_while_touched_paths_stays_empty (call)"
+    }
+   ],
+   "total_ids": 15861,
+   "wall_s": 1450.2
+  }
+ },
+ "schema": 1
+}
