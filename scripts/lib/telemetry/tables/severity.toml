@@ -1,0 +1,41 @@
+version = 1
+
+[[members]]
+name = "band_1"
+since = 1
+kind = "band"
+from_minutes = 0
+below_minutes = 10
+mass = 1
+
+[[members]]
+name = "band_2"
+since = 1
+kind = "band"
+from_minutes = 10
+below_minutes = 60
+mass = 2
+
+[[members]]
+name = "band_3"
+since = 1
+kind = "band"
+from_minutes = 60
+mass = 3
+
+[[members]]
+name = "interval_unknown"
+since = 1
+kind = "case"
+mass = 2
+
+[[members]]
+name = "never_closed"
+since = 1
+kind = "case"
+mass = 3
+
+[[members]]
+name = "open_running"
+since = 1
+kind = "case"

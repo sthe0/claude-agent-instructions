@@ -1,0 +1,1528 @@
+version = 1
+
+[[members]]
+name = "cli:accept"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:accept"]
+
+[[members]]
+name = "cli:accept-protected-grant"
+since = 1
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["cli:accept-protected-grant"]
+
+[[members]]
+name = "cli:adopt-escalation"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["cli:adopt-escalation"]
+
+[[members]]
+name = "cli:approve"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:approve"]
+
+[[members]]
+name = "cli:block"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:block"]
+
+[[members]]
+name = "cli:check-coverage"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["cli:check-coverage"]
+
+[[members]]
+name = "cli:children"
+since = 1
+kind = "elementary"
+part_of = []
+place = "dispatch"
+source_keys = ["cli:children"]
+
+[[members]]
+name = "cli:classify"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:classify"]
+
+[[members]]
+name = "cli:close"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:close"]
+
+[[members]]
+name = "cli:code-review"
+since = 1
+kind = "elementary"
+part_of = []
+place = "verification"
+source_keys = ["cli:code-review"]
+
+[[members]]
+name = "cli:confirm-delivery"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:confirm-delivery"]
+
+[[members]]
+name = "cli:critique"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["cli:critique"]
+
+[[members]]
+name = "cli:declare"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["cli:declare"]
+
+[[members]]
+name = "cli:difficulty-close"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["cli:difficulty-close"]
+
+[[members]]
+name = "cli:difficulty-open"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["cli:difficulty-open"]
+
+[[members]]
+name = "cli:dispatch"
+since = 1
+kind = "elementary"
+part_of = []
+place = "dispatch"
+source_keys = ["cli:dispatch"]
+
+[[members]]
+name = "cli:drive"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:drive"]
+
+[[members]]
+name = "cli:effort-check"
+since = 1
+kind = "elementary"
+part_of = ["effort_trigger"]
+place = "effort_control"
+source_keys = ["cli:effort-check"]
+
+[[members]]
+name = "cli:evidence-dir"
+since = 1
+kind = "elementary"
+part_of = []
+place = "verification"
+source_keys = ["cli:evidence-dir"]
+
+[[members]]
+name = "cli:fire-acknowledge"
+since = 1
+kind = "elementary"
+part_of = ["effort_trigger"]
+place = "effort_control"
+source_keys = ["cli:fire-acknowledge"]
+
+[[members]]
+name = "cli:grant-stats"
+since = 1
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["cli:grant-stats"]
+
+[[members]]
+name = "cli:investigate"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["cli:investigate"]
+
+[[members]]
+name = "cli:ledger-add"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:ledger-add"]
+
+[[members]]
+name = "cli:ledger-candidate"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:ledger-candidate"]
+
+[[members]]
+name = "cli:ledger-check"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:ledger-check"]
+
+[[members]]
+name = "cli:ledger-dispose"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:ledger-dispose"]
+
+[[members]]
+name = "cli:ledger-enumerate"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:ledger-enumerate"]
+
+[[members]]
+name = "cli:mandate-extend"
+since = 1
+kind = "elementary"
+part_of = []
+place = "mandate_cycle"
+source_keys = ["cli:mandate-extend"]
+
+[[members]]
+name = "cli:mandate-grant"
+since = 1
+kind = "elementary"
+part_of = []
+place = "mandate_cycle"
+source_keys = ["cli:mandate-grant"]
+
+[[members]]
+name = "cli:mandate-resume"
+since = 1
+kind = "elementary"
+part_of = []
+place = "mandate_cycle"
+source_keys = ["cli:mandate-resume"]
+
+[[members]]
+name = "cli:mandate-retry"
+since = 1
+kind = "elementary"
+part_of = []
+place = "mandate_cycle"
+source_keys = ["cli:mandate-retry"]
+
+[[members]]
+name = "cli:mandate-status"
+since = 1
+kind = "elementary"
+part_of = []
+place = "mandate_cycle"
+source_keys = ["cli:mandate-status"]
+
+[[members]]
+name = "cli:mandate-stop"
+since = 1
+kind = "elementary"
+part_of = []
+place = "mandate_cycle"
+source_keys = ["cli:mandate-stop"]
+
+[[members]]
+name = "cli:next-stage"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:next-stage"]
+
+[[members]]
+name = "cli:normalize"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["cli:normalize"]
+
+[[members]]
+name = "cli:order-agree"
+since = 1
+kind = "elementary"
+part_of = ["order_phase"]
+place = "order_agreement"
+source_keys = ["cli:order-agree"]
+
+[[members]]
+name = "cli:order-challenge-dismiss"
+since = 1
+kind = "elementary"
+part_of = ["order_phase"]
+place = "order_agreement"
+source_keys = ["cli:order-challenge-dismiss"]
+
+[[members]]
+name = "cli:order-dispose"
+since = 1
+kind = "elementary"
+part_of = ["order_phase"]
+place = "order_agreement"
+source_keys = ["cli:order-dispose"]
+
+[[members]]
+name = "cli:order-list"
+since = 1
+kind = "elementary"
+part_of = ["order_phase"]
+place = "order_agreement"
+source_keys = ["cli:order-list"]
+
+[[members]]
+name = "cli:order-raise"
+since = 1
+kind = "elementary"
+part_of = ["order_phase"]
+place = "order_agreement"
+source_keys = ["cli:order-raise"]
+
+[[members]]
+name = "cli:order-submit"
+since = 1
+kind = "elementary"
+part_of = ["order_phase"]
+place = "order_agreement"
+source_keys = ["cli:order-submit"]
+
+[[members]]
+name = "cli:partition"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:partition"]
+
+[[members]]
+name = "cli:partition-units"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:partition-units"]
+
+[[members]]
+name = "cli:plan"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:plan"]
+
+[[members]]
+name = "cli:plan-convert"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:plan-convert"]
+
+[[members]]
+name = "cli:plan-convert-live"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:plan-convert-live"]
+
+[[members]]
+name = "cli:plan-digest"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:plan-digest"]
+
+[[members]]
+name = "cli:plan-externalize"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:plan-externalize"]
+
+[[members]]
+name = "cli:plan-generalizations"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:plan-generalizations"]
+
+[[members]]
+name = "cli:plan-grants"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:plan-grants"]
+
+[[members]]
+name = "cli:plan-render"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:plan-render"]
+
+[[members]]
+name = "cli:plan-resources"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:plan-resources"]
+
+[[members]]
+name = "cli:plan-review"
+since = 1
+kind = "elementary"
+part_of = ["plan_review_cycle"]
+place = "plan_review"
+source_keys = ["cli:plan-review"]
+
+[[members]]
+name = "cli:plan-review-compose"
+since = 1
+kind = "elementary"
+part_of = ["plan_review_cycle"]
+place = "plan_review"
+source_keys = ["cli:plan-review-compose"]
+
+[[members]]
+name = "cli:plan-review-delta"
+since = 1
+kind = "elementary"
+part_of = ["plan_review_cycle"]
+place = "plan_review"
+source_keys = ["cli:plan-review-delta"]
+
+[[members]]
+name = "cli:plan-review-pair-history"
+since = 1
+kind = "elementary"
+part_of = ["plan_review_cycle"]
+place = "plan_review"
+source_keys = ["cli:plan-review-pair-history"]
+
+[[members]]
+name = "cli:plan-review-walk"
+since = 1
+kind = "elementary"
+part_of = ["plan_review_cycle"]
+place = "plan_review"
+source_keys = ["cli:plan-review-walk"]
+
+[[members]]
+name = "cli:plan-seal"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:plan-seal"]
+
+[[members]]
+name = "cli:plugin-activate"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:plugin-activate"]
+
+[[members]]
+name = "cli:plugin-deactivate"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:plugin-deactivate"]
+
+[[members]]
+name = "cli:plugin-record"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:plugin-record"]
+
+[[members]]
+name = "cli:pop-subplan"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:pop-subplan"]
+
+[[members]]
+name = "cli:present-plan"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:present-plan"]
+
+[[members]]
+name = "cli:push-subplan"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:push-subplan"]
+
+[[members]]
+name = "cli:question-candidate-dispose"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:question-candidate-dispose"]
+
+[[members]]
+name = "cli:question-check"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:question-check"]
+
+[[members]]
+name = "cli:question-dispose"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:question-dispose"]
+
+[[members]]
+name = "cli:question-enumerate"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:question-enumerate"]
+
+[[members]]
+name = "cli:question-enumerate-escape"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:question-enumerate-escape"]
+
+[[members]]
+name = "cli:question-enumerate-worker"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:question-enumerate-worker"]
+
+[[members]]
+name = "cli:question-list"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:question-list"]
+
+[[members]]
+name = "cli:question-raise"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:question-raise"]
+
+[[members]]
+name = "cli:question-rebind"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:question-rebind"]
+
+[[members]]
+name = "cli:question-research"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:question-research"]
+
+[[members]]
+name = "cli:question-retire"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:question-retire"]
+
+[[members]]
+name = "cli:record-landing"
+since = 1
+kind = "elementary"
+part_of = ["landing_path"]
+place = "landing"
+source_keys = ["cli:record-landing"]
+
+[[members]]
+name = "cli:record-result"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:record-result"]
+
+[[members]]
+name = "cli:reject"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:reject"]
+
+[[members]]
+name = "cli:replan"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["cli:replan"]
+
+[[members]]
+name = "cli:reset"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:reset"]
+
+[[members]]
+name = "cli:resolve"
+since = 1
+kind = "elementary"
+part_of = []
+place = "resolution"
+source_keys = ["cli:resolve"]
+
+[[members]]
+name = "cli:resolve-permission"
+since = 1
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["cli:resolve-permission"]
+
+[[members]]
+name = "cli:risk-accept"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["cli:risk-accept"]
+
+[[members]]
+name = "cli:stage-grants"
+since = 1
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["cli:stage-grants"]
+
+[[members]]
+name = "cli:stage-review"
+since = 1
+kind = "elementary"
+part_of = ["plan_review_cycle"]
+place = "plan_review"
+source_keys = ["cli:stage-review"]
+
+[[members]]
+name = "cli:start"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:start"]
+
+[[members]]
+name = "cli:status"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:status"]
+
+[[members]]
+name = "cli:submit-plan"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["cli:submit-plan"]
+
+[[members]]
+name = "cli:task-reset"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:task-reset"]
+
+[[members]]
+name = "cli:unblock"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:unblock"]
+
+[[members]]
+name = "cli:verify-final"
+since = 1
+kind = "elementary"
+part_of = []
+place = "verification"
+source_keys = ["cli:verify-final"]
+
+[[members]]
+name = "cli:workspace-register"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["cli:workspace-register"]
+
+[[members]]
+name = "effort_trigger"
+since = 1
+kind = "composite"
+part_of = []
+place = "effort_control"
+
+[[members]]
+name = "gate:diagnosing_replan"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:diagnosing_replan", "hook:engine:diagnosing_replan"]
+
+[[members]]
+name = "gate:difficulty_blockers"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:difficulty_blockers", "hook:engine:difficulty_blockers"]
+
+[[members]]
+name = "gate:difficulty_close"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:difficulty_close", "hook:engine:difficulty_close"]
+
+[[members]]
+name = "gate:difficulty_stack"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:difficulty_stack", "hook:engine:difficulty_stack"]
+
+[[members]]
+name = "gate:effort_fire"
+since = 1
+kind = "elementary"
+part_of = ["effort_trigger"]
+place = "effort_control"
+source_keys = ["gate:effort_fire", "hook:engine:effort_fire"]
+
+[[members]]
+name = "gate:escalation_orphans"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:escalation_orphans", "hook:engine:escalation_orphans"]
+
+[[members]]
+name = "gate:failure_address_blockers"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:failure_address_blockers", "hook:engine:failure_address_blockers"]
+
+[[members]]
+name = "gate:frozen_stage"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["gate:frozen_stage", "hook:engine:frozen_stage"]
+
+[[members]]
+name = "gate:normalization_blockers"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:normalization_blockers", "hook:engine:normalization_blockers"]
+
+[[members]]
+name = "gate:normalization_waiver"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:normalization_waiver", "hook:engine:normalization_waiver"]
+
+[[members]]
+name = "gate:normative_edit"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:normative_edit", "hook:engine:normative_edit"]
+
+[[members]]
+name = "gate:order_agreement"
+since = 1
+kind = "elementary"
+part_of = ["order_phase"]
+place = "order_agreement"
+source_keys = ["gate:order_agreement", "hook:engine:order_agreement"]
+
+[[members]]
+name = "gate:order_review"
+since = 1
+kind = "elementary"
+part_of = ["order_phase"]
+place = "order_agreement"
+source_keys = ["gate:order_review", "hook:engine:order_review"]
+
+[[members]]
+name = "gate:plan_approval"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["gate:plan_approval", "hook:engine:plan_approval"]
+
+[[members]]
+name = "gate:plan_approval_plugin"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["gate:plan_approval_plugin", "hook:engine:plan_approval_plugin"]
+
+[[members]]
+name = "gate:plan_review"
+since = 1
+kind = "elementary"
+part_of = ["plan_review_cycle"]
+place = "plan_review"
+source_keys = ["gate:plan_review", "hook:engine:plan_review"]
+
+[[members]]
+name = "gate:renorm_final"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:renorm_final", "hook:engine:renorm_final"]
+
+[[members]]
+name = "gate:renorm_retention"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:renorm_retention", "hook:engine:renorm_retention"]
+
+[[members]]
+name = "gate:renormalization"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:renormalization", "hook:engine:renormalization"]
+
+[[members]]
+name = "gate:replan_authorization"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:replan_authorization", "hook:engine:replan_authorization"]
+
+[[members]]
+name = "gate:replan_coverage"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:replan_coverage", "hook:engine:replan_coverage"]
+
+[[members]]
+name = "gate:replan_coverage_waiver"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["gate:replan_coverage_waiver", "hook:engine:replan_coverage_waiver"]
+
+[[members]]
+name = "gate:resolution"
+since = 1
+kind = "elementary"
+part_of = []
+place = "resolution"
+source_keys = ["gate:resolution", "hook:engine:resolution"]
+
+[[members]]
+name = "hook:hook-ask-answer-record"
+since = 1
+kind = "elementary"
+part_of = []
+place = "user_interaction"
+source_keys = ["hook:hook-ask-answer-record"]
+
+[[members]]
+name = "hook:hook-branch-backup"
+since = 1
+kind = "elementary"
+part_of = ["landing_path"]
+place = "landing"
+source_keys = ["hook:hook-branch-backup"]
+
+[[members]]
+name = "hook:hook-burn-rate-guard"
+since = 1
+kind = "elementary"
+part_of = []
+place = "effort_control"
+source_keys = ["hook:hook-burn-rate-guard"]
+
+[[members]]
+name = "hook:hook-canon-guard-wired-check"
+since = 1
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["hook:hook-canon-guard-wired-check"]
+
+[[members]]
+name = "hook:hook-deferring-disposition-gate"
+since = 1
+kind = "elementary"
+part_of = []
+place = "user_interaction"
+source_keys = ["hook:hook-deferring-disposition-gate"]
+
+[[members]]
+name = "hook:hook-engine-start"
+since = 1
+kind = "elementary"
+part_of = []
+place = "session_lifecycle"
+source_keys = ["hook:hook-engine-start"]
+
+[[members]]
+name = "hook:hook-escalation-diagnosis-gate"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["hook:hook-escalation-diagnosis-gate"]
+
+[[members]]
+name = "hook:hook-guard-agent-specialist-stand-in"
+since = 1
+kind = "elementary"
+part_of = []
+place = "dispatch"
+source_keys = ["hook:hook-guard-agent-specialist-stand-in"]
+
+[[members]]
+name = "hook:hook-guard-bash-source-edit"
+since = 1
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["hook:hook-guard-bash-source-edit"]
+
+[[members]]
+name = "hook:hook-guard-canon-readonly"
+since = 1
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["hook:hook-guard-canon-readonly"]
+
+[[members]]
+name = "hook:hook-guard-destructive-rm"
+since = 1
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["hook:hook-guard-destructive-rm"]
+
+[[members]]
+name = "hook:hook-guard-permission-surface"
+since = 1
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["hook:hook-guard-permission-surface"]
+
+[[members]]
+name = "hook:hook-guard-subagent-destructive-action"
+since = 1
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["hook:hook-guard-subagent-destructive-action"]
+
+[[members]]
+name = "hook:hook-long-job-arm"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["hook:hook-long-job-arm"]
+
+[[members]]
+name = "hook:hook-memory-consistency"
+since = 1
+kind = "elementary"
+part_of = []
+place = "memory"
+source_keys = ["hook:hook-memory-consistency"]
+
+[[members]]
+name = "hook:hook-memory-retrieval"
+since = 1
+kind = "elementary"
+part_of = []
+place = "memory"
+source_keys = ["hook:hook-memory-retrieval"]
+
+[[members]]
+name = "hook:hook-multi-mount-search-guard"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["hook:hook-multi-mount-search-guard"]
+
+[[members]]
+name = "hook:hook-plan-delivery-gate"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["hook:hook-plan-delivery-gate"]
+
+[[members]]
+name = "hook:hook-prompt-reminders"
+since = 1
+kind = "elementary"
+part_of = []
+place = "instruction_delivery"
+source_keys = ["hook:hook-prompt-reminders"]
+
+[[members]]
+name = "hook:hook-published-text-writer-gate"
+since = 1
+kind = "elementary"
+part_of = []
+place = "user_interaction"
+source_keys = ["hook:hook-published-text-writer-gate"]
+
+[[members]]
+name = "hook:hook-reaper"
+since = 1
+kind = "elementary"
+part_of = []
+place = "session_lifecycle"
+source_keys = ["hook:hook-reaper"]
+
+[[members]]
+name = "hook:hook-resolution-reminder"
+since = 1
+kind = "elementary"
+part_of = []
+place = "resolution"
+source_keys = ["hook:hook-resolution-reminder"]
+
+[[members]]
+name = "hook:hook-retry-detector"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["hook:hook-retry-detector"]
+
+[[members]]
+name = "hook:hook-review-mergeable-guardian"
+since = 1
+kind = "elementary"
+part_of = ["landing_path"]
+place = "landing"
+source_keys = ["hook:hook-review-mergeable-guardian"]
+
+[[members]]
+name = "hook:hook-review-monitor-arm"
+since = 1
+kind = "elementary"
+part_of = ["plan_review_cycle"]
+place = "plan_review"
+source_keys = ["hook:hook-review-monitor-arm"]
+
+[[members]]
+name = "hook:hook-run-url-surfaced-reminder"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["hook:hook-run-url-surfaced-reminder"]
+
+[[members]]
+name = "hook:hook-scope-conflict"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["hook:hook-scope-conflict"]
+
+[[members]]
+name = "hook:hook-scope-track"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["hook:hook-scope-track"]
+
+[[members]]
+name = "hook:hook-self-critique-reminder"
+since = 1
+kind = "elementary"
+part_of = []
+place = "instruction_delivery"
+source_keys = ["hook:hook-self-critique-reminder"]
+
+[[members]]
+name = "hook:hook-session-due"
+since = 1
+kind = "elementary"
+part_of = []
+place = "session_lifecycle"
+source_keys = ["hook:hook-session-due"]
+
+[[members]]
+name = "hook:hook-si-freetext-answer"
+since = 1
+kind = "elementary"
+part_of = []
+place = "instruction_delivery"
+source_keys = ["hook:hook-si-freetext-answer"]
+
+[[members]]
+name = "hook:hook-skill-first"
+since = 1
+kind = "elementary"
+part_of = []
+place = "instruction_delivery"
+source_keys = ["hook:hook-skill-first"]
+
+[[members]]
+name = "hook:hook-state-gate"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["hook:hook-state-gate"]
+
+[[members]]
+name = "hook:hook-telemetry-session-end"
+since = 1
+kind = "elementary"
+part_of = []
+place = "telemetry"
+source_keys = ["hook:hook-telemetry-session-end"]
+
+[[members]]
+name = "hook:hook-term-neutrality"
+since = 1
+kind = "elementary"
+part_of = []
+place = "instruction_delivery"
+source_keys = ["hook:hook-term-neutrality"]
+
+[[members]]
+name = "hook:hook-turn-end-gate"
+since = 1
+kind = "elementary"
+part_of = []
+place = "user_interaction"
+source_keys = ["hook:hook-turn-end-gate"]
+
+[[members]]
+name = "hook:verify-experience-leaf"
+since = 1
+kind = "elementary"
+part_of = []
+place = "memory"
+source_keys = ["hook:verify-experience-leaf"]
+
+[[members]]
+name = "hook:verify-leaf-structure"
+since = 1
+kind = "elementary"
+part_of = []
+place = "memory"
+source_keys = ["hook:verify-leaf-structure"]
+
+[[members]]
+name = "hook:verify-no-conflict-markers"
+since = 1
+kind = "elementary"
+part_of = []
+place = "verification"
+source_keys = ["hook:verify-no-conflict-markers"]
+
+[[members]]
+name = "judge:acceptance_judge"
+since = 1
+kind = "elementary"
+part_of = []
+place = "resolution"
+source_keys = ["judge:acceptance_judge"]
+calling_modules = ["scripts/agentctl/advisor.py"]
+
+[[members]]
+name = "judge:approval_ask"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["judge:approval_ask"]
+calling_modules = ["scripts/hook-plan-delivery-gate.py"]
+
+[[members]]
+name = "judge:binary_ask"
+since = 1
+kind = "elementary"
+part_of = []
+place = "user_interaction"
+source_keys = ["judge:binary_ask"]
+calling_modules = ["scripts/hook-turn-end-gate.py"]
+
+[[members]]
+name = "judge:code_effects"
+since = 1
+kind = "elementary"
+part_of = []
+place = "permission_control"
+source_keys = ["judge:code_effects"]
+calling_modules = ["scripts/agentctl/code_effects.py", "scripts/hook-resource-grant-check.py"]
+
+[[members]]
+name = "judge:deferring_disposition"
+since = 1
+kind = "elementary"
+part_of = []
+place = "user_interaction"
+source_keys = ["judge:deferring_disposition"]
+calling_modules = ["scripts/hook-deferring-disposition-gate.py"]
+
+[[members]]
+name = "judge:enumerate_claims"
+since = 1
+kind = "elementary"
+part_of = []
+place = "planning"
+source_keys = ["judge:enumerate_claims"]
+calling_modules = ["scripts/agentctl/advisor.py"]
+
+[[members]]
+name = "judge:feedback_signal"
+since = 1
+kind = "elementary"
+part_of = []
+place = "instruction_delivery"
+source_keys = ["judge:feedback_signal"]
+calling_modules = ["scripts/hook-turn-end-gate.py", "scripts/lib/prompt_judges.py"]
+
+[[members]]
+name = "judge:grounding_link"
+since = 1
+kind = "elementary"
+part_of = []
+place = "order_agreement"
+source_keys = ["judge:grounding_link"]
+calling_modules = ["scripts/agentctl/grounding_judge.py"]
+
+[[members]]
+name = "judge:judge"
+since = 1
+kind = "elementary"
+part_of = []
+place = "verification"
+source_keys = ["judge:judge"]
+calling_modules = ["scripts/agentctl/advisor.py", "scripts/mandate_cycle/driver.py"]
+
+[[members]]
+name = "judge:landing_discipline"
+since = 1
+kind = "elementary"
+part_of = []
+place = "landing"
+source_keys = ["judge:landing_discipline"]
+calling_modules = ["scripts/hook-resolution-reminder.py"]
+
+[[members]]
+name = "judge:order_quote"
+since = 1
+kind = "elementary"
+part_of = []
+place = "order_agreement"
+source_keys = ["judge:order_quote"]
+calling_modules = ["scripts/agentctl/grounding_judge.py"]
+
+[[members]]
+name = "judge:outage_escalation"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["judge:outage_escalation"]
+calling_modules = ["scripts/hook-escalation-diagnosis-gate.py", "scripts/hook-turn-end-gate.py"]
+
+[[members]]
+name = "judge:published_attachment"
+since = 1
+kind = "elementary"
+part_of = []
+place = "user_interaction"
+source_keys = ["judge:published_attachment"]
+calling_modules = ["scripts/hook-published-text-writer-gate.py"]
+
+[[members]]
+name = "judge:published_text_rules"
+since = 1
+kind = "elementary"
+part_of = []
+place = "user_interaction"
+source_keys = ["judge:published_text_rules"]
+calling_modules = ["scripts/hook-published-text-writer-gate.py"]
+
+[[members]]
+name = "judge:question_materiality"
+since = 1
+kind = "elementary"
+part_of = []
+place = "plan_approval"
+source_keys = ["judge:question_materiality"]
+calling_modules = ["scripts/agentctl/cli_questions.py"]
+
+[[members]]
+name = "judge:resolution_confirmation"
+since = 1
+kind = "elementary"
+part_of = []
+place = "resolution"
+source_keys = ["judge:resolution_confirmation"]
+calling_modules = ["scripts/lib/prompt_judges.py"]
+
+[[members]]
+name = "judge:same_difficulty"
+since = 1
+kind = "elementary"
+part_of = []
+place = "difficulty_handling"
+source_keys = ["judge:same_difficulty"]
+calling_modules = ["scripts/lib/semantic_join.py"]
+
+[[members]]
+name = "judge:silent_closure"
+since = 1
+kind = "elementary"
+part_of = []
+place = "user_interaction"
+source_keys = ["judge:silent_closure"]
+calling_modules = ["scripts/hook-turn-end-gate.py"]
+
+[[members]]
+name = "judge:unattributed"
+since = 1
+kind = "elementary"
+part_of = []
+place = "execution"
+source_keys = ["judge:unattributed"]
+calling_modules = ["scripts/agentctl/advisor.py"]
+
+[[members]]
+name = "judge:user_question"
+since = 1
+kind = "elementary"
+part_of = []
+place = "user_interaction"
+source_keys = ["judge:user_question"]
+calling_modules = ["scripts/lib/prompt_judges.py"]
+
+[[members]]
+name = "land:attempt"
+since = 1
+kind = "elementary"
+part_of = ["landing_path"]
+place = "landing"
+source_keys = ["land:attempt"]
+
+[[members]]
+name = "land:landed"
+since = 1
+kind = "elementary"
+part_of = ["landing_path"]
+place = "landing"
+source_keys = ["land:landed"]
+
+[[members]]
+name = "land:start"
+since = 1
+kind = "elementary"
+part_of = ["landing_path"]
+place = "landing"
+source_keys = ["land:start"]
+
+[[members]]
+name = "land:suite_gate"
+since = 1
+kind = "elementary"
+part_of = ["landing_path"]
+place = "landing"
+source_keys = ["land:suite_gate"]
+
+[[members]]
+name = "landing_path"
+since = 1
+kind = "composite"
+part_of = []
+place = "landing"
+
+[[members]]
+name = "order_phase"
+since = 1
+kind = "composite"
+part_of = []
+place = "order_agreement"
+
+[[members]]
+name = "plan_review_cycle"
+since = 1
+kind = "composite"
+part_of = []
+place = "plan_review"
+
+[[members]]
+name = "precommit"
+since = 1
+kind = "elementary"
+part_of = ["landing_path"]
+place = "landing"
+source_keys = ["precommit"]
+
+[[members]]
+name = "spawn"
+since = 1
+kind = "elementary"
+part_of = []
+place = "dispatch"
+source_keys = ["spawn"]
+
+[[members]]
+name = "telemetry"
+since = 1
+kind = "composite"
+part_of = []
+place = "telemetry"
+
+[[members]]
+name = "telemetry:importer"
+since = 1
+kind = "elementary"
+part_of = ["telemetry"]
+place = "telemetry"
+source_keys = ["telemetry:importer"]
+
+[[members]]
+name = "telemetry:recorder"
+since = 1
+kind = "elementary"
+part_of = ["telemetry"]
+place = "telemetry"
+source_keys = ["telemetry:recorder"]
+
+[[members]]
+name = "telemetry:report"
+since = 1
+kind = "elementary"
+part_of = ["telemetry"]
+place = "telemetry"
+source_keys = ["telemetry:report"]
+
+[[members]]
+name = "telemetry:sync"
+since = 1
+kind = "elementary"
+part_of = ["telemetry"]
+place = "telemetry"
+source_keys = ["telemetry:sync"]

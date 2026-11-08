@@ -1,0 +1,45 @@
+version = 1
+
+[[members]]
+name = "check_authoring_defect"
+since = 1
+
+[[members]]
+name = "dispatch_or_procedure_precondition"
+since = 1
+
+[[members]]
+name = "effort_trigger_overrun"
+since = 1
+
+[[members]]
+name = "flaky_or_loaded_verify"
+since = 1
+
+[[members]]
+name = "implementation_defect"
+since = 1
+
+[[members]]
+name = "other"
+since = 1
+
+[[members]]
+name = "parent_norm_defect"
+since = 1
+
+[[members]]
+name = "review_budget_gate_friction"
+since = 1
+
+[[members]]
+name = "spec_shift_or_underspecified"
+since = 1
+
+[[members]]
+name = "trunk_drift_landing"
+since = 1
+
+[[members]]
+name = "wrong_premise_environment"
+since = 1

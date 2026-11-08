@@ -1,4 +1,5 @@
-"""Open enumeration tables of the telemetry record (roles, phases, loss modes).
+"""Open enumeration tables of the telemetry record (roles, phases, loss modes, cause categories,
+severity bands, functional places, the mechanism registry).
 
 An enumeration is a versioned data table under `tables/<name>.toml`, never a literal
 list in code: a member carries the table version it exists from (`since`) and, once
@@ -19,11 +20,12 @@ from __future__ import annotations
 import json
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT_ENV = "AGENTCTL_TELEMETRY_TABLES_ROOT"
-TABLE_NAMES = ("roles", "phases", "loss_modes")
+TABLE_NAMES = ("roles", "phases", "loss_modes", "categories", "severity", "places", "registry")
+_RESERVED_KEYS = ("name", "since", "retired_since")
 
 
 class TableError(ValueError):
@@ -35,6 +37,7 @@ class Member:
     name: str
     since: int
     retired_since: "int | None" = None
+    attrs: dict = field(default_factory=dict, compare=False)
 
     def live_at(self, version: int) -> bool:
         return self.since <= version and (self.retired_since is None or self.retired_since > version)
@@ -67,7 +70,8 @@ def load(name: str, root: "Path | None" = None) -> Table:
         data = tomllib.load(fh)
     members = {}
     for entry in data.get("members", []):
-        members[entry["name"]] = Member(entry["name"], int(entry["since"]), entry.get("retired_since"))
+        attrs = {k: v for k, v in entry.items() if k not in _RESERVED_KEYS}
+        members[entry["name"]] = Member(entry["name"], int(entry["since"]), entry.get("retired_since"), attrs)
     return Table(name, int(data["version"]), members)
 
 
@@ -107,12 +111,19 @@ def validate(name: str, value, core_version: "int | None" = None, root: "Path | 
     return version
 
 
+def _toml_value(value) -> str:
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    return json.dumps(value)
+
+
 def _render(version: int, members: "list[Member]") -> str:
     lines = [f"version = {version}"]
     for m in members:
         lines += ["", "[[members]]", f'name = "{m.name}"', f"since = {m.since}"]
         if m.retired_since is not None:
             lines.append(f"retired_since = {m.retired_since}")
+        lines += [f"{key} = {_toml_value(value)}" for key, value in m.attrs.items()]
     return "\n".join(lines) + "\n"
 
 
@@ -132,14 +143,15 @@ def _write(name: str, table: Table, root: "Path | None") -> None:
     _snapshot_path(root).write_text(json.dumps(snap, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def add_member(name: str, member: str, root: "Path | None" = None) -> int:
-    """Add a member and bump the table version by one; returns the new version."""
+def add_member(name: str, member: str, root: "Path | None" = None, attrs: "dict | None" = None) -> int:
+    """Add a member (with its extra attributes, for a table whose members carry some) and bump
+    the table version by one; returns the new version."""
     table = load(name, root)
     if member in table.members:
         raise TableError(f"{member!r} is already a member of {name}")
     version = table.version + 1
     members = dict(table.members)
-    members[member] = Member(member, version)
+    members[member] = Member(member, version, None, dict(attrs or {}))
     _write(name, Table(name, version, members), root)
     return version
 
@@ -152,7 +164,7 @@ def retire_member(name: str, member: str, root: "Path | None" = None) -> int:
         raise TableError(f"{member!r} is not a live member of {name}")
     version = table.version + 1
     members = dict(table.members)
-    members[member] = Member(member, current.since, version)
+    members[member] = Member(member, current.since, version, current.attrs)
     _write(name, Table(name, version, members), root)
     return version
 
