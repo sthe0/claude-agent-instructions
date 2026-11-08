@@ -5,9 +5,14 @@ fixture; the harness tests read the same file.
 """
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import json
 import os
+import signal
+import struct
+import termios
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +26,7 @@ CONTRACT = json.loads((SCRIPTS / "tests" / "fixtures" / "plan_dashboard_contract
 _spec = importlib.util.spec_from_file_location("plan_dashboard_cli", SCRIPTS / "plan-dashboard.py")
 cli = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cli)
+HANG_GUARD_S = 60
 
 
 @pytest.fixture(autouse=True)
@@ -142,3 +148,108 @@ def test_the_tui_subcommand_takes_the_pipe_path_and_defaults_it_off():
     parser = cli.build_parser()
     assert parser.parse_args(["tui"]).events is None
     assert parser.parse_args(["tui", "--events", "/s/events.fifo"]).events == Path("/s/events.fifo")
+
+
+def pipe_size(fd: int) -> int:
+    return fcntl.fcntl(fd, fcntl.F_GETPIPE_SZ)
+
+
+def queued(fd: int) -> int:
+    return struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, struct.pack("i", 0)))[0]
+
+
+def fill_with_whole_lines(read_fd: int, write_fd: int) -> None:
+    """Fill the pipe to F_GETPIPE_SZ with page-sized, valid event lines."""
+    page = os.sysconf("SC_PAGE_SIZE")
+    stub = b'{"ev":"fill","pad":""}\n'
+    line = b'{"ev":"fill","pad":"' + b"x" * (page - len(stub)) + b'"}\n'
+    os.set_blocking(write_fd, False)
+    try:
+        while True:
+            os.write(write_fd, line)
+    except BlockingIOError:
+        pass
+    finally:
+        os.set_blocking(write_fd, True)
+    assert queued(read_fd) == pipe_size(read_fd)
+
+
+class Reader:
+    """Drains a pipe to EOF in a thread, so a blocked writer is never held up by the test."""
+
+    def __init__(self, read_fd: int):
+        self.chunks: list[bytes] = []
+        self.thread = threading.Thread(target=self.run, args=(read_fd,), daemon=True)
+        self.thread.start()
+
+    def run(self, read_fd: int) -> None:
+        while chunk := os.read(read_fd, 1 << 16):
+            self.chunks.append(chunk)
+
+    def lines(self) -> list[dict]:
+        self.thread.join(HANG_GUARD_S)
+        assert not self.thread.is_alive(), "hang guard"
+        return [json.loads(line) for line in b"".join(self.chunks).decode("utf-8").splitlines()]
+
+
+def finished(thread: threading.Thread) -> None:
+    thread.join(HANG_GUARD_S)
+    assert not thread.is_alive(), "hang guard"
+
+
+def wait_for(condition) -> None:
+    deadline = time.monotonic() + HANG_GUARD_S
+    while not condition():
+        assert time.monotonic() < deadline, "hang guard"
+        time.sleep(0.001)
+
+
+def emit_in_thread(**payload) -> threading.Thread:
+    thread = threading.Thread(target=events.emit, args=("big",), kwargs=payload, daemon=True)
+    thread.start()
+    return thread
+
+
+def test_emit_writes_a_whole_line_through_a_full_interrupted_pipe(pipe):
+    read_fd, write_fd = pipe
+    size = pipe_size(read_fd)
+    handled = threading.Event()
+    previous = signal.signal(signal.SIGUSR1, lambda signum, frame: handled.set())
+    try:
+        fill_with_whole_lines(read_fd, write_fd)
+        events.enable(write_fd)
+        writer = emit_in_thread(pad="y" * (4 * size))
+        os.read(read_fd, size // 4)
+        wait_for(lambda: queued(read_fd) == size)
+        signal.pthread_kill(writer.ident, signal.SIGUSR1)
+        wait_for(handled.is_set)
+        reader = Reader(read_fd)
+        finished(writer)
+    finally:
+        signal.signal(signal.SIGUSR1, previous)
+    os.close(write_fd)
+    lines = reader.lines()
+    assert lines[-1]["ev"] == "big"
+    assert len(lines[-1]["pad"]) == 4 * size
+
+
+def test_a_broken_pipe_ends_the_write_of_a_long_line(pipe):
+    read_fd, write_fd = pipe
+    events.enable(write_fd)
+    os.close(read_fd)
+    finished(emit_in_thread(pad="y" * (4 * pipe_size(write_fd))))
+
+
+def test_lines_of_two_threads_never_interleave(pipe):
+    read_fd, write_fd = pipe
+    events.enable(write_fd)
+    reader = Reader(read_fd)
+    pad = "z" * (3 * pipe_size(write_fd))
+    writers = [threading.Thread(target=lambda tag=tag: [events.emit("big", tag=tag, pad=pad) for _ in range(3)],
+                                daemon=True) for tag in ("a", "b")]
+    for thread in writers:
+        thread.start()
+    for thread in writers:
+        finished(thread)
+    os.close(write_fd)
+    assert sorted(line["tag"] for line in reader.lines()) == ["a", "a", "a", "b", "b", "b"]
