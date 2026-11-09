@@ -1898,6 +1898,27 @@ def test_a_read_that_the_exit_stopped_ends_without_an_outcome_and_without_a_trac
     assert tracebacks == []
 
 
+def test_an_outcome_that_arrives_after_the_loop_closed_raises_nothing(monkeypatch):
+    """A read that passed its last stop check before the exit still finishes, and hands its outcome to a loop
+    that is already closed; nothing may surface as a thread traceback."""
+    tracebacks, threads, gate = [], [], threading.Event()
+    monkeypatch.setattr(threading, "excepthook", tracebacks.append)
+
+    async def main():
+        before = set(threading.enumerate())
+        task = asyncio.ensure_future(tui_app.in_daemon_thread(lambda: gate.wait(SHUTDOWN_HANG_GUARD_S)))
+        await asyncio.sleep(0)
+        threads.extend(set(threading.enumerate()) - before)
+        task.cancel()
+
+    asyncio.run(main())
+    gate.set()
+    for thread in threads:
+        thread.join(SHUTDOWN_HANG_GUARD_S)
+    assert threads and not any(thread.is_alive() for thread in threads)
+    assert tracebacks == []
+
+
 LAUNCHER_HANG_GUARD_S = 300
 
 
