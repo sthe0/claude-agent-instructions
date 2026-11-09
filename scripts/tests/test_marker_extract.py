@@ -281,6 +281,7 @@ def test_a_none_verdict_does_not_trigger_a_retry():
 
 
 def test_subprocess_runner_converts_a_timeout_into_a_failed_runresult(monkeypatch):
+    monkeypatch.delenv("AGENTCTL_LIVE_JUDGES", raising=False)
     import subprocess
 
     def fake_run(argv, **kwargs):
@@ -293,6 +294,7 @@ def test_subprocess_runner_converts_a_timeout_into_a_failed_runresult(monkeypatc
 
 
 def test_subprocess_runner_runs_isolated_via_host_llm(monkeypatch):
+    monkeypatch.delenv("AGENTCTL_LIVE_JUDGES", raising=False)
     captured = {}
 
     def fake_run(argv, **kwargs):

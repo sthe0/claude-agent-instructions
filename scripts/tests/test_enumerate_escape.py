@@ -77,6 +77,7 @@ def _escape_row(plan_path, reason):
 
 class TestClassifyRunnerFailure:
     def test_reads_back_the_runners_own_timeout_stderr(self, monkeypatch):
+        monkeypatch.delenv("AGENTCTL_LIVE_JUDGES", raising=False)
         """Produced by forcing the REAL TimeoutExpired rather than restating the
         literal: if the emitted wording and the classifier ever drift apart, every
         timeout would be pre-selected as the catch-all `advisor_error`."""

@@ -2060,6 +2060,8 @@ def subprocess_runner(
     machine authenticated by a plain environment API key must never be labelled
     a credential failure, and an authenticated call that fails for any other
     reason keeps its own classification."""
+    if os.environ.get("AGENTCTL_LIVE_JUDGES") == "0":
+        return RunResult(-1, stdout="", stderr="live judges disabled (AGENTCTL_LIVE_JUDGES=0)")
     judge_name = judge_ledger.take_current_judge()
     if judge_name is None:
         # Every caller in this module now self-identifies before invoking the

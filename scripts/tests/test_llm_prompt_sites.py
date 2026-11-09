@@ -370,6 +370,7 @@ def drive_enumerate_runner(plan_file, views, monkeypatch, **_):
         seen.append((list(argv), kwargs.get("input") or ""))
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
+    monkeypatch.delenv("AGENTCTL_LIVE_JUDGES", raising=False)
     monkeypatch.setattr(advisor.subprocess, "run", fake_run)
     from agentctl.render import build_site_prompt
 

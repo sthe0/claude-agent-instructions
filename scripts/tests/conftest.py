@@ -456,6 +456,19 @@ def _advisor_off_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _live_judges_off_by_default(monkeypatch):
+    """Default every live model judge runner (`advisor.subprocess_runner`,
+    `marker_extract.subprocess_runner`) to a failed, no-launch result for the suite.
+
+    Set through monkeypatch.setenv so it lives in os.environ and reaches every child
+    process that inherits the environment. Injected runners and PATH stubs stay
+    reachable, unlike the AGENTCTL_MARKER_EXTRACTOR kill switch, which returns before
+    consulting them. A test whose subject is a runner re-enables it with
+    monkeypatch.delenv("AGENTCTL_LIVE_JUDGES")."""
+    monkeypatch.setenv("AGENTCTL_LIVE_JUDGES", "0")
+
+
+@pytest.fixture(autouse=True)
 def _child_contour_linking_on_by_default(monkeypatch):
     """Keep child-contour linking ON for the suite at large, although config.md ships
     `child-contour-linking` as `off`.

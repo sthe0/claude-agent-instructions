@@ -169,6 +169,7 @@ class TestJudgeFallbackUnaffectedByEnumerateTimeout:
         and confirm `enumerate_subprocess_runner` -- the wider-timeout entry
         point sized for a whole-plan payload -- is never touched on this path."""
         monkeypatch.setenv("AGENTCTL_STAGE_REVIEW", "1")
+        monkeypatch.delenv("AGENTCTL_LIVE_JUDGES", raising=False)
         _make_acceptance_session(store, "judge-1")
 
         calls = []

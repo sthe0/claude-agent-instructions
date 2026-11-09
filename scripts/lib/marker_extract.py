@@ -189,6 +189,8 @@ Runner = Callable[..., RunResult]
 
 
 def subprocess_runner(argv: list[str], *, timeout: int = _EXTRACT_TIMEOUT_S) -> RunResult:
+    if os.environ.get("AGENTCTL_LIVE_JUDGES") == "0":
+        return RunResult(1, "", "live judges disabled (AGENTCTL_LIVE_JUDGES=0)")
     try:
         proc = subprocess.run(
             argv, capture_output=True, text=True, timeout=timeout,

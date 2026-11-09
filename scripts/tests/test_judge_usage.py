@@ -94,6 +94,7 @@ DEFECTIVE_PAYLOAD = {
 def _use_ledger(monkeypatch, tmp_path, name="ledger.jsonl"):
     path = tmp_path / name
     monkeypatch.setenv("AGENTCTL_JUDGE_LEDGER", str(path))
+    monkeypatch.delenv("AGENTCTL_LIVE_JUDGES", raising=False)
     return path
 
 

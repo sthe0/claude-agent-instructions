@@ -190,6 +190,7 @@ def _ledger_calls(path: Path) -> "list[tuple[str, dict]]":
 def test_one_judge_event_per_judge_call_under_its_source_key(tmp_path, monkeypatch):
     ledger = tmp_path / "judge-ledger.jsonl"
     monkeypatch.setenv("AGENTCTL_JUDGE_LEDGER", str(ledger))
+    monkeypatch.delenv("AGENTCTL_LIVE_JUDGES", raising=False)
     monkeypatch.setitem(judge_ledger._state, "source", "judge-sess")
     for name in ("binary_ask", "same_difficulty", None):
         if name:

@@ -154,6 +154,10 @@ class TestResolveEnabled:
 # ── subprocess_runner: hard timeout ───────────────────────────────────────────
 
 class TestSubprocessRunner:
+    @pytest.fixture(autouse=True)
+    def _runner_live(self, monkeypatch):
+        monkeypatch.delenv("AGENTCTL_LIVE_JUDGES", raising=False)
+
     def test_timeout_returns_failed_result_not_raise(self, monkeypatch):
         import subprocess as _subprocess
 
@@ -1280,6 +1284,10 @@ def _fake_kernel_run(argv, *, input="", **kwargs):
 
 
 class TestOversizePromptDeliveredViaStdin:
+    @pytest.fixture(autouse=True)
+    def _runner_live(self, monkeypatch):
+        monkeypatch.delenv("AGENTCTL_LIVE_JUDGES", raising=False)
+
     def test_subprocess_runner_delivers_an_oversize_prompt_via_stdin_not_argv(
         self, monkeypatch
     ):
