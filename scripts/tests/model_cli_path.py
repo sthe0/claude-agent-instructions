@@ -18,9 +18,15 @@ STUBS_DIR = str(Path(__file__).resolve().parent / "stubs")
 MODEL_CLI_NAMES = ("claude", "agent", "cursor-agent")
 LAUNCH_LOG_ENV = "CORE_TESTS_LAUNCH_LOG"
 LAUNCH_MARKER = "real model launch blocked"
-# Where a guard records a launch from a child whose environment has no LAUNCH_LOG_ENV; the
-# guards derive the same name from their own directory.
-UNATTRIBUTED_LAUNCH_LOG = Path("/tmp") / f"core-tests-model-cli-launches{STUBS_DIR.replace('/', '_')}.log"
+
+
+def unattributed_launch_log(stubs_dir: str) -> Path:
+    """Where a guard in `stubs_dir` records a launch from a child whose environment has no
+    LAUNCH_LOG_ENV; the guards derive the same name from their own directory."""
+    return Path("/tmp") / f"core-tests-model-cli-launches{stubs_dir.replace('/', '_')}.log"
+
+
+UNATTRIBUTED_LAUNCH_LOG = unattributed_launch_log(STUBS_DIR)
 
 _no_model_cli_dirs: dict[bool, str] = {}
 

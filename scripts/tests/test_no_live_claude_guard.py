@@ -29,6 +29,7 @@ from conftest import (
     path_with_arc_stub,
     path_without_model_cli,
 )
+from model_cli_path import unattributed_launch_log
 
 TESTS_DIR = Path(__file__).resolve().parent
 LINT_EXEMPT = frozenset({Path(__file__).name, "manual_real_cli_mcp.py"})
@@ -439,6 +440,24 @@ def test_guard_free_path_holds_no_model_cli(name):
     assert shutil.which(name, path=path) is None
     assert shutil.which("sh", path=path) and shutil.which("python3", path=path)
     assert os.path.realpath(shutil.which("arc", path=path)) == os.path.realpath(os.path.join(ARC_STUB_DIR, "arc"))
+
+
+def test_guard_without_a_launch_log_writes_where_conftest_reads(tmp_path):
+    """A child built from scratch carries no launch log variable; its guard falls back to the
+    log conftest derives from the stubs directory. A copied guard keeps the real one's log
+    out of this run."""
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    guard = stubs / "claude"
+    shutil.copy2(os.path.join(ARC_STUB_DIR, "claude"), guard)
+    log = unattributed_launch_log(str(stubs.resolve()))
+    try:
+        done = subprocess.run([str(guard), "-p", "orphan"], env={"PATH": path_without_model_cli()},
+                              capture_output=True, text=True)
+        assert done.returncode == 97, done.stderr
+        assert log.read_text().strip() == f"{LAUNCH_MARKER}: claude -p orphan [test: ?]"
+    finally:
+        log.unlink(missing_ok=True)
 
 
 PROBE_TESTS = """

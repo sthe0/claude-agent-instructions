@@ -146,13 +146,15 @@ def pytest_sessionfinish(session, exitstatus):
     if lines:
         reporter = session.config.pluginmanager.get_plugin("terminalreporter")
         write = reporter.write_line if reporter else (lambda s: print(s, file=sys.stderr))
-        write(f"{LAUNCH_MARKER}: {len(lines)} launch(es) logged in {os.environ[LAUNCH_LOG_ENV]}")
+        write(f"{LAUNCH_MARKER}: {len(lines)} launch(es) logged in "
+              f"{os.environ[LAUNCH_LOG_ENV]} or {UNATTRIBUTED_LAUNCH_LOG}")
         for line in lines:
             write(f"  {line}")
         if session.exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
     if _own_launch_log:
         Path(_own_launch_log).unlink(missing_ok=True)
+
 
 # The plan-level places a SUBSTANTIVE plan owes the submission seam, as TOML an author
 # would write. Every fixture plan in the suite that expects to SUBMIT CLEAN splices these
