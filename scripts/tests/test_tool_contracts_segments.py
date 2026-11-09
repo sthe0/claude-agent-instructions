@@ -64,6 +64,9 @@ def build_world(tmp: Path) -> dict:
     outside = tmp / "outside"
     other = _init_repo(outside / "canonical-checkout", "main")
     _git(venue, "branch", "topic")
+    # replay case uncovered-write-06 pushes this branch; without it here the case passed only when
+    # uncovered-write-05 (which renames the venue's branch to it) had run first in the same worker
+    _git(venue, "branch", "plan-dashboard")
     _git(venue, "tag", "v1")
     _git(venue, "tag", "agent/x")
     _git(venue, "branch", "both")
