@@ -32,6 +32,7 @@ import os
 import re
 import resource
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -754,6 +755,87 @@ def _import_history(run: _Run) -> None:
         run.stats.rows_added += out["value"]
 
 
+# --- the historical causes fixture ------------------------------------------------------------
+
+_FIXTURE_INSERT = (
+    "INSERT OR IGNORE INTO causes (cause_id, session, difficulty_index, cause_category, cause_category_table_version, "
+    "machinery_induced, mechanism, mechanism_table_version, functional_place, functional_place_table_version, "
+    "cause_note, origin, imported, provenance, fixture_sha256, fixture_row, mechanism_basis, place_basis, "
+    "alignment_session, alignment_difficulty_index, interval_minutes, interval_unknown) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+
+
+def fixture_cause_id(fixture_sha256: str, index: int) -> str:
+    """The row id of fixture row `index`: a function of the fixture content and the index, not of
+    the path or the record's origin, so a copy of the same fixture adds nothing."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{fixture_sha256}:{index}"))
+
+
+def _fixture_causes() -> "tuple[str, list] | None":
+    from lib.telemetry import align
+    path = align.fixture_path(".jsonl")
+    if not path.exists():
+        return None
+    return align.sha256_file(path), align.read_jsonl(path)
+
+
+def _import_fixture_causes(run: _Run) -> None:
+    """File the fixture's cause rows; rows of an earlier fixture content are replaced in the same
+    transaction, rows of this content are kept."""
+    from lib.telemetry import align, cause
+    loaded = _fixture_causes()
+    if loaded is None:
+        return
+    digest, rows = loaded
+
+    def work(conn):
+        conn.execute("DELETE FROM causes WHERE provenance = ? AND fixture_sha256 != ?", (align.SOURCE, digest))
+        added = 0
+        for index, row in enumerate(rows):
+            fields = {"cause_category": row["category"], "machinery_induced": row["machinery_induced"],
+                      "mechanism": row["mechanism"], "functional_place": row["functional_place"]}
+            stored, violated = cause.complete_cause(fields, imported=True)
+            if violated:
+                raise ValueError(f"fixture row {index}: {'; '.join(violated)}")
+            link = row["alignment"] or {}
+            before = conn.total_changes
+            conn.execute(_FIXTURE_INSERT, (
+                fixture_cause_id(digest, index), link.get("session") or align.SOURCE, link.get("difficulty_index"),
+                stored["cause_category"], stored["cause_category_table_version"], 1 if stored["machinery_induced"] else 0,
+                stored["mechanism"], stored["mechanism_table_version"], stored["functional_place"],
+                stored["functional_place_table_version"], None, run.origin, align.SOURCE, digest, index,
+                row["mechanism_basis"], row["place_basis"], link.get("session"), link.get("difficulty_index"),
+                row["interval_minutes"], 1 if row["interval_unknown"] else 0))
+            added += conn.total_changes - before
+        return added
+    out = _commit(run, work)
+    if _settle(run, out):
+        run.stats.source("fixture_causes")["rows"] += out["value"]
+        run.stats.rows_added += out["value"]
+
+
+def check_fixture_causes(expect: int) -> dict:
+    """Count the fixture's imported cause rows in the record and validate each of them."""
+    from lib.telemetry import align, cause
+    result = {"ok": False, "expected": expect, "count": 0, "invalid": 0, "fixtures": 0}
+    conn = store.open_readonly() if store.record_exists() else None
+    if conn is None:
+        return result
+    try:
+        rows = conn.execute(
+            "SELECT cause_category, machinery_induced, mechanism, functional_place, cause_note, fixture_sha256 "
+            "FROM causes WHERE provenance = ? AND imported = 1", (align.SOURCE,)).fetchall()
+    finally:
+        conn.close()
+    result["count"] = len(rows)
+    result["fixtures"] = len({r[5] for r in rows})
+    result["invalid"] = sum(1 for r in rows if cause.validate_cause(
+        {"cause_category": r[0], "machinery_induced": bool(r[1]), "mechanism": r[2], "functional_place": r[3],
+         cause.NOTE_FIELD: r[4]}, imported=True))
+    result["ok"] = len(rows) == expect and result["invalid"] == 0 and result["fixtures"] <= 1
+    return result
+
+
 def _attach_pass(conn) -> None:
     """Give every session and contour still without a task key the key of its parent session."""
     parent = "(SELECT p.{col} FROM sessions p WHERE p.session_id = {tbl}.parent_session)"
@@ -819,6 +901,7 @@ def run_import(include_transcripts: bool = False, replay_all_spools: bool = Fals
         run.refresh_live()
         _import_history(run)
         _settle(run, _commit(run, _attach_pass))
+        _import_fixture_causes(run)
         _emit_run_event(run, started)
         return _report(run.stats, ro)
     finally:

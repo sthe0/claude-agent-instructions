@@ -6,6 +6,8 @@
     telemetry.py rebuild [--transcripts]
     telemetry.py prune [--retention-days N]
     telemetry.py check-profile-unchanged --reference F --premises P --transcripts-snapshot T
+    telemetry.py align-causes [--inputs DIR] [--draft | --text-out FILE | --report]
+    telemetry.py check-causes --imported --expect N
     telemetry.py now
     telemetry.py path
 
@@ -35,6 +37,7 @@ import argparse
 import json
 import sys
 import time
+from pathlib import Path
 
 from lib import config_root
 from lib.telemetry import live, store, sync as telemetry_sync
@@ -78,6 +81,35 @@ def _import(args) -> int:
     return 0 if stats["complete"] and not over else 1
 
 
+def _align_causes(args) -> int:
+    from lib.telemetry import align
+    try:
+        if args.report:
+            report = align.write_report()
+            print(json.dumps(report, sort_keys=True))
+            return 0
+        if args.text_out:
+            print(json.dumps({"texts": align.show_texts(args.inputs, args.text_out)}))
+            return 0
+        if args.draft:
+            rows = align.write_draft(args.inputs)
+            print(json.dumps({"draft_rows": len(rows), "judged": sum(1 for r in rows if r["aligned_category"])},
+                             sort_keys=True))
+            return 0
+        print(json.dumps(align.run_align(args.inputs), sort_keys=True))
+        return 0
+    except (align.AlignmentError, OSError, ValueError, KeyError) as err:
+        print(f"align-causes: {err}", file=sys.stderr)
+        return 1
+
+
+def _check_causes(args) -> int:
+    from lib.telemetry import importer
+    result = importer.check_fixture_causes(args.expect)
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["ok"] else 1
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -101,6 +133,15 @@ def main(argv=None) -> int:
     check.add_argument("--reference", required=True)
     check.add_argument("--premises", required=True)
     check.add_argument("--transcripts-snapshot", required=True)
+    align_cmd = sub.add_parser("align-causes", help="one-off: align the hand-classified replan causes to engine history")
+    align_cmd.add_argument("--inputs", default=str(Path(__file__).resolve().parents[1].parent
+                                                    / (Path(__file__).resolve().parents[1].name + ".inputs")))
+    align_cmd.add_argument("--draft", action="store_true", help="write the draft alignment (no hand categories)")
+    align_cmd.add_argument("--text-out", default=None, help="write the critique texts to this uncommitted file")
+    align_cmd.add_argument("--report", action="store_true", help="write the alignment report from the fixture rows")
+    chk = sub.add_parser("check-causes", help="count the imported cause rows and validate each")
+    chk.add_argument("--imported", action="store_true", required=True)
+    chk.add_argument("--expect", type=int, required=True)
     sub.add_parser("now", help="print the epoch time")
     sub.add_parser("path", help="print the record's path")
     args = parser.parse_args(argv)
@@ -118,6 +159,10 @@ def main(argv=None) -> int:
     if args.command == "check-profile-unchanged":
         from lib.telemetry import profile_check
         return profile_check.run(args.reference, args.premises, args.transcripts_snapshot)
+    if args.command == "align-causes":
+        return _align_causes(args)
+    if args.command == "check-causes":
+        return _check_causes(args)
     if args.command == "path":
         print(config_root.telemetry_db())
         return 0

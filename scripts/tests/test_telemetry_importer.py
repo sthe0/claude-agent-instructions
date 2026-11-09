@@ -14,13 +14,20 @@ import pytest
 
 import telemetry as telemetry_cli
 from lib import config_root, judge_ledger
-from lib.telemetry import importer, live, store, sync
+from lib.telemetry import align, importer, live, store, sync
 from telemetry_import_support import (
     BASE, at, bash_call, bash_result, line, prompt, reply, world)  # noqa: F401
 from telemetry_live_support import query
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 STATUS = {"node_before": "ROUTED", "node_after": "ROUTED"}
+
+
+@pytest.fixture(autouse=True)
+def no_fixture_causes(monkeypatch, tmp_path):
+    """The exact row totals below are those of the generated sources; the committed causes fixture
+    adds its own 235 rows to every import and is covered by test_telemetry_fixture.py."""
+    monkeypatch.setattr(align, "FIXTURES", tmp_path / "no-fixtures")
 
 
 def history(*seconds) -> list:
