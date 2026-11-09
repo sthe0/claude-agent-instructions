@@ -2,6 +2,7 @@
 
 The helper redirects file descriptor 1, so each case runs a throwaway hook script in a
 subprocess and compares its stdout and exit code with what the same script does bare."""
+import errno
 import json
 import os
 import subprocess
@@ -294,3 +295,32 @@ def test_a_landing_event_is_a_no_op_when_the_telemetry_layer_is_missing(monkeypa
     spec.loader.exec_module(module)
     module.live = None
     module._emit_landing("start", "s", {"branch": "b"})
+
+
+def test_torn_tail_heals_for_both_writers(tmp_path, monkeypatch, store):
+    """A row cut short by a failed write leaves no newline; each decision-log writer must
+    start its row on a new line instead of gluing it onto the fragment."""
+    from argparse import Namespace
+    from agentctl import cli, cli_common
+    log = tmp_path / "log.jsonl"
+    monkeypatch.setenv("AGENTCTL_DECISION_LOG", str(log))
+    monkeypatch.setattr(cli_common, "GATE_LOG", tmp_path / "gate-log.jsonl")
+    log.write_bytes(b'{"torn": "one')
+    hook_telemetry.record("hook-x", "PreToolUse", "deny", "s1")
+    with log.open("ab") as f:
+        f.write(b'{"torn": "two')
+    cli.cmd_start(Namespace(session="s1", task="t", goal="g", done_criterion="dc",
+                            criterion_type="measurable", recursion_depth=0), store=store)
+    cli._log_gate(store.load("s1"), "plan_approval", [], passed=True)
+    lines = log.read_text().splitlines()
+    assert lines[0] == '{"torn": "one' and lines[2] == '{"torn": "two'
+    assert json.loads(lines[1])["mechanism"] == "hook-x"
+    assert [json.loads(line)["mechanism"] for line in lines[3:]][-1] == "engine:plan_approval"
+
+
+def test_a_short_write_raises_out_of_space(tmp_path, monkeypatch):
+    log = tmp_path / "log.jsonl"
+    monkeypatch.setattr(hook_telemetry.os, "write", lambda fd, data: len(data) - 1)
+    with pytest.raises(OSError) as raised:
+        hook_telemetry.append_decision_row(log, b'{"a": 1}\n')
+    assert raised.value.errno == errno.ENOSPC

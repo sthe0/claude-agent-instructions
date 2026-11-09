@@ -2325,7 +2325,9 @@ def _log_gate(state: SessionState, gate: str, blockers: list[str], *, passed: bo
     try:
         decision = hook_telemetry.decision_row(
             f"engine:{gate}", "engine", "silent" if passed else "deny", state.session_id, layer="engine")
-        decision_backref = _append_jsonl(config_root.decision_log(), decision)
+        decision_backref = hook_telemetry.append_decision_row(
+            config_root.decision_log(),
+            (json.dumps(decision, ensure_ascii=False) + "\n").encode("utf-8"), mode=0o666)
     except Exception:
         decision_backref = None
     if decision_backref is not None:  # an event only for a row that reached the decision log
