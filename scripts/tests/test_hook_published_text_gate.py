@@ -24,6 +24,8 @@ import time
 import types
 from pathlib import Path
 
+from conftest import path_with_arc_stub
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agentctl import advisor  # noqa: E402
 from lib import published_body  # noqa: E402
@@ -66,7 +68,7 @@ def run_hook(payload: dict, agent_home: Path, env_extra: "dict | None" = None) -
     # CLAUDE_AGENT_HOME, not CLAUDE_CONFIG_DIR: the Done criterion requires the
     # seam-dependent scenarios to run under CLAUDE_AGENT_HOME specifically, so
     # the seam load path is genuinely exercised rather than trivially inert.
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(agent_home), "CLAUDE_AGENT_HOME": str(agent_home)}
+    env = {"PATH": path_with_arc_stub(), "HOME": str(agent_home), "CLAUDE_AGENT_HOME": str(agent_home)}
     env.update(env_extra or {})
     return subprocess.run(
         [sys.executable, str(HOOK)],
@@ -454,7 +456,7 @@ def test_malformed_stdin_allows(tmp_path):
         [sys.executable, str(HOOK)],
         input="this is not json",
         capture_output=True, text=True,
-        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "CLAUDE_AGENT_HOME": str(tmp_path)},
+        env={"PATH": path_with_arc_stub(), "HOME": str(tmp_path), "CLAUDE_AGENT_HOME": str(tmp_path)},
     )
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""

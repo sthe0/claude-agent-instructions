@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import path_with_arc_stub
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 INSTALLER = SCRIPTS / "install-claude-recover-systemd.sh"
@@ -41,7 +42,7 @@ def box(tmp_path):
 def _run(box, *args, extra_env=None):
     (box["home"]).mkdir(exist_ok=True)
     env = {
-        "PATH": f"{box['fakes']}:/usr/bin:/bin",
+        "PATH": path_with_arc_stub(str(box["fakes"])),
         "HOME": str(box["home"]),
         "SYSTEMD_USER_DIR": str(box["unit_dir"]),
         "LOCAL_BIN_DIR": str(box["bin_dir"]),

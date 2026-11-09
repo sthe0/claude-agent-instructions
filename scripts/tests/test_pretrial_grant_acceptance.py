@@ -22,6 +22,7 @@ from agentctl import cli, gates
 from agentctl.plan import load_plan
 from agentctl.render import render_plan_grants
 from agentctl.state import Node
+from conftest import path_with_arc_stub
 from test_plan_presentation import (
     _declared_venue_plan,
     _to_plan_ready,
@@ -106,7 +107,7 @@ def _accept_protected_grant(home_store, sid: str, tmp_path: Path) -> subprocess.
         [sys.executable, str(CLI), "accept-protected-grant", "--session", sid,
          "--id", PROTECTED_ENTRY, "--note", "the trunk push is intended"],
         capture_output=True, text=True, timeout=120,
-        env={"HOME": str(tmp_path / "fakehome"), "PATH": "/usr/bin:/bin:/usr/local/bin",
+        env={"HOME": str(tmp_path / "fakehome"), "PATH": path_with_arc_stub(system="/usr/bin:/bin:/usr/local/bin"),
              "CLAUDE_CONFIG_DIR": str(home), "CLAUDE_AGENT_HOME": str(home)},
     )
 

@@ -1,0 +1,12 @@
+#!/bin/bash
+# Stands first on the test suite's PATH under the name of every model CLI (`claude`, `agent`,
+# `cursor-agent`), so a test that reaches one by name starts no model. It never execs anything:
+# it reports the launch, records it for conftest to fail the test (and the run) that made it,
+# and exits non-zero. A test that needs a CLI to answer puts its own stub ahead of this one.
+# A child whose environment was built from scratch has no $CORE_TESTS_LAUNCH_LOG; its launch
+# goes to a log keyed by this directory, which conftest reads as well.
+line="real model launch blocked: ${0##*/} $* [test: ${PYTEST_CURRENT_TEST:-?}]"
+echo "$line" >&2
+here=$(cd "${0%/*}" && pwd -P)
+echo "$line" >>"${CORE_TESTS_LAUNCH_LOG:-/tmp/core-tests-model-cli-launches${here//\//_}.log}"
+exit 97

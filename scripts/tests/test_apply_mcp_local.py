@@ -2,18 +2,17 @@
 
 The script registers MCP server definitions into <root>/.claude.json — the file
 Claude Code reads user-scope servers from. Every test runs against a throwaway
-root; none touches the real config root. test_real_cli is the consumer-side
-control: it asks the actual `claude` CLI whether it sees the registered servers.
+root; none touches the real config root. The consumer-side control, which asks the
+actual `claude` CLI whether it sees the registered servers, is manual_real_cli_mcp.py,
+run by hand.
 """
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import stat
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 
 import pytest
@@ -283,26 +282,3 @@ def test_judge_isolation_guard(env, monkeypatch, tmp_path):
     if child_json.exists():
         assert "mcpServers" not in json.loads(child_json.read_text())
     assert "--strict-mcp-config" in host_llm.LEAN_ISOLATION_FLAGS
-
-
-@pytest.mark.skipif(shutil.which("claude") is None, reason="claude CLI not on PATH")
-def test_real_cli(env, tmp_path):
-    """The consumer sees what the script registered: `claude mcp list` under the
-    prepared root lists both a personal and an org-layer server."""
-    suffix = uuid.uuid4().hex[:10]
-    names = [f"corelocal-{suffix}", f"coreplugin-{suffix}"]
-    exiting = _stdio(sys.executable, args=["-c", "import sys; sys.exit(0)"])
-    env.login()
-    env.define("local", names[0], exiting)
-    env.define("plugin", names[1], exiting)
-    assert env.run().returncode == 0
-
-    cwd = tmp_path / "empty-cwd"
-    cwd.mkdir()
-    cli_env = env.env()
-    cli_env["CLAUDE_CONFIG_DIR"] = str(env.root)
-    proc = subprocess.run(["claude", "mcp", "list"], env=cli_env, cwd=cwd,
-                          capture_output=True, text=True, timeout=120)
-    out = proc.stdout + proc.stderr
-    for name in names:
-        assert name in out, out

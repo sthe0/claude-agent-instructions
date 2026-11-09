@@ -920,9 +920,9 @@ def _suite_env(base, scrub=("SECRET_TOKEN",)):
 
 
 def test_suite_env_drops_scrubbed_agent_and_pytest_names():
-    env = _suite_env({"PATH": "/bin", "SECRET_TOKEN": "s", "AGENTCTL_SESSION": "x", "PYTEST_ADDOPTS": "-n 8",
+    env = _suite_env({"PATH": "/opt/kept", "SECRET_TOKEN": "s", "AGENTCTL_SESSION": "x", "PYTEST_ADDOPTS": "-n 8",
                       "PYTHONPATH": "/evil", "KEEP": "1"})
-    assert env["KEEP"] == "1" and env["PATH"] == "/bin"
+    assert env["KEEP"] == "1" and env["PATH"] == "/opt/kept"
     for gone in ("SECRET_TOKEN", "AGENTCTL_SESSION", "PYTEST_ADDOPTS"):
         assert gone not in env
     assert env["PYTHONPATH"] == "/sb/plugin"

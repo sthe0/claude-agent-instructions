@@ -5,6 +5,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from conftest import path_with_arc_stub
+
 SCRIPTS = Path(__file__).resolve().parents[1]
 LAUNCHERS = SCRIPTS / "claude-launchers.sh"
 
@@ -12,7 +14,7 @@ LAUNCHERS = SCRIPTS / "claude-launchers.sh"
 def _bash(tmp_path, snippet):
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(home)}
+    env = {"PATH": path_with_arc_stub(), "HOME": str(home)}
     return subprocess.run(
         ["bash", "-c", f'source "{LAUNCHERS}" && {snippet}'],
         env=env, capture_output=True, text=True, timeout=60, cwd=tmp_path,

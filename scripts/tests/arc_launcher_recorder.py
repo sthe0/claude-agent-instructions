@@ -34,8 +34,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+from model_cli_path import path_without_model_cli
+
 DEFAULT_LAUNCHER = "/usr/bin/arc"
-LITERAL_PATH = "/usr/bin:/bin"
 CANARY = Path(__file__).resolve().parent / "canary_arc_launcher.py"
 CANARY_TEST_ID = "canary_arc_launcher.py::test_launcher_run_downloads_nothing"
 
@@ -108,7 +109,7 @@ def run_wrapped(launcher: str, log: Path, cmd: list[str], attach_it: bool = True
 
 
 def _scrubbed(home: str, **extra: str) -> list[str]:
-    return ["env", "-i", f"PATH={LITERAL_PATH}", f"HOME={home}", *[f"{k}={v}" for k, v in extra.items()]]
+    return ["env", "-i", f"PATH={path_without_model_cli(real_arc=True)}", f"HOME={home}", *[f"{k}={v}" for k, v in extra.items()]]
 
 
 def _wrapper_cmd(launcher: str, log: Path, inner: list[str], no_attach: bool = False) -> list[str]:
@@ -148,7 +149,7 @@ def selfcheck(launcher: str, no_attach: bool, require: bool) -> int:
         log = Path(tmp) / "records"
         home = Path(tmp) / "home"
         home.mkdir()
-        path = f"{Path(launcher).parent}:{LITERAL_PATH}"
+        path = path_without_model_cli(str(Path(launcher).parent), real_arc=True)
         inner = ["env", "-i", f"PATH={path}", f"HOME={home}", "sh", "-c",
                  f"{shlex.quote(launcher)} --is-launcher; {name} --is-launcher"]
         status = subprocess.run(_wrapper_cmd(launcher, log, inner, no_attach)).returncode

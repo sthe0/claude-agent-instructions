@@ -21,6 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from conftest import path_with_arc_stub
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from session_scope import registry  # noqa: E402
 
@@ -71,7 +73,7 @@ def _run(
     env.pop("CLAUDE_AGENT_HOME", None)
     env.pop("AGENTCTL_WORKSPACE_REGISTRY_DIR", None)
     env["GIT_BIN"] = str(_stub_git(tmp_path, fake_toplevel, git_calls, wt_list))
-    env["PATH"] = "/usr/bin:/bin"
+    env["PATH"] = path_with_arc_stub()
     if session_id is not None:
         env["CLAUDE_CODE_SESSION_ID"] = session_id
     else:
@@ -242,7 +244,7 @@ def test_missing_task_name_argument_errors():
         ["bash", str(SCRIPT)],
         capture_output=True,
         text=True,
-        env={"PATH": "/usr/bin:/bin"},
+        env={"PATH": path_with_arc_stub()},
     )
     assert proc.returncode != 0
     assert "usage" in proc.stderr

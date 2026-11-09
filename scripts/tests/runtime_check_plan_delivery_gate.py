@@ -42,6 +42,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agentctl import delivery as _delivery  # noqa: E402
 from agentctl.state import PlanPresentation, SessionState  # noqa: E402
+from model_cli_path import path_with_arc_stub  # noqa: E402
 
 # A stable rendering body the delivered-case transcript echoes verbatim; the
 # hook's byte check is exact-substring, so this must round-trip unaltered.
@@ -110,7 +111,7 @@ def run_hook(hook_path: Path, config_dir: Path, session_id: str, transcript_path
         "transcript_path": str(transcript_path),
         "tool_input": {"questions": [{"question": "Approve the plan?", "options": options or []}]},
     }
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(config_dir), "CLAUDE_CONFIG_DIR": str(config_dir)}
+    env = {"PATH": path_with_arc_stub(), "HOME": str(config_dir), "CLAUDE_CONFIG_DIR": str(config_dir)}
     proc = subprocess.run(
         [sys.executable, str(hook_path)],
         input=json.dumps(payload),

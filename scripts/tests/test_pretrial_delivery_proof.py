@@ -26,6 +26,7 @@ import pytest
 from agentctl import cli, delivery as delivery_mod
 from agentctl.state import SHOW_FULL_PLAN_MARKER as MARKER
 from agentctl.store import FileStateStore
+from conftest import path_with_arc_stub
 from lib import writer_pass
 from test_plan_presentation import _declared_venue_plan, _write_rendering
 
@@ -67,7 +68,7 @@ def _env(tmp_path: Path, cfg: Path, harness: str | None, *, writer_gate: bool) -
         "HOME": str(tmp_path / "fakehome"),
         "CLAUDE_CONFIG_DIR": str(cfg),
         "CLAUDE_AGENT_HOME": str(cfg),
-        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "PATH": path_with_arc_stub(str(bin_dir)),
         "AGENTCTL_PLAN_PRESENTATION": "1",
         "AGENTCTL_PLAN_REVIEW": "0",
     }

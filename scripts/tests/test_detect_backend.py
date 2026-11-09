@@ -11,6 +11,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from conftest import path_with_arc_stub
 
 from project_entry.detect_backend import (
     detect_backends,
@@ -448,7 +449,7 @@ def test_main_returns_git_when_detect_dir_is_git_repo(tmp_path, monkeypatch):
         **os.environ,
         "CLAUDE_BACKEND_DETECT_DIR": str(git_repo),
         "CLAUDE_PROJECT_PLUGIN_DIR": str(plugin),
-        "PATH": "/usr/bin:/bin",
+        "PATH": path_with_arc_stub(),
     }
     r = _run_cli(env)
     assert r.returncode == 0, r.stderr
@@ -464,7 +465,7 @@ def test_main_default_target_is_instructions_repo_root(tmp_path):
     env = {
         **os.environ,
         "CLAUDE_PROJECT_PLUGIN_DIR": str(plugin),
-        "PATH": "/usr/bin:/bin",
+        "PATH": path_with_arc_stub(),
     }
     env.pop("CLAUDE_BACKEND_DETECT_DIR", None)
     r = _run_cli(env)

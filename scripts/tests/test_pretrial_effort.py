@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import patch_cli_name
+from conftest import patch_cli_name, path_with_arc_stub
 from agentctl import cli
 from agentctl.config import Thresholds
 from agentctl.state import (
@@ -154,7 +154,7 @@ def _prompt_after_gap(home: Path, session: str, node: str) -> dict:
         [sys.executable, str(PROMPT_HOOK)],
         input=json.dumps({"session_id": session, "prompt": "carry on"}),
         capture_output=True, text=True, timeout=60,
-        env={"HOME": str(home), "PATH": "/usr/bin:/bin:/usr/local/bin"},
+        env={"HOME": str(home), "PATH": path_with_arc_stub(system="/usr/bin:/bin:/usr/local/bin")},
     )
     assert proc.returncode == 0, f"setup: the prompt hook failed: {proc.stderr[-300:]}"
     return json.loads(path.read_text(encoding="utf-8"))

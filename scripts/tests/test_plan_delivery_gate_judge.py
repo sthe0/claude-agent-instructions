@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from agentctl import delivery as delivery_mod
+from conftest import path_without_model_cli
 from lib import judge_ledger
 
 from test_plan_delivery_gate_presentation import (
@@ -50,9 +51,9 @@ def _run_hook(payload: dict, config_dir: Path, *, bin_dir: Path | None) -> subpr
     """Like test_plan_delivery_gate_presentation.run_hook, but the caller
     controls what (if anything) PATH exposes as `claude` -- bin_dir=None
     reproduces the pre-Stage-8 default (no claude on PATH at all)."""
-    path = f"{bin_dir}:/usr/bin:/bin" if bin_dir is not None else "/usr/bin:/bin"
+    leading = (str(bin_dir),) if bin_dir is not None else ()
     env = {
-        "PATH": path, "HOME": str(config_dir), "CLAUDE_CONFIG_DIR": str(config_dir),
+        "PATH": path_without_model_cli(*leading), "HOME": str(config_dir), "CLAUDE_CONFIG_DIR": str(config_dir),
         "AGENTCTL_JUDGE_LEDGER": str(_ledger_path(config_dir)),
     }
     return subprocess.run(

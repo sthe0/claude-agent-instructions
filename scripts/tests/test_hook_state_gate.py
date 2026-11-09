@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import path_with_arc_stub
 
 from agentctl.state import Critique, Declaration, Difficulty, Investigation, SessionState
 
@@ -26,7 +27,7 @@ def _load_module():
 
 
 def run_hook(payload: dict, home: Path, extra_env: dict | None = None) -> subprocess.CompletedProcess:
-    env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+    env = {"HOME": str(home), "PATH": path_with_arc_stub()}
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -215,7 +216,7 @@ def test_corrupt_state_file_allows(tmp_path):
 
 
 def test_malformed_stdin_allows(tmp_path):
-    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+    env = {"HOME": str(tmp_path), "PATH": path_with_arc_stub()}
     proc = subprocess.run(
         [sys.executable, str(HOOK)],
         input="this is not json",

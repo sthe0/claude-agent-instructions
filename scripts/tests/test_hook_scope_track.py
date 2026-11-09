@@ -250,7 +250,7 @@ def test_never_blocks_on_malformed_stdin(tmp_path):
         input="not json",
         capture_output=True,
         text=True,
-        env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+        env={"HOME": str(home), "PATH": path_with_arc_stub()},
     )
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""

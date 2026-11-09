@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import arc_launcher_recorder as rec
+from conftest import path_with_arc_stub
 
 RECORDER = Path(rec.__file__).resolve()
 
@@ -31,7 +32,7 @@ def _run(launcher, log, inner, *flags):
 
 
 def _env(launcher, *shell):
-    return ["env", "-i", f"PATH={launcher.parent}:/usr/bin:/bin", "HOME=/nonexistent", "sh", "-c", *shell]
+    return ["env", "-i", f"PATH={path_with_arc_stub(str(launcher.parent))}", "HOME=/nonexistent", "sh", "-c", *shell]
 
 
 def test_records_through_literal_path_and_absolute_path(fake_launcher, tmp_path):
@@ -43,7 +44,7 @@ def test_records_through_literal_path_and_absolute_path(fake_launcher, tmp_path)
 
 def test_records_two_levels_down_and_carries_test_id(fake_launcher, tmp_path):
     log = tmp_path / "log"
-    inner = ["env", "-i", f"PATH={fake_launcher.parent}:/usr/bin:/bin", "PYTEST_CURRENT_TEST=mod.py::t (call)",
+    inner = ["env", "-i", f"PATH={path_with_arc_stub(str(fake_launcher.parent))}", "PYTEST_CURRENT_TEST=mod.py::t (call)",
              "sh", "-c", "sh -c 'sh -c \"arc deep\"'"]
     assert _run(fake_launcher, log, inner).returncode == 0
     (record,) = rec.read_records(log)

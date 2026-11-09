@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from model_cli_path import path_without_model_cli
 
 
 def _link_or_copy(src: Path, dst: Path) -> None:
@@ -59,7 +60,7 @@ def test_launcher_run_downloads_nothing(tmp_path):
     assert seeded, "no channel link resolved to a release directory"
 
     env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": path_without_model_cli(real_arc=True),
         "HOME": str(home),
         "ARC_UPDATE_INTERVAL": "0",
         "PYTEST_CURRENT_TEST": os.environ.get("PYTEST_CURRENT_TEST", ""),

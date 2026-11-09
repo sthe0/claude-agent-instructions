@@ -22,6 +22,7 @@ from pathlib import Path
 from agentctl import delivery as delivery_mod
 from agentctl.state import GateRecord, PlanPresentation, SessionState
 from agentctl.state import SHOW_FULL_PLAN_MARKER as MARKER
+from conftest import path_with_arc_stub
 
 HOOK = Path(__file__).resolve().parent.parent / "hook-plan-delivery-gate.py"
 
@@ -106,7 +107,7 @@ def _write_approval_classifier_stub(bin_dir: Path) -> None:
 def run_hook(payload: dict, config_dir: Path) -> subprocess.CompletedProcess:
     bin_dir = config_dir / "_fakebin"
     _write_approval_classifier_stub(bin_dir)
-    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(config_dir), "CLAUDE_CONFIG_DIR": str(config_dir)}
+    env = {"PATH": path_with_arc_stub(str(bin_dir)), "HOME": str(config_dir), "CLAUDE_CONFIG_DIR": str(config_dir)}
     return subprocess.run(
         [sys.executable, str(HOOK)], input=json.dumps(payload),
         capture_output=True, text=True, env=env,

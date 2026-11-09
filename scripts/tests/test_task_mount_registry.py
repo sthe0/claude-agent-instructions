@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from conftest import path_with_arc_stub
+
 from project_entry.task_mount_registry import _default_root, get_name, set_name
 
 SCRIPT = Path(__file__).resolve().parents[1] / "project_entry" / "task_mount_registry.py"
@@ -108,13 +110,13 @@ def _run(*args: str, env: "dict[str, str]") -> subprocess.CompletedProcess:
 
 
 def test_cli_get_missing_key_exits_1(tmp_path):
-    r = _run("get", str(tmp_path), "PROJ-440", env={"PATH": "/usr/bin:/bin"})
+    r = _run("get", str(tmp_path), "PROJ-440", env={"PATH": path_with_arc_stub()})
     assert r.returncode == 1
     assert r.stdout == ""
 
 
 def test_cli_set_then_get_round_trips(tmp_path):
-    env = {"PATH": "/usr/bin:/bin"}
+    env = {"PATH": path_with_arc_stub()}
     r_set = _run("set", str(tmp_path), "PROJ-440", "PROJ-440-judge-calibration", env=env)
     assert r_set.returncode == 0
     assert r_set.stdout.strip().endswith("PROJ-440.json")
@@ -125,5 +127,5 @@ def test_cli_set_then_get_round_trips(tmp_path):
 
 
 def test_cli_unknown_command_exits_2(tmp_path):
-    r = _run("bogus", env={"PATH": "/usr/bin:/bin"})
+    r = _run("bogus", env={"PATH": path_with_arc_stub()})
     assert r.returncode == 2

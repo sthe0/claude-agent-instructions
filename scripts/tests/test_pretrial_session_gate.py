@@ -17,9 +17,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from conftest import path_with_arc_stub
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 CLI = SCRIPTS_DIR / "agentctl-cli.py"
 HOOK = SCRIPTS_DIR / "hook-state-gate.py"
+SYSTEM_PATH = path_with_arc_stub(system="/usr/bin:/bin:/usr/local/bin")
 
 HARNESS = "harness-h"
 ENGINE = "engine-e"
@@ -28,7 +31,7 @@ WARNING_PREFIX = "agentctl: warning:"
 
 
 def _env(home: Path, harness: str | None = HARNESS) -> dict:
-    env = {"HOME": str(home), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    env = {"HOME": str(home), "PATH": SYSTEM_PATH}
     if harness is not None:
         env["CLAUDE_CODE_SESSION_ID"] = harness
     return env
@@ -60,7 +63,7 @@ def _edit_from_harness(home: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload), capture_output=True, text=True,
-        env={"HOME": str(home), "PATH": "/usr/bin:/bin:/usr/local/bin"}, timeout=60,
+        env={"HOME": str(home), "PATH": SYSTEM_PATH}, timeout=60,
     )
 
 
@@ -285,7 +288,7 @@ def test_pending_session_guard_does_not_apply_to_a_plan_file(tmp_path):
     proc = subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload), capture_output=True, text=True,
-        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}, timeout=60,
+        env={"HOME": str(tmp_path), "PATH": SYSTEM_PATH}, timeout=60,
     )
 
     assert proc.returncode == 0 and not _is_deny(proc), (
@@ -341,7 +344,7 @@ def test_status_of_unbound_session_still_warns_about_the_harness_id(tmp_path):
 def _edit_from_linked_child(home: Path, child: str) -> subprocess.CompletedProcess:
     payload = {"tool_name": "Edit", "session_id": child, "tool_input": {"file_path": PRODUCTION_FILE}}
     env = {
-        "HOME": str(home), "PATH": "/usr/bin:/bin:/usr/local/bin",
+        "HOME": str(home), "PATH": SYSTEM_PATH,
         "AGENTCTL_OWN_SESSION": child, "AGENTCTL_NORM_HANDOFF": "handoff", "AGENT_RECURSION_DEPTH": "1",
     }
     return subprocess.run(

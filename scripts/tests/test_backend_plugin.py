@@ -25,6 +25,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from conftest import path_with_arc_stub
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from session_scope import registry  # noqa: E402
 
@@ -160,7 +162,7 @@ def test_session_isolate_dispatches_to_plugin_fixture(tmp_path):
 
     env = dict(os.environ)
     env["HOME"] = str(home)
-    env["PATH"] = "/usr/bin:/bin"
+    env["PATH"] = path_with_arc_stub()
     # config_root resolves CLAUDE_CONFIG_DIR/CLAUDE_AGENT_HOME before HOME —
     # strip them so the child derives its root from the tmp HOME, not the
     # developer machine's real isolated root.
@@ -209,7 +211,7 @@ def test_session_isolate_degrades_to_git_when_plugin_absent(tmp_path):
 
     env = dict(os.environ)
     env["HOME"] = str(home)
-    env["PATH"] = "/usr/bin:/bin"
+    env["PATH"] = path_with_arc_stub()
     # config_root resolves CLAUDE_CONFIG_DIR/CLAUDE_AGENT_HOME before HOME —
     # strip them so the child derives its root from the tmp HOME, not the
     # developer machine's real isolated root.

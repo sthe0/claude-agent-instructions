@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agentctl.state import PlanPresentation  # noqa: E402
+from conftest import path_with_arc_stub  # noqa: E402
 
 HOOK = Path(__file__).resolve().parent.parent / "hook-plan-delivery-gate.py"
 
@@ -59,7 +60,7 @@ def run_hook(payload: dict, config_dir: Path, env_extra: dict | None = None) -> 
     # fallback hardcodes Path.home() (not CLAUDE_CONFIG_DIR) — without this an
     # unset HOME falls back to the real user's home and the hook would read
     # ~/.claude/agentctl/state for a session-id collision with a real file.
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(config_dir), "CLAUDE_CONFIG_DIR": str(config_dir)}
+    env = {"PATH": path_with_arc_stub(), "HOME": str(config_dir), "CLAUDE_CONFIG_DIR": str(config_dir)}
     env.update(env_extra or {})
     return subprocess.run(
         [sys.executable, str(HOOK)],
@@ -246,7 +247,7 @@ def test_corrupt_state_file_allows(tmp_path):
 
 
 def test_malformed_stdin_allows(tmp_path):
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path)}
+    env = {"PATH": path_with_arc_stub(), "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path)}
     proc = subprocess.run(
         [sys.executable, str(HOOK)],
         input="this is not json",
@@ -624,7 +625,7 @@ def test_no_judge_call_outside_plan_ready(tmp_path):
         stub = bin_dir / "claude"
         stub.write_text(f"#!/bin/sh\ntouch {marker}\necho YES\n")
         stub.chmod(0o755)
-        env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path)}
+        env = {"PATH": path_with_arc_stub(str(bin_dir)), "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path)}
         payload = pres.ask_payload(sid, _delivered_transcript(tmp_path))
         return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
                               capture_output=True, text=True, env=env)

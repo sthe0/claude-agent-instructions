@@ -30,6 +30,7 @@ from agentctl import cost, inline_class, inline_git, mandate as rules, mandate_s
 from agentctl.config import Thresholds, parse_config_md
 from agentctl.dispatch import RunResult
 from agentctl.store import FileStateStore
+from conftest import path_with_arc_stub
 from lib import config_root
 from mandate_cycle import driver, notifiers
 from session_scope import registry as scopes
@@ -2080,7 +2081,7 @@ def box(tmp_path):
 
 def install(box, *args, extra_env=None):
     env = {
-        "PATH": f"{box['fakes']}:/usr/bin:/bin", "HOME": str(box["home"]),
+        "PATH": path_with_arc_stub(str(box["fakes"])), "HOME": str(box["home"]),
         "SYSTEMD_USER_DIR": str(box["units"]), "SYSTEMCTL_BIN": str(box["fakes"] / "systemctl"),
     }
     env.update(extra_env or {})
@@ -2116,7 +2117,7 @@ def test_the_unit_path_leads_with_python3_and_execstart_names_it_even_when_gh_co
         d.mkdir()
         (d / name).write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         (d / name).chmod(0o755)
-    result = install(box, extra_env={"PATH": f"{gh_dir}:{py_dir}:{box['fakes']}:/usr/bin:/bin"})
+    result = install(box, extra_env={"PATH": path_with_arc_stub(str(gh_dir), str(py_dir), str(box["fakes"]))})
     assert result.returncode == 0, result.stderr
     env_text = (box["home"] / ".config" / "agent-debt-cycle" / "env").read_text(encoding="utf-8")
     unit_path = env_text.splitlines()[0].removeprefix("PATH=").split(":")

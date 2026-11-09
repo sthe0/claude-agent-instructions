@@ -4,6 +4,7 @@ from __future__ import annotations
 import itertools
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -16,15 +17,24 @@ TESTS_DIR = str(Path(__file__).resolve().parent)
 if TESTS_DIR not in sys.path:
     sys.path.insert(0, TESTS_DIR)
 
-ARC_STUB_DIR = str(Path(__file__).resolve().parent / "stubs")
+from model_cli_path import (  # noqa: E402,F401
+    LAUNCH_LOG_ENV,
+    LAUNCH_MARKER,
+    MODEL_CLI_NAMES,
+    UNATTRIBUTED_LAUNCH_LOG,
+    path_with_arc_stub,
+    path_without_model_cli,
+)
+from model_cli_path import STUBS_DIR as ARC_STUB_DIR  # noqa: E402
 
 
-def path_with_arc_stub(*leading: str, system: str = "/usr/bin:/bin") -> str:
-    """A PATH for a test that builds its own: the test's `leading` stub directories, then the
-    stub arc's, then `system`. A literal PATH that reaches the real launcher in a fresh HOME
-    makes it download a release."""
-    return os.pathsep.join(p for p in (*leading, ARC_STUB_DIR, system) if p)
-
+# Set before xdist starts its workers, so they and every child that inherits the environment
+# share one log with the controller; a nested pytest run keeps it unless it sets its own.
+_own_launch_log: str | None = None
+if LAUNCH_LOG_ENV not in os.environ:
+    _fd, _own_launch_log = tempfile.mkstemp(prefix="core-tests-launch-", suffix=".log")
+    os.close(_fd)
+    os.environ[LAUNCH_LOG_ENV] = _own_launch_log
 
 if os.environ.get("PATH", "").split(os.pathsep)[:1] != [ARC_STUB_DIR]:
     os.environ["PATH"] = path_with_arc_stub(system=os.environ.get("PATH", ""))
@@ -79,6 +89,70 @@ def pytest_drop_arc_canary_unless_requested(config, items):
         if dropped:
             items[:] = [i for i in items if i not in dropped]
             config.hook.pytest_deselected(items=dropped)
+
+
+def _log_size(log: Path) -> int:
+    try:
+        return log.stat().st_size
+    except OSError:
+        return 0
+
+
+# The unattributed log is shared by every run from this checkout, so each process reads only
+# what was appended after it started.
+_unattributed_start = _log_size(UNATTRIBUTED_LAUNCH_LOG)
+
+
+def _launch_log_lines() -> list[str]:
+    lines = []
+    for log, start in ((Path(os.environ.get(LAUNCH_LOG_ENV, "")), 0),
+                       (UNATTRIBUTED_LAUNCH_LOG, _unattributed_start)):
+        if _log_size(log) <= start or not log.is_file():
+            continue
+        try:
+            with log.open("rb") as f:
+                f.seek(start)
+                text = f.read().decode(errors="replace")
+        except OSError:
+            continue
+        lines += [line for line in text.splitlines() if line.strip()]
+    return lines
+
+
+_launches_reported: dict[str, int] = {}
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Fail the test whose process tree reached a model CLI guard. The judges fail open, so
+    the guard's non-zero exit alone would leave such a test green."""
+    outcome = yield
+    report = outcome.get_result()
+    tag = f"[test: {item.nodeid} ("
+    lines = [line for line in _launch_log_lines() if tag in line]
+    new = lines[_launches_reported.get(item.nodeid, 0):]
+    if new:
+        _launches_reported[item.nodeid] = len(lines)
+        report.outcome = "failed"
+        report.longrepr = f"{LAUNCH_MARKER} in {item.nodeid}:\n" + "\n".join(new)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """On the controller, fail the run for every launch a guard logged, including one from a
+    child that dropped PYTEST_CURRENT_TEST and so names no test."""
+    if hasattr(session.config, "workerinput"):
+        return
+    lines = _launch_log_lines()
+    if lines:
+        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+        write = reporter.write_line if reporter else (lambda s: print(s, file=sys.stderr))
+        write(f"{LAUNCH_MARKER}: {len(lines)} launch(es) logged in {os.environ[LAUNCH_LOG_ENV]}")
+        for line in lines:
+            write(f"  {line}")
+        if session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    if _own_launch_log:
+        Path(_own_launch_log).unlink(missing_ok=True)
 
 # The plan-level places a SUBSTANTIVE plan owes the submission seam, as TOML an author
 # would write. Every fixture plan in the suite that expects to SUBMIT CLEAN splices these

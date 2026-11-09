@@ -18,6 +18,8 @@ import sys
 import time
 from pathlib import Path
 
+from conftest import path_with_arc_stub
+
 from session_scope import registry
 
 HOOK = Path(__file__).resolve().parent.parent / "hook-scope-conflict.py"
@@ -51,7 +53,7 @@ def _payload(session_id: str, file_path: str, tool: str = "Edit") -> dict:
 
 
 def run_hook(payload: dict, home: Path, lineage: "str | None" = None) -> subprocess.CompletedProcess:
-    env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+    env = {"HOME": str(home), "PATH": path_with_arc_stub()}
     if lineage is not None:
         env["AGENT_LINEAGE_IDS"] = lineage
     return subprocess.run(
@@ -239,7 +241,7 @@ def test_malformed_stdin_allows(tmp_path):
         input="not json",
         capture_output=True,
         text=True,
-        env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+        env={"HOME": str(home), "PATH": path_with_arc_stub()},
     )
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
