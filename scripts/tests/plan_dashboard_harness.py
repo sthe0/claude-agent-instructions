@@ -253,6 +253,46 @@ def changed_map(changed: list[dict], bindings: dict[str, list[str]]) -> dict[str
             if not item.get("deleted")}
 
 
+def contract_changes(copy: dict, live: list[dict]) -> list[dict]:
+    """The sources changed since a saved snapshot copy, by the contract's source-to-task rule.
+
+    State, binding and ledger files compare as ``changed_since`` compares them. A transcript is a source only of the
+    tasks ``tasks_of_source`` gives it, so it counts only when one of them can be shown
+    (``ContractWatcher.shown_tasks``: the copy's rows, the window, changed state and binding files), and then when it
+    is recorded with another identity, recorded and gone, or unrecorded and written at or after the copy's taken
+    time less 120 s (``taken_at`` is stamped to the second after a save run). Recorded transcripts are stat'ed
+    directly, so one the ``*/*.jsonl`` listing misses is not taken for deleted.
+    """
+    try:
+        taken_ns = int(datetime.fromisoformat(copy["taken_at"]).timestamp()) * 10**9
+    except (KeyError, TypeError, ValueError):
+        taken_ns = 0
+    rows = set()
+    try:
+        sections = load_json(Path(copy["file"])).get("sections") or {}
+    except (KeyError, OSError, ValueError, AttributeError):
+        sections = {}
+    for section in sections.values():
+        tasks = (section.get("snapshot") or {}).get("tasks") if isinstance(section, dict) else None
+        rows |= {t["session_id"] for t in tasks or [] if isinstance(t, dict) and isinstance(t.get("session_id"), str)}
+    files = [item for item in live if item["kind"] != "transcript"]
+    changed = changed_since([item for item in copy["sources"] if item["kind"] != "transcript"], files)
+    bindings = bindings_map(agent_home() / "agentctl" / "engine-session-bindings")
+    shown = ContractWatcher.shown_tasks(rows, changed, files, taken_ns, bindings)
+    recorded = {item["path"]: item for item in copy["sources"] if item["kind"] == "transcript"}
+    for path, before in recorded.items():
+        if tasks_of_source(path, "transcript", bindings) & shown:
+            now = identity(path, "transcript")
+            if now is None:
+                changed.append(dict(before, deleted=True))
+            elif any(now[k] != before[k] for k in IDENTITY_KEYS):
+                changed.append(now)
+    changed += [item for item in live if item["kind"] == "transcript" and item["path"] not in recorded
+                and tasks_of_source(item["path"], "transcript", bindings) & shown
+                and max(item["mtime_ns"], item["ctime_ns"]) >= taken_ns - 120 * 10**9]
+    return changed
+
+
 # --- statistics ----------------------------------------------------------------------------------------
 
 def median(values) -> float | None:
@@ -585,6 +625,66 @@ class StatWatcher:
             changed.append(path)
             self.seen[path] = now
         return changed
+
+
+class ContractWatcher:
+    """R3's due sources by the contract's rule, re-listed at every cycle start: every state, binding and ledger file
+    that changed or was created, and every changed or created transcript of a task the dashboard can show, with
+    ``StatWatcher``'s rule that a file modified after the cycle's start is not yet due."""
+
+    WINDOW_NS = 24 * 3600 * 10**9
+
+    def __init__(self):
+        self.seen = {item["path"]: item for item in live_sources()}
+
+    @staticmethod
+    def shown_tasks(rows: set[str], changed: list[dict], files: list[dict], at_ns: int,
+                    bindings: dict[str, list[str]]) -> set[str]:
+        """The rows, the task of every state file inside the 24 h window at ``at_ns`` or changed, and the tasks
+        driven by every changed binding file; the window term keeps a row the code under test drops in the set."""
+        shown = set(rows)
+        shown |= {Path(item["path"]).stem for item in files
+                  if item["kind"] == "state" and item["mtime_ns"] >= at_ns - ContractWatcher.WINDOW_NS}
+        for item in changed:
+            if item["kind"] in ("state", "binding"):
+                shown |= tasks_of_source(item["path"], item["kind"], bindings)
+        return shown
+
+    @staticmethod
+    def screen_ids(frames: list[tuple[float, dict]]) -> set[str]:
+        """The session cells of the latest screen frame that has rows."""
+        for _, parsed in reversed(frames):
+            if parsed and parsed["rows"]:
+                return set(parsed["rows"])
+        return set()
+
+    def poll(self, due_wall_ns: int, screen_ids: set[str]) -> list[str]:
+        live = {item["path"]: item for item in live_sources()}
+        moved = sorted(p for p in {*self.seen, *live} if p not in live or p not in self.seen
+                       or any(live[p][k] != self.seen[p][k] for k in IDENTITY_KEYS))
+        # Shown tasks are those at the cycle's start: a file modified after it counts as last seen, or not at all.
+        files = [item if item["mtime_ns"] <= due_wall_ns else self.seen.get(path) for path, item in live.items()]
+        files = [item for item in files if item and item["kind"] != "transcript" and item["mtime_ns"] <= due_wall_ns]
+        changed = [item for item in (live.get(p) or self.seen[p] for p in moved)
+                   if item["kind"] != "transcript" and item["mtime_ns"] <= due_wall_ns]
+        bindings = bindings_map(agent_home() / "agentctl" / "engine-session-bindings")
+        rows = {Path(item["path"]).stem for item in files if item["kind"] == "state"
+                and any(cell and Path(item["path"]).stem.startswith(cell) for cell in screen_ids)}
+        shown = self.shown_tasks(rows, changed, files, due_wall_ns, bindings)
+        due = []
+        for path in moved:
+            now = live.get(path)
+            kind = (now or self.seen[path])["kind"]
+            if kind == "transcript" and not tasks_of_source(path, kind, bindings) & shown:
+                continue
+            if now is not None and now["mtime_ns"] > due_wall_ns:
+                continue
+            due.append(path)
+            if now is None:
+                del self.seen[path]
+            else:
+                self.seen[path] = now
+        return due
 
 
 # --- what one run says --------------------------------------------------------------------------------
@@ -1347,7 +1447,7 @@ class Campaign:
         low, high = BANDS[cell]
         best = None
         for copy in self.copies:
-            count = len([c for c in changed_since(copy["sources"], live) if not c.get("deleted")])
+            count = len(contract_changes(copy, live_sources()))
             self.largest = max(self.largest, count)
             if band_of(count) == cell and (best is None or count < best[1]):
                 best = (copy, count)
@@ -1487,7 +1587,7 @@ class RealRunner:
         elif copy is not None:
             snapshot.write_bytes(Path(copy["file"]).read_bytes())
             live_now = self.do_live(None)
-            changed = [c for c in changed_since(copy["sources"], live_now) if not c.get("deleted")]
+            changed = contract_changes(copy, live_sources())
             changed_count = len(changed)
             changes = changed_map(changed, bindings_map(agent_home() / "agentctl" / "engine-session-bindings"))
         tree = self.new if arm == "new" else self.old
@@ -1505,13 +1605,13 @@ class RealRunner:
     def do_r3(self, job):
         arm = job["arm"]
         tree = self.new if arm == "new" else self.old
-        watcher = StatWatcher(self.watch_paths)
+        watcher = ContractWatcher()
         due: dict[int, list[str]] = {}
 
         def on_event(trace, event):
             if event.get("ev") == "cycle_start":
                 wall_ns = event["t_ns"] + trace.wall_minus_mono_ns
-                due[event["cycle"]] = watcher.poll(wall_ns)
+                due[event["cycle"]] = watcher.poll(wall_ns, ContractWatcher.screen_ids(trace.frames))
 
         trace = run_pty(dashboard_argv(tree, events=True), cwd=tree, env=self.env(arm), events=True, max_s=180,
                         on_event=on_event,

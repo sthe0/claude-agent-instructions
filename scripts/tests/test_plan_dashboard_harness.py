@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -277,6 +278,130 @@ def test_an_r3_run_takes_twenty_cycles_after_the_first_and_checks_coverage():
     cycles[10]["covered"] = False
     assert not h.r3_run_record("new", cycles)["covered_all"]
     assert not h.r3_run_record("new", cycles[:10])["covered_all"]
+
+
+# --- the changed count and the R3 due set follow the contract's rule, not the 2026-11-06 trace -------------
+
+DAY_NS = 24 * 3600 * 10**9
+
+
+def fake_home(tmp_path, monkeypatch):
+    """An agent home with state, binding and transcript folders, and a ``HOME`` holding only the cost ledger."""
+    home = tmp_path / "agent-home"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    monkeypatch.delenv("CLAUDE_AGENT_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "user-home"))
+    for folder in (home / "agentctl" / "state", home / "agentctl" / "engine-session-bindings",
+                   home / "projects" / "-proj", h.cost_ledger().parent):
+        folder.mkdir(parents=True)
+    h.cost_ledger().write_text("{}\n")
+    return home
+
+
+def put(path: Path, text: str = "x\n", age_ns: int = 0) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    if age_ns:
+        at = time.time_ns() - age_ns
+        os.utime(path, ns=(at, at))
+    return path
+
+
+class FakeTrace:
+    def __init__(self, frames=()):
+        self.frames, self.events, self.t0_ns, self.wall_minus_mono_ns = list(frames), [], 0, 0
+
+
+def test_the_changed_count_follows_the_contract_not_the_trace(tmp_path, monkeypatch):
+    home = fake_home(tmp_path, monkeypatch)
+    state, binding = home / "agentctl" / "state", home / "agentctl" / "engine-session-bindings"
+    proj = home / "projects" / "-proj"
+    put(state / "task-a.json", age_ns=3 * DAY_NS)          # a row of the copy, outside the window
+    put(state / "task-b.json", age_ns=3 * DAY_NS)          # no row, outside the window: not shown
+    put(state / "task-c.json")                             # no row, inside the window: shown, no session yet
+    put(binding / "h1.json", json.dumps({"driven": [{"session": "task-a"}]}), age_ns=3 * DAY_NS)
+    shown_a = put(proj / "task-a.jsonl")
+    nested_h1 = put(proj / "nested" / "h1.jsonl")          # recorded, but not in the */*.jsonl listing
+    others = [put(proj / f"other-{n}.jsonl") for n in range(20)]
+    trace_population = [str(p) for p in proj.glob("*.jsonl")]
+    recorded = [h.identity(p, kind) for p, kind in (
+        (state / "task-a.json", "state"), (state / "task-b.json", "state"), (state / "task-c.json", "state"),
+        (binding / "h1.json", "binding"), (h.cost_ledger(), "ledger"),
+        (shown_a, "transcript"), (nested_h1, "transcript"))]
+    snapshot = tmp_path / "copy-0001.json"
+    snapshot.write_text(json.dumps({"version": 1, "sources": recorded, "sections": {
+        "live:24:": {"snapshot": {"tasks": [{"session_id": "task-a"}]}}}}))
+    copy_ = {"file": str(snapshot), "taken_at": h.iso_now(), "sources": recorded}
+
+    runner = h.RealRunner(tmp_path / "state", tmp_path / "old", tmp_path / "new", CONTRACT, trace_population)
+    camp = h.Campaign(tmp_path / "state", tmp_path / "old", tmp_path / "new", save_every=3600, until=1e12,
+                      watch=[], runner=runner, clock=lambda: 0.0, log=lambda m: None)
+    camp.copies = [copy_]
+    seen = {}
+    monkeypatch.setattr(h, "run_pty", lambda *a, **k: FakeTrace())
+    monkeypatch.setattr(h, "summarize_run", lambda trace, **k: seen.update(k) or {})
+
+    def counted():
+        found = camp.pick_copy("near-zero", runner("live", None))
+        runner("run", {"cell": "near-zero", "arm": "new", "copy": copy_, "live": None})
+        assert found is not None and found[1] == seen["changed_count"]
+        return seen["changed_count"], set(seen["changes"])
+
+    for p in others[:10]:
+        p.write_text("written after the copy\n")
+    put(proj / "other-new.jsonl")
+    put(proj / "task-b.jsonl")
+    assert counted() == (0, set()), "transcripts of no shown task are no source of any row"
+
+    shown_a.write_text("x\nmore\n")
+    assert counted() == (1, {str(shown_a)})
+
+    new_session = put(proj / "task-c.jsonl")
+    assert counted() == (2, {str(shown_a), str(new_session)})
+
+    (state / "task-b.json").write_text("changed\n")
+    four = {str(shown_a), str(new_session), str(state / "task-b.json"), str(proj / "task-b.jsonl")}
+    assert counted() == (4, four)
+
+    nested_h1.unlink()                                     # a recorded session gone counts, but is no row's source
+    assert counted() == (5, four)
+    h.cost_ledger().write_text("{}\n{}\n")
+    assert counted()[0] == 6
+
+
+def test_r3_due_sources_include_sessions_created_after_the_trace(tmp_path, monkeypatch):
+    home = fake_home(tmp_path, monkeypatch)
+    state, proj = home / "agentctl" / "state", home / "projects" / "-proj"
+    put(state / "aaaa1111-full.json", age_ns=3 * DAY_NS)   # on the screen, outside the window
+    put(state / "bbbb2222.json")                           # inside the window, no row on the screen
+    put(state / "cccc3333.json", age_ns=3 * DAY_NS)        # neither: not shown
+    late_state = put(state / "dddd4444.json", age_ns=3 * DAY_NS)   # touched only after the cycle starts
+    put(home / "agentctl" / "engine-session-bindings" / "hsess.json",
+        json.dumps({"driven": [{"session": "bbbb2222"}]}), age_ns=3 * DAY_NS)
+    driven = put(proj / "hsess.jsonl", age_ns=DAY_NS)
+    unshown = put(proj / "cccc3333.jsonl", age_ns=DAY_NS)
+    late_task = put(proj / "dddd4444.jsonl", age_ns=DAY_NS)
+    trace_population = [str(driven), str(unshown)]
+    new_session = proj / "aaaa1111-full.jsonl"
+    due = {}
+
+    def fake_run_pty(argv, *, on_event=None, **kw):
+        put(new_session)
+        driven.write_text("x\nmore\n")
+        unshown.write_text("x\nmore\n")
+        late_task.write_text("x\nmore\n")
+        cycle_ns = time.time_ns() + 5 * 10**9
+        late_state.write_text("changed\n")
+        os.utime(late_state, ns=(cycle_ns + 10**9, cycle_ns + 10**9))
+        trace = FakeTrace(frames=[(0.1, {"rows": {"aaaa1111": "~"}})])
+        on_event(trace, {"ev": "cycle_start", "cycle": 2, "t_ns": cycle_ns})
+        return trace
+
+    monkeypatch.setattr(h, "run_pty", fake_run_pty)
+    monkeypatch.setattr(h, "check_cycle_coverage", lambda cycles, by_cycle: due.update(by_cycle) or [])
+    runner = h.RealRunner(tmp_path / "state", tmp_path / "old", tmp_path / "new", CONTRACT, trace_population)
+    runner("r3", {"arm": "new"})
+    assert set(due[2]) == {str(new_session), str(driven)}
 
 
 # --- floors and acceptance: exit codes on fake reports -------------------------------------------------
@@ -625,8 +750,10 @@ def test_the_campaign_alternates_old_and_new_within_a_cell(tmp_path):
     assert [c[0] for c in runner.calls].count("save") == 1
 
 
-def test_a_band_cell_runs_on_the_saved_copy_whose_count_is_in_its_band(tmp_path):
+def test_a_band_cell_runs_on_the_saved_copy_whose_count_is_in_its_band(tmp_path, monkeypatch):
+    fake_home(tmp_path, monkeypatch)
     runner = Script(live_changed=95, run_changed=95)
+    monkeypatch.setattr(h, "live_sources", lambda: runner("live", None))
     camp = campaign(tmp_path, runner)
     for name, changed in (("no-snapshot", None), ("damaged", None), ("near-zero", 3)):
         finished_cell(camp, name, changed)
