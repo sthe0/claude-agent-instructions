@@ -135,7 +135,8 @@ class Eng:
         self.run("investigate", session=sid, localized_expectation="le", localized_actual="la",
                  hypothesis=["h1", "h2"])
         self.run("critique", session=sid, functional_ground="fg", replanning_task="rt",
-                 failure_address="resource")
+                 failure_address="resource", cause_category="implementation_defect",
+                 machinery_induced="false", mechanism="none", functional_place="verification")
         self.run("normalize", session=sid, factor="reproducible cause", level="note")
 
     def replanned(self, text=None, sid="s", review=True):

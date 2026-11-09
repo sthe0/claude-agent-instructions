@@ -96,7 +96,9 @@ def _critique(store, sid, *, differences=(), invariants=()):
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
                         invariants_to_preserve=list(invariants),
                         differences_to_remove=list(differences),
-                        failure_address="resource"), store=store)
+                        failure_address="resource", cause_category="implementation_defect",
+                        machinery_induced="false", mechanism="none",
+                        functional_place="verification"), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 

@@ -88,7 +88,8 @@ def _child(store, fixtures_dir, tmp_path, monkeypatch, *, sid=CHILD):
 
 def _critique(store, sid=CHILD, failure_address=NORMATIVE, targets=("parent",)):
     kw = dict(session=sid, functional_ground="fg", replanning_task="rt",
-              failure_address=failure_address)
+              failure_address=failure_address, cause_category="implementation_defect",
+              machinery_induced="false", mechanism="none", functional_place="verification")
     if targets:
         kw["norm_targets"] = list(targets)
     return cli.cmd_critique(ns(**kw), store=store)

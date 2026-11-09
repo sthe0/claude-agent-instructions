@@ -60,7 +60,9 @@ def _to_diagnosing(store, sid, plan):
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="normative", norm_targets=["stage:1"]), store=store)
+                        failure_address="normative", norm_targets=["stage:1"],
+                        cause_category="implementation_defect", machinery_induced="false",
+                        mechanism="none", functional_place="verification"), store=store)
 
 
 @pytest.fixture(autouse=True)
@@ -262,7 +264,9 @@ def test_replan_normalize_factor_not_double_logged_on_refused_retry(store, venue
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="normative", norm_targets=["stage:1"]), store=store)
+                        failure_address="normative", norm_targets=["stage:1"],
+                        cause_category="implementation_defect", machinery_induced="false",
+                        mechanism="none", functional_place="verification"), store=store)
 
     # `refined` retitles stage 1, moving O1's covering-stage key (#123), so the
     # plan_approval plugin gate refuses it on the order bag -- strictly past

@@ -981,7 +981,9 @@ def test_renormalize_is_not_blocked_by_the_closure_preconditions(store, tmp_path
     cli.cmd_investigate(ns(session="rn", localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session="rn", functional_ground="fg", replanning_task="rt",
-                        failure_address="normative", norm_targets=["stage:1"]),
+                        failure_address="normative", norm_targets=["stage:1"],
+                        cause_category="implementation_defect", machinery_induced="false",
+                        mechanism="none", functional_place="verification"),
                      store=store)
     assert gates.normalization_blockers(store.load("rn")), (
         "the closure gate must be armed, or this test pins nothing"

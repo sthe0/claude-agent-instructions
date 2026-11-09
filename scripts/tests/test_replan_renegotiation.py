@@ -56,7 +56,9 @@ def _to_diagnosing(store, venued_fixtures_dir, sid, *, normalize=True, norm_faul
                            hypotheses=["h1", "h2"]), store=store)
     fault = (dict(failure_address="normative", norm_targets=["stage:1"]) if norm_fault
              else dict(failure_address="resource"))
-    cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt", **fault),
+    cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
+                        cause_category="implementation_defect", machinery_induced="false",
+                        mechanism="none", functional_place="verification", **fault),
                      store=store)
     if normalize:
         cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)

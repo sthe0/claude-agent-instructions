@@ -382,7 +382,9 @@ def _do_critique(store, sid, runner=None):
     )
     return cli.cmd_critique(
         ns(session=sid, functional_ground="the system assumes X", replanning_task="fix config",
-           invariants_to_preserve=None, differences_to_remove=None),
+           invariants_to_preserve=None, differences_to_remove=None,
+           cause_category="implementation_defect", machinery_induced="false",
+           mechanism="none", functional_place="verification"),
         store=store, runner=runner,
     )
 

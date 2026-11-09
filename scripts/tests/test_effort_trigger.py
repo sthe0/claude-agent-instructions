@@ -128,7 +128,9 @@ def test_repeat_digest_escalate_does_not_spend_the_fire(store, venued_fixtures_d
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="resource"), store=store)
+                        failure_address="resource",
+                        cause_category="implementation_defect", machinery_induced="false",
+                        mechanism="none", functional_place="verification"), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
     cli.cmd_replan(ns(session=sid, plan=plan), store=store)  # no_change; re-arms the stage
     cli.cmd_next_stage(ns(session=sid), store=store)
