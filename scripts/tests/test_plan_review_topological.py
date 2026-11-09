@@ -320,10 +320,29 @@ def test_early_stop_flags_exclusive(drv):
     assert exc.value.code == 2
 
 
+def rendezvous(width):
+    """One-shot rendezvous for a spawn's on_spawn hook: hold each spawn until
+    `width` of them have started, so overlap reflects the driver's width rather
+    than scheduler timing under machine load."""
+    lock = threading.Lock()
+    started = [0]
+    reached = threading.Event()
+
+    def on_spawn(_pair):
+        with lock:
+            started[0] += 1
+            if started[0] >= width:
+                reached.set()
+        reached.wait(5)
+
+    return on_spawn
+
+
 def test_td2_parallel_never_starts_a_level_before_the_previous_one_returned(make_rig):
     engine = FakeEngine([["a", "b"], ["c", "d"]])
     rig = make_rig(engine)
-    rig.specs = {p: {"delay": 0.05} for p in "abcd"}
+    first, second = rendezvous(2), rendezvous(2)
+    rig.specs = {p: {"delay": 0.05, "on_spawn": first if p in "ab" else second} for p in "abcd"}
     rc, out = rig.run("--parallel", "2")
     assert rc == 0
     ev = rig.events
@@ -349,19 +368,7 @@ def run_level_with_cap(make_rig, monkeypatch, drv, cap, pairs, *extra, width):
     constants = {} if cap is None else {"review-parallel-max": str(cap)}
     monkeypatch.setattr(drv, "parse_config_md", lambda: constants, raising=False)
     rig = make_rig(FakeEngine([list(pairs)]))
-    # One-shot rendezvous: hold each spawn until `width` of them have started,
-    # so the peak reflects the driver's width rather than scheduler timing.
-    lock = threading.Lock()
-    started = [0]
-    reached = threading.Event()
-
-    def on_spawn(_pair):
-        with lock:
-            started[0] += 1
-            if started[0] >= width:
-                reached.set()
-        reached.wait(5)
-
+    on_spawn = rendezvous(width)
     rig.specs = {p: {"delay": 0.05, "on_spawn": on_spawn} for p in pairs}
     rc, _ = rig.run(*extra)
     assert rc == 0
@@ -402,7 +409,9 @@ def test_default_parallel_same_level(make_rig, drv, monkeypatch):
     def recorded(extra):
         monkeypatch.setattr(drv, "parse_config_md", lambda: {"review-parallel-max": "4"}, raising=False)
         rig = make_rig(FakeEngine([["a", "b", "c"]]))
-        rig.specs = {"a": {"delay": 0.05}, "b": {"delay": 0.05, "verdict": "revise"}, "c": {"delay": 0.05}}
+        on_spawn = rendezvous(1 if extra else 3)
+        rig.specs = {p: {"delay": 0.05, "on_spawn": on_spawn} for p in "abc"}
+        rig.specs["b"]["verdict"] = "revise"
         rig.run(*extra)
         return rig, [(argv[argv.index("--scope") + 1], argv[argv.index("--verdict") + 1])
                      for argv in rig.engine.verbs("plan-review")], dict(rig.engine.status)
