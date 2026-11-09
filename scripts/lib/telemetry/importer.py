@@ -880,6 +880,17 @@ def _emit_run_event(run: _Run, started: float) -> None:
                    "duration_s": round(_clock() - started, 3)}}], BATCH_DEADLINE_S)
 
 
+def _collect_tokens(run: _Run) -> None:
+    """Token rows of every transcript, live sessions' included (lib/telemetry/tokens.py)."""
+    from lib.telemetry import tokens
+    counts = tokens.collect(None, deadline_s=BATCH_DEADLINE_S)
+    run.stats.source("tokens")["rows"] += counts["rows"]
+    for _ in range(counts["deferred"]):
+        run.stats.defer()
+    for _ in range(counts["failed"]):
+        run.stats.fail()
+
+
 def run_import(include_transcripts: bool = False, replay_all_spools: bool = False) -> dict:
     """Import every source once; the stats dict is the whole report."""
     started = _clock()
@@ -901,6 +912,8 @@ def run_import(include_transcripts: bool = False, replay_all_spools: bool = Fals
         run.refresh_live()
         _import_history(run)
         _settle(run, _commit(run, _attach_pass))
+        if include_transcripts or replay_all_spools:
+            _collect_tokens(run)
         _import_fixture_causes(run)
         _emit_run_event(run, started)
         return _report(run.stats, ro)

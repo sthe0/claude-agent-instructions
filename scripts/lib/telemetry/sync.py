@@ -674,5 +674,7 @@ def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
     filed = materialize([s for s in stems if s not in deferred])
     if filed.get("failed_session"):
         _write_own(SYNC_DEFERRED, {"session": filed["failed_session"], "phase": "materialize"})
+    from lib.telemetry import tokens
+    collected = tokens.collect([s for s in stems if s != SYNC_SESSION])
     return {"kind": kind, "visited": stems, "committed": committed, "deferred": deferred,
-            "unattached": filed["unattached"]}
+            "unattached": filed["unattached"], "tokens": collected}

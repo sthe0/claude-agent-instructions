@@ -8,6 +8,7 @@
     telemetry.py check-profile-unchanged --reference F --premises P --transcripts-snapshot T
     telemetry.py align-causes [--inputs DIR] [--draft | --text-out FILE | --report]
     telemetry.py check-causes --imported --expect N
+    telemetry.py check-tokens (--task <id> [--require-spawn] [--require-compaction] | --imported-coverage)
     telemetry.py now
     telemetry.py path
 
@@ -22,6 +23,16 @@ and decision rows older than `telemetry-prune-retention-days` (config.md) or `--
 `check-profile-unchanged` recomputes the time-profile aggregate from stage 1's frozen inputs and
 compares it with the frozen reference (lib/telemetry/profile_check.py: exit 0 unchanged, 1 a figure
 differs, 2 a premise or the session set differs).
+
+`check-tokens --task <id>` checks one task's token conservation (lib/telemetry/tokens.py): the
+usage of the message ids whose winning line falls in the task, read up to each transcript's tokens
+offset, against its token rows by role and phase, plus its judge usage; it lists bytes appended
+since the last read, winning lines with no open epoch and copies another task owns as gaps that
+leave the exit unchanged. It exits 1 on a mismatch, an expected judge call (a judge event of the
+task) with no ledger row, or a missing context birth `--require-spawn` / `--require-compaction`
+asks for. `--imported-coverage` exits 1 unless every transcript with usage lines has a last
+collector read that committed up to its last complete line, with a token row per message id read.
+Both exit 2 on a usage error.
 
 `sync` runs one sync (lib/telemetry/sync.py): it replays the named session's spool and every
 other spool with unreplayed bytes, files the rows the events imply and prints the result as one
@@ -110,6 +121,28 @@ def _check_causes(args) -> int:
     return 0 if result["ok"] else 1
 
 
+def _check_tokens(args) -> int:
+    from lib.telemetry import tokens
+    if not args.task and not args.imported_coverage:
+        print("check-tokens: give --task <id> or --imported-coverage", file=sys.stderr)
+        return 2
+    conn = store.open_readonly()
+    if conn is None:
+        print("check-tokens: the record is unavailable", file=sys.stderr)
+        return 2
+    try:
+        if args.imported_coverage:
+            result = tokens.check_imported_coverage(conn)
+        else:
+            result = tokens.check_task(conn, args.task, args.require_spawn, args.require_compaction)
+    finally:
+        conn.close()
+    print(json.dumps(result, sort_keys=True))
+    if "usage_error" in result:
+        return 2
+    return 0 if result["ok"] else 1
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -142,6 +175,11 @@ def main(argv=None) -> int:
     chk = sub.add_parser("check-causes", help="count the imported cause rows and validate each")
     chk.add_argument("--imported", action="store_true", required=True)
     chk.add_argument("--expect", type=int, required=True)
+    tok = sub.add_parser("check-tokens", help="check a task's token conservation or the imported coverage")
+    tok.add_argument("--task", default=None)
+    tok.add_argument("--require-spawn", action="store_true", help="exit 1 without a spawn context birth")
+    tok.add_argument("--require-compaction", action="store_true", help="exit 1 without a compaction")
+    tok.add_argument("--imported-coverage", action="store_true")
     sub.add_parser("now", help="print the epoch time")
     sub.add_parser("path", help="print the record's path")
     args = parser.parse_args(argv)
@@ -163,6 +201,8 @@ def main(argv=None) -> int:
         return _align_causes(args)
     if args.command == "check-causes":
         return _check_causes(args)
+    if args.command == "check-tokens":
+        return _check_tokens(args)
     if args.command == "path":
         print(config_root.telemetry_db())
         return 0
