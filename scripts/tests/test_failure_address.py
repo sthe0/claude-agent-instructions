@@ -113,6 +113,10 @@ def test_blockers_grandfather_legacy_value_at_closure():
 
 # --- cmd_critique validation -------------------------------------------------
 
+CAUSE = dict(cause_category="implementation_defect", machinery_induced="false",
+             mechanism="none", functional_place="verification")
+
+
 def _to_failed_stage1(store, sid, plan):
     cli.cmd_start(ns(session=sid, task="fa-demo", goal="", done_criterion="",
                      criterion_type="measurable", recursion_depth=0), store=store)
@@ -139,7 +143,7 @@ def test_cmd_critique_accepts_valid_routing(store, venued_fixtures_dir):
     _to_failed_stage1(store, "cc1", str(venued_fixtures_dir / "plan_two_stage.toml"))
     _declare_investigate(store, "cc1")
     d = cli.cmd_critique(ns(session="cc1", functional_ground="fg", replanning_task="rt",
-                            failure_address="resource"), store=store)
+                            failure_address="resource", **CAUSE), store=store)
     assert d.ok is True
     assert store.load("cc1").difficulty.critique.failure_address == "resource"
 
@@ -159,7 +163,7 @@ def test_cmd_critique_omitted_routing_is_none(store, venued_fixtures_dir):
     # what demands it be present at closure
     _to_failed_stage1(store, "cc3", str(venued_fixtures_dir / "plan_two_stage.toml"))
     _declare_investigate(store, "cc3")
-    d = cli.cmd_critique(ns(session="cc3", functional_ground="fg", replanning_task="rt"),
+    d = cli.cmd_critique(ns(session="cc3", functional_ground="fg", replanning_task="rt", **CAUSE),
                          store=store)
     assert d.ok is True
     assert store.load("cc3").difficulty.critique.failure_address is None
@@ -235,7 +239,7 @@ def test_replan_blocked_without_routing(store, venued_fixtures_dir):
     refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_failed_stage1(store, "e1", plan)
     _declare_investigate(store, "e1")
-    cli.cmd_critique(ns(session="e1", functional_ground="fg", replanning_task="rt"),
+    cli.cmd_critique(ns(session="e1", functional_ground="fg", replanning_task="rt", **CAUSE),
                      store=store)
     _renorm(store, "e1")
     d = cli.cmd_replan(ns(session="e1", plan=refined), store=store)
@@ -254,7 +258,7 @@ def test_emitted_replan_block_has_no_cyrillic(store, venued_fixtures_dir):
     refined = str(venued_fixtures_dir / "plan_two_stage_refined.toml")
     _to_failed_stage1(store, "e9", plan)
     _declare_investigate(store, "e9")
-    cli.cmd_critique(ns(session="e9", functional_ground="fg", replanning_task="rt"),
+    cli.cmd_critique(ns(session="e9", functional_ground="fg", replanning_task="rt", **CAUSE),
                      store=store)
     _renorm(store, "e9")
     d = cli.cmd_replan(ns(session="e9", plan=refined), store=store)
@@ -270,7 +274,7 @@ def test_routed_critique_unblocks_replan(store, venued_fixtures_dir):
     _to_failed_stage1(store, "e2", plan)
     _declare_investigate(store, "e2")
     cli.cmd_critique(ns(session="e2", functional_ground="fg", replanning_task="rt",
-                        failure_address="normative", norm_targets=["stage:1"]),
+                        failure_address="normative", norm_targets=["stage:1"], **CAUSE),
                      store=store)
     _renorm(store, "e2")
     d = cli.cmd_replan(ns(session="e2", plan=refined), store=store)
@@ -288,7 +292,7 @@ def test_explicit_not_applicable_unblocks_replan(store, venued_fixtures_dir):
     _to_failed_stage1(store, "e3", plan)
     _declare_investigate(store, "e3")
     cli.cmd_critique(ns(session="e3", functional_ground="fg", replanning_task="rt",
-                        failure_address="not_applicable"), store=store)
+                        failure_address="not_applicable", **CAUSE), store=store)
     _renorm(store, "e3")
     d = cli.cmd_replan(ns(session="e3", plan=refined), store=store)
     assert d.ok is True
@@ -320,7 +324,7 @@ def test_alias_cli_critique_stores_the_english_value(store, venued_fixtures_dir,
     english = FAILURE_ADDRESS_ALIASES[alias]
     d = cli.cmd_critique(ns(session="al1", functional_ground="fg", replanning_task="rt",
                             failure_address=alias,
-                            norm_targets=["stage:1"] if english == "normative" else []),
+                            norm_targets=["stage:1"] if english == "normative" else [], **CAUSE),
                          store=store)
     assert d.ok is True, d.detail
     assert store.load("al1").difficulty.critique.failure_address == english
@@ -330,7 +334,7 @@ def test_alias_hard_coded_cyrillic_literal_is_stored_as_english(store, venued_fi
     _to_failed_stage1(store, "al2", str(venued_fixtures_dir / "plan_two_stage.toml"))
     _declare_investigate(store, "al2")
     d = cli.cmd_critique(ns(session="al2", functional_ground="fg", replanning_task="rt",
-                            failure_address="ресурсное"), store=store)
+                            failure_address="ресурсное", **CAUSE), store=store)
     assert d.ok is True
     assert store.load("al2").difficulty.critique.failure_address == "resource"
 

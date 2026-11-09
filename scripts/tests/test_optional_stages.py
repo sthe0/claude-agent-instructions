@@ -379,7 +379,9 @@ def _work_the_difficulty(store, sid):
     # critique must name the norm it corrects, and renorm_retention_blockers then holds
     # the replan until that stage's norm actually changes.
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="normative", norm_targets=["stage:2"]), store=store)
+                        failure_address="normative", norm_targets=["stage:2"],
+                        cause_category="implementation_defect", machinery_induced="false",
+                        mechanism="none", functional_place="verification"), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 
@@ -1160,7 +1162,9 @@ def _diagnose_resource(eng, sid: str, tag: str = "a", *, difference: bool = True
             localized_actual=f"la-{tag}", hypothesis=[f"h1-{tag}", f"h2-{tag}"])
     eng.run("critique", session=sid, functional_ground=f"fg-{tag}", replanning_task=f"rt-{tag}",
             failure_address="resource",
-            difference_to_remove=[f"d-{tag}"] if difference else None)
+            difference_to_remove=[f"d-{tag}"] if difference else None,
+            cause_category="implementation_defect", machinery_induced="false",
+            mechanism="none", functional_place="verification")
     eng.run("normalize", session=sid, factor=f"factor-{tag}", level="note")
 
 

@@ -516,6 +516,8 @@ def test_own_channel_reaches_parent_norm_critique(contour):
         "critique", "--functional-ground", "the parent stage's norm cannot be met",
         "--replanning-task", "rewrite the parent stage's done criterion",
         "--failure-address", "normative", "--norm-target", "parent",
+        "--cause-category", "parent_norm_defect", "--machinery-induced", "false",
+        "--mechanism", "none", "--functional-place", "dispatch",
     )
     result = _expect_ok(critique, "own channel `critique`")
     assert result["marker"] == "REPLAN" and result["action"] == "return_replan", result

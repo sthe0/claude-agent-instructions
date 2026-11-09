@@ -41,7 +41,9 @@ def _to_diagnosing_with_critique(store, sid, plan, *, invariants_to_preserve=Non
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
                         invariants_to_preserve=invariants_to_preserve or ["keep idempotency"],
                         differences_to_remove=[], failure_address="normative",
-                        norm_targets=["stage:1"]), store=store)
+                        norm_targets=["stage:1"], cause_category="implementation_defect",
+                        machinery_induced="false", mechanism="none",
+                        functional_place="verification"), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
 

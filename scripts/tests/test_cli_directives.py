@@ -230,7 +230,9 @@ def test_critique_persists_the_structured_split(store, venued_fixtures_dir):
                            hypotheses=["h1", "h2"]), store=store)
     d = cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
                             invariants_to_preserve=["stage 1 done criterion"],
-                            differences_to_remove=["means: ad-hoc retry"]), store=store)
+                            differences_to_remove=["means: ad-hoc retry"],
+                            cause_category="implementation_defect", machinery_induced="false",
+                            mechanism="none", functional_place="verification"), store=store)
     assert d.action == "replan"
     crit = store.load(sid).difficulty.critique
     assert crit.invariants_to_preserve == ["stage 1 done criterion"]
@@ -260,7 +262,9 @@ def test_critique_does_not_announce_replan_while_blocked(store, venued_fixtures_
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1"]), store=store)
     d = cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                            invariants_to_preserve=[], differences_to_remove=[]), store=store)
+                            invariants_to_preserve=[], differences_to_remove=[],
+                            cause_category="implementation_defect", machinery_induced="false",
+                            mechanism="none", functional_place="verification"), store=store)
     assert d.ok is False
     assert d.action != "replan"
     assert "investigation needs >=2 hypotheses" in d.detail
@@ -275,7 +279,9 @@ def test_critique_announces_replan_when_record_is_complete(store, venued_fixture
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     d = cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                            invariants_to_preserve=[], differences_to_remove=[]), store=store)
+                            invariants_to_preserve=[], differences_to_remove=[],
+                            cause_category="implementation_defect", machinery_induced="false",
+                            mechanism="none", functional_place="verification"), store=store)
     assert d.ok is True
     assert d.action == "replan"
     assert d.detail == "difficulty cycle complete; replan is now unblocked"

@@ -618,7 +618,8 @@ def test_spine_walk_replan_deny_then_pass(tmp_path):
          "--localized-actual", "la", "--hypothesis", "h1", "--hypothesis", "h2")
     _run(root, "critique", "--session", "r1", "--functional-ground", "fg",
          "--replanning-task", "rt", "--failure-address", "normative",
-         "--norm-target", "stage:1")
+         "--norm-target", "stage:1", "--cause-category", "implementation_defect",
+         "--machinery-induced", "false", "--mechanism", "none", "--functional-place", "verification")
     _run(root, "normalize", "--session", "r1", "--factor", "reproducible cause", "--level", "note")
     denied = _run(root, "replan", "--session", "r1", "--plan", refined)
     assert '"ok": false' in denied.stdout and "plan-review" in denied.stdout.lower()

@@ -3556,7 +3556,9 @@ def test_a_rejected_small_path_child_works_its_difficulty_and_replans_without_a_
 
     cli.cmd_declare(ns(expected=declaration.expected, actual="not addressed", mismatch="m"), store=child_store)
     cli.cmd_investigate(ns(localized_expectation="le", localized_actual="la", hypotheses=["h1", "h2"]), store=child_store)
-    cli.cmd_critique(ns(functional_ground="fg", replanning_task="rt", failure_address="not_applicable", norm_targets=None),
+    cli.cmd_critique(ns(functional_ground="fg", replanning_task="rt", failure_address="not_applicable", norm_targets=None,
+                        cause_category="implementation_defect", machinery_induced="false",
+                        mechanism="none", functional_place="verification"),
                      store=child_store)
     cli.cmd_normalize(ns(factor="reproducible cause", level="note"), store=child_store)
     replanned = cli.cmd_replan(ns(plan=None), store=child_store)

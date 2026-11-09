@@ -165,7 +165,9 @@ def test_walkthrough_logs_difficulty_and_replan_coverage_gates(store, monkeypatc
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="normative", norm_targets=["stage:1"]), store=store)
+                        failure_address="normative", norm_targets=["stage:1"],
+                        cause_category="implementation_defect", machinery_induced="false",
+                        mechanism="none", functional_place="verification"), store=store)
     cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
 
     d = cli.cmd_replan(ns(session=sid, plan=refined), store=store)

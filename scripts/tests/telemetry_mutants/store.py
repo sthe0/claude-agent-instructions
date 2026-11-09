@@ -111,10 +111,10 @@ MUTANTS = [
     {"name": "table_version_not_bumped_on_retire", "file": _TABLES_FILE,
      "anchor": "    version = table.version + 1\n"
                "    members = dict(table.members)\n"
-               "    members[member] = Member(member, current.since, version)",
+               "    members[member] = Member(member, current.since, version, current.attrs)",
      "replacement": "    version = table.version\n"
                     "    members = dict(table.members)\n"
-                    "    members[member] = Member(member, current.since, version)",
+                    "    members[member] = Member(member, current.since, version, current.attrs)",
      "tests": [_TABLES_TESTS +
                "test_table_version_bumped_on_every_add_or_retire_and_recorded_in_snapshot_history"]},
     {"name": "replay_keeps_imported_row_on_live_arrival", "file": _STORE_FILE,

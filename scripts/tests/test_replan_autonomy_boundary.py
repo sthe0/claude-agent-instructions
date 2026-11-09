@@ -164,7 +164,9 @@ class Eng:
                  localized_actual=f"la-{tag}", hypothesis=[f"h1-{tag}", f"h2-{tag}"])
         self.run("critique", session=sid, functional_ground=f"fg-{tag}", replanning_task=f"rt-{tag}",
                  failure_address="normative", norm_target="stage:1",
-                 difference_to_remove=[f"d-{tag}"] if difference else None)
+                 difference_to_remove=[f"d-{tag}"] if difference else None,
+                 cause_category="implementation_defect", machinery_induced="false",
+                 mechanism="none", functional_place="verification")
         if normalize:
             self.run("normalize", session=sid, factor=f"factor-{tag}", level="note")
 
@@ -561,7 +563,9 @@ def reflect_after_release(eng: Eng, sid: str, tag: str = "r") -> None:
         ("investigate", dict(localized_expectation=f"le-{tag}", localized_actual=f"la-{tag}",
                              hypothesis=[f"h1-{tag}", f"h2-{tag}"])),
         ("critique", dict(functional_ground=f"fg-{tag}", replanning_task=f"rt-{tag}",
-                          failure_address="not_applicable", difference_to_remove=[f"d-{tag}"])),
+                          failure_address="not_applicable", difference_to_remove=[f"d-{tag}"],
+                          cause_category="implementation_defect", machinery_induced="false",
+                          mechanism="none", functional_place="verification")),
         ("normalize", dict(factor=f"factor-{tag}", level="note")),
     ):
         d = eng.run(cmd, session=sid, **flags)
@@ -1035,7 +1039,9 @@ def test_e2e_agent_replan_cycle_without_user(eng):
                              hypothesis=["h1", "h2"])),
         ("critique", dict(functional_ground="fg", replanning_task="rt",
                           failure_address="normative", norm_target="stage:1",
-                          difference_to_remove="d")),
+                          difference_to_remove="d", cause_category="implementation_defect",
+                          machinery_induced="false", mechanism="none",
+                          functional_place="verification")),
         ("normalize", dict(factor="f", level="note")),
     ):
         sub(eng, step, session="e1", **flags)

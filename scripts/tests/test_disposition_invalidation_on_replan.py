@@ -283,7 +283,9 @@ class TestDispositionInvalidationOnReplan:
                         store=store)
         cli.cmd_critique(ns(session=sid, similarities="same approach",
                             differences="img updated",
-                            failure_address="not_applicable"), store=store)
+                            failure_address="not_applicable", cause_category="implementation_defect",
+                            machinery_induced="false", mechanism="none",
+                            functional_place="verification"), store=store)
         cli.cmd_replan(ns(session=sid, plan=str(corrected),
                           normalization_waiver="one-off img change",
                           coverage_waiver=None), store=store)
@@ -306,7 +308,9 @@ class TestDispositionInvalidationOnReplan:
                         store=store)
         cli.cmd_critique(ns(session=sid, similarities="same approach",
                             differences="img updated",
-                            failure_address="not_applicable"), store=store)
+                            failure_address="not_applicable", cause_category="implementation_defect",
+                            machinery_induced="false", mechanism="none",
+                            functional_place="verification"), store=store)
         cli.cmd_replan(ns(session=sid, plan=str(corrected),
                           normalization_waiver="one-off img change",
                           coverage_waiver=None), store=store)
@@ -333,7 +337,9 @@ class TestDispositionInvalidationOnReplan:
                         store=store)
         cli.cmd_critique(ns(session=sid, similarities="same approach",
                             differences="img updated",
-                            failure_address="not_applicable"), store=store)
+                            failure_address="not_applicable", cause_category="implementation_defect",
+                            machinery_induced="false", mechanism="none",
+                            functional_place="verification"), store=store)
         cli.cmd_replan(ns(session=sid, plan=str(corrected),
                           normalization_waiver="one-off", coverage_waiver=None),
                        store=store)
@@ -347,7 +353,9 @@ class TestDispositionInvalidationOnReplan:
                         store=store)
         cli.cmd_critique(ns(session=sid, similarities="same approach",
                             differences="img reverted",
-                            failure_address="not_applicable"), store=store)
+                            failure_address="not_applicable", cause_category="implementation_defect",
+                            machinery_induced="false", mechanism="none",
+                            functional_place="verification"), store=store)
         cli.cmd_replan(ns(session=sid, plan=str(reverted),
                           normalization_waiver="one-off", coverage_waiver=None),
                        store=store)
@@ -372,7 +380,9 @@ class TestDispositionInvalidationOnReplan:
                         store=store)
         cli.cmd_critique(ns(session=sid, similarities="same approach",
                             differences="img updated",
-                            failure_address="not_applicable"), store=store)
+                            failure_address="not_applicable", cause_category="implementation_defect",
+                            machinery_induced="false", mechanism="none",
+                            functional_place="verification"), store=store)
         cli.cmd_replan(ns(session=sid, plan=str(corrected),
                           normalization_waiver="one-off", coverage_waiver=None),
                        store=store)

@@ -89,7 +89,9 @@ def reflect(eng: Eng, sid: str, tag: str = "r", *, difference: bool = True,
                              hypothesis=[f"h1-{tag}", f"h2-{tag}"])),
         ("critique", dict(functional_ground=f"fg-{tag}", replanning_task=f"rt-{tag}",
                           failure_address="not_applicable",
-                          difference_to_remove=[f"d-{tag}"] if difference else None)),
+                          difference_to_remove=[f"d-{tag}"] if difference else None,
+                          cause_category="implementation_defect", machinery_induced="false",
+                          mechanism="none", functional_place="verification")),
     ]
     if normalize:
         steps.append(("normalize", dict(factor=f"factor-{tag}", level="note")))

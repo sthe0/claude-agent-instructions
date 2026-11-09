@@ -3206,6 +3206,13 @@ hits = 1
 hit_classes = ["structural"]
 reviewed_by = "developer"
 
+[sites."scripts/lib/telemetry/align.py::registry_matches::re.search"]
+class = "structural"
+ground = "Finds whether a fixed registry id or one of its declared source keys occurs as a whole token in an aligned critique; an exact identifier lookup (re.escape of the key between token boundaries), not a judgement of meaning. A row gets an observed mechanism only when exactly one id is named, otherwise it stays unknown."
+hits = 1
+hit_classes = ["structural"]
+reviewed_by = "developer"
+
 [sites."scripts/lib/telemetry/importer.py::<module>::re.compile"]
 class = "structural"
 ground = "Compiles _BASH_EXIT, the fixed 'Exit code <digits>' line the harness writes into a failed Bash tool result; a machine-written token, not prose."

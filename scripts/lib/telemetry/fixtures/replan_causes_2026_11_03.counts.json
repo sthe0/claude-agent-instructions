@@ -1,0 +1,46 @@
+{
+  "categories": {
+    "check_authoring_defect": {
+      "false": 43,
+      "true": 7
+    },
+    "dispatch_or_procedure_precondition": {
+      "false": 0,
+      "true": 10
+    },
+    "effort_trigger_overrun": {
+      "false": 0,
+      "true": 20
+    },
+    "flaky_or_loaded_verify": {
+      "false": 23,
+      "true": 7
+    },
+    "implementation_defect": {
+      "false": 18,
+      "true": 0
+    },
+    "parent_norm_defect": {
+      "false": 0,
+      "true": 12
+    },
+    "review_budget_gate_friction": {
+      "false": 0,
+      "true": 51
+    },
+    "spec_shift_or_underspecified": {
+      "false": 8,
+      "true": 5
+    },
+    "trunk_drift_landing": {
+      "false": 12,
+      "true": 3
+    },
+    "wrong_premise_environment": {
+      "false": 16,
+      "true": 0
+    }
+  },
+  "causes_sha256": "2c53008b4f2b81291900b3e287438787c178bfd8e0a7c1eeee64dacfa98bf962",
+  "total": 235
+}

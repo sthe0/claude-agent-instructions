@@ -1,0 +1,64 @@
+# Defaults of the historical causes fixture (lib/telemetry/fixtures/replan_causes_2026_11_03.*).
+# A hand row whose replan could not be aligned, or whose aligned text names no single registry
+# entry, still needs a place and (for the machinery flag) a baseline. Per category:
+#   machinery_induced - the majority value of the 235 hand rows; a row that differs is stored with
+#                       machinery_override = true.
+#   place             - the place given to a machinery-induced row whose mechanism is `unknown`.
+# A row that is not machinery-induced gets `non_machinery_place`.
+
+non_machinery_place = "none"
+
+[[categories]]
+name = "check_authoring_defect"
+machinery_induced = false
+place = "verification"
+
+[[categories]]
+name = "dispatch_or_procedure_precondition"
+machinery_induced = true
+place = "dispatch"
+
+[[categories]]
+name = "effort_trigger_overrun"
+machinery_induced = true
+place = "effort_control"
+
+[[categories]]
+name = "flaky_or_loaded_verify"
+machinery_induced = false
+place = "verification"
+
+[[categories]]
+name = "implementation_defect"
+machinery_induced = false
+place = "execution"
+
+[[categories]]
+name = "other"
+machinery_induced = false
+place = "execution"
+
+[[categories]]
+name = "parent_norm_defect"
+machinery_induced = true
+place = "mandate_cycle"
+
+[[categories]]
+name = "review_budget_gate_friction"
+machinery_induced = true
+place = "plan_review"
+
+[[categories]]
+name = "spec_shift_or_underspecified"
+machinery_induced = false
+place = "order_agreement"
+
+[[categories]]
+name = "trunk_drift_landing"
+machinery_induced = false
+place = "landing"
+
+[[categories]]
+name = "wrong_premise_environment"
+machinery_induced = false
+place = "planning"

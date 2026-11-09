@@ -679,7 +679,9 @@ def _to_normalize_ready(store, sid, plan):
     cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
                            hypotheses=["h1", "h2"]), store=store)
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
-                        failure_address="resource"), store=store)
+                        failure_address="resource", cause_category="implementation_defect",
+                        machinery_induced="false", mechanism="none",
+                        functional_place="verification"), store=store)
 
 
 def test_submission_seam_b_refuses_on_the_new_side_of_replan(tmp_path, store):
@@ -794,7 +796,9 @@ def test_a_refused_replan_leaves_the_accepted_digest_unchanged(tmp_path, store,
     cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
                         failure_address="resource",
                         invariants_to_preserve=["the seam never tightens the loader"],
-                        differences_to_remove=[]), store=store)
+                        differences_to_remove=[], cause_category="implementation_defect",
+                        machinery_induced="false", mechanism="none",
+                        functional_place="verification"), store=store)
 
     seen = {}
     real = cli._log_gate

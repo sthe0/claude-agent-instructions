@@ -712,6 +712,12 @@ class Difficulty:
     # on a record that is no escalation and on every record written before schema 54.
     escalated_to: dict = field(default_factory=dict)
     escalated_from: dict = field(default_factory=dict)
+    # The structured cause stated at critique (lib/telemetry/cause.py): cause_category,
+    # machinery_induced, mechanism, functional_place, cause_note and the table version of each
+    # enumerated field. Kept on the record, not inside `Critique`, for the reason of norm_targets;
+    # empty on a record whose critique has prose fields only. No SCHEMA_VERSION bump: an absent
+    # key loads as the empty dict and an older engine ignores the key.
+    cause: dict = field(default_factory=dict)
 
     def complete(self) -> bool:
         return (
@@ -742,6 +748,7 @@ class Difficulty:
             normalization_waiver=d.get("normalization_waiver"),
             escalated_to=dict(d.get("escalated_to") or {}),
             escalated_from=dict(d.get("escalated_from") or {}),
+            cause=dict(d.get("cause") or {}),
             # A record written before schema 48 carries no identity: it becomes a level-0
             # stage-origin root. Its uid is derived from its content, not drawn at random,
             # so every load of the same unsaved legacy file names the record the same way

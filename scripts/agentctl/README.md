@@ -690,12 +690,16 @@ Difficulty removed: a plan was built, approved and run on an order the user neve
 
 Proof the tests can fail: [`../tests/order_agreement_mutants.py`](../tests/order_agreement_mutants.py) plants eight defects of this surface; `test_order_agreement.py` runs one killer test per mutant in a subprocess.
 
+## Structured cause of a critique
+
+`critique` states the cause as fields, not only prose, and refuses a record without them (nothing in the session changes on a refusal): `--cause-category` (a member of `lib/telemetry/tables/categories.toml`; `other` needs `--cause-note`), `--machinery-induced true|false` (the agent system's own process caused the rework), `--mechanism` (a registry id from `registry.toml` when machinery-induced, else `none`) and `--functional-place` (a member of `places.toml`: the place whose filling should have caught the cause, `none` when no place is implicated). A machinery-induced cause takes its place from its registry entry, so the flag may be left out and a differing value is refused. The rules live in [`../lib/telemetry/cause.py`](../lib/telemetry/cause.py) (`validate_cause`), which reads the tables, so a new category or place is a data edit. A member retired from its table is refused on a new critique; a stored cause keeps the version of each table it was checked against, so old records stay valid. The fields are kept on the difficulty record and the history entry, and the critique event reaches the `causes` table of the telemetry record (migration `004_cause_fields.sql`); a critique recorded before this change, with the prose fields only, still loads and renders.
+
 ## Passing large text (`@<path>`)
 
 Any narrative argument this CLI consumes — a goal, a replanning task, a critique, a concern, an observation — accepts **`@<path>` in place of the text itself**, and reads the value from that file. Both spawn wrappers (`spawn-specialist.py`, `spawn-cursor-specialist.py`) accept it on `--constraints` and `--done-criterion`. The Cursor recursive-escape wrapper (`spawn-cursor-escape.py`) does **not yet** apply the convention — its narrative flags (`--expected`/`--actual`/`--mismatch`/`--tried`) take inline text only.
 
 ```bash
-python3 -m agentctl critique --session s --functional-ground fg --replanning-task @/tmp/task.md
+python3 -m agentctl critique --session s --functional-ground fg --replanning-task @/tmp/task.md --cause-category implementation_defect --machinery-induced false --mechanism none --functional-place verification
 ```
 
 - **`@@` escapes.** A value that really begins with one `@` is written `@@text` and arrives as `@text`.

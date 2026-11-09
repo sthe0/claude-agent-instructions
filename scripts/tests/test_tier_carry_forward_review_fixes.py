@@ -309,7 +309,9 @@ def test_refused_replan_marks_only_the_dispositions_the_edit_made_stale(
     _review(store, sid, edited, scope="stage:1")
     cli.cmd_declare(ns(session=sid, symptom="criterion moved", diagnosis="criterion"), store=store)
     cli.cmd_critique(ns(session=sid, similarities="same approach", differences="criterion",
-                        failure_address="not_applicable"), store=store)
+                        failure_address="not_applicable", cause_category="implementation_defect",
+                        machinery_induced="false", mechanism="none",
+                        functional_place="verification"), store=store)
 
     d = cli.cmd_replan(ns(session=sid, plan=str(edited), normalization_waiver="one-off",
                           coverage_waiver=None), store=store)

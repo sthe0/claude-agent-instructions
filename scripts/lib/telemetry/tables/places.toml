@@ -1,0 +1,77 @@
+version = 1
+
+[[members]]
+name = "difficulty_handling"
+since = 1
+
+[[members]]
+name = "dispatch"
+since = 1
+
+[[members]]
+name = "effort_control"
+since = 1
+
+[[members]]
+name = "execution"
+since = 1
+
+[[members]]
+name = "instruction_delivery"
+since = 1
+
+[[members]]
+name = "landing"
+since = 1
+
+[[members]]
+name = "mandate_cycle"
+since = 1
+
+[[members]]
+name = "memory"
+since = 1
+
+[[members]]
+name = "none"
+since = 1
+
+[[members]]
+name = "order_agreement"
+since = 1
+
+[[members]]
+name = "permission_control"
+since = 1
+
+[[members]]
+name = "plan_approval"
+since = 1
+
+[[members]]
+name = "plan_review"
+since = 1
+
+[[members]]
+name = "planning"
+since = 1
+
+[[members]]
+name = "resolution"
+since = 1
+
+[[members]]
+name = "session_lifecycle"
+since = 1
+
+[[members]]
+name = "telemetry"
+since = 1
+
+[[members]]
+name = "user_interaction"
+since = 1
+
+[[members]]
+name = "verification"
+since = 1
