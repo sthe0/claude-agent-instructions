@@ -29,8 +29,8 @@ categories of a critique and `severity.toml` the severity bands and cases of a d
 `scripts/tests/test_telemetry_registry.py` derives the expected entries from the live sources, so a new hook, gate,
 judge or command fails there until it is registered.
 
-**Structured cause** (`cause.py`, table `causes`, migration `004_cause_fields.sql`). `agentctl critique` takes four
-required flags: `--cause-category` (a `categories` member), `--machinery-induced true|false`, `--mechanism` (a
+**Structured cause** (`cause.py`, table `causes`, migration `004_cause_fields.sql`). the `critique` command of
+`agentctl` takes four required flags: `--cause-category` (a `categories` member), `--machinery-induced true|false`, `--mechanism` (a
 `registry` id, or `none` exactly when the cause was not machinery-induced) and `--functional-place` (a `places`
 member, or `none`; omitted for a machinery-induced cause, whose place is the registry entry's). `other` needs
 `--cause-note`. `unknown` is a mechanism only an imported row may carry, with a place other than `none`. A critique
@@ -42,7 +42,7 @@ event id, with the three table versions, the note and the record origin. The pla
 `agentctl/mandate.py` names its item place (`ITEM_PLACE`) as a constant because that module reads no file, and
 `test_registry_places_and_mandate_vocabulary_are_one_list` holds it to a live `places` member.
 `test_telemetry_cause.py` also scans every git-tracked file under `scripts/`, `skills/`, `docs/`, `cursor/` plus
-`CLAUDE.md` and `README.md` (`CRITIQUE_SCAN_TREE`) and fails on a call of `agentctl critique` — a fenced line, an
+`CLAUDE.md` and `README.md` (`CRITIQUE_SCAN_TREE`) and fails on a call of the `critique` command — a fenced line, an
 inline code span or a Python argv list — that does not show the four cause flags.
 
 **Import.** `python3 scripts/telemetry.py import [--transcripts] [--all] [--max-rss-mib N] [--stats-json F]`.
