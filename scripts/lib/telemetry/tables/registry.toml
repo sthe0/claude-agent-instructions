@@ -1,4 +1,4 @@
-version = 1
+version = 2
 
 [[members]]
 name = "cli:accept"
@@ -1526,3 +1526,11 @@ kind = "elementary"
 part_of = ["telemetry"]
 place = "telemetry"
 source_keys = ["telemetry:sync"]
+
+[[members]]
+name = "cli:mandate-limits"
+since = 2
+kind = "elementary"
+part_of = []
+place = "mandate_cycle"
+source_keys = ["cli:mandate-limits"]
