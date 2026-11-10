@@ -73,6 +73,7 @@ asserts that no token of a node the row does not show reaches the captured argv 
 | `scripts/probe-hook-decision-semantics.py`:`run_add_dir_write_cell` | none | no plan content | a fixed probe prompt |
 | `scripts/probe-hook-decision-semantics.py`:`run_headless_cell` | none | no plan content | a fixed probe prompt |
 | `scripts/spawn-cursor-escape.py`:`main` | none | no plan content | the difficulty statement |
+| `scripts/telemetry-synthetic-task.py`:`run_task` | none; a fixed one-stage synthetic plan is named by path inside an agentctl command line | no plan content | a fixed list of agentctl command lines |
 
 ## Instruction texts
 

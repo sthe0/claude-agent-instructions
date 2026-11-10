@@ -58,7 +58,7 @@ GATES_OFF = {
     "AGENTCTL_PLAN_REVIEW": "0", "AGENTCTL_PLAN_PRESENTATION": "0", "AGENTCTL_PREMISE": "0",
     "AGENTCTL_CODE_REVIEW": "0", "AGENTCTL_STAGE_REVIEW": "0", "AGENTCTL_ACCEPTANCE": "0",
     "AGENTCTL_LANDING_GATE": "0", "AGENTCTL_WORKSPACE_CLEANUP": "0", "AGENTCTL_RESOLUTION_ASK_GATE": "0",
-    "AGENTCTL_ADVISOR": "0", "WORKTREE_ROUTE_DISABLE": "1", "CLAUDE_DIFFICULTY_CHANNEL_OFFLINE": "1",
+    "AGENTCTL_ADVISOR": "0", "AGENTCTL_TASK_TITLE": "0", "WORKTREE_ROUTE_DISABLE": "1", "CLAUDE_DIFFICULTY_CHANNEL_OFFLINE": "1",
 }
 AUDIT_HOOK = ("import os, sys\n"
               "def _audit(event, args):\n"
@@ -81,7 +81,8 @@ def engine_sequence(state_root: Path, plan: Path) -> list:
     session = ["--session", CHILD_SESSION]
     steps = [
         ["reset", *session, "--task", TASK_ID, "--goal", "synthetic engine walk",
-         "--done-criterion", "verify-final reaches RESOLUTION", "--criterion-type", "measurable", "--force"],
+         "--done-criterion", "verify-final reaches RESOLUTION", "--criterion-type", "measurable", "--force",
+         "--host", "claude"],
         ["classify", *session, "--architectural"],
         ["plan", *session],
         ["submit-plan", *session, "--plan", str(plan)],
@@ -100,7 +101,8 @@ def engine_sequence(state_root: Path, plan: Path) -> list:
 def render_command(argv: list) -> str:
     """One shell line; the session id stays a shell reference the child's Bash expands. The host
     session id is unset for the engine so the order-agreement hold, armed only on a detected claude
-    host, does not stop an unattended walk."""
+    host, does not stop an unattended walk; reset binds the host with `--host claude` instead,
+    since detection would otherwise depend on a Cursor CLI being installed."""
     words = [a if a == CHILD_SESSION else shlex.quote(a) for a in argv]
     return " ".join(["env", "-u", "CLAUDE_CODE_SESSION_ID", "python3", shlex.quote(str(ENGINE_CLI)), *words])
 
