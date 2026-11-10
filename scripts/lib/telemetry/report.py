@@ -70,9 +70,9 @@ def _minutes(events: list) -> float:
     return (max(stamps) - min(stamps)) / 60000.0 if stamps else 0.0
 
 
-def tasks(conn, include_synthetic: bool = False) -> list:
-    """One dict per task row: key, weight_class, status (RESOLVED or open), last_event_at,
-    minutes, spend_usd (each token row priced by its own model), replans, synthetic."""
+def tasks_with_events(conn, include_synthetic: bool = False) -> "list[tuple[dict, list]]":
+    """(tasks() row, its task_event_rows) per task: one pass over the record that a caller
+    needing both tasks() and difficulties() hands to difficulties(task_events=...)."""
     out = []
     for row in conn.execute("SELECT origin, task_id, epoch, status, weight_class, synthetic FROM tasks "
                             "ORDER BY opened_at, task_id").fetchall():
@@ -80,7 +80,7 @@ def tasks(conn, include_synthetic: bool = False) -> list:
             continue
         key = _task_key(row)
         events = task_event_rows(conn, key)
-        out.append({
+        out.append(({
             "task": key, "weight_class": row[4],
             "status": "RESOLVED" if row[3] == "resolved" else "open",
             "last_event_at": events[-1][5] if events else None,
@@ -89,8 +89,14 @@ def tasks(conn, include_synthetic: bool = False) -> list:
             "replans": sum(1 for e in events if e[2] == "command" and e[6].get("command") == "replan"
                            and e[6].get("outcome") == "ok"),
             "synthetic": bool(row[5]),
-        })
+        }, events))
     return out
+
+
+def tasks(conn, include_synthetic: bool = False) -> list:
+    """One dict per task row: key, weight_class, status (RESOLVED or open), last_event_at,
+    minutes, spend_usd (each token row priced by its own model), replans, synthetic."""
+    return [task for task, _ in tasks_with_events(conn, include_synthetic)]
 
 
 def _cause(row) -> dict:
@@ -130,15 +136,17 @@ def _entry_route(prior: list, entry: tuple) -> str:
     return "failed_stage"
 
 
-def difficulties(conn, include_synthetic: bool = False) -> list:
+def difficulties(conn, include_synthetic: bool = False, task_events: "list | None" = None) -> list:
     """One dict per difficulty, read from the command events' node transitions: an entry into
     DIAGNOSING opens one, the next command leaving it closes it. The cause is the one filed for
     the same (session, 0-based difficulty ordinal); an imported cause aligned to no difficulty
-    is its own row, keyed by its cause id, with only the cause set."""
+    is its own row, keyed by its cause id, with only the cause set. `task_events` is a
+    tasks_with_events() result already read (include_synthetic is then not consulted)."""
     causes = _causes_by_slot(conn)
     out = []
-    for task in tasks(conn, include_synthetic):
-        events = task_event_rows(conn, task["task"])
+    if task_events is None:
+        task_events = tasks_with_events(conn, include_synthetic)
+    for task, events in task_events:
         ordinal: dict = {}
         open_by_session: dict = {}
         for index, event in enumerate(events):

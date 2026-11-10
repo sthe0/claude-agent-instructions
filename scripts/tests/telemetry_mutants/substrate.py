@@ -7,13 +7,17 @@ the pytest node ids that must go red. The catalogue test checks the anchors and 
 from __future__ import annotations
 
 _SUBSTRATE = "scripts/lib/telemetry/substrate.py"
+_REPORT = "scripts/lib/telemetry/report.py"
+_SCAN = "scripts/improvement-scan.py"
 _T = "scripts/tests/test_substrate_adequacy.py::"
 
 _CREDIT = "            slot[key] = (mass, difficulty, case)"
+_KEY = '        key = (difficulty["task"], difficulty["difficulty"])'
+_ENTRY_ROUTE = "def _entry_route(prior: list, entry: tuple) -> str:\n"
 
 
-def _mutant(name, anchor, replacement, *tests):
-    return {"name": name, "file": _SUBSTRATE, "anchor": anchor, "replacement": replacement,
+def _mutant(name, anchor, replacement, *tests, file=_SUBSTRATE):
+    return {"name": name, "file": file, "anchor": anchor, "replacement": replacement,
             "tests": [_T + t for t in tests]}
 
 
@@ -35,13 +39,13 @@ MUTANTS = [
             '    for parent in ():',
             "test_mass_rolls_up_part_of_closure"),
     _mutant("only_failed_route_opens",
-            'OPENING_ROUTES = ("failed_stage", "effort_fire", "review_cycle")',
-            'OPENING_ROUTES = ("failed_stage",)',
-            "test_each_diagnosing_entry_route_opens_interval"),
+            _ENTRY_ROUTE,
+            _ENTRY_ROUTE + '    return "failed_stage"\n',
+            "test_each_diagnosing_entry_route_opens_interval", file=_REPORT),
     _mutant("replan_only_closes",
-            'CLOSING_EXITS = ("replan", "unblock", "reset")',
-            'CLOSING_EXITS = ("replan",)',
-            "test_each_exit_kind_closes_interval"),
+            'DIFFICULTY_EXITS = ("replan", "unblock", "reset")',
+            'DIFFICULTY_EXITS = ("replan",)',
+            "test_each_exit_kind_closes_interval", file=_REPORT),
     _mutant("band_boundary_off_by_one",
             "minutes < below",
             "minutes <= below",
@@ -73,7 +77,16 @@ MUTANTS = [
             ' / counted_mass if total else None}',
             "test_calibrate_prints_total_counted_and_machinery_induced_shares"),
     _mutant("unaligned_rows_collapse",
-            '        key = difficulty["difficulty"]',
+            _KEY,
             '        key = (difficulty["task"], difficulty["entry_at"])',
             "test_unaligned_imported_rows_each_count"),
+    _mutant("key_without_task",
+            _KEY,
+            '        key = difficulty["difficulty"]',
+            "test_two_tasks_of_one_session_each_count_their_difficulty"),
+    _mutant("scan_opens_record_writable",
+            "    conn = telemetry_store.open_readonly()",
+            "    conn = telemetry_store.open_record()",
+            "test_report_substrate_section_without_a_record_names_why",
+            "test_substrate_leaves_a_populated_record_unchanged", file=_SCAN),
 ]

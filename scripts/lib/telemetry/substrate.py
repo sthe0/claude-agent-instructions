@@ -10,9 +10,10 @@ when it is RESOLVED or has been silent longer than the abandonment window.
 Each difficulty is attributed to the place of the registry entry its cause names (the cause's
 own place when it names no entry) and rolled up to the place of every composite reachable from
 that entry through part_of. A place's mass is the sum of the severities of the difficulties
-credited to it, each difficulty at most once per place, keyed by its difficulty id. Place `none`
-(not machinery-induced) is never ranked. Inputs come only through report.tasks() and
-report.difficulties(); this module reads the record and writes nothing.
+credited to it, each difficulty at most once per place, keyed by (task, difficulty id): one
+session may feed several task rows, each restarting its difficulty ordinals. Place `none`
+(not machinery-induced) is never ranked. Inputs come only through report.tasks_with_events()
+and report.difficulties(); this module reads the record and writes nothing.
 """
 from __future__ import annotations
 
@@ -23,8 +24,6 @@ from lib.telemetry import report, sync, tables
 NONE_PLACE = "none"
 UNKNOWN_MECHANISM = "unknown"
 CATEGORY_DEFAULT = "category_default"
-OPENING_ROUTES = ("failed_stage", "effort_fire", "review_cycle")
-CLOSING_EXITS = ("replan", "unblock", "reset")
 INCLUDE_SYNTHETIC = False
 
 
@@ -66,7 +65,7 @@ def severity_of(difficulty: dict, task: "dict | None", now, abandon_days: float,
     """(case, mass) of one difficulty; mass None when it weighs nothing (open, task running)."""
     if difficulty["entry_at"] is None:
         return "interval_unknown", severity["interval_unknown"]
-    if difficulty["exit_at"] is not None and difficulty["exit_kind"] in CLOSING_EXITS:
+    if difficulty["exit_at"] is not None and difficulty["exit_kind"] in report.DIFFICULTY_EXITS:
         minutes = (sync.parse_time(difficulty["exit_at"]) - sync.parse_time(difficulty["entry_at"])).total_seconds() / 60.0
         return "closed", band_mass(minutes, severity)
     if task_ended(task, now, abandon_days):
@@ -84,13 +83,14 @@ def _rollup(registry: dict, entry: str) -> list:
 
 
 def places_of(cause: "dict | None", registry: dict) -> list:
-    """(entry or None, place) pairs a cause is credited to, most specific first."""
+    """Places a cause is credited to, most specific first; a place reached by several entries
+    or paths appears once per reach."""
     if cause is None:
         return []
     mechanism = cause["mechanism"]
     if cause["machinery_induced"] and mechanism in registry:
-        return [(entry, registry[entry]["place"]) for entry in _rollup(registry, mechanism)]
-    return [(None, cause["functional_place"])]
+        return [registry[entry]["place"] for entry in _rollup(registry, mechanism)]
+    return [cause["functional_place"]]
 
 
 def _closures(registry: dict) -> dict:
@@ -119,29 +119,28 @@ def _task_label(key) -> str:
 def compute(tasks: list, difficulties: list, now, abandon_days: float,
             registry: "dict | None" = None, severity: "dict | None" = None) -> dict:
     """Per place: mass, the machinery-induced part of it and the credited difficulties; plus the
-    record-wide counts of difficulties by severity case and the uncaused ones."""
+    record-wide counts of difficulties by severity case, the uncaused ones and the caused ones
+    credited to no ranked place (`none` or no place)."""
     registry = load_registry() if registry is None else registry
     severity = load_severity() if severity is None else severity
     by_task = {t["task"]: t for t in tasks}
     credit: dict = {}
-    counts = {"difficulties": 0, "uncaused": 0, "skipped_routes": 0,
+    counts = {"difficulties": 0, "uncaused": 0, "unplaced": 0,
               "cases": {"closed": 0, "never_closed": 0, "interval_unknown": 0, "open_running": 0}}
     for difficulty in difficulties:
-        if difficulty["entry_at"] is not None and difficulty["entry_route"] not in OPENING_ROUTES:
-            counts["skipped_routes"] += 1
-            continue
         counts["difficulties"] += 1
         case, mass = severity_of(difficulty, by_task.get(difficulty["task"]), now, abandon_days, severity)
         counts["cases"][case] += 1
         cause = difficulty["cause"]
+        ranked = [p for p in places_of(cause, registry) if p not in (None, NONE_PLACE)]
         if cause is None:
             counts["uncaused"] += 1
+        elif not ranked:
+            counts["unplaced"] += 1
         if mass is None:
             continue
-        key = difficulty["difficulty"]
-        for entry, place in places_of(cause, registry):
-            if place in (None, NONE_PLACE):
-                continue
+        key = (difficulty["task"], difficulty["difficulty"])
+        for place in ranked:
             slot = credit.setdefault(place, {})
             slot[key] = (mass, difficulty, case)
     places = {}
@@ -220,6 +219,8 @@ def calibrate(result: dict, places: int) -> dict:
 
 
 def load(conn, now, abandon_days: float, registry: "dict | None" = None) -> dict:
-    """compute() over the record's readers, synthetic tasks left out."""
-    return compute(report.tasks(conn, INCLUDE_SYNTHETIC), report.difficulties(conn, INCLUDE_SYNTHETIC),
+    """compute() over the record's readers, synthetic tasks left out; one pass over the tasks
+    and their events feeds both readers."""
+    task_events = report.tasks_with_events(conn, INCLUDE_SYNTHETIC)
+    return compute([task for task, _ in task_events], report.difficulties(conn, task_events=task_events),
                    now, abandon_days, registry)

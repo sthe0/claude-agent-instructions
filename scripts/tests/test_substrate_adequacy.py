@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from lib import config_root
 from lib.telemetry import report, store, substrate, tables
 from telemetry_import_support import BASE, at
 
@@ -364,6 +365,8 @@ def test_none_place_excluded_from_mass_ranking_and_findings():
     payload = run("--threshold", "0")[1]
     assert masses(payload) == {"execution": 2}
     assert [f["place"] for f in payload["findings"]] == ["execution"] and payload["ties"] == []
+    assert payload["counts"]["unplaced"] == 2 and payload["counts"]["uncaused"] == 0
+    assert payload["counts"]["difficulties"] == 3
     calibration = run("--calibrate", "--places", "1")[1]["calibration"]
     assert [r["place"] for r in calibration["rows"]] == ["execution"] and calibration["total_mass"] == 2
 
@@ -437,6 +440,82 @@ def test_report_includes_substrate_section(config, tmp_path, capsys):
 def test_report_substrate_section_without_a_record_names_why(tmp_path, capsys):
     assert scan.main(["report", "--format", "json", "--board", str(tmp_path / "no-board.json")]) == 0
     assert json.loads(capsys.readouterr().out)["substrate"]["status"] == "no telemetry record"
+    assert run()[0] == 2
+    assert not config_root.telemetry_db().exists()
+
+
+def _record_state() -> tuple:
+    """The record's bytes and mtime, and its WAL's bytes; a read-only open of a WAL database
+    may create an empty WAL file, which holds no write."""
+    record = config_root.telemetry_db()
+    wal = record.with_name(record.name + "-wal")
+    return record.read_bytes(), record.stat().st_mtime_ns, wal.read_bytes() if wal.exists() else b""
+
+
+def test_substrate_leaves_a_populated_record_unchanged(config):
+    config(**{"substrate-mass-threshold": 2})
+    one("a", 20, "cli:approve")
+    before = _record_state()
+    assert run()[0] == 0
+    assert _record_state() == before
+
+
+def test_report_survives_a_substrate_fault(config, tmp_path, monkeypatch, capsys):
+    config(**{"substrate-mass-threshold": 2})
+    one("a", 20, "cli:approve")
+    monkeypatch.setattr(substrate, "load_severity", lambda: {"bands": []})
+    with pytest.raises(ValueError):
+        run()
+    capsys.readouterr()
+    assert scan.main(["report", "--format", "json", "--board", str(tmp_path / "no-board.json")]) == 0
+    status = json.loads(capsys.readouterr().out)["substrate"]["status"]
+    assert status.startswith("error: ValueError") and "no severity band" in status
+
+
+def test_report_no_substrate_skips_the_section(config, tmp_path, monkeypatch, capsys):
+    config(**{"substrate-mass-threshold": 2})
+    one("a", 20, "cli:approve")
+
+    def scanned(*_args, **_kwargs):
+        raise AssertionError("--no-substrate still scanned the record")
+    monkeypatch.setattr(substrate, "load", scanned)
+    board = str(tmp_path / "no-board.json")
+    assert scan.main(["report", "--format", "json", "--no-substrate", "--board", board]) == 0
+    assert "substrate" not in json.loads(capsys.readouterr().out)
+    assert scan.main(["report", "--no-substrate", "--board", board]) == 0
+    assert "## Substrate adequacy" not in capsys.readouterr().out
+
+
+def test_check_with_calibrate_exits_2(config, capsys):
+    config(**{"substrate-mass-threshold": 2})
+    one("a", 20, "cli:approve")
+    assert run("--calibrate", "--check") == (2, None)
+    assert "--check" in capsys.readouterr().err
+
+
+def test_two_tasks_of_one_session_each_count_their_difficulty():
+    session, origin, keys = "s-shared", store.origin_id(), []
+    put("sessions", {"session_id": session, "core_head": "h1", "started_at": at(0)})
+    for n, task_id in enumerate(("first", "second")):
+        epoch = event(session, "task", n * 3000, {"action": "open", "task_id": task_id}, "cli:start")
+        put("tasks", {"origin": origin, "task_id": task_id, "epoch": epoch, "opened_at": at(n * 3000),
+                      "weight_class": "small", "synthetic": 0, "status": "resolved"})
+        keys.append((origin, task_id, epoch))
+    for n, key in enumerate(keys):
+        for seconds, name, before, after in ((n * 3000 + 100, "record-result", "EXECUTING", "DIAGNOSING"),
+                                             (n * 3000 + 1300, "replan", "DIAGNOSING", "PLAN_READY")):
+            event(session, "command", seconds, {"command": name, "outcome": "ok", "task_epoch": key[2],
+                                                "node_before": before, "node_after": after}, f"cli:{name}")
+    put("causes", {"cause_id": str(uuid.uuid4()), "session": session, "difficulty_index": 0,
+                   "cause_category": "other", "cause_category_table_version": 1, "machinery_induced": 1,
+                   "mechanism": "cli:approve", "mechanism_table_version": 1,
+                   "functional_place": "plan_approval", "functional_place_table_version": 1,
+                   "origin": origin})
+    conn = store.open_readonly()
+    found = sorted((d["task"][1], d["difficulty"]) for d in report.difficulties(conn))
+    conn.close()
+    assert found == [("first", "s-shared#0"), ("second", "s-shared#0")]
+    assert masses(run("--threshold", "1")[1]) == {"plan_approval": 4}
 
 
 def test_band_mass_reads_the_severity_table():

@@ -1935,16 +1935,28 @@ def _cmd_report(args: argparse.Namespace) -> int:
         print(f"improvement-scan report: external lanes have no listed sources: {exc}", file=sys.stderr)
         listed = []
     external = _external_report(_report_ideas(args.store), ranked, _sources_state(args), listed)
-    status, payload = _substrate_run(None, threshold_above_max=False, places=None, now=None)
-    substrate_section = {**payload, "status": "ok" if status == 0 else status}
+    substrate_section = None if getattr(args, "no_substrate", False) else _report_substrate_section()
     if args.format == "json":
         print(_render_json(ranked, lanes, external, sinks, sinks_status, substrate_section))
     else:
         addresses = {ref: item.addresses for ref, item in board.items.items()} if board else None
-        print(_render_markdown(
-            ranked, lanes, addresses, external, sinks, agg.sessions if agg else 0, sinks_status,
-        ) + "\n" + "\n".join(_render_substrate_md(substrate_section)))
+        markdown = _render_markdown(
+            ranked, lanes, addresses, external, sinks, agg.sessions if agg else 0, sinks_status)
+        if substrate_section is not None:
+            markdown += "\n" + "\n".join(_render_substrate_md(substrate_section))
+        print(markdown)
     return 0
+
+
+def _report_substrate_section() -> dict:
+    """The substrate section of `report`; a failure of the producer becomes the section's
+    status instead of failing the whole report."""
+    try:
+        status, payload = _substrate_run(None, threshold_above_max=False, places=None, now=None)
+    except Exception as exc:  # noqa: BLE001 — any producer fault is reported, the other sections still render
+        print(f"improvement-scan report: substrate section failed: {exc!r}", file=sys.stderr)
+        return {"status": f"error: {type(exc).__name__}: {exc}"}
+    return {**payload, "status": "ok" if status == 0 else status}
 
 
 # --- substrate adequacy -------------------------------------------------------
@@ -2024,6 +2036,10 @@ def _substrate_check_failures(payload: dict, min_findings: int, expect_threshold
 
 
 def _cmd_substrate(args: argparse.Namespace) -> int:
+    if args.check and args.calibrate:
+        print("improvement-scan substrate: --check checks findings, which --calibrate does not produce",
+              file=sys.stderr)
+        return 2
     status, payload = _substrate_run(
         args.threshold, threshold_above_max=args.threshold_above_max,
         places=args.places if args.calibrate else None, now=args.now)
@@ -2785,6 +2801,8 @@ def build_parser() -> argparse.ArgumentParser:
         "Without the flag no profile is read",
     )
     p_report.add_argument("--format", choices=("md", "json"), default="md", help="output format")
+    p_report.add_argument("--no-substrate", action="store_true",
+                          help="leave out the substrate-adequacy section (it scans the whole telemetry record)")
     p_report.set_defaults(func=_cmd_report)
 
     p_substrate = sub.add_parser(
