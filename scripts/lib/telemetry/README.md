@@ -16,6 +16,7 @@ applies the spool to a SQLite record exactly once.
 | `importer.py` | Fills the record from what predates live emission: the gate log, decision log, judge ledger, spawn/cost ledger, engine histories (`import:*` sources) and, with `--transcripts`, session transcripts as a fallback. Also `rebuild` (new record, same origin, from the spools and sources) and `prune`. |
 | `phases.py` | The one definition of a task's phase at a time: from live events when the session has any, else from the transcript reconstruction. `scripts/lib/time_profile.py` reads the record through it and falls back to transcripts when there is no record, and, for one session, to its engine state file when the record holds a loss for it. |
 | `profile_check.py` | `check-profile-unchanged`: recomputes the time-profile aggregate from a frozen transcript snapshot, pinned clock and frozen ledgers and compares it with the stored reference. |
+| `tokens.py` | Token accounting. A collector reads root, spawned-child and subagent transcripts and the judge ledger incrementally. Each file keeps its own offset under consumer `tokens`, and the offset commits in the same transaction as the rows. The collector writes one `token_usage` row per message id across the record: the winning line is the earliest timestamp, then the original before a copy, then the earliest session start, path and offset. Each row carries its task (null with no open epoch), role, phase, model and four counts. It also writes `context_births` (spawn, compaction, resume; content-based ids), compaction pre/post sizes, `judge_usage`, and one `standing_surface` row per origin and canonical HEAD (UTF-8 bytes of the always-loaded files plus SessionStart hook output). `sync` and `import` call it. `check-tokens` checks a task's conservation and the imported coverage. |
 
 **Mechanism registry** (`tables/registry.toml`). One entry per mechanism that emits an event: every hook of
 `install-reminder-hooks.sh`, every engine gate, one `judge:<name>` per `judge_ledger.JUDGE_NAMES` (with
@@ -98,9 +99,10 @@ their event emission off and leaves their own ledger line as it was) and evaluat
 emit argument inside their `try`.
 
 **Run it.** `python3 scripts/telemetry.py sync --session <id> [--budget S]`,
-`python3 scripts/telemetry.py path`.
+`python3 scripts/telemetry.py path`,
+`python3 scripts/telemetry.py check-tokens (--task <id> [--require-spawn] [--require-compaction] | --imported-coverage)`.
 
-**Tests.** `scripts/tests/test_telemetry_{tables,store,hook_isolation,mutation_catalogue,importer,transition,registry,cause}.py`
+**Tests.** `scripts/tests/test_telemetry_{tables,store,hook_isolation,mutation_catalogue,importer,transition,registry,cause,tokens}.py`
 (run with `--telemetry-no-skip` to fail on any skip) and the mutation control
 `scripts/tests/telemetry_mutation_control.py` (`--control`, `--mutant NAME`; mutants live in
 `scripts/tests/telemetry_mutants/`).

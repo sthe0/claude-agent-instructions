@@ -364,6 +364,122 @@ def insert_rows(table: str, rows, deadline_s: "float | None" = None) -> dict:
     return _guarded(run, deferred, failed)
 
 
+# A table whose rows are replaced by a better-ranked row of the same key: key column, rank columns
+# compared as one row value (lower wins, text in byte order).
+RANKED_TABLES = {
+    "token_usage": ("message_id", ("ts_ms", "copy_rank", "session_start_ms", "transcript", "byte_offset")),
+}
+
+_EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+
+_READ_OFFSET_UPSERT = (
+    "INSERT INTO import_offsets (source, generation, consumer, byte_offset, last_start, last_sha256, "
+    "read_size, read_outcome, carry) VALUES (?, ?, ?, ?, ?, ?, ?, 'committed', ?) "
+    "ON CONFLICT (source, generation, consumer) DO UPDATE SET byte_offset = excluded.byte_offset, "
+    "last_start = excluded.last_start, last_sha256 = excluded.last_sha256, read_size = excluded.read_size, "
+    "read_outcome = 'committed', carry = excluded.carry")
+
+_READ_ATTEMPT_UPSERT = (
+    "INSERT INTO import_offsets (source, generation, consumer, byte_offset, last_start, last_sha256, "
+    "read_size, read_outcome) VALUES (?, ?, ?, 0, 0, ?, ?, ?) "
+    "ON CONFLICT (source, generation, consumer) DO UPDATE SET read_size = excluded.read_size, "
+    "read_outcome = excluded.read_outcome")
+
+
+def _upsert_ranked(conn: sqlite3.Connection, table: str, prepared: dict) -> None:
+    key, rank = RANKED_TABLES[table]
+    names = list(prepared)
+    assignments = ", ".join(f'"{n}" = excluded."{n}"' for n in names if n != key)
+    mine = ", ".join(f'excluded."{c}"' for c in rank)
+    theirs = ", ".join(f'"{table}"."{c}"' for c in rank)
+    conn.execute(
+        f'INSERT INTO "{table}" ({", ".join(chr(34) + n + chr(34) for n in names)}) '
+        f'VALUES ({", ".join("?" for _ in names)}) ON CONFLICT ("{key}") DO UPDATE SET {assignments} '
+        f'WHERE ({mine}) < ({theirs})',
+        [prepared[n] for n in names])
+
+
+def _write_read_offset(conn: sqlite3.Connection, offset: dict) -> None:
+    conn.execute(_READ_OFFSET_UPSERT, (
+        offset["source"], offset["generation"], offset["consumer"], offset["byte_offset"], offset["last_start"],
+        offset["last_sha256"], offset["read_size"], offset.get("carry")))
+
+
+def insert_rows_with_offset(rows, offset: dict, deadline_s: "float | None" = None, updates=()) -> dict:
+    """Commit one read batch of a consumer in one transaction: `rows` as (table, row) pairs
+    (a row of a RANKED_TABLES table replaces the stored one when it ranks better, any other row
+    already present is ignored), `updates` as (table, key column, key, column, value) filling a
+    column still NULL, and the consumer's offset row with read outcome committed. `offset` holds
+    source, generation, consumer, byte_offset, last_start, last_sha256, read_size and carry.
+    Returns {inserted, deferred, failed, committed}: the first three sum to the rows given as
+    store.insert_rows's do, so the offset moves only when the rows are returned inserted.
+    Never raises."""
+    rows = list(rows)
+    outcome = {"inserted": 0, "deferred": 0, "failed": 0, "committed": False}
+    deadline = _Deadline(deadline_s)
+
+    def run():
+        conn = _open(deadline)
+        try:
+            prepared = []
+            for table, row in rows:
+                prepared.append((table, _prepare_row(table, row, _table_columns(conn, table))))
+            _begin(conn, deadline)
+            try:
+                _write_read_offset(conn, offset)
+                for table, row in prepared:
+                    if table in RANKED_TABLES:
+                        _upsert_ranked(conn, table, row)
+                    else:
+                        _insert_prepared(conn, table, row)
+                for table, key_column, key, column, value in updates:
+                    _table_columns(conn, table)
+                    conn.execute(f'UPDATE "{table}" SET "{column}" = ? WHERE "{key_column}" = ? AND "{column}" IS NULL',
+                                 (value, key))
+                conn.execute("COMMIT")
+            except BaseException:
+                _rollback(conn)
+                raise
+        finally:
+            conn.close()
+        outcome["inserted"] = len(rows)
+        outcome["committed"] = True
+        return outcome
+
+    def deferred():
+        outcome["deferred"] = len(rows)
+        return outcome
+
+    def failed():
+        outcome["failed"] = len(rows)
+        return outcome
+
+    return _guarded(run, deferred, failed)
+
+
+def record_read_attempt(source: str, generation: str, consumer: str, read_size: int, read_outcome: str,
+                        deadline_s: "float | None" = None) -> bool:
+    """Record a consumer's read attempt (its attempted end and how it ended) beside its offset,
+    which a first attempt creates at 0. True when committed; never raises."""
+    deadline = _Deadline(deadline_s)
+
+    def run():
+        conn = _open(deadline)
+        try:
+            _begin(conn, deadline)
+            try:
+                conn.execute(_READ_ATTEMPT_UPSERT, (source, generation, consumer, _EMPTY_SHA256, read_size, read_outcome))
+                conn.execute("COMMIT")
+            except BaseException:
+                _rollback(conn)
+                raise
+        finally:
+            conn.close()
+        return True
+
+    return _guarded(run, lambda: False, lambda: False)
+
+
 def transact(work, deadline_s: "float | None" = None) -> dict:
     """Run `work(conn)` in one write transaction under the call's deadline, for the sync's
     updates (a task row's status, a contour's task key) that INSERT OR IGNORE cannot express.
