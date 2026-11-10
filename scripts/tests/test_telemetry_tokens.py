@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import telemetry as telemetry_cli
 from lib import config_root
 from lib.telemetry import importer, store, sync, tables, tokens
-from telemetry_import_support import at, line, world  # noqa: F401  (world is a fixture)
+from telemetry_import_support import at, line, slow_first_record_bootstrap, world  # noqa: F401  (world is a fixture)
 from telemetry_live_support import query as _query
 
 
@@ -115,6 +115,15 @@ def defer_call(monkeypatch, number):
             return {"inserted": 0, "deferred": len(rows), "failed": 0, "committed": False}
         return real(rows, offset, deadline_s, updates)
     monkeypatch.setattr(store, "insert_rows_with_offset", flaky)
+
+
+def test_collect_on_a_fresh_record_survives_a_bootstrap_past_the_command_path_deadline(world, monkeypatch):
+    """The sync collects off the command path: a loaded machine taking more than the command path's
+    250 ms to create the record must not turn the collection into a failure."""
+    slow_first_record_bootstrap(monkeypatch)
+    world.transcript("S", [user(0, "S"), usage(1, "m1", "S")])
+    counts = tokens.collect()
+    assert counts["failed"] == 0 and counts["deferred"] == 0 and counts["rows"] >= 1
 
 
 # --- context births and compactions ---------------------------------------------------------

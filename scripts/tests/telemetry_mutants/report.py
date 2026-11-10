@@ -12,6 +12,7 @@ from __future__ import annotations
 _IMPORTER = "scripts/lib/telemetry/importer.py"
 _REPORT = "scripts/lib/telemetry/report.py"
 _SYNC = "scripts/lib/telemetry/sync.py"
+_TOKENS = "scripts/lib/telemetry/tokens.py"
 _K = "scripts/tests/test_telemetry_tokens.py::"
 _I = "scripts/tests/test_telemetry_importer.py::"
 _R = "scripts/tests/test_core_version_report.py::"
@@ -208,4 +209,14 @@ MUTANTS = [
      "replacement": 'return raw if raw.endswith(b"\\n") else None',
      "tests": [_K + "test_oversized_first_line_transcript_is_collected",
                _I + "test_transcript_with_oversized_first_line_gets_transcript_events"]},
+
+    # the importer and the collector open the record under their batch deadline, not the command path's
+    {"name": "import_opens_under_command_path_deadline", "file": _IMPORTER,
+     "anchor": "boot = store.open_record(BATCH_DEADLINE_S)",
+     "replacement": "boot = store.open_record()",
+     "tests": [_I + "test_import_completes_when_creating_the_record_outlasts_the_command_path_deadline"]},
+    {"name": "collect_opens_under_command_path_deadline", "file": _TOKENS,
+     "anchor": "boot = store.open_record(deadline_s)",
+     "replacement": "boot = store.open_record()",
+     "tests": [_K + "test_collect_on_a_fresh_record_survives_a_bootstrap_past_the_command_path_deadline"]},
 ]

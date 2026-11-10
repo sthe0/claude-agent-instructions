@@ -897,7 +897,7 @@ def _collect_tokens(run: _Run) -> None:
 def run_import(include_transcripts: bool = False, replay_all_spools: bool = False) -> dict:
     """Import every source once; the stats dict is the whole report."""
     started = _clock()
-    boot = store.open_record()
+    boot = store.open_record(BATCH_DEADLINE_S)
     ro = store.open_readonly() if boot is not None else None
     if boot is None or ro is None:
         stats = _Stats()
