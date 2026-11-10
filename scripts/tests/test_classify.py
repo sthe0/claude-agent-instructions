@@ -69,6 +69,27 @@ def test_non_tracker_string_does_not_force():
     assert c.weight_class == WeightClass.SMALL_CHANGE.value
 
 
+def test_external_effect_is_substantive():
+    c = classify(Signals(changed_lines=1, external_effect=True), THR)
+    assert c.weight_class == WeightClass.SUBSTANTIVE.value
+
+
+def test_external_effect_with_a_verbatim_approved_payload_is_a_small_change():
+    c = classify(Signals(changed_lines=1, external_effect=True, payload_approved="ask 3: texts A-D"), THR)
+    assert c.weight_class == WeightClass.SMALL_CHANGE.value
+    assert any("ask 3: texts A-D" in r for r in c.reasons)
+
+
+def test_an_approved_payload_does_not_exempt_other_substantive_signals():
+    c = classify(Signals(changed_lines=1, external_effect=True, payload_approved="ask", architectural=True), THR)
+    assert c.weight_class == WeightClass.SUBSTANTIVE.value
+
+
+def test_a_blank_approval_does_not_exempt():
+    c = classify(Signals(changed_lines=1, external_effect=True, payload_approved="  "), THR)
+    assert c.weight_class == WeightClass.SUBSTANTIVE.value
+
+
 def _main(root, *argv):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -95,6 +116,15 @@ def test_the_cli_classifies_a_cohesive_small_change_inline(tmp_path):
     rc, result = _main(tmp_path, "classify", "--session", "ok", "--changed-lines", "1")
     assert rc == 0, result
     assert "small" in json.dumps(result)
+
+
+def test_the_cli_reads_payload_approved_as_an_exemption(tmp_path):
+    _started(tmp_path, "pa")
+    rc, result = _main(tmp_path, "classify", "--session", "pa", "--changed-lines", "1",
+                       "--external-effect", "--payload-approved", "ask: texts approved")
+    assert rc == 0, result
+    assert "small change" in result["detail"], result
+    assert "ask: texts approved" in json.dumps(result)
 
 
 def test_the_files_flag_is_gone(tmp_path):

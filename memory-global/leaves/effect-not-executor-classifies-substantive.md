@@ -34,6 +34,20 @@ Classify a task as Substantive by its **effect**, not by **who executes it**. An
 
 Extracted 2026-09-27 from `CLAUDE.md` § Classify task weight during instruction grooming (headroom recovery under `claude-md-max-chars`) — the rule sentence stays inline there; this leaf carries the full elaboration.
 
+## Exception: a payload the user approved verbatim
+
+The spine exists so that no external effect happens without the user's agreement. When the user has already approved the effect's exact payload verbatim — the text of a comment, an issue or a message, shown in full in an `AskUserQuestion` and accepted — and nothing is left to decide, that approval is the gate the spine would add. Classify such a task by its remaining signals and pass `classify --external-effect --payload-approved "<which ask approved which texts>"`; the engine then does not count the external effect, and the reasons record the approval.
+
+The exception holds only while all of these hold:
+
+- the approval covers the exact bytes that will be published; any content edit after it voids the exception;
+- no choice remains (target, wording, timing) and the effect is no more irreversible than the publication itself;
+- the published-text gate still applies: a tech-writer pass before those bytes.
+
+It does not cover sudo, system or power settings, scripts, or any effect whose payload cannot be shown and approved verbatim; those stay Substantive.
+
+Precedent: 2026-11-10, four backlog comments whose texts the user approved one by one were routed through the full order/plan/review spine; the user asked that such publications no longer count as substantive tasks.
+
 ## See also
 
 - [acting-without-asking.md](acting-without-asking.md)

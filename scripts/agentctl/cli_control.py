@@ -777,6 +777,9 @@ def register(sub, add):
                     help="a design decision (more than one reasonable solution) or an "
                          "architectural change")
     sp.add_argument("--external-effect", dest="external_effect", action="store_true")
+    sp.add_argument("--payload-approved", dest="payload_approved", default="",
+                    help="where the user approved the external effect's exact payload verbatim; "
+                         "with it --external-effect is not a substantive signal")
     sp.add_argument("--new-dependency", dest="new_dependency", action="store_true")
     sp.add_argument("--public-api-change", dest="public_api_change", action="store_true")
     sp.add_argument("--deliverable-kind", dest="deliverable_kind", default="",

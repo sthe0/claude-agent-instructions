@@ -7,6 +7,12 @@ substantive-wall-clock-min); the rules mirror CLAUDE.md § Classify task weight.
 Overrides that are NOT size-derived (mirroring the prose):
   - a tracker key (ABC-123) forces SUBSTANTIVE — the ticket boundary is the scope
     boundary, regardless of apparent size.
+
+Exemption: an external effect whose exact payload the user approved verbatim
+(``payload_approved`` names that approval) is not a substantive signal — the
+approval already is the gate the spine would add. Whether the approval covers
+these exact bytes is the model's perception; the flag makes that call explicit
+and records it in the reasons.
 """
 from __future__ import annotations
 
@@ -29,6 +35,7 @@ class Signals:
     tracker_key: str | None = None
     architectural: bool = False
     external_effect: bool = False
+    payload_approved: str = ""
     new_dependency: bool = False
     public_api_change: bool = False
 
@@ -126,7 +133,12 @@ def classify(sig: Signals, thr: Thresholds) -> Classification:
     substantive_signals = []
     if sig.architectural:
         substantive_signals.append("architectural decision")
-    if sig.external_effect:
+    if sig.external_effect and sig.payload_approved.strip():
+        reasons.append(
+            "external effect not substantive: the user approved its exact payload verbatim "
+            f"({sig.payload_approved.strip()})"
+        )
+    elif sig.external_effect:
         substantive_signals.append("external/irreversible effect")
     if sig.new_dependency:
         substantive_signals.append("new dependency")
