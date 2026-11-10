@@ -7,8 +7,8 @@
 
 ## Overview
 
-`scripts/improvement-scan.py` provides five subcommands (`backlog`, `loss`, `telemetry`,
-`sources`, `report`). Each does only the mechanizable rule
+`scripts/improvement-scan.py` provides six subcommands (`backlog`, `loss`, `telemetry`,
+`sources`, `substrate`, `report`). Each does only the mechanizable rule
 part of its responsibility — collection, diffing, scoring, deduplication, rendering — and leaves
 every judgment call (classification, functional-ground statement, which candidate is worth acting
 on) to whichever live session drives it via the `improvement-scan` skill. The CLI never files a
@@ -200,6 +200,34 @@ larger; the item then follows its cluster's own row at equal cost, by proxy scor
 copied, never summed across items sharing a cluster. Keys matching no open row are listed as
 `dangling` (markdown and JSON) even when another key resolved; an item whose keys match only
 unmeasured rows, or none, stays in the unmeasured band.
+
+The report ends with the `substrate` section (JSON key `substrate`, with a `status` that names
+why it was not computed — no telemetry record, a missing config row).
+
+## `substrate` — difficulty mass per functional place
+
+```
+python3 scripts/improvement-scan.py substrate [--format text|json] \
+    [--threshold N | --threshold-above-max | --calibrate --places N] \
+    [--check [--min-findings K] [--expect-threshold V]] [--now ISO]
+```
+
+Reads the telemetry record read-only (`lib/telemetry/substrate.py` over `report.tasks()` and
+`report.difficulties()`) and ranks functional places by the severity mass of the difficulties
+attributed to them. A difficulty is a DIAGNOSING interval (entered by a failed stage, an effort
+firing or a review-cycle limit; closed by the next `replan`, `unblock` or `reset`), weighed by
+`severity.toml`: its duration band, `never_closed` when its task ended with it open,
+`interval_unknown` for an imported cause no interval was aligned to. An open interval of a running
+task weighs nothing. A task has ended when RESOLVED or silent longer than
+`telemetry-abandon-window-days`. Each difficulty counts at the place of its cause's registry entry
+(the cause's own place when it names none) and of every composite above it through `part_of`,
+once per place. Place `none` and synthetic tasks are left out.
+
+A finding is every place whose mass reaches `substrate-mass-threshold` (read from the `config.md`
+beside the script; absent with no `--threshold` → exit 2). `--threshold-above-max` uses the
+largest mass + 1. `--calibrate --places N` needs no threshold: it walks the ranking, skips a
+place `part_of`-related to a higher counted one, and prints the Nth counted place's mass, its
+ties, the total mass, the counted share and the machinery-induced share. It proposes and stops.
 
 ## Time profile
 

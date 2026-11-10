@@ -104,6 +104,7 @@ import improvement_scan_shell as shell  # noqa: E402
 import improvement_scan_loss as loss  # noqa: E402
 import improvement_scan_sources as srcs  # noqa: E402
 import improvement_scan_fetch as fetcher  # noqa: E402
+from lib.telemetry import store as telemetry_store, substrate  # noqa: E402
 from agentctl import advisor  # noqa: E402
 from agentctl.cost import COST_LOG as SPAWN_LEDGER_DEFAULT, read_rows as read_spawn_rows  # noqa: E402
 
@@ -1876,20 +1877,21 @@ def _render_markdown(
 def _render_json(
     ranked: "list[dict]", lanes: "dict | None" = None, external: "dict | None" = None,
     time_sinks: "list[dict] | None" = None, time_sinks_status: str = "empty",
+    substrate_section: "dict | None" = None,
 ) -> str:
     lanes = lanes or {"loss": [], "silent": [], "awaiting": []}
-    return json.dumps(
-        {
-            "findings": ranked,
-            "loss": lanes["loss"],
-            "time_sinks": time_sinks or [],
-            "time_sinks_status": time_sinks_status,
-            "silent": lanes["silent"],
-            "awaiting": lanes["awaiting"],
-            "external_ideas": external or EMPTY_EXTERNAL,
-        },
-        ensure_ascii=False, indent=2,
-    )
+    payload = {
+        "findings": ranked,
+        "loss": lanes["loss"],
+        "time_sinks": time_sinks or [],
+        "time_sinks_status": time_sinks_status,
+        "silent": lanes["silent"],
+        "awaiting": lanes["awaiting"],
+        "external_ideas": external or EMPTY_EXTERNAL,
+    }
+    if substrate_section is not None:
+        payload["substrate"] = substrate_section
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 
 def _board_for_report(board_path: "str | None") -> "PriorBoard | None":
@@ -1933,13 +1935,126 @@ def _cmd_report(args: argparse.Namespace) -> int:
         print(f"improvement-scan report: external lanes have no listed sources: {exc}", file=sys.stderr)
         listed = []
     external = _external_report(_report_ideas(args.store), ranked, _sources_state(args), listed)
+    substrate_section = None if getattr(args, "no_substrate", False) else _report_substrate_section()
     if args.format == "json":
-        print(_render_json(ranked, lanes, external, sinks, sinks_status))
+        print(_render_json(ranked, lanes, external, sinks, sinks_status, substrate_section))
     else:
         addresses = {ref: item.addresses for ref, item in board.items.items()} if board else None
-        print(_render_markdown(
-            ranked, lanes, addresses, external, sinks, agg.sessions if agg else 0, sinks_status,
-        ))
+        markdown = _render_markdown(
+            ranked, lanes, addresses, external, sinks, agg.sessions if agg else 0, sinks_status)
+        if substrate_section is not None:
+            markdown += "\n" + "\n".join(_render_substrate_md(substrate_section))
+        print(markdown)
+    return 0
+
+
+def _report_substrate_section() -> dict:
+    """The substrate section of `report`; a failure of the producer becomes the section's
+    status instead of failing the whole report."""
+    try:
+        status, payload = _substrate_run(None, threshold_above_max=False, places=None, now=None)
+    except Exception as exc:  # noqa: BLE001 — any producer fault is reported, the other sections still render
+        print(f"improvement-scan report: substrate section failed: {exc!r}", file=sys.stderr)
+        return {"status": f"error: {type(exc).__name__}: {exc}"}
+    return {**payload, "status": "ok" if status == 0 else status}
+
+
+# --- substrate adequacy -------------------------------------------------------
+
+SUBSTRATE_THRESHOLD_KEY = "substrate-mass-threshold"
+ABANDON_WINDOW_KEY = "telemetry-abandon-window-days"
+
+
+def _substrate_run(threshold: "float | None", *, threshold_above_max: bool, places: "int | None",
+                   now: "str | None") -> "tuple[int | str, dict]":
+    """(status, payload): status 0 with the payload, or a reason string the caller maps to its
+    exit (the CLI exits 2) with what could still be computed. The two config rows are read from
+    the config.md beside this script, the one its own checkout carries."""
+    abandon_days = _read_config_float(ABANDON_WINDOW_KEY, CONFIG_PATH)
+    if abandon_days is None:
+        return f"config.md has no {ABANDON_WINDOW_KEY} row", {}
+    moment = datetime.fromisoformat(now).astimezone(timezone.utc) if now else datetime.now(timezone.utc)
+    conn = telemetry_store.open_readonly()
+    if conn is None:
+        return "no telemetry record", {}
+    try:
+        result = substrate.load(conn, moment, abandon_days)
+    finally:
+        conn.close()
+    rows = substrate.ranking(result)
+    payload = {"threshold": None, "findings": [], "ranking": rows, "ties": substrate.ties(rows),
+               "counts": result["counts"], "abandon_window_days": abandon_days}
+    if places is not None:
+        payload["calibration"] = substrate.calibrate(result, places)
+        return 0, payload
+    if threshold_above_max:
+        threshold = max((r["mass"] for r in rows), default=0) + 1
+    elif threshold is None:
+        threshold = _read_config_float(SUBSTRATE_THRESHOLD_KEY, CONFIG_PATH)
+        if threshold is None:
+            return f"config.md has no {SUBSTRATE_THRESHOLD_KEY} row", payload
+    payload["threshold"] = threshold
+    payload["findings"] = substrate.findings(result, threshold)
+    return 0, payload
+
+
+def _render_substrate_md(payload: dict) -> "list[str]":
+    lines = ["## Substrate adequacy — difficulty mass per functional place", ""]
+    if payload.get("status", "ok") != "ok":
+        lines.append(f"Not computed: {payload['status']}.")
+    for f in payload.get("findings", ()):
+        lines.append(
+            f"- **{f['place']}** mass {f['mass']}{' (composite)' if f['composite'] else ''}: "
+            f"{f['difficulties']} difficulties over {len(f['tasks'])} tasks, {f['minutes']:.1f} min, "
+            f"${f['spend_usd']:.2f}, {f['replans']} replans; interval unknown {f['interval_unknown']}, "
+            f"unknown mechanism {f['unknown_mechanism']}, place by category default {f['category_default_place']}")
+    if payload.get("ranking"):
+        lines.append("")
+        lines.append("Ranking: " + ", ".join(f"{r['place']}={r['mass']}" for r in payload["ranking"]))
+    calibration = payload.get("calibration")
+    if calibration:
+        lines.append(f"Calibration: place {calibration['places']} is {calibration['nth_place']} "
+                     f"at mass {calibration['nth_mass']}; ties {calibration['ties_at_nth']}; total "
+                     f"{calibration['total_mass']}, counted share {calibration['counted_share']}, "
+                     f"machinery-induced share {calibration['machinery_induced_share']}")
+        for row in calibration["rows"]:
+            nested = f" (nested with {', '.join(row['nested_with'])})" if row["nested_with"] else ""
+            lines.append(f"  {row['place']}={row['mass']} {row['status']}{nested}")
+    if payload.get("threshold") is not None:
+        lines.append(f"Threshold: {payload['threshold']}; findings: {len(payload['findings'])}")
+    lines.append("")
+    return lines
+
+
+def _substrate_check_failures(payload: dict, min_findings: int, expect_threshold: "float | None") -> "list[str]":
+    failures = []
+    if len(payload["findings"]) < min_findings:
+        failures.append(f"{len(payload['findings'])} findings < --min-findings {min_findings}")
+    if expect_threshold is not None and payload["threshold"] != expect_threshold:
+        failures.append(f"threshold {payload['threshold']} != --expect-threshold {expect_threshold}")
+    return failures
+
+
+def _cmd_substrate(args: argparse.Namespace) -> int:
+    if args.check and args.calibrate:
+        print("improvement-scan substrate: --check checks findings, which --calibrate does not produce",
+              file=sys.stderr)
+        return 2
+    status, payload = _substrate_run(
+        args.threshold, threshold_above_max=args.threshold_above_max,
+        places=args.places if args.calibrate else None, now=args.now)
+    if status != 0:
+        print(f"improvement-scan substrate: {status}", file=sys.stderr)
+        return 2
+    if args.format == "json":
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+    else:
+        print("\n".join(_render_substrate_md(payload)))
+    if args.check:
+        failures = _substrate_check_failures(payload, args.min_findings, args.expect_threshold)
+        for failure in failures:
+            print(f"improvement-scan substrate --check: {failure}", file=sys.stderr)
+        return 1 if failures else 0
     return 0
 
 
@@ -2686,7 +2801,27 @@ def build_parser() -> argparse.ArgumentParser:
         "Without the flag no profile is read",
     )
     p_report.add_argument("--format", choices=("md", "json"), default="md", help="output format")
+    p_report.add_argument("--no-substrate", action="store_true",
+                          help="leave out the substrate-adequacy section (it scans the whole telemetry record)")
     p_report.set_defaults(func=_cmd_report)
+
+    p_substrate = sub.add_parser(
+        "substrate", help="difficulty mass per functional place from the telemetry record (read-only)")
+    p_substrate.add_argument("--format", choices=("text", "json"), default="text")
+    limit = p_substrate.add_mutually_exclusive_group()
+    limit.add_argument("--threshold", type=float, default=None,
+                       help=f"override the {SUBSTRATE_THRESHOLD_KEY} row of config.md")
+    limit.add_argument("--threshold-above-max", action="store_true",
+                       help="use the largest place mass plus 1, so no place reaches it")
+    limit.add_argument("--calibrate", action="store_true",
+                       help="with --places N: the mass of the Nth independent place; needs no threshold")
+    p_substrate.add_argument("--places", type=int, default=3, help="with --calibrate: the rank N")
+    p_substrate.add_argument("--check", action="store_true",
+                             help="exit 1 unless the run met --min-findings and --expect-threshold")
+    p_substrate.add_argument("--min-findings", type=int, default=1)
+    p_substrate.add_argument("--expect-threshold", type=float, default=None)
+    p_substrate.add_argument("--now", default=None, help="ISO time the abandonment window counts from")
+    p_substrate.set_defaults(func=_cmd_substrate)
 
     return parser
 

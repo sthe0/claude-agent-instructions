@@ -349,9 +349,12 @@ def _file_units() -> list:
 # --- reading a source file ------------------------------------------------------------------
 
 def _first_line(handle):
+    """The bytes a file's generation is keyed on: its first line, or, when that line is longer than
+    FIRST_LINE_MAX, its first FIRST_LINE_MAX bytes (stable for an append-only file); None while the
+    first line is shorter than the bound and still unterminated."""
     handle.seek(0)
     raw = handle.readline(FIRST_LINE_MAX)
-    return raw if raw.endswith(b"\n") else None
+    return raw if raw.endswith(b"\n") or len(raw) == FIRST_LINE_MAX else None
 
 
 def _resume_point(handle, stored, size: int) -> "tuple[int, bool, int]":
@@ -894,7 +897,7 @@ def _collect_tokens(run: _Run) -> None:
 def run_import(include_transcripts: bool = False, replay_all_spools: bool = False) -> dict:
     """Import every source once; the stats dict is the whole report."""
     started = _clock()
-    boot = store.open_record()
+    boot = store.open_record(BATCH_DEADLINE_S)
     ro = store.open_readonly() if boot is not None else None
     if boot is None or ro is None:
         stats = _Stats()
