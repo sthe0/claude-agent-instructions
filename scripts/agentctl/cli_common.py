@@ -3532,6 +3532,7 @@ _RESOLVE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("reopen_user_decision", ("reset",)),
     ("rejection_text", ("present-plan",)),
     ("accept_content_loss", ("record-landing",)),
+    ("payload_approved", ("classify", "drive")),
 )
 
 
