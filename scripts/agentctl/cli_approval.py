@@ -184,7 +184,7 @@ def _refresh_caches_from_plan_path(
     # against it, exactly as at replan, so approve judges the same exemption replan did.
     violations = _submission_problems(refreshed, runner, state.weight_class,
                                       _frozen_edge_stages(state, baseline, refreshed),
-                                      state=state, baseline=baseline)
+                                      state=state, baseline=baseline, plan_path=state.plan_path)
     if violations:
         return violations
     if advice is not None:

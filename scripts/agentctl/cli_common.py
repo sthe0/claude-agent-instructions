@@ -35,6 +35,7 @@ from . import (
     grants as _grants,
     grounding,
     grounding_gate,
+    mandate_store,
     norm_handoff,
     order_approvals,
     plan_refs,
@@ -2447,7 +2448,7 @@ def _submission_advice(
 def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
                          frozen_edge_stages: frozenset[int] = frozenset(), *,
                          state: SessionState | None = None, baseline=None,
-                         warnings: list[str] | None = None) -> list[str]:
+                         warnings: list[str] | None = None, plan_path=None) -> list[str]:
     """The submission seam's REFUSING channel, with its judge resolved the way the advice
     channel's is — one place per channel, so no seam re-derives the enabled rule.
 
@@ -2476,8 +2477,11 @@ def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
     # The exempt set (finished stages whose principle is unchanged) is the one plan-review uses too; a
     # judge that cannot look adds to `warnings` and never refuses.
     exempt = grounding_gate.exempt_stages(state, doc, baseline)
+    # A mandate's item norm is accepted only when byte-equal to its re-render, so its fixed
+    # principle is not re-judged by the model; the given rule still runs.
+    grounding_enabled = enabled and not (plan_path and mandate_store.is_rendered_item_norm(plan_path))
     return (violations + _grounding_problems(doc, exempt)
-            + grounding_gate.plan_problems(doc, exempt, runner=runner, enabled=enabled, warnings=warnings)
+            + grounding_gate.plan_problems(doc, exempt, runner=runner, enabled=grounding_enabled, warnings=warnings)
             + [f["message"] for f in plan_size_blocks(doc)])
 
 

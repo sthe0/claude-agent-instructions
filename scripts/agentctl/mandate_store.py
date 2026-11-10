@@ -147,6 +147,20 @@ def load_mandate(mandate_id: str) -> "rules.Mandate | None":
     return rules.Mandate.from_dict(data)
 
 
+def is_rendered_item_norm(plan_path) -> bool:
+    """Whether the file at `plan_path` is byte-for-byte the item norm its mandate renders from the
+    `norm.inputs.json` beside it. Every doubt answers False; never raises."""
+    try:
+        plan = Path(plan_path)
+        text = plan.read_bytes().decode("utf-8")
+        inputs = json.loads((plan.parent / "norm.inputs.json").read_text(encoding="utf-8"))
+        mandate_id = inputs.get("mandate_id")
+        mandate = load_mandate(mandate_id) if isinstance(mandate_id, str) and mandate_id else None
+        return mandate is not None and not rules.item_norm_render_problems(text, inputs, mandate)
+    except Exception:
+        return False
+
+
 def save_mandate(mandate: rules.Mandate) -> None:
     atomic_write_json(path_of(mandate.id, MANDATE_FILE), mandate.to_dict())
 

@@ -672,7 +672,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     run = runner if runner is not None else advisor.subprocess_runner
     grounding_warnings: list[str] = []
     problems: list[str] = _submission_problems(
-        doc, run, state.weight_class, warnings=grounding_warnings)
+        doc, run, state.weight_class, warnings=grounding_warnings, plan_path=plan_path)
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
