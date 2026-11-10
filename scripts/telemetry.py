@@ -11,8 +11,21 @@
     telemetry.py check-tokens (--task <id> [--require-spawn] [--require-compaction] | --imported-coverage)
     telemetry.py check-events --task <id> [--unrecorded-window F]
     telemetry.py check-latency --max-seconds S --since-landing F
+    telemetry.py export --out F [--with-text]
+    telemetry.py merge F
+    telemetry.py check-roundtrip --workdir D
     telemetry.py now
     telemetry.py path
+
+`export` writes the record's structured rows with their origin under a header (origin id,
+taken_at, the version of every enumeration table) into the new file F, created 0600; text artifacts
+only with `--with-text`. `merge F` merges such an export into the record by each table's merge key
+(lib/telemetry/portability.py): a re-merge adds nothing, an export replaces only its own origin's
+rows and only when taken after that origin's last merged export, and an unknown table version or
+another fixture revision refuses the whole merge (exit 2). `check-roundtrip` copies the record,
+opened read-only, into D, exports the copy, merges it twice into a new record under D and exits 1
+when the row counts differ, the second merge adds a row or the export holds text; it writes only
+into D.
 
 `import` reads the history that predates live emission (gate, decision, judge, spawn-cost and
 quality ledgers, engine state files, and with `--transcripts` the session transcripts) into the
@@ -186,6 +199,26 @@ def _check_record(args) -> int:
     return 0 if result["ok"] else 1
 
 
+def _portability(args) -> int:
+    from lib.telemetry import portability
+    try:
+        if args.command == "export":
+            result = portability.export(config_root.telemetry_db(), args.out, with_text=args.with_text)
+        elif args.command == "merge":
+            conn = store.open_for_merge()
+            try:
+                result = portability.merge(conn, args.file)
+            finally:
+                conn.close()
+        else:
+            result = portability.check_roundtrip(args.workdir)
+    except (portability.Refused, OSError, ValueError) as err:
+        print(f"{args.command}: {err}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result.get("ok", True) else 1
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -229,9 +262,18 @@ def main(argv=None) -> int:
     lat = sub.add_parser("check-latency", help="check that ended sessions reach the record within the bound")
     lat.add_argument("--max-seconds", type=float, required=True)
     lat.add_argument("--since-landing", required=True, help="landing record (JSON with landed_at)")
+    exp = sub.add_parser("export", help="export the record's rows for a merge on another machine")
+    exp.add_argument("--out", required=True, help="the export file to create (must not exist)")
+    exp.add_argument("--with-text", action="store_true", help="also export the text artifacts")
+    mrg = sub.add_parser("merge", help="merge an export into the record")
+    mrg.add_argument("file")
+    rt = sub.add_parser("check-roundtrip", help="export a copy of the record and merge it into a scratch record")
+    rt.add_argument("--workdir", required=True, help="directory receiving every file the check writes")
     sub.add_parser("now", help="print the epoch time")
     sub.add_parser("path", help="print the record's path")
     args = parser.parse_args(argv)
+    if args.command in ("export", "merge", "check-roundtrip"):
+        return _portability(args)
     if args.command == "import":
         return _import(args)
     if args.command == "rebuild":

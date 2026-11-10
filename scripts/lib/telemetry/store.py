@@ -56,7 +56,11 @@ ENUM_COLUMNS = {
     "token_usage": {"role": ("roles", "role_table_version"), "phase": ("phases", "phase_table_version")},
     "losses": {"loss_mode": ("loss_modes", "loss_mode_table_version")},
 }
-_INTERNAL_TABLES = frozenset({"meta", "schema_migrations", "spool_offsets", "import_offsets", "sqlite_sequence"})
+_INTERNAL_TABLES = frozenset({"meta", "schema_migrations", "spool_offsets", "import_offsets", "merge_state",
+                              "sqlite_sequence"})
+# A merge is a foreground command the user starts and can interrupt, not a command-path call:
+# it waits on the write lock with SQLite's longest busy timeout instead of DEADLINE_S.
+MERGE_BUSY_MS = 2 ** 31 - 1
 
 _clock = time.monotonic
 _sleep = time.sleep
@@ -220,20 +224,24 @@ def _bootstrap(conn: sqlite3.Connection, record: Path, deadline: _Deadline) -> N
         raise
 
 
-def _open(deadline: _Deadline) -> sqlite3.Connection:
+def _open(deadline: _Deadline, record: "Path | None" = None) -> sqlite3.Connection:
     if emit.fault_active("enospc_record"):
         raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
-    record = config_root.telemetry_db()
+    record = record or config_root.telemetry_db()
     emit.ensure_private_dir(record.parent)
     # Create the file owner-only, but never open an existing one: closing any descriptor of
     # the record drops every POSIX lock this process holds on it, a held reader's included.
     try:
-        os.close(os.open(record, os.O_RDWR | os.O_CREAT | os.O_EXCL, RECORD_MODE))
+        _create_owner_only(record)
     except FileExistsError:
         # Refuse a read-only record before SQLite opens it: SQLite would fall back to a
         # read-only open, and that state outlives the connection for the whole process.
         if not os.access(record, os.W_OK):
             raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(record))
+    return _connect_writable(record, deadline)
+
+
+def _connect_writable(record: Path, deadline: _Deadline) -> sqlite3.Connection:
     conn = sqlite3.connect(str(record), timeout=0, isolation_level=None)
     try:
         _set_busy(conn, deadline.busy_ms())
@@ -538,14 +546,22 @@ def open_readonly() -> "sqlite3.Connection | None":
         return None
     conn = None
     try:
-        conn = sqlite3.connect("file:" + urllib.parse.quote(str(record)) + "?mode=ro", uri=True,
-                               timeout=DEADLINE_S, isolation_level=None)
+        conn = open_record_readonly(record, timeout_s=DEADLINE_S)
         conn.execute("SELECT 1 FROM events LIMIT 1")
         return conn
     except sqlite3.Error:
         if conn is not None:
             conn.close()
         return None
+
+
+def open_record_readonly(path, timeout_s: float = 5.0, immutable: bool = False) -> sqlite3.Connection:
+    """A `file:<path>?mode=ro` URI connection: SQLite refuses every write through it. Raises
+    sqlite3.Error when the file is not a readable record. `immutable` also tells SQLite the file
+    cannot change, so it takes no lock and creates no -shm or -wal file beside it."""
+    query = "?mode=ro&immutable=1" if immutable else "?mode=ro"
+    return sqlite3.connect("file:" + urllib.parse.quote(str(path)) + query, uri=True,
+                           timeout=timeout_s, isolation_level=None)
 
 
 def record_exists() -> bool:
@@ -564,6 +580,195 @@ def move_record_aside(stamp: str) -> bool:
         if part.exists():
             os.replace(part, record.with_name(aside + suffix))
     return True
+
+
+# --- export, merge and round-trip (lib/telemetry/portability.py) -------------------
+# Rows cross records verbatim: a merge neither re-validates an enumerated value nor restamps
+# its table version, so these entry points bypass _prepare_row.
+
+MERGE_MODES = ("ignore", "upsert", "delete")
+
+
+def _unbounded() -> _Deadline:
+    return _Deadline(MERGE_BUSY_MS / 1000)
+
+
+def _create_owner_only(path: Path) -> None:
+    os.close(os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, RECORD_MODE))
+
+
+def open_for_merge(record: "Path | None" = None) -> sqlite3.Connection:
+    """A writable connection to the record (created and migrated if needed) that waits on the
+    write lock without the command-path deadline. Raises on failure: merge is a foreground command."""
+    return _open(_unbounded(), Path(record) if record else None)
+
+
+def open_scratch(path) -> sqlite3.Connection:
+    """A new record at `path` (0600, migrated, with its own random origin); the file must not exist
+    and its directory is left as it is."""
+    record = Path(path)
+    _create_owner_only(record)
+    return _connect_writable(record, _unbounded())
+
+
+def backup(src_conn: sqlite3.Connection, dest_path) -> None:
+    """Copy the record behind `src_conn` into the new file `dest_path` (0600) with the SQLite backup API."""
+    dest = Path(dest_path)
+    _create_owner_only(dest)
+    target = sqlite3.connect(str(dest), isolation_level=None)
+    try:
+        src_conn.backup(target)
+    finally:
+        target.close()
+
+
+@contextmanager
+def read_snapshot(conn: sqlite3.Connection):
+    """Hold one read transaction for the body, so every read inside it sees one state of the record."""
+    conn.execute("BEGIN")
+    try:
+        yield conn
+    finally:
+        conn.execute("COMMIT")
+
+
+def _file_identity(path: Path) -> "tuple[int, int, int]":
+    stat = os.stat(path)
+    return stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
+def _read_with(record: Path, read, immutable: bool):
+    conn = open_record_readonly(record, immutable=immutable)
+    try:
+        return read(conn)
+    finally:
+        conn.close()
+
+
+def read_record_quietly(record, read, discard):
+    """Return `read(conn)` over a read-only connection to `record`, creating no file beside it.
+    A read-only open of a WAL record with no -wal file (no connection has it open) would create
+    its -wal and -shm, so such a record is read as immutable, and the result is kept only when the
+    file is unchanged afterwards; otherwise `discard()` undoes the read's output and the record is
+    read again through a plain read-only open, as it is while a connection has it open."""
+    record = Path(record)
+    wal = record.with_name(record.name + "-wal")
+    if not wal.exists():
+        before = _file_identity(record)
+        result = _read_with(record, read, immutable=True)
+        if _file_identity(record) == before and not wal.exists():
+            return result
+        discard()
+    return _read_with(record, read, immutable=False)
+
+
+def backup_record(record, dest_path) -> None:
+    """Copy the record into the new file `dest_path` with the backup API, read quietly."""
+    dest = Path(dest_path)
+    read_record_quietly(record, lambda conn: backup(conn, dest), dest.unlink)
+
+
+def table_names(conn: sqlite3.Connection) -> "list[str]":
+    """The record's tables from sqlite_master, without sqlite_ tables, virtual (FTS) tables and their shadows."""
+    rows = conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'table'").fetchall()
+    virtual = {name for name, sql in rows if (sql or "").upper().startswith("CREATE VIRTUAL TABLE")}
+    return sorted(name for name, _ in rows
+                  if not name.startswith("sqlite_") and name not in virtual
+                  and not any(name.startswith(v + "_") for v in virtual))
+
+
+def table_columns(conn: sqlite3.Connection, table: str) -> "list[str]":
+    return [row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')]
+
+
+def table_counts(conn: sqlite3.Connection, names) -> "dict[str, int]":
+    return {name: conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0] for name in names}
+
+
+def record_origin(conn: sqlite3.Connection) -> str:
+    return _read_origin(conn)
+
+
+def export_rows(conn: sqlite3.Connection, table: str, origin_sql: str):
+    """Yield (row origin, row dict) for every row of `table` in rowid order; `origin_sql` is an
+    expression over the row aliased `t`."""
+    cursor = conn.execute(f'SELECT {origin_sql} AS "__origin", t.* FROM "{table}" AS t ORDER BY t.rowid')
+    names = [d[0] for d in cursor.description][1:]
+    for values in cursor:
+        yield values[0], dict(zip(names, values[1:]))
+
+
+def fixture_revisions(conn: sqlite3.Connection) -> "set[str]":
+    return {row[0] for row in conn.execute(
+        "SELECT DISTINCT fixture_sha256 FROM causes WHERE fixture_sha256 IS NOT NULL")}
+
+
+def merge_watermark(conn: sqlite3.Connection, origin: str) -> "str | None":
+    row = conn.execute("SELECT taken_at FROM merge_state WHERE origin = ?", (origin,)).fetchone()
+    return row[0] if row else None
+
+
+def set_merge_watermark(conn: sqlite3.Connection, origin: str, taken_at: str) -> None:
+    _merge_transaction(conn, lambda: conn.execute(
+        "INSERT INTO merge_state (origin, taken_at) VALUES (?, ?) "
+        "ON CONFLICT (origin) DO UPDATE SET taken_at = excluded.taken_at", (origin, taken_at)))
+
+
+def superseded_imported_event_ids(conn: sqlite3.Connection) -> "list[str]":
+    """Imported event rows a live row of the record supersedes: one whose id a live row
+    back-references, and an imported spawn-cost row whose child session a live spawn event names."""
+    return [row[0] for row in conn.execute(
+        "SELECT event_id FROM events WHERE provenance = 'imported' AND ("
+        "event_id IN (SELECT backref_id FROM events WHERE provenance <> 'imported' AND backref_id IS NOT NULL)"
+        " OR (kind = 'spawn_cost' AND child_session_id IN (SELECT child_session_id FROM events "
+        "WHERE kind = 'spawn' AND provenance <> 'imported' AND child_session_id IS NOT NULL)))")]
+
+
+def _merge_transaction(conn: sqlite3.Connection, work):
+    _set_busy(conn, MERGE_BUSY_MS)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        value = work()
+        conn.execute("COMMIT")
+    except BaseException:
+        _rollback(conn)
+        raise
+    return value
+
+
+def _merge_row(conn, table: str, row: dict, columns: "set[str]", keys: "list[str]", mode: str) -> int:
+    unknown = set(row) - columns
+    if unknown:
+        raise ValueError(f"{table} has no column(s) {sorted(unknown)}")
+    values = {c: json.dumps(v, separators=(",", ":")) if isinstance(v, (dict, list)) else v for c, v in row.items()}
+    match = " AND ".join(f'"{k}" IS ?' for k in keys)
+    key_values = [values.get(k) for k in keys]
+    if mode == "delete":
+        return conn.execute(f'DELETE FROM "{table}" WHERE {match}', key_values).rowcount
+    names = ", ".join(f'"{n}"' for n in values)
+    marks = ", ".join("?" for _ in values)
+    if mode == "ignore":
+        return conn.execute(
+            f'INSERT INTO "{table}" ({names}) SELECT {marks} '
+            f'WHERE NOT EXISTS (SELECT 1 FROM "{table}" WHERE {match}) ON CONFLICT DO NOTHING',
+            [*values.values(), *key_values]).rowcount
+    updates = ", ".join(f'"{n}" = excluded."{n}"' for n in values if n not in keys)
+    action = f"UPDATE SET {updates}" if updates else "NOTHING"
+    target = ", ".join(f'"{k}"' for k in keys)
+    return conn.execute(f'INSERT INTO "{table}" ({names}) VALUES ({marks}) ON CONFLICT ({target}) DO {action}',
+                        list(values.values())).rowcount
+
+
+def merge_rows(conn: sqlite3.Connection, table: str, rows, key_columns, mode: str) -> int:
+    """Apply `rows` to a data table by its merge key in one transaction, waiting on the write lock
+    without the command-path deadline: `ignore` inserts a row whose key is absent, `upsert` also
+    replaces the stored row's other columns, `delete` removes the row with the key. Rows are
+    stored verbatim. Returns the rows changed; raises on failure."""
+    if mode not in MERGE_MODES:
+        raise ValueError(f"unknown merge mode {mode!r}")
+    columns = _table_columns(conn, table)
+    keys = list(key_columns)
+    return _merge_transaction(conn, lambda: sum(_merge_row(conn, table, row, columns, keys, mode) for row in rows))
 
 
 # --- spool replay ------------------------------------------------------------------
