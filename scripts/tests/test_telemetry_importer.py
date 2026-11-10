@@ -193,6 +193,14 @@ def test_session_without_live_events_gets_transcript_events(world):
     assert world.run(include_transcripts=True)["rows_added"] == 0
 
 
+def test_transcript_with_oversized_first_line_gets_transcript_events(world):
+    oversized = {"type": "summary", "sessionId": "O", "summary": "x" * (importer.FIRST_LINE_MAX + 10)}
+    world.transcript("O", [oversized, prompt(0), bash_call(1, "c1", "git status"), bash_result(2, "c1")])
+    world.run(include_transcripts=True)
+    assert world.count("events", "kind = 'bash' AND session_id = 'O'") == 1
+    assert world.run(include_transcripts=True)["rows_added"] == 0
+
+
 # --- identity of partially recorded and child sessions ------------------------------------------------
 
 def _root_with_live_event(world, session="S", opening=None) -> None:

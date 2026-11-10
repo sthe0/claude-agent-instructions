@@ -389,6 +389,39 @@ def _token_row(message_id):
             "copy_rank": 0, "session_start_ms": 1, "transcript": "/nowhere/s.jsonl", "byte_offset": 0}
 
 
+def _oversized_first_line(session) -> dict:
+    return {"type": "summary", "sessionId": session, "summary": "x" * (importer.FIRST_LINE_MAX + 10)}
+
+
+def test_oversized_first_line_transcript_is_collected(world, capsys):
+    path = world.transcript("s", [_oversized_first_line("s"), usage(1, "m1", "s"), usage(2, "m2", "s")])
+    tokens.collect()
+    assert {r[0] for r in query("SELECT message_id FROM token_usage")} == {"m1", "m2"}
+    assert tokens_offset(path) == [(path.stat().st_size, "committed")]
+    with open(path, "rb") as handle:
+        prefix = handle.read(importer.FIRST_LINE_MAX)
+    [(generation,)] = query("SELECT generation FROM import_offsets WHERE source = ? AND consumer = 'tokens'", str(path))
+    assert generation == importer.hashlib.sha256(prefix).hexdigest()
+    world.add(path, usage(3, "m3", "s"))
+    assert tokens.collect()["rows"] == 1
+    rc, out = check(capsys, "--imported-coverage")
+    assert rc == 0 and out["covered"] == 1
+
+
+def test_short_first_line_generation_unchanged(world):
+    path = world.transcript("s", [usage(1, "m1", "s"), usage(2, "m2", "s")])
+    tokens.collect()
+    with open(path, "rb") as handle:
+        first = handle.readline()
+    [(generation,)] = query("SELECT generation FROM import_offsets WHERE source = ? AND consumer = 'tokens'", str(path))
+    assert generation == importer.hashlib.sha256(first).hexdigest()
+    assert tokens.collect()["rows"] == 0
+    unterminated = world.transcript("u", [])
+    unterminated.write_bytes(line(usage(1, "m9", "u"))[:-1])
+    tokens.collect()
+    assert tokens_offset(unterminated) == [] and world.count("token_usage", "message_id = 'm9'") == 0
+
+
 def test_tokens_offset_advances_in_the_same_transaction_as_its_rows(world):
     offset = {"source": "/nowhere/s.jsonl", "generation": "g", "consumer": tokens.CONSUMER, "byte_offset": 100,
               "last_start": 50, "last_sha256": "0" * 64, "read_size": 100, "carry": None}
