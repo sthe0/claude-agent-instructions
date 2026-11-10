@@ -627,6 +627,8 @@ def test_the_default_runner_goes_through_the_judge_isolation(monkeypatch, tmp_pa
         seen["argv"], seen["kwargs"] = argv, kwargs
         return subprocess.CompletedProcess(argv, 0, answer([]), "")
 
+    # The runner is this test's subject; subprocess.run stays faked, so nothing real launches.
+    monkeypatch.setenv("AGENTCTL_LIVE_JUDGES", "1")
     monkeypatch.setattr(host_llm, "_SANDBOX_ROOT", tmp_path / "sandbox")
     monkeypatch.setattr(advisor.subprocess, "run", fake_run)
     verdict = advisor.judge_code_effects("x = 1\n", str(tmp_path), timeout=5)
