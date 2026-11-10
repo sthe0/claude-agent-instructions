@@ -1024,6 +1024,13 @@ def _settled_at_once(original):
     return mutated
 
 
+def _without_resolution_dirs(original):
+    def mutated(files, version):
+        record = original(files, version)
+        return record and {**record, "dirs": {}}
+    return mutated
+
+
 SNAPSHOT = "plan_dashboard.snapshot"
 SNAPSHOT_MUTATIONS = {
     "snapshot-checksum-ignored": (SNAPSHOT, "load", _checksum_unchecked),
@@ -1039,6 +1046,9 @@ SNAPSHOT_MUTATIONS = {
     "source-binding-cached-forever": (SNAPSHOT, "same_identity", _identity_of_kind("binding", True)),
     "source-transcript-cached-forever": (SNAPSHOT, "same_identity", _identity_of_kind("transcript", True)),
     "source-ledger-cached-forever": (SNAPSHOT, "same_identity", _identity_of_kind("ledger", True)),
+    "code-version-identity-ignored": (SNAPSHOT, "same_code_identities", _always(True)),
+    "code-version-new-module-missed": (SNAPSHOT, "code_record", _without_resolution_dirs),
+    "code-version-always-parsed": (SNAPSHOT, "accepted_code_version", _always((None, "no record"))),
 }
 
 

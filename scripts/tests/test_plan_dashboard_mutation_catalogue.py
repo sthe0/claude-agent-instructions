@@ -40,7 +40,8 @@ SNAPSHOT_NAMES = (
     "snapshot-checksum-ignored", "cache-same-size-rewrite-missed", "unread-cost-zero", "old-marking-dropped",
     "jump-uses-snapshot-window", "mark-confirmed-from-snapshot", "overlay-waits-on-order-read",
     "binding-scan-uncached", "binding-cache-never-invalidated", "source-state-cached-forever",
-    "source-binding-cached-forever", "source-transcript-cached-forever", "source-ledger-cached-forever")
+    "source-binding-cached-forever", "source-transcript-cached-forever", "source-ledger-cached-forever",
+    "code-version-identity-ignored", "code-version-new-module-missed", "code-version-always-parsed")
 SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-read")
 SNAPSHOT_STDLIB_NAMES = tuple(name for name in SNAPSHOT_NAMES if name not in SNAPSHOT_PILOT_NAMES)
 REQUIRED = os.environ.get("PLAN_DASHBOARD_REQUIRE_TEXTUAL") == "1"

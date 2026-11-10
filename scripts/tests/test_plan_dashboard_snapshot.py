@@ -1,7 +1,9 @@
 """The snapshot on disk and the identity-keyed caches of the console dashboard (``plan_dashboard.snapshot``).
 
 Plain pytest, standard library only (textual stays in ``test_plan_dashboard_tui_app.py``, which holds the
-tests that need the running app: the old marking on a start from a snapshot, the events' order, SIGTERM).
+tests that need the running app: the old marking on a start from a snapshot, the events' order, SIGTERM). The
+one test here that runs the app, the code-version path on the event stream, borrows that file's helpers and
+skips, or fails, with it.
 
 Every kind of source the dashboard reads (``snapshot.SOURCE_KINDS``: state, binding, transcript, ledger) is
 put through the same four changes between two refreshes — a different size, a same-size rewrite that moves
@@ -803,6 +805,139 @@ def test_a_snapshot_written_by_other_code_is_absent_after_the_code_changed(root,
     code_files[0].write_text("VALUE = 'fixed'\n", encoding="utf-8")
     store.code_version.cache_clear()
     assert store.load(path) is None
+
+
+@pytest.fixture
+def code_tree(tmp_path, monkeypatch):
+    """A code tree of its own: ``pkg.root`` imports ``pkg.helper`` and ``pkg.later``, which does not exist yet.
+    Every file and directory carries a past mtime, so a later write moves its identity whatever the clock's tick."""
+    scripts = tmp_path / "scripts"
+    package = scripts / "pkg"
+    package.mkdir(parents=True)
+    (package / "root.py").write_text("from . import helper\nimport pkg.later\n", encoding="utf-8")
+    (package / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
+    for path in (package / "root.py", package / "helper.py", package, scripts):
+        os.utime(path, ns=(PAST_NS, PAST_NS))
+    monkeypatch.setattr(store, "SCRIPTS", scripts)
+    monkeypatch.setattr(store, "CODE_ROOTS", ("pkg.root",))
+    monkeypatch.setattr(store, "code_files", store.code_files.__wrapped__)
+    store.code_version.cache_clear()
+    yield package
+    monkeypatch.undo()
+    store.code_version.cache_clear()
+
+
+def written_by_another_process(path: Path) -> Path:
+    """A snapshot written, then the code version forgotten, as a new process starts without it."""
+    store.write(path, {SELECTION: {"marks": EMPTY_MARKS}}, [])
+    store.code_version.cache_clear()
+    return path
+
+
+def count_parses(monkeypatch) -> list:
+    import ast
+
+    parsed, original = [], ast.parse
+    monkeypatch.setattr(ast, "parse", lambda *args, **kwargs: parsed.append(args) or original(*args, **kwargs))
+    return parsed
+
+
+def test_an_unchanged_code_tree_is_accepted_without_parsing(code_tree, tmp_path, monkeypatch):
+    path = written_by_another_process(tmp_path / store.FILE_NAME)
+    parsed = count_parses(monkeypatch)
+    assert store.load(path) is not None
+    assert len(parsed) == 0
+
+
+def test_a_changed_code_file_invalidates_the_snapshot(code_tree, tmp_path):
+    same_size, other_size = "VALUE = 2\n", "VALUE = 1234\n"
+    assert len(same_size) == len((code_tree / "helper.py").read_text(encoding="utf-8")) != len(other_size)
+    for rewrite in (same_size, other_size):
+        path = written_by_another_process(tmp_path / store.FILE_NAME)
+        (code_tree / "helper.py").write_text(rewrite, encoding="utf-8")
+        assert store.load(path) is None
+        assert store.code_check_report()["code_version_path"] == "full"
+        store.code_version.cache_clear()
+
+
+def test_a_module_newly_resolving_an_import_invalidates_the_snapshot(code_tree, tmp_path):
+    path = written_by_another_process(tmp_path / store.FILE_NAME)
+    (code_tree / "later.py").write_text("LATER = True\n", encoding="utf-8")
+    assert store.load(path) is None
+    store.code_version.cache_clear()
+    later_package = code_tree / "later"
+    (code_tree / "later.py").unlink()
+    os.utime(code_tree, ns=(PAST_NS, PAST_NS))
+    path = written_by_another_process(tmp_path / store.FILE_NAME)
+    later_package.mkdir()
+    (later_package / "__init__.py").write_text("LATER = True\n", encoding="utf-8")
+    assert store.load(path) is None
+
+
+def rewritten_record(path: Path, record) -> Path:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    for section in document["sections"].values():
+        if record is None:
+            section.pop("code_identities")
+        else:
+            section["code_identities"] = record
+    document["body_sha256"] = store.body_sha256(document["sections"])
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return path
+
+
+def test_a_snapshot_without_code_identities_takes_the_full_path(code_tree, tmp_path, monkeypatch):
+    path = written_by_another_process(tmp_path / store.FILE_NAME)
+    record = next(iter(json.loads(path.read_text(encoding="utf-8"))["sections"].values()))["code_identities"]
+    malformed = (None, "not a record", {**record, "files": {"pkg/root.py": [1, 2]}}, {**record, "dirs": None},
+                 {**record, "taken_ns": "soon"}, {**record, "root": str(tmp_path)})
+    for damaged in malformed:
+        rewritten_record(written_by_another_process(path), damaged)
+        parsed = count_parses(monkeypatch)
+        assert store.load(path) is not None, damaged
+        assert parsed, damaged
+        reason = "identity differs" if damaged is malformed[-1] else "no record"
+        assert store.code_check_report() == {"code_version_path": "full", "code_version_reason": reason}, damaged
+        store.code_version.cache_clear()
+
+
+def test_a_code_file_written_within_one_resolution_step_of_the_walk_takes_the_full_path(code_tree, tmp_path, monkeypatch):
+    changed = max(max(p.stat().st_mtime_ns, p.stat().st_ctime_ns) for p in (code_tree, *code_tree.iterdir()))
+    monkeypatch.setattr(store, "now_ns", lambda: changed + store.MTIME_STEP_NS // 2)
+    path = written_by_another_process(tmp_path / store.FILE_NAME)
+    assert store.load(path) is not None
+    assert store.code_check_report() == {"code_version_path": "full", "code_version_reason": "write within resolution step"}
+
+
+def test_the_code_version_path_is_reported_on_the_event_stream(code_tree, tmp_path):
+    import test_plan_dashboard_tui_app as app_tests  # skips, or fails under PLAN_DASHBOARD_REQUIRE_TEXTUAL=1, without textual
+    from plan_dashboard import events
+
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(read_fd, False)
+    events.enable(write_fd)
+    try:
+        root = app_tests.attention_root(tmp_path)
+        path = app_tests.snapshot_file(tmp_path)
+        app_tests.leave_a_snapshot(root, path, locator=app_tests.attention_locator())
+        written = [e for e in app_tests.drain(read_fd) if e["ev"] == "snapshot_written"]
+        assert written and all("code_version_path" in e for e in written)
+        paths = []
+        for change in (None, "VALUE = 2\n"):
+            if change is not None:
+                (code_tree / "helper.py").write_text(change, encoding="utf-8")
+            store.code_version.cache_clear()
+            attention.clear_cache()
+            model.clear_cache()
+            app_tests.run(app_tests.nothing, root, snapshot_path=path, locator=app_tests.attention_locator())
+            painted = [e for e in app_tests.drain(read_fd) if e["ev"] == "rows_painted"]
+            assert painted
+            paths.append({(e["code_version_path"], e.get("code_version_reason")) for e in painted})
+        assert paths == [{("fast", None)}, {("full", "identity differs")}]
+    finally:
+        events.disable()
+        os.close(read_fd)
+        os.close(write_fd)
 
 
 def damage(path: Path, how: str) -> None:

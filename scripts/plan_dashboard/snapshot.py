@@ -22,6 +22,11 @@ of the last cycle; a section holds the rows and the overlay that screen showed a
 sources (state digests, binding contents, transcript tails, ledger sums), which a start seeds the caches
 with. The file is written atomically at a clean exit and holds the one section of the selection last shown;
 a missing, damaged, half-written, foreign-version or unreadable file is read as absent.
+
+Every section also holds ``code_identities``: the identities of the code files and of the directories the import
+resolution looked in when ``code`` was computed. A start whose stat of each finds them unchanged, and settled
+when recorded, takes ``code`` as its own version without reading or parsing a module; anything else computes
+the version in full (``code_check_report`` says which, for the event stream).
 """
 from __future__ import annotations
 
@@ -34,6 +39,7 @@ import stat as stat_module
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from lib import config_root, engine_session_binding
 
@@ -47,6 +53,10 @@ SOURCE_KINDS = ("state", "binding", "transcript", "ledger")
 IDENTITY_KEYS = ("dev", "ino", "size", "mtime_ns", "ctime_ns")
 SCRIPTS = Path(__file__).resolve().parent.parent
 CODE_ROOTS = tuple(f"plan_dashboard.{name}" for name in ("model", "attention", "snapshot", "tui", "tui_app", "locate"))
+CODE_RECORD_KEY = "code_identities"
+CODE_PATH_NO_RECORD = "no record"
+CODE_PATH_IDENTITY_DIFFERS = "identity differs"
+CODE_PATH_WITHIN_STEP = "write within resolution step"
 MISS = object()
 
 _LOCK = threading.Lock()
@@ -427,12 +437,61 @@ def body_sha256(body) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _repo_module_file(dotted: str) -> Path | None:
+def _repo_module_file(dotted: str, consult=None) -> Path | None:
     base = SCRIPTS.joinpath(*dotted.split("."))
     for candidate in (base.with_suffix(".py"), base / "__init__.py"):
+        if consult is not None:
+            consult(candidate)
         if candidate.is_file():
             return candidate
     return None
+
+
+class _CodeWalk:
+    """The identities the walk of the code files looked at, so a later start can tell by a stat of each that
+    none changed: every code file before it is parsed, and for every place an import could resolve to, the
+    nearest existing directory above it, which a module created or removed there changes. A place the walk
+    cannot vouch for by a directory — a non-file where a module could be, an entry it cannot stat — breaks it."""
+
+    def __init__(self):
+        self.taken_ns = now_ns()
+        self.files: dict[str, list[int]] = {}
+        self.dirs: dict[str, list[int]] = {}
+        self.broken = False
+
+    def _identity(self, path) -> list[int] | None:
+        try:
+            return list(identity_of(os.stat(path)))
+        except OSError:
+            self.broken = True
+            return None
+
+    def read(self, path: Path) -> None:
+        identity = self._identity(path)
+        if identity is not None:
+            self.files.setdefault(os.path.relpath(path, SCRIPTS), identity)
+
+    def consult(self, candidate: Path) -> None:
+        if os.path.lexists(candidate) and not candidate.is_file():
+            self.broken = True
+            return
+        directory = candidate.parent
+        while not os.path.lexists(directory) and directory != directory.parent:
+            directory = directory.parent
+        key = os.path.relpath(directory, SCRIPTS)
+        if key not in self.dirs:
+            identity = self._identity(directory)
+            if identity is not None:
+                self.dirs[key] = identity
+
+
+class CodeFiles(tuple):
+    """The sorted code files, and the walk that found them."""
+
+    def __new__(cls, paths, walk: _CodeWalk):
+        files = super().__new__(cls, paths)
+        files.walk = walk
+        return files
 
 
 def _statements(nodes):
@@ -466,34 +525,134 @@ def code_files() -> tuple[Path, ...]:
     """The repo modules whose code makes what the snapshot stores: ``CODE_ROOTS`` and every module under
     ``scripts/`` they import, transitively. Derived from the imports, so a helper a stored value passes
     through (an effort count, a timestamp parser) is covered without anyone listing it."""
+    walk = _CodeWalk()
     found: dict[Path, None] = {}
-    pending = [_repo_module_file(name) or SCRIPTS.joinpath(*name.split(".")).with_suffix(".py") for name in CODE_ROOTS]
+    pending = [_repo_module_file(name, walk.consult) or SCRIPTS.joinpath(*name.split(".")).with_suffix(".py")
+               for name in CODE_ROOTS]
     while pending:
         path = pending.pop()
         if path in found:
             continue
         found[path] = None
+        walk.read(path)
         for name in _imported_names(path):
-            module = _repo_module_file(name)
+            module = _repo_module_file(name, walk.consult)
             if module is not None and module not in found:
                 pending.append(module)
-    return tuple(sorted(found))
+    return CodeFiles(sorted(found), walk)
 
 
-@functools.lru_cache(maxsize=1)
-def code_version() -> str:
+def _computed_code_version() -> tuple[str, dict | None]:
     """A hash of the modules that compute what the snapshot stores (state digests, tails, sums, row shape).
     A snapshot written by other code is read as absent: its values are kept for as long as a file's identity
     holds, so values another computation made would otherwise outlive the fix of that computation. An
     unreadable or unparsable module gives a version no other process shares."""
     digest = hashlib.sha256()
     try:
-        for path in code_files():
+        files = code_files()
+        for path in files:
             name = path.relative_to(SCRIPTS).as_posix()
             digest.update(name.encode("utf-8") + b"\0" + path.read_bytes() + b"\0")
     except (OSError, SyntaxError, ValueError):
-        return f"unreadable-{os.urandom(8).hex()}"
-    return digest.hexdigest()
+        return f"unreadable-{os.urandom(8).hex()}", None
+    version = digest.hexdigest()
+    return version, code_record(files, version)
+
+
+def code_record(files, version: str) -> dict | None:
+    """What a snapshot keeps of the walk that gave ``version``, so the next start can adopt the version after a
+    stat of each identity; None when a stat cannot vouch for it: no walk, a broken one, an unreadable version."""
+    walk = getattr(files, "walk", None)
+    if walk is None or walk.broken or version.startswith("unreadable-"):
+        return None
+    return {"root": str(SCRIPTS), "version": version, "taken_ns": walk.taken_ns,
+            "files": dict(walk.files), "dirs": dict(walk.dirs)}
+
+
+def _is_identity(value) -> bool:
+    return (isinstance(value, list) and len(value) == len(IDENTITY_KEYS)
+            and all(isinstance(number, int) and not isinstance(number, bool) for number in value))
+
+
+def _valid_code_record(record) -> bool:
+    return (isinstance(record, dict) and isinstance(record.get("root"), str) and isinstance(record.get("version"), str)
+            and isinstance(record.get("taken_ns"), int) and not isinstance(record.get("taken_ns"), bool)
+            and all(isinstance(record.get(group), dict) and all(isinstance(name, str) and _is_identity(identity)
+                                                              for name, identity in record[group].items())
+                    for group in ("files", "dirs"))
+            and bool(record["files"]))
+
+
+def same_code_identities(recorded, live) -> bool:
+    return tuple(recorded) == tuple(live)
+
+
+def accepted_code_version(record) -> tuple[str | None, str]:
+    """``record``'s version when every identity it holds is the live one and was settled when recorded, with no
+    file read or parsed; else None and the first reason the full path is taken."""
+    if not _valid_code_record(record):
+        return None, CODE_PATH_NO_RECORD
+    if record["root"] != str(SCRIPTS):
+        return None, CODE_PATH_IDENTITY_DIFFERS
+    entries = [*record["files"].items(), *record["dirs"].items()]
+    if not all(settled(SimpleNamespace(st_mtime_ns=identity[3], st_ctime_ns=identity[4]), record["taken_ns"])
+               for _, identity in entries):
+        return None, CODE_PATH_WITHIN_STEP
+    for name, identity in entries:
+        try:
+            live = identity_of(os.stat(SCRIPTS / name))
+        except OSError:
+            return None, CODE_PATH_IDENTITY_DIFFERS
+        if not same_code_identities(identity, live):
+            return None, CODE_PATH_IDENTITY_DIFFERS
+    return record["version"], ""
+
+
+class _CodeVersion:
+    """``code_version()``: computed once per process (``_computed_code_version``), or adopted from a snapshot's
+    record that ``accepted_code_version`` confirmed. ``record`` is what a snapshot written now keeps of it;
+    ``path`` says how this process came by it, for the event stream, with the ``reason`` a computation was
+    called with."""
+
+    def __init__(self):
+        self.cache_clear()
+
+    def cache_clear(self) -> None:
+        self.version: str | None = None
+        self.record: dict | None = None
+        self.path: dict = {}
+
+    def __call__(self, reason: str = CODE_PATH_NO_RECORD) -> str:
+        if self.version is None:
+            self.version, self.record = _computed_code_version()
+            self.path = {"code_version_path": "full", "code_version_reason": reason}
+        return self.version
+
+    def adopt(self, record: dict) -> None:
+        if self.version is None:
+            self.version, self.record = record["version"], record
+            self.path = {"code_version_path": "fast"}
+
+
+_CODE = code_version = _CodeVersion()
+
+
+def code_check_report() -> dict:
+    """``code_version_path`` (``fast`` or ``full``) and, on ``full``, ``code_version_reason``; empty while this
+    process has no code version yet."""
+    return dict(_CODE.path)
+
+
+def _stored_code_record(sections: dict):
+    records = [section.get(CODE_RECORD_KEY) for section in sections.values() if isinstance(section, dict)]
+    return records[0] if records and all(record == records[0] for record in records) else None
+
+
+def _with_code_record(section, record):
+    if not isinstance(section, dict):
+        return section
+    rest = {key: value for key, value in section.items() if key != CODE_RECORD_KEY}
+    return rest if record is None else {**rest, CODE_RECORD_KEY: record}
 
 
 def _pid_alive(pid: int) -> bool:
@@ -521,7 +680,10 @@ def write(path, sections: dict, sources: list[dict]) -> Path:
     ``body_sha256`` covers the sections, as the contract says; ``sources_sha256`` covers the identities."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    document = {"version": VERSION, "code": code_version(), "body_sha256": body_sha256(sections),
+    version = code_version()
+    record = _CODE.record if _CODE.version == version else None
+    sections = {name: _with_code_record(section, record) for name, section in sections.items()}
+    document = {"version": VERSION, "code": version, "body_sha256": body_sha256(sections),
                 "sources_sha256": body_sha256(sources), "sections": sections, "sources": sources}
     temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}")
     try:
@@ -551,11 +713,17 @@ def load(path) -> dict | None:
         return None
     if not isinstance(document, dict) or document.get("version") != VERSION or isinstance(document.get("version"), bool):
         return None
-    if document.get("code") != code_version():
-        return None
     sections, sources = document.get("sections"), document.get("sources")
     if not isinstance(sections, dict) or not isinstance(sources, list) or not all(map(_valid_source, sources)):
         return None
     if document.get("body_sha256") != body_sha256(sections) or document.get("sources_sha256") != body_sha256(sources):
+        return None
+    reason = ""
+    if _CODE.version is None:
+        record = _stored_code_record(sections)
+        version, reason = accepted_code_version(record)
+        if version is not None:
+            _CODE.adopt(record)
+    if document.get("code") != code_version(reason):
         return None
     return document

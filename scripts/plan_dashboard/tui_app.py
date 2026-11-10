@@ -481,7 +481,7 @@ def paint_stored(app: "DashboardApp", section: dict) -> None:
     app.old_ids = frozenset(tui.stored_ids(stored, app.stored))
     show_table(app, stored, now, app.view.include_all)
     app.rows_noted = True
-    note(app, "rows_painted", from_snapshot=True, rows=len(app.view.session_ids))
+    note(app, "rows_painted", from_snapshot=True, rows=len(app.view.session_ids), **snapshot_store.code_check_report())
 
 
 def forget_snapshot(app: "DashboardApp") -> None:
@@ -754,7 +754,7 @@ class DashboardApp(App):
             path = tui.write_snapshot(self.snapshot_path, key, section)
         except OSError:
             return None
-        events.emit("snapshot_written", path=str(path))
+        events.emit("snapshot_written", path=str(path), **snapshot_store.code_check_report())
         return path
 
     def _tick(self) -> None:
@@ -784,7 +784,8 @@ class DashboardApp(App):
         show_table(self, snapshot, now, include_all)
         if not self.rows_noted:
             self.rows_noted = True
-            note(self, "rows_painted", from_snapshot=False, rows=len(snapshot["tasks"]))
+            code_check = snapshot_store.code_check_report() if self.snapshot_path is not None else {}
+            note(self, "rows_painted", from_snapshot=False, rows=len(snapshot["tasks"]), **code_check)
         self._finish_load()
         start_order_read(self, snapshot, include_all)
         start_overlay_read(self, snapshot, include_all)
