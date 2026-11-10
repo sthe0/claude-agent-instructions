@@ -372,14 +372,15 @@ def collect(sessions=None, deadline_s: "float | None" = None) -> dict:
     """Read every transcript (or `sessions`' transcripts), the judge ledger and the standing
     surface into the record. Returns {rows, files, deferred, failed}; never raises on a store
     or file failure."""
-    boot = store.open_record()
+    deadline_s = BATCH_DEADLINE_S if deadline_s is None else deadline_s
+    boot = store.open_record(deadline_s)
     conn = store.open_readonly() if boot is not None else None
     if boot is not None:
         boot.close()
     origin = store.origin_id() if conn is not None else None
     if conn is None or origin is None:
         return {"rows": 0, "files": 0, "deferred": 0, "failed": 1}
-    run = _Run(conn, origin, BATCH_DEADLINE_S if deadline_s is None else deadline_s)
+    run = _Run(conn, origin, deadline_s)
     try:
         for path, session, subagent in transcripts(sessions):
             _read_source(run, path, _transcript_handler(run, path, session, subagent))

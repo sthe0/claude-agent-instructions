@@ -16,7 +16,7 @@ import telemetry as telemetry_cli
 from lib import config_root, judge_ledger
 from lib.telemetry import align, importer, live, store, sync
 from telemetry_import_support import (
-    BASE, at, bash_call, bash_result, line, prompt, reply, world)  # noqa: F401
+    BASE, at, bash_call, bash_result, line, prompt, reply, slow_first_record_bootstrap, world)  # noqa: F401
 from telemetry_live_support import query
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -190,6 +190,14 @@ def test_session_without_live_events_gets_transcript_events(world):
     world.run(include_transcripts=True)
     rows = [json.loads(r[0]) for r in query("SELECT fields FROM events WHERE kind = 'bash' AND session_id = 'B' ORDER BY time")]
     assert [(r["program"], r["verb"], r["exit"]) for r in rows] == [("agentctl-cli.py", "classify", 0), ("git", "status", 1)]
+    assert world.run(include_transcripts=True)["rows_added"] == 0
+
+
+def test_transcript_with_oversized_first_line_gets_transcript_events(world):
+    oversized = {"type": "summary", "sessionId": "O", "summary": "x" * (importer.FIRST_LINE_MAX + 10)}
+    world.transcript("O", [oversized, prompt(0), bash_call(1, "c1", "git status"), bash_result(2, "c1")])
+    world.run(include_transcripts=True)
+    assert world.count("events", "kind = 'bash' AND session_id = 'O'") == 1
     assert world.run(include_transcripts=True)["rows_added"] == 0
 
 
@@ -467,6 +475,15 @@ def test_importer_retries_undrained_spool_replay(world, monkeypatch):
     assert sleeps == [1.0] and world.count("events", "session_id = 'E'") == 1
 
 
+def test_import_completes_when_creating_the_record_outlasts_the_command_path_deadline(world, monkeypatch):
+    """A loaded machine can spend more than the command path's 250 ms between opening a fresh record and
+    taking its write lock; the importer runs off the command path and must not count that as a failure."""
+    slow_first_record_bootstrap(monkeypatch)
+    world.add(world.gate, world.gate_line("R"))
+    report = world.run()
+    assert report["complete"] and report["errors"] == 0 and report["per_source"]["gate"]["rows"] == 1
+
+
 # --- bounded memory ---------------------------------------------------------------------------------
 
 def _cli_import(tmp_path: Path, gate_mib: int, name: str, states: int = 0) -> float:
@@ -495,7 +512,7 @@ def _cli_import(tmp_path: Path, gate_mib: int, name: str, states: int = 0) -> fl
     # starts its ru_maxrss at pytest's own high-water mark (about 120 MiB), which would hide any growth below it.
     done = subprocess.run(["/bin/sh", "-c", '"$0" "$1" import; exit $?', sys.executable, str(SCRIPTS / "telemetry.py")],
                           env=env, capture_output=True, text=True, timeout=600, cwd=str(SCRIPTS))
-    assert done.returncode == 0, done.stderr[-500:]
+    assert done.returncode == 0, (done.stdout[-1500:], done.stderr[-500:])
     return json.loads(done.stdout.splitlines()[-1])["peak_rss_mib"]
 
 

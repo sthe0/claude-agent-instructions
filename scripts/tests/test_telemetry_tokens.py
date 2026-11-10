@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import telemetry as telemetry_cli
 from lib import config_root
 from lib.telemetry import importer, store, sync, tables, tokens
-from telemetry_import_support import at, line, world  # noqa: F401  (world is a fixture)
+from telemetry_import_support import at, line, slow_first_record_bootstrap, world  # noqa: F401  (world is a fixture)
 from telemetry_live_support import query as _query
 
 
@@ -115,6 +115,15 @@ def defer_call(monkeypatch, number):
             return {"inserted": 0, "deferred": len(rows), "failed": 0, "committed": False}
         return real(rows, offset, deadline_s, updates)
     monkeypatch.setattr(store, "insert_rows_with_offset", flaky)
+
+
+def test_collect_on_a_fresh_record_survives_a_bootstrap_past_the_command_path_deadline(world, monkeypatch):
+    """The sync collects off the command path: a loaded machine taking more than the command path's
+    250 ms to create the record must not turn the collection into a failure."""
+    slow_first_record_bootstrap(monkeypatch)
+    world.transcript("S", [user(0, "S"), usage(1, "m1", "S")])
+    counts = tokens.collect()
+    assert counts["failed"] == 0 and counts["deferred"] == 0 and counts["rows"] >= 1
 
 
 # --- context births and compactions ---------------------------------------------------------
@@ -387,6 +396,39 @@ def test_context_births_written_for_sessions_with_live_events(world):
 def _token_row(message_id):
     return {"message_id": message_id, "session_id": "s", "role": "root", "phase": "other", "ts_ms": 1,
             "copy_rank": 0, "session_start_ms": 1, "transcript": "/nowhere/s.jsonl", "byte_offset": 0}
+
+
+def _oversized_first_line(session) -> dict:
+    return {"type": "summary", "sessionId": session, "summary": "x" * (importer.FIRST_LINE_MAX + 10)}
+
+
+def test_oversized_first_line_transcript_is_collected(world, capsys):
+    path = world.transcript("s", [_oversized_first_line("s"), usage(1, "m1", "s"), usage(2, "m2", "s")])
+    tokens.collect()
+    assert {r[0] for r in query("SELECT message_id FROM token_usage")} == {"m1", "m2"}
+    assert tokens_offset(path) == [(path.stat().st_size, "committed")]
+    with open(path, "rb") as handle:
+        prefix = handle.read(importer.FIRST_LINE_MAX)
+    [(generation,)] = query("SELECT generation FROM import_offsets WHERE source = ? AND consumer = 'tokens'", str(path))
+    assert generation == importer.hashlib.sha256(prefix).hexdigest()
+    world.add(path, usage(3, "m3", "s"))
+    assert tokens.collect()["rows"] == 1
+    rc, out = check(capsys, "--imported-coverage")
+    assert rc == 0 and out["covered"] == 1
+
+
+def test_short_first_line_generation_unchanged(world):
+    path = world.transcript("s", [usage(1, "m1", "s"), usage(2, "m2", "s")])
+    tokens.collect()
+    with open(path, "rb") as handle:
+        first = handle.readline()
+    [(generation,)] = query("SELECT generation FROM import_offsets WHERE source = ? AND consumer = 'tokens'", str(path))
+    assert generation == importer.hashlib.sha256(first).hexdigest()
+    assert tokens.collect()["rows"] == 0
+    unterminated = world.transcript("u", [])
+    unterminated.write_bytes(line(usage(1, "m9", "u"))[:-1])
+    tokens.collect()
+    assert tokens_offset(unterminated) == [] and world.count("token_usage", "message_id = 'm9'") == 0
 
 
 def test_tokens_offset_advances_in_the_same_transaction_as_its_rows(world):

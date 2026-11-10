@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import tarfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -117,6 +118,23 @@ class World:
 @pytest.fixture
 def world(tmp_path, monkeypatch):
     return World(tmp_path, monkeypatch)
+
+
+COMMAND_PATH_DEADLINE_S = 0.25
+
+
+def slow_first_record_bootstrap(monkeypatch) -> None:
+    """Restore the command path's store deadline (the world fixture raises it) and make the first
+    bootstrap of the record outlast it, as a loaded machine does."""
+    monkeypatch.setattr(store, "DEADLINE_S", COMMAND_PATH_DEADLINE_S)
+    real, calls = store._migration_files, []
+
+    def slow():
+        if not calls:
+            time.sleep(COMMAND_PATH_DEADLINE_S + 0.2)
+        calls.append(1)
+        return real()
+    monkeypatch.setattr(store, "_migration_files", slow)
 
 
 def prompt(seconds: float, text: str = "go") -> dict:

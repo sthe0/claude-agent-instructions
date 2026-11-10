@@ -63,5 +63,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `resource-estimate-drift-repeat` | `2` | Distinct tasks in which one executor kind's resource request must under-estimate before self-diagnosis proposes an edit to that kind's skill. |
 | `time-profile-half-life-days` | `7` | Half-life in days of the session age weight in `agent-report.py time-profile`; a session this old counts half as much as one that just ended. |
 | `telemetry-prune-retention-days` | `70` | Age in days beyond which `telemetry.py prune` deletes sync and decision rows of the telemetry record; per-task aggregate rows are never pruned. |
+| `telemetry-abandon-window-days` | `7` | Days of silence after which an unresolved task counts as ended in `improvement-scan.py substrate`, so a difficulty it left open weighs as never closed. |
+| `substrate-mass-threshold` | `28` | Difficulty mass per functional place at or above which `improvement-scan.py substrate` reports the place as a substrate-adequacy finding. |
 
 Per-machine values live uncommitted beside this file (`agent-identity.local`, `term-rulesets/*.toml`); see `docs/operations/config-rationale.md` and `docs/operations/org-portability.md`.
