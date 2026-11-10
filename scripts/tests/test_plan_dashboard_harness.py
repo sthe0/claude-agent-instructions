@@ -19,10 +19,12 @@ from pathlib import Path
 import pytest
 
 TESTS = Path(__file__).resolve().parent
-_spec = importlib.util.spec_from_file_location("plan_dashboard_harness", TESTS / "plan_dashboard_harness.py")
-h = importlib.util.module_from_spec(_spec)
-sys.modules["plan_dashboard_harness"] = h
-_spec.loader.exec_module(h)
+h = sys.modules.get("plan_dashboard_harness")   # the one a mutation is installed on, when one is
+if h is None:
+    _spec = importlib.util.spec_from_file_location("plan_dashboard_harness", TESTS / "plan_dashboard_harness.py")
+    h = importlib.util.module_from_spec(_spec)
+    sys.modules["plan_dashboard_harness"] = h
+    _spec.loader.exec_module(h)
 
 CONTRACT = json.loads((TESTS / "fixtures" / "plan_dashboard_contract.json").read_text(encoding="utf-8"))
 T0 = 1_000_000_000_000
@@ -402,6 +404,32 @@ def test_r3_due_sources_include_sessions_created_after_the_trace(tmp_path, monke
     runner = h.RealRunner(tmp_path / "state", tmp_path / "old", tmp_path / "new", CONTRACT, trace_population)
     runner("r3", {"arm": "new"})
     assert set(due[2]) == {str(new_session), str(driven)}
+
+
+class SavedTrace(FakeTrace):
+    def event_times(self, name):
+        return [0.1] if name in ("snapshot_written", "live_check_end") else []
+
+
+def test_a_save_records_the_harness_census_as_the_copy_sources(tmp_path, monkeypatch):
+    home = fake_home(tmp_path, monkeypatch)
+    state, proj = home / "agentctl" / "state", home / "projects" / "-proj"
+    shown = put(state / "task-a.json")
+    put(state / "task-b.json", age_ns=3 * DAY_NS)          # outside the window: not in the trimmed snapshot
+    put(proj / "task-a.jsonl")                             # a transcript the trimmed snapshot omits too
+    runner = h.RealRunner(tmp_path / "state", tmp_path / "old", tmp_path / "new", CONTRACT, [])
+    trimmed = [h.identity(shown, "state")]
+
+    def save_run(*_args, **_kwargs):
+        runner.snapshot_path("new").parent.mkdir(parents=True, exist_ok=True)
+        runner.snapshot_path("new").write_text(json.dumps({"version": 1, "sources": trimmed, "sections": {}}))
+        return SavedTrace()
+
+    monkeypatch.setattr(h, "run_pty", save_run)
+    copy_ = runner("save", None)
+    census = h.live_sources()
+    assert len(census) > len(trimmed)
+    assert copy_["sources"] == census
 
 
 # --- floors and acceptance: exit codes on fake reports -------------------------------------------------

@@ -41,9 +41,13 @@ SNAPSHOT_NAMES = (
     "jump-uses-snapshot-window", "mark-confirmed-from-snapshot", "overlay-waits-on-order-read",
     "binding-scan-uncached", "binding-cache-never-invalidated", "source-state-cached-forever",
     "source-binding-cached-forever", "source-transcript-cached-forever", "source-ledger-cached-forever",
-    "code-version-identity-ignored", "code-version-new-module-missed", "code-version-always-parsed")
+    "code-version-identity-ignored", "code-version-new-module-missed", "code-version-always-parsed",
+    "snapshot-records-every-source", "snapshot-directory-marker-ignored")
 SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-read")
 SNAPSHOT_STDLIB_NAMES = tuple(name for name in SNAPSHOT_NAMES if name not in SNAPSHOT_PILOT_NAMES)
+HARNESS_TESTS = TESTS / "test_plan_dashboard_harness.py"
+SCRIPT_MODULE_TESTS = {"harness-save-records-app-sources": HARNESS_TESTS,
+                       "launcher-imports-every-subcommand": TUI_TESTS}
 REQUIRED = os.environ.get("PLAN_DASHBOARD_REQUIRE_TEXTUAL") == "1"
 
 
@@ -202,3 +206,23 @@ def test_a_snapshot_mutation_turns_a_snapshot_test_red(name, snapshot_results):
 @pytest.mark.parametrize("name", SNAPSHOT_PILOT_NAMES)
 def test_a_snapshot_mutation_turns_a_pilot_test_red(name, snapshot_pilot_results):
     assert_red(name, snapshot_pilot_results[name], "pilot tests")
+
+
+@pytest.fixture(scope="module")
+def script_module_results():
+    runs = {"": HARNESS_TESTS, **SCRIPT_MODULE_TESTS}
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        return dict(zip(runs, pool.map(lambda name: run_tests(runs[name], name), runs)))
+
+
+def test_the_script_module_family_is_the_registered_one():
+    assert set(SCRIPT_MODULE_TESTS) == set(mutations.SCRIPT_MODULE_MUTATIONS)
+
+
+def test_the_harness_tests_are_green_with_no_mutation(script_module_results):
+    assert_green(script_module_results[""])
+
+
+@pytest.mark.parametrize("name", sorted(SCRIPT_MODULE_TESTS))
+def test_a_script_module_mutation_turns_its_test_red(name, script_module_results):
+    assert_red(name, script_module_results[name], SCRIPT_MODULE_TESTS[name].name)

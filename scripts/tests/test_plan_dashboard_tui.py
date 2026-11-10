@@ -1023,6 +1023,39 @@ def test_pilot_tests_skip_without_textual_when_it_is_not_required(tmp_path):
     assert "1 skipped" in done.stdout
 
 
+# --- the interactive path loads only what it uses --------------------------------------------
+
+IMPORT_PROBE = """
+import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location("plan_dashboard_cli", sys.argv[1])
+cli = importlib.util.module_from_spec(spec)
+sys.modules["plan_dashboard_cli"] = cli
+spec.loader.exec_module(cli)
+if os.environ.get("PLAN_DASHBOARD_MUTATION"):
+    import plan_dashboard_mutations
+    plan_dashboard_mutations.install(os.environ["PLAN_DASHBOARD_MUTATION"])
+try:
+    cli.main(["tui", "--help"])
+except SystemExit:
+    pass
+with open(sys.argv[2], "w") as out:
+    json.dump(sorted(sys.modules), out)
+"""
+NOT_ON_THE_TUI_PATH = ("plan_dashboard.publish", "plan_dashboard.web", "plan_dashboard.bench", "agentctl.cost")
+
+
+def test_the_interactive_tui_path_imports_only_what_it_needs(tmp_path):
+    probe, loaded = tmp_path / "probe.py", tmp_path / "modules.json"
+    probe.write_text(IMPORT_PROBE, encoding="utf-8")
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(TESTS), str(SCRIPTS)])}
+    done = subprocess.run([sys.executable, str(probe), str(SCRIPTS / "plan-dashboard.py"), str(loaded)],
+                          env=env, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    modules = json.loads(loaded.read_text(encoding="utf-8"))
+    assert "plan_dashboard.tui" in modules
+    assert [m for m in modules if m.startswith(NOT_ON_THE_TUI_PATH)] == []
+
+
 # --- the documentation section ---------------------------------------------------------------
 
 def console_section() -> str:

@@ -30,9 +30,11 @@ import copy
 import datetime as dt
 import fcntl
 import importlib
+import importlib.util
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -1032,6 +1034,22 @@ def _without_resolution_dirs(original):
 
 
 SNAPSHOT = "plan_dashboard.snapshot"
+
+
+def _records_every_source(original):
+    def mutated(shown):
+        _trimmed, observed = original(shown)
+        return importlib.import_module(SNAPSHOT).OBSERVED.sources(), observed
+    return mutated
+
+
+def _marker_taken_as_recorded(original):
+    def mutated(reference, path, kind, ident, live_marker=None):
+        recorded = (getattr(reference, "unrecorded", None) or {}).get(kind)
+        return original(reference, path, kind, ident, recorded[2] if recorded else live_marker)
+    return mutated
+
+
 SNAPSHOT_MUTATIONS = {
     "snapshot-checksum-ignored": (SNAPSHOT, "load", _checksum_unchecked),
     "cache-same-size-rewrite-missed": (SNAPSHOT, "settled", _settled_at_once),
@@ -1049,22 +1067,59 @@ SNAPSHOT_MUTATIONS = {
     "code-version-identity-ignored": (SNAPSHOT, "same_code_identities", _always(True)),
     "code-version-new-module-missed": (SNAPSHOT, "code_record", _without_resolution_dirs),
     "code-version-always-parsed": (SNAPSHOT, "accepted_code_version", _always((None, "no record"))),
+    "snapshot-records-every-source": (SNAPSHOT, "snapshot_sources", _records_every_source),
+    "snapshot-directory-marker-ignored": (SNAPSHOT, "_unchanged", _marker_taken_as_recorded),
 }
 
 
-def pytest_configure(config):
+def _save_records_the_copy_sources(original):
+    class Mutated(original):
+        def do_save(self, arg):
+            kept = super().do_save(arg)
+            if kept:
+                kept["sources"] = json.loads(Path(kept["file"]).read_text(encoding="utf-8")).get("sources", [])
+            return kept
+    return Mutated
+
+
+LAUNCHER = "plan_dashboard_cli"
+FILE_MODULES = {LAUNCHER: Path(__file__).resolve().parents[1] / "plan-dashboard.py",
+                "plan_dashboard_harness": Path(__file__).resolve().parent / "plan_dashboard_harness.py"}
+SCRIPT_MODULE_MUTATIONS = {
+    "harness-save-records-app-sources": ("plan_dashboard_harness", "RealRunner", _save_records_the_copy_sources),
+    "launcher-imports-every-subcommand": (LAUNCHER, "command_of", _always(None)),
+}
+
+
+def _module(name: str):
+    """The module a mutation patches; a script module is loaded from its file once and shared through
+    ``sys.modules``, where the tests that use it look first."""
+    if name in sys.modules or name not in FILE_MODULES:
+        return importlib.import_module(name)
+    spec = importlib.util.spec_from_file_location(name, FILE_MODULES[name])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def install(name: str) -> None:
+    """Apply the mutation ``name`` in this process (``pytest.UsageError`` for an unknown one)."""
     global applied
-    name = os.environ.get(ENV) or config.getoption("--plan-dashboard-mutation")
-    if not name:
-        return
     known = {**MUTATIONS, **TUI_MUTATIONS, **WEB_MUTATIONS, **WEB_PAGE_MUTATIONS, **PUBLISH_MUTATIONS,
-             **ATTENTION_MUTATIONS, **SNAPSHOT_MUTATIONS}
+             **ATTENTION_MUTATIONS, **SNAPSHOT_MUTATIONS, **SCRIPT_MODULE_MUTATIONS}
     if name not in known:
         raise pytest.UsageError(f"{ENV}={name!r} is not a known mutation; known: {sorted(known)}")
     module_name, attr, wrapper = known[name]
-    module = importlib.import_module(module_name)
+    module = _module(module_name)
     setattr(module, attr, wrapper(getattr(module, attr)))
     applied = name
+
+
+def pytest_configure(config):
+    name = os.environ.get(ENV) or config.getoption("--plan-dashboard-mutation")
+    if name:
+        install(name)
 
 
 def pytest_terminal_summary(terminalreporter):

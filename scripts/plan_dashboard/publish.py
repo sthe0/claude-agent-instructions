@@ -27,13 +27,12 @@ from pathlib import Path
 
 from lib import plugin_dir as plugin_dirs
 from plan_dashboard import model, tui
+from plan_dashboard.locate import PLUGIN_DIRNAME, PLUGIN_ENV
 
 TEXT_LIMIT = 4096
 MIN_INTERVAL_S = 30.0
 DEFAULT_INTERVAL_S = 60.0
 GOAL_WIDTH = 60
-PLUGIN_ENV = "PLAN_DASHBOARD_PLUGIN_DIR"
-PLUGIN_DIRNAME = "plan-dashboard-plugins"
 PUBLISHER_SUBDIR = "publishers"
 MORE_TASKS = "… and {} more"
 MAX_CONSECUTIVE_FAILURES = 5

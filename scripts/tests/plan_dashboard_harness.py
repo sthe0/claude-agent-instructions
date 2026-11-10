@@ -1568,7 +1568,7 @@ class RealRunner:
         keep = self.copy_dir / f"copy-{self.counter:04d}.json"
         keep.write_bytes(snapshot.read_bytes())
         try:
-            recorded = load_json(keep).get("sources", [])
+            recorded = live_sources()
         except (OSError, ValueError):
             recorded = sources
         return {"file": str(keep), "taken_at": iso_now(), "sources": recorded}

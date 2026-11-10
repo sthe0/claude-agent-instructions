@@ -27,7 +27,7 @@ import pytest
 from plan_dashboard import attention, model, snapshot as store, tui
 from plan_dashboard_fixtures import set_mtime, write_transcript
 from plan_dashboard_support import (  # noqa: F401
-    ALPHA, BETA, HARNESS, NOW, at, console_root, isolated_home, iso, usage_row,
+    ALPHA, BETA, HARNESS, NOW, ONE_HOUR_NS, STALE, at, console_root, isolated_home, iso, usage_row,
 )
 
 TESTS = Path(__file__).resolve().parent
@@ -1022,7 +1022,7 @@ def test_a_cycle_reports_what_was_created_changed_deleted_or_read_since_the_snap
     def stat(size):
         return SimpleNamespace(st_dev=1, st_ino=2, st_size=size, st_mtime_ns=3, st_ctime_ns=4)
 
-    store.OBSERVED.seed([entry("/a", 10), entry("/b", 10), entry("/c", 10)])
+    store.seed_observation([entry("/a", 10), entry("/b", 10), entry("/c", 10)], None)
     store.OBSERVED.scanned("state", {"/a": (stat(10), 0), "/b": (stat(11), 0), "/d": (stat(10), 0)})
     assert store.OBSERVED.peek() == ["/b", "/c", "/d"]
     store.OBSERVED.note_read("/a")
@@ -1046,3 +1046,64 @@ def test_a_jump_from_an_old_row_whose_window_is_gone_finds_a_live_window_of_the_
                          runner=lambda *args, **kwargs: ran.append(args) or subprocess.CompletedProcess(args[0], 0, "", ""))
     assert tried == ["h-gone", HARNESS] and len(ran) == 1
     assert status.startswith("window one — return:")
+
+
+# --- the snapshot records what the window shows, and the live check still sees the rest --------------------
+
+WINDOW = store.selection_key(False, 24, ())
+OUT_OF_WINDOW_NS = PAST_NS - 72 * ONE_HOUR_NS
+
+
+def read_window(root) -> dict:
+    snapshot = model.collect(root.state_root, now=NOW, include_all=False, cost_log=root.cost_log)
+    store.BINDINGS.read()
+    attention.transcript_index(root.transcripts_root)
+    return snapshot
+
+
+def restart_window(root, tmp_path) -> dict:
+    """Save the window's snapshot, forget every cache and start from it; the saved document is returned."""
+    path = tmp_path / "cache" / store.CACHE_DIRNAME / store.FILE_NAME
+    tui.write_snapshot(path, WINDOW, tui.snapshot_section(read_window(root), EMPTY_MARKS, {}, NOW))
+    attention.clear_cache()
+    model.clear_cache()
+    assert tui.restore_snapshot(path, WINDOW) is not None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def out_of_window_state(root, name: str) -> Path:
+    path = root.state_root / f"{name}.json"
+    rewrite(path, (root.state_root / f"{STALE}.json").read_text(encoding="utf-8"), mtime_ns=OUT_OF_WINDOW_NS)
+    return path
+
+
+def recorded_states(document) -> list[str]:
+    return [source["path"] for source in document["sources"] if source["kind"] == "state"]
+
+
+def test_a_new_state_file_behind_the_snapshot_is_detected(root, tmp_path):
+    os.utime(root.state_root, ns=(OUT_OF_WINDOW_NS, OUT_OF_WINDOW_NS))   # its creation then moves the marker
+    restart_window(root, tmp_path)
+    created = out_of_window_state(root, "late-3333-dddd")
+    read_window(root)
+    assert str(created) in store.observation()[0]
+
+
+def test_the_snapshot_does_not_grow_with_state_files_outside_the_window(root, tmp_path):
+    for n in range(2):
+        out_of_window_state(root, f"old-{n}-eeee")
+    few = recorded_states(restart_window(root, tmp_path))
+    for n in range(2, 12):
+        out_of_window_state(root, f"old-{n}-eeee")
+    many = restart_window(root, tmp_path)
+    assert len(recorded_states(many)) == len(few)
+    assert str(root.state_root / f"{STALE}.json") not in recorded_states(many)
+
+
+def test_a_changed_state_file_outside_the_window_is_applied_by_the_live_check(root, tmp_path):
+    stale = root.state_root / f"{STALE}.json"
+    assert str(stale) not in recorded_states(restart_window(root, tmp_path))
+    rewrite(stale, stale.read_text(encoding="utf-8") + " ", mtime_ns=os.stat(stale).st_mtime_ns)
+    CTIME_TICKS[os.stat(stale).st_ino] += ONE_HOUR_NS                 # its ctime on the dashboard's clock
+    read_window(root)
+    assert str(stale) in store.observation()[0]

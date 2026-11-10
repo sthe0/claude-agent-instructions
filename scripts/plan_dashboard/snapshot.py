@@ -30,7 +30,6 @@ the version in full (``code_check_report`` says which, for the event stream).
 """
 from __future__ import annotations
 
-import ast
 import functools
 import hashlib
 import json
@@ -161,6 +160,45 @@ def scan(root, suffix: str) -> dict[str, tuple[str, os.stat_result]]:
     return found
 
 
+def directory_marker(path) -> list[int] | None:
+    """``[dev, ino, mtime_ns, ctime_ns]`` of a directory: a file created, removed or renamed in it moves them."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return [st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns]
+
+
+class Recorded(dict):
+    """The identities a snapshot recorded (``path → (kind, identity)``) and, per kind, what a path of that kind
+    it does not record is judged by (``unrecorded``: ``kind → (directory, written_ns, marker)``): the directory
+    it lies in, the snapshot's write time, and the directory's marker when it was settled at its listing."""
+
+    def __init__(self, items, unrecorded: dict[str, tuple[str, int, list[int] | None]] | None = None):
+        super().__init__(items)
+        self.unrecorded = unrecorded or {}
+
+
+def _last_change(ident_or_marker) -> int:
+    """The later of the mtime and the ctime of an identity (``…, mtime_ns, ctime_ns``) or a marker."""
+    return max(ident_or_marker[-2:])
+
+
+def _unchanged(reference: dict, path: str, kind: str, ident, live_marker=None) -> bool:
+    """Whether ``path`` at ``ident`` is as ``reference`` (an observation, or a snapshot's ``Recorded``) saw it.
+    A path a snapshot does not record is unchanged when it last changed a resolution step before the write,
+    and, unless its directory's ``live_marker`` is still the recorded one, no later than the directory's last
+    change the marker recorded: a file created or renamed in since is newer than that."""
+    if path in reference:
+        return same_identity(kind, reference[path][1], ident)
+    directory, written_ns, marker = getattr(reference, "unrecorded", {}).get(kind, (None, None, None))
+    if directory != os.path.dirname(path) or marker is None:
+        return False
+    if not settled(SimpleNamespace(st_mtime_ns=ident[3], st_ctime_ns=ident[4]), written_ns):
+        return False
+    return live_marker == marker or _last_change(ident) <= _last_change(marker)
+
+
 class Observed:
     """The identities the dashboard saw this cycle, against those of the cycle before (or of the snapshot it
     started from): the set a cycle reports as ``applied``, and the ``sources`` of the next snapshot."""
@@ -173,18 +211,35 @@ class Observed:
             self.previous: dict[str, tuple] | None = None
             self.base: dict[str, tuple] | None = None
             self.current: dict[str, dict[str, tuple]] = {kind: {} for kind in SOURCE_KINDS}
+            self.directories: dict[str, dict] = {}
+            self.loaded: set[str] = set()
             self.touched: set[str] = set()
             self.read: set[str] = set()
 
-    def seed(self, sources) -> None:
+    def seed(self, recorded: Recorded) -> None:
         with _LOCK:
-            self.previous = {item["path"]: (item["kind"], tuple(item[k] for k in IDENTITY_KEYS)) for item in sources}
-            self.base = dict(self.previous)
+            self.previous = self.base = recorded
 
-    def scanned(self, kind: str, items: dict[str, tuple]) -> None:
-        """Replace every identity of ``kind`` by those of one full directory pass: ``{path: (stat, read_ns)}``."""
+    def scanned(self, kind: str, items: dict[str, tuple], directory: dict | None = None) -> None:
+        """Replace every identity of ``kind`` by those of one full directory pass: ``{path: (stat, read_ns)}``;
+        ``directory`` is the pass's ``{"path", "marker", "taken_ns"}``, the marker stat'ed before the listing."""
         with _LOCK:
             self.current[kind] = {path: (identity_of(st), settled(st, read_ns)) for path, (st, read_ns) in items.items()}
+            if directory is not None:
+                self.directories[kind] = directory
+
+    def marker(self, kind: str) -> list[int] | None:
+        """The marker of the directory of ``kind`` as of its last listing."""
+        return (self.directories.get(kind) or {}).get("marker")
+
+    def unsettled(self, kind: str) -> list[str]:
+        with _LOCK:
+            return [path for path, (_, ok) in self.current[kind].items() if not ok]
+
+    def used(self, paths) -> None:
+        """The state files the last collect loaded: the ones the rows it made are read from."""
+        with _LOCK:
+            self.loaded = set(paths)
 
     def ledger(self, path) -> None:
         try:
@@ -208,7 +263,7 @@ class Observed:
         reference = self.base if self.base is not None else self.previous
         if reference is not None:
             changed |= {path for path, (kind, ident) in now.items()
-                        if path not in reference or not same_identity(kind, reference[path][1], ident)}
+                        if not _unchanged(reference, path, kind, ident, self.marker(kind))}
             changed |= {path for path in reference if path not in now}
         return changed
 
@@ -239,14 +294,27 @@ class Observed:
             out.update({path: kind for kind, items in self.current.items() for path in items})
             return out
 
-    def sources(self) -> list[dict]:
+    def sources(self, keep=None) -> list[dict]:
+        """The settled identities of this cycle; with ``keep(kind, path)``, only those it keeps."""
         with _LOCK:
             return [{"path": path, "kind": kind, **dict(zip(IDENTITY_KEYS, ident))}
-                    for kind, items in self.current.items() for path, (ident, ok) in sorted(items.items()) if ok]
+                    for kind, items in self.current.items() for path, (ident, ok) in sorted(items.items())
+                    if ok and (keep is None or keep(kind, path))]
 
 
 OBSERVED = Observed()
 STATES = IdentityCache("state")
+
+
+def listed(kind: str, root, suffix: str) -> dict[str, tuple[str, os.stat_result]]:
+    """``scan(root, suffix)``, recorded in ``OBSERVED`` as every identity of ``kind``, with the directory's
+    marker taken before the pass."""
+    read_ns = now_ns()
+    marker = directory_marker(root)
+    found = scan(root, suffix)
+    directory = None if marker is None else {"path": str(root), "marker": marker, "taken_ns": read_ns}
+    OBSERVED.scanned(kind, {path: (st, read_ns) for path, st in found.values()}, directory)
+    return found
 
 
 def _driven(path) -> list[str]:
@@ -263,25 +331,40 @@ class BindingScan:
     def __init__(self):
         self.files = IdentityCache("binding")
         self.memo: tuple | None = None
+        self.presumption: tuple[frozenset[str], Recorded] | None = None
 
     def directory(self) -> Path:
         return config_root.agentctl_dir() / engine_session_binding.BINDINGS_DIRNAME
 
+    def presume(self, covered, recorded: Recorded) -> None:
+        """Take a binding file the snapshot ``recorded`` does not record, and that has not changed since, to
+        drive none of the engine sessions ``covered``: the snapshot records every one that drove them."""
+        self.presumption = (frozenset(covered), recorded)
+
     def read(self) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
         """``(harness_index, driven)``: the harness sessions bound to each engine session in file-name order,
-        and each harness session's engine sessions in drive order."""
-        read_ns = now_ns()
-        found = scan(self.directory(), ".json")
-        OBSERVED.scanned("binding", {path: (st, read_ns) for path, st in found.values()})
-        driven = {stem: self.files.fetch(path, st, _driven) for stem, (path, st) in sorted(found.items())}
+        and each harness session's engine sessions in drive order. Under a presumption a file it holds for is
+        not read and drives none, and the index is a ``PresumedIndex``."""
+        presumption = self.presumption
+        found = listed("binding", self.directory(), ".json")
+        driven, marker = {}, OBSERVED.marker("binding")
+        for stem, (path, st) in sorted(found.items()):
+            if (presumption is not None and path not in presumption[1]
+                    and _unchanged(presumption[1], path, "binding", identity_of(st), marker)):
+                driven[stem] = []
+            else:
+                driven[stem] = self.files.fetch(path, st, _driven)
         self.files.prune({path for path, _ in found.values()})
-        key = fingerprint((str(self.directory()), *((stem, identity_of(st)) for stem, (_, st) in sorted(found.items()))))
+        key = fingerprint((str(self.directory()), presumption is not None,
+                           *((stem, identity_of(st)) for stem, (_, st) in sorted(found.items()))))
         memo = self.memo
         if memo is None or memo[0] != key:
             index: dict[str, list[str]] = {}
             for stem, engines in driven.items():
                 for engine in engines:
                     index.setdefault(engine, []).append(stem)
+            if presumption is not None:
+                index = PresumedIndex(index, presumption[0])
             memo = self.memo = (key, index, driven)
         return memo[1], memo[2]
 
@@ -293,6 +376,22 @@ class BindingScan:
     def clear(self) -> None:
         self.files.clear()
         self.memo = None
+        self.presumption = None
+
+
+class PresumedIndex(dict):
+    """A harness index read under a presumption: a lookup of an engine session outside the presumption's cover
+    ends the presumption and is answered from a read of every binding file."""
+
+    def __init__(self, items, covered: frozenset[str]):
+        super().__init__(items)
+        self.covered = covered
+
+    def get(self, engine, default=None):
+        if engine in self.covered:
+            return super().get(engine, default)
+        BINDINGS.presumption = None
+        return BINDINGS.read()[0].get(engine, default)
 
 
 BINDINGS = BindingScan()
@@ -318,7 +417,64 @@ def identities_of(sources) -> dict[str, tuple]:
     return {item["path"]: tuple(item[key] for key in IDENTITY_KEYS) for item in sources}
 
 
+def _stem(path: str, suffix: str = ".json") -> str:
+    return os.path.basename(path)[: -len(suffix)]
+
+
+def snapshot_sources(shown) -> tuple[list[dict], dict]:
+    """``(sources, observed)`` of a snapshot showing the tasks ``shown`` (engine session ids). ``sources`` are
+    the settled identities the shown values are read from: the state files the last collect loaded, the
+    binding files driving a covered task, the transcripts and the ledger. ``observed`` records the write time,
+    each scanned directory's marker, and the covered tasks: the shown ones no unsettled binding file drives
+    (and, under a presumption, inside its cover), so no binding file left out drives one of them."""
+    covered = {config_root.sanitize_session_id(s) for s in shown if s}
+    if BINDINGS.presumption is not None:
+        covered &= BINDINGS.presumption[0]
+    driven = BINDINGS.driven()
+    for path in OBSERVED.unsettled("binding"):
+        covered -= set(driven.get(_stem(path), ()))
+
+    def keep(kind: str, path: str) -> bool:
+        if kind == "state":
+            return path in OBSERVED.loaded
+        if kind == "binding":
+            return not covered.isdisjoint(driven.get(_stem(path), ()))
+        return True
+
+    observed = {"written_ns": now_ns(), "covered": sorted(covered),
+                "directories": {kind: dict(record) for kind, record in OBSERVED.directories.items()}}
+    return OBSERVED.sources(keep), observed
+
+
+def _valid_observed(observed) -> bool:
+    try:
+        return (isinstance(observed["written_ns"], int) and all(isinstance(s, str) for s in observed["covered"])
+                and all(isinstance(r["path"], str) and isinstance(r["taken_ns"], int)
+                        and len(r["marker"]) == 4 and all(isinstance(n, int) for n in r["marker"])
+                        for r in observed["directories"].values()))
+    except (KeyError, TypeError, AttributeError):
+        return False
+
+
+def seed_observation(sources, observed) -> None:
+    """Start the observation from a snapshot's ``sources`` and ``observed`` record (see ``_unchanged`` for a
+    path it does not record). A directory whose marker was not settled at its listing, or a snapshot with no
+    valid record, leaves every path it does not record counted as changed, and every binding file read."""
+    recorded = {item["path"]: (item["kind"], tuple(item[key] for key in IDENTITY_KEYS)) for item in sources}
+    unrecorded = {}
+    if _valid_observed(observed):
+        for kind, record in observed["directories"].items():
+            marker = record["marker"]
+            settled_marker = record["taken_ns"] - _last_change(marker) >= MTIME_STEP_NS
+            unrecorded[kind] = (record["path"], observed["written_ns"], marker if settled_marker else None)
+    reference = Recorded(recorded, unrecorded)
+    OBSERVED.seed(reference)
+    if unrecorded.get("binding", (None, None, None))[2] is not None:
+        BINDINGS.presume(observed["covered"], reference)
+
+
 def harness_index() -> dict[str, list[str]]:
+    """Look an engine session up with ``get``: under a presumption, other reads see only its cover."""
     return BINDINGS.read()[0]
 
 
@@ -507,6 +663,8 @@ def _statements(nodes):
 def _imported_names(path: Path) -> set[str]:
     """Every dotted module name ``path`` imports, at any depth, relative imports resolved against its package
     and each ``from X import y`` also naming ``X.y`` (``y`` may be a submodule)."""
+    import ast
+
     package = path.relative_to(SCRIPTS).parent.parts
     names: set[str] = set()
     for node in _statements(ast.parse(path.read_bytes()).body):

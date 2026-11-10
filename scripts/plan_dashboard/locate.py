@@ -25,8 +25,9 @@ import subprocess
 from pathlib import Path
 
 from lib import plugin_dir as plugin_dirs
-from plan_dashboard import publish
 
+PLUGIN_ENV = "PLAN_DASHBOARD_PLUGIN_DIR"
+PLUGIN_DIRNAME = "plan-dashboard-plugins"
 LOCATOR_SUBDIR = "locators"
 HOOKS = ("transcript_path", "permission_wait", "jump_target", "sessions", "inputs_stamp")
 JUMP_TIMEOUT_S = 5
@@ -39,7 +40,7 @@ class LocatorError(Exception):
 
 
 def discover(plugin_dir: Path | None = None) -> list:
-    root = plugin_dir if plugin_dir is not None else plugin_dirs.resolve_plugin_dir(publish.PLUGIN_ENV, publish.PLUGIN_DIRNAME)
+    root = plugin_dir if plugin_dir is not None else plugin_dirs.resolve_plugin_dir(PLUGIN_ENV, PLUGIN_DIRNAME)
     directory = Path(root) / LOCATOR_SUBDIR
     found = []
     for path in sorted(directory.glob("*.py")) if directory.is_dir() else []:

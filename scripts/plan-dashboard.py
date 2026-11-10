@@ -35,9 +35,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from agentctl import cost  # noqa: E402
 from lib import config_root  # noqa: E402
-from plan_dashboard import attention, bench, locate, model, publish, tui, web  # noqa: E402
+from plan_dashboard import attention, locate, model, tui  # noqa: E402
 
 EXIT_NO_SUCH_SESSION = 3
 EXIT_NO_LOCATOR = 3
@@ -54,7 +53,7 @@ def shared_parser() -> argparse.ArgumentParser:
     parser.add_argument("--window-hours", type=float, default=24)
     parser.add_argument("--all", action="store_true", dest="include_all")
     parser.add_argument("--session", action="append", default=[], dest="sessions")
-    parser.add_argument("--cost-log", type=Path, default=cost.COST_LOG)
+    parser.add_argument("--cost-log", type=Path, default=None, help="default: the agentctl spawn cost ledger")
     parser.add_argument("--transcripts-root", type=Path, default=None)
     return parser
 
@@ -66,7 +65,9 @@ def locator_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(command: str | None = None) -> argparse.ArgumentParser:
+    """Every subcommand; the options whose defaults live in a subcommand's own module only for ``command``
+    (all of them when None), so a run imports only its own subcommand's modules."""
     parser = argparse.ArgumentParser(prog="plan-dashboard", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     snapshot = sub.add_parser("snapshot", parents=[shared_parser(), locator_parser()])
@@ -81,7 +82,10 @@ def build_parser() -> argparse.ArgumentParser:
     console.add_argument("--interval", type=float, default=tui.DEFAULT_INTERVAL_S)
     page = sub.add_parser("web", parents=[shared_parser(), locator_parser()])
     page.add_argument("--port", type=int, default=DEFAULT_PORT)
-    page.add_argument("--interval", type=float, default=web.DEFAULT_INTERVAL_S)
+    if command in (None, "web"):
+        from plan_dashboard import web
+
+        page.add_argument("--interval", type=float, default=web.DEFAULT_INTERVAL_S)
     page.add_argument("--self-test", action="store_true")
     where = sub.add_parser("locate", parents=[shared_parser(), locator_parser()])
     where.add_argument("--health", action="store_true")
@@ -93,12 +97,23 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--watch", action="store_true")
     pub.add_argument("--plugin-dir", type=Path, default=None)
     pub.add_argument("--publish-state", type=Path, default=None)
-    pub.add_argument("--interval", type=float, default=publish.DEFAULT_INTERVAL_S)
-    pub.add_argument("--min-interval", type=float, default=publish.MIN_INTERVAL_S)
+    if command in (None, "publish"):
+        from plan_dashboard import publish
+
+        pub.add_argument("--interval", type=float, default=publish.DEFAULT_INTERVAL_S)
+        pub.add_argument("--min-interval", type=float, default=publish.MIN_INTERVAL_S)
     timing = sub.add_parser("bench", parents=[shared_parser(), locator_parser()])
-    for name, budget in bench.BUDGETS.items():
-        timing.add_argument(bench.budget_flag(name), type=float, default=budget, dest=bench.budget_dest(name))
+    if command in (None, "bench"):
+        from plan_dashboard import bench
+
+        for name, budget in bench.BUDGETS.items():
+            timing.add_argument(bench.budget_flag(name), type=float, default=budget, dest=bench.budget_dest(name))
     return parser
+
+
+def command_of(argv) -> str | None:
+    """The subcommand ``argv`` names: its first word that is not an option."""
+    return next((word for word in argv if not word.startswith("-")), None)
 
 
 def _duration(seconds) -> str:
@@ -241,6 +256,8 @@ def _is_zombie(pid: int) -> bool:
 
 
 def run_web(args) -> int:
+    from plan_dashboard import web
+
     options = dict(window_hours=args.window_hours, include_all=args.include_all, sessions=args.sessions,
                    cost_log=args.cost_log, transcripts_root=args.transcripts_root,
                    locator=locate.select_or_none(args.plugin_dir, args.locator))
@@ -309,6 +326,8 @@ def run_chat(snapshot: dict, args) -> int:
 
 
 def run_publish(args) -> int:
+    from plan_dashboard import publish
+
     options = dict(window_hours=args.window_hours, include_all=args.include_all, sessions=args.sessions,
                    cost_log=args.cost_log)
     if args.dry_run or args.once or args.watch:
@@ -350,6 +369,8 @@ def run_publish(args) -> int:
 
 
 def run_bench(args) -> int:
+    from plan_dashboard import bench
+
     return bench.run(
         args.state_root, session=args.sessions[-1] if args.sessions else None, window_hours=args.window_hours,
         cost_log=args.cost_log, transcripts_root=args.transcripts_root,
@@ -359,7 +380,8 @@ def run_bench(args) -> int:
 
 
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
+    argv = sys.argv[1:] if argv is None else argv
+    args = build_parser(command_of(argv)).parse_args(argv)
     if args.command == "bench":
         return run_bench(args)
     if args.command == "tui":

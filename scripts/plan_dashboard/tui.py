@@ -636,13 +636,15 @@ def _section_usable(section) -> bool:
 
 def write_snapshot(path, key: str, section: dict) -> Path:
     """Write ``section`` as the snapshot's section for selection ``key``, with the values of the sources the
-    caches hold (the next start seeds them); sections of other selections stay as rows and marks only."""
-    sources = snapshot_store.OBSERVED.sources()
+    caches hold for the sources its tasks are read from (the next start seeds them); sections of other
+    selections stay as rows and marks only."""
+    sources, observed = snapshot_store.snapshot_sources(task["session_id"] for task in section["snapshot"]["tasks"])
     identities = snapshot_store.identities_of(sources)
     values = {"state": snapshot_store.export_values(snapshot_store.STATES, identities),
               "binding": snapshot_store.export_values(snapshot_store.BINDINGS.files, identities),
               "tails": attention.export_tails(identities),
-              "ledger": model.export_sums(identities)}
+              "ledger": model.export_sums(identities),
+              "observed": observed}
     kept = snapshot_store.load(path)
     others = {name: {k: v for k, v in other.items() if k != "values"}
               for name, other in ((kept or {}).get("sections") or {}).items()
@@ -664,7 +666,7 @@ def restore_snapshot(path, key: str) -> dict | None:
         snapshot_store.seed_values(snapshot_store.BINDINGS.files, values.get("binding"), identities)
         attention.seed_tails(values.get("tails"), identities)
         model.seed_sums(values.get("ledger"), identities)
-        snapshot_store.OBSERVED.seed(document["sources"])
+        snapshot_store.seed_observation(document["sources"], values.get("observed"))
     return section
 
 
@@ -705,7 +707,9 @@ def launch_argv(args) -> list[str]:
     """The ``uv run`` command line that starts the textual app with the same selection."""
     app = Path(__file__).resolve().with_name("tui_app.py")
     argv = ["uv", "run", str(app), "--state-root", str(args.state_root), "--window-hours", str(args.window_hours),
-            "--interval", str(args.interval), "--cost-log", str(args.cost_log)]
+            "--interval", str(args.interval)]
+    if args.cost_log is not None:
+        argv += ["--cost-log", str(args.cost_log)]
     if args.include_all:
         argv.append("--all")
     if getattr(args, "events", None):

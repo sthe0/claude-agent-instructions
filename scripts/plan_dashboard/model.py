@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-from agentctl import child_runs, cost, effort
+from agentctl import child_runs, effort
 from lib import config_root, engine_session_binding, transcript_cost
 from plan_dashboard import snapshot
 
@@ -113,7 +113,11 @@ def _read_state(path: Path) -> tuple[dict | None, str | None]:
 
 
 def _ledger_path(cost_log) -> Path:
-    return Path(cost_log) if cost_log is not None else cost.COST_LOG
+    if cost_log is not None:
+        return Path(cost_log)
+    from agentctl import cost
+
+    return cost.COST_LOG
 
 
 def _stat_ledger(path: Path):
@@ -716,9 +720,7 @@ def collect(state_root, *, now: dt.datetime, window_hours=24, include_all=False,
     root = Path(state_root)
     window = dt.timedelta(hours=window_hours)
     pinned = {config_root.sanitize_session_id(s) for s in (*(sessions or ()), *(windowed or ()))}
-    read_ns = snapshot.now_ns()
-    listing = dict(sorted(snapshot.scan(root, ".json").items()))
-    snapshot.OBSERVED.scanned("state", {path: (st, read_ns) for path, st in listing.values()})
+    listing = dict(sorted(snapshot.listed("state", root, ".json").items()))
     snapshot.STATES.prune({path for path, _ in listing.values()})
     mtimes = {stem: (path, st, dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc))
               for stem, (path, st) in listing.items()}
@@ -735,6 +737,7 @@ def collect(state_root, *, now: dt.datetime, window_hours=24, include_all=False,
         parent = ((entry["digest"] or {}).get("row") or {}).get("parent_session")
         if parent:
             queue.append(config_root.sanitize_session_id(parent))
+    snapshot.OBSERVED.used(mtimes[stem][0] for stem in loaded)
     sums = _ledger_sums(cost_log)
     snapshot.OBSERVED.ledger(_ledger_path(cost_log))
     summaries, wanted = {}, set()
