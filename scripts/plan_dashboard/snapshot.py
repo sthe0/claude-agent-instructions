@@ -846,8 +846,9 @@ def write(path, sections: dict, sources: list[dict]) -> Path:
     temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}")
     try:
         _remove_stale_temporaries(path)
-        with open(temporary, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(document, separators=(",", ":")))
+        # backslashreplace writes a lone surrogate as its own JSON escape, so it reads back unchanged
+        with open(temporary, "w", encoding="utf-8", errors="backslashreplace") as handle:
+            handle.write(json.dumps(document, separators=(",", ":"), ensure_ascii=False))
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)

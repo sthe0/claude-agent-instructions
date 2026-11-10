@@ -595,6 +595,17 @@ def test_a_failed_write_leaves_the_old_snapshot_and_no_temporary_file(root, tmp_
     assert path.read_bytes() == before and os.listdir(path.parent) == [store.FILE_NAME]
 
 
+def test_text_is_stored_as_utf8_and_reads_back_unchanged(tmp_path):
+    path = tmp_path / "cache" / store.FILE_NAME
+    sections = {"live:24:": {"goal": "Ускорить запуск", "tail": "half \ud83d pair"}}
+    store.write(path, sections, [])
+    raw = path.read_bytes()
+    assert "Ускорить запуск".encode("utf-8") in raw and b"\\u0423" not in raw
+    assert b"\\ud83d" in raw
+    stored = store.load(path)["sections"]["live:24:"]
+    assert {key: stored[key] for key in ("goal", "tail")} == sections["live:24:"]
+
+
 def a_dead_pid() -> int:
     child = subprocess.Popen([sys.executable, "-I", "-c", "pass"])
     child.wait()
