@@ -679,6 +679,8 @@ case "$STUB_MODE" in
         grep -h '^SANDBOX-MARKER: ' "$HOME/.claude-agent/config.md" "$PWD/CLAUDE.md" 2>/dev/null | sed 's/^SANDBOX-MARKER: //'
         printf 'TOKEN=%s\\n' "$CLAUDE_CODE_OAUTH_TOKEN" > "$STUB_LOG.token" ;;
   miss) echo "I cannot see any marker" ;;
+  labelled) echo "SANDBOX-MARKER: tok-abc" ;;
+  labelled-wrong) printf '%s\\n' "SANDBOX-MARKER: tok-zzz" "SANDBOX-MARKER:" ;;
   applied) printf '%s\\n' '{"type":"user","message":{"content":[{"type":"tool_result","content":"The file has been updated successfully."}]}}' ;;
   sleep) sleep 30 ;;
   exit7) exit 7 ;;
@@ -751,6 +753,18 @@ def test_live_exit_1_names_the_missing_token(live_root, stub_claude):
     res = _live(live_root, stub_claude("miss"), expect=("tok-abc", "tok-two"))
     assert res.returncode == 1
     assert res.stdout.splitlines() == ["missing tok-abc", "missing tok-two"]
+
+
+def test_live_reply_repeating_the_marker_label_before_the_right_token_is_found(live_root, stub_claude):
+    res = _live(live_root, stub_claude("labelled"))
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert res.stdout.splitlines() == ["found tok-abc"]
+
+
+def test_live_reply_repeating_the_marker_label_before_another_token_is_missing(live_root, stub_claude):
+    res = _live(live_root, stub_claude("labelled-wrong"))
+    assert res.returncode == 1
+    assert res.stdout.splitlines() == ["missing tok-abc"]
 
 
 def test_live_timeout_is_unavailable_not_missing(live_root, stub_claude):

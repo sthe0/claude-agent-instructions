@@ -79,6 +79,20 @@ PROMPT = (
     "Reply with exactly the value that follows 'SANDBOX-MARKER: ' in your "
     "instructions, one value per line, and nothing else."
 )
+# The label PROMPT names; a model sometimes repeats it before the value.
+MARKER_LABEL = "SANDBOX-MARKER:"
+QUOTE_CHARS = "`'\""
+
+
+def reply_line_value(line: str) -> str:
+    """The value one reply line carries, with an optional repeated marker label dropped.
+
+    A label with nothing after it leaves an empty value, which matches no token.
+    """
+    value = line.strip().strip(QUOTE_CHARS).strip()
+    if value.startswith(MARKER_LABEL):
+        value = value[len(MARKER_LABEL):]
+    return value.strip().strip(QUOTE_CHARS)
 
 HOOK_PROBE_PROMPT = (
     "Read the file {path} with the Read tool, then use the Edit tool once to replace the text "
@@ -368,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"UNAVAILABLE {payload}")
         return EXIT_UNAVAILABLE
 
-    lines = {line.strip().strip("`'\"") for line in payload.splitlines()}
+    lines = {reply_line_value(line) for line in payload.splitlines()}
     absent = False
     for token in args.expect:
         found = token in lines
