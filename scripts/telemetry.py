@@ -9,6 +9,8 @@
     telemetry.py align-causes [--inputs DIR] [--draft | --text-out FILE | --report]
     telemetry.py check-causes --imported --expect N
     telemetry.py check-tokens (--task <id> [--require-spawn] [--require-compaction] | --imported-coverage)
+    telemetry.py check-events --task <id> [--unrecorded-window F]
+    telemetry.py check-latency --max-seconds S --since-landing F
     telemetry.py now
     telemetry.py path
 
@@ -33,6 +35,14 @@ task) with no ledger row, or a missing context birth `--require-spawn` / `--requ
 asks for. `--imported-coverage` exits 1 unless every transcript with usage lines has a last
 collector read that committed up to its last complete line, with a token row per message id read.
 Both exit 2 on a usage error.
+
+`check-events --task <id>` matches every engine-history command and gate evaluation of the task's
+sessions to its live event row and exits 1 on an unmatched act; an act inside the
+`unrecorded_window {from, to}` of `--unrecorded-window F` is listed as an excused loss instead.
+`check-latency` classifies each non-synthetic session that ended after F's `landed_at` by the
+latency rule (sync.latency_marks): on_time, late, waiting, in_flight or sync_deferred; it exits 1
+on a late session or when no session of that population has reached the record. Both are
+lib/telemetry/report.py, as is `agent-report.py core-version`.
 
 `sync` runs one sync (lib/telemetry/sync.py): it replays the named session's spool and every
 other spool with unreplayed bytes, files the rows the events imply and prints the result as one
@@ -143,6 +153,39 @@ def _check_tokens(args) -> int:
     return 0 if result["ok"] else 1
 
 
+def _read_json_file(path: str, key: str):
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)[key]
+
+
+def _check_record(args) -> int:
+    """check-events / check-latency over the record (lib/telemetry/report.py)."""
+    from datetime import datetime, timezone
+
+    from lib.telemetry import report
+    report.emit_usage(args.command)
+    try:
+        window = _read_json_file(args.unrecorded_window, "unrecorded_window") \
+            if getattr(args, "unrecorded_window", None) else None
+        landed_at = _read_json_file(args.since_landing, "landed_at") if args.command == "check-latency" else None
+    except (OSError, ValueError, KeyError, TypeError) as err:
+        print(f"{args.command}: {err}", file=sys.stderr)
+        return 2
+    conn = store.open_readonly()
+    if conn is None:
+        print(f"{args.command}: the record is unavailable", file=sys.stderr)
+        return 2
+    try:
+        if args.command == "check-events":
+            result = report.check_events(conn, args.task, window)
+        else:
+            result = report.check_latency(conn, args.max_seconds, landed_at, datetime.now(timezone.utc))
+    finally:
+        conn.close()
+    print(json.dumps(result, sort_keys=True, default=str))
+    return 0 if result["ok"] else 1
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -180,6 +223,12 @@ def main(argv=None) -> int:
     tok.add_argument("--require-spawn", action="store_true", help="exit 1 without a spawn context birth")
     tok.add_argument("--require-compaction", action="store_true", help="exit 1 without a compaction")
     tok.add_argument("--imported-coverage", action="store_true")
+    evt = sub.add_parser("check-events", help="check that every engine act of a task has its event row")
+    evt.add_argument("--task", required=True)
+    evt.add_argument("--unrecorded-window", default=None, help="JSON file with unrecorded_window {from, to}")
+    lat = sub.add_parser("check-latency", help="check that ended sessions reach the record within the bound")
+    lat.add_argument("--max-seconds", type=float, required=True)
+    lat.add_argument("--since-landing", required=True, help="landing record (JSON with landed_at)")
     sub.add_parser("now", help="print the epoch time")
     sub.add_parser("path", help="print the record's path")
     args = parser.parse_args(argv)
@@ -203,6 +252,8 @@ def main(argv=None) -> int:
         return _check_causes(args)
     if args.command == "check-tokens":
         return _check_tokens(args)
+    if args.command in ("check-events", "check-latency"):
+        return _check_record(args)
     if args.command == "path":
         print(config_root.telemetry_db())
         return 0
