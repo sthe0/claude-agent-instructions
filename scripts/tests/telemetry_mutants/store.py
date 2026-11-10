@@ -135,8 +135,10 @@ MUTANTS = [
      "replacement": '"{}"',
      "tests": [_STORE_TESTS + "test_emitted_fields_survive_replay_in_the_fields_column"]},
     {"name": "insert_rows_reports_deferral_as_inserted", "file": _STORE_FILE,
-     "anchor": 'outcome["deferred"] = len(rows)',
-     "replacement": 'outcome["inserted"] = len(rows)',
+     "anchor": 'outcome["inserted"] = len(rows)\n        return outcome\n\n    def deferred():\n'
+               '        outcome["deferred"] = len(rows)',
+     "replacement": 'outcome["inserted"] = len(rows)\n        return outcome\n\n    def deferred():\n'
+                    '        outcome["inserted"] = len(rows)',
      "tests": [_STORE_TESTS + "test_insert_rows_returns_inserted_deferred_failed"]},
     {"name": "replay_leaves_child_session_id_null", "file": _STORE_FILE,
      "anchor": 'child_session = fields.get("child_session_id")',
