@@ -23,6 +23,7 @@ from __future__ import annotations
 import errno
 import fcntl
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -61,6 +62,9 @@ _INTERNAL_TABLES = frozenset({"meta", "schema_migrations", "spool_offsets", "imp
 # A merge is a foreground command the user starts and can interrupt, not a command-path call:
 # it waits on the write lock with SQLite's longest busy timeout instead of DEADLINE_S.
 MERGE_BUSY_MS = 2 ** 31 - 1
+# Rows per merge transaction: a merge into the live record releases the write lock between
+# chunks, so hook writers on the command-path deadline get it, and the WAL stays bounded.
+MERGE_CHUNK_ROWS = 50_000
 
 _clock = time.monotonic
 _sleep = time.sleep
@@ -300,10 +304,15 @@ def imported_row_id(source_path, offset: int, line_sha256: str, origin: "str | N
 
 # --- row inserts -------------------------------------------------------------------
 
+def table_columns(conn: sqlite3.Connection, table: str) -> "set[str]":
+    """The columns of any table of the record; empty when there is no such table."""
+    return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+
+
 def _table_columns(conn: sqlite3.Connection, table: str) -> "set[str]":
     if table in _INTERNAL_TABLES or table.startswith("artifacts_fts"):
         raise ValueError(f"{table!r} is not a data table of the record")
-    columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+    columns = table_columns(conn, table)
     if not columns:
         raise ValueError(f"no table {table!r}")
     return columns
@@ -646,18 +655,25 @@ def _read_with(record: Path, read, immutable: bool):
 
 
 def read_record_quietly(record, read, discard):
-    """Return `read(conn)` over a read-only connection to `record`, creating no file beside it.
-    A read-only open of a WAL record with no -wal file (no connection has it open) would create
-    its -wal and -shm, so such a record is read as immutable, and the result is kept only when the
-    file is unchanged afterwards; otherwise `discard()` undoes the read's output and the record is
-    read again through a plain read-only open, as it is while a connection has it open."""
+    """Return `read(conn)` over a read-only connection to `record`. A read-only open of a WAL
+    record with no -wal file (no connection has it open) would create its -wal and -shm, so such
+    a record is read as immutable, which creates no file beside it; the result is kept only when
+    the read succeeded and the file is unchanged afterwards. Otherwise (the file changed, or the
+    immutable read hit an sqlite3.DatabaseError, which a file changed under it can cause)
+    `discard()` undoes the read's output and the record is read again through a plain read-only
+    open, as it is while a connection has it open; that open may leave -wal and -shm beside the
+    record, as any reader of a WAL record does."""
     record = Path(record)
     wal = record.with_name(record.name + "-wal")
     if not wal.exists():
         before = _file_identity(record)
-        result = _read_with(record, read, immutable=True)
-        if _file_identity(record) == before and not wal.exists():
-            return result
+        try:
+            result = _read_with(record, read, immutable=True)
+        except sqlite3.DatabaseError:
+            pass
+        else:
+            if _file_identity(record) == before and not wal.exists():
+                return result
         discard()
     return _read_with(record, read, immutable=False)
 
@@ -675,10 +691,6 @@ def table_names(conn: sqlite3.Connection) -> "list[str]":
     return sorted(name for name, _ in rows
                   if not name.startswith("sqlite_") and name not in virtual
                   and not any(name.startswith(v + "_") for v in virtual))
-
-
-def table_columns(conn: sqlite3.Connection, table: str) -> "list[str]":
-    return [row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')]
 
 
 def table_counts(conn: sqlite3.Connection, names) -> "dict[str, int]":
@@ -714,14 +726,26 @@ def set_merge_watermark(conn: sqlite3.Connection, origin: str, taken_at: str) ->
         "ON CONFLICT (origin) DO UPDATE SET taken_at = excluded.taken_at", (origin, taken_at)))
 
 
-def superseded_imported_event_ids(conn: sqlite3.Connection) -> "list[str]":
-    """Imported event rows a live row of the record supersedes: one whose id a live row
-    back-references, and an imported spawn-cost row whose child session a live spawn event names."""
-    return [row[0] for row in conn.execute(
-        "SELECT event_id FROM events WHERE provenance = 'imported' AND ("
-        "event_id IN (SELECT backref_id FROM events WHERE provenance <> 'imported' AND backref_id IS NOT NULL)"
-        " OR (kind = 'spawn_cost' AND child_session_id IN (SELECT child_session_id FROM events "
-        "WHERE kind = 'spawn' AND provenance <> 'imported' AND child_session_id IS NOT NULL)))")]
+# Imported event rows a live row of the record supersedes: one whose id a live row
+# back-references, and an imported spawn-cost row whose child session a live spawn event names.
+_SUPERSEDED_IMPORTED_EVENTS = (
+    "SELECT event_id FROM events WHERE provenance = 'imported' AND ("
+    "event_id IN (SELECT backref_id FROM events WHERE provenance <> 'imported' AND backref_id IS NOT NULL)"
+    " OR (kind = 'spawn_cost' AND child_session_id IN (SELECT child_session_id FROM events "
+    "WHERE kind = 'spawn' AND provenance <> 'imported' AND child_session_id IS NOT NULL)))")
+
+
+def delete_superseded_imported_events(conn: sqlite3.Connection) -> int:
+    """Delete every imported event row a live row supersedes, MERGE_CHUNK_ROWS per transaction.
+    Returns the rows deleted."""
+    deleted = 0
+    while True:
+        changed = _merge_transaction(conn, lambda: conn.execute(
+            f"DELETE FROM events WHERE event_id IN ({_SUPERSEDED_IMPORTED_EVENTS} LIMIT {MERGE_CHUNK_ROWS})"
+        ).rowcount)
+        deleted += changed
+        if not changed:
+            return deleted
 
 
 def _merge_transaction(conn: sqlite3.Connection, work):
@@ -736,7 +760,8 @@ def _merge_transaction(conn: sqlite3.Connection, work):
     return value
 
 
-def _merge_row(conn, table: str, row: dict, columns: "set[str]", keys: "list[str]", mode: str) -> int:
+def _merge_row(conn, table: str, row: dict, columns: "set[str]", keys: "list[str]", mode: str,
+               owner) -> int:
     unknown = set(row) - columns
     if unknown:
         raise ValueError(f"{table} has no column(s) {sorted(unknown)}")
@@ -753,22 +778,37 @@ def _merge_row(conn, table: str, row: dict, columns: "set[str]", keys: "list[str
             f'WHERE NOT EXISTS (SELECT 1 FROM "{table}" WHERE {match}) ON CONFLICT DO NOTHING',
             [*values.values(), *key_values]).rowcount
     updates = ", ".join(f'"{n}" = excluded."{n}"' for n in values if n not in keys)
-    action = f"UPDATE SET {updates}" if updates else "NOTHING"
     target = ", ".join(f'"{k}"' for k in keys)
-    return conn.execute(f'INSERT INTO "{table}" ({names}) VALUES ({marks}) ON CONFLICT ({target}) DO {action}',
-                        list(values.values())).rowcount
+    if not updates:
+        action, guard = "NOTHING", []
+    elif owner is None:
+        action, guard = f"UPDATE SET {updates}", []
+    else:
+        action, guard = f"UPDATE SET {updates} WHERE ({owner[0]}) IS ?", [owner[1]]
+    return conn.execute(
+        f'INSERT INTO "{table}" AS t ({names}) VALUES ({marks}) ON CONFLICT ({target}) DO {action}',
+        [*values.values(), *guard]).rowcount
 
 
-def merge_rows(conn: sqlite3.Connection, table: str, rows, key_columns, mode: str) -> int:
-    """Apply `rows` to a data table by its merge key in one transaction, waiting on the write lock
-    without the command-path deadline: `ignore` inserts a row whose key is absent, `upsert` also
-    replaces the stored row's other columns, `delete` removes the row with the key. Rows are
-    stored verbatim. Returns the rows changed; raises on failure."""
+def merge_rows(conn: sqlite3.Connection, table: str, rows, key_columns, mode: str, owner=None) -> int:
+    """Apply the iterable `rows` to a data table by its merge key, MERGE_CHUNK_ROWS rows per
+    transaction, waiting on the write lock without the command-path deadline: `ignore` inserts a
+    row whose key is absent, `upsert` also replaces the stored row's other columns, `delete`
+    removes the row with the key. With `owner` = (origin SQL over the stored row aliased `t`,
+    origin), an upsert replaces only a stored row of that origin. Rows are stored verbatim.
+    Returns the rows changed; raises on failure, keeping the chunks already committed."""
     if mode not in MERGE_MODES:
         raise ValueError(f"unknown merge mode {mode!r}")
     columns = _table_columns(conn, table)
     keys = list(key_columns)
-    return _merge_transaction(conn, lambda: sum(_merge_row(conn, table, row, columns, keys, mode) for row in rows))
+    rows = iter(rows)
+    changed = 0
+    while True:
+        chunk = list(itertools.islice(rows, MERGE_CHUNK_ROWS))
+        if not chunk:
+            return changed
+        changed += _merge_transaction(
+            conn, lambda: sum(_merge_row(conn, table, row, columns, keys, mode, owner) for row in chunk))
 
 
 # --- spool replay ------------------------------------------------------------------

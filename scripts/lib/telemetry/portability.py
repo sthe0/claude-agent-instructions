@@ -6,28 +6,36 @@ tasks, or letting an old copy of a row overwrite a newer one.
 
 An export is a gzip JSON-lines file created 0600: a header (the record's random origin,
 taken_at, the version of every enumeration table, the fixture revision of the imported
-causes, per-table row counts), then one line per row with the row's own origin. Text
-artifacts are exported only with `with_text`. A merge applies each row by its table's merge
-key (MERGE_KEYS, the identity table of the record): an ignore-mode row is inserted when its
-key is absent; an upsert-mode row also replaces the stored row, but only when it belongs to
-the export's own origin, that origin is not the receiving record's, and the export was taken
-after the newest export of that origin merged before (merge_state). Afterwards every imported
-event row a live row of the record supersedes is deleted, as replay does. SQLite access stays
-in store.py; this module never imports sqlite3.
+causes, per-table row counts), then one line per row, grouped by table in MERGE_KEYS order,
+with the row's own origin (null when the exporting record cannot resolve it). Text artifacts
+are exported only with `with_text`. A merge reads the export twice, one line at a time: the
+first pass validates the header and every line (table, columns, table versions, per-table
+counts against the header) and writes nothing; the second applies each row by its table's
+merge key (MERGE_KEYS, the identity table of the record), store.MERGE_CHUNK_ROWS rows per
+transaction. An ignore-mode row is inserted when its key is absent; an upsert-mode row also
+replaces the stored row, but only when the row and the stored row belong to the export's own
+origin, that origin is not the receiving record's, and the export was taken after the newest
+export of that origin merged before (merge_state). A row of unresolved origin is always
+merged in ignore mode. Afterwards every imported event row a live row of the record
+supersedes is deleted, as replay does. SQLite access stays in store.py; this module never
+imports sqlite3.
 """
 from __future__ import annotations
 
 import gzip
 import json
 import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lib import config_root
 from lib.telemetry import store, tables
 
 FORMAT = "telemetry-export/1"
 EXPORT_MODE = 0o600
+HEADER_FIELDS = ("format", "origin", "taken_at", "table_versions", "fixture_sha256", "counts")
+# check-roundtrip holds a copy of the record, a second record of about its size and the export.
+ROUNDTRIP_DISK_FACTOR = 3
 
 _TASK_KEY = ("task_origin", "task_id", "task_epoch")
 
@@ -58,10 +66,10 @@ MERGE_MODE = {
     "events": "ignore", "compactions": "ignore", "context_births": "ignore", "judge_usage": "ignore",
     "causes": "ignore", "artifacts": "ignore",
 }
-LOCAL_ONLY = frozenset({"meta", "schema_migrations", "spool_offsets", "import_offsets", "session_head_marks",
-                        "merge_state"})
+LOCAL_ONLY = store._INTERNAL_TABLES | {"session_head_marks"}
 TEXT_TABLES = frozenset({"artifacts"})
 LOCAL_ROWID_COLUMNS = {"artifacts": ("artifact_id",)}
+_TABLE_ORDER = {table: position for position, table in enumerate(MERGE_KEYS)}
 
 # Column storing the enumeration-table version a value was validated against -> that table.
 VERSION_COLUMNS = {
@@ -84,7 +92,7 @@ def _event_origin(column: str) -> str:
 
 
 # The origin a row belongs to (the machine that recorded it), an SQL expression over the row
-# aliased t; NULL falls back to the exporting record's origin.
+# aliased t; NULL when the record cannot resolve it.
 ROW_ORIGIN = {
     "tasks": "t.origin",
     "sessions": "t.origin",
@@ -128,7 +136,8 @@ def _exported(table: str, row: dict) -> dict:
 
 def export(record, out, with_text: bool = False, taken_at: "str | None" = None) -> dict:
     """Write the record's structured rows (and text artifacts with `with_text`) into the new file
-    `out`, created 0600; the record is read quietly (store.read_record_quietly). Returns the header."""
+    `out`, created 0600; the record is read quietly (store.read_record_quietly). A failed export
+    leaves no file at `out`. Returns the header."""
     out = Path(out)
     taken_at = taken_at or _now_iso()
     return store.read_record_quietly(record, lambda conn: _write_export(conn, out, with_text, taken_at),
@@ -147,21 +156,49 @@ def _write_export(conn, out: Path, with_text: bool, taken_at: str) -> dict:
                   "fixture_sha256": sorted(store.fixture_revisions(conn)), "with_text": with_text,
                   "counts": store.table_counts(conn, names)}
         fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, EXPORT_MODE)
-        with os.fdopen(fd, "wb") as raw, gzip.open(raw, "wt", encoding="utf-8") as handle:
-            handle.write(json.dumps(header, sort_keys=True) + "\n")
-            for table in names:
-                for row_origin, row in store.export_rows(conn, table, ROW_ORIGIN[table]):
-                    line = {"table": table, "origin": row_origin or origin, "row": _exported(table, row)}
-                    handle.write(json.dumps(line, sort_keys=True, separators=(",", ":")) + "\n")
+        try:
+            with os.fdopen(fd, "wb") as raw, gzip.open(raw, "wt", encoding="utf-8") as handle:
+                handle.write(json.dumps(header, sort_keys=True) + "\n")
+                for table in names:
+                    for row_origin, row in store.export_rows(conn, table, ROW_ORIGIN[table]):
+                        line = {"table": table, "origin": row_origin, "row": _exported(table, row)}
+                        handle.write(json.dumps(line, sort_keys=True, separators=(",", ":")) + "\n")
+        except BaseException:
+            out.unlink(missing_ok=True)
+            raise
     return header
 
 
-def read_export(path) -> "tuple[dict, list[dict]]":
-    with gzip.open(path, "rt", encoding="utf-8") as handle:
-        header = json.loads(handle.readline())
-        if not isinstance(header, dict) or header.get("format") != FORMAT:
-            raise Refused(f"{path} is not a {FORMAT} export")
-        return header, [json.loads(line) for line in handle if line.strip()]
+def _header(path, text: str) -> dict:
+    try:
+        header = json.loads(text)
+    except ValueError:
+        header = None
+    if not isinstance(header, dict) or header.get("format") != FORMAT:
+        raise Refused(f"{path} is not a {FORMAT} export")
+    missing = [field for field in HEADER_FIELDS if field not in header]
+    if missing:
+        raise Refused(f"{path}: the export header has no {missing}")
+    if not isinstance(header["table_versions"], dict) or not isinstance(header["counts"], dict) \
+            or not isinstance(header["fixture_sha256"], list):
+        raise Refused(f"{path}: malformed export header")
+    try:
+        _instant(header["taken_at"])
+    except (TypeError, ValueError, AttributeError):
+        raise Refused(f"{path}: taken_at {header['taken_at']!r} is no time") from None
+    return header
+
+
+def read_export(path):
+    """Yield the export's header, then its row lines, one decoded line at a time."""
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            yield _header(path, handle.readline())
+            for line in handle:
+                if line.strip():
+                    yield json.loads(line)
+    except (EOFError, gzip.BadGzipFile, UnicodeDecodeError, json.JSONDecodeError) as err:
+        raise Refused(f"{path} is truncated or corrupt: {err}") from None
 
 
 class _Versions:
@@ -177,63 +214,110 @@ class _Versions:
             raise Refused(f"unknown version {version!r} of table {name!r}")
 
 
-def _validate(conn, header: dict, lines: "list[dict]") -> None:
+def _validate(conn, path) -> dict:
+    """The first pass: every check a merge makes, over the whole export, before any write.
+    Returns the header."""
+    lines = read_export(path)
+    header = next(lines)
     versions = _Versions()
     for name, version in header["table_versions"].items():
         versions.require(name, version)
-    for line in lines:
-        table = line["table"]
-        if table not in MERGE_KEYS:
-            raise Refused(f"table {table!r} has no merge key here")
-        for column, name in VERSION_COLUMNS.items():
-            if line["row"].get(column) is not None:
-                versions.require(name, line["row"][column])
     theirs = set(header["fixture_sha256"])
     ours = store.fixture_revisions(conn)
     if len(theirs) > 1 or (theirs and ours and theirs != ours):
         raise Refused(f"fixture revision {sorted(theirs)} differs from this record's {sorted(ours)}")
+    columns: "dict[str, set[str]]" = {}
+    counts: "dict[str, int]" = {}
+    last = -1
+    for line in lines:
+        table = line.get("table") if isinstance(line, dict) else None
+        if table not in MERGE_KEYS:
+            raise Refused(f"table {table!r} has no merge key here")
+        if _TABLE_ORDER[table] < last:
+            raise Refused(f"table {table!r} out of order in the export")
+        last = _TABLE_ORDER[table]
+        row = line.get("row")
+        if not isinstance(row, dict):
+            raise Refused(f"a {table} line has no row")
+        if table not in columns:
+            columns[table] = store.table_columns(conn, table)
+        unknown = set(row) - columns[table]
+        if unknown:
+            raise Refused(f"{table} has no column(s) {sorted(unknown)} here")
+        for column, name in VERSION_COLUMNS.items():
+            if row.get(column) is not None:
+                versions.require(name, row[column])
+        counts[table] = counts.get(table, 0) + 1
+    declared = {table: n for table, n in header["counts"].items() if n}
+    if counts != declared:
+        raise Refused(f"{path} holds {counts} rows, its header declares {declared}: truncated or altered")
+    return header
+
+
+def _flush(conn, pending: dict, source: str) -> None:
+    for (table, mode), rows in pending.items():
+        if rows:
+            owner = (ROW_ORIGIN[table], source) if mode == "upsert" else None
+            store.merge_rows(conn, table, rows, MERGE_KEYS[table], mode, owner=owner)
+    pending.clear()
+
+
+def _apply(conn, path, source: str, fresh: bool) -> None:
+    """The second pass: apply the rows table by table, at most store.MERGE_CHUNK_ROWS held at once."""
+    pending: "dict[tuple[str, str], list[dict]]" = {}
+    current = None
+    lines = read_export(path)
+    next(lines)
+    for line in lines:
+        table = line["table"]
+        if table != current:
+            _flush(conn, pending, source)
+            current = table
+        upsert = fresh and MERGE_MODE[table] == "upsert" and line["origin"] == source
+        batch = pending.setdefault((table, "upsert" if upsert else "ignore"), [])
+        batch.append(line["row"])
+        if len(batch) >= store.MERGE_CHUNK_ROWS:
+            _flush(conn, pending, source)
+    _flush(conn, pending, source)
 
 
 def merge(conn, path) -> dict:
     """Merge the export at `path` into the record behind the writable `conn`. Returns the
     origin, whether the export was fresh (its own rows replace stored ones), the rows added
     per table and the imported rows superseded. Raises Refused before writing anything."""
-    header, lines = read_export(path)
-    _validate(conn, header, lines)
+    header = _validate(conn, path)
     source = header["origin"]
     watermark = store.merge_watermark(conn, source)
     fresh = source != store.record_origin(conn) and (
         watermark is None or _instant(header["taken_at"]) > _instant(watermark))
-    pending: "dict[tuple[str, str], list[dict]]" = {}
-    for line in lines:
-        table = line["table"]
-        upsert = fresh and MERGE_MODE[table] == "upsert" and line["origin"] == source
-        pending.setdefault((table, "upsert" if upsert else "ignore"), []).append(line["row"])
     names = [t for t in MERGE_KEYS if t in store.table_names(conn)]
     before = store.table_counts(conn, names)
-    for table in MERGE_KEYS:
-        for mode in ("ignore", "upsert"):
-            batch = pending.get((table, mode))
-            if batch:
-                store.merge_rows(conn, table, batch, MERGE_KEYS[table], mode)
-    superseded = store.superseded_imported_event_ids(conn)
-    if superseded:
-        store.merge_rows(conn, "events", [{"event_id": i} for i in superseded], MERGE_KEYS["events"], "delete")
+    _apply(conn, path, source, fresh)
+    superseded = store.delete_superseded_imported_events(conn)
     if fresh:
         store.set_merge_watermark(conn, source, header["taken_at"])
     after = store.table_counts(conn, names)
-    return {"origin": source, "fresh": fresh, "superseded": len(superseded),
+    return {"origin": source, "fresh": fresh, "superseded": superseded,
             "added": {t: after[t] - before[t] for t in names if after[t] != before[t]}}
 
 
-def check_roundtrip(workdir, record=None) -> dict:
+def _record_bytes(record: Path) -> int:
+    return sum(part.stat().st_size for part in (record, record.with_name(record.name + "-wal")) if part.exists())
+
+
+def check_roundtrip(workdir, record) -> dict:
     """Copy the record (opened read-only) into `workdir` with the backup API, export the copy,
     merge the export twice into a new record under `workdir`, and compare the row counts per
     table. ok is false on a count mismatch, a row the second merge added, or a text row in the
-    export. Writes nothing outside `workdir`."""
+    export. Refuses when `workdir`'s disk has less free space than ROUNDTRIP_DISK_FACTOR times
+    the record. Writes nothing outside `workdir`."""
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
-    store.backup_record(Path(record or config_root.telemetry_db()), workdir / "copy.sqlite")
+    record = Path(record)
+    needed, free = ROUNDTRIP_DISK_FACTOR * _record_bytes(record), shutil.disk_usage(workdir).free
+    if free < needed:
+        raise Refused(f"check-roundtrip needs {needed} bytes free under {workdir}, {free} are")
+    store.backup_record(record, workdir / "copy.sqlite")
     export_path = workdir / "export.jsonl.gz"
     header = export(workdir / "copy.sqlite", export_path)
     second = store.open_scratch(workdir / "second.sqlite")
@@ -245,7 +329,8 @@ def check_roundtrip(workdir, record=None) -> dict:
         second.close()
     expected = header["counts"]
     mismatches = {t: {"exported": expected[t], "merged": counts[t]} for t in expected if counts[t] != expected[t]}
-    _, lines = read_export(export_path)
+    lines = read_export(export_path)
+    next(lines)
     text_rows = sum(1 for line in lines if line["table"] in TEXT_TABLES)
     return {"ok": not mismatches and not again["added"] and not text_rows, "mismatches": mismatches,
             "first_merge_added": first["added"], "second_merge_added": again["added"], "text_rows": text_rows,

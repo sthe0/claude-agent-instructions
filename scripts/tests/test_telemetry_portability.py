@@ -10,10 +10,12 @@ import hashlib
 import itertools
 import json
 import os
+import shutil
 import socket
 import sqlite3
 import threading
 import time
+import tracemalloc
 import uuid
 from pathlib import Path
 
@@ -160,7 +162,7 @@ def test_export_without_text_flag_has_no_text_rows(records, live_record, tmp_pat
     assert header["counts"]["artifacts"] == 1 and texts and "artifact_id" not in texts[0]
     populate(live_record)
     live_record.conn.close()
-    result = portability.check_roundtrip(tmp_path / "D")
+    result = portability.check_roundtrip(tmp_path / "D", config_root.telemetry_db())
     assert result["ok"] and result["text_rows"] == 0
 
 
@@ -235,7 +237,7 @@ def test_import_into_second_record_same_structured_counts(live_record, tmp_path)
     populate(live_record, "b")
     expected = {t: n for t, n in live_record.counts().items() if t not in portability.TEXT_TABLES}
     live_record.conn.close()
-    result = portability.check_roundtrip(tmp_path / "D")
+    result = portability.check_roundtrip(tmp_path / "D", config_root.telemetry_db())
     assert result["ok"] and not result["mismatches"]
     assert {t: n for t, n in result["first_merge_added"].items()} == {t: n for t, n in expected.items() if n}
     second = sqlite3.connect(tmp_path / "D" / "second.sqlite")
@@ -490,10 +492,10 @@ def test_check_roundtrip_fails_on_count_mismatch(live_record, tmp_path, monkeypa
     live_record.conn.close()
     real = store.merge_rows
 
-    def lossy(conn, table, rows, key_columns, mode):
-        return real(conn, table, [] if table == "sessions" and mode != "delete" else rows, key_columns, mode)
+    def lossy(conn, table, rows, key_columns, mode, **kw):
+        return real(conn, table, [] if table == "sessions" and mode != "delete" else rows, key_columns, mode, **kw)
     monkeypatch.setattr(store, "merge_rows", lossy)
-    result = portability.check_roundtrip(tmp_path / "D")
+    result = portability.check_roundtrip(tmp_path / "D", config_root.telemetry_db())
     assert not result["ok"] and result["mismatches"] == {"sessions": {"exported": 1, "merged": 0}}
     assert telemetry.main(["check-roundtrip", "--workdir", str(tmp_path / "D2")]) == 1
 
@@ -523,9 +525,215 @@ def test_check_roundtrip_opens_the_live_record_read_only(live_record, tmp_path, 
             refused.append("readonly" in str(err))
         return real(src_conn, dest_path)
     monkeypatch.setattr(store, "backup", probing)
-    assert portability.check_roundtrip(tmp_path / "D")["ok"]
+    assert portability.check_roundtrip(tmp_path / "D", config_root.telemetry_db())["ok"]
     assert refused == [True]
     assert digest(record) == before
+
+
+def test_check_roundtrip_refuses_without_free_disk(live_record, tmp_path, monkeypatch):
+    populate(live_record)
+    live_record.conn.close()
+    real = shutil.disk_usage
+    monkeypatch.setattr(portability.shutil, "disk_usage", lambda path: real(path)._replace(free=1))
+    with pytest.raises(portability.Refused, match="bytes free"):
+        portability.check_roundtrip(tmp_path / "D", config_root.telemetry_db())
+    assert not (tmp_path / "D" / "copy.sqlite").exists()
+    assert telemetry.main(["check-roundtrip", "--workdir", str(tmp_path / "D2")]) == 2
+
+
+# --- streaming and validation before any write ---------------------------------------
+
+def _events_record(records, name: str, n: int) -> Rec:
+    rec = records(name)
+    rec.put("sessions", session("s", rec.origin))
+    store.merge_rows(rec.conn, "events", (event(f"{name}-{i:07d}", "s", source_key="k" * 200) for i in range(n)),
+                     portability.MERGE_KEYS["events"], "ignore")
+    return rec
+
+
+def _merge_peak_bytes(target: Rec, export: Path) -> int:
+    tracemalloc.start()
+    try:
+        target.merge(export)
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_merge_memory_stays_bounded_as_the_export_grows(records, monkeypatch):
+    monkeypatch.setattr(store, "MERGE_CHUNK_ROWS", 100)
+    small, large = _events_record(records, "small", 1_000), _events_record(records, "large", 8_000)
+    small_peak = _merge_peak_bytes(records("small-target"), small.export("small", T1))
+    large_target = records("large-target")
+    large_peak = _merge_peak_bytes(large_target, large.export("large", T1))
+    assert large_target.counts()["events"] == 8_000
+    assert large_peak < small_peak * 1.5 + 256 * 1024, (small_peak, large_peak)
+    assert large_peak < 4 * 1024 * 1024, large_peak
+
+
+def test_merge_commits_in_chunks(records, monkeypatch):
+    monkeypatch.setattr(store, "MERGE_CHUNK_ROWS", 2)
+    a = records("a")
+    transactions = []
+    real = store._merge_transaction
+
+    def counting(conn, work):
+        transactions.append(1)
+        return real(conn, work)
+    monkeypatch.setattr(store, "_merge_transaction", counting)
+    assert store.merge_rows(a.conn, "tasks", (task(a.origin, f"t{i}") for i in range(5)),
+                            portability.MERGE_KEYS["tasks"], "ignore") == 5
+    assert len(transactions) == 3
+
+
+def test_merge_refuses_a_truncated_export(records):
+    a, b = records("a"), records("b")
+    populate(a)
+    short = a.export("short", T1)
+    header, lines = export_lines(short)
+    short.unlink()
+    with gzip.open(short, "wt", encoding="utf-8") as handle:
+        for obj in [header, *lines[:-1]]:
+            handle.write(json.dumps(obj) + "\n")
+    cut = a.export("cut", T2)
+    cut.write_bytes(cut.read_bytes()[:-20])
+    before = b.counts()
+    with pytest.raises(portability.Refused, match="truncated or altered"):
+        b.merge(short)
+    with pytest.raises(portability.Refused, match="truncated or corrupt"):
+        b.merge(cut)
+    assert b.counts() == before
+
+
+def test_merge_refuses_an_unknown_column_before_writing(records):
+    a, b = records("a"), records("b")
+    populate(a)
+    newer = a.export("newer", T1)
+    rewrite_export(newer, row_change=lambda line: line["row"].update(future_col=1)
+                   if line["table"] == "sessions" else None)
+    before = b.counts()
+    with pytest.raises(portability.Refused, match="future_col"):
+        b.merge(newer)
+    assert b.counts() == before
+
+
+def test_merge_refuses_a_malformed_header(records):
+    a, b = records("a"), records("b")
+    populate(a)
+    for field in ("table_versions", "fixture_sha256", "origin", "counts"):
+        bad = a.export(f"no-{field}", T1)
+        rewrite_export(bad, header_change=lambda h, f=field: h.pop(f))
+        with pytest.raises(portability.Refused, match=field):
+            b.merge(bad)
+    bad = a.export("bad-time", T1)
+    rewrite_export(bad, header_change=lambda h: h.update(taken_at="never"))
+    with pytest.raises(portability.Refused, match="no time"):
+        b.merge(bad)
+    assert b.counts() == {t: 0 for t in b.counts()}
+
+
+# --- row origins --------------------------------------------------------------------
+
+def test_unresolved_row_round_trip_leaves_its_owner_row_unchanged(records):
+    a, b = records("a"), records("b")
+    a.put("token_usage", {"message_id": "m", "session_id": "no-session-row", "input_tokens": 3})
+    first = a.export("a1", T1)
+    assert [line["origin"] for line in export_lines(first)[1] if line["table"] == "token_usage"] == [None]
+    b.merge(first)
+    a.set("token_usage", {"message_id": "m", "session_id": "no-session-row", "input_tokens": 9})
+    a.merge(b.export("b1", T2))
+    assert a.rows("SELECT input_tokens FROM token_usage") == [(9,)]
+
+
+def test_unresolved_row_merges_insert_or_ignore_where_the_receiver_resolves_it(records):
+    x, y = records("x"), records("y")
+    y.put("token_usage", {"message_id": "m", "session_id": "ys", "input_tokens": 9})
+    x.put("sessions", session("ys", y.origin))
+    x.put("token_usage", {"message_id": "m", "session_id": "ys", "input_tokens": 3})
+    assert x.merge(y.export("y1", T1))["fresh"]
+    assert x.rows("SELECT input_tokens FROM token_usage") == [(3,)]
+
+
+def test_upsert_never_overwrites_a_stored_row_of_another_origin(records):
+    a, b = records("a"), records("b")
+    b.put("sessions", session("s", b.origin, core_head="hb"))
+    a.put("sessions", session("s", a.origin, core_head="ha"))
+    assert b.merge(a.export("a", T1))["fresh"]
+    assert b.rows("SELECT origin, core_head FROM sessions") == [(b.origin, "hb")]
+
+
+# --- quiet read of the record ----------------------------------------------------------
+
+def _probe_reads(monkeypatch) -> list:
+    modes = []
+    real = store._read_with
+
+    def probing(record, read, immutable):
+        modes.append(immutable)
+        return real(record, read, immutable)
+    monkeypatch.setattr(store, "_read_with", probing)
+    return modes
+
+
+def test_read_quietly_reads_plainly_while_a_wal_exists(records, monkeypatch):
+    a = records("a")
+    populate(a)
+    assert a.path.with_name(a.path.name + "-wal").exists()
+    modes, discards = _probe_reads(monkeypatch), []
+    count = store.read_record_quietly(a.path, lambda conn: store.table_counts(conn, ["tasks"]),
+                                      lambda: discards.append(1))
+    assert count == {"tasks": 1} and modes == [False] and not discards
+
+
+def test_read_quietly_discards_a_read_when_the_record_changes(records, monkeypatch):
+    a = records("a")
+    populate(a)
+    a.conn.close()
+    assert not a.path.with_name(a.path.name + "-wal").exists()
+    modes, discards, reads = _probe_reads(monkeypatch), [], []
+
+    def read(conn):
+        reads.append(1)
+        if len(reads) == 1:
+            writer = store.open_for_merge(a.path)
+            store.merge_rows(writer, "tasks", [task(a.origin, "added")], portability.MERGE_KEYS["tasks"], "ignore")
+            writer.close()
+        return store.table_counts(conn, ["tasks"])
+    assert store.read_record_quietly(a.path, read, lambda: discards.append(1)) == {"tasks": 2}
+    assert modes == [True, False] and discards == [1]
+
+
+def test_read_quietly_retries_after_an_immutable_read_error(records, monkeypatch):
+    a = records("a")
+    populate(a)
+    a.conn.close()
+    modes, discards = _probe_reads(monkeypatch), []
+
+    def read(conn):
+        if len(modes) == 1:
+            raise sqlite3.DatabaseError("database disk image is malformed")
+        return store.table_counts(conn, ["tasks"])
+    assert store.read_record_quietly(a.path, read, lambda: discards.append(1)) == {"tasks": 1}
+    assert modes == [True, False] and discards == [1]
+
+
+def test_export_removes_a_partial_file_on_error(records, monkeypatch):
+    a = records("a")
+    populate(a)
+    real = store.export_rows
+
+    def failing(conn, table, origin_sql):
+        yield from real(conn, table, origin_sql)
+        raise RuntimeError("disk gone")
+    monkeypatch.setattr(store, "export_rows", failing)
+    out = a.path.parent / "partial.jsonl.gz"
+    with pytest.raises(RuntimeError, match="disk gone"):
+        portability.export(a.path, out)
+    assert not out.exists()
+    out.write_bytes(b"kept")
+    with pytest.raises(FileExistsError):
+        portability.export(a.path, out)
+    assert out.read_bytes() == b"kept"
 
 
 def test_portability_opens_the_record_only_through_store():

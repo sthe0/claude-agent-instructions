@@ -211,7 +211,7 @@ def _portability(args) -> int:
             finally:
                 conn.close()
         else:
-            result = portability.check_roundtrip(args.workdir)
+            result = portability.check_roundtrip(args.workdir, config_root.telemetry_db())
     except (portability.Refused, OSError, ValueError) as err:
         print(f"{args.command}: {err}", file=sys.stderr)
         return 2

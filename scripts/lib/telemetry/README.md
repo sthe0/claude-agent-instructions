@@ -99,11 +99,28 @@ writers, `hook_telemetry` and `judge_ledger`, import `live` guarded (a failed im
 their event emission off and leaves their own ledger line as it was) and evaluate every
 emit argument inside their `try`.
 
+**Export, merge and round trip** (`portability.py`). `telemetry.py export --out F [--with-text]`
+writes a gzip JSON-lines file, created 0600, from the record opened read-only: a header (origin,
+`taken_at`, every enumeration table's version, the fixture revision, per-table counts), then one
+line per row with the origin of the machine that recorded it (null when the record cannot resolve
+it). Text artifacts go out only with `--with-text`; a failed export leaves no file. `telemetry.py
+merge F` reads the export twice, one line at a time, so memory does not grow with its size: the
+first pass refuses (exit 2, nothing written) an unknown table, column or table version, another
+fixture revision, a malformed header, or line counts that differ from the header's (a truncated
+file); the second applies rows by each table's merge key (`MERGE_KEYS`), 50 000 rows per
+transaction so hook writers get the lock between chunks. An upsert-mode row replaces a stored row
+only when both belong to the export's origin, that origin is not the receiver's, and the export is
+newer than that origin's last merged one; a row of unresolved origin is only inserted when absent.
+`telemetry.py check-roundtrip --workdir D` copies the record into D, exports the copy, merges it
+twice into a new record under D and exits 1 on a count mismatch, a row added by the second merge
+or a text row; it refuses when D's disk has less than three times the record's size free, and
+writes nothing outside D. On a multi-GB record it takes about as much disk and time as two merges.
+
 **Run it.** `python3 scripts/telemetry.py sync --session <id> [--budget S]`,
 `python3 scripts/telemetry.py path`,
 `python3 scripts/telemetry.py check-tokens (--task <id> [--require-spawn] [--require-compaction] | --imported-coverage)`.
 
-**Tests.** `scripts/tests/test_telemetry_{tables,store,hook_isolation,mutation_catalogue,importer,transition,registry,cause,tokens}.py`
+**Tests.** `scripts/tests/test_telemetry_{tables,store,hook_isolation,mutation_catalogue,importer,transition,registry,cause,tokens,portability}.py`
 (run with `--telemetry-no-skip` to fail on any skip) and the mutation control
 `scripts/tests/telemetry_mutation_control.py` (`--control`, `--mutant NAME`; mutants live in
 `scripts/tests/telemetry_mutants/`).
