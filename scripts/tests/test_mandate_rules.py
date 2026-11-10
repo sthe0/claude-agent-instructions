@@ -629,6 +629,18 @@ def test_a_killed_spawn_without_a_cost_row_is_charged_the_whole_cap():
     assert m.killed_spawn_charge(True, 15.0) == 0.0
 
 
+def test_killed_spawn_charge_prefers_the_cost_row_then_transcript_usage_then_the_cap():
+    assert m.killed_spawn_charge(True, 15.0, 4.2) == 0.0
+    assert m.killed_spawn_charge(False, 15.0, 4.2) == 4.2
+    assert m.killed_spawn_charge(False, 15.0, 0.0) == 0.0
+    assert m.killed_spawn_charge(False, 15.0, None) == 15.0
+    assert m.killed_spawn_charge(False, 15.0) == 15.0
+
+
+def test_the_default_item_minutes_cap_is_200():
+    assert m.MandateLimits().item_minutes_cap == 200.0
+
+
 @pytest.mark.parametrize("outcome", ["pr-opened", "overrun", "declined", "limit"])
 @pytest.mark.parametrize("kind", ["", "tests", "spawn-error", "whatever"])
 def test_a_non_failure_outcome_never_opens_the_breaker(outcome, kind):
@@ -672,6 +684,36 @@ def test_local_failure_streak_counts_since_the_last_resume():
     assert m.local_failure_streak(rows, hours(5)) == 1
     assert m.local_failure_streak(rows, hours(2)) == 0
     assert m.local_failure_run(rows, hours(5)) == [4]
+
+
+def test_mandate_boundary_stops_never_grow_the_failure_streak_on_the_recorded_rows():
+    rows = [
+        attempt(315, kind="tests", ago=30),
+        attempt(317, kind="tests", ago=20),
+        attempt(301, "declined", "", ago=15),
+        attempt(318, kind="tests", ago=10),
+    ]
+    assert m.local_failure_run(rows, hours(25)) == [317, 318]
+    assert m.local_failure_streak(rows, hours(25)) == 2
+    assert m.local_failure_run(rows, hours(40)) == [315, 317, 318]
+    for stop in ("declined", "overrun", "limit"):
+        stopped = [attempt(317, kind="tests", ago=20), attempt(301, stop, "", ago=15), attempt(318, kind="tests", ago=10)]
+        assert m.local_failure_streak(stopped, hours(25)) == 2, stop
+
+    r315 = {"ts": "2026-10-27T23:03:59Z", "issue": 315, "outcome": "failed", "failure_kind": "tests"}
+    r317 = {"ts": "2026-10-27T23:52:55Z", "issue": 317, "outcome": "failed", "failure_kind": "tests"}
+    r318 = {"ts": "2026-10-28T00:33:15Z", "issue": 318, "outcome": "failed", "failure_kind": "tests"}
+    r301 = {"ts": "2026-10-30T15:44:17Z", "issue": 301, "outcome": "declined", "failure_kind": ""}
+    granted = "2026-10-26T00:00:00Z"
+    for stop in ("declined", "overrun", "limit"):
+        for stamp in (r301["ts"], "2026-10-27T23:30:00Z", "2026-10-28T00:10:00Z"):
+            between = dict(r301, outcome=stop, ts=stamp)
+            two, three = [r315, between, r317], [r315, r317, between, r318]
+            assert not any(m.opens_breaker(row["outcome"], row["failure_kind"]) for row in three), stop
+            assert m.local_failure_run(two, granted) == [315, 317], (stop, stamp)
+            assert m.local_failure_streak(two, granted) == 2 < m.LOCAL_FAILURE_STREAK
+            assert m.local_failure_run(three, granted) == [315, 317, 318], (stop, stamp)
+            assert m.local_failure_streak(three, granted) == 3 == m.LOCAL_FAILURE_STREAK
 
 
 def test_a_pr_opened_row_resets_the_streak():
@@ -979,6 +1021,19 @@ def test_check_review_bound_and_covered_permission_are_settled_until_the_rounds_
     assert (approval.cls, approval.answer) == (m.ASK_SETTLED, "parent-norm")
 
 
+def test_contour_incomplete_is_settled_as_resume_at_any_round_count():
+    for node in ("ROUTED", "EXECUTING", "VERIFYING", "DIAGNOSING"):
+        for rounds in (0, ROUNDS_LIMIT - 1, ROUNDS_LIMIT, ROUNDS_LIMIT + 40):
+            verdict = ask("contour-incomplete", {"child_node": node}, rounds=rounds)
+            assert (verdict.cls, verdict.answer) == (m.ASK_SETTLED, "resume"), (node, rounds)
+
+
+def test_contour_incomplete_without_a_child_node_exceeds():
+    for observed in ({}, {"child_node": "RESOLUTION"}, {"child_node": None}, {"child_node": 3}):
+        verdict = ask("contour-incomplete", observed)
+        assert (verdict.cls, verdict.reason) == (m.ASK_EXCEEDS, "observation:child_node"), observed
+
+
 def test_effort_fires_backstops_and_ceiling_exceed_the_mandate():
     for kind, observed, reason in EXCEEDS_ROWS:
         if kind.startswith("effort-fire") or kind in ("since-user-backstop", "replan-ceiling", "review-backstop"):
@@ -1159,6 +1214,67 @@ def test_the_rendered_item_norm_passes_the_engine_load_plan_and_submission_grade
     path.write_text(item_norm(body="y" * 10_000), encoding="utf-8")
     doc = plan.load_plan(path, strict=True)
     assert submission.submission_violations(doc, session_weight_class="substantive") == []
+
+
+def test_the_item_norm_stage_knowledge_names_the_issue_title_and_body():
+    import tomllib
+    knowledge = tomllib.loads(item_norm(title="The title", body="Line one\nLine two"))["stage"][0]["knowledge"]
+    assert "Issue #7: The title" in knowledge
+    assert "Line one\nLine two" in knowledge
+    cut = tomllib.loads(item_norm(body="z" * 5000))["stage"][0]["knowledge"]
+    assert "z" * 2000 in cut and "z" * 2001 not in cut and "(cut; full text: issue #7)" in cut
+
+
+def test_the_item_norm_says_check_item_runs_once_at_the_end_without_flags():
+    import tomllib
+    stage = tomllib.loads(item_norm())["stage"][0]
+    text = stage["knowledge"] + stage["procedure"]
+    assert "until it is green" not in text
+    assert "about an hour" in stage["knowledge"] and "full suite against the cycle baseline" in stage["knowledge"]
+    assert "once, at the end, with exactly the command line" in stage["procedure"]
+
+
+def test_the_item_norm_procedure_names_the_small_change_contour_path():
+    import tomllib
+    procedure = tomllib.loads(item_norm())["stage"][0]["procedure"]
+    for verb in ("classify", "next-stage", "record-result --status passed", "verify-final"):
+        assert verb in procedure, verb
+    assert "COMPLETED only once your session is at RESOLUTION" in procedure
+    assert "within 200 lines" in procedure
+
+
+def test_the_item_norm_loads_strictly_with_the_item_dir_under_the_harness_config_root(tmp_path, monkeypatch):
+    from agentctl import plan, submission
+    root = tmp_path / "harness"
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(root))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    item_dir = root / "mandates" / "core-debt" / "items" / "7"
+    item_dir.mkdir(parents=True)
+    path = item_dir / "plan.toml"
+    path.write_text(item_norm(item_dir=str(item_dir), body="y" * 10_000), encoding="utf-8")
+    doc = plan.load_plan(path, strict=True)
+    assert submission.submission_violations(doc, session_weight_class="substantive") == []
+    grants = doc.stages[0].grants
+    assert [g.rule for g in grants.allow] == [
+        "Bash(python3 -m pytest:*)", "Bash(python3 /r/scripts/spawn-specialist.py --kind thinker:*)",
+    ]
+    assert [(d.path, d.mode) for d in grants.add_dirs] == [("/w/item-7", "write")]
+    inputs = dict(item_inputs(item_dir=str(item_dir), body="y" * 10_000), mandate_id=mandate().id)
+    assert m.mandate_approval_problems(path.read_text(encoding="utf-8"), inputs, mandate(), m.GateResult(True)) == []
+
+
+def test_the_item_norm_under_the_harness_config_root_passes_the_mandate_approval_basis(tmp_path, monkeypatch):
+    root = tmp_path / "harness"
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(root))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    item_dir = root / "mandates" / "core-debt" / "items" / "7"
+    inputs = dict(item_inputs(item_dir=str(item_dir), body="y" * 10_000), mandate_id=mandate().id)
+    plan_text = item_norm(item_dir=str(item_dir), body="y" * 10_000)
+    assert m.mandate_approval_problems(plan_text, inputs, mandate(), m.GateResult(True)) == []
+    other_dir = dict(inputs, item_dir=str(root / "mandates" / "core-debt" / "items" / "8"))
+    assert m.mandate_approval_problems(plan_text, other_dir, mandate(), m.GateResult(True))
 
 
 def test_hostile_issue_text_cannot_change_the_item_norm_structure():

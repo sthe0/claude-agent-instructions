@@ -625,14 +625,26 @@ reviewed_by = "developer"
 
 [sites."scripts/mandate_cycle/driver.py::<module>::re.compile"]
 class = "structural"
-ground = "Compiles: VERDICT_RE (the review brief's own `VERDICT: accept|reject` reply marker) and SHA_RE (a 40-hex git commit id)."
-hits = 2
-hit_classes = ["structural", "structural"]
+ground = "Compiles the review brief's own fixed reply-marker syntax (VERDICT_RE, ADDRESSES_ISSUE_RE, ISSUE_ASKS_RE), the list-marker and key-line decoration patterns that read or defang those lines (LIST_MARKER_RE, REVIEW_KEY_LINE_RE), and SHA_RE (a 40-hex git commit id)."
+hits = 6
+hit_classes = ["structural", "structural", "structural", "structural", "structural", "structural"]
 reviewed_by = "developer"
 
-[sites."scripts/mandate_cycle/driver.py::Cycle.review_item::pattern.findall"]
+[sites."scripts/mandate_cycle/driver.py::review_marker_lines::pattern.match"]
 class = "structural"
-ground = "VERDICT_RE.findall reads the reviewer's `VERDICT: accept|reject` marker, a fixed tag the review brief requires; the accept/reject judgement itself is the reviewer model's."
+ground = "The ISSUE-ASKS / ADDRESSES-ISSUE / VERDICT patterns match whole key lines the review brief requires verbatim; the accept/reject and yes/no judgement itself is the reviewer model's."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/mandate_cycle/driver.py::review_marker_lines::pattern.sub"]
+class = "structural"
+ground = "LIST_MARKER_RE.sub strips a leading list bullet or number from a reply line so the fixed key syntax can be matched; it decides no meaning."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/mandate_cycle/driver.py::neutralize_marker::pattern.sub"]
+class = "structural"
+ground = "REVIEW_KEY_LINE_RE.sub quotes (`> `) a line of untrusted text that begins with one of the three fixed key tags, so it cannot pose as the reviewer's own marker line; it matches the tag syntax, not what the text means."
 hits = 1
 reviewed_by = "developer"
 

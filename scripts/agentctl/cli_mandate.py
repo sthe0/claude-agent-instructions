@@ -128,6 +128,44 @@ def cmd_mandate_extend(args, *, store: StateStore, runner: Runner | None = None)
     )
 
 
+def cmd_mandate_limits(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
+    """Change only the named limits of the standing mandate -- a user decision, since the
+    limits bound what the cycle may spend. Each change is logged as {field: [old, new]}."""
+    refusal = _mandate_by_refusal(args)
+    if refusal:
+        return refusal
+    mandate = mandate_store.load_mandate(args.mandate_id)
+    if mandate is None:
+        return Directive(False, _MANDATE_NODE, "noop", f"no mandate {args.mandate_id!r}")
+    changes = {
+        name: getattr(args, name) for name in mandate_rules.LIMIT_FIELDS if getattr(args, name) is not None
+    }
+    if not changes:
+        return Directive(
+            False, _MANDATE_NODE, "noop",
+            "mandate-limits needs at least one limit flag: "
+            + ", ".join("--" + name.replace("_", "-") for name in mandate_rules.LIMIT_FIELDS),
+            data={"mandate": args.mandate_id},
+        )
+    try:
+        changed = mandate_rules.with_limits(mandate, changes)
+    except mandate_rules.MandateError as error:
+        return Directive(False, _MANDATE_NODE, "noop", str(error), data={"mandate": args.mandate_id})
+    now = mandate_store.utcnow()
+    mandate_store.save_mandate(changed)
+    mandate_store.append_event(
+        changed.id, "limits-changed",
+        {name: [getattr(mandate, name), getattr(changed, name)] for name in changes},
+        by=args.by.strip(), now=now,
+    )
+    return Directive(
+        True, _MANDATE_NODE, "noop",
+        f"mandate {changed.id!r}: limits changed by {args.by.strip()}: "
+        + ", ".join(f"{name} {getattr(mandate, name)} -> {getattr(changed, name)}" for name in changes),
+        data=_mandate_view(changed, now),
+    )
+
+
 def cmd_mandate_resume(args, *, store: StateStore, runner: Runner | None = None) -> Directive:
     """Unpause a stopped mandate and close an open breaker -- a user decision, since the
     breaker opens exactly when the cycle's own judgement failed."""
@@ -222,17 +260,22 @@ def register(sub, add):
                              help="the customer authorizing this; the coordinator is refused")
         return sub
 
+    def add_limit_flags(sp: argparse.ArgumentParser, verb: str) -> None:
+        for limit, unit in (
+            ("daily_usd", "USD"), ("weekly_usd", "USD"), ("item_usd_cap", "USD"),
+            ("item_minutes_cap", "minutes"), ("cycle_minutes_cap", "minutes"),
+            ("veto_window_hours", "hours"),
+        ):
+            sp.add_argument(f"--{limit.replace('_', '-')}", dest=limit, type=float, default=None,
+                            help=f"{verb} ({unit})")
+        sp.add_argument("--max-items", dest="max_items", type=int, default=None,
+                        help=f"{verb} (items taken per cycle)")
+
     sp = add_mandate("mandate-grant", "create the standing mandate for the background debt cycle", by=True)
     sp.add_argument("--days", type=float, default=None, help="term length in days")
-    for limit, unit in (
-        ("daily_usd", "USD"), ("weekly_usd", "USD"), ("item_usd_cap", "USD"),
-        ("item_minutes_cap", "minutes"), ("cycle_minutes_cap", "minutes"),
-        ("veto_window_hours", "hours"),
-    ):
-        sp.add_argument(f"--{limit.replace('_', '-')}", dest=limit, type=float, default=None,
-                        help=f"override the default ({unit})")
-    sp.add_argument("--max-items", dest="max_items", type=int, default=None,
-                    help="items taken per cycle")
+    add_limit_flags(sp, "override the default")
+    sp = add_mandate("mandate-limits", "change only the named limits of the standing mandate", by=True)
+    add_limit_flags(sp, "set the limit")
     sp = add_mandate("mandate-extend", "push the mandate's expiry out", by=True)
     sp.add_argument("--days", type=float, required=True, help="days to add past the later of now and expiry")
     add_mandate("mandate-resume", "unpause the mandate and close its breaker", by=True)

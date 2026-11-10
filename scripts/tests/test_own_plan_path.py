@@ -108,12 +108,14 @@ def _assert_foreign_refused(proc: subprocess.CompletedProcess, who: str) -> None
 
 
 def _launch(monkeypatch, tmp_path: Path, *, kind: str = "thinker", stage_index: int | None,
-            dry_run: bool = False) -> Launch:
+            dry_run: bool = False, executor: str | None = None) -> Launch:
     """Run `spawn-specialist.py main` up to the child launch. The workdir is a directory of
     its own, apart from the agent home, so no repo-root deny sits over the plan file."""
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     spawn = _load_spawn()
+    if executor is not None:
+        monkeypatch.setattr(spawn, "executor_of_stage", lambda *a, **k: executor)
     monkeypatch.setattr(spawn.shutil, "which", lambda *a, **k: "/usr/bin/claude")
 
     def launch(cmd, env=None, **kw):
@@ -173,7 +175,7 @@ def test_linked_spawn_grants_exactly_its_own_plan_file(tmp_path, home, agent_hom
     # the allow must survive every kind's deny list: deny beats allow with no diagnostic
     spawn = _load_spawn()
     for kind in _all_kinds():
-        run = _launch(monkeypatch, tmp_path, kind=kind, stage_index=1)
+        run = _launch(monkeypatch, tmp_path, kind=kind, stage_index=1, executor=f"spawn:{kind}")
         assert run.env is not None, f"setup: kind {kind} did not reach the launch (rc={run.rc})"
         child = run.option("--session-id")
         rule = f"Edit(/{agent_home / 'own-plans' / child / 'plan.toml'})"

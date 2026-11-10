@@ -296,9 +296,10 @@ class Contour:
         self.root = _state_dir(self.home)
         self.store = FileStateStore(self.root)
         parent_plan = _parent_plan(tmp_path)
-        _cli(self.root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc")
+        _cli(self.root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc",
+             host="claude")
         _cli(self.root, "classify", session=PARENT, architectural=True,
-             changed_lines=200, wall_clock_min=60)
+             changed_lines=200, wall_clock_min=60, host="claude")
         _cli(self.root, "plan", session=PARENT)
         _cli(self.root, "submit-plan", session=PARENT, plan=parent_plan)
         _cli(self.root, "approve", session=PARENT, by="user")
@@ -317,7 +318,8 @@ class Contour:
         )
         self.handoff = spawn_handoff(self.root, record, CHILD)
         monkeypatch.setenv(HANDOFF_ENV, self.handoff)
-        _cli(self.root, "start", session=CHILD, task="child", goal="g", done_criterion="dc")
+        _cli(self.root, "start", session=CHILD, task="child", goal="g", done_criterion="dc",
+             host="claude")
         monkeypatch.delenv(HANDOFF_ENV)
 
     def own(self, *argv: str, session: str | None = CHILD, **env: str) -> subprocess.CompletedProcess:
@@ -331,7 +333,7 @@ class Contour:
         digest = hashlib.sha256(Path(self.plan).read_bytes()).hexdigest()
         steps = [
             ("classify", "--architectural", "--changed-lines", "200",
-             "--wall-clock-min", "60"),
+             "--wall-clock-min", "60", "--host", "claude"),
             ("plan",),
             ("submit-plan", "--plan", self.plan),
             ("plan-review", "--verdict", "pass", "--reviewer", "thinker",
@@ -383,6 +385,20 @@ def test_own_channel_refuses_unlinked_session(contour):
     assert contour.state_bytes("unlinked-s") == before
     ghost = contour.own("status", session="no-such-session")
     assert ghost.returncode == 2 and REFUSED in ghost.stderr and "no engine session" in ghost.stderr
+
+
+def test_a_linked_small_change_childs_stage_takes_the_handoff_done_criterion(contour, monkeypatch):
+    small = "small-child-s"
+    record = norm_handoff.build_record(
+        parent_session=PARENT, stage_index=1, kind="developer", norm=contour.norm,
+        grants=[], depth=1, parent_lineage=None,
+    )
+    monkeypatch.setenv(HANDOFF_ENV, spawn_handoff(contour.root, record, small))
+    _cli(contour.root, "start", session=small, task="small", goal="g", host="claude")
+    monkeypatch.delenv(HANDOFF_ENV)
+    _cli(contour.root, "classify", session=small, changed_lines=10, wall_clock_min=5, host="claude")
+    criterion = contour.store.load(small).stage(1).criterion.done_criterion
+    assert contour.norm.done_criterion and criterion == contour.norm.done_criterion
 
 
 def _agentctl_subcommands() -> set[str]:
@@ -455,7 +471,7 @@ def test_own_channel_reaches_own_session(contour):
     assert result["node"] != "EXECUTING"
     classified = _expect_ok(
         contour.own("classify", "--architectural", "--changed-lines", "200",
-                    "--wall-clock-min", "60"),
+                    "--wall-clock-min", "60", "--host", "claude"),
         "own channel `classify`",
     )
     assert classified["node"] != "EXECUTING"
@@ -547,6 +563,7 @@ def _load_spawn():
     spec = importlib.util.spec_from_file_location("spawn_specialist_child_contour", SPAWN_SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.SKILLS_DIR = SCRIPTS.parent / "skills" / "specializations"
     return module
 
 
@@ -554,9 +571,10 @@ def _parent_session(home: Path) -> FileStateStore:
     """A session at EXECUTING stage 1 of the shared two-stage fixture, in the state
     directory under `home` (the one a spawned child's engine and hooks resolve)."""
     root = _state_dir(home)
-    _cli(root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc")
+    _cli(root, "start", session=PARENT, task="parent", goal="g", done_criterion="dc",
+         host="claude")
     _cli(root, "classify", session=PARENT, architectural=True, changed_lines=200,
-         wall_clock_min=60)
+         wall_clock_min=60, host="claude")
     _cli(root, "plan", session=PARENT)
     _cli(root, "submit-plan", session=PARENT, plan=str(FIXTURE_PLAN))
     _cli(root, "approve", session=PARENT, by="user")
@@ -651,6 +669,19 @@ def test_linked_brief_names_own_contour(tmp_path, capsys):
         assert needle in section, f"the contour section lacks {needle!r}"
     for verb in sorted(OWN_CONTOUR_VERBS):
         assert f"`{verb}`" in section, f"the brief's verb list lacks {verb!r}"
+
+
+def test_the_own_contour_brief_names_the_small_change_path_and_resolution_before_completed(tmp_path, capsys):
+    _parent_session(tmp_path / "home")
+    argv = _spawn_argv(tmp_path / "home", tmp_path, 1) + ["--dry-run"]
+    assert _load_spawn().main(argv) == 0
+    out = capsys.readouterr().out
+    section = out.split("## Your own engine contour", 1)[1].split("\n## ", 1)[0]
+    path = section.split("Small-change path:", 1)[1].split("\n\n", 1)[0]
+    flat = " ".join(path.split())
+    for needle in ("classify --changed-lines", "`next-stage`", "record-result --status passed", "verify-final"):
+        assert needle in flat, f"the small-change path lacks {needle!r}"
+    assert "Return `COMPLETED:` only once your session is at RESOLUTION" in flat
 
 
 def test_unlinked_spawn_unchanged(tmp_path, monkeypatch, capsys):

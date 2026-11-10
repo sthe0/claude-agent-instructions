@@ -95,6 +95,11 @@ guards = [
     "scripts/tests/test_classify.py",
     "scripts/tests/test_inline_class.py",
     "scripts/tests/test_inline_measure.py",
+    "scripts/tests/test_replan.py",
+    "scripts/tests/test_hook_engine_start.py",
+    "scripts/tests/test_spawn_specialist_grants.py",
+    "scripts/hook-engine-start.py",
+    "scripts/spawn-specialist.py",
     "scripts/tests/mandate_mutation_control.py",
     "config.md",
 ]

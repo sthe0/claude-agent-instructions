@@ -153,6 +153,42 @@ def test_extend_with_a_non_positive_term_fails(env):
     assert rc == 1
 
 
+def test_mandate_limits_sets_only_the_named_limits_and_logs_the_change(env):
+    grant(env, "--daily-usd", "5")
+    before = store.load_mandate(ID)
+    rc, out = env.run("mandate-limits", "--by", "alice", "--item-minutes-cap", "300", "--max-items", "2")
+    assert rc == 0 and out["ok"] is True
+    saved = store.load_mandate(ID)
+    assert (saved.item_minutes_cap, saved.max_items) == (300.0, 2)
+    assert (saved.daily_usd, saved.weekly_usd, saved.item_usd_cap) == (5.0, before.weekly_usd, before.item_usd_cap)
+    assert saved.expires_at == before.expires_at and saved.cycle_minutes_cap == before.cycle_minutes_cap
+    event = store.read_events(ID)[-1]
+    assert event["event"] == "limits-changed" and event["by"] == "alice"
+    assert event["detail"] == {"item_minutes_cap": [200.0, 300.0], "max_items": [3, 2]}
+
+
+def test_mandate_limits_refuses_the_agent(env):
+    grant(env)
+    before = store.load_mandate(ID)
+    for by in ("agent", " AGENT "):
+        rc, out = env.run("mandate-limits", "--by", by, "--item-minutes-cap", "999")
+        assert rc == 1 and out["marker"] == DIRECTIVE_ESCALATE_TO_USER
+    assert store.load_mandate(ID) == before
+    assert [e["event"] for e in store.read_events(ID)] == ["granted"]
+
+
+def test_mandate_limits_needs_a_limit_a_valid_value_and_a_known_mandate(env):
+    grant(env)
+    before = store.load_mandate(ID)
+    rc, out = env.run("mandate-limits", "--by", "alice")
+    assert rc == 1 and "at least one limit flag" in out["detail"]
+    rc, _ = env.run("mandate-limits", "--by", "alice", "--daily-usd", "0")
+    assert rc == 1
+    rc, out = env.run("mandate-limits", "--id", "ghost", "--by", "alice", "--daily-usd", "1")
+    assert rc == 1 and "no mandate" in out["detail"]
+    assert store.load_mandate(ID) == before and [e["event"] for e in store.read_events(ID)] == ["granted"]
+
+
 def test_resume_unpauses_closes_the_breaker_and_reenables_the_timer(env):
     grant(env)
     broken = rules.breaker_opened(rules.stopped(store.load_mandate(ID)), "tests failed")
@@ -334,8 +370,14 @@ def test_mandate_verbs_survive_the_default_session_injection(env, monkeypatch):
 
 # --- user authority -------------------------------------------------------------------
 
+def test_mandate_limits_is_a_user_authority_verb():
+    assert "mandate-limits" in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS
+    call = ["python3", "scripts/agentctl-cli.py", "mandate-limits", "--by", "alice"]
+    assert widening_targets.agentctl_user_authority_call(call) == "mandate-limits"
+
+
 def test_grant_extend_resume_and_retry_are_user_authority_verbs():
-    for verb in ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry"):
+    for verb in ("mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume", "mandate-retry"):
         assert verb in widening_targets.AGENTCTL_USER_AUTHORITY_VERBS, verb
         call = ["python3", "scripts/agentctl-cli.py", verb, "--by", "alice"]
         assert widening_targets.agentctl_user_authority_call(call) == verb

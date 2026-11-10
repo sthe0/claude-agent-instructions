@@ -24,6 +24,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from test_stage_grants import _to_executing, _write_declared_grants_plan, ns
 from agentctl import cli
 
@@ -38,6 +40,11 @@ def _load():
 
 
 MOD = _load()
+
+
+@pytest.fixture(autouse=True)
+def checkout_skills(monkeypatch):
+    monkeypatch.setattr(MOD, "SKILLS_DIR", SCRIPT.parent.parent / "skills" / "specializations")
 
 
 def _dry_run_argv(sid: str, kind: str, stage_index: int, state_root: Path, plan: Path) -> list[str]:

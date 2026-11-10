@@ -1153,3 +1153,276 @@ def test_apply_refined_copies_all_criterion_fields_except_engine_written():
                 f"Field {field.name} should be copied but was not"
 
     assert cli._CRITERION_ENGINE_WRITTEN_FIELDS == expected_engine_written
+
+
+def _small_change_failed(store, sid):
+    cli.cmd_start(ns(session=sid, task=sid, goal="fix it", done_criterion="it is fixed",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=10, files=1,
+                        wall_clock_min=5, tracker_key=None, architectural=False,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
+
+
+def _work_the_difficulty(store, sid, *, failure_address="not_applicable", norm_targets=None,
+                         normalize=True):
+    cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
+    cli.cmd_investigate(ns(session=sid, localized_expectation="le", localized_actual="la",
+                           hypotheses=["h1", "h2"]), store=store)
+    cli.cmd_critique(ns(session=sid, functional_ground="fg", replanning_task="rt",
+                        failure_address=failure_address, norm_targets=norm_targets,
+                        cause_category="implementation_defect", machinery_induced="false",
+                        mechanism="none", functional_place="verification"), store=store)
+    if normalize:
+        cli.cmd_normalize(ns(session=sid, factor="reproducible cause", level="note"), store=store)
+
+
+def test_a_small_change_session_replans_without_a_plan_after_a_complete_difficulty_record(store):
+    sid = "pl-ok"
+    _small_change_failed(store, sid)
+    assert store.load(sid).node == Node.DIAGNOSING.value
+    _work_the_difficulty(store, sid)
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is True and d.action == "next_stage"
+    state = store.load(sid)
+    assert state.node == Node.VERIFYING.value
+    assert state.plan_path is None
+    assert state.difficulty is None
+    assert state.stage(1).outcome.status == StageStatus.PENDING.value
+    assert state.ready_stages()[0].index == 1
+
+
+def test_a_planless_replan_is_refused_on_an_incomplete_difficulty_record(store):
+    sid = "pl-incomplete"
+    _small_change_failed(store, sid)
+    cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and d.action == "declare"
+    assert store.load(sid).node == Node.DIAGNOSING.value
+
+
+def test_a_planless_replan_of_a_substantive_session_is_refused(store, venued_fixtures_dir):
+    sid = "pl-substantive"
+    _to_executing_stage1(store, sid, str(venued_fixtures_dir / "plan_two_stage.toml"))
+    cli.cmd_record_result(ns(session=sid, status="failed", actual="boom"), store=store)
+    _work_the_difficulty(store, sid, failure_address="resource")
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and "replan needs --plan" in d.detail
+    assert store.load(sid).node == Node.DIAGNOSING.value
+
+
+def test_a_planless_replan_with_a_file_norm_target_is_refused(store, tmp_path, monkeypatch):
+    norms = tmp_path / "norms"
+    norms.mkdir()
+    norm_file = norms / "rule.md"
+    norm_file.write_text("a norm\n", encoding="utf-8")
+    monkeypatch.setenv("AGENTCTL_NORM_ROOTS", str(norms))
+    sid = "pl-file-target"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid, failure_address="normative", norm_targets=[str(norm_file)])
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and "edits no norm" in d.detail
+    assert d.data["blockers"] == [str(norm_file)]
+    assert store.load(sid).node == Node.DIAGNOSING.value
+
+
+def test_a_planless_replan_is_refused_without_a_failure_address(store):
+    sid = "pl-no-address"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid, failure_address=None)
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and d.action == "critique"
+    assert store.load(sid).node == Node.DIAGNOSING.value
+
+
+def test_a_planless_replan_is_refused_without_a_normalization(store):
+    sid = "pl-no-normalization"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid, normalize=False)
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and d.action == "normalize"
+    assert store.load(sid).node == Node.DIAGNOSING.value
+
+
+def test_a_planless_replan_is_booked_as_an_operative_replan(store):
+    from agentctl import effort, task_accumulator
+    sid = "pl-booked"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    before = int(task_accumulator.get(sid).get("per_axis_totals", {}).get("replan_count", 0) or 0)
+
+    assert cli.cmd_replan(ns(session=sid, plan=None), store=store).ok is True
+
+    state = store.load(sid)
+    replans = [h for h in state.history if h.get("event") == "replan"]
+    assert [h["change_class"] for h in replans] == [effort.OPERATIVE_CLASS]
+    assert effort.replan_count(state) == 1
+    after = int(task_accumulator.get(sid).get("per_axis_totals", {}).get("replan_count", 0) or 0)
+    assert after == before + 1
+
+
+def _seed_replan_ceiling(sid):
+    from agentctl import task_accumulator
+    from agentctl.config import Thresholds
+    thr = Thresholds().effort_replan_absolute()
+    task_accumulator.add(sid, "replan_count", thr, session_id=sid, now=None)
+    return thr
+
+
+def test_a_planless_replan_at_the_replan_ceiling_escalates_to_the_user(store):
+    from agentctl.directive import DIRECTIVE_ESCALATE_TO_USER
+    sid = "pl-ceiling"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    thr = _seed_replan_ceiling(sid)
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and d.action == "renegotiate"
+    assert d.marker == DIRECTIVE_ESCALATE_TO_USER
+    assert d.data["replan_count"] == thr
+    assert store.load(sid).node == Node.DIAGNOSING.value
+
+
+def test_an_agent_cannot_continue_a_planless_replan_past_the_ceiling(store):
+    sid = "pl-ceiling-agent"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    _seed_replan_ceiling(sid)
+    assert cli.cmd_replan(ns(session=sid, plan=None), store=store).action == "renegotiate"
+
+    d = cli.cmd_replan(ns(session=sid, plan=None, renegotiation_decision="continue",
+                          renegotiated_by="agent", renegotiation_note="keep going"), store=store)
+
+    assert d.ok is False and d.action == "renegotiate"
+    assert "renegotiation by the agent refused" in d.detail
+    assert "no user-approved version" in d.detail
+    state = store.load(sid)
+    assert state.node == Node.DIAGNOSING.value
+    assert state.renegotiations == []
+
+
+def test_the_user_can_continue_a_planless_replan_past_the_ceiling(store):
+    sid = "pl-ceiling-user"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    _seed_replan_ceiling(sid)
+
+    d = cli.cmd_replan(ns(session=sid, plan=None, renegotiation_decision="continue",
+                          renegotiated_by="user", renegotiation_note="keep going"), store=store)
+
+    assert d.ok is True and d.action == "next_stage"
+    state = store.load(sid)
+    assert state.node == Node.VERIFYING.value
+    assert [r["decision"] for r in state.renegotiations] == ["continue"]
+
+
+def test_a_planless_replan_is_refused_on_an_unacknowledged_effort_fire(store, monkeypatch):
+    monkeypatch.setenv("AGENTCTL_EFFORT", "1")
+    sid = "pl-effort-fire"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    state = store.load(sid)
+    state.effort_fires = [{"scale": "spend", "kind": "ratio", "actual": 12.5, "estimate": 3.0,
+                           "multiple": 4.17, "history_len": 0, "ts": 1.0}]
+    store.save(state)
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and d.action == "fire_acknowledge"
+    assert "effort-divergence fire" in d.detail
+    assert store.load(sid).node == Node.DIAGNOSING.value
+
+
+def test_a_planless_replan_is_refused_while_a_nested_difficulty_is_open(store):
+    sid = "pl-nested"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    assert cli.cmd_difficulty_open(ns(session=sid, origin="normalize"), store=store).ok is True
+    nested_uid = store.load(sid).difficulty.uid
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and d.action == "difficulty_close"
+    assert nested_uid in d.data["blockers"][0]
+    state = store.load(sid)
+    assert state.node == Node.DIAGNOSING.value
+    assert len(state.difficulty_stack) == 1
+
+
+def test_a_planless_replan_outside_diagnosing_is_refused(store):
+    sid = "pl-not-diagnosing"
+    cli.cmd_start(ns(session=sid, task=sid, goal="fix it", done_criterion="it is fixed",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=10, files=1,
+                        wall_clock_min=5, tracker_key=None, architectural=False,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    node = store.load(sid).node
+    assert node != Node.DIAGNOSING.value
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and "node=DIAGNOSING" in d.detail
+    assert store.load(sid).node == node
+
+
+def test_a_planless_replan_is_refused_at_executing_with_a_release_time_difficulty_record(store):
+    from agentctl import task_accumulator
+    sid = "pl-release-record"
+    cli.cmd_start(ns(session=sid, task=sid, goal="fix it", done_criterion="it is fixed",
+                     criterion_type="measurable", recursion_depth=0), store=store)
+    cli.cmd_classify(ns(session=sid, chat=False, changed_lines=10, files=1,
+                        wall_clock_min=5, tracker_key=None, architectural=False,
+                        external_effect=False, new_dependency=False,
+                        public_api_change=False), store=store)
+    cli.cmd_next_stage(ns(session=sid), store=store)
+    task_accumulator.add(sid, "review_rounds", _seed_replan_ceiling(sid), session_id=sid, now=None)
+    declared = cli.cmd_declare(ns(session=sid, expected="e", actual="a", mismatch="m"), store=store)
+    assert declared.ok is True, declared.detail
+    state = store.load(sid)
+    assert state.node == Node.EXECUTING.value and state.difficulty is not None
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and "node=DIAGNOSING" in d.detail
+    assert store.load(sid).node == Node.EXECUTING.value
+
+
+def test_a_planless_replan_of_a_paused_session_is_refused_and_names_unblock(store):
+    sid = "pl-paused"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+    assert cli.cmd_block(ns(session=sid, reason="waiting"), store=store).ok is True
+    assert store.load(sid).node == Node.BLOCKED.value
+
+    d = cli.cmd_replan(ns(session=sid, plan=None), store=store)
+
+    assert d.ok is False and "node=DIAGNOSING" in d.detail and "unblock" in d.detail
+    state = store.load(sid)
+    assert state.node == Node.BLOCKED.value and state.difficulty is not None
+
+
+def test_a_planless_replan_refuses_renormalize(store):
+    sid = "pl-renormalize"
+    _small_change_failed(store, sid)
+    _work_the_difficulty(store, sid)
+
+    d = cli.cmd_replan(ns(session=sid, plan=None, renormalize=True), store=store)
+
+    assert d.ok is False and "--renormalize" in d.detail
+    assert store.load(sid).node == Node.DIAGNOSING.value

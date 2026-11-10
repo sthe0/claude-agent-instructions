@@ -57,6 +57,10 @@ EXPECTED_ENTRIES = (
     "ask-wall-clock-exceeds", "ask-wall-clock-scale", "stop-limit-mapping",
     "stop-declined-fallback", "item-norm-title-cut", "item-norm-body-cut",
     "item-norm-body-cut-length", "mandate-id-compared", "driver-records-order",
+    "spawned-task-id", "item-norm-issue-text", "killed-charge-transcript", "review-addresses-issue",
+    "addresses-issue-no-after-verdict", "review-any-reject-line", "boundary-stop-counted",
+    "contour-reminder", "contour-resume-counts-round", "planless-replan",
+    "spawn-executor-guard", "planless-replan-node-gate",
 )
 
 

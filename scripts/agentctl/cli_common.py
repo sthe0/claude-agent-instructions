@@ -1724,6 +1724,17 @@ def _adopt_norm_handoff(state: SessionState, store: StateStore) -> None:
               norm_digest=adopted["norm_digest"])
 
 
+def _done_criterion_or_handoff(state: SessionState) -> str:
+    """The session's overall done criterion, else the done criterion of the parent stage
+    norm it was handed ('' for an unlinked session with none). A linked child that takes
+    the small-change path writes no plan to carry one, and the parent's norm is the order
+    it works under."""
+    if state.overall_done_criterion:
+        return state.overall_done_criterion
+    lineage = (state.parent_link or {}).get("norm_lineage") or []
+    return str(lineage[-1].get("done_criterion") or "") if lineage else ""
+
+
 def _agent_replans_fire_route(state: SessionState) -> dict | None:
     """The agent's own route for an unacknowledged `replans`-scale fire of a ledgered
     order: a planning-difficulty cycle, not a question to the user. None for every other
@@ -3468,8 +3479,8 @@ _SESSION_COMMANDS = (
     "verify-final", "resolve", "reject",
     "replan", "fire-acknowledge", "check-coverage", "effort-check", "block", "unblock", "status", "children",
     "adopt-escalation", "drive", "close", "push-subplan", "pop-subplan", "task-reset",
-    "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry", "mandate-stop", "mandate-status",
-    "workspace-register",
+    "mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume", "mandate-retry", "mandate-stop",
+    "mandate-status", "workspace-register",
 )
 
 
@@ -3575,11 +3586,12 @@ _DO_NOT_WRAP_ROWS: tuple[tuple[str, tuple[str, ...], str], ...] = (
      "comma-separated stage indices the launcher narrowed the pass to"),
     ("new", ("check-coverage",), "corrected plan file path — the object under a coverage pre-check, not narrative"),
     ("rendering_file", ("present-plan",), "path to the rendered presentation"),
-    ("mandate_id", ("mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry",
+    ("mandate_id", ("mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume", "mandate-retry",
                     "mandate-stop", "mandate-status"),
      "mandate slug the state directory is keyed by"),
     ("by", ("confirm-delivery", "approve", "resolve", "fire-acknowledge", "resolve-permission",
-            "task-reset", "mandate-grant", "mandate-extend", "mandate-resume", "mandate-retry"),
+            "task-reset", "mandate-grant", "mandate-limits", "mandate-extend", "mandate-resume",
+            "mandate-retry"),
      "who acted — a name, not a narrative (resolve-permission's reserved 'agent' value is an "
      "identity token like any other --by, not free text)"),
     # --decision is NOT listed here: argparse `choices=` already makes it a non-candidate
