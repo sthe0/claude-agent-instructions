@@ -66,7 +66,7 @@ MERGE_MODE = {
     "events": "ignore", "compactions": "ignore", "context_births": "ignore", "judge_usage": "ignore",
     "causes": "ignore", "artifacts": "ignore",
 }
-LOCAL_ONLY = store._INTERNAL_TABLES | {"session_head_marks"}
+LOCAL_ONLY = store.INTERNAL_TABLES | {"session_head_marks"}
 TEXT_TABLES = frozenset({"artifacts"})
 LOCAL_ROWID_COLUMNS = {"artifacts": ("artifact_id",)}
 _TABLE_ORDER = {table: position for position, table in enumerate(MERGE_KEYS)}
@@ -182,6 +182,8 @@ def _header(path, text: str) -> dict:
     if not isinstance(header["table_versions"], dict) or not isinstance(header["counts"], dict) \
             or not isinstance(header["fixture_sha256"], list):
         raise Refused(f"{path}: malformed export header")
+    if not isinstance(header["origin"], str) or not header["origin"]:
+        raise Refused(f"{path}: the export header's origin {header['origin']!r} is not a non-empty string")
     try:
         _instant(header["taken_at"])
     except (TypeError, ValueError, AttributeError):
@@ -239,6 +241,11 @@ def _validate(conn, path) -> dict:
         row = line.get("row")
         if not isinstance(row, dict):
             raise Refused(f"a {table} line has no row")
+        if "origin" not in line:
+            raise Refused(f"a {table} line has no origin")
+        missing_keys = [k for k in MERGE_KEYS[table] if k not in row]
+        if missing_keys:
+            raise Refused(f"a {table} row has no merge-key column(s) {missing_keys}")
         if table not in columns:
             columns[table] = store.table_columns(conn, table)
         unknown = set(row) - columns[table]

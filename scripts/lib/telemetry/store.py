@@ -57,8 +57,8 @@ ENUM_COLUMNS = {
     "token_usage": {"role": ("roles", "role_table_version"), "phase": ("phases", "phase_table_version")},
     "losses": {"loss_mode": ("loss_modes", "loss_mode_table_version")},
 }
-_INTERNAL_TABLES = frozenset({"meta", "schema_migrations", "spool_offsets", "import_offsets", "merge_state",
-                              "sqlite_sequence"})
+INTERNAL_TABLES = frozenset({"meta", "schema_migrations", "spool_offsets", "import_offsets", "merge_state",
+                             "sqlite_sequence"})
 # A merge is a foreground command the user starts and can interrupt, not a command-path call:
 # it waits on the write lock with SQLite's longest busy timeout instead of DEADLINE_S.
 MERGE_BUSY_MS = 2 ** 31 - 1
@@ -310,7 +310,7 @@ def table_columns(conn: sqlite3.Connection, table: str) -> "set[str]":
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> "set[str]":
-    if table in _INTERNAL_TABLES or table.startswith("artifacts_fts"):
+    if table in INTERNAL_TABLES or table.startswith("artifacts_fts"):
         raise ValueError(f"{table!r} is not a data table of the record")
     columns = table_columns(conn, table)
     if not columns:
@@ -737,15 +737,17 @@ _SUPERSEDED_IMPORTED_EVENTS = (
 
 def delete_superseded_imported_events(conn: sqlite3.Connection) -> int:
     """Delete every imported event row a live row supersedes, MERGE_CHUNK_ROWS per transaction.
+    Each chunk of ids is selected outside the write transaction, since the select scans the
+    events table and the write lock must stay short for hook writers. Superseding only grows
+    (live rows are never deleted), so an id selected before the transaction stays superseded.
     Returns the rows deleted."""
     deleted = 0
     while True:
-        changed = _merge_transaction(conn, lambda: conn.execute(
-            f"DELETE FROM events WHERE event_id IN ({_SUPERSEDED_IMPORTED_EVENTS} LIMIT {MERGE_CHUNK_ROWS})"
-        ).rowcount)
-        deleted += changed
-        if not changed:
+        ids = [row[0] for row in conn.execute(f"{_SUPERSEDED_IMPORTED_EVENTS} LIMIT {MERGE_CHUNK_ROWS}")]
+        if not ids:
             return deleted
+        deleted += _merge_transaction(conn, lambda: conn.executemany(
+            "DELETE FROM events WHERE provenance = 'imported' AND event_id = ?", [(i,) for i in ids]).rowcount)
 
 
 def _merge_transaction(conn: sqlite3.Connection, work):

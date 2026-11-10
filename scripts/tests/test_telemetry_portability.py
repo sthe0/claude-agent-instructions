@@ -617,6 +617,45 @@ def test_merge_refuses_an_unknown_column_before_writing(records):
     assert b.counts() == before
 
 
+def test_merge_refuses_a_line_without_origin_or_merge_key_before_writing(records):
+    a, b = records("a"), records("b")
+    populate(a)
+
+    def drop_origin(line):
+        if line["table"] == "losses":
+            line.pop("origin")
+
+    def drop_key(line):
+        if line["table"] == "losses":
+            line["row"].pop("session_id")
+    cases = [(drop_origin, None, "no origin"), (drop_key, None, "merge-key column"),
+             (None, lambda h: h.update(origin=""), "origin ''"), (None, lambda h: h.update(origin=7), "origin 7")]
+    for n, (row_change, header_change, message) in enumerate(cases):
+        bad = a.export(f"bad-{n}", T1)
+        rewrite_export(bad, header_change=header_change, row_change=row_change)
+        with pytest.raises(portability.Refused, match=message):
+            b.merge(bad)
+        assert b.counts() == {t: 0 for t in b.counts()}, message
+
+
+def test_superseded_select_runs_outside_the_write_transaction(records):
+    holder, liver, target = records("holder"), records("liver"), records("target")
+    holder.put("sessions", session("old", holder.origin))
+    holder.put("events", event("imported-1", "old", provenance="imported"))
+    liver.put("sessions", session("new", liver.origin))
+    liver.put("events", event("live-1", "new", backref_id="imported-1"))
+    target.merge(holder.export("imported", T1))
+    selects = []
+    target.conn.set_trace_callback(
+        lambda sql: selects.append(target.conn.in_transaction) if "SELECT backref_id FROM events" in sql else None)
+    try:
+        assert target.merge(liver.export("live", T1))["superseded"] == 1
+    finally:
+        target.conn.set_trace_callback(None)
+    assert selects and not any(selects), selects
+    assert target.rows("SELECT event_id FROM events") == [("live-1",)]
+
+
 def test_merge_refuses_a_malformed_header(records):
     a, b = records("a"), records("b")
     populate(a)

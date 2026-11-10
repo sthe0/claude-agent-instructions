@@ -105,10 +105,12 @@ writes a gzip JSON-lines file, created 0600, from the record opened read-only: a
 line per row with the origin of the machine that recorded it (null when the record cannot resolve
 it). Text artifacts go out only with `--with-text`; a failed export leaves no file. `telemetry.py
 merge F` reads the export twice, one line at a time, so memory does not grow with its size: the
-first pass refuses (exit 2, nothing written) an unknown table, column or table version, another
-fixture revision, a malformed header, or line counts that differ from the header's (a truncated
-file); the second applies rows by each table's merge key (`MERGE_KEYS`), 50 000 rows per
-transaction so hook writers get the lock between chunks. An upsert-mode row replaces a stored row
+first pass refuses (exit 2, nothing written) an unknown table, column or table version, a line
+without an origin or without its table's merge-key columns, another fixture revision, a malformed
+header, or line counts that differ from the header's (a truncated file); the second applies rows
+by each table's merge key (`MERGE_KEYS`), 50 000 rows per transaction so hook writers get the lock
+between chunks. A merge interrupted after validation leaves its earlier chunks committed; running
+it again completes it. An upsert-mode row replaces a stored row
 only when both belong to the export's origin, that origin is not the receiver's, and the export is
 newer than that origin's last merged one; a row of unresolved origin is only inserted when absent.
 `telemetry.py check-roundtrip --workdir D` copies the record into D, exports the copy, merges it
