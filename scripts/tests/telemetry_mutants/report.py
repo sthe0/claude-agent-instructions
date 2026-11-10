@@ -203,6 +203,12 @@ MUTANTS = [
      "anchor": 'env[live.SYNTHETIC_ENV] = "1"',
      "replacement": "env.pop(live.SYNTHETIC_ENV, None)",
      "tests": [_C + "test_driver_run_task_reads_synthetic_true"]},
+    # the child walks the engine sequence, not just classify and status
+    {"name": "driver_runs_status_only", "file": _DRIVER,
+     "anchor": 'code = run_task(task_prompt(Path(scratch) / "state", plan), child_env(), trace_log)',
+     "replacement": ("code = run_task(\"Run `python3 ~/claude-agent-instructions/scripts/agentctl-cli.py classify "
+                     "--title synthetic` and then `agentctl-cli.py status`, and stop.\", child_env(), trace_log)"),
+     "tests": [_C + "test_driver_prompt_walks_the_engine_against_an_isolated_state_root"]},
 
     {"name": "oversized_first_line_skipped", "file": _IMPORTER,
      "anchor": 'return raw if raw.endswith(b"\\n") or len(raw) == FIRST_LINE_MAX else None',

@@ -6,6 +6,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
+import subprocess
 import uuid
 from pathlib import Path
 from unittest import mock
@@ -324,6 +326,39 @@ def test_driver_run_task_reads_synthetic_true(world, monkeypatch):
     assert results == [{"returncode": 0, "trace": None}]
     rows = [t for t in tasks() if t["task_id"] == "synthetic-task"]
     assert [t["synthetic"] for t in rows] == [1]
+
+
+ENGINE_STEPS = ("reset", "submit-plan", "dispatch", "record-result", "verify-final")
+
+
+def test_driver_prompt_walks_the_engine_against_an_isolated_state_root(world, monkeypatch):
+    """The child is told to walk reset → submit-plan → dispatch → record-result → verify-final, each
+    against the task's own --state-root; run as written, the walk reaches RESOLUTION."""
+    handed = []
+
+    def fake_run_task(prompt, env, trace_log=None):
+        lines = [line.split("`")[1] for line in prompt.splitlines() if line.count("`") == 2]
+        directives = []
+        for line in lines:
+            done = subprocess.run(["bash", "-c", line], env={**env, "CLAUDE_CODE_SESSION_ID": "s-walk"},
+                                  capture_output=True, text=True, check=False)
+            directives.append(json.loads(done.stdout))
+        handed.append((lines, directives))
+        return 0
+
+    monkeypatch.setattr(driver, "run_task", fake_run_task)
+    driver.run(2)
+    roots = []
+    for lines, directives in handed:
+        argvs = [shlex.split(line) for line in lines]
+        verbs = [argv[argv.index("--state-root") + 2] for argv in argvs if "--state-root" in argv]
+        assert [verb for verb in verbs if verb in ENGINE_STEPS] == list(ENGINE_STEPS)
+        task_roots = {argv[argv.index("--state-root") + 1] for argv in argvs}
+        assert len(task_roots) == 1
+        roots.append(task_roots.pop())
+        assert all(d["ok"] for d in directives), directives
+        assert directives[-1]["node"] == "RESOLUTION"
+    assert len(set(roots)) == 2 and not any(Path(root).exists() for root in roots)
 
 
 # --- trace ----------------------------------------------------------------------------------
