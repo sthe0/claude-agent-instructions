@@ -17,7 +17,8 @@ from telemetry_live_support import spool_events
 
 
 def put(table, *rows):
-    assert store.insert_rows(table, rows)["failed"] == 0
+    outcome = store.insert_rows(table, rows, deadline_s=60)
+    assert outcome["failed"] == 0 and outcome["deferred"] == 0
 
 
 def event(session, kind, seconds, fields=None, source_key=None, provenance="live") -> str:
