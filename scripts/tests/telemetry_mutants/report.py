@@ -15,6 +15,10 @@ _SYNC = "scripts/lib/telemetry/sync.py"
 _K = "scripts/tests/test_telemetry_tokens.py::"
 _I = "scripts/tests/test_telemetry_importer.py::"
 _R = "scripts/tests/test_core_version_report.py::"
+_COMPARE = "scripts/telemetry-compare.py"
+_DRIVER = "scripts/telemetry-synthetic-task.py"
+_BENCH = "scripts/telemetry-bench.py"
+_C = "scripts/tests/test_telemetry_compare.py::"
 
 _LAST_EVENT = 'sync.parse_time(conn.execute("SELECT MAX(time) FROM events WHERE session_id = ?", (session,)).fetchone()[0])'
 _SYNC_COMMITS = ('[t for t in _times(conn, "SELECT time FROM events WHERE kind = ? AND json_extract(fields, \'$.session\') = ?", '
@@ -108,6 +112,96 @@ MUTANTS = [
     {"name": "deferred_sync_counted_as_late", "file": _REPORT,
      "anchor": 'status = "sync_deferred"', "replacement": 'status = "late"',
      "tests": [_R + "test_check_latency_lists_deferred_sync_rows_as_named_loss_not_late"]},
+
+    {"name": "tolerance_includes_se", "file": _COMPARE,
+     "anchor": 'reconstruction_half_width(stat["lo"], stat["hi"]))',
+     "replacement": 'reconstruction_half_width(stat["lo"], stat["hi"]) + stat["se"])',
+     "tests": [_C + "test_tolerance_is_max_of_two_points_and_reconstruction_half_width"]},
+
+    {"name": "bench_ignores_bound", "file": _BENCH,
+     "anchor": "for name, ms in commands.items() if ms > command_bound_ms]",
+     "replacement": "for name, ms in commands.items() if False]",
+     "tests": [_C + "test_bench_fails_when_a_bound_is_exceeded"]},
+
+    {"name": "trace_counts_hooks_as_command_path", "file": _DRIVER,
+     "anchor": "return HOOK_PATH if any(",
+     "replacement": "return COMMAND_PATH if any(",
+     "tests": [_C + "test_trace_classifies_hook_and_command_path_processes"]},
+
+    {"name": "compare_ignores_snapshot_sha", "file": _COMPARE,
+     "anchor": "if actual != expected:",
+     "replacement": "if False:",
+     "tests": [_C + "test_compare_refuses_a_snapshot_with_another_sha256"]},
+
+    {"name": "historical_transcript_side_reads_frozen_aggregate", "file": _COMPARE,
+     "anchor": "lines = snapshot_lines(snapshot, {s for _, windows in chosen for s in windows})",
+     "replacement": "lines = {s: _file_lines(p) for s, p in local_transcripts().items()}",
+     "tests": [_C + "test_historical_transcript_side_computed_over_the_record_side_task_set"]},
+
+    {"name": "historical_missing_task_kept_on_record_side", "file": _COMPARE,
+     "anchor": "if any(s not in stems for s in required):",
+     "replacement": "if False:",
+     "tests": [_C + "test_historical_task_missing_from_the_snapshot_left_out_of_both_sides"]},
+
+    {"name": "historical_passes_on_empty_join", "file": _COMPARE,
+     "anchor": 'payload["ok"] = False\n        payload["error"] = f"{len(chosen)} task(s) join',
+     "replacement": 'payload["error"] = f"{len(chosen)} task(s) join',
+     "tests": [_C + "test_historical_side_fails_when_no_task_joins_the_snapshot"]},
+
+    {"name": "historical_transcript_side_counts_whole_session", "file": _COMPARE,
+     "anchor": "return phase_ms(phases.bash_points(rows), landing, window)",
+     "replacement": "return phase_ms(phases.bash_points(rows), landing, (0, 2**62))",
+     "tests": [_C + "test_historical_transcript_side_splits_a_session_at_task_boundaries"]},
+
+    {"name": "historical_partially_recorded_task_kept", "file": _COMPARE,
+     "anchor": "elif _partially_recorded(conn, windows):",
+     "replacement": "elif False:",
+     "tests": [_C + "test_historical_task_with_partially_recorded_session_left_out_of_both_sides"]},
+
+    {"name": "historical_unimported_transcript_task_kept", "file": _COMPARE,
+     "anchor": "elif any(not _has_rows(conn, s, RECORDED) for s in required):",
+     "replacement": "elif False:",
+     "tests": [_C + "test_historical_task_with_unimported_transcript_left_out_of_both_sides"]},
+
+    {"name": "historical_judge_contour_requires_transcript", "file": _COMPARE,
+     "anchor": "required = [s for s in contours if roles.get(s) != JUDGE_ROLE]",
+     "replacement": "required = list(contours)",
+     "tests": [_C + "test_historical_task_with_transcriptless_judge_contour_stays_in_both_sides"]},
+
+    {"name": "live_partially_recorded_task_kept", "file": _COMPARE,
+     "anchor": "elif _partially_recorded(conn, sessions):",
+     "replacement": "elif False:",
+     "tests": [_C + "test_live_side_excludes_partially_recorded_and_open_tasks"]},
+
+    {"name": "live_imported_task_kept", "file": _COMPARE,
+     "anchor": "if not windows:",
+     "replacement": "if False:",
+     "tests": [_C + "test_live_side_excludes_imported_only_tasks"]},
+
+    {"name": "live_mixed_provenance_task_kept", "file": _COMPARE,
+     "anchor": "elif any(_transcript_derived(conn, s) for s in sessions):",
+     "replacement": "elif False:",
+     "tests": [_C + "test_live_side_excludes_tasks_with_an_imported_session"]},
+
+    {"name": "live_task_without_transcript_kept", "file": _COMPARE,
+     "anchor": "elif any(s not in transcripts for s in needs):",
+     "replacement": "elif False:",
+     "tests": [_C + "test_live_task_without_transcript_left_out_of_both_sides"]},
+
+    {"name": "judge_contour_requires_transcript", "file": _COMPARE,
+     "anchor": "needs = [s for s in sessions if roles.get(s) != JUDGE_ROLE]",
+     "replacement": "needs = list(sessions)",
+     "tests": [_C + "test_task_with_transcriptless_judge_contour_stays_in_the_live_set"]},
+
+    {"name": "synthesize_ignores_min_tasks", "file": _COMPARE,
+     "anchor": "wanted = min(max(min_tasks - len(chosen), 0), max_synthetic)",
+     "replacement": "wanted = max_synthetic",
+     "tests": [_C + "test_synthesize_tops_up_to_min_tasks"]},
+
+    {"name": "driver_omits_synthetic_env", "file": _DRIVER,
+     "anchor": 'env[live.SYNTHETIC_ENV] = "1"',
+     "replacement": "env.pop(live.SYNTHETIC_ENV, None)",
+     "tests": [_C + "test_driver_run_task_reads_synthetic_true"]},
 
     {"name": "oversized_first_line_skipped", "file": _IMPORTER,
      "anchor": 'return raw if raw.endswith(b"\\n") or len(raw) == FIRST_LINE_MAX else None',

@@ -44,7 +44,7 @@ def _is_red(fields: dict) -> bool:
 
 # --- readers ----------------------------------------------------------------------------
 
-def _task_events(conn, key: tuple) -> list:
+def task_event_rows(conn, key: tuple) -> list:
     """(event_id, session_id, kind, source_key, provenance, time, fields) of the task's events."""
     ids = sync.events_of_task(conn, *key)
     rows = []
@@ -79,7 +79,7 @@ def tasks(conn, include_synthetic: bool = False) -> list:
         if row[5] and not include_synthetic:
             continue
         key = _task_key(row)
-        events = _task_events(conn, key)
+        events = task_event_rows(conn, key)
         out.append({
             "task": key, "weight_class": row[4],
             "status": "RESOLVED" if row[3] == "resolved" else "open",
@@ -138,7 +138,7 @@ def difficulties(conn, include_synthetic: bool = False) -> list:
     causes = _causes_by_slot(conn)
     out = []
     for task in tasks(conn, include_synthetic):
-        events = _task_events(conn, task["task"])
+        events = task_event_rows(conn, task["task"])
         ordinal: dict = {}
         open_by_session: dict = {}
         for index, event in enumerate(events):
@@ -165,7 +165,7 @@ def difficulties(conn, include_synthetic: bool = False) -> list:
     return out
 
 
-def _task_sessions(conn, key: tuple) -> list:
+def task_session_ids(conn, key: tuple) -> list:
     sessions = {r[0] for r in conn.execute(
         "SELECT session_id FROM sessions WHERE task_origin = ? AND task_id = ? AND task_epoch = ?", key)}
     opener = conn.execute("SELECT session_id FROM events WHERE event_id = ?", (key[2],)).fetchone()
@@ -177,7 +177,7 @@ def _task_sessions(conn, key: tuple) -> list:
 def sessions(conn, task: tuple) -> list:
     """The task's sessions as dicts of their session-row columns (session_id only when no row)."""
     out = []
-    for session in _task_sessions(conn, task):
+    for session in task_session_ids(conn, task):
         cursor = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session,))
         values = cursor.fetchone()
         out.append(dict(zip([d[0] for d in cursor.description], values)) if values else {"session_id": session})
@@ -187,14 +187,14 @@ def sessions(conn, task: tuple) -> list:
 def events(conn, task: tuple, kinds=None) -> list:
     """The task's events as dicts (fields decoded), oldest first; `kinds` filters by kind."""
     names = ("event_id", "session_id", "kind", "source_key", "provenance", "time", "fields")
-    return [dict(zip(names, e)) for e in _task_events(conn, task) if kinds is None or e[2] in kinds]
+    return [dict(zip(names, e)) for e in task_event_rows(conn, task) if kinds is None or e[2] in kinds]
 
 
 # --- the core-version view ----------------------------------------------------------------
 
 def _head(conn, key: tuple) -> str:
     opener = conn.execute("SELECT session_id FROM events WHERE event_id = ?", (key[2],)).fetchone()
-    candidates = ([opener[0]] if opener else []) + _task_sessions(conn, key)
+    candidates = ([opener[0]] if opener else []) + task_session_ids(conn, key)
     for session in candidates:
         row = conn.execute("SELECT core_head FROM sessions WHERE session_id = ?", (session,)).fetchone()
         if row and row[0]:
@@ -332,11 +332,11 @@ def core_version(conn, include_synthetic: bool = False) -> dict:
     synthetic = 0
     for task in tasks(conn, include_synthetic):
         synthetic += task["synthetic"]
-        task_events = _task_events(conn, task["task"])
+        task_events = task_event_rows(conn, task["task"])
         head = heads.setdefault(_head(conn, task["task"]), {"tasks": [], "events": [], "sessions": set()})
         head["tasks"].append({**_task_measures(conn, task, task_events), "weight_class": task["weight_class"]})
         head["events"] += task_events
-        head["sessions"].update(_task_sessions(conn, task["task"]))
+        head["sessions"].update(task_session_ids(conn, task["task"]))
     out_heads = []
     for name, head in sorted(heads.items()):
         classes: dict = {}
@@ -363,7 +363,7 @@ def self_cost(conn, task_id: str) -> dict:
     `task_id`, and the event count of each self-measurement entry over the task's sessions."""
     keys = [_task_key(r) for r in conn.execute(
         "SELECT origin, task_id, epoch FROM tasks WHERE task_id = ?", (task_id,))]
-    session_ids = sorted({s for key in keys for s in _task_sessions(conn, key)})
+    session_ids = sorted({s for key in keys for s in task_session_ids(conn, key)})
     rows = []
     for start in range(0, len(session_ids), 500):
         chunk = session_ids[start:start + 500]
@@ -443,7 +443,7 @@ def check_events(conn, task_id: str, window: "dict | None" = None) -> dict:
     and session, recorded at the act or within its command's duration after it. An unmatched act
     inside `window` ({from, to}) is an excused loss; any other unmatched act fails the check."""
     keys = [_task_key(r) for r in conn.execute("SELECT origin, task_id, epoch FROM tasks WHERE task_id = ?", (task_id,))]
-    task_sessions = sorted({s for key in keys for s in _task_sessions(conn, key)})
+    task_sessions = sorted({s for key in keys for s in task_session_ids(conn, key)})
     pool: dict = {}
     for session in task_sessions:
         for source_key, moment, raw in conn.execute(

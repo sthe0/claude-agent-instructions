@@ -265,6 +265,12 @@ def _overlap(a: tuple, b: tuple) -> bool:
     return not (a[0] > b[1] or b[0] > a[1])
 
 
+def reconstruction_half_width(lo: float, hi: float) -> float:
+    """Half the (lo, hi) reconstruction interval of one figure: the error the reconstruction
+    itself admits, apart from the sampling SE."""
+    return abs(hi - lo) / 2
+
+
 @dataclass
 class UncertaintyReport:
     half_life_days: float
