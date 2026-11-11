@@ -82,6 +82,33 @@ def task_title_enabled(
     return constants.get(TASK_TITLE_KEY) == "on"
 
 
+CHILD_NOANSWER_RECOVERY_KEY = "child-noanswer-recovery"
+CHILD_NOANSWER_RECOVERY_ENV = "AGENTCTL_CHILD_NOANSWER_RECOVERY"
+
+
+def child_noanswer_recovery_enabled(
+    env: Mapping[str, str] | None = None,
+    constants: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether spawn-specialist recovers a child run that ended with no return marker.
+
+    AGENTCTL_CHILD_NOANSWER_RECOVERY `1` / `0` wins in both directions; otherwise config.md's
+    `child-noanswer-recovery` row decides, and only exactly `on` enables it. Anything else --
+    another value, a missing row, an unreadable config.md -- is off: today's MALFORMED path."""
+    environ = os.environ if env is None else env
+    forced = environ.get(CHILD_NOANSWER_RECOVERY_ENV)
+    if forced == "1":
+        return True
+    if forced == "0":
+        return False
+    if constants is None:
+        try:
+            constants = parse_config_md()
+        except (OSError, UnicodeDecodeError):
+            return False
+    return constants.get(CHILD_NOANSWER_RECOVERY_KEY) == "on"
+
+
 RESOURCE_GRANT_HOOK_KEY = "resource-grant-hook"
 RESOURCE_GRANT_HOOK_ENV = "AGENTCTL_RESOURCE_HOOK"
 RESOURCE_GRANT_HOOK_TIMEOUT_KEY = "resource-grant-hook-timeout-s"
