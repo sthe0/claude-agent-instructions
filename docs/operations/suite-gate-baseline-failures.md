@@ -30,7 +30,7 @@ defect of the code under test.
    exempt wherever the machine's temporary directory is; the hook-guard tests run the hook with the `/tmp/`
    substring removed and an explicit scratch root, and the canon-writer tests pass `AGENTCTL_SCRATCH_ROOTS`.
    Every changed test still checks the behaviour it checked before; none was skipped or deleted.
-   One hook-guard test, `test_allow_tmp_git_tree_through_the_unpatched_hook`, still runs the shipped hook on a
+   One hook-guard test, `test_allow_tmp_segment_git_tree_through_the_unpatched_hook`, still runs the shipped hook on a
    real `/tmp/` path, so the production exemption stays covered.
 
    **Known production hazard, not fixed here:** the `/tmp/` substring exemption is itself a defect. A
