@@ -518,6 +518,7 @@ def cmd_classify(args, *, store: StateStore, runner: Runner | None = None) -> Di
         tracker_key=getattr(args, "tracker_key", None),
         architectural=bool(getattr(args, "architectural", False)),
         external_effect=bool(getattr(args, "external_effect", False)),
+        payload_approved=str(getattr(args, "payload_approved", "") or ""),
         new_dependency=bool(getattr(args, "new_dependency", False)),
         public_api_change=bool(getattr(args, "public_api_change", False)),
     )
@@ -671,7 +672,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     run = runner if runner is not None else advisor.subprocess_runner
     grounding_warnings: list[str] = []
     problems: list[str] = _submission_problems(
-        doc, run, state.weight_class, warnings=grounding_warnings)
+        doc, run, state.weight_class, warnings=grounding_warnings, plan_path=plan_path)
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
@@ -1300,6 +1301,10 @@ def register(sub, add):
                     help="a design decision (more than one reasonable solution) or an "
                          "architectural change")
     sp.add_argument("--external-effect", dest="external_effect", action="store_true")
+    sp.add_argument("--payload-approved", dest="payload_approved", default="",
+                    help="where the user approved the external effect's exact payload verbatim "
+                         "(e.g. the ask that approved the comment texts); with it "
+                         "--external-effect is not a substantive signal")
     sp.add_argument("--new-dependency", dest="new_dependency", action="store_true")
     sp.add_argument("--public-api-change", dest="public_api_change", action="store_true")
     sp.add_argument("--deliverable-kind", dest="deliverable_kind", default="",

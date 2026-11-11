@@ -1067,8 +1067,15 @@ def mandate_approval_problems(plan_text, inputs, mandate, gate_result) -> "list[
     problems = []
     if not getattr(gate_result, "may_start", False):
         problems.append("gate: " + ",".join(getattr(gate_result, "reasons", ())))
+    return problems + item_norm_render_problems(plan_text, inputs, mandate)
+
+
+def item_norm_render_problems(plan_text, inputs, mandate) -> "list[str]":
+    """Why `plan_text` is not byte-for-byte the item norm re-rendered from `inputs` for `mandate`,
+    empty when it is. The one comparison the mandate's approval and the grounding exemption share."""
     if not isinstance(inputs, Mapping):
-        return problems + ["inputs: not an object"]
+        return ["inputs: not an object"]
+    problems = []
     rest = dict(inputs)
     if rest.pop("mandate_id", None) != mandate.id:
         problems.append("inputs: mandate_id does not name this mandate")
