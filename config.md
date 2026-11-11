@@ -50,7 +50,11 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `root-silent-max-min` | `25` | Longest stretch the root stays silent to the user while specialists are in flight. |
 | `fanout-cap-extra-tasks` | `512` | Extra threads/processes a fan-out trial under `scripts/cap-run.sh` may add to the user's task count. |
 | `fanout-cap-timeout-s` | `3600` | Wall-clock limit in seconds for one capped fan-out trial. |
-| `suite-gate-timeout-s` | `1800` | Wall-clock limit in seconds for one full-suite run of the pre-land suite gate (the candidate's, or the tip baseline's). |
+| `suite-gate-timeout-s` | `7200` | Wall-clock limit in seconds for one full-suite run of the pre-land suite gate (the candidate's, or the tip baseline's), counted from when its worker slots are held. |
+| `test-slots-total` | `8` | Machine-wide pytest-xdist worker slots shared by every parallel test run (`scripts/lib/test_slots.py`); a run waits in a queue when they are taken. |
+| `test-slots-per-run` | `4` | Most worker slots one parallel test run takes; an explicit `-n` above it is capped. |
+| `test-slots-dir` | `/tmp/core-test-slots-<uid>` | Fixed per-user directory of the slot lock files; never derived from HOME or TMPDIR. |
+| `test-slots-max-wait-s` | `14400` | Longest a parallel test run waits in the slot queue; past it the run fails to start (the suite gate: UNAVAILABLE) naming the holders. |
 | `memory-leaf-max-bytes` | `74000` | Byte size above which `self-diagnose.py` flags a difficulty/v1 leaf `oversized-leaf`. |
 | `memory-leaf-max-contexts-multiple` | `27` | Multiple of `principle-promotion-threshold` in `### ` contexts above which the same flag fires. |
 | `plan-stage-max-chars` | `70000` | Largest rendered size of one plan node; over it blocks `submit-plan` and topological review. |

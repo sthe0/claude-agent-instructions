@@ -29,6 +29,7 @@ from .plan import (
     plan_meta_element_keys,
     refined_grant_entries,
     replan_class,
+    review_ids,
     stage_norm_keys,
     stage_reattest_digest,
 )
@@ -50,6 +51,7 @@ from .state import (
 from .store import StateStore
 from . import effort_segments
 from .cli_common import _judge_and_refuse
+from .cli_review import TOPOLOGICAL_COMPOSITION_REVIEWER
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -81,6 +83,7 @@ from .cli_common import (
     _frozen_edge_stages,
     _review_baseline,
     _carry_records,
+    _log_settled_rows,
     _verdict_survives,
     _autonomy_directive_data,
     _apply_refined_stage_fields,
@@ -102,6 +105,7 @@ from .cli_common import (
     _park_node,
     _enumeration_escape_counts,
     _note_round_release,
+    _plan_review_release_active,
     _review_cycle_arrive,
     _cost_rows,
     _refresh_spend,
@@ -377,6 +381,43 @@ def _passed_dependents_closure(live_stages, new_stages, roots) -> set[int]:
                 closure.add(index)
                 grew = True
     return closure
+
+
+def _reopened_stages(state: SessionState, new_stages, roots) -> set[int]:
+    """The PASSED stages `replan --reopen roots` re-arms: the roots and the PASSED stages
+    depending on them. A root naming no live stage is ignored."""
+    known = set(roots) & {s.index for s in state.stages}
+    if not known:
+        return set()
+    return {
+        i for i in _passed_dependents_closure(state.stages, new_stages, known)
+        if state.stage(i).outcome.status == StageStatus.PASSED.value
+    }
+
+
+def _reopened_rows_owed(gate_state: SessionState, plan_path: str,
+                        reopened: set[int]) -> list[tuple[str, str]]:
+    """`(id, status)` of each unit and pair row of the plan at `plan_path` that covers a
+    stage in `reopened` and is not satisfied in `gate_state`. A whole-plan pass composed
+    before the replan read these rows without knowing which stages `--reopen` re-arms,
+    so neither it nor the walk-stale set measured against it may stand in for them. Only a
+    reviewer's own whole-plan record bound to `plan_path` (not the engine's composition)
+    clears them: it read the corrected plan whole. The check does not wait for pair
+    records, since a composed pass can stand on carried unit rows alone."""
+    if not reopened or not gates.plan_review_active(gate_state):
+        return []
+    review = gate_state.plan_review
+    if review is not None and review.plan_path == plan_path and not review.scope \
+            and review.reviewer != TOPOLOGICAL_COMPOSITION_REVIEWER:
+        return []
+    try:
+        doc = load_plan(plan_path)
+        ids = review_ids(doc)
+    except (OSError, PlanError):
+        return []
+    rows = [(rid, gates.pair_status(gate_state, doc, plan_path, rid))
+            for rid in ids if carry_forward.covered_stages(rid) & reopened]
+    return [(rid, status) for rid, status in rows if status not in gates.PAIR_SATISFIED]
 
 
 def _frozen_stage_refusal(state: SessionState, tier, reopening: set[int]):
@@ -657,6 +698,7 @@ class _ReplanContext:
     agent_acked_difficulty: bool = False
     closing_waiver: str | None = None
     gate_state: Any = None
+    carry_preview: Any = None
     carry_change: Any = None
     trigger_exit: str | None = None
     run: Any = None
@@ -1012,13 +1054,26 @@ def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
     # The records are judged as carried onto the corrected plan: a tier 0-1 edit owes no
     # review, a tier 2 edit owes the edited stages' own. Nothing is written until the
     # replan is applied.
-    gate_state, carry_preview, carry_change = _carry_records(store, state, args.plan, in_place=False)
+    try:
+        reopened = _reopened_stages(state, _load(args.plan, strict=False).stages,
+                                    getattr(args, "reopen", None) or [])
+    except (OSError, PlanError):
+        reopened = set()
+    gate_state, carry_preview, carry_change = _carry_records(
+        store, state, args.plan, in_place=False, reopened=reopened)
     trigger_exit = _review_trigger_exit(state, args.plan)
     # A changed plan leaves a review-cost trigger by owing a fresh counted PASS at approve,
     # so the replan itself does not wait on a review of bytes nobody has reviewed yet.
-    prblock = (
+    base_blockers = (
         [] if trigger_exit == _TRIGGER_EXIT_CHANGED
         else gates.plan_review_blockers(gate_state, args.plan))
+    reopened_rows = (
+        [] if trigger_exit == _TRIGGER_EXIT_CHANGED or _plan_review_release_active(state)
+        else _reopened_rows_owed(gate_state, args.plan, reopened))
+    prblock = base_blockers + [
+        f"review row {rid} ({status}) covers re-armed stage(s) {sorted(reopened)}: "
+        "--reopen owes it a fresh verdict on the corrected plan"
+        for rid, status in reopened_rows]
     _log_gate(state, "plan_review", prblock, passed=not prblock)
     if prblock:
         # With the round-release valve active the blockers ARE the release message,
@@ -1049,6 +1104,11 @@ def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
                 ]
             else:
                 review_commands = ["plan-review --target " + args.plan]
+            if reopened_rows:
+                review_commands = [
+                    "plan-review --target " + args.plan + " --scope topo:" + rid
+                    for rid, _ in reopened_rows
+                ] + (review_commands if base_blockers else [])
             message = (
                 "replan blocked: the corrected plan needs a thinker review "
                 "(run: " + "; run: ".join(review_commands)
@@ -1063,6 +1123,7 @@ def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
                             "verify_command of a live stage, so the review must judge that check")
         return Directive(False, state.node, "plan_review", message, data=replan_data)
     ctx.gate_state, ctx.carry_change, ctx.trigger_exit = gate_state, carry_change, trigger_exit
+    ctx.carry_preview = carry_preview
     return None
 
 
@@ -1123,10 +1184,7 @@ def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
     if unknown_reopen:
         return Directive(False, state.node, "replan",
                          f"replan refused: --reopen names no such stage: {unknown_reopen}")
-    reopening = {
-        i for i in _passed_dependents_closure(state.stages, new.stages, reopen_roots)
-        if state.stage(i).outcome.status == StageStatus.PASSED.value
-    } if reopen_roots else set()
+    reopening = _reopened_stages(state, new.stages, reopen_roots)
     if reopen_ignored is not None:
         reopen_ignored.extend(sorted(i for i in reopen_roots if i not in reopening))
     if tier is not None:
@@ -1155,6 +1213,7 @@ def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
 def _replan_norm_and_premise_gates(ctx: _ReplanContext) -> Directive | None:
     state, store, args = ctx.state, ctx.store, ctx.args
     gate_state, carry_change, new = ctx.gate_state, ctx.carry_change, ctx.new
+    carried = bool(ctx.carry_preview and ctx.carry_preview["carried"])
     auth_kind, tier, reopening = ctx.auth_kind, ctx.tier, ctx.reopening
 
     # Norm-edit consequence: a replan closing a difficulty whose record names norm targets
@@ -1193,14 +1252,15 @@ def _replan_norm_and_premise_gates(ctx: _ReplanContext) -> Directive | None:
     # the mismatch is visible in question-list output even when this replan is blocked
     # by the gate (#123). Runs here — after the try-finally restored plan_path and
     # before the pblock return — so a blocked replan still surfaces stale notes on disk.
-    # A carried view (`gate_state` is a copy) already holds the carried premise stamps; on
-    # the refused path the real state gets the same carry first, so the invalidation below
-    # marks only the dispositions the edit really made stale. On the applied path the
-    # carry is left to `_carry_records`, whose `carried` verdict it would otherwise change.
+    # A carried view (`carried`: `gate_state` is a copy) already holds the carried premise
+    # stamps; on the refused path the real state gets the same carry first, so the
+    # invalidation below marks only the dispositions the edit really made stale. On the
+    # applied path the carry is left to `_carry_records`, whose `carried` verdict it would
+    # otherwise change. A copy holding only an order change's settled rows carries no stamp.
     _inv_bag = state.plugins.get("premise")
-    if _inv_bag is not None and (gate_state is state or pblock):
+    if _inv_bag is not None and (not carried or pblock):
         _inv_changed = False
-        if gate_state is not state:
+        if carried:
             _carry_baseline, _ = _review_baseline(store, state)
             if _carry_baseline is not None:
                 _inv_changed = bool(
@@ -1349,9 +1409,10 @@ def _replan_record_acceptance(ctx: _ReplanContext) -> None:
     # A tier 0-2 edit does not start a new review loop: its records are carried onto the
     # new version (`carry_forward`), so the rounds, the counted digest and the passes
     # stay with them; every other edit settles the old loop and starts from zero.
-    _, carry_report, _ = _carry_records(store, state, args.plan, in_place=True)
+    _, carry_report, _ = _carry_records(store, state, args.plan, in_place=True, reopened=reopening)
     carry_note = carry_forward.describe(carry_report)
-    if carry_note:
+    _log_settled_rows(state, args.plan, carry_report)
+    if carry_report["carried"]:
         state.log("review_carried", plan=args.plan, tier=carry_report["tier"],
                   records=list(carry_report["records"]), owed=list(carry_report["owed"]),
                   held=list(carry_report["held"]))

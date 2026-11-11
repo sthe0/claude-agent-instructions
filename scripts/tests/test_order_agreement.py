@@ -1217,7 +1217,7 @@ _PLAN_PATH_REASONS = {
     "cli_replan.py:_replan_apply_refinement": "a _cmd_replan phase that runs after _replan_closure_gates' agreement refusal",
     "cli_replan.py:_replan_apply_substantive": "a _cmd_replan phase that runs after _replan_closure_gates' agreement refusal",
     "carry_forward.py:_restamp": "rebinds a review record's own plan_path, not the session's",
-    "carry_forward.py:pair_records": "rebinds a pair record's own plan_path, not the session's",
+    "carry_forward.py:_rebind": "rebinds a pair or unit record's own plan_path, not the session's",
 }
 
 

@@ -36,6 +36,7 @@
 "scripts/plan-fit-report.py" = { disposition = "not-canon", category = "not-canon", reason = "writes one report file at the path the caller names with --out; reads a plan, launches nothing" }
 "scripts/agentctl/code_effects.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only verdict cache files under the agentctl state dir (code-effects-cache); never a tracked file" }
 "scripts/hook-resource-grant-check.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only decision-log rows under the agentctl state dir (resource-uses); the git and file-write verbs in its text are patterns it recognises, never commands it runs" }
+"scripts/measure-branch-refresh.py" = { disposition = "not-canon", category = "not-canon", reason = "--check-trailers builds and commits in a temporary repository it creates and removes; every other mode only reads history and transcripts" }
 "scripts/code_effects_live_probe.py" = { disposition = "not-canon", category = "not-canon", reason = "runs in a temporary directory it creates and removes; writes nothing in the repo" }
 
 # --- exempt-landing: the sync / landing path itself ---
@@ -70,6 +71,7 @@
 "scripts/plan_dashboard/publish.py" = { disposition = "not-canon", category = "not-canon", reason = "writes one publish-state file under XDG_STATE_HOME (or the path --publish-state names); no tracked file" }
 "scripts/lib/instruction_smoke_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes smoke records under the git common dir and a throwaway sandbox under the temp dir; no tracked file" }
 "scripts/lib/suite_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes suite records and baselines under the git common dir and a throwaway sandbox under the temp dir; no tracked file" }
+"scripts/lib/test_slots.py" = { disposition = "not-canon", category = "not-canon", reason = "creates and writes its pid into slot lock files under the per-user test-slots-dir in /tmp; no tracked file" }
 "scripts/lib/landing_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes gate records under the git common dir, temp file then rename; no tracked file" }
 "scripts/lib/engine_session_binding.py" = { disposition = "not-canon", category = "not-canon", reason = "harness-to-engine session binding records under the agentctl state dir, temp file then rename; no tracked file" }
 "scripts/lib/time_profile.py" = { disposition = "not-canon", category = "not-canon", reason = "writes its profile cache and ledger cursors under $TIME_PROFILE_STATE_DIR (default ~/.local/state/time-profile), temp file then rename; no tracked file" }
