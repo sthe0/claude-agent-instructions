@@ -812,10 +812,6 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "re-attest stash and substantive-replan carry: both ask whether a stage has a PASS "
         "outcome to reuse, and the carry arm names SKIPPED beside PASSED explicitly"
     ),
-    ("agentctl/cli_replan.py", "_replan_submission_gates"): (
-        "asks which stages `--reopen` actually re-arms: only a stage that has a PASS to "
-        "invalidate, so PASSED is the exact set"
-    ),
     ("agentctl/plugins_tracker.py", "_passed_artifact_stages"): (
         "asks which stages produced artifacts a ticket reader must be told about; a declined "
         "stage produced none, so PASSED is the exact set"
@@ -898,8 +894,8 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "is settled for the carry"
     ),
     ("agentctl/cli_replan.py", "_reopened_stages"): (
-        "asks which stages `--reopen` actually re-arms, the same question as "
-        "_replan_submission_gates: only a stage with a PASS to invalidate, so PASSED is the "
+        "asks which stages `--reopen` actually re-arms (moved here from "
+        "_replan_submission_gates): only a stage with a PASS to invalidate, so PASSED is the "
         "exact set"
     ),
 }
