@@ -791,14 +791,21 @@ def _walk_status(store, sid, target) -> dict[str, str]:
     return {row["pair"]: row["status"] for level in d.data["levels"] for row in level}
 
 
-def _order_changed_session(store, sid, venued_fixtures_dir, tmp_path, monkeypatch):
+def _order_changed_session(store, sid, venued_fixtures_dir, tmp_path, monkeypatch,
+                           independent=False):
     """A session whose stage 1 PASSED with every row of the two-stage plan reviewed, and an
-    agreed goal-only order change of that plan, not yet applied. Returns both plan paths."""
+    agreed goal-only order change of that plan, not yet applied. Returns both plan paths.
+    `independent` drops stage 2's reliance on stage 1, so the plan has unit rows only."""
     from agentctl.plan import review_ids
     from test_change_tier import _passed_session
 
     monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
     plan = venued_fixtures_dir / "plan_two_stage.toml"
+    if independent:
+        text = plan.read_text()
+        assert text.count("depends_on = [1]") == 1, "fixture no longer names stage 2's reliance"
+        plan.write_text(text.replace("depends_on = [1]", "depends_on = []"))
+        assert not [r for r in review_ids(load_plan(plan)) if not r.startswith("unit:")]
     _passed_session(store, sid, str(plan), stages=1)
     monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
     for rid in review_ids(load_plan(plan)):
@@ -854,15 +861,18 @@ def test_an_agreed_order_change_replan_owes_only_the_pending_rows(
     assert carried and carried[-1]["rows"] == ["unit:1"]
 
 
+@pytest.mark.parametrize("independent", [False, True], ids=["with-pairs", "units-only"])
 def test_a_reopening_replan_owes_the_reopened_stages_rows_after_compose(
-        store, venued_fixtures_dir, tmp_path, monkeypatch):
+        store, venued_fixtures_dir, tmp_path, monkeypatch, independent):
     """Walk and compose read stage 1's carried rows as current, not knowing a later
-    `--reopen 1` re-arms it; the replan gate still owes those rows a fresh verdict."""
+    `--reopen 1` re-arms it; the replan gate still owes those rows a fresh verdict, also
+    for a plan whose rows are all unit rows (no pair record ever binds to it)."""
     from agentctl import carry_forward
     from agentctl.plan import review_ids
 
     sid = "order-change-reopen"
-    _, edited = _order_changed_session(store, sid, venued_fixtures_dir, tmp_path, monkeypatch)
+    _, edited = _order_changed_session(store, sid, venued_fixtures_dir, tmp_path, monkeypatch,
+                                       independent=independent)
     walked = _walk_status(store, sid, edited)
     assert walked["unit:1"] == "current"
     for rid, status in walked.items():

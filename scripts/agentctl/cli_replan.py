@@ -51,6 +51,7 @@ from .state import (
 from .store import StateStore
 from . import effort_segments
 from .cli_common import _judge_and_refuse
+from .cli_review import TOPOLOGICAL_COMPOSITION_REVIEWER
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -399,10 +400,15 @@ def _reopened_rows_owed(gate_state: SessionState, plan_path: str,
     """`(id, status)` of each unit and pair row of the plan at `plan_path` that covers a
     stage in `reopened` and is not satisfied in `gate_state`. A whole-plan pass composed
     before the replan read these rows without knowing which stages `--reopen` re-arms,
-    so neither it nor the walk-stale set measured against it may stand in for them. A plan
-    reviewed without pair records owes no row."""
-    if not reopened or not gates.plan_review_active(gate_state) \
-            or not gates.has_pair_records_for(gate_state, plan_path):
+    so neither it nor the walk-stale set measured against it may stand in for them. Only a
+    reviewer's own whole-plan record bound to `plan_path` (not the engine's composition)
+    clears them: it read the corrected plan whole. The check does not wait for pair
+    records, since a composed pass can stand on carried unit rows alone."""
+    if not reopened or not gates.plan_review_active(gate_state):
+        return []
+    review = gate_state.plan_review
+    if review is not None and review.plan_path == plan_path and not review.scope \
+            and review.reviewer != TOPOLOGICAL_COMPOSITION_REVIEWER:
         return []
     try:
         doc = load_plan(plan_path)
@@ -1058,13 +1064,13 @@ def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
     trigger_exit = _review_trigger_exit(state, args.plan)
     # A changed plan leaves a review-cost trigger by owing a fresh counted PASS at approve,
     # so the replan itself does not wait on a review of bytes nobody has reviewed yet.
-    prblock = (
+    base_blockers = (
         [] if trigger_exit == _TRIGGER_EXIT_CHANGED
         else gates.plan_review_blockers(gate_state, args.plan))
     reopened_rows = (
         [] if trigger_exit == _TRIGGER_EXIT_CHANGED or _plan_review_release_active(state)
         else _reopened_rows_owed(gate_state, args.plan, reopened))
-    prblock = prblock + [
+    prblock = base_blockers + [
         f"review row {rid} ({status}) covers re-armed stage(s) {sorted(reopened)}: "
         "--reopen owes it a fresh verdict on the corrected plan"
         for rid, status in reopened_rows]
@@ -1102,7 +1108,7 @@ def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
                 review_commands = [
                     "plan-review --target " + args.plan + " --scope topo:" + rid
                     for rid, _ in reopened_rows
-                ] + (review_commands if len(prblock) > len(reopened_rows) else [])
+                ] + (review_commands if base_blockers else [])
             message = (
                 "replan blocked: the corrected plan needs a thinker review "
                 "(run: " + "; run: ".join(review_commands)
