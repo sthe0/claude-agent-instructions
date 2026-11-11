@@ -1934,6 +1934,21 @@ def check_venue_warnings(
                     f"verify_venue_at_final = \"repo_root\" if the check should "
                     f"re-verify against the landed artifact instead."
                 )
+        for fi, fc in enumerate(final_check or [], 1):
+            fc_label = fc.label or fc.command
+            if (
+                fc.kind != CheckKind.LANDED.value
+                and fc.venue == CheckVenue.DELIVERY.value
+            ):
+                warnings.append(
+                    f"final_check {fi} ({fc_label!r}) declares venue = \"delivery\" "
+                    f"but this plan asserts landing elsewhere — landing removes the "
+                    f"delivery worktree, so this check will REFUSE at verify-final "
+                    f"unless the worktree happens to survive "
+                    f"(e.g. `land-branch.py --keep-branch`); declare "
+                    f"venue = \"repo_root\" if the check should run against the "
+                    f"landed artifact instead."
+                )
     return warnings
 
 
