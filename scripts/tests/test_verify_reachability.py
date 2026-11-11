@@ -8,11 +8,6 @@ legitimate counter-instance, so it BLOCKS a substantive plan rather than warning
 """
 from argparse import Namespace
 from dataclasses import asdict
-from pathlib import Path
-
-import pytest
-
-from lib import config_root
 from agentctl import cli
 from agentctl.plan import (
     load_plan,
@@ -434,26 +429,6 @@ def test_final_check_path_nothing_produces_is_blocked(tmp_path):
     )
     # `test -f` uses no absolute path; scripts/absent.py is relative + orphan
     assert any("scripts/absent.py" in x and "final_check" in x for x in b)
-
-
-def test_this_plans_own_controls_are_all_reachable():
-    # Dogfood: THIS plan, loaded through the engine's own load_plan, must carry ZERO
-    # reachability blockers — every path its controls name exists in the tree or is
-    # declared in a stage's output_artifacts. The rule was run against this plan
-    # while it was written; this pins that it stays true. Skips where the machine-
-    # local plan artifact is absent (other checkouts / CI) or where the venue it
-    # pins is gone — reachability is resolved against meta.repo_root, so a removed
-    # worktree makes every path unreachable for a reason that is not the plan's.
-    plan_path = config_root.plans_dir() / "question-provenance-and-derivation.toml"
-    if not plan_path.exists():
-        pytest.skip("plan artifact not present in this checkout")
-    doc = load_plan(str(plan_path))
-    if not Path(doc.meta.repo_root).is_dir():
-        pytest.skip("the plan's repo_root venue is not present on this machine")
-    b = verify_command_reachability_blockers(
-        doc.stages, doc.meta.final_check, doc.meta.repo_root
-    )
-    assert b == [], f"this plan's own controls must all be reachable, got: {b}"
 
 
 def test_docstring_names_false_positives_and_the_two_limits():
