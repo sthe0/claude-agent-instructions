@@ -434,28 +434,85 @@ CATALOGUE: "dict[str, Mutant]" = {
         LIVENESS, '            sweep.mark_incomplete(f"{pid_dir}/status: owner unreadable: no Uid line")\n', "            pass\n",
         _ids(T_LIVENESS, "test_a_status_without_a_uid_line_makes_the_sweep_incomplete"),
     ),
-    "residue-clone-refs-unchecked": Mutant(
-        TEMP_RESIDUE, "    return not missing\n", "    return True\n",
+    "residue-clone-own-objects-unchecked": Mutant(
+        TEMP_RESIDUE, '    return counts.get("count") == "0" and counts.get("in-pack") == "0"\n', "    return True\n",
         _ids(T_RESIDUE, "test_a_local_commit_that_the_alternate_does_not_hold_keeps_the_sandbox",
-             "test_a_branch_with_a_commit_the_alternate_does_not_hold_keeps_the_sandbox_though_head_is_held"),
+             "test_a_branch_with_a_commit_the_alternate_does_not_hold_keeps_the_sandbox_though_head_is_held",
+             "test_a_commit_only_the_reflog_reaches_keeps_the_sandbox_after_a_reset",
+             "test_a_detached_commit_left_by_checking_back_out_keeps_the_sandbox",
+             "test_a_deleted_branch_that_had_a_commit_keeps_the_sandbox",
+             "test_a_dropped_stash_entry_keeps_the_sandbox"),
     ),
-    "residue-clone-head-only": Mutant(
-        TEMP_RESIDUE, "wanted = sorted({*listed.split(), head.strip()})", "wanted = sorted({head.strip()})",
-        _ids(T_RESIDUE, "test_a_branch_with_a_commit_the_alternate_does_not_hold_keeps_the_sandbox_though_head_is_held"),
+    "residue-clone-loose-objects-unchecked": Mutant(
+        TEMP_RESIDUE, '    return counts.get("count") == "0" and counts.get("in-pack") == "0"\n',
+        '    return counts.get("in-pack") == "0"\n',
+        _ids(T_RESIDUE, "test_a_commit_only_the_reflog_reaches_keeps_the_sandbox_after_a_reset",
+             "test_a_detached_commit_left_by_checking_back_out_keeps_the_sandbox"),
+    ),
+    "residue-clone-packed-objects-unchecked": Mutant(
+        TEMP_RESIDUE, '    return counts.get("count") == "0" and counts.get("in-pack") == "0"\n',
+        '    return counts.get("count") == "0"\n',
+        _ids(T_RESIDUE, "test_an_own_commit_that_was_packed_keeps_the_sandbox"),
+    ),
+    "residue-clone-linked-worktrees-unchecked": Mutant(
+        TEMP_RESIDUE, '        return not os.listdir(os.path.join(git_dir, "worktrees"))\n', "        return True\n",
+        _ids(T_RESIDUE, "test_a_linked_worktree_that_holds_no_commit_still_keeps_the_sandbox"),
     ),
     "residue-clone-dirty-ignored": Mutant(
         TEMP_RESIDUE,
-        '    return _git(["--git-dir", git_dir, "--work-tree", work_tree, "status", "--porcelain"]) == ""',
-        "    return True",
+        '    for entry in filter(None, out.split("\\0")):\n'
+        '        if not entry.startswith("!! ") or not _disposable_ignored(work_tree, entry[3:]):\n'
+        "            return False\n"
+        "    return True\n",
+        "    return True\n",
         _ids(T_RESIDUE, "test_a_modified_tracked_file_keeps_the_sandbox", "test_an_untracked_file_keeps_the_sandbox"),
     ),
-    "residue-clone-untracked-ignored": Mutant(
-        TEMP_RESIDUE, '"status", "--porcelain"]', '"status", "--porcelain", "--untracked-files=no"]',
-        _ids(T_RESIDUE, "test_an_untracked_file_keeps_the_sandbox"),
+    "residue-clone-status-defaults": Mutant(
+        TEMP_RESIDUE,
+        '        "-c", "status.showUntrackedFiles=all", "--git-dir", git_dir, "--work-tree", work_tree,\n'
+        '        "status", "--porcelain", "-z", "--untracked-files=all", "--ignored=matching",\n',
+        '        "--git-dir", git_dir, "--work-tree", work_tree, "status", "--porcelain", "-z",\n',
+        _ids(T_RESIDUE, "test_an_untracked_file_is_seen_though_the_clones_config_hides_untracked_files",
+             "test_an_ignored_file_keeps_the_sandbox",
+             "test_a_file_excluded_through_the_clones_own_exclude_file_keeps_the_sandbox"),
+    ),
+    "residue-clone-ignored-unseen": Mutant(
+        TEMP_RESIDUE, '"--ignored=matching",', '"--ignored=no",',
+        _ids(T_RESIDUE, "test_an_ignored_file_keeps_the_sandbox",
+             "test_a_file_excluded_through_the_clones_own_exclude_file_keeps_the_sandbox"),
+    ),
+    "residue-clone-ignored-any": Mutant(
+        TEMP_RESIDUE,
+        '        if not entry.startswith("!! ") or not _disposable_ignored(work_tree, entry[3:]):\n',
+        '        if not entry.startswith("!! "):\n',
+        _ids(T_RESIDUE, "test_an_ignored_file_keeps_the_sandbox",
+             "test_a_file_excluded_through_the_clones_own_exclude_file_keeps_the_sandbox",
+             "test_a_pycache_directory_holding_anything_but_bytecode_keeps_the_sandbox"),
+    ),
+    "residue-clone-pycache-contents": Mutant(
+        TEMP_RESIDUE, '== BYTECODE_DIR and _only_bytecode(full)', "== BYTECODE_DIR",
+        _ids(T_RESIDUE, "test_a_pycache_directory_holding_anything_but_bytecode_keeps_the_sandbox"),
+    ),
+    "residue-clone-pycache-symlink": Mutant(
+        TEMP_RESIDUE,
+        "        if any(os.path.islink(os.path.join(here, name)) for name in dirs + files):\n            return False\n", "",
+        _ids(T_RESIDUE, "test_a_pycache_directory_holding_anything_but_bytecode_keeps_the_sandbox"),
+    ),
+    "residue-clone-assume-unchanged": Mutant(
+        TEMP_RESIDUE, 'tag[:1].islower() or tag[:1] == "S"', 'tag[:1] == "S"',
+        _ids(T_RESIDUE, "test_an_assume_unchanged_edit_keeps_the_sandbox"),
+    ),
+    "residue-clone-skip-worktree": Mutant(
+        TEMP_RESIDUE, 'tag[:1].islower() or tag[:1] == "S"', "tag[:1].islower()",
+        _ids(T_RESIDUE, "test_a_skip_worktree_edit_keeps_the_sandbox"),
+    ),
+    "residue-git-fsmonitor": Mutant(
+        TEMP_RESIDUE, '"-c", "core.fsmonitor=false", ', "",
+        _ids(T_RESIDUE, "test_a_program_the_clones_own_config_names_is_not_started_by_judging"),
     ),
     "residue-clone-no-alternates": Mutant(
         TEMP_RESIDUE, "    except OSError:\n        return []\n    repos = []", "    except OSError:\n        return [git_dir]\n    repos = []",
-        _ids(T_RESIDUE, "test_a_full_clone_without_alternates_keeps_the_sandbox"),
+        _ids(T_RESIDUE, "test_a_repository_with_no_alternates_and_no_objects_keeps_the_sandbox"),
     ),
     "residue-clone-alternate-inside": Mutant(
         TEMP_RESIDUE, "        if repo == candidate or repo.startswith(candidate + os.sep):\n            return []\n", "",

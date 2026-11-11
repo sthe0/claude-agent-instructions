@@ -792,10 +792,16 @@ def test_main_writes_the_kept_snapshot_under_the_config_root(hermetic):
 
 # ── mutation catalogue ────────────────────────────────────────────────────
 
+MUTANT_WORKERS = 6  # each worker is one scratch copy and one serial pytest child; bounded, never recursive
+
 @pytest.mark.skipif(os.environ.get("REAPER_MUTATION_CHILD") == "1", reason="running inside a mutant subprocess")
 def test_every_catalogue_mutant_is_killed_and_the_control_is_green():
+    from concurrent.futures import ThreadPoolExecutor
+
     import reaper_mutation_control as control
 
-    survivors = {name: control.run_mutant(name) for name in control.CATALOGUE}
-    assert survivors == {name: control.KILLED for name in control.CATALOGUE}
+    names = list(control.CATALOGUE)
+    with ThreadPoolExecutor(max_workers=min(MUTANT_WORKERS, os.cpu_count() or 1)) as pool:
+        survivors = dict(zip(names, pool.map(control.run_mutant, names)))
+    assert survivors == {name: control.KILLED for name in names}
     assert control.run_control() == 0

@@ -22,12 +22,17 @@ module's constant: tests move it or `ctx.now`, no environment variable or config
 
 One exemption from the nested-repository clause, for kind `instruction-sandbox` only: the
 sandbox script makes `<candidate>/core` a `git clone --shared`, so every sandbox holds a `.git`.
-That clone protects nothing when `disposable_shared_clone` proves, with a scrubbed git
-environment, no network and a timeout, that (1) it is the only `.git` in the candidate, (2) its
-`objects/info/alternates` lists only objects directories of repositories that exist outside the
-candidate, (3) HEAD and every ref resolve to commits those repositories hold, and (4) its
-working tree has no uncommitted or untracked change. Any other `.git`, and any failed check or
-git failure, keeps the candidate as `nested-git`.
+That clone is judged to hold nothing of value when `disposable_shared_clone` proves, with a
+scrubbed git environment, no network and a timeout, exactly this and no more: (1) it is the only
+`.git` in the candidate; (2) its `objects/info/alternates` lists only objects directories of
+repositories that exist outside the candidate; (3) `.git/worktrees` is absent or empty; (4) its own
+object store is empty (`git count-objects -v`: count 0, in-pack 0), so HEAD and every ref can only
+name objects the alternates hold, and no reflog, stash, deleted branch or detached commit keeps an
+object only here; (5) `git status` with untracked and ignored files listed shows nothing except
+ignored `__pycache__/` directories holding only `*.pyc` files and ignored `*.pyc` files; (6) no
+index entry is marked assume-unchanged or skip-worktree. Any other `.git`, and any failed check
+or git failure, keeps the candidate as `nested-git`. Nested repositories are found by their `.git`
+name, so a bare repository under another name is not seen.
 
 The reaper deletes only on a machine that opted in: `temp-residue = true` in
 `<agent home>/reaper/opt-in.toml` (`reaper.opt_in`). Without it a live pass keeps every
@@ -78,6 +83,8 @@ REASONS = (
 )
 CLONE_DIR = "core"
 GIT_TIMEOUT_S = 20
+BYTECODE_DIR = "__pycache__"
+BYTECODE_SUFFIX = ".pyc"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -173,10 +180,13 @@ def _git(args: "list[str]", stdin: str = "") -> "str | None":
     """Stdout of ``git <args>`` run in a scrubbed environment under a timeout; None on any failure.
 
     ``GIT_OPTIONAL_LOCKS=0`` keeps ``status`` from refreshing the index, so judging writes nothing.
+    ``core.fsmonitor`` and ``core.hooksPath`` are neutralized so the candidate's own config names
+    no program for git to start; clean filters and attributes of the candidate are not (see the
+    residuals in docs/operations/reapers.md).
     """
     try:
         done = subprocess.run(
-            ["git", "-c", "core.fsmonitor=false", *args], input=stdin, capture_output=True, text=True,
+            ["git", "-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}", *args], input=stdin, capture_output=True, text=True,
             env=_git_env(), timeout=GIT_TIMEOUT_S, check=False,
         )
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -207,27 +217,75 @@ def _alternate_repositories(git_dir: str, candidate: str) -> "list[str]":
     return repos
 
 
-def _refs_in_alternates(git_dir: str, repos: "list[str]") -> bool:
-    """HEAD and every ref of the clone name a commit that one of ``repos`` holds."""
-    listed = _git(["--git-dir", git_dir, "for-each-ref", "--format=%(objectname)"])
-    head = _git(["--git-dir", git_dir, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
-    if listed is None or head is None or not head.strip():
+def _own_object_store_empty(git_dir: str) -> bool:
+    """The clone holds no loose and no packed object of its own (``git count-objects -v``).
+
+    A commit made in the clone, however it is later hidden (reset, a detached checkout, a deleted
+    branch, a stash), is an own object, so this one check covers every ref, reflog and worktree.
+    """
+    out = _git(["--git-dir", git_dir, "count-objects", "-v"])
+    if out is None:
         return False
-    wanted = sorted({*listed.split(), head.strip()})
-    request = "".join(f"{oid}^{{commit}}\n" for oid in wanted)
-    missing = set(wanted)
-    for repo in repos:
-        answer = _git(["--git-dir", repo, "cat-file", "--batch-check"], request)
-        if answer is None or len(answer.splitlines()) != len(wanted):
+    counts = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
+    return counts.get("count") == "0" and counts.get("in-pack") == "0"
+
+
+def _no_linked_worktrees(git_dir: str) -> bool:
+    try:
+        return not os.listdir(os.path.join(git_dir, "worktrees"))
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+
+
+def _only_bytecode(directory: str) -> bool:
+    """Every file below ``directory`` is a ``*.pyc`` and nothing in it is a symlink."""
+
+    def fail(exc: OSError) -> None:
+        raise exc
+
+    for here, dirs, files in os.walk(directory, onerror=fail, followlinks=False):
+        if any(os.path.islink(os.path.join(here, name)) for name in dirs + files):
             return False
-        for oid, line in zip(wanted, answer.splitlines()):
-            if line.split()[1:2] == ["commit"]:
-                missing.discard(oid)
-    return not missing
+        if any(not name.endswith(BYTECODE_SUFFIX) for name in files):
+            return False
+    return True
 
 
-def _worktree_clean(git_dir: str, work_tree: str) -> bool:
-    return _git(["--git-dir", git_dir, "--work-tree", work_tree, "status", "--porcelain"]) == ""
+def _disposable_ignored(work_tree: str, relative: str) -> bool:
+    """An ignored entry that a Python run leaves behind and that holds no work: a bytecode file or directory."""
+    full = os.path.join(work_tree, relative)
+    if relative.endswith("/"):
+        return os.path.basename(relative.rstrip("/")) == BYTECODE_DIR and _only_bytecode(full)
+    return relative.endswith(BYTECODE_SUFFIX) and stat.S_ISREG(os.lstat(full).st_mode)
+
+
+def _worktree_holds_nothing(git_dir: str, work_tree: str) -> bool:
+    """No tracked change, no untracked file and no ignored file except bytecode.
+
+    ``--untracked-files=all`` and ``status.showUntrackedFiles=all`` on the command line outrank the
+    clone's own configuration, and ``--ignored=matching`` brings in what ``.gitignore`` and
+    ``.git/info/exclude`` hide.
+    """
+    out = _git([
+        "-c", "status.showUntrackedFiles=all", "--git-dir", git_dir, "--work-tree", work_tree,
+        "status", "--porcelain", "-z", "--untracked-files=all", "--ignored=matching",
+    ])
+    if out is None:
+        return False
+    for entry in filter(None, out.split("\0")):
+        if not entry.startswith("!! ") or not _disposable_ignored(work_tree, entry[3:]):
+            return False
+    return True
+
+
+def _index_flags_clear(git_dir: str, work_tree: str) -> bool:
+    """No index entry is marked assume-unchanged (lowercase tag) or skip-worktree (``S``), which hide edits from ``status``."""
+    out = _git(["--git-dir", git_dir, "--work-tree", work_tree, "ls-files", "-v", "-z"])
+    if out is None:
+        return False
+    return not any(tag[:1].islower() or tag[:1] == "S" for tag in out.split("\0") if tag)
 
 
 def disposable_shared_clone(candidate: str, git_entries: "list[str]") -> bool:
@@ -236,10 +294,13 @@ def disposable_shared_clone(candidate: str, git_entries: "list[str]") -> bool:
     git_dir = os.path.join(clone, liveness.GIT_NAME)
     if git_entries != [git_dir] or not stat.S_ISDIR(os.lstat(git_dir).st_mode):
         return False
-    repos = _alternate_repositories(git_dir, candidate)
-    if not _refs_in_alternates(git_dir, repos):
+    if not _alternate_repositories(git_dir, candidate) or not _no_linked_worktrees(git_dir):
         return False
-    return _worktree_clean(git_dir, clone)
+    return (
+        _own_object_store_empty(git_dir)
+        and _worktree_holds_nothing(git_dir, clone)
+        and _index_flags_clear(git_dir, clone)
+    )
 
 
 def _judge(path: str, source: Source, ctx: ReapContext,

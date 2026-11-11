@@ -78,7 +78,8 @@ class World:
         repo = self.root / "canonical"
         git(repo.parent, "init", "-q", "-b", "main", str(repo))
         (repo / "tracked.txt").write_text("one\n", encoding="utf-8")
-        git(repo, "add", "tracked.txt")
+        (repo / ".gitignore").write_text("__pycache__/\n*.pyc\n.env\nsecrets/\n", encoding="utf-8")
+        git(repo, "add", "tracked.txt", ".gitignore")
         git(repo, "commit", "-q", "-m", "one")
         git(repo, "branch", "side")
         return repo
@@ -318,6 +319,137 @@ def test_a_branch_with_a_commit_the_alternate_does_not_hold_keeps_the_sandbox_th
     assert_kept_as_nested_git(world, path)
 
 
+def commit_in(repo: Path, message: str = "own work") -> str:
+    git(repo, "commit", "-q", "--allow-empty", "-m", message)
+    return git(repo, "rev-parse", "HEAD").strip()
+
+
+def test_a_commit_only_the_reflog_reaches_keeps_the_sandbox_after_a_reset(world):
+    path = world.shared_sandbox()
+    commit_in(path / "core")
+    git(path / "core", "reset", "-q", "--hard", "HEAD~")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_detached_commit_left_by_checking_back_out_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    held = git(path / "core", "rev-parse", "HEAD").strip()
+    commit_in(path / "core")
+    git(path / "core", "checkout", "-q", "--detach", held)
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_deleted_branch_that_had_a_commit_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    held = git(path / "core", "rev-parse", "HEAD").strip()
+    git(path / "core", "switch", "-q", "-c", "work")
+    commit_in(path / "core")
+    git(path / "core", "checkout", "-q", "--detach", held)
+    git(path / "core", "branch", "-q", "-D", "work")
+    assert "refs/heads/work" not in git(path / "core", "for-each-ref")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_dropped_stash_entry_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    (path / "core" / "tracked.txt").write_text("stashed\n", encoding="utf-8")
+    git(path / "core", "stash", "push", "-q")
+    git(path / "core", "stash", "drop", "-q")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_an_own_commit_that_was_packed_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    commit_in(path / "core")
+    git(path / "core", "reset", "-q", "--hard", "HEAD~")
+    git(path / "core", "repack", "-q", "-d")
+    counts = git(path / "core", "count-objects", "-v")
+    assert "count: 0" in counts and "in-pack: 0" not in counts
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_linked_worktree_with_a_commit_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    linked = world.root / "linked-worktree"
+    git(path / "core", "worktree", "add", "-q", "--detach", str(linked))
+    commit_in(linked)
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_linked_worktree_that_holds_no_commit_still_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    git(path / "core", "worktree", "add", "-q", "--detach", str(world.root / "linked-worktree"))
+    assert "count: 0" in git(path / "core", "count-objects", "-v")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_repository_with_no_alternates_and_no_objects_keeps_the_sandbox(world):
+    path = world.sandbox / "instruction-sandbox.empty"
+    (path / "core").mkdir(parents=True)
+    git(path / "core", "init", "-q")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_an_ignored_file_keeps_the_sandbox(world):
+    for number, name in enumerate((".env", "secrets/token")):
+        path = world.shared_sandbox(suffix=f"ig{number}")
+        (path / "core" / name).parent.mkdir(exist_ok=True)
+        (path / "core" / name).write_text("mine\n", encoding="utf-8")
+        assert_kept_as_nested_git(world, path)
+
+
+def test_a_file_excluded_through_the_clones_own_exclude_file_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    (path / "core" / ".git" / "info" / "exclude").write_text("notes.txt\n", encoding="utf-8")
+    (path / "core" / "notes.txt").write_text("mine\n", encoding="utf-8")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_an_untracked_file_is_seen_though_the_clones_config_hides_untracked_files(world):
+    path = world.shared_sandbox()
+    git(path / "core", "config", "status.showUntrackedFiles", "no")
+    (path / "core" / "new.txt").write_text("new\n", encoding="utf-8")
+    assert git(path / "core", "status", "--porcelain") == ""
+    assert_kept_as_nested_git(world, path)
+
+
+def test_an_assume_unchanged_edit_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    git(path / "core", "update-index", "--assume-unchanged", "tracked.txt")
+    (path / "core" / "tracked.txt").write_text("edited\n", encoding="utf-8")
+    assert git(path / "core", "status", "--porcelain") == ""
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_skip_worktree_edit_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    git(path / "core", "update-index", "--skip-worktree", "tracked.txt")
+    (path / "core" / "tracked.txt").write_text("edited\n", encoding="utf-8")
+    assert git(path / "core", "status", "--porcelain") == ""
+    assert_kept_as_nested_git(world, path)
+
+
+def test_ignored_bytecode_alone_leaves_the_sandbox_removable(world):
+    path = world.shared_sandbox()
+    (path / "core" / "stray.pyc").write_bytes(b"\0")
+    for directory in ("__pycache__", "pkg/__pycache__/deeper"):
+        (path / "core" / directory).mkdir(parents=True)
+        (path / "core" / directory / "m.cpython-312.pyc").write_bytes(b"\0")
+    assert verdict_of(world, path).action == REMOVE
+
+
+def test_a_pycache_directory_holding_anything_but_bytecode_keeps_the_sandbox(world):
+    for number, setup in enumerate(("notes", "link")):
+        path = world.shared_sandbox(suffix=f"pc{number}")
+        cache = path / "core" / "__pycache__"
+        cache.mkdir()
+        if setup == "notes":
+            (cache / "notes.txt").write_text("mine\n", encoding="utf-8")
+        else:
+            (cache / "m.pyc").symlink_to(path / "core" / "tracked.txt")
+        assert_kept_as_nested_git(world, path)
+
+
 def test_a_modified_tracked_file_keeps_the_sandbox(world):
     path = world.shared_sandbox()
     (path / "core" / "tracked.txt").write_text("edited\n", encoding="utf-8")
@@ -402,6 +534,17 @@ def test_git_runs_with_a_scrubbed_environment_and_a_timeout(world, monkeypatch):
     assert seen and all(k["timeout"] == temp_residue.GIT_TIMEOUT_S for k in seen)
     assert all("GIT_INDEX_FILE" not in k["env"] and "GIT_SSH_COMMAND" not in k["env"] for k in seen)
     assert all(k["env"]["GIT_OPTIONAL_LOCKS"] == "0" for k in seen)
+
+
+def test_a_program_the_clones_own_config_names_is_not_started_by_judging(world):
+    path = world.shared_sandbox()
+    marker = world.root / "started"
+    hook = world.root / "fsmonitor-hook.sh"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    git(path / "core", "config", "core.fsmonitor", str(hook))
+    assert verdict_of(world, path).action == REMOVE
+    assert not marker.exists()
 
 
 def test_the_exemption_is_for_the_instruction_sandbox_kind_only(world):
