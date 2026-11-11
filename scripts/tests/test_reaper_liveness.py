@@ -8,6 +8,7 @@ started here, asserted on the sweep's own findings (not on the machine's /proc b
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -317,23 +318,34 @@ def test_a_same_uid_process_with_unreadable_links_keeps_the_candidate(root, tmp_
     assert (result.action, result.slug) == (KEEP, liveness.HOLDER_SWEEP_INCOMPLETE)
 
 
+OTHER_UID = os.getuid() + 7  # never the owner of a planted /proc entry, which the test process creates
+
+
 def test_a_process_of_this_uid_by_its_status_is_swept_whoever_owns_its_proc_entry(root, tmp_path):
     proc = tmp_path.resolve() / "proc"
     candidate = make_tree(root)
-    fake_proc(proc, 23, cwd=candidate / "sub", uid=1000)
-    sweep = liveness.sweep_holders(str(proc), uid=1000)
+    fake_proc(proc, 23, cwd=candidate / "sub", uid=OTHER_UID)
+    sweep = liveness.sweep_holders(str(proc), uid=OTHER_UID)
     assert sweep.foreign_skipped == 0 and sweep.holder_of(str(candidate)) == "cwd"
 
 
+def test_a_non_dumpable_process_of_this_uid_is_judged_by_its_status_uid_not_its_directory_owner(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    unreadable_entry(proc, 23, uid=OTHER_UID)
+    sweep = liveness.sweep_holders(str(proc), uid=OTHER_UID)
+    assert sweep.foreign_skipped == 0 and sweep.incomplete and "pid=23" in sweep.incomplete
+
+
 def test_any_of_the_four_uids_in_the_status_line_counts_as_this_uid(tmp_path):
+    mine = OTHER_UID
     for number, line in enumerate((
-        "Uid:\t1000\t1000\t1000\t1000", "Uid:\t0\t0\t0\t1000", "Uid:\t0\t1000\t0\t0", "Uid:\t0\t0\t1000\t0",
+        f"Uid:\t{mine}\t{mine}\t{mine}\t{mine}", f"Uid:\t0\t0\t0\t{mine}", f"Uid:\t0\t{mine}\t0\t0", f"Uid:\t0\t0\t{mine}\t0",
     )):
         proc = tmp_path.resolve() / f"proc{number}"
         entry = proc / "24"
         (entry / "cwd").mkdir(parents=True)
         (entry / "status").write_text(f"Name:\tx\n{line}\n", encoding="utf-8")
-        sweep = liveness.sweep_holders(str(proc), uid=1000)
+        sweep = liveness.sweep_holders(str(proc), uid=mine)
         assert sweep.foreign_skipped == 0 and sweep.incomplete, line
 
 
@@ -369,6 +381,282 @@ def test_a_process_that_vanished_is_not_an_error(tmp_path):
 
 def test_a_proc_root_that_cannot_be_listed_is_an_incomplete_sweep(tmp_path):
     assert liveness.sweep_holders(str(tmp_path / "no-proc")).incomplete
+
+
+# ── the allowlist of same-uid system helpers (K10) ────────────────────────
+
+MAIN_PID = 4859
+
+
+def manager_is(pid):
+    return lambda uid: pid
+
+
+def helper_proc(base: Path, pid: int, name: str, argv0: str, *, ppid: int = 1, cmdline="auto", uid=None) -> Path:
+    """A same-uid process whose cwd link cannot be read (a non-dumpable one), with its status and cmdline."""
+    entry = base / str(pid)
+    (entry / "cwd").mkdir(parents=True)
+    me = os.getuid() if uid is None else uid
+    (entry / "status").write_text(
+        f"Name:\t{name}\nPPid:\t{ppid}\nUid:\t{me}\t{me}\t{me}\t{me}\n", encoding="utf-8",
+    )
+    if cmdline == "auto":
+        cmdline = argv0 + "\0"
+    if cmdline is not None:
+        (entry / "cmdline").write_text(cmdline, encoding="utf-8")
+    return entry
+
+
+def sweep_of(proc: Path, **kw) -> liveness.HolderSweep:
+    kw.setdefault("manager_pid_fn", manager_is(MAIN_PID))
+    return liveness.sweep_holders(str(proc), **kw)
+
+
+HELPERS = [
+    pytest.param(MAIN_PID, "systemd", 1, "/usr/lib/systemd/systemd", id="manager-by-mainpid"),
+    pytest.param(4860, "(sd-pam)", MAIN_PID, "(sd-pam)", id="sd-pam-of-the-manager"),
+    pytest.param(30, "sshd", 20, "sshd: user@pts/28", id="sshd-session-process"),
+    pytest.param(31, "sshd-session", 20, "sshd-session: user@pts/28", id="sshd-session"),
+    pytest.param(32, "gpg-agent", MAIN_PID, "/usr/bin/gpg-agent", id="gpg-agent"),
+    pytest.param(33, "ssh-agent", 1, "ssh-agent", id="ssh-agent"),
+    pytest.param(34, "fusermount", 35, "fusermount", id="fusermount"),
+    pytest.param(36, "fusermount3", 37, "fusermount3", id="fusermount3"),
+]
+
+
+@pytest.mark.parametrize(("pid", "name", "ppid", "argv0"), HELPERS)
+def test_a_known_helper_with_unreadable_links_is_skipped_and_counted(tmp_path, pid, name, ppid, argv0):
+    proc = tmp_path.resolve() / "proc"
+    helper_proc(proc, pid, name, argv0, ppid=ppid)
+    sweep = sweep_of(proc)
+    assert (sweep.incomplete, sweep.helpers_skipped) == (None, 1)
+
+
+def test_the_seventeen_unreadable_processes_seen_on_a_real_machine_leave_the_sweep_complete(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    helper_proc(proc, 4859, "systemd", "/usr/lib/systemd/systemd", ppid=1)
+    helper_proc(proc, 4860, "(sd-pam)", "(sd-pam)", ppid=4859)
+    helper_proc(proc, 3333455, "gpg-agent", "/usr/bin/gpg-agent", ppid=4859)
+    helper_proc(proc, 2476276, "sshd", "sshd: user@pts/28", ppid=2476217)
+    helper_proc(proc, 2478703, "sshd", "sshd: user@pts/33,pts/39,pts/40", ppid=2478485)
+    fusermounts = (
+        (2063752, 2063479), (2080892, 2080638), (2082500, 2082081), (2084968, 2084613), (2399734, 2399415),
+        (2457345, 2456945), (2457711, 2457515), (2458151, 2457857), (2458554, 2458346), (3445810, 3445609),
+        (542122, 541622), (746078, 744703),
+    )
+    for pid, ppid in fusermounts:
+        helper_proc(proc, pid, "fusermount", "fusermount", ppid=ppid)
+    sweep = sweep_of(proc, manager_pid_fn=manager_is(4859))
+    assert (sweep.incomplete, sweep.helpers_skipped) == (None, 17)
+
+
+def test_an_unreadable_same_uid_process_that_is_not_on_the_list_makes_the_sweep_incomplete(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    helper_proc(proc, 41, "screen", "screen", ppid=1)
+    sweep = sweep_of(proc)
+    assert sweep.helpers_skipped == 0
+    assert sweep.incomplete.startswith("pid=41 name='screen' argv0='screen' errno=")
+    assert "(EINVAL)" in sweep.incomplete and "/proc" in sweep.incomplete and "cwd" in sweep.incomplete
+
+
+def test_the_cause_names_the_pid_the_status_name_the_raw_argv0_and_the_errno(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    helper_proc(proc, 42, "keyring", "/usr/bin/keyring-daemon --foreground", ppid=1)
+    cause = sweep_of(proc).incomplete
+    assert re.match(
+        r"pid=42 name='keyring' argv0='/usr/bin/keyring-daemon --foreground' errno=\d+ \([A-Z]+\): ", cause,
+    )
+
+
+@pytest.mark.parametrize(("name", "argv0"), [
+    pytest.param("sshd", "bash", id="listed-name-other-argv0"),
+    pytest.param("bash", "sshd", id="other-name-listed-argv0"),
+    pytest.param("sshd", "sshd-session", id="two-different-listed-names"),
+    pytest.param("fusermount", "/tmp/evil dir/fusermount3", id="spaced-path-token-differs"),
+])
+def test_a_helper_needs_both_its_name_and_its_argv0_token_to_match_one_pair(tmp_path, name, argv0):
+    proc = tmp_path.resolve() / "proc"
+    helper_proc(proc, 43, name, argv0)
+    sweep = sweep_of(proc)
+    assert sweep.helpers_skipped == 0 and sweep.incomplete and "pid=43" in sweep.incomplete
+
+
+def test_the_manager_name_is_exempt_only_as_the_mainpid_of_the_user_manager(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    helper_proc(proc, 44, "systemd", "/usr/lib/systemd/systemd", ppid=1)
+    assert sweep_of(proc, manager_pid_fn=manager_is(MAIN_PID)).incomplete
+    assert sweep_of(proc, manager_pid_fn=manager_is(44)).incomplete is None
+
+
+@pytest.mark.parametrize("answer", [pytest.param(None, id="query-failed-or-timed-out"), pytest.param(0, id="mainpid-zero")])
+def test_a_manager_query_that_gave_no_pid_exempts_neither_the_manager_nor_its_sd_pam(tmp_path, answer):
+    proc = tmp_path.resolve() / "proc"
+    helper_proc(proc, 44, "systemd", "systemd", ppid=1)
+    helper_proc(proc, 45, "(sd-pam)", "(sd-pam)", ppid=44)
+    # an unusable answer is what user_manager_main_pid returns for a failure; the sweep never sees 0
+    sweep = sweep_of(proc, manager_pid_fn=lambda uid: answer or None)
+    assert sweep.helpers_skipped == 0 and sweep.incomplete
+
+
+def test_sd_pam_is_exempt_only_when_its_parent_is_the_manager(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    helper_proc(proc, 46, "(sd-pam)", "(sd-pam)", ppid=1234)
+    sweep = sweep_of(proc)
+    assert sweep.helpers_skipped == 0 and sweep.incomplete
+
+
+def test_the_manager_is_asked_once_per_sweep_and_only_when_a_process_needs_it(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    helper_proc(proc, 47, "fusermount", "fusermount")
+    asked = []
+    sweep_of(proc, manager_pid_fn=lambda uid: asked.append(uid))
+    assert asked == []
+    helper_proc(proc, MAIN_PID, "systemd", "systemd")
+    helper_proc(proc, 48, "(sd-pam)", "(sd-pam)", ppid=MAIN_PID)
+    sweep_of(proc, manager_pid_fn=lambda uid: asked.append(uid) or MAIN_PID)
+    assert asked == [os.getuid()]
+
+
+def test_an_unreadable_or_empty_cmdline_never_matches_the_allowlist(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    helper_proc(proc, 51, "fusermount", "fusermount", cmdline=None)
+    sweep = sweep_of(proc)
+    assert sweep.helpers_skipped == 0 and "pid=51" in sweep.incomplete and "cmdline unreadable" in sweep.incomplete
+    other = tmp_path.resolve() / "proc2"
+    helper_proc(other, 52, "fusermount", "fusermount", cmdline="")
+    sweep = sweep_of(other)
+    assert sweep.helpers_skipped == 0 and "pid=52" in sweep.incomplete and "empty cmdline" in sweep.incomplete
+
+
+def test_a_readable_helper_is_swept_like_any_process_and_not_counted(root, tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    candidate = make_tree(root)
+    entry = fake_proc(proc, 53, cwd=candidate / "sub")
+    (entry / "status").write_text(f"Name:\tgpg-agent\nPPid:\t1\nUid:\t{os.getuid()}\t0\t0\t0\n", encoding="utf-8")
+    (entry / "cmdline").write_text("/usr/bin/gpg-agent\0", encoding="utf-8")
+    sweep = sweep_of(proc)
+    assert (sweep.incomplete, sweep.helpers_skipped) == (None, 0)
+    assert judge(candidate, sweep=sweep).slug == liveness.HELD
+
+
+def test_an_unreadable_helper_does_not_hide_the_holds_that_were_readable(root, tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    candidate = make_tree(root)
+    entry = helper_proc(proc, 54, "ssh-agent", "ssh-agent")
+    (entry / "fd").mkdir()
+    (entry / "fd" / "3").symlink_to(candidate / "sub" / "file.txt")
+    sweep = sweep_of(proc)
+    assert sweep.helpers_skipped == 1 and sweep.holder_of(str(candidate)) == "fd"
+
+
+@pytest.mark.parametrize(("cmdline", "expected"), [
+    ("/usr/lib/systemd/systemd\0--user\0", ("/usr/lib/systemd/systemd", "systemd")),
+    ("sshd: user@pts/28", ("sshd: user@pts/28", "sshd")),
+    ("sshd: user@pts/33,pts/39,pts/40\0\0", ("sshd: user@pts/33,pts/39,pts/40", "sshd")),
+    ("(sd-pam)\0", ("(sd-pam)", "(sd-pam)")),
+    ("/usr/bin/gpg-agent --supervised", ("/usr/bin/gpg-agent --supervised", "gpg-agent")),
+    ("fusermount\0-u\0/mnt/x", ("fusermount", "fusermount")),
+    ("", None),
+    ("\0\0", None),
+    (": rewritten", None),
+])
+def test_the_argv0_token_is_cut_at_the_first_colon_or_space_then_reduced_to_its_basename(cmdline, expected):
+    assert liveness._argv0(cmdline) == expected
+
+
+class Done:
+    def __init__(self, returncode=0, stdout=""):
+        self.returncode, self.stdout = returncode, stdout
+
+
+@pytest.mark.parametrize(("outcome", "expected"), [
+    pytest.param(Done(0, "MainPID=4859\n"), 4859, id="running"),
+    pytest.param(Done(0, "MainPID=0\n"), None, id="stopped-unit"),
+    pytest.param(Done(1, "MainPID=4859\n"), None, id="non-zero-exit"),
+    pytest.param(Done(0, "MainPID=abc\n"), None, id="not-a-number"),
+    pytest.param(Done(0, "Other=1\n"), None, id="no-line"),
+    pytest.param(subprocess.TimeoutExpired("systemctl", 5), None, id="timeout"),
+    pytest.param(FileNotFoundError("systemctl"), None, id="no-systemctl"),
+])
+def test_the_manager_pid_query_answers_only_a_running_unit_and_any_failure_means_none(monkeypatch, outcome, expected):
+    calls = []
+
+    def fake_run(command, **kw):
+        calls.append((command, kw))
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(liveness.subprocess, "run", fake_run)
+    assert liveness.user_manager_main_pid(1000) == expected
+    command, kw = calls[0]
+    assert command == ["systemctl", "show", "-p", "MainPID", "user@1000.service"]
+    assert kw["timeout"] == liveness.MANAGER_QUERY_TIMEOUT_S and set(kw["env"]) == {"PATH", "LC_ALL"}
+
+
+# ── vanished processes and entries ────────────────────────────────────────
+
+def test_a_process_whose_status_disappears_between_listing_and_reading_leaves_the_sweep_complete(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    fake_proc(proc, 61)
+    fake_proc(proc, 62)
+
+    def status(path):
+        if "/62/" in path:
+            raise ProcessLookupError(3, "No such process", path)
+        return Path(path).read_text(encoding="utf-8")
+
+    sweep = liveness.sweep_holders(str(proc), status_fn=status)
+    assert sweep.incomplete is None and sweep.foreign_skipped == 0
+
+
+def test_a_same_uid_zombie_whose_cwd_and_exe_are_gone_but_whose_status_remains_is_not_incomplete(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    entry = proc / "63"
+    entry.mkdir(parents=True)
+    write_status(entry, os.getuid())
+    sweep = sweep_of(proc)
+    assert (sweep.incomplete, sweep.helpers_skipped) == (None, 0)
+
+
+def test_a_vanished_fd_skips_only_that_entry_and_a_later_fd_still_holds_the_candidate(root, tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    candidate = make_tree(root)
+    fake_proc(proc, 64, fds=["/nonexistent/a", "/nonexistent/b", candidate / "sub" / "file.txt"])
+
+    def readlink(path):
+        if path.endswith("/fd/0"):
+            raise FileNotFoundError(2, "No such file or directory", path)
+        return os.readlink(path)
+
+    sweep = liveness.sweep_holders(str(proc), readlink_fn=readlink)
+    assert sweep.incomplete is None and sweep.holder_of(str(candidate)) == "fd"
+    assert judge(candidate, sweep=sweep).slug == liveness.HELD
+
+
+def test_a_permission_error_on_a_single_fd_of_a_live_process_is_still_incomplete(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    fake_proc(proc, 65, fds=["/nonexistent/a"])
+
+    def readlink(path):
+        raise PermissionError(13, "Permission denied", path)
+
+    sweep = liveness.sweep_holders(str(proc), readlink_fn=readlink, cmdline_fn=lambda path: "x\0")
+    assert sweep.incomplete and "pid=65" in sweep.incomplete and "(EACCES)" in sweep.incomplete
+
+
+def test_a_status_that_is_denied_is_incomplete_with_its_errno_and_a_gone_status_is_not(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    fake_proc(proc, 66)
+    for err, incomplete in ((PermissionError(13, "denied"), True), (PermissionError(1, "not permitted"), True),
+                            (FileNotFoundError(2, "gone"), False)):
+        def status(path, err=err):
+            raise err
+
+        sweep = liveness.sweep_holders(str(proc), status_fn=status)
+        assert bool(sweep.incomplete) is incomplete
+        if incomplete:
+            assert "pid=66" in sweep.incomplete and "errno=" in sweep.incomplete
 
 
 def test_an_incomplete_sweep_keeps_every_candidate_with_its_own_slug(root):

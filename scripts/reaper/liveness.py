@@ -21,8 +21,14 @@ clauses are tested in this order and the first that fails decides the slug:
   unlike the links, and not subject to the dumpable-owner swap of ``/proc/<pid>`` itself —
   shows none of its uids is this one. A process of this uid whose cwd, exe, fd or maps cannot
   be read (a non-dumpable one, say), or whose status cannot be read, makes the sweep
-  incomplete, and an incomplete sweep keeps every candidate. A process that has vanished (the
-  entry or its link is gone, ENOENT) holds nothing and is not an error;
+  incomplete, and an incomplete sweep keeps every candidate — except a *known system helper*
+  (``HELPER_PAIRS`` plus the user's systemd manager and its ``(sd-pam)``), skipped and counted
+  in ``helpers_skipped``. Identity is an exact pair: the status ``Name`` AND the argv0 token of
+  ``cmdline`` (cut at the first ``:`` or space, then its basename); ``systemd`` must also be
+  MainPID of ``user@<uid>.service`` and ``(sd-pam)`` its child; an unreadable or empty
+  ``cmdline`` never matches. A readable helper is swept like any process. A process whose
+  ``/proc/<pid>`` or status is gone (ENOENT/ESRCH) holds nothing and is not an error; an entry
+  (cwd, exe, one fd or map) that vanished while its process is still listed skips only itself;
 * ``os-error`` — also when mountinfo is unreadable;
 * ``mount-inside`` — also when no mount point (mountinfo) is at or inside it; the walk never
   enters an entry on another ``st_dev``, so it never reaches a FUSE or network mount;
@@ -44,6 +50,7 @@ import errno
 import os
 import shutil
 import stat
+import subprocess
 from typing import Callable
 
 from reaper.contract import KEEP, REMOVE
@@ -67,6 +74,14 @@ OS_ERROR = "os-error"
 HOLDER_KINDS = ("cwd", "exe", "fd", "maps")
 _VANISHED = (errno.ENOENT, errno.ESRCH)
 
+MANAGER = ("systemd", "systemd")
+SD_PAM = ("(sd-pam)", "(sd-pam)")
+HELPER_PAIRS = frozenset({
+    ("sshd", "sshd"), ("sshd-session", "sshd-session"), ("gpg-agent", "gpg-agent"),
+    ("ssh-agent", "ssh-agent"), ("fusermount", "fusermount"), ("fusermount3", "fusermount3"),
+})
+MANAGER_QUERY_TIMEOUT_S = 5
+
 
 @dataclasses.dataclass(frozen=True)
 class Judgment:
@@ -82,6 +97,7 @@ class HolderSweep:
 
     held: "dict[str, list[str]]" = dataclasses.field(default_factory=lambda: {k: [] for k in HOLDER_KINDS})
     foreign_skipped: int = 0
+    helpers_skipped: int = 0
     incomplete: "str | None" = None
 
     def holder_of(self, real: str) -> "str | None":
@@ -102,12 +118,15 @@ class HolderSweep:
             self.incomplete = why
 
 
-def _readlink(path: str, sweep: HolderSweep, what: str) -> "str | None":
+Failures = "list[tuple[str, OSError]]"
+
+
+def _readlink(path: str, failures: Failures, readlink_fn: "Callable[[str], str]") -> "str | None":
     try:
-        return os.readlink(path)
+        return readlink_fn(path)
     except OSError as exc:
         if exc.errno not in _VANISHED:
-            sweep.mark_incomplete(f"{what}: {type(exc).__name__}: {exc.strerror or exc}")
+            failures.append((path, exc))
         return None
 
 
@@ -117,28 +136,28 @@ def _absolute(target: "str | None") -> "str | None":
     return target.removesuffix(DELETED_SUFFIX)
 
 
-def _fd_targets(pid_dir: str, sweep: HolderSweep) -> "list[str]":
+def _fd_targets(pid_dir: str, failures: Failures, readlink_fn: "Callable[[str], str]") -> "list[str]":
     try:
         names = os.listdir(os.path.join(pid_dir, "fd"))
     except OSError as exc:
         if exc.errno not in _VANISHED:
-            sweep.mark_incomplete(f"{pid_dir}/fd: {type(exc).__name__}: {exc.strerror or exc}")
+            failures.append((os.path.join(pid_dir, "fd"), exc))
         return []
     found = []
-    for name in names:
-        target = _absolute(_readlink(os.path.join(pid_dir, "fd", name), sweep, f"{pid_dir}/fd/{name}"))
+    for name in sorted(names):
+        target = _absolute(_readlink(os.path.join(pid_dir, "fd", name), failures, readlink_fn))
         if target:
             found.append(target)
     return found
 
 
-def _map_paths(pid_dir: str, sweep: HolderSweep) -> "list[str]":
+def _map_paths(pid_dir: str, failures: Failures) -> "list[str]":
     try:
         with open(os.path.join(pid_dir, "maps"), encoding="utf-8", errors="surrogateescape") as handle:
             lines = handle.read().splitlines()
     except OSError as exc:
         if exc.errno not in _VANISHED:
-            sweep.mark_incomplete(f"{pid_dir}/maps: {type(exc).__name__}: {exc.strerror or exc}")
+            failures.append((os.path.join(pid_dir, "maps"), exc))
         return []
     found = set()
     for line in lines:
@@ -150,31 +169,122 @@ def _map_paths(pid_dir: str, sweep: HolderSweep) -> "list[str]":
     return sorted(found)
 
 
-def _read_status(path: str) -> str:
+def _read_text(path: str) -> str:
     with open(path, encoding="utf-8", errors="surrogateescape") as handle:
         return handle.read()
 
 
-def _status_uids(text: str) -> "frozenset[int] | None":
-    """The real, effective, saved and filesystem uids of a ``/proc/<pid>/status`` text, else None."""
+@dataclasses.dataclass(frozen=True)
+class StatusFacts:
+    """What the sweep needs from a ``/proc/<pid>/status`` text: the four uids, ``Name`` and ``PPid``."""
+
+    uids: "frozenset[int] | None"
+    name: "str | None"
+    ppid: "int | None"
+
+
+def _parse_status(text: str) -> StatusFacts:
+    uids = name = ppid = None
     for line in text.splitlines():
-        if line.startswith("Uid:"):
+        key, _, rest = line.partition(":")
+        if key == "Uid" and uids is None:
             try:
-                return frozenset(int(field) for field in line.split()[1:])
+                uids = frozenset(int(field) for field in rest.split())
+            except ValueError:
+                uids = None
+        elif key == "Name" and name is None:
+            name = rest.strip()
+        elif key == "PPid" and ppid is None:
+            try:
+                ppid = int(rest.strip())
+            except ValueError:
+                ppid = None
+    return StatusFacts(uids, name, ppid)
+
+
+def _argv0(cmdline: str) -> "tuple[str, str] | None":
+    """(raw first argument, its identity token) of a ``/proc/<pid>/cmdline`` text, or None when empty.
+
+    The token is the raw argument cut at its first ``:`` or space (a daemon that rewrites its title
+    to ``sshd: user@pts/0``) and then reduced to its basename."""
+    raw = cmdline.split("\0", 1)[0]
+    cut = min((i for i in (raw.find(":"), raw.find(" ")) if i >= 0), default=len(raw))
+    token = os.path.basename(raw[:cut])
+    return (raw, token) if token else None
+
+
+def _errno_text(exc: "OSError | None") -> str:
+    if exc is None or exc.errno is None:
+        return "errno=none"
+    return f"errno={exc.errno} ({errno.errorcode.get(exc.errno, '?')})"
+
+
+def _cause(pid: str, name: "str | None", argv0: "str | None", where: str, exc: "OSError | None") -> str:
+    return f"pid={pid} name={name!r} argv0={argv0!r} {_errno_text(exc)}: {where}"
+
+
+def user_manager_main_pid(uid: int) -> "int | None":
+    """MainPID of ``user@<uid>.service`` (the user's systemd manager) from ``systemctl show``, else
+    None on any failure, timeout or a stopped unit (MainPID=0)."""
+    try:
+        done = subprocess.run(
+            ["systemctl", "show", "-p", "MainPID", f"user@{uid}.service"], capture_output=True, text=True,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": "C"}, timeout=MANAGER_QUERY_TIMEOUT_S, check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if done.returncode != 0:
+        return None
+    for line in done.stdout.splitlines():
+        if line.startswith("MainPID="):
+            try:
+                main = int(line.partition("=")[2])
             except ValueError:
                 return None
+            return main if main > 0 else None
     return None
+
+
+@dataclasses.dataclass(frozen=True)
+class ProcessIdentity:
+    pid: int
+    name: "str | None"
+    ppid: "int | None"
+    argv0: "str | None"
+
+
+def is_known_helper(proc: ProcessIdentity, manager_main_pid: "Callable[[], int | None]") -> bool:
+    """True when ``proc`` matches one pair of the closed allowlist (see the module docstring).
+
+    Both its status ``Name`` and its argv0 token must equal the pair. The user's systemd manager
+    must also be MainPID of ``user@<uid>.service`` and its ``(sd-pam)`` child must have that pid as
+    parent; if MainPID cannot be read, neither matches."""
+    pair = (proc.name, proc.argv0)
+    if pair == MANAGER:
+        main = manager_main_pid()
+        return main is not None and proc.pid == main
+    if pair == SD_PAM:
+        main = manager_main_pid()
+        return main is not None and proc.ppid == main
+    return pair in HELPER_PAIRS
 
 
 def sweep_holders(
     proc_root: str = PROC_ROOT,
     uid: "int | None" = None,
-    status_fn: "Callable[[str], str]" = _read_status,
+    status_fn: "Callable[[str], str]" = _read_text,
+    readlink_fn: "Callable[[str], str]" = os.readlink,
+    cmdline_fn: "Callable[[str], str]" = _read_text,
+    manager_pid_fn: "Callable[[int], int | None]" = user_manager_main_pid,
 ) -> HolderSweep:
     """One pass over ``proc_root``: what every process that has ``uid`` (default: this uid) holds.
 
     A process is read through its ``status`` file's ``Uid:`` line, never through the owner of
-    ``/proc/<pid>`` (the kernel shows root there for a non-dumpable process).
+    ``/proc/<pid>`` (the kernel shows root there for a non-dumpable process). A process whose
+    directory or status is gone holds nothing; a link, fd or map entry that vanished while the
+    process is still listed (a zombie, an exiting process) skips only that entry. A same-uid process
+    with an unreadable link is skipped and counted only when it is a known helper, else the sweep
+    is incomplete.
     """
     uid = os.getuid() if uid is None else uid
     sweep = HolderSweep()
@@ -183,31 +293,60 @@ def sweep_holders(
     except OSError as exc:
         sweep.mark_incomplete(f"{proc_root}: {type(exc).__name__}: {exc.strerror or exc}")
         return sweep
+    manager: "list[int | None]" = []
+
+    def manager_main_pid() -> "int | None":
+        if not manager:
+            manager.append(manager_pid_fn(uid))
+        return manager[0]
+
     held: "dict[str, set[str]]" = {kind: set() for kind in HOLDER_KINDS}
     for entry in entries:
         pid_dir = os.path.join(proc_root, entry)
         try:
-            owners = _status_uids(status_fn(os.path.join(pid_dir, "status")))
+            facts = _parse_status(status_fn(os.path.join(pid_dir, "status")))
         except OSError as exc:
             if exc.errno not in _VANISHED:
-                sweep.mark_incomplete(f"{pid_dir}/status: owner unreadable: {type(exc).__name__}: {exc.strerror or exc}")
+                sweep.mark_incomplete(_cause(entry, None, None, f"{pid_dir}/status: owner unreadable", exc))
             continue
-        if owners is None:
-            sweep.mark_incomplete(f"{pid_dir}/status: owner unreadable: no Uid line")
+        if facts.uids is None:
+            sweep.mark_incomplete(_cause(entry, facts.name, None, f"{pid_dir}/status: owner unreadable: no Uid line", None))
             continue
-        if uid not in owners:
+        if uid not in facts.uids:
             sweep.foreign_skipped += 1
             continue
-        for kind, target in (
-            ("cwd", _absolute(_readlink(os.path.join(pid_dir, "cwd"), sweep, f"{pid_dir}/cwd"))),
-            ("exe", _absolute(_readlink(os.path.join(pid_dir, "exe"), sweep, f"{pid_dir}/exe"))),
-        ):
+        failures: Failures = []
+        for kind in ("cwd", "exe"):
+            target = _absolute(_readlink(os.path.join(pid_dir, kind), failures, readlink_fn))
             if target:
                 held[kind].add(target)
-        held["fd"].update(_fd_targets(pid_dir, sweep))
-        held["maps"].update(_map_paths(pid_dir, sweep))
+        held["fd"].update(_fd_targets(pid_dir, failures, readlink_fn))
+        held["maps"].update(_map_paths(pid_dir, failures))
+        if failures:
+            _judge_unreadable(sweep, entry, pid_dir, facts, failures, cmdline_fn, manager_main_pid)
     sweep.held = {kind: sorted(paths) for kind, paths in held.items()}
     return sweep
+
+
+def _judge_unreadable(
+    sweep: HolderSweep, entry: str, pid_dir: str, facts: StatusFacts, failures: Failures,
+    cmdline_fn: "Callable[[str], str]", manager_main_pid: "Callable[[], int | None]",
+) -> None:
+    """A same-uid process with an unreadable entry is a counted known helper, else an incomplete sweep.
+
+    An unreadable or empty ``cmdline`` identifies nothing, so it never matches the allowlist."""
+    argv0: "tuple[str, str] | None" = None
+    cmdline_error: "OSError | None" = None
+    try:
+        argv0 = _argv0(cmdline_fn(os.path.join(pid_dir, "cmdline")))
+    except OSError as exc:
+        cmdline_error = exc
+    if argv0 is not None and is_known_helper(ProcessIdentity(int(entry), facts.name, facts.ppid, argv0[1]), manager_main_pid):
+        sweep.helpers_skipped += 1
+        return
+    where, error = failures[0]
+    shown = argv0[0] if argv0 else (f"<cmdline unreadable: {_errno_text(cmdline_error)}>" if cmdline_error else "<empty cmdline>")
+    sweep.mark_incomplete(_cause(entry, facts.name, shown, where, error))
 
 
 def read_mount_points(path: str = MOUNTINFO) -> "frozenset[str]":
