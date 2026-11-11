@@ -26,13 +26,15 @@ That clone is judged to hold nothing of value when `disposable_shared_clone` pro
 scrubbed git environment, no network and a timeout, exactly this and no more: (1) it is the only
 `.git` in the candidate; (2) its `objects/info/alternates` lists only objects directories of
 repositories that exist outside the candidate; (3) `.git/worktrees` is absent or empty; (4) its own
-object store is empty (`git count-objects -v`: count 0, in-pack 0), so HEAD and every ref can only
-name objects the alternates hold, and no reflog, stash, deleted branch or detached commit keeps an
-object only here; (5) `git status` with untracked and ignored files listed shows nothing except
-ignored `__pycache__/` directories holding only `*.pyc` files and ignored `*.pyc` files; (6) no
-index entry is marked assume-unchanged or skip-worktree. Any other `.git`, and any failed check
-or git failure, keeps the candidate as `nested-git`. Nested repositories are found by their `.git`
-name, so a bare repository under another name is not seen.
+object store is empty (`git count-objects -v`: count 0, in-pack 0, garbage 0), so HEAD and every ref
+can only name objects the alternates hold, and no reflog, stash, deleted branch or detached commit
+keeps an object only here; (5) `git status` with untracked and ignored files listed shows nothing
+except ignored `__pycache__/` directories holding only `*.pyc` files and ignored `*.pyc` files;
+(6) no index entry is marked assume-unchanged or skip-worktree; (7) `.git/modules` is absent or
+empty (a submodule keeps its own object store there) and no marker of an operation in progress
+exists in `.git` (`OPERATION_MARKERS`: a stopped `am` or rebase keeps its patch only there). Any
+other `.git`, and any failed check or git failure, keeps the candidate as `nested-git`. Nested
+repositories are found by their `.git` name, so a bare repository under another name is not seen.
 
 The reaper deletes only on a machine that opted in: `temp-residue = true` in
 `<agent home>/reaper/opt-in.toml` (`reaper.opt_in`). Without it a live pass keeps every
@@ -85,6 +87,9 @@ CLONE_DIR = "core"
 GIT_TIMEOUT_S = 20
 BYTECODE_DIR = "__pycache__"
 BYTECODE_SUFFIX = ".pyc"
+OPERATION_MARKERS = (
+    "rebase-apply", "rebase-merge", "sequencer", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG",
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -227,16 +232,23 @@ def _own_object_store_empty(git_dir: str) -> bool:
     if out is None:
         return False
     counts = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
-    return counts.get("count") == "0" and counts.get("in-pack") == "0"
+    return counts.get("count") == "0" and counts.get("in-pack") == "0" and counts.get("garbage") == "0"
 
 
-def _no_linked_worktrees(git_dir: str) -> bool:
+def _empty_or_absent(git_dir: str, name: str) -> bool:
+    """``<git_dir>/<name>`` (``worktrees``, ``modules``) is absent or an empty directory."""
     try:
-        return not os.listdir(os.path.join(git_dir, "worktrees"))
+        return not os.listdir(os.path.join(git_dir, name))
     except FileNotFoundError:
         return True
     except OSError:
         return False
+
+
+def _no_operation_in_progress(git_dir: str) -> bool:
+    """No marker of a stopped ``am``, rebase, cherry-pick, revert, merge or bisect, whose
+    state (a patch not yet applied, a todo list) lives only in these files."""
+    return not any(os.path.lexists(os.path.join(git_dir, name)) for name in OPERATION_MARKERS)
 
 
 def _only_bytecode(directory: str) -> bool:
@@ -269,6 +281,7 @@ def _worktree_holds_nothing(git_dir: str, work_tree: str) -> bool:
     ``.git/info/exclude`` hide.
     """
     out = _git([
+        "-c", "core.untrackedCache=false", "-c", "core.checkStat=default", "-c", "core.trustctime=true",
         "-c", "status.showUntrackedFiles=all", "--git-dir", git_dir, "--work-tree", work_tree,
         "status", "--porcelain", "-z", "--untracked-files=all", "--ignored=matching",
     ])
@@ -294,7 +307,11 @@ def disposable_shared_clone(candidate: str, git_entries: "list[str]") -> bool:
     git_dir = os.path.join(clone, liveness.GIT_NAME)
     if git_entries != [git_dir] or not stat.S_ISDIR(os.lstat(git_dir).st_mode):
         return False
-    if not _alternate_repositories(git_dir, candidate) or not _no_linked_worktrees(git_dir):
+    if not _alternate_repositories(git_dir, candidate):
+        return False
+    if not _empty_or_absent(git_dir, "worktrees") or not _empty_or_absent(git_dir, "modules"):
+        return False
+    if not _no_operation_in_progress(git_dir):
         return False
     return (
         _own_object_store_empty(git_dir)

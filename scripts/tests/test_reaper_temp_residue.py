@@ -383,6 +383,70 @@ def test_a_linked_worktree_that_holds_no_commit_still_keeps_the_sandbox(world):
     assert_kept_as_nested_git(world, path)
 
 
+def test_a_packfile_without_its_index_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    commit_in(path / "core")
+    git(path / "core", "reset", "-q", "--hard", "HEAD~")
+    git(path / "core", "repack", "-q", "-d")
+    for index in (path / "core" / ".git" / "objects" / "pack").glob("*.idx"):
+        index.unlink()
+    counts = git(path / "core", "count-objects", "-v")
+    lines = counts.splitlines()
+    assert "count: 0" in lines and "in-pack: 0" in lines and "garbage: 0" not in lines
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_submodule_git_directory_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    module = path / "core" / ".git" / "modules" / "sub"
+    module.mkdir(parents=True)
+    (module / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_an_empty_modules_directory_leaves_the_sandbox_removable(world):
+    path = world.shared_sandbox()
+    (path / "core" / ".git" / "modules").mkdir()
+    assert verdict_of(world, path).action == REMOVE
+
+
+def test_a_stopped_am_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    patch_dir = path / "core" / ".git" / "rebase-apply"
+    patch_dir.mkdir()
+    (patch_dir / "0001").write_text("From: me\n\nthe only copy of the patch\n", encoding="utf-8")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_every_operation_in_progress_marker_keeps_the_sandbox(world):
+    """One loop, not a parametrization: the mutation catalogue names tests by function."""
+    for number, marker in enumerate(temp_residue.OPERATION_MARKERS):
+        path = world.shared_sandbox(suffix=f"op{number}")
+        assert verdict_of(world, path).action == REMOVE, marker
+        target = path / "core" / ".git" / marker
+        if marker in ("rebase-apply", "rebase-merge", "sequencer"):
+            target.mkdir()
+        else:
+            target.write_text("0" * 40 + "\n", encoding="utf-8")
+        assert_kept_as_nested_git(world, path)
+
+
+def test_status_runs_without_the_clones_untracked_cache_and_stat_settings(world, monkeypatch):
+    path = world.shared_sandbox()
+    calls: "list[list[str]]" = []
+    real_run = subprocess.run
+
+    def spy(cmd, *args, **kwargs):
+        calls.append(list(cmd))
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(temp_residue.subprocess, "run", spy)
+    assert verdict_of(world, path).action == REMOVE
+    (status,) = [c for c in calls if "status" in c]
+    for setting in ("core.untrackedCache=false", "core.checkStat=default", "core.trustctime=true"):
+        assert setting in status
+
+
 def test_a_repository_with_no_alternates_and_no_objects_keeps_the_sandbox(world):
     path = world.sandbox / "instruction-sandbox.empty"
     (path / "core").mkdir(parents=True)

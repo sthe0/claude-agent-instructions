@@ -794,14 +794,43 @@ def test_main_writes_the_kept_snapshot_under_the_config_root(hermetic):
 
 MUTANT_WORKERS = 6  # each worker is one scratch copy and one serial pytest child; bounded, never recursive
 
+
+def mutant_workers(environ, soft_nproc_limit: int) -> int:
+    """Six workers only under ``scripts/cap-run.sh``: it exports its cap as ``CAP_RUN_NPROC``, and
+    the process's own RLIMIT_NPROC must equal it, so a stray or inherited variable does not count."""
+    capped = environ.get("CAP_RUN_NPROC") == str(soft_nproc_limit)
+    return min(MUTANT_WORKERS, os.cpu_count() or 1) if capped else 1
+
+
+def test_mutant_workers_fan_out_only_under_a_matching_cap():
+    assert mutant_workers({}, 5000) == 1
+    assert mutant_workers({"CAP_RUN_NPROC": "4000"}, 5000) == 1
+    assert mutant_workers({"CAP_RUN_NPROC": "5000"}, 5000) == min(MUTANT_WORKERS, os.cpu_count() or 1)
+
+
+def test_cap_run_exports_the_cap_it_set(tmp_path):
+    import subprocess
+
+    cap_run = Path(__file__).resolve().parents[1] / "cap-run.sh"
+    done = subprocess.run(
+        ["bash", str(cap_run), "--extra-tasks", "64", "--timeout", "60", "--", sys.executable, "-c",
+         "import os, resource; print(os.environ['CAP_RUN_NPROC'], resource.getrlimit(resource.RLIMIT_NPROC)[0])"],
+        capture_output=True, text=True, check=True,
+    )
+    exported, soft = done.stdout.split()
+    assert exported == soft
+
+
 @pytest.mark.skipif(os.environ.get("REAPER_MUTATION_CHILD") == "1", reason="running inside a mutant subprocess")
 def test_every_catalogue_mutant_is_killed_and_the_control_is_green():
+    import resource
     from concurrent.futures import ThreadPoolExecutor
 
     import reaper_mutation_control as control
 
     names = list(control.CATALOGUE)
-    with ThreadPoolExecutor(max_workers=min(MUTANT_WORKERS, os.cpu_count() or 1)) as pool:
+    workers = mutant_workers(os.environ, resource.getrlimit(resource.RLIMIT_NPROC)[0])
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         survivors = dict(zip(names, pool.map(control.run_mutant, names)))
     assert survivors == {name: control.KILLED for name in names}
     assert control.run_control() == 0

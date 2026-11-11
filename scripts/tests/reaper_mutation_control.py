@@ -435,7 +435,8 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_LIVENESS, "test_a_status_without_a_uid_line_makes_the_sweep_incomplete"),
     ),
     "residue-clone-own-objects-unchecked": Mutant(
-        TEMP_RESIDUE, '    return counts.get("count") == "0" and counts.get("in-pack") == "0"\n', "    return True\n",
+        TEMP_RESIDUE, '    return counts.get("count") == "0" and counts.get("in-pack") == "0" and counts.get("garbage") == "0"\n',
+        "    return True\n",
         _ids(T_RESIDUE, "test_a_local_commit_that_the_alternate_does_not_hold_keeps_the_sandbox",
              "test_a_branch_with_a_commit_the_alternate_does_not_hold_keeps_the_sandbox_though_head_is_held",
              "test_a_commit_only_the_reflog_reaches_keeps_the_sandbox_after_a_reset",
@@ -444,19 +445,37 @@ CATALOGUE: "dict[str, Mutant]" = {
              "test_a_dropped_stash_entry_keeps_the_sandbox"),
     ),
     "residue-clone-loose-objects-unchecked": Mutant(
-        TEMP_RESIDUE, '    return counts.get("count") == "0" and counts.get("in-pack") == "0"\n',
-        '    return counts.get("in-pack") == "0"\n',
+        TEMP_RESIDUE, '    return counts.get("count") == "0" and counts.get("in-pack") == "0" and counts.get("garbage") == "0"\n',
+        '    return counts.get("in-pack") == "0" and counts.get("garbage") == "0"\n',
         _ids(T_RESIDUE, "test_a_commit_only_the_reflog_reaches_keeps_the_sandbox_after_a_reset",
              "test_a_detached_commit_left_by_checking_back_out_keeps_the_sandbox"),
     ),
     "residue-clone-packed-objects-unchecked": Mutant(
-        TEMP_RESIDUE, '    return counts.get("count") == "0" and counts.get("in-pack") == "0"\n',
-        '    return counts.get("count") == "0"\n',
+        TEMP_RESIDUE, '    return counts.get("count") == "0" and counts.get("in-pack") == "0" and counts.get("garbage") == "0"\n',
+        '    return counts.get("count") == "0" and counts.get("garbage") == "0"\n',
         _ids(T_RESIDUE, "test_an_own_commit_that_was_packed_keeps_the_sandbox"),
     ),
     "residue-clone-linked-worktrees-unchecked": Mutant(
-        TEMP_RESIDUE, '        return not os.listdir(os.path.join(git_dir, "worktrees"))\n', "        return True\n",
+        TEMP_RESIDUE, 'not _empty_or_absent(git_dir, "worktrees")', "False",
         _ids(T_RESIDUE, "test_a_linked_worktree_that_holds_no_commit_still_keeps_the_sandbox"),
+    ),
+    "residue-clone-garbage-unchecked": Mutant(
+        TEMP_RESIDUE, ' and counts.get("garbage") == "0"\n', "\n",
+        _ids(T_RESIDUE, "test_a_packfile_without_its_index_keeps_the_sandbox"),
+    ),
+    "residue-clone-modules-unchecked": Mutant(
+        TEMP_RESIDUE, 'or not _empty_or_absent(git_dir, "modules")', "or False",
+        _ids(T_RESIDUE, "test_a_submodule_git_directory_keeps_the_sandbox"),
+    ),
+    "residue-clone-operation-unchecked": Mutant(
+        TEMP_RESIDUE, "if not _no_operation_in_progress(git_dir):", "if False:",
+        _ids(T_RESIDUE, "test_a_stopped_am_keeps_the_sandbox",
+             "test_every_operation_in_progress_marker_keeps_the_sandbox"),
+    ),
+    "residue-clone-status-cache-settings": Mutant(
+        TEMP_RESIDUE,
+        '        "-c", "core.untrackedCache=false", "-c", "core.checkStat=default", "-c", "core.trustctime=true",\n', "",
+        _ids(T_RESIDUE, "test_status_runs_without_the_clones_untracked_cache_and_stat_settings"),
     ),
     "residue-clone-dirty-ignored": Mutant(
         TEMP_RESIDUE,
