@@ -383,3 +383,55 @@ def test_the_command_exit_code_is_the_verdict(tmp_path):
                            str(FIXTURES / "r11_bad_report.json"), "--named", str(_doc(tmp_path))],
                           capture_output=True, text=True, timeout=60)
     assert proc.returncode == 1 and "UNNAMED" in proc.stdout, proc.stdout + proc.stderr
+
+
+# ── reruns of the failing ids ─────────────────────────────────────────────
+
+FLAKY_ID = "scripts/tests/t.py::test_flaky"
+STABLE_ID = "scripts/tests/t.py::test_stable"
+
+
+def test_only_confirmed_ids_must_be_named_and_the_ids_that_passed_on_rerun_are_printed(tmp_path, capsys):
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"collected": 16000, "failing": [FLAKY_ID, STABLE_ID], "collection_errors": [],
+                                  "confirmed": [STABLE_ID], "rerun_passed": [FLAKY_ID]}), encoding="utf-8")
+    assert _verify(report, _doc(tmp_path, STABLE_ID)) == 0
+    assert FLAKY_ID in capsys.readouterr().out
+    assert _verify(report, _doc(tmp_path)) == 1
+
+
+def _rerun(monkeypatch, failing, results, reruns=2):
+    """Run ``_rerun_failing`` against a stand-in runner: each call takes the next set of failing ids
+    from ``results`` (None: the rerun did not complete). Returns the verdict and each call's selection."""
+    calls = []
+
+    def run(repo, sha, root, *, select, timeout_s):
+        calls.append(list(select))
+        failures = results.pop(0)
+        if failures is None:
+            return gate.SuiteRun(pytest_exit=None)
+        return gate.SuiteRun(pytest_exit=int(bool(failures)), failures=tuple(failures))
+
+    monkeypatch.setattr(control.gate, "default_runner", run)
+    return control._rerun_failing(Path("."), "sha", Path("."), failing, reruns, 60), calls
+
+
+def test_an_id_that_fails_any_rerun_is_confirmed_and_one_that_passes_both_is_not(monkeypatch):
+    (confirmed, passed), calls = _rerun(monkeypatch, [FLAKY_ID, STABLE_ID], [[STABLE_ID], []])
+    assert (confirmed, passed) == ([STABLE_ID], [FLAKY_ID])
+    assert calls == [[FLAKY_ID, STABLE_ID], [FLAKY_ID]]
+
+
+def test_a_failure_in_the_second_rerun_confirms_the_id(monkeypatch):
+    (confirmed, passed), _ = _rerun(monkeypatch, [FLAKY_ID], [[], [FLAKY_ID]])
+    assert (confirmed, passed) == ([FLAKY_ID], [])
+
+
+def test_a_collection_error_is_confirmed_without_a_rerun(monkeypatch):
+    (confirmed, passed), calls = _rerun(monkeypatch, ["scripts/tests/t.py"], [])
+    assert (confirmed, passed, calls) == (["scripts/tests/t.py"], [], [])
+
+
+def test_a_rerun_that_does_not_complete_confirms_every_id_under_test(monkeypatch):
+    (confirmed, passed), _ = _rerun(monkeypatch, [FLAKY_ID, STABLE_ID], [None], reruns=1)
+    assert (sorted(confirmed), passed) == (sorted([FLAKY_ID, STABLE_ID]), [])

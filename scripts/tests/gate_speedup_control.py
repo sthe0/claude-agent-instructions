@@ -25,18 +25,22 @@ two checks show the limiter holds and the record carries the cost, on real proce
       reduced record can never admit a real landing.
 
   gate_speedup_control.py sandbox-run --out PATH [-C REPO] [--select PATH ...] [--root DIR] [--timeout-s N]
+                                      [--reruns N]
       Run the committed tip of REPO once, the way the gate does (a private clone in a sandbox
       with a fake HOME and a scrubbed environment), and write PATH: the collected count, the
       collection errors and every failing id (an error counts as failing). Exit 0 when the run
       completed and the report was written, whatever the test outcomes; 2 when it could not run.
       ``--select`` runs only the named test paths, serially; ``--root`` reuses and keeps a sandbox.
+      ``--reruns N`` then reruns every failing id N times, serially, in the same sandbox: an id
+      that fails any rerun goes to ``confirmed``, one that passes them all to ``rerun_passed``.
       The whole suite takes about 40 minutes.
 
   gate_speedup_control.py verify-named --report PATH --named DOC [--max-named N]
       Compare a sandbox-run report with the document that names the known failures (default at
       most 20 ids): 0 every failing id is named and DOC names at most N; 1 a failing id is not
       named; 3 DOC names more than N ids; 4 the run did not finish (fewer than 15000 collected,
-      or a collection error); 2 an input could not be read.
+      or a collection error); 2 an input could not be read. When the report has ``confirmed``,
+      only those ids must be named; the ids that passed on rerun are printed.
 
 Exit 2 on a usage or environment error (not enough free disk, git failure).
 """
@@ -436,8 +440,33 @@ def concurrent_gates(repo: Path, runs: int, out: Path, keep: list[str] | None = 
 
 # ── sandbox-run, verify-named ─────────────────────────────────────────────
 
-def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, timeout_s: int) -> int:
-    """One gate-shaped run of the committed tip of ``repo``; the report names every failing id."""
+def _rerun_failing(repo: Path, sha: str, work: Path, failing: list[str], reruns: int,
+                   timeout_s: int) -> tuple[list[str], list[str]]:
+    """Rerun the failing ids ``reruns`` times, serially, in the sandbox ``work``.
+
+    An id that fails any rerun is confirmed; one that passes every rerun passed on rerun. An id
+    without ``::`` (a file that did not collect) is not a test that can pass alone: always confirmed.
+    A rerun that does not complete confirms every id still under test."""
+    confirmed = [i for i in failing if "::" not in i]
+    candidates = [i for i in failing if "::" in i]
+    for _ in range(reruns):
+        if not candidates:
+            break
+        run = gate.default_runner(repo, sha, work, select=candidates, timeout_s=timeout_s)
+        if not run.build_ok or run.timed_out or run.pytest_exit is None:
+            _say(f"a rerun did not complete; {len(candidates)} ids stay confirmed")
+            failed_again = set(candidates)
+        else:
+            failed_again = set(run.failures)
+        confirmed += [i for i in candidates if i in failed_again]
+        candidates = [i for i in candidates if i not in failed_again]
+    return confirmed, candidates
+
+
+def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, timeout_s: int,
+                reruns: int = 0) -> int:
+    """One gate-shaped run of the committed tip of ``repo``; the report names every failing id,
+    and with ``reruns`` which of them failed again (``confirmed``) and which passed (``rerun_passed``)."""
     free_gb = shutil.disk_usage("/").free / 2**30
     if free_gb < MIN_FREE_GB:
         _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
@@ -464,12 +493,17 @@ def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, tim
             "failing": list(run.failures),
         }
         out.parent.mkdir(parents=True, exist_ok=True)
+        # Copied before any rerun: a rerun in the same sandbox overwrites these files.
         for src, suffix in ((run.junit_path, ".junit.xml"), (run.report_path, ".tests.jsonl")):
             if src:
                 shutil.copyfile(src, stem.with_name(stem.name + suffix))
+        if reruns:
+            report["confirmed"], report["rerun_passed"] = _rerun_failing(
+                repo, sha, work, report["failing"], reruns, timeout_s)
         out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        _say(f"{report['collected']} collected, {len(report['failing'])} failing, pytest exit {run.pytest_exit}, "
-             f"{report['duration_s']} s; report {out}")
+        confirmed = f", {len(report['confirmed'])} confirmed by {reruns} reruns" if reruns else ""
+        _say(f"{report['collected']} collected, {len(report['failing'])} failing{confirmed}, "
+             f"pytest exit {run.pytest_exit}, {report['duration_s']} s; report {out}")
         return 0
     except (gate.GateError, OSError) as exc:
         _say(f"sandbox-run failed: {exc}")
@@ -499,6 +533,9 @@ def verify_named(report_path: Path, named_path: Path, max_named: int) -> int:
         text = named_path.read_text(encoding="utf-8")
         failing, collected = list(report["failing"]), int(report["collected"])
         collection_errors = list(report.get("collection_errors") or [])
+        rerun_passed = list(report.get("rerun_passed") or [])
+        if "confirmed" in report:
+            failing = list(report["confirmed"])
     except (OSError, ValueError, KeyError, TypeError) as exc:
         _say(f"cannot read the inputs: {exc}")
         return 2
@@ -506,6 +543,8 @@ def verify_named(report_path: Path, named_path: Path, max_named: int) -> int:
         _say(f"INCOMPLETE: {collected} tests collected (need {MIN_COLLECTED}), "
              f"{len(collection_errors)} collection errors {' '.join(collection_errors[:3])}")
         return 4
+    if rerun_passed:
+        _say(f"passed on rerun, not required to be named: {' '.join(rerun_passed)}")
     named = named_ids(text)
     unnamed = [i for i in failing if i not in named]
     if unnamed:
@@ -537,6 +576,8 @@ def main(argv: list[str] | None = None) -> int:
     sandboxed.add_argument("--root", type=Path, default=None,
                            help="an existing sandbox to reuse and keep; default: a fresh one, removed after")
     sandboxed.add_argument("--timeout-s", type=int, default=gate.DEFAULT_TIMEOUT_S)
+    sandboxed.add_argument("--reruns", type=int, default=0,
+                           help="rerun each failing id this many times, serially; failing any rerun confirms it")
     named = sub.add_parser("verify-named", help="check a sandbox-run report against the documented failures")
     named.add_argument("--report", required=True, type=Path)
     named.add_argument("--named", required=True, type=Path)
@@ -552,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "concurrent-gates":
         return concurrent_gates(args.repo.resolve(), args.runs, args.out, args.tests)
     if args.command == "sandbox-run":
-        return sandbox_run(args.repo.resolve(), args.out, args.select, args.root, args.timeout_s)
+        return sandbox_run(args.repo.resolve(), args.out, args.select, args.root, args.timeout_s, args.reruns)
     if args.command == "verify-named":
         return verify_named(args.report, args.named, args.max_named)
     return _fake_run(args)
