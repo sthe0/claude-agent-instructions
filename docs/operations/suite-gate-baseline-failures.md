@@ -37,9 +37,19 @@ defect of the code under test.
    repository checked out under `/tmp/` is entirely unguarded by these hooks. It is out of scope of this
    change (it would alter a production guard) and is left for a separate ticket.
 
+## Known intermittent failures
+
+Two Core tests fail now and then under the load of a full-suite run and pass otherwise. They are not caused
+by the sandbox: each passes alone and in three repeated parallel runs of its file (`pytest -n 4`), and each
+already appears among the failures of six earlier suite-gate records on other commits. Both touch the
+telemetry record store. They go to the flake list, `flaky.toml` in the tests directory, once it exists.
+
+- `scripts/tests/test_substrate_adequacy.py::test_two_tasks_of_one_session_each_count_their_difficulty`
+- `scripts/tests/test_telemetry_fixture.py::test_migration_adds_the_fixture_cause_columns`
+
 ## Failures that remain by design
 
-None: the last full run in the sandbox failed no test.
+None: no test fails in the sandbox for a reason outside Core.
 
 A test that cannot pass in the sandbox for a reason outside Core gets one line here, as its full pytest
 node id (the repository-relative test file, then `::`, then the test name) with the reason it cannot be fixed.
