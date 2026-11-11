@@ -286,7 +286,7 @@ class _Ctx:
             and s.index in self.old_keys and self.old_keys[s.index] == self.new_keys.get(s.index)
         }
         for rid, record in self._carriable_rows(held_too=False):
-            stages = _covered_stages(rid)
+            stages = covered_stages(rid)
             if not stages or not stages <= settled:
                 continue
             if review_currency_hash(self.old, rid) != review_currency_hash(self.new, rid):
@@ -407,7 +407,7 @@ class _Ctx:
             self.report["records"].append(f"order:{element.get('id', '')}")
 
 
-def _covered_stages(review_id: str) -> set:
+def covered_stages(review_id: str) -> set:
     """The stages a unit or pair id judges: `unit:<n>` stage n, `<b>-<s>` both, `base-<s>`
     stage s; `unit:base` none."""
     nodes = (unit_node(review_id),) if is_unit_id(review_id) else split_pair_id(review_id)

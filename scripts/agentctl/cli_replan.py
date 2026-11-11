@@ -29,6 +29,7 @@ from .plan import (
     plan_meta_element_keys,
     refined_grant_entries,
     replan_class,
+    review_ids,
     stage_norm_keys,
     stage_reattest_digest,
 )
@@ -103,6 +104,7 @@ from .cli_common import (
     _park_node,
     _enumeration_escape_counts,
     _note_round_release,
+    _plan_review_release_active,
     _review_cycle_arrive,
     _cost_rows,
     _refresh_spend,
@@ -390,6 +392,26 @@ def _reopened_stages(state: SessionState, new_stages, roots) -> set[int]:
         i for i in _passed_dependents_closure(state.stages, new_stages, known)
         if state.stage(i).outcome.status == StageStatus.PASSED.value
     }
+
+
+def _reopened_rows_owed(gate_state: SessionState, plan_path: str,
+                        reopened: set[int]) -> list[tuple[str, str]]:
+    """`(id, status)` of each unit and pair row of the plan at `plan_path` that covers a
+    stage in `reopened` and is not satisfied in `gate_state`. A whole-plan pass composed
+    before the replan read these rows without knowing which stages `--reopen` re-arms,
+    so neither it nor the walk-stale set measured against it may stand in for them. A plan
+    reviewed without pair records owes no row."""
+    if not reopened or not gates.plan_review_active(gate_state) \
+            or not gates.has_pair_records_for(gate_state, plan_path):
+        return []
+    try:
+        doc = load_plan(plan_path)
+        ids = review_ids(doc)
+    except (OSError, PlanError):
+        return []
+    rows = [(rid, gates.pair_status(gate_state, doc, plan_path, rid))
+            for rid in ids if carry_forward.covered_stages(rid) & reopened]
+    return [(rid, status) for rid, status in rows if status not in gates.PAIR_SATISFIED]
 
 
 def _frozen_stage_refusal(state: SessionState, tier, reopening: set[int]):
@@ -1039,6 +1061,13 @@ def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
     prblock = (
         [] if trigger_exit == _TRIGGER_EXIT_CHANGED
         else gates.plan_review_blockers(gate_state, args.plan))
+    reopened_rows = (
+        [] if trigger_exit == _TRIGGER_EXIT_CHANGED or _plan_review_release_active(state)
+        else _reopened_rows_owed(gate_state, args.plan, reopened))
+    prblock = prblock + [
+        f"review row {rid} ({status}) covers re-armed stage(s) {sorted(reopened)}: "
+        "--reopen owes it a fresh verdict on the corrected plan"
+        for rid, status in reopened_rows]
     _log_gate(state, "plan_review", prblock, passed=not prblock)
     if prblock:
         # With the round-release valve active the blockers ARE the release message,
@@ -1069,6 +1098,11 @@ def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
                 ]
             else:
                 review_commands = ["plan-review --target " + args.plan]
+            if reopened_rows:
+                review_commands = [
+                    "plan-review --target " + args.plan + " --scope topo:" + rid
+                    for rid, _ in reopened_rows
+                ] + (review_commands if len(prblock) > len(reopened_rows) else [])
             message = (
                 "replan blocked: the corrected plan needs a thinker review "
                 "(run: " + "; run: ".join(review_commands)

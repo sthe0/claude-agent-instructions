@@ -760,7 +760,8 @@ def _cmd_plan_review_pair(
             f"({live!r}): the reviewer read a different or stale plan; re-read the "
             "current plan and re-run plan-review"
         )
-    prev = state.plan_pair_reviews.get(pair)
+    view = _carried_view(store, state, target)
+    prev = view.plan_pair_reviews.get(pair)
     if prev is not None and prev.plan_path != target:
         prev = None
     crossing = None
@@ -772,7 +773,7 @@ def _cmd_plan_review_pair(
             return refuse(refusal)
     regression_command = (getattr(args, "regression_command", "") or "").strip()
     regression_exit: int | None = None
-    if verdict == gates._PLAN_REVIEW_REVISE and gates.pair_status(state, doc, target, pair) == "current":
+    if verdict == gates._PLAN_REVIEW_REVISE and gates.pair_status(view, doc, target, pair) == "current":
         if not regression_command:
             return refuse(
                 f"a current pass for pair {pair!r} is overturned only by run-demonstrated "
@@ -1898,13 +1899,19 @@ def cmd_plan_review_compose(args, *, store: StateStore, runner: Runner | None = 
         reviewed_stage_keys={str(k): v for k, v in plan_stage_digests(doc).items()},
         reviewed_interface_keys={str(k): v for k, v in plan_interface_digests(doc).items()},
     )
+    # Compose's writes go to the carried copy too, so the gate below needs no second carry.
+    written = (state,) if view is state else (state, view)
     _stamp_whole_plan_baseline(state, review, doc)
-    state.plan_review = review
-    state.plan_review_passes[""] = review
+    if view is not state:
+        view.next_record_seq = state.next_record_seq
+    for each in written:
+        each.plan_review = review
+        each.plan_review_passes[""] = review
     if not overridden:
         _record_first_thinker_verdict(state, doc, review, "")
-    _count_plan_review_round(state, target)
-    blockers = gates.plan_review_blockers(_carried_view(store, state, target), target)
+    for each in written:
+        _count_plan_review_round(each, target)
+    blockers = gates.plan_review_blockers(view, target)
     _log_gate(state, "plan_review", blockers, passed=not blockers)
     state.log("plan_review_compose", target=target, pairs=list(pairs), overridden=overridden,
               plan_sha256=live)

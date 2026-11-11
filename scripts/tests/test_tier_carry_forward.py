@@ -791,16 +791,12 @@ def _walk_status(store, sid, target) -> dict[str, str]:
     return {row["pair"]: row["status"] for level in d.data["levels"] for row in level}
 
 
-def test_an_agreed_order_change_replan_owes_only_the_pending_rows(
-        store, venued_fixtures_dir, tmp_path, monkeypatch):
-    """The whole review loop across an agreed order change after stage 1 PASSED: the
-    replan is refused for review, walk and compose read the rows the gate will count
-    (stage 1's carried, the rest owed), the owed rows alone are recorded, compose passes,
-    and the replan is accepted with the settled rows re-bound in the real state."""
+def _order_changed_session(store, sid, venued_fixtures_dir, tmp_path, monkeypatch):
+    """A session whose stage 1 PASSED with every row of the two-stage plan reviewed, and an
+    agreed goal-only order change of that plan, not yet applied. Returns both plan paths."""
     from agentctl.plan import review_ids
     from test_change_tier import _passed_session
 
-    sid = "order-change"
     monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
     plan = venued_fixtures_dir / "plan_two_stage.toml"
     _passed_session(store, sid, str(plan), stages=1)
@@ -812,9 +808,22 @@ def test_an_agreed_order_change_replan_owes_only_the_pending_rows(
     assert text.count(goal) == 1, "fixture no longer states its goal as expected"
     edited = Path(_plan_file(tmp_path, text.replace(goal, 'goal = "Demonstrate it, restated"'),
                              "order-changed.toml"))
-    state = store.load(sid)
     assert set(change_tier(load_plan(plan), load_plan(edited)).meta) == {"goal"}
+    state = store.load(sid)
     _agree(state, load_plan(edited))
+    store.save(state)
+    return plan, edited
+
+
+def test_an_agreed_order_change_replan_owes_only_the_pending_rows(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    """The whole review loop across an agreed order change after stage 1 PASSED: the
+    replan is refused for review, walk and compose read the rows the gate will count
+    (stage 1's carried, the rest owed), the owed rows alone are recorded, compose passes,
+    and the replan is accepted with the settled rows re-bound in the real state."""
+    sid = "order-change"
+    plan, edited = _order_changed_session(store, sid, venued_fixtures_dir, tmp_path, monkeypatch)
+    state = store.load(sid)
     state.plan_review_rounds = 3
     store.save(state)
 
@@ -843,6 +852,49 @@ def test_an_agreed_order_change_replan_owes_only_the_pending_rows(
         "a rows-only carry is no carried review: the replan resets the round count"
     carried = [e for e in state.history if e.get("event") == "review_rows_carried"]
     assert carried and carried[-1]["rows"] == ["unit:1"]
+
+
+def test_a_reopening_replan_owes_the_reopened_stages_rows_after_compose(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    """Walk and compose read stage 1's carried rows as current, not knowing a later
+    `--reopen 1` re-arms it; the replan gate still owes those rows a fresh verdict."""
+    from agentctl import carry_forward
+    from agentctl.plan import review_ids
+
+    sid = "order-change-reopen"
+    _, edited = _order_changed_session(store, sid, venued_fixtures_dir, tmp_path, monkeypatch)
+    walked = _walk_status(store, sid, edited)
+    assert walked["unit:1"] == "current"
+    for rid, status in walked.items():
+        if status not in gates.PAIR_SATISFIED:
+            assert _topo_record(store, sid, edited, rid).ok, rid
+    composed = cli.cmd_plan_review_compose(ns(session=sid, target=str(edited)), store=store)
+    assert composed.ok, composed.detail
+
+    refused = cli.cmd_replan(ns(session=sid, plan=str(edited), reopen=[1]), store=store)
+    assert not refused.ok and "unit:1" in _says(refused), _says(refused)
+
+    covering = [r for r in review_ids(load_plan(edited)) if 1 in carry_forward.covered_stages(r)]
+    assert "unit:1" in covering
+    for rid in covering:
+        assert _topo_record(store, sid, edited, rid).ok, rid
+    accepted = cli.cmd_replan(ns(session=sid, plan=str(edited), reopen=[1]), store=store)
+    assert accepted.ok, _says(accepted)
+
+
+def test_a_revise_of_a_carried_current_row_needs_regression_evidence(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    sid = "order-change-revise"
+    _, edited = _order_changed_session(store, sid, venued_fixtures_dir, tmp_path, monkeypatch)
+    assert _walk_status(store, sid, edited)["unit:1"] == "current"
+
+    refused = cli.cmd_plan_review(
+        ns(session=sid, target=str(edited), scope="topo:unit:1", verdict="revise",
+           reviewer="thinker", concerns=["blocking: C1: regressed"], note="",
+           plan_digest=_sha(edited), regression_command=None),
+        store=store)
+
+    assert not refused.ok and "--regression-command" in refused.detail, refused.detail
 
 
 def test_a_chained_order_change_keeps_the_first_version(order_env):
