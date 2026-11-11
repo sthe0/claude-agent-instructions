@@ -2128,13 +2128,14 @@ def _review_baseline(store: StateStore, state: SessionState):
 
 
 def _carry_records(store: StateStore, state: SessionState, plan_path: str, *, in_place: bool,
-                   baseline: "tuple | None" = None):
+                   baseline: "tuple | None" = None,
+                   reopened: "set[int] | frozenset[int]" = frozenset()):
     """Carry the review, premise and order-coverage records onto the plan at `plan_path`
     as far as the edit's change tier allows (`carry_forward`). Returns `(state, report,
     change)`: with `in_place` False the records are carried on a copy and `state` stays as
     it was, so a gate can read the carried view of a command that may still be refused.
     `baseline` is `(plan, sha256, path)` of the version the records describe, for a caller
-    that has already moved `state.plan_path` off it."""
+    that has already moved `state.plan_path` off it; `reopened` the stages the edit re-arms."""
     from .plan import PlanError, change_tier, load_plan as _load
 
     report = {"tier": None, "carried": False, "owed": [], "records": [], "held": [], "settled": []}
@@ -2150,8 +2151,17 @@ def _carry_records(store: StateStore, state: SessionState, plan_path: str, *, in
     target = state if in_place else copy.deepcopy(state)
     report = carry_forward.apply(
         target, old, new, new_path=plan_path, new_sha=_plan_file_sha256(plan_path),
-        change=change, old_path=old_path, old_sha=old_sha)
+        change=change, old_path=old_path, old_sha=old_sha, reopened=reopened)
     return (target if report["carried"] or report["settled"] else state), report, change
+
+
+def _carried_view(store: StateStore, state: SessionState, plan_path: "str | None") -> SessionState:
+    """`state` as the replan gate reads it against the plan at `plan_path`: when that is
+    not the session's own plan, the records carried onto it on a copy (`_carry_records`),
+    so a read-only review command lists the rows the gate will count as current."""
+    if not plan_path or plan_path == state.plan_path:
+        return state
+    return _carry_records(store, state, plan_path, in_place=False)[0]
 
 
 def _log_settled_rows(state: SessionState, plan_path: str, report: dict) -> None:

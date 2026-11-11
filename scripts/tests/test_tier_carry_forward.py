@@ -488,11 +488,12 @@ def _write_version(env, mutate, name: str) -> Path:
 
 
 def _change_order(env, mutate=_order_change, *, passed=(1, 2), agreement="new", seed=None,
-                  name="plan.r2.toml", change=None, record=True):
+                  name="plan.r2.toml", change=None, record=True, reopened=frozenset()):
     """Record every row of `env`'s plan (unless `record` is False), write the edited plan
     to `name`, mark `passed` PASSED, arm the agreement on the new understanding
-    (`agreement`: new / old / none / unarmed) and carry. `seed(state)` edits the state
-    before the carry; `change` replaces the computed `PlanChange`."""
+    (`agreement`: new / old / none / unarmed) and carry with `reopened` reopened.
+    `seed(state)` edits the state before the carry; `change` replaces the computed
+    `PlanChange`."""
     from agentctl import carry_forward
 
     if record:
@@ -510,7 +511,8 @@ def _change_order(env, mutate=_order_change, *, passed=(1, 2), agreement="new", 
         seed(state)
     report = carry_forward.apply(
         state, old, new, new_path=str(new_path), new_sha=_sha(new_path),
-        change=change or change_tier(old, new), old_path=str(old_path), old_sha=_sha(old_path))
+        change=change or change_tier(old, new), old_path=str(old_path), old_sha=_sha(old_path),
+        reopened=reopened)
     return _OrderChange(env, new_path, report, state)
 
 
@@ -677,6 +679,62 @@ def test_an_override_record_of_a_settled_pair_carries(order_env):
     assert "2-1" in result.report["settled"]
 
 
+def test_a_record_stale_on_the_old_version_is_not_revived(order_env):
+    """unit:1 and 2-1 attest an earlier stage-1 text, so they are stale on the old version:
+    stage 1 being settled does not make them current on the new one."""
+    from agentctl.plan import pair_content, unit_currency_hash
+
+    earlier = load_plan(_write_version(order_env, _set(0, method="an earlier method"), "plan.r0.toml"))
+
+    def stale(state):
+        state.plan_pair_reviews["unit:1"].unit_norm = unit_currency_hash(earlier, "unit:1")
+        record = state.plan_pair_reviews["2-1"]
+        for key, value in pair_content(earlier, "2-1").items():
+            setattr(record, key, value)
+
+    result = _change_order(order_env, seed=stale)
+
+    assert result.status("unit:1") == "missing" and result.status("2-1") == "missing"
+    assert result.state.plan_pair_reviews["unit:1"].plan_path == str(order_env.plan)
+    assert result.report["settled"] == ["base-1", "unit:2"]
+
+
+def test_a_record_already_bound_to_the_new_version_is_not_rebound(order_env):
+    import dataclasses
+
+    new_path = Path(order_env.plan).with_name("plan.r2.toml")
+    bound_as = {}
+
+    def bind_to_new(state):
+        record = state.plan_pair_reviews["2-1"]
+        record.plan_path, record.plan_sha256 = str(new_path), _sha(new_path)
+        bound_as.update(dataclasses.asdict(record))
+
+    result = _change_order(order_env, seed=bind_to_new)
+
+    assert "2-1" not in result.report["settled"]
+    assert dataclasses.asdict(result.state.plan_pair_reviews["2-1"]) == bound_as
+
+
+def test_a_reopened_stage_is_not_settled(order_env):
+    result = _change_order(order_env, reopened={2})
+
+    assert result.status("unit:2") == "missing" and result.status("2-1") == "missing"
+    assert result.satisfied() == ["base-1", "unit:1"]
+
+
+def test_the_replan_reopens_the_passed_dependents_of_its_roots(order_env):
+    from agentctl.cli_replan import _reopened_stages
+
+    state = order_env.state()
+    _passed(state, order_env.plan, (1, 2))
+    stages = load_plan(order_env.plan).stages
+
+    assert _reopened_stages(state, stages, [1]) == {1, 2}
+    assert _reopened_stages(state, stages, [2]) == {2}
+    assert _reopened_stages(state, stages, []) == set()
+
+
 def test_a_settled_row_whose_content_hash_moved_stays_owed(order_env):
     """A pending stage's edit adds an inbound edge on settled stage 1, and the order change
     restates R2, the requirement covering stage 1: neither stage digest moves, the unit's
@@ -719,16 +777,72 @@ def test_a_pending_pair_bundle_shows_the_new_order(order_env, tmp_path):
     assert "## Order context" in bundle and "R1 text, restated" in bundle
 
 
-def test_a_rows_only_carry_is_not_a_review_round(order_env):
-    def rounds(state):
-        state.plan_review_rounds = 3
-        state.plan_review_counted_digest = "counted"
+def _topo_record(store, sid, target, rid):
+    return cli.cmd_plan_review(
+        ns(session=sid, target=str(target), scope=f"topo:{rid}", verdict="pass",
+           reviewer="thinker", concerns=None, note="", plan_digest=_sha(Path(target)),
+           regression_command=None),
+        store=store)
 
-    result = _change_order(order_env, seed=rounds)
 
-    assert result.report["carried"] is False and result.report["settled"]
-    assert result.state.plan_review_rounds == 3
-    assert result.state.plan_review_counted_digest == "counted"
+def _walk_status(store, sid, target) -> dict[str, str]:
+    d = cli.cmd_plan_review_walk(ns(session=sid, target=str(target), format="json"), store=store)
+    assert d.ok, d.detail
+    return {row["pair"]: row["status"] for level in d.data["levels"] for row in level}
+
+
+def test_an_agreed_order_change_replan_owes_only_the_pending_rows(
+        store, venued_fixtures_dir, tmp_path, monkeypatch):
+    """The whole review loop across an agreed order change after stage 1 PASSED: the
+    replan is refused for review, walk and compose read the rows the gate will count
+    (stage 1's carried, the rest owed), the owed rows alone are recorded, compose passes,
+    and the replan is accepted with the settled rows re-bound in the real state."""
+    from agentctl.plan import review_ids
+    from test_change_tier import _passed_session
+
+    sid = "order-change"
+    monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+    plan = venued_fixtures_dir / "plan_two_stage.toml"
+    _passed_session(store, sid, str(plan), stages=1)
+    monkeypatch.setenv("AGENTCTL_PLAN_REVIEW", "1")
+    for rid in review_ids(load_plan(plan)):
+        assert _topo_record(store, sid, plan, rid).ok, rid
+    text = plan.read_text()
+    goal = 'goal = "Demonstrate the full two-stage coordination cycle"'
+    assert text.count(goal) == 1, "fixture no longer states its goal as expected"
+    edited = Path(_plan_file(tmp_path, text.replace(goal, 'goal = "Demonstrate it, restated"'),
+                             "order-changed.toml"))
+    state = store.load(sid)
+    assert set(change_tier(load_plan(plan), load_plan(edited)).meta) == {"goal"}
+    _agree(state, load_plan(edited))
+    state.plan_review_rounds = 3
+    store.save(state)
+
+    refused = cli.cmd_replan(ns(session=sid, plan=str(edited)), store=store)
+    assert not refused.ok and "review" in _says(refused), _says(refused)
+
+    owed = ["2-1", "unit:2", "unit:base"]
+    walked = _walk_status(store, sid, edited)
+    assert walked["unit:1"] == "current"
+    assert sorted(r for r, s in walked.items() if s not in gates.PAIR_SATISFIED) == owed
+    assert store.load(sid).plan_pair_reviews["unit:1"].plan_path == str(plan), \
+        "walk reads the carried view and writes nothing"
+    for rid in owed:
+        assert _topo_record(store, sid, edited, rid).ok, rid
+
+    composed = cli.cmd_plan_review_compose(ns(session=sid, target=str(edited)), store=store)
+    assert composed.ok, composed.detail
+    assert store.load(sid).plan_review_rounds == 4, "a composed whole-plan review is a round"
+
+    accepted = cli.cmd_replan(ns(session=sid, plan=str(edited)), store=store)
+    assert accepted.ok, _says(accepted)
+    state = store.load(sid)
+    assert state.plan_pair_reviews["unit:1"].plan_path == str(edited)
+    assert state.plan_pair_reviews["unit:1"].carried_tier == 4
+    assert state.plan_review_rounds == 0 and state.plan_review_passes == {}, \
+        "a rows-only carry is no carried review: the replan resets the round count"
+    carried = [e for e in state.history if e.get("event") == "review_rows_carried"]
+    assert carried and carried[-1]["rows"] == ["unit:1"]
 
 
 def test_a_chained_order_change_keeps_the_first_version(order_env):

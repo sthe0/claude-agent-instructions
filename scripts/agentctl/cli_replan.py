@@ -380,6 +380,18 @@ def _passed_dependents_closure(live_stages, new_stages, roots) -> set[int]:
     return closure
 
 
+def _reopened_stages(state: SessionState, new_stages, roots) -> set[int]:
+    """The PASSED stages `replan --reopen roots` re-arms: the roots and the PASSED stages
+    depending on them. A root naming no live stage is ignored."""
+    known = set(roots) & {s.index for s in state.stages}
+    if not known:
+        return set()
+    return {
+        i for i in _passed_dependents_closure(state.stages, new_stages, known)
+        if state.stage(i).outcome.status == StageStatus.PASSED.value
+    }
+
+
 def _frozen_stage_refusal(state: SessionState, tier, reopening: set[int]):
     """Refusal text and data for a replan that edits an operative or interface leaf of a
     PASSED stage the replan does not reopen; None when none does."""
@@ -1014,7 +1026,13 @@ def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
     # The records are judged as carried onto the corrected plan: a tier 0-1 edit owes no
     # review, a tier 2 edit owes the edited stages' own. Nothing is written until the
     # replan is applied.
-    gate_state, carry_preview, carry_change = _carry_records(store, state, args.plan, in_place=False)
+    try:
+        reopened = _reopened_stages(state, _load(args.plan, strict=False).stages,
+                                    getattr(args, "reopen", None) or [])
+    except (OSError, PlanError):
+        reopened = set()
+    gate_state, carry_preview, carry_change = _carry_records(
+        store, state, args.plan, in_place=False, reopened=reopened)
     trigger_exit = _review_trigger_exit(state, args.plan)
     # A changed plan leaves a review-cost trigger by owing a fresh counted PASS at approve,
     # so the replan itself does not wait on a review of bytes nobody has reviewed yet.
@@ -1126,10 +1144,7 @@ def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
     if unknown_reopen:
         return Directive(False, state.node, "replan",
                          f"replan refused: --reopen names no such stage: {unknown_reopen}")
-    reopening = {
-        i for i in _passed_dependents_closure(state.stages, new.stages, reopen_roots)
-        if state.stage(i).outcome.status == StageStatus.PASSED.value
-    } if reopen_roots else set()
+    reopening = _reopened_stages(state, new.stages, reopen_roots)
     if reopen_ignored is not None:
         reopen_ignored.extend(sorted(i for i in reopen_roots if i not in reopening))
     if tier is not None:
@@ -1354,7 +1369,7 @@ def _replan_record_acceptance(ctx: _ReplanContext) -> None:
     # A tier 0-2 edit does not start a new review loop: its records are carried onto the
     # new version (`carry_forward`), so the rounds, the counted digest and the passes
     # stay with them; every other edit settles the old loop and starts from zero.
-    _, carry_report, _ = _carry_records(store, state, args.plan, in_place=True)
+    _, carry_report, _ = _carry_records(store, state, args.plan, in_place=True, reopened=reopening)
     carry_note = carry_forward.describe(carry_report)
     _log_settled_rows(state, args.plan, carry_report)
     if carry_report["carried"]:
