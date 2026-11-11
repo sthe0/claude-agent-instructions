@@ -111,7 +111,8 @@ class Env:
 
 
 @pytest.fixture
-def env(tmp_path) -> Env:
+def env(tmp_path, monkeypatch) -> Env:
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
     return Env(tmp_path.resolve())
 
 
@@ -293,7 +294,7 @@ def test_removal_is_logged_before_remove_runs(env):
     assert [[r["path"] for r in snapshot] for snapshot in seen] == [[str(env.item)]]
     record = env.log_records()[0]
     assert (record["reaper"], record["layer"], record["reason"]) == ("a", "builtin", "stale one")
-    assert set(record) == {"ts", "reaper", "layer", "path", "reason"}
+    assert set(record) == {"ts", "reaper", "layer", "path", "reason", "trigger"}
 
 
 def test_scan_exception_cancels_every_removal_and_advances_no_stamp(env):
@@ -442,12 +443,19 @@ def test_only_dry_run_lists_just_that_reaper(env):
     assert out.splitlines() == [f"b KEEP {env.tmp / 'elsewhere'} (in use)"]
 
 
-def test_summary_line_is_printed_for_due_reapers_but_not_in_dry_run(env):
+def test_summary_line_is_printed_for_due_reapers_and_in_a_dry_run(env):
     a = Fake("a", [], summary_line="a: something to look at")
     out, _ = env.run([a])
     assert out.strip() == "a: something to look at"
     out, _ = env.run([a], dry_run=True)
-    assert "something to look at" not in out
+    assert out.strip() == "a: something to look at"
+
+
+def test_a_summary_is_not_printed_for_a_reaper_that_is_not_selected_in_a_dry_run(env):
+    a = Fake("a", [], summary_line="a: look")
+    b = Fake("b", [], summary_line="b: look")
+    out, _ = env.run([a, b], dry_run=True, only="b")
+    assert out.strip() == "b: look"
 
 
 # ── CLI entry ─────────────────────────────────────────────────────────────
@@ -663,12 +671,299 @@ def test_tags_survive_normalization():
     assert [v.tags for v in runner._normalize([tagged, untagged])] == [("unbacked",), ()]
 
 
+def test_size_survives_normalization_and_defaults_to_zero():
+    sized = types.SimpleNamespace(path="/p", action=KEEP, reason="r", size=4096)
+    unsized = types.SimpleNamespace(path="/q", action=KEEP, reason="r")
+    assert [v.size for v in runner._normalize([sized, unsized])] == [4096, 0]
+
+
+# ── trigger, invocation id and the kept snapshot ──────────────────────────
+
+def run_live(env, fakes, *, force_run=False, dry_run=False, kept=True):
+    out, err = io.StringIO(), io.StringIO()
+    runner.execute_pass(
+        [f.reaper for f in fakes], env.ctx(dry_run=dry_run),
+        dry_run=dry_run, force_run=force_run, only=None,
+        stamps=env.stamps, log_path=env.log, out=out, err=err,
+        kept_dir=env.tmp / "kept" if kept else None,
+    )
+    return out.getvalue(), err.getvalue()
+
+
+def kept_snapshot(env, name):
+    return json.loads((env.tmp / "kept" / f"{name}.json").read_text(encoding="utf-8"))
+
+
+def test_a_pass_under_systemd_records_trigger_unit_and_the_invocation_id_in_row_and_snapshot(env, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "0123abcd")
+    a = Fake("a", [rm(env.item), keep(env.tmp / "other", "busy")])
+    run_live(env, [a])
+    [row] = env.log_records()
+    snapshot = kept_snapshot(env, "a")
+    assert (row["trigger"], row["invocation_id"]) == ("unit", "0123abcd")
+    assert (snapshot["trigger"], snapshot["invocation_id"]) == ("unit", "0123abcd")
+
+
+def test_a_pass_outside_systemd_records_no_invocation_id(env):
+    a = Fake("a", [rm(env.item), keep(env.tmp / "other", "busy")])
+    run_live(env, [a])
+    [row] = env.log_records()
+    snapshot = kept_snapshot(env, "a")
+    assert "invocation_id" not in row and "invocation_id" not in snapshot
+    assert (row["trigger"], snapshot["trigger"]) == ("hook", "hook")
+
+
+def test_a_manual_pass_records_trigger_manual(env):
+    a = Fake("a", [rm(env.item)])
+    run_live(env, [a], force_run=True)
+    assert env.log_records()[0]["trigger"] == "manual"
+
+
+def test_the_kept_snapshot_lists_every_keep_with_reason_and_bytes_and_none_of_the_removals(env):
+    other = env.tmp / "other"
+    kept_verdict = types.SimpleNamespace(path=str(other), action=KEEP, reason="busy: held", size=123)
+    removed = types.SimpleNamespace(path=str(env.item), action=REMOVE, reason="stale", size=9)
+    a = Fake("a", [])
+    a.verdicts = [kept_verdict, removed]
+    run_live(env, [a])
+    snapshot = kept_snapshot(env, "a")
+    assert snapshot["kept"] == [{"path": str(other), "reason": "unclassified", "detail": "busy: held", "bytes": 123}]
+    assert snapshot["reaper"] == "a" and snapshot["pass_time"].endswith("+00:00")
+
+
+def test_the_snapshot_and_its_entries_have_exactly_the_documented_keys(env, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "0123abcd")
+    a = Fake("a", [keep(env.tmp / "one", "busy")])
+    run_live(env, [a])
+    snapshot = kept_snapshot(env, "a")
+    assert set(snapshot) == {"reaper", "pass_time", "trigger", "invocation_id", "kept"}
+    assert set(snapshot["kept"][0]) == {"path", "reason", "detail", "bytes"}
+
+
+def test_the_removal_row_has_exactly_the_documented_keys(env, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "0123abcd")
+    run_live(env, [Fake("a", [rm(env.item)])])
+    [row] = env.log_records()
+    assert set(row) == {"ts", "reaper", "layer", "path", "reason", "trigger", "invocation_id"}
+
+
+def test_a_keep_verdicts_reason_tag_is_the_entry_slug_and_its_text_is_the_detail(env):
+    tagged = Verdict(
+        str(env.tmp / "one"), KEEP, "holder-sweep-incomplete: pid=7 name='x' argv0='x' errno=13 (EACCES): cwd",
+        tags=("kind=tmp", "reason=holder-sweep-incomplete"),
+    )
+    run_live(env, [Fake("a", [tagged])])
+    [entry] = kept_snapshot(env, "a")["kept"]
+    assert entry["reason"] == "holder-sweep-incomplete"
+    assert entry["detail"] == "holder-sweep-incomplete: pid=7 name='x' argv0='x' errno=13 (EACCES): cwd"
+
+
+def test_the_reapers_snapshot_extra_fields_join_the_snapshot_and_a_failing_hook_does_not_lose_it(env):
+    a = Fake("a", [keep(env.tmp / "one", "busy")])
+    a.reaper.module.snapshot_extra = lambda verdicts: {"unreadable_helpers_skipped": len(verdicts) + 16}
+    run_live(env, [a], force_run=True)
+    assert kept_snapshot(env, "a")["unreadable_helpers_skipped"] == 17
+
+    def broken(verdicts):
+        raise RuntimeError("boom")
+
+    a.reaper.module.snapshot_extra = broken
+    _, err = run_live(env, [a], force_run=True)
+    assert "snapshot_extra failed" in err and "unreadable_helpers_skipped" not in kept_snapshot(env, "a")
+
+
+def test_a_dry_run_prints_the_reapers_notes_to_stderr_and_keeps_stdout_closed(env):
+    a = Fake("a", [keep(env.tmp / "one", "busy")], summary_line="a summary")
+    a.reaper.module.dry_run_notes = lambda verdicts: [f"a: note about {len(verdicts)} verdict(s)"]
+    out, err = run_live(env, [a], dry_run=True)
+    assert "a: note about 1 verdict(s)" in err and "note" not in out and "a summary" in out
+
+
+def test_a_live_pass_prints_no_dry_run_notes(env):
+    a = Fake("a", [keep(env.tmp / "one", "busy")])
+    a.reaper.module.dry_run_notes = lambda verdicts: ["a: a note"]
+    _, err = run_live(env, [a], force_run=True)
+    assert "a note" not in err
+
+
+def test_a_remove_vetoed_by_another_reaper_appears_in_the_snapshot_as_a_keep(env):
+    a, b = Fake("a", [rm(env.item)]), Fake("b", [keep(env.item, "in use")])
+    run_live(env, [a, b])
+    assert kept_snapshot(env, "a")["kept"] == [
+        {"path": str(env.item), "reason": "blocked", "detail": "kept by b", "bytes": 0},
+    ]
+
+
+def test_a_reaper_whose_scan_failed_gets_no_kept_snapshot_while_the_others_do(env):
+    broken = Fake("a", [], scan_exc=RuntimeError("boom"))
+    other = Fake("b", [keep(env.tmp / "one", "busy")])
+    _, err = run_live(env, [broken, other], force_run=True)
+    assert "reaper a: scan failed" in err
+    assert sorted(p.name for p in (env.tmp / "kept").iterdir()) == ["b.json"]
+
+
+def test_a_removal_that_was_refused_is_snapshotted_as_refused_with_its_remove_reason(env):
+    refused = Fake("a", [rm(env.item, "no holder, idle 80h")], remove_result=False)
+    _, err = run_live(env, [refused], force_run=True)
+    assert "FAILED to remove" in err
+    assert kept_snapshot(env, "a")["kept"] == [{
+        "path": str(env.item), "reason": "removal-failed",
+        "detail": "removal refused or failed: no holder, idle 80h", "bytes": 0,
+    }]
+
+
+def test_a_removal_that_raised_is_snapshotted_as_failed(env):
+    failing = Fake("a", [rm(env.item, "stale")], remove_exc=OSError("busy"))
+    run_live(env, [failing], force_run=True)
+    [entry] = kept_snapshot(env, "a")["kept"]
+    assert (entry["reason"], entry["detail"]) == ("removal-failed", "removal refused or failed: stale")
+
+
+def test_the_kept_snapshot_is_replaced_by_each_pass_not_appended_to(env):
+    a = Fake("a", [keep(env.tmp / "one", "busy")])
+    run_live(env, [a], force_run=True)
+    a.verdicts = [keep(env.tmp / "two", "busy")]
+    run_live(env, [a], force_run=True)
+    assert [k["path"] for k in kept_snapshot(env, "a")["kept"]] == [str(env.tmp / "two")]
+    assert sorted(p.name for p in (env.tmp / "kept").iterdir()) == ["a.json"]
+
+
+def test_no_snapshot_is_written_when_the_reaper_is_not_due(env):
+    a = Fake("a", [keep(env.tmp / "one", "busy")])
+    env.stamp("a", NOW)
+    run_live(env, [a])
+    assert not (env.tmp / "kept").exists()
+
+
+def test_a_dry_run_writes_no_kept_snapshot_and_no_removal_row(env):
+    a = Fake("a", [rm(env.item), keep(env.tmp / "one", "busy")])
+    run_live(env, [a], dry_run=True)
+    assert not (env.tmp / "kept").exists() and env.log_records() == [] and not env.stamps.exists()
+
+
+def test_main_writes_the_kept_snapshot_under_the_config_root(hermetic):
+    a = Fake("a", [keep(hermetic / "one", "busy")])
+    assert runner.main(["--force-run"], discover=lambda project, warn: [a.reaper]) == 0
+    snapshot = json.loads((hermetic / "config" / "reaper" / "kept" / "a.json").read_text(encoding="utf-8"))
+    assert snapshot["kept"][0]["path"] == str(hermetic / "one")
+
+
 # ── mutation catalogue ────────────────────────────────────────────────────
+
+MUTANT_WORKERS = 6  # each worker is one scratch copy and one serial pytest child; bounded, never recursive
+
+
+def mutant_workers(environ, soft_nproc_limit: int) -> int:
+    """Six workers only under ``scripts/cap-run.sh``: it exports its cap as ``CAP_RUN_NPROC``, and
+    the process's own RLIMIT_NPROC must equal it, so a stray or inherited variable does not count."""
+    capped = environ.get("CAP_RUN_NPROC") == str(soft_nproc_limit)
+    return min(MUTANT_WORKERS, os.cpu_count() or 1) if capped else 1
+
+
+def test_mutant_workers_fan_out_only_under_a_matching_cap():
+    assert mutant_workers({}, 5000) == 1
+    assert mutant_workers({"CAP_RUN_NPROC": "4000"}, 5000) == 1
+    assert mutant_workers({"CAP_RUN_NPROC": "5000"}, 5000) == min(MUTANT_WORKERS, os.cpu_count() or 1)
+
+
+def test_cap_run_exports_the_cap_it_set(tmp_path):
+    import subprocess
+
+    cap_run = Path(__file__).resolve().parents[1] / "cap-run.sh"
+    done = subprocess.run(
+        ["bash", str(cap_run), "--extra-tasks", "64", "--timeout", "60", "--", sys.executable, "-c",
+         "import os, resource; print(os.environ['CAP_RUN_NPROC'], resource.getrlimit(resource.RLIMIT_NPROC)[0])"],
+        capture_output=True, text=True, check=True,
+    )
+    exported, soft = done.stdout.split()
+    assert exported == soft
+
 
 @pytest.mark.skipif(os.environ.get("REAPER_MUTATION_CHILD") == "1", reason="running inside a mutant subprocess")
 def test_every_catalogue_mutant_is_killed_and_the_control_is_green():
+    import resource
+    from concurrent.futures import ThreadPoolExecutor
+
     import reaper_mutation_control as control
 
-    survivors = {name: control.run_mutant(name) for name in control.CATALOGUE}
-    assert survivors == {name: control.KILLED for name in control.CATALOGUE}
+    names = list(control.CATALOGUE)
+    workers = mutant_workers(os.environ, resource.getrlimit(resource.RLIMIT_NPROC)[0])
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        survivors = dict(zip(names, pool.map(control.run_mutant, names)))
+    assert survivors == {name: control.KILLED for name in names}
     assert control.run_control() == 0
+
+
+# ── unit-pass observation (read by install-reaper-timer.sh --check) ──────────
+
+def _unit_pass_files(hermetic):
+    return sorted((hermetic / "config" / "reaper" / "unit-pass").glob("*.json"))
+
+
+def _force_run_main(hermetic, monkeypatch, reaper):
+    monkeypatch.setattr(runner, "stamp_dir", lambda: hermetic / "stamps")
+    return runner.main(["--force-run"], discover=lambda project, warn: [reaper])
+
+
+def test_a_unit_pass_records_what_it_saw(hermetic, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    monkeypatch.setenv("TMPDIR", str(hermetic))
+    monkeypatch.setattr("tempfile.tempdir", None)
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/s")
+    monkeypatch.delenv("SSH_AGENT_PID", raising=False)
+    monkeypatch.delenv("GIT_ASKPASS", raising=False)
+    monkeypatch.delenv("SSH_ASKPASS", raising=False)
+    assert _force_run_main(hermetic, monkeypatch, Fake("a", []).reaper) == 0
+    [path] = _unit_pass_files(hermetic)
+    assert path.name == "feed0123.json"
+    assert json.loads(path.read_text()) == {
+        "invocation_id": "feed0123", "tmpdir": str(hermetic), "agent_home": str(hermetic / "config"),
+        "credentials_present": {"SSH_AUTH_SOCK": True, "SSH_AGENT_PID": False, "GIT_ASKPASS": False, "SSH_ASKPASS": False},
+        "reapers_run": 1, "errors": 0,
+    }
+
+
+def test_no_observation_is_written_outside_systemd(hermetic, monkeypatch):
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    assert _force_run_main(hermetic, monkeypatch, Fake("a", []).reaper) == 0
+    assert _unit_pass_files(hermetic) == []
+
+
+def test_a_dry_run_under_systemd_writes_no_observation(hermetic, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    monkeypatch.setattr(runner, "stamp_dir", lambda: hermetic / "stamps")
+    assert runner.main(["--dry-run"], discover=lambda project, warn: [Fake("a", []).reaper]) == 0
+    assert _unit_pass_files(hermetic) == []
+
+
+def test_reapers_run_counts_the_scans_that_completed_and_errors_the_failed_ones(hermetic, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    monkeypatch.setattr(runner, "stamp_dir", lambda: hermetic / "stamps")
+    good, bad = Fake("good", []), Fake("bad", scan_exc=RuntimeError("x"))
+    runner.main(["--force-run"], discover=lambda project, warn: [good.reaper, bad.reaper])
+    seen = json.loads(_unit_pass_files(hermetic)[0].read_text())
+    assert (seen["reapers_run"], seen["errors"]) == (1, 1)
+
+
+def test_a_runner_error_under_systemd_still_leaves_an_observation_with_an_error(hermetic, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "feed0123")
+
+    def explode(project, warn):
+        raise RuntimeError("boom")
+
+    assert runner.main(["--force-run"], discover=explode) == 1
+    seen = json.loads(_unit_pass_files(hermetic)[0].read_text())
+    assert (seen["reapers_run"], seen["errors"]) == (0, 1)
+
+
+def test_only_the_newest_fifty_observations_are_kept(hermetic, monkeypatch):
+    directory = hermetic / "config" / "reaper" / "unit-pass"
+    directory.mkdir(parents=True)
+    for index in range(60):
+        old = directory / f"old{index:02d}.json"
+        old.write_text("{}")
+        os.utime(old, (1_000_000 + index, 1_000_000 + index))
+    monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    _force_run_main(hermetic, monkeypatch, Fake("a", []).reaper)
+    names = {path.name for path in _unit_pass_files(hermetic)}
+    assert len(names) == runner.UNIT_PASS_KEEP and "feed0123.json" in names and "old00.json" not in names

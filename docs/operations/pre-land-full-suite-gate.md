@@ -22,13 +22,19 @@ Outcomes follow the smoke gate: PASS, FAIL, UNAVAILABLE. UNAVAILABLE (a timeout,
 
 `suite-gate.py run` writes `<git common dir>/suite-gate/<candidate sha>.json` (`suite-run/v1`). A record admits a landing only when it names the candidate, was built on the *current* remote tip and has an admitting status. A remote that moved on makes it stale and the suite runs again. The candidate must contain the remote tip; otherwise merge it and rerun.
 
+The record also says what the run cost: `cpu_s` (CPU of the run's process tree), `peak_disk_mb` (largest size of the sandbox, sampled every minute), `slot_wait_s` and `slots_held`, the instants `queued_at`, `slots_acquired_at` and `timeout_started_at`, and the `pytest_argv` it ran. Beside it lie `<sha>.log`, `<sha>.junit.xml` and `<sha>.tests.jsonl` (one line per collected test and per test phase, keyed by pytest node id; `scripts/tests/_test_report.py`).
+
+## Worker slots
+
+A full run takes up to `test-slots-per-run` worker slots of the machine-wide `test-slots-total` (`scripts/lib/test_slots.py`) before pytest starts, waiting in a queue while other runs hold them, and runs with as many xdist workers as it holds; its timeout starts once it holds them. While it waits it prints the holders' pids every minute; after `test-slots-max-wait-s` (14400 s) it gives up and the run is UNAVAILABLE, naming them. pytest inherits the slot descriptors, so a gate killed mid-run leaves the slots held until its pytest tree exits. The rerun of new failures is serial and takes no slot. Every other parallel `pytest` of `scripts/tests` takes slots the same way, so a gate and an interactive run share the limit. pytest runs under `scripts/cap-run.sh`. That script caps the user's machine-wide thread count at its count on entry plus a headroom, so a run started later spends from the headroom of the runs already going. For this reason a run that holds slots gets the per-run headroom (`fanout-cap-extra-tasks`, read from config) once for every full share the slot holders together can run, `ceil(test-slots-total / test-slots-per-run)`; threads grow with workers, and runs that hold no slot are not counted. `python3 scripts/lib/test_slots.py held` shows who holds which slot.
+
 ## What is exempt
 
 A landing that changes only `.md` files under `memory-global/` or `docs/` is exempt (the memory/docs-only case): such files cannot fail a test. The decision reads git's own path list over the whole range, counts both sides of a rename and every deletion, and treats an empty change list as required. It cannot be requested. A repository without `scripts/suite-gate.py` in either the tip or the candidate tree is not gated at all.
 
 ## Landing
 
-`land-branch.py` fetches the remote tip once and checks that the candidate contains it, then runs the suite gate, then the smoke gate, and pushes only when both admit. The suite line (`SUITE: ADMITTED …`, `SUITE: exempt (memory/docs-only): <files>` or `SUITE: not required …`) is printed before the smoke line and the push report; a refusal or a gate error exits 2 with `NOT-LANDABLE: suite gate: …` and nothing is pushed. `--suite-waiver "<reason>"` and `--suite-timeout <seconds>` pass through to the run (default 1800 s per run; config key `suite-gate-timeout-s`). `--check` additionally prints a `SUITE-STATUS:` line from local state and never runs the suite.
+`land-branch.py` fetches the remote tip once and checks that the candidate contains it, then runs the suite gate, then the smoke gate, and pushes only when both admit. The suite line (`SUITE: ADMITTED …`, `SUITE: exempt (memory/docs-only): <files>` or `SUITE: not required …`) is printed before the smoke line and the push report; a refusal or a gate error exits 2 with `NOT-LANDABLE: suite gate: …` and nothing is pushed. `--suite-waiver "<reason>"` and `--suite-timeout <seconds>` pass through to the run (default 7200 s per run, counted from when the run holds its worker slots; config key `suite-gate-timeout-s`). `--check` additionally prints a `SUITE-STATUS:` line from local state and never runs the suite.
 
 ## The hook
 
@@ -36,7 +42,7 @@ A landing that changes only `.md` files under `memory-global/` or `docs/` is exe
 
 ## Cost
 
-A landing that needs the suite pays its wall-clock inside the `land-branch.py` call: one run when the candidate is clean; when it has failures, also a baseline run on the tip (skipped when that tip's baseline is cached) and a rerun of the failures the baseline lacks, so up to three runs. Callers that wrap the landing with a short timeout must expect that, or run `suite-gate.py run` first and land the recorded commit.
+A landing that needs the suite pays its wall-clock inside the `land-branch.py` call, plus any time queued for worker slots: one run when the candidate is clean; when it has failures, also a baseline run on the tip (skipped when that tip's baseline is cached) and a rerun of the failures the baseline lacks, so up to three runs. Callers that wrap the landing with a short timeout must expect that, or run `suite-gate.py run` first and land the recorded commit.
 
 ## Not covered
 

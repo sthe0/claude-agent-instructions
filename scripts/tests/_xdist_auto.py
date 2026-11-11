@@ -10,12 +10,20 @@ worker is recognised by `config.workerinput` and `PYTEST_XDIST_WORKER`, both set
 
 Opt out with `-n 0`, `-p no:xdist`, or `--dist no`; set the count with
 `PYTEST_XDIST_AUTO_NUM_WORKERS`. Stdlib only.
+
+Every parallel run, auto or explicit `-n`, first takes worker slots from the machine-wide
+limiter (scripts/lib/test_slots.py) and runs with as many workers as it holds, so an explicit
+`-n 12` is capped to `test-slots-per-run`. A run inside one that already holds slots (the
+suite gate passes `CORE_TEST_SLOTS_HELD`; a nested pytest has a holding ancestor) takes none.
+Serial runs take no slot.
 """
 from __future__ import annotations
 
 import importlib.util
 import os
 import shlex
+import sys
+from pathlib import Path
 
 _MODE_FLAGS = (
     "collectonly",
@@ -106,19 +114,65 @@ def _xdist_importable() -> bool:
     return importlib.util.find_spec("xdist") is not None
 
 
+def _explicit_workers(config) -> int:
+    """The worker count of an explicit `-n N` run (xdist has resolved `auto` by now), else 0."""
+    if _in_worker(config) or _xdist_absent(config):
+        return 0
+    n = config.getoption("numprocesses", None)
+    return n if isinstance(n, int) else 0
+
+
+def _say(line: str) -> None:
+    print(line, file=sys.stderr, flush=True)
+
+
+def _take_slots(config, want: int) -> int:
+    """Hold up to ``want`` worker slots for the session; returns how many workers may run."""
+    scripts = str(Path(__file__).resolve().parents[1])
+    if scripts not in sys.path:
+        sys.path.append(scripts)
+    from lib import test_slots
+
+    limits = test_slots.configured()
+    try:
+        holder = test_slots.acquire(
+            want, limits=limits, on_wait=lambda holders: _say(test_slots.describe_wait(want, limits, holders)))
+    except test_slots.SlotWaitExpired as exc:
+        import pytest
+
+        raise pytest.UsageError(str(exc)) from exc
+    if holder.source == test_slots.ACQUIRED:
+        os.environ[test_slots.HELD_ENV] = str(holder.count)
+
+        def release():
+            os.environ.pop(test_slots.HELD_ENV, None)
+            holder.release()
+
+        config.add_cleanup(release)
+    return min(want, holder.count)
+
+
 def pytest_configure(config, min_workers=2):
-    if not wants_auto_parallel(config):
+    if wants_auto_parallel(config):
+        n = config.hook.pytest_xdist_auto_num_workers(config=config)
+        cap = config.getoption("maxprocesses", None)
+        if cap:
+            n = min(n, cap)
+        if n < min_workers:
+            return
+        n = _take_slots(config, n)
+        if n < min_workers:
+            return
+        config.option.numprocesses = n
+        config.option.dist = "load"
+        config.option.tx = ["popen"] * n
+        setattr(config, _FANNED_OUT, n)
         return
-    n = config.hook.pytest_xdist_auto_num_workers(config=config)
-    cap = config.getoption("maxprocesses", None)
-    if cap:
-        n = min(n, cap)
-    if n < min_workers:
-        return
-    config.option.numprocesses = n
-    config.option.dist = "load"
-    config.option.tx = ["popen"] * n
-    setattr(config, _FANNED_OUT, n)
+    explicit = _explicit_workers(config)
+    if explicit >= min_workers:
+        n = _take_slots(config, explicit)
+        config.option.numprocesses = n
+        config.option.tx = ["popen"] * n
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config, require_dsession=True):

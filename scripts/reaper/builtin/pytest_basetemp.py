@@ -33,11 +33,11 @@ from __future__ import annotations
 import getpass
 import os
 import re
-import shutil
 import stat
 import tempfile
 from pathlib import Path
 
+from reaper import liveness
 from reaper.contract import KEEP, REMOVE, ReapContext, Verdict
 from session_scope.registry import pid_alive
 
@@ -154,36 +154,6 @@ def scan(ctx: ReapContext) -> "list[Verdict]":
     return [judge(root / name, ctx, holders) for name in names if NUMBERED_DIR.fullmatch(name)]
 
 
-def _make_writable(top: str) -> None:
-    pending = [top]
-    while pending:
-        current = pending.pop()
-        try:
-            mode = os.lstat(current).st_mode
-        except OSError:
-            continue
-        if not stat.S_ISDIR(mode):
-            continue
-        try:
-            os.chmod(current, stat.S_IMODE(mode) | 0o700)
-            pending.extend(os.path.join(current, name) for name in os.listdir(current))
-        except OSError:
-            continue
-
-
-def _rmtree(path: str) -> None:
-    try:
-        shutil.rmtree(path)
-    except FileNotFoundError:
-        return
-    except PermissionError:
-        _make_writable(path)
-        try:
-            shutil.rmtree(path)
-        except FileNotFoundError:
-            return
-
-
 def remove(path: str, ctx: ReapContext) -> bool:
     target = Path(path)
     if not NUMBERED_DIR.fullmatch(target.name):
@@ -195,5 +165,5 @@ def remove(path: str, ctx: ReapContext) -> bool:
         return True
     if judge(target, ctx, _holders_or_none()).action != REMOVE:
         return False
-    _rmtree(str(target))
+    liveness.remove_tree(os.path.dirname(real), os.path.basename(real))
     return True

@@ -13,6 +13,10 @@ A reaper is a Python module defining
 * ``remove(path, ctx)`` — delete one item the runner approved. Raise (or return
   ``False``) when the removal did not happen;
 * optionally ``summary(verdicts) -> str | None`` — one line for the SessionStart notice;
+* optionally ``snapshot_extra(verdicts) -> dict`` — extra top-level fields of the runner's kept
+  snapshot; optionally ``dry_run_notes(verdicts) -> list[str]`` — diagnostic lines a dry run
+  prints to stderr after the summary. A keep verdict's ``reason=<slug>`` tag becomes the
+  snapshot entry's ``reason``; its ``reason`` text becomes the entry's ``detail``;
 * optionally ``upkeep(ctx) -> list[str]`` — non-destructive, idempotent, unthrottled
   maintenance (the ``git-worktrees`` reaper backs its branches up to origin), one report
   line per action. Only ``runner --upkeep-only`` calls it, under a lock and with errors
@@ -42,13 +46,16 @@ KEEP = "keep"
 @dataclass(frozen=True)
 class Verdict:
     """One reaper's opinion on one item. ``report`` marks a kept item worth a notice;
-    ``tags`` are labels the reaper reads back in its own ``summary`` (not compared)."""
+    ``tags`` are labels the reaper reads back in its own ``summary`` (not compared);
+    ``size`` is the item's disk bytes when the reaper measured them (0 when it did not),
+    recorded in the runner's kept snapshot."""
 
     path: str
     action: str
     reason: str
     report: bool = False
     tags: "tuple[str, ...]" = field(default=(), compare=False)
+    size: int = field(default=0, compare=False)
 
 
 def _at_or_inside(container: str, candidate: str) -> bool:

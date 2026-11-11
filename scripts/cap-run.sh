@@ -57,6 +57,8 @@ if [ "$cap" -lt "$want" ]; then
     echo "cap-run.sh: requested cap $want clamped to $cap by a limit already in force" >&2
 fi
 ulimit -u "$cap" || { echo "cap-run.sh: cannot set ulimit -u $cap" >&2; exit 2; }
+# The command can tell it runs capped: it compares this value with its own RLIMIT_NPROC.
+export CAP_RUN_NPROC="$cap"
 
 # --foreground keeps timeout in the caller's process group, so a group kill from a
 # supervising runner reaches the whole tree instead of orphaning it.

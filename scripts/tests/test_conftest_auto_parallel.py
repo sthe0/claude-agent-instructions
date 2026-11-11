@@ -185,6 +185,15 @@ def _no_xdist_environment(monkeypatch):
     monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _slots_granted(monkeypatch, tmp_path_factory):
+    # The fan-out decision is pinned here; the slot limiter it calls is pinned in
+    # test_test_slots.py. A mini suite run below takes real slots, from a private directory.
+    monkeypatch.setattr(_xdist_auto, "_take_slots", lambda config, want: want)
+    monkeypatch.setenv("CORE_TEST_SLOTS_DIR", str(tmp_path_factory.mktemp("slots")))
+    monkeypatch.delenv("CORE_TEST_SLOTS_HELD", raising=False)
+
+
 _UNSET = object()
 
 

@@ -20,7 +20,21 @@ One pass:
      missing). A removal
      is logged to ``<config root>/reaper/removed.jsonl`` BEFORE it is attempted; a
      remove() exception keeps the path and leaves that reaper's stamp where it was.
-  5. SessionStart mode (no flag) always exits 0.
+  5. Every removal row carries ``trigger`` (``unit`` when INVOCATION_ID is set, else ``pressure``,
+     ``manual`` or ``hook``) and, under systemd, ``invocation_id``. After a live pass each due
+     reaper's keeps replace the snapshot ``<config root>/reaper/kept/<NAME>.json`` (a snapshot,
+     because a timer re-judges the same items every pass): pass time, trigger, the reaper's own
+     ``snapshot_extra(verdicts)`` fields and ``kept``, a list of ``{path, reason, detail, bytes}``
+     where ``reason`` is the reaper's ``reason=<slug>`` tag (``unclassified`` without one,
+     ``removal-failed`` and ``blocked`` set here) and ``detail`` the full text. A dry run prints
+     each selected reaper's ``summary`` after its verdict lines, then the lines of its optional
+     ``dry_run_notes(verdicts)`` to stderr.
+  6. Under systemd (INVOCATION_ID set) every non-dry pass mode also writes the observation
+     ``<config root>/reaper/unit-pass/<INVOCATION_ID>.json`` (``write_unit_observation``; the newest
+     50 kept): invocation_id, tmpdir and agent_home as seen (resolved), ``credentials_present``
+     for SSH_AUTH_SOCK / SSH_AGENT_PID / GIT_ASKPASS / SSH_ASKPASS, ``reapers_run`` (scans that
+     completed) and ``errors``. ``scripts/install-reaper-timer.sh --check`` judges a unit run by it.
+  7. SessionStart mode (no flag) always exits 0.
 
 ``--upkeep-only`` is a different mode: it skips scan/remove and the throttle stamps and
 calls only each reaper's optional ``upkeep(ctx)``, one reaper at a time with its errors
@@ -49,6 +63,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -89,6 +104,10 @@ def removal_log_path() -> Path:
     return config_root.agent_home() / "reaper" / "removed.jsonl"
 
 
+def kept_snapshot_dir() -> Path:
+    return config_root.agent_home() / "reaper" / "kept"
+
+
 def default_deadletter_dir() -> Path:
     return config_root.agent_home() / "orphan-worktree-deadletter"
 
@@ -123,15 +142,110 @@ def _normalize(raw: object) -> "list[Verdict]":
         if action not in (REMOVE, KEEP):
             raise ValueError(f"verdict action {action!r} is neither remove nor keep")
         tags = tuple(str(tag) for tag in getattr(item, "tags", ()))
-        verdicts.append(Verdict(str(item.path), action, str(item.reason), bool(getattr(item, "report", False)), tags))
+        size = int(getattr(item, "size", 0) or 0)
+        verdicts.append(Verdict(str(item.path), action, str(item.reason), bool(getattr(item, "report", False)), tags, size))
     return verdicts
 
 
-def _append_removal_log(log_path: Path, now: float, reaper: registry.Reaper, verdict: Verdict) -> None:
+def _provenance(*, pressured: bool, manual: bool) -> "dict[str, str]":
+    """How this pass was started: ``unit`` under systemd (INVOCATION_ID set, which is also
+    recorded as ``invocation_id``), else ``pressure``, ``manual`` or the SessionStart ``hook``."""
+    invocation = os.environ.get("INVOCATION_ID")
+    if invocation:
+        return {"trigger": "unit", "invocation_id": invocation}
+    return {"trigger": "pressure" if pressured else "manual" if manual else "hook"}
+
+
+def _append_removal_log(
+    log_path: Path, now: float, reaper: registry.Reaper, verdict: Verdict, provenance: "dict[str, str]",
+) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    record = {"ts": _iso(now), "reaper": reaper.name, "layer": reaper.layer, "path": verdict.path, "reason": verdict.reason}
+    record = {
+        "ts": _iso(now), "reaper": reaper.name, "layer": reaper.layer, "path": verdict.path, "reason": verdict.reason,
+        **provenance,
+    }
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+REASON_TAG = "reason="
+UNCLASSIFIED = "unclassified"
+REMOVAL_FAILED = "removal-failed"
+BLOCKED = "blocked"
+
+
+def _slug(verdict: Verdict) -> str:
+    """The reaper's own reason slug (its ``reason=<slug>`` tag), else ``unclassified``."""
+    return next((tag[len(REASON_TAG):] for tag in verdict.tags if tag.startswith(REASON_TAG)), UNCLASSIFIED)
+
+
+def _write_kept(
+    kept: Path, name: str, now: float, provenance: "dict[str, str]", keeps: "list[tuple[str, str, str, int]]",
+    extra: "dict[str, object] | None" = None,
+) -> None:
+    """Replace ``<kept>/<name>.json`` atomically with every keep of the pass.
+
+    An entry is ``path``, ``reason`` (a slug), ``detail`` (the full text, any OSError string
+    included) and ``bytes``. ``extra`` is the reaper's own ``snapshot_extra`` fields. A snapshot,
+    not a log: a timer re-judges the same items every pass. Best effort."""
+    record = {
+        "reaper": name, "pass_time": _iso(now), **provenance, **(extra or {}),
+        "kept": [
+            {"path": path, "reason": reason, "detail": detail, "bytes": size} for path, reason, detail, size in keeps
+        ],
+    }
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+    tmp = kept / f".{safe}.json.tmp"
+    try:
+        kept.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(record, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        os.replace(tmp, kept / f"{safe}.json")
+    except OSError:
+        pass
+
+
+def _print_summaries(
+    selected: "list[registry.Reaper]", due: "set[str]", scanned: "dict[str, list[Verdict]]", out: TextIO, err: TextIO,
+) -> None:
+    for reaper in selected:
+        summarize = getattr(reaper.module, "summary", None)
+        if reaper.name not in due or not callable(summarize):
+            continue
+        try:
+            line = summarize(scanned[reaper.name])
+        except Exception as exc:
+            print(f"reaper {reaper.name}: summary failed: {type(exc).__name__}: {exc}", file=err)
+            continue
+        if line:
+            print(line, file=out)
+
+
+def _snapshot_extra(reaper: registry.Reaper, verdicts: "list[Verdict]", err: TextIO) -> "dict[str, object]":
+    hook = getattr(reaper.module, "snapshot_extra", None)
+    if not callable(hook):
+        return {}
+    try:
+        return dict(hook(verdicts))
+    except Exception as exc:
+        print(f"reaper {reaper.name}: snapshot_extra failed: {type(exc).__name__}: {exc}", file=err)
+        return {}
+
+
+def _print_notes(
+    selected: "list[registry.Reaper]", due: "set[str]", scanned: "dict[str, list[Verdict]]", err: TextIO,
+) -> None:
+    """A dry run's diagnostic lines (``dry_run_notes``) go to stderr, so stdout keeps its closed format."""
+    for reaper in selected:
+        notes = getattr(reaper.module, "dry_run_notes", None)
+        if reaper.name not in due or not callable(notes):
+            continue
+        try:
+            lines = list(notes(scanned[reaper.name]))
+        except Exception as exc:
+            print(f"reaper {reaper.name}: dry_run_notes failed: {type(exc).__name__}: {exc}", file=err)
+            continue
+        for line in lines:
+            print(line, file=err)
 
 
 def _nested(real_a: str, real_b: str) -> bool:
@@ -217,8 +331,14 @@ def execute_pass(
     err: TextIO,
     skipped_modules: "Sequence[str]" = (),
     pressured: "frozenset[str] | None" = None,
+    kept_dir: "Path | None" = None,
+    observe: "dict[str, int] | None" = None,
 ) -> int:
     """Run one pass over ``reapers`` (every discovered reaper). See the module docstring.
+
+    ``kept_dir`` makes a live pass write each due reaper's kept snapshot there; None writes none.
+    ``observe`` receives ``reapers_run`` (scans that completed) and ``errors`` (failed scans,
+    failed removals, skipped modules, an unreadable scope registry) for the unit-pass observation.
 
     ``skipped_modules`` are the discovery warnings for modules that did not load.
     ``pressured`` makes exactly those reapers due and selected (others still scan and veto)
@@ -249,13 +369,19 @@ def execute_pass(
     if skipped_modules:
         cancelled.append(f"{len(skipped_modules)} reaper module(s) skipped at discovery")
     scanned: "dict[str, list[Verdict]]" = {}
+    failed_scans: "set[str]" = set()
     for reaper in reapers:
         try:
             scanned[reaper.name] = _normalize(reaper.module.scan(dataclasses.replace(ctx, due=reaper.name in due)))
         except Exception as exc:
             scanned[reaper.name] = []
+            failed_scans.add(reaper.name)
             cancelled.append(f"scan of {reaper.name} failed")
             print(f"reaper {reaper.name}: scan failed: {type(exc).__name__}: {exc}", file=err)
+
+    if observe is not None:
+        observe["reapers_run"] += len(reapers) - len(failed_scans)
+        observe["errors"] += len(failed_scans) + len(skipped_modules) + (1 if ctx.scope_registry_error else 0)
 
     joined: "dict[str, list[tuple[registry.Reaper, Verdict]]]" = {}
     for reaper in reapers:
@@ -281,10 +407,15 @@ def execute_pass(
                     print(f"{reaper.name} REMOVE {verdict.path} ({verdict.reason})", file=out)
                 else:
                     print(f"{reaper.name} KEEP {verdict.path} ({reason or verdict.reason})", file=out)
+        _print_summaries(selected, due, scanned, out, err)
+        _print_notes(selected, due, scanned, err)
         return 0
 
+    provenance = _provenance(pressured=pressured is not None, manual=manual)
     removed = 0
     failed_removals: "set[str]" = set()
+    failed_paths: "set[str]" = set()
+    removed_paths: "set[str]" = set()
     for real, entries in joined.items():
         if blocker(real) is not None:
             continue
@@ -296,27 +427,36 @@ def execute_pass(
             continue
         reaper, verdict = executor
         try:
-            _append_removal_log(log_path, now, reaper, verdict)
+            _append_removal_log(log_path, now, reaper, verdict, provenance)
             if reaper.module.remove(verdict.path, ctx) is False:
                 raise RuntimeError("remove() returned False")
         except Exception as exc:
             failed_removals.add(reaper.name)
+            failed_paths.add(verdict.path)
             print(f"reaper {reaper.name}: FAILED to remove {verdict.path}: {type(exc).__name__}: {exc}", file=err)
             continue
         removed += 1
+        removed_paths.add(verdict.path)
         print(f"reaper {reaper.name}: removed {verdict.path} ({verdict.reason})", file=err)
 
-    for reaper in selected:
-        summarize = getattr(reaper.module, "summary", None)
-        if reaper.name not in due or not callable(summarize):
-            continue
-        try:
-            line = summarize(scanned[reaper.name])
-        except Exception as exc:
-            print(f"reaper {reaper.name}: summary failed: {type(exc).__name__}: {exc}", file=err)
-            continue
-        if line:
-            print(line, file=out)
+    if observe is not None:
+        observe["errors"] += len(failed_paths)
+    _print_summaries(selected, due, scanned, out, err)
+
+    if kept_dir is not None:
+        for reaper in selected:
+            if reaper.name not in due or reaper.name in failed_scans:
+                continue
+            keeps = []
+            for verdict in scanned[reaper.name]:
+                if verdict.action == KEEP:
+                    keeps.append((verdict.path, _slug(verdict), verdict.reason, verdict.size))
+                elif verdict.path in failed_paths:
+                    keeps.append((verdict.path, REMOVAL_FAILED, f"removal refused or failed: {verdict.reason}", verdict.size))
+                elif verdict.path not in removed_paths:
+                    why = blocker(os.path.realpath(verdict.path))
+                    keeps.append((verdict.path, BLOCKED if why else UNCLASSIFIED, why or verdict.reason, verdict.size))
+            _write_kept(kept_dir, reaper.name, now, provenance, keeps, _snapshot_extra(reaper, scanned[reaper.name], err))
 
     if not manual and not cancelled:
         for name in due - failed_removals:
@@ -335,6 +475,8 @@ def execute_pressure(
     out: TextIO,
     err: TextIO,
     skipped_modules: "Sequence[str]" = (),
+    kept_dir: "Path | None" = None,
+    observe: "dict[str, int] | None" = None,
 ) -> None:
     """One ``--on-pressure`` pass: read the free space of each reaper that names pressure paths,
     run the due ones through ``execute_pass`` and start their cooldown.
@@ -353,7 +495,7 @@ def execute_pressure(
         reapers, ctx,
         dry_run=ctx.dry_run, force_run=False, only=None,
         stamps=stamps, log_path=log_path, out=out, err=err,
-        skipped_modules=skipped_modules, pressured=due,
+        skipped_modules=skipped_modules, pressured=due, kept_dir=kept_dir, observe=observe,
     )
     if ctx.dry_run:
         return
@@ -445,7 +587,45 @@ def _discover_default(project_dir: Path, warn: "Callable[[str], None]") -> "list
     return registry.discover(project_dir, warn=warn)
 
 
-def _run_on_pressure(reapers: "list[registry.Reaper]", ctx: ReapContext, skipped: "list[str]") -> None:
+UNIT_PASS_KEEP = 50
+CREDENTIAL_VARS = ("SSH_AUTH_SOCK", "SSH_AGENT_PID", "GIT_ASKPASS", "SSH_ASKPASS")
+
+
+def unit_pass_dir() -> Path:
+    return config_root.agent_home() / "reaper" / "unit-pass"
+
+
+def write_unit_observation(observe: "dict[str, int]", err: TextIO) -> None:
+    """Under systemd (INVOCATION_ID set) record what this run saw, for ``install-reaper-timer.sh
+    --check``: temp root, agent home, which credential variables are present, reapers whose scan
+    ran, errors. Atomic; the newest ``UNIT_PASS_KEEP`` files stay. Best effort."""
+    invocation = os.environ.get("INVOCATION_ID")
+    if not invocation or not re.fullmatch(r"[A-Za-z0-9]+", invocation):
+        return
+    record = {
+        "invocation_id": invocation,
+        "tmpdir": os.path.realpath(tempfile.gettempdir()),
+        "agent_home": os.path.realpath(config_root.agent_home()),
+        "credentials_present": {name: name in os.environ for name in CREDENTIAL_VARS},
+        "reapers_run": observe["reapers_run"],
+        "errors": observe["errors"],
+    }
+    try:
+        directory = unit_pass_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        tmp = directory / f".{invocation}.json.tmp"
+        tmp.write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8")
+        os.replace(tmp, directory / f"{invocation}.json")
+        files = sorted(directory.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+        for stale in files[UNIT_PASS_KEEP:]:
+            stale.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"reaper: unit-pass observation unavailable: {type(exc).__name__}: {exc}", file=err)
+
+
+def _run_on_pressure(
+    reapers: "list[registry.Reaper]", ctx: ReapContext, skipped: "list[str]", observe: "dict[str, int] | None" = None,
+) -> None:
     threshold = read_pressure_threshold()
     if threshold is None:
         print(f"reaper: pressure mode disarmed: config.md row {PRESSURE_THRESHOLD_KEY} is missing or not a percentage above 0 and below 100", file=sys.stderr)
@@ -455,6 +635,7 @@ def _run_on_pressure(reapers: "list[registry.Reaper]", ctx: ReapContext, skipped
         execute_pressure(
             reapers, ctx, threshold=threshold, stamps=stamp_dir(), log_path=removal_log_path(),
             pressure_log=pressure_log_path(), out=sys.stdout, err=sys.stderr, skipped_modules=skipped,
+            kept_dir=kept_snapshot_dir(), observe=observe,
         )
 
     if ctx.dry_run:
@@ -484,6 +665,8 @@ def main(
     if args.on_pressure and (args.upkeep_only or args.only or args.force_run):
         parser.error("--on-pressure combines only with --dry-run")
     fail_open = not (args.dry_run or args.force_run or args.only or args.list) or args.upkeep_only
+    observe = {"reapers_run": 0, "errors": 0}
+    records_pass = not (args.list or args.upkeep_only or args.dry_run)
 
     try:
         now = time.time()
@@ -508,15 +691,19 @@ def main(
                     execute_upkeep(reapers, ctx, only=args.only, out=sys.stdout, err=sys.stderr)
             return 0
         if args.on_pressure:
-            _run_on_pressure(reapers, ctx, skipped)
+            _run_on_pressure(reapers, ctx, skipped, observe)
             return 0
         execute_pass(
             reapers, ctx,
             dry_run=args.dry_run, force_run=args.force_run, only=args.only,
             stamps=stamp_dir(), log_path=removal_log_path(), out=sys.stdout, err=sys.stderr,
-            skipped_modules=skipped,
+            skipped_modules=skipped, kept_dir=kept_snapshot_dir(), observe=observe,
         )
     except Exception as exc:
+        observe["errors"] += 1
         print(f"reaper: runner error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 0 if fail_open else 1
+    finally:
+        if records_pass:
+            write_unit_observation(observe, sys.stderr)
     return 0
