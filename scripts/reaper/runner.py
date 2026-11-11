@@ -20,7 +20,12 @@ One pass:
      missing). A removal
      is logged to ``<config root>/reaper/removed.jsonl`` BEFORE it is attempted; a
      remove() exception keeps the path and leaves that reaper's stamp where it was.
-  5. SessionStart mode (no flag) always exits 0.
+  5. Every removal row carries ``trigger`` (``unit`` when INVOCATION_ID is set, else ``pressure``,
+     ``manual`` or ``hook``) and, under systemd, ``invocation_id``. After a live pass each due
+     reaper's keeps (path, reason, bytes, pass time, trigger) replace the snapshot
+     ``<config root>/reaper/kept/<NAME>.json``: a snapshot, because a timer re-judges the same
+     items every pass. A dry run prints each selected reaper's ``summary`` after its verdict lines.
+  6. SessionStart mode (no flag) always exits 0.
 
 ``--upkeep-only`` is a different mode: it skips scan/remove and the throttle stamps and
 calls only each reaper's optional ``upkeep(ctx)``, one reaper at a time with its errors
@@ -89,6 +94,10 @@ def removal_log_path() -> Path:
     return config_root.agent_home() / "reaper" / "removed.jsonl"
 
 
+def kept_snapshot_dir() -> Path:
+    return config_root.agent_home() / "reaper" / "kept"
+
+
 def default_deadletter_dir() -> Path:
     return config_root.agent_home() / "orphan-worktree-deadletter"
 
@@ -123,15 +132,66 @@ def _normalize(raw: object) -> "list[Verdict]":
         if action not in (REMOVE, KEEP):
             raise ValueError(f"verdict action {action!r} is neither remove nor keep")
         tags = tuple(str(tag) for tag in getattr(item, "tags", ()))
-        verdicts.append(Verdict(str(item.path), action, str(item.reason), bool(getattr(item, "report", False)), tags))
+        size = int(getattr(item, "size", 0) or 0)
+        verdicts.append(Verdict(str(item.path), action, str(item.reason), bool(getattr(item, "report", False)), tags, size))
     return verdicts
 
 
-def _append_removal_log(log_path: Path, now: float, reaper: registry.Reaper, verdict: Verdict) -> None:
+def _provenance(*, pressured: bool, manual: bool) -> "dict[str, str]":
+    """How this pass was started: ``unit`` under systemd (INVOCATION_ID set, which is also
+    recorded as ``invocation_id``), else ``pressure``, ``manual`` or the SessionStart ``hook``."""
+    invocation = os.environ.get("INVOCATION_ID")
+    if invocation:
+        return {"trigger": "unit", "invocation_id": invocation}
+    return {"trigger": "pressure" if pressured else "manual" if manual else "hook"}
+
+
+def _append_removal_log(
+    log_path: Path, now: float, reaper: registry.Reaper, verdict: Verdict, provenance: "dict[str, str]",
+) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    record = {"ts": _iso(now), "reaper": reaper.name, "layer": reaper.layer, "path": verdict.path, "reason": verdict.reason}
+    record = {
+        "ts": _iso(now), "reaper": reaper.name, "layer": reaper.layer, "path": verdict.path, "reason": verdict.reason,
+        **provenance,
+    }
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _write_kept(
+    kept: Path, name: str, now: float, provenance: "dict[str, str]", keeps: "list[tuple[str, str, int]]",
+) -> None:
+    """Replace ``<kept>/<name>.json`` atomically with every keep of the pass (path, reason, bytes).
+
+    A snapshot, not a log: a timer re-judges the same items every pass. Best effort."""
+    record = {
+        "reaper": name, "pass_time": _iso(now), **provenance,
+        "kept": [{"path": path, "reason": reason, "bytes": size} for path, reason, size in keeps],
+    }
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+    tmp = kept / f".{safe}.json.tmp"
+    try:
+        kept.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(record, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        os.replace(tmp, kept / f"{safe}.json")
+    except OSError:
+        pass
+
+
+def _print_summaries(
+    selected: "list[registry.Reaper]", due: "set[str]", scanned: "dict[str, list[Verdict]]", out: TextIO, err: TextIO,
+) -> None:
+    for reaper in selected:
+        summarize = getattr(reaper.module, "summary", None)
+        if reaper.name not in due or not callable(summarize):
+            continue
+        try:
+            line = summarize(scanned[reaper.name])
+        except Exception as exc:
+            print(f"reaper {reaper.name}: summary failed: {type(exc).__name__}: {exc}", file=err)
+            continue
+        if line:
+            print(line, file=out)
 
 
 def _nested(real_a: str, real_b: str) -> bool:
@@ -217,8 +277,11 @@ def execute_pass(
     err: TextIO,
     skipped_modules: "Sequence[str]" = (),
     pressured: "frozenset[str] | None" = None,
+    kept_dir: "Path | None" = None,
 ) -> int:
     """Run one pass over ``reapers`` (every discovered reaper). See the module docstring.
+
+    ``kept_dir`` makes a live pass write each due reaper's kept snapshot there; None writes none.
 
     ``skipped_modules`` are the discovery warnings for modules that did not load.
     ``pressured`` makes exactly those reapers due and selected (others still scan and veto)
@@ -281,10 +344,13 @@ def execute_pass(
                     print(f"{reaper.name} REMOVE {verdict.path} ({verdict.reason})", file=out)
                 else:
                     print(f"{reaper.name} KEEP {verdict.path} ({reason or verdict.reason})", file=out)
+        _print_summaries(selected, due, scanned, out, err)
         return 0
 
+    provenance = _provenance(pressured=pressured is not None, manual=manual)
     removed = 0
     failed_removals: "set[str]" = set()
+    removed_paths: "set[str]" = set()
     for real, entries in joined.items():
         if blocker(real) is not None:
             continue
@@ -296,7 +362,7 @@ def execute_pass(
             continue
         reaper, verdict = executor
         try:
-            _append_removal_log(log_path, now, reaper, verdict)
+            _append_removal_log(log_path, now, reaper, verdict, provenance)
             if reaper.module.remove(verdict.path, ctx) is False:
                 raise RuntimeError("remove() returned False")
         except Exception as exc:
@@ -304,19 +370,22 @@ def execute_pass(
             print(f"reaper {reaper.name}: FAILED to remove {verdict.path}: {type(exc).__name__}: {exc}", file=err)
             continue
         removed += 1
+        removed_paths.add(verdict.path)
         print(f"reaper {reaper.name}: removed {verdict.path} ({verdict.reason})", file=err)
 
-    for reaper in selected:
-        summarize = getattr(reaper.module, "summary", None)
-        if reaper.name not in due or not callable(summarize):
-            continue
-        try:
-            line = summarize(scanned[reaper.name])
-        except Exception as exc:
-            print(f"reaper {reaper.name}: summary failed: {type(exc).__name__}: {exc}", file=err)
-            continue
-        if line:
-            print(line, file=out)
+    _print_summaries(selected, due, scanned, out, err)
+
+    if kept_dir is not None:
+        for reaper in selected:
+            if reaper.name not in due or f"scan of {reaper.name} failed" in cancelled:
+                continue
+            keeps = []
+            for verdict in scanned[reaper.name]:
+                if verdict.action == KEEP:
+                    keeps.append((verdict.path, verdict.reason, verdict.size))
+                elif verdict.path not in removed_paths:
+                    keeps.append((verdict.path, blocker(os.path.realpath(verdict.path)) or verdict.reason, verdict.size))
+            _write_kept(kept_dir, reaper.name, now, provenance, keeps)
 
     if not manual and not cancelled:
         for name in due - failed_removals:
@@ -335,6 +404,7 @@ def execute_pressure(
     out: TextIO,
     err: TextIO,
     skipped_modules: "Sequence[str]" = (),
+    kept_dir: "Path | None" = None,
 ) -> None:
     """One ``--on-pressure`` pass: read the free space of each reaper that names pressure paths,
     run the due ones through ``execute_pass`` and start their cooldown.
@@ -353,7 +423,7 @@ def execute_pressure(
         reapers, ctx,
         dry_run=ctx.dry_run, force_run=False, only=None,
         stamps=stamps, log_path=log_path, out=out, err=err,
-        skipped_modules=skipped_modules, pressured=due,
+        skipped_modules=skipped_modules, pressured=due, kept_dir=kept_dir,
     )
     if ctx.dry_run:
         return
@@ -455,6 +525,7 @@ def _run_on_pressure(reapers: "list[registry.Reaper]", ctx: ReapContext, skipped
         execute_pressure(
             reapers, ctx, threshold=threshold, stamps=stamp_dir(), log_path=removal_log_path(),
             pressure_log=pressure_log_path(), out=sys.stdout, err=sys.stderr, skipped_modules=skipped,
+            kept_dir=kept_snapshot_dir(),
         )
 
     if ctx.dry_run:
@@ -514,7 +585,7 @@ def main(
             reapers, ctx,
             dry_run=args.dry_run, force_run=args.force_run, only=args.only,
             stamps=stamp_dir(), log_path=removal_log_path(), out=sys.stdout, err=sys.stderr,
-            skipped_modules=skipped,
+            skipped_modules=skipped, kept_dir=kept_snapshot_dir(),
         )
     except Exception as exc:
         print(f"reaper: runner error: {type(exc).__name__}: {exc}", file=sys.stderr)

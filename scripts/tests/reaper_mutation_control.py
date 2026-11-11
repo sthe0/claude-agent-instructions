@@ -49,6 +49,12 @@ T_BASETEMP = "tests/test_reaper_pytest_basetemp.py"
 T_PRESSURE = "tests/test_reaper_pressure.py"
 HOOK_BACKUP = "hook-branch-backup.py"
 T_HOOK = "tests/test_hook_branch_backup.py"
+LIVENESS = "reaper/liveness.py"
+TEMP_RESIDUE = "reaper/builtin/temp_residue.py"
+T_LIVENESS = "tests/test_reaper_liveness.py"
+T_RESIDUE = "tests/test_reaper_temp_residue.py"
+
+PLANTED_HOLDERS = "test_each_holder_kind_in_a_planted_proc_root_is_found_under_its_own_kind"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
 CONTROL_RED = 7
@@ -99,12 +105,12 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "removal-log-before-remove": Mutant(
         RUNNER,
-        '            _append_removal_log(log_path, now, reaper, verdict)\n'
+        '            _append_removal_log(log_path, now, reaper, verdict, provenance)\n'
         '            if reaper.module.remove(verdict.path, ctx) is False:\n'
         '                raise RuntimeError("remove() returned False")\n',
         '            if reaper.module.remove(verdict.path, ctx) is False:\n'
         '                raise RuntimeError("remove() returned False")\n'
-        '            _append_removal_log(log_path, now, reaper, verdict)\n',
+        '            _append_removal_log(log_path, now, reaper, verdict, provenance)\n',
         _ids(T_RUNNER, "test_removal_is_logged_before_remove_runs"),
     ),
     "realpath": Mutant(
@@ -343,6 +349,112 @@ CATALOGUE: "dict[str, Mutant]" = {
         HOOK_BACKUP, "        spawn_pressure()\n", "        pass\n",
         _ids(T_HOOK, "test_it_starts_the_pressure_check_detached_beside_the_upkeep",
              "test_the_pressure_check_starts_for_a_stop_payload"),
+    ),
+    "residue-idle-floor": Mutant(
+        LIVENESS, "if idle < floor_s:", "if idle < 0:",
+        _ids(T_LIVENESS, "test_a_tree_younger_than_the_idle_floor_is_kept",
+             "test_the_idle_floor_is_exact_at_the_newest_time_in_the_tree",
+             "test_a_fresh_file_deep_in_the_tree_keeps_it")
+        + _ids(T_RESIDUE, "test_a_candidate_inside_the_idle_floor_is_kept_with_the_idle_floor_slug"),
+    ),
+    "residue-holder-cwd": Mutant(
+        LIVENESS,
+        '            ("cwd", _absolute(_readlink(os.path.join(pid_dir, "cwd"), sweep, f"{pid_dir}/cwd"))),\n',
+        "",
+        _ids(T_LIVENESS, PLANTED_HOLDERS, "test_a_process_with_its_cwd_inside_the_tree_is_found"),
+    ),
+    "residue-holder-exe": Mutant(
+        LIVENESS,
+        '            ("exe", _absolute(_readlink(os.path.join(pid_dir, "exe"), sweep, f"{pid_dir}/exe"))),\n',
+        "",
+        _ids(T_LIVENESS, PLANTED_HOLDERS, "test_a_process_running_an_executable_inside_the_tree_is_found"),
+    ),
+    "residue-holder-fd": Mutant(
+        LIVENESS, '        held["fd"].update(_fd_targets(pid_dir, sweep))\n', "        pass\n",
+        _ids(T_LIVENESS, PLANTED_HOLDERS, "test_a_process_with_an_open_file_inside_the_tree_is_found",
+             "test_a_deleted_suffix_pipes_and_spaces_in_proc_targets_are_read_correctly"),
+    ),
+    "residue-holder-maps": Mutant(
+        LIVENESS, '        held["maps"].update(_map_paths(pid_dir, sweep))\n', "        pass\n",
+        _ids(T_LIVENESS, PLANTED_HOLDERS, "test_a_process_with_a_mapped_file_inside_the_tree_is_found_under_the_maps_kind",
+             "test_a_deleted_suffix_pipes_and_spaces_in_proc_targets_are_read_correctly"),
+    ),
+    "residue-session-owned": Mutant(
+        LIVENESS, "if owned(path):", "if False:",
+        _ids(T_LIVENESS, "test_a_candidate_owned_by_a_live_session_is_kept")
+        + _ids(T_RESIDUE, "test_a_candidate_of_a_live_session_is_kept_session_owned"),
+    ),
+    "residue-owner-uid": Mutant(
+        LIVENESS, "if top.st_uid != uid:", "if False:",
+        _ids(T_LIVENESS, "test_a_candidate_of_another_uid_is_kept"),
+    ),
+    "residue-proc-unreadable-keeps": Mutant(
+        LIVENESS, "if sweep.incomplete:", "if False:",
+        _ids(T_LIVENESS, "test_an_incomplete_sweep_keeps_every_candidate_with_its_own_slug")
+        + _ids(T_RESIDUE, "test_an_incomplete_sweep_keeps_every_candidate"),
+    ),
+    "residue-mount-keep": Mutant(
+        LIVENESS, "if facts.crossed_device or mounted_inside(path, mounts):", "if False:",
+        _ids(T_LIVENESS, "test_a_mount_point_inside_the_tree_keeps_it",
+             "test_an_entry_on_another_filesystem_is_not_entered_and_keeps_the_tree"),
+    ),
+    "residue-nested-git": Mutant(
+        LIVENESS, "if facts.nested_git:", "if False:",
+        _ids(T_LIVENESS, "test_a_nested_git_directory_or_file_keeps_the_tree"),
+    ),
+    "residue-symlink": Mutant(
+        LIVENESS, "child = lstat_fn(entry.path)", "child = os.stat(entry.path)",
+        _ids(T_LIVENESS, "test_a_symlink_inside_the_tree_is_not_followed_and_its_target_is_not_read"),
+    ),
+    "residue-one-fs": Mutant(
+        LIVENESS, "if child.st_dev != root_dev:", "if False:",
+        _ids(T_LIVENESS, "test_an_entry_on_another_filesystem_is_not_entered_and_keeps_the_tree"),
+    ),
+    "residue-root-realpath": Mutant(
+        TEMP_RESIDUE, "real = os.path.realpath(raw)", "real = os.path.abspath(raw)",
+        _ids(T_RESIDUE, "test_a_symlinked_session_root_is_scanned_once_at_its_resolved_path",
+             "test_a_session_root_that_is_a_symlink_to_the_sandbox_root_is_one_root"),
+    ),
+    "residue-opt-in": Mutant(
+        TEMP_RESIDUE, "if not ctx.dry_run and not enabled:", "if False:",
+        _ids(T_RESIDUE, "test_without_opt_in_a_live_pass_keeps_what_it_would_remove_and_says_why"),
+    ),
+    "residue-opt-in-remove": Mutant(
+        TEMP_RESIDUE, "    if not opt_in.enabled(NAME):\n        return False\n", "",
+        _ids(T_RESIDUE, "test_remove_refuses_without_opt_in_even_for_a_dead_candidate"),
+    ),
+    "residue-remove-rejudge": Mutant(
+        TEMP_RESIDUE,
+        "    if _judge(candidate, source, ctx, liveness.sweep_holders(), _mounts()).action != REMOVE:",
+        "    if False:",
+        _ids(T_RESIDUE, "test_remove_judges_again_and_refuses_what_became_held_or_fresh"),
+    ),
+    "residue-error-keeps": Mutant(
+        LIVENESS,
+        '    except Exception as exc:\n        return Judgment(KEEP, OS_ERROR, f"{type(exc).__name__}: {exc}")',
+        '    except KeyboardInterrupt as exc:\n        return Judgment(KEEP, OS_ERROR, f"{type(exc).__name__}: {exc}")',
+        _ids(T_LIVENESS, "test_an_os_error_while_judging_keeps_with_the_error_as_reason",
+             "test_a_vanished_candidate_resolves_to_keep"),
+    ),
+    "residue-dry-run-no-write": Mutant(
+        RUNNER, "    if dry_run:\n        for reaper in selected:\n", "    if False:\n        for reaper in selected:\n",
+        _ids(T_RUNNER, "test_a_dry_run_writes_no_kept_snapshot_and_no_removal_row")
+        + _ids(T_RESIDUE, "test_a_dry_run_through_the_runner_writes_no_stamp_snapshot_or_removal_row"),
+    ),
+    "residue-summary-format": Mutant(
+        TEMP_RESIDUE, 'f"temp-residue kind={kind} removable=', 'f"temp-residue kind:{kind} removable=',
+        _ids(T_RESIDUE, "test_the_summary_has_root_lines_every_kind_line_and_slug_only_reason_lines",
+             "test_the_dry_run_prints_remove_lines_and_the_summary_and_writes_nothing"),
+    ),
+    "kept-snapshot-written": Mutant(
+        RUNNER, "            _write_kept(kept_dir, reaper.name, now, provenance, keeps)\n", "            pass\n",
+        _ids(T_RUNNER, "test_the_kept_snapshot_lists_every_keep_with_reason_and_bytes_and_none_of_the_removals")
+        + _ids(T_RESIDUE, "test_the_snapshot_lists_every_keep_with_a_reason_when_the_machine_has_not_opted_in"),
+    ),
+    "residue-pressure-paths": Mutant(
+        TEMP_RESIDUE, "    return list(dict.fromkeys(s.base for s in _sources()))", "    return []",
+        _ids(T_RESIDUE, "test_the_pressure_paths_are_the_resolved_existing_roots_without_duplicates",
+             "test_a_pressure_pass_through_the_runner_removes_dead_candidates_and_never_a_held_one"),
     ),
     "pressure-hook-stop-only": Mutant(
         HOOK_BACKUP,

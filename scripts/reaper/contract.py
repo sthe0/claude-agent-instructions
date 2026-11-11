@@ -42,13 +42,16 @@ KEEP = "keep"
 @dataclass(frozen=True)
 class Verdict:
     """One reaper's opinion on one item. ``report`` marks a kept item worth a notice;
-    ``tags`` are labels the reaper reads back in its own ``summary`` (not compared)."""
+    ``tags`` are labels the reaper reads back in its own ``summary`` (not compared);
+    ``size`` is the item's disk bytes when the reaper measured them (0 when it did not),
+    recorded in the runner's kept snapshot."""
 
     path: str
     action: str
     reason: str
     report: bool = False
     tags: "tuple[str, ...]" = field(default=(), compare=False)
+    size: int = field(default=0, compare=False)
 
 
 def _at_or_inside(container: str, candidate: str) -> bool:

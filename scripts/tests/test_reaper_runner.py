@@ -111,7 +111,8 @@ class Env:
 
 
 @pytest.fixture
-def env(tmp_path) -> Env:
+def env(tmp_path, monkeypatch) -> Env:
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
     return Env(tmp_path.resolve())
 
 
@@ -293,7 +294,7 @@ def test_removal_is_logged_before_remove_runs(env):
     assert [[r["path"] for r in snapshot] for snapshot in seen] == [[str(env.item)]]
     record = env.log_records()[0]
     assert (record["reaper"], record["layer"], record["reason"]) == ("a", "builtin", "stale one")
-    assert set(record) == {"ts", "reaper", "layer", "path", "reason"}
+    assert set(record) == {"ts", "reaper", "layer", "path", "reason", "trigger"}
 
 
 def test_scan_exception_cancels_every_removal_and_advances_no_stamp(env):
@@ -442,12 +443,19 @@ def test_only_dry_run_lists_just_that_reaper(env):
     assert out.splitlines() == [f"b KEEP {env.tmp / 'elsewhere'} (in use)"]
 
 
-def test_summary_line_is_printed_for_due_reapers_but_not_in_dry_run(env):
+def test_summary_line_is_printed_for_due_reapers_and_in_a_dry_run(env):
     a = Fake("a", [], summary_line="a: something to look at")
     out, _ = env.run([a])
     assert out.strip() == "a: something to look at"
     out, _ = env.run([a], dry_run=True)
-    assert "something to look at" not in out
+    assert out.strip() == "a: something to look at"
+
+
+def test_a_summary_is_not_printed_for_a_reaper_that_is_not_selected_in_a_dry_run(env):
+    a = Fake("a", [], summary_line="a: look")
+    b = Fake("b", [], summary_line="b: look")
+    out, _ = env.run([a, b], dry_run=True, only="b")
+    assert out.strip() == "b: look"
 
 
 # ── CLI entry ─────────────────────────────────────────────────────────────
@@ -661,6 +669,101 @@ def test_tags_survive_normalization():
     tagged = types.SimpleNamespace(path="/p", action=KEEP, reason="r", report=False, tags=["unbacked"])
     untagged = types.SimpleNamespace(path="/q", action=KEEP, reason="r")
     assert [v.tags for v in runner._normalize([tagged, untagged])] == [("unbacked",), ()]
+
+
+def test_size_survives_normalization_and_defaults_to_zero():
+    sized = types.SimpleNamespace(path="/p", action=KEEP, reason="r", size=4096)
+    unsized = types.SimpleNamespace(path="/q", action=KEEP, reason="r")
+    assert [v.size for v in runner._normalize([sized, unsized])] == [4096, 0]
+
+
+# ── trigger, invocation id and the kept snapshot ──────────────────────────
+
+def run_live(env, fakes, *, force_run=False, dry_run=False, kept=True):
+    out, err = io.StringIO(), io.StringIO()
+    runner.execute_pass(
+        [f.reaper for f in fakes], env.ctx(dry_run=dry_run),
+        dry_run=dry_run, force_run=force_run, only=None,
+        stamps=env.stamps, log_path=env.log, out=out, err=err,
+        kept_dir=env.tmp / "kept" if kept else None,
+    )
+    return out.getvalue(), err.getvalue()
+
+
+def kept_snapshot(env, name):
+    return json.loads((env.tmp / "kept" / f"{name}.json").read_text(encoding="utf-8"))
+
+
+def test_a_pass_under_systemd_records_trigger_unit_and_the_invocation_id_in_row_and_snapshot(env, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "0123abcd")
+    a = Fake("a", [rm(env.item), keep(env.tmp / "other", "busy")])
+    run_live(env, [a])
+    [row] = env.log_records()
+    snapshot = kept_snapshot(env, "a")
+    assert (row["trigger"], row["invocation_id"]) == ("unit", "0123abcd")
+    assert (snapshot["trigger"], snapshot["invocation_id"]) == ("unit", "0123abcd")
+
+
+def test_a_pass_outside_systemd_records_no_invocation_id(env):
+    a = Fake("a", [rm(env.item), keep(env.tmp / "other", "busy")])
+    run_live(env, [a])
+    [row] = env.log_records()
+    snapshot = kept_snapshot(env, "a")
+    assert "invocation_id" not in row and "invocation_id" not in snapshot
+    assert (row["trigger"], snapshot["trigger"]) == ("hook", "hook")
+
+
+def test_a_manual_pass_records_trigger_manual(env):
+    a = Fake("a", [rm(env.item)])
+    run_live(env, [a], force_run=True)
+    assert env.log_records()[0]["trigger"] == "manual"
+
+
+def test_the_kept_snapshot_lists_every_keep_with_reason_and_bytes_and_none_of_the_removals(env):
+    other = env.tmp / "other"
+    kept_verdict = types.SimpleNamespace(path=str(other), action=KEEP, reason="busy: held", size=123)
+    removed = types.SimpleNamespace(path=str(env.item), action=REMOVE, reason="stale", size=9)
+    a = Fake("a", [])
+    a.verdicts = [kept_verdict, removed]
+    run_live(env, [a])
+    snapshot = kept_snapshot(env, "a")
+    assert snapshot["kept"] == [{"path": str(other), "reason": "busy: held", "bytes": 123}]
+    assert snapshot["reaper"] == "a" and snapshot["pass_time"].endswith("+00:00")
+
+
+def test_a_remove_vetoed_by_another_reaper_appears_in_the_snapshot_as_a_keep(env):
+    a, b = Fake("a", [rm(env.item)]), Fake("b", [keep(env.item, "in use")])
+    run_live(env, [a, b])
+    assert kept_snapshot(env, "a")["kept"] == [{"path": str(env.item), "reason": "kept by b", "bytes": 0}]
+
+
+def test_the_kept_snapshot_is_replaced_by_each_pass_not_appended_to(env):
+    a = Fake("a", [keep(env.tmp / "one", "busy")])
+    run_live(env, [a], force_run=True)
+    a.verdicts = [keep(env.tmp / "two", "busy")]
+    run_live(env, [a], force_run=True)
+    assert [k["path"] for k in kept_snapshot(env, "a")["kept"]] == [str(env.tmp / "two")]
+    assert sorted(p.name for p in (env.tmp / "kept").iterdir()) == ["a.json"]
+
+
+def test_no_snapshot_is_written_when_the_reaper_is_not_due(env):
+    a = Fake("a", [keep(env.tmp / "one", "busy")])
+    env.stamp("a", NOW)
+    run_live(env, [a])
+    assert not (env.tmp / "kept").exists()
+
+
+def test_a_dry_run_writes_no_kept_snapshot_and_no_removal_row(env):
+    a = Fake("a", [rm(env.item), keep(env.tmp / "one", "busy")])
+    run_live(env, [a], dry_run=True)
+    assert not (env.tmp / "kept").exists() and env.log_records() == [] and not env.stamps.exists()
+
+
+def test_main_writes_the_kept_snapshot_under_the_config_root(hermetic):
+    a = Fake("a", [keep(hermetic / "one", "busy")])
+    assert runner.main(["--force-run"], discover=lambda project, warn: [a.reaper]) == 0
+    snapshot = json.loads((hermetic / "config" / "reaper" / "kept" / "a.json").read_text(encoding="utf-8"))
+    assert snapshot["kept"][0]["path"] == str(hermetic / "one")
 
 
 # ── mutation catalogue ────────────────────────────────────────────────────

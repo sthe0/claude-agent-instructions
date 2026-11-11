@@ -12,9 +12,9 @@ A reaper is a Python module in one of the three layers below, defining:
 |---|---|
 | `NAME` | unique string; the identity used for override, `--only`, stamps and the log |
 | `THROTTLE_HOURS` | minimum hours between real passes of this reaper; a finite number above 0 (default 24) |
-| `scan(ctx) -> list[Verdict]` | one `Verdict(path, action, reason, report=False)` per item it has an opinion on; `action` is `remove` or `keep`. No side effect beyond best-effort bookkeeping that checks `ctx.dry_run` and `ctx.due` |
+| `scan(ctx) -> list[Verdict]` | one `Verdict(path, action, reason, report=False, tags=(), size=0)` per item it has an opinion on; `action` is `remove` or `keep`; `size` is the item's disk bytes when the reaper measured them (recorded in the kept snapshot). No side effect beyond best-effort bookkeeping that checks `ctx.dry_run` and `ctx.due` |
 | `remove(path, ctx)` | delete one item the runner approved. Raise, or return `False`, when it did not happen |
-| `summary(verdicts) -> str \| None` | optional; one line for the SessionStart notice (the `git-worktrees` reaper uses it for worktrees kept for over a week, and for branches origin lacks) |
+| `summary(verdicts) -> str \| None` | optional; the text of the SessionStart notice, printed after each pass in which the reaper was due, and after a dry run (the `git-worktrees` reaper uses it for worktrees kept for over a week, and for branches origin lacks; `temp-residue` prints a multi-line report) |
 | `upkeep(ctx) -> list[str]` | optional; work that is not a removal and must run on every trigger rather than on the throttle (the `git-worktrees` reaper backs up unpushed branches). Returns report lines; honours `ctx.dry_run`. Called **only** by `--upkeep-only`, never by a plain pass |
 | `pressure_paths(ctx) -> list[str]` | optional; the paths whose free space this reaper can relieve. A reaper without it is never triggered by disk pressure (see [Disk pressure](#disk-pressure)) |
 
@@ -41,16 +41,17 @@ Files starting with `_` are not reapers. A module that fails to import, calls `s
 1. **Throttle.** Each reaper has its own stamp, `~/.local/state/claude-reaper/<NAME>.stamp`. A pass starts when at least one selected reaper is due; if none is, the runner prints `throttled: within window` to stderr and does nothing.
 2. **Every reaper scans, due or not.** A reaper that is not due cannot remove anything, but its `keep` verdicts still count.
 3. **Keep wins.** Verdicts are joined by real path. A path is removed only if no reaper says `keep` for it, for anything inside it, or for a directory containing it (compared by path component, so `/a/item` does not contain `/a/item-2`), a due reaper proposed `remove`, and then **once**, even when two reapers propose it.
-4. **Log before removal.** Before each `remove`, one JSON line `{ts, reaper, layer, path, reason}` is appended to `<config root>/reaper/removed.jsonl`.
-5. **Error isolation.** A `scan` exception cancels **every** removal of the pass (a reaper that cannot see cannot be outvoted by one that can), prints one stderr line and advances no stamp. The same cancellation applies when a module was skipped at discovery, and when a session-scope record could not be read (an owner may be missing; the registry is loaded strictly). A dry run then prints each `remove` as `KEEP ... (pass cancelled: <why>)`. A `remove` exception, or a `False` return, keeps that path, prints one stderr line and leaves that reaper's stamp where it was; other reapers carry on.
-6. **SessionStart mode always exits 0**, whatever a reaper or the runner does.
+4. **Log before removal.** Before each `remove`, one JSON line `{ts, reaper, layer, path, reason, trigger[, invocation_id]}` is appended to `<config root>/reaper/removed.jsonl`. `trigger` says how the pass started: `unit` when `INVOCATION_ID` is set (a systemd unit; that value is also recorded as `invocation_id`, which is absent otherwise), else `pressure` (`--on-pressure`), `manual` (`--dry-run`, `--force-run` or `--only`) or `hook` (SessionStart).
+5. **Kept snapshot.** After each live pass, for every reaper that was due and whose scan did not fail, `<config root>/reaper/kept/<NAME>.json` is replaced atomically (temporary file, then `os.replace`) with `{reaper, pass_time, trigger[, invocation_id], kept: [{path, reason, bytes}]}`: every keep of the pass, including a remove another reaper vetoed (`kept by <other NAME>`) and excluding what was removed. It is a snapshot, not a log: a timer re-judges the same items on every pass. A dry run writes none. Writing it is best effort.
+6. **Error isolation.** A `scan` exception cancels **every** removal of the pass (a reaper that cannot see cannot be outvoted by one that can), prints one stderr line and advances no stamp. The same cancellation applies when a module was skipped at discovery, and when a session-scope record could not be read (an owner may be missing; the registry is loaded strictly). A dry run then prints each `remove` as `KEEP ... (pass cancelled: <why>)`. A `remove` exception, or a `False` return, keeps that path, prints one stderr line and leaves that reaper's stamp where it was; other reapers carry on.
+7. **SessionStart mode always exits 0**, whatever a reaper or the runner does.
 
 ## Modes
 
 | Invocation | Effect |
 |---|---|
 | `hook-reaper.py` | SessionStart mode: throttled, real removals, stamps advanced on a clean pass |
-| `--dry-run` | Evaluates every selected reaper regardless of stamps and changes nothing (no removal, no log, no stamp, no dead-letter). Prints `<NAME> REMOVE\|KEEP <path> (<reason>)` per verdict; a remove overridden by another reaper prints as `KEEP ... (kept by <other NAME>)` |
+| `--dry-run` | Evaluates every selected reaper regardless of stamps and changes nothing (no removal, no log, no stamp, no dead-letter). Prints `<NAME> REMOVE\|KEEP <path> (<reason>)` per verdict; a remove overridden by another reaper prints as `KEEP ... (kept by <other NAME>)`. After the verdict lines it prints each due reaper's `summary()`, so the report of what a live pass would act on is readable without a live pass |
 | `--force-run` | A real run that ignores stamps, and writes none. No effect with `--dry-run` |
 | `--only NAME` | Restricts the run to one reaper: only it is due and can remove, the others still scan and veto, and only its lines print in a dry run. An unknown name exits 2 |
 | `--list` | Lists the discovered reapers and exits |
@@ -134,15 +135,53 @@ pytest's own 3-day lock timeout is not used as the age: it is too long to bound 
 
 Residuals, named rather than hidden: a pid written by a process in another PID namespace that shares this temp root looks dead here, and its directory is removed once it is over 2 hours idle with no cwd visible; a run started with an explicit `--basetemp` lives outside the root and is never seen; `garbage-*` and other non-numbered leftovers in the root are not reaped; a live run that has touched nothing for over 2 hours and whose lock was removed is protected only by the cwd scan.
 
+## The `temp-residue` reaper
+
+Source: `scripts/reaper/builtin/temp_residue.py`, proof in `scripts/reaper/liveness.py`, switch in `scripts/reaper/opt_in.py`. Test and session runs leave directories in shared temp roots that nothing reclaims; on a busy machine they fill the volume. The reaper removes one only on a proof of death, never on age alone.
+
+**Where it looks.** Three kinds, each a direct child of its root, matched by full name (`<prefix>.[A-Za-z0-9_-]+`):
+
+| Kind | Root |
+|---|---|
+| `instruction-sandbox.*` | `/tmp` and the session temp root (`tempfile.gettempdir()` at pass time, so `TMPDIR` decides) |
+| `tmp.*` | the session temp root |
+| `sbx.*` | `<agent home>/jobs/<job>/tmp` for each job |
+
+Each root is resolved with `os.path.realpath` and scanned once however many ways it is named; the walk and its device reference come from the resolved root. The roots are the reaper's `pressure_paths`, so a [pressure pass](#disk-pressure) makes it due ahead of its 24-hour throttle, under the same rules.
+
+**Proof of death (`liveness.judge_residue`).** A candidate is removable only when all of these hold; the first that fails decides the keep slug:
+
+| Slug | Keeps the candidate when |
+|---|---|
+| `not-a-directory` | it is a symlink or a plain file (lstat, never followed) |
+| `foreign-owner` | its uid is not the current user's |
+| `session-owned` | a live scope record owns it (`ctx.owned_path`) |
+| `mount-inside` | a mount point from `/proc/self/mountinfo` is at or inside it, or the walk meets an entry on another device |
+| `nested-git` | a `.git` entry is inside it |
+| `held` | a process has its cwd, exe, an open fd or a mapped file (`/proc/<pid>/maps`) at or inside it; the keep text names the holder kinds |
+| `holder-sweep-incomplete` | a same-user `/proc` entry could not be read, or `/proc` could not be listed, so a holder cannot be ruled out. A process that vanished mid-sweep holds nothing; processes of other users are skipped and counted |
+| `idle-floor` | the newest `max(mtime, ctime)` of anything in the tree is younger than the floor |
+| `os-error` | any exception while judging; the text goes to the kept snapshot only |
+
+The walk never follows a symlink and does not cross a filesystem boundary. The floor, `IDLE_FLOOR_SECONDS`, is 3 days and a constant of the module: no environment variable or config key moves it.
+
+**Opt-in.** The reaper deletes only on a machine whose owner wrote `temp-residue = true` in `<agent home>/reaper/opt-in.toml` (the boolean `true` only; a missing file, a missing key, a string or `1` all mean off). With it off, a live pass keeps every candidate it would have removed (`opt-in-off-would-remove`), `remove()` refuses, and a dry run still shows those as `REMOVE`, so the owner sees what enabling would do. The summary and the kept snapshot show the same candidates.
+
+**Removal.** `remove()` re-judges the candidate with a fresh `/proc` sweep and then deletes it through the parent's directory fd (`liveness.remove_tree`: `chmod u+rwx` and retry on an unwritable directory, never following a symlink; a vanished name is success).
+
+**Report.** `summary()` prints one `temp-residue root=<path>` line per scanned root, one `temp-residue kind=<kind> removable=<n> removable_bytes=<b> kept=<n> kept_bytes=<b>` line per kind (zero counts included) and one `temp-residue reason=<slug> count=<n> bytes=<b>` line per keep slug present. Reasons are slugs only; paths and OS error text are in the kept snapshot. The runner prints it after a live pass in which the reaper was due and after a dry run.
+
+Residuals, named rather than hidden: a process in another PID namespace sharing the temp root is invisible to the sweep, so its directory is protected only by the idle floor; processes of other users are not examined (their directories are `foreign-owner` anyway); a candidate on another device than its root is kept as `mount-inside` rather than judged.
+
 ## Cleanup at `resolve`, not by a reaper
 
 A reaper handles residue nobody reclaimed. The workspaces of a task that finished normally are reclaimed at its end instead: `agentctl resolve` removes the clean, landed workspaces the task registered (`scripts/agentctl/workspace_cleanup.py`, report in `data['workspace_cleanup']`). Whatever it keeps (dirty, unlanded, protected, a failed teardown) stays with a stated reason and remains for the `git-worktrees` reaper above. The rule, the registry and the controls are in `scripts/agentctl/README.md` § Workspace cleanup on `resolve`. A task that never reaches `resolve` registers its workspaces and loses nothing: they stay for the reaper.
 
 ## Tests and the mutation catalogue
 
-`scripts/tests/test_reaper_runner.py`, `scripts/tests/test_reaper_git_worktrees.py`, `scripts/tests/test_reaper_agentctl_state.py`, `scripts/tests/test_reaper_pytest_basetemp.py`, `scripts/tests/test_reaper_pressure.py` and `scripts/tests/test_hook_branch_backup.py` are hermetic: throw-away git repositories, and `HOME`, the config root, the plugin dir, the project dir and `TMPDIR` redirected under `tmp_path`. A test never runs the real runner against a real checkout.
+`scripts/tests/test_reaper_runner.py`, `scripts/tests/test_reaper_git_worktrees.py`, `scripts/tests/test_reaper_agentctl_state.py`, `scripts/tests/test_reaper_pytest_basetemp.py`, `scripts/tests/test_reaper_pressure.py`, `scripts/tests/test_reaper_liveness.py`, `scripts/tests/test_reaper_temp_residue.py` and `scripts/tests/test_hook_branch_backup.py` are hermetic: throw-away git repositories, and `HOME`, the config root, the plugin dir, the project dir and `TMPDIR` redirected under `tmp_path`. A test never runs the real runner against a real checkout.
 
-`scripts/tests/reaper_mutation_control.py` holds a catalogue of named wrong versions of production lines (`keep-wins`, `error-isolation`, `removal-log-before-remove`, `realpath`, `landed-check`, `state-node-filter`, `state-age-floor`, `state-suffix-filter`, `basetemp-live-lock`, `basetemp-age-floor`, `basetemp-name-filter`, `basetemp-cwd-holder`, `basetemp-symlink`, `basetemp-foreign-uid`, `basetemp-owned-scope`, `basetemp-remove-rejudge`, `backup-push-duty`, `backup-never-force`, `backup-trunk-excluded`, `backup-skip-backed-up`, `backup-dry-run`, `backup-fail-open`, `pressure-threshold`, `pressure-keeps-veto`, `pressure-cooldown`, `pressure-no-throttle-stamp`, `pressure-disarm-on-bad-row`, `pressure-hook-spawn`, `pressure-hook-stop-only`, ...). `--mutant NAME` applies one to a scratch copy of `scripts/` and runs only its listed tests; exit **1** means killed (the anchor matched once and every listed test failed in its call phase), **0** survived, **3** anchor miss, **4** collection error, **5** a listed test was missing, errored or skipped, **6** unhandled exception. `--control` runs the same tests on the unmutated copy. The in-suite test runs the whole catalogue (about half a minute); the child runs set `REAPER_MUTATION_CHILD=1` so it skips itself. Run the first trial of the catalogue through `scripts/cap-run.sh`: it spawns a pytest per mutant.
+`scripts/tests/reaper_mutation_control.py` holds a catalogue of named wrong versions of production lines (`keep-wins`, `error-isolation`, `removal-log-before-remove`, `realpath`, `landed-check`, `state-node-filter`, `state-age-floor`, `state-suffix-filter`, `basetemp-live-lock`, `basetemp-age-floor`, `basetemp-name-filter`, `basetemp-cwd-holder`, `basetemp-symlink`, `basetemp-foreign-uid`, `basetemp-owned-scope`, `basetemp-remove-rejudge`, `backup-push-duty`, `backup-never-force`, `backup-trunk-excluded`, `backup-skip-backed-up`, `backup-dry-run`, `backup-fail-open`, `pressure-threshold`, `pressure-keeps-veto`, `pressure-cooldown`, `pressure-no-throttle-stamp`, `pressure-disarm-on-bad-row`, `pressure-hook-spawn`, `pressure-hook-stop-only`, `residue-idle-floor`, `residue-holder-cwd`, `residue-holder-fd`, `residue-holder-maps`, `residue-holder-exe`, `residue-session-owned`, `residue-owner-uid`, `residue-proc-unreadable-keeps`, `residue-mount-keep`, `residue-nested-git`, `residue-symlink`, `residue-one-fs`, `residue-root-realpath`, `residue-opt-in`, `residue-opt-in-remove`, `residue-remove-rejudge`, `residue-error-keeps`, `residue-dry-run-no-write`, `residue-summary-format`, `kept-snapshot-written`, `residue-pressure-paths`, ...). `--mutant NAME` applies one to a scratch copy of `scripts/` and runs only its listed tests; exit **1** means killed (the anchor matched once and every listed test failed in its call phase), **0** survived, **3** anchor miss, **4** collection error, **5** a listed test was missing, errored or skipped, **6** unhandled exception. `--control` runs the same tests on the unmutated copy. The in-suite test runs the whole catalogue (about half a minute); the child runs set `REAPER_MUTATION_CHILD=1` so it skips itself. Run the first trial of the catalogue through `scripts/cap-run.sh`: it spawns a pytest per mutant.
 
 ## Adding a reaper
 
