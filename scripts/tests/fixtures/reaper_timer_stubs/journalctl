@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Stub of `journalctl --user` for the tests of install-reaper-timer.sh: prints $REAPER_TIMER_STUB_JOURNAL
+# (default: nothing) whatever it is asked, and logs the call under $REAPER_TIMER_STUB_STATE when set.
+if [[ -n "${REAPER_TIMER_STUB_STATE:-}" ]]; then
+  mkdir -p "$REAPER_TIMER_STUB_STATE"
+  printf 'journalctl %s\n' "$*" >> "$REAPER_TIMER_STUB_STATE/calls.log"
+fi
+if [[ -n "${REAPER_TIMER_STUB_JOURNAL:-}" ]]; then printf '%s\n' "$REAPER_TIMER_STUB_JOURNAL"; fi
+exit 0

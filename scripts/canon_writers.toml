@@ -49,6 +49,7 @@
 "scripts/apply-settings.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "merges settings/base.json into the live settings file in the config root" }
 "scripts/configure-identity.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "writes agent-identity.local in the config root, an untracked per-machine file" }
 "scripts/install-claude-recover-systemd.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "installs a user systemd unit on this machine" }
+"scripts/install-reaper-timer.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "installs the reaper pressure timer and its user systemd units on this machine" }
 "scripts/install-mandate-timer.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "installs the agent-debt-cycle user systemd service and timer and writes their env file under ~/.config" }
 "scripts/install-git-hooks.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "points core.hooksPath at githooks/ in git config; no tracked file changes" }
 "scripts/install-reminder-hooks.sh" = { disposition = "exempt", category = "exempt-config-root", reason = "wires reminder hooks into the live settings file in the config root" }

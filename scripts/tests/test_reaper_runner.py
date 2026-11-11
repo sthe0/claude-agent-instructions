@@ -892,3 +892,78 @@ def test_every_catalogue_mutant_is_killed_and_the_control_is_green():
         survivors = dict(zip(names, pool.map(control.run_mutant, names)))
     assert survivors == {name: control.KILLED for name in names}
     assert control.run_control() == 0
+
+
+# ── unit-pass observation (read by install-reaper-timer.sh --check) ──────────
+
+def _unit_pass_files(hermetic):
+    return sorted((hermetic / "config" / "reaper" / "unit-pass").glob("*.json"))
+
+
+def _force_run_main(hermetic, monkeypatch, reaper):
+    monkeypatch.setattr(runner, "stamp_dir", lambda: hermetic / "stamps")
+    return runner.main(["--force-run"], discover=lambda project, warn: [reaper])
+
+
+def test_a_unit_pass_records_what_it_saw(hermetic, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    monkeypatch.setenv("TMPDIR", str(hermetic))
+    monkeypatch.setattr("tempfile.tempdir", None)
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/s")
+    monkeypatch.delenv("SSH_AGENT_PID", raising=False)
+    monkeypatch.delenv("GIT_ASKPASS", raising=False)
+    monkeypatch.delenv("SSH_ASKPASS", raising=False)
+    assert _force_run_main(hermetic, monkeypatch, Fake("a", []).reaper) == 0
+    [path] = _unit_pass_files(hermetic)
+    assert path.name == "feed0123.json"
+    assert json.loads(path.read_text()) == {
+        "invocation_id": "feed0123", "tmpdir": str(hermetic), "agent_home": str(hermetic / "config"),
+        "credentials_present": {"SSH_AUTH_SOCK": True, "SSH_AGENT_PID": False, "GIT_ASKPASS": False, "SSH_ASKPASS": False},
+        "reapers_run": 1, "errors": 0,
+    }
+
+
+def test_no_observation_is_written_outside_systemd(hermetic, monkeypatch):
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    assert _force_run_main(hermetic, monkeypatch, Fake("a", []).reaper) == 0
+    assert _unit_pass_files(hermetic) == []
+
+
+def test_a_dry_run_under_systemd_writes_no_observation(hermetic, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    monkeypatch.setattr(runner, "stamp_dir", lambda: hermetic / "stamps")
+    assert runner.main(["--dry-run"], discover=lambda project, warn: [Fake("a", []).reaper]) == 0
+    assert _unit_pass_files(hermetic) == []
+
+
+def test_reapers_run_counts_the_scans_that_completed_and_errors_the_failed_ones(hermetic, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    monkeypatch.setattr(runner, "stamp_dir", lambda: hermetic / "stamps")
+    good, bad = Fake("good", []), Fake("bad", scan_exc=RuntimeError("x"))
+    runner.main(["--force-run"], discover=lambda project, warn: [good.reaper, bad.reaper])
+    seen = json.loads(_unit_pass_files(hermetic)[0].read_text())
+    assert (seen["reapers_run"], seen["errors"]) == (1, 1)
+
+
+def test_a_runner_error_under_systemd_still_leaves_an_observation_with_an_error(hermetic, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "feed0123")
+
+    def explode(project, warn):
+        raise RuntimeError("boom")
+
+    assert runner.main(["--force-run"], discover=explode) == 1
+    seen = json.loads(_unit_pass_files(hermetic)[0].read_text())
+    assert (seen["reapers_run"], seen["errors"]) == (0, 1)
+
+
+def test_only_the_newest_fifty_observations_are_kept(hermetic, monkeypatch):
+    directory = hermetic / "config" / "reaper" / "unit-pass"
+    directory.mkdir(parents=True)
+    for index in range(60):
+        old = directory / f"old{index:02d}.json"
+        old.write_text("{}")
+        os.utime(old, (1_000_000 + index, 1_000_000 + index))
+    monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    _force_run_main(hermetic, monkeypatch, Fake("a", []).reaper)
+    names = {path.name for path in _unit_pass_files(hermetic)}
+    assert len(names) == runner.UNIT_PASS_KEEP and "feed0123.json" in names and "old00.json" not in names
