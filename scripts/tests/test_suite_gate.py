@@ -35,6 +35,15 @@ PUSH_RIGHTS = re.compile(shared.PUSH_RIGHTS_PATTERN, re.IGNORECASE)
 
 # ── fixtures ──────────────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def _private_slots(tmp_path_factory, monkeypatch):
+    """The runner's worker slots come from a directory of this test, never the machine's."""
+    from lib import test_slots
+
+    monkeypatch.setenv(test_slots.DIR_ENV, str(tmp_path_factory.mktemp("slots")))
+    monkeypatch.delenv(test_slots.HELD_ENV, raising=False)
+
+
 def git(repo, *args, check=True):
     proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
     if check and proc.returncode != 0:
@@ -610,6 +619,52 @@ def test_a_clean_candidate_run_writes_the_record_and_the_log_tail(world):
     assert len(lines) == gate.LOG_TAIL_LINES and lines[-1] == "line 999"
 
 
+def _costed_runner(failed_by_sha):
+    """A runner that leaves a JUnit XML and a per-test report in the sandbox, as pytest would."""
+    def runner(repo, sha, root, *, select, timeout_s):
+        root = Path(root)
+        (root / gate.JUNIT_NAME).write_text(f"<testsuites name='{sha}' rerun='{bool(select)}'/>",
+                                            encoding="utf-8")
+        (root / gate.REPORT_NAME).write_text(json.dumps({"kind": "collected", "nodeid": sha}) + "\n",
+                                             encoding="utf-8")
+        ids = tuple(i for i in failed_by_sha[sha] if not select or i in select)
+        return gate.SuiteRun(
+            1 if ids else 0, ids, sha, cpu_s=12.34, peak_disk_mb=321, slot_wait_s=1.5, slots_held=4,
+            slots_source="acquired", queued_at="2026-11-01T00:00:00.000Z",
+            slots_acquired_at="2026-11-01T00:00:01.500Z", timeout_started_at="2026-11-01T00:00:01.600Z",
+            pytest_argv=("cap-run.sh", "--", "pytest"), junit_path=str(root / gate.JUNIT_NAME),
+            report_path=str(root / gate.REPORT_NAME))
+    return runner
+
+
+def test_the_record_carries_the_run_cost_and_keeps_its_junit_and_test_report(world):
+    cand = world.code_commit()
+    out = world.run(_costed_runner({cand: ()}))
+    stored = json.loads(out.record_path.read_text(encoding="utf-8"))
+    assert (stored["cpu_s"], stored["peak_disk_mb"], stored["slot_wait_s"], stored["slots_held"]) == (12.3, 321, 1.5, 4)
+    assert stored["slots_source"] == "acquired" and stored["pytest_argv"] == ["cap-run.sh", "--", "pytest"]
+    assert (stored["queued_at"], stored["slots_acquired_at"], stored["timeout_started_at"]) == (
+        "2026-11-01T00:00:00.000Z", "2026-11-01T00:00:01.500Z", "2026-11-01T00:00:01.600Z")
+    junit, report = Path(stored["junit_xml"]), Path(stored["tests_jsonl"])
+    assert junit == out.record_path.with_suffix(".junit.xml") and cand in junit.read_text(encoding="utf-8")
+    assert report == out.record_path.with_suffix(".tests.jsonl") and cand in report.read_text(encoding="utf-8")
+
+
+def test_the_kept_files_are_the_candidate_runs_not_the_reruns(world):
+    cand = world.code_commit()
+    out = world.run(_costed_runner({cand: (FAILED_A,), world.base: ()}))
+    assert out.record["status"] == gate.FAIL
+    assert "rerun='False'" in Path(out.record["junit_xml"]).read_text(encoding="utf-8")
+    baseline = gate.baseline_record(world.common, world.base)
+    assert world.base in Path(baseline["junit_xml"]).read_text(encoding="utf-8") and baseline["cpu_s"] == 12.3
+
+
+def test_a_run_without_files_records_empty_paths(world):
+    cand = world.code_commit()
+    out = world.run(FakeRunner({cand: ()}))
+    assert (out.record["junit_xml"], out.record["tests_jsonl"], out.record["slots_held"]) == ("", "", 0)
+
+
 def test_the_lock_serialises_concurrent_holders(tmp_path):
     path = tmp_path / "x.lock"
     got = threading.Event()
@@ -1024,6 +1079,119 @@ def test_default_runner_reports_a_timed_out_pytest(tmp_path, monkeypatch):
     assert run.timed_out and run.pytest_exit is None
 
 
+# ── the runner's worker slots and run cost ────────────────────────────────
+
+def _slot_dir():
+    from lib import test_slots
+
+    return test_slots.configured().directory
+
+
+def _holding_fake(seen):
+    """A fake run_group that notes, while 'pytest' runs, the env it got and the slots then held."""
+    from lib import test_slots
+
+    inner = _fake_group(failed=())
+
+    def fake(argv, *, cwd, env, timeout_s, grace_s=gate.KILL_GRACE_S):
+        if Path(argv[0]).name != gate.SANDBOX_SCRIPT:
+            seen.append({"at": time.time(), "env": dict(env), "timeout_s": timeout_s,
+                         "held": test_slots.held(_slot_dir())})
+        return inner(argv, cwd=cwd, env=env, timeout_s=timeout_s, grace_s=grace_s)
+
+    return fake
+
+
+def test_a_full_run_holds_its_slots_while_pytest_runs_and_tells_pytest_how_many(tmp_path, monkeypatch):
+    from lib import test_slots
+
+    seen = []
+    monkeypatch.setattr(gate, "run_group", _holding_fake(seen))
+    root = tmp_path / "root"
+    root.mkdir()
+    run = gate.default_runner(tmp_path, SHA_A, root, select=(), timeout_s=50)
+    want = min(os.cpu_count() or 1, test_slots.DEFAULT_PER_RUN)
+    (during,) = seen
+    assert len(during["held"]) == want and {pid for _, pid in during["held"]} == {os.getpid()}
+    assert during["env"][gate.XDIST_WORKERS_ENV] == during["env"][test_slots.HELD_ENV] == str(want)
+    assert during["env"][gate.REPORT_ENV] == str(root / gate.REPORT_NAME)
+    assert (run.slots_held, run.slots_source) == (want, test_slots.ACQUIRED)
+    assert test_slots.held(_slot_dir()) == [], "the slots are released when pytest ends"
+    assert run.pytest_argv[run.pytest_argv.index("--junitxml") + 1] == str(root / gate.JUNIT_NAME)
+    assert run.queued_at <= run.slots_acquired_at <= run.timeout_started_at
+
+
+def test_the_timeout_starts_after_the_wait_for_slots(tmp_path, monkeypatch):
+    from lib import test_slots
+
+    limits = test_slots.configured()
+    blockers = [test_slots.acquire(limits.per_run, limits=limits) for _ in range(limits.total // limits.per_run)]
+    assert len(test_slots.held(limits.directory)) == limits.total
+    freed = []
+
+    def free_later():
+        time.sleep(1.0)
+        freed.append(time.time())
+        for blocker in blockers:
+            blocker.release()
+
+    seen = []
+    monkeypatch.setattr(gate, "run_group", _holding_fake(seen))
+    root = tmp_path / "root"
+    root.mkdir()
+    threading.Thread(target=free_later, daemon=True).start()
+    run = gate.default_runner(tmp_path, SHA_A, root, select=(), timeout_s=50)
+    assert run.slot_wait_s >= 0.8 and seen[0]["at"] >= freed[0]
+    assert seen[0]["timeout_s"] == 50, "the whole timeout is left after the wait"
+    assert run.slots_acquired_at <= run.timeout_started_at and run.queued_at < run.slots_acquired_at
+
+
+def test_a_serial_rerun_takes_no_slot(tmp_path, monkeypatch):
+    from lib import test_slots
+
+    limits = test_slots.configured()
+    blockers = [test_slots.acquire(limits.per_run, limits=limits) for _ in range(limits.total // limits.per_run)]
+    seen = []
+    monkeypatch.setattr(gate, "run_group", _holding_fake(seen))
+    root = tmp_path / "root"
+    root.mkdir()
+    try:
+        run = gate.default_runner(tmp_path, SHA_A, root, select=(FAILED_A,), timeout_s=50)
+    finally:
+        for blocker in blockers:
+            blocker.release()
+    assert (run.slots_held, run.slot_wait_s, run.queued_at) == (0, 0.0, "")
+    assert test_slots.HELD_ENV not in seen[0]["env"] and gate.XDIST_WORKERS_ENV not in seen[0]["env"]
+
+
+def test_a_run_inside_a_slotted_run_takes_no_more(tmp_path, monkeypatch):
+    from lib import test_slots
+
+    monkeypatch.setenv(test_slots.HELD_ENV, "3")
+    seen = []
+    monkeypatch.setattr(gate, "run_group", _holding_fake(seen))
+    root = tmp_path / "root"
+    root.mkdir()
+    run = gate.default_runner(tmp_path, SHA_A, root, select=(), timeout_s=50)
+    assert (run.slots_held, run.slots_source) == (3, test_slots.INHERITED) and seen[0]["held"] == []
+
+
+def test_the_disk_peak_samples_at_start_periodically_and_at_stop(tmp_path):
+    sizes = iter([5, 9, 7, 7, 7, 7, 7, 7, 7, 7, 7, 3])
+    with gate.DiskPeak(tmp_path, interval_s=0.01, measure=lambda _: next(sizes, 2)) as disk:
+        time.sleep(0.2)
+    assert disk.peak_mb == 9
+
+
+def test_du_measures_a_directory(tmp_path):
+    (tmp_path / "blob").write_bytes(b"x" * (3 * 1024 * 1024))
+    assert gate.disk_mb(tmp_path) >= 3 and gate.disk_mb(tmp_path / "missing") is None
+
+
+def test_iso_instant_keeps_milliseconds():
+    assert gate.iso_instant(1762992000.25) == "2025-11-13T00:00:00.250Z"
+
+
 # ── the recording plugin, on a real two-file project ──────────────────────
 
 def _plugin_project(tmp_path):
@@ -1082,14 +1250,14 @@ def test_read_failures_of_a_missing_file_is_empty(tmp_path):
 # ── configuration ─────────────────────────────────────────────────────────
 
 def test_the_default_timeout_equals_the_config_row():
-    assert gate.configured_timeout_s() == gate.DEFAULT_TIMEOUT_S == 1800
+    assert gate.configured_timeout_s() == gate.DEFAULT_TIMEOUT_S == 7200
     row = re.search(r"^\| `suite-gate-timeout-s` \| `(\d+)` \|", (REPO_DIR / "config.md").read_text(encoding="utf-8"), re.M)
     assert row and int(row.group(1)) == gate.DEFAULT_TIMEOUT_S
 
 
 def test_the_config_row_has_a_rationale_row():
     text = (REPO_DIR / "docs" / "operations" / "config-rationale.md").read_text(encoding="utf-8")
-    assert re.search(r"^\| `suite-gate-timeout-s` \| `1800` \|", text, re.M)
+    assert re.search(r"^\| `suite-gate-timeout-s` \| `7200` \|", text, re.M)
 
 
 @pytest.mark.parametrize("value,expected", [("120", 120), ("abc", gate.DEFAULT_TIMEOUT_S), ("0", gate.DEFAULT_TIMEOUT_S), ("-5", gate.DEFAULT_TIMEOUT_S), ("", gate.DEFAULT_TIMEOUT_S)])
@@ -1112,7 +1280,7 @@ def test_the_plugin_reads_the_env_var_the_runner_sets():
 def _execution(**over):
     fields = dict(root=Path("/sb"), candidate_run=None, candidate_ids=(FAILED_A,), reason="",
                   baseline={"status": gate.COMPLETE, "failures": []}, baseline_cache="built",
-                  new=(FAILED_A,), confirmation=([FAILED_A], [], ""))
+                  new=(FAILED_A,), confirmation=([FAILED_A], [], ""), kept={})
     return gate.Execution(**{**fields, **over})
 
 

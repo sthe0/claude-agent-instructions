@@ -1,0 +1,411 @@
+#!/usr/bin/env python3
+"""Control of the worker-slot limiter and of what a suite-gate run records about its cost.
+
+Difficulty removed: concurrent suite runs oversubscribed the machine and cut each other's
+timeouts, and a gate record said nothing about what a run cost or which tests it finished. These
+two checks show the limiter holds and the record carries the cost, on real processes.
+
+  gate_speedup_control.py slots-selftest [--limiter slots|none]
+      Three fake runs of 4 slots each against a private slot directory: at most 8 are ever
+      held, the third waits, and killing a holder lets it in. ``--limiter none`` bypasses the
+      limiter, so the control must fail: it prints ``LIMIT EXCEEDED: held=<n> > 8`` and exits 1.
+      Takes a few seconds; touches nothing outside its own temporary directory.
+
+  gate_speedup_control.py concurrent-gates --runs N --out PATH [-C REPO]
+      Start N ``suite-gate.py run`` at once on N throwaway commits of HEAD's tree (unreferenced
+      ``git commit-tree`` objects; the records land in the repository's suite-gate store) and
+      check each record: a verdict without timeout, pytest under scripts/cap-run.sh, slots
+      taken (1..test-slots-per-run) before the timeout started, the slot wait equal to the gap
+      between queueing and the timeout start, cpu_s, peak_disk_mb, a parsing JUnit XML, and a
+      per-test report whose collected ids equal ``--collect-only``'s. At least one run must have
+      waited for slots. Writes a JSON summary to PATH; exit 0 when every check holds, else 1.
+      Each run is a full suite, so this takes as long as the slowest queued gate.
+
+Exit 2 on a usage or environment error (not enough free disk, git failure).
+"""
+from __future__ import annotations
+
+import argparse
+import collections
+import datetime
+import fcntl
+import json
+import os
+import queue
+import shutil
+import signal
+import site
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+REPO_DIR = SCRIPTS_DIR.parent
+for _path in (SCRIPTS_DIR, SCRIPTS_DIR / "tests"):
+    if str(_path) not in sys.path:
+        sys.path.append(str(_path))
+
+import _test_report  # noqa: E402
+from lib import suite_gate as gate  # noqa: E402
+from lib import test_slots  # noqa: E402
+
+SELFTEST_TOTAL, SELFTEST_PER_RUN = 8, 4
+SELFTEST_HOLD_S = 30
+SELFTEST_POLL_S = 0.05
+SELFTEST_WAIT_S = 1.0
+MIN_FREE_GB = 10
+WAIT_TOLERANCE_S = 2.0
+LIMITERS = ("slots", "none")
+
+
+def _say(line: str) -> None:
+    print(line, flush=True)
+
+
+def _wait_for(predicate, seconds: float, step: float = SELFTEST_POLL_S):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(step)
+    return predicate()
+
+
+class HeldSampler:
+    """Polls who holds slots in a directory; keeps the largest count and every change."""
+
+    def __init__(self, directory: Path, every_s: float):
+        self.directory, self.every_s = directory, every_s
+        self.max_held = 0
+        self.timeline: list[tuple[float, int]] = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+
+    def count(self) -> int:
+        return len(test_slots.held(self.directory))
+
+    def _loop(self) -> None:
+        while True:
+            n = self.count()
+            self.max_held = max(self.max_held, n)
+            if not self.timeline or self.timeline[-1][1] != n:
+                self.timeline.append((round(time.time(), 3), n))
+            if self._stop.wait(self.every_s):
+                return
+
+    def __enter__(self) -> "HeldSampler":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        self._thread.join()
+
+
+# ── slots-selftest ────────────────────────────────────────────────────────
+
+def _fake_run(args: argparse.Namespace) -> int:
+    """One fake run: hold ``--want`` slots (or, without the limiter, as many free lock files) and sleep."""
+    directory = Path(args.dir)
+    queued = time.time()
+    if args.limiter == "slots":
+        limits = test_slots.Limits(SELFTEST_TOTAL, SELFTEST_PER_RUN, directory)
+        holder = test_slots.acquire(args.want, limits=limits, poll_s=SELFTEST_POLL_S)
+        wait_s = holder.wait_s
+    else:
+        fds = []
+        for i in range(args.want):
+            fd = os.open(directory / f"{test_slots.SLOT_PREFIX}free-{os.getpid()}-{i}", os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            fds.append(fd)
+        wait_s = time.time() - queued
+    _say(json.dumps({"pid": os.getpid(), "wait_s": round(wait_s, 3)}))
+    time.sleep(args.hold_s)
+    return 0
+
+
+class FakeRun:
+    """One fake run process; a single reader thread hands its acquisition line over a queue."""
+
+    def __init__(self, directory: Path, limiter: str, want: int):
+        self.proc = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "_fake-run", "--dir", str(directory),
+             "--want", str(want), "--hold-s", str(SELFTEST_HOLD_S), "--limiter", limiter],
+            stdout=subprocess.PIPE, text=True,
+            env={k: v for k, v in os.environ.items() if k != test_slots.HELD_ENV})
+        self.pid = self.proc.pid
+        self._lines: queue.Queue[str] = queue.Queue()
+        threading.Thread(target=lambda: self._lines.put(self.proc.stdout.readline()), daemon=True).start()
+
+    def acquired(self, seconds: float) -> dict | None:
+        """The acquisition line, if it comes within ``seconds``."""
+        try:
+            line = self._lines.get(timeout=seconds)
+        except queue.Empty:
+            return None
+        return json.loads(line) if line.strip() else None
+
+    def kill(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.kill()
+        self.proc.wait()
+
+
+class FakeRuns:
+    def __init__(self, directory: Path, limiter: str):
+        self.directory, self.limiter = directory, limiter
+        self.runs: list[FakeRun] = []
+
+    def start(self, want: int) -> FakeRun:
+        run = FakeRun(self.directory, self.limiter, want)
+        self.runs.append(run)
+        return run
+
+    def stop(self) -> None:
+        for run in self.runs:
+            run.kill()
+
+
+def slots_selftest(limiter: str) -> int:
+    directory = Path(tempfile.mkdtemp(prefix="cls-slots-"))
+    runs = FakeRuns(directory, limiter)
+    problems: list[str] = []
+    try:
+        with HeldSampler(directory, SELFTEST_POLL_S) as sampler:
+            first = runs.start(SELFTEST_PER_RUN)
+            first_line = first.acquired(15)
+            second = runs.start(SELFTEST_PER_RUN)
+            second_line = second.acquired(15)
+            if not (first_line and second_line):
+                problems.append("the first two runs did not both take their slots")
+            third = runs.start(SELFTEST_PER_RUN)
+            early = third.acquired(SELFTEST_WAIT_S + 0.5)
+            if early is None:
+                os.kill(first.pid, signal.SIGKILL)
+                first.proc.wait()
+                late = third.acquired(5)
+                if late is None:
+                    problems.append("the third run did not get slots after a holder was killed")
+                elif late["wait_s"] <= 0:
+                    problems.append(f"the third run waited {late['wait_s']} s")
+                elif first.pid in {pid for _, pid in test_slots.held(directory)}:
+                    problems.append("the killed holder still holds slots")
+            else:
+                problems.append(f"the third run did not wait (wait_s={early['wait_s']})")
+            time.sleep(10 * SELFTEST_POLL_S)
+        if sampler.max_held > SELFTEST_TOTAL:
+            problems.insert(0, f"LIMIT EXCEEDED: held={sampler.max_held} > {SELFTEST_TOTAL}")
+    finally:
+        runs.stop()
+        shutil.rmtree(directory, ignore_errors=True)
+    _say(f"slots-selftest (limiter {limiter}): max held {sampler.max_held} of {SELFTEST_TOTAL}")
+    for problem in problems:
+        _say(problem)
+    _say("FAIL" if problems else "OK")
+    return 1 if problems else 0
+
+
+# ── concurrent-gates: the record checks (pure) ───────────────────────────
+
+def instant(text: str) -> float | None:
+    try:
+        return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError):
+        return None
+
+
+def reached_verdict(record: dict) -> bool:
+    """PASS or FAIL; UNAVAILABLE only when it is a flaky rerun, never a timeout or a broken run."""
+    if record.get("status") in (gate.PASS, gate.FAIL):
+        return True
+    return record.get("status") == gate.UNAVAILABLE and "did not fail again on rerun" in str(
+        record.get("unavailable_reason"))
+
+
+def check_record(record: dict, *, per_run: int, collect_ids: list[str]) -> list[str]:
+    """What is wrong with one gate run's record; empty when it carries everything the control needs."""
+    problems = []
+    if not reached_verdict(record):
+        problems.append(f"no verdict: {record.get('status')} {record.get('unavailable_reason')!r}")
+    argv = record.get("pytest_argv") or []
+    if not argv or Path(argv[0]).name != "cap-run.sh":
+        problems.append(f"pytest did not run under cap-run.sh: {argv[:1]}")
+    if record.get("slots_source") != test_slots.ACQUIRED or not 1 <= (record.get("slots_held") or 0) <= per_run:
+        problems.append(f"no slots taken: source={record.get('slots_source')!r} held={record.get('slots_held')}")
+    queued, acquired, started = (instant(record.get(k, "")) for k in
+                                 ("queued_at", "slots_acquired_at", "timeout_started_at"))
+    if None in (queued, acquired, started):
+        problems.append("an instant is missing")
+    else:
+        if not queued <= acquired <= started:
+            problems.append("the timeout started before the slots were held")
+        wait = record.get("slot_wait_s")
+        if not isinstance(wait, (int, float)) or abs((started - queued) - wait) > WAIT_TOLERANCE_S:
+            problems.append(f"slot_wait_s {wait} is not timeout_started_at - queued_at ({started - queued:.1f})")
+    if not (isinstance(record.get("cpu_s"), (int, float)) and record["cpu_s"] > 0):
+        problems.append(f"cpu_s missing or zero: {record.get('cpu_s')}")
+    if not isinstance(record.get("peak_disk_mb"), int):
+        problems.append(f"peak_disk_mb missing: {record.get('peak_disk_mb')}")
+    junit = record.get("junit_xml") or ""
+    try:
+        ET.parse(junit)
+    except (OSError, ET.ParseError) as exc:
+        problems.append(f"JUnit XML {junit!r} does not parse: {exc}")
+    report = record.get("tests_jsonl") or ""
+    try:
+        lines = _test_report.read_lines(report)
+    except OSError as exc:
+        problems.append(f"per-test report {report!r} unreadable: {exc}")
+        return problems
+    collected = _test_report.collected_ids(lines)
+    duplicated = [i for i, n in collections.Counter(collected).items() if n > 1]
+    if duplicated:
+        problems.append(f"{len(duplicated)} id(s) collected more than once, e.g. {duplicated[0]}")
+    if collections.Counter(collected) != collections.Counter(collect_ids):
+        missing = sorted(set(collect_ids) - set(collected))
+        extra = sorted(set(collected) - set(collect_ids))
+        problems.append(f"collected ids differ from --collect-only: {len(missing)} missing, {len(extra)} extra"
+                        + (f", e.g. {(missing or extra)[0]}" if missing or extra else ""))
+    if record.get("status") == gate.PASS:
+        unfinished = sorted(set(collected) - _test_report.finished_ids(lines))
+        if unfinished:
+            problems.append(f"{len(unfinished)} collected test(s) have no terminal line, e.g. {unfinished[0]}")
+    return problems
+
+
+def check_runs(records: list[dict], *, max_held: int, total: int) -> list[str]:
+    """What is wrong across the concurrent runs: the machine limit and the queue."""
+    problems = []
+    if max_held > total:
+        problems.append(f"LIMIT EXCEEDED: held={max_held} > {total}")
+    waits = [r.get("slot_wait_s") or 0 for r in records]
+    if not any(w > 0 for w in waits):
+        problems.append(f"no run waited for slots: slot_wait_s {waits}")
+    return problems
+
+
+# ── concurrent-gates: the edges ───────────────────────────────────────────
+
+def _git(repo: Path, *args: str) -> str:
+    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise SystemExit(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
+    return proc.stdout.strip()
+
+
+def collect_only_ids(repo: Path, sha: str) -> list[str]:
+    """The node ids ``pytest --collect-only -q`` prints for ``sha``, in a sandbox like the gate's."""
+    root = Path(tempfile.mkdtemp(prefix=gate.SANDBOX_PREFIX, dir=gate.SANDBOX_PARENT))
+    try:
+        build = subprocess.run(
+            [str(SCRIPTS_DIR / gate.SANDBOX_SCRIPT), "--source", str(repo), "--core-ref", sha, "--root", str(root)],
+            capture_output=True, text=True, env=gate.shared.clean_env(), timeout=gate.BUILD_TIMEOUT_S)
+        if build.returncode != 0:
+            raise SystemExit(f"sandbox build for --collect-only failed: {build.stdout[-400:]}{build.stderr[-400:]}")
+        (root / "tmp").mkdir(exist_ok=True)
+        env = gate.suite_env(root, site.getuserbase(), root / "failures.txt",
+                             gate.sandbox_scrub_names(SCRIPTS_DIR / gate.SANDBOX_SCRIPT))
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "scripts/tests", "--collect-only", "-q", "-p", "no:xdist",
+             "-p", "no:cacheprovider", "--continue-on-collection-errors", "--rootdir", str(root / "core")],
+            cwd=root / "core", env=env, capture_output=True, text=True, timeout=1800)
+    finally:
+        gate.remove_sandbox(root, gate.SANDBOX_PARENT)
+    ids = []
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            break
+        if "::" in line:
+            ids.append(line)
+    if not ids:
+        raise SystemExit(f"--collect-only printed no ids (exit {proc.returncode}): {proc.stdout[-400:]}")
+    return ids
+
+
+def _record_path(output: str) -> str:
+    for line in output.splitlines():
+        if line.startswith("RECORD: "):
+            return line[len("RECORD: "):].strip()
+    return ""
+
+
+def concurrent_gates(repo: Path, runs: int, out: Path) -> int:
+    free_gb = shutil.disk_usage("/").free / 2**30
+    if free_gb < MIN_FREE_GB:
+        _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
+        return 2
+    tip = _git(repo, "merge-base", "HEAD", "origin/main")
+    nonce = f"{os.getpid()}-{int(time.time())}"
+    candidates = [_git(repo, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", f"cls-control {n} {nonce}")
+                  for n in range(1, runs + 1)]
+    _say(f"tip {tip[:12]}; candidates {' '.join(c[:12] for c in candidates)}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    limits = test_slots.configured()
+    env = {k: v for k, v in os.environ.items() if k not in ("SOY_TOKEN", test_slots.HELD_ENV)}
+    logs = [out.with_name(f"{out.stem}.run{n}.log") for n in range(1, runs + 1)]
+    with HeldSampler(limits.directory, 1.0) as sampler:
+        procs = []
+        for sha, log in zip(candidates, logs):
+            procs.append(subprocess.Popen(
+                [sys.executable, str(SCRIPTS_DIR / "suite-gate.py"), "run", "-C", str(repo), "--ref", sha,
+                 "--remote-sha", tip],
+                stdout=log.open("w", encoding="utf-8"), stderr=subprocess.STDOUT, env=env))
+        exits = [proc.wait() for proc in procs]
+    collect_ids = collect_only_ids(repo, candidates[0])
+    results, records = [], []
+    for sha, log, code in zip(candidates, logs, exits):
+        path = _record_path(log.read_text(encoding="utf-8", errors="replace"))
+        record = json.loads(Path(path).read_text(encoding="utf-8")) if path else {}
+        records.append(record)
+        problems = check_record(record, per_run=limits.per_run, collect_ids=collect_ids) if record else [
+            f"no record (exit {code}); see {log}"]
+        results.append({"candidate": sha, "exit": code, "record": path, "log": str(log),
+                        "status": record.get("status"), "problems": problems,
+                        **{k: record.get(k) for k in ("slots_held", "slot_wait_s", "queued_at",
+                                                      "slots_acquired_at", "timeout_started_at", "cpu_s",
+                                                      "peak_disk_mb", "duration_s", "junit_xml", "tests_jsonl")}})
+    overall = check_runs(records, max_held=sampler.max_held, total=limits.total)
+    ok = not overall and not any(r["problems"] for r in results)
+    summary = {"tip": tip, "runs": results, "max_held": sampler.max_held, "total": limits.total,
+               "slot_timeline": sampler.timeline, "collect_only_ids": len(collect_ids),
+               "problems": overall, "ok": ok}
+    out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    for r in results:
+        _say(f"{r['candidate'][:12]} {r['status']} slots={r['slots_held']} wait={r['slot_wait_s']} "
+             f"cpu={r['cpu_s']} disk={r['peak_disk_mb']}MB " + ("ok" if not r["problems"] else "; ".join(r["problems"])))
+    for problem in overall:
+        _say(problem)
+    _say(f"max held {sampler.max_held} of {limits.total}; summary {out}")
+    _say("OK" if ok else "FAIL")
+    return 0 if ok else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="gate_speedup_control.py", description=__doc__.split("\n")[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+    selftest = sub.add_parser("slots-selftest", help="three fake runs against a private slot directory")
+    selftest.add_argument("--limiter", choices=LIMITERS, default="slots")
+    gates = sub.add_parser("concurrent-gates", help="N real suite-gate runs at once")
+    gates.add_argument("--runs", type=int, default=3)
+    gates.add_argument("--out", required=True, type=Path)
+    gates.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    fake = sub.add_parser("_fake-run")
+    fake.add_argument("--dir", required=True)
+    fake.add_argument("--want", type=int, required=True)
+    fake.add_argument("--hold-s", type=float, required=True)
+    fake.add_argument("--limiter", choices=LIMITERS, required=True)
+    args = parser.parse_args(argv)
+    if args.command == "slots-selftest":
+        return slots_selftest(args.limiter)
+    if args.command == "concurrent-gates":
+        return concurrent_gates(args.repo.resolve(), args.runs, args.out)
+    return _fake_run(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -26,18 +26,21 @@ import fcntl
 import importlib.util
 import os
 import re
+import resource
 import shutil
 import signal
 import site
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Protocol, Sequence
 
 from . import landing_gate as shared
+from . import test_slots
 from .landing_gate import ADMITTED, NOT_REQUIRED, REFUSED, Decision, GateError, PrePushResult, defuse, one_line, short
 
 SCHEMA = "suite-run/v1"
@@ -52,11 +55,14 @@ SANDBOX_PARENT = "/tmp"
 SANDBOX_PREFIX = "instruction-sandbox."
 
 CONFIG_KEY = "suite-gate-timeout-s"
-DEFAULT_TIMEOUT_S = 1800  # config.md: suite-gate-timeout-s (a test keeps the two equal)
+DEFAULT_TIMEOUT_S = 7200  # config.md: suite-gate-timeout-s (a test keeps the two equal)
 BUILD_TIMEOUT_S = 600
 KILL_GRACE_S = 10
 LOG_TAIL_LINES = 400
 CAP_RUN_SLACK_S = 30
+DISK_SAMPLE_S = 60
+JUNIT_NAME = "junit.xml"
+REPORT_NAME = "tests.jsonl"
 
 PASS, FAIL, UNAVAILABLE = "PASS", "FAIL", "UNAVAILABLE"
 STATUSES = (PASS, FAIL, UNAVAILABLE)
@@ -70,6 +76,8 @@ EXEMPT_SUFFIX = ".md"
 RUN_COMMAND = "python3 scripts/suite-gate.py run"
 
 FAILURES_ENV = "SUITE_GATE_FAILURES"
+REPORT_ENV = "CORE_TEST_REPORT"  # scripts/tests/_test_report.py
+XDIST_WORKERS_ENV = "PYTEST_XDIST_AUTO_NUM_WORKERS"
 PLUGIN_MODULE = "suite_gate_plugin"
 PLUGIN_SOURCE = '''\
 """pytest plugin of the suite gate: record the node id of every failed test and collection."""
@@ -175,6 +183,17 @@ class SuiteRun:
     log_tail: str = ""
     build_s: float = 0.0
     duration_s: float = 0.0
+    cpu_s: float = 0.0
+    peak_disk_mb: int | None = None
+    slot_wait_s: float = 0.0
+    slots_held: int = 0
+    slots_source: str = ""
+    queued_at: str = ""
+    slots_acquired_at: str = ""
+    timeout_started_at: str = ""
+    pytest_argv: tuple[str, ...] = ()
+    junit_path: str = ""
+    report_path: str = ""
 
 
 class Runner(Protocol):
@@ -287,6 +306,34 @@ def usable_baseline(record: object, tip: str) -> bool:
         and record.get("sandbox_core_sha") == tip
         and isinstance(record.get("failures"), list)
     )
+
+
+def keep_run_files(run: SuiteRun, common_dir: Path, dirname: str, sha: str) -> dict[str, str]:
+    """Copy the run's JUnit XML and per-test report beside its record, before the sandbox goes."""
+    kept = {"junit_xml": "", "tests_jsonl": ""}
+    for key, source, suffix in (("junit_xml", run.junit_path, ".junit.xml"),
+                                ("tests_jsonl", run.report_path, ".tests.jsonl")):
+        if source and Path(source).is_file():
+            target = shared.record_path(common_dir, dirname, sha).with_suffix(suffix)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            kept[key] = str(target)
+    return kept
+
+
+def cost_fields(run: SuiteRun) -> dict:
+    """What a run cost and when its slots and timeout started; a run that held no slot has no wait."""
+    return {
+        "cpu_s": round(run.cpu_s, 1),
+        "peak_disk_mb": run.peak_disk_mb,
+        "slot_wait_s": round(run.slot_wait_s, 3),
+        "slots_held": run.slots_held,
+        "slots_source": run.slots_source,
+        "queued_at": run.queued_at,
+        "slots_acquired_at": run.slots_acquired_at,
+        "timeout_started_at": run.timeout_started_at,
+        "pytest_argv": list(run.pytest_argv),
+    }
 
 
 def _write_log(common_dir: Path, dirname: str, sha: str, tail: str) -> str:
@@ -461,8 +508,66 @@ def pytest_argv(root: Path, select: Sequence[str], timeout_s: int) -> list[str]:
         str(cap_run), "--timeout", str(timeout_s + KILL_GRACE_S + CAP_RUN_SLACK_S), "--",
         sys.executable, "-m", "pytest", *(select or ["scripts/tests"]),
         "-q", "--continue-on-collection-errors", "--rootdir", str(root / "core"),
-        "-p", PLUGIN_MODULE, "-p", "no:cacheprovider",
+        "-p", PLUGIN_MODULE, "-p", "no:cacheprovider", "--junitxml", str(root / JUNIT_NAME),
     ]
+
+
+def iso_instant(epoch_s: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(epoch_s)) + f".{int(epoch_s % 1 * 1000):03d}Z"
+
+
+def _children_cpu_s() -> float:
+    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return usage.ru_utime + usage.ru_stime
+
+
+def disk_mb(path: Path) -> int | None:
+    """Megabytes ``du -sxm`` reports for ``path`` (one filesystem), or None when du fails."""
+    proc = subprocess.run(["du", "-sxm", str(path)], capture_output=True, text=True)
+    try:
+        return int(proc.stdout.split()[0])
+    except (IndexError, ValueError):
+        return None
+
+
+class DiskPeak:
+    """The largest size of a directory, sampled at start, every ``interval_s`` and at stop."""
+
+    def __init__(self, path: Path, interval_s: float = DISK_SAMPLE_S, measure=disk_mb):
+        self._path, self._interval_s, self._measure = path, interval_s, measure
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self.peak_mb: int | None = None
+
+    def _sample(self) -> None:
+        mb = self._measure(self._path)
+        if mb is not None and (self.peak_mb is None or mb > self.peak_mb):
+            self.peak_mb = mb
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self._interval_s):
+            self._sample()
+
+    def __enter__(self) -> "DiskPeak":
+        self._sample()
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        self._thread.join()
+        self._sample()
+
+
+def _hold_slots(xdist_ok: bool, select: Sequence[str]) -> test_slots.Holder | None:
+    """Worker slots for a full parallel run, waiting in the machine-wide queue; a serial run takes none."""
+    if select or not xdist_ok:
+        return None
+    limits = test_slots.configured()
+    want = os.cpu_count() or 1
+    return test_slots.acquire(
+        want, limits=limits,
+        on_wait=lambda holders: print(test_slots.describe_wait(want, limits, holders), file=sys.stderr, flush=True))
 
 
 def read_failures(path: Path) -> tuple[str, ...]:
@@ -497,15 +602,39 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
     (root / "plugin" / f"{PLUGIN_MODULE}.py").write_text(PLUGIN_SOURCE, encoding="utf-8")
     (root / "tmp").mkdir(exist_ok=True)
     failures_file = root / "failures.txt"
-    failures_file.unlink(missing_ok=True)
+    junit, report = root / JUNIT_NAME, root / REPORT_NAME
+    for stale in (failures_file, junit, report):
+        stale.unlink(missing_ok=True)
     env = suite_env(root, userbase, failures_file, sandbox_scrub_names(scripts / SANDBOX_SCRIPT))
-    ran = time.monotonic()
-    code, out, timed_out = run_group(pytest_argv(root, select, timeout_s), cwd=root / "core", env=env,
-                                     timeout_s=timeout_s)
+    env[REPORT_ENV] = str(report)
+    argv = pytest_argv(root, select, timeout_s)
+    holder = _hold_slots(xdist_ok, select)
+    try:
+        if holder is not None:
+            env[XDIST_WORKERS_ENV] = env[test_slots.HELD_ENV] = str(holder.count)
+        cpu_before = _children_cpu_s()
+        timeout_started = time.time()
+        ran = time.monotonic()
+        with DiskPeak(root) as disk:
+            code, out, timed_out = run_group(argv, cwd=root / "core", env=env, timeout_s=timeout_s)
+        duration_s = time.monotonic() - ran
+        cpu_s = _children_cpu_s() - cpu_before
+    finally:
+        if holder is not None:
+            holder.release()
     return SuiteRun(
         None if timed_out else code, read_failures(failures_file), core_sha, timed_out, True, xdist_ok,
         log_tail="\n".join(out.splitlines()[-LOG_TAIL_LINES:]), build_s=build_s,
-        duration_s=time.monotonic() - ran,
+        duration_s=duration_s, cpu_s=cpu_s, peak_disk_mb=disk.peak_mb,
+        slot_wait_s=holder.wait_s if holder else 0.0,
+        slots_held=holder.count if holder else 0,
+        slots_source=holder.source if holder else "",
+        queued_at=iso_instant(holder.queued_at) if holder else "",
+        slots_acquired_at=iso_instant(holder.acquired_at) if holder else "",
+        timeout_started_at=iso_instant(timeout_started),
+        pytest_argv=tuple(argv),
+        junit_path=str(junit) if junit.is_file() else "",
+        report_path=str(report) if report.is_file() else "",
     )
 
 
@@ -554,6 +683,7 @@ def _baseline(repo: Path, tip: str, common_dir: Path, runner: Runner, timeout_s:
         try:
             run = runner(repo, tip, root, select=(), timeout_s=timeout_s)
             ids, reason = classify(run, tip)
+            kept = keep_run_files(run, common_dir, BASELINE_DIR, tip)
             record = {
                 "schema": BASELINE_SCHEMA,
                 "tip_sha": tip,
@@ -567,6 +697,8 @@ def _baseline(repo: Path, tip: str, common_dir: Path, runner: Runner, timeout_s:
                 "failures": list(ids),
                 "unavailable_reason": reason,
                 "log": _write_log(common_dir, BASELINE_DIR, tip, run.log_tail),
+                **cost_fields(run),
+                **kept,
             }
             shared.write_record(common_dir, BASELINE_DIR, tip, record)
             return record, "built"
@@ -595,6 +727,7 @@ class Execution:
     baseline_cache: str
     new: tuple[str, ...]
     confirmation: tuple[list[str], list[str], str] | None
+    kept: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -613,6 +746,7 @@ def _execute(repo: Path, candidate_sha: str, tip: str, common_dir: Path, run: Ru
     try:
         candidate_run = run(repo, candidate_sha, root, select=(), timeout_s=limit)
         candidate_ids, reason = classify(candidate_run, candidate_sha)
+        kept = keep_run_files(candidate_run, common_dir, RECORD_DIR, candidate_sha)
         baseline, baseline_cache = None, "none"
         new: list[str] = []
         confirmation = None
@@ -623,7 +757,7 @@ def _execute(repo: Path, candidate_sha: str, tip: str, common_dir: Path, run: Ru
                 if new:
                     confirmation = _confirmed(repo, candidate_sha, root, new, run, limit)
         return Execution(root, candidate_run, candidate_ids, reason, baseline, baseline_cache,
-                         tuple(new), confirmation)
+                         tuple(new), confirmation, kept)
     finally:
         remove_sandbox(root, sandbox_parent)
 
@@ -671,6 +805,8 @@ def _build_record(execution: Execution, verdict: Verdict, candidate_sha: str, ti
         "unavailable_reason": verdict.reason,
         "waiver": None,
         "log": log,
+        **cost_fields(run),
+        **execution.kept,
     }
 
 
