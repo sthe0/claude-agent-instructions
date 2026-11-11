@@ -60,6 +60,7 @@ BUILD_TIMEOUT_S = 600
 KILL_GRACE_S = 10
 LOG_TAIL_LINES = 400
 CAP_RUN_SLACK_S = 30
+CAP_RUN_EXTRA_TASKS = 512  # config.md: fanout-cap-extra-tasks, cap-run.sh's own default
 DISK_SAMPLE_S = 60
 JUNIT_NAME = "junit.xml"
 REPORT_NAME = "tests.jsonl"
@@ -502,10 +503,21 @@ def suite_env(root: Path, userbase: str, failures_file: Path, scrub: Sequence[st
     return env
 
 
-def pytest_argv(root: Path, select: Sequence[str], timeout_s: int) -> list[str]:
+def slot_holder_extra_tasks(limits: test_slots.Limits) -> int:
+    """cap-run.sh headroom of a run that holds slots: one default share per run the limiter admits at once.
+
+    cap-run.sh caps the user's machine-wide thread count at its count on entry plus the headroom,
+    so every run started later spends from the headroom of the runs already going; with the
+    default headroom alone, two slot holders together could exhaust the first one's.
+    """
+    return CAP_RUN_EXTRA_TASKS * max(1, limits.total // limits.per_run)
+
+
+def pytest_argv(root: Path, select: Sequence[str], timeout_s: int, extra_tasks: int | None = None) -> list[str]:
     cap_run = Path(__file__).resolve().parents[1] / "cap-run.sh"
+    headroom = [] if extra_tasks is None else ["--extra-tasks", str(extra_tasks)]
     return [
-        str(cap_run), "--timeout", str(timeout_s + KILL_GRACE_S + CAP_RUN_SLACK_S), "--",
+        str(cap_run), *headroom, "--timeout", str(timeout_s + KILL_GRACE_S + CAP_RUN_SLACK_S), "--",
         sys.executable, "-m", "pytest", *(select or ["scripts/tests"]),
         "-q", "--continue-on-collection-errors", "--rootdir", str(root / "core"),
         "-p", PLUGIN_MODULE, "-p", "no:cacheprovider", "--junitxml", str(root / JUNIT_NAME),
@@ -559,15 +571,19 @@ class DiskPeak:
         self._sample()
 
 
-def _hold_slots(xdist_ok: bool, select: Sequence[str]) -> test_slots.Holder | None:
-    """Worker slots for a full parallel run, waiting in the machine-wide queue; a serial run takes none."""
+def _hold_slots(xdist_ok: bool, select: Sequence[str]) -> tuple[test_slots.Holder | None, int | None]:
+    """Worker slots for a full parallel run (waiting in the machine-wide queue) and its cap-run.sh headroom.
+
+    A serial run takes no slots, and a run without slots of its own keeps cap-run.sh's default headroom.
+    """
     if select or not xdist_ok:
-        return None
+        return None, None
     limits = test_slots.configured()
     want = os.cpu_count() or 1
-    return test_slots.acquire(
+    holder = test_slots.acquire(
         want, limits=limits,
         on_wait=lambda holders: print(test_slots.describe_wait(want, limits, holders), file=sys.stderr, flush=True))
+    return holder, slot_holder_extra_tasks(limits) if holder.source == test_slots.ACQUIRED else None
 
 
 def read_failures(path: Path) -> tuple[str, ...]:
@@ -607,9 +623,9 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
         stale.unlink(missing_ok=True)
     env = suite_env(root, userbase, failures_file, sandbox_scrub_names(scripts / SANDBOX_SCRIPT))
     env[REPORT_ENV] = str(report)
-    argv = pytest_argv(root, select, timeout_s)
-    holder = _hold_slots(xdist_ok, select)
+    holder, extra_tasks = _hold_slots(xdist_ok, select)
     try:
+        argv = pytest_argv(root, select, timeout_s, extra_tasks)
         if holder is not None:
             env[XDIST_WORKERS_ENV] = env[test_slots.HELD_ENV] = str(holder.count)
         cpu_before = _children_cpu_s()

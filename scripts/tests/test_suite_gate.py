@@ -1012,6 +1012,25 @@ def test_pytest_argv_runs_the_whole_tree_or_exactly_the_selected_ids():
     assert whole[whole.index("--timeout") + 1] == str(100 + gate.KILL_GRACE_S + gate.CAP_RUN_SLACK_S)
     picked = gate.pytest_argv(root, (FAILED_A, FAILED_B), 100)
     assert FAILED_A in picked and FAILED_B in picked and "scripts/tests" not in picked
+    assert "--extra-tasks" not in whole
+    widened = gate.pytest_argv(root, (), 100, extra_tasks=1024)
+    assert widened[1:3] == ["--extra-tasks", "1024"] and widened.index("--") > widened.index("--timeout")
+
+
+def test_a_slot_holder_gets_cap_run_headroom_for_every_run_the_limiter_admits_at_once(tmp_path):
+    from lib import test_slots
+
+    assert gate.slot_holder_extra_tasks(test_slots.Limits(8, 4, tmp_path)) == 2 * gate.CAP_RUN_EXTRA_TASKS
+    assert gate.slot_holder_extra_tasks(test_slots.Limits(8, 8, tmp_path)) == gate.CAP_RUN_EXTRA_TASKS
+    assert gate.slot_holder_extra_tasks(test_slots.Limits(4, 8, tmp_path)) == gate.CAP_RUN_EXTRA_TASKS
+
+
+def test_the_cap_run_headroom_constant_equals_its_config_row_and_cap_run_default():
+    from agentctl.config import parse_config_md
+
+    assert parse_config_md(None)["fanout-cap-extra-tasks"] == str(gate.CAP_RUN_EXTRA_TASKS)
+    cap_run = (SCRIPTS_DIR / "cap-run.sh").read_text(encoding="utf-8")
+    assert f"\nextra={gate.CAP_RUN_EXTRA_TASKS} " in cap_run
 
 
 def _fake_group(failed=(FAILED_A,), build_rc=0, pytest_rc=1, timed_out=False):
@@ -1060,6 +1079,7 @@ def test_default_runner_reuses_an_existing_sandbox_for_a_rerun(tmp_path, monkeyp
     gate.default_runner(tmp_path, SHA_A, root, select=(FAILED_A,), timeout_s=50)
     builds = [c for c in fake.calls if Path(c[0][0]).name == gate.SANDBOX_SCRIPT]
     assert len(builds) == 1 and FAILED_A in fake.calls[-1][0]
+    assert "--extra-tasks" not in fake.calls[-1][0], "a rerun holds no slots and keeps cap-run's headroom"
 
 
 def test_default_runner_reports_a_failed_build(tmp_path, monkeypatch):
@@ -1118,6 +1138,8 @@ def test_a_full_run_holds_its_slots_while_pytest_runs_and_tells_pytest_how_many(
     assert (run.slots_held, run.slots_source) == (want, test_slots.ACQUIRED)
     assert test_slots.held(_slot_dir()) == [], "the slots are released when pytest ends"
     assert run.pytest_argv[run.pytest_argv.index("--junitxml") + 1] == str(root / gate.JUNIT_NAME)
+    assert run.pytest_argv[run.pytest_argv.index("--extra-tasks") + 1] == str(
+        gate.slot_holder_extra_tasks(test_slots.configured()))
     assert run.queued_at <= run.slots_acquired_at <= run.timeout_started_at
 
 

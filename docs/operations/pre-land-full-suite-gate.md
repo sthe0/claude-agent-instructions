@@ -26,7 +26,7 @@ The record also says what the run cost: `cpu_s` (CPU of the run's process tree),
 
 ## Worker slots
 
-A full run takes up to `test-slots-per-run` worker slots of the machine-wide `test-slots-total` (`scripts/lib/test_slots.py`) before pytest starts, waiting in a queue while other runs hold them, and runs with as many xdist workers as it holds; its timeout starts once it holds them. The rerun of new failures is serial and takes no slot. Every other parallel `pytest` of `scripts/tests` takes slots the same way, so a gate and an interactive run share the limit. `python3 scripts/lib/test_slots.py held` shows who holds which slot.
+A full run takes up to `test-slots-per-run` worker slots of the machine-wide `test-slots-total` (`scripts/lib/test_slots.py`) before pytest starts, waiting in a queue while other runs hold them, and runs with as many xdist workers as it holds; its timeout starts once it holds them. The rerun of new failures is serial and takes no slot. Every other parallel `pytest` of `scripts/tests` takes slots the same way, so a gate and an interactive run share the limit. pytest runs under `scripts/cap-run.sh`. That script caps the user's machine-wide thread count at its count on entry plus a headroom, so a run started later spends from the headroom of the runs already going. For this reason a run that holds slots gets the default headroom (`fanout-cap-extra-tasks`) once for every run the limiter admits at once (`test-slots-total` // `test-slots-per-run`). `python3 scripts/lib/test_slots.py held` shows who holds which slot.
 
 ## What is exempt
 
