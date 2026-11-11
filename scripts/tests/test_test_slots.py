@@ -257,7 +257,7 @@ GATE = textwrap.dedent("""
 """)
 
 
-def test_slots_stay_held_by_a_running_pytest_after_its_gate_is_killed(slot_dir, tmp_path):
+def test_slots_stay_held_by_a_running_pytest_after_its_gate_is_killed(slot_dir, tmp_path, monkeypatch):
     release, pid_file = tmp_path / "release", tmp_path / "child.pid"
     env = {k: v for k, v in os.environ.items() if k != test_slots.HELD_ENV}
     gate = subprocess.Popen([sys.executable, "-c", GATE, str(SCRIPTS_DIR), str(slot_dir), str(release), str(pid_file)],
@@ -270,6 +270,9 @@ def test_slots_stay_held_by_a_running_pytest_after_its_gate_is_killed(slot_dir, 
         gate.wait()
         time.sleep(0.5)
         assert len(test_slots.held(slot_dir)) == 4, "the fake pytest still holds the slots"
+        assert _pids(slot_dir) == {child_pid}, "the report names the live holder, not the dead gate"
+        monkeypatch.setattr(test_slots, "_ancestors", lambda pid: {child_pid})
+        assert test_slots.inherited(slot_dir, env={}) == 4, "a nested run finds its holding ancestor"
         release.write_text("", encoding="utf-8")
         assert _wait_for(lambda: test_slots.held(slot_dir) == [], 30), "the slots are freed when the child exits"
     finally:

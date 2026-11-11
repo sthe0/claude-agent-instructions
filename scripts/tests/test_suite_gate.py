@@ -1033,7 +1033,27 @@ def test_the_per_run_headroom_is_read_from_config_like_the_timeout(tmp_path):
     assert gate.configured_extra_tasks(config) == 300
     config.write_text("| `fanout-cap-extra-tasks` | `many` |\n", encoding="utf-8")
     assert gate.configured_extra_tasks(config) == gate.CAP_RUN_EXTRA_TASKS
-    assert gate.configured_extra_tasks() == gate.CAP_RUN_EXTRA_TASKS == 512, "config.md row equals the constant"
+    from agentctl.config import parse_config_md
+    assert int(parse_config_md(None)["fanout-cap-extra-tasks"]) == gate.CAP_RUN_EXTRA_TASKS == 512, \
+        "config.md row equals the constant"
+
+
+def test_cap_run_default_headroom_equals_the_config_row(tmp_path):
+    from agentctl.config import parse_config_md
+    stub = tmp_path / "ps"
+    stub.write_text("#!/bin/sh\necho 1000\n", encoding="utf-8")
+    stub.chmod(0o755)
+    recorded = tmp_path / "cap"
+    bash_env = tmp_path / "bash_env"
+    bash_env.write_text(
+        'ulimit() { case "$1" in -u) echo "$2" > "$CAP_RECORD" ;; *) echo unlimited ;; esac; }\n',
+        encoding="utf-8")
+    env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+           "BASH_ENV": str(bash_env), "CAP_RECORD": str(recorded)}
+    cap_run = Path(__file__).resolve().parents[1] / "cap-run.sh"
+    proc = subprocess.run(["bash", str(cap_run), "--", "true"], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert int(recorded.read_text()) == 1000 + int(parse_config_md(None)["fanout-cap-extra-tasks"])
 
 
 def _fake_group(failed=(FAILED_A,), build_rc=0, pytest_rc=1, timed_out=False):

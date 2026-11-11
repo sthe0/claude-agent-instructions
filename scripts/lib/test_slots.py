@@ -143,15 +143,48 @@ def _slot_files(directory: Path) -> dict[tuple[int, int, int], str]:
     return found
 
 
-def held(directory: str | Path, locks_path: str = PROC_LOCKS) -> list[tuple[str, int]]:
-    """(slot file name, holder pid) for every held slot in ``directory``, sorted by name.
+def _live_pids_with_open(key: tuple[int, int, int]) -> set[int]:
+    """Pids of this user's processes that have the file ``key`` open (a scan of /proc/*/fd)."""
+    uid, found = os.getuid(), set()
+    try:
+        proc_entries = [e for e in os.scandir("/proc") if e.name.isdigit()]
+    except OSError:
+        return found
+    for entry in proc_entries:
+        try:
+            if entry.stat().st_uid != uid:
+                continue
+            for fd in os.scandir(f"{entry.path}/fd"):
+                if _file_key(os.stat(fd.path)) == key:
+                    found.add(int(entry.name))
+                    break
+        except OSError:
+            continue
+    return found
 
-    /proc/locks is read in several syscalls, so a lock passed from one holder to the next
-    between two reads can appear twice; an exclusive flock has one holder, so the last row wins.
+
+def _holder_pids(directory: str | Path, locks_path: str) -> dict[str, set[int]]:
+    """Slot file name -> pids holding it.
+
+    /proc/locks names the process that took an flock. A child that inherited the descriptor
+    (``pass_fds``) keeps the lock after that process dies, so a taker that is gone is replaced
+    by the live processes that have the slot file open; when none is found the dead pid stays.
     """
     files = _slot_files(Path(directory))
-    holders = {files[key]: pid for pid, key in _lock_table(locks_path) if key in files}
-    return sorted(holders.items())
+    taker = {files[key]: (pid, key) for pid, key in _lock_table(locks_path) if key in files}
+    holders = {}
+    for name, (pid, key) in taker.items():
+        holders[name] = {pid} if os.path.exists(f"/proc/{pid}") else (_live_pids_with_open(key) or {pid})
+    return holders
+
+
+def held(directory: str | Path, locks_path: str = PROC_LOCKS) -> list[tuple[str, int]]:
+    """(slot file name, holder pid) for every held slot in ``directory``, one row per slot, sorted by name.
+
+    /proc/locks is read in several syscalls, so a lock passed from one holder to the next
+    between two reads can appear twice; the pid reported for such a slot is arbitrary.
+    """
+    return sorted((name, min(pids)) for name, pids in _holder_pids(directory, locks_path).items())
 
 
 def _parent(pid: int) -> int:
@@ -185,7 +218,7 @@ def inherited(directory: str | Path, env: dict[str, str] | None = None, pid: int
     if not os.path.exists(locks_path):
         return None
     ancestors = _ancestors(os.getpid() if pid is None else pid)
-    count = sum(1 for _, holder in held(directory, locks_path) if holder in ancestors)
+    count = sum(1 for pids in _holder_pids(directory, locks_path).values() if pids & ancestors)
     return count or None
 
 
