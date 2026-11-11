@@ -7,9 +7,10 @@ among the baseline's failures. This document records why the baseline failed in 
 fixed, and which failures remain by design.
 
 `scripts/tests/gate_speedup_control.py sandbox-run` runs the committed tip once the way the gate does and
-writes every failing id; `verify-named` fails when a failing id is absent from this document, when this
-document names more than 20 ids, or when the run did not finish (fewer than 15000 tests collected, or a
-collection error). Both are listed in [scripts/README.md](../../scripts/README.md).
+writes every failing id; `verify-named` fails when a failing id is not named in this document as a backtick-quoted span (an id in
+prose does not count), when this document names more than `DEFAULT_MAX_NAMED` ids, or when the run did not
+finish (fewer than `MIN_COLLECTED` tests collected, or a collection error); both constants are in
+`gate_speedup_control.py`. Both are listed in [scripts/README.md](../../scripts/README.md).
 
 ## Causes found, and where each was fixed
 
@@ -29,6 +30,12 @@ defect of the code under test.
    exempt wherever the machine's temporary directory is; the hook-guard tests run the hook with the `/tmp/`
    substring removed and an explicit scratch root, and the canon-writer tests pass `AGENTCTL_SCRATCH_ROOTS`.
    Every changed test still checks the behaviour it checked before; none was skipped or deleted.
+   One hook-guard test, `test_allow_tmp_git_tree_through_the_unpatched_hook`, still runs the shipped hook on a
+   real `/tmp/` path, so the production exemption stays covered.
+
+   **Known production hazard, not fixed here:** the `/tmp/` substring exemption is itself a defect. A
+   repository checked out under `/tmp/` is entirely unguarded by these hooks. It is out of scope of this
+   change (it would alter a production guard) and is left for a separate ticket.
 
 ## Failures that remain by design
 

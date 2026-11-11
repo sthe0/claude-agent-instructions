@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -49,12 +51,8 @@ HOOK_RUNNER = (
     "runpy.run_path(sys.argv[1], run_name='__main__')\n"
 )
 
-_scratch_root: "Path | None" = None
-
-
 def _hook_env() -> dict:
     env = {**os.environ, **GIT_ENV}
-    env[exempt_paths.SCRATCH_ROOTS_ENV] = str(_scratch_root)
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(SCRIPTS_DIR), env.get("PYTHONPATH")]))
     for var in ("GIT_DIR", "GIT_WORK_TREE"):
         env.pop(var, None)
@@ -77,15 +75,15 @@ def _init_repo(repo: Path) -> None:
     _git("commit", "--quiet", "-m", "seed", cwd=repo)
 
 
-def _in_scratch(path: Path) -> bool:
+def _in_scratch(path: Path, scratch_root: Path) -> bool:
     p = os.path.realpath(path)
-    r = os.path.realpath(_scratch_root)
+    r = os.path.realpath(scratch_root)
     return p == r or p.startswith(r + os.sep)
 
 
-def _hook_exempts(path: Path) -> bool:
+def _hook_exempts(path: Path, scratch_root: Path) -> bool:
     with pytest.MonkeyPatch.context() as patch:
-        patch.setenv(exempt_paths.SCRATCH_ROOTS_ENV, str(_scratch_root))
+        patch.setenv(exempt_paths.SCRATCH_ROOTS_ENV, str(scratch_root))
         patch.setattr(exempt_paths, "_EXEMPT_SUBSTRINGS",
                       tuple(s for s in exempt_paths._EXEMPT_SUBSTRINGS if s != TMP_SEGMENT))
         return exempt_paths.is_engine_exempt(str(path))
@@ -99,12 +97,16 @@ class Sandbox:
         self.plain = root / "plain"
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope="module")
 def scratch_root(tmp_path_factory):
-    global _scratch_root
-    _scratch_root = tmp_path_factory.mktemp("hook-scratch-root")
-    yield _scratch_root
-    _scratch_root = None
+    return tmp_path_factory.mktemp("hook-scratch-root")
+
+
+@pytest.fixture(autouse=True)
+def _hook_scratch_roots(_hermetic_scratch_roots, scratch_root, monkeypatch):
+    """Replace the suite's scratch roots by this module's one private root (depends on
+    `_hermetic_scratch_roots` so it is set after, and undone before, that fixture)."""
+    monkeypatch.setenv(exempt_paths.SCRATCH_ROOTS_ENV, str(scratch_root))
 
 
 @pytest.fixture(scope="module")
@@ -119,8 +121,8 @@ def sandbox(scratch_root, tmp_path_factory):
     (root / "memory-global").symlink_to(box.repo)
     (root / "proj").symlink_to(box.repo / "agent-memory")
     (root / "link.py").symlink_to(box.repo / "tracked.py")
-    assert not _in_scratch(root), f"{root} lies under a scratch root; deny tests would be vacuous"
-    assert not _hook_exempts(root), f"{root} is engine-exempt"
+    assert not _in_scratch(root, scratch_root), f"{root} lies under a scratch root; deny tests would be vacuous"
+    assert not _hook_exempts(root, scratch_root), f"{root} is engine-exempt"
     return box
 
 
@@ -296,11 +298,27 @@ def test_allow_home_arc_state_dir(sandbox):
 
 
 def test_allow_scratch_root_git_tree(scratch_root):
-    assert _in_scratch(scratch_root), f"{scratch_root} is not under a scratch root"
+    assert _in_scratch(scratch_root, scratch_root), f"{scratch_root} is not under a scratch root"
     repo = scratch_root / "repo"
     _init_repo(repo)
     assert_allowed("sed -i s/a/b/ tracked.py", repo)
     assert_allowed("echo text > tracked.py", repo)
+
+
+def test_allow_tmp_segment_git_tree_through_the_unpatched_hook():
+    """The production "/tmp/" path-segment exemption, with the hook run as it ships."""
+    root = Path(tempfile.mkdtemp(prefix="hook-guard-tmp-segment-", dir="/tmp"))
+    try:
+        repo = root / "repo"
+        _init_repo(repo)
+        env = _hook_env()
+        env.pop(exempt_paths.SCRATCH_ROOTS_ENV, None)
+        payload = {"tool_name": "Bash", "tool_input": {"command": "echo text > tracked.py"}, "cwd": str(repo)}
+        proc = subprocess.run([sys.executable, str(HOOK_SCRIPT)], input=json.dumps(payload),
+                              env=env, capture_output=True, text=True)
+        assert allowed(proc), f"rc={proc.returncode} out={proc.stdout!r}"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_allow_unreadable_target_shapes(sandbox):

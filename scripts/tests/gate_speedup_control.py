@@ -49,6 +49,7 @@ import fcntl
 import json
 import os
 import queue
+import re
 import shutil
 import signal
 import site
@@ -480,13 +481,14 @@ def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, tim
 
 MIN_COLLECTED = 15000
 DEFAULT_MAX_NAMED = 20
-NAMED_TRIM = "`'\",;()[]<>|*"
+NAMED_SPAN = re.compile(r"`([\w./-]+\.py::[^`\n]+)`")
 
 
 def named_ids(text: str) -> set[str]:
-    """The test ids a document names: its whitespace-separated words that hold a ``::`` node id."""
-    words = (word.strip(NAMED_TRIM).rstrip(".:") for word in text.split())
-    return {word for word in words if word.startswith("scripts/") and "::" in word}
+    """The test ids a document names: its backtick-delimited spans of the form ``path/to/test.py::name``.
+
+    A span, not a word, so a parametrized id with spaces is one id; an id in prose is not named."""
+    return {span.strip() for span in NAMED_SPAN.findall(text)}
 
 
 def verify_named(report_path: Path, named_path: Path, max_named: int) -> int:
@@ -505,7 +507,7 @@ def verify_named(report_path: Path, named_path: Path, max_named: int) -> int:
              f"{len(collection_errors)} collection errors {' '.join(collection_errors[:3])}")
         return 4
     named = named_ids(text)
-    unnamed = [i for i in failing if i not in named and i not in text]
+    unnamed = [i for i in failing if i not in named]
     if unnamed:
         _say(f"UNNAMED: {len(unnamed)} failing ids not named in {named_path.name}, first: {' '.join(unnamed[:5])}")
         return 1

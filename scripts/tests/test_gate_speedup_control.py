@@ -332,6 +332,24 @@ def test_a_failing_id_that_the_document_does_not_name_is_refused(tmp_path):
     assert _verify(FIXTURES / "r11_bad_report.json", _doc(tmp_path, "scripts/tests/test_other.py::test_x")) == 1
 
 
+def test_a_failing_id_that_is_a_prefix_of_a_named_id_is_refused(tmp_path):
+    assert _verify(FIXTURES / "r11_bad_report.json", _doc(tmp_path, NAMED_ID + "_longer")) == 1
+
+
+def test_a_failing_id_mentioned_only_in_prose_is_refused(tmp_path):
+    doc = tmp_path / "named.md"
+    doc.write_text(f"{NAMED_ID} fails here, reason unknown.\n", encoding="utf-8")
+    assert _verify(FIXTURES / "r11_bad_report.json", doc) == 1
+
+
+def test_a_parametrized_id_with_spaces_is_named_as_one_span(tmp_path):
+    report = tmp_path / "report.json"
+    spaced = "scripts/tests/t.py::test_a[two words]"
+    report.write_text(json.dumps({"collected": 16000, "failing": [spaced], "collection_errors": []}),
+                      encoding="utf-8")
+    assert _verify(report, _doc(tmp_path, spaced)) == 0
+
+
 def test_a_clean_run_passes_against_an_empty_document(tmp_path):
     assert _verify(FIXTURES / "r11_clean_report.json", _doc(tmp_path)) == 0
 
