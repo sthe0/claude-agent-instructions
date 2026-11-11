@@ -800,6 +800,10 @@ def _order_changed_session(store, sid, venued_fixtures_dir, tmp_path, monkeypatc
     from test_change_tier import _passed_session
 
     monkeypatch.setenv("AGENTCTL_REPLAN_AUTHORIZATION", "0")
+    # The module's autouse fixture drops CLAUDE_CODE_SESSION_ID, so where no Cursor CLI is
+    # runnable (the pre-land suite sandbox) classify cannot name the runtime host.
+    from agentctl import runtime_host
+    monkeypatch.setattr(runtime_host, "detect_host", lambda: runtime_host.HOST_CLAUDE)
     plan = venued_fixtures_dir / "plan_two_stage.toml"
     if independent:
         text = plan.read_text()
