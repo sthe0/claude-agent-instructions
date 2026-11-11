@@ -141,7 +141,7 @@ def _prompt_argv(runtime_host: str, complexity: str, *, lean: bool | None = None
     model = model_for(runtime_host, complexity)
     if lean is None:
         lean = complexity == _JUDGE_COMPLEXITY
-    return host_llm.build_launch_argv(runtime_host, model, lean=lean)
+    return host_llm.build_launch_argv(runtime_host, model, lean=lean, structured_output=True)
 
 _JUDGE_PASS = "pass"
 _JUDGE_REVISE = "revise"
@@ -2082,26 +2082,27 @@ def subprocess_runner(
             argv, input=stdin, capture_output=True, text=True, timeout=timeout, **run_kwargs,
         )
         duration = time.monotonic() - start
+        text, usage, usage_reason = host_llm.unwrap_structured(argv, proc.stdout)
         judge_ledger.call(
             judge_name, timed_out=False, duration=duration, returncode=proc.returncode,
-            prompt_chars=len(stdin),
+            prompt_chars=len(stdin), usage=usage, usage_reason=usage_reason,
         )
         stderr = proc.stderr
         if proc.returncode != 0 and not _child_was_authenticated(run_kwargs):
             stderr = f"{_CREDENTIAL_STDERR_PREFIX}\n{stderr}"
-        return RunResult(proc.returncode, proc.stdout, stderr, timed_out=False)
+        return RunResult(proc.returncode, text, stderr, timed_out=False)
     except subprocess.TimeoutExpired:
         duration = time.monotonic() - start
         judge_ledger.call(
             judge_name, timed_out=True, duration=duration, returncode=None,
-            prompt_chars=len(stdin),
+            prompt_chars=len(stdin), usage_reason="timed_out",
         )
         return RunResult(1, "", f"{_TIMEOUT_STDERR_PREFIX} {timeout}s", timed_out=True)
     except Exception as exc:
         duration = time.monotonic() - start
         judge_ledger.call(
             judge_name, timed_out=False, duration=duration, returncode=None, raised=repr(exc),
-            prompt_chars=len(stdin),
+            prompt_chars=len(stdin), usage_reason="raised",
         )
         raise
 

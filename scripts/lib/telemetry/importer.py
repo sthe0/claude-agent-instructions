@@ -37,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from lib import config_root, judge_ledger
-from lib.telemetry import emit, live, phases, store, sync, tables
+from lib.telemetry import emit, live, phases, snapshot, store, sync, tables
 
 BATCH_LINES = 1000
 BACKOFF_FIRST_S = 1.0
@@ -413,7 +413,7 @@ _OFFSET_UPSERT = (
 
 def _import_unit(run: _Run, unit: _Unit, path) -> None:
     try:
-        with open(path, "rb") as handle:
+        with snapshot.open_source(path) as handle:
             _read_unit(run, unit, handle)
     except FileNotFoundError:
         return
@@ -543,8 +543,15 @@ def _transcript_consumer(session: str):
     return handle
 
 
+def _session_transcripts() -> list:
+    frozen = snapshot.active()
+    if frozen is None:
+        return config_root.iter_transcripts()
+    return [p for p in frozen.live_paths(snapshot.TRANSCRIPT) if p.parent.name != "subagents"]
+
+
 def _import_transcripts(run: _Run) -> None:
-    for path in config_root.iter_transcripts():
+    for path in _session_transcripts():
         session = path.stem
         if run.is_live(session):
             continue
@@ -586,13 +593,15 @@ def _project_state(data: dict) -> dict:
 def _load_states() -> dict:
     """session -> (path, projected state), reading the state files one at a time."""
     states = {}
+    frozen = snapshot.active()
     try:
-        paths = sorted(config_root.agentctl_state_dir().glob("*.json"))
+        paths = frozen.live_paths(snapshot.STATE) if frozen else sorted(config_root.agentctl_state_dir().glob("*.json"))
     except OSError:
         return states
     for path in paths:
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            with snapshot.open_source(path) as handle:
+                data = json.loads(handle.read().decode("utf-8"))
         except (OSError, ValueError):
             continue
         if isinstance(data, dict) and isinstance(data.get("session_id"), str) and isinstance(data.get("history"), list):
@@ -933,8 +942,19 @@ def _collect_tokens(run: _Run) -> None:
         run.stats.fail()
 
 
-def run_import(include_transcripts: bool = False, replay_all_spools: bool = False) -> dict:
-    """Import every source once; the stats dict is the whole report."""
+def run_import(include_transcripts: bool = False, replay_all_spools: bool = False, sources=None) -> dict:
+    """Import every source once — or, with `sources`, every source of that snapshot
+    (lib/telemetry/snapshot.py) and no live one; the stats dict is the whole report."""
+    if sources is None:
+        return _run_import(include_transcripts, replay_all_spools)
+    snapshot.activate(sources)
+    try:
+        return _run_import(include_transcripts, replay_all_spools)
+    finally:
+        snapshot.deactivate()
+
+
+def _run_import(include_transcripts: bool, replay_all_spools: bool) -> dict:
     started = _clock()
     boot = store.open_record(BATCH_DEADLINE_S)
     ro = store.open_readonly() if boot is not None else None

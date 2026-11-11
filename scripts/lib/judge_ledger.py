@@ -394,6 +394,17 @@ def started(judge: str) -> None:
     _write("started", judge=judge)
 
 
+USAGE_SCHEMA = 1
+USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+
+
+def _usage_counts(usage) -> "dict | None":
+    """The token counts of a response's usage, only the integer fields, so the line stays bounded."""
+    if not isinstance(usage, dict):
+        return None
+    return {name: usage[name] for name in USAGE_FIELDS if isinstance(usage.get(name), int)}
+
+
 def call(
     judge: str,
     *,
@@ -402,6 +413,8 @@ def call(
     returncode,
     raised: str | None = None,
     prompt_chars: "int | None" = None,
+    usage: "dict | None" = None,
+    usage_reason: "str | None" = None,
 ) -> None:
     """Mechanical fact about one subprocess_runner call, written from inside
     subprocess_runner itself (the true source of truth for duration and
@@ -411,7 +424,12 @@ def call(
     None on every other path. ``prompt_chars`` is ``len(stdin)`` of the prompt
     subprocess_runner sent this judge — always known here since
     subprocess_runner is the sole call site, unlike ``decided`` where a
-    budget/killswitch/no_text/no_runner stage never built a prompt at all."""
+    budget/killswitch/no_text/no_runner stage never built a prompt at all.
+    ``usage`` is the response's token usage; when it is None, ``usage_reason``
+    says why (timed_out, raised, unparsed, usage_unavailable:<host>). Every
+    line carries ``usage_schema``, so a reader tells a line written since usage
+    was recorded from an older line that never could carry it."""
+    counts = _usage_counts(usage)
     backref = _write(
         "call",
         judge=judge,
@@ -420,6 +438,9 @@ def call(
         returncode=returncode,
         raised=raised,
         prompt_chars=prompt_chars,
+        usage=counts,
+        usage_reason=None if counts is not None else usage_reason,
+        usage_schema=USAGE_SCHEMA,
     )
     if live is None:
         return

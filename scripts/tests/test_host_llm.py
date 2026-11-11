@@ -240,6 +240,16 @@ def test_build_launch_argv_claude_shape():
     assert argv == ["claude", "-p", "--model", "sonnet"]
 
 
+def test_host_llm_default_invocation_unchanged(monkeypatch):
+    monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/agent" if name == "agent" else None)
+    assert host_llm.build_launch_argv(HOST_CLAUDE, "sonnet") == ["claude", "-p", "--model", "sonnet"]
+    assert host_llm.build_launch_argv(HOST_CLAUDE, "sonnet", structured_output=True) == [
+        "claude", "-p", "--model", "sonnet", *host_llm.STRUCTURED_OUTPUT_FLAGS]
+    cursor = host_llm.build_launch_argv(HOST_CURSOR, "auto")
+    assert host_llm.build_launch_argv(HOST_CURSOR, "auto", structured_output=True) == cursor
+    assert host_llm.unwrap_structured(["claude", "-p"], "plain reply") == ("plain reply", None, "usage_unavailable:claude")
+
+
 def test_build_launch_argv_cursor_shape(monkeypatch):
     monkeypatch.setattr(host_llm.shutil, "which", lambda name: "/usr/bin/agent" if name == "agent" else None)
     argv = host_llm.build_launch_argv(HOST_CURSOR, "auto")

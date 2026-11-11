@@ -152,6 +152,7 @@
 "scripts/lib/telemetry/store.py" = { disposition = "not-canon", category = "not-canon", reason = "move_record_aside renames the record and its WAL files to a `.corrupt-<stamp>` name under the config root; no tracked file" }
 "scripts/lib/telemetry/portability.py" = { disposition = "not-canon", category = "not-canon", reason = "creates the export file the caller names and the check-roundtrip files inside the workdir the caller names; the record is only read; no tracked file" }
 "scripts/lib/telemetry/importer.py" = { disposition = "not-canon", category = "not-canon", reason = "prune removes drained spools under the config root; no tracked file" }
+"scripts/lib/telemetry/snapshot.py" = { disposition = "not-canon", category = "not-canon", reason = "copies the import sources and writes their manifest into the --out directory the caller names; the live sources are only read; no tracked file" }
 "scripts/lib/telemetry/profile_check.py" = { disposition = "not-canon", category = "not-canon", reason = "extracts the frozen snapshots into a scratch directory it creates and removes; no tracked file" }
 "scripts/lib/telemetry/align.py" = { disposition = "exempt", category = "exempt-maintenance", reason = "the one-off align-causes run rewrites the committed causes fixture, its draft and its report; run by a maintainer inside a worktree, reviewed in the diff" }
 "scripts/telemetry.py" = { disposition = "not-canon", category = "not-canon", reason = "writes the import stats file the caller names; no tracked file" }

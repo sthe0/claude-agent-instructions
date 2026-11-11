@@ -664,14 +664,38 @@ def preflight(host: str) -> tuple[bool, str]:
     raise ValueError(f"unknown host {host!r}; must be one of {HOSTS}")
 
 
+STRUCTURED_OUTPUT_FLAGS = ["--output-format", "json"]
+
+
+def unwrap_structured(argv, stdout: str) -> "tuple[str, dict | None, str | None]":
+    """(reply text, usage, reason usage is None) of one child's stdout. For an argv built with
+    `structured_output` the stdout is the JSON envelope; any other stdout is returned unchanged."""
+    if argv[-len(STRUCTURED_OUTPUT_FLAGS):] != STRUCTURED_OUTPUT_FLAGS:
+        binary = os.path.basename(str(argv[0])) if argv else "unknown"
+        return stdout, None, f"usage_unavailable:{binary}"
+    try:
+        envelope = json.loads(stdout)
+    except (TypeError, ValueError):
+        return stdout, None, "unparsed"
+    if not isinstance(envelope, dict) or not isinstance(envelope.get("result"), str):
+        return stdout, None, "unparsed"
+    usage = envelope.get("usage")
+    return envelope["result"], usage if isinstance(usage, dict) else None, None if isinstance(usage, dict) else "no_usage"
+
+
 def build_launch_argv(
     host: str,
     model: str | None,
     *,
     workspace: "Path | str | None" = None,
     lean: bool = False,
+    structured_output: bool = False,
 ) -> list[str]:
     """Assemble the launch argv for `host` WITHOUT the prompt.
+
+    `structured_output` asks the Claude host for its JSON envelope (the reply
+    under `result`, token counts under `usage`) — see `unwrap_structured`; the
+    Cursor host has no usage in its output and ignores it.
 
     The prompt is never a member of this argv, on purpose: appended as a
     single argv string it can exceed Linux MAX_ARG_STRLEN (32 * PAGE_SIZE =
@@ -691,6 +715,8 @@ def build_launch_argv(
         argv = [binary, "-p", "--model", model]
         if lean:
             argv += LEAN_ISOLATION_FLAGS
+        if structured_output:
+            argv += STRUCTURED_OUTPUT_FLAGS
     elif host == HOST_CURSOR:
         # `model is None` is a FIRST-CLASS value here, not an omission: every tier
         # of CURSOR_COMPLEXITY_MODEL is None, and omitting --model is how a caller

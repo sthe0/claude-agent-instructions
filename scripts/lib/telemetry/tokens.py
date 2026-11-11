@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from lib import config_root, judge_ledger
-from lib.telemetry import phases, store, sync
+from lib.telemetry import phases, snapshot, store, sync
 from lib.telemetry.importer import _first_line, _resume_point
 
 CONSUMER = "tokens"
@@ -40,6 +40,14 @@ HOOK_SCAN_LINES = 200
 def transcripts(sessions=None) -> "list[tuple[Path, str, bool]]":
     """(path, owning session, is an Agent-tool subagent) of every transcript, or of `sessions`'."""
     found = []
+    frozen = snapshot.active()
+    if frozen is not None:
+        for path in frozen.live_paths(snapshot.TRANSCRIPT):
+            subagent = path.parent.name == "subagents"
+            session = path.parent.parent.name if subagent else path.stem
+            if sessions is None or session in sessions:
+                found.append((path, session, subagent))
+        return found
     for root in config_root.projects_roots():
         for stem in ("*",) if sessions is None else sessions:
             own = [(p, p.stem, False) for p in sorted(root.glob(f"*/{stem}.jsonl"))]
@@ -179,7 +187,7 @@ def _read_source(run, path: Path, handler) -> None:
     offset; stop at the first batch not committed, leaving the offset where it was."""
     source = str(path)
     try:
-        handle = open(path, "rb")
+        handle = snapshot.open_source(path)
     except FileNotFoundError:
         return
     except OSError:
@@ -329,7 +337,7 @@ def static_surface_bytes() -> int:
 def session_start_hook_bytes(path: Path) -> int:
     """UTF-8 bytes of the SessionStart hook outputs injected into one transcript's context."""
     total = 0
-    with open(path, "rb") as handle:
+    with snapshot.open_source(path) as handle:
         for _ in range(HOOK_SCAN_LINES):
             obj = _parse(handle.readline() or b"null")
             if obj is None:
@@ -590,5 +598,51 @@ def check_imported_coverage(conn) -> dict:
             grown.append({"transcript": str(path), "bytes": size - offset["read_size"]})
         no_open_epoch += conn.execute("SELECT COUNT(*) FROM token_usage WHERE transcript = ? AND task_id IS NULL",
                                       (str(path),)).fetchone()[0]
-    return {"ok": not uncovered, "covered": covered, "uncovered": uncovered,
-            "gaps": {"grown_since_read": grown, "no_open_epoch": no_open_epoch}}
+    judge = judge_ledger_coverage(conn)
+    return {"ok": not uncovered and not judge["failures"], "covered": covered, "uncovered": uncovered,
+            "judge": judge, "gaps": {"grown_since_read": grown, "no_open_epoch": no_open_epoch}}
+
+
+def _judge_call_lines(path: Path, limit: int):
+    """(offset, sha, line) of every judge `call` line of the ledger before byte `limit` that the
+    collector turns into a judge_usage row."""
+    position = 0
+    with open(path, "rb") as handle:
+        while position < limit:
+            raw = handle.readline()
+            if not raw.endswith(b"\n") or position + len(raw) > limit:
+                break
+            start, position = position, position + len(raw)
+            obj = _parse(raw)
+            if (obj is not None and obj.get("kind") == "call" and isinstance(obj.get("source"), str)
+                    and isinstance(obj.get("judge"), str)):
+                yield start, _sha(raw), obj
+
+
+def judge_ledger_coverage(conn) -> dict:
+    """The judge ledger's call lines read so far, against their judge_usage rows. A line with usage
+    and no row fails; a line written since usage is recorded (it carries usage_schema) with neither
+    usage nor a reason fails; an older line without usage is listed, never counted as a failure."""
+    path = judge_ledger.ledger_path()
+    out = {"failures": [], "lines": 0, "with_usage": 0, "without_usage_before_schema": 0,
+           "without_usage_by_reason": {}}
+    offset = _offset_row(conn, path) if path.exists() else None
+    if offset is None:
+        return out
+    origin = store._read_origin(conn)
+    rows = {r[0] for r in conn.execute("SELECT ledger_row_id FROM judge_usage")}
+    for start, sha, obj in _judge_call_lines(path, offset["byte_offset"]):
+        out["lines"] += 1
+        where = {"offset": start, "judge": obj["judge"]}
+        if isinstance(obj.get("usage"), dict):
+            out["with_usage"] += 1
+            if store.imported_row_id(str(path), start, sha, origin) not in rows:
+                out["failures"].append({**where, "reason": "judge_line_without_row"})
+        elif "usage_schema" not in obj:
+            out["without_usage_before_schema"] += 1
+        elif obj.get("usage_reason"):
+            reasons = out["without_usage_by_reason"]
+            reasons[obj["usage_reason"]] = reasons.get(obj["usage_reason"], 0) + 1
+        else:
+            out["failures"].append({**where, "reason": "judge_line_without_usage"})
+    return out

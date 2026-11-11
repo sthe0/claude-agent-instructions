@@ -2,7 +2,8 @@
 
     telemetry.py sync [--session <id>] [--stale] [--budget SECONDS]
     telemetry.py emit-precommit --started <epoch seconds> --exit <code>
-    telemetry.py import [--transcripts] [--all] [--max-rss-mib N] [--stats-json FILE]
+    telemetry.py import [--transcripts] [--all] [--max-rss-mib N] [--stats-json FILE] [--sources DIR]
+    telemetry.py snapshot-sources --out DIR
     telemetry.py rebuild [--transcripts]
     telemetry.py prune [--retention-days N]
     telemetry.py check-profile-unchanged --reference F --premises P --transcripts-snapshot T
@@ -32,7 +33,10 @@ quality ledgers, engine state files, and with `--transcripts` the session transc
 record (lib/telemetry/importer.py); a second run adds nothing. `--all` replays every spool, not
 only those of ended sessions. It prints the stats as one JSON line (also to `--stats-json FILE`)
 and exits 1 when the run is incomplete (a batch deferred past its budget, an unreadable source or
-a failed batch) or its peak RSS passed `--max-rss-mib`. `rebuild` moves a corrupt record aside and
+a failed batch) or its peak RSS passed `--max-rss-mib`. `snapshot-sources --out DIR` copies every
+import source once (append-only files cut at their size, after a free-space check) with a manifest
+of the live path of each copy; `import --sources DIR` then reads only those copies, naming rows by
+the live paths (lib/telemetry/snapshot.py), so two imports read one fixed input. `rebuild` moves a corrupt record aside and
 builds a new one with the same origin id from the spools and the sources; `prune` deletes the sync
 and decision rows older than `telemetry-prune-retention-days` (config.md) or `--retention-days`.
 `check-profile-unchanged` recomputes the time-profile aggregate from stage 1's frozen inputs and
@@ -104,7 +108,7 @@ def emit_precommit(started: float, exit_code: int) -> "str | None":
 
 def _import(args) -> int:
     from lib.telemetry import importer
-    stats = importer.run_import(args.transcripts, replay_all_spools=args.all)
+    stats = importer.run_import(args.transcripts, replay_all_spools=args.all, sources=args.sources)
     over = args.max_rss_mib is not None and stats["peak_rss_mib"] > args.max_rss_mib
     stats["rss_exceeded"] = over
     text = json.dumps(stats, sort_keys=True, default=str)
@@ -113,6 +117,17 @@ def _import(args) -> int:
             handle.write(text + "\n")
     print(text)
     return 0 if stats["complete"] and not over else 1
+
+
+def _snapshot_sources(args) -> int:
+    from lib.telemetry import snapshot
+    try:
+        result = snapshot.take(args.out)
+    except (OSError, snapshot.SnapshotError) as err:
+        print(f"snapshot-sources: {err}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, sort_keys=True))
+    return 0
 
 
 def _align_causes(args) -> int:
@@ -236,6 +251,9 @@ def main(argv=None) -> int:
     imp.add_argument("--all", action="store_true", help="replay every spool, not only those of ended sessions")
     imp.add_argument("--max-rss-mib", type=float, default=None, help="exit 1 when the peak RSS passes this")
     imp.add_argument("--stats-json", default=None, help="also write the stats to this file")
+    imp.add_argument("--sources", default=None, help="read the sources of this snapshot-sources directory only")
+    snap = sub.add_parser("snapshot-sources", help="copy every import source once, for an import on a fixed input")
+    snap.add_argument("--out", required=True, help="the directory to create")
     rebuild_cmd = sub.add_parser("rebuild", help="rebuild a corrupt record from the spools and the sources")
     rebuild_cmd.add_argument("--transcripts", action="store_true")
     prune_cmd = sub.add_parser("prune", help="delete sync and decision rows past the retention window")
@@ -278,6 +296,8 @@ def main(argv=None) -> int:
         return _portability(args)
     if args.command == "import":
         return _import(args)
+    if args.command == "snapshot-sources":
+        return _snapshot_sources(args)
     if args.command == "rebuild":
         from lib.telemetry import importer
         report = importer.rebuild(args.transcripts)
