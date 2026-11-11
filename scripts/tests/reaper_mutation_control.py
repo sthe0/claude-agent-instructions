@@ -399,8 +399,105 @@ CATALOGUE: "dict[str, Mutant]" = {
              "test_an_entry_on_another_filesystem_is_not_entered_and_keeps_the_tree"),
     ),
     "residue-nested-git": Mutant(
-        LIVENESS, "if facts.nested_git:", "if False:",
-        _ids(T_LIVENESS, "test_a_nested_git_directory_or_file_keeps_the_tree"),
+        LIVENESS,
+        "if facts.git_entries and not (git_exemption is not None and git_exemption(path, facts.git_entries)):",
+        "if False:",
+        _ids(T_LIVENESS, "test_a_nested_git_directory_or_file_keeps_the_tree")
+        + _ids(T_RESIDUE, "test_a_local_commit_that_the_alternate_does_not_hold_keeps_the_sandbox",
+               "test_a_full_clone_without_alternates_keeps_the_sandbox"),
+    ),
+    "residue-skip-unreadable-same-uid": Mutant(
+        LIVENESS, '            sweep.mark_incomplete(f"{what}: {type(exc).__name__}: {exc.strerror or exc}")\n', "            pass\n",
+        _ids(T_LIVENESS, "test_a_same_uid_process_whose_links_cannot_be_read_makes_the_sweep_incomplete",
+             "test_a_same_uid_process_with_unreadable_links_keeps_the_candidate"),
+    ),
+    "residue-skip-every-process": Mutant(
+        LIVENESS, "if uid not in owners:", "if True:",
+        _ids(T_LIVENESS, PLANTED_HOLDERS, "test_a_process_with_its_cwd_inside_the_tree_is_found",
+             "test_a_process_of_this_uid_by_its_status_is_swept_whoever_owns_its_proc_entry"),
+    ),
+    "residue-skip-no-process": Mutant(
+        LIVENESS, "if uid not in owners:", "if False:",
+        _ids(T_LIVENESS, "test_a_process_proven_by_its_status_uid_to_be_another_users_is_skipped_and_counted"),
+    ),
+    "residue-status-uid-first-only": Mutant(
+        LIVENESS, "if uid not in owners:", "if uid != min(owners):",
+        _ids(T_LIVENESS, "test_any_of_the_four_uids_in_the_status_line_counts_as_this_uid"),
+    ),
+    "residue-owner-unreadable-keeps": Mutant(
+        LIVENESS,
+        '                sweep.mark_incomplete(f"{pid_dir}/status: owner unreadable: {type(exc).__name__}: {exc.strerror or exc}")\n',
+        "                pass\n",
+        _ids(T_LIVENESS, "test_an_entry_whose_owner_cannot_be_read_makes_the_sweep_incomplete"),
+    ),
+    "residue-no-uid-line-keeps": Mutant(
+        LIVENESS, '            sweep.mark_incomplete(f"{pid_dir}/status: owner unreadable: no Uid line")\n', "            pass\n",
+        _ids(T_LIVENESS, "test_a_status_without_a_uid_line_makes_the_sweep_incomplete"),
+    ),
+    "residue-clone-refs-unchecked": Mutant(
+        TEMP_RESIDUE, "    return not missing\n", "    return True\n",
+        _ids(T_RESIDUE, "test_a_local_commit_that_the_alternate_does_not_hold_keeps_the_sandbox",
+             "test_a_branch_with_a_commit_the_alternate_does_not_hold_keeps_the_sandbox_though_head_is_held"),
+    ),
+    "residue-clone-head-only": Mutant(
+        TEMP_RESIDUE, "wanted = sorted({*listed.split(), head.strip()})", "wanted = sorted({head.strip()})",
+        _ids(T_RESIDUE, "test_a_branch_with_a_commit_the_alternate_does_not_hold_keeps_the_sandbox_though_head_is_held"),
+    ),
+    "residue-clone-dirty-ignored": Mutant(
+        TEMP_RESIDUE,
+        '    return _git(["--git-dir", git_dir, "--work-tree", work_tree, "status", "--porcelain"]) == ""',
+        "    return True",
+        _ids(T_RESIDUE, "test_a_modified_tracked_file_keeps_the_sandbox", "test_an_untracked_file_keeps_the_sandbox"),
+    ),
+    "residue-clone-untracked-ignored": Mutant(
+        TEMP_RESIDUE, '"status", "--porcelain"]', '"status", "--porcelain", "--untracked-files=no"]',
+        _ids(T_RESIDUE, "test_an_untracked_file_keeps_the_sandbox"),
+    ),
+    "residue-clone-no-alternates": Mutant(
+        TEMP_RESIDUE, "    except OSError:\n        return []\n    repos = []", "    except OSError:\n        return [git_dir]\n    repos = []",
+        _ids(T_RESIDUE, "test_a_full_clone_without_alternates_keeps_the_sandbox"),
+    ),
+    "residue-clone-alternate-inside": Mutant(
+        TEMP_RESIDUE, "        if repo == candidate or repo.startswith(candidate + os.sep):\n            return []\n", "",
+        _ids(T_RESIDUE, "test_an_alternate_repository_inside_the_candidate_keeps_the_sandbox"),
+    ),
+    "residue-clone-second-git": Mutant(
+        TEMP_RESIDUE, "if git_entries != [git_dir] or not", "if git_dir not in git_entries or not",
+        _ids(T_RESIDUE, "test_a_second_git_entry_elsewhere_in_the_candidate_keeps_the_sandbox"),
+    ),
+    "residue-clone-any-kind": Mutant(
+        TEMP_RESIDUE, "git_exemption=disposable_shared_clone if source.kind == SANDBOX_KIND else None,",
+        "git_exemption=disposable_shared_clone,",
+        _ids(T_RESIDUE, "test_the_exemption_is_for_the_instruction_sandbox_kind_only"),
+    ),
+    "residue-git-failure-keeps": Mutant(
+        TEMP_RESIDUE, "    return done.stdout if done.returncode == 0 else None", "    return done.stdout",
+        _ids(T_RESIDUE, "test_a_git_that_exits_non_zero_keeps_the_sandbox"),
+    ),
+    "residue-git-exceptions": Mutant(
+        TEMP_RESIDUE, "    except (OSError, subprocess.SubprocessError, ValueError):", "    except ValueError:",
+        _ids(T_RESIDUE, "test_git_that_times_out_or_cannot_start_yields_no_answer"),
+    ),
+    "residue-git-env-scrubbed": Mutant(
+        TEMP_RESIDUE, "env=_git_env(), timeout=GIT_TIMEOUT_S, check=False,", "env=None, timeout=GIT_TIMEOUT_S, check=False,",
+        _ids(T_RESIDUE, "test_git_runs_with_a_scrubbed_environment_and_a_timeout"),
+    ),
+    "residue-git-timeout": Mutant(
+        TEMP_RESIDUE, "env=_git_env(), timeout=GIT_TIMEOUT_S, check=False,", "env=_git_env(), check=False,",
+        _ids(T_RESIDUE, "test_git_runs_with_a_scrubbed_environment_and_a_timeout"),
+    ),
+    "residue-remove-candidate-check": Mutant(
+        TEMP_RESIDUE, "    elif parent != source.base:\n        return False\n", "",
+        _ids(T_RESIDUE, "test_remove_refuses_a_path_that_is_not_a_current_candidate"),
+    ),
+    "residue-failed-scan-no-snapshot": Mutant(
+        RUNNER, "if reaper.name not in due or reaper.name in failed_scans:", "if reaper.name not in due:",
+        _ids(T_RUNNER, "test_a_reaper_whose_scan_failed_gets_no_kept_snapshot_while_the_others_do"),
+    ),
+    "residue-refused-removal-reason": Mutant(
+        RUNNER, "elif verdict.path in failed_paths:", "elif False:",
+        _ids(T_RUNNER, "test_a_removal_that_was_refused_is_snapshotted_as_refused_with_its_remove_reason",
+             "test_a_removal_that_raised_is_snapshotted_as_failed"),
     ),
     "residue-symlink": Mutant(
         LIVENESS, "child = lstat_fn(entry.path)", "child = os.stat(entry.path)",
@@ -442,7 +539,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         + _ids(T_RESIDUE, "test_a_dry_run_through_the_runner_writes_no_stamp_snapshot_or_removal_row"),
     ),
     "residue-summary-format": Mutant(
-        TEMP_RESIDUE, 'f"temp-residue kind={kind} removable=', 'f"temp-residue kind:{kind} removable=',
+        TEMP_RESIDUE, 'f"{NAME} kind={kind} removable=', 'f"{NAME} kind:{kind} removable=',
         _ids(T_RESIDUE, "test_the_summary_has_root_lines_every_kind_line_and_slug_only_reason_lines",
              "test_the_dry_run_prints_remove_lines_and_the_summary_and_writes_nothing"),
     ),

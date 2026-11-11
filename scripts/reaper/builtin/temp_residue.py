@@ -20,6 +20,15 @@ not owned by a live session, no mount or nested repository inside, idle past
 `IDLE_FLOOR_SECONDS`); everything else is kept with a slug and a reason. The floor is this
 module's constant: tests move it or `ctx.now`, no environment variable or config key does.
 
+One exemption from the nested-repository clause, for kind `instruction-sandbox` only: the
+sandbox script makes `<candidate>/core` a `git clone --shared`, so every sandbox holds a `.git`.
+That clone protects nothing when `disposable_shared_clone` proves, with a scrubbed git
+environment, no network and a timeout, that (1) it is the only `.git` in the candidate, (2) its
+`objects/info/alternates` lists only objects directories of repositories that exist outside the
+candidate, (3) HEAD and every ref resolve to commits those repositories hold, and (4) its
+working tree has no uncommitted or untracked change. Any other `.git`, and any failed check or
+git failure, keeps the candidate as `nested-git`.
+
 The reaper deletes only on a machine that opted in: `temp-residue = true` in
 `<agent home>/reaper/opt-in.toml` (`reaper.opt_in`). Without it a live pass keeps every
 candidate it would have removed (`opt-in-off-would-remove`), and `remove()` refuses; a dry run
@@ -41,7 +50,9 @@ import dataclasses
 import os
 import re
 import stat
+import subprocess
 import tempfile
+from pathlib import Path
 
 from lib import config_root
 from reaper import liveness, opt_in
@@ -52,9 +63,10 @@ THROTTLE_HOURS = 24.0
 IDLE_FLOOR_SECONDS = 3 * 86400
 SANDBOX_ROOT = "/tmp"
 
-KINDS = ("instruction-sandbox", "tmp", "sbx")
+SANDBOX_KIND = "instruction-sandbox"
+KINDS = (SANDBOX_KIND, "tmp", "sbx")
 PATTERNS = {
-    "instruction-sandbox": re.compile(r"instruction-sandbox\.[A-Za-z0-9_-]+"),
+    SANDBOX_KIND: re.compile(r"instruction-sandbox\.[A-Za-z0-9_-]+"),
     "tmp": re.compile(r"tmp\.[A-Za-z0-9_-]+"),
     "sbx": re.compile(r"sbx\.[A-Za-z0-9_-]+"),
 }
@@ -64,21 +76,24 @@ REASONS = (
     liveness.NOT_A_DIRECTORY, liveness.MOUNT_INSIDE, liveness.NESTED_GIT,
     liveness.HOLDER_SWEEP_INCOMPLETE, OPT_IN_OFF, liveness.OS_ERROR,
 )
-JOB_TMP_DEPTH = 2
+CLONE_DIR = "core"
+GIT_TIMEOUT_S = 20
 
 
 @dataclasses.dataclass(frozen=True)
 class Source:
+    """A root to scan. ``per_job`` roots hold ``<job>/tmp`` directories whose children are the candidates."""
+
     kind: str
     base: str
-    depth: int
+    per_job: bool
     dev: int
 
 
 def _sources() -> "list[Source]":
     sources: "list[Source]" = []
 
-    def add(kind: str, raw: str, depth: int) -> None:
+    def add(kind: str, raw: str, per_job: bool) -> None:
         real = os.path.realpath(raw)
         if any(s.kind == kind and s.base == real for s in sources):
             return
@@ -87,13 +102,13 @@ def _sources() -> "list[Source]":
         except OSError:
             return
         if stat.S_ISDIR(st.st_mode):
-            sources.append(Source(kind, real, depth, st.st_dev))
+            sources.append(Source(kind, real, per_job, st.st_dev))
 
     session_root = tempfile.gettempdir()
-    add("instruction-sandbox", SANDBOX_ROOT, 0)
-    add("instruction-sandbox", session_root, 0)
-    add("tmp", session_root, 0)
-    add("sbx", str(config_root.agent_home() / "jobs"), JOB_TMP_DEPTH)
+    add(SANDBOX_KIND, SANDBOX_ROOT, False)
+    add(SANDBOX_KIND, session_root, False)
+    add("tmp", session_root, False)
+    add("sbx", str(config_root.agent_home() / "jobs"), True)
     return sources
 
 
@@ -108,14 +123,14 @@ def _real_dirs(parent: str) -> "list[str]":
 
 def _children(source: Source) -> "list[str]":
     """Paths directly under the source's root(s) whose names match its kind's pattern."""
-    if source.depth == 0:
-        parents = [source.base]
-    else:
+    if source.per_job:
         parents = []
         for job in _real_dirs(source.base):
             job_tmp = os.path.join(job, "tmp")
             if os.path.isdir(job_tmp) and not os.path.islink(job_tmp):
                 parents.append(job_tmp)
+    else:
+        parents = [source.base]
     pattern = PATTERNS[source.kind]
     found = []
     for parent in parents:
@@ -127,6 +142,18 @@ def _children(source: Source) -> "list[str]":
     return sorted(found)
 
 
+def _is_child_of(source: Source, path: str) -> bool:
+    """``path`` (its parent already resolved) is where ``_children(source)`` would list a candidate."""
+    parent = os.path.dirname(path)
+    if source.per_job:
+        parent, job_tmp = os.path.dirname(parent), os.path.basename(parent)
+        if job_tmp != "tmp" or os.path.dirname(parent) != source.base:
+            return False
+    elif parent != source.base:
+        return False
+    return PATTERNS[source.kind].fullmatch(os.path.basename(path)) is not None
+
+
 def _mounts() -> "frozenset[str] | None":
     try:
         return liveness.read_mount_points()
@@ -134,11 +161,93 @@ def _mounts() -> "frozenset[str] | None":
         return None
 
 
+def _git_env() -> "dict[str, str]":
+    return {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent", "LC_ALL": "C",
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+    }
+
+
+def _git(args: "list[str]", stdin: str = "") -> "str | None":
+    """Stdout of ``git <args>`` run in a scrubbed environment under a timeout; None on any failure.
+
+    ``GIT_OPTIONAL_LOCKS=0`` keeps ``status`` from refreshing the index, so judging writes nothing.
+    """
+    try:
+        done = subprocess.run(
+            ["git", "-c", "core.fsmonitor=false", *args], input=stdin, capture_output=True, text=True,
+            env=_git_env(), timeout=GIT_TIMEOUT_S, check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _alternate_repositories(git_dir: str, candidate: str) -> "list[str]":
+    """Git dirs of the repositories the clone borrows objects from; [] unless every entry of its
+    ``alternates`` file is the objects directory of an existing repository outside ``candidate``."""
+    objects = os.path.join(git_dir, "objects")
+    try:
+        lines = Path(objects, "info", "alternates").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    repos = []
+    for line in lines:
+        if not line.strip() or line.startswith("#"):
+            continue
+        alt = os.path.realpath(os.path.join(objects, line))
+        repo = os.path.dirname(alt)
+        if (os.path.basename(alt) != "objects" or not os.path.isdir(alt)
+                or not os.path.isfile(os.path.join(repo, "HEAD")) or not os.path.isdir(os.path.join(repo, "refs"))):
+            return []
+        if repo == candidate or repo.startswith(candidate + os.sep):
+            return []
+        repos.append(repo)
+    return repos
+
+
+def _refs_in_alternates(git_dir: str, repos: "list[str]") -> bool:
+    """HEAD and every ref of the clone name a commit that one of ``repos`` holds."""
+    listed = _git(["--git-dir", git_dir, "for-each-ref", "--format=%(objectname)"])
+    head = _git(["--git-dir", git_dir, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+    if listed is None or head is None or not head.strip():
+        return False
+    wanted = sorted({*listed.split(), head.strip()})
+    request = "".join(f"{oid}^{{commit}}\n" for oid in wanted)
+    missing = set(wanted)
+    for repo in repos:
+        answer = _git(["--git-dir", repo, "cat-file", "--batch-check"], request)
+        if answer is None or len(answer.splitlines()) != len(wanted):
+            return False
+        for oid, line in zip(wanted, answer.splitlines()):
+            if line.split()[1:2] == ["commit"]:
+                missing.discard(oid)
+    return not missing
+
+
+def _worktree_clean(git_dir: str, work_tree: str) -> bool:
+    return _git(["--git-dir", git_dir, "--work-tree", work_tree, "status", "--porcelain"]) == ""
+
+
+def disposable_shared_clone(candidate: str, git_entries: "list[str]") -> bool:
+    """True when the only ``.git`` of a sandbox candidate is its throw-away ``--shared`` clone. See the module docstring."""
+    clone = os.path.join(candidate, CLONE_DIR)
+    git_dir = os.path.join(clone, liveness.GIT_NAME)
+    if git_entries != [git_dir] or not stat.S_ISDIR(os.lstat(git_dir).st_mode):
+        return False
+    repos = _alternate_repositories(git_dir, candidate)
+    if not _refs_in_alternates(git_dir, repos):
+        return False
+    return _worktree_clean(git_dir, clone)
+
+
 def _judge(path: str, source: Source, ctx: ReapContext,
            sweep: liveness.HolderSweep, mounts: "frozenset[str] | None") -> liveness.Judgment:
     return liveness.judge_residue(
         path, root_dev=source.dev, now=ctx.now, floor_s=IDLE_FLOOR_SECONDS, sweep=sweep,
         mounts=mounts, owned=ctx.owned_path,
+        git_exemption=disposable_shared_clone if source.kind == SANDBOX_KIND else None,
     )
 
 
@@ -172,11 +281,10 @@ def scan(ctx: ReapContext) -> "list[Verdict]":
 def remove(path: str, ctx: ReapContext) -> bool:
     if not opt_in.enabled(NAME):
         return False
-    target = os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
-    match = next(((s, p) for s in _sources() for p in _children(s) if p == target), None)
-    if match is None:
+    candidate = os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
+    source = next((s for s in _sources() if _is_child_of(s, candidate)), None)
+    if source is None:
         return False
-    source, candidate = match
     if _judge(candidate, source, ctx, liveness.sweep_holders(), _mounts()).action != REMOVE:
         return False
     liveness.remove_tree(os.path.dirname(candidate), os.path.basename(candidate))
@@ -202,7 +310,7 @@ def summary(verdicts: "list[Verdict]") -> str:
     for kind in KINDS:
         c = counts[kind]
         lines.append(
-            f"temp-residue kind={kind} removable={c['removable']} removable_bytes={c['removable_bytes']}"
+            f"{NAME} kind={kind} removable={c['removable']} removable_bytes={c['removable_bytes']}"
             f" kept={c['kept']} kept_bytes={c['kept_bytes']}"
         )
     lines.extend(f"{NAME} reason={slug} count={n} bytes={b}" for slug, (n, b) in reasons.items() if n)

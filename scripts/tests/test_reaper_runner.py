@@ -737,6 +737,30 @@ def test_a_remove_vetoed_by_another_reaper_appears_in_the_snapshot_as_a_keep(env
     assert kept_snapshot(env, "a")["kept"] == [{"path": str(env.item), "reason": "kept by b", "bytes": 0}]
 
 
+def test_a_reaper_whose_scan_failed_gets_no_kept_snapshot_while_the_others_do(env):
+    broken = Fake("a", [], scan_exc=RuntimeError("boom"))
+    other = Fake("b", [keep(env.tmp / "one", "busy")])
+    _, err = run_live(env, [broken, other], force_run=True)
+    assert "reaper a: scan failed" in err
+    assert sorted(p.name for p in (env.tmp / "kept").iterdir()) == ["b.json"]
+
+
+def test_a_removal_that_was_refused_is_snapshotted_as_refused_with_its_remove_reason(env):
+    refused = Fake("a", [rm(env.item, "no holder, idle 80h")], remove_result=False)
+    _, err = run_live(env, [refused], force_run=True)
+    assert "FAILED to remove" in err
+    assert kept_snapshot(env, "a")["kept"] == [
+        {"path": str(env.item), "reason": "removal refused or failed: no holder, idle 80h", "bytes": 0},
+    ]
+
+
+def test_a_removal_that_raised_is_snapshotted_as_failed(env):
+    failing = Fake("a", [rm(env.item, "stale")], remove_exc=OSError("busy"))
+    run_live(env, [failing], force_run=True)
+    [entry] = kept_snapshot(env, "a")["kept"]
+    assert entry["reason"] == "removal refused or failed: stale"
+
+
 def test_the_kept_snapshot_is_replaced_by_each_pass_not_appended_to(env):
     a = Fake("a", [keep(env.tmp / "one", "busy")])
     run_live(env, [a], force_run=True)

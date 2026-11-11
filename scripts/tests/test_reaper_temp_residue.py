@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,7 +34,19 @@ DAY = 86400.0
 SLUG = re.compile(r"[a-z]+(-[a-z]+)*")
 
 
+def git(cwd: Path, *args: str) -> str:
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(cwd), "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.org",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.org",
+    }
+    done = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True, check=True)
+    return done.stdout
+
+
 class World:
+    canonical: "Path | None" = None
+
     def __init__(self, root: Path):
         self.root = root
         self.sandbox = root / "sandbox"
@@ -59,6 +72,31 @@ class World:
         tmp = self.jobs / job / "tmp"
         tmp.mkdir(parents=True, exist_ok=True)
         return self.candidate(tmp, f"sbx.{suffix}")
+
+    def canonical_repo(self) -> Path:
+        """A repository with one commit and a second branch, standing in for the canonical checkout."""
+        repo = self.root / "canonical"
+        git(repo.parent, "init", "-q", "-b", "main", str(repo))
+        (repo / "tracked.txt").write_text("one\n", encoding="utf-8")
+        git(repo, "add", "tracked.txt")
+        git(repo, "commit", "-q", "-m", "one")
+        git(repo, "branch", "side")
+        return repo
+
+    def shared_sandbox(self, parent: "Path | None" = None, suffix: str = "s1") -> Path:
+        """The layout scripts/instruction-sandbox.sh builds: a shared, detached, origin-less clone at
+        ``core`` and ``home/claude-agent-instructions`` linked to it."""
+        repo = getattr(self, "canonical", None) or self.canonical_repo()
+        self.canonical = repo
+        path = (parent or self.sandbox) / f"instruction-sandbox.{suffix}"
+        path.mkdir()
+        core = path / "core"
+        git(path, "clone", "-q", "--shared", "--no-checkout", str(repo), str(core))
+        git(core, "checkout", "-q", "--detach")
+        git(core, "remote", "remove", "origin")
+        (path / "home").mkdir()
+        (path / "home" / "claude-agent-instructions").symlink_to(core)
+        return path
 
     def opt_in(self, value: str = "true") -> None:
         path = self.home / "reaper" / "opt-in.toml"
@@ -230,6 +268,147 @@ def test_an_incomplete_sweep_keeps_every_candidate(world, monkeypatch):
     world.sandbox_dir()
     monkeypatch.setattr(liveness, "sweep_holders", lambda *a, **k: liveness.HolderSweep(incomplete="/proc/1/cwd: denied"))
     assert {reason_of(v) for v in temp_residue.scan(world.ctx())} == {liveness.HOLDER_SWEEP_INCOMPLETE}
+
+
+# ── the disposable shared clone of an instruction sandbox ─────────────────
+
+def verdict_of(world, path: Path):
+    return by_path(temp_residue.scan(world.ctx(dry_run=True)))[str(path)]
+
+
+def assert_kept_as_nested_git(world, path: Path) -> None:
+    verdict = verdict_of(world, path)
+    assert (verdict.action, reason_of(verdict)) == (KEEP, liveness.NESTED_GIT)
+
+
+def test_a_clean_shared_clone_sandbox_is_removable_and_its_canonical_repository_survives(world):
+    path = world.shared_sandbox()
+    world.opt_in()
+    assert verdict_of(world, path).action == REMOVE
+    assert temp_residue.remove(str(path), world.ctx()) is True
+    assert not path.exists() and (world.canonical / ".git" / "objects").is_dir()
+    assert git(world.canonical, "rev-parse", "--verify", "HEAD").strip()
+
+
+def test_judging_a_shared_clone_writes_nothing_into_it(world):
+    path = world.shared_sandbox()
+
+    def snapshot():
+        return sorted(
+            (os.path.join(d, n), os.lstat(os.path.join(d, n)).st_mtime_ns)
+            for d, dirs, files in os.walk(path) for n in dirs + files
+        )
+
+    before = snapshot()
+    assert verdict_of(world, path).action == REMOVE
+    assert snapshot() == before
+
+
+def test_a_local_commit_that_the_alternate_does_not_hold_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    git(path / "core", "commit", "-q", "--allow-empty", "-m", "local work")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_branch_with_a_commit_the_alternate_does_not_hold_keeps_the_sandbox_though_head_is_held(world):
+    path = world.shared_sandbox()
+    git(path / "core", "switch", "-q", "-c", "work")
+    git(path / "core", "commit", "-q", "--allow-empty", "-m", "local work")
+    git(path / "core", "checkout", "-q", "--detach", "HEAD~1")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_modified_tracked_file_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    (path / "core" / "tracked.txt").write_text("edited\n", encoding="utf-8")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_an_untracked_file_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    (path / "core" / "new.txt").write_text("new\n", encoding="utf-8")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_git_that_exits_non_zero_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    (path / "core" / ".git" / "index").write_bytes(b"not an index")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_full_clone_without_alternates_keeps_the_sandbox(world):
+    repo = world.canonical_repo()
+    path = world.sandbox / "instruction-sandbox.full"
+    path.mkdir()
+    git(path, "clone", "-q", str(repo), str(path / "core"))
+    assert not (path / "core" / ".git" / "objects" / "info" / "alternates").exists()
+    assert_kept_as_nested_git(world, path)
+
+
+def test_an_alternate_that_names_a_missing_objects_directory_keeps_the_sandbox(world):
+    path = world.shared_sandbox()
+    alternates = path / "core" / ".git" / "objects" / "info" / "alternates"
+    alternates.write_text(str(world.root / "gone" / ".git" / "objects") + "\n", encoding="utf-8")
+    assert_kept_as_nested_git(world, path)
+
+
+def test_an_alternate_repository_inside_the_candidate_keeps_the_sandbox(world):
+    path = world.sandbox / "instruction-sandbox.self"
+    path.mkdir()
+    inner = path / "canonical.git"
+    git(path, "clone", "-q", "--bare", str(world.canonical_repo()), str(inner))
+    git(path, "clone", "-q", "--shared", str(inner), str(path / "core"))
+    assert_kept_as_nested_git(world, path)
+
+
+def test_a_second_git_entry_elsewhere_in_the_candidate_keeps_the_sandbox(world):
+    for number, where in enumerate(("home/other/.git", "core/vendor/.git", "extra/.git")):
+        path = world.shared_sandbox(suffix=f"two{number}")
+        (path / where).mkdir(parents=True)
+        assert_kept_as_nested_git(world, path)
+
+
+def test_a_failing_or_timing_out_git_keeps_the_sandbox(world, monkeypatch):
+    path = world.shared_sandbox()
+    monkeypatch.setattr(temp_residue, "_git", lambda *a, **k: None)
+    assert_kept_as_nested_git(world, path)
+
+
+def test_git_that_times_out_or_cannot_start_yields_no_answer(monkeypatch):
+    def timeout(*a, **k):
+        raise subprocess.TimeoutExpired("git", 1)
+
+    def missing(*a, **k):
+        raise FileNotFoundError(2, "git")
+
+    for failure in (timeout, missing):
+        monkeypatch.setattr(subprocess, "run", failure)
+        assert temp_residue._git(["status"]) is None
+
+
+def test_git_runs_with_a_scrubbed_environment_and_a_timeout(world, monkeypatch):
+    path = world.shared_sandbox()
+    seen = []
+    real = subprocess.run
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setenv("GIT_INDEX_FILE", str(world.root / "absent-index"))
+    monkeypatch.setenv("GIT_SSH_COMMAND", "false")
+    monkeypatch.setattr(subprocess, "run", spy)
+    assert verdict_of(world, path).action == REMOVE
+    assert seen and all(k["timeout"] == temp_residue.GIT_TIMEOUT_S for k in seen)
+    assert all("GIT_INDEX_FILE" not in k["env"] and "GIT_SSH_COMMAND" not in k["env"] for k in seen)
+    assert all(k["env"]["GIT_OPTIONAL_LOCKS"] == "0" for k in seen)
+
+
+def test_the_exemption_is_for_the_instruction_sandbox_kind_only(world):
+    world.shared_sandbox()
+    clone_as_tmp = world.session / "tmp.clone"
+    shutil.copytree(world.sandbox / "instruction-sandbox.s1", clone_as_tmp, symlinks=True)
+    assert_kept_as_nested_git(world, clone_as_tmp)
 
 
 # ── opt-in ────────────────────────────────────────────────────────────────

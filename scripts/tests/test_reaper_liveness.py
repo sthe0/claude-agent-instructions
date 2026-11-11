@@ -230,9 +230,16 @@ def test_a_vanished_candidate_resolves_to_keep(root):
 
 # ── the /proc sweep: planted proc roots ───────────────────────────────────
 
-def fake_proc(base: Path, pid: int, *, cwd=None, exe=None, fds=(), maps=()) -> Path:
+def write_status(entry: Path, uid: int) -> None:
+    (entry / "status").write_text(
+        f"Name:\tx\nUmask:\t0022\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\nGid:\t0\t0\t0\t0\n", encoding="utf-8",
+    )
+
+
+def fake_proc(base: Path, pid: int, *, cwd=None, exe=None, fds=(), maps=(), uid=None) -> Path:
     entry = base / str(pid)
     (entry / "fd").mkdir(parents=True)
+    write_status(entry, os.getuid() if uid is None else uid)
     if cwd is not None:
         (entry / "cwd").symlink_to(cwd)
     if exe is not None:
@@ -279,23 +286,64 @@ def test_a_deleted_suffix_pipes_and_spaces_in_proc_targets_are_read_correctly(ro
     assert sweep.held["maps"] == [str(spaced / "m.so")]
 
 
-def unreadable_entry(proc: Path, pid: int) -> None:
+def unreadable_entry(proc: Path, pid: int, *, uid: int) -> None:
+    """A process whose cwd link cannot be read (a directory in its place), owned by ``uid``."""
     entry = proc / str(pid)
     (entry / "cwd").mkdir(parents=True)
+    write_status(entry, uid)
 
 
-def test_an_unreadable_entry_proven_to_be_another_users_is_skipped_and_counted(tmp_path):
+def test_a_process_proven_by_its_status_uid_to_be_another_users_is_skipped_and_counted(root, tmp_path):
     proc = tmp_path.resolve() / "proc"
-    unreadable_entry(proc, 21)
-    sweep = liveness.sweep_holders(str(proc), uid=os.getuid() + 1)
-    assert (sweep.foreign_skipped, sweep.incomplete) == (1, None)
+    unreadable_entry(proc, 21, uid=os.getuid() + 1)
+    fake_proc(proc, 22, cwd=root / "tmp.theirs", uid=os.getuid() + 1)
+    sweep = liveness.sweep_holders(str(proc))
+    assert (sweep.foreign_skipped, sweep.incomplete) == (2, None)
+    assert sweep.holder_of(str(root / "tmp.theirs")) is None
 
 
-def test_an_unreadable_entry_of_this_uid_makes_the_sweep_incomplete(tmp_path):
+def test_a_same_uid_process_whose_links_cannot_be_read_makes_the_sweep_incomplete(tmp_path):
     proc = tmp_path.resolve() / "proc"
-    unreadable_entry(proc, 21)
+    unreadable_entry(proc, 21, uid=os.getuid())
     sweep = liveness.sweep_holders(str(proc))
     assert sweep.foreign_skipped == 0 and sweep.incomplete and "cwd" in sweep.incomplete
+
+
+def test_a_same_uid_process_with_unreadable_links_keeps_the_candidate(root, tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    unreadable_entry(proc, 21, uid=os.getuid())
+    sweep = liveness.sweep_holders(str(proc))
+    result = judge(make_tree(root), sweep=sweep)
+    assert (result.action, result.slug) == (KEEP, liveness.HOLDER_SWEEP_INCOMPLETE)
+
+
+def test_a_process_of_this_uid_by_its_status_is_swept_whoever_owns_its_proc_entry(root, tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    candidate = make_tree(root)
+    fake_proc(proc, 23, cwd=candidate / "sub", uid=1000)
+    sweep = liveness.sweep_holders(str(proc), uid=1000)
+    assert sweep.foreign_skipped == 0 and sweep.holder_of(str(candidate)) == "cwd"
+
+
+def test_any_of_the_four_uids_in_the_status_line_counts_as_this_uid(tmp_path):
+    for number, line in enumerate((
+        "Uid:\t1000\t1000\t1000\t1000", "Uid:\t0\t0\t0\t1000", "Uid:\t0\t1000\t0\t0", "Uid:\t0\t0\t1000\t0",
+    )):
+        proc = tmp_path.resolve() / f"proc{number}"
+        entry = proc / "24"
+        (entry / "cwd").mkdir(parents=True)
+        (entry / "status").write_text(f"Name:\tx\n{line}\n", encoding="utf-8")
+        sweep = liveness.sweep_holders(str(proc), uid=1000)
+        assert sweep.foreign_skipped == 0 and sweep.incomplete, line
+
+
+def test_a_status_without_a_uid_line_makes_the_sweep_incomplete(tmp_path):
+    proc = tmp_path.resolve() / "proc"
+    entry = proc / "25"
+    entry.mkdir(parents=True)
+    (entry / "status").write_text("Name:\tx\n", encoding="utf-8")
+    sweep = liveness.sweep_holders(str(proc))
+    assert sweep.foreign_skipped == 0 and sweep.incomplete and "no Uid line" in sweep.incomplete
 
 
 def test_an_entry_whose_owner_cannot_be_read_makes_the_sweep_incomplete(tmp_path):
@@ -305,7 +353,7 @@ def test_an_entry_whose_owner_cannot_be_read_makes_the_sweep_incomplete(tmp_path
     def denied(path):
         raise PermissionError(13, "Permission denied", path)
 
-    sweep = liveness.sweep_holders(str(proc), stat_fn=denied)
+    sweep = liveness.sweep_holders(str(proc), status_fn=denied)
     assert sweep.incomplete and "owner unreadable" in sweep.incomplete
 
 
@@ -316,7 +364,7 @@ def test_a_process_that_vanished_is_not_an_error(tmp_path):
     def gone(path):
         raise FileNotFoundError(2, "No such file", path)
 
-    assert liveness.sweep_holders(str(proc), stat_fn=gone).incomplete is None
+    assert liveness.sweep_holders(str(proc), status_fn=gone).incomplete is None
 
 
 def test_a_proc_root_that_cannot_be_listed_is_an_incomplete_sweep(tmp_path):

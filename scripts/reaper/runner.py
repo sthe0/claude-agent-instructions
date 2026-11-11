@@ -312,11 +312,13 @@ def execute_pass(
     if skipped_modules:
         cancelled.append(f"{len(skipped_modules)} reaper module(s) skipped at discovery")
     scanned: "dict[str, list[Verdict]]" = {}
+    failed_scans: "set[str]" = set()
     for reaper in reapers:
         try:
             scanned[reaper.name] = _normalize(reaper.module.scan(dataclasses.replace(ctx, due=reaper.name in due)))
         except Exception as exc:
             scanned[reaper.name] = []
+            failed_scans.add(reaper.name)
             cancelled.append(f"scan of {reaper.name} failed")
             print(f"reaper {reaper.name}: scan failed: {type(exc).__name__}: {exc}", file=err)
 
@@ -350,6 +352,7 @@ def execute_pass(
     provenance = _provenance(pressured=pressured is not None, manual=manual)
     removed = 0
     failed_removals: "set[str]" = set()
+    failed_paths: "set[str]" = set()
     removed_paths: "set[str]" = set()
     for real, entries in joined.items():
         if blocker(real) is not None:
@@ -367,6 +370,7 @@ def execute_pass(
                 raise RuntimeError("remove() returned False")
         except Exception as exc:
             failed_removals.add(reaper.name)
+            failed_paths.add(verdict.path)
             print(f"reaper {reaper.name}: FAILED to remove {verdict.path}: {type(exc).__name__}: {exc}", file=err)
             continue
         removed += 1
@@ -377,12 +381,14 @@ def execute_pass(
 
     if kept_dir is not None:
         for reaper in selected:
-            if reaper.name not in due or f"scan of {reaper.name} failed" in cancelled:
+            if reaper.name not in due or reaper.name in failed_scans:
                 continue
             keeps = []
             for verdict in scanned[reaper.name]:
                 if verdict.action == KEEP:
                     keeps.append((verdict.path, verdict.reason, verdict.size))
+                elif verdict.path in failed_paths:
+                    keeps.append((verdict.path, f"removal refused or failed: {verdict.reason}", verdict.size))
                 elif verdict.path not in removed_paths:
                     keeps.append((verdict.path, blocker(os.path.realpath(verdict.path)) or verdict.reason, verdict.size))
             _write_kept(kept_dir, reaper.name, now, provenance, keeps)
