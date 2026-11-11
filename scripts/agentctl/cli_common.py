@@ -2137,7 +2137,7 @@ def _carry_records(store: StateStore, state: SessionState, plan_path: str, *, in
     that has already moved `state.plan_path` off it."""
     from .plan import PlanError, change_tier, load_plan as _load
 
-    report = {"tier": None, "carried": False, "owed": [], "records": [], "held": []}
+    report = {"tier": None, "carried": False, "owed": [], "records": [], "held": [], "settled": []}
     old, old_sha = _review_baseline(store, state) if baseline is None else baseline[:2]
     old_path = state.plan_path if baseline is None else baseline[2]
     if old is None:
@@ -2151,7 +2151,15 @@ def _carry_records(store: StateStore, state: SessionState, plan_path: str, *, in
     report = carry_forward.apply(
         target, old, new, new_path=plan_path, new_sha=_plan_file_sha256(plan_path),
         change=change, old_path=old_path, old_sha=old_sha)
-    return (target if report["carried"] else state), report, change
+    return (target if report["carried"] or report["settled"] else state), report, change
+
+
+def _log_settled_rows(state: SessionState, plan_path: str, report: dict) -> None:
+    """The history event of an agreed order change's row carry (`carry_forward` `settled`),
+    apart from `review_carried`: the plan's own review is still owed."""
+    if report["settled"]:
+        state.log("review_rows_carried", plan=plan_path, tier=report["tier"],
+                  rows=list(report["settled"]))
 
 
 _VERDICT_PRESERVING_CLASSES = frozenset({"B", "F", "C"})

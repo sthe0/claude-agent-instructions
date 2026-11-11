@@ -10,7 +10,11 @@ that tier, which records still describe the new version and re-binds them to it:
   are *held* — kept without a review of the new content, satisfied until a unit reviewer
   escalates them (`release_holds`);
 * tier 3-4 and an edit whose tier cannot be computed: nothing changes, so every record is
-  exactly as stale as it would be without this module.
+  exactly as stale as it would be without this module — except an agreed order change
+  (`_agreed_order_change`): there the unit and pair records of settled stages carry, each
+  only when every stage it covers is PASSED with an unmoved digest and its currency hash
+  is the same in both versions, so the change cannot have reached what it judged
+  (`_Ctx.settled_rows`); `unit:base` and every other record stay as stale as before.
 
 A record counts only if it described the OLD version. One bound to the new version
 already (its `plan_sha256` is the new file's) is left alone, and so is a record that was
@@ -21,8 +25,9 @@ from __future__ import annotations
 
 import copy
 
-from .gates import pair_binding_hash
+from .gates import order_agreement_active, order_agreement_blockers, pair_binding_hash
 from .plan import (
+    PAIR_BASE_NODE,
     WHOLE_STAGE_ELEMENT,
     PlanChange,
     PlanDoc,
@@ -53,10 +58,21 @@ from .premise import (
     parse_target,
 )
 from .stage_norm import StageNorm
-from .state import PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, PlanPairReview, PlanReview, SessionState
+from .state import (
+    PAIR_BINDING_KEYS, PAIR_CONTENT_KEYS, PlanPairReview, PlanReview, SessionState, StageStatus,
+)
 
 #: Highest tier of an edit whose records carry.
 MAX_CARRIED_TIER = 2
+
+#: The `PlanMeta` fields an agreed order change may move while the rows of settled stages
+#: keep their review: the order (its whole subtree is the one field `order`) and the goal
+#: and done criterion the plan states in answer to it.
+ORDER_CHANGE_META = frozenset({"goal", "done_criterion", "order"})
+
+#: The name `plan.change_tier` adds to `PlanChange.meta` when the stage set moved; it is not
+#: a `PlanMeta` field.
+_STAGE_SET = "stages"
 
 _KEY_BOUND = frozenset({"researched", "escalated", "assumed"})
 
@@ -71,12 +87,19 @@ def apply(
     old_path: "str | None" = None, old_sha: "str | None" = None,
 ) -> dict:
     """Carry `state`'s records from `old_doc` onto `new_doc` as far as `change` allows.
-    Returns `{"tier", "carried", "owed", "records", "held"}`: `owed` the stages whose own
-    review is owed again, `records` a label per record carried, `held` the pair ids
-    carried without a review."""
+    Returns `{"tier", "carried", "owed", "records", "held", "settled"}`: `owed` the stages
+    whose own review is owed again, `records` a label per record carried, `held` the pair
+    ids carried without a review, `settled` the unit and pair ids an agreed order change
+    carried. `carried` stays False for a `settled`-only carry: the plan's own review is
+    still owed, so the round accounting of an uncarried edit applies."""
     report = {"tier": None if change is None else change.tier, "carried": False,
-              "owed": [], "records": [], "held": []}
-    if change is None or change.tier > MAX_CARRIED_TIER:
+              "owed": [], "records": [], "held": [], "settled": []}
+    if change is None:
+        return report
+    if change.tier > MAX_CARRIED_TIER:
+        if _agreed_order_change(state, new_doc, change):
+            _Ctx(state, old_doc, new_doc, new_path, new_sha, old_path, old_sha,
+                 change.tier, set(), report).settled_rows()
         return report
     owed = _owed(change)
     ctx = _Ctx(state, old_doc, new_doc, new_path, new_sha, old_path, old_sha,
@@ -102,6 +125,18 @@ def carry_premise(
     return report["records"]
 
 
+def _agreed_order_change(state: SessionState, new_doc: PlanDoc, change: PlanChange) -> bool:
+    """Whether an edit above the carried tiers is an order change the user agreed: the
+    stage set is unchanged, the plan-level fields it moves are some of
+    `ORDER_CHANGE_META` and no other, and the order agreement stands for the new version."""
+    if _STAGE_SET in change.meta:
+        return False
+    moved = set(change.meta) - {_STAGE_SET}
+    if not moved or not moved <= ORDER_CHANGE_META:
+        return False
+    return order_agreement_active(state, new_doc) and not order_agreement_blockers(state, new_doc)
+
+
 def _owed(change: PlanChange) -> set:
     """The stages whose own review an edit of this change owes again (stage tier 2)."""
     return {index for index, c in change.stages.items() if c.tier == 2}
@@ -121,6 +156,10 @@ def release_holds(state: SessionState, node: "int | str | None" = None) -> list[
 
 def describe(report: dict) -> str:
     """One line for a Directive: what was carried, at which tier, and what is owed."""
+    if report.get("settled"):
+        return (f"kept the review of {len(report['settled'])} row(s) of settled stages across "
+                f"the agreed order change (tier {report['tier']}): {', '.join(report['settled'])}; "
+                "every other row and the plan's own review are owed")
     if not report.get("carried"):
         return ""
     text = f"carried {len(report['records'])} record(s) onto the new version (tier {report['tier']})"
@@ -253,6 +292,42 @@ class _Ctx:
             record.plan_sha256 = self._restamped_sha(record.plan_sha256)
             self.report["records"].append(rid)
 
+    def settled_rows(self) -> None:
+        """Re-bind each current unit and pair record of the old version that an agreed
+        order change cannot have reached: every stage it covers is PASSED with the same
+        stage digest in both versions, and its currency hash did not move. `unit:base`
+        covers no stage and judged the order itself, so it never carries."""
+        settled = {
+            s.index for s in self.state.stages
+            if s.outcome.status == StageStatus.PASSED.value
+            and s.index in self.old_keys and self.old_keys[s.index] == self.new_keys.get(s.index)
+        }
+        old_ids = set(review_units(self.old)) | set(review_pairs(self.old))
+        new_ids = set(review_units(self.new)) | set(review_pairs(self.new))
+        for rid, record in self.state.plan_pair_reviews.items():
+            if is_legacy_review_id(rid) or rid not in old_ids or rid not in new_ids:
+                continue
+            if record.verdict not in _HOLDABLE_VERDICTS:
+                continue
+            if not self._binds_old(record.plan_path, record.plan_sha256):
+                continue
+            if not self._was_current(record, rid):
+                continue
+            stages = _covered_stages(rid)
+            if not stages or not stages <= settled:
+                continue
+            if review_currency_hash(self.old, rid) != review_currency_hash(self.new, rid):
+                continue
+            if is_unit_id(rid):
+                self._restamp_unit(record, rid)
+            else:
+                self._restamp_pair(record, rid)
+            self._mark(record, self.old_sha or record.plan_sha256)
+            record.plan_path = self.new_path
+            record.plan_sha256 = self._restamped_sha(record.plan_sha256)
+            self.report["settled"].append(rid)
+        self.report["settled"].sort()
+
     def _was_held(self, record: PlanPairReview, rid: str) -> bool:
         return bool(record.held) and not is_unit_id(rid) \
             and record.held == review_currency_hash(self.old, rid)
@@ -332,6 +407,13 @@ class _Ctx:
         if binding and stamp in previous and stamp != binding:
             element["content_digest"] = binding
             self.report["records"].append(f"order:{element.get('id', '')}")
+
+
+def _covered_stages(review_id: str) -> set:
+    """The stages a unit or pair id judges: `unit:<n>` stage n, `<b>-<s>` both, `base-<s>`
+    stage s; `unit:base` none."""
+    nodes = (unit_node(review_id),) if is_unit_id(review_id) else split_pair_id(review_id)
+    return {node for node in nodes if node != PAIR_BASE_NODE}
 
 
 def _interface_payload(stage) -> tuple:

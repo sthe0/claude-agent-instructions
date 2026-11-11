@@ -81,6 +81,7 @@ from .cli_common import (
     _frozen_edge_stages,
     _review_baseline,
     _carry_records,
+    _log_settled_rows,
     _verdict_survives,
     _autonomy_directive_data,
     _apply_refined_stage_fields,
@@ -657,6 +658,7 @@ class _ReplanContext:
     agent_acked_difficulty: bool = False
     closing_waiver: str | None = None
     gate_state: Any = None
+    carry_preview: Any = None
     carry_change: Any = None
     trigger_exit: str | None = None
     run: Any = None
@@ -1063,6 +1065,7 @@ def _replan_review_gate(ctx: _ReplanContext) -> Directive | None:
                             "verify_command of a live stage, so the review must judge that check")
         return Directive(False, state.node, "plan_review", message, data=replan_data)
     ctx.gate_state, ctx.carry_change, ctx.trigger_exit = gate_state, carry_change, trigger_exit
+    ctx.carry_preview = carry_preview
     return None
 
 
@@ -1155,6 +1158,7 @@ def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
 def _replan_norm_and_premise_gates(ctx: _ReplanContext) -> Directive | None:
     state, store, args = ctx.state, ctx.store, ctx.args
     gate_state, carry_change, new = ctx.gate_state, ctx.carry_change, ctx.new
+    carried = bool(ctx.carry_preview and ctx.carry_preview["carried"])
     auth_kind, tier, reopening = ctx.auth_kind, ctx.tier, ctx.reopening
 
     # Norm-edit consequence: a replan closing a difficulty whose record names norm targets
@@ -1193,14 +1197,15 @@ def _replan_norm_and_premise_gates(ctx: _ReplanContext) -> Directive | None:
     # the mismatch is visible in question-list output even when this replan is blocked
     # by the gate (#123). Runs here — after the try-finally restored plan_path and
     # before the pblock return — so a blocked replan still surfaces stale notes on disk.
-    # A carried view (`gate_state` is a copy) already holds the carried premise stamps; on
-    # the refused path the real state gets the same carry first, so the invalidation below
-    # marks only the dispositions the edit really made stale. On the applied path the
-    # carry is left to `_carry_records`, whose `carried` verdict it would otherwise change.
+    # A carried view (`carried`: `gate_state` is a copy) already holds the carried premise
+    # stamps; on the refused path the real state gets the same carry first, so the
+    # invalidation below marks only the dispositions the edit really made stale. On the
+    # applied path the carry is left to `_carry_records`, whose `carried` verdict it would
+    # otherwise change. A copy holding only an order change's settled rows carries no stamp.
     _inv_bag = state.plugins.get("premise")
-    if _inv_bag is not None and (gate_state is state or pblock):
+    if _inv_bag is not None and (not carried or pblock):
         _inv_changed = False
-        if gate_state is not state:
+        if carried:
             _carry_baseline, _ = _review_baseline(store, state)
             if _carry_baseline is not None:
                 _inv_changed = bool(
@@ -1351,7 +1356,8 @@ def _replan_record_acceptance(ctx: _ReplanContext) -> None:
     # stay with them; every other edit settles the old loop and starts from zero.
     _, carry_report, _ = _carry_records(store, state, args.plan, in_place=True)
     carry_note = carry_forward.describe(carry_report)
-    if carry_note:
+    _log_settled_rows(state, args.plan, carry_report)
+    if carry_report["carried"]:
         state.log("review_carried", plan=args.plan, tier=carry_report["tier"],
                   records=list(carry_report["records"]), owed=list(carry_report["owed"]),
                   held=list(carry_report["held"]))

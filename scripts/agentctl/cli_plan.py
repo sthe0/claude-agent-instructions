@@ -93,6 +93,7 @@ from .cli_common import (
     _agent_review_override,
     _review_baseline,
     _carry_records,
+    _log_settled_rows,
     _autonomy_directive_data,
     _sync_venue_from_plan,
     _log_gate,
@@ -724,8 +725,9 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
         # version (`carry_forward`) is not a round: no review is owed again for it.
         _, _submit_carry, _ = _carry_records(
             store, state, plan_path, in_place=True, baseline=_prior_baseline)
+        _carry_note = carry_forward.describe(_submit_carry)
+        _log_settled_rows(state, plan_path, _submit_carry)
         if _submit_carry["carried"]:
-            _carry_note = carry_forward.describe(_submit_carry)
             state.log("review_carried", plan=plan_path, tier=_submit_carry["tier"],
                       records=list(_submit_carry["records"]), owed=list(_submit_carry["owed"]),
                       held=list(_submit_carry["held"]))
