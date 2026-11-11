@@ -361,6 +361,12 @@ def candidate_tree(repo: Path, keep: list[str]) -> str:
     return proc.stdout.strip()
 
 
+def gate_env(environ) -> dict[str, str]:
+    """The environment of a gate run: the sandbox's scrub list and an enclosing run's slot marker removed."""
+    scrub = {*gate.sandbox_scrub_names(SCRIPTS_DIR / gate.SANDBOX_SCRIPT), test_slots.HELD_ENV}
+    return {k: v for k, v in environ.items() if k not in scrub}
+
+
 def concurrent_gates(repo: Path, runs: int, out: Path, keep: list[str] | None = None) -> int:
     free_gb = shutil.disk_usage("/").free / 2**30
     if free_gb < MIN_FREE_GB:
@@ -374,7 +380,7 @@ def concurrent_gates(repo: Path, runs: int, out: Path, keep: list[str] | None = 
     _say(f"tip {tip[:12]}; candidates {' '.join(c[:12] for c in candidates)}")
     out.parent.mkdir(parents=True, exist_ok=True)
     limits = test_slots.configured()
-    env = {k: v for k, v in os.environ.items() if k not in ("SOY_TOKEN", test_slots.HELD_ENV)}
+    env = gate_env(os.environ)
     logs = [out.with_name(f"{out.stem}.run{n}.log") for n in range(1, runs + 1)]
     with HeldSampler(limits.directory, 1.0) as sampler:
         procs = []

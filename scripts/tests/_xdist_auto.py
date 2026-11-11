@@ -134,8 +134,13 @@ def _take_slots(config, want: int) -> int:
     from lib import test_slots
 
     limits = test_slots.configured()
-    holder = test_slots.acquire(
-        want, limits=limits, on_wait=lambda holders: _say(test_slots.describe_wait(want, limits, holders)))
+    try:
+        holder = test_slots.acquire(
+            want, limits=limits, on_wait=lambda holders: _say(test_slots.describe_wait(want, limits, holders)))
+    except test_slots.SlotWaitExpired as exc:
+        import pytest
+
+        raise pytest.UsageError(str(exc)) from exc
     if holder.source == test_slots.ACQUIRED:
         os.environ[test_slots.HELD_ENV] = str(holder.count)
 

@@ -242,6 +242,12 @@ def test_the_runs_must_stay_within_the_limit_and_one_must_have_waited():
     assert any("no run waited" in p for p in control.check_runs([{"slot_wait_s": 0}] * 3, max_held=8, total=8))
 
 
+def test_a_gate_run_gets_the_sandbox_scrub_list_and_no_enclosing_slot_marker_removed():
+    scrubbed = gate.sandbox_scrub_names(SCRIPTS_DIR / gate.SANDBOX_SCRIPT)
+    env = control.gate_env({scrubbed[0]: "x", test_slots.HELD_ENV: "4", "KEEP_ME": "1"})
+    assert env == {"KEEP_ME": "1"}
+
+
 def test_the_record_path_is_read_from_the_gate_output():
     assert control._record_path("SUITE: PASS\nRECORD: /x/y.json\n") == "/x/y.json"
     assert control._record_path("error\n") == ""

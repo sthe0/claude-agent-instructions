@@ -54,6 +54,7 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `test-slots-total` | `8` | Machine-wide pytest-xdist worker slots shared by every parallel test run (`scripts/lib/test_slots.py`); a run waits in a queue when they are taken. |
 | `test-slots-per-run` | `4` | Most worker slots one parallel test run takes; an explicit `-n` above it is capped. |
 | `test-slots-dir` | `/tmp/core-test-slots-<uid>` | Fixed per-user directory of the slot lock files; never derived from HOME or TMPDIR. |
+| `test-slots-max-wait-s` | `14400` | Longest a parallel test run waits in the slot queue; past it the run fails to start (the suite gate: UNAVAILABLE) naming the holders. |
 | `memory-leaf-max-bytes` | `74000` | Byte size above which `self-diagnose.py` flags a difficulty/v1 leaf `oversized-leaf`. |
 | `memory-leaf-max-contexts-multiple` | `27` | Multiple of `principle-promotion-threshold` in `### ` contexts above which the same flag fires. |
 | `plan-stage-max-chars` | `70000` | Largest rendered size of one plan node; over it blocks `submit-plan` and topological review. |

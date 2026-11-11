@@ -60,7 +60,8 @@ BUILD_TIMEOUT_S = 600
 KILL_GRACE_S = 10
 LOG_TAIL_LINES = 400
 CAP_RUN_SLACK_S = 30
-CAP_RUN_EXTRA_TASKS = 512  # config.md: fanout-cap-extra-tasks, cap-run.sh's own default
+CAP_RUN_EXTRA_KEY = "fanout-cap-extra-tasks"
+CAP_RUN_EXTRA_TASKS = 512  # config.md: fanout-cap-extra-tasks
 DISK_SAMPLE_S = 60
 JUNIT_NAME = "junit.xml"
 REPORT_NAME = "tests.jsonl"
@@ -181,6 +182,7 @@ class SuiteRun:
     build_ok: bool = True
     xdist_ok: bool = True
     detail: str = ""
+    slots_unavailable: str = ""
     log_tail: str = ""
     build_s: float = 0.0
     duration_s: float = 0.0
@@ -204,6 +206,8 @@ class Runner(Protocol):
 
 def classify(run: SuiteRun, expected_sha: str) -> tuple[tuple[str, ...], str]:
     """(failed node ids, unavailable reason); a non-empty reason means the ids prove nothing."""
+    if run.slots_unavailable:
+        return (), run.slots_unavailable
     if run.timed_out:
         return (), f"pytest did not finish within the timeout{_detail(run)}"
     if not run.build_ok:
@@ -450,12 +454,16 @@ def _signal_group(proc: subprocess.Popen, sig: int) -> None:
 
 
 def run_group(argv: Sequence[str], *, cwd: str | Path | None, env: dict[str, str],
-              timeout_s: float, grace_s: float = KILL_GRACE_S) -> tuple[int, str, bool]:
-    """(exit code, merged output, timed out). On timeout the whole group gets SIGTERM, then SIGKILL."""
+              timeout_s: float, grace_s: float = KILL_GRACE_S,
+              pass_fds: Sequence[int] = ()) -> tuple[int, str, bool]:
+    """(exit code, merged output, timed out). On timeout the whole group gets SIGTERM, then SIGKILL.
+
+    ``pass_fds`` stay open in the child, so locks held through them outlive this process.
+    """
     try:
         proc = subprocess.Popen(
             list(argv), cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, errors="replace", start_new_session=True,
+            text=True, errors="replace", start_new_session=True, pass_fds=tuple(pass_fds),
         )
     except OSError as exc:
         raise GateError(f"cannot run {Path(argv[0]).name}: {exc}") from exc
@@ -503,14 +511,28 @@ def suite_env(root: Path, userbase: str, failures_file: Path, scrub: Sequence[st
     return env
 
 
-def slot_holder_extra_tasks(limits: test_slots.Limits) -> int:
-    """cap-run.sh headroom of a run that holds slots: one default share per run the limiter admits at once.
+def configured_extra_tasks(config_path: str | Path | None = None) -> int:
+    """cap-run.sh's per-run headroom: the ``fanout-cap-extra-tasks`` row, else the equal code constant."""
+    try:
+        from agentctl.config import parse_config_md
+
+        value = int(parse_config_md(Path(config_path) if config_path else None).get(CAP_RUN_EXTRA_KEY, ""))
+    except (ImportError, OSError, ValueError):
+        return CAP_RUN_EXTRA_TASKS
+    return value if value > 0 else CAP_RUN_EXTRA_TASKS
+
+
+def slot_holder_extra_tasks(limits: test_slots.Limits, per_run_extra: int | None = None) -> int:
+    """cap-run.sh headroom of a run that holds slots: room for every slot holder the limiter admits at once.
 
     cap-run.sh caps the user's machine-wide thread count at its count on entry plus the headroom,
-    so every run started later spends from the headroom of the runs already going; with the
-    default headroom alone, two slot holders together could exhaust the first one's.
+    so every run started later spends from the headroom of the runs already going. Threads grow
+    with workers, ``fanout-cap-extra-tasks`` covers one run of a full per-run share, and slot
+    holders together never run more than ``total`` workers, so ``ceil(total / per_run)`` shares
+    bound what all of them spend. Runs that hold no slot (serial runs) are not counted.
     """
-    return CAP_RUN_EXTRA_TASKS * max(1, limits.total // limits.per_run)
+    extra = configured_extra_tasks() if per_run_extra is None else per_run_extra
+    return extra * max(1, -(-limits.total // limits.per_run))
 
 
 def pytest_argv(root: Path, select: Sequence[str], timeout_s: int, extra_tasks: int | None = None) -> list[str]:
@@ -623,7 +645,11 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
         stale.unlink(missing_ok=True)
     env = suite_env(root, userbase, failures_file, sandbox_scrub_names(scripts / SANDBOX_SCRIPT))
     env[REPORT_ENV] = str(report)
-    holder, extra_tasks = _hold_slots(xdist_ok, select)
+    try:
+        holder, extra_tasks = _hold_slots(xdist_ok, select)
+    except test_slots.SlotWaitExpired as exc:
+        return SuiteRun(None, (), core_sha, build_s=build_s, xdist_ok=xdist_ok, slots_unavailable=str(exc),
+                        slot_wait_s=exc.waited_s)
     try:
         argv = pytest_argv(root, select, timeout_s, extra_tasks)
         if holder is not None:
@@ -632,7 +658,8 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
         timeout_started = time.time()
         ran = time.monotonic()
         with DiskPeak(root) as disk:
-            code, out, timed_out = run_group(argv, cwd=root / "core", env=env, timeout_s=timeout_s)
+            code, out, timed_out = run_group(argv, cwd=root / "core", env=env, timeout_s=timeout_s,
+                                             pass_fds=holder.fds if holder else ())
         duration_s = time.monotonic() - ran
         cpu_s = _children_cpu_s() - cpu_before
     finally:

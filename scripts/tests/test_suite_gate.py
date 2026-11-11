@@ -1018,26 +1018,28 @@ def test_pytest_argv_runs_the_whole_tree_or_exactly_the_selected_ids():
     assert widened[1:3] == ["--extra-tasks", "1024"] and widened.index("--") > widened.index("--timeout")
 
 
-def test_a_slot_holder_gets_cap_run_headroom_for_every_run_the_limiter_admits_at_once(tmp_path):
+def test_a_slot_holder_gets_cap_run_headroom_for_every_slot_holder_the_limiter_admits_at_once(tmp_path):
     from lib import test_slots
 
-    assert gate.slot_holder_extra_tasks(test_slots.Limits(8, 4, tmp_path)) == 2 * gate.CAP_RUN_EXTRA_TASKS
-    assert gate.slot_holder_extra_tasks(test_slots.Limits(8, 8, tmp_path)) == gate.CAP_RUN_EXTRA_TASKS
-    assert gate.slot_holder_extra_tasks(test_slots.Limits(4, 8, tmp_path)) == gate.CAP_RUN_EXTRA_TASKS
+    assert gate.slot_holder_extra_tasks(test_slots.Limits(8, 4, tmp_path), 100) == 200
+    assert gate.slot_holder_extra_tasks(test_slots.Limits(8, 3, tmp_path), 100) == 300, "a partial share counts"
+    assert gate.slot_holder_extra_tasks(test_slots.Limits(8, 8, tmp_path), 100) == 100
+    assert gate.slot_holder_extra_tasks(test_slots.Limits(4, 8, tmp_path), 100) == 100
 
 
-def test_the_cap_run_headroom_constant_equals_its_config_row_and_cap_run_default():
-    from agentctl.config import parse_config_md
-
-    assert parse_config_md(None)["fanout-cap-extra-tasks"] == str(gate.CAP_RUN_EXTRA_TASKS)
-    cap_run = (SCRIPTS_DIR / "cap-run.sh").read_text(encoding="utf-8")
-    assert f"\nextra={gate.CAP_RUN_EXTRA_TASKS} " in cap_run
+def test_the_per_run_headroom_is_read_from_config_like_the_timeout(tmp_path):
+    config = tmp_path / "config.md"
+    config.write_text("| `fanout-cap-extra-tasks` | `300` |\n", encoding="utf-8")
+    assert gate.configured_extra_tasks(config) == 300
+    config.write_text("| `fanout-cap-extra-tasks` | `many` |\n", encoding="utf-8")
+    assert gate.configured_extra_tasks(config) == gate.CAP_RUN_EXTRA_TASKS
+    assert gate.configured_extra_tasks() == gate.CAP_RUN_EXTRA_TASKS == 512, "config.md row equals the constant"
 
 
 def _fake_group(failed=(FAILED_A,), build_rc=0, pytest_rc=1, timed_out=False):
     calls = []
 
-    def fake(argv, *, cwd, env, timeout_s, grace_s=gate.KILL_GRACE_S):
+    def fake(argv, *, cwd, env, timeout_s, grace_s=gate.KILL_GRACE_S, pass_fds=()):
         calls.append((list(argv), cwd, env, timeout_s))
         if Path(argv[0]).name == gate.SANDBOX_SCRIPT:
             if build_rc == 0:
@@ -1114,10 +1116,11 @@ def _holding_fake(seen):
 
     inner = _fake_group(failed=())
 
-    def fake(argv, *, cwd, env, timeout_s, grace_s=gate.KILL_GRACE_S):
+    def fake(argv, *, cwd, env, timeout_s, grace_s=gate.KILL_GRACE_S, pass_fds=()):
         if Path(argv[0]).name != gate.SANDBOX_SCRIPT:
             seen.append({"at": time.time(), "env": dict(env), "timeout_s": timeout_s,
-                         "held": test_slots.held(_slot_dir())})
+                         "held": test_slots.held(_slot_dir()),
+                         "passed": sorted(test_slots._file_key(os.fstat(fd)) for fd in pass_fds)})
         return inner(argv, cwd=cwd, env=env, timeout_s=timeout_s, grace_s=grace_s)
 
     return fake
@@ -1134,6 +1137,8 @@ def test_a_full_run_holds_its_slots_while_pytest_runs_and_tells_pytest_how_many(
     want = min(os.cpu_count() or 1, test_slots.DEFAULT_PER_RUN)
     (during,) = seen
     assert len(during["held"]) == want and {pid for _, pid in during["held"]} == {os.getpid()}
+    held_keys = sorted(test_slots._file_key(os.stat(_slot_dir() / slot)) for slot, _ in during["held"])
+    assert during["passed"] == held_keys, "pytest gets the slot descriptors, so it keeps them if the gate dies"
     assert during["env"][gate.XDIST_WORKERS_ENV] == during["env"][test_slots.HELD_ENV] == str(want)
     assert during["env"][gate.REPORT_ENV] == str(root / gate.REPORT_NAME)
     assert (run.slots_held, run.slots_source) == (want, test_slots.ACQUIRED)
@@ -1164,9 +1169,32 @@ def test_the_timeout_starts_after_the_wait_for_slots(tmp_path, monkeypatch):
     root.mkdir()
     threading.Thread(target=free_later, daemon=True).start()
     run = gate.default_runner(tmp_path, SHA_A, root, select=(), timeout_s=50)
-    assert run.slot_wait_s >= 0.8 and seen[0]["at"] >= freed[0]
+    assert run.slot_wait_s > 0 and seen[0]["at"] >= freed[0]
+    assert run.slots_acquired_at >= gate.iso_instant(freed[0]), "slots came only once the blockers let go"
     assert seen[0]["timeout_s"] == 50, "the whole timeout is left after the wait"
     assert run.slots_acquired_at <= run.timeout_started_at and run.queued_at < run.slots_acquired_at
+
+
+def test_a_run_that_waits_past_the_slot_limit_is_unavailable_and_names_the_holders(tmp_path, monkeypatch):
+    from lib import test_slots
+
+    real = test_slots.configured()
+    limits = test_slots.Limits(real.total, real.per_run, real.directory, max_wait_s=1)
+    monkeypatch.setattr(gate.test_slots, "configured", lambda *a, **k: limits)
+    blockers = [test_slots.acquire(limits.per_run, limits=limits) for _ in range(limits.total // limits.per_run)]
+    seen = []
+    monkeypatch.setattr(gate, "run_group", _holding_fake(seen))
+    root = tmp_path / "root"
+    root.mkdir()
+    try:
+        run = gate.default_runner(tmp_path, SHA_A, root, select=(), timeout_s=50)
+    finally:
+        for blocker in blockers:
+            blocker.release()
+    assert seen == [], "pytest never started"
+    ids, reason = gate.classify(run, run.sandbox_core_sha)
+    assert ids == () and reason.startswith("no test slots came free within 1 s") and f"pid {os.getpid()}" in reason
+    assert gate.derive_status([], reason) == gate.UNAVAILABLE and run.slot_wait_s >= 1.0
 
 
 def test_a_serial_rerun_takes_no_slot(tmp_path, monkeypatch):

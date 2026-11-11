@@ -15,7 +15,11 @@ waiting runs never split the free slots between them.
 A process started inside a run that already holds slots never acquires again: the run says so
 in ``CORE_TEST_SLOTS_HELD``, and an ancestor holding a slot (seen in /proc/locks) counts too,
 for a nested pytest whose environment was scrubbed. Without that a run could wait on slots
-its own process tree holds.
+its own process tree holds. The ancestor lookup is Linux-only (/proc/locks, /proc/<pid>/stat);
+where /proc/locks is absent only the environment variable is consulted.
+
+A run waits at most ``test-slots-max-wait-s`` for its slots, then ``acquire`` raises
+``SlotWaitExpired`` naming the holders; while it waits it reports them every minute.
 
   test_slots.py held [--dir DIR] [--json]
       Print who holds which slot (from /proc/locks). Read-only; exit 0.
@@ -35,9 +39,12 @@ from pathlib import Path
 TOTAL_KEY = "test-slots-total"
 PER_RUN_KEY = "test-slots-per-run"
 DIR_KEY = "test-slots-dir"
+MAX_WAIT_KEY = "test-slots-max-wait-s"
 DEFAULT_TOTAL = 8  # config.md: test-slots-total
 DEFAULT_PER_RUN = 4  # config.md: test-slots-per-run
 DEFAULT_DIR = "/tmp/core-test-slots-<uid>"  # config.md: test-slots-dir
+DEFAULT_MAX_WAIT_S = 14400  # config.md: test-slots-max-wait-s
+WAIT_REPORT_S = 60.0
 
 HELD_ENV = "CORE_TEST_SLOTS_HELD"
 DIR_ENV = "CORE_TEST_SLOTS_DIR"
@@ -54,6 +61,17 @@ class Limits:
     total: int
     per_run: int
     directory: Path
+    max_wait_s: int = DEFAULT_MAX_WAIT_S
+
+
+class SlotWaitExpired(Exception):
+    """No slots came free within the wait limit; ``holders`` are (slot, pid) at expiry."""
+
+    def __init__(self, waited_s: float, holders: list[tuple[str, int]]):
+        pids = ", ".join(str(p) for p in sorted({pid for _, pid in holders})) or "-"
+        super().__init__(f"no test slots came free within {waited_s:.0f} s (held by pid {pids})")
+        self.waited_s = waited_s
+        self.holders = holders
 
 
 def _positive(raw: str | None, default: int) -> int:
@@ -81,6 +99,7 @@ def configured(config_path: str | Path | None = None, env: dict[str, str] | None
         total=_positive(rows.get(TOTAL_KEY), DEFAULT_TOTAL),
         per_run=_positive(rows.get(PER_RUN_KEY), DEFAULT_PER_RUN),
         directory=Path(raw_dir.replace("<uid>", str(os.getuid()))),
+        max_wait_s=_positive(rows.get(MAX_WAIT_KEY), DEFAULT_MAX_WAIT_S),
     )
 
 
@@ -125,9 +144,14 @@ def _slot_files(directory: Path) -> dict[tuple[int, int, int], str]:
 
 
 def held(directory: str | Path, locks_path: str = PROC_LOCKS) -> list[tuple[str, int]]:
-    """(slot file name, holder pid) for every held slot in ``directory``, sorted by name."""
+    """(slot file name, holder pid) for every held slot in ``directory``, sorted by name.
+
+    /proc/locks is read in several syscalls, so a lock passed from one holder to the next
+    between two reads can appear twice; an exclusive flock has one holder, so the last row wins.
+    """
     files = _slot_files(Path(directory))
-    return sorted((files[key], pid) for pid, key in _lock_table(locks_path) if key in files)
+    holders = {files[key]: pid for pid, key in _lock_table(locks_path) if key in files}
+    return sorted(holders.items())
 
 
 def _parent(pid: int) -> int:
@@ -147,17 +171,21 @@ def _ancestors(pid: int) -> set[int]:
     return found
 
 
-def inherited(directory: str | Path, env: dict[str, str] | None = None, pid: int | None = None) -> int | None:
+def inherited(directory: str | Path, env: dict[str, str] | None = None, pid: int | None = None,
+              locks_path: str = PROC_LOCKS) -> int | None:
     """The slot count this process already runs under, or None when it must acquire its own.
 
-    ``CORE_TEST_SLOTS_HELD`` (set by a run for its process tree) wins; else the number of slots
-    held by this process's ancestors.
+    ``CORE_TEST_SLOTS_HELD`` (set by a run for its process tree) wins; else, on Linux, the
+    number of slots held by this process's ancestors. Without ``locks_path`` the environment
+    variable is the only source.
     """
     environ = os.environ if env is None else env
     if environ.get(HELD_ENV):
         return _positive(environ.get(HELD_ENV), 1)
+    if not os.path.exists(locks_path):
+        return None
     ancestors = _ancestors(os.getpid() if pid is None else pid)
-    count = sum(1 for _, holder in held(directory) if holder in ancestors)
+    count = sum(1 for _, holder in held(directory, locks_path) if holder in ancestors)
     return count or None
 
 
@@ -198,6 +226,11 @@ class Holder:
     def wait_s(self) -> float:
         return max(0.0, self.acquired_at - self.queued_at)
 
+    @property
+    def fds(self) -> tuple[int, ...]:
+        """The slot descriptors, to hand to a child (``pass_fds``) that must keep the slots if this process dies."""
+        return tuple(self._fds)
+
     def release(self) -> None:
         for fd in self._fds:
             os.close(fd)
@@ -215,12 +248,33 @@ def share(want: int, limits: Limits) -> int:
     return max(1, min(want, limits.per_run, limits.total))
 
 
+class _Wait:
+    """The deadline of one acquisition and its periodic report of the holders."""
+
+    def __init__(self, directory: Path, max_wait_s: float, poll_s: float, on_wait, report_s: float):
+        self.directory, self.poll_s, self.on_wait, self.report_s = directory, poll_s, on_wait, report_s
+        self.started = time.monotonic()
+        self.deadline = self.started + max_wait_s
+        self.next_report: float | None = None
+
+    def tick(self) -> None:
+        """One poll interval of waiting: report when due, raise past the deadline, then sleep."""
+        now = time.monotonic()
+        if now >= self.deadline:
+            raise SlotWaitExpired(now - self.started, held(self.directory))
+        if self.on_wait is not None and (self.next_report is None or now >= self.next_report):
+            self.on_wait(held(self.directory))
+            self.next_report = now + self.report_s
+        time.sleep(self.poll_s)
+
+
 def acquire(want: int, *, limits: Limits | None = None, poll_s: float = POLL_S,
-            on_wait=None, clock=time.time) -> Holder:
+            on_wait=None, report_s: float = WAIT_REPORT_S, clock=time.time) -> Holder:
     """Hold ``min(want, per_run, total)`` slots, waiting in the queue until they are free.
 
     A process that already runs under slots (``inherited``) gets a holder of that count that
-    holds nothing. ``on_wait`` is called once with the current holders when the run must wait.
+    holds nothing. ``on_wait`` is called with the current holders when the run starts to wait
+    and every ``report_s`` after; past ``limits.max_wait_s`` it raises ``SlotWaitExpired``.
     """
     limits = limits or configured()
     queued_at = clock()
@@ -232,9 +286,10 @@ def acquire(want: int, *, limits: Limits | None = None, poll_s: float = POLL_S,
     queue_fd = _open_lock_file(directory / QUEUE_FILE)
     fds: list[int] = []
     names: list[str] = []
+    wait = _Wait(directory, limits.max_wait_s, poll_s, on_wait, report_s)
     try:
-        fcntl.flock(queue_fd, fcntl.LOCK_EX)
-        warned = False
+        while not _try_lock(queue_fd):
+            wait.tick()
         while True:
             for i in range(limits.total):
                 name = f"{SLOT_PREFIX}{i}"
@@ -248,10 +303,7 @@ def acquire(want: int, *, limits: Limits | None = None, poll_s: float = POLL_S,
                     os.close(fd)
             if len(fds) == want:
                 break
-            if on_wait is not None and not warned:
-                on_wait(held(directory))
-                warned = True
-            time.sleep(poll_s)
+            wait.tick()
     except BaseException:
         for fd in fds:
             os.close(fd)
