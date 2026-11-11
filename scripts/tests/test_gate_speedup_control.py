@@ -306,3 +306,62 @@ def test_the_selftest_passes_with_the_limiter():
 def test_the_selftest_fails_without_the_limiter():
     proc = _selftest("--limiter", "none")
     assert proc.returncode == 1 and "LIMIT EXCEEDED: held=12 > 8" in proc.stdout, proc.stdout + proc.stderr
+
+
+# ── verify-named ──────────────────────────────────────────────────────────
+
+FIXTURES = TESTS_DIR / "fixtures"
+NAMED_ID = "scripts/tests/test_r11_fixture_never_named.py::test_this_id_is_in_no_baseline_document"
+
+
+def _verify(report, named, max_named=20):
+    return control.verify_named(Path(report), Path(named), max_named)
+
+
+def _doc(tmp_path, *ids):
+    doc = tmp_path / "named.md"
+    doc.write_text("".join(f"- `{i}` — reason\n" for i in ids), encoding="utf-8")
+    return doc
+
+
+def test_a_failing_id_that_the_document_names_passes(tmp_path):
+    assert _verify(FIXTURES / "r11_bad_report.json", _doc(tmp_path, NAMED_ID)) == 0
+
+
+def test_a_failing_id_that_the_document_does_not_name_is_refused(tmp_path):
+    assert _verify(FIXTURES / "r11_bad_report.json", _doc(tmp_path, "scripts/tests/test_other.py::test_x")) == 1
+
+
+def test_a_clean_run_passes_against_an_empty_document(tmp_path):
+    assert _verify(FIXTURES / "r11_clean_report.json", _doc(tmp_path)) == 0
+
+
+def test_a_document_naming_more_than_the_limit_is_refused():
+    assert _verify(FIXTURES / "r11_clean_report.json", FIXTURES / "r11_21_named.md") == 3
+
+
+def test_the_limit_is_a_parameter():
+    assert _verify(FIXTURES / "r11_clean_report.json", FIXTURES / "r11_21_named.md", max_named=21) == 0
+
+
+def test_a_run_that_did_not_finish_is_refused_even_with_nothing_failing(tmp_path):
+    assert _verify(FIXTURES / "r11_incomplete_report.json", _doc(tmp_path)) == 4
+
+
+def test_a_run_with_a_collection_error_is_refused_however_many_were_collected(tmp_path):
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"collected": 16000, "failing": [], "collection_errors": ["scripts/tests/t.py"]}),
+                      encoding="utf-8")
+    assert _verify(report, _doc(tmp_path)) == 4
+
+
+def test_an_unreadable_input_is_an_error(tmp_path):
+    assert _verify(tmp_path / "missing.json", _doc(tmp_path)) == 2
+    assert _verify(FIXTURES / "r11_clean_report.json", tmp_path / "missing.md") == 2
+
+
+def test_the_command_exit_code_is_the_verdict(tmp_path):
+    proc = subprocess.run([sys.executable, str(CONTROL), "verify-named", "--report",
+                           str(FIXTURES / "r11_bad_report.json"), "--named", str(_doc(tmp_path))],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 1 and "UNNAMED" in proc.stdout, proc.stdout + proc.stderr

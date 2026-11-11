@@ -24,6 +24,20 @@ two checks show the limiter holds and the record carries the cost, on real proce
       path on a few files and the check takes minutes; the commits are never landed, so a
       reduced record can never admit a real landing.
 
+  gate_speedup_control.py sandbox-run --out PATH [-C REPO] [--select PATH ...] [--root DIR] [--timeout-s N]
+      Run the committed tip of REPO once, the way the gate does (a private clone in a sandbox
+      with a fake HOME and a scrubbed environment), and write PATH: the collected count, the
+      collection errors and every failing id (an error counts as failing). Exit 0 when the run
+      completed and the report was written, whatever the test outcomes; 2 when it could not run.
+      ``--select`` runs only the named test paths, serially; ``--root`` reuses and keeps a sandbox.
+      The whole suite takes about 40 minutes.
+
+  gate_speedup_control.py verify-named --report PATH --named DOC [--max-named N]
+      Compare a sandbox-run report with the document that names the known failures (default at
+      most 20 ids): 0 every failing id is named and DOC names at most N; 1 a failing id is not
+      named; 3 DOC names more than N ids; 4 the run did not finish (fewer than 15000 collected,
+      or a collection error); 2 an input could not be read.
+
 Exit 2 on a usage or environment error (not enough free disk, git failure).
 """
 from __future__ import annotations
@@ -419,6 +433,89 @@ def concurrent_gates(repo: Path, runs: int, out: Path, keep: list[str] | None = 
     return 0 if ok else 1
 
 
+# ── sandbox-run, verify-named ─────────────────────────────────────────────
+
+def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, timeout_s: int) -> int:
+    """One gate-shaped run of the committed tip of ``repo``; the report names every failing id."""
+    free_gb = shutil.disk_usage("/").free / 2**30
+    if free_gb < MIN_FREE_GB:
+        _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
+        return 2
+    sha = _git(repo, "rev-parse", "HEAD")
+    if _git(repo, "status", "--porcelain", "--untracked-files=no"):
+        _say("warning: tracked files are modified; the sandbox runs the committed tip only")
+    os.environ.pop(test_slots.HELD_ENV, None)
+    own_root = root is None
+    work = Path(tempfile.mkdtemp(prefix=gate.SANDBOX_PREFIX, dir=gate.SANDBOX_PARENT)) if own_root else root
+    try:
+        run = gate.default_runner(repo, sha, work, select=select, timeout_s=timeout_s)
+        if not run.build_ok or run.timed_out or run.pytest_exit is None:
+            _say(f"the run did not complete: {'timed out' if run.timed_out else run.detail or 'no pytest exit'}")
+            return 2
+        stem = out.with_suffix("")
+        lines = _test_report.read_lines(run.report_path) if run.report_path else []
+        collected = _test_report.collected_ids(lines)
+        collected_set = set(collected)
+        report = {
+            "commit": sha, "select": select, "pytest_exit": run.pytest_exit,
+            "duration_s": round(run.duration_s, 1), "collected": len(collected),
+            "collection_errors": [i for i in run.failures if "::" not in i and i not in collected_set],
+            "failing": list(run.failures),
+        }
+        out.parent.mkdir(parents=True, exist_ok=True)
+        for src, suffix in ((run.junit_path, ".junit.xml"), (run.report_path, ".tests.jsonl")):
+            if src:
+                shutil.copyfile(src, stem.with_name(stem.name + suffix))
+        out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        _say(f"{report['collected']} collected, {len(report['failing'])} failing, pytest exit {run.pytest_exit}, "
+             f"{report['duration_s']} s; report {out}")
+        return 0
+    except (gate.GateError, OSError) as exc:
+        _say(f"sandbox-run failed: {exc}")
+        return 2
+    finally:
+        if own_root:
+            gate.remove_sandbox(work, gate.SANDBOX_PARENT)
+
+
+MIN_COLLECTED = 15000
+DEFAULT_MAX_NAMED = 20
+NAMED_TRIM = "`'\",;()[]<>|*"
+
+
+def named_ids(text: str) -> set[str]:
+    """The test ids a document names: its whitespace-separated words that hold a ``::`` node id."""
+    words = (word.strip(NAMED_TRIM).rstrip(".:") for word in text.split())
+    return {word for word in words if word.startswith("scripts/") and "::" in word}
+
+
+def verify_named(report_path: Path, named_path: Path, max_named: int) -> int:
+    """0: every failing id is named and at most ``max_named`` ids are; 1: one is not named; 3: too many
+    named; 4: the report is of a run that did not finish; 2: unreadable input."""
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        text = named_path.read_text(encoding="utf-8")
+        failing, collected = list(report["failing"]), int(report["collected"])
+        collection_errors = list(report.get("collection_errors") or [])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _say(f"cannot read the inputs: {exc}")
+        return 2
+    if collected < MIN_COLLECTED or collection_errors:
+        _say(f"INCOMPLETE: {collected} tests collected (need {MIN_COLLECTED}), "
+             f"{len(collection_errors)} collection errors {' '.join(collection_errors[:3])}")
+        return 4
+    named = named_ids(text)
+    unnamed = [i for i in failing if i not in named and i not in text]
+    if unnamed:
+        _say(f"UNNAMED: {len(unnamed)} failing ids not named in {named_path.name}, first: {' '.join(unnamed[:5])}")
+        return 1
+    if len(named) > max_named:
+        _say(f"TOO MANY NAMED: {named_path.name} names {len(named)} ids, at most {max_named} are accepted")
+        return 3
+    _say(f"OK: {len(failing)} failing, all named; {len(named)} ids named (at most {max_named})")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gate_speedup_control.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -430,6 +527,18 @@ def main(argv: list[str] | None = None) -> int:
     gates.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
     gates.add_argument("--tests", nargs="+", default=None, metavar="PATH",
                        help="keep only these test files (repo-relative) in the throwaway candidates")
+    sandboxed = sub.add_parser("sandbox-run", help="one gate-shaped run of the committed tip; writes a report")
+    sandboxed.add_argument("--out", required=True, type=Path)
+    sandboxed.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    sandboxed.add_argument("--select", nargs="+", default=[], metavar="PATH",
+                           help="run only these test paths (serial, no slots); default: the whole suite")
+    sandboxed.add_argument("--root", type=Path, default=None,
+                           help="an existing sandbox to reuse and keep; default: a fresh one, removed after")
+    sandboxed.add_argument("--timeout-s", type=int, default=gate.DEFAULT_TIMEOUT_S)
+    named = sub.add_parser("verify-named", help="check a sandbox-run report against the documented failures")
+    named.add_argument("--report", required=True, type=Path)
+    named.add_argument("--named", required=True, type=Path)
+    named.add_argument("--max-named", type=int, default=DEFAULT_MAX_NAMED)
     fake = sub.add_parser("_fake-run")
     fake.add_argument("--dir", required=True)
     fake.add_argument("--want", type=int, required=True)
@@ -440,6 +549,10 @@ def main(argv: list[str] | None = None) -> int:
         return slots_selftest(args.limiter)
     if args.command == "concurrent-gates":
         return concurrent_gates(args.repo.resolve(), args.runs, args.out, args.tests)
+    if args.command == "sandbox-run":
+        return sandbox_run(args.repo.resolve(), args.out, args.select, args.root, args.timeout_s)
+    if args.command == "verify-named":
+        return verify_named(args.report, args.named, args.max_named)
     return _fake_run(args)
 
 

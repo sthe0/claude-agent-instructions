@@ -5,9 +5,11 @@ sessions' scope records are seeded directly through registry.save with a fresh
 heartbeat. No git/arc stubs are needed — the conflict hook never resolves a VCS,
 it only reads the scope registry and reasons over paths.
 
-pytest tmp_path resolves under /place/vartmp on this machine (not /tmp), so a
-seeded .py path is NOT engine-exempt and is_gated_path treats it as a gated
-(block-eligible) path — which is what the block-vs-warn split hinges on.
+The repo paths come from conftest.unexempt_dir: a seeded .py path there is NOT
+engine-exempt (no "/tmp/" in it, whatever the machine's tmp_path is) and
+is_gated_path treats it as a gated (block-eligible) path — which is what the
+block-vs-warn split hinges on. The paths are never created; the hook only reasons
+over them.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from conftest import path_with_arc_stub
+from conftest import path_with_arc_stub, unexempt_dir
 
 from session_scope import registry
 
@@ -75,10 +77,8 @@ def _decision(stdout: str) -> "dict | None":
 def test_block_on_gated_path_held_by_other_live_session(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    shared = repo / "shared.py"           # .py under /place/vartmp -> gated
-    shared.write_text("x")
+    repo = unexempt_dir(tmp_path, "repo")
+    shared = repo / "shared.py"           # .py outside any exempt root -> gated
 
     _seed(home, "other", [str(shared)], heartbeat_ts=time.time())
 
@@ -94,10 +94,8 @@ def test_block_on_gated_path_held_by_other_live_session(tmp_path):
 def test_warn_on_non_gated_path_held_by_other_live_session(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
+    repo = unexempt_dir(tmp_path, "repo")
     notes = repo / "notes.txt"            # .txt -> not a production/gated file
-    notes.write_text("x")
 
     _seed(home, "other", [str(notes)], heartbeat_ts=time.time())
 
@@ -111,10 +109,8 @@ def test_warn_on_non_gated_path_held_by_other_live_session(tmp_path):
 def test_silent_allow_single_session(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
+    repo = unexempt_dir(tmp_path, "repo")
     shared = repo / "shared.py"
-    shared.write_text("x")
     # no other session seeded
 
     proc = run_hook(_payload("me", str(shared)), home)
@@ -125,13 +121,9 @@ def test_silent_allow_single_session(tmp_path):
 def test_silent_allow_distinct_worktrees(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo_a = tmp_path / "repoA"
-    repo_a.mkdir()
-    repo_b = tmp_path / "repoB"
-    repo_b.mkdir()
-    (repo_a / "shared.py").write_text("x")
+    repo_a = unexempt_dir(tmp_path, "repoA")
+    repo_b = unexempt_dir(tmp_path, "repoB")
     mine = repo_b / "shared.py"
-    mine.write_text("x")
 
     # other session holds repoA/shared.py; I write repoB/shared.py — disjoint roots
     _seed(home, "other", [str(repo_a / "shared.py")], heartbeat_ts=time.time())
@@ -144,10 +136,8 @@ def test_silent_allow_distinct_worktrees(tmp_path):
 def test_dead_pid_excludes_heartbeat_fresh_record(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
+    repo = unexempt_dir(tmp_path, "repo")
     shared = repo / "shared.py"
-    shared.write_text("x")
 
     rec = registry.ScopeRecord(
         session_id="other",
@@ -169,10 +159,8 @@ def test_dead_pid_excludes_heartbeat_fresh_record(tmp_path):
 def test_stale_other_session_ignored(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
+    repo = unexempt_dir(tmp_path, "repo")
     shared = repo / "shared.py"
-    shared.write_text("x")
 
     _seed(home, "other", [str(shared)], heartbeat_ts=0.0)   # long-dead heartbeat
 
@@ -184,10 +172,8 @@ def test_stale_other_session_ignored(tmp_path):
 def test_own_session_is_never_a_conflict(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
+    repo = unexempt_dir(tmp_path, "repo")
     shared = repo / "shared.py"
-    shared.write_text("x")
 
     _seed(home, "me", [str(shared)], heartbeat_ts=time.time())   # my OWN record
 
@@ -200,11 +186,8 @@ def test_ancestor_directory_overlap_blocks(tmp_path):
     # other holds the directory root; I write a descendant file under it.
     home = tmp_path / "home"
     home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
+    repo = unexempt_dir(tmp_path, "repo")
     child = repo / "pkg" / "mod.py"
-    child.parent.mkdir(parents=True)
-    child.write_text("x")
 
     _seed(home, "other", [str(repo)], heartbeat_ts=time.time())
 
@@ -217,10 +200,8 @@ def test_ancestor_directory_overlap_blocks(tmp_path):
 def test_non_edit_write_tool_is_ignored(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
+    repo = unexempt_dir(tmp_path, "repo")
     shared = repo / "shared.py"
-    shared.write_text("x")
     _seed(home, "other", [str(shared)], heartbeat_ts=time.time())
 
     payload = {
@@ -251,10 +232,8 @@ def test_lineage_allows_child_writing_parent_held_gated_path(tmp_path):
     # child's env lineage names the parent that holds the path -> one actor -> allow.
     home = tmp_path / "home"
     home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
+    repo = unexempt_dir(tmp_path, "repo")
     shared = repo / "shared.py"
-    shared.write_text("x")
 
     _seed(home, "parent", [str(shared)], heartbeat_ts=time.time())
 
@@ -269,10 +248,8 @@ def test_lineage_allows_parent_writing_child_held_path(tmp_path):
     # the same path -> the parent's own id is in the child's holder-set -> allow.
     home = tmp_path / "home"
     home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
+    repo = unexempt_dir(tmp_path, "repo")
     shared = repo / "shared.py"
-    shared.write_text("x")
 
     rec = registry.ScopeRecord(
         session_id="child",
@@ -295,10 +272,8 @@ def test_foreign_lineage_still_blocks_gated_path(tmp_path):
     # disjoint lineage roots -> a genuinely foreign live session -> still denied.
     home = tmp_path / "home"
     home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
+    repo = unexempt_dir(tmp_path, "repo")
     shared = repo / "shared.py"
-    shared.write_text("x")
 
     rec = registry.ScopeRecord(
         session_id="foreign",
@@ -321,10 +296,8 @@ def test_foreign_lineage_still_blocks_gated_path(tmp_path):
 def test_stale_holder_ignored_even_with_lineage_env(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    repo = tmp_path / "repo"
-    repo.mkdir()
+    repo = unexempt_dir(tmp_path, "repo")
     shared = repo / "shared.py"
-    shared.write_text("x")
 
     _seed(home, "foreign", [str(shared)], heartbeat_ts=0.0)  # long-dead heartbeat
 

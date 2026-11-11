@@ -6,19 +6,19 @@ Every test drives the hook as a subprocess through its stdin/stdout contract and
 never imports it, so the stage's negative control can swap the file for a stub.
 
 Deny-side fixtures (the git repo, the `.arc`-marker directory) and the plain
-directory live under a HOME-derived directory, never under pytest `tmp_path` or
-$TMPDIR: both lie inside the allowlisted scratch roots and would make every deny
-test pass vacuously. The fixture asserts that, so a machine where HOME itself
-sits under a scratch root fails loudly instead of silently.
+directory must lie outside every allowlisted scratch root, or every deny test
+would pass vacuously. The module therefore names its own scratch root
+($AGENTCTL_SCRATCH_ROOTS, one private directory), puts the fixtures in a sibling
+directory, and runs the hook with the "/tmp/" path-segment exemption removed (see
+HOOK_RUNNER): the verdict depends on neither where $HOME nor where /tmp is. The
+fixture asserts that the fixtures are not exempt under those rules.
 """
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 
 import pytest
@@ -28,7 +28,6 @@ HOOK_SCRIPT = SCRIPTS_DIR / "hook-guard-bash-source-edit.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 from agentctl import exempt_paths  # noqa: E402
 
-FIXTURE_BASE = Path.home() / ".cache" / "hook-guard-bash-source-edit-tests"
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "Test",
     "GIT_AUTHOR_EMAIL": "test@example.com",
@@ -37,9 +36,26 @@ GIT_ENV = {
 }
 
 
+TMP_SEGMENT = "/tmp/"
+
+# The hook runs with the "/tmp/" path-segment exemption removed, so a fixture tree is
+# judged by the scratch roots alone and no verdict depends on whether the checkout or
+# pytest's tmp_path sits under /tmp. The scratch-root rule itself is exercised by
+# test_allow_scratch_root_git_tree.
+HOOK_RUNNER = (
+    "import runpy, sys\n"
+    "from agentctl import exempt_paths\n"
+    f"exempt_paths._EXEMPT_SUBSTRINGS = tuple(s for s in exempt_paths._EXEMPT_SUBSTRINGS if s != {TMP_SEGMENT!r})\n"
+    "runpy.run_path(sys.argv[1], run_name='__main__')\n"
+)
+
+_scratch_root: "Path | None" = None
+
+
 def _hook_env() -> dict:
     env = {**os.environ, **GIT_ENV}
-    env.pop(exempt_paths.SCRATCH_ROOTS_ENV, None)
+    env[exempt_paths.SCRATCH_ROOTS_ENV] = str(_scratch_root)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(SCRIPTS_DIR), env.get("PYTHONPATH")]))
     for var in ("GIT_DIR", "GIT_WORK_TREE"):
         env.pop(var, None)
     return env
@@ -63,7 +79,16 @@ def _init_repo(repo: Path) -> None:
 
 def _in_scratch(path: Path) -> bool:
     p = os.path.realpath(path)
-    return any(p == r or p.startswith(r + os.sep) for r in exempt_paths.scratch_roots())
+    r = os.path.realpath(_scratch_root)
+    return p == r or p.startswith(r + os.sep)
+
+
+def _hook_exempts(path: Path) -> bool:
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(exempt_paths.SCRATCH_ROOTS_ENV, str(_scratch_root))
+        patch.setattr(exempt_paths, "_EXEMPT_SUBSTRINGS",
+                      tuple(s for s in exempt_paths._EXEMPT_SUBSTRINGS if s != TMP_SEGMENT))
+        return exempt_paths.is_engine_exempt(str(path))
 
 
 class Sandbox:
@@ -74,25 +99,29 @@ class Sandbox:
         self.plain = root / "plain"
 
 
+@pytest.fixture(scope="module", autouse=True)
+def scratch_root(tmp_path_factory):
+    global _scratch_root
+    _scratch_root = tmp_path_factory.mktemp("hook-scratch-root")
+    yield _scratch_root
+    _scratch_root = None
+
+
 @pytest.fixture(scope="module")
-def sandbox():
-    root = FIXTURE_BASE / uuid.uuid4().hex
+def sandbox(scratch_root, tmp_path_factory):
+    root = tmp_path_factory.mktemp("hook-deny-fixtures")
     box = Sandbox(root)
-    try:
-        _init_repo(box.repo)
-        (box.arc / ".arc").mkdir(parents=True)
-        (box.arc / "src.py").write_text("a = 1\n")
-        box.plain.mkdir()
-        (box.plain / "f.txt").write_text("x\n")
-        (root / "memory-global").symlink_to(box.repo)
-        (root / "proj").symlink_to(box.repo / "agent-memory")
-        (root / "link.py").symlink_to(box.repo / "tracked.py")
-        assert not _in_scratch(root), f"{root} lies under a scratch root; deny tests would be vacuous"
-        assert not exempt_paths.is_engine_exempt(str(root)), f"{root} is engine-exempt"
-        yield box
-    finally:
-        assert root.parent == FIXTURE_BASE
-        shutil.rmtree(root, ignore_errors=True)
+    _init_repo(box.repo)
+    (box.arc / ".arc").mkdir(parents=True)
+    (box.arc / "src.py").write_text("a = 1\n")
+    box.plain.mkdir()
+    (box.plain / "f.txt").write_text("x\n")
+    (root / "memory-global").symlink_to(box.repo)
+    (root / "proj").symlink_to(box.repo / "agent-memory")
+    (root / "link.py").symlink_to(box.repo / "tracked.py")
+    assert not _in_scratch(root), f"{root} lies under a scratch root; deny tests would be vacuous"
+    assert not _hook_exempts(root), f"{root} is engine-exempt"
+    return box
 
 
 def run_hook(command: str, cwd: "Path | str", tool: str = "Bash",
@@ -102,7 +131,7 @@ def run_hook(command: str, cwd: "Path | str", tool: str = "Bash",
 
 
 def run_raw(stdin: str, env: "dict | None" = None) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(HOOK_SCRIPT)], input=stdin,
+    return subprocess.run([sys.executable, "-c", HOOK_RUNNER, str(HOOK_SCRIPT)], input=stdin,
                           env=env or _hook_env(), capture_output=True, text=True)
 
 
@@ -266,9 +295,9 @@ def test_allow_home_arc_state_dir(sandbox):
     assert denied(run_hook("echo text > f.txt", fake_home / "mount", env=env))
 
 
-def test_allow_tmp_git_tree(tmp_path):
-    assert _in_scratch(tmp_path), f"{tmp_path} is not under a scratch root of this machine"
-    repo = tmp_path / "repo"
+def test_allow_scratch_root_git_tree(scratch_root):
+    assert _in_scratch(scratch_root), f"{scratch_root} is not under a scratch root"
+    repo = scratch_root / "repo"
     _init_repo(repo)
     assert_allowed("sed -i s/a/b/ tracked.py", repo)
     assert_allowed("echo text > tracked.py", repo)

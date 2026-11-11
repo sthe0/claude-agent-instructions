@@ -215,6 +215,7 @@ def _shell_env(tmp_path, ledger_path):
         "HOME": str(home),
         "CLAUDE_AGENT_HOME": str(agent_home),
         "AGENTCTL_EDIT_LEDGER": str(ledger_path),
+        "AGENTCTL_SCRATCH_ROOTS": str(tmp_path / "scratchroot"),
     }
 
 
