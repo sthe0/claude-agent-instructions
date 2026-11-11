@@ -13,6 +13,10 @@ A reaper is a Python module defining
 * ``remove(path, ctx)`` — delete one item the runner approved. Raise (or return
   ``False``) when the removal did not happen;
 * optionally ``summary(verdicts) -> str | None`` — one line for the SessionStart notice;
+* optionally ``snapshot_extra(verdicts) -> dict`` — extra top-level fields of the runner's kept
+  snapshot; optionally ``dry_run_notes(verdicts) -> list[str]`` — diagnostic lines a dry run
+  prints to stderr after the summary. A keep verdict's ``reason=<slug>`` tag becomes the
+  snapshot entry's ``reason``; its ``reason`` text becomes the entry's ``detail``;
 * optionally ``upkeep(ctx) -> list[str]`` — non-destructive, idempotent, unthrottled
   maintenance (the ``git-worktrees`` reaper backs its branches up to origin), one report
   line per action. Only ``runner --upkeep-only`` calls it, under a lock and with errors

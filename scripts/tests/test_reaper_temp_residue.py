@@ -32,6 +32,7 @@ from session_scope import registry as scope_registry  # noqa: E402
 
 DAY = 86400.0
 SLUG = re.compile(r"[a-z]+(-[a-z]+)*")
+REAL_SWEEP = liveness.sweep_holders
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -779,8 +780,8 @@ def test_a_live_pass_removes_with_opt_in_logs_the_row_and_writes_the_kept_snapsh
     rows = [json.loads(line) for line in runner.removal_log_path().read_text(encoding="utf-8").splitlines()]
     assert [(r["path"], r["trigger"]) for r in rows] == [(str(dead), "manual")]
     snapshot = json.loads((runner.kept_snapshot_dir() / "temp-residue.json").read_text(encoding="utf-8"))
-    assert [(k["path"], k["reason"].split(":")[0]) for k in snapshot["kept"]] == [(str(fresh), liveness.IDLE_FLOOR)]
-    assert snapshot["kept"][0]["bytes"] > 0
+    assert [(k["path"], k["reason"]) for k in snapshot["kept"]] == [(str(fresh), liveness.IDLE_FLOOR)]
+    assert snapshot["kept"][0]["bytes"] > 0 and snapshot["kept"][0]["detail"].startswith(f"{liveness.IDLE_FLOOR}: idle ")
 
 
 def test_the_snapshot_lists_every_keep_with_a_reason_when_the_machine_has_not_opted_in(world, monkeypatch):
@@ -792,7 +793,10 @@ def test_the_snapshot_lists_every_keep_with_a_reason_when_the_machine_has_not_op
     snapshot = json.loads((runner.kept_snapshot_dir() / "temp-residue.json").read_text(encoding="utf-8"))
     assert dead.exists()
     assert len(snapshot["kept"]) == 2
-    assert all(k["reason"].startswith(temp_residue.OPT_IN_OFF) and k["bytes"] > 0 for k in snapshot["kept"])
+    assert all(
+        k["reason"] == temp_residue.OPT_IN_OFF and k["detail"].startswith(temp_residue.OPT_IN_OFF) and k["bytes"] > 0
+        for k in snapshot["kept"]
+    )
     assert not runner.removal_log_path().exists()
 
 
@@ -802,6 +806,108 @@ def test_a_dry_run_through_the_runner_writes_no_stamp_snapshot_or_removal_row(wo
     runner.main(["--dry-run", "--only", temp_residue.NAME], discover=only_temp_residue)
     assert not (world.home / "reaper" / "kept").exists() and not runner.removal_log_path().exists()
     assert not runner.stamp_dir().exists() or not any(runner.stamp_dir().iterdir())
+
+
+# ── an incomplete sweep: snapshot, helpers count, dry-run cause ───────────
+
+def plant_unreadable(proc: Path, pid: int, name: str, argv0: str, ppid: int = 1) -> None:
+    """A same-uid process whose cwd link cannot be read (a directory in place of the link), with status and cmdline."""
+    entry = proc / str(pid)
+    (entry / "cwd").mkdir(parents=True)
+    me = os.getuid()
+    (entry / "status").write_text(f"Name:\t{name}\nPPid:\t{ppid}\nUid:\t{me}\t{me}\t{me}\t{me}\n", encoding="utf-8")
+    (entry / "cmdline").write_text(argv0 + "\0", encoding="utf-8")
+
+
+def fake_sweep(monkeypatch, proc: Path, main_pid: int = 4859) -> None:
+    monkeypatch.setattr(
+        liveness, "sweep_holders", lambda *a, **k: REAL_SWEEP(str(proc), manager_pid_fn=lambda uid: main_pid),
+    )
+
+
+def test_an_incomplete_sweep_reaches_the_snapshot_as_a_slug_with_the_cause_as_detail(world, monkeypatch):
+    world.session_dir()
+    proc = world.root / "proc"
+    plant_unreadable(proc, 77, "screen", "screen")
+    fake_sweep(monkeypatch, proc)
+    original_now = time.time
+    monkeypatch.setattr(time, "time", lambda: original_now() + 5 * DAY)
+    runner.main(["--force-run", "--only", temp_residue.NAME], discover=only_temp_residue)
+    snapshot = json.loads((runner.kept_snapshot_dir() / "temp-residue.json").read_text(encoding="utf-8"))
+    [entry] = snapshot["kept"]
+    assert entry["reason"] == liveness.HOLDER_SWEEP_INCOMPLETE
+    assert re.search(r"pid=77 name='screen' argv0='screen' errno=\d+ \([A-Z]+\)", entry["detail"])
+    assert snapshot["unreadable_helpers_skipped"] == 0
+
+
+def test_the_snapshot_counts_the_unreadable_helpers_the_sweep_skipped(world, monkeypatch):
+    world.session_dir()
+    proc = world.root / "proc"
+    plant_unreadable(proc, 4859, "systemd", "/usr/lib/systemd/systemd")
+    plant_unreadable(proc, 4860, "(sd-pam)", "(sd-pam)", ppid=4859)
+    plant_unreadable(proc, 91, "fusermount", "fusermount", ppid=90)
+    fake_sweep(monkeypatch, proc)
+    original_now = time.time
+    monkeypatch.setattr(time, "time", lambda: original_now() + 5 * DAY)
+    runner.main(["--force-run", "--only", temp_residue.NAME], discover=only_temp_residue)
+    snapshot = json.loads((runner.kept_snapshot_dir() / "temp-residue.json").read_text(encoding="utf-8"))
+    assert snapshot["unreadable_helpers_skipped"] == 3
+    assert [k["reason"] for k in snapshot["kept"]] == [temp_residue.OPT_IN_OFF]
+
+
+def test_the_snapshot_without_any_candidate_reports_no_skipped_helpers():
+    assert temp_residue.snapshot_extra([]) == {"unreadable_helpers_skipped": 0}
+
+
+def test_the_dry_run_note_is_the_first_incomplete_cause_and_only_that(world, monkeypatch):
+    world.session_dir("b2")
+    world.session_dir("b3")
+    proc = world.root / "proc"
+    plant_unreadable(proc, 77, "screen", "screen -S work")
+    fake_sweep(monkeypatch, proc)
+    verdicts = temp_residue.scan(world.ctx(dry_run=True))
+    [note] = temp_residue.dry_run_notes(verdicts)
+    assert note.startswith("temp-residue: holder sweep incomplete, first cause: pid=77 name='screen' argv0='screen -S work' errno=")
+    assert temp_residue.dry_run_notes([v for v in verdicts if reason_of(v) != liveness.HOLDER_SWEEP_INCOMPLETE]) == []
+
+
+def test_the_dry_run_cli_names_the_process_behind_an_incomplete_sweep_and_keeps_stdout_closed(world, tmp_path):
+    world.session_dir()
+    proc = world.root / "proc"
+    plant_unreadable(proc, 77, "screen", "screen -S work")
+    scripts = Path(__file__).resolve().parent.parent
+    wrapper = world.root / "run_cli.py"
+    wrapper.write_text(
+        "import runpy, sys\n"
+        f"sys.path.insert(0, {str(scripts)!r})\n"
+        "from reaper import liveness\n"
+        "from reaper.builtin import temp_residue\n"
+        "real = liveness.sweep_holders\n"
+        f"liveness.sweep_holders = lambda *a, **k: real({str(proc)!r}, manager_pid_fn=lambda uid: 4859)\n"
+        f"temp_residue.SANDBOX_ROOT = {str(world.sandbox)!r}\n"
+        f"sys.argv = [{str(scripts / 'hook-reaper.py')!r}, '--dry-run', '--only', 'temp-residue']\n"
+        f"runpy.run_path({str(scripts / 'hook-reaper.py')!r}, run_name='__main__')\n",
+        encoding="utf-8",
+    )
+    env = {
+        **{k: v for k, v in os.environ.items() if k in ("PATH", "LANG", "LC_ALL")},
+        "HOME": str(world.root / "userhome"), "CLAUDE_CONFIG_DIR": str(world.home), "TMPDIR": str(world.session),
+        "CLAUDE_PROJECT_DIR": str(world.root / "project"), "CLAUDE_REAPER_PLUGIN_DIR": str(world.root / "plugins"),
+    }
+    done = subprocess.run([sys.executable, str(wrapper)], env=env, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert re.search(r"holder sweep incomplete, first cause: pid=77 name='screen' argv0='screen -S work' errno=\d+ \([A-Z]+\)", done.stderr)
+    lines = done.stdout.splitlines()
+    assert f"temp-residue KEEP {world.session / 'tmp.b2'}" in done.stdout
+    assert [l for l in lines if l.startswith("temp-residue root=")] == [
+        f"temp-residue root={world.sandbox}", f"temp-residue root={world.session}", f"temp-residue root={world.jobs}",
+    ]
+    kinds = [l for l in lines if l.startswith("temp-residue kind=")]
+    assert [re.search(r"kind=(\S+)", l).group(1) for l in kinds] == list(temp_residue.KINDS)
+    assert all(re.fullmatch(r"temp-residue kind=\S+ removable=\d+ removable_bytes=\d+ kept=\d+ kept_bytes=\d+", l) for l in kinds)
+    reasons = [l for l in lines if l.startswith("temp-residue reason=")]
+    assert reasons == [f"temp-residue reason=holder-sweep-incomplete count=1 bytes={re.search(r'bytes=(\d+)', reasons[0]).group(1)}"]
+    assert "pid=77" not in done.stdout.split("temp-residue root=")[-1]
 
 
 # ── disk pressure ─────────────────────────────────────────────────────────
@@ -833,7 +939,7 @@ def test_a_pressure_pass_through_the_runner_removes_dead_candidates_and_never_a_
     rows = [json.loads(line) for line in runner.removal_log_path().read_text(encoding="utf-8").splitlines()]
     assert {r["trigger"] for r in rows} == {"pressure"}
     snapshot = json.loads((runner.kept_snapshot_dir() / "temp-residue.json").read_text(encoding="utf-8"))
-    assert [(k["path"], k["reason"].split(":")[0]) for k in snapshot["kept"]] == [(str(held), liveness.HELD)]
+    assert [(k["path"], k["reason"]) for k in snapshot["kept"]] == [(str(held), liveness.HELD)]
 
 
 def test_a_pressure_pass_without_opt_in_removes_nothing(world, monkeypatch):

@@ -727,14 +727,71 @@ def test_the_kept_snapshot_lists_every_keep_with_reason_and_bytes_and_none_of_th
     a.verdicts = [kept_verdict, removed]
     run_live(env, [a])
     snapshot = kept_snapshot(env, "a")
-    assert snapshot["kept"] == [{"path": str(other), "reason": "busy: held", "bytes": 123}]
+    assert snapshot["kept"] == [{"path": str(other), "reason": "unclassified", "detail": "busy: held", "bytes": 123}]
     assert snapshot["reaper"] == "a" and snapshot["pass_time"].endswith("+00:00")
+
+
+def test_the_snapshot_and_its_entries_have_exactly_the_documented_keys(env, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "0123abcd")
+    a = Fake("a", [keep(env.tmp / "one", "busy")])
+    run_live(env, [a])
+    snapshot = kept_snapshot(env, "a")
+    assert set(snapshot) == {"reaper", "pass_time", "trigger", "invocation_id", "kept"}
+    assert set(snapshot["kept"][0]) == {"path", "reason", "detail", "bytes"}
+
+
+def test_the_removal_row_has_exactly_the_documented_keys(env, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "0123abcd")
+    run_live(env, [Fake("a", [rm(env.item)])])
+    [row] = env.log_records()
+    assert set(row) == {"ts", "reaper", "layer", "path", "reason", "trigger", "invocation_id"}
+
+
+def test_a_keep_verdicts_reason_tag_is_the_entry_slug_and_its_text_is_the_detail(env):
+    tagged = Verdict(
+        str(env.tmp / "one"), KEEP, "holder-sweep-incomplete: pid=7 name='x' argv0='x' errno=13 (EACCES): cwd",
+        tags=("kind=tmp", "reason=holder-sweep-incomplete"),
+    )
+    run_live(env, [Fake("a", [tagged])])
+    [entry] = kept_snapshot(env, "a")["kept"]
+    assert entry["reason"] == "holder-sweep-incomplete"
+    assert entry["detail"] == "holder-sweep-incomplete: pid=7 name='x' argv0='x' errno=13 (EACCES): cwd"
+
+
+def test_the_reapers_snapshot_extra_fields_join_the_snapshot_and_a_failing_hook_does_not_lose_it(env):
+    a = Fake("a", [keep(env.tmp / "one", "busy")])
+    a.reaper.module.snapshot_extra = lambda verdicts: {"unreadable_helpers_skipped": len(verdicts) + 16}
+    run_live(env, [a], force_run=True)
+    assert kept_snapshot(env, "a")["unreadable_helpers_skipped"] == 17
+
+    def broken(verdicts):
+        raise RuntimeError("boom")
+
+    a.reaper.module.snapshot_extra = broken
+    _, err = run_live(env, [a], force_run=True)
+    assert "snapshot_extra failed" in err and "unreadable_helpers_skipped" not in kept_snapshot(env, "a")
+
+
+def test_a_dry_run_prints_the_reapers_notes_to_stderr_and_keeps_stdout_closed(env):
+    a = Fake("a", [keep(env.tmp / "one", "busy")], summary_line="a summary")
+    a.reaper.module.dry_run_notes = lambda verdicts: [f"a: note about {len(verdicts)} verdict(s)"]
+    out, err = run_live(env, [a], dry_run=True)
+    assert "a: note about 1 verdict(s)" in err and "note" not in out and "a summary" in out
+
+
+def test_a_live_pass_prints_no_dry_run_notes(env):
+    a = Fake("a", [keep(env.tmp / "one", "busy")])
+    a.reaper.module.dry_run_notes = lambda verdicts: ["a: a note"]
+    _, err = run_live(env, [a], force_run=True)
+    assert "a note" not in err
 
 
 def test_a_remove_vetoed_by_another_reaper_appears_in_the_snapshot_as_a_keep(env):
     a, b = Fake("a", [rm(env.item)]), Fake("b", [keep(env.item, "in use")])
     run_live(env, [a, b])
-    assert kept_snapshot(env, "a")["kept"] == [{"path": str(env.item), "reason": "kept by b", "bytes": 0}]
+    assert kept_snapshot(env, "a")["kept"] == [
+        {"path": str(env.item), "reason": "blocked", "detail": "kept by b", "bytes": 0},
+    ]
 
 
 def test_a_reaper_whose_scan_failed_gets_no_kept_snapshot_while_the_others_do(env):
@@ -749,16 +806,17 @@ def test_a_removal_that_was_refused_is_snapshotted_as_refused_with_its_remove_re
     refused = Fake("a", [rm(env.item, "no holder, idle 80h")], remove_result=False)
     _, err = run_live(env, [refused], force_run=True)
     assert "FAILED to remove" in err
-    assert kept_snapshot(env, "a")["kept"] == [
-        {"path": str(env.item), "reason": "removal refused or failed: no holder, idle 80h", "bytes": 0},
-    ]
+    assert kept_snapshot(env, "a")["kept"] == [{
+        "path": str(env.item), "reason": "removal-failed",
+        "detail": "removal refused or failed: no holder, idle 80h", "bytes": 0,
+    }]
 
 
 def test_a_removal_that_raised_is_snapshotted_as_failed(env):
     failing = Fake("a", [rm(env.item, "stale")], remove_exc=OSError("busy"))
     run_live(env, [failing], force_run=True)
     [entry] = kept_snapshot(env, "a")["kept"]
-    assert entry["reason"] == "removal refused or failed: stale"
+    assert (entry["reason"], entry["detail"]) == ("removal-failed", "removal refused or failed: stale")
 
 
 def test_the_kept_snapshot_is_replaced_by_each_pass_not_appended_to(env):

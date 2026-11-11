@@ -22,9 +22,13 @@ One pass:
      remove() exception keeps the path and leaves that reaper's stamp where it was.
   5. Every removal row carries ``trigger`` (``unit`` when INVOCATION_ID is set, else ``pressure``,
      ``manual`` or ``hook``) and, under systemd, ``invocation_id``. After a live pass each due
-     reaper's keeps (path, reason, bytes, pass time, trigger) replace the snapshot
-     ``<config root>/reaper/kept/<NAME>.json``: a snapshot, because a timer re-judges the same
-     items every pass. A dry run prints each selected reaper's ``summary`` after its verdict lines.
+     reaper's keeps replace the snapshot ``<config root>/reaper/kept/<NAME>.json`` (a snapshot,
+     because a timer re-judges the same items every pass): pass time, trigger, the reaper's own
+     ``snapshot_extra(verdicts)`` fields and ``kept``, a list of ``{path, reason, detail, bytes}``
+     where ``reason`` is the reaper's ``reason=<slug>`` tag (``unclassified`` without one,
+     ``removal-failed`` and ``blocked`` set here) and ``detail`` the full text. A dry run prints
+     each selected reaper's ``summary`` after its verdict lines, then the lines of its optional
+     ``dry_run_notes(verdicts)`` to stderr.
   6. SessionStart mode (no flag) always exits 0.
 
 ``--upkeep-only`` is a different mode: it skips scan/remove and the throttle stamps and
@@ -158,15 +162,31 @@ def _append_removal_log(
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def _write_kept(
-    kept: Path, name: str, now: float, provenance: "dict[str, str]", keeps: "list[tuple[str, str, int]]",
-) -> None:
-    """Replace ``<kept>/<name>.json`` atomically with every keep of the pass (path, reason, bytes).
+REASON_TAG = "reason="
+UNCLASSIFIED = "unclassified"
+REMOVAL_FAILED = "removal-failed"
+BLOCKED = "blocked"
 
-    A snapshot, not a log: a timer re-judges the same items every pass. Best effort."""
+
+def _slug(verdict: Verdict) -> str:
+    """The reaper's own reason slug (its ``reason=<slug>`` tag), else ``unclassified``."""
+    return next((tag[len(REASON_TAG):] for tag in verdict.tags if tag.startswith(REASON_TAG)), UNCLASSIFIED)
+
+
+def _write_kept(
+    kept: Path, name: str, now: float, provenance: "dict[str, str]", keeps: "list[tuple[str, str, str, int]]",
+    extra: "dict[str, object] | None" = None,
+) -> None:
+    """Replace ``<kept>/<name>.json`` atomically with every keep of the pass.
+
+    An entry is ``path``, ``reason`` (a slug), ``detail`` (the full text, any OSError string
+    included) and ``bytes``. ``extra`` is the reaper's own ``snapshot_extra`` fields. A snapshot,
+    not a log: a timer re-judges the same items every pass. Best effort."""
     record = {
-        "reaper": name, "pass_time": _iso(now), **provenance,
-        "kept": [{"path": path, "reason": reason, "bytes": size} for path, reason, size in keeps],
+        "reaper": name, "pass_time": _iso(now), **provenance, **(extra or {}),
+        "kept": [
+            {"path": path, "reason": reason, "detail": detail, "bytes": size} for path, reason, detail, size in keeps
+        ],
     }
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)
     tmp = kept / f".{safe}.json.tmp"
@@ -192,6 +212,34 @@ def _print_summaries(
             continue
         if line:
             print(line, file=out)
+
+
+def _snapshot_extra(reaper: registry.Reaper, verdicts: "list[Verdict]", err: TextIO) -> "dict[str, object]":
+    hook = getattr(reaper.module, "snapshot_extra", None)
+    if not callable(hook):
+        return {}
+    try:
+        return dict(hook(verdicts))
+    except Exception as exc:
+        print(f"reaper {reaper.name}: snapshot_extra failed: {type(exc).__name__}: {exc}", file=err)
+        return {}
+
+
+def _print_notes(
+    selected: "list[registry.Reaper]", due: "set[str]", scanned: "dict[str, list[Verdict]]", err: TextIO,
+) -> None:
+    """A dry run's diagnostic lines (``dry_run_notes``) go to stderr, so stdout keeps its closed format."""
+    for reaper in selected:
+        notes = getattr(reaper.module, "dry_run_notes", None)
+        if reaper.name not in due or not callable(notes):
+            continue
+        try:
+            lines = list(notes(scanned[reaper.name]))
+        except Exception as exc:
+            print(f"reaper {reaper.name}: dry_run_notes failed: {type(exc).__name__}: {exc}", file=err)
+            continue
+        for line in lines:
+            print(line, file=err)
 
 
 def _nested(real_a: str, real_b: str) -> bool:
@@ -347,6 +395,7 @@ def execute_pass(
                 else:
                     print(f"{reaper.name} KEEP {verdict.path} ({reason or verdict.reason})", file=out)
         _print_summaries(selected, due, scanned, out, err)
+        _print_notes(selected, due, scanned, err)
         return 0
 
     provenance = _provenance(pressured=pressured is not None, manual=manual)
@@ -386,12 +435,13 @@ def execute_pass(
             keeps = []
             for verdict in scanned[reaper.name]:
                 if verdict.action == KEEP:
-                    keeps.append((verdict.path, verdict.reason, verdict.size))
+                    keeps.append((verdict.path, _slug(verdict), verdict.reason, verdict.size))
                 elif verdict.path in failed_paths:
-                    keeps.append((verdict.path, f"removal refused or failed: {verdict.reason}", verdict.size))
+                    keeps.append((verdict.path, REMOVAL_FAILED, f"removal refused or failed: {verdict.reason}", verdict.size))
                 elif verdict.path not in removed_paths:
-                    keeps.append((verdict.path, blocker(os.path.realpath(verdict.path)) or verdict.reason, verdict.size))
-            _write_kept(kept_dir, reaper.name, now, provenance, keeps)
+                    why = blocker(os.path.realpath(verdict.path))
+                    keeps.append((verdict.path, BLOCKED if why else UNCLASSIFIED, why or verdict.reason, verdict.size))
+            _write_kept(kept_dir, reaper.name, now, provenance, keeps, _snapshot_extra(reaper, scanned[reaper.name], err))
 
     if not manual and not cancelled:
         for name in due - failed_removals:

@@ -43,7 +43,9 @@ still shows them as `remove`, so the owner sees what enabling would do.
 
 `summary()` prints the dry-run report: one `root=` line per scanned root, one `kind=` line per
 kind (zero counts included) and one `reason=` line per keep reason, each reason a slug from
-`REASONS`. The long reason text and any OSError string go only into the runner's kept snapshot.
+`REASONS`. The long reason text and any OSError string go only into the runner's kept snapshot,
+which also carries `unreadable_helpers_skipped` (`snapshot_extra`). In a dry run `dry_run_notes`
+puts the first cause of an incomplete sweep (pid, status Name, argv0, errno) on stderr.
 
 The roots are this reaper's pressure paths: a disk-pressure pass (`runner --on-pressure`)
 makes it due before its 24-hour throttle, under the same rules.
@@ -78,6 +80,7 @@ PATTERNS = {
     "sbx": re.compile(r"sbx\.[A-Za-z0-9_-]+"),
 }
 OPT_IN_OFF = "opt-in-off-would-remove"
+SKIPPED_TAG = "helpers_skipped="
 REASONS = (
     liveness.IDLE_FLOOR, liveness.HELD, liveness.SESSION_OWNED, liveness.FOREIGN_OWNER,
     liveness.NOT_A_DIRECTORY, liveness.MOUNT_INSIDE, liveness.NESTED_GIT,
@@ -329,8 +332,9 @@ def _judge(path: str, source: Source, ctx: ReapContext,
     )
 
 
-def _verdict(kind: str, path: str, judgment: liveness.Judgment, ctx: ReapContext, enabled: bool) -> Verdict:
-    tags = (f"kind={kind}",)
+def _verdict(kind: str, path: str, judgment: liveness.Judgment, ctx: ReapContext, enabled: bool,
+             helpers_skipped: int = 0) -> Verdict:
+    tags = (f"kind={kind}", f"{SKIPPED_TAG}{helpers_skipped}")
     if judgment.action == REMOVE:
         if not ctx.dry_run and not enabled:
             reason = f"{OPT_IN_OFF}: {judgment.detail}; set {NAME} = true in the machine's reaper opt-in file to remove"
@@ -351,7 +355,7 @@ def scan(ctx: ReapContext) -> "list[Verdict]":
     mounts = _mounts()
     sweep = liveness.sweep_holders()
     return [
-        _verdict(source.kind, path, _judge(path, source, ctx, sweep, mounts), ctx, enabled)
+        _verdict(source.kind, path, _judge(path, source, ctx, sweep, mounts), ctx, enabled, sweep.helpers_skipped)
         for source, path in candidates
     ]
 
@@ -367,6 +371,22 @@ def remove(path: str, ctx: ReapContext) -> bool:
         return False
     liveness.remove_tree(os.path.dirname(candidate), os.path.basename(candidate))
     return True
+
+
+def snapshot_extra(verdicts: "list[Verdict]") -> "dict[str, int]":
+    """Fields the runner adds to the kept snapshot: how many unreadable system helpers the sweep skipped."""
+    skipped = [int(tag[len(SKIPPED_TAG):]) for v in verdicts for tag in v.tags if tag.startswith(SKIPPED_TAG)]
+    return {"unreadable_helpers_skipped": max(skipped, default=0)}
+
+
+def dry_run_notes(verdicts: "list[Verdict]") -> "list[str]":
+    """Stderr lines of a dry run: the first cause of an incomplete sweep (pid, Name, argv0, errno), which
+    the closed summary format leaves out."""
+    marker = f"{liveness.HOLDER_SWEEP_INCOMPLETE}: "
+    for verdict in verdicts:
+        if verdict.action == KEEP and verdict.reason.startswith(marker):
+            return [f"{NAME}: holder sweep incomplete, first cause: {verdict.reason[len(marker):]}"]
+    return []
 
 
 def summary(verdicts: "list[Verdict]") -> str:
