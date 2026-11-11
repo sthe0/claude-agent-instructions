@@ -39,6 +39,18 @@ def queued_command_entry(ts: float) -> dict:
     }
 
 
+def wakeup_fired_entry(ts: float) -> dict:
+    """A ScheduleWakeup-fired loop-iteration prompt: a user entry with isMeta: true
+    and text content. The harness re-enters /loop by injecting this user-role prompt;
+    it is machine-generated but opens a new turn just like a human-typed prompt."""
+    return {
+        "type": "user",
+        "isMeta": True,
+        "message": {"role": "user", "content": [{"type": "text", "text": "<task-notification>wakeup</task-notification>"}]},
+        "timestamp": iso(ts),
+    }
+
+
 # Real fixture 1 (delivered/terminal shape — ALLOW-eligible): transcript
 # .claude/projects/<a task-mount project dir>/
 # 038d367a-a877-41d3-a732-746c1bdf2653.jsonl, assistant entry
@@ -173,6 +185,42 @@ def test_queued_command_boundary_closes_a_segment(tmp_path):
         user_prompt_entry(120.0),
     ])
     assert delivered_final_texts(t) == [("delivered before timer", 102.0)]
+
+
+def test_wakeup_fired_imeta_entry_is_turn_boundary(tmp_path):
+    # Issue #315: a ScheduleWakeup-fired turn in /loop mode creates a user entry
+    # with isMeta: true. It must be recognised as a turn boundary so a reply
+    # delivered in the PREVIOUS turn is correctly attributed to that completed
+    # turn rather than to the still-open (wakeup-fired) current turn.
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt_entry(100.0),
+        text_only_entry(102.0, "here is the plan"),
+        wakeup_fired_entry(110.0),
+        user_prompt_entry(120.0),
+    ])
+    assert delivered_final_texts(t) == [("here is the plan", 102.0)]
+
+
+def test_wakeup_fired_entry_itself_becomes_its_own_open_turn(tmp_path):
+    # The wakeup-fired entry opens a turn; if that turn has no following boundary,
+    # it is the CURRENT open turn and must be excluded from delivered_final_texts.
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt_entry(100.0),
+        text_only_entry(102.0, "delivered"),
+        wakeup_fired_entry(110.0),  # opens new turn — no closing boundary follows
+        text_only_entry(115.0, "not yet delivered"),
+    ])
+    assert delivered_final_texts(t) == [("delivered", 102.0)]
+
+
+def test_latest_turn_start_finds_wakeup_fired_boundary(tmp_path):
+    # latest_turn_start must return the wakeup entry's timestamp as the most
+    # recent boundary when it is later than any user_prompt_entry.
+    t = write_transcript(tmp_path / "t.jsonl", [
+        user_prompt_entry(100.0),
+        wakeup_fired_entry(110.0),
+    ])
+    assert latest_turn_start(t) == 110.0
 
 
 def test_no_boundary_at_all_returns_empty_list_not_none(tmp_path):
