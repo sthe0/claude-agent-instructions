@@ -3051,6 +3051,18 @@ ground = "PATTERNS[kind].fullmatch selects residue directories from a directory 
 hits = 1
 reviewed_by = "coordinator"
 
+[sites."scripts/reaper/builtin/temp_residue.py::_is_child_of::pattern.fullmatch"]
+class = "structural"
+ground = "PATTERNS[kind].fullmatch re-checks, before removal, that a path's base name has the directory-name syntax of its residue kind, the same syntax _children lists by."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/runner.py::write_unit_observation::re.fullmatch"]
+class = "structural"
+ground = "Accepts INVOCATION_ID only if it is alphanumeric before using it as an observation file name (path sanitization of a systemd id)."
+hits = 1
+reviewed_by = "coordinator"
+
 [sites."scripts/verify-canon-writers.py::<module>::re.compile"]
 class = "structural"
 ground = "Compiles fixed patterns for file-write primitives in Python/shell source (write_text, open-for-write, sed -i, git commit, tee, redirects); they match code syntax, not natural-language meaning."
