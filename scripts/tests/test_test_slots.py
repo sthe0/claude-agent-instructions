@@ -186,7 +186,8 @@ def test_a_child_of_a_holder_inherits_without_the_marker(slot_dir):
     assert test_slots.inherited(slot_dir, env={}) is None, "the holder itself is not its own ancestor"
 
 
-def test_the_slot_dir_must_be_a_directory_of_this_user(tmp_path):
+def test_the_slot_dir_must_be_a_directory_of_this_user(tmp_path, monkeypatch):
+    monkeypatch.delenv(test_slots.HELD_ENV, raising=False)
     real = tmp_path / "real"
     real.mkdir()
     link = tmp_path / "link"

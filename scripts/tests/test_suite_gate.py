@@ -37,11 +37,12 @@ PUSH_RIGHTS = re.compile(shared.PUSH_RIGHTS_PATTERN, re.IGNORECASE)
 
 @pytest.fixture(autouse=True)
 def _private_slots(tmp_path_factory, monkeypatch):
-    """The runner's worker slots come from a directory of this test, never the machine's."""
+    """The runner's worker slots come from a directory of this test, never the machine's or an enclosing run's."""
     from lib import test_slots
 
     monkeypatch.setenv(test_slots.DIR_ENV, str(tmp_path_factory.mktemp("slots")))
     monkeypatch.delenv(test_slots.HELD_ENV, raising=False)
+    monkeypatch.delenv(gate.XDIST_WORKERS_ENV, raising=False)
 
 
 def git(repo, *args, check=True):
