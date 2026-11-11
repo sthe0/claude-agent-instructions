@@ -20,7 +20,7 @@ One pass:
      missing). A removal
      is logged to ``<config root>/reaper/removed.jsonl`` BEFORE it is attempted; a
      remove() exception keeps the path and leaves that reaper's stamp where it was.
-  5. Every removal row carries ``trigger`` (``unit`` when INVOCATION_ID is set, else ``pressure``,
+  5. Every removal row carries ``trigger`` (``unit`` when a reaper unit started the pass, else ``pressure``,
      ``manual`` or ``hook``) and, under systemd, ``invocation_id``. After a live pass each due
      reaper's keeps replace the snapshot ``<config root>/reaper/kept/<NAME>.json`` (a snapshot,
      because a timer re-judges the same items every pass): pass time, trigger, the reaper's own
@@ -29,9 +29,10 @@ One pass:
      ``removal-failed`` and ``blocked`` set here) and ``detail`` the full text. A dry run prints
      each selected reaper's ``summary`` after its verdict lines, then the lines of its optional
      ``dry_run_notes(verdicts)`` to stderr.
-  6. Under systemd (INVOCATION_ID set) every non-dry pass mode also writes the observation
+  6. When a reaper unit started the pass (``unit_run``: AGENT_REAPER_UNIT, which only the units set,
+     and INVOCATION_ID) every non-dry pass mode also writes the observation
      ``<config root>/reaper/unit-pass/<INVOCATION_ID>.json`` (``write_unit_observation``; the newest
-     50 kept): invocation_id, tmpdir and agent_home as seen (resolved), ``credentials_present``
+     50 kept): invocation_id, unit, tmpdir and agent_home as seen (resolved), ``credentials_present``
      for SSH_AUTH_SOCK / SSH_AGENT_PID / GIT_ASKPASS / SSH_ASKPASS, ``reapers_run`` (scans that
      completed) and ``errors``. ``scripts/install-reaper-timer.sh --check`` judges a unit run by it.
   7. SessionStart mode (no flag) always exits 0.
@@ -147,12 +148,23 @@ def _normalize(raw: object) -> "list[Verdict]":
     return verdicts
 
 
-def _provenance(*, pressured: bool, manual: bool) -> "dict[str, str]":
-    """How this pass was started: ``unit`` under systemd (INVOCATION_ID set, which is also
-    recorded as ``invocation_id``), else ``pressure``, ``manual`` or the SessionStart ``hook``."""
+def unit_run() -> "tuple[str, str] | None":
+    """``(unit name, invocation id)`` when a reaper unit started this process, else None. Only a unit sets
+    AGENT_REAPER_UNIT; INVOCATION_ID alone is inherited by every descendant of a systemd-started process
+    (a session under a systemd-started tmux) and proves only ancestry."""
+    unit = os.environ.get("AGENT_REAPER_UNIT")
     invocation = os.environ.get("INVOCATION_ID")
-    if invocation:
-        return {"trigger": "unit", "invocation_id": invocation}
+    if unit and invocation:
+        return unit, invocation
+    return None
+
+
+def _provenance(*, pressured: bool, manual: bool) -> "dict[str, str]":
+    """How this pass was started: ``unit`` when a reaper unit started it (``unit_run``; its invocation id is
+    also recorded as ``invocation_id``), else ``pressure``, ``manual`` or the SessionStart ``hook``."""
+    started = unit_run()
+    if started:
+        return {"trigger": "unit", "invocation_id": started[1]}
     return {"trigger": "pressure" if pressured else "manual" if manual else "hook"}
 
 
@@ -596,14 +608,16 @@ def unit_pass_dir() -> Path:
 
 
 def write_unit_observation(observe: "dict[str, int]", err: TextIO) -> None:
-    """Under systemd (INVOCATION_ID set) record what this run saw, for ``install-reaper-timer.sh
-    --check``: temp root, agent home, which credential variables are present, reapers whose scan
+    """When a reaper unit started this pass (``unit_run``) record what it saw, for ``install-reaper-timer.sh
+    --check``: unit name, temp root, agent home, which credential variables are present, reapers whose scan
     ran, errors. Atomic; the newest ``UNIT_PASS_KEEP`` files stay. Best effort."""
-    invocation = os.environ.get("INVOCATION_ID")
-    if not invocation or not re.fullmatch(r"[A-Za-z0-9]+", invocation):
+    started = unit_run()
+    if not started or not re.fullmatch(r"[A-Za-z0-9]+", started[1]):
         return
+    unit, invocation = started
     record = {
         "invocation_id": invocation,
+        "unit": unit,
         "tmpdir": os.path.realpath(tempfile.gettempdir()),
         "agent_home": os.path.realpath(config_root.agent_home()),
         "credentials_present": {name: name in os.environ for name in CREDENTIAL_VARS},

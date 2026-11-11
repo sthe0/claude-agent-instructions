@@ -113,6 +113,7 @@ class Env:
 @pytest.fixture
 def env(tmp_path, monkeypatch) -> Env:
     monkeypatch.delenv("INVOCATION_ID", raising=False)
+    monkeypatch.delenv("AGENT_REAPER_UNIT", raising=False)
     return Env(tmp_path.resolve())
 
 
@@ -121,6 +122,8 @@ def hermetic(tmp_path, monkeypatch):
     root = tmp_path.resolve()
     for sub in ("home", "config", "project"):
         (root / sub).mkdir()
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    monkeypatch.delenv("AGENT_REAPER_UNIT", raising=False)
     monkeypatch.setenv("HOME", str(root / "home"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root / "config"))
     monkeypatch.setenv("CLAUDE_REAPER_PLUGIN_DIR", str(root / "plugins"))
@@ -696,12 +699,29 @@ def kept_snapshot(env, name):
 
 def test_a_pass_under_systemd_records_trigger_unit_and_the_invocation_id_in_row_and_snapshot(env, monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "0123abcd")
+    monkeypatch.setenv("AGENT_REAPER_UNIT", "agent-reaper-pass.service")
     a = Fake("a", [rm(env.item), keep(env.tmp / "other", "busy")])
     run_live(env, [a])
     [row] = env.log_records()
     snapshot = kept_snapshot(env, "a")
     assert (row["trigger"], row["invocation_id"]) == ("unit", "0123abcd")
     assert (snapshot["trigger"], snapshot["invocation_id"]) == ("unit", "0123abcd")
+
+
+def test_an_inherited_invocation_id_without_the_unit_marker_is_not_a_unit_pass(env, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "0123abcd")
+    a = Fake("a", [rm(env.item), keep(env.tmp / "other", "busy")])
+    run_live(env, [a])
+    [row] = env.log_records()
+    snapshot = kept_snapshot(env, "a")
+    assert "invocation_id" not in row and "invocation_id" not in snapshot
+    assert (row["trigger"], snapshot["trigger"]) == ("hook", "hook")
+
+
+def test_the_unit_marker_without_an_invocation_id_is_not_a_unit_pass(env, monkeypatch):
+    monkeypatch.setenv("AGENT_REAPER_UNIT", "agent-reaper-pass.service")
+    run_live(env, [Fake("a", [rm(env.item)])])
+    assert env.log_records()[0]["trigger"] == "hook"
 
 
 def test_a_pass_outside_systemd_records_no_invocation_id(env):
@@ -733,6 +753,7 @@ def test_the_kept_snapshot_lists_every_keep_with_reason_and_bytes_and_none_of_th
 
 def test_the_snapshot_and_its_entries_have_exactly_the_documented_keys(env, monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "0123abcd")
+    monkeypatch.setenv("AGENT_REAPER_UNIT", "agent-reaper-pass.service")
     a = Fake("a", [keep(env.tmp / "one", "busy")])
     run_live(env, [a])
     snapshot = kept_snapshot(env, "a")
@@ -742,6 +763,7 @@ def test_the_snapshot_and_its_entries_have_exactly_the_documented_keys(env, monk
 
 def test_the_removal_row_has_exactly_the_documented_keys(env, monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "0123abcd")
+    monkeypatch.setenv("AGENT_REAPER_UNIT", "agent-reaper-pass.service")
     run_live(env, [Fake("a", [rm(env.item)])])
     [row] = env.log_records()
     assert set(row) == {"ts", "reaper", "layer", "path", "reason", "trigger", "invocation_id"}
@@ -907,6 +929,7 @@ def _force_run_main(hermetic, monkeypatch, reaper):
 
 def test_a_unit_pass_records_what_it_saw(hermetic, monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    monkeypatch.setenv("AGENT_REAPER_UNIT", "agent-reaper-pass.service")
     monkeypatch.setenv("TMPDIR", str(hermetic))
     monkeypatch.setattr("tempfile.tempdir", None)
     monkeypatch.setenv("SSH_AUTH_SOCK", "/s")
@@ -917,10 +940,17 @@ def test_a_unit_pass_records_what_it_saw(hermetic, monkeypatch):
     [path] = _unit_pass_files(hermetic)
     assert path.name == "feed0123.json"
     assert json.loads(path.read_text()) == {
-        "invocation_id": "feed0123", "tmpdir": str(hermetic), "agent_home": str(hermetic / "config"),
+        "invocation_id": "feed0123", "unit": "agent-reaper-pass.service", "tmpdir": str(hermetic), "agent_home": str(hermetic / "config"),
         "credentials_present": {"SSH_AUTH_SOCK": True, "SSH_AGENT_PID": False, "GIT_ASKPASS": False, "SSH_ASKPASS": False},
         "reapers_run": 1, "errors": 0,
     }
+
+
+def test_an_inherited_invocation_id_without_the_unit_marker_writes_no_observation(hermetic, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/s")
+    assert _force_run_main(hermetic, monkeypatch, Fake("a", []).reaper) == 0
+    assert _unit_pass_files(hermetic) == []
 
 
 def test_no_observation_is_written_outside_systemd(hermetic, monkeypatch):
@@ -931,6 +961,7 @@ def test_no_observation_is_written_outside_systemd(hermetic, monkeypatch):
 
 def test_a_dry_run_under_systemd_writes_no_observation(hermetic, monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    monkeypatch.setenv("AGENT_REAPER_UNIT", "agent-reaper-pass.service")
     monkeypatch.setattr(runner, "stamp_dir", lambda: hermetic / "stamps")
     assert runner.main(["--dry-run"], discover=lambda project, warn: [Fake("a", []).reaper]) == 0
     assert _unit_pass_files(hermetic) == []
@@ -938,6 +969,7 @@ def test_a_dry_run_under_systemd_writes_no_observation(hermetic, monkeypatch):
 
 def test_reapers_run_counts_the_scans_that_completed_and_errors_the_failed_ones(hermetic, monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    monkeypatch.setenv("AGENT_REAPER_UNIT", "agent-reaper-pass.service")
     monkeypatch.setattr(runner, "stamp_dir", lambda: hermetic / "stamps")
     good, bad = Fake("good", []), Fake("bad", scan_exc=RuntimeError("x"))
     runner.main(["--force-run"], discover=lambda project, warn: [good.reaper, bad.reaper])
@@ -947,6 +979,7 @@ def test_reapers_run_counts_the_scans_that_completed_and_errors_the_failed_ones(
 
 def test_a_runner_error_under_systemd_still_leaves_an_observation_with_an_error(hermetic, monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    monkeypatch.setenv("AGENT_REAPER_UNIT", "agent-reaper-pass.service")
 
     def explode(project, warn):
         raise RuntimeError("boom")
@@ -964,6 +997,7 @@ def test_only_the_newest_fifty_observations_are_kept(hermetic, monkeypatch):
         old.write_text("{}")
         os.utime(old, (1_000_000 + index, 1_000_000 + index))
     monkeypatch.setenv("INVOCATION_ID", "feed0123")
+    monkeypatch.setenv("AGENT_REAPER_UNIT", "agent-reaper-pass.service")
     _force_run_main(hermetic, monkeypatch, Fake("a", []).reaper)
     names = {path.name for path in _unit_pass_files(hermetic)}
     assert len(names) == runner.UNIT_PASS_KEEP and "feed0123.json" in names and "old00.json" not in names

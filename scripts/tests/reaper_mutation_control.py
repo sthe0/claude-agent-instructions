@@ -350,6 +350,13 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_HOOK, "test_it_starts_the_pressure_check_detached_beside_the_upkeep",
              "test_the_pressure_check_starts_for_a_stop_payload"),
     ),
+    "unit-trigger-without-marker": Mutant(
+        RUNNER, "    if unit and invocation:\n        return unit, invocation\n",
+        '    if invocation:\n        return unit or "", invocation\n',
+        _ids(T_RUNNER,
+             "test_an_inherited_invocation_id_without_the_unit_marker_is_not_a_unit_pass",
+             "test_an_inherited_invocation_id_without_the_unit_marker_writes_no_observation"),
+    ),
     "residue-idle-floor": Mutant(
         LIVENESS, "if idle < floor_s:", "if idle < 0:",
         _ids(T_LIVENESS, "test_a_tree_younger_than_the_idle_floor_is_kept",
