@@ -59,8 +59,25 @@ def _iso(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
-def parse_time(text: str) -> datetime:
+NO_TIME_ROWS = "no_time_rows"
+
+
+def parse_time(text: "str | None") -> "datetime | None":
+    """A stored event time as an aware UTC datetime; None for the empty time of an imported row
+    whose source line carried no time."""
+    if not text:
+        return None
     return datetime.fromisoformat(text).astimezone(timezone.utc)
+
+
+def known_times(texts, skipped: "dict | None" = None) -> "list[datetime]":
+    """The parsed times of `texts`, sorted, the empty ones left out and counted in
+    skipped[NO_TIME_ROWS] when a tally is passed."""
+    parsed = [parse_time(text) for text in texts]
+    known = sorted(moment for moment in parsed if moment is not None)
+    if skipped is not None:
+        skipped[NO_TIME_ROWS] = skipped.get(NO_TIME_ROWS, 0) + len(parsed) - len(known)
+    return known
 
 
 # --- the sync's own rows -------------------------------------------------------------
@@ -163,31 +180,34 @@ def prune_spool(stem: str, deadline_s: "float | None" = None) -> bool:
 
 # --- the latency rule -----------------------------------------------------------------
 
-def _times(conn, sql: str, args: tuple) -> "list[datetime]":
-    return sorted(parse_time(row[0]) for row in conn.execute(sql, args))
+def _times(conn, sql: str, args: tuple, skipped: "dict | None" = None) -> "list[datetime]":
+    return known_times((row[0] for row in conn.execute(sql, args)), skipped)
 
 
-def latency_marks(conn, session_id: str) -> "tuple[datetime | None, datetime | None, datetime | None]":
+def latency_marks(conn, session_id: str, skipped: "dict | None" = None
+                  ) -> "tuple[datetime | None, datetime | None, datetime | None]":
     """(E, T1, A) of a session by the latency rule.
 
     E: the time of the session_end trigger.start that names the session, else its last recorded
     event time plus LIVE_TTL_S (the sync's own rows carry the sync session id, so they are
     not events of the session and never move E). T1: the first trigger.start, session_end or
-    sweep, at or after E. A: the first sync.commit for the session at or after E."""
+    sweep, at or after E. A: the first sync.commit for the session at or after E. Rows with an
+    empty time are left out and counted in skipped[NO_TIME_ROWS] when a tally is passed."""
     ended = _times(
         conn, "SELECT time FROM events WHERE kind = ? AND json_extract(fields, '$.kind') = 'session_end' "
-        "AND json_extract(fields, '$.session') = ?", (TRIGGER_START, session_id))
+        "AND json_extract(fields, '$.session') = ?", (TRIGGER_START, session_id), skipped)
     if ended:
         end = ended[0]
     else:
-        last = _times(conn, "SELECT time FROM events WHERE session_id = ?", (session_id,))
+        last = _times(conn, "SELECT time FROM events WHERE session_id = ?", (session_id,), skipped)
         if not last:
             return None, None, None
         end = last[-1] + timedelta(seconds=LIVE_TTL_S)
-    first = next((t for t in _times(conn, "SELECT time FROM events WHERE kind = ?", (TRIGGER_START,)) if t >= end), None)
+    first = next((t for t in _times(conn, "SELECT time FROM events WHERE kind = ?", (TRIGGER_START,), skipped)
+                  if t >= end), None)
     commit = next((t for t in _times(
         conn, "SELECT time FROM events WHERE kind = ? AND json_extract(fields, '$.session') = ?",
-        (SYNC_COMMIT, session_id)) if t >= end), None)
+        (SYNC_COMMIT, session_id), skipped) if t >= end), None)
     return end, first, commit
 
 
@@ -241,7 +261,7 @@ def _task_key_for(conn, session: str, moment: str, explicit_epoch: "str | None",
     if opens is None:
         opens = _task_opens(conn, session)
     stamp = parse_time(moment)
-    before = [(t, i) for t, i in opens if t <= stamp]
+    before = [(t, i) for t, i in opens if t is not None and stamp is not None and t <= stamp]
     if before:
         row = conn.execute("SELECT origin, task_id, epoch FROM tasks WHERE epoch = ?", (max(before)[1],)).fetchone()
         if row:
@@ -632,6 +652,7 @@ def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
 
     conn = store.open_record()
     stems = []
+    skipped = {NO_TIME_ROWS: 0}
     if conn is not None:
         try:
             for stem in spool_stems():
@@ -640,7 +661,7 @@ def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
             for stem in spool_stems():
                 if stem in stems or not is_eligible(stem, begun):
                     continue
-                end, _, commit = latency_marks(conn, stem)
+                end, _, commit = latency_marks(conn, stem, skipped)
                 if end is not None and end <= begun and commit is None:
                     stems.append(stem)
         finally:
@@ -663,7 +684,7 @@ def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
             if result["inserted"] > 0 or stem == session:
                 write = True
             else:
-                end, _, commit = latency_marks(conn, stem) if conn is not None else (None, None, None)
+                end, _, commit = latency_marks(conn, stem, skipped) if conn is not None else (None, None, None)
                 write = end is not None and end <= begun and commit is None and is_eligible(stem, begun)
             if write:
                 _write_own(SYNC_COMMIT, {"session": stem, "rows_inserted": result["inserted"]})
@@ -677,4 +698,4 @@ def run(session: "str | None" = None, budget_s: "float | None" = None) -> dict:
     from lib.telemetry import tokens
     collected = tokens.collect([s for s in stems if s != SYNC_SESSION])
     return {"kind": kind, "visited": stems, "committed": committed, "deferred": deferred,
-            "unattached": filed["unattached"], "tokens": collected}
+            "unattached": filed["unattached"], "tokens": collected, NO_TIME_ROWS: skipped[NO_TIME_ROWS]}

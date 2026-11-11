@@ -80,7 +80,7 @@ def _synthetic() -> int:
 def _record_identity(ctx: Context, args, state) -> None:
     """The events of a start or reset that built a fresh session state."""
     session, verb = ctx.session, ctx.verb
-    source = f"cli:{verb}"
+    source = live.act_key(verb)
     parent_link = state.parent_link if state is not None else None
     depth = int(state.recursion_depth or 0) if state is not None else 0
     task_id = getattr(args, "task", None) or (state.task_id if state is not None else None)
@@ -135,7 +135,7 @@ def _check_events(ctx: Context, state) -> None:
                 code_ref = heads.get(int(check.split(":", 1)[1])) or latest
             except ValueError:
                 pass
-        live.emit_event(ctx.session, "check", f"cli:{ctx.verb}", {
+        live.emit_event(ctx.session, "check", live.act_key(ctx.verb), {
             "check": check, "venue": entry.get("venue"), "decision": entry.get("decision"),
             "reason": entry.get("reason"), "duration_s": entry.get("duration_s"), "exit": entry.get("exit"),
             "plan_digest": state.accepted_plan_digest, "code_ref": code_ref})
@@ -169,9 +169,9 @@ def _finish(ctx: Context, args, state_store, directive) -> None:
     }
     if verb == "classify" and state is not None:
         fields["weight_class"] = state.weight_class
-    live.emit_event(session, "command", f"cli:{verb}", fields)
+    live.emit_event(session, "command", live.act_key(verb), fields)
     if ctx.node_before != node_after and ctx.node_before is not None:
-        live.emit_event(session, "transition", f"cli:{verb}", {
+        live.emit_event(session, "transition", live.act_key(verb), {
             "command": verb, "from": ctx.node_before, "to": node_after})
     if verb == "verify-final" and state is not None:
         _check_events(ctx, state)

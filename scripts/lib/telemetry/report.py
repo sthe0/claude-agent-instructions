@@ -428,8 +428,18 @@ def _read_jsonl(path) -> list:
     return rows
 
 
-def _engine_acts(task_sessions: list) -> list:
-    """(session, act, ms) of every engine-history command and gate evaluation of the sessions."""
+def agentctl_command_keys() -> frozenset:
+    """The act key of every agentctl verb, read from the CLI's own parser."""
+    from agentctl import cli
+    subparsers = next(a for a in cli.build_parser()._actions if isinstance(a, argparse._SubParsersAction))
+    return frozenset(live.act_key(verb) for verb in subparsers.choices)
+
+
+def _engine_acts(task_sessions: list, command_keys: "frozenset | None" = None) -> list:
+    """(session, act, ms) of every engine-history command and gate evaluation of the sessions. A
+    history entry is a command act when its event names an agentctl verb; the entries a verb logs
+    about its own steps (an attempt, a verdict, a carried review) are not separate acts."""
+    command_keys = agentctl_command_keys() if command_keys is None else command_keys
     acts = []
     for session in task_sessions:
         try:
@@ -438,44 +448,60 @@ def _engine_acts(task_sessions: list) -> list:
             data = {}
         history = data.get("history") if isinstance(data, dict) else None
         for entry in history if isinstance(history, list) else ():
-            if isinstance(entry, dict) and entry.get("event"):
-                acts.append((session, f"cli:{entry['event']}", phases._ms(entry.get("ts"))))
+            if isinstance(entry, dict) and entry.get("event") and live.act_key(entry["event"]) in command_keys:
+                acts.append((session, live.act_key(entry["event"]), phases._ms(entry.get("ts"))))
     for row in _read_jsonl(config_root.agentctl_gate_log()):
         if row.get("session") in task_sessions and row.get("gate"):
             acts.append((row["session"], f"gate:{row['gate']}", phases._ms(row.get("ts"))))
     return acts
 
 
-def check_events(conn, task_id: str, window: "dict | None" = None) -> dict:
-    """Each engine act of the task's sessions matched to one live event row of the same source key
-    and session, recorded at the act or within its command's duration after it. An unmatched act
-    inside `window` ({from, to}) is an excused loss; any other unmatched act fails the check."""
+def task_sessions_of(conn, task_id: str) -> list:
     keys = [_task_key(r) for r in conn.execute("SELECT origin, task_id, epoch FROM tasks WHERE task_id = ?", (task_id,))]
-    task_sessions = sorted({s for key in keys for s in task_session_ids(conn, key)})
+    return sorted({s for key in keys for s in task_session_ids(conn, key)})
+
+
+def check_events(conn, task_id: str, window: "dict | None" = None, command_keys: "frozenset | None" = None) -> dict:
+    """Each engine act of the task's sessions matched to one live event row of the same source key
+    and session, recorded at the act or within its command's duration after it; both sides read
+    their keys through live.normalized_source_key, so a row stored in either spelling matches. An
+    act before its session's first live event is a counted loss (lost_before_first_live); an
+    unmatched act inside `window` ({from, to}) is an excused loss; any other unmatched act fails."""
+    keys = [_task_key(r) for r in conn.execute("SELECT origin, task_id, epoch FROM tasks WHERE task_id = ?", (task_id,))]
+    task_sessions = task_sessions_of(conn, task_id)
     pool: dict = {}
+    first_live: dict = {}
     for session in task_sessions:
         for source_key, moment, raw in conn.execute(
                 "SELECT source_key, time, fields FROM events WHERE session_id = ? AND provenance = 'live'", (session,)):
             duration = _fields(raw).get("duration_s")
-            pool.setdefault((session, source_key), []).append(
-                (phases._ms(moment), (duration if isinstance(duration, (int, float)) else 0.0) * 1000.0))
+            ms = phases._ms(moment)
+            if ms is not None:
+                first_live[session] = min(ms, first_live.get(session, ms))
+            pool.setdefault((session, live.normalized_source_key(source_key)), []).append(
+                (ms, (duration if isinstance(duration, (int, float)) else 0.0) * 1000.0))
     bounds = (phases._ms(window.get("from")), phases._ms(window.get("to"))) if window else None
     slack = EVENT_MATCH_SLACK_S * 1000.0
-    missing, excused, matched = [], [], 0
-    for session, source_key, ms in sorted(_engine_acts(task_sessions), key=lambda a: a[2] or 0):
+    missing, excused, lost, matched = [], [], [], 0
+    for session, source_key, ms in sorted(_engine_acts(task_sessions, command_keys), key=lambda a: a[2] or 0):
+        source_key = live.normalized_source_key(source_key)
         candidates = pool.get((session, source_key), [])
-        hit = next((c for c in candidates if ms is not None and c[0] - c[1] - slack <= ms <= c[0] + slack), None)
+        hit = next((c for c in candidates if ms is not None and c[0] is not None
+                    and c[0] - c[1] - slack <= ms <= c[0] + slack), None)
         if hit is not None:
             candidates.remove(hit)
             matched += 1
             continue
         act = {"session": session, "act": source_key, "time_ms": ms}
-        if bounds and ms is not None and bounds[0] <= ms <= bounds[1]:
+        start = first_live.get(session)
+        if start is None or ms is None or ms < start - slack:
+            lost.append(act)
+        elif bounds and bounds[0] <= ms <= bounds[1]:
             excused.append(act)
         else:
             missing.append(act)
     return {"ok": not missing and bool(keys), "task_id": task_id, "sessions": task_sessions, "matched": matched,
-            "missing": missing, "excused": excused}
+            "missing": missing, "excused": excused, "lost_before_first_live": len(lost)}
 
 
 # --- check-latency: each ended session reaches the record within the bound -------------------
@@ -526,8 +552,9 @@ def check_latency(conn, max_seconds: float, landed_at: str, now) -> dict:
     deferred_rows = {r[0] for r in conn.execute(
         "SELECT json_extract(fields, '$.session') FROM events WHERE kind = ?", (sync.SYNC_DEFERRED,))}
     rows = []
+    skipped = {sync.NO_TIME_ROWS: 0}
     for session in _population(conn):
-        end, first, commit = sync.latency_marks(conn, session)
+        end, first, commit = sync.latency_marks(conn, session, skipped)
         if end is None or end <= landed:
             continue
         seconds = None
@@ -548,18 +575,47 @@ def check_latency(conn, max_seconds: float, landed_at: str, now) -> dict:
     return {"ok": ok, "max_seconds": max_seconds, "landed_at": landed_at, "late": late,
             "by_status": {s: sum(1 for r in rows if r["status"] == s)
                           for s in ("on_time", "late", "waiting", "in_flight", "sync_deferred")},
-            "sessions": rows}
+            sync.NO_TIME_ROWS: skipped[sync.NO_TIME_ROWS], "sessions": rows}
 
 
 # --- the report's own usage event and the CLI -----------------------------------------------
 
-def emit_usage(view: str) -> None:
-    """One `report` event per run of a report or check, so the report path is measured too."""
-    session = os.environ.get("CLAUDE_CODE_SESSION_ID") or REPORT_SOURCE
+def task_opener_session(conn, task_id: str) -> "str | None":
+    """The session that opened the latest epoch of `task_id`: the task's engine root."""
+    row = conn.execute(
+        "SELECT e.session_id FROM tasks t JOIN events e ON e.event_id = t.epoch WHERE t.task_id = ? "
+        "ORDER BY t.opened_at DESC LIMIT 1", (task_id,)).fetchone()
+    return row[0] if row else None
+
+
+def usage_session(conn=None, task_id: "str | None" = None) -> str:
+    """The session a report run is charged to: the harness session, else the engine root of the
+    task the run reports on, else the report's own pseudo-session."""
+    env_session = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if env_session:
+        return env_session
+    if conn is not None and task_id:
+        try:
+            return task_opener_session(conn, task_id) or REPORT_SOURCE
+        except Exception:
+            return REPORT_SOURCE
+    return REPORT_SOURCE
+
+
+def emit_usage(view: str, conn=None, task_id: "str | None" = None) -> None:
+    """One `report` event per run of a report or check, so the report path is measured too; a run
+    charged to a real session replays that session's spool so the next read of the record sees it."""
+    session = usage_session(conn, task_id)
     try:
         live.emit_event(session, "report", REPORT_SOURCE, {"view": view, "session": session})
+        if session != REPORT_SOURCE:
+            store.replay(session)
     except Exception:  # telemetry is fail-open
         pass
+
+
+def unstamped_row_count(conn) -> int:
+    return conn.execute("SELECT COUNT(*) FROM events WHERE time = ''").fetchone()[0]
 
 
 def _print(payload: dict, fmt: str) -> None:
@@ -573,7 +629,7 @@ def _print(payload: dict, fmt: str) -> None:
                   f"red_rate={row['verify_red_rate']} flakes={row['flakes']} minutes={row['minutes']:.1f} "
                   f"spend=${row['spend_usd']:.2f}")
     for name in ("losses", "unattributed_contours", "unresolved_source_keys",
-                 "imported_unresolved_source_keys", "synthetic_tasks_counted", "self_cost"):
+                 "imported_unresolved_source_keys", "synthetic_tasks_counted", "no_ts_rows", "self_cost"):
         if name in payload:
             print(f"{name}: {json.dumps(payload[name], sort_keys=True, default=str)}")
 
@@ -590,13 +646,15 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.check_self_cost and not args.task:
         parser.error("--check-self-cost needs --task")
-    emit_usage("core-version")
     conn = store.open_readonly()
     if conn is None:
+        emit_usage("core-version")
         print("no telemetry record", file=sys.stderr)
         return 2
     try:
+        emit_usage("core-version", conn, args.task)
         payload = core_version(conn, args.include_synthetic)
+        payload["no_ts_rows"] = unstamped_row_count(conn)
         if args.task:
             payload["self_cost"] = self_cost(conn, args.task)
     finally:

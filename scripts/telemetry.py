@@ -176,19 +176,21 @@ def _check_record(args) -> int:
     from datetime import datetime, timezone
 
     from lib.telemetry import report
-    report.emit_usage(args.command)
     try:
         window = _read_json_file(args.unrecorded_window, "unrecorded_window") \
             if getattr(args, "unrecorded_window", None) else None
         landed_at = _read_json_file(args.since_landing, "landed_at") if args.command == "check-latency" else None
     except (OSError, ValueError, KeyError, TypeError) as err:
+        report.emit_usage(args.command)
         print(f"{args.command}: {err}", file=sys.stderr)
         return 2
     conn = store.open_readonly()
     if conn is None:
+        report.emit_usage(args.command)
         print(f"{args.command}: the record is unavailable", file=sys.stderr)
         return 2
     try:
+        report.emit_usage(args.command, conn, getattr(args, "task", None))
         if args.command == "check-events":
             result = report.check_events(conn, args.task, window)
         else:

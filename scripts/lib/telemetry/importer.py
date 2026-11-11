@@ -76,8 +76,40 @@ def _commit_index() -> list:
     return _tp().load_commit_index(sync.CORE_ROOT)
 
 
+TIME_FIELDS = ("ts", "at", "timestamp", "time")
+EPOCH_MS_FLOOR = 1e12
+EPOCH_MS_CEILING = 1e15
+
+
+def source_moment(obj: dict):
+    """The time a source line carries, under the first of TIME_FIELDS it fills; None when it has none."""
+    return next((obj[name] for name in TIME_FIELDS if obj.get(name) not in (None, "")), None)
+
+
+def _numeric(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def moment_ms(value) -> "int | None":
+    """Epoch milliseconds of a source time: epoch seconds or milliseconds as a number or a numeric
+    string, or an ISO string; None when the value is absent or unreadable."""
+    number = _numeric(value)
+    if number is not None and EPOCH_MS_FLOOR <= abs(number) < EPOCH_MS_CEILING:
+        return int(round(number))
+    return _tp().epoch_or_iso_ms(number if number is not None else value)
+
+
 def _iso(value) -> str:
-    ms = _tp().epoch_or_iso_ms(value)
+    ms = moment_ms(value)
     return "" if ms is None else datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="milliseconds")
 
 
@@ -211,8 +243,11 @@ def _put_event(conn, event_id: str, session: str, kind: str, source_key: str, mo
                child=None) -> int:
     body = dict(fields)
     body["source_key"] = source_key
-    return conn.execute(_EVENT_INSERT, (event_id, session, kind, source_key, moment, None, child,
-                                        json.dumps(body, separators=(",", ":")))).rowcount
+    added = conn.execute(_EVENT_INSERT, (event_id, session, kind, source_key, moment, None, child,
+                                         json.dumps(body, separators=(",", ":")))).rowcount
+    if not added:
+        store.fill_empty_time(conn, event_id, moment)
+    return added
 
 
 def _backref(line: _Line, path: str) -> dict:
@@ -223,7 +258,7 @@ def _gate_part(obj: dict):
     gate, session = obj.get("gate"), obj.get("session")
     if not isinstance(gate, str) or not isinstance(session, str):
         return None
-    moment = _iso(obj.get("ts"))
+    moment = _iso(source_moment(obj))
     return {"session": session, "kind": "gate", "source_key": f"gate:{gate}", "time": moment,
             "fields": {"session": session, "verb": None, "gate": gate,
                        "outcome": "pass" if obj.get("passed") else "refuse", "time": moment}}
@@ -233,7 +268,7 @@ def _decision_part(obj: dict):
     mechanism, session = obj.get("mechanism"), obj.get("session")
     if not isinstance(mechanism, str) or not isinstance(session, str):
         return None
-    return {"session": session, "kind": "decision", "source_key": f"hook:{mechanism}", "time": _iso(obj.get("ts")),
+    return {"session": session, "kind": "decision", "source_key": f"hook:{mechanism}", "time": _iso(source_moment(obj)),
             "fields": {"mechanism": mechanism, "event": obj.get("event"), "decision": obj.get("decision"),
                        "layer": obj.get("layer"), "test": obj.get("test")}}
 
@@ -242,7 +277,7 @@ def _judge_part(obj: dict):
     session, judge = obj.get("source"), obj.get("judge")
     if obj.get("kind") != "call" or not isinstance(session, str) or not isinstance(judge, str):
         return None
-    return {"session": session, "kind": "judge", "source_key": f"judge:{judge}", "time": _iso(obj.get("ts")),
+    return {"session": session, "kind": "judge", "source_key": f"judge:{judge}", "time": _iso(source_moment(obj)),
             "fields": {"judge": judge, "timed_out": bool(obj.get("timed_out")), "duration": obj.get("duration"),
                        "returncode": obj.get("returncode"), "prompt_chars": obj.get("prompt_chars"),
                        "invocation_id": obj.get("invocation_id")}}
@@ -254,7 +289,7 @@ def _spawn_part(obj: dict):
         return None
     spawner = obj.get("spawner_session")
     return {"session": spawner if isinstance(spawner, str) and spawner else "import:spawn", "kind": "spawn_cost",
-            "source_key": "spawn", "time": _iso(obj.get("ts")), "child": child, "spawner": spawner,
+            "source_key": "spawn", "time": _iso(source_moment(obj)), "child": child, "spawner": spawner,
             "fields": {"role": "spawned-child", "kind": obj.get("kind"), "depth": obj.get("depth"),
                        "stage_index": obj.get("stage_index"), "cost_usd": obj.get("cost_usd"),
                        "duration_ms": obj.get("duration_ms"), "return_marker": obj.get("return_marker"),
@@ -529,7 +564,11 @@ def _project_state(data: dict) -> dict:
     history, digests = [], []
     for entry in data["history"]:
         if isinstance(entry, dict):
-            history.append({k: entry[k] for k in _HISTORY_FIELDS if k in entry})
+            projected = {k: entry[k] for k in _HISTORY_FIELDS if k in entry}
+            moment = source_moment(entry)
+            if moment is not None:
+                projected["ts"] = moment
+            history.append(projected)
             digests.append(hashlib.sha256(_canonical(entry)).hexdigest())
         else:
             history.append(None)
@@ -608,7 +647,7 @@ class _Session:
         self.times = {}
         previous = -1
         for index, entry in self.history:
-            ms = _tp().epoch_or_iso_ms(entry.get("ts"))
+            ms = moment_ms(entry.get("ts"))
             self.times[index] = (ms, previous if ms is None else ms)
             previous = previous if ms is None else ms
         self.by_index = dict(self.history)
@@ -685,7 +724,7 @@ def _history_events(conn, run, owner: _Session, epoch) -> int:
             fields["task_epoch"] = epoch
         if entry.get("event") == "classify" and entry.get("weight_class"):
             fields["weight_class"] = entry["weight_class"]
-        added += _put_event(conn, owner.entry_ids[index], owner.session, "command", f"cli:{entry.get('event')}",
+        added += _put_event(conn, owner.entry_ids[index], owner.session, "command", live.act_key(entry.get("event")),
                             _iso(entry.get("ts")), fields)
     return added
 
@@ -1004,7 +1043,7 @@ def _protected_sync_rows(conn) -> set:
             end = ended[0][0]
             keep.add(ended[0][1])
         else:
-            last = sorted(sync.parse_time(r[0]) for r in conn.execute("SELECT time FROM events WHERE session_id = ?", (session,)))
+            last = sync.known_times(r[0] for r in conn.execute("SELECT time FROM events WHERE session_id = ?", (session,)))
             if not last:
                 continue
             end = last[-1] + timedelta(seconds=sync.LIVE_TTL_S)
@@ -1029,10 +1068,10 @@ def prune(days: "int | None" = None, now: "datetime | None" = None) -> dict:
         for event_id, moment, session, kind in conn.execute("SELECT event_id, time, session_id, kind FROM events"):
             if (session == sync.SYNC_SESSION or kind == "decision") and event_id not in keep:
                 try:
-                    old = sync.parse_time(moment) < cutoff
+                    stamp = sync.parse_time(moment)
                 except ValueError:
                     continue
-                if old:
+                if stamp is not None and stamp < cutoff:
                     doomed.append(event_id)
         for chunk in _chunks(doomed):
             conn.execute(f"DELETE FROM events WHERE event_id IN ({','.join('?' for _ in chunk)})", chunk)

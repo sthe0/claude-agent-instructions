@@ -46,6 +46,22 @@ def current_verb() -> "str | None":
     return _current_verb
 
 
+CLI_PREFIX = "cli:"
+
+
+def act_key(verb) -> str:
+    """The `cli:<verb>` source key of an agentctl verb or engine-history event name. The CLI spells
+    a verb with `-` and the engine history logs it with `_`; both map to the CLI spelling."""
+    return CLI_PREFIX + str(verb).replace("_", "-")
+
+
+def normalized_source_key(source_key: str) -> str:
+    """A stored source key read as `act_key` would write it, so rows of either spelling compare equal."""
+    if isinstance(source_key, str) and source_key.startswith(CLI_PREFIX):
+        return act_key(source_key[len(CLI_PREFIX):])
+    return source_key
+
+
 def enabled() -> bool:
     return os.environ.get(SWITCH_ENV, "").strip().lower() != "off"
 

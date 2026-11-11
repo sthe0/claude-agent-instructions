@@ -242,7 +242,7 @@ def test_spend_usd_prices_each_row_by_its_model_on_a_mixed_model_fixture():
 
 def test_readers_return_the_declared_fields():
     key = task("t1")
-    command(key, 10, "plan-check", node_before="EXECUTING", node_after="DIAGNOSING")
+    command(key, 10, "plan-render", node_before="EXECUTING", node_after="DIAGNOSING")
     command(key, 20, "replan", node_before="DIAGNOSING", node_after="PLANNING")
     event("s-t1", "gate", 25, {"gate": "effort_fire", "outcome": "refuse", "task_epoch": key[2]}, "gate:effort_fire")
     command(key, 30, "status", node_before="PLAN_READY", node_after="DIAGNOSING")
@@ -267,7 +267,7 @@ def test_readers_return_the_declared_fields():
     assert (second["entry_route"], second["exit_at"], second["cause"]) == ("review_cycle", None, None)
     assert free["difficulty"] == "c-free" and free["task"] is None and free["cause"]["category"] == "other"
     assert [s["session_id"] for s in sessions] == ["s-t1"] and sessions[0]["core_head"] == "h1"
-    assert [e["fields"]["command"] for e in events] == ["plan-check", "replan", "status"]
+    assert [e["fields"]["command"] for e in events] == ["plan-render", "replan", "status"]
 
 
 def test_effort_fire_entry_route():
@@ -352,9 +352,9 @@ def acts(world, monkeypatch):
     gate_log = world.tmp / "gate-log.jsonl"
     monkeypatch.setattr(config_root, "agentctl_gate_log", lambda: gate_log)
     key = task("t1")
-    world.state("s-t1", [{"event": "classify", "ts": at(10)}, {"event": "plan-check", "ts": at(20)}], task="t1")
+    world.state("s-t1", [{"event": "classify", "ts": at(10)}, {"event": "plan-render", "ts": at(20)}], task="t1")
     command(key, 11, "classify", duration_s=1.5)
-    command(key, 21, "plan-check", duration_s=1.5)
+    command(key, 21, "plan-render", duration_s=1.5)
     world.add(gate_log, world.gate_line("s-t1", "plan", seconds=20))
     event("s-t1", "gate", 20.5, {"gate": "plan", "outcome": "pass"}, "gate:plan")
     return world, gate_log
@@ -376,7 +376,7 @@ def test_check_events_fails_on_a_missing_event_row(acts):
     world.add(gate_log, world.gate_line("s-t1", "approve", seconds=30))
     status, result = check_events_cli("--task", "t1")
     assert status == 1 and [m["act"] for m in result["missing"]] == ["gate:approve"]
-    world.state("s-t1", [{"event": "classify", "ts": at(10)}, {"event": "plan-check", "ts": at(20)},
+    world.state("s-t1", [{"event": "classify", "ts": at(10)}, {"event": "plan-render", "ts": at(20)},
                          {"event": "approve", "ts": at(40)}], task="t1")
     event("s-t1", "gate", 30, {"gate": "approve", "outcome": "pass"}, "gate:approve")
     status, result = check_events_cli("--task", "t1")

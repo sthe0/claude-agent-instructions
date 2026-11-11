@@ -339,6 +339,17 @@ def _insert_prepared(conn: sqlite3.Connection, table: str, prepared: dict) -> No
         [prepared[n] for n in names])
 
 
+def fill_empty_time(conn: sqlite3.Connection, event_id: str, moment: str) -> int:
+    """Give a stored event whose time is empty the `moment` a later import read for it; a stored
+    time that is already set is never changed. Returns the number of rows filled (0 or 1)."""
+    if not moment:
+        return 0
+    return conn.execute(
+        "UPDATE events SET time = ?, fields = CASE WHEN json_extract(fields, '$.time') = '' "
+        "THEN json_set(fields, '$.time', ?) ELSE fields END WHERE event_id = ? AND time = ''",
+        (moment, moment, event_id)).rowcount
+
+
 def insert_rows(table: str, rows, deadline_s: "float | None" = None) -> dict:
     """Insert `rows` (dicts of column -> value) into `table` in one transaction under the
     call's deadline, ignoring a row whose key is already present (a NOT NULL or CHECK
