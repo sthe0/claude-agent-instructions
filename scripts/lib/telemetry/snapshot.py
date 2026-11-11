@@ -79,9 +79,9 @@ def take(out_dir) -> dict:
         try:
             if kind == STATE:
                 shutil.copyfile(path, out / copy)
-                size = (out / copy).stat().st_size
             else:
                 _copy_prefix(path, out / copy, size)
+            size = (out / copy).stat().st_size
         except OSError:
             continue
         files.append({"kind": kind, "live": str(path), "copy": str(copy), "size": size})
