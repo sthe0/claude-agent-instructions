@@ -100,6 +100,8 @@ from .cli_common import (
     _attach_advisories,
     _submission_advice,
     _submission_problems,
+    _conditions_securing_required,
+    _note_securing_outcome,
     _generalizations_block,
     _generalizations_missing,
     _effort_fire_refusal,
@@ -672,8 +674,10 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # costs nothing; only a prefilter hit spends a judge call.
     run = runner if runner is not None else advisor.subprocess_runner
     grounding_warnings: list[str] = []
+    securing_required = _conditions_securing_required(state)
     problems: list[str] = _submission_problems(
-        doc, run, state.weight_class, warnings=grounding_warnings, plan_path=plan_path)
+        doc, run, state.weight_class, warnings=grounding_warnings, plan_path=plan_path,
+        conditions_securing_required=securing_required)
     if state.weight_class == WeightClass.SUBSTANTIVE.value:
         # Two-directional control: the scope lint (advisory, below) keeps a
         # control from being false-RED; this BLOCKS a control that can never
@@ -690,6 +694,7 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
                       if v and os.path.isabs(v)), None),
             )
         )
+    _note_securing_outcome(state, problems, securing_required)
     if problems:
         state.plan_verified = False
 
@@ -707,6 +712,8 @@ def cmd_submit_plan(args, *, store: StateStore, runner: Runner | None = None) ->
     # Past the refusal, so these bytes were ACCEPTED — which is the only thing
     # accepted_plan_digest ever records.
     state.accepted_plan_digest = _submitted_plan_digest
+    # The session's securing decision is fixed by its first accepted plan; later seams read it.
+    state.conditions_securing_required = securing_required
     # Content-address these accepted bytes as a plan version, independent of the
     # approved-plan snapshot below (that one is taken only at `approve`) -- so the
     # `submit_plan` history event's plan_sha256 always resolves to a stored file, even

@@ -566,6 +566,7 @@ def _flagged_fixes_off_by_default(tmp_path, monkeypatch):
     child without a resumable session, an unmarked condition), and no test may append to the live
     `fix-firing/v1` log. A test of a fix turns its flag on with monkeypatch.setenv(..., "1")."""
     monkeypatch.setenv("AGENTCTL_CHILD_NOANSWER_RECOVERY", "0")
+    monkeypatch.setenv("AGENTCTL_CONDITIONS_SECURING", "0")
     monkeypatch.setenv("AGENTCTL_FIX_FIRINGS_LOG", str(tmp_path / "fix-firings.jsonl"))
 
 
