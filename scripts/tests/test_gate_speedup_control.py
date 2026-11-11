@@ -247,6 +247,43 @@ def test_the_record_path_is_read_from_the_gate_output():
     assert control._record_path("error\n") == ""
 
 
+def _repo_with_tests(tmp_path):
+    repo = tmp_path / "repo"
+    for rel in ("scripts/tests/test_a.py", "scripts/tests/test_b.py", "scripts/tests/conftest.py",
+                "scripts/tests/_helper.py", "scripts/tests/sub/test_c.py", "scripts/tool.py"):
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text("x = 1\n")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(repo)]
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
+    return repo
+
+
+def _tree_files(repo, tree):
+    return subprocess.run(["git", "-C", str(repo), "ls-tree", "-r", "--name-only", tree],
+                          capture_output=True, text=True, check=True).stdout.split()
+
+
+def test_a_reduced_tree_keeps_the_named_tests_and_every_non_test_file(tmp_path):
+    repo = _repo_with_tests(tmp_path)
+    tree = control.candidate_tree(repo, ["scripts/tests/test_a.py"])
+    assert sorted(_tree_files(repo, tree)) == ["scripts/tests/_helper.py", "scripts/tests/conftest.py",
+                                               "scripts/tests/test_a.py", "scripts/tool.py"]
+    status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
+                            capture_output=True, text=True, check=True).stdout
+    assert status == ""  # the repository's own index and working tree are untouched
+
+
+def test_without_tests_the_tree_is_heads_and_an_unknown_test_is_refused(tmp_path):
+    repo = _repo_with_tests(tmp_path)
+    head_tree = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD^{tree}"],
+                               capture_output=True, text=True, check=True).stdout.strip()
+    assert control.candidate_tree(repo, []) == head_tree
+    with pytest.raises(SystemExit, match="does not track"):
+        control.candidate_tree(repo, ["scripts/tests/test_missing.py"])
+
+
 # ── slots-selftest itself ─────────────────────────────────────────────────
 
 def _selftest(*args):

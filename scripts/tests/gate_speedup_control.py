@@ -11,7 +11,7 @@ two checks show the limiter holds and the record carries the cost, on real proce
       limiter, so the control must fail: it prints ``LIMIT EXCEEDED: held=<n> > 8`` and exits 1.
       Takes a few seconds; touches nothing outside its own temporary directory.
 
-  gate_speedup_control.py concurrent-gates --runs N --out PATH [-C REPO]
+  gate_speedup_control.py concurrent-gates --runs N --out PATH [-C REPO] [--tests PATH ...]
       Start N ``suite-gate.py run`` at once on N throwaway commits of HEAD's tree (unreferenced
       ``git commit-tree`` objects; the records land in the repository's suite-gate store) and
       check each record: a verdict without timeout, pytest under scripts/cap-run.sh, slots
@@ -19,7 +19,10 @@ two checks show the limiter holds and the record carries the cost, on real proce
       between queueing and the timeout start, cpu_s, peak_disk_mb, a parsing JUnit XML, and a
       per-test report whose collected ids equal ``--collect-only``'s. At least one run must have
       waited for slots. Writes a JSON summary to PATH; exit 0 when every check holds, else 1.
-      Each run is a full suite, so this takes as long as the slowest queued gate.
+      Each run is a full suite, so this takes as long as the slowest queued gate. ``--tests``
+      drops every other ``test_*.py`` from the throwaway trees, so each gate runs the real code
+      path on a few files and the check takes minutes; the commits are never landed, so a
+      reduced record can never admit a real landing.
 
 Exit 2 on a usage or environment error (not enough free disk, git failure).
 """
@@ -334,14 +337,39 @@ def _record_path(output: str) -> str:
     return ""
 
 
-def concurrent_gates(repo: Path, runs: int, out: Path) -> int:
+def candidate_tree(repo: Path, keep: list[str]) -> str:
+    """HEAD's tree, or, when ``keep`` names test files, HEAD's tree without every other test file.
+
+    Only ``scripts/tests/**/test_*.py`` files are dropped; helpers, fixtures and conftest stay, so
+    the kept tests run exactly as in the full suite. The tree is built in a private index file and
+    never touches the working tree or the repository's own index.
+    """
+    if not keep:
+        return _git(repo, "rev-parse", "HEAD^{tree}")
+    tracked = _git(repo, "ls-tree", "-r", "--name-only", "HEAD", "--", "scripts/tests").splitlines()
+    missing = [path for path in keep if path not in tracked]
+    if missing:
+        raise SystemExit(f"--tests names files HEAD does not track: {' '.join(missing)}")
+    drop = [path for path in tracked
+            if path.rsplit("/", 1)[-1].startswith("test_") and path.endswith(".py") and path not in keep]
+    with tempfile.TemporaryDirectory(prefix="cls-control-index-") as scratch:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        for args in (["read-tree", "HEAD"], ["rm", "-q", "--cached", "--", *drop], ["write-tree"]):
+            proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, env=env)
+            if proc.returncode != 0:
+                raise SystemExit(f"git {args[0]} for the reduced tree failed: {proc.stderr.strip()}")
+    return proc.stdout.strip()
+
+
+def concurrent_gates(repo: Path, runs: int, out: Path, keep: list[str] | None = None) -> int:
     free_gb = shutil.disk_usage("/").free / 2**30
     if free_gb < MIN_FREE_GB:
         _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
         return 2
     tip = _git(repo, "merge-base", "HEAD", "origin/main")
     nonce = f"{os.getpid()}-{int(time.time())}"
-    candidates = [_git(repo, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", f"cls-control {n} {nonce}")
+    tree = candidate_tree(repo, keep or [])
+    candidates = [_git(repo, "commit-tree", tree, "-p", "HEAD", "-m", f"cls-control {n} {nonce}")
                   for n in range(1, runs + 1)]
     _say(f"tip {tip[:12]}; candidates {' '.join(c[:12] for c in candidates)}")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -394,6 +422,8 @@ def main(argv: list[str] | None = None) -> int:
     gates.add_argument("--runs", type=int, default=3)
     gates.add_argument("--out", required=True, type=Path)
     gates.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    gates.add_argument("--tests", nargs="+", default=None, metavar="PATH",
+                       help="keep only these test files (repo-relative) in the throwaway candidates")
     fake = sub.add_parser("_fake-run")
     fake.add_argument("--dir", required=True)
     fake.add_argument("--want", type=int, required=True)
@@ -403,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "slots-selftest":
         return slots_selftest(args.limiter)
     if args.command == "concurrent-gates":
-        return concurrent_gates(args.repo.resolve(), args.runs, args.out)
+        return concurrent_gates(args.repo.resolve(), args.runs, args.out, args.tests)
     return _fake_run(args)
 
 
