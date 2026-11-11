@@ -358,24 +358,20 @@ CATALOGUE: "dict[str, Mutant]" = {
         + _ids(T_RESIDUE, "test_a_candidate_inside_the_idle_floor_is_kept_with_the_idle_floor_slug"),
     ),
     "residue-holder-cwd": Mutant(
-        LIVENESS,
-        '            ("cwd", _absolute(_readlink(os.path.join(pid_dir, "cwd"), sweep, f"{pid_dir}/cwd"))),\n',
-        "",
+        LIVENESS, 'for kind in ("cwd", "exe"):', 'for kind in ("exe",):',
         _ids(T_LIVENESS, PLANTED_HOLDERS, "test_a_process_with_its_cwd_inside_the_tree_is_found"),
     ),
     "residue-holder-exe": Mutant(
-        LIVENESS,
-        '            ("exe", _absolute(_readlink(os.path.join(pid_dir, "exe"), sweep, f"{pid_dir}/exe"))),\n',
-        "",
+        LIVENESS, 'for kind in ("cwd", "exe"):', 'for kind in ("cwd",):',
         _ids(T_LIVENESS, PLANTED_HOLDERS, "test_a_process_running_an_executable_inside_the_tree_is_found"),
     ),
     "residue-holder-fd": Mutant(
-        LIVENESS, '        held["fd"].update(_fd_targets(pid_dir, sweep))\n', "        pass\n",
+        LIVENESS, '        held["fd"].update(_fd_targets(pid_dir, failures, readlink_fn))\n', "        pass\n",
         _ids(T_LIVENESS, PLANTED_HOLDERS, "test_a_process_with_an_open_file_inside_the_tree_is_found",
              "test_a_deleted_suffix_pipes_and_spaces_in_proc_targets_are_read_correctly"),
     ),
     "residue-holder-maps": Mutant(
-        LIVENESS, '        held["maps"].update(_map_paths(pid_dir, sweep))\n', "        pass\n",
+        LIVENESS, '        held["maps"].update(_map_paths(pid_dir, failures))\n', "        pass\n",
         _ids(T_LIVENESS, PLANTED_HOLDERS, "test_a_process_with_a_mapped_file_inside_the_tree_is_found_under_the_maps_kind",
              "test_a_deleted_suffix_pipes_and_spaces_in_proc_targets_are_read_correctly"),
     ),
@@ -407,32 +403,107 @@ CATALOGUE: "dict[str, Mutant]" = {
                "test_a_full_clone_without_alternates_keeps_the_sandbox"),
     ),
     "residue-skip-unreadable-same-uid": Mutant(
-        LIVENESS, '            sweep.mark_incomplete(f"{what}: {type(exc).__name__}: {exc.strerror or exc}")\n', "            pass\n",
+        LIVENESS, "    sweep.mark_incomplete(_cause(entry, facts.name, shown, where, error))\n", "    pass\n",
         _ids(T_LIVENESS, "test_a_same_uid_process_whose_links_cannot_be_read_makes_the_sweep_incomplete",
              "test_a_same_uid_process_with_unreadable_links_keeps_the_candidate"),
     ),
     "residue-skip-every-process": Mutant(
-        LIVENESS, "if uid not in owners:", "if True:",
+        LIVENESS, "if uid not in facts.uids:", "if True:",
         _ids(T_LIVENESS, PLANTED_HOLDERS, "test_a_process_with_its_cwd_inside_the_tree_is_found",
              "test_a_process_of_this_uid_by_its_status_is_swept_whoever_owns_its_proc_entry"),
     ),
     "residue-skip-no-process": Mutant(
-        LIVENESS, "if uid not in owners:", "if False:",
+        LIVENESS, "if uid not in facts.uids:", "if False:",
         _ids(T_LIVENESS, "test_a_process_proven_by_its_status_uid_to_be_another_users_is_skipped_and_counted"),
     ),
     "residue-status-uid-first-only": Mutant(
-        LIVENESS, "if uid not in owners:", "if uid != min(owners):",
+        LIVENESS, "if uid not in facts.uids:", "if uid != min(facts.uids):",
         _ids(T_LIVENESS, "test_any_of_the_four_uids_in_the_status_line_counts_as_this_uid"),
     ),
     "residue-owner-unreadable-keeps": Mutant(
         LIVENESS,
-        '                sweep.mark_incomplete(f"{pid_dir}/status: owner unreadable: {type(exc).__name__}: {exc.strerror or exc}")\n',
+        '                sweep.mark_incomplete(_cause(entry, None, None, f"{pid_dir}/status: owner unreadable", exc))\n',
         "                pass\n",
         _ids(T_LIVENESS, "test_an_entry_whose_owner_cannot_be_read_makes_the_sweep_incomplete"),
     ),
     "residue-no-uid-line-keeps": Mutant(
-        LIVENESS, '            sweep.mark_incomplete(f"{pid_dir}/status: owner unreadable: no Uid line")\n', "            pass\n",
+        LIVENESS,
+        '            sweep.mark_incomplete(_cause(entry, facts.name, None, f"{pid_dir}/status: owner unreadable: no Uid line", None))\n',
+        "            pass\n",
         _ids(T_LIVENESS, "test_a_status_without_a_uid_line_makes_the_sweep_incomplete"),
+    ),
+    "residue-helper-allowlist-empty": Mutant(
+        LIVENESS, "    pair = (proc.name, proc.argv0)\n", "    return False\n",
+        _ids(T_LIVENESS, "test_a_known_helper_with_unreadable_links_is_skipped_and_counted[manager-by-mainpid]",
+             "test_a_known_helper_with_unreadable_links_is_skipped_and_counted[sshd-session-process]",
+             "test_a_known_helper_with_unreadable_links_is_skipped_and_counted[fusermount]",
+             "test_the_seventeen_unreadable_processes_seen_on_a_real_machine_leave_the_sweep_complete"),
+    ),
+    "residue-helper-allowlist-open": Mutant(
+        LIVENESS, "    return pair in HELPER_PAIRS\n", "    return True\n",
+        _ids(T_LIVENESS, "test_an_unreadable_same_uid_process_that_is_not_on_the_list_makes_the_sweep_incomplete",
+             "test_the_cause_names_the_pid_the_status_name_the_raw_argv0_and_the_errno"),
+    ),
+    "residue-helper-name-or-argv0": Mutant(
+        LIVENESS, "    return pair in HELPER_PAIRS\n",
+        "    return proc.name in {n for n, _ in HELPER_PAIRS} or proc.argv0 in {a for _, a in HELPER_PAIRS}\n",
+        _ids(T_LIVENESS, "test_a_helper_needs_both_its_name_and_its_argv0_token_to_match_one_pair[listed-name-other-argv0]",
+             "test_a_helper_needs_both_its_name_and_its_argv0_token_to_match_one_pair[other-name-listed-argv0]",
+             "test_a_helper_needs_both_its_name_and_its_argv0_token_to_match_one_pair[two-different-listed-names]",
+             "test_a_helper_needs_both_its_name_and_its_argv0_token_to_match_one_pair[spaced-path-token-differs]"),
+    ),
+    "residue-helper-manager-not-mainpid": Mutant(
+        LIVENESS, "return main is not None and proc.pid == main", "return main is not None",
+        _ids(T_LIVENESS, "test_the_manager_name_is_exempt_only_as_the_mainpid_of_the_user_manager"),
+    ),
+    "residue-helper-manager-query-fails-open": Mutant(
+        LIVENESS, "return main is not None and proc.pid == main", "return main is None or proc.pid == main",
+        _ids(T_LIVENESS,
+             "test_a_manager_query_that_gave_no_pid_exempts_neither_the_manager_nor_its_sd_pam[query-failed-or-timed-out]",
+             "test_a_manager_query_that_gave_no_pid_exempts_neither_the_manager_nor_its_sd_pam[mainpid-zero]"),
+    ),
+    "residue-helper-sdpam-parent": Mutant(
+        LIVENESS, "return main is not None and proc.ppid == main", "return True",
+        _ids(T_LIVENESS, "test_sd_pam_is_exempt_only_when_its_parent_is_the_manager"),
+    ),
+    "residue-helper-readable-exempt": Mutant(
+        LIVENESS, "        if failures:\n", "        if failures or facts.name in {n for n, _ in HELPER_PAIRS}:\n",
+        _ids(T_LIVENESS, "test_a_readable_helper_is_swept_like_any_process_and_not_counted"),
+    ),
+    "residue-vanished-incomplete": Mutant(
+        LIVENESS,
+        "            if exc.errno not in _VANISHED:\n                sweep.mark_incomplete(_cause(entry, None, None,",
+        "            if True:\n                sweep.mark_incomplete(_cause(entry, None, None,",
+        _ids(T_LIVENESS, "test_a_process_whose_status_disappears_between_listing_and_reading_leaves_the_sweep_complete",
+             "test_a_status_that_is_denied_is_incomplete_with_its_errno_and_a_gone_status_is_not"),
+    ),
+    "residue-proc-owner-from-dir-stat": Mutant(
+        LIVENESS, "if uid not in facts.uids:", "if os.lstat(pid_dir).st_uid != uid:",
+        _ids(T_LIVENESS, "test_a_process_proven_by_its_status_uid_to_be_another_users_is_skipped_and_counted",
+             "test_any_of_the_four_uids_in_the_status_line_counts_as_this_uid"),
+    ),
+    "residue-vanished-fd-skips-process": Mutant(
+        LIVENESS,
+        '        target = _absolute(_readlink(os.path.join(pid_dir, "fd", name), failures, readlink_fn))\n        if target:\n',
+        '        raw = _readlink(os.path.join(pid_dir, "fd", name), failures, readlink_fn)\n'
+        "        if raw is None:\n            break\n        target = _absolute(raw)\n        if target:\n",
+        _ids(T_LIVENESS, "test_a_vanished_fd_skips_only_that_entry_and_a_later_fd_still_holds_the_candidate"),
+    ),
+    "residue-snapshot-reason-slug": Mutant(
+        RUNNER, '"reason": reason, "detail": detail,', '"reason": detail, "detail": detail,',
+        _ids(T_RUNNER, "test_a_keep_verdicts_reason_tag_is_the_entry_slug_and_its_text_is_the_detail")
+        + _ids(T_RESIDUE, "test_an_incomplete_sweep_reaches_the_snapshot_as_a_slug_with_the_cause_as_detail"),
+    ),
+    "residue-snapshot-helpers-count": Mutant(
+        TEMP_RESIDUE, 'return {"unreadable_helpers_skipped": max(skipped, default=0)}',
+        'return {"unreadable_helpers_skipped": 0}',
+        _ids(T_RESIDUE, "test_the_snapshot_counts_the_unreadable_helpers_the_sweep_skipped"),
+    ),
+    "residue-dry-run-cause": Mutant(
+        TEMP_RESIDUE, 'return [f"{NAME}: holder sweep incomplete, first cause: {verdict.reason[len(marker):]}"]',
+        "return []",
+        _ids(T_RESIDUE, "test_the_dry_run_note_is_the_first_incomplete_cause_and_only_that",
+             "test_the_dry_run_cli_names_the_process_behind_an_incomplete_sweep_and_keeps_stdout_closed"),
     ),
     "residue-clone-own-objects-unchecked": Mutant(
         TEMP_RESIDUE, '    return counts.get("count") == "0" and counts.get("in-pack") == "0" and counts.get("garbage") == "0"\n',
@@ -620,7 +691,9 @@ CATALOGUE: "dict[str, Mutant]" = {
              "test_the_dry_run_prints_remove_lines_and_the_summary_and_writes_nothing"),
     ),
     "kept-snapshot-written": Mutant(
-        RUNNER, "            _write_kept(kept_dir, reaper.name, now, provenance, keeps)\n", "            pass\n",
+        RUNNER,
+        "            _write_kept(kept_dir, reaper.name, now, provenance, keeps, _snapshot_extra(reaper, scanned[reaper.name], err))\n",
+        "            pass\n",
         _ids(T_RUNNER, "test_the_kept_snapshot_lists_every_keep_with_reason_and_bytes_and_none_of_the_removals")
         + _ids(T_RESIDUE, "test_the_snapshot_lists_every_keep_with_a_reason_when_the_machine_has_not_opted_in"),
     ),
