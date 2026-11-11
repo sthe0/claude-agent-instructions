@@ -8,6 +8,84 @@ source "$REPO/scripts/lib/config-root.sh"
 
 mkdir -p "$CLAUDE_AGENT_HOME" "$HOME/.cursor"
 
+REAPER_TIMER_FLAG=""
+for arg in "$@"; do
+  case "$arg" in
+    --reaper-timer=yes|--reaper-timer=no) REAPER_TIMER_FLAG="${arg#--reaper-timer=}" ;;
+    --reaper-timer=*) echo "setup-symlinks.sh: --reaper-timer takes yes or no" >&2; exit 2 ;;
+  esac
+done
+
+reaper_timer_have_tty() {
+  [[ -t 0 ]]
+}
+
+reaper_timer_record_decline() {
+  local answer_file="$1"
+  mkdir -p "$(dirname "$answer_file")"
+  printf 'reaper-timer = "declined"\ndate = "%s"\n' "$(date +%Y-%m-%d)" > "$answer_file"
+  echo "disk-guard timer: declined and recorded; to install later run: $REPO/scripts/install-reaper-timer.sh"
+}
+
+# Offers the disk-guard timer once per machine and never fails the setup. Decision order is fixed:
+# user-manager state, explicit flag, recorded decline, terminal presence, then the question.
+offer_reaper_timer() {
+  local flag="$1"
+  local installer="$REPO/scripts/install-reaper-timer.sh"
+  local answer_file="$CLAUDE_AGENT_HOME/reaper/install-answer.toml"
+  local install_cmd="$installer"
+  [[ -n "${TMPDIR:-}" ]] && install_cmd="$installer --tmpdir $TMPDIR"
+  local out rc=0
+  out="$("$installer" --status 2>&1)" || rc=$?
+  if (( rc == 4 )); then
+    echo "disk-guard timer: skipped ($out)"
+    return 0
+  elif (( rc == 0 )); then
+    echo "disk-guard timer: already installed"
+    return 0
+  elif (( rc != 3 )); then
+    echo "disk-guard timer: status check failed (exit $rc): $out" >&2
+    return 0
+  fi
+  if [[ "$flag" == no ]]; then
+    reaper_timer_record_decline "$answer_file"
+    return 0
+  fi
+  if [[ "$flag" != yes ]]; then
+    if [[ -f "$answer_file" ]] && grep -q '^reaper-timer = "declined"' "$answer_file"; then
+      echo "disk-guard timer: declined earlier; to install later run: $install_cmd"
+      return 0
+    fi
+    if ! reaper_timer_have_tty; then
+      echo "Install the disk-guard timer (runs the pressure reaper every minute)? [Y/n]"
+      echo "No terminal: nothing installed. To install, run: $install_cmd   (or rerun setup with --reaper-timer=yes)"
+      return 0
+    fi
+    local reply=""
+    read -r -p "Install the disk-guard timer (runs the pressure reaper every minute)? [Y/n] " reply || true
+    case "$reply" in
+      ""|[Yy]|[Yy][Ee][Ss]) ;;
+      *) reaper_timer_record_decline "$answer_file"; return 0 ;;
+    esac
+  fi
+  rc=0
+  if [[ -n "${TMPDIR:-}" ]]; then
+    out="$("$installer" --tmpdir "$TMPDIR" 2>&1)" || rc=$?
+  else
+    out="$("$installer" 2>&1)" || rc=$?
+  fi
+  if (( rc == 4 )); then
+    echo "disk-guard timer: skipped ($out)"
+  elif (( rc != 0 )); then
+    echo "disk-guard timer: install failed (exit $rc):" >&2
+    echo "$out" >&2
+  else
+    echo "$out"
+    rm -f "$answer_file"
+  fi
+  return 0
+}
+
 link() {
   local target="$1" linkpath="$2"
   if [[ -e "$linkpath" && ! -L "$linkpath" ]]; then
@@ -242,6 +320,9 @@ ensure_hook_plugin_dir
 "$REPO/scripts/install-reminder-hooks.sh"
 
 "$REPO/scripts/install-git-hooks.sh"
+
+offer_reaper_timer "$REAPER_TIMER_FLAG"
+
 "$REPO/scripts/verify-layout-contract.sh" 2>/dev/null || true
 "$REPO/scripts/verify-instructions-sync.sh" || true
 
