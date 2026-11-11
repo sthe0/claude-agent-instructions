@@ -892,6 +892,16 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "norm targets across a replan; a SKIPPED stage is likewise counted as pending. "
         "KNOWN GAP shared with that helper, same Core issue, remove both entries together"
     ),
+    ("agentctl/carry_forward.py", "_Ctx.settled_rows"): (
+        "asks which stages hold a delivered verdict whose review row may survive an agreed "
+        "order change; a SKIPPED stage was never reviewed as delivered work, so only PASSED "
+        "is settled for the carry"
+    ),
+    ("agentctl/cli_replan.py", "_reopened_stages"): (
+        "asks which stages `--reopen` actually re-arms, the same question as "
+        "_replan_submission_gates: only a stage with a PASS to invalidate, so PASSED is the "
+        "exact set"
+    ),
 }
 
 
