@@ -405,7 +405,7 @@ def _rerun(monkeypatch, failing, results, reruns=2):
     from ``results`` (None: the rerun did not complete). Returns the verdict and each call's selection."""
     calls = []
 
-    def run(repo, sha, root, *, select, timeout_s):
+    def run(repo, sha, root, *, select, timeout_s, hide=True):
         calls.append(list(select))
         failures = results.pop(0)
         if failures is None:

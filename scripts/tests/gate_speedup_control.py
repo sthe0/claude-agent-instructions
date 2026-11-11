@@ -42,6 +42,17 @@ two checks show the limiter holds and the record carries the cost, on real proce
       or a collection error); 2 an input could not be read. When the report has ``confirmed``,
       only those ids must be named; the ids that passed on rerun are printed.
 
+  gate_speedup_control.py hermetic-run --out PATH --named DOC [--max-named N] [-C REPO] [--root DIR]
+                                       [--reruns N] [--no-hide] [--probe-only]
+      One sandbox-run inside the hermetic runner (scripts/tests/hermetic_run.py: empty HOME, the
+      source work tree, git directory and agent homes hidden, no network) with a probe test planted
+      in the sandbox that asserts the hidden source work tree reads as empty, then verify-named.
+      0: the report says ``hermetic: true``, the probe passed and every failure is named; 1: the run
+      was not hermetic, or the probe failed, or a failure is not named, or verify-named refuses the
+      run (incomplete) or the document (too many ids); 2: any other error. ``--no-hide`` hides
+      nothing, so the probe fails and the exit is 1 (the negative control); ``--probe-only``
+      collects only the probe (minutes instead of the full run).
+
 Exit 2 on a usage or environment error (not enough free disk, git failure).
 """
 from __future__ import annotations
@@ -441,7 +452,7 @@ def concurrent_gates(repo: Path, runs: int, out: Path, keep: list[str] | None = 
 # ── sandbox-run, verify-named ─────────────────────────────────────────────
 
 def _rerun_failing(repo: Path, sha: str, work: Path, failing: list[str], reruns: int,
-                   timeout_s: int) -> tuple[list[str], list[str]]:
+                   timeout_s: int, hide: bool = True) -> tuple[list[str], list[str]]:
     """Rerun the failing ids ``reruns`` times, serially, in the sandbox ``work``.
 
     An id that fails any rerun is confirmed; one that passes every rerun passed on rerun. An id
@@ -452,7 +463,7 @@ def _rerun_failing(repo: Path, sha: str, work: Path, failing: list[str], reruns:
     for _ in range(reruns):
         if not candidates:
             break
-        run = gate.default_runner(repo, sha, work, select=candidates, timeout_s=timeout_s)
+        run = gate.default_runner(repo, sha, work, select=candidates, timeout_s=timeout_s, hide=hide)
         if not run.build_ok or run.timed_out or run.pytest_exit is None:
             _say(f"a rerun did not complete; {len(candidates)} ids stay confirmed")
             failed_again = set(candidates)
@@ -463,10 +474,26 @@ def _rerun_failing(repo: Path, sha: str, work: Path, failing: list[str], reruns:
     return confirmed, candidates
 
 
+PROBE_FILE = "scripts/tests/test_hermetic_probe.py"
+PROBE_ID = f"{PROBE_FILE}::test_the_source_work_tree_is_hidden"
+
+
+def _probe_source(source_tree: Path) -> str:
+    return (
+        '"""Planted by gate_speedup_control.py hermetic-run: inside a hermetic run the source work tree is empty."""\n'
+        "import os\n\n\n"
+        "def test_the_source_work_tree_is_hidden():\n"
+        f"    assert os.listdir({str(source_tree)!r}) == []\n")
+
+
 def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, timeout_s: int,
-                reruns: int = 0) -> int:
+                reruns: int = 0, hide: bool = True, probe: bool = False) -> int:
     """One gate-shaped run of the committed tip of ``repo``; the report names every failing id,
-    and with ``reruns`` which of them failed again (``confirmed``) and which passed (``rerun_passed``)."""
+    and with ``reruns`` which of them failed again (``confirmed``) and which passed (``rerun_passed``).
+
+    The report says whether the run was hermetic (``hide`` off or no namespaces: it was not). With
+    ``probe`` a test asserting that the source work tree reads as empty is planted in the sandbox;
+    its outcome is ``probe_passed`` and its id is not among ``failing``."""
     free_gb = shutil.disk_usage("/").free / 2**30
     if free_gb < MIN_FREE_GB:
         _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
@@ -478,7 +505,13 @@ def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, tim
     own_root = root is None
     work = Path(tempfile.mkdtemp(prefix=gate.SANDBOX_PREFIX, dir=gate.SANDBOX_PARENT)) if own_root else root
     try:
-        run = gate.default_runner(repo, sha, work, select=select, timeout_s=timeout_s)
+        if probe:
+            failed_build = gate.build_sandbox(repo, sha, work)
+            if failed_build is not None:
+                _say(f"the sandbox did not build: {failed_build.detail}")
+                return 2
+            (work / "core" / PROBE_FILE).write_text(_probe_source(repo.resolve()), encoding="utf-8")
+        run = gate.default_runner(repo, sha, work, select=select, timeout_s=timeout_s, hide=hide)
         if not run.build_ok or run.timed_out or run.pytest_exit is None:
             _say(f"the run did not complete: {'timed out' if run.timed_out else run.detail or 'no pytest exit'}")
             return 2
@@ -490,8 +523,11 @@ def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, tim
             "commit": sha, "select": select, "pytest_exit": run.pytest_exit,
             "duration_s": round(run.duration_s, 1), "collected": len(collected),
             "collection_errors": [i for i in run.failures if "::" not in i and i not in collected_set],
-            "failing": list(run.failures),
+            "failing": [i for i in run.failures if i != PROBE_ID],
+            "hermetic": run.hermetic, "hermetic_reason": run.hermetic_reason,
         }
+        if probe:
+            report["probe_passed"] = PROBE_ID in collected_set and PROBE_ID not in run.failures
         out.parent.mkdir(parents=True, exist_ok=True)
         # Copied before any rerun: a rerun in the same sandbox overwrites these files.
         for src, suffix in ((run.junit_path, ".junit.xml"), (run.report_path, ".tests.jsonl")):
@@ -499,7 +535,7 @@ def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, tim
                 shutil.copyfile(src, stem.with_name(stem.name + suffix))
         if reruns:
             report["confirmed"], report["rerun_passed"] = _rerun_failing(
-                repo, sha, work, report["failing"], reruns, timeout_s)
+                repo, sha, work, report["failing"], reruns, timeout_s, hide)
         out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         confirmed = f", {len(report['confirmed'])} confirmed by {reruns} reruns" if reruns else ""
         _say(f"{report['collected']} collected, {len(report['failing'])} failing{confirmed}, "
@@ -557,8 +593,38 @@ def verify_named(report_path: Path, named_path: Path, max_named: int) -> int:
     return 0
 
 
+def hermetic_run(repo: Path, out: Path, named: Path, max_named: int, root: Path | None, timeout_s: int,
+                 reruns: int, no_hide: bool, probe_only: bool) -> int:
+    """One run in the hermetic runner with the probe planted, judged against the documented failures.
+
+    0: the report says ``hermetic: true``, the probe passed and every failure is named; 1: the run was
+    not hermetic, or the probe failed, or a failure is not named (or the named document or the run
+    do not meet verify-named's bounds); 2: any other error."""
+    select = [PROBE_FILE] if probe_only else []
+    code = sandbox_run(repo, out, select, root, timeout_s, reruns, hide=not no_hide, probe=True)
+    if code != 0:
+        return 2
+    try:
+        report = json.loads(out.read_text(encoding="utf-8"))
+        hermetic, probe_passed = bool(report["hermetic"]), bool(report["probe_passed"])
+    except (OSError, ValueError, KeyError) as exc:
+        _say(f"cannot read the run report: {exc}")
+        return 2
+    if not hermetic:
+        _say(f"NOT HERMETIC: {report.get('hermetic_reason') or 'unknown reason'} (probe passed: {probe_passed})")
+        return 1
+    if not probe_passed:
+        _say(f"PROBE FAILED: {PROBE_ID} saw the source work tree")
+        return 1
+    if probe_only:
+        _say("OK: hermetic, probe passed")
+        return 0
+    verdict = verify_named(out, named, max_named)
+    return {0: 0, 2: 2}.get(verdict, 1)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="gate_speedup_control.py", description=__doc__.split("\n")[0])
+    parser =argparse.ArgumentParser(prog="gate_speedup_control.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     selftest = sub.add_parser("slots-selftest", help="three fake runs against a private slot directory")
     selftest.add_argument("--limiter", choices=LIMITERS, default="slots")
@@ -578,6 +644,18 @@ def main(argv: list[str] | None = None) -> int:
     sandboxed.add_argument("--timeout-s", type=int, default=gate.DEFAULT_TIMEOUT_S)
     sandboxed.add_argument("--reruns", type=int, default=0,
                            help="rerun each failing id this many times, serially; failing any rerun confirms it")
+    sandboxed.add_argument("--no-hide", action="store_true",
+                           help="run without hiding anything (the run is not hermetic)")
+    hermetic = sub.add_parser("hermetic-run", help="a full run in the hermetic runner with a planted probe")
+    hermetic.add_argument("--out", required=True, type=Path)
+    hermetic.add_argument("--named", required=True, type=Path)
+    hermetic.add_argument("--max-named", type=int, default=DEFAULT_MAX_NAMED)
+    hermetic.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    hermetic.add_argument("--root", type=Path, default=None)
+    hermetic.add_argument("--timeout-s", type=int, default=gate.DEFAULT_TIMEOUT_S)
+    hermetic.add_argument("--reruns", type=int, default=2)
+    hermetic.add_argument("--no-hide", action="store_true", help="hide nothing: the probe must fail (negative control)")
+    hermetic.add_argument("--probe-only", action="store_true", help="collect only the planted probe test")
     named = sub.add_parser("verify-named", help="check a sandbox-run report against the documented failures")
     named.add_argument("--report", required=True, type=Path)
     named.add_argument("--named", required=True, type=Path)
@@ -593,7 +671,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "concurrent-gates":
         return concurrent_gates(args.repo.resolve(), args.runs, args.out, args.tests)
     if args.command == "sandbox-run":
-        return sandbox_run(args.repo.resolve(), args.out, args.select, args.root, args.timeout_s, args.reruns)
+        return sandbox_run(args.repo.resolve(), args.out, args.select, args.root, args.timeout_s, args.reruns,
+                           hide=not args.no_hide)
+    if args.command == "hermetic-run":
+        return hermetic_run(args.repo.resolve(), args.out, args.named, args.max_named, args.root, args.timeout_s,
+                            args.reruns, args.no_hide, args.probe_only)
     if args.command == "verify-named":
         return verify_named(args.report, args.named, args.max_named)
     return _fake_run(args)

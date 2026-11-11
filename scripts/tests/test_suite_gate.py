@@ -45,6 +45,12 @@ def _private_slots(tmp_path_factory, monkeypatch):
     monkeypatch.delenv(gate.XDIST_WORKERS_ENV, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_hermetic_runner(monkeypatch):
+    """These tests stub pytest's process; the hermetic wrapper has its own tests (test_suite_gate_hermetic.py)."""
+    monkeypatch.setattr(gate, "hermetic_unavailable", lambda: "off in these tests")
+
+
 def git(repo, *args, check=True):
     proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
     if check and proc.returncode != 0:
