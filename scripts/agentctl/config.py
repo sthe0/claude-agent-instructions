@@ -109,6 +109,33 @@ def child_noanswer_recovery_enabled(
     return constants.get(CHILD_NOANSWER_RECOVERY_KEY) == "on"
 
 
+CONDITIONS_SECURING_KEY = "conditions-securing"
+CONDITIONS_SECURING_ENV = "AGENTCTL_CONDITIONS_SECURING"
+
+
+def conditions_securing_enabled(
+    env: Mapping[str, str] | None = None,
+    constants: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether a new session's substantive plan must mark how each of its `conditions` is secured.
+
+    AGENTCTL_CONDITIONS_SECURING `1` / `0` wins in both directions; otherwise config.md's
+    `conditions-securing` row decides, and only exactly `on` enables it. Anything else is off.
+    Read once per session, at its first accepted submission (conditions_securing.py)."""
+    environ = os.environ if env is None else env
+    forced = environ.get(CONDITIONS_SECURING_ENV)
+    if forced == "1":
+        return True
+    if forced == "0":
+        return False
+    if constants is None:
+        try:
+            constants = parse_config_md()
+        except (OSError, UnicodeDecodeError):
+            return False
+    return constants.get(CONDITIONS_SECURING_KEY) == "on"
+
+
 RESOURCE_GRANT_HOOK_KEY = "resource-grant-hook"
 RESOURCE_GRANT_HOOK_ENV = "AGENTCTL_RESOURCE_HOOK"
 RESOURCE_GRANT_HOOK_TIMEOUT_KEY = "resource-grant-hook-timeout-s"

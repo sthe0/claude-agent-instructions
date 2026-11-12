@@ -92,6 +92,7 @@ from .cli_common import (
     _with_advisories,
     _submission_advice,
     _submission_problems,
+    _conditions_securing_required,
     _clear_open_fires_if_customer,
     _effort_fire_escalation_data,
     _fire_directive_figures,
@@ -564,7 +565,8 @@ def _renormalize_replan(args, state, store: StateStore, runner: Runner | None) -
     # ones `new` was diffed and gated against.
     new, _new_plan_bytes, _new_plan_digest = load_plan_with_digest(args.plan)
     run = runner if runner is not None else advisor.subprocess_runner
-    submission = _submission_problems(new, run, state.weight_class, state=state, baseline=old)
+    submission = _submission_problems(new, run, state.weight_class, state=state, baseline=old,
+                                      conditions_securing_required=_conditions_securing_required(state))
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "renormalization blocked: the corrected plan does not meet "
@@ -1150,7 +1152,8 @@ def _replan_submission_gates(ctx: _ReplanContext) -> Directive | None:
     submission = _submission_problems(
         new, run, state.weight_class,
         _frozen_edge_stages(state, baseline, new),
-        state=state, baseline=baseline, warnings=ctx.warnings)
+        state=state, baseline=baseline, warnings=ctx.warnings,
+        conditions_securing_required=_conditions_securing_required(state))
     if submission:
         return Directive(False, state.node, "fix_plan",
                          "replan blocked: the corrected plan does not meet submission "

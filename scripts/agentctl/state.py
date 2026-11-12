@@ -2782,6 +2782,11 @@ class SessionState:
     # The short title of the task classify last registered (`classify --title`); '' on legacy
     # states and when no title was given (absent key -> dataclass default via from_dict).
     task_title: str = ""
+    # Whether this session's plans must mark each `conditions` line by how it is secured
+    # (conditions_securing.py). Decided once, from the `conditions-securing` flag, at the
+    # session's first accepted submission; False on legacy states (absent key -> dataclass
+    # default via from_dict), so a plan in flight when the flag landed stays exempt.
+    conditions_securing_required: bool = False
     # Effort-divergence trigger (schema 25) — effort.py owns every read and write of
     # these; nothing else interprets them, and effort.py's module docstring is the
     # canonical statement of the mechanism (THE WINDOW; ARMED-ONLY, AND ARMED AT MOST
@@ -3530,5 +3535,5 @@ SESSION_SCOPED_FIELDS = frozenset({
     "settings_drift", "cwd_drift", "resource_estimates", "pending_renorms", "difficulty_stack", "parent_difficulty",
     "closed_difficulties", "parent_link", "schema_version", "plan_conversions", "check_cache",
     "order_draft_path", "order_draft_sha256", "order_reviews",
-    "order_agreement_armed", "order_agreement_exemption",
+    "order_agreement_armed", "order_agreement_exemption", "conditions_securing_required",
 })
