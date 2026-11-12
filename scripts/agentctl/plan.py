@@ -107,7 +107,12 @@ and every stage must also carry the 8-element activity-structure fields:
                                          # meeting that requirement — the executor's
                                          # own, replaceable via replan --renormalize
     conditions = "..."                   # what must hold OF THE WORLD for the stage's
-                                         # transformation to go through
+                                         # transformation to go through; under the
+                                         # conditions-securing flag one `- ` line per
+                                         # world state, each ending with [probe: ...],
+                                         # [probe-revised: ...], [means: stage N] or
+                                         # [risk: ...] (conditions_securing.py); conduct
+                                         # norms go in `invariants`
     preconditions = "..."                # what must already be true before the stage
                                          # may START (inherited from outside it)
     knowledge = "..."                    # the knowledge the stage acts FROM

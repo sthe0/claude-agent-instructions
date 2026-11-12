@@ -68,6 +68,8 @@ from .cli_common import (
     _with_advisories,
     _submission_advice,
     _submission_problems,
+    _conditions_securing_required,
+    _record_securing_firings,
     _adopt_order_identities,
     _carried_live_stage_blockers,
     _hand_on_after_approval,
@@ -184,7 +186,8 @@ def _refresh_caches_from_plan_path(
     # against it, exactly as at replan, so approve judges the same exemption replan did.
     violations = _submission_problems(refreshed, runner, state.weight_class,
                                       _frozen_edge_stages(state, baseline, refreshed),
-                                      state=state, baseline=baseline, plan_path=state.plan_path)
+                                      state=state, baseline=baseline, plan_path=state.plan_path,
+                                      conditions_securing_required=_conditions_securing_required(state))
     if violations:
         return violations
     if advice is not None:
@@ -749,6 +752,7 @@ def cmd_approve(args, *, store: StateStore, runner: Runner | None = None) -> Dir
         state.log("approve", by=args.by, basis=mandate_rules.MANDATE_BASIS)
     else:
         state.log("approve", by=args.by)
+    _record_securing_firings(state, _approved_doc, _utcnow())
     if not mandate_basis:
         _clear_since_user_decision(state, args.by)
     # REQ4: stamp the order-approvals ledger for the CUSTOMER only -- never

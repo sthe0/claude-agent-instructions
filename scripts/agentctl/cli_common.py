@@ -17,7 +17,7 @@ import tomllib
 from contextlib import contextmanager
 from dataclasses import asdict, fields, replace
 from pathlib import Path
-from lib import argv_text, config_root, engine_session_binding, hook_telemetry
+from lib import argv_text, config_root, engine_session_binding, fix_firings, hook_telemetry
 try:
     from lib.telemetry import live
 except Exception:  # telemetry must never stop the engine from starting
@@ -48,6 +48,8 @@ from . import (
     runtime_host,
     task_accumulator,
 )
+from . import conditions_securing
+from . import config as agentctl_config
 from .config import Thresholds
 from .directive import Directive, DIRECTIVE_ESCALATE_TO_USER
 from .dispatch import Runner, subprocess_runner
@@ -2463,12 +2465,121 @@ def _submission_advice(
     return advice
 
 
+def _conditions_securing_decision(state: SessionState) -> bool:
+    """The session's stored securing decision, or the live flag's while it has none yet.
+
+    A session that has not yet had a plan accepted (no accepted digest, no pushed sub-plan)
+    decides from the live `conditions-securing` flag, and submit-plan stores that decision on
+    acceptance; every later seam reads the stored value, so a session already in flight when
+    the flag landed (stored value absent -> False) is never refused for it."""
+    if state.accepted_plan_digest is None and not state.plan_stack:
+        try:
+            return agentctl_config.conditions_securing_enabled()
+        except Exception:
+            return False
+    return state.conditions_securing_required
+
+
+def _securing_killed() -> bool:
+    """AGENTCTL_CONDITIONS_SECURING=0, the kill switch: it overrides even a stored decision."""
+    return os.environ.get(agentctl_config.CONDITIONS_SECURING_ENV) == "0"
+
+
+def _conditions_securing_required(state: SessionState) -> bool:
+    """Whether this session's plans must mark how each condition is secured now: its decision,
+    unless the kill switch is set."""
+    return not _securing_killed() and _conditions_securing_decision(state)
+
+
+_SECURING_EVENT = "conditions_securing"
+_SECURING_APPROVED_EVENT = "conditions_securing_approved"
+
+
+def _securing_spend(state: SessionState) -> float:
+    """The effort spend meter's reading; 0.0 when it cannot be read — the firing log is
+    telemetry and must never refuse a submission or an approve."""
+    try:
+        return float(effort.actual(state)[effort.SCALE_SPEND])
+    except Exception:
+        return 0.0
+
+
+def _note_securing_outcome(state: SessionState, problems: list[str], required: bool) -> None:
+    """Timestamp a submission refused for unsecured conditions, and the next one after it, in the
+    history, with the effort spend meter's reading, so approve can sum the minutes and dollars
+    the requirement cost (the operating firing row). Telemetry: never raises."""
+    if not required:
+        return
+    try:
+        refused = any(conditions_securing.is_securing_problem(p) for p in problems)
+        last = next((e for e in reversed(state.history) if e.get("event") == _SECURING_EVENT), None)
+        if refused or (last is not None and last.get("refused")):
+            state.log(_SECURING_EVENT, refused=refused, ts=_utcnow(),
+                      spend=_securing_spend(state))
+    except Exception:
+        pass
+
+
+def _record_securing_firings(state: SessionState, doc, now: float) -> None:
+    """At approve under the requirement: one D2 firing row per `probe-revised` mark new in this
+    version (deduplicated by stage + `was` against earlier approvals) and one operating row.
+    Telemetry: never raises, so it can never block the approve it rides on."""
+    if _securing_killed() or not state.conditions_securing_required or doc is None:
+        return
+    try:
+        _write_securing_firings(state, doc, now)
+    except Exception:
+        pass
+
+
+def _write_securing_firings(state: SessionState, doc, now: float) -> None:
+    seen = {
+        (int(stage), str(was))
+        for e in state.history if e.get("event") == _SECURING_APPROVED_EVENT
+        for stage, was in e.get("revisions", [])
+    }
+    since = 0
+    for i, e in enumerate(state.history):
+        if e.get("event") == _SECURING_APPROVED_EVENT:
+            since = i + 1
+    marks = [e for e in state.history[since:] if e.get("event") == _SECURING_EVENT]
+    seconds = 0.0
+    spend = 0.0
+    spend_now = _securing_spend(state)
+    for cur, nxt in zip(marks, [*marks[1:], None]):
+        if cur.get("refused"):
+            seconds += max(0.0, (nxt["ts"] if nxt is not None else now) - float(cur["ts"]))
+            end = nxt.get("spend", spend_now) if nxt is not None else spend_now
+            spend += max(0.0, float(end) - float(cur.get("spend", end)))
+    revisions = conditions_securing.probe_revisions(doc.stages)
+    new = [r for r in revisions if (r["stage"], r["was"]) not in seen]
+    for r in new:
+        fix_firings.append(
+            "D2", "firing", "probe_revised",
+            {k: r[k] for k in ("stage_title", "condition", "probe", "observed", "was")},
+            session=state.session_id, task=state.task_id, stage=r["stage"],
+        )
+    refusals = sum(1 for m in marks if m.get("refused"))
+    fix_firings.append(
+        "D2", "operating", "approve",
+        {"securing_refusals": refusals, "probe_revised_new": len(new),
+         "marked_conditions": sum(
+             1 for s in doc.stages for c in conditions_securing.parse_marks(s.conditions) if c.mark_kind)},
+        session=state.session_id, task=state.task_id, minutes=seconds / 60.0, cost_usd=spend,
+    )
+    state.log(_SECURING_APPROVED_EVENT, revisions=[[r["stage"], r["was"]] for r in revisions])
+
+
 def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
                          frozen_edge_stages: frozenset[int] = frozenset(), *,
                          state: SessionState | None = None, baseline=None,
-                         warnings: list[str] | None = None, plan_path=None) -> list[str]:
+                         warnings: list[str] | None = None, plan_path=None,
+                         conditions_securing_required: bool = False) -> list[str]:
     """The submission seam's REFUSING channel, with its judge resolved the way the advice
     channel's is — one place per channel, so no seam re-derives the enabled rule.
+
+    `conditions_securing_required` is the session's decision (`_conditions_securing_required`),
+    passed by every seam rather than read from `state`, which submit-plan does not hand in.
 
     Unlike `_submission_advice` this may NOT swallow its result: these strings refuse a
     plan, and dropping them on an unrelated error would pass bytes nobody validated. Only
@@ -2488,6 +2599,7 @@ def _submission_problems(doc, runner: Runner | None, weight_class: str | None,
         judge_runner=runner,
         judge_enabled=enabled,
         frozen_edge_stages=frozen_edge_stages,
+        conditions_securing_required=conditions_securing_required,
     )
     # A node over plan-stage-max-chars cannot be reviewed in one pair prompt, so every seam
     # that admits plan bytes to a session (submit-plan, approve after an in-place edit,

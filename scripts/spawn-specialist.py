@@ -46,6 +46,7 @@ from agentctl.config import (  # the one definition of the child-contour kill sw
     CHILD_CONTOUR_LINKING_ENV,
     CHILD_CONTOUR_LINKING_KEY,
     child_contour_linking_enabled,
+    child_noanswer_recovery_enabled,
     resource_grant_hook_enabled,
     resource_grant_hook_timeout_s,
 )
@@ -74,6 +75,7 @@ from agentctl.render import (  # build_site_prompt is the one place a spawn's pl
 from lib import hook_wiring  # the managed-settings path, one definition
 from lib import argv_text  # one place decides how an argv value names its text
 from lib import marker_extract  # unconditional second-pass marker extraction (model is the primary classifier)
+from lib import fix_firings  # firing log of flagged fixes (child-noanswer-recovery writes fix A rows)
 from agentctl import tool_contracts  # the one parser of an interpreter call's script operand
 from lib import shell_tokens
 try:
@@ -2946,6 +2948,8 @@ CHILD_EXHAUSTED = "CHILD_EXHAUSTED"
 MARKER_SOURCE_CHILD = "child"
 MARKER_SOURCE_ENVELOPE = "envelope"
 MARKER_SOURCE_NONE = "none"
+# The child's own marker, recovered by one resume of its session (child-noanswer-recovery).
+MARKER_SOURCE_RESUME = "resume"
 
 # The harness can inject an autonomous-loop prompt into a `claude -p` child that has already
 # returned, re-entering it on ScheduleWakeup. The bare names are removed from the child's context
@@ -2973,6 +2977,32 @@ _CHILD_OUTCOME_SIGNATURES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (CHILD_EXHAUSTED, ("Prompt is too long",)),
 )
 
+# The `claude` CLI's own result text when the account usage limit stops a run, e.g.
+# "You've hit your 5-hour limit · resets 4am (Europe/Moscow)" (`is_error: true`, error
+# `rate_limit`; 2.1.322, seen on marker-less spawn-cost rows 2026-10-13..11-11). Matched only
+# with child-noanswer-recovery on, mapping the run to CHILD_INFRA_FAILURE's retry, not MALFORMED.
+_USAGE_LIMIT_SIGNATURES: tuple[str, ...] = (
+    "hit your session limit",
+    "hit your 5-hour limit",
+    "hit your weekly limit",
+    "hit your limit",
+    "Usage limit reached",
+)
+
+
+def _child_outcome_signatures(usage_limit: bool) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    if not usage_limit:
+        return _CHILD_OUTCOME_SIGNATURES
+    return _CHILD_OUTCOME_SIGNATURES + ((CHILD_INFRA_FAILURE, _USAGE_LIMIT_SIGNATURES),)
+
+# The one question a resumed child is asked when its run ended with no return marker.
+RESUME_FOR_MARKER_PROMPT = (
+    "Your last turn ended without a return marker. Reply only with your return marker line "
+    "and its body for the work already done; do no further work."
+)
+RESUME_TIMEOUT_S = 300
+RESUME_BUDGET_USD = "1.0"
+
 CHILD_OUTCOME_NOTE: dict[str, str] = {
     CHILD_INFRA_FAILURE: (
         "the child spawn never reached, or lost, the API before exiting — a "
@@ -2988,7 +3018,9 @@ CHILD_OUTCOME_NOTE: dict[str, str] = {
 }
 
 
-def classify_child_outcome(stdout: str, stderr: str, returncode: int) -> tuple[str, str | None]:
+def classify_child_outcome(
+    stdout: str, stderr: str, returncode: int, usage_limit: bool = False
+) -> tuple[str, str | None]:
     """The high-recall signature scan alone, with no knowledge of whether a
     marker was found — ``returncode`` is accepted for a future signature
     keyed on exit code but unused today; every current signature is a
@@ -2997,9 +3029,10 @@ def classify_child_outcome(stdout: str, stderr: str, returncode: int) -> tuple[s
     ``(CHILD_ANSWERED, None)`` when nothing matches. Callers that need the
     marker-precedence rule applied use ``_resolve_child_outcome`` instead —
     this function alone does NOT know a marker exists and must never be
-    treated as the final verdict."""
+    treated as the final verdict. ``usage_limit`` adds the usage-limit family
+    (child-noanswer-recovery)."""
     haystack = f"{stdout}\n{stderr}"
-    for outcome, signatures in _CHILD_OUTCOME_SIGNATURES:
+    for outcome, signatures in _child_outcome_signatures(usage_limit):
         for signature in signatures:
             if signature in haystack:
                 return outcome, signature
@@ -3007,7 +3040,7 @@ def classify_child_outcome(stdout: str, stderr: str, returncode: int) -> tuple[s
 
 
 def _resolve_child_outcome(
-    stdout: str, stderr: str, returncode: int, marker: str | None
+    stdout: str, stderr: str, returncode: int, marker: str | None, usage_limit: bool = False
 ) -> tuple[str, str | None]:
     """Apply the precedence rule the prefilter's legitimacy rests on: a
     genuine terminal marker ALWAYS outranks a signature match. ``marker`` is
@@ -3018,7 +3051,65 @@ def _resolve_child_outcome(
     override a result the child produced."""
     if marker is not None:
         return CHILD_ANSWERED, None
-    return classify_child_outcome(stdout, stderr, returncode)
+    return classify_child_outcome(stdout, stderr, returncode, usage_limit=usage_limit)
+
+
+class ResumeOutcome(NamedTuple):
+    result_text: str
+    returncode: int | None
+    duration_ms: int
+    cost_usd: float | None
+
+
+def resumable_session(payload: object) -> "str | None":
+    """The session a marker-less child may be resumed under: only the `session_id` of its own
+    result payload, and only when that payload is not an error. Never the transcript-stem id
+    `resolve_child_session_id` falls back to -- in a workdir shared with a sibling child that
+    stem can name the sibling's session."""
+    if not isinstance(payload, dict) or payload.get("is_error"):
+        return None
+    sid = payload.get("session_id")
+    return sid if isinstance(sid, str) and sid else None
+
+
+def _resume_for_marker(
+    child_session_id: str, env: Mapping[str, str], cwd: "Path | str", model: str,
+    carried_args: Sequence[str] = (),
+    timeout_s: float = RESUME_TIMEOUT_S, budget_usd: str = RESUME_BUDGET_USD,
+) -> ResumeOutcome:
+    """Resume a marker-less child once and ask it only for its return marker.
+
+    ``carried_args`` are the original child's settings, system prompt, permission mode,
+    added directories and effort, so the resumed turn runs under the same surface.
+    Launched supervised like the child itself; a run past ``timeout_s`` is torn down and
+    returns empty text, which leaves the caller on today's MALFORMED path."""
+    cmd = [
+        "claude", "-p", "--resume", child_session_id,
+        "--output-format", "json",
+        "--max-budget-usd", budget_usd,
+        "--disallowedTools", ",".join(LOOP_TOOLS_DENIED),
+        "--model", model,
+        *carried_args,
+    ]
+    started = time.monotonic()
+    proc = proc_tree.launch_supervised(
+        cmd, env=dict(env), cwd=cwd, stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    stdout = ""
+    try:
+        stdout, _ = proc.communicate(input=RESUME_FOR_MARKER_PROMPT, timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        proc_tree.kill_tree(proc)
+    duration_ms = int((time.monotonic() - started) * 1000)
+    payload = _load_json_payload(stdout)
+    text, cost = "", None
+    if isinstance(payload, dict):
+        text = payload.get("result") or ""
+        cost = payload.get("cost_usd") or payload.get("total_cost_usd")
+    return ResumeOutcome(text, proc.returncode, duration_ms, cost)
 
 
 def _child_outcome_envelope(outcome: str, matched: str, result_text: str, stderr: str) -> str:
@@ -3028,6 +3119,23 @@ def _child_outcome_envelope(outcome: str, matched: str, result_text: str, stderr
     anything (the common shape for both documented instances)."""
     body = result_text if result_text.strip() else stderr
     return f"{outcome}: {CHILD_OUTCOME_NOTE[outcome]} (matched {matched!r}).\n\n{body}"
+
+
+_USAGE_LIMIT_RESET = re.compile(r"resets\s+([^\n\"]+)")
+
+
+def _usage_limit_envelope(matched: str, result_text: str, stderr: str) -> str:
+    """CHILD_INFRA_FAILURE (so the parent still gets retry_dispatch) with reason=account_limit:
+    an immediate retry would hit the same limit, so the note says to wait for the reset."""
+    body = result_text if result_text.strip() else stderr
+    reset = _USAGE_LIMIT_RESET.search(f"{result_text}\n{stderr}")
+    reset_note = f" (resets {reset.group(1).strip()})" if reset else ""
+    return (
+        f"{CHILD_INFRA_FAILURE}: reason=account_limit — the account usage limit stopped the "
+        f"child{reset_note}. Recommended move: retry the same dispatch only after the limit "
+        "resets, not immediately. The child may have partly modified the working tree before "
+        f"it stopped; check it before the retry (matched {matched!r}).\n\n{body}"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3518,25 +3626,27 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
     if child_linked and resource_grant_hook_enabled(constants=constants):
         register_resource_grant_hook(child_settings, resource_grant_hook_timeout_s(constants))
 
+    system_prompt_args = (
+        ["--append-system-prompt-file", str(composed_system_prompt_file(skill))]
+        if skill is not None
+        else []
+    )
+    # Pass the child's autocompact window pin via --settings (highest in the
+    # settings precedence ladder) so it beats the same key in
+    # ~/.claude/settings.json. Setting it in the child's process env does NOT
+    # work: settings.json env is applied after process start and wins (see
+    # memory-global leaf claude-code-settings-env-precedence.md).
+    settings_args = ["--settings", json.dumps(child_settings)]
+    permission_args = ["--permission-mode", permission_mode] if permission_mode is not None else []
     cmd = [
         "claude",
         "-p",
-        *(
-            ["--append-system-prompt-file", str(composed_system_prompt_file(skill))]
-            if skill is not None
-            else []
-        ),
+        *system_prompt_args,
         "--max-budget-usd",
         cap,
         "--output-format",
         "json",
-        # Pass the child's autocompact window pin via --settings (highest in the
-        # settings precedence ladder) so it beats the same key in
-        # ~/.claude/settings.json. Setting it in the child's process env does NOT
-        # work: settings.json env is applied after process start and wins (see
-        # memory-global leaf claude-code-settings-env-precedence.md).
-        "--settings",
-        json.dumps(child_settings),
+        *settings_args,
         "--disallowedTools",
         ",".join(LOOP_TOOLS_DENIED),
     ]
@@ -3547,10 +3657,13 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         # The harness session id becomes this uuid, which is also the id the child's
         # engine autostarts under, so AGENTCTL_OWN_SESSION names that engine session.
         cmd.extend(["--session-id", own_session])
-    if permission_mode is not None:
-        cmd.extend(["--permission-mode", permission_mode])
+    cmd.extend(permission_args)
     cmd.extend(["--model", model])
     cmd.extend(["--effort", args.effort])
+    # A marker-recovery resume (child-noanswer-recovery) runs under the same surface.
+    resume_carried_args = [
+        *system_prompt_args, *settings_args, *add_dir_argv, *permission_args, "--effort", args.effort,
+    ]
     # The prompt is NOT appended to argv: with the plan inlined it exceeds Linux
     # MAX_ARG_STRLEN (32 pages = 131072 bytes for a single argv string), which execve
     # rejects with E2BIG before the child starts. It travels via stdin instead (see
@@ -3695,15 +3808,55 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
     # specialist's output being unparseable. Precedence is enforced inside
     # _resolve_child_outcome — a found marker always wins, so this can only
     # relabel a run already headed to MALFORMED/NO_MARKER, never suppress one.
+    recovery = child_noanswer_recovery_enabled(constants=constants)
     child_outcome, child_matched = _resolve_child_outcome(
-        completed.stdout, completed.stderr, completed.returncode, parsed_marker
+        completed.stdout, completed.stderr, completed.returncode, parsed_marker, usage_limit=recovery
     )
-    if child_outcome != CHILD_ANSWERED:
+    usage_limit_hit = (
+        child_outcome == CHILD_INFRA_FAILURE and child_matched in _USAGE_LIMIT_SIGNATURES
+    )
+    if usage_limit_hit:
+        forwarded = _usage_limit_envelope(child_matched, result_text, completed.stderr)
+    elif child_outcome != CHILD_ANSWERED:
         forwarded = _child_outcome_envelope(child_outcome, child_matched, result_text, completed.stderr)
+
+    resume: "ResumeOutcome | None" = None
+    resumed_marker: "str | None" = None
+    resume_session = resumable_session(payload)
+    if recovery and parsed_marker is None and child_outcome == CHILD_ANSWERED and resume_session:
+        resume = _resume_for_marker(resume_session, env, workdir, model, resume_carried_args)
+        if resume.result_text.strip():
+            resume_extraction = _build_extraction(resume.result_text, args.kind)
+            r_forwarded, r_ok, resumed_marker = check_planner_return(
+                resume.result_text, args.kind, extraction=resume_extraction
+            )
+            if r_ok and resumed_marker is not None:
+                result_text, extraction = resume.result_text, resume_extraction
+                forwarded, ok, parsed_marker = r_forwarded, r_ok, resumed_marker
+        if resume.cost_usd is not None:
+            # The ledger's cost_usd is what the dispatch spent, the resume included.
+            cost_usd = (cost_usd or 0.0) + resume.cost_usd
+    if usage_limit_hit or resume is not None:
+        fix_firings.append(
+            "A", "firing", "usage_limit" if usage_limit_hit else "resume",
+            {
+                "dispatch_kind": args.kind,
+                "child_session": child_session_id,
+                "resume_marker": resumed_marker if resume is not None and ok else None,
+                "resume_rc": resume.returncode if resume is not None else None,
+                "matched": child_matched if usage_limit_hit else None,
+            },
+            session=args.session or os.environ.get(OWN_SESSION_ENV),
+            stage=args.stage_index,
+            minutes=(resume.duration_ms / 60000) if resume is not None else 0.0,
+            cost_usd=(resume.cost_usd or 0.0) if resume is not None else 0.0,
+        )
 
     routed_marker, _ = parse_marker(forwarded)
     if routed_marker is None:
         marker_source = MARKER_SOURCE_NONE
+    elif resume is not None and ok:
+        marker_source = MARKER_SOURCE_RESUME
     elif not ok or child_outcome != CHILD_ANSWERED:
         marker_source = MARKER_SOURCE_ENVELOPE
     else:
@@ -3745,6 +3898,10 @@ def _main(argv: list[str] | None, prompt_only: bool) -> "int | str":
         "transcript_path": str(transcript_path) if transcript_path is not None else None,
         "review_pair": topo_pair,
         "plan_sha256": topo_plan_sha256,
+        **({"resume": {
+            "cost_usd": resume.cost_usd, "duration_ms": resume.duration_ms,
+            "exit_code": resume.returncode, "marker": parsed_marker if ok else None,
+        }} if resume is not None else {}),
         **_spawner_session_field(args.session),
         **_spawn_tags(),
         **({"child_outside_project_override": child_project_override} if child_project_override else {}),

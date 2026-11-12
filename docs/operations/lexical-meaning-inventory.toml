@@ -260,6 +260,44 @@ hits = 2
 hit_classes = ["candidate-generation", "candidate-generation"]
 reviewed_by = "developer"
 
+[sites."scripts/agentctl/conditions_securing.py::<module>::re.compile"]
+class = "structural"
+ground = "_MARK, _PROBE, _REVISED and _MEANS compile the agent-authored securing-tag syntax '[probe: cmd => result]', '[probe-revised: ...; was: ...]', '[means: stage N]', '[risk: ...]' that ends a conditions line; _MARK_OPEN compiles the opening '[<kind>:' of the same tags; whether a line is a world state is not decided here."
+hits = 5
+hit_classes = ["structural", "structural", "structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/conditions_securing.py::_fields::pattern.match"]
+class = "structural"
+ground = "_PROBE, _REVISED and _MEANS split a securing tag's body into its fixed fields (command => result; was:; stage N)."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/conditions_securing.py::parse_marks::pattern.search"]
+class = "structural"
+ground = "_MARK.search finds the trailing bracketed securing tag on one conditions line, a fixed tag syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/conditions_securing.py::grammar_problems::pattern.findall"]
+class = "structural"
+ground = "_MARK_OPEN.findall counts the opening '[<kind>:' securing tags in one condition's lines, so a condition with two marks is refused; a fixed tag syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/conditions_securing.py::grammar_problems::pattern.search"]
+class = "structural"
+ground = "_MARK_OPEN.search finds a securing tag opening on a line that is not a condition's last, so a continuation after the mark is refused; a fixed tag syntax."
+hits = 1
+reviewed_by = "developer"
+
+[sites."scripts/agentctl/conditions_securing.py::securing_problems::pattern.search"]
+class = "structural"
+ground = "_MARK_OPEN.search finds a securing tag opening in a condition whose trailing-mark parse failed, i.e. text follows the mark; a fixed tag syntax."
+hits = 1
+reviewed_by = "developer"
+
 [sites."scripts/agentctl/config.py::<module>::re.compile"]
 class = "structural"
 ground = "CONFIG_KEY_RE compiles the config.md markdown table row syntax '| `key` | `value` |'."
@@ -2430,9 +2468,15 @@ reviewed_by = "developer"
 
 [sites."scripts/spawn-specialist.py::<module>::re.compile"]
 class = "structural"
-ground = "CONFIG_KEY_RE compiles the fixed config.md markdown table-row syntax; _PUSH_RULE_BRANCH compiles the closed git ref-name character class a push rule may carry."
-hits = 2
-hit_classes = ["structural", "structural"]
+ground = "CONFIG_KEY_RE compiles the fixed config.md markdown table-row syntax; _PUSH_RULE_BRANCH compiles the closed git ref-name character class a push rule may carry; _USAGE_LIMIT_RESET compiles the 'resets <when>' tail of the CLI's own usage-limit message."
+hits = 3
+hit_classes = ["structural", "structural", "structural"]
+reviewed_by = "developer"
+
+[sites."scripts/spawn-specialist.py::_usage_limit_envelope::pattern.search"]
+class = "structural"
+ground = "_USAGE_LIMIT_RESET.search copies the reset time out of the CLI's fixed usage-limit message into the envelope note; the usage-limit outcome itself is already decided by the signature table, not here."
+hits = 1
 reviewed_by = "developer"
 
 [sites."scripts/spawn-specialist.py::push_allow_rules::pattern.match"]
