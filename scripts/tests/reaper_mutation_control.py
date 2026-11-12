@@ -53,7 +53,9 @@ LIVENESS = "reaper/liveness.py"
 TEMP_RESIDUE = "reaper/builtin/temp_residue.py"
 T_LIVENESS = "tests/test_reaper_liveness.py"
 T_RESIDUE = "tests/test_reaper_temp_residue.py"
+T_HOLDERS = "tests/test_reaper_holders.py"
 
+GATE_MATRIX = "test_a_gated_reaper_is_due_only_in_a_fresh_interactive_top_level_start"
 PLANTED_HOLDERS = "test_each_holder_kind_in_a_planted_proc_root_is_found_under_its_own_kind"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
@@ -735,6 +737,65 @@ CATALOGUE: "dict[str, Mutant]" = {
         "    try:\n        spawn_upkeep()\n    except Exception:\n        pass\n"
         "    try:\n        if \"Stop\" in raw:\n            spawn_pressure()\n",
         _ids(T_HOOK, "test_the_pressure_check_starts_for_a_session_start_payload"),
+    ),
+    "session-gate-ignored": Mutant(
+        RUNNER, '            if session_admits(getattr(r.module, "SESSION_SOURCES", None), ctx.session)\n', "            if True\n",
+        _ids(T_RUNNER, GATE_MATRIX + "[cli-0-compact]", GATE_MATRIX + "[sdk-cli-0-startup]", GATE_MATRIX + "[cli-1-startup]",
+             "test_a_gated_reaper_is_never_due_without_a_usable_payload[None]"),
+    ),
+    "session-gate-stamps": Mutant(
+        RUNNER, "        for name in due - failed_removals:\n", "        for name in {r.name for r in selected} - failed_removals:\n",
+        _ids(T_RUNNER, GATE_MATRIX + "[cli-0-compact]", GATE_MATRIX + "[sdk-cli-0-startup]",
+             "test_a_gated_reaper_is_never_due_without_a_usable_payload[None]"),
+    ),
+    "session-gate-child": Mutant(
+        RUNNER, "session[0] in sources and session[1] and session[2]", "session[0] in sources and session[2]",
+        _ids(T_RUNNER, GATE_MATRIX + "[cli-1-startup]"),
+    ),
+    "session-gate-noninteractive": Mutant(
+        RUNNER, "session[0] in sources and session[1] and session[2]", "session[0] in sources and session[1]",
+        _ids(T_RUNNER, GATE_MATRIX + "[sdk-cli-0-startup]"),
+    ),
+    "session-gate-manual": Mutant(
+        RUNNER,
+        "    elif dry_run or force_run:\n        due = {r.name for r in selected}\n",
+        "    elif dry_run or force_run:\n"
+        '        due = {r.name for r in selected if session_admits(getattr(r.module, "SESSION_SOURCES", None), ctx.session)}\n',
+        _ids(T_RUNNER, "test_manual_modes_ignore_the_gate[argv0]", "test_manual_modes_ignore_the_gate[argv1]"),
+    ),
+    "holders-scope-ignored": Mutant(
+        LIVENESS,
+        "        record = owning_record(wanted, ctx.scope_records, ctx.now, ctx.heartbeat_ttl_hours, _lexical)\n",
+        "        record = None\n",
+        _ids(T_HOLDERS, "test_a_live_scope_record_inside_the_path_holds_it_and_a_sibling_stays_free",
+             "test_a_scope_record_with_a_repo_root_at_the_path_holds_it"),
+    ),
+    "holders-engine-ignored": Mutant(
+        LIVENESS,
+        "        task = next((t for t in tasks if any(_inside(wanted, root) for root in t.roots)), None)\n",
+        "        task = None\n",
+        _ids(T_HOLDERS, "test_an_unresolved_engine_task_holds_the_path_and_names_session_and_task[repo_root]",
+             "test_an_unresolved_engine_task_holds_the_path_and_names_session_and_task[delivery_worktree]",
+             "test_holders_exits_three_when_a_path_is_held_and_names_who"),
+    ),
+    "holders-engine-resolved-held": Mutant(
+        LIVENESS, "        if node == RESOLVED_NODE:\n            continue\n", "        if False:\n            continue\n",
+        _ids(T_HOLDERS, "test_a_resolved_engine_task_holds_nothing"),
+    ),
+    "holders-process-ignored": Mutant(
+        LIVENESS, "        process = sweep.holder_of(wanted)\n", "        process = None\n",
+        _ids(T_HOLDERS, "test_a_process_with_its_cwd_inside_the_path_holds_it",
+             "test_a_held_path_is_held_even_when_the_sweep_was_incomplete"),
+    ),
+    "holders-unknown-as-free": Mutant(
+        LIVENESS, "        elif unreadable:\n", "        elif False:\n",
+        _ids(T_HOLDERS, "test_an_incomplete_process_sweep_gives_unknown", "test_an_unreadable_scope_registry_gives_unknown",
+             "test_an_engine_store_that_is_not_a_directory_gives_unknown",
+             "test_holders_exits_four_when_any_path_is_unknown_even_if_another_is_held"),
+    ),
+    "holders-realpath": Mutant(
+        LIVENESS, "    return os.path.normpath(os.path.abspath(path))\n", "    return os.path.realpath(path)\n",
+        _ids(T_HOLDERS, "test_nothing_at_or_under_a_queried_path_is_stat_ed_resolved_or_walked"),
     ),
 }
 
