@@ -18,8 +18,11 @@ One pass:
      when a scan raises, when a reaper module was skipped at discovery (its KEEP vetoes
      are missing), or when a session-scope record could not be read (an owner may be
      missing). A removal
-     is logged to ``<config root>/reaper/removed.jsonl`` BEFORE it is attempted; a
-     remove() exception keeps the path and leaves that reaper's stamp where it was.
+     is logged to ``<config root>/reaper/removed.jsonl`` BEFORE it is attempted, and its outcome
+     row (``outcome``: ``removed``, ``refused`` or ``failed``, with ``detail``) after; an attempt
+     row with no outcome row means the pass died mid-removal. ``RemovalRefused`` from remove()
+     keeps the path with its reason and is not an error; any other remove() exception keeps the
+     path and leaves that reaper's stamp where it was.
   5. Every removal row carries ``trigger`` (``unit`` when a reaper unit started the pass, else ``pressure``,
      ``manual`` or ``hook``) and, under systemd, ``invocation_id``. After a live pass each due
      reaper's keeps replace the snapshot ``<config root>/reaper/kept/<NAME>.json`` (a snapshot,
@@ -73,7 +76,7 @@ from typing import Callable, Iterator, Sequence, TextIO
 from agentctl import config as agentctl_config
 from lib import config_root
 from reaper import registry
-from reaper.contract import KEEP, REMOVE, ReapContext, Verdict
+from reaper.contract import KEEP, REMOVE, ReapContext, RemovalRefused, Verdict
 from session_scope import registry as scope_registry
 
 THROTTLED_SENTINEL = "throttled: within window"
@@ -180,9 +183,31 @@ def _append_removal_log(
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+OUTCOME_REMOVED = "removed"
+OUTCOME_REFUSED = "refused"
+OUTCOME_FAILED = "failed"
+
+
+def _append_outcome_log(
+    log_path: Path, now: float, reaper: registry.Reaper, verdict: Verdict, provenance: "dict[str, str]",
+    outcome: str, detail: str, err: TextIO,
+) -> None:
+    """Append the attempt's outcome row; best effort, since the attempt row is already written."""
+    record = {
+        "ts": _iso(now), "reaper": reaper.name, "layer": reaper.layer, "path": verdict.path,
+        "outcome": outcome, "detail": detail, **provenance,
+    }
+    try:
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        print(f"reaper {reaper.name}: could not log the outcome for {verdict.path}: {exc}", file=err)
+
+
 REASON_TAG = "reason="
 UNCLASSIFIED = "unclassified"
 REMOVAL_FAILED = "removal-failed"
+REMOVAL_REFUSED = "removal-refused"
 BLOCKED = "blocked"
 
 
@@ -427,6 +452,7 @@ def execute_pass(
     removed = 0
     failed_removals: "set[str]" = set()
     failed_paths: "set[str]" = set()
+    refused_paths: "dict[str, str]" = {}
     removed_paths: "set[str]" = set()
     for real, entries in joined.items():
         if blocker(real) is not None:
@@ -438,15 +464,27 @@ def execute_pass(
         if executor is None:
             continue
         reaper, verdict = executor
+        logged = False
         try:
             _append_removal_log(log_path, now, reaper, verdict, provenance)
+            logged = True
             if reaper.module.remove(verdict.path, ctx) is False:
                 raise RuntimeError("remove() returned False")
+        except RemovalRefused as exc:
+            refused_paths[verdict.path] = str(exc)
+            _append_outcome_log(log_path, now, reaper, verdict, provenance, OUTCOME_REFUSED, str(exc), err)
+            print(f"reaper {reaper.name}: refused to remove {verdict.path}: {exc}", file=err)
+            continue
         except Exception as exc:
             failed_removals.add(reaper.name)
             failed_paths.add(verdict.path)
+            if logged:
+                _append_outcome_log(
+                    log_path, now, reaper, verdict, provenance, OUTCOME_FAILED, f"{type(exc).__name__}: {exc}", err,
+                )
             print(f"reaper {reaper.name}: FAILED to remove {verdict.path}: {type(exc).__name__}: {exc}", file=err)
             continue
+        _append_outcome_log(log_path, now, reaper, verdict, provenance, OUTCOME_REMOVED, verdict.reason, err)
         removed += 1
         removed_paths.add(verdict.path)
         print(f"reaper {reaper.name}: removed {verdict.path} ({verdict.reason})", file=err)
@@ -464,7 +502,9 @@ def execute_pass(
                 if verdict.action == KEEP:
                     keeps.append((verdict.path, _slug(verdict), verdict.reason, verdict.size))
                 elif verdict.path in failed_paths:
-                    keeps.append((verdict.path, REMOVAL_FAILED, f"removal refused or failed: {verdict.reason}", verdict.size))
+                    keeps.append((verdict.path, REMOVAL_FAILED, f"removal failed: {verdict.reason}", verdict.size))
+                elif verdict.path in refused_paths:
+                    keeps.append((verdict.path, REMOVAL_REFUSED, refused_paths[verdict.path], verdict.size))
                 elif verdict.path not in removed_paths:
                     why = blocker(os.path.realpath(verdict.path))
                     keeps.append((verdict.path, BLOCKED if why else UNCLASSIFIED, why or verdict.reason, verdict.size))

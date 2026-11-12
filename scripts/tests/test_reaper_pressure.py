@@ -72,6 +72,9 @@ class PressureEnv:
             return []
         return [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
 
+    def attempt_records(self):
+        return [r for r in self.log_records() if "outcome" not in r]
+
     def pressure_records(self):
         if not self.pressure_log.exists():
             return []
@@ -243,7 +246,7 @@ def test_a_pressured_reaper_removes_what_nothing_vetoes(env):
     env.free[str(env.tmp)] = 3.0
     env.run([a])
     assert a.removed == [str(env.item)]
-    assert [r["path"] for r in env.log_records()] == [str(env.item)]
+    assert [r["path"] for r in env.attempt_records()] == [str(env.item)]
 
 
 def test_a_reaper_that_is_not_pressured_cannot_remove_even_what_it_proposes(env):

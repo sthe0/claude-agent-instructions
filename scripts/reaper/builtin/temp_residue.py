@@ -65,7 +65,7 @@ from pathlib import Path
 
 from lib import config_root
 from reaper import liveness, opt_in
-from reaper.contract import KEEP, REMOVE, ReapContext, Verdict
+from reaper.contract import KEEP, REMOVE, ReapContext, RemovalRefused, Verdict
 
 NAME = "temp-residue"
 THROTTLE_HOURS = 24.0
@@ -80,6 +80,7 @@ PATTERNS = {
     "sbx": re.compile(r"sbx\.[A-Za-z0-9_-]+"),
 }
 OPT_IN_OFF = "opt-in-off-would-remove"
+NOT_A_CANDIDATE = "not-a-candidate"
 SKIPPED_TAG = "helpers_skipped="
 REASONS = (
     liveness.IDLE_FLOOR, liveness.HELD, liveness.SESSION_OWNED, liveness.FOREIGN_OWNER,
@@ -362,13 +363,14 @@ def scan(ctx: ReapContext) -> "list[Verdict]":
 
 def remove(path: str, ctx: ReapContext) -> bool:
     if not opt_in.enabled(NAME):
-        return False
+        raise RemovalRefused(f"{OPT_IN_OFF}: {NAME} is not true in the machine's reaper opt-in file")
     candidate = os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
     source = next((s for s in _sources() if _is_child_of(s, candidate)), None)
     if source is None:
-        return False
-    if _judge(candidate, source, ctx, liveness.sweep_holders(), _mounts()).action != REMOVE:
-        return False
+        raise RemovalRefused(f"{NOT_A_CANDIDATE}: not a direct child of a residue root")
+    judgment = _judge(candidate, source, ctx, liveness.sweep_holders(), _mounts())
+    if judgment.action != REMOVE:
+        raise RemovalRefused(f"{judgment.slug}: {judgment.detail}")
     liveness.remove_tree(os.path.dirname(candidate), os.path.basename(candidate))
     return True
 

@@ -106,12 +106,26 @@ CATALOGUE: "dict[str, Mutant]" = {
     "removal-log-before-remove": Mutant(
         RUNNER,
         '            _append_removal_log(log_path, now, reaper, verdict, provenance)\n'
+        '            logged = True\n'
         '            if reaper.module.remove(verdict.path, ctx) is False:\n'
         '                raise RuntimeError("remove() returned False")\n',
         '            if reaper.module.remove(verdict.path, ctx) is False:\n'
         '                raise RuntimeError("remove() returned False")\n'
-        '            _append_removal_log(log_path, now, reaper, verdict, provenance)\n',
+        '            _append_removal_log(log_path, now, reaper, verdict, provenance)\n'
+        '            logged = True\n',
         _ids(T_RUNNER, "test_removal_is_logged_before_remove_runs"),
+    ),
+    "removal-outcome-logged": Mutant(
+        RUNNER,
+        "        _append_outcome_log(log_path, now, reaper, verdict, provenance, OUTCOME_REMOVED, verdict.reason, err)\n",
+        "",
+        _ids(T_RUNNER, "test_each_attempt_is_followed_by_its_outcome_row"),
+    ),
+    "removal-refused-not-an-error": Mutant(
+        RUNNER,
+        "        except RemovalRefused as exc:\n",
+        "        except KeyboardInterrupt as exc:\n",
+        _ids(T_RUNNER, "test_a_refused_removal_is_kept_with_its_reason_and_is_not_an_error"),
     ),
     "realpath": Mutant(
         RUNNER, "joined.setdefault(os.path.realpath(verdict.path), [])", "joined.setdefault(verdict.path, [])",
@@ -650,7 +664,7 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "residue-refused-removal-reason": Mutant(
         RUNNER, "elif verdict.path in failed_paths:", "elif False:",
-        _ids(T_RUNNER, "test_a_removal_that_was_refused_is_snapshotted_as_refused_with_its_remove_reason",
+        _ids(T_RUNNER, "test_a_removal_that_returned_false_is_snapshotted_as_failed_with_its_remove_reason",
              "test_a_removal_that_raised_is_snapshotted_as_failed"),
     ),
     "residue-symlink": Mutant(
@@ -671,12 +685,15 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_RESIDUE, "test_without_opt_in_a_live_pass_keeps_what_it_would_remove_and_says_why"),
     ),
     "residue-opt-in-remove": Mutant(
-        TEMP_RESIDUE, "    if not opt_in.enabled(NAME):\n        return False\n", "",
+        TEMP_RESIDUE,
+        "    if not opt_in.enabled(NAME):\n"
+        "        raise RemovalRefused(f\"{OPT_IN_OFF}: {NAME} is not true in the machine's reaper opt-in file\")\n",
+        "",
         _ids(T_RESIDUE, "test_remove_refuses_without_opt_in_even_for_a_dead_candidate"),
     ),
     "residue-remove-rejudge": Mutant(
         TEMP_RESIDUE,
-        "    if _judge(candidate, source, ctx, liveness.sweep_holders(), _mounts()).action != REMOVE:",
+        "    if judgment.action != REMOVE:",
         "    if False:",
         _ids(T_RESIDUE, "test_remove_judges_again_and_refuses_what_became_held_or_fresh"),
     ),
