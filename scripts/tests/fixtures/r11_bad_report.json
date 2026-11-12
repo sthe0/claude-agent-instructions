@@ -1,0 +1,7 @@
+{
+  "collected": 16000,
+  "collection_errors": [],
+  "failing": [
+    "scripts/tests/test_r11_fixture_never_named.py::test_this_id_is_in_no_baseline_document"
+  ]
+}

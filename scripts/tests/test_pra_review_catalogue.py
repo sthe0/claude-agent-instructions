@@ -126,7 +126,10 @@ _B1_POSITIVE_CONTROLS = [
 ]
 
 
-@pytest.mark.parametrize("rule", _B1_POSITIVE_CONTROLS)
+@pytest.mark.parametrize(
+    "rule", _B1_POSITIVE_CONTROLS,
+    # a hermetic run's scripts dir is a random sandbox path, which would make the id differ per run
+    ids=lambda rule: rule.replace(str(SPAWN.SCRIPTS_DIR), "<scripts>"))
 def test_b1_positive_controls_still_accepted(rule):
     validate_rule(rule)  # must not raise
 

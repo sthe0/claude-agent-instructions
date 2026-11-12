@@ -24,6 +24,8 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `advisor-mode` | `substantive` | When the agentctl advisory judge activates: `off` or `substantive`; `AGENTCTL_ADVISOR` overrides. |
 | `child-contour-linking` | `on` | Kill switch linking a spawned specialist into its own engine contour; `AGENTCTL_CHILD_LINKING` overrides. |
 | `task-title` | `on` | Kill switch for `classify --title` retitling the tmux pane of a top-level session; `AGENTCTL_TASK_TITLE` overrides. |
+| `child-noanswer-recovery` | `on` | Kill switch for recovering a spawned child that returned no marker (usage limit → retry; else one resume asking for the marker); `AGENTCTL_CHILD_NOANSWER_RECOVERY` overrides. |
+| `conditions-securing` | `on` | Kill switch requiring each substantive stage's `conditions` line to end with a securing mark (probe / probe-revised / means / risk); decided once per session; `AGENTCTL_CONDITIONS_SECURING` overrides. |
 | `principle-promotion-threshold` | `3` | Context-block count at which promote-scan flags an experience cluster for a regularity leaf. |
 | `skill-description-max-chars` | `850` | Character ceiling on a SKILL.md frontmatter `description:`. |
 | `always-loaded-surface-advisory-chars` | `80000` | Advisory-only ceiling on the aggregate always-loaded surface; never fails. |

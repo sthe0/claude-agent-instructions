@@ -70,6 +70,7 @@
 # --- not-canon: writes only outside the repo, or names a write primitive without using it ---
 "scripts/plan_dashboard/publish.py" = { disposition = "not-canon", category = "not-canon", reason = "writes one publish-state file under XDG_STATE_HOME (or the path --publish-state names); no tracked file" }
 "scripts/lib/instruction_smoke_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes smoke records under the git common dir and a throwaway sandbox under the temp dir; no tracked file" }
+"scripts/lib/hermetic_run.py" = { disposition = "not-canon", category = "not-canon", reason = "writes only the user-namespace id maps of its own process and mounts over paths inside its private mount namespace; no tracked file" }
 "scripts/lib/suite_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes suite records and baselines under the git common dir and a throwaway sandbox under the temp dir; no tracked file" }
 "scripts/lib/test_slots.py" = { disposition = "not-canon", category = "not-canon", reason = "creates and writes its pid into slot lock files under the per-user test-slots-dir in /tmp; no tracked file" }
 "scripts/lib/landing_gate.py" = { disposition = "not-canon", category = "not-canon", reason = "writes gate records under the git common dir, temp file then rename; no tracked file" }
@@ -78,6 +79,7 @@
 "scripts/lib/agent_report/time_profile.py" = { disposition = "not-canon", category = "not-canon", reason = "writes uncertainty-report.md/.json under $TIME_PROFILE_STATE_DIR (default ~/.local/state/time-profile); no tracked file" }
 "scripts/hook-memory-retrieval.py" = { disposition = "not-canon", category = "not-canon", reason = "per-session surfaced-leaf dedupe state under the agent state dir; reads the memory corpus, writes no tracked file" }
 "scripts/lib/memory_retrieval_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only retrieval ledger under ~/.local/log; writes no tracked file" }
+"scripts/lib/fix_firings.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only fix-firing/v1 log under ~/.local/log (AGENTCTL_FIX_FIRINGS_LOG overrides); writes no tracked file" }
 "scripts/agent_commit_trailer.py" ={ disposition = "not-canon", category = "not-canon", reason = "prints a commit trailer; `git commit` appears in prose only" }
 "scripts/agentctl/cli.py" = { disposition = "not-canon", category = "not-canon", reason = "engine state, evidence, gate and quality logs under ~/.local and the agentctl state dir; plan snapshots under the session dir" }
 "scripts/agentctl/answer_ledger.py" = { disposition = "not-canon", category = "not-canon", reason = "append-only answer ledger beside the session state file in the agentctl state dir" }

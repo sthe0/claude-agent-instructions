@@ -306,3 +306,132 @@ def test_the_selftest_passes_with_the_limiter():
 def test_the_selftest_fails_without_the_limiter():
     proc = _selftest("--limiter", "none")
     assert proc.returncode == 1 and "LIMIT EXCEEDED: held=12 > 8" in proc.stdout, proc.stdout + proc.stderr
+
+
+# ── verify-named ──────────────────────────────────────────────────────────
+
+FIXTURES = TESTS_DIR / "fixtures"
+NAMED_ID = "scripts/tests/test_r11_fixture_never_named.py::test_this_id_is_in_no_baseline_document"
+
+
+def _verify(report, named, max_named=20):
+    return control.verify_named(Path(report), Path(named), max_named)
+
+
+def _doc(tmp_path, *ids):
+    doc = tmp_path / "named.md"
+    doc.write_text("".join(f"- `{i}` — reason\n" for i in ids), encoding="utf-8")
+    return doc
+
+
+def test_a_failing_id_that_the_document_names_passes(tmp_path):
+    assert _verify(FIXTURES / "r11_bad_report.json", _doc(tmp_path, NAMED_ID)) == 0
+
+
+def test_a_failing_id_that_the_document_does_not_name_is_refused(tmp_path):
+    assert _verify(FIXTURES / "r11_bad_report.json", _doc(tmp_path, "scripts/tests/test_other.py::test_x")) == 1
+
+
+def test_a_failing_id_that_is_a_prefix_of_a_named_id_is_refused(tmp_path):
+    assert _verify(FIXTURES / "r11_bad_report.json", _doc(tmp_path, NAMED_ID + "_longer")) == 1
+
+
+def test_a_failing_id_mentioned_only_in_prose_is_refused(tmp_path):
+    doc = tmp_path / "named.md"
+    doc.write_text(f"{NAMED_ID} fails here, reason unknown.\n", encoding="utf-8")
+    assert _verify(FIXTURES / "r11_bad_report.json", doc) == 1
+
+
+def test_a_parametrized_id_with_spaces_is_named_as_one_span(tmp_path):
+    report = tmp_path / "report.json"
+    spaced = "scripts/tests/t.py::test_a[two words]"
+    report.write_text(json.dumps({"collected": 16000, "failing": [spaced], "collection_errors": []}),
+                      encoding="utf-8")
+    assert _verify(report, _doc(tmp_path, spaced)) == 0
+
+
+def test_a_clean_run_passes_against_an_empty_document(tmp_path):
+    assert _verify(FIXTURES / "r11_clean_report.json", _doc(tmp_path)) == 0
+
+
+def test_a_document_naming_more_than_the_limit_is_refused():
+    assert _verify(FIXTURES / "r11_clean_report.json", FIXTURES / "r11_21_named.md") == 3
+
+
+def test_the_limit_is_a_parameter():
+    assert _verify(FIXTURES / "r11_clean_report.json", FIXTURES / "r11_21_named.md", max_named=21) == 0
+
+
+def test_a_run_that_did_not_finish_is_refused_even_with_nothing_failing(tmp_path):
+    assert _verify(FIXTURES / "r11_incomplete_report.json", _doc(tmp_path)) == 4
+
+
+def test_a_run_with_a_collection_error_is_refused_however_many_were_collected(tmp_path):
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"collected": 16000, "failing": [], "collection_errors": ["scripts/tests/t.py"]}),
+                      encoding="utf-8")
+    assert _verify(report, _doc(tmp_path)) == 4
+
+
+def test_an_unreadable_input_is_an_error(tmp_path):
+    assert _verify(tmp_path / "missing.json", _doc(tmp_path)) == 2
+    assert _verify(FIXTURES / "r11_clean_report.json", tmp_path / "missing.md") == 2
+
+
+def test_the_command_exit_code_is_the_verdict(tmp_path):
+    proc = subprocess.run([sys.executable, str(CONTROL), "verify-named", "--report",
+                           str(FIXTURES / "r11_bad_report.json"), "--named", str(_doc(tmp_path))],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 1 and "UNNAMED" in proc.stdout, proc.stdout + proc.stderr
+
+
+# ── reruns of the failing ids ─────────────────────────────────────────────
+
+FLAKY_ID = "scripts/tests/t.py::test_flaky"
+STABLE_ID = "scripts/tests/t.py::test_stable"
+
+
+def test_only_confirmed_ids_must_be_named_and_the_ids_that_passed_on_rerun_are_printed(tmp_path, capsys):
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"collected": 16000, "failing": [FLAKY_ID, STABLE_ID], "collection_errors": [],
+                                  "confirmed": [STABLE_ID], "rerun_passed": [FLAKY_ID]}), encoding="utf-8")
+    assert _verify(report, _doc(tmp_path, STABLE_ID)) == 0
+    assert FLAKY_ID in capsys.readouterr().out
+    assert _verify(report, _doc(tmp_path)) == 1
+
+
+def _rerun(monkeypatch, failing, results, reruns=2):
+    """Run ``_rerun_failing`` against a stand-in runner: each call takes the next set of failing ids
+    from ``results`` (None: the rerun did not complete). Returns the verdict and each call's selection."""
+    calls = []
+
+    def run(repo, sha, root, *, select, timeout_s, hide=True):
+        calls.append(list(select))
+        failures = results.pop(0)
+        if failures is None:
+            return gate.SuiteRun(pytest_exit=None)
+        return gate.SuiteRun(pytest_exit=int(bool(failures)), failures=tuple(failures))
+
+    monkeypatch.setattr(control.gate, "default_runner", run)
+    return control._rerun_failing(Path("."), "sha", Path("."), failing, reruns, 60), calls
+
+
+def test_an_id_that_fails_any_rerun_is_confirmed_and_one_that_passes_both_is_not(monkeypatch):
+    (confirmed, passed), calls = _rerun(monkeypatch, [FLAKY_ID, STABLE_ID], [[STABLE_ID], []])
+    assert (confirmed, passed) == ([STABLE_ID], [FLAKY_ID])
+    assert calls == [[FLAKY_ID, STABLE_ID], [FLAKY_ID]]
+
+
+def test_a_failure_in_the_second_rerun_confirms_the_id(monkeypatch):
+    (confirmed, passed), _ = _rerun(monkeypatch, [FLAKY_ID], [[], [FLAKY_ID]])
+    assert (confirmed, passed) == ([FLAKY_ID], [])
+
+
+def test_a_collection_error_is_confirmed_without_a_rerun(monkeypatch):
+    (confirmed, passed), calls = _rerun(monkeypatch, ["scripts/tests/t.py"], [])
+    assert (confirmed, passed, calls) == (["scripts/tests/t.py"], [], [])
+
+
+def test_a_rerun_that_does_not_complete_confirms_every_id_under_test(monkeypatch):
+    (confirmed, passed), _ = _rerun(monkeypatch, [FLAKY_ID, STABLE_ID], [None], reruns=1)
+    assert (sorted(confirmed), passed) == (sorted([FLAKY_ID, STABLE_ID]), [])

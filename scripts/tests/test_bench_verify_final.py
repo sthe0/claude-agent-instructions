@@ -4,6 +4,10 @@ The end-to-end case runs the benchmark with sub-second check costs and ratio lim
 enough that interpreter and git start-up cannot flake it, while --assert-decisions checks
 the candidate's logged per-check decisions exactly. The gate cases feed gate_failures
 synthetic numbers.
+
+The end-to-end case runs the benchmark from a temporary clone of this repository and checks
+that the clone's refs, worktrees and index are untouched, so it reads nothing outside the
+tree it runs in. The clone holds the committed tip, not uncommitted edits.
 """
 from __future__ import annotations
 
@@ -16,8 +20,8 @@ from pathlib import Path
 
 import pytest
 
-BENCH = Path(__file__).resolve().parents[1] / "bench-verify-final.py"
-REPO = BENCH.parent.parent
+REPO = Path(__file__).resolve().parents[2]
+BENCH = REPO / "scripts" / "bench-verify-final.py"
 PINNED_BASE = "00267dd6"
 
 
@@ -28,21 +32,21 @@ def _load_bench():
     return module
 
 
-def _git(*argv):
-    done = subprocess.run(["git", "-C", str(REPO), *argv], capture_output=True, check=False)
+def _git(repo, *argv):
+    done = subprocess.run(["git", "-C", str(repo), *argv], capture_output=True, check=False)
     return done.returncode, done.stdout
 
 
-def _base_ref():
-    code, _ = _git("rev-parse", "--verify", f"{PINNED_BASE}^{{commit}}")
+def _base_ref(repo):
+    code, _ = _git(repo, "rev-parse", "--verify", f"{PINNED_BASE}^{{commit}}")
     return PINNED_BASE if code == 0 else "HEAD"
 
 
-def _repo_state():
-    index = Path(_git("rev-parse", "--path-format=absolute", "--git-path", "index")[1].decode().strip())
+def _repo_state(repo):
+    index = Path(_git(repo, "rev-parse", "--path-format=absolute", "--git-path", "index")[1].decode().strip())
     return (
-        _git("for-each-ref")[1],
-        _git("worktree", "list", "--porcelain")[1],
+        _git(repo, "for-each-ref")[1],
+        _git(repo, "worktree", "list", "--porcelain")[1],
         index.read_bytes() if index.exists() else b"",
     )
 
@@ -66,15 +70,22 @@ def bench():
 
 
 @pytest.fixture(scope="module")
-def report():
-    before = _repo_state()
+def clone(tmp_path_factory):
+    path = tmp_path_factory.mktemp("bench-clone") / "repo"
+    subprocess.run(["git", "clone", "-q", "--shared", str(REPO), str(path)], check=True)
+    return path
+
+
+@pytest.fixture(scope="module")
+def report(clone):
+    before = _repo_state(clone)
     done = subprocess.run(
-        [sys.executable, str(BENCH), "--base-ref", _base_ref(), "--assert-decisions",
-         "--cost-a", "0.3", "--cost-b", "0.15", "--cost-c", "0.15",
+        [sys.executable, str(clone / "scripts" / "bench-verify-final.py"), "--base-ref", _base_ref(clone),
+         "--assert-decisions", "--cost-a", "0.3", "--cost-b", "0.15", "--cost-c", "0.15",
          "--max-first-ratio", "5", "--max-repeat-ratio", "5"],
         capture_output=True, text=True, check=False, timeout=170,
     )
-    return done, before, _repo_state()
+    return done, before, _repo_state(clone)
 
 
 def test_bench_exits_zero_with_the_expected_decisions(report):
@@ -102,7 +113,7 @@ def test_bench_report_records_the_fixture_commit_order(report):
     assert set(data["ratios"]) == {"first", "repeat", "parallel_first", "parallel_repeat"}
 
 
-def test_bench_leaves_the_real_repository_untouched(report):
+def test_bench_leaves_the_repository_it_runs_in_untouched(report):
     _, before, after = report
     assert after == before
 

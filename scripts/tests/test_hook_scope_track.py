@@ -13,7 +13,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-from conftest import path_with_arc_stub
+from conftest import path_with_arc_stub, unexempt_dir
 from session_scope import registry
 
 HOOK = Path(__file__).resolve().parent.parent / "hook-scope-track.py"
@@ -109,8 +109,7 @@ def test_edit_records_touch_and_context(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _make_git_stub(bin_dir, repo)
-    target = repo / "a.py"
-    target.write_text("x")
+    target = unexempt_dir(tmp_path, "repo") / "a.py"
 
     proc = run_hook(edit_payload("s1", str(repo), str(target)), home, str(bin_dir))
     assert proc.returncode == 0
@@ -347,8 +346,7 @@ def test_edit_persists_lineage_ids_from_env(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _make_git_stub(bin_dir, repo)
-    target = repo / "a.py"
-    target.write_text("x")
+    target = unexempt_dir(tmp_path, "repo") / "a.py"
 
     proc = run_hook(
         edit_payload("child", str(repo), str(target)), home, str(bin_dir),
@@ -370,8 +368,7 @@ def test_no_lineage_env_leaves_lineage_ids_empty(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _make_git_stub(bin_dir, repo)
-    target = repo / "a.py"
-    target.write_text("x")
+    target = unexempt_dir(tmp_path, "repo") / "a.py"
 
     proc = run_hook(edit_payload("s1", str(repo), str(target)), home, str(bin_dir))
     assert proc.returncode == 0

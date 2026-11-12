@@ -5,6 +5,7 @@ A change can pass review and its own tests and still break a test far from the f
 ## Parts
 
 - `scripts/lib/suite_gate.py` — the decision rule and the run, record and baseline handling.
+- `scripts/lib/hermetic_run.py` — the namespace runner pytest runs in (§ Hermetic run).
 - `scripts/suite-gate.py` — the CLI: `run`, `check`, `show`, `waive`, `pre-push`.
 - `scripts/lib/landing_gate.py` — the layer shared with the instruction smoke gate: binding a record to a candidate and a remote tip, the record store, the pre-push loop and the output defusing. The smoke gate (`pre-land-instruction-smoke-test.md` § Landing gate) is built on the same layer.
 - `scripts/land-branch.py` and `githooks/pre-push` — the two places that enforce it.
@@ -22,11 +23,19 @@ Outcomes follow the smoke gate: PASS, FAIL, UNAVAILABLE. UNAVAILABLE (a timeout,
 
 `suite-gate.py run` writes `<git common dir>/suite-gate/<candidate sha>.json` (`suite-run/v1`). A record admits a landing only when it names the candidate, was built on the *current* remote tip and has an admitting status. A remote that moved on makes it stale and the suite runs again. The candidate must contain the remote tip; otherwise merge it and rerun.
 
-The record also says what the run cost: `cpu_s` (CPU of the run's process tree), `peak_disk_mb` (largest size of the sandbox, sampled every minute), `slot_wait_s` and `slots_held`, the instants `queued_at`, `slots_acquired_at` and `timeout_started_at`, and the `pytest_argv` it ran. Beside it lie `<sha>.log`, `<sha>.junit.xml` and `<sha>.tests.jsonl` (one line per collected test and per test phase, keyed by pytest node id; `scripts/tests/_test_report.py`).
+The record also says what the run cost: `cpu_s` (CPU of the run's process tree), `peak_disk_mb` (largest size of the sandbox, sampled every minute), `slot_wait_s` and `slots_held`, the instants `queued_at`, `slots_acquired_at` and `timeout_started_at`, the `pytest_argv` it ran, and whether it was `hermetic` (with `hermetic_reason` when not). Beside it lie `<sha>.log`, `<sha>.junit.xml` and `<sha>.tests.jsonl` (one line per collected test and per test phase, keyed by pytest node id; `scripts/tests/_test_report.py`).
 
 ## Worker slots
 
 A full run takes up to `test-slots-per-run` worker slots of the machine-wide `test-slots-total` (`scripts/lib/test_slots.py`) before pytest starts, waiting in a queue while other runs hold them, and runs with as many xdist workers as it holds; its timeout starts once it holds them. While it waits it prints the holders' pids every minute; after `test-slots-max-wait-s` (14400 s) it gives up and the run is UNAVAILABLE, naming them. pytest inherits the slot descriptors, so a gate killed mid-run leaves the slots held until its pytest tree exits. The rerun of new failures is serial and takes no slot. Every other parallel `pytest` of `scripts/tests` takes slots the same way, so a gate and an interactive run share the limit. pytest runs under `scripts/cap-run.sh`. That script caps the user's machine-wide thread count at its count on entry plus a headroom, so a run started later spends from the headroom of the runs already going. For this reason a run that holds slots gets the per-run headroom (`fanout-cap-extra-tasks`, read from config) once for every full share the slot holders together can run, `ceil(test-slots-total / test-slots-per-run)`; threads grow with workers, and runs that hold no slot are not counted. `python3 scripts/lib/test_slots.py held` shows who holds which slot.
+
+## Hermetic run
+
+A test that reads the live repository (its refs move with every landing), the agent home or the network passes on the machine that holds them and flakes when other sessions work; the verdict then depends on them, not on the candidate. pytest therefore runs inside `scripts/lib/hermetic_run.py`: a private user, mount and network namespace (entered from inside the Python process; the command-line `unshare` is refused here) in which an empty read-only filesystem is mounted over the source repository's work tree, its git directory, the canonical checkout and the agent homes (the configured config root and both default agent directories under the real home), and only loopback is up. A read of a hidden path through a symlink, an environment variable or a relative path reads an empty directory. The sandbox clone keeps reading the source's objects through alternates, so only that objects directory is bound back into the sandbox, read-only (a bind that cannot be made read-only fails the run, it is never left writable); the source's refs and work tree stay hidden. Not hidden: the rest of the home (the user site holds pytest and xdist), and `/proc/<pid>/root` of a process outside the namespace (there is no PID namespace). The mounts exist only inside pytest's own mount namespace.
+
+The runner exits 125 when it itself fails (namespaces refused, a mount refused, the command not startable), so the gate reports `the hermetic runner failed before pytest ran` and the run is UNAVAILABLE, not taken for pytest's own exit 2.
+
+**Where the namespaces are unavailable the gate does not stop: it runs unhidden, and says so.** It prints `NOT HERMETIC: <reason>` on stderr when the run starts, writes `hermetic: false` and `hermetic_reason` into the record, and `suite-gate.py run` and `check` end the decision line with `[NOT HERMETIC: <reason>]` (`SUITE: ADMITTED (PASS) [NOT HERMETIC: …]`). Read such a PASS as the weaker, pre-isolation verdict: tests that read the live repository ran against it. `scripts/tests/gate_speedup_control.py hermetic-run` never accepts a non-hermetic run.
 
 ## What is exempt
 

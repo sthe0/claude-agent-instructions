@@ -533,6 +533,7 @@ STRUCTURAL_ONLY = {
     "scripts/probe-hook-decision-semantics.py:run_add_dir_write_cell": "a fixed probe prompt",
     "scripts/probe-hook-decision-semantics.py:run_headless_cell": "a fixed probe prompt",
     "scripts/spawn-cursor-escape.py:main": "the difficulty statement",
+    "scripts/spawn-specialist.py:_resume_for_marker": "a fixed ask for the return marker",
     "scripts/telemetry-synthetic-task.py:run_task": "a fixed list of agentctl command lines",
 }
 

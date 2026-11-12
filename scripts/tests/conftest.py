@@ -41,9 +41,19 @@ if os.environ.get("PATH", "").split(os.pathsep)[:1] != [ARC_STUB_DIR]:
 
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import host_llm, judge_ledger  # noqa: E402
+import _core_shuffle  # noqa: E402
 import _test_report  # noqa: E402
 from _xdist_auto import pytest_configure, pytest_terminal_summary  # noqa: E402,F401
 from slow_selection import pytest_addoption, pytest_collection_modifyitems  # noqa: E402,F401
+
+def unexempt_dir(tmp_path: Path, name: str) -> Path:
+    """A directory path the engine's scratch rule never exempts, and that is not created.
+
+    is_engine_exempt exempts any path containing "/tmp/", and pytest's tmp_path sits
+    under /tmp on a stock Linux machine; a test whose verdict depends on a path being
+    gated or recorded takes its repo path from here instead."""
+    return Path("/unexempt-fixture") / tmp_path.name / name
+
 
 NO_SKIP_OPTION = "--telemetry-no-skip"
 
@@ -79,6 +89,8 @@ def pytest_addhooks(pluginmanager):
     if not pluginmanager.has_plugin("telemetry-no-skip"):
         pluginmanager.register(_NoSkipGuard(), "telemetry-no-skip")
     _test_report.register(pluginmanager)
+    if not pluginmanager.has_plugin("core-shuffle"):
+        pluginmanager.register(_core_shuffle, "core-shuffle")
 
 
 @pytest.hookimpl(specname="pytest_collection_modifyitems")
@@ -559,6 +571,18 @@ def _child_contour_linking_on_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _flagged_fixes_off_by_default(tmp_path, monkeypatch):
+    """Keep the flagged fixes OFF for the suite at large and their firing log in tmp.
+
+    config.md ships them `on`; tests written before a fix must keep their base behaviour (a fake
+    child without a resumable session, an unmarked condition), and no test may append to the live
+    `fix-firing/v1` log. A test of a fix turns its flag on with monkeypatch.setenv(..., "1")."""
+    monkeypatch.setenv("AGENTCTL_CHILD_NOANSWER_RECOVERY", "0")
+    monkeypatch.setenv("AGENTCTL_CONDITIONS_SECURING", "0")
+    monkeypatch.setenv("AGENTCTL_FIX_FIRINGS_LOG", str(tmp_path / "fix-firings.jsonl"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_self_diagnose_store(tmp_path, monkeypatch):
     """Redirect the self-diagnose findings store to tmp for the suite at large.
 
@@ -752,6 +776,14 @@ def _no_reported_order_exemption_by_default(request, monkeypatch):
 def _default_claude_runtime_host(monkeypatch):
     """Default CLAUDE_CODE_SESSION_ID so runtime_host.detect_host() resolves to claude."""
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "agentctl-test-session")
+
+
+@pytest.fixture(autouse=True)
+def _cursor_key_present_by_default(monkeypatch):
+    """A test that drops CLAUDE_CODE_SESSION_ID resolves its host from the Cursor CLI's preflight,
+    which needs an API key: without this default the verdict depends on whether the developer's
+    real home holds ~/.cursor_api_key. Tests of the key itself set or delete the variable."""
+    monkeypatch.setenv("CURSOR_API_KEY", "agentctl-test-key")
 
 
 @pytest.fixture(autouse=True)
