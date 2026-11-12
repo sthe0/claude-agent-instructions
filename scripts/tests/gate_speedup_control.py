@@ -787,13 +787,13 @@ def _timed_run(name: str, seed: int | None, repo: Path, sha: str, junit: Path, s
         into[name] = {"error": str(exc)}
 
 
-def _record_path(out: Path, name: str) -> Path:
+def _run_record_file(out: Path, name: str) -> Path:
     return out.with_name(f"{out.stem}.{name}.record.json")
 
 
 def _recorded_run(out: Path, name: str, seed: int | None, sha: str) -> dict | str:
     """The record an earlier ``--runs`` launch saved for ``name``, or why it cannot be used."""
-    path = _record_path(out, name)
+    path = _run_record_file(out, name)
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -848,7 +848,7 @@ def shuffle_pair(repo: Path, seeds: list[int], out: Path, exceptions_path: Path,
             _say(f"{name}: {message}")
         return EXIT_ERROR
     for name, _ in todo:
-        _record_path(out, name).write_text(json.dumps({**records[name], "commit": sha}) + "\n", encoding="utf-8")
+        _run_record_file(out, name).write_text(json.dumps({**records[name], "commit": sha}) + "\n", encoding="utf-8")
     for name, seed in plan:
         if name not in records:
             earlier = _recorded_run(out, name, seed, sha)
