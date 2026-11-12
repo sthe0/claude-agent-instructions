@@ -10,8 +10,9 @@ A reaper is a Python module defining
 * ``NAME`` (str) and ``THROTTLE_HOURS`` (a finite number > 0, default 24);
 * ``scan(ctx) -> list[Verdict]`` — one verdict per item it has an opinion on, with no
   side effect beyond best-effort bookkeeping that checks ``ctx.dry_run`` and ``ctx.due``;
-* ``remove(path, ctx)`` — delete one item the runner approved. Raise (or return
-  ``False``) when the removal did not happen;
+* ``remove(path, ctx)`` — delete one item the runner approved. Raise ``RemovalRefused(reason)``
+  when the item, judged again at removal time, must stay (not an error: the runner keeps it and
+  records the reason); raise anything else (or return ``False``) when the removal failed;
 * optionally ``summary(verdicts) -> str | None`` — one line for the SessionStart notice;
 * optionally ``snapshot_extra(verdicts) -> dict`` — extra top-level fields of the runner's kept
   snapshot; optionally ``dry_run_notes(verdicts) -> list[str]`` — diagnostic lines a dry run
@@ -41,6 +42,13 @@ from session_scope import registry
 OWNER_HEARTBEAT_TTL_HOURS = 24.0
 REMOVE = "remove"
 KEEP = "keep"
+
+
+class RemovalRefused(Exception):
+    """``remove`` found, judging again, that the item must stay; the message is the reason.
+
+    Difficulty removed: an item that turned live between scan and removal was reported as a
+    failed removal with no reason, so a correct refusal looked like a pass error."""
 
 
 @dataclass(frozen=True)

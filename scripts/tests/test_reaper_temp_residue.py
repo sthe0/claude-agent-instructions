@@ -27,12 +27,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agentctl import config as agentctl_config  # noqa: E402
 from reaper import liveness, registry, runner  # noqa: E402
 from reaper.builtin import temp_residue  # noqa: E402
-from reaper.contract import KEEP, REMOVE, ReapContext  # noqa: E402
+from reaper.contract import KEEP, REMOVE, ReapContext, RemovalRefused  # noqa: E402
 from session_scope import registry as scope_registry  # noqa: E402
 
 DAY = 86400.0
 SLUG = re.compile(r"[a-z]+(-[a-z]+)*")
 REAL_SWEEP = liveness.sweep_holders
+
+
+def refusal(path: str, ctx: ReapContext) -> str:
+    """The reason ``remove`` gave for refusing ``path`` (the test fails if it did not refuse)."""
+    with pytest.raises(RemovalRefused) as refused:
+        temp_residue.remove(path, ctx)
+    return str(refused.value)
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -164,7 +171,7 @@ def test_a_symlink_named_like_a_candidate_is_kept_and_its_target_untouched(world
     world.opt_in()
     verdict = by_path(temp_residue.scan(world.ctx())).get(str(link))
     assert verdict is None or (verdict.action, reason_of(verdict)) == (KEEP, liveness.NOT_A_DIRECTORY)
-    assert temp_residue.remove(str(link), world.ctx()) is False
+    assert refusal(str(link), world.ctx()).startswith(liveness.NOT_A_DIRECTORY + ":")
     assert target.exists() and link.is_symlink()
 
 
@@ -641,12 +648,12 @@ def test_only_the_boolean_true_turns_the_reaper_on(world, content):
     (world.home / "reaper" / "opt-in.toml").write_text(content, encoding="utf-8")
     [verdict] = temp_residue.scan(world.ctx())
     assert reason_of(verdict) == temp_residue.OPT_IN_OFF
-    assert temp_residue.remove(str(path), world.ctx()) is False and path.exists()
+    assert refusal(str(path), world.ctx()).startswith(temp_residue.OPT_IN_OFF + ":") and path.exists()
 
 
 def test_remove_refuses_without_opt_in_even_for_a_dead_candidate(world):
     path = world.session_dir()
-    assert temp_residue.remove(str(path), world.ctx()) is False
+    assert refusal(str(path), world.ctx()).startswith(temp_residue.OPT_IN_OFF + ":")
     assert path.exists()
 
 
@@ -663,12 +670,12 @@ def test_remove_deletes_a_dead_candidate_of_each_kind(world):
 def test_remove_judges_again_and_refuses_what_became_held_or_fresh(world):
     path = world.session_dir()
     world.opt_in()
-    assert temp_residue.remove(str(path), world.ctx(now=time.time())) is False
+    assert refusal(str(path), world.ctx(now=time.time())).startswith(liveness.IDLE_FLOOR + ":")
     held = liveness.HolderSweep(held={"cwd": [str(path)], "exe": [], "fd": [], "maps": []})
     original = liveness.sweep_holders
     liveness.sweep_holders = lambda *a, **k: held
     try:
-        assert temp_residue.remove(str(path), world.ctx()) is False
+        assert refusal(str(path), world.ctx()).startswith(liveness.HELD + ":")
     finally:
         liveness.sweep_holders = original
     assert path.exists()
@@ -678,8 +685,8 @@ def test_remove_refuses_a_path_that_is_not_a_current_candidate(world, tmp_path):
     world.opt_in()
     stranger = world.candidate(world.root, "tmp.elsewhere")
     inside = world.session_dir() / "inner"
-    assert temp_residue.remove(str(stranger), world.ctx()) is False
-    assert temp_residue.remove(str(inside), world.ctx()) is False
+    assert refusal(str(stranger), world.ctx()).startswith(temp_residue.NOT_A_CANDIDATE + ":")
+    assert refusal(str(inside), world.ctx()).startswith(temp_residue.NOT_A_CANDIDATE + ":")
     assert stranger.exists() and inside.exists()
 
 
@@ -778,7 +785,9 @@ def test_a_live_pass_removes_with_opt_in_logs_the_row_and_writes_the_kept_snapsh
     assert runner.main(["--force-run", "--only", temp_residue.NAME], discover=only_temp_residue) == 0
     assert not dead.exists() and fresh.exists()
     rows = [json.loads(line) for line in runner.removal_log_path().read_text(encoding="utf-8").splitlines()]
-    assert [(r["path"], r["trigger"]) for r in rows] == [(str(dead), "manual")]
+    assert [(r["path"], r["trigger"], r.get("outcome")) for r in rows] == [
+        (str(dead), "manual", None), (str(dead), "manual", "removed"),
+    ]
     snapshot = json.loads((runner.kept_snapshot_dir() / "temp-residue.json").read_text(encoding="utf-8"))
     assert [(k["path"], k["reason"]) for k in snapshot["kept"]] == [(str(fresh), liveness.IDLE_FLOOR)]
     assert snapshot["kept"][0]["bytes"] > 0 and snapshot["kept"][0]["detail"].startswith(f"{liveness.IDLE_FLOOR}: idle ")

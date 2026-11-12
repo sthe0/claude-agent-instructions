@@ -7,7 +7,7 @@ generality: 0
 resolution_confirmed_by_user: "user"
 refs: [/Users/the0/.claude-agent/plans/plan-convergence-evidence/cause-account.md, /Users/the0/.claude-agent/plans/plan-convergence-revision-log.md]
 created: 2026-08-11
-last_verified: 2026-09-27
+last_verified: 2026-11-12
 generalized_into: [incremental-repair-review-has-a-nonzero-finding-floor, a-review-reads-the-artifact-so-defects-in-its-fit-to-the-machinery-that-executes-it-stay-invisible-to-review, a-record-that-does-not-retain-the-variables-a-hypothesis-relates-leaves-it-unanswerable]
 ---
 
@@ -50,6 +50,10 @@ Establish the CAUSE of large-plan non-convergence before designing any remedy (u
 ### 2026-09-27 — convergence levers R1-R4 in agentctl (2026-09-27, quality 2/5)
 - Where it arose: agentctl engine, instructions repo; landed origin/main 5995ed7
 - Working plan: /home/the0/.claude-agent/plans/convergence-levers-r1-r2-r4-fcw.toml
+
+### 2026-11-12 — 2026-11-12 — disk-guard part 2a: temp-residue reaper and pressure timer (quality 3)
+- Where it arose: claude-agent-instructions scripts/reaper (temp_residue, runner), systemd --user units agent-reaper-pass/agent-reaper-pressure on the0.klg
+- Working plan: Build the temp-residue reaper (opt-in, re-judge before remove), a free-space pressure timer and a setup-symlinks opt-in question; review rounds until convergence; land; first live pass. Review rounds converged on the code, but every systemd-facing behaviour (InvocationID, unit marker, trigger) was checked only against hand-written stubs, and the stubs encoded the author's model of systemd, so the reviewers could not see the gap: the mismatch showed only at the first live pass. The live pass then exposed two reporting defects no review round had asked about: removed.jsonl logged attempts rather than deletions, and a re-judge refusal (item turned live between scan and remove) carried no reason and was counted as a pass error (11 cases). Both were fixed in a follow-up (outcome row after each attempt, RemovalRefused contract exception).
 ## Common core & variations
 **Common:** This leaf's third mechanism — repair is an authoring act at the density where authoring introduces defects, so the finding count falls to a NON-ZERO FLOOR and a pass-required gate cannot terminate by construction — is here confirmed by direct measurement rather than inferred. Breakers by round: 6,1,0,3,1,1,2,2,2,3,1,2,3,3,1 = 31 total; of the 24 found from round 4 on, 19 (79%) were defects the immediately preceding round's own fix introduced. Zero rounds closed with zero plan edits, the loop's only fixed point, so it never had a reachable exit. The plan grew 59.8 KB to 113.6 KB (+90%) across the series. The fourth mechanism reproduced exactly too: the two defects invisible to review at any round count were artifact-to-machinery fit failures — a stage whose commit the repo's own pre-commit spine would have refused (found round 13, after twelve reviews), and a guard watching the GATE_BEARING_HOOKS constant instead of the live hooks.PreToolUse array, so an edit deleting the row that ran the guard itself tripped nothing (found round 14, after thirteen). The leaf's own predicted remedy is the one taken: not shrinking the artifact but SPLITTING it, so the finished part is frozen rather than re-reviewed.
 

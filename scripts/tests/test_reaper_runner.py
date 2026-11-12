@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from reaper import registry, runner  # noqa: E402
-from reaper.contract import KEEP, REMOVE, ReapContext, Verdict  # noqa: E402
+from reaper.contract import KEEP, REMOVE, ReapContext, RemovalRefused, Verdict  # noqa: E402
 
 NOW = 2_000_000_000.0
 HOUR = 3600.0
@@ -108,6 +108,10 @@ class Env:
         if not self.log.exists():
             return []
         return [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
+
+    def attempt_records(self):
+        """The rows written before each removal; the outcome rows that follow them are left out."""
+        return [r for r in self.log_records() if "outcome" not in r]
 
 
 @pytest.fixture
@@ -245,7 +249,7 @@ def test_path_proposed_by_two_reapers_is_removed_once(env):
     a, b = Fake("a", [rm(env.item)]), Fake("b", [rm(env.item)])
     env.run([a, b])
     assert len(a.removed) + len(b.removed) == 1
-    assert len(env.log_records()) == 1
+    assert len(env.attempt_records()) == 1
 
 
 def test_verdicts_are_joined_by_realpath(env):
@@ -298,6 +302,46 @@ def test_removal_is_logged_before_remove_runs(env):
     record = env.log_records()[0]
     assert (record["reaper"], record["layer"], record["reason"]) == ("a", "builtin", "stale one")
     assert set(record) == {"ts", "reaper", "layer", "path", "reason", "trigger"}
+
+
+def outcomes(env):
+    return [(r["path"], r["outcome"], r["detail"]) for r in env.log_records() if "outcome" in r]
+
+
+def test_each_attempt_is_followed_by_its_outcome_row(env):
+    second, third = env.tmp / "second", env.tmp / "third"
+    second.mkdir()
+    third.mkdir()
+    a = Fake("a", [rm(env.item, "stale one")])
+    b = Fake("b", [rm(second)], remove_exc=OSError("busy"))
+    c = Fake("c", [rm(third)], remove_exc=RemovalRefused("held: cwd of pid 7"))
+    env.run([a, b, c])
+    assert sorted(outcomes(env)) == sorted([
+        (str(env.item), "removed", "stale one"),
+        (str(second), "failed", "OSError: busy"),
+        (str(third), "refused", "held: cwd of pid 7"),
+    ])
+    rows = env.log_records()
+    for path in (env.item, second, third):
+        kinds = ["outcome" in r for r in rows if r["path"] == str(path)]
+        assert kinds == [False, True]
+    assert len({r["trigger"] for r in rows}) == 1
+
+
+def test_a_refused_removal_is_kept_with_its_reason_and_is_not_an_error(env):
+    a = Fake("a", [rm(env.item, "no holder, idle 80h")], remove_exc=RemovalRefused("fresh: idle 1h"))
+    observe = {"errors": 0, "reapers_run": 0}
+    out, err = io.StringIO(), io.StringIO()
+    env.kept = env.tmp / "kept"
+    runner.execute_pass(
+        [a.reaper], env.ctx(), dry_run=False, force_run=False, only=None,
+        stamps=env.stamps, log_path=env.log, out=out, err=err, kept_dir=env.kept, observe=observe,
+    )
+    assert "refused to remove" in err.getvalue() and "FAILED" not in err.getvalue()
+    assert observe["errors"] == 0 and runner._read_stamp(env.stamps, "a") == NOW
+    assert json.loads((env.kept / "a.json").read_text())["kept"] == [{
+        "path": str(env.item), "reason": "removal-refused", "detail": "fresh: idle 1h", "bytes": 0,
+    }]
 
 
 def test_scan_exception_cancels_every_removal_and_advances_no_stamp(env):
@@ -494,7 +538,8 @@ def test_main_force_run_writes_the_removal_log_under_the_config_root(hermetic):
     a = Fake("a", [rm(item)])
     assert runner.main(["--force-run"], discover=lambda project, warn: [a.reaper]) == 0
     log = hermetic / "config" / "reaper" / "removed.jsonl"
-    assert [json.loads(l)["path"] for l in log.read_text(encoding="utf-8").splitlines()] == [str(item)]
+    rows = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
+    assert [(r["path"], r.get("outcome")) for r in rows] == [(str(item), None), (str(item), "removed")]
     assert not (hermetic / "home" / ".local" / "state" / "claude-reaper").exists()
 
 
@@ -702,7 +747,7 @@ def test_a_pass_under_systemd_records_trigger_unit_and_the_invocation_id_in_row_
     monkeypatch.setenv("AGENT_REAPER_UNIT", "agent-reaper-pass.service")
     a = Fake("a", [rm(env.item), keep(env.tmp / "other", "busy")])
     run_live(env, [a])
-    [row] = env.log_records()
+    [row] = env.attempt_records()
     snapshot = kept_snapshot(env, "a")
     assert (row["trigger"], row["invocation_id"]) == ("unit", "0123abcd")
     assert (snapshot["trigger"], snapshot["invocation_id"]) == ("unit", "0123abcd")
@@ -712,7 +757,7 @@ def test_an_inherited_invocation_id_without_the_unit_marker_is_not_a_unit_pass(e
     monkeypatch.setenv("INVOCATION_ID", "0123abcd")
     a = Fake("a", [rm(env.item), keep(env.tmp / "other", "busy")])
     run_live(env, [a])
-    [row] = env.log_records()
+    [row] = env.attempt_records()
     snapshot = kept_snapshot(env, "a")
     assert "invocation_id" not in row and "invocation_id" not in snapshot
     assert (row["trigger"], snapshot["trigger"]) == ("hook", "hook")
@@ -727,7 +772,7 @@ def test_the_unit_marker_without_an_invocation_id_is_not_a_unit_pass(env, monkey
 def test_a_pass_outside_systemd_records_no_invocation_id(env):
     a = Fake("a", [rm(env.item), keep(env.tmp / "other", "busy")])
     run_live(env, [a])
-    [row] = env.log_records()
+    [row] = env.attempt_records()
     snapshot = kept_snapshot(env, "a")
     assert "invocation_id" not in row and "invocation_id" not in snapshot
     assert (row["trigger"], snapshot["trigger"]) == ("hook", "hook")
@@ -765,8 +810,9 @@ def test_the_removal_row_has_exactly_the_documented_keys(env, monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "0123abcd")
     monkeypatch.setenv("AGENT_REAPER_UNIT", "agent-reaper-pass.service")
     run_live(env, [Fake("a", [rm(env.item)])])
-    [row] = env.log_records()
+    [row, outcome] = env.log_records()
     assert set(row) == {"ts", "reaper", "layer", "path", "reason", "trigger", "invocation_id"}
+    assert set(outcome) == {"ts", "reaper", "layer", "path", "outcome", "detail", "trigger", "invocation_id"}
 
 
 def test_a_keep_verdicts_reason_tag_is_the_entry_slug_and_its_text_is_the_detail(env):
@@ -824,13 +870,13 @@ def test_a_reaper_whose_scan_failed_gets_no_kept_snapshot_while_the_others_do(en
     assert sorted(p.name for p in (env.tmp / "kept").iterdir()) == ["b.json"]
 
 
-def test_a_removal_that_was_refused_is_snapshotted_as_refused_with_its_remove_reason(env):
-    refused = Fake("a", [rm(env.item, "no holder, idle 80h")], remove_result=False)
-    _, err = run_live(env, [refused], force_run=True)
+def test_a_removal_that_returned_false_is_snapshotted_as_failed_with_its_remove_reason(env):
+    failing = Fake("a", [rm(env.item, "no holder, idle 80h")], remove_result=False)
+    _, err = run_live(env, [failing], force_run=True)
     assert "FAILED to remove" in err
     assert kept_snapshot(env, "a")["kept"] == [{
         "path": str(env.item), "reason": "removal-failed",
-        "detail": "removal refused or failed: no holder, idle 80h", "bytes": 0,
+        "detail": "removal failed: no holder, idle 80h", "bytes": 0,
     }]
 
 
@@ -838,7 +884,7 @@ def test_a_removal_that_raised_is_snapshotted_as_failed(env):
     failing = Fake("a", [rm(env.item, "stale")], remove_exc=OSError("busy"))
     run_live(env, [failing], force_run=True)
     [entry] = kept_snapshot(env, "a")["kept"]
-    assert (entry["reason"], entry["detail"]) == ("removal-failed", "removal refused or failed: stale")
+    assert (entry["reason"], entry["detail"]) == ("removal-failed", "removal failed: stale")
 
 
 def test_the_kept_snapshot_is_replaced_by_each_pass_not_appended_to(env):
