@@ -476,6 +476,12 @@ def test_hook_messages_never_read_as_missing_push_rights(world):
     assert gate._PUSH_RIGHTS.search(text) is None
 
 
+def test_the_admission_line_is_the_printed_form_even_for_a_sha_holding_403():
+    cursed = "a" * 10 + "403" + "b" * 27
+    line = gate.admission_line(cursed)
+    assert gate._PUSH_RIGHTS.search(line) is None and gate.defuse(line) == line
+
+
 def test_the_defused_pattern_is_the_one_sync_instructions_repo_matches():
     script = (SCRIPTS_DIR / "sync-instructions-repo.sh").read_text(encoding="utf-8")
     assert gate.PUSH_RIGHTS_PATTERN in script
@@ -502,7 +508,7 @@ def test_git_push_runs_the_hook_and_a_recorded_candidate_lands(world):
     landed = subprocess.run(push, capture_output=True, text=True)
     assert landed.returncode == 0, landed.stderr
     assert gate.admission_line(tip) in landed.stderr
-    assert f"pre-push: instruction smoke record admitted {tip}" in landed.stderr
+    assert gate.defuse(f"pre-push: instruction smoke record admitted {tip}") in landed.stderr
     assert git(world.remote, "rev-parse", "main") == tip
 
 

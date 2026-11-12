@@ -125,8 +125,11 @@ GIT_IDENTITY = {
 
 
 def admission_line(candidate_sha: str) -> str:
-    """The one line the hook prints on admitting a push through a suite record."""
-    return f"pre-push: suite gate admitted {candidate_sha}"
+    """The one line the hook prints on admitting a push through a suite record, exactly as printed.
+
+    Hook output is defused, so a sha containing ``403`` is printed broken (``4·03``); returning the
+    defused form keeps every comparison with the printed line true for any sha."""
+    return shared.defuse(f"pre-push: suite gate admitted {candidate_sha}")
 
 
 # ── configuration ─────────────────────────────────────────────────────────

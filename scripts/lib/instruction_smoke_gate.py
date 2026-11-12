@@ -62,8 +62,11 @@ RUN_COMMAND = "python3 scripts/instruction-smoke-gate.py run"
 
 
 def admission_line(candidate_sha: str) -> str:
-    """The one line the hook prints on admitting a push; nothing else may print it."""
-    return f"pre-push: instruction smoke record admitted {candidate_sha}"
+    """The one line the hook prints on admitting a push, exactly as printed; nothing else may print it.
+
+    Hook output is defused, so a sha containing ``403`` is printed broken (``4·03``); returning the
+    defused form keeps every comparison with the printed line true for any sha."""
+    return defuse(f"pre-push: instruction smoke record admitted {candidate_sha}")
 
 
 # ── surface classifier (R1) ───────────────────────────────────────────────

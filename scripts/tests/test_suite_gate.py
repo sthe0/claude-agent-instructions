@@ -891,6 +891,12 @@ def test_pre_push_admits_a_recorded_candidate(world):
     assert result.allowed and gate.admission_line(cand) in result.messages
 
 
+def test_the_admission_line_is_the_printed_form_even_for_a_sha_holding_403():
+    cursed = "a" * 10 + "403" + "b" * 27
+    line = gate.admission_line(cursed)
+    assert PUSH_RIGHTS.search(line) is None and gate.defuse(line) == line
+
+
 def test_pre_push_prints_the_waiver_in_effect(world):
     cand = world.code_commit()
     world.store(make_record(cand, world.base, status=gate.UNAVAILABLE, reason="timeout", waiver=WAIVER))
