@@ -129,7 +129,7 @@ def admission_line(candidate_sha: str) -> str:
 
     Hook output is defused, so a sha containing ``403`` is printed broken (``4·03``); returning the
     defused form keeps every comparison with the printed line true for any sha."""
-    return shared.defuse(f"pre-push: suite gate admitted {candidate_sha}")
+    return defuse(f"pre-push: suite gate admitted {candidate_sha}")
 
 
 # ── configuration ─────────────────────────────────────────────────────────
