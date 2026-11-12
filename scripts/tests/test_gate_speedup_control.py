@@ -435,3 +435,77 @@ def test_a_collection_error_is_confirmed_without_a_rerun(monkeypatch):
 def test_a_rerun_that_does_not_complete_confirms_every_id_under_test(monkeypatch):
     (confirmed, passed), _ = _rerun(monkeypatch, [FLAKY_ID, STABLE_ID], [None], reruns=1)
     assert (sorted(confirmed), passed) == (sorted([FLAKY_ID, STABLE_ID]), [])
+
+
+def _scenario_record(case, *, status=None, first_run=None, result=None, failed_rounds=None, confirmed=None):
+    scenario = control.VERDICT_SCENARIOS[case]
+    planted = scenario.planted[0]
+    node = control.planted_id(planted.name)
+    return scenario, node, {
+        "status": status or scenario.verdict,
+        "new_failures": [node] if (confirmed if confirmed is not None else planted.result == "confirmed") else [],
+        "reruns": {node: {"first_run": first_run or planted.first_run, "result": result or planted.result,
+                          "failed_rounds": planted.failed_rounds if failed_rounds is None else failed_rounds}},
+    }
+
+
+@pytest.mark.parametrize("case", control.VERDICT_CASES)
+def test_the_expected_record_of_every_scenario_has_no_disagreement(case):
+    scenario = control.VERDICT_SCENARIOS[case]
+    detail = {control.planted_id(p.name): {"first_run": p.first_run, "result": p.result,
+                                           "failed_rounds": list(p.failed_rounds)} for p in scenario.planted}
+    record = {"status": scenario.verdict, "reruns": detail,
+              "new_failures": [n for n, d in detail.items() if d["result"] == "confirmed"]}
+    journaled = [n for n, d in detail.items() if d["result"] == "unconfirmed"]
+    assert control.judge_scenario(scenario, record, journaled)[1] == []
+
+
+def test_a_wrong_verdict_is_a_disagreement():
+    scenario, node, record = _scenario_record("confirmed", status=gate.PASS)
+    assert any("verdict" in problem for problem in control.judge_scenario(scenario, record, [])[1])
+
+
+def test_a_confirmed_test_that_was_called_unconfirmed_is_a_disagreement():
+    scenario, node, record = _scenario_record("first-rerun-fail", result="unconfirmed", failed_rounds=[],
+                                              confirmed=False)
+    assert control.judge_scenario(scenario, record, [node])[1]
+
+
+def test_an_unconfirmed_test_missing_from_the_journal_is_a_disagreement():
+    scenario, node, record = _scenario_record("flake-list")
+    assert any("journaled" in problem for problem in control.judge_scenario(scenario, record, [])[1])
+
+
+def test_a_confirmed_test_in_the_journal_is_a_disagreement():
+    scenario, node, record = _scenario_record("confirmed")
+    assert any("journaled" in problem for problem in control.judge_scenario(scenario, record, [node])[1])
+
+
+def test_the_single_rerun_mutant_counts_a_test_unconfirmed_when_one_rerun_passes():
+    node = "scripts/tests/t.py::test_a"
+    rounds = [frozenset({node}), frozenset()]
+    assert control.sabotaged_passing_every_rerun({node}, rounds) == {node}
+    assert gate.passing_every_rerun({node}, rounds) == frozenset()
+
+
+def test_the_planted_source_has_one_test_per_planted_id_and_compiles():
+    for scenario in control.VERDICT_SCENARIOS.values():
+        source = control.planted_source(scenario)
+        compile(source, "test_planted.py", "exec")
+        for planted in scenario.planted:
+            assert f"def test_{planted.name}()" in source
+
+
+def test_only_listed_planted_tests_enter_the_flake_list_table():
+    table = control.listed_table(control.VERDICT_SCENARIOS["flake-list"])
+    assert list(table) == [control.planted_id("flaky_listed")]
+    assert control.listed_table(control.VERDICT_SCENARIOS["additive"]) == {}
+
+
+def test_a_journal_state_tells_absent_from_present_and_changed(tmp_path):
+    path = tmp_path / "journal.jsonl"
+    assert control.journal_state(path) == {"present": False}
+    path.write_text("a\n", encoding="utf-8")
+    first = control.journal_state(path)
+    path.write_text("b\n", encoding="utf-8")
+    assert first["present"] and first != control.journal_state(path)

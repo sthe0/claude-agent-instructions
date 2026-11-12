@@ -29,9 +29,9 @@ to opt out (e.g. a release branch cut from the landed tip must outlive it).
                  [--session SID --stage N [--stage N ...]]
       Re-checks landability, then applies the instruction smoke gate and the
       suite gate (below), then runs, in order:
-        git push <remote> <branch>:<trunk>
+        git push <remote> <landing-sha>:<trunk>      (the branch tip, or the flaky-journal fold on it)
         git push <remote> --delete <branch>          (unless --keep-branch)
-        git branch -f <trunk> <branch-tip-sha>       (unless --remote-only)
+        git branch -f <trunk> <landing-sha>          (unless --remote-only)
         git worktree remove <path>                   (the branch's worktree,
                                                       unless --keep-branch)
         git branch -D <branch>                        (unless --keep-branch)
@@ -79,7 +79,17 @@ to opt out (e.g. a release branch cut from the landed tip must outlive it).
       record admits it, and a failure the tip's own run also has does not count.
       A landing that changes only .md files under memory-global/ or docs/ is
       exempt and runs nothing. Exactly one "SUITE: ..." line is printed before
-      the push; a refusal or any gate error exits 2 with nothing pushed.
+      the push; a refusal or any gate error exits 2 with nothing pushed. A test
+      that failed once in the run but passed both reruns is journaled on this
+      machine (<git common dir>/suite-gate/flaky-pending.jsonl, or the file
+      SUITE_GATE_FLAKY_JOURNAL names); every landing first drops the journal
+      entries origin/main already carries, then folds the rest into
+      scripts/tests/flaky.toml as one separate commit `tests: record flaky
+      tests` (trailer `Flake-Entries:`) on top of the branch tip. The suite
+      gate, the smoke gate, the push (`<fold sha>:<trunk>`), the local trunk
+      move and the landing record all use that commit; the branch ref is not
+      moved. A journal that cannot be folded is reported and never holds a
+      landing.
       --suite-waiver REASON admits an UNAVAILABLE suite run (never a FAIL), with
       the reason recorded; --suite-timeout bounds each suite run (default:
       config.md suite-gate-timeout-s). The pre-push hook re-checks the same
@@ -100,12 +110,13 @@ import shlex
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lib import instruction_smoke_gate as gate  # noqa: E402
+from lib import flake_list  # noqa: E402
 from lib import suite_gate  # noqa: E402
 try:
     from lib.telemetry import live  # noqa: E402
@@ -325,6 +336,27 @@ def _smoke_gate(repo_root, assessment: Assessment, tip, timeout_s, waiver, runne
     return None, _admitted_line(sha, outcome.record, "ran", outcome.record_path)
 
 
+def _fold_flaky_journal(repo_root, assessment: Assessment):
+    """Count the machine-local flaky journal into scripts/tests/flaky.toml as one commit on the candidate.
+
+    Returns (assessment, line): the assessment whose ``branch_sha`` is that commit (the branch ref is
+    not moved; the commit is what the gates judge and the push lands), or the unchanged one when
+    nothing is pending. A journal that cannot be folded never holds a landing."""
+    remote, trunk = assessment.remote, assessment.trunk
+    try:
+        journal = flake_list.journal_path(gate.git_common_dir(repo_root))
+        flake_list.drop_landed(repo_root, journal, f"{remote}/{trunk}")
+        folded = flake_list.fold(repo_root, journal, assessment.branch_sha, suite_gate.GIT_IDENTITY)
+    except Exception as exc:  # noqa: BLE001 — the fold is bookkeeping; the gates still judge the candidate
+        return assessment, f"[land-branch] flaky journal not folded: {gate.one_line(exc, 300)}"
+    if folded is None:
+        return assessment, None
+    lines = [f"[land-branch] folded {len(folded.entry_ids)} flaky-test journal entr"
+             f"{'y' if len(folded.entry_ids) == 1 else 'ies'} into {flake_list.LIST_PATH} ({gate.short(folded.sha)})"]
+    lines += [f"[land-branch] {line}" for line in flake_list.due_lines(folded.table)]
+    return replace(assessment, branch_sha=folded.sha), "\n".join(lines)
+
+
 def _suite_gate(repo_root, assessment: Assessment, tip, timeout_s, waiver, runner):
     """The pre-land suite gate. Returns (None, line) when landing may proceed, else (reason, None).
 
@@ -337,6 +369,7 @@ def _suite_gate(repo_root, assessment: Assessment, tip, timeout_s, waiver, runne
         else:
             decision = suite_gate.evaluate_landing(
                 repo_root, assessment.branch_sha, tip, runner=runner, timeout_s=timeout_s, waiver=waiver,
+                tip_reader=lambda: gate.fetch_remote_tip(repo_root, assessment.remote, assessment.trunk),
             )
     except Exception as exc:  # noqa: BLE001 — a crashed gate refuses rather than admits
         return f"suite gate: {gate.one_line(exc, 400)}", None
@@ -491,6 +524,10 @@ def _do_land(repo_root, assessment: Assessment, smoke_timeout=gate.DEFAULT_TIMEO
 
     refusal, remote_tip = _fetch_tip(repo_root, assessment)
     if refusal is None:
+        assessment, fold_line = _fold_flaky_journal(repo_root, assessment)
+        sha = assessment.branch_sha
+        if fold_line:
+            print(fold_line)
         suite_began = time.perf_counter()
         refusal, suite_line = _suite_gate(repo_root, assessment, remote_tip, suite_timeout, suite_waiver, suite_runner)
         _emit_landing("suite_gate", session, {
@@ -507,7 +544,7 @@ def _do_land(repo_root, assessment: Assessment, smoke_timeout=gate.DEFAULT_TIMEO
     print(smoke_line)
 
     push_began = time.perf_counter()
-    push_landing = _git(["push", remote, f"{branch}:{trunk}"], repo_root)
+    push_landing = _git(["push", remote, f"{sha}:{trunk}"], repo_root)
     _emit_landing("attempt", session, {
         "branch": branch, "tip": sha, "outcome": "pushed" if push_landing.returncode == 0 else "failed",
         "duration_s": round(time.perf_counter() - push_began, 3)})

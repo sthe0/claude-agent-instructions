@@ -48,6 +48,7 @@ SHARED = "scripts/lib/landing_gate.py"
 HOOK = "githooks/pre-push"
 LAND = "scripts/land-branch.py"
 TESTS = "tests/test_suite_gate.py"
+ADDITIVE_TESTS = "tests/test_suite_gate_additive.py"
 LAND_TESTS = "tests/test_land_branch_suite_gate.py"
 SMOKE_LAND_TESTS = "tests/test_land_branch_smoke_gate.py"
 SUITE_HOOK_LINE = 'printf \'%s\\n\' "$STDIN" | python3 "$HERE/../scripts/suite-gate.py" pre-push "$@" || suite=$?'
@@ -136,11 +137,49 @@ CATALOGUE: "dict[str, Mutant]" = {
         "    def pytest_collectreport_ignored(self, report):",
         _ids("test_the_plugin_records_failed_tests_and_collection_errors"),
     ),
-    "suite-unconfirmed-not-admitted": Mutant(
+    "suite-unconfirmed-holds-the-landing": Mutant(
         LIB,
-        "            if unconfirmed and not new_failures and not reason:",
-        "            if False:",
-        _ids("test_a_new_failure_that_passes_on_rerun_is_unavailable_not_admitted"),
+        "    return Verdict(reason, tuple(confirmed), tuple(unconfirmed), tuple(baseline_failures),",
+        "    return Verdict(reason, tuple(confirmed + unconfirmed), tuple(unconfirmed), tuple(baseline_failures),",
+        _ids(
+            "test_a_new_failure_that_passes_both_reruns_is_unconfirmed_and_passes",
+            "test_judge_lets_an_unconfirmed_failure_pass",
+        ),
+    ),
+    "suite-one-passing-rerun-unconfirms": Mutant(
+        LIB,
+        "    return frozenset(new) - frozenset().union(*failed_rounds)",
+        "    return frozenset(new) - frozenset(new).intersection(*failed_rounds)",
+        _ids(
+            "test_a_failure_of_the_second_rerun_alone_confirms_it",
+            "test_judge_confirms_a_failure_of_the_second_rerun_alone",
+        ),
+    ),
+    "suite-join-same-candidate": Mutant(
+        LIB,
+        "    if first.candidate_sha != second.candidate_sha:",
+        "    if False:",
+        _ids("test_join_refuses_a_different_candidate", module=ADDITIVE_TESTS),
+    ),
+    "suite-join-same-tip": Mutant(
+        LIB,
+        "    if first.tip_sha != second.tip_sha:",
+        "    if False:",
+        _ids("test_join_refuses_a_different_tip", "test_a_tip_that_moved_during_the_reruns_is_unavailable",
+             module=ADDITIVE_TESTS),
+    ),
+    "suite-join-covers-the-non-passing-ids": Mutant(
+        LIB,
+        "    if second.covered != first.covered - first.passing:",
+        "    if False:",
+        _ids("test_join_refuses_a_second_set_that_misses_a_non_passing_id",
+             "test_join_refuses_a_second_set_that_covers_a_passing_id", module=ADDITIVE_TESTS),
+    ),
+    "suite-report-without-collection-is-unavailable": Mutant(
+        LIB,
+        "    if not report.collected_ids(lines):",
+        "    if False:",
+        _ids("test_a_report_with_no_collected_line_is_unavailable_not_pass", module=ADDITIVE_TESTS),
     ),
     "suite-baseline-keyed-by-tip": Mutant(
         LIB,
@@ -195,7 +234,7 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "suite-timeout-unavailable": Mutant(
         LIB,
-        '    if run.timed_out:\n        return (), f"pytest did not finish within the timeout{_detail(run)}"\n',
+        '    if run.timed_out:\n        return f"pytest did not finish within the timeout{_detail(run)}"\n',
         "",
         _ids(
             "test_a_timed_out_run_is_unavailable_whatever_it_recorded",

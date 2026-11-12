@@ -9,7 +9,10 @@ the filesystem, the sandbox and pytest are the edges (``run_suite``, ``default_r
 Both runs happen in an isolated sandbox root built by scripts/instruction-sandbox.sh: the candidate
 in one, and - only when the candidate fails something - the tip in another, cached by tip sha. A
 failure present in the tip's baseline is not the candidate's doing and does not block; a failure
-absent from it is rerun once and blocks when it fails again. Memory and docs markdown cannot fail
+absent from it - a failed test, or one that never finished because the run was killed after collection -
+is rerun twice, each time in a fresh serial pytest process, and blocks when it fails either rerun; a
+test that passes both is unconfirmed, no longer holds the landing and goes to the flaky journal
+(scripts/lib/flake_list.py). Memory and docs markdown cannot fail
 a test, so a landing that changes nothing else is exempt, decided from git's own path list.
 
 Built on scripts/lib/landing_gate.py (binding, record store, pre-push loop); records are
@@ -42,6 +45,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Protocol, Sequence
 
 from . import config_root
+from . import flake_list
 from . import hermetic_run
 from . import landing_gate as shared
 from . import test_slots
@@ -71,6 +75,8 @@ CAP_RUN_SLACK_S = 30
 CAP_RUN_EXTRA_KEY = "fanout-cap-extra-tasks"
 CAP_RUN_EXTRA_TASKS = 512  # config.md: fanout-cap-extra-tasks
 DISK_SAMPLE_S = 60
+RERUN_ROUNDS = 2
+MAX_UNFINISHED_RERUN = 200
 JUNIT_NAME = "junit.xml"
 REPORT_NAME = "tests.jsonl"
 
@@ -217,19 +223,27 @@ class Runner(Protocol):
                  select: Sequence[str], timeout_s: int) -> SuiteRun: ...
 
 
+def _precondition(run: SuiteRun, expected_sha: str) -> str:
+    """Why the run proves nothing whatever it reports, or an empty string."""
+    if run.slots_unavailable:
+        return run.slots_unavailable
+    if run.timed_out:
+        return f"pytest did not finish within the timeout{_detail(run)}"
+    if not run.build_ok:
+        return f"sandbox build failed{_detail(run)}"
+    if not run.xdist_ok:
+        return "pytest-xdist is not importable, so the suite cannot finish in time"
+    if run.sandbox_core_sha != expected_sha:
+        return (f"sandbox was built from {short(run.sandbox_core_sha)}, "
+                f"not the commit under test {short(expected_sha)}")
+    return ""
+
+
 def classify(run: SuiteRun, expected_sha: str) -> tuple[tuple[str, ...], str]:
     """(failed node ids, unavailable reason); a non-empty reason means the ids prove nothing."""
-    if run.slots_unavailable:
-        return (), run.slots_unavailable
-    if run.timed_out:
-        return (), f"pytest did not finish within the timeout{_detail(run)}"
-    if not run.build_ok:
-        return (), f"sandbox build failed{_detail(run)}"
-    if not run.xdist_ok:
-        return (), "pytest-xdist is not importable, so the suite cannot finish in time"
-    if run.sandbox_core_sha != expected_sha:
-        return (), (f"sandbox was built from {short(run.sandbox_core_sha)}, "
-                    f"not the commit under test {short(expected_sha)}")
+    reason = _precondition(run, expected_sha)
+    if reason:
+        return (), reason
     ids = tuple(sorted(set(run.failures)))
     if run.pytest_exit == 0:
         if ids:
@@ -255,6 +269,87 @@ def subtract(candidate_ids: Iterable[str], baseline_ids: Iterable[str]) -> list[
     """Candidate failures the baseline does not have, by node id."""
     known = set(baseline_ids)
     return sorted(i for i in set(candidate_ids) if i not in known)
+
+
+@functools.cache
+def _test_report():
+    """scripts/tests/_test_report.py, the module that writes and reads a run's per-test report."""
+    path = Path(__file__).resolve().parents[1] / "tests" / "_test_report.py"
+    spec = importlib.util.spec_from_file_location("suite_gate_test_report", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@dataclass(frozen=True)
+class Observation:
+    """What one pytest process showed: the ids it ran to a failure, the collected ids that never finished,
+    the ids it ran to a pass, and the reason it proves nothing (then the id sets are empty)."""
+    failed: tuple[str, ...] = ()
+    unfinished: tuple[str, ...] = ()
+    passed: frozenset[str] = frozenset()
+    reason: str = ""
+
+
+def observe(run: SuiteRun, expected_sha: str) -> Observation:
+    """``classify`` plus the per-test report: a run killed after collection yields unfinished ids.
+
+    A run with no report keeps ``classify``'s reading (failed ids only). A report with no ``collected``
+    line means the run died before collection finished, so it proves nothing.
+    """
+    reason = _precondition(run, expected_sha)
+    if reason:
+        return Observation(reason=reason)
+    if not run.report_path:
+        ids, reason = classify(run, expected_sha)
+        return Observation(failed=ids, reason=reason)
+    try:
+        lines = _test_report().read_lines(run.report_path)
+    except OSError as exc:
+        return Observation(reason=f"the per-test report is unreadable: {one_line(str(exc), 160)}")
+    report = _test_report()
+    if not report.collected_ids(lines):
+        return Observation(reason="the run died before collection finished (its report has no collected test)")
+    outcome = report.outcomes(lines)
+    failed = tuple(sorted({*run.failures, *(i for i, o in outcome.items() if o == "failed")}))
+    unfinished = tuple(sorted(i for i, o in outcome.items() if o == "unfinished"))
+    passed = frozenset(i for i, o in outcome.items() if o in ("passed", "skipped")) - set(failed)
+    if run.pytest_exit in (0, 1):
+        reason = classify(run, expected_sha)[1]
+        if reason:
+            return Observation(reason=reason)
+    elif (run.pytest_exit == hermetic_run.RUNNER_FAILED_EXIT and run.hermetic) or not (failed or unfinished):
+        return Observation(reason=classify(run, expected_sha)[1])
+    return Observation(failed, unfinished, passed)
+
+
+class JoinRefused(ValueError):
+    """Two partial sets that must not be combined."""
+
+
+@dataclass(frozen=True)
+class PartialSet:
+    """The ids a stage of one verdict covered and the ones it saw pass, bound to (candidate, tip)."""
+    candidate_sha: str
+    tip_sha: str
+    covered: frozenset[str]
+    passing: frozenset[str]
+
+
+def join_partial_sets(first: PartialSet, second: PartialSet) -> PartialSet:
+    """The only way the full run's passing ids and the reruns' passing ids are combined.
+
+    Refuses a different candidate, a different tip, and a second set that does not cover exactly the
+    first set's non-passing ids.
+    """
+    if first.candidate_sha != second.candidate_sha:
+        raise JoinRefused(f"the sets are of different candidates: {short(first.candidate_sha)} "
+                          f"and {short(second.candidate_sha)}")
+    if first.tip_sha != second.tip_sha:
+        raise JoinRefused(f"the sets are of different tips: {short(first.tip_sha)} and {short(second.tip_sha)}")
+    if second.covered != first.covered - first.passing:
+        raise JoinRefused("the second set does not cover exactly the first set's non-passing ids")
+    return PartialSet(first.candidate_sha, first.tip_sha, first.covered, first.passing | second.passing)
 
 
 def derive_status(new_failures: Sequence[str], unavailable_reason: str) -> str:
@@ -902,14 +997,28 @@ def _baseline(repo: Path, tip: str, common_dir: Path, runner: Runner, timeout_s:
             remove_sandbox(root, sandbox_parent)
 
 
-def _confirmed(repo: Path, candidate: str, root: Path, new: list[str], runner: Runner,
-               timeout_s: int) -> tuple[list[str], list[str], str]:
-    """Rerun the new failures once in the candidate sandbox: (still failing, passed now, unavailable reason)."""
-    rerun = runner(repo, candidate, root, select=tuple(new), timeout_s=timeout_s)
-    ids, reason = classify(rerun, candidate)
-    if reason:
-        return [], [], f"rerun of {len(new)} new failure(s) unavailable: {reason}"
-    return [i for i in new if i in ids], [i for i in new if i not in ids], ""
+@dataclass(frozen=True)
+class Reruns:
+    """Two serial reruns of the new ids: the ids each round did not pass, or why the reruns prove nothing."""
+    failed_rounds: tuple[frozenset[str], ...] = ()
+    reason: str = ""
+
+
+def _rerun(repo: Path, candidate: str, root: Path, new: Sequence[str], runner: Runner,
+           timeout_s: int) -> Reruns:
+    """Each round is one fresh serial pytest process holding every new id, in the candidate's sandbox."""
+    rounds = []
+    for _ in range(RERUN_ROUNDS):
+        seen = observe(runner(repo, candidate, root, select=tuple(new), timeout_s=timeout_s), candidate)
+        if seen.reason:
+            return Reruns(reason=f"rerun of {len(new)} new failure(s) unavailable: {seen.reason}")
+        rounds.append(frozenset(seen.failed) | frozenset(seen.unfinished))
+    return Reruns(tuple(rounds))
+
+
+def passing_every_rerun(new: Iterable[str], failed_rounds: Sequence[frozenset[str]]) -> frozenset[str]:
+    """The new ids that failed in no rerun round; the rest are confirmed."""
+    return frozenset(new) - frozenset().union(*failed_rounds)
 
 
 @dataclass(frozen=True)
@@ -918,11 +1027,14 @@ class Execution:
     root: Path
     candidate_run: SuiteRun
     candidate_ids: tuple[str, ...]
+    unfinished: tuple[str, ...]
     reason: str
     baseline: dict | None
     baseline_cache: str
+    first: PartialSet | None
     new: tuple[str, ...]
-    confirmation: tuple[list[str], list[str], str] | None
+    reruns: Reruns | None
+    rerun_tip: str
     kept: dict[str, str]
 
 
@@ -936,33 +1048,49 @@ class Verdict:
 
 
 def _execute(repo: Path, candidate_sha: str, tip: str, common_dir: Path, run: Runner, limit: int,
-             now: Callable[[], str], sandbox_parent: str | Path) -> Execution:
-    """Run the candidate, then the tip's baseline and the rerun of its new failures when they are needed."""
+             now: Callable[[], str], sandbox_parent: str | Path,
+             tip_reader: Callable[[], str] | None = None) -> Execution:
+    """Run the candidate, then the tip's baseline and the reruns of its new failures when they are needed."""
     root = _new_root(sandbox_parent)
     try:
         candidate_run = run(repo, candidate_sha, root, select=(), timeout_s=limit)
-        candidate_ids, reason = classify(candidate_run, candidate_sha)
+        seen = observe(candidate_run, candidate_sha)
+        reason = seen.reason
         kept = keep_run_files(candidate_run, common_dir, RECORD_DIR, candidate_sha)
+        unsettled = sorted({*seen.failed, *seen.unfinished})
+        if not reason and len(seen.unfinished) > MAX_UNFINISHED_RERUN:
+            reason = (f"{len(seen.unfinished)} tests did not finish, more than the {MAX_UNFINISHED_RERUN} "
+                      "the reruns take")
         baseline, baseline_cache = None, "none"
-        new: list[str] = []
-        confirmation = None
-        if not reason and candidate_ids:
+        first, new, reruns, rerun_tip = None, [], None, tip
+        if not reason and unsettled:
             baseline, baseline_cache = _baseline(repo, tip, common_dir, run, limit, now, sandbox_parent)
             if baseline.get("status") == COMPLETE:
-                new = subtract(candidate_ids, baseline["failures"])
+                new = subtract(unsettled, baseline["failures"])
+                covered = seen.passed | frozenset(unsettled)
+                first = PartialSet(candidate_sha, tip, covered, covered - frozenset(new))
                 if new:
-                    confirmation = _confirmed(repo, candidate_sha, root, new, run, limit)
-        return Execution(root, candidate_run, candidate_ids, reason, baseline, baseline_cache,
-                         tuple(new), confirmation, kept)
+                    reruns = _rerun(repo, candidate_sha, root, new, run, limit)
+                    if tip_reader is not None and not reruns.reason:
+                        try:
+                            rerun_tip = tip_reader()
+                        except GateError as exc:
+                            reruns = Reruns(reason=f"cannot re-read the remote tip after the reruns: {exc}")
+        return Execution(root, candidate_run, seen.failed, seen.unfinished, reason, baseline, baseline_cache,
+                         first, tuple(new), reruns, rerun_tip, kept)
     finally:
         remove_sandbox(root, sandbox_parent)
 
 
 def _judge(execution: Execution) -> Verdict:
-    """Pure: the failures that count and the reason a run is unavailable, from what the runs observed."""
+    """Pure: the failures that count and the reason a run is unavailable, from what the runs observed.
+
+    The full run's passing ids and the reruns' are joined by ``join_partial_sets``; what the join leaves
+    non-passing is confirmed, and every other new id is unconfirmed and no longer holds the landing.
+    """
     reason = execution.reason
     baseline = execution.baseline
-    new_failures: list[str] = []
+    confirmed: list[str] = []
     unconfirmed: list[str] = []
     baseline_failures: list[str] = []
     if baseline is not None:
@@ -970,13 +1098,34 @@ def _judge(execution: Execution) -> Verdict:
             reason = f"the tip's baseline is unavailable: {one_line(baseline.get('unavailable_reason'), 240)}"
         else:
             baseline_failures = list(baseline["failures"])
-            if execution.confirmation is not None:
-                new_failures, unconfirmed, reason = execution.confirmation
-            if unconfirmed and not new_failures and not reason:
-                reason = f"{len(unconfirmed)} new failure(s) did not fail again on rerun: " + ", ".join(
-                    one_line(i, 120) for i in unconfirmed[:5])
-    return Verdict(reason, tuple(new_failures), tuple(unconfirmed), tuple(baseline_failures),
+            reruns = execution.reruns
+            if reruns is not None and reruns.reason:
+                reason = reruns.reason
+            elif reruns is not None:
+                second = PartialSet(execution.first.candidate_sha, execution.rerun_tip, frozenset(execution.new),
+                                    passing_every_rerun(execution.new, reruns.failed_rounds))
+                try:
+                    joined = join_partial_sets(execution.first, second)
+                except JoinRefused as exc:
+                    reason = f"the reruns cannot be joined to the full run: {exc}"
+                else:
+                    confirmed = sorted(joined.covered - joined.passing)
+                    unconfirmed = sorted(set(execution.new) - set(confirmed))
+    return Verdict(reason, tuple(confirmed), tuple(unconfirmed), tuple(baseline_failures),
                    execution.baseline_cache)
+
+
+def _rerun_detail(execution: Execution, verdict: Verdict) -> dict[str, dict]:
+    """Per new id: how the full run left it, which rerun rounds it failed, and the result."""
+    reruns = execution.reruns
+    if reruns is None or reruns.reason or verdict.reason:
+        return {}
+    return {
+        i: {"first_run": "unfinished" if i in execution.unfinished else "failed",
+            "failed_rounds": [n for n, failed in enumerate(reruns.failed_rounds, 1) if i in failed],
+            "result": "confirmed" if i in verdict.new_failures else "unconfirmed"}
+        for i in execution.new
+    }
 
 
 def _build_record(execution: Execution, verdict: Verdict, candidate_sha: str, tip: str,
@@ -994,10 +1143,12 @@ def _build_record(execution: Execution, verdict: Verdict, candidate_sha: str, ti
         "pytest_exit": run.pytest_exit,
         "status": derive_status(verdict.new_failures, verdict.reason),
         "candidate_failures": list(execution.candidate_ids),
+        "unfinished": list(execution.unfinished),
         "baseline_failures": list(verdict.baseline_failures),
         "baseline_cache": verdict.baseline_cache,
         "new_failures": list(verdict.new_failures),
         "unconfirmed": list(verdict.unconfirmed),
+        "reruns": _rerun_detail(execution, verdict),
         "unavailable_reason": verdict.reason,
         "waiver": None,
         "log": log,
@@ -1009,11 +1160,14 @@ def _build_record(execution: Execution, verdict: Verdict, candidate_sha: str, ti
 def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner | None = None,
               timeout_s: int | None = None, waiver: str | None = None, reuse: bool = False,
               clock: Callable[[], str] | None = None,
-              sandbox_parent: str | Path | None = None) -> SuiteOutcome:
-    """Run the suite on the candidate, subtract the tip's baseline, write the record.
+              sandbox_parent: str | Path | None = None,
+              tip_reader: Callable[[], str] | None = None) -> SuiteOutcome:
+    """Run the suite on the candidate, subtract the tip's baseline, rerun what is new, write the record.
 
     Raises ``GateError`` before any record exists (not a descendant of the tip, git failure).
-    ``reuse`` returns a stored record that already admits instead of running again.
+    ``reuse`` returns a stored record that already admits instead of running again. ``tip_reader``
+    re-reads the remote tip after the reruns; a tip that moved makes the verdict UNAVAILABLE. Unconfirmed
+    ids are appended to the flaky journal (``flake_list.journal_path``); the tree is never written.
     """
     repo = Path(repo)
     run = runner or default_runner
@@ -1033,8 +1187,10 @@ def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner 
             if stored is not None and record_admits(stored, candidate_sha, tip)[0]:
                 path = shared.record_path(common_dir, RECORD_DIR, candidate_sha)
                 return SuiteOutcome(stored, path, _record_decision(True, admission_summary(stored), path, stored))
-        execution = _execute(repo, candidate_sha, tip, common_dir, run, limit, now, sandbox_parent)
+        execution = _execute(repo, candidate_sha, tip, common_dir, run, limit, now, sandbox_parent, tip_reader)
     verdict = _judge(execution)
+    if verdict.unconfirmed and not verdict.reason:
+        _journal_unconfirmed(common_dir, verdict.unconfirmed, candidate_sha, tip, now())
     record = _build_record(execution, verdict, candidate_sha, tip, now,
                            _write_log(common_dir, RECORD_DIR, candidate_sha, execution.candidate_run.log_tail))
     if waiver is not None and record["status"] == UNAVAILABLE:
@@ -1042,6 +1198,15 @@ def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner 
     path = shared.write_record(common_dir, RECORD_DIR, candidate_sha, record)
     ok, why = record_admits(record, candidate_sha, tip)
     return SuiteOutcome(record, path, _record_decision(ok, why, path, record))
+
+
+def _journal_unconfirmed(common_dir: Path, ids: Sequence[str], candidate_sha: str, tip: str, at: str) -> None:
+    """Best effort: a journal that cannot be written costs a trace of a flake, never a verdict."""
+    try:
+        flake_list.append_entries(flake_list.journal_path(common_dir),
+                                  [flake_list.new_entry(i, candidate_sha, tip, at) for i in ids])
+    except OSError as exc:
+        print(f"suite-gate: cannot journal {len(ids)} unconfirmed test(s): {exc}", file=sys.stderr)
 
 
 def waive_record(repo: str | Path, sha: str, reason: str,
@@ -1060,13 +1225,15 @@ def waive_record(repo: str | Path, sha: str, reason: str,
 def evaluate_landing(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner | None = None,
                      timeout_s: int | None = None, waiver: str | None = None, reuse: bool = True,
                      clock: Callable[[], str] | None = None,
-                     sandbox_parent: str | Path | None = None) -> LandingDecision:
+                     sandbox_parent: str | Path | None = None,
+                     tip_reader: Callable[[], str] | None = None) -> LandingDecision:
     """The landing decision for the candidate: reuse a bound admitting record, else run the suite."""
     try:
         scoped = _scope_decision(repo, tip, candidate_sha)
         if scoped is not None:
             return scoped
         return run_suite(repo, candidate_sha, tip, runner=runner, timeout_s=timeout_s, waiver=waiver,
-                         reuse=reuse, clock=clock, sandbox_parent=sandbox_parent).decision
+                         reuse=reuse, clock=clock, sandbox_parent=sandbox_parent,
+                         tip_reader=tip_reader).decision
     except GateError as exc:
         return _decision(False, REFUSED, f"cannot decide: {exc}")

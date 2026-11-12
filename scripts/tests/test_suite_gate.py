@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from lib import flake_list
 from lib import landing_gate as shared
 from lib import suite_gate as gate
 
@@ -454,21 +455,66 @@ def test_the_baseline_gets_its_own_sandbox_root(world):
     assert runner.calls[0].root != runner.calls[1].root
 
 
-def test_a_new_failure_is_rerun_once_in_the_candidates_sandbox(world):
+def test_a_new_failure_is_rerun_twice_in_the_candidates_sandbox(world):
     cand = world.code_commit()
     runner = FakeRunner({cand: (FAILED_A,), world.base: ()})
     world.run(runner)
-    first, _, rerun = runner.calls
-    assert (rerun.sha, rerun.select, rerun.root) == (cand, (FAILED_A,), first.root)
+    first, _, round_one, round_two = runner.calls
+    for rerun in (round_one, round_two):
+        assert (rerun.sha, rerun.select, rerun.root) == (cand, (FAILED_A,), first.root)
 
 
-def test_a_new_failure_that_passes_on_rerun_is_unavailable_not_admitted(world):
+def test_both_reruns_hold_every_new_id_in_one_process_each(world):
+    cand = world.code_commit()
+    runner = FakeRunner({cand: (FAILED_A, FAILED_B), world.base: ()}, rerun_fail={FAILED_A})
+    world.run(runner)
+    assert [c.select for c in runner.calls[2:]] == [(FAILED_A, FAILED_B)] * 2
+
+
+def test_a_new_failure_that_passes_both_reruns_is_unconfirmed_and_passes(world):
     cand = world.code_commit()
     runner = FakeRunner({cand: (FAILED_A,), world.base: ()}, rerun_fail=set())
     out = world.run(runner)
-    assert out.record["status"] == gate.UNAVAILABLE and not out.decision.admitted
+    assert out.record["status"] == gate.PASS and out.decision.admitted
     assert out.record["unconfirmed"] == [FAILED_A] and out.record["new_failures"] == []
-    assert "did not fail again" in out.record["unavailable_reason"]
+    assert out.record["reruns"][FAILED_A] == {"first_run": "failed", "failed_rounds": [], "result": "unconfirmed"}
+
+
+def test_an_unconfirmed_id_is_appended_to_the_journal_with_its_binding(world):
+    cand = world.code_commit()
+    world.run(FakeRunner({cand: (FAILED_A,), world.base: ()}, rerun_fail=set()))
+    (entry,) = flake_list.read_entries(flake_list.journal_path(world.common))
+    assert (entry["test"], entry["candidate"], entry["tip"]) == (FAILED_A, cand, world.base)
+    assert entry["id"] and entry["at"]
+
+
+def test_a_confirmed_failure_is_not_journaled_but_its_unconfirmed_neighbour_is(world):
+    cand = world.code_commit()
+    world.run(FakeRunner({cand: (FAILED_A, FAILED_B), world.base: ()}, rerun_fail={FAILED_A}))
+    assert [e["test"] for e in flake_list.read_entries(flake_list.journal_path(world.common))] == [FAILED_B]
+
+
+def test_a_failure_of_the_second_rerun_alone_confirms_it(world):
+    cand = world.code_commit()
+
+    class SecondRoundFails(FakeRunner):
+        def __call__(self, repo, sha, root, *, select, timeout_s):
+            run = super().__call__(repo, sha, root, select=select, timeout_s=timeout_s)
+            if select and len([c for c in self.calls if c.select]) == 1:
+                return ok_run(sha)
+            return run
+
+    out = world.run(SecondRoundFails({cand: (FAILED_A,), world.base: ()}))
+    assert out.record["status"] == gate.FAIL and out.record["new_failures"] == [FAILED_A]
+    assert out.record["reruns"][FAILED_A]["failed_rounds"] == [2]
+
+
+def test_an_unjournalable_flake_does_not_change_the_verdict(world, monkeypatch):
+    cand = world.code_commit()
+    (world.root / "a-file").write_text("not a directory", encoding="utf-8")
+    monkeypatch.setenv(flake_list.JOURNAL_ENV, str(world.root / "a-file" / "journal.jsonl"))
+    out = world.run(FakeRunner({cand: (FAILED_A,), world.base: ()}, rerun_fail=set()))
+    assert out.record["status"] == gate.PASS
 
 
 def test_a_confirmed_failure_blocks_even_when_another_did_not_repeat(world):
@@ -632,8 +678,10 @@ def _costed_runner(failed_by_sha):
         root = Path(root)
         (root / gate.JUNIT_NAME).write_text(f"<testsuites name='{sha}' rerun='{bool(select)}'/>",
                                             encoding="utf-8")
-        (root / gate.REPORT_NAME).write_text(json.dumps({"kind": "collected", "nodeid": sha}) + "\n",
-                                             encoding="utf-8")
+        (root / gate.REPORT_NAME).write_text(
+            json.dumps({"kind": "collected", "nodeid": sha}) + "\n"
+            + json.dumps({"kind": "report", "nodeid": sha, "when": "call", "outcome": "passed"}) + "\n",
+            encoding="utf-8")
         ids = tuple(i for i in failed_by_sha[sha] if not select or i in select)
         return gate.SuiteRun(
             1 if ids else 0, ids, sha, cpu_s=12.34, peak_disk_mb=321, slot_wait_s=1.5, slots_held=4,
@@ -1360,10 +1408,12 @@ def test_the_plugin_reads_the_env_var_the_runner_sets():
     assert f'os.environ.get("{gate.FAILURES_ENV}")' in gate.PLUGIN_SOURCE
 
 
-def _execution(**over):
-    fields = dict(root=Path("/sb"), candidate_run=None, candidate_ids=(FAILED_A,), reason="",
+def _execution(failed_rounds=(frozenset({FAILED_A}), frozenset({FAILED_A})), **over):
+    first = gate.PartialSet("c" * 40, "b" * 40, frozenset({FAILED_A, "t::ok"}), frozenset({"t::ok"}))
+    fields = dict(root=Path("/sb"), candidate_run=None, candidate_ids=(FAILED_A,), unfinished=(), reason="",
                   baseline={"status": gate.COMPLETE, "failures": []}, baseline_cache="built",
-                  new=(FAILED_A,), confirmation=([FAILED_A], [], ""), kept={})
+                  first=first, new=(FAILED_A,), reruns=gate.Reruns(tuple(failed_rounds)), rerun_tip="b" * 40,
+                  kept={})
     return gate.Execution(**{**fields, **over})
 
 
@@ -1372,21 +1422,25 @@ def test_judge_counts_a_confirmed_new_failure():
     assert verdict.new_failures == (FAILED_A,) and verdict.reason == "" and verdict.baseline_cache == "built"
 
 
-def test_judge_makes_an_unconfirmed_failure_unavailable():
-    verdict = gate._judge(_execution(confirmation=([], [FAILED_A], "")))
-    assert verdict.new_failures == () and verdict.unconfirmed == (FAILED_A,)
-    assert "did not fail again on rerun" in verdict.reason
+def test_judge_lets_an_unconfirmed_failure_pass():
+    verdict = gate._judge(_execution(failed_rounds=(frozenset(), frozenset())))
+    assert verdict.new_failures == () and verdict.unconfirmed == (FAILED_A,) and verdict.reason == ""
+
+
+def test_judge_confirms_a_failure_of_the_second_rerun_alone():
+    verdict = gate._judge(_execution(failed_rounds=(frozenset(), frozenset({FAILED_A}))))
+    assert verdict.new_failures == (FAILED_A,) and verdict.unconfirmed == ()
 
 
 def test_judge_reports_an_unavailable_baseline():
     baseline = {"status": gate.UNAVAILABLE, "unavailable_reason": "pytest exited 4", "failures": []}
-    verdict = gate._judge(_execution(baseline=baseline, new=(), confirmation=None))
+    verdict = gate._judge(_execution(baseline=baseline, new=(), reruns=None, first=None))
     assert "the tip's baseline is unavailable: pytest exited 4" in verdict.reason and verdict.new_failures == ()
 
 
 def test_judge_keeps_the_candidate_runs_own_unavailable_reason():
     verdict = gate._judge(_execution(reason="pytest exited 4", baseline=None, baseline_cache="none",
-                                     new=(), confirmation=None))
+                                     new=(), reruns=None, first=None))
     assert verdict.reason == "pytest exited 4" and verdict.baseline_failures == ()
 
 
@@ -1532,7 +1586,7 @@ def test_the_suite_library_uses_the_shared_layer_and_not_the_smoke_gate():
 def test_the_catalogue_control_is_green_and_every_anchor_matches_once():
     import suite_gate_mutation_control as control
 
-    assert len(control.CATALOGUE) == 39
+    assert len(control.CATALOGUE) == 44
     for name, mutant in control.CATALOGUE.items():
         source = (control.SCRIPTS_DIR.parent / mutant.relpath).read_text(encoding="utf-8")
         assert source.count(mutant.anchor) == 1, name

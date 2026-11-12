@@ -352,3 +352,98 @@ def test_the_hook_admits_a_push_both_gates_admit(world):
     assert landed.returncode == 0, landed.stderr
     assert gate.admission_line(sha) in landed.stderr and smoke_gate.admission_line(sha) in landed.stderr
     assert remote_main(world) == sha
+
+
+# ── the flaky journal folded into the landing ─────────────────────────────
+
+FLAKY_TEST = "scripts/tests/test_x.py::test_flaky"
+
+
+class CleanRunner:
+    """A suite runner for a candidate whose sha is not known up front: every run is clean."""
+
+    def __init__(self):
+        self.shas = []
+
+    def __call__(self, repo, sha, root, *, select, timeout_s):
+        self.shas.append(sha)
+        return gate.SuiteRun(0, (), sha, log_tail="log line\n")
+
+
+@pytest.fixture
+def journal(tmp_path, monkeypatch):
+    path = tmp_path / "private-journal.jsonl"
+    monkeypatch.setenv(land_branch.flake_list.JOURNAL_ENV, str(path))
+    return path
+
+
+def journaled(path, entry_id="e1", test=FLAKY_TEST):
+    land_branch.flake_list.append_entries(path, [
+        {"id": entry_id, "test": test, "candidate": "c" * 40, "tip": "b" * 40, "at": "2026-11-01T00:00:00Z"}])
+
+
+def test_a_pending_journal_lands_as_one_fold_commit_on_the_branch_tip(world, capsys, journal):
+    sha = feature(world, CODE)
+    journaled(journal)
+    runner = CleanRunner()
+    code, out, err = land(world, capsys, suite_runner=runner)
+    landed = remote_main(world)
+    assert code == 0, err
+    assert landed != sha and git(world.remote, "rev-parse", "main^") == sha
+    assert git(world.remote, "log", "-1", "--format=%s", "main") == "tests: record flaky tests"
+    assert land_branch.flake_list.parse_list(
+        git(world.remote, "show", f"main:{land_branch.flake_list.LIST_PATH}"))[FLAKY_TEST]["count"] == 1
+    assert runner.shas == [landed] and "folded 1 flaky-test journal entry" in out
+
+
+def test_the_fold_does_not_move_the_branch_ref(world, capsys, journal):
+    sha = feature(world, CODE)
+    journaled(journal)
+    land(world, capsys, suite_runner=CleanRunner())
+    assert git(world.work, "rev-parse", "feature") == sha
+
+
+def test_a_landed_fold_is_not_folded_again_and_leaves_the_journal(world, capsys, journal):
+    feature(world, CODE)
+    journaled(journal)
+    land(world, capsys, suite_runner=CleanRunner())
+    git(world.work, "checkout", "-q", "-b", "second")
+    second = commit(world.work, {"scripts/bar.py": "y = 2\n"}, "second feature")
+    git(world.work, "fetch", "-q", "origin")
+    git(world.work, "merge", "-q", "--no-edit", "origin/main")
+    second = git(world.work, "rev-parse", "HEAD")
+    code, _, err = land(world, capsys, "--branch", "second", suite_runner=CleanRunner())
+    assert code == 0, err
+    assert remote_main(world) == second
+    assert land_branch.flake_list.read_entries(journal) == []
+
+
+def test_a_listed_ids_count_is_raised_by_the_fold(world, capsys, journal):
+    feature(world, CODE)
+    journaled(journal, "e1")
+    land(world, capsys, suite_runner=CleanRunner())
+    git(world.work, "checkout", "-q", "-b", "second")
+    commit(world.work, {"scripts/bar.py": "y = 2\n"}, "second feature")
+    git(world.work, "fetch", "-q", "origin")
+    git(world.work, "merge", "-q", "--no-edit", "origin/main")
+    journaled(journal, "e2")
+    code, _, err = land(world, capsys, "--branch", "second", suite_runner=CleanRunner())
+    assert code == 0, err
+    assert land_branch.flake_list.parse_list(
+        git(world.remote, "show", f"main:{land_branch.flake_list.LIST_PATH}"))[FLAKY_TEST]["count"] == 2
+
+
+def test_a_journal_that_cannot_be_read_is_reported_and_does_not_hold_the_landing(world, capsys, journal):
+    journal.mkdir()
+    sha = feature(world, CODE)
+    code, out, err = land(world, capsys, suite_runner=FakeRunner({sha: ()}))
+    assert code == 0, err
+    assert "flaky journal not folded" in out and remote_main(world) == sha
+
+
+def test_the_fold_commit_is_what_the_suite_gate_judges(world, capsys, journal):
+    sha = feature(world, CODE)
+    journaled(journal)
+    code, _, err = land(world, capsys, suite_runner=FakeRunner({sha: ()}))
+    assert code == 2 and "suite gate:" in err
+    assert remote_main(world) == world.base

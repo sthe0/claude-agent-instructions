@@ -4,7 +4,12 @@
   suite-gate.py run [--ref HEAD] [--remote-sha SHA] [--timeout S] [--waiver REASON] [-C DIR]
       Fetch the remote tip (unless --remote-sha names it), build the sandbox of the candidate commit
       and run the whole suite in it. A failure the tip's own run also has does not count; a failure
-      absent from it is rerun once and counts when it fails again. Writes the record
+      absent from it, and every test the run collected but never finished, is rerun in two fresh
+      serial runs and counts when it fails in either; a test that passes both no longer holds the
+      landing and is appended to the flaky journal (<git common dir>/suite-gate/flaky-pending.jsonl,
+      or the file SUITE_GATE_FLAKY_JOURNAL names), which the next landing folds into
+      scripts/tests/flaky.toml. Without --remote-sha the remote tip is re-read after the reruns and a
+      moved tip makes the run UNAVAILABLE. Writes the record
       <git common dir>/suite-gate/<sha>.json. Exit 0 admitted (PASS, exempt, not required, or
       UNAVAILABLE under a waiver), 1 refused (FAIL, or UNAVAILABLE without a waiver), 2 usage or
       environment. The candidate must contain the remote tip: the record is bound to it. The last
@@ -61,6 +66,10 @@ def _print_record(record: dict) -> None:
           f"suite {record['duration_s']}s, build {record['build_s']}s")
     for node in record["new_failures"]:
         print(f"  NEW FAILURE {gate.one_line(node, 300)}")
+    for node in record["unconfirmed"]:
+        print(f"  UNCONFIRMED (passed both reruns, journaled as flaky) {gate.one_line(node, 300)}")
+    if record.get("unfinished"):
+        print(f"  unfinished in the full run: {len(record['unfinished'])}")
     if record["unavailable_reason"]:
         print(f"  unavailable: {gate.one_line(record['unavailable_reason'], 400)}")
     print(f"  log: {record['log']}")
@@ -69,9 +78,11 @@ def _print_record(record: dict) -> None:
 def cmd_run(args: argparse.Namespace) -> int:
     repo = _repo(args)
     candidate = shared.resolve_commit(repo, args.ref)
+    tip_reader = None if args.remote_sha is not None else (
+        lambda: shared.fetch_remote_tip(repo, args.remote, args.trunk))
     decision = gate.evaluate_landing(
         repo, candidate, _tip(args, repo), timeout_s=args.timeout, waiver=args.waiver, reuse=False,
-        runner=args.runner, clock=args.clock, sandbox_parent=args.sandbox_parent,
+        runner=args.runner, clock=args.clock, sandbox_parent=args.sandbox_parent, tip_reader=tip_reader,
     )
     if decision.record_path is not None:
         _print_record(shared.read_record(decision.record_path))
