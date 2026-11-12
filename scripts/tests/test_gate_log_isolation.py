@@ -13,6 +13,7 @@ from pathlib import Path
 
 from agentctl import cli, cli_common
 from lib import config_root
+from test_decision_log_isolation import isolated_home_env
 
 CLI = Path(__file__).resolve().parents[1] / "agentctl-cli.py"
 
@@ -46,7 +47,7 @@ def test_in_process_gate_evaluation_reaches_only_the_temporary_log(store, monkey
 def test_subprocess_gate_evaluation_reaches_only_the_temporary_log(monkeypatch, tmp_path):
     nonce = f"canary-{uuid.uuid4().hex}"
     temp_log = Path(os.environ["AGENTCTL_GATE_LOG"])
-    env = {**os.environ, "CLAUDE_AGENT_HOME": str(tmp_path / "home")}
+    env = isolated_home_env(tmp_path / "home")
     for verb in (["start", "--task", "t", "--goal", "g", "--done-criterion", "d",
                   "--criterion-type", "measurable"],
                  ["resolve", "--by", "canary"]):

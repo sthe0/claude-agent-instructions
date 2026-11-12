@@ -1,4 +1,4 @@
-version = 2
+version = 3
 
 [[members]]
 name = "cli:accept"
@@ -1534,3 +1534,12 @@ kind = "elementary"
 part_of = []
 place = "mandate_cycle"
 source_keys = ["cli:mandate-limits"]
+
+[[members]]
+name = "judge:mandate_cycle_judge"
+since = 3
+kind = "elementary"
+part_of = []
+place = "mandate_cycle"
+source_keys = ["judge:mandate_cycle_judge"]
+calling_modules = ["scripts/mandate_cycle/driver.py"]

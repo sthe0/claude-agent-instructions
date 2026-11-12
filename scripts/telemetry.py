@@ -12,6 +12,7 @@
     telemetry.py check-tokens (--task <id> [--require-spawn] [--require-compaction] | --imported-coverage)
     telemetry.py check-events --task <id> [--unrecorded-window F]
     telemetry.py check-latency --max-seconds S --since-landing F
+        [--sync-outage-from TS (--sync-outage-until-landing F2 | --sync-outage-until TS2)] [--pre-fix-late P]
     telemetry.py export --out F [--with-text]
     telemetry.py merge F
     telemetry.py check-roundtrip --workdir D
@@ -35,7 +36,8 @@ only those of ended sessions. It prints the stats as one JSON line (also to `--s
 and exits 1 when the run is incomplete (a batch deferred past its budget, an unreadable source or
 a failed batch) or its peak RSS passed `--max-rss-mib`. `snapshot-sources --out DIR` copies every
 import source once (append-only files cut at their size, after a free-space check) with a manifest
-of the live path of each copy; `import --sources DIR` then reads only those copies, naming rows by
+of the live path of each copy, and exits 1 when a source could not be read or copied (listed under
+`skipped` in the manifest); `import --sources DIR` then reads only those copies, naming rows by
 the live paths (lib/telemetry/snapshot.py), so two imports read one fixed input. `rebuild` moves a corrupt record aside and
 builds a new one with the same origin id from the spools and the sources; `prune` deletes the sync
 and decision rows older than `telemetry-prune-retention-days` (config.md) or `--retention-days`.
@@ -58,7 +60,15 @@ sessions to its live event row and exits 1 on an unmatched act; an act inside th
 `unrecorded_window {from, to}` of `--unrecorded-window F` is listed as an excused loss instead.
 `check-latency` classifies each non-synthetic session that ended after F's `landed_at` by the
 latency rule (sync.latency_marks): on_time, late, waiting, in_flight or sync_deferred; it exits 1
-on a late session or when no session of that population has reached the record. Both are
+on a late session or when no session of that population has reached the record. A session leaves
+that population only when its rows prove it synthetic; the excluded ones are listed and counted.
+A late session is a counted named loss instead when its T1 falls in the sync outage window
+[--sync-outage-from, end) (sync_outage; the end is F2's landed_at, bound to the record's land:landed
+event of F2's head, or TS2), when P names it with a pre_fix_cause_* cause (pre_fix_late:<cause>, or
+import_only:<cause> for a session no live row or spool ever carried), or when it is such an
+import-only session whose earliest timed row precedes F's landed_at (import_only:pre_emitter). An
+unreadable F2 or P, a landed_at off its landing event, or an entry naming a session that is not
+late, not real and not import-only, or late outside [landed_at, TS), exits 2. Both are
 lib/telemetry/report.py, as is `agent-report.py core-version`.
 
 `sync` runs one sync (lib/telemetry/sync.py): it replays the named session's spool and every
@@ -127,7 +137,7 @@ def _snapshot_sources(args) -> int:
         print(f"snapshot-sources: {err}", file=sys.stderr)
         return 2
     print(json.dumps(result, sort_keys=True))
-    return 0
+    return 1 if result["skipped"] else 0
 
 
 def _align_causes(args) -> int:
@@ -181,9 +191,10 @@ def _check_tokens(args) -> int:
     return 0 if result["ok"] else 1
 
 
-def _read_json_file(path: str, key: str):
+def _read_json_file(path: str, key: "str | None"):
     with open(path, encoding="utf-8") as handle:
-        return json.load(handle)[key]
+        data = json.load(handle)
+    return data if key is None else data[key]
 
 
 def _check_record(args) -> int:
@@ -191,10 +202,16 @@ def _check_record(args) -> int:
     from datetime import datetime, timezone
 
     from lib.telemetry import report
+    latency = args.command == "check-latency"
     try:
         window = _read_json_file(args.unrecorded_window, "unrecorded_window") \
             if getattr(args, "unrecorded_window", None) else None
-        landed_at = _read_json_file(args.since_landing, "landed_at") if args.command == "check-latency" else None
+        landed_at = _read_json_file(args.since_landing, "landed_at") if latency else None
+        landing = _read_json_file(args.sync_outage_until_landing, None) \
+            if latency and args.sync_outage_until_landing else None
+        entries = _read_json_file(args.pre_fix_late, "entries") if latency and args.pre_fix_late else None
+        outage_from = telemetry_sync.parse_time(args.sync_outage_from) if latency else None
+        outage_until = telemetry_sync.parse_time(args.sync_outage_until) if latency else None
     except (OSError, ValueError, KeyError, TypeError) as err:
         report.emit_usage(args.command)
         print(f"{args.command}: {err}", file=sys.stderr)
@@ -209,7 +226,14 @@ def _check_record(args) -> int:
         if args.command == "check-events":
             result = report.check_events(conn, args.task, window)
         else:
-            result = report.check_latency(conn, args.max_seconds, landed_at, datetime.now(timezone.utc))
+            if outage_from is not None and landing is not None:
+                outage_until = report.outage_end_from_landing(conn, landing if isinstance(landing, dict) else {})
+            outage = (outage_from, outage_until) if outage_from is not None else None
+            result = report.check_latency(conn, args.max_seconds, landed_at, datetime.now(timezone.utc),
+                                          outage, entries if isinstance(entries, list) else None)
+    except report.LatencyInputError as err:
+        print(f"{args.command}: {err}", file=sys.stderr)
+        return 2
     finally:
         conn.close()
     print(json.dumps(result, sort_keys=True, default=str))
@@ -282,6 +306,13 @@ def main(argv=None) -> int:
     lat = sub.add_parser("check-latency", help="check that ended sessions reach the record within the bound")
     lat.add_argument("--max-seconds", type=float, required=True)
     lat.add_argument("--since-landing", required=True, help="landing record (JSON with landed_at)")
+    lat.add_argument("--sync-outage-from", default=None, help="start (ISO time) of a sync outage window")
+    until = lat.add_mutually_exclusive_group()
+    until.add_argument("--sync-outage-until-landing", default=None,
+                       help="landing record (JSON with head, landed_at) whose landing ends the outage")
+    until.add_argument("--sync-outage-until", default=None, help="end (ISO time) of the outage window")
+    lat.add_argument("--pre-fix-late", default=None,
+                     help='JSON {"entries": [{"session", "cause"}]} of sessions late for a cause this change fixes')
     exp = sub.add_parser("export", help="export the record's rows for a merge on another machine")
     exp.add_argument("--out", required=True, help="the export file to create (must not exist)")
     exp.add_argument("--with-text", action="store_true", help="also export the text artifacts")
@@ -292,6 +323,9 @@ def main(argv=None) -> int:
     sub.add_parser("now", help="print the epoch time")
     sub.add_parser("path", help="print the record's path")
     args = parser.parse_args(argv)
+    if args.command == "check-latency" and (args.sync_outage_from is None) != (
+            args.sync_outage_until_landing is None and args.sync_outage_until is None):
+        lat.error("--sync-outage-from needs one of --sync-outage-until-landing / --sync-outage-until, and they need it")
     if args.command in ("export", "merge", "check-roundtrip"):
         return _portability(args)
     if args.command == "import":

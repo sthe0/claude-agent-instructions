@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lib import config_root, judge_ledger
+from lib import config_root, host_llm, judge_ledger
 from lib.telemetry import phases, snapshot, store, sync
 from lib.telemetry.importer import _first_line, _resume_point
 
@@ -622,7 +622,9 @@ def _judge_call_lines(path: Path, limit: int):
 def judge_ledger_coverage(conn) -> dict:
     """The judge ledger's call lines read so far, against their judge_usage rows. A line with usage
     and no row fails; a line written since usage is recorded (it carries usage_schema) with neither
-    usage nor a reason fails; an older line without usage is listed, never counted as a failure."""
+    usage nor a reason fails, and so does one whose Claude call never asked for usage; every other
+    reason is counted under its name (`usage_unavailable:<host id>`, `no_usage`, `unparsed`, …);
+    an older line without usage is listed, never counted as a failure."""
     path = judge_ledger.ledger_path()
     out = {"failures": [], "lines": 0, "with_usage": 0, "without_usage_before_schema": 0,
            "without_usage_by_reason": {}}
@@ -643,6 +645,8 @@ def judge_ledger_coverage(conn) -> dict:
         elif obj.get("usage_reason"):
             reasons = out["without_usage_by_reason"]
             reasons[obj["usage_reason"]] = reasons.get(obj["usage_reason"], 0) + 1
+            if obj["usage_reason"] == host_llm.USAGE_NOT_REQUESTED:
+                out["failures"].append({**where, "reason": "judge_line_usage_not_requested"})
         else:
             out["failures"].append({**where, "reason": "judge_line_without_usage"})
     return out

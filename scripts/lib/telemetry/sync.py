@@ -30,10 +30,13 @@ from pathlib import Path
 from lib import config_root
 from lib.telemetry import cause, emit, live, store, tables
 
-BUDGET_S = 120.0
+LATENCY_S = 600.0
+# A deferred spool is retried until the latency bound of the session that started the sync, less
+# the time its commit, materialize and token collection take once the write lock is free.
+COMMIT_MARGIN_S = 60.0
+BUDGET_S = LATENCY_S - COMMIT_MARGIN_S
 BACKOFF_FIRST_S = 1.0
 BACKOFF_MAX_S = 30.0
-LATENCY_S = 600.0
 LIVE_TTL_S = live.LIVE_TTL_S
 END_GRACE_S = 30.0
 SYNC_SESSION = live.SYNC_SESSION
@@ -70,14 +73,19 @@ def parse_time(text: "str | None") -> "datetime | None":
     return datetime.fromisoformat(text).astimezone(timezone.utc)
 
 
-def known_times(texts, skipped: "dict | None" = None) -> "list[datetime]":
-    """The parsed times of `texts`, sorted, the empty ones left out and counted in
-    skipped[NO_TIME_ROWS] when a tally is passed."""
-    parsed = [parse_time(text) for text in texts]
-    known = sorted(moment for moment in parsed if moment is not None)
-    if skipped is not None:
-        skipped[NO_TIME_ROWS] = skipped.get(NO_TIME_ROWS, 0) + len(parsed) - len(known)
-    return known
+_UNTIMED_ROW_IDS = "_untimed_row_ids"
+
+
+def known_times(texts) -> "list[datetime]":
+    """The parsed times of `texts`, sorted, the empty ones left out."""
+    return sorted(moment for moment in map(parse_time, texts) if moment is not None)
+
+
+def tally_untimed(skipped: dict, event_ids) -> None:
+    """Count each row with an empty time once in skipped[NO_TIME_ROWS], however many reads meet it."""
+    seen = skipped.setdefault(_UNTIMED_ROW_IDS, set())
+    seen.update(event_ids)
+    skipped[NO_TIME_ROWS] = len(seen)
 
 
 # --- the sync's own rows -------------------------------------------------------------
@@ -181,10 +189,19 @@ def prune_spool(stem: str, deadline_s: "float | None" = None) -> bool:
 # --- the latency rule -----------------------------------------------------------------
 
 def _times(conn, sql: str, args: tuple, skipped: "dict | None" = None) -> "list[datetime]":
-    return known_times((row[0] for row in conn.execute(sql, args)), skipped)
+    """`sql` selects (event_id, time); the untimed rows are tallied in `skipped` when one is passed."""
+    rows = conn.execute(sql, args).fetchall()
+    if skipped is not None:
+        tally_untimed(skipped, (event_id for event_id, moment in rows if not moment))
+    return known_times(moment for _, moment in rows)
 
 
-def latency_marks(conn, session_id: str, skipped: "dict | None" = None
+def trigger_start_times(conn, skipped: "dict | None" = None) -> "list[datetime]":
+    """Every timed trigger.start, sorted: what latency_marks searches for T1."""
+    return _times(conn, "SELECT event_id, time FROM events WHERE kind = ?", (TRIGGER_START,), skipped)
+
+
+def latency_marks(conn, session_id: str, skipped: "dict | None" = None, trigger_starts: "list | None" = None
                   ) -> "tuple[datetime | None, datetime | None, datetime | None]":
     """(E, T1, A) of a session by the latency rule.
 
@@ -192,21 +209,22 @@ def latency_marks(conn, session_id: str, skipped: "dict | None" = None
     event time plus LIVE_TTL_S (the sync's own rows carry the sync session id, so they are
     not events of the session and never move E). T1: the first trigger.start, session_end or
     sweep, at or after E. A: the first sync.commit for the session at or after E. Rows with an
-    empty time are left out and counted in skipped[NO_TIME_ROWS] when a tally is passed."""
+    empty time are left out and counted once each in skipped[NO_TIME_ROWS] when a tally is passed.
+    A caller judging many sessions passes `trigger_starts` (trigger_start_times) read once."""
     ended = _times(
-        conn, "SELECT time FROM events WHERE kind = ? AND json_extract(fields, '$.kind') = 'session_end' "
+        conn, "SELECT event_id, time FROM events WHERE kind = ? AND json_extract(fields, '$.kind') = 'session_end' "
         "AND json_extract(fields, '$.session') = ?", (TRIGGER_START, session_id), skipped)
     if ended:
         end = ended[0]
     else:
-        last = _times(conn, "SELECT time FROM events WHERE session_id = ?", (session_id,), skipped)
+        last = _times(conn, "SELECT event_id, time FROM events WHERE session_id = ?", (session_id,), skipped)
         if not last:
             return None, None, None
         end = last[-1] + timedelta(seconds=LIVE_TTL_S)
-    first = next((t for t in _times(conn, "SELECT time FROM events WHERE kind = ?", (TRIGGER_START,), skipped)
-                  if t >= end), None)
+    starts = trigger_start_times(conn, skipped) if trigger_starts is None else trigger_starts
+    first = next((t for t in starts if t >= end), None)
     commit = next((t for t in _times(
-        conn, "SELECT time FROM events WHERE kind = ? AND json_extract(fields, '$.session') = ?",
+        conn, "SELECT event_id, time FROM events WHERE kind = ? AND json_extract(fields, '$.session') = ?",
         (SYNC_COMMIT, session_id), skipped) if t >= end), None)
     return end, first, commit
 

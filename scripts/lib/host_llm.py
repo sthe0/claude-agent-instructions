@@ -618,6 +618,15 @@ class CrossHostError(Exception):
     runtime_host's family."""
 
 
+USAGE_NOT_REQUESTED = "not_requested"
+
+
+def host_of_binary(binary) -> "str | None":
+    """The host id whose family `binary` belongs to; None for a binary that is no LLM host."""
+    name = Path(str(binary)).name
+    return next((host for host, family in _HOST_BINARY_FAMILY.items() if name in family), None)
+
+
 def binary_for(host: str) -> str:
     if host == HOST_CLAUDE:
         return "claude"
@@ -669,10 +678,12 @@ STRUCTURED_OUTPUT_FLAGS = ["--output-format", "json"]
 
 def unwrap_structured(argv, stdout: str) -> "tuple[str, dict | None, str | None]":
     """(reply text, usage, reason usage is None) of one child's stdout. For an argv built with
-    `structured_output` the stdout is the JSON envelope; any other stdout is returned unchanged."""
+    `structured_output` the stdout is the JSON envelope; any other stdout is returned unchanged.
+    A Claude argv without the envelope request is `not_requested` (the caller could have had
+    usage); a host whose output carries none is `usage_unavailable:<host id>`."""
     if argv[-len(STRUCTURED_OUTPUT_FLAGS):] != STRUCTURED_OUTPUT_FLAGS:
-        binary = os.path.basename(str(argv[0])) if argv else "unknown"
-        return stdout, None, f"usage_unavailable:{binary}"
+        host = host_of_binary(argv[0]) if argv else None
+        return stdout, None, USAGE_NOT_REQUESTED if host == HOST_CLAUDE else f"usage_unavailable:{host}"
     try:
         envelope = json.loads(stdout)
     except (TypeError, ValueError):

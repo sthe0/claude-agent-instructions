@@ -21,6 +21,12 @@ CLI = SCRIPTS / "agentctl-cli.py"
 HOOK = SCRIPTS / "hook-state-gate.py"
 
 
+def isolated_home_env(home: Path) -> dict:
+    """The environment of a subprocess whose agent home, and so its engine state, is `home`.
+    CLAUDE_CONFIG_DIR outranks CLAUDE_AGENT_HOME in config_root.agent_home, so both point there."""
+    return {**os.environ, "CLAUDE_AGENT_HOME": str(home), "CLAUDE_CONFIG_DIR": str(home)}
+
+
 def _real_decision_log(monkeypatch) -> Path:
     monkeypatch.delenv("AGENTCTL_DECISION_LOG")
     return config_root.decision_log()
@@ -50,7 +56,7 @@ def test_in_process_gate_evaluation_reaches_only_the_temporary_log(store, monkey
 def test_subprocess_gate_evaluation_reaches_only_the_temporary_log(monkeypatch, tmp_path):
     nonce = f"canary-{uuid.uuid4().hex}"
     temp_log = Path(os.environ["AGENTCTL_DECISION_LOG"])
-    env = {**os.environ, "CLAUDE_AGENT_HOME": str(tmp_path / "home")}
+    env = isolated_home_env(tmp_path / "home")
     for verb in (["start", "--task", "t", "--goal", "g", "--done-criterion", "d",
                   "--criterion-type", "measurable"],
                  ["resolve", "--by", "canary"]):
@@ -65,7 +71,7 @@ def test_hook_run_reaches_only_the_temporary_log(monkeypatch, tmp_path):
     temp_log = Path(os.environ["AGENTCTL_DECISION_LOG"])
     payload = {"hook_event_name": "PreToolUse", "session_id": nonce, "tool_name": "Read",
                "tool_input": {"file_path": str(tmp_path / "f")}}
-    env = {**os.environ, "CLAUDE_AGENT_HOME": str(tmp_path / "home")}
+    env = isolated_home_env(tmp_path / "home")
     subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), env=env,
                    capture_output=True, text=True, timeout=60)
     assert _logged(temp_log, nonce)

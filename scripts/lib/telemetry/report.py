@@ -465,10 +465,11 @@ def check_events(conn, task_id: str, window: "dict | None" = None, command_keys:
     """Each engine act of the task's sessions matched to one live event row of the same source key
     and session, recorded at the act or within its command's duration after it; both sides read
     their keys through live.normalized_source_key, so a row stored in either spelling matches. An
-    act before its session's first live event is a counted loss (lost_before_first_live); an
-    unmatched act inside `window` ({from, to}) is an excused loss; any other unmatched act fails."""
+    act before the first live event of a session that has live events is a counted loss
+    (lost_before_first_live); an unmatched act inside `window` ({from, to}) is an excused loss; any
+    other unmatched act fails, every act of a session with no live event among them."""
     keys = [_task_key(r) for r in conn.execute("SELECT origin, task_id, epoch FROM tasks WHERE task_id = ?", (task_id,))]
-    task_sessions = task_sessions_of(conn, task_id)
+    task_sessions = sorted({s for key in keys for s in task_session_ids(conn, key)})
     pool: dict = {}
     first_live: dict = {}
     for session in task_sessions:
@@ -494,9 +495,9 @@ def check_events(conn, task_id: str, window: "dict | None" = None, command_keys:
             continue
         act = {"session": session, "act": source_key, "time_ms": ms}
         start = first_live.get(session)
-        if start is None or ms is None or ms < start - slack:
+        if start is not None and ms is not None and ms < start - slack:
             lost.append(act)
-        elif bounds and bounds[0] <= ms <= bounds[1]:
+        elif bounds and ms is not None and bounds[0] <= ms <= bounds[1]:
             excused.append(act)
         else:
             missing.append(act)
@@ -531,30 +532,146 @@ def _reserved_spool_sessions(conn) -> "tuple[int, set]":
     return pending, named
 
 
-def _population(conn) -> list:
-    """Non-synthetic sessions of the record, the record's own pseudo-sessions excluded."""
-    synthetic = {r[0] for r in conn.execute(
+SYNC_OUTAGE = "sync_outage"
+PRE_FIX_LATE = "pre_fix_late"
+IMPORT_ONLY = "import_only"
+PRE_FIX_CAUSE_PREFIX = "pre_fix_cause_"
+PRE_EMITTER = "pre_emitter"
+IMPORT_SESSION_PREFIX = "import:"
+LANDED_SOURCE_KEY = "land:landed"
+LANDED_AT_MAX_LAG_S = 600.0
+# The rows the record writes about itself (the sync, the report, the importer, a pre-commit run, a
+# landing); a session holding nothing else did no work of its own.
+RECORD_OWN_SOURCE_KEYS = (*SELF_COST_ENTRIES, importer.SELF_SOURCE_KEY, "precommit")
+SYNTHETIC_TASK = "synthetic_task"
+ONLY_RECORD_OWN_ROWS = "only_record_own_rows"
+
+
+class LatencyInputError(ValueError):
+    """An outage window or a pre-fix-late entry check-latency refuses (exit 2)."""
+
+
+def outage_end_from_landing(conn, landing: dict):
+    """The `landed_at` of a landing record, bound to the record's land:landed event whose tip or
+    pushed head is the record's head (the earliest when several are): it may not precede that event
+    nor follow it by more than LANDED_AT_MAX_LAG_S. Only landing rows are read."""
+    head, claimed = landing.get("head"), sync.parse_time(landing.get("landed_at"))
+    if not head or claimed is None:
+        raise LatencyInputError("the landing record needs head and landed_at")
+    events = []
+    for moment, raw in conn.execute("SELECT time, fields FROM events WHERE kind = 'landing' AND source_key = ?",
+                                    (LANDED_SOURCE_KEY,)):
+        fields = _fields(raw)
+        if head in (fields.get("tip"), fields.get("pushed_head")) and sync.parse_time(moment) is not None:
+            events.append(sync.parse_time(moment))
+    if not events:
+        raise LatencyInputError(f"no {LANDED_SOURCE_KEY} event of head {head} in the record")
+    landed_event = min(events)
+    if claimed < landed_event or (claimed - landed_event).total_seconds() > LANDED_AT_MAX_LAG_S:
+        raise LatencyInputError(f"landed_at {claimed.isoformat()} is not within {LANDED_AT_MAX_LAG_S:.0f} s "
+                                f"after the {LANDED_SOURCE_KEY} event at {landed_event.isoformat()}")
+    return claimed
+
+
+def _synthetic_proofs(conn) -> dict:
+    """{session: proof} of the sessions whose task rows mark them synthetic."""
+    proofs = {r[0]: SYNTHETIC_TASK for r in conn.execute(
         "SELECT s.session_id FROM sessions s JOIN tasks t ON t.origin = s.task_origin AND t.task_id = s.task_id "
         "AND t.epoch = s.task_epoch WHERE t.synthetic = 1")}
-    synthetic |= {r[0] for r in conn.execute(
-        "SELECT session_id FROM events WHERE kind = 'task' AND json_extract(fields, '$.synthetic') = 1")}
-    return [r[0] for r in conn.execute("SELECT DISTINCT session_id FROM events ORDER BY session_id")
-            if not r[0].startswith("telemetry:") and r[0] not in synthetic]
+    proofs.update({r[0]: SYNTHETIC_TASK for r in conn.execute(
+        "SELECT session_id FROM events WHERE kind = 'task' AND json_extract(fields, '$.synthetic') = 1")})
+    return proofs
 
 
-def check_latency(conn, max_seconds: float, landed_at: str, now) -> dict:
-    """Each non-synthetic session that ended after `landed_at`, by the latency rule over
+def _holds_only_record_own_rows(conn, session: str) -> bool:
+    marks = ",".join("?" * len(RECORD_OWN_SOURCE_KEYS))
+    return conn.execute(f"SELECT 1 FROM events WHERE session_id = ? AND source_key NOT IN ({marks}) LIMIT 1",
+                        (session, *RECORD_OWN_SOURCE_KEYS)).fetchone() is None
+
+
+def _population(conn) -> "tuple[list, list]":
+    """(sessions judged, [{session, proof}] excluded): a session leaves the population only when its
+    rows prove it synthetic (its task is synthetic, or it holds nothing but the record's own rows)."""
+    proofs = _synthetic_proofs(conn)
+    judged, excluded = [], []
+    for (session,) in conn.execute("SELECT DISTINCT session_id FROM events ORDER BY session_id").fetchall():
+        proof = proofs.get(session) or (ONLY_RECORD_OWN_ROWS if _holds_only_record_own_rows(conn, session) else None)
+        if proof:
+            excluded.append({"session": session, "proof": proof})
+        else:
+            judged.append(session)
+    return judged, excluded
+
+
+def is_real_session(conn, session: str) -> bool:
+    """The session ran here: it is not an import:* key and the record holds a row it wrote while it
+    ran (a live row) or a transcript row of it."""
+    if session.startswith(IMPORT_SESSION_PREFIX):
+        return False
+    return conn.execute("SELECT 1 FROM events WHERE session_id = ? AND provenance IN ('live', 'transcript') LIMIT 1",
+                        (session,)).fetchone() is not None
+
+
+def is_import_only(conn, session: str) -> bool:
+    """No row of the session came through the live path (every row is imported or from a transcript;
+    the sync's rows naming it are the sync's own) and no spool of it exists, so a sync never had
+    anything of it to commit."""
+    from lib.telemetry import emit
+    if conn.execute("SELECT 1 FROM events WHERE session_id = ? AND provenance NOT IN ('imported', 'transcript') "
+                    "LIMIT 1", (session,)).fetchone() is not None:
+        return False
+    stem = emit.session_file_stem(session)
+    return stem is None or not emit.spool_path(stem).exists()
+
+
+def _earliest_time(conn, session: str):
+    texts = [r[0] for r in conn.execute("SELECT time FROM events WHERE session_id = ?", (session,))]
+    return min(sync.known_times(texts), default=None)
+
+
+def _pre_fix_causes(conn, entries, rows: dict, landed, span_end) -> dict:
+    """{session: status} of the pre-fix-late entries, each checked against the record."""
+    statuses = {}
+    for entry in entries:
+        entry = entry if isinstance(entry, dict) else {}
+        cause, session = entry.get("cause"), entry.get("session")
+        if not isinstance(cause, str) or not cause.startswith(PRE_FIX_CAUSE_PREFIX):
+            raise LatencyInputError(f"entry {entry!r}: the cause must start with {PRE_FIX_CAUSE_PREFIX}")
+        if not isinstance(session, str) or not session:
+            raise LatencyInputError(f"entry {entry!r}: no session")
+        import_only = is_import_only(conn, session)
+        if not import_only and not is_real_session(conn, session):
+            raise LatencyInputError(f"{session}: neither a real session nor import-only")
+        row = rows.get(session)
+        if row is None or row["status"] != "late":
+            raise LatencyInputError(f"{session}: not late by the rule")
+        if not landed <= row["T1"] < span_end:
+            raise LatencyInputError(f"{session}: T1 {row['T1'].isoformat()} is outside [{landed.isoformat()}, "
+                                    f"{span_end.isoformat()})")
+        statuses[session] = f"{IMPORT_ONLY if import_only else PRE_FIX_LATE}:{cause}"
+    return statuses
+
+
+def check_latency(conn, max_seconds: float, landed_at: str, now, outage: "tuple | None" = None,
+                  pre_fix_entries: "list | None" = None) -> dict:
+    """Each session of the population that ended after `landed_at`, by the latency rule over
     sync.latency_marks: on_time, late, waiting (no trigger yet), in_flight (a trigger younger than
-    the bound, no commit) or sync_deferred (its rows wait in the reserved spool). The check fails
-    on a late session and when no session of the population has appeared."""
+    the bound, no commit) or sync_deferred (its rows wait in the reserved spool). A late session is
+    instead a counted named loss: sync_outage when its T1 is in `outage` ([from, until)), the
+    status its pre-fix-late entry names (pre_fix_late:<cause>, or import_only:<cause> for an
+    import-only session), or import_only:pre_emitter for an import-only session whose earliest
+    timed row precedes `landed_at`. The check fails on a late session and when no session of the
+    population has appeared; it raises LatencyInputError on an entry it refuses."""
     landed = sync.parse_time(landed_at)
     pending, spooled = _reserved_spool_sessions(conn)
     deferred_rows = {r[0] for r in conn.execute(
         "SELECT json_extract(fields, '$.session') FROM events WHERE kind = ?", (sync.SYNC_DEFERRED,))}
     rows = []
     skipped = {sync.NO_TIME_ROWS: 0}
-    for session in _population(conn):
-        end, first, commit = sync.latency_marks(conn, session, skipped)
+    judged, excluded = _population(conn)
+    starts = sync.trigger_start_times(conn, skipped)
+    for session in judged:
+        end, first, commit = sync.latency_marks(conn, session, skipped, starts)
         if end is None or end <= landed:
             continue
         seconds = None
@@ -569,12 +686,26 @@ def check_latency(conn, max_seconds: float, landed_at: str, now) -> dict:
             status = "in_flight"
         else:
             status = "late"
+        if status == "late" and outage and outage[0] <= first < outage[1]:
+            status = SYNC_OUTAGE
         rows.append({"session": session, "E": end, "T1": first, "A": commit, "latency_s": seconds, "status": status})
+    by_session = {r["session"]: r for r in rows}
+    named = _pre_fix_causes(conn, pre_fix_entries or (), by_session, landed, outage[0] if outage else now)
+    for row in rows:
+        if row["session"] in named:
+            row["status"] = named[row["session"]]
+        elif row["status"] == "late" and is_import_only(conn, row["session"]):
+            earliest = _earliest_time(conn, row["session"])
+            if earliest is not None and earliest < landed:
+                row["status"] = f"{IMPORT_ONLY}:{PRE_EMITTER}"
     late = [r["session"] for r in rows if r["status"] == "late"]
     ok = not late and any(r["A"] for r in rows)
-    return {"ok": ok, "max_seconds": max_seconds, "landed_at": landed_at, "late": late,
-            "by_status": {s: sum(1 for r in rows if r["status"] == s)
-                          for s in ("on_time", "late", "waiting", "in_flight", "sync_deferred")},
+    by_status = {s: 0 for s in ("on_time", "late", "waiting", "in_flight", "sync_deferred")}
+    for row in rows:
+        by_status[row["status"]] = by_status.get(row["status"], 0) + 1
+    losses = {s: n for s, n in by_status.items() if s == SYNC_OUTAGE or ":" in s}
+    return {"ok": ok, "max_seconds": max_seconds, "landed_at": landed_at, "late": late, "by_status": by_status,
+            "losses": losses, "excluded": excluded, "excluded_count": len(excluded),
             sync.NO_TIME_ROWS: skipped[sync.NO_TIME_ROWS], "sessions": rows}
 
 
@@ -629,7 +760,7 @@ def _print(payload: dict, fmt: str) -> None:
                   f"red_rate={row['verify_red_rate']} flakes={row['flakes']} minutes={row['minutes']:.1f} "
                   f"spend=${row['spend_usd']:.2f}")
     for name in ("losses", "unattributed_contours", "unresolved_source_keys",
-                 "imported_unresolved_source_keys", "synthetic_tasks_counted", "no_ts_rows", "self_cost"):
+                 "imported_unresolved_source_keys", "synthetic_tasks_counted", sync.NO_TIME_ROWS, "self_cost"):
         if name in payload:
             print(f"{name}: {json.dumps(payload[name], sort_keys=True, default=str)}")
 
@@ -654,7 +785,7 @@ def main(argv=None) -> int:
     try:
         emit_usage("core-version", conn, args.task)
         payload = core_version(conn, args.include_synthetic)
-        payload["no_ts_rows"] = unstamped_row_count(conn)
+        payload[sync.NO_TIME_ROWS] = unstamped_row_count(conn)
         if args.task:
             payload["self_cost"] = self_cost(conn, args.task)
     finally:

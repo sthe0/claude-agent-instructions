@@ -247,7 +247,7 @@ def test_host_llm_default_invocation_unchanged(monkeypatch):
         "claude", "-p", "--model", "sonnet", *host_llm.STRUCTURED_OUTPUT_FLAGS]
     cursor = host_llm.build_launch_argv(HOST_CURSOR, "auto")
     assert host_llm.build_launch_argv(HOST_CURSOR, "auto", structured_output=True) == cursor
-    assert host_llm.unwrap_structured(["claude", "-p"], "plain reply") == ("plain reply", None, "usage_unavailable:claude")
+    assert host_llm.unwrap_structured(["claude", "-p"], "plain reply") == ("plain reply", None, host_llm.USAGE_NOT_REQUESTED)
 
 
 def test_build_launch_argv_cursor_shape(monkeypatch):

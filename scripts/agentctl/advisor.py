@@ -2017,6 +2017,17 @@ def _child_was_authenticated(run_kwargs: dict) -> bool:
     return status in host_llm.AUTHENTICATED_TOKEN_STATUSES
 
 
+def _run_without_ledger(argv: list[str], *, timeout: int, stdin: str) -> RunResult:
+    """A non-LLM command (git) handed the judge runner: run as before, but it is no judge call,
+    so the ledger gets no line for it."""
+    try:
+        proc = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout,
+                              **host_llm.isolated_run_kwargs())
+    except subprocess.TimeoutExpired:
+        return RunResult(1, "", f"{_TIMEOUT_STDERR_PREFIX} {timeout}s", timed_out=True)
+    return RunResult(proc.returncode, proc.stdout, proc.stderr, timed_out=False)
+
+
 def subprocess_runner(
     argv: list[str], *, timeout: int = _ADVISOR_TIMEOUT_S, stdin: str = ""
 ) -> RunResult:
@@ -2062,6 +2073,8 @@ def subprocess_runner(
     reason keeps its own classification."""
     if os.environ.get("AGENTCTL_LIVE_JUDGES") == "0":
         return RunResult(-1, stdout="", stderr="live judges disabled (AGENTCTL_LIVE_JUDGES=0)")
+    if host_llm.host_of_binary(argv[0] if argv else "") is None:
+        return _run_without_ledger(argv, timeout=timeout, stdin=stdin)
     judge_name = judge_ledger.take_current_judge()
     if judge_name is None:
         # Every caller in this module now self-identifies before invoking the

@@ -77,7 +77,7 @@ MUTANTS = [
      "replacement": "if False:",
      "tests": [_R + "test_check_events_fails_on_a_missing_event_row"]},
     {"name": "unrecorded_window_ignored", "file": _REPORT,
-     "anchor": "elif bounds and bounds[0] <= ms <= bounds[1]:", "replacement": "elif False:",
+     "anchor": "elif bounds and ms is not None and bounds[0] <= ms <= bounds[1]:", "replacement": "elif False:",
      "tests": [_R + "test_check_events_excuses_acts_in_the_declared_unrecorded_window"]},
     # check-latency
     {"name": "latency_from_last_event", "file": _REPORT,
@@ -85,8 +85,7 @@ MUTANTS = [
      "replacement": f"else (commit - {_LAST_EVENT}).total_seconds()",
      "tests": [_R + "test_check_latency_measures_from_first_recorded_trigger_start_after_eligibility"]},
     {"name": "latency_from_eligibility", "file": _SYNC,
-     "anchor": ("first = next((t for t in _times(conn, \"SELECT time FROM events WHERE kind = ?\", (TRIGGER_START,), skipped)\n"
-                "                  if t >= end), None)"),
+     "anchor": "first = next((t for t in starts if t >= end), None)",
      "replacement": "first = end",
      "tests": [_R + "test_check_latency_measures_from_first_recorded_trigger_start_after_eligibility"]},
     {"name": "latency_uses_last_commit", "file": _SYNC,
@@ -94,8 +93,8 @@ MUTANTS = [
      "replacement": f"(SYNC_COMMIT, session_id), skipped) if t >= end), None) and ({_SYNC_COMMITS} or [None])[-1]",
      "tests": [_R + "test_timely_first_commit_followed_by_commits_past_S_is_not_late"]},
     {"name": "latency_ttl_counts_sync_events", "file": _SYNC,
-     "anchor": 'last = _times(conn, "SELECT time FROM events WHERE session_id = ?", (session_id,), skipped)',
-     "replacement": 'last = _times(conn, "SELECT time FROM events WHERE session_id = ? '
+     "anchor": 'last = _times(conn, "SELECT event_id, time FROM events WHERE session_id = ?", (session_id,), skipped)',
+     "replacement": 'last = _times(conn, "SELECT event_id, time FROM events WHERE session_id = ? '
                     'OR json_extract(fields, \'$.session\') = ?", (session_id, session_id), skipped)',
      "tests": [_R + "test_killed_session_E_unchanged_across_repeated_sweeps"]},
     {"name": "latency_appearance_requires_commit_after_T1", "file": _REPORT,

@@ -192,10 +192,14 @@ def test_one_judge_event_per_judge_call_under_its_source_key(tmp_path, monkeypat
     monkeypatch.setenv("AGENTCTL_JUDGE_LEDGER", str(ledger))
     monkeypatch.delenv("AGENTCTL_LIVE_JUDGES", raising=False)
     monkeypatch.setitem(judge_ledger._state, "source", "judge-sess")
+    stub_claude = tmp_path / "bin" / "claude"
+    stub_claude.parent.mkdir()
+    stub_claude.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    stub_claude.chmod(0o755)
     for name in ("binary_ask", "same_difficulty", None):
         if name:
             judge_ledger.begin_attributed_call(name)
-        advisor.subprocess_runner(["true"], timeout=20)
+        advisor.subprocess_runner([str(stub_claude)], timeout=20)
     store.replay("judge-sess")
 
     judge_events = events("judge-sess", kind="judge")
@@ -268,7 +272,7 @@ def test_judge_names_cover_every_set_current_judge_call():
             sources.append(path.name)
             passed |= _judge_names_passed(path)
 
-    assert sources == ["advisor.py", "grounding_judge.py"]
+    assert sources == ["advisor.py", "grounding_judge.py", "driver.py"]
     assert len(passed) >= 18
     assert passed | {"unattributed"} == set(judge_ledger.JUDGE_NAMES)
 

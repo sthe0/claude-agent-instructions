@@ -39,7 +39,7 @@ from xml.sax.saxutils import escape as xml_escape
 from agentctl import cost, dispatch, grants, inline_class, inline_git, mandate as rules, mandate_store as store, norm_handoff
 from agentctl.config import Thresholds
 from agentctl.dispatch import RunResult
-from lib import config_root, host_llm, transcript_cost
+from lib import config_root, host_llm, judge_ledger, transcript_cost
 from lib.runtime_models import HOST_CLAUDE
 from session_scope import registry as scopes
 
@@ -60,6 +60,7 @@ TRIAGE_BATCH = 10
 TRIAGE_BODY_CHARS = 4000
 JUDGE_FLAT_CHARGE_USD = 0.5
 JUDGE_TIMEOUT_S = 300
+MANDATE_JUDGE = "mandate_cycle_judge"
 GH_LIST_LIMIT = 500
 SUITE_TIMEOUT_S = 3600
 REAP_TIMEOUT_S = 30
@@ -180,12 +181,25 @@ def real_spawn(argv, cwd, timeout_s) -> SpawnResult:
 
 
 def real_judge(prompt: str) -> "tuple[str, float]":
-    """One isolated single-turn sonnet call; returns (text, cost in USD)."""
-    argv = host_llm.build_launch_argv(HOST_CLAUDE, "sonnet", lean=True) + ["--output-format", "json"]
-    proc = subprocess.run(
-        argv, input=prompt, capture_output=True, text=True, timeout=JUDGE_TIMEOUT_S,
-        **host_llm.isolated_run_kwargs(),
-    )
+    """One isolated single-turn sonnet call, mirrored to the judge ledger with its usage; returns
+    (text, cost in USD)."""
+    argv = host_llm.build_launch_argv(HOST_CLAUDE, "sonnet", lean=True, structured_output=True)
+    judge_ledger.begin_attributed_call(MANDATE_JUDGE)
+    judge_ledger.started(MANDATE_JUDGE)
+    start = time.monotonic()
+    try:
+        proc = subprocess.run(
+            argv, input=prompt, capture_output=True, text=True, timeout=JUDGE_TIMEOUT_S,
+            **host_llm.isolated_run_kwargs(),
+        )
+    except subprocess.TimeoutExpired:
+        judge_ledger.call(MANDATE_JUDGE, timed_out=True, duration=time.monotonic() - start,
+                          returncode=None, prompt_chars=len(prompt), usage_reason="timed_out")
+        raise
+    _, usage, usage_reason = host_llm.unwrap_structured(argv, proc.stdout)
+    judge_ledger.call(MANDATE_JUDGE, timed_out=False, duration=time.monotonic() - start,
+                      returncode=proc.returncode, prompt_chars=len(prompt), usage=usage,
+                      usage_reason=usage_reason)
     if proc.returncode != 0:
         raise DriverError(f"judge exited {proc.returncode}: {proc.stderr.strip()[:200]}")
     try:

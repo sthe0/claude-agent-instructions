@@ -62,12 +62,14 @@ def take(out_dir) -> dict:
     out = Path(out_dir)
     if out.exists():
         raise SnapshotError(f"{out} already exists")
-    measured = []
+    measured, skipped = [], []
     for kind, path in _sources():
         try:
             measured.append((kind, path, path.stat().st_size))
-        except OSError:
+        except FileNotFoundError:
             continue
+        except OSError as err:
+            skipped.append({"live": str(path), "error": repr(err)})
     need = sum(size for _, _, size in measured) + FREE_SPACE_MARGIN_BYTES
     free = shutil.disk_usage(out.parent).free
     if free < need:
@@ -82,12 +84,14 @@ def take(out_dir) -> dict:
             else:
                 _copy_prefix(path, out / copy, size)
             size = (out / copy).stat().st_size
-        except OSError:
+        except OSError as err:
+            skipped.append({"live": str(path), "error": repr(err)})
             continue
         files.append({"kind": kind, "live": str(path), "copy": str(copy), "size": size})
-    manifest = {"taken_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "files": files}
+    manifest = {"taken_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "files": files,
+                "skipped": skipped}
     (out / MANIFEST).write_text(json.dumps(manifest, indent=1, sort_keys=True), encoding="utf-8")
-    return {"out": str(out), "files": len(files), "bytes": sum(f["size"] for f in files)}
+    return {"out": str(out), "files": len(files), "bytes": sum(f["size"] for f in files), "skipped": skipped}
 
 
 class Snapshot:

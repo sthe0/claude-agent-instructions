@@ -68,7 +68,7 @@ JUDGE_NAMES = frozenset({
     "published_attachment", "published_text_rules", "feedback_signal", "user_question",
     "resolution_confirmation", "outage_escalation", "silent_closure", "deferring_disposition",
     "landing_discipline", "question_materiality", "approval_ask", "code_effects",
-    "grounding_link", "order_quote", "unattributed",
+    "grounding_link", "order_quote", "mandate_cycle_judge", "unattributed",
 })
 
 # Ceiling on one ledger line. NOT an atomicity mechanism — O_APPEND is what

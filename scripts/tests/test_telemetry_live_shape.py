@@ -8,6 +8,7 @@ import builtins
 import io
 import json
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,7 +19,8 @@ from lib import config_root, host_llm, judge_ledger
 from lib.telemetry import importer, live, recorder, report, snapshot, store, sync, tokens
 from telemetry_import_support import at, line, world  # noqa: F401  (world is a fixture)
 from telemetry_live_support import events, query, spool_events, start
-from test_core_version_report import event as record_event, put, task, view
+from test_core_version_report import S, appeared, event as cv_event, put, task, trigger, view
+from test_core_version_report import event as record_event
 from test_telemetry_tokens import check as check_tokens, judge_event, ledger_call, open_task, usage, write_record
 
 EPOCH_2026 = 1767225600
@@ -109,7 +111,7 @@ def test_report_shows_no_ts_rows_beside_shares():
     untimed("s-t1")
     untimed("s-t1", source_key="cli:approve")
     payload = view()[1]
-    assert payload["no_ts_rows"] == 2 and "heads" in payload
+    assert payload[sync.NO_TIME_ROWS] == 2 and "heads" in payload
 
 
 # --- the session a report run is charged to ------------------------------------------------------
@@ -234,7 +236,7 @@ def test_judge_callers_receive_unchanged_response_text(world, monkeypatch):
     assert run_judge(monkeypatch, structured_argv(), json.dumps(ENVELOPE)).stdout == "VERDICT: pass"
     plain = run_judge(monkeypatch, ["claude", "-p", "--model", "sonnet"], "VERDICT: pass\n")
     assert plain.stdout == "VERDICT: pass\n"
-    assert last_call(world)["usage_reason"] == "usage_unavailable:claude" and not last_call(world).get("usage")
+    assert last_call(world)["usage_reason"] == host_llm.USAGE_NOT_REQUESTED and not last_call(world).get("usage")
     garbled = run_judge(monkeypatch, structured_argv(), "not json")
     assert garbled.stdout == "not json" and last_call(world)["usage_reason"] == "unparsed"
 
@@ -384,3 +386,357 @@ def test_snapshot_rows_carry_live_path_backreferences(world):
                                  "WHERE provenance = 'imported' AND json_extract(fields, '$.backref.path') IS NOT NULL")}
     assert paths and paths <= {str(world.gate), str(world.judge), str(world.decision)}
     assert not [p for p in paths if p.startswith(str(out))]
+
+
+def counter_values(obj, name: str) -> list:
+    if isinstance(obj, dict):
+        return [v for k, v in obj.items() if k == name] + [x for v in obj.values() for x in counter_values(v, name)]
+    if isinstance(obj, list):
+        return [x for v in obj for x in counter_values(v, name)]
+    return []
+
+
+def test_snapshot_cut_shorter_than_offset_is_not_truncation(world):
+    sources(world)
+    out = take(world)
+    world.add(world.gate, world.gate_line("R", "late", seconds=9))
+    assert world.run(include_transcripts=True)["rows_added"] > 0
+    result = world.run(include_transcripts=True, sources=out)
+    assert result["rows_added"] == 0
+    assert sum(counter_values(result, "truncated_bytes")) == 0 and sum(counter_values(result, "rereads")) == 0
+
+
+def test_import_sources_reads_no_live_spool(world, monkeypatch):
+    sources(world)
+    out = take(world)
+    touched = []
+    monkeypatch.setattr(importer, "_replay_ended_spools", lambda *a, **k: touched.append("replay"))
+    monkeypatch.setattr(live, "spool_or_end_marker_exists", lambda session: touched.append(session) or False)
+    world.run(include_transcripts=True, sources=out)
+    assert touched == []
+    world.run(include_transcripts=True)
+    assert "replay" in touched
+
+
+def test_snapshot_take_fails_on_oserror(world, monkeypatch, tmp_path):
+    import telemetry as telemetry_cli
+    sources(world)
+    real = snapshot._copy_prefix
+
+    def fail_gate(source, target, size):
+        if Path(source) == world.gate:
+            raise OSError("unreadable")
+        return real(source, target, size)
+    monkeypatch.setattr(snapshot, "_copy_prefix", fail_gate)
+    result = snapshot.take(tmp_path / "snap-a")
+    assert [s["live"] for s in result["skipped"]] == [str(world.gate)]
+    assert telemetry_cli.main(["snapshot-sources", "--out", str(tmp_path / "snap-b")]) == 1
+
+
+# --- judge losses named per host id ------------------------------------------------------------
+
+def test_judge_losses_named_per_host_id(world, monkeypatch):
+    run_judge(monkeypatch, ["agent", "-p", "--model", "m"], "VERDICT: pass")
+    assert last_call(world)["usage_reason"] == f"usage_unavailable:{host_llm.HOST_CURSOR}"
+    run_judge(monkeypatch, ["claude", "-p"], "VERDICT: pass")
+    assert last_call(world)["usage_reason"] == host_llm.USAGE_NOT_REQUESTED
+    lines = world.judge.read_text(encoding="utf-8")
+    result = run_judge(monkeypatch, ["git", "-C", "/x", "rev-parse", "HEAD"], "abc\n")
+    assert result.stdout == "abc\n" and world.judge.read_text(encoding="utf-8") == lines
+
+
+def test_claude_no_usage_and_unparsed_lines_counted(world, capsys):
+    for reason in ("no_usage", "unparsed", "no_usage", host_llm.USAGE_NOT_REQUESTED, "usage_unavailable:cursor"):
+        judge_line(world, 1, usage_schema=1, usage_reason=reason)
+    tokens.collect()
+    rc, out = check_tokens(capsys, "--imported-coverage")
+    assert out["judge"]["without_usage_by_reason"] == {"no_usage": 2, "unparsed": 1, host_llm.USAGE_NOT_REQUESTED: 1,
+                                                       "usage_unavailable:cursor": 1}
+    assert rc == 1 and [f["reason"] for f in out["judge"]["failures"]] == ["judge_line_usage_not_requested"]
+
+
+def test_grounding_judge_usage_recorded_with_structured_output(world, monkeypatch):
+    from agentctl import grounding_judge
+    run_judge(monkeypatch, structured_argv(), json.dumps(ENVELOPE))
+    assert grounding_judge._ask("grounding", "prompt", advisor.subprocess_runner, lambda text: text) == "VERDICT: pass"
+    call = last_call(world)
+    assert call["judge"] == "grounding" and call["usage"]["output_tokens"] == 7 and not call.get("usage_reason")
+
+
+def test_real_judge_writes_ledger_line(world, monkeypatch):
+    from mandate_cycle import driver
+    monkeypatch.setattr(driver.subprocess, "run",
+                        lambda a, **kw: subprocess.CompletedProcess(a, 0, stdout=json.dumps(ENVELOPE), stderr=""))
+    assert driver.real_judge("prompt") == ("VERDICT: pass", 0.01)
+    call = last_call(world)
+    assert call["judge"] == driver.MANDATE_JUDGE and call["usage"]["input_tokens"] == 11
+
+
+def test_judge_usage_report_reads_new_format_lines(world, monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("judge_usage_report", Path(advisor.__file__).parents[1]
+                                                  / "judge-usage-report.py")
+    usage_report = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, usage_report)
+    spec.loader.exec_module(usage_report)
+    judge_ledger.begin_attributed_call("j")
+    run_judge(monkeypatch, structured_argv(), json.dumps(ENVELOPE))
+    judge_ledger.begin_attributed_call("j")
+    run_judge(monkeypatch, ["claude", "-p"], "VERDICT: pass")
+    read = judge_ledger.read_ledger()
+    result = usage_report.tally(read, world.judge)
+    assert read.dropped_lines == 0 and result.record_count == len(read.records) >= 4
+    calls = [r for r in read.records if r.get("kind") == "call"]
+    assert [c.get("usage_schema") for c in calls] == [judge_ledger.USAGE_SCHEMA] * 2
+    assert result.complaints == [] and result.record_count == len(read.records)
+
+
+# --- check-events: a session with no live event ------------------------------------------------
+
+def test_check_events_fails_session_with_zero_live_events(world):
+    acts_task(world, [{"event": "record_result", "ts": at(10)}], [])
+    conn = store.open_record()
+    try:
+        conn.execute("UPDATE events SET provenance = 'imported' WHERE session_id = 's-t1'")
+        conn.commit()
+        assert conn.execute("SELECT COUNT(*) FROM events WHERE session_id = 's-t1'").fetchone()[0] > 0
+        result = report.check_events(conn, "t1", command_keys=frozenset({"cli:record-result"}))
+    finally:
+        conn.close()
+    assert not result["ok"] and [a["act"] for a in result["missing"]] == ["cli:record-result"]
+    assert result["lost_before_first_live"] == 0
+
+
+# --- check-latency: named losses, each proven from the record -----------------------------------
+
+def late_session(session, seconds, provenance="live", earliest=None) -> None:
+    if earliest is not None:
+        cv_event(session, "command", earliest, {"command": "plan"}, "cli:plan", provenance=provenance)
+    cv_event(session, "command", seconds, {"command": "status"}, "cli:status", provenance=provenance)
+    trigger(seconds + 10, "session_end", session)
+    appeared(seconds + 10 + S + 100, session)
+
+
+def on_time_session(session, seconds, provenance="live") -> None:
+    cv_event(session, "command", seconds, {"command": "status"}, "cli:status", provenance=provenance)
+    trigger(seconds + 10, "session_end", session)
+    appeared(seconds + 20, session)
+
+
+def moment(seconds):
+    return sync.parse_time(at(seconds))
+
+
+def lat(landed_s=-10_000, outage=None, entries=None, now_s=100_000) -> dict:
+    conn = store.open_readonly()
+    try:
+        return report.check_latency(conn, S, at(landed_s), moment(now_s),
+                                    (moment(outage[0]), moment(outage[1])) if outage else None, entries)
+    finally:
+        conn.close()
+
+
+def refused(**kwargs) -> bool:
+    try:
+        lat(**kwargs)
+    except report.LatencyInputError:
+        return True
+    return False
+
+
+def statuses(result) -> dict:
+    return {r["session"]: r["status"] for r in result["sessions"]}
+
+
+def spool_of(session) -> None:
+    from lib.telemetry import emit
+    path = emit.spool_path(emit.session_file_stem(session))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("", encoding="utf-8")
+
+
+CAUSE = "pre_fix_cause_x"
+
+
+def test_sync_outage_window_edges(world):
+    for session, seconds in (("s-before", -500), ("s-from", 0), ("s-in", 1000), ("s-until", 2000)):
+        late_session(session, seconds)
+    result = lat(outage=(10, 2010))
+    assert statuses(result) == {"s-before": "late", "s-from": report.SYNC_OUTAGE, "s-in": report.SYNC_OUTAGE,
+                                "s-until": "late"}
+    assert result["losses"] == {report.SYNC_OUTAGE: 2} and result["late"] == ["s-before", "s-until"]
+
+
+def landing_event(seconds, head="abc") -> None:
+    cv_event("telemetry:landing", "landing", seconds, {"tip": head, "pushed_head": head}, report.LANDED_SOURCE_KEY)
+
+
+def test_sync_outage_missing_landing_refused(world, tmp_path):
+    import telemetry as telemetry_cli
+    on_time_session("s-ok", 0)
+    landing = tmp_path / "landing.json"
+    landing.write_text(json.dumps({"head": "abc", "landed_at": at(500)}), encoding="utf-8")
+    argv = ["check-latency", "--max-seconds", str(S), "--since-landing", str(landing),
+            "--sync-outage-from", at(100), "--sync-outage-until-landing", str(landing)]
+    assert telemetry_cli.main(argv) == 2
+    landing_event(450)
+    assert telemetry_cli.main(argv) != 2
+
+
+def test_sync_outage_landed_at_bound_to_landing_event(world):
+    landing_event(1000)
+
+    def end(landed_s, head="abc"):
+        conn = store.open_readonly()
+        try:
+            return report.outage_end_from_landing(conn, {"head": head, "landed_at": at(landed_s)})
+        finally:
+            conn.close()
+    for landed_s, head in ((990, "abc"), (1000 + report.LANDED_AT_MAX_LAG_S + 1, "abc"), (1100, "zzz")):
+        with pytest.raises(report.LatencyInputError):
+            end(landed_s, head)
+    assert end(1300) == moment(1300)
+    appeared(1300, "s-x")
+    appeared(1200, "s-y")
+    assert end(1300) == moment(1300)
+    with pytest.raises(report.LatencyInputError):
+        end(990)
+
+
+def test_pre_fix_late_refuses_entry_outside_pre_outage_span(world):
+    late_session("s-real", 5000)
+    late_session("s-imp", 5000, provenance="imported")
+    for session in ("s-real", "s-imp"):
+        assert refused(outage=(3000, 4000), entries=[{"session": session, "cause": CAUSE}]), session
+    result = lat(outage=(6000, 7000), entries=[{"session": "s-real", "cause": CAUSE},
+                                               {"session": "s-imp", "cause": CAUSE}])
+    assert statuses(result) == {"s-real": f"{report.PRE_FIX_LATE}:{CAUSE}", "s-imp": f"{report.IMPORT_ONLY}:{CAUSE}"}
+
+
+def test_pre_fix_late_refuses_session_not_late(world):
+    on_time_session("s-real", 0)
+    on_time_session("s-imp", 0, provenance="imported")
+    for session in ("s-real", "s-imp"):
+        assert refused(entries=[{"session": session, "cause": CAUSE}]), session
+
+
+def test_pre_fix_late_refuses_bad_cause(world):
+    late_session("s1", 0)
+    for entry in ({"session": "s1", "cause": "deferred"}, {"session": "s1"}, {"cause": CAUSE}, "s1"):
+        assert refused(entries=[entry]), entry
+    result = lat(entries=[{"session": "s1", "cause": CAUSE}])
+    assert result["ok"] and result["losses"] == {f"{report.PRE_FIX_LATE}:{CAUSE}": 1}
+
+
+def test_pre_fix_late_refuses_non_real_session_with_live_row(world):
+    late_session("import:x", 0, provenance="imported")
+    cv_event("import:x", "command", 1, {"command": "plan"}, "cli:plan")
+    late_session("s-spooled", 0, provenance="imported")
+    spool_of("s-spooled")
+    for session in ("import:x", "s-spooled"):
+        assert refused(entries=[{"session": session, "cause": CAUSE}]), session
+
+
+def test_latency_exclusion_not_by_name_prefix(world):
+    for session in ("test-1", "canary-1", "fake-1"):
+        late_session(session, 0)
+    result = lat()
+    assert result["late"] == ["canary-1", "fake-1", "test-1"]
+    assert [e["session"] for e in result["excluded"]] == [sync.SYNC_SESSION]
+
+
+def test_latency_exclusion_requires_proof_from_rows(world):
+    task("fake", synthetic=1, seconds=0)
+    cv_event("s-own", "import.run", 0, {}, importer.SELF_SOURCE_KEY)
+    late_session("s-work", 0)
+    result = lat()
+    assert {e["session"]: e["proof"] for e in result["excluded"]} == {
+        "s-fake": report.SYNTHETIC_TASK, "s-own": report.ONLY_RECORD_OWN_ROWS,
+        sync.SYNC_SESSION: report.ONLY_RECORD_OWN_ROWS}
+    assert result["late"] == ["s-work"] and result["excluded_count"] == 3
+
+
+def test_import_only_loss_refuses_session_with_live_row(world):
+    late_session("s1", 5000, provenance="imported", earliest=-500)
+    cv_event("s1", "command", 5001, {"command": "plan"}, "cli:plan")
+    assert lat(landed_s=0)["late"] == ["s1"]
+
+
+def test_import_only_loss_refuses_session_with_spool(world):
+    late_session("s1", 5000, provenance="imported", earliest=-500)
+    spool_of("s1")
+    assert lat(landed_s=0)["late"] == ["s1"]
+
+
+def test_import_only_pre_emitter_bound_by_pr1_landing(world):
+    late_session("s-pre", 5000, provenance="imported", earliest=-500)
+    late_session("s-post", 5000, provenance="imported", earliest=100)
+    late_session("s-blank", 5000, provenance="imported")
+    untimed("s-blank")
+    untimed("s-untimed")
+    result = lat(landed_s=0)
+    assert statuses(result) == {"s-pre": f"{report.IMPORT_ONLY}:{report.PRE_EMITTER}", "s-post": "late",
+                                "s-blank": "late"}
+    assert result["losses"] == {f"{report.IMPORT_ONLY}:{report.PRE_EMITTER}": 1}
+
+
+def test_import_only_after_pr1_without_entry_judged_late(world):
+    late_session("s1", 5000, provenance="imported", earliest=100)
+    result = lat(landed_s=0)
+    assert not result["ok"] and result["late"] == ["s1"] and result["losses"] == {}
+
+
+def test_no_time_rows_counted_once_under_one_name(world):
+    for session in ("s1", "s2"):
+        cv_event(session, "command", 0, {"command": "status"}, "cli:status")
+    trigger(sync.LIVE_TTL_S + 10)
+    untimed("s1")
+    untimed(sync.SYNC_SESSION, kind=sync.TRIGGER_START, source_key=sync.SOURCE_KEY)
+    result = lat()
+    assert {r["session"] for r in result["sessions"]} == {"s1", "s2"}
+    assert result[sync.NO_TIME_ROWS] == 2 and "no_ts_rows" not in result
+
+
+def test_source_with_every_line_without_time_is_counted(world):
+    world.add(world.gate, {**world.gate_line("R"), "ts": ""}, {**world.gate_line("R", "exec"), "ts": None})
+    world.run()
+    assert query("SELECT COUNT(*) FROM events WHERE session_id = 'R' AND time = ''")[0][0] == 2
+    late_session("s1", 0)
+    assert lat()[sync.NO_TIME_ROWS] == 2
+
+
+# --- class A: an isolation test's subprocess writes no live engine state ------------------------
+
+def test_isolation_tests_write_no_live_engine_state(monkeypatch, tmp_path):
+    import uuid
+    from test_decision_log_isolation import CLI, isolated_home_env
+    live_root = tmp_path / "live-root"
+    live_root.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(live_root))
+    monkeypatch.setenv("CLAUDE_AGENT_HOME", str(live_root))
+    nonce = f"canary-{uuid.uuid4().hex}"
+    done = subprocess.run([sys.executable, str(CLI), "start", "--session", nonce, "--task", "t", "--goal", "g",
+                           "--done-criterion", "d", "--criterion-type", "measurable"],
+                          env=isolated_home_env(tmp_path / "home"), capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    leaked = [p for p in live_root.rglob("*") if p.is_file() and nonce in p.read_text(errors="replace") + p.name]
+    assert leaked == []
+    assert [p for p in (tmp_path / "home").rglob("*") if nonce in p.name]
+
+
+# --- class C: a deferred sync keeps retrying within the bound -----------------------------------
+
+def test_deferred_sync_retried_within_latency_bound(world, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(sync, "_sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    real_replay = store.replay
+
+    def locked_for_300_s(*args, **kwargs):
+        if clock[0] < 300:
+            return {"inserted": 0, "deferred": 1, "drained": False, "failed": 0}
+        return real_replay(*args, **kwargs)
+    monkeypatch.setattr(store, "replay", locked_for_300_s)
+    session = "s-locked"
+    world.live_event(session, "command", "cli:status")
+    result = sync.run(session)
+    assert session in result["committed"], result

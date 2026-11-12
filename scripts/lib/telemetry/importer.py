@@ -154,7 +154,7 @@ class _Run:
             "WHERE source = ? AND generation = ? AND consumer = ?", (source, generation, consumer)).fetchone()
 
     def is_live(self, session: str) -> bool:
-        return session in self.live_sessions or live.spool_or_end_marker_exists(session)
+        return session in self.live_sessions or _live_spool_exists(session)
 
     def refresh_live(self) -> None:
         self.live_sessions = {r[0] for r in self.ro.execute("SELECT DISTINCT session_id FROM events WHERE provenance = 'live'")}
@@ -392,11 +392,21 @@ def _first_line(handle):
     return raw if raw.endswith(b"\n") or len(raw) == FIRST_LINE_MAX else None
 
 
+def _live_spool_exists(session: str) -> bool:
+    """Whether the live spool directory holds this session's spool; never with a frozen snapshot,
+    whose import reads only the snapshot's copies."""
+    return snapshot.active() is None and live.spool_or_end_marker_exists(session)
+
+
 def _resume_point(handle, stored, size: int) -> "tuple[int, bool, int]":
-    """(offset to read from, whether the file is read again, bytes missing against the old offset)."""
+    """(offset to read from, whether the file is read again, bytes missing against the old offset).
+    A snapshot copy shorter than the offset was cut before bytes the record already holds: there
+    is nothing new to read in it, and nothing was lost."""
     if stored is None:
         return 0, False, 0
     offset, last_start, last_sha = stored
+    if size < offset and snapshot.active() is not None:
+        return offset, False, 0
     if size < offset:
         return 0, True, offset - size
     handle.seek(last_start)
@@ -674,7 +684,7 @@ def _plan_sessions(run: _Run) -> "tuple[list, list, dict]":
     chosen, partial_losses = [], {}
     for session, (path, state) in _load_states().items():
         is_child = bool(state.get("parent_link")) or (state.get("recursion_depth") or 0) > 0 or session in children_db
-        spool_opening, spool_first = _spool_scan(session) if live.spool_or_end_marker_exists(session) else (False, None)
+        spool_opening, spool_first = _spool_scan(session) if _live_spool_exists(session) else (False, None)
         if not run.is_live(session):
             chosen.append(_Session(session, path, state, False))
         elif not is_child and not (session in opened or spool_opening):
@@ -965,7 +975,8 @@ def _run_import(include_transcripts: bool, replay_all_spools: bool) -> dict:
     boot.close()
     try:
         run = _Run(store.origin_id(), ro)
-        _replay_ended_spools(run, everything=replay_all_spools)
+        if snapshot.active() is None:
+            _replay_ended_spools(run, everything=replay_all_spools)
         run.refresh_live()
         for unit in _file_units():
             _import_unit(run, unit, unit.path)

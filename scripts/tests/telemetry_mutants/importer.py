@@ -103,7 +103,7 @@ MUTANTS = [
      "replacement": '(str(uuid.uuid4()), event.get("session_id", spool_session), event["kind"], fields.get("source_key"),',
      "tests": [_I + "test_spool_import_reuses_the_spool_event_id"]},
     {"name": "spool_only_session_not_live", "file": _IMPORTER,
-     "anchor": "return session in self.live_sessions or live.spool_or_end_marker_exists(session)",
+     "anchor": "return session in self.live_sessions or _live_spool_exists(session)",
      "replacement": "return session in self.live_sessions",
      "tests": [_I + "test_spool_only_session_counts_as_live"]},
     {"name": "live_wins_only_for_transcripts", "file": _IMPORTER,
