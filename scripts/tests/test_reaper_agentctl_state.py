@@ -123,7 +123,9 @@ def test_pass_removes_exactly_the_residue_file_and_logs_it(state_dir):
     _, err, log = run_pass(state_dir, dry_run=False)
     assert before - set(os.listdir(state_dir)) == {REMOVABLE}
     records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-    assert [(r["reaper"], Path(r["path"]).name) for r in records] == [(st.NAME, REMOVABLE)]
+    assert [(r["reaper"], Path(r["path"]).name, r.get("outcome")) for r in records] == [
+        (st.NAME, REMOVABLE, None), (st.NAME, REMOVABLE, "removed"),
+    ]
     assert f"removed {state_dir / REMOVABLE}" in err
 
 
