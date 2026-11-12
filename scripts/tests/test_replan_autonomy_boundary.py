@@ -843,6 +843,9 @@ def test_agent_cannot_acknowledge_with_continue_or_abandon(eng):
         refused = ack(eng, decision=decision)
         assert refused["ok"] is False
         assert "the agent may only revise" in refused["detail"]
+        # The refusal names the agent's own exit, so a replans-scale fire is not escalated.
+        assert "do not ask the user" in refused["detail"]
+        assert "--decision revise --by agent" in refused["detail"]
     assert eng.state("a1").effort_fires[-1].get("ack") is None
 
 
