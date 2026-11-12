@@ -157,6 +157,32 @@ def test_an_engine_state_that_cannot_be_read_as_a_state_gives_unknown(tmp_path, 
     assert answer.status == liveness.UNKNOWN_STATUS and "engine store" in answer.report()
 
 
+def test_a_zero_byte_engine_state_records_nothing_and_does_not_make_the_answer_unknown(tmp_path, planted):
+    work, _ = planted
+    store = tmp_path / "state"
+    store.mkdir()
+    (store / "empty.json").write_bytes(b"")
+    assert ask(tmp_path, [work], state_dir=store)[str(work)].status == liveness.FREE_STATUS
+
+
+def test_a_zero_byte_engine_state_beside_an_unresolved_task_still_leaves_the_path_held(tmp_path, planted):
+    work, _ = planted
+    store = tmp_path / "state"
+    write_state(store, "sess-a", "EXECUTING", delivery_worktree=str(work))
+    (store / "empty.json").write_bytes(b"")
+    assert ask(tmp_path, [work], state_dir=store)[str(work)].status == liveness.HELD_STATUS
+
+
+def test_a_non_empty_unparseable_engine_state_beside_a_zero_byte_one_still_gives_unknown(tmp_path, planted):
+    work, _ = planted
+    store = tmp_path / "state"
+    store.mkdir()
+    (store / "empty.json").write_bytes(b"")
+    (store / "bad.json").write_text("{", encoding="utf-8")
+    answer = ask(tmp_path, [work], state_dir=store)[str(work)]
+    assert answer.status == liveness.UNKNOWN_STATUS and "bad.json" in answer.report()
+
+
 def test_a_missing_engine_store_holds_nothing(tmp_path, planted):
     work, _ = planted
     assert ask(tmp_path, [work], state_dir=tmp_path / "never-created")[str(work)].status == liveness.FREE_STATUS

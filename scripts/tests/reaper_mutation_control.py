@@ -793,6 +793,10 @@ CATALOGUE: "dict[str, Mutant]" = {
              "test_an_engine_store_that_is_not_a_directory_gives_unknown",
              "test_holders_exits_four_when_any_path_is_unknown_even_if_another_is_held"),
     ),
+    "holders-empty-state-unknown": Mutant(
+        LIVENESS, "            if not text:\n                continue\n", "            if False:\n                continue\n",
+        _ids(T_HOLDERS, "test_a_zero_byte_engine_state_records_nothing_and_does_not_make_the_answer_unknown"),
+    ),
     "holders-realpath": Mutant(
         LIVENESS, "    return os.path.normpath(os.path.abspath(path))\n", "    return os.path.realpath(path)\n",
         _ids(T_HOLDERS, "test_nothing_at_or_under_a_queried_path_is_stat_ed_resolved_or_walked"),

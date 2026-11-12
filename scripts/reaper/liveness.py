@@ -523,8 +523,8 @@ def read_engine_tasks(state_dir: "Path | None" = None) -> "tuple[list[EngineTask
     """Every agentctl session state whose node is not RESOLVED, and why the store could not be read in full.
 
     Reads ``<state dir>/<session>.json`` as plain JSON (the store's own format), never importing the
-    engine. A missing store holds nothing; an unreadable directory, or a state file that cannot be read
-    or parsed, is returned as the error (the first cause and a count) beside whatever else was readable."""
+    engine. A missing store holds nothing, and so does a zero-byte state file (it records no task); an
+    unreadable directory, or a non-empty state file that cannot be read or parsed, is returned as the error (the first cause and a count) beside whatever else was readable."""
     root = config_root.agentctl_state_dir() if state_dir is None else state_dir
     try:
         names = sorted(os.listdir(root))
@@ -539,7 +539,10 @@ def read_engine_tasks(state_dir: "Path | None" = None) -> "tuple[list[EngineTask
             continue
         path = os.path.join(root, name)
         try:
-            data = json.loads(_read_text(path))
+            text = _read_text(path)
+            if not text:
+                continue
+            data = json.loads(text)
         except FileNotFoundError:
             continue
         except (OSError, ValueError) as exc:
