@@ -356,11 +356,31 @@ def show_read_error(app: "DashboardApp", kind: str, error: Exception | None) -> 
 
 
 def start_order_read(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
-    """After the table is shown: the index read and stat behind the ordering key, then the re-sort. A newer
-    table's read replaces an older one's, whose order would sort rows that are gone. The marks of the live set
-    are read on their own, not after this: a pending question must show whatever the index read costs."""
-    app.run_worker(read_order_for(app, snapshot, issued_all), group="order", exclusive=True)
-    app.run_worker(in_daemon_thread(lambda: warm_child_index(app, snapshot)), group="children", exclusive=True)
+    """After the table is shown: the index read and stat behind the ordering key, then the re-sort, and the
+    child index warm-up. A newer table's read waits for the one running, as the overlay's does: a worker
+    cancelled by a newer one leaves its thread running, so replacing reads piled threads up. The marks of
+    the live set are read on their own, not after this: a pending question must show whatever the index read
+    costs."""
+    launch_read(app, "order", read_order_for, snapshot, issued_all)
+    launch_read(app, "children", warm_child_index_for, snapshot, issued_all)
+
+
+def launch_read(app: "DashboardApp", group: str, read_for, snapshot: dict, issued_all: bool) -> None:
+    """Start ``read_for`` of ``snapshot`` as the ``group`` worker, or keep the newest such request for when
+    the running one ends."""
+    if read_in_flight(app, group):
+        app.skipped[group] = (snapshot, issued_all)
+        return
+    app.run_worker(read_for(app, snapshot, issued_all), group=group)
+
+
+def make_up_read(app: "DashboardApp", group: str, read_for, snapshot: dict, issued_all: bool) -> None:
+    """At the end of a ``group`` read of ``(snapshot, issued_all)``: start the one read for the newest table
+    refused meanwhile, unless it is the table this read was for. Not through ``launch_read``: the worker
+    that calls this still counts as running."""
+    pending = app.skipped.pop(group, None)
+    if pending is not None and (pending[0] is not snapshot or pending[1] != issued_all):
+        app.run_worker(read_for(app, *pending), group=group)
 
 
 def warm_child_index(app: "DashboardApp", snapshot: dict) -> None:
@@ -369,9 +389,15 @@ def warm_child_index(app: "DashboardApp", snapshot: dict) -> None:
     model.child_index(app.state_root, since=tui.oldest_first_activity(snapshot["tasks"]))
 
 
+async def warm_child_index_for(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
+    await in_daemon_thread(lambda: warm_child_index(app, snapshot))
+    make_up_read(app, "children", warm_child_index_for, snapshot, issued_all)
+
+
 async def read_order_for(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
     order, error = await in_daemon_thread(lambda: attempt(lambda: tui.read_order(snapshot, app.transcripts_root)))
     order_ready(app, snapshot, order, error, issued_all)
+    make_up_read(app, "order", read_order_for, snapshot, issued_all)
 
 
 def order_ready(app: "DashboardApp", snapshot: dict, order, error: Exception | None, issued_all: bool) -> None:
@@ -660,6 +686,7 @@ class DashboardApp(App):
         self.overlay: dict | None = None
         self.last_chat_read: dt.datetime | None = None
         self.read_errors: dict[str, Exception] = {}
+        self.skipped: dict[str, tuple[dict, bool]] = {}
         self.snapshot: dict | None = None
         self.read_at: dt.datetime | None = None
         self.last_detail_read: dt.datetime | None = None

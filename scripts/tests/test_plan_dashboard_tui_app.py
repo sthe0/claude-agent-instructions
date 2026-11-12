@@ -2028,3 +2028,122 @@ def test_the_launcher_passes_a_sigterm_on_and_the_snapshot_is_written(tmp_path, 
     path = snapshot_store.default_path({"XDG_CACHE_HOME": str(cache_home)})
     assert snapshot_store.load(path) is not None
     assert os.listdir(path.parent) == [snapshot_store.FILE_NAME]
+
+
+def count_launches(monkeypatch):
+    """Count the workers the app registers, by group: the reads it launches, not the calls into a stub."""
+    launched: dict[str, int] = {}
+    real = DashboardApp.run_worker
+
+    def counting(self, work, *args, **kwargs):
+        launched[kwargs.get("group")] = launched.get(kwargs.get("group"), 0) + 1
+        return real(self, work, *args, **kwargs)
+
+    monkeypatch.setattr(DashboardApp, "run_worker", counting)
+    return launched
+
+
+def watch_overlap(monkeypatch, module, name):
+    """Record the most calls of ``module.name`` that were inside it at the same time."""
+    lock, state, real = threading.Lock(), {"active": 0, "most": 0}, getattr(module, name)
+
+    def watched(*args, **kwargs):
+        with lock:
+            state["active"] += 1
+            state["most"] = max(state["most"], state["active"])
+        try:
+            return real(*args, **kwargs)
+        finally:
+            with lock:
+                state["active"] -= 1
+
+    monkeypatch.setattr(module, name, watched)
+    return state
+
+
+async def reload_and_wait(app, pilot, times):
+    for _ in range(times):
+        before = app.cycle
+        await pilot.press("r")
+        assert await until(pilot, lambda: app.cycle > before and not app._loading)
+
+
+def test_a_running_order_read_is_not_restarted_and_is_made_up_once(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    launched = count_launches(monkeypatch)
+    release, _ = hold(monkeypatch, tui, "read_order")
+
+    async def scenario(app, pilot):
+        try:
+            assert await until(pilot, lambda: launched.get("order") == 1)
+            await reload_and_wait(app, pilot, 3)
+            assert launched["order"] == 1
+            assert app.order is None
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert launched["order"] == 2
+        assert app.order is not None
+
+    run_unsettled(scenario, root)
+
+
+def test_a_running_child_index_warm_up_is_not_restarted_and_is_made_up_once(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    launched = count_launches(monkeypatch)
+    release, _ = hold(monkeypatch, model, "child_index")
+
+    async def scenario(app, pilot):
+        try:
+            assert await until(pilot, lambda: launched.get("children") == 1)
+            await reload_and_wait(app, pilot, 3)
+            assert launched["children"] == 1
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert launched["children"] == 2
+
+    run_unsettled(scenario, root)
+
+
+def test_reads_of_one_kind_never_run_two_at_once_across_many_reloads(tmp_path, monkeypatch):
+    root = attention_root(tmp_path)
+    release_order, _ = hold(monkeypatch, tui, "read_order")
+    release_children, _ = hold(monkeypatch, model, "child_index")
+    orders = watch_overlap(monkeypatch, tui, "read_order")
+    children = watch_overlap(monkeypatch, model, "child_index")
+    launched = count_launches(monkeypatch)
+
+    async def scenario(app, pilot):
+        try:
+            assert await until(pilot, lambda: launched.get("order") == 1 and launched.get("children") == 1)
+            await reload_and_wait(app, pilot, 6)
+            assert await until(pilot, lambda: orders["active"] >= 1 and children["active"] >= 1)
+        finally:
+            release_order.set()
+            release_children.set()
+        await settle(app, pilot)
+        assert (orders["most"], children["most"]) == (1, 1)
+        assert launched["order"] == 2 and launched["children"] == 2
+
+    run_unsettled(scenario, root)
+
+
+@pytest.mark.parametrize("ending", ["lands", "fails"])
+def test_no_make_up_read_runs_without_a_newer_table(tmp_path, monkeypatch, ending):
+    root = attention_root(tmp_path)
+    launched = count_launches(monkeypatch)
+    release, _ = hold(monkeypatch, tui, "read_order")
+    if ending == "fails":
+        def broken(*args, **kwargs):
+            raise OSError("index unreadable")
+        monkeypatch.setattr(tui, "read_order", broken)
+
+    async def scenario(app, pilot):
+        assert await until(pilot, lambda: launched.get("order") == 1)
+        release.set()
+        await settle(app, pilot)
+        assert launched["order"] == 1 and launched["children"] == 1
+        assert ("index unreadable" in app.sub_title) == (ending == "fails")
+
+    run_unsettled(scenario, root)

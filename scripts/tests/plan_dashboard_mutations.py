@@ -14,7 +14,9 @@ locator's family, killed by ``test_plan_dashboard_attention.py``.
 
 SNAPSHOT_MUTATIONS is the snapshot's and the identity-keyed caches' family, killed by
 ``test_plan_dashboard_snapshot.py``; the two rows that target ``tui_app`` (``mark-confirmed-from-snapshot``,
-``overlay-waits-on-order-read``) are killed by the pilot file. ``same-named-transcript-dropped`` (a task's
+``overlay-waits-on-order-read``) are killed by the pilot file, as are ``order-read-piles-up`` and
+``child-warm-piles-up`` (a newer table's read replaces the running one) and ``skipped-order-read-not-made-up``
+(the newest refused table's read is never started). ``same-named-transcript-dropped`` (a task's
 other transcripts are not recorded) and ``unrecorded-source-stat-skipped`` (the live check stats no unrecorded
 source in a directory whose marker is unchanged) are killed by the snapshot tests.
 
@@ -1014,6 +1016,25 @@ def _overlay_waits_on_the_order_read(original):
     return mutated
 
 
+def _read_of_group_replaces_the_running_one(group):
+    def wrap(original):
+        def mutated(app, read_group, read_for, snapshot, issued_all):
+            if read_group != group:
+                return original(app, read_group, read_for, snapshot, issued_all)
+            app.run_worker(read_for(app, snapshot, issued_all), group=read_group, exclusive=True)
+        return mutated
+    return wrap
+
+
+def _skipped_order_read_forgotten(original):
+    def mutated(app, group, read_for, snapshot, issued_all):
+        if group == "order":
+            app.skipped.pop(group, None)
+            return
+        return original(app, group, read_for, snapshot, issued_all)
+    return mutated
+
+
 def _identity_of_kind(kind, same):
     def wrap(original):
         def mutated(source_kind, cached, live):
@@ -1071,6 +1092,9 @@ SNAPSHOT_MUTATIONS = {
     "jump-uses-snapshot-window": (TUI, "bound_jump_target", _always(None)),
     "mark-confirmed-from-snapshot": (TUI_APP, "paint_stored", _stored_marks_confirmed),
     "overlay-waits-on-order-read": (TUI_APP, "start_overlay_read", _overlay_waits_on_the_order_read),
+    "order-read-piles-up": (TUI_APP, "launch_read", _read_of_group_replaces_the_running_one("order")),
+    "child-warm-piles-up": (TUI_APP, "launch_read", _read_of_group_replaces_the_running_one("children")),
+    "skipped-order-read-not-made-up": (TUI_APP, "make_up_read", _skipped_order_read_forgotten),
     "binding-scan-uncached": (SNAPSHOT, "same_identity", _identity_of_kind("binding", False)),
     "binding-cache-never-invalidated": (SNAPSHOT, "fingerprint", _always(0)),
     "source-state-cached-forever": (SNAPSHOT, "same_identity", _identity_of_kind("state", True)),
