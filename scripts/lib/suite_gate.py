@@ -570,7 +570,7 @@ def slot_holder_extra_tasks(limits: test_slots.Limits, per_run_extra: int | None
 
 
 def pytest_argv(root: Path, select: Sequence[str], timeout_s: int, extra_tasks: int | None = None,
-                wrapper: Sequence[str] = ()) -> list[str]:
+                wrapper: Sequence[str] = (), extra_args: Sequence[str] = ()) -> list[str]:
     cap_run = Path(__file__).resolve().parents[1] / "cap-run.sh"
     headroom = [] if extra_tasks is None else ["--extra-tasks", str(extra_tasks)]
     return [
@@ -578,6 +578,7 @@ def pytest_argv(root: Path, select: Sequence[str], timeout_s: int, extra_tasks: 
         *wrapper, sys.executable, "-m", "pytest", *(select or ["scripts/tests"]),
         "-q", "--continue-on-collection-errors", "--rootdir", str(root / "core"),
         "-p", PLUGIN_MODULE, "-p", "no:cacheprovider", "--junitxml", str(root / JUNIT_NAME),
+        *extra_args,
     ]
 
 
@@ -628,15 +629,17 @@ class DiskPeak:
         self._sample()
 
 
-def _hold_slots(xdist_ok: bool, select: Sequence[str]) -> tuple[test_slots.Holder | None, int | None]:
+def _hold_slots(xdist_ok: bool, select: Sequence[str],
+                slots: int | None = None) -> tuple[test_slots.Holder | None, int | None]:
     """Worker slots for a full parallel run (waiting in the machine-wide queue) and its cap-run.sh headroom.
 
     A serial run takes no slots, and a run without slots of its own keeps cap-run.sh's default headroom.
+    ``slots`` replaces the default of one per CPU; the limiter still caps a run at its per-run share.
     """
     if select or not xdist_ok:
         return None, None
     limits = test_slots.configured()
-    want = os.cpu_count() or 1
+    want = slots or os.cpu_count() or 1
     holder = test_slots.acquire(
         want, limits=limits,
         on_wait=lambda holders: print(test_slots.describe_wait(want, limits, holders), file=sys.stderr, flush=True))
@@ -722,8 +725,12 @@ def build_sandbox(repo: Path, sha: str, root: Path) -> SuiteRun | None:
 
 
 def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], timeout_s: int,
-                   hide: bool = True) -> SuiteRun:
+                   hide: bool = True, extra_pytest_args: Sequence[str] = (),
+                   slots: int | None = None) -> SuiteRun:
     """Build the sandbox of ``sha`` under ``root`` (once), then run pytest in it.
+
+    ``extra_pytest_args`` end pytest's argv (the gate passes none); ``slots`` is the worker slots a
+    full run asks for (default one per CPU, capped by the limiter).
 
     ``hide`` runs pytest with the live repository and agent homes hidden and no network; where the
     namespaces are unavailable (or ``hide`` is off) it runs without, and the run says so."""
@@ -760,12 +767,12 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
     env = suite_env(root, userbase, failures_file, sandbox_scrub_names(scripts / SANDBOX_SCRIPT))
     env[REPORT_ENV] = str(report)
     try:
-        holder, extra_tasks = _hold_slots(xdist_ok, select)
+        holder, extra_tasks = _hold_slots(xdist_ok, select, slots)
     except test_slots.SlotWaitExpired as exc:
         return SuiteRun(None, (), core_sha, build_s=build_s, xdist_ok=xdist_ok, slots_unavailable=str(exc),
                         slot_wait_s=exc.waited_s)
     try:
-        argv = pytest_argv(root, select, timeout_s, extra_tasks, wrapper)
+        argv = pytest_argv(root, select, timeout_s, extra_tasks, wrapper, extra_pytest_args)
         if holder is not None:
             env[XDIST_WORKERS_ENV] = env[test_slots.HELD_ENV] = str(holder.count)
         cpu_before = _children_cpu_s()
@@ -795,6 +802,33 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
         junit_path=str(junit) if junit.is_file() else "",
         report_path=str(report) if report.is_file() else "",
     )
+
+
+def run_tree(repo: Path, sha: str, extra_pytest_args: Sequence[str], junit_path: Path, slots: int | None = None,
+             *, timeout_s: int = DEFAULT_TIMEOUT_S, sandbox_parent: str | Path = SANDBOX_PARENT) -> SuiteRun:
+    """One whole-suite run of ``sha`` in its own sandbox, hermetic and under the limiter, outside the gate's record.
+
+    The isolation check runs the same tree several times and compares outcomes; this is the way it
+    asks for a run: ``default_runner`` (hide set, objects rebinding, namespaces, slot queue) with
+    ``extra_pytest_args`` on pytest's argv and at most ``slots`` worker slots, and the run's JUnit XML
+    and per-test report copied beside ``junit_path`` (the report keyed by node id, ``<stem>.tests.jsonl``).
+    The sandbox is removed after; the returned run names the copies.
+    """
+    root = _new_root(sandbox_parent)
+    try:
+        run = default_runner(repo, sha, root, select=(), timeout_s=timeout_s,
+                             extra_pytest_args=extra_pytest_args, slots=slots)
+        junit_path.parent.mkdir(parents=True, exist_ok=True)
+        report_copy = junit_path.with_name(junit_path.stem + ".tests.jsonl")
+        kept = {}
+        for field, src, dst in (("junit_path", run.junit_path, junit_path),
+                                ("report_path", run.report_path, report_copy)):
+            if src:
+                shutil.copyfile(src, dst)
+                kept[field] = str(dst)
+        return dataclasses.replace(run, **kept)
+    finally:
+        remove_sandbox(root, sandbox_parent)
 
 
 # ── run: candidate, baseline, rerun, record ───────────────────────────────

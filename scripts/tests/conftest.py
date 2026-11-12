@@ -41,6 +41,7 @@ if os.environ.get("PATH", "").split(os.pathsep)[:1] != [ARC_STUB_DIR]:
 
 from agentctl.store import FileStateStore  # noqa: E402
 from lib import host_llm, judge_ledger  # noqa: E402
+import _core_shuffle  # noqa: E402
 import _test_report  # noqa: E402
 from _xdist_auto import pytest_configure, pytest_terminal_summary  # noqa: E402,F401
 from slow_selection import pytest_addoption, pytest_collection_modifyitems  # noqa: E402,F401
@@ -88,6 +89,8 @@ def pytest_addhooks(pluginmanager):
     if not pluginmanager.has_plugin("telemetry-no-skip"):
         pluginmanager.register(_NoSkipGuard(), "telemetry-no-skip")
     _test_report.register(pluginmanager)
+    if not pluginmanager.has_plugin("core-shuffle"):
+        pluginmanager.register(_core_shuffle, "core-shuffle")
 
 
 @pytest.hookimpl(specname="pytest_collection_modifyitems")

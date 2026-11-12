@@ -102,3 +102,24 @@ def is_terminal(line: dict) -> bool:
 
 def finished_ids(lines: Iterable[dict]) -> set[str]:
     return {line["nodeid"] for line in lines if is_terminal(line)}
+
+
+def outcomes(lines: Iterable[dict]) -> dict[str, str]:
+    """The outcome of every collected test: ``failed`` (any phase failed), ``skipped``, ``passed``,
+    or ``unfinished`` (collected, but no terminal report)."""
+    lines = list(lines)
+    seen: dict[str, set[str]] = {}
+    for line in lines:
+        if line.get("kind") == REPORT:
+            seen.setdefault(line["nodeid"], set()).add(line.get("outcome"))
+    finished = finished_ids(lines)
+    result = {}
+    for nodeid in collected_ids(lines):
+        phases = seen.get(nodeid, set())
+        if "failed" in phases:
+            result[nodeid] = "failed"
+        elif nodeid not in finished:
+            result[nodeid] = "unfinished"
+        else:
+            result[nodeid] = "skipped" if "skipped" in phases else "passed"
+    return result

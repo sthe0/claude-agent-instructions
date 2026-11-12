@@ -56,7 +56,22 @@ two checks show the limiter holds and the record carries the cost, on real proce
       not fire) or was not collected (no evidence); ``--probe-only``
       collects only the probe (minutes instead of the full run).
 
-Exit 2 on a usage or environment error (not enough free disk, git failure).
+  gate_speedup_control.py shuffle-pair --seeds A,B --out PATH [--exceptions TOML] [-C REPO] [--timeout-s N]
+      Isolation judged by outcomes. Three whole-suite runs of REPO's committed tip, each in the hermetic
+      runner under the slot limiter (at most test-slots-per-run slots each): unshuffled, then seed A and
+      seed B (``--core-shuffle-seed``) started together. Per-test outcomes come from each run's per-test
+      report; PATH gets all three (the JUnit XML and report of each beside it). The exit code is the
+      verdict: 0 outcomes equal apart from the ids in the exceptions file (default
+      scripts/tests/isolation_exceptions.toml, each entry with a reason); 1 an unlisted id differs; 2 an
+      exceptions entry has no reason; 5 the shuffled runs overlapped for under half of the shorter one
+      (inconclusive, never a pass; time queued for slots does not count); 6 a run was not hermetic;
+      3 any other error. About 2 h on an idle machine.
+
+  gate_speedup_control.py compare --report PATH [--exceptions TOML]
+      The same comparison on a saved pair report: 0, 1, 2 and 3 as above (it never judges overlap or
+      hermeticity; shuffle-pair does, for the runs it makes).
+
+Elsewhere exit 2 is a usage or environment error (not enough free disk, git failure).
 """
 from __future__ import annotations
 
@@ -76,6 +91,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -647,6 +663,169 @@ def hermetic_run(repo: Path, out: Path, named: Path, max_named: int, root: Path 
     return {0: 0, 2: 2}.get(verdict, 1)
 
 
+# ── shuffle-pair, compare: isolation judged by outcomes ───────────────────
+
+SHUFFLE_SCHEMA = "shuffle-pair/v1"
+EXCEPTIONS_PATH = SCRIPTS_DIR / "tests" / "isolation_exceptions.toml"
+SEED_OPTION = "--core-shuffle-seed"
+UNSHUFFLED = "unshuffled"
+MIN_OVERLAP_FRACTION = 0.5
+EXIT_EQUAL, EXIT_DIFFERENT, EXIT_REASONLESS, EXIT_ERROR, EXIT_NO_OVERLAP, EXIT_NOT_HERMETIC = 0, 1, 2, 3, 5, 6
+
+
+class InputError(Exception):
+    """A report or an exceptions file that cannot be used (exit 3)."""
+
+
+def load_exceptions(path: Path) -> tuple[dict[str, str], list[str]]:
+    """(id -> reason for every ``[[exception]]`` entry, the ids whose reason is empty)."""
+    try:
+        entries = tomllib.loads(path.read_text(encoding="utf-8")).get("exception", [])
+        ids = [str(entry["id"]) for entry in entries]
+        reasons = [str(entry.get("reason", "")).strip() for entry in entries]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise InputError(f"cannot read the exceptions {path}: {exc}") from exc
+    return dict(zip(ids, reasons)), [i for i, reason in zip(ids, reasons) if not reason]
+
+
+def differing_ids(runs: list[dict]) -> dict[str, dict[str, str]]:
+    """Every test id whose outcome is not the same in all runs: id -> run name -> outcome (``absent`` when not collected)."""
+    ids = {i for run in runs for i in run["outcomes"]}
+    table = {i: {run["name"]: run["outcomes"].get(i, "absent") for run in runs} for i in ids}
+    return {i: seen for i, seen in sorted(table.items()) if len(set(seen.values())) > 1}
+
+
+def overlap(first: dict, second: dict) -> tuple[float, float]:
+    """(seconds both runs were running after their slots were held, the share of the shorter run that is)."""
+    start = max(first["running_from"], second["running_from"])
+    end = min(first["running_to"], second["running_to"])
+    shorter = min(first["running_to"] - first["running_from"], second["running_to"] - second["running_from"])
+    seconds = max(0.0, end - start)
+    return seconds, (seconds / shorter if shorter > 0 else 0.0)
+
+
+def judge(report: dict, exceptions_path: Path, *, strict: bool) -> int:
+    """The verdict of a shuffle-pair report: 0 equal apart from listed exceptions, 1 an unlisted
+    difference, 2 an entry without a reason, 3 unusable input. With ``strict`` (the run's own verdict)
+    also 6 a run was not hermetic and 5 the two shuffled runs did not overlap."""
+    try:
+        runs = report["runs"]
+        names = [run["name"] for run in runs]
+        listed, reasonless = load_exceptions(exceptions_path)
+        differing = differing_ids(runs)
+        shuffled = [run for run in runs if run.get("seed") is not None]
+    except InputError as exc:
+        _say(str(exc))
+        return EXIT_ERROR
+    except (KeyError, TypeError, AttributeError) as exc:
+        _say(f"cannot read the pair report: {exc!r}")
+        return EXIT_ERROR
+    if len(runs) < 2 or len(set(names)) != len(names):
+        _say(f"the report has {len(runs)} runs named {names}: need at least two, distinctly named")
+        return EXIT_ERROR
+    if reasonless:
+        _say(f"REASONLESS: {len(reasonless)} exception(s) without a reason: {' '.join(reasonless[:5])}")
+        return EXIT_REASONLESS
+    if strict:
+        outside = [run["name"] for run in runs if not run.get("hermetic")]
+        if outside:
+            _say(f"NOT HERMETIC: {' '.join(outside)} ran outside isolation, so the comparison proves nothing")
+            return EXIT_NOT_HERMETIC
+    unlisted = {i: seen for i, seen in differing.items() if i not in listed}
+    for i, seen in list(unlisted.items())[:20]:
+        _say(f"DIFFERS: {i}: {', '.join(f'{name}={outcome}' for name, outcome in seen.items())}")
+    if len(unlisted) > 20:
+        _say(f"... and {len(unlisted) - 20} more")
+    if strict and len(shuffled) == 2:
+        seconds, share = overlap(*shuffled)
+        if share < MIN_OVERLAP_FRACTION:
+            _say(f"NO OVERLAP: the shuffled runs ran together for {seconds:.0f} s, {share:.0%} of the shorter "
+                 f"(need {MIN_OVERLAP_FRACTION:.0%}): inconclusive")
+            return EXIT_NO_OVERLAP
+    if unlisted:
+        _say(f"FAIL: {len(unlisted)} test(s) differ and are not listed in {exceptions_path.name}")
+        return EXIT_DIFFERENT
+    used = sorted(set(differing) & set(listed))
+    _say(f"OK: {len(runs)} runs, {len(differing)} differing test(s), all listed" + (f": {' '.join(used)}" if used else ""))
+    return EXIT_EQUAL
+
+
+def compare(report_path: Path, exceptions_path: Path) -> int:
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _say(f"cannot read the pair report {report_path}: {exc}")
+        return EXIT_ERROR
+    return judge(report, exceptions_path, strict=False)
+
+
+def _timed_run(name: str, seed: int | None, repo: Path, sha: str, junit: Path, slots: int, timeout_s: int,
+               into: dict) -> None:
+    """One whole-suite run through ``suite_gate.run_tree``; its record (or its failure) goes into ``into[name]``."""
+    args = [] if seed is None else [f"{SEED_OPTION}={seed}"]
+    try:
+        run = gate.run_tree(repo, sha, args, junit, slots, timeout_s=timeout_s)
+        if not run.build_ok or run.timed_out or run.pytest_exit is None or not run.report_path:
+            raise gate.GateError(f"the run did not complete: {'timed out' if run.timed_out else run.detail or 'no report'}")
+        if run.hermetic and run.pytest_exit == gate.hermetic_run.RUNNER_FAILED_EXIT:
+            raise gate.GateError(f"the hermetic runner failed before pytest ran: {gate.one_line(run.log_tail[-300:], 300)}")
+        lines = _test_report.read_lines(run.report_path)
+        started = (instant(run.slots_acquired_at) if run.slots_source == test_slots.ACQUIRED else None) \
+            or instant(run.timeout_started_at)
+        into[name] = {
+            "name": name, "seed": seed, "pytest_exit": run.pytest_exit, "hermetic": run.hermetic,
+            "hermetic_reason": run.hermetic_reason, "slots_held": run.slots_held, "slot_wait_s": run.slot_wait_s,
+            "running_from": started, "running_to": instant(run.timeout_started_at) + run.duration_s,
+            "duration_s": round(run.duration_s, 1), "junit_xml": run.junit_path, "tests_jsonl": run.report_path,
+            "collected": len(_test_report.collected_ids(lines)), "outcomes": _test_report.outcomes(lines)}
+    except (gate.GateError, OSError) as exc:
+        into[name] = {"error": str(exc)}
+
+
+def shuffle_pair(repo: Path, seeds: list[int], out: Path, exceptions_path: Path, timeout_s: int) -> int:
+    """Three whole-suite runs of the committed tip in the hermetic runner: unshuffled, then one per seed,
+    the shuffled ones started together. The exit code is the verdict ``judge`` gives the recorded runs."""
+    free_gb = shutil.disk_usage("/").free / 2**30
+    if free_gb < MIN_FREE_GB:
+        _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
+        return EXIT_ERROR
+    if len(seeds) != 2 or seeds[0] == seeds[1]:
+        _say(f"need two different seeds, got {seeds}")
+        return EXIT_ERROR
+    sha = _git(repo, "rev-parse", "HEAD")
+    if _git(repo, "status", "--porcelain", "--untracked-files=no"):
+        _say("warning: tracked files are modified; the runs use the committed tip only")
+    os.environ.pop(test_slots.HELD_ENV, None)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    slots = test_slots.configured().per_run
+    records: dict[str, dict] = {}
+    plan = [(UNSHUFFLED, None)] + [(f"seed{seed}", seed) for seed in seeds]
+
+    def start(name: str, seed: int | None) -> threading.Thread:
+        junit = out.with_name(f"{out.stem}.{name}.junit.xml")
+        thread = threading.Thread(target=_timed_run, args=(name, seed, repo, sha, junit, slots, timeout_s, records))
+        thread.start()
+        return thread
+
+    _say(f"commit {sha[:12]}: unshuffled run, then {' and '.join(n for n, _ in plan[1:])} together")
+    start(*plan[0]).join()
+    for thread in [start(name, seed) for name, seed in plan[1:]]:
+        thread.join()
+    failed = {name: rec["error"] for name, rec in records.items() if "error" in rec}
+    if failed:
+        for name, message in failed.items():
+            _say(f"{name}: {message}")
+        return EXIT_ERROR
+    runs = [records[name] for name, _ in plan]
+    report = {"schema": SHUFFLE_SCHEMA, "commit": sha, "runs": runs}
+    out.write_text(json.dumps(report) + "\n", encoding="utf-8")
+    for run in runs:
+        _say(f"{run['name']}: {run['collected']} collected, "
+             f"{sum(o == 'failed' for o in run['outcomes'].values())} failed, pytest exit {run['pytest_exit']}, "
+             f"{run['duration_s']} s, slots {run['slots_held']}, hermetic {run['hermetic']}")
+    return judge(report, exceptions_path, strict=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gate_speedup_control.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -680,6 +859,15 @@ def main(argv: list[str] | None = None) -> int:
     hermetic.add_argument("--reruns", type=int, default=2)
     hermetic.add_argument("--no-hide", action="store_true", help="hide nothing: the probe must fail (negative control)")
     hermetic.add_argument("--probe-only", action="store_true", help="collect only the planted probe test")
+    pair = sub.add_parser("shuffle-pair", help="three whole-suite runs (unshuffled, two seeds together); judges them")
+    pair.add_argument("--seeds", required=True, help="two different integers, e.g. 1,2")
+    pair.add_argument("--out", required=True, type=Path)
+    pair.add_argument("--exceptions", type=Path, default=EXCEPTIONS_PATH)
+    pair.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    pair.add_argument("--timeout-s", type=int, default=gate.DEFAULT_TIMEOUT_S)
+    cmp_ = sub.add_parser("compare", help="judge a shuffle-pair report against the isolation exceptions")
+    cmp_.add_argument("--report", required=True, type=Path)
+    cmp_.add_argument("--exceptions", type=Path, default=EXCEPTIONS_PATH)
     named = sub.add_parser("verify-named", help="check a sandbox-run report against the documented failures")
     named.add_argument("--report", required=True, type=Path)
     named.add_argument("--named", required=True, type=Path)
@@ -700,6 +888,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "hermetic-run":
         return hermetic_run(args.repo.resolve(), args.out, args.named, args.max_named, args.root, args.timeout_s,
                             args.reruns, args.no_hide, args.probe_only)
+    if args.command == "shuffle-pair":
+        try:
+            seeds = [int(part) for part in args.seeds.split(",")]
+        except ValueError:
+            _say(f"--seeds takes two integers, got {args.seeds!r}")
+            return EXIT_ERROR
+        return shuffle_pair(args.repo.resolve(), seeds, args.out, args.exceptions, args.timeout_s)
+    if args.command == "compare":
+        return compare(args.report, args.exceptions)
     if args.command == "verify-named":
         return verify_named(args.report, args.named, args.max_named)
     return _fake_run(args)

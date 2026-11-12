@@ -1,0 +1,15 @@
+{
+  "schema": "shuffle-pair/v1",
+  "commit": "0000000000000000000000000000000000000000",
+  "runs": [
+    {"name": "unshuffled", "seed": null, "hermetic": true, "running_from": 1000.0, "running_to": 1100.0,
+     "outcomes": {"scripts/tests/test_r8_fixture.py::test_steady": "passed",
+                  "scripts/tests/test_r8_fixture.py::test_order_dependent": "passed"}},
+    {"name": "seed1", "seed": 1, "hermetic": true, "running_from": 1200.0, "running_to": 1300.0,
+     "outcomes": {"scripts/tests/test_r8_fixture.py::test_steady": "passed",
+                  "scripts/tests/test_r8_fixture.py::test_order_dependent": "failed"}},
+    {"name": "seed2", "seed": 2, "hermetic": true, "running_from": 1200.0, "running_to": 1300.0,
+     "outcomes": {"scripts/tests/test_r8_fixture.py::test_steady": "passed",
+                  "scripts/tests/test_r8_fixture.py::test_order_dependent": "passed"}}
+  ]
+}
