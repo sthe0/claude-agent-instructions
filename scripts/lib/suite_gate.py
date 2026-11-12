@@ -313,7 +313,8 @@ def observe(run: SuiteRun, expected_sha: str) -> Observation:
     outcome = report.outcomes(lines)
     failed = tuple(sorted({*run.failures, *(i for i, o in outcome.items() if o == "failed")}))
     unfinished = tuple(sorted(i for i, o in outcome.items() if o == "unfinished"))
-    passed = frozenset(i for i, o in outcome.items() if o in ("passed", "skipped")) - set(failed)
+    # A skip says nothing about whether the test passes, so it is not evidence a rerun passed.
+    passed = frozenset(i for i, o in outcome.items() if o == "passed") - set(failed)
     if run.pytest_exit in (0, 1):
         reason = classify(run, expected_sha)[1]
         if reason:

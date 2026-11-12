@@ -255,6 +255,24 @@ def test_an_id_the_rerun_never_reports_is_unavailable_not_a_pass(world):
     assert flake_list.read_entries(flake_list.journal_path(world.common)) == []
 
 
+def skips(*ids):
+    def run(root, sha, select):
+        out = report_run(root, sha, collected=select, finished=[i for i in select if i not in ids])
+        with open(out.report_path, "a", encoding="utf-8") as fh:
+            fh.writelines(json.dumps({"kind": "report", "nodeid": i, "when": "setup", "outcome": "skipped"}) + "\n"
+                          for i in ids)
+        return out
+    return run
+
+
+def test_a_rerun_that_skips_a_new_failure_is_unavailable_not_a_pass(world):
+    cand = world.code_commit()
+    out = world.run(RerunScript({cand: KILLED, world.base: CLEAN}, [skips(T3), skips(T3)]))
+    assert out.record["status"] == gate.UNAVAILABLE and "did not report" in out.record["unavailable_reason"]
+    assert out.record["unconfirmed"] == []
+    assert flake_list.read_entries(flake_list.journal_path(world.common)) == []
+
+
 def test_a_rerun_with_no_report_is_unavailable_not_a_pass(world):
     cand = world.code_commit()
     out = world.run(RerunScript({cand: KILLED, world.base: CLEAN},

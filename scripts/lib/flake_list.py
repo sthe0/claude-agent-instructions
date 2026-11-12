@@ -221,7 +221,8 @@ def _write_commit(repo: str | Path, parent: str, text: str, entry_ids: Sequence[
         _git_with(repo, env, "update-index", "--add", "--cacheinfo", f"100644,{blob},{LIST_PATH}")
         tree = _git_with(repo, env, "write-tree")
         message = f"{COMMIT_SUBJECT}\n\n{TRAILER}: {' '.join(entry_ids)}\n"
-        return _git_with(repo, env, "commit-tree", tree, "-p", parent, "-m", message)
+        # An operator's commit.gpgSign would make the sha differ per attempt.
+        return _git_with(repo, env, "commit-tree", "--no-gpg-sign", tree, "-p", parent, "-m", message)
 
 
 def fold(repo: str | Path, journal: Path, branch_sha: str, identity: Mapping[str, str]) -> Fold | None:
