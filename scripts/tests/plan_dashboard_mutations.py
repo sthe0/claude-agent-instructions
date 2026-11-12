@@ -16,7 +16,10 @@ SNAPSHOT_MUTATIONS is the snapshot's and the identity-keyed caches' family, kill
 ``test_plan_dashboard_snapshot.py``; the two rows that target ``tui_app`` (``mark-confirmed-from-snapshot``,
 ``overlay-waits-on-order-read``) are killed by the pilot file, as are ``order-read-piles-up`` and
 ``child-warm-piles-up`` (a newer table's read replaces the running one) and ``skipped-order-read-not-made-up``
-(the newest refused table's read is never started). ``same-named-transcript-dropped`` (a task's
+(the newest refused table's read is never started). ``row-confirmed-skipped`` (no row is named),
+``startup-applied-last-read-only`` (the sources of earlier reads are dropped), ``startup-applied-at-check-end``
+(named once the check has ended) and ``startup-applied-needs-old-rows`` (named only when old rows are shown)
+are killed by the pilot file too. ``same-named-transcript-dropped`` (a task's
 other transcripts are not recorded) and ``unrecorded-source-stat-skipped`` (the live check stats no unrecorded
 source in a directory whose marker is unchanged) are killed by the snapshot tests.
 
@@ -1035,6 +1038,26 @@ def _skipped_order_read_forgotten(original):
     return mutated
 
 
+def _startup_sources_of_the_last_read_only(original):
+    def mutated(app, seen):
+        app.startup_sources.clear()
+        return original(app, seen)
+    return mutated
+
+
+def _startup_applied_once_the_check_has_ended(original):
+    def mutated(app, seen):
+        app.call_after_refresh(lambda: app.old_cleared and original(app, seen))
+    return mutated
+
+
+def _startup_applied_only_with_old_rows(original):
+    def mutated(app, seen):
+        if app.old_ids:
+            return original(app, seen)
+    return mutated
+
+
 def _identity_of_kind(kind, same):
     def wrap(original):
         def mutated(source_kind, cached, live):
@@ -1095,6 +1118,10 @@ SNAPSHOT_MUTATIONS = {
     "order-read-piles-up": (TUI_APP, "launch_read", _read_of_group_replaces_the_running_one("order")),
     "child-warm-piles-up": (TUI_APP, "launch_read", _read_of_group_replaces_the_running_one("children")),
     "skipped-order-read-not-made-up": (TUI_APP, "make_up_read", _skipped_order_read_forgotten),
+    "row-confirmed-skipped": (TUI_APP, "note_rows_confirmed", lambda _original: lambda app: None),
+    "startup-applied-last-read-only": (TUI_APP, "note_startup_applied", _startup_sources_of_the_last_read_only),
+    "startup-applied-at-check-end": (TUI_APP, "note_startup_applied", _startup_applied_once_the_check_has_ended),
+    "startup-applied-needs-old-rows": (TUI_APP, "note_startup_applied", _startup_applied_only_with_old_rows),
     "binding-scan-uncached": (SNAPSHOT, "same_identity", _identity_of_kind("binding", False)),
     "binding-cache-never-invalidated": (SNAPSHOT, "fingerprint", _always(0)),
     "source-state-cached-forever": (SNAPSHOT, "same_identity", _identity_of_kind("state", True)),

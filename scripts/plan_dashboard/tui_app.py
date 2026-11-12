@@ -84,6 +84,29 @@ def unconfirmed(app: "DashboardApp", ids) -> list[str]:
                 and sid not in app.view.harness_ids)]
 
 
+def note_rows_confirmed(app: "DashboardApp") -> None:
+    """Name, once, each row of the table the first time it is out of ``unconfirmed``: whichever repaint
+    confirms it, whether it entered confirmed or lost its ``~`` or ``?`` later."""
+    if not events.enabled():
+        return
+    ids = app.view.session_ids
+    behind = set(unconfirmed(app, ids))
+    rows = [sid for sid in ids if sid not in behind and sid not in app.named_rows]
+    if rows:
+        app.named_rows.update(rows)
+        note(app, "row_confirmed", rows=rows)
+
+
+def note_startup_applied(app: "DashboardApp", seen) -> None:
+    """Report, at each overlay read while the start-up check is open, every source the start-up reads have
+    applied so far; the first read always reports."""
+    if not events.enabled() or (app.startup_noted and app.old_cleared):
+        return
+    app.startup_noted = True
+    app.startup_sources.update(seen[0])
+    note(app, "startup_applied", applied=sorted(app.startup_sources))
+
+
 def note_confirmed(app: "DashboardApp") -> None:
     """Say once that the first screen, then once that the whole table, shows confirmed values."""
     if app.old_cleared:
@@ -312,6 +335,7 @@ async def read_overlay_for(app: "DashboardApp", snapshot: dict, issued_all: bool
 
 def overlay_ready(app: "DashboardApp", overlay: dict | None, error: Exception | None, issued_all: bool,
                   seen) -> None:
+    note_startup_applied(app, seen)
     if title_is_current(app, issued_all):
         note_read(app, "overlay", error)
     if overlay is not None:
@@ -467,6 +491,7 @@ async def read_marks_for(app: "DashboardApp", ids: list[str], order) -> None:
         note_confirmed(app)
     elif title_is_current(app, app.view.include_all):
         show_read_error(app, "marks", error)
+    note_rows_confirmed(app)
 
 
 def show_marks(app: "DashboardApp", ids) -> None:
@@ -498,6 +523,7 @@ def show_table(app: "DashboardApp", snapshot: dict, now: dt.datetime, issued_all
         table.move_cursor(row=app.view.cursor)
     if title_is_current(app, issued_all):
         app.sub_title = f"{mode_title(app.view.include_all, len(ids))}, read {now:%H:%M:%S}{read_failure_suffix(app)}"
+    note_rows_confirmed(app)
 
 
 def paint_stored(app: "DashboardApp", section: dict) -> None:
@@ -702,6 +728,9 @@ class DashboardApp(App):
         self.confirmed: set = set()
         self.live_check_ended = False
         self.rows_noted = False
+        self.named_rows: set = set()
+        self.startup_sources: set = set()
+        self.startup_noted = False
 
     def check_action(self, action: str, parameters) -> bool:
         if action in KEY_ACTION_OWNERS:

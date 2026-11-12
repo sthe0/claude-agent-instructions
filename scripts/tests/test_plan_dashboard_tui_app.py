@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import fcntl
 import json
 import os
 import re
@@ -1596,6 +1597,8 @@ def test_a_pending_question_shows_on_the_next_overlay_pass_while_the_order_read_
 def stream():
     read_fd, write_fd = os.pipe()
     os.set_blocking(read_fd, False)
+    # a 500-task table's ``applied`` lists exceed the default 64 KiB pipe, and a full pipe blocks the app's own write
+    fcntl.fcntl(write_fd,getattr(fcntl, "F_SETPIPE_SZ", 1031), 1 << 20)
     events.enable(write_fd)
     yield read_fd
     events.disable()
@@ -2147,3 +2150,141 @@ def test_no_make_up_read_runs_without_a_newer_table(tmp_path, monkeypatch, endin
         assert ("index unreadable" in app.sub_title) == (ending == "fails")
 
     run_unsettled(scenario, root)
+
+
+def rows_named(events_seen) -> list[str]:
+    return [sid for e in events_seen if e["ev"] == "row_confirmed" for sid in e["rows"]]
+
+
+def confirmed_rows_of(app) -> set[str]:
+    ids = table_ids(app)
+    return set(ids) - set(tui_app.unconfirmed(app, ids))
+
+
+@pytest.mark.parametrize("mode", ["live", "all"])
+def test_each_row_confirmed_by_the_live_check_is_named_once_in_row_confirmed(tmp_path, stream, mode):
+    got: list[dict] = []
+    final: dict = {}
+    if mode == "live":
+        root = attention_root(tmp_path)
+        path = snapshot_file(tmp_path)
+        leave_a_snapshot(root, path, locator=attention_locator())
+        alpha_state = root.state_root / f"{ALPHA}.json"
+        alpha_state.write_text(alpha_state.read_text(encoding="utf-8").replace('"node": "EXECUTING"', '"node": "PLAN_READY"', 1),
+                               encoding="utf-8")
+        drain(stream)
+        options = {"snapshot_path": path, "locator": attention_locator()}
+
+        async def scenario(app, pilot):
+            final["confirmed"], final["ids"] = confirmed_rows_of(app), table_ids(app)
+    else:
+        root = bulk_root(tmp_path)
+        options = {"include_all": True}
+
+        async def scenario(app, pilot):
+            assert await until(pilot, lambda: BULK[0] in rows_named(got.extend(drain(stream)) or got))
+            first = rows_named(got)
+            app.query_one(DataTable).move_cursor(row=300, animate=False)
+            assert await until(pilot, lambda: BULK[300] in rows_named(got.extend(drain(stream)) or got))
+            await settle(app, pilot)
+            final["confirmed"], final["ids"], final["first"] = confirmed_rows_of(app), table_ids(app), first
+
+    app = run(scenario, root, **options)
+    got.extend(drain(stream))
+    named = rows_named(got)
+    assert len(named) == len(set(named)), "a row was named twice"
+    assert set(named) == final["confirmed"]
+    names = [e["ev"] for e in got]
+    if mode == "live":
+        assert set(named) == set(final["ids"]) and {ALPHA, BETA} <= set(named)
+        assert names.index("rows_painted") < names.index("row_confirmed") < names.index("first_screen_confirmed")
+    else:
+        assert BULK[0] in final["first"] and BULK[300] not in final["first"]
+        assert BULK[300] in named and BULK[450] not in named
+        assert names.count("row_confirmed") >= 2
+        later = [e["rows"] for e in got if e["ev"] == "row_confirmed" and BULK[300] in e["rows"]]
+        assert len(later) == 1 and BULK[0] not in later[0]
+    assert app.view.session_ids
+
+
+def stub_observed_sources(monkeypatch):
+    """Make the n-th rotating observation report the one source ``/stub/source-n``; ``rotated`` counts them."""
+    rotated, real = [], snapshot_store.observation
+
+    def stubbed(rotate=True):
+        changed, kinds, driven = real(rotate)
+        if rotate is False:
+            return changed, kinds, driven
+        rotated.append(1)
+        return [f"/stub/source-{len(rotated)}"], kinds, driven
+
+    monkeypatch.setattr(snapshot_store, "observation", stubbed)
+    return rotated
+
+
+def test_startup_applied_carries_every_source_the_start_up_check_applied(tmp_path, monkeypatch, stream):
+    root = bulk_root(tmp_path)
+    rotated = stub_observed_sources(monkeypatch)
+    release, _ = hold(monkeypatch, tui, "read_order")
+    got: list[dict] = []
+
+    def applied_so_far():
+        got.extend(drain(stream))
+        return [e["applied"] for e in got if e["ev"] == "startup_applied"]
+
+    async def read_ended(app, pilot, n):
+        return await until(pilot, lambda: len(applied_so_far()) >= n and not tui_app.read_in_flight(app, "overlay"))
+
+    async def scenario(app, pilot):
+        try:
+            assert await read_ended(app, pilot, 1)
+            for n in (2, 3):
+                await reload_and_wait(app, pilot, 1)
+                assert await read_ended(app, pilot, n)
+            sources = [f"/stub/source-{n}" for n in (1, 2, 3)]
+            assert applied_so_far() == [sources[:1], sources[:2], sources]
+            assert not app.old_cleared
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert app.old_cleared
+        await reload_and_wait(app, pilot, 1)
+        assert await until(pilot, lambda: len(rotated) >= 4 and not tui_app.read_in_flight(app, "overlay"))
+        await settle(app, pilot)
+        assert len(applied_so_far()) == 3
+
+    run_unsettled(scenario, root, include_all=True)
+    names = [e["ev"] for e in got]
+    assert names.count("startup_applied") == 3
+    assert names.index("startup_applied") < names.index("mark_painted") < names.index("last_old_cleared")
+    assert names.index("startup_applied") < names.index("first_screen_confirmed")
+
+
+@pytest.mark.parametrize("start", ["no-snapshot", "damaged-snapshot", "snapshot", "all-rows-already-confirmed"])
+def test_startup_applied_is_named_once_at_every_kind_of_start_ahead_of_the_marks(tmp_path, stream, start):
+    options = {"locator": attention_locator()}
+    root = attention_root(tmp_path)
+    if start == "all-rows-already-confirmed":
+        root, options = bulk_root(tmp_path), {}
+    elif start != "no-snapshot":
+        path = snapshot_file(tmp_path)
+        leave_a_snapshot(root, path, locator=attention_locator())
+        if start == "damaged-snapshot":
+            alter_snapshot(path, "foreign-code")
+        drain(stream)
+        options["snapshot_path"] = path
+
+    async def scenario(app, pilot):
+        assert app.old_cleared
+
+    run(scenario, root, **options)
+    got = drain(stream)
+    names = [e["ev"] for e in got]
+    assert names.count("startup_applied") == 1
+    applied = next(e for e in got if e["ev"] == "startup_applied")["applied"]
+    assert applied == sorted(next(e for e in got if e["ev"] == "live_check_end")["applied"])
+    assert names.index("startup_applied") < names.index("first_screen_confirmed") <= names.index("last_old_cleared")
+    if "mark_painted" in names:
+        assert names.index("startup_applied") < names.index("mark_painted")
+        assert names.index("startup_applied") < names.index("mark_confirmed")
+    assert start != "snapshot" or applied

@@ -43,9 +43,13 @@ SNAPSHOT_NAMES = (
     "source-binding-cached-forever", "source-transcript-cached-forever", "source-ledger-cached-forever",
     "code-version-identity-ignored", "code-version-new-module-missed", "code-version-always-parsed",
     "snapshot-records-every-source", "snapshot-directory-marker-ignored", "same-named-transcript-dropped",
-    "unrecorded-source-stat-skipped", "order-read-piles-up", "child-warm-piles-up", "skipped-order-read-not-made-up")
+    "unrecorded-source-stat-skipped", "order-read-piles-up", "child-warm-piles-up", "skipped-order-read-not-made-up",
+    "row-confirmed-skipped", "startup-applied-last-read-only", "startup-applied-at-check-end",
+    "startup-applied-needs-old-rows")
 SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-read", "order-read-piles-up",
-                        "child-warm-piles-up", "skipped-order-read-not-made-up")
+                        "child-warm-piles-up", "skipped-order-read-not-made-up", "row-confirmed-skipped",
+                        "startup-applied-last-read-only", "startup-applied-at-check-end",
+                        "startup-applied-needs-old-rows")
 SNAPSHOT_STDLIB_NAMES = tuple(name for name in SNAPSHOT_NAMES if name not in SNAPSHOT_PILOT_NAMES)
 HARNESS_TESTS = TESTS / "test_plan_dashboard_harness.py"
 SCRIPT_MODULE_TESTS = {"harness-save-records-app-sources": HARNESS_TESTS,
