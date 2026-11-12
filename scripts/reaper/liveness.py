@@ -47,13 +47,17 @@ from __future__ import annotations
 import bisect
 import dataclasses
 import errno
+import json
 import os
+import re
 import shutil
 import stat
 import subprocess
+from pathlib import Path
 from typing import Callable
 
-from reaper.contract import KEEP, REMOVE
+from lib import config_root
+from reaper.contract import KEEP, REMOVE, ReapContext, owning_record
 
 PROC_ROOT = "/proc"
 MOUNTINFO = "/proc/self/mountinfo"
@@ -70,6 +74,15 @@ HOLDER_SWEEP_INCOMPLETE = "holder-sweep-incomplete"
 NESTED_GIT = "nested-git"
 IDLE_FLOOR = "idle-floor"
 OS_ERROR = "os-error"
+
+FREE_STATUS = "free"
+HELD_STATUS = "held"
+UNKNOWN_STATUS = "unknown"
+KIND_SCOPE = "session-scope"
+KIND_ENGINE = "engine-task"
+KIND_PROCESS = "process"
+RESOLVED_NODE = "RESOLVED"
+STATE_FILE_NAME = re.compile(r"[0-9A-Za-z_-]+\.json")
 
 HOLDER_KINDS = ("cwd", "exe", "fd", "maps")
 _VANISHED = (errno.ENOENT, errno.ESRCH)
@@ -468,6 +481,131 @@ def judge_residue(
 
 def _keep(slug: str, detail: str, size: int = 0) -> Judgment:
     return Judgment(KEEP, slug, detail, size)
+
+
+@dataclasses.dataclass(frozen=True)
+class HolderAnswer:
+    """Who holds one queried path: ``free``, ``held`` by ``kind`` (``session-scope``, ``engine-task`` or
+    ``process``) with ``detail``, or ``unknown`` with the ``detail`` naming the source that could not be read."""
+
+    status: str
+    kind: str = ""
+    detail: str = ""
+
+    def report(self) -> str:
+        if self.status == HELD_STATUS:
+            return f"{self.kind}: {self.detail}"
+        return self.detail
+
+
+def _lexical(path: str) -> str:
+    """Absolute, normalized spelling of ``path`` by string rules alone: no stat, no symlink resolved."""
+    return os.path.normpath(os.path.abspath(path))
+
+
+def _inside(container: str, candidate: str) -> bool:
+    return candidate == container or candidate.startswith(container.rstrip(os.sep) + os.sep)
+
+
+@dataclasses.dataclass(frozen=True)
+class EngineTask:
+    session_id: str
+    task_id: str
+    roots: "tuple[str, ...]"
+
+
+def read_engine_tasks(state_dir: "Path | None" = None) -> "tuple[list[EngineTask], str | None]":
+    """Every agentctl session state whose node is not RESOLVED, and why the store could not be read in full.
+
+    Reads ``<state dir>/<session>.json`` as plain JSON (the store's own format), never importing the
+    engine. A missing store holds nothing; an unreadable directory, or a state file that cannot be read
+    or parsed, is returned as the error (the first cause and a count) beside whatever else was readable."""
+    root = config_root.agentctl_state_dir() if state_dir is None else state_dir
+    try:
+        names = sorted(os.listdir(root))
+    except FileNotFoundError:
+        return [], None
+    except OSError as exc:
+        return [], f"engine store {root}: {type(exc).__name__}: {exc.strerror or exc}"
+    tasks: "list[EngineTask]" = []
+    problems: "list[str]" = []
+    for name in names:
+        if not STATE_FILE_NAME.fullmatch(name):
+            continue
+        path = os.path.join(root, name)
+        try:
+            data = json.loads(_read_text(path))
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError) as exc:
+            problems.append(f"{path}: {type(exc).__name__}: {exc}")
+            continue
+        node = data.get("node") if isinstance(data, dict) else None
+        if not isinstance(node, str):
+            problems.append(f"{path}: no node")
+            continue
+        if node == RESOLVED_NODE:
+            continue
+        roots = tuple(
+            _lexical(value) for key in ("repo_root", "delivery_worktree")
+            if isinstance(value := data.get(key), str) and value
+        )
+        tasks.append(EngineTask(name[: -len(".json")], str(data.get("task_id") or ""), roots))
+    error = f"engine store: {problems[0]}" + (f" (+{len(problems) - 1} more)" if len(problems) > 1 else "") if problems else None
+    return tasks, error
+
+
+def path_holders(
+    paths: "list[str]",
+    ctx: ReapContext,
+    *,
+    sweep: "HolderSweep | None" = None,
+    state_dir: "Path | None" = None,
+) -> "dict[str, HolderAnswer]":
+    """For each queried path: ``free``, ``held`` or ``unknown``, from three sources, read-only.
+
+    * a live session-scope record (``ctx.scope_records``, the ownership rule of ``contract.owning_record``)
+      whose cwd or repo_root is at or inside the path;
+    * an agentctl session state whose node is not RESOLVED and whose repo_root or delivery_worktree is at
+      or inside it (``engine-task``: session id and task id);
+    * a process whose cwd, exe, an open fd or a mapped file is at or inside it (one ``sweep_holders`` call).
+
+    A path is ``held`` when any source holds it (the first in the order above names it). Otherwise it is
+    ``unknown`` when a source could not be read in full — a scope registry that failed to load, an engine
+    store that could not be read, an incomplete process sweep — and ``free`` only when all three were read.
+    The paths are compared as normalized absolute strings; nothing is stat-ed, resolved or walked under a
+    queried path, so a symlinked spelling of a held path is not recognized. ``sweep`` and ``state_dir``
+    let a caller (a test) supply the process sweep and the engine store directory.
+    """
+    sweep = sweep_holders() if sweep is None else sweep
+    tasks, engine_error = read_engine_tasks(state_dir)
+    unreadable = [
+        why for why in (
+            f"scope registry: {ctx.scope_registry_error}" if ctx.scope_registry_error else None,
+            engine_error,
+            f"process sweep: {sweep.incomplete}" if sweep.incomplete else None,
+        ) if why
+    ]
+    answers: "dict[str, HolderAnswer]" = {}
+    for raw in paths:
+        wanted = _lexical(raw)
+        if wanted == os.sep:
+            answers[raw] = HolderAnswer(UNKNOWN_STATUS, detail="the filesystem root is not a queryable path")
+            continue
+        record = owning_record(wanted, ctx.scope_records, ctx.now, ctx.heartbeat_ttl_hours, _lexical)
+        task = next((t for t in tasks if any(_inside(wanted, root) for root in t.roots)), None)
+        process = sweep.holder_of(wanted)
+        if record is not None:
+            answers[raw] = HolderAnswer(HELD_STATUS, KIND_SCOPE, f"session={record.session_id} cwd={record.cwd or record.repo_root}")
+        elif task is not None:
+            answers[raw] = HolderAnswer(HELD_STATUS, KIND_ENGINE, f"session={task.session_id} task={task.task_id}")
+        elif process is not None:
+            answers[raw] = HolderAnswer(HELD_STATUS, KIND_PROCESS, process)
+        elif unreadable:
+            answers[raw] = HolderAnswer(UNKNOWN_STATUS, detail="; ".join(unreadable))
+        else:
+            answers[raw] = HolderAnswer(FREE_STATUS)
+    return answers
 
 
 def make_writable(top: str) -> None:

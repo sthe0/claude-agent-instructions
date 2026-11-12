@@ -66,6 +66,7 @@ import fcntl
 import json
 import os
 import re
+import select
 import sys
 import tempfile
 import time
@@ -75,8 +76,8 @@ from typing import Callable, Iterator, Sequence, TextIO
 
 from agentctl import config as agentctl_config
 from lib import config_root
-from reaper import registry
-from reaper.contract import KEEP, REMOVE, ReapContext, RemovalRefused, Verdict
+from reaper import liveness, registry
+from reaper.contract import KEEP, REMOVE, ReapContext, RemovalRefused, Verdict, session_sources_problem
 from session_scope import registry as scope_registry
 
 THROTTLED_SENTINEL = "throttled: within window"
@@ -86,6 +87,71 @@ PRESSURE_THRESHOLD_KEY = "reaper-pressure-free-percent"
 # Minimum minutes between two pressured passes of one reaper; the hook fires at every turn end,
 # and a pass that frees nothing must not repeat that often.
 PRESSURE_COOLDOWN_MIN = 10.0
+# The SessionStart payload is a few hundred bytes; a longer one, or one that does not arrive in time, is no payload.
+SESSION_PAYLOAD_MAX_BYTES = 65536
+SESSION_PAYLOAD_WAIT_S = 2.0
+# Values of CLAUDE_CODE_ENTRYPOINT that mean a person is at the terminal; a headless run carries another one.
+INTERACTIVE_ENTRYPOINTS = frozenset({"cli"})
+HOLDERS_EXIT_HELD = 3
+HOLDERS_EXIT_UNKNOWN = 4
+
+
+def read_session_payload(stream: "TextIO | None") -> "dict[str, object] | None":
+    """The SessionStart hook's JSON object from ``stream``, else None.
+
+    None when there is no stream, it is a terminal, nothing readable arrives within
+    ``SESSION_PAYLOAD_WAIT_S``, more than ``SESSION_PAYLOAD_MAX_BYTES`` arrive, or the text is not
+    one JSON object. A pipe the writer keeps open is not waited on once the object is complete."""
+    if stream is None or stream.isatty():
+        return None
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        text = stream.read(SESSION_PAYLOAD_MAX_BYTES + 1)
+    else:
+        buf = b""
+        deadline = time.monotonic() + SESSION_PAYLOAD_WAIT_S
+        while len(buf) <= SESSION_PAYLOAD_MAX_BYTES:
+            try:
+                ready = select.select([fd], [], [], max(0.0, deadline - time.monotonic()))[0]
+                chunk = os.read(fd, 4096) if ready else b""
+            except OSError:
+                return None
+            if not chunk:
+                break
+            buf += chunk
+            try:
+                json.loads(buf)
+                break
+            except ValueError:
+                continue
+        text = buf.decode("utf-8", errors="replace")
+    if len(text) > SESSION_PAYLOAD_MAX_BYTES:
+        return None
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def session_of(payload: "dict[str, object] | None", environ: "dict[str, str] | os._Environ[str]") -> "tuple[str, bool, bool] | None":
+    """``(source, top_level, interactive)`` for a payload that names a string ``source``, else None.
+
+    ``top_level`` holds when AGENT_RECURSION_DEPTH is unset or ``0`` (a spawned specialist has a
+    higher depth); ``interactive`` when CLAUDE_CODE_ENTRYPOINT is in ``INTERACTIVE_ENTRYPOINTS``."""
+    source = payload.get("source") if payload else None
+    if not isinstance(source, str) or not source:
+        return None
+    top_level = environ.get("AGENT_RECURSION_DEPTH") in (None, "0")
+    return source, top_level, environ.get("CLAUDE_CODE_ENTRYPOINT") in INTERACTIVE_ENTRYPOINTS
+
+
+def session_admits(sources: "frozenset[str] | None", session: "tuple[str, bool, bool] | None") -> bool:
+    """False when a reaper gates on ``sources`` and ``session`` is not a fresh interactive top-level start of one."""
+    if sources is None:
+        return True
+    return session is not None and session[0] in sources and session[1] and session[2]
 
 
 def stamp_dir() -> Path:
@@ -394,7 +460,8 @@ def execute_pass(
     else:
         due = {
             r.name for r in selected
-            if (prev := _read_stamp(stamps, r.name)) is None or (now - prev) >= r.throttle_hours * 3600.0
+            if session_admits(getattr(r.module, "SESSION_SOURCES", None), ctx.session)
+            and ((prev := _read_stamp(stamps, r.name)) is None or (now - prev) >= r.throttle_hours * 3600.0)
         }
     if not due:
         print(THROTTLED_SENTINEL, file=err)
@@ -636,7 +703,27 @@ def _list(reapers: "list[registry.Reaper]", out: TextIO) -> None:
 
 
 def _discover_default(project_dir: Path, warn: "Callable[[str], None]") -> "list[registry.Reaper]":
-    return registry.discover(project_dir, warn=warn)
+    """Discovered reapers minus those whose ``SESSION_SOURCES`` is malformed, each skipped with one warning."""
+    usable = []
+    for reaper in registry.discover(project_dir, warn=warn):
+        problem = session_sources_problem(reaper.module)
+        if problem:
+            warn(f"reaper: skipped {reaper.file}: {problem}")
+        else:
+            usable.append(reaper)
+    return usable
+
+
+def _holders_report(paths: "list[str]", ctx: ReapContext, out: TextIO) -> int:
+    """Print ``<path>\\t<free|held|unknown>\\t<detail>`` per path; exit 0 all free, 4 any unknown, else 3 any held."""
+    answers = liveness.path_holders(paths, ctx)
+    for path in paths:
+        answer = answers[path]
+        print(f"{path}\t{answer.status}\t{answer.report()}", file=out)
+    statuses = {answer.status for answer in answers.values()}
+    if liveness.UNKNOWN_STATUS in statuses:
+        return HOLDERS_EXIT_UNKNOWN
+    return HOLDERS_EXIT_HELD if liveness.HELD_STATUS in statuses else 0
 
 
 UNIT_PASS_KEEP = 50
@@ -713,18 +800,24 @@ def main(
     parser.add_argument("--upkeep-only", action="store_true", help="run only each reaper's upkeep (e.g. the branch backup push), under a lock")
     parser.add_argument("--no-wait", action="store_true", help="with --upkeep-only: exit 0 at once if another upkeep run holds the lock")
     parser.add_argument("--on-pressure", action="store_true", help="run the reapers whose pressure paths are short of free space (config.md row reaper-pressure-free-percent), under a no-wait lock")
+    parser.add_argument("--holders", nargs="+", metavar="PATH", help="print who holds each path (free, held or unknown) and exit 0 if all free, 3 if any held, 4 if any unknown; changes nothing")
     args = parser.parse_args(argv)
+    if args.holders and (args.dry_run or args.force_run or args.only or args.list or args.upkeep_only or args.no_wait or args.on_pressure):
+        parser.error("--holders combines with no other flag")
     if args.no_wait and not args.upkeep_only:
         parser.error("--no-wait needs --upkeep-only")
     if args.on_pressure and (args.upkeep_only or args.only or args.force_run):
         parser.error("--on-pressure combines only with --dry-run")
-    fail_open = not (args.dry_run or args.force_run or args.only or args.list) or args.upkeep_only
+    fail_open = not (args.dry_run or args.force_run or args.only or args.list or args.holders) or args.upkeep_only
     observe = {"reapers_run": 0, "errors": 0}
-    records_pass = not (args.list or args.upkeep_only or args.dry_run)
+    records_pass = not (args.list or args.upkeep_only or args.dry_run or args.holders)
+    manual = bool(args.dry_run or args.force_run or args.only or args.on_pressure)
 
     try:
         now = time.time()
         ctx = build_context(now=now, dry_run=args.dry_run)
+        if args.holders:
+            return _holders_report(args.holders, ctx, sys.stdout)
         skipped: "list[str]" = []
 
         def warn(line: str) -> None:
@@ -747,6 +840,8 @@ def main(
         if args.on_pressure:
             _run_on_pressure(reapers, ctx, skipped, observe)
             return 0
+        if not manual and any(hasattr(r.module, "SESSION_SOURCES") for r in reapers):
+            ctx = dataclasses.replace(ctx, session=session_of(read_session_payload(sys.stdin), os.environ))
         execute_pass(
             reapers, ctx,
             dry_run=args.dry_run, force_run=args.force_run, only=args.only,

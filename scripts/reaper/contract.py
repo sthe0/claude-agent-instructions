@@ -26,7 +26,14 @@ A reaper is a Python module defining
 * optionally ``pressure_paths(ctx) -> list[str]`` — paths of the filesystems this reaper's
   residue fills. ``runner --on-pressure`` makes the reaper due (ignoring its throttle) when
   the lowest free percentage among them is below the config.md row
-  ``reaper-pressure-free-percent``. It changes when the reaper runs, never what it may remove.
+  ``reaper-pressure-free-percent``. It changes when the reaper runs, never what it may remove;
+* optionally ``SESSION_SOURCES`` (a non-empty frozenset of SessionStart ``source`` values, e.g.
+  ``frozenset({"startup", "clear"})``) — a session gate. In a SessionStart pass the reaper is due
+  (prints its summary, spends its throttle) only when the hook payload names one of these sources
+  and the session is a top-level, interactive one (``ReapContext.session``). Otherwise it is not due:
+  its ``scan`` still runs with ``ctx.due`` False, it prints nothing and writes no stamp. A timer or
+  pressure pass carries no payload, so a gated reaper is never due there. ``--dry-run``,
+  ``--force-run`` and ``--only`` ignore the gate.
 
 A plugin module must use ABSOLUTE imports (``from reaper.contract import Verdict``):
 ``lib.plugin_dir.load_plugin_module`` executes it under a synthetic package name.
@@ -36,6 +43,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from session_scope import registry
 
@@ -66,8 +74,46 @@ class Verdict:
     size: int = field(default=0, compare=False)
 
 
+def session_sources_problem(module: object) -> "str | None":
+    """Why a module's optional ``SESSION_SOURCES`` is unusable, else None (absent is fine)."""
+    if not hasattr(module, "SESSION_SOURCES"):
+        return None
+    sources = module.SESSION_SOURCES  # type: ignore[attr-defined]
+    if not isinstance(sources, frozenset) or not sources:
+        return "SESSION_SOURCES is not a non-empty frozenset"
+    if not all(isinstance(source, str) and source for source in sources):
+        return "SESSION_SOURCES holds a value that is not a non-empty string"
+    return None
+
+
 def _at_or_inside(container: str, candidate: str) -> bool:
     return candidate == container or candidate.startswith(container + os.sep)
+
+
+def owning_record(
+    path: str,
+    records: "list[registry.ScopeRecord]",
+    now_ts: float,
+    heartbeat_ttl_hours: float = OWNER_HEARTBEAT_TTL_HOURS,
+    resolve: "Callable[[str], str]" = os.path.realpath,
+) -> "registry.ScopeRecord | None":
+    """The first session-scope record whose cwd or repo_root sits at/inside ``path`` and whose
+    session is live — a confirmed-alive pid, or a heartbeat within the floor — else None.
+
+    Absence of a live process is not proof of no owner: a paused session can still own
+    a worktree across an idle gap, so the registry, not a /proc scan, is the oracle.
+    Both sides are spelled by ``resolve`` (realpath by default, so a symlinked spelling on either
+    side still matches); a caller that must not touch the filesystem passes a lexical one.
+    """
+    wanted = resolve(path)
+    ttl_s = heartbeat_ttl_hours * 3600.0
+    for rec in records:
+        if not _record_alive(rec, now_ts, ttl_s):
+            continue
+        for held in (rec.cwd, rec.repo_root):
+            if held and _at_or_inside(wanted, resolve(held)):
+                return rec
+    return None
 
 
 def path_owned(
@@ -76,22 +122,8 @@ def path_owned(
     now_ts: float,
     heartbeat_ttl_hours: float = OWNER_HEARTBEAT_TTL_HOURS,
 ) -> bool:
-    """True if a session-scope record's cwd or repo_root sits at/inside ``path`` and that
-    session is live — a confirmed-alive pid, or a heartbeat within the floor.
-
-    Absence of a live process is not proof of no owner: a paused session can still own
-    a worktree across an idle gap, so the registry, not a /proc scan, is the oracle.
-    Paths are compared by realpath, so a symlinked spelling on either side still matches.
-    """
-    real = os.path.realpath(path)
-    ttl_s = heartbeat_ttl_hours * 3600.0
-    for rec in records:
-        if not _record_alive(rec, now_ts, ttl_s):
-            continue
-        for held in (rec.cwd, rec.repo_root):
-            if held and _at_or_inside(real, os.path.realpath(held)):
-                return True
-    return False
+    """True if ``owning_record`` finds a live session-scope record at/inside ``path`` (by realpath)."""
+    return owning_record(path, records, now_ts, heartbeat_ttl_hours) is not None
 
 
 def session_owned(
@@ -126,6 +158,8 @@ class ReapContext:
     runner then removes nothing, since ``scope_records`` may be missing an owner.
     ``pressured`` names the reapers a ``--on-pressure`` pass made due; it is empty in every
     other pass.
+    ``session`` is ``(source, top_level, interactive)`` of the SessionStart hook payload the runner
+    read, else None (no payload, a manual pass, or a pass that no reaper gates).
     """
 
     now: float
@@ -137,6 +171,7 @@ class ReapContext:
     heartbeat_ttl_hours: float = OWNER_HEARTBEAT_TTL_HOURS
     scope_registry_error: "str | None" = None
     pressured: "frozenset[str]" = frozenset()
+    session: "tuple[str, bool, bool] | None" = None
 
     def owned_path(self, path: str) -> bool:
         return path_owned(path, self.scope_records, self.now, self.heartbeat_ttl_hours)
