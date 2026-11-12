@@ -238,7 +238,8 @@ def classify(run: SuiteRun, expected_sha: str) -> tuple[tuple[str, ...], str]:
         return ids, ""
     if run.pytest_exit == hermetic_run.RUNNER_FAILED_EXIT and run.hermetic:
         last_line = run.log_tail.strip().splitlines()[-1:] or [""]
-        return (), (f"the hermetic runner failed before pytest ran (exit {run.pytest_exit})"
+        return (), (f"the hermetic runner failed before pytest ran (exit {run.pytest_exit}; "
+                    "cap-run's own timeout exits the same code when it fails itself)"
                     f"{': ' + one_line(last_line[0], 200) if last_line[0] else ''}")
     return (), f"pytest exited {run.pytest_exit}{_detail(run)}"
 

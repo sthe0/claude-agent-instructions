@@ -242,7 +242,7 @@ def _run(monkeypatch, tmp_path, report, *, code=0, named=(FLAKY,), **kwargs):
 
 def _report(**changes):
     base = {"collected": 16000, "collection_errors": [], "failing": [], "hermetic": True,
-            "hermetic_reason": "", "probe_passed": True}
+            "hermetic_reason": "", "probe_collected": True, "probe_passed": True}
     return {**base, **changes}
 
 
@@ -302,6 +302,16 @@ def test_no_hide_exits_2_when_the_probe_passed_so_the_control_did_not_fire(monke
     code, _ = _run(monkeypatch, tmp_path, _report(collected=1, hermetic=False, probe_passed=True),
                    probe_only=True, no_hide=True)
     assert code == 2
+
+
+def test_no_hide_exits_2_when_pytest_never_collected_the_probe(monkeypatch, tmp_path):
+    report = _report(collected=0, hermetic=False, probe_collected=False, probe_passed=False)
+    assert _run(monkeypatch, tmp_path, report, probe_only=True, no_hide=True)[0] == 2
+
+
+def test_a_hidden_run_that_never_collected_the_probe_exits_2(monkeypatch, tmp_path):
+    report = _report(collected=0, probe_collected=False, probe_passed=False)
+    assert _run(monkeypatch, tmp_path, report, probe_only=True)[0] == 2
 
 
 def test_a_hermetic_failed_probe_without_no_hide_still_exits_1(monkeypatch, tmp_path):

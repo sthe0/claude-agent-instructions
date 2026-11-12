@@ -50,9 +50,10 @@ two checks show the limiter holds and the record carries the cost, on real proce
       source work tree reads as empty, then verify-named.
       0: the report says ``hermetic: true``, the probe passed and every failure is named; 1: the run
       was not hermetic, or the probe failed, or a failure is not named, or verify-named refuses the
-      run (incomplete) or the document (too many ids); 2: any other error. ``--no-hide`` hides
-      nothing and the exit rests on the probe alone: 1 when it failed on the visible tree (the
-      negative control fired), 2 when it passed (the control did not fire); ``--probe-only``
+      run (incomplete) or the document (too many ids); 2: the probe was not collected, or any other
+      error. ``--no-hide`` hides nothing and the exit rests on the probe alone: 1 when it ran and
+      failed on the visible tree (the negative control fired), 2 when it passed (the control did
+      not fire) or was not collected (no evidence); ``--probe-only``
       collects only the probe (minutes instead of the full run).
 
 Exit 2 on a usage or environment error (not enough free disk, git failure).
@@ -495,7 +496,8 @@ def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, tim
 
     The report says whether the run was hermetic (``hide`` off or no namespaces: it was not). With
     ``probe`` a test asserting that the source work tree reads as empty is planted in the sandbox;
-    its outcome is ``probe_passed`` and its id is not among ``failing``."""
+    whether pytest collected it is ``probe_collected``, its outcome ``probe_passed``, and its id is
+    not among ``failing``."""
     free_gb = shutil.disk_usage("/").free / 2**30
     if free_gb < MIN_FREE_GB:
         _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
@@ -532,7 +534,8 @@ def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, tim
             "hermetic": run.hermetic, "hermetic_reason": run.hermetic_reason,
         }
         if probe:
-            report["probe_passed"] = PROBE_ID in collected_set and PROBE_ID not in run.failures
+            report["probe_collected"] = PROBE_ID in collected_set
+            report["probe_passed"] = report["probe_collected"] and PROBE_ID not in run.failures
         out.parent.mkdir(parents=True, exist_ok=True)
         # Copied before any rerun: a rerun in the same sandbox overwrites these files.
         for src, suffix in ((run.junit_path, ".junit.xml"), (run.report_path, ".tests.jsonl")):
@@ -604,10 +607,12 @@ def hermetic_run(repo: Path, out: Path, named: Path, max_named: int, root: Path 
 
     0: the report says ``hermetic: true``, the probe passed and every failure is named; 1: the run was
     not hermetic, or the probe failed, or a failure is not named (or the named document or the run
-    do not meet verify-named's bounds); 2: any other error.
+    do not meet verify-named's bounds); 2: the probe was not collected (pytest never ran it), or any
+    other error.
 
-    With ``no_hide`` nothing is hidden, so the verdict rests on the probe alone: 1 when it failed (it
-    saw the visible tree), 2 when it passed (the negative control did not fire)."""
+    With ``no_hide`` nothing is hidden, so the verdict rests on the probe alone: 1 when it ran and
+    failed (it saw the visible tree), 2 when it passed (the negative control did not fire) or was not
+    collected (there is no evidence either way)."""
     select = [PROBE_FILE] if probe_only else []
     code = sandbox_run(repo, out, select, root, timeout_s, reruns, hide=not no_hide, probe=True)
     if code != 0:
@@ -615,8 +620,13 @@ def hermetic_run(repo: Path, out: Path, named: Path, max_named: int, root: Path 
     try:
         report = json.loads(out.read_text(encoding="utf-8"))
         hermetic, probe_passed = bool(report["hermetic"]), bool(report["probe_passed"])
+        probe_collected = bool(report["probe_collected"])
     except (OSError, ValueError, KeyError) as exc:
         _say(f"cannot read the run report: {exc}")
+        return 2
+    if not probe_collected:
+        _say(f"PROBE NOT COLLECTED: {PROBE_ID} never ran (pytest exit {report.get('pytest_exit')}), "
+             "so the run proves nothing about hiding")
         return 2
     if no_hide:
         if probe_passed:
