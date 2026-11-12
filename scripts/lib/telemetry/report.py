@@ -466,8 +466,10 @@ def check_events(conn, task_id: str, window: "dict | None" = None, command_keys:
     and session, recorded at the act or within its command's duration after it; both sides read
     their keys through live.normalized_source_key, so a row stored in either spelling matches. An
     act before the first live event of a session that has live events is a counted loss
-    (lost_before_first_live); an unmatched act inside `window` ({from, to}) is an excused loss; any
-    other unmatched act fails, every act of a session with no live event among them."""
+    (lost_before_first_live); an unmatched act inside `window` ({from, to}) is an excused loss; an
+    act before `window` of a session with no live event was made before any emitter existed, so
+    it is a loss named under lost_before_emitter; any other unmatched act fails, every later act
+    of a session with no live event among them."""
     keys = [_task_key(r) for r in conn.execute("SELECT origin, task_id, epoch FROM tasks WHERE task_id = ?", (task_id,))]
     task_sessions = sorted({s for key in keys for s in task_session_ids(conn, key)})
     pool: dict = {}
@@ -483,7 +485,7 @@ def check_events(conn, task_id: str, window: "dict | None" = None, command_keys:
                 (ms, (duration if isinstance(duration, (int, float)) else 0.0) * 1000.0))
     bounds = (phases._ms(window.get("from")), phases._ms(window.get("to"))) if window else None
     slack = EVENT_MATCH_SLACK_S * 1000.0
-    missing, excused, lost, matched = [], [], [], 0
+    missing, excused, lost, before_emitter, matched = [], [], [], [], 0
     for session, source_key, ms in sorted(_engine_acts(task_sessions, command_keys), key=lambda a: a[2] or 0):
         source_key = live.normalized_source_key(source_key)
         candidates = pool.get((session, source_key), [])
@@ -499,10 +501,13 @@ def check_events(conn, task_id: str, window: "dict | None" = None, command_keys:
             lost.append(act)
         elif bounds and ms is not None and bounds[0] <= ms <= bounds[1]:
             excused.append(act)
+        elif start is None and bounds and ms is not None and bounds[0] is not None and ms < bounds[0]:
+            before_emitter.append(act)
         else:
             missing.append(act)
     return {"ok": not missing and bool(keys), "task_id": task_id, "sessions": task_sessions, "matched": matched,
-            "missing": missing, "excused": excused, "lost_before_first_live": len(lost)}
+            "missing": missing, "excused": excused, "lost_before_first_live": len(lost),
+            "lost_before_emitter": before_emitter}
 
 
 # --- check-latency: each ended session reaches the record within the bound -------------------

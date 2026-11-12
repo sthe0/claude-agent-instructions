@@ -507,6 +507,22 @@ def test_check_events_fails_session_with_zero_live_events(world):
     assert result["lost_before_first_live"] == 0
 
 
+@pytest.mark.parametrize("window_from, named", [(20, True), (5, False)])
+def test_check_events_names_zero_live_session_acts_before_the_emitter(world, window_from, named):
+    acts_task(world, [{"event": "record_result", "ts": at(10)}, {"event": "record_result", "ts": at(40)}], [])
+    conn = store.open_record()
+    try:
+        conn.execute("UPDATE events SET provenance = 'imported' WHERE session_id = 's-t1'")
+        conn.commit()
+        result = report.check_events(conn, "t1", {"from": at(window_from), "to": at(30)},
+                                     command_keys=frozenset({"cli:record-result"}))
+    finally:
+        conn.close()
+    assert [a["time_ms"] for a in result["missing"]] == [importer.moment_ms(at(40))]
+    assert [a["time_ms"] for a in result["lost_before_emitter"]] == ([importer.moment_ms(at(10))] if named else [])
+    assert [a["time_ms"] for a in result["excused"]] == ([] if named else [importer.moment_ms(at(10))])
+
+
 # --- check-latency: named losses, each proven from the record -----------------------------------
 
 def late_session(session, seconds, provenance="live", earliest=None) -> None:
