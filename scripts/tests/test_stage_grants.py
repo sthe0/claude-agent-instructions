@@ -175,12 +175,20 @@ _REFUSED_RULES = [
 ]
 
 
-@pytest.mark.parametrize("rule", _ACCEPTED_RULES)
+def _stable_id(value):
+    """A test id without the home directory: a hermetic run's home is a random sandbox path, and an
+    id that embeds it differs on every run, so two runs could not be compared test by test."""
+    if isinstance(value, str):
+        return value.replace(str(config_root.agent_home().parent), "<home>")
+    return None
+
+
+@pytest.mark.parametrize("rule", _ACCEPTED_RULES, ids=_stable_id)
 def test_validate_rule_accepts(rule):
     validate_rule(rule)  # must not raise
 
 
-@pytest.mark.parametrize("rule", _REFUSED_RULES)
+@pytest.mark.parametrize("rule", _REFUSED_RULES, ids=_stable_id)
 def test_validate_rule_refuses(rule):
     with pytest.raises(GrantValidationError):
         validate_rule(rule)
@@ -216,7 +224,7 @@ def _refuse_add_dir_cases() -> list[tuple[str, str]]:
     ]
 
 
-@pytest.mark.parametrize("path,mode", _refuse_add_dir_cases())
+@pytest.mark.parametrize("path,mode", _refuse_add_dir_cases(), ids=_stable_id)
 def test_validate_add_dir_refuses(path, mode):
     with pytest.raises(GrantValidationError):
         validate_add_dir(path, mode)
