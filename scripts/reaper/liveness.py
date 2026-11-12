@@ -41,6 +41,11 @@ uses ``lstat`` only, never follows a symlink, and so never reads a time from out
 
 A paused session owns its directory while holding no process at all, so process checks cannot
 prove death; the idle floor carries that case.
+
+``path_holders`` answers the same question for a caller that decides alone: per path ``free``, ``held``
+(a live scope record, an unresolved agentctl engine task, or a process) or ``unknown`` (a source could
+not be read in full). It compares normalized path strings only and never touches the filesystem under
+a queried path.
 """
 from __future__ import annotations
 

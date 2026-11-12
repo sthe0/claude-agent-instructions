@@ -39,6 +39,14 @@ One pass:
      for SSH_AUTH_SOCK / SSH_AGENT_PID / GIT_ASKPASS / SSH_ASKPASS, ``reapers_run`` (scans that
      completed) and ``errors``. ``scripts/install-reaper-timer.sh --check`` judges a unit run by it.
   7. SessionStart mode (no flag) always exits 0.
+  8. A reaper with ``SESSION_SOURCES`` (a session gate) is due in a SessionStart pass only for a fresh
+     interactive top-level start of one of those sources, read from the hook payload on stdin
+     (``ctx.session``); otherwise it scans with ``ctx.due`` false, prints nothing and keeps its stamp.
+     Manual modes ignore the gate.
+
+``--holders PATH...`` is a read-only query, combined with no other flag: it prints
+a tab-separated ``<path> <free|held|unknown> <detail>`` line per path (``liveness.path_holders``) and exits 0 when every
+path is free, 3 when one is held, 4 when one is unknown. It runs no reaper and writes nothing.
 
 ``--upkeep-only`` is a different mode: it skips scan/remove and the throttle stamps and
 calls only each reaper's optional ``upkeep(ctx)``, one reaper at a time with its errors
