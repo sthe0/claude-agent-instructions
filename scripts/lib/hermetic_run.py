@@ -7,9 +7,12 @@ work. Hiding them makes such a read fail at once, wherever it comes from. The ru
 user, mount and network namespace from inside this process (the command-line ``unshare`` is
 refused here, an in-process one is not), mounts an empty read-only filesystem over every hidden
 path, brings up loopback only and execs the command. A mount hides the directory itself, so the
-path reads as empty however it is reached: through a symlink, by an environment variable, by a
-relative path. The mounts exist only inside the command's own mount namespace; nothing on the
-real machine changes and other processes see nothing.
+path reads as empty however a file path reaches it: through a symlink, by an environment
+variable, by a relative path. Not covered: ``/proc/<pid>/root`` and ``/proc/<pid>/cwd`` of a
+process outside the namespace (there is no PID namespace, so /proc is the host's) still lead to
+the real tree; a test does not do that by accident. Only the listed paths are hidden, not the
+whole home. The mounts exist only inside the command's own mount namespace; nothing on the real
+machine changes and other processes see nothing.
 
 Usage:
     hermetic_run.py [--hide PATH ...] [--objects SRC:DST ...] -- CMD...
@@ -19,8 +22,10 @@ Usage:
                 path; a path that does not exist is skipped
 --objects S:D   first bind S, read-only, onto the existing directory D, so a clone that reads
                 its objects through alternates keeps working after S's parent is hidden
---check         enter the namespaces and exit 0, or print why they are unavailable and exit 2
-Exit status is the command's; 2 when the namespaces cannot be entered.
+--check         enter the namespaces and exit 0, or print why they are unavailable and exit 125
+Exit status is the command's; 125 when the runner itself fails (the namespaces cannot be entered,
+a mount is refused, the command cannot be started), so a runner failure is not taken for pytest's
+own exit 2 (interrupted).
 """
 from __future__ import annotations
 
@@ -34,7 +39,9 @@ import sys
 from pathlib import Path
 
 _MS_RDONLY, _MS_REMOUNT, _MS_BIND, _MS_REC, _MS_PRIVATE = 1, 32, 4096, 16384, 1 << 18
+_MS_NOSUID, _MS_NODEV, _MS_NOEXEC, _MS_NOATIME, _MS_NODIRATIME, _MS_STRICTATIME = 2, 4, 8, 1024, 2048, 1 << 24
 _SIOCSIFFLAGS, _IFF_UP = 0x8914, 0x1
+RUNNER_FAILED_EXIT = 125
 
 
 class NamespaceError(Exception):
@@ -73,14 +80,25 @@ def enter_namespaces() -> None:
     _loopback_up()
 
 
+def locked_mount_flags(statvfs_flags: int) -> int:
+    """The mount flags a bind keeps from its source's mount: a user namespace may not clear them on remount."""
+    flags = 0
+    for stat_flag, mount_flag in ((os.ST_NOSUID, _MS_NOSUID), (os.ST_NODEV, _MS_NODEV), (os.ST_NOEXEC, _MS_NOEXEC),
+                                  (os.ST_NOATIME, _MS_NOATIME), (os.ST_NODIRATIME, _MS_NODIRATIME)):
+        if statvfs_flags & stat_flag:
+            flags |= mount_flag
+    if not statvfs_flags & (os.ST_NOATIME | os.ST_RELATIME):
+        flags |= _MS_STRICTATIME
+    return flags
+
+
 def bind_readonly(source: str, target: str) -> None:
+    """Bind ``source`` onto ``target`` read-only; a bind that stays writable is an error, never a fallback."""
     if not Path(source).is_dir() or not Path(target).is_dir():
         raise NamespaceError(f"--objects needs two directories: {source} -> {target}")
     _mount(source, target, _MS_BIND)
-    try:
-        _mount("none", target, _MS_BIND | _MS_REMOUNT | _MS_RDONLY)
-    except NamespaceError:
-        pass
+    keep = locked_mount_flags(os.statvfs(target).f_flag)
+    _mount("none", target, _MS_BIND | _MS_REMOUNT | _MS_RDONLY | keep)
 
 
 def hide(paths: list[str]) -> list[str]:
@@ -115,7 +133,9 @@ def run(hidden: list[str], objects: list[str], cmd: list[str]) -> int:
 
 
 def check() -> str:
-    """Empty string when the namespaces can be entered here, else the reason they cannot."""
+    """Empty string when the namespaces can be entered here, else the reason they cannot.
+
+    The runner's own mounts are not tried here: a mount refused later is exit 125 of the run."""
     read_end, write_end = os.pipe()
     pid = os.fork()
     if pid == 0:
@@ -124,7 +144,7 @@ def check() -> str:
             enter_namespaces()
         except NamespaceError as exc:
             os.write(write_end, str(exc).encode())
-            os._exit(2)
+            os._exit(RUNNER_FAILED_EXIT)
         os._exit(0)
     os.close(write_end)
     with os.fdopen(read_end, "rb") as pipe:
@@ -150,14 +170,14 @@ def main(argv: list[str] | None = None) -> int:
         reason = check()
         if reason:
             print(f"hermetic_run: {reason}", file=sys.stderr)
-        return 2 if reason else 0
+        return RUNNER_FAILED_EXIT if reason else 0
     if not inner:
         ap.error("a command after -- is required")
     try:
         return run(args.hide, args.objects, inner)
     except (NamespaceError, OSError) as exc:
         print(f"hermetic_run: {exc}", file=sys.stderr)
-        return 2
+        return RUNNER_FAILED_EXIT
 
 
 if __name__ == "__main__":

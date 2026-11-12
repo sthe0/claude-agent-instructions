@@ -93,6 +93,16 @@ def test_the_source_work_tree_git_directory_checkout_and_agent_homes_are_hidden(
     assert str(Path(home) / ".local") not in hidden, "the user site holds pytest and xdist"
 
 
+def test_both_literal_agent_homes_are_hidden_when_the_launcher_points_the_config_root_at_one(
+        source, monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-agent"))
+    monkeypatch.delenv("CLAUDE_AGENT_HOME", raising=False)
+    hidden = gate.hidden_paths(source)
+    assert str(home / ".claude") in hidden and str(home / ".claude-agent") in hidden
+
+
 def test_the_clone_reads_the_sources_objects_through_the_rebinding_only(source, sandbox, calls, monkeypatch):
     monkeypatch.setattr(gate, "hermetic_unavailable", lambda: "")
     gate.default_runner(source, SHA, sandbox, select=(), timeout_s=50)
@@ -110,6 +120,76 @@ def test_a_run_without_namespaces_goes_on_unhidden_and_says_why(source, sandbox,
     assert not run.hermetic and run.hermetic_reason == "user namespaces unavailable: EPERM"
     assert alternates(sandbox) == str(source / ".git" / "objects")
     assert gate.cost_fields(run)["hermetic"] is False and "EPERM" in gate.cost_fields(run)["hermetic_reason"]
+
+
+def test_a_run_without_namespaces_says_NOT_HERMETIC_on_stderr(source, sandbox, calls, monkeypatch, capsys):
+    monkeypatch.setattr(gate, "hermetic_unavailable", lambda: "user namespaces unavailable: EPERM")
+    gate.default_runner(source, SHA, sandbox, select=(), timeout_s=50)
+    assert "NOT HERMETIC: user namespaces unavailable: EPERM" in capsys.readouterr().err
+
+
+def test_a_hermetic_run_prints_no_notice(source, sandbox, calls, monkeypatch, capsys):
+    monkeypatch.setattr(gate, "hermetic_unavailable", lambda: "")
+    gate.default_runner(source, SHA, sandbox, select=(), timeout_s=50)
+    assert "NOT HERMETIC" not in capsys.readouterr().err
+
+
+def test_the_core_sha_is_read_before_the_alternates_leave_the_real_objects(source, sandbox, calls, monkeypatch):
+    monkeypatch.setattr(gate, "hermetic_unavailable", lambda: "")
+    head = subprocess.run(["git", "-C", str(sandbox / "core"), "rev-parse", "HEAD"], capture_output=True, text=True,
+                          env=GIT_ENV, check=True).stdout.strip()
+    seen = []
+    real_point = gate.point_alternates
+
+    def point(root, objects_dir):
+        seen.append(subprocess.run(["git", "-C", str(root / "core"), "cat-file", "-t", "HEAD"], capture_output=True,
+                                   text=True, env=GIT_ENV).stdout.strip())
+        real_point(root, objects_dir)
+
+    monkeypatch.setattr(gate, "point_alternates", point)
+    run = gate.default_runner(source, SHA, sandbox, select=(), timeout_s=50)
+    assert run.sandbox_core_sha == head and seen == ["commit"]
+
+
+def _record(**changes):
+    base = {"status": gate.PASS, "new_failures": [], "unavailable_reason": "", "hermetic": True,
+            "hermetic_reason": ""}
+    return {**base, **changes}
+
+
+def test_a_record_of_a_run_that_was_not_hermetic_shows_it_in_the_decision_line(tmp_path):
+    decision = gate._record_decision(True, gate.PASS, tmp_path / "r.json",
+                                     _record(hermetic=False, hermetic_reason="user namespaces unavailable: EPERM"))
+    assert decision.admitted
+    assert decision.line == "SUITE: ADMITTED (PASS) [NOT HERMETIC: user namespaces unavailable: EPERM]"
+
+
+def test_a_hermetic_record_and_one_without_the_field_add_nothing_to_the_line(tmp_path):
+    hermetic_line = gate._record_decision(True, gate.PASS, tmp_path / "r.json", _record()).line
+    legacy = _record()
+    del legacy["hermetic"]
+    assert hermetic_line == gate._record_decision(True, gate.PASS, tmp_path / "r.json", legacy).line
+    assert "NOT HERMETIC" not in hermetic_line
+
+
+def test_check_shows_the_notice_for_a_stored_record(source, tmp_path, monkeypatch):
+    sha = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], capture_output=True, text=True,
+                         env=GIT_ENV, check=True).stdout.strip()
+    path = tmp_path / "record.json"
+    path.write_text(json.dumps(_record(hermetic=False, hermetic_reason="no namespaces")), encoding="utf-8")
+    monkeypatch.setattr(gate, "record_admits", lambda record, candidate, tip: (True, gate.PASS))
+    monkeypatch.setattr(gate.shared, "read_record", lambda p: json.loads(Path(p).read_text(encoding="utf-8")))
+    monkeypatch.setattr(gate, "_scope_decision", lambda repo, tip, candidate: None)
+    line = gate.landing_decision(source, sha, sha, common_dir=tmp_path, record_file=path).line
+    assert line == "SUITE: ADMITTED (PASS) [NOT HERMETIC: no namespaces]"
+
+
+def test_a_runner_failure_after_the_check_is_named_not_taken_for_pytests_interrupt():
+    run = gate.SuiteRun(125, (), "c" * 40, hermetic=True, log_tail="hermetic_run: mount none -> /x: EPERM\n")
+    failed, reason = gate.classify(run, "c" * 40)
+    assert failed == () and "hermetic runner failed before pytest ran" in reason and "EPERM" in reason
+    plain = gate.SuiteRun(2, (), "c" * 40, hermetic=True, log_tail="interrupted\n")
+    assert "pytest exited 2" in gate.classify(plain, "c" * 40)[1]
 
 
 def test_hiding_switched_off_is_recorded_as_such(source, sandbox, calls, monkeypatch):
@@ -212,10 +292,20 @@ def test_probe_only_collects_the_probe_and_needs_no_full_run(monkeypatch, tmp_pa
     assert code == 0 and seen["select"] == [control.PROBE_FILE]
 
 
-def test_no_hide_with_the_probe_only_exits_1(monkeypatch, tmp_path):
+def test_no_hide_exits_1_when_the_probe_failed_on_the_visible_tree(monkeypatch, tmp_path):
     code, _ = _run(monkeypatch, tmp_path, _report(collected=1, hermetic=False, probe_passed=False),
                    probe_only=True, no_hide=True)
     assert code == 1
+
+
+def test_no_hide_exits_2_when_the_probe_passed_so_the_control_did_not_fire(monkeypatch, tmp_path):
+    code, _ = _run(monkeypatch, tmp_path, _report(collected=1, hermetic=False, probe_passed=True),
+                   probe_only=True, no_hide=True)
+    assert code == 2
+
+
+def test_a_hermetic_failed_probe_without_no_hide_still_exits_1(monkeypatch, tmp_path):
+    assert _run(monkeypatch, tmp_path, _report(probe_passed=False), no_hide=False)[0] == 1
 
 
 def test_the_planted_probe_passes_on_an_empty_tree_and_fails_on_a_visible_one(tmp_path):

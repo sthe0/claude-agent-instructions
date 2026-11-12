@@ -32,6 +32,8 @@ def _fixture_text(name):
     """The recorded plan, with the checkout it was written in swapped for this one, so the paths
     its controls name resolve here and not in a checkout that may be absent or hidden."""
     return (FIX / name).read_text().replace(RECORDED_REPO_ROOT, THIS_REPO_ROOT)
+
+
 SID = "replay"
 STALE_SET = {
     "unit:base": "stale:unit",

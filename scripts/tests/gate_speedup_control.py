@@ -44,13 +44,15 @@ two checks show the limiter holds and the record carries the cost, on real proce
 
   gate_speedup_control.py hermetic-run --out PATH --named DOC [--max-named N] [-C REPO] [--root DIR]
                                        [--reruns N] [--no-hide] [--probe-only]
-      One sandbox-run inside the hermetic runner (scripts/tests/hermetic_run.py: empty HOME, the
-      source work tree, git directory and agent homes hidden, no network) with a probe test planted
-      in the sandbox that asserts the hidden source work tree reads as empty, then verify-named.
+      One sandbox-run inside the hermetic runner (scripts/lib/hermetic_run.py: the source work tree,
+      its git directory, the canonical checkout and the agent homes hidden, no network; the rest of
+      the home stays visible) with a probe test planted in the sandbox that asserts the hidden
+      source work tree reads as empty, then verify-named.
       0: the report says ``hermetic: true``, the probe passed and every failure is named; 1: the run
       was not hermetic, or the probe failed, or a failure is not named, or verify-named refuses the
       run (incomplete) or the document (too many ids); 2: any other error. ``--no-hide`` hides
-      nothing, so the probe fails and the exit is 1 (the negative control); ``--probe-only``
+      nothing and the exit rests on the probe alone: 1 when it failed on the visible tree (the
+      negative control fired), 2 when it passed (the control did not fire); ``--probe-only``
       collects only the probe (minutes instead of the full run).
 
 Exit 2 on a usage or environment error (not enough free disk, git failure).
@@ -515,6 +517,9 @@ def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, tim
         if not run.build_ok or run.timed_out or run.pytest_exit is None:
             _say(f"the run did not complete: {'timed out' if run.timed_out else run.detail or 'no pytest exit'}")
             return 2
+        if run.hermetic and run.pytest_exit == gate.hermetic_run.RUNNER_FAILED_EXIT:
+            _say(f"the hermetic runner failed before pytest ran: {gate.one_line(run.log_tail[-300:], 300)}")
+            return 2
         stem = out.with_suffix("")
         lines = _test_report.read_lines(run.report_path) if run.report_path else []
         collected = _test_report.collected_ids(lines)
@@ -599,7 +604,10 @@ def hermetic_run(repo: Path, out: Path, named: Path, max_named: int, root: Path 
 
     0: the report says ``hermetic: true``, the probe passed and every failure is named; 1: the run was
     not hermetic, or the probe failed, or a failure is not named (or the named document or the run
-    do not meet verify-named's bounds); 2: any other error."""
+    do not meet verify-named's bounds); 2: any other error.
+
+    With ``no_hide`` nothing is hidden, so the verdict rests on the probe alone: 1 when it failed (it
+    saw the visible tree), 2 when it passed (the negative control did not fire)."""
     select = [PROBE_FILE] if probe_only else []
     code = sandbox_run(repo, out, select, root, timeout_s, reruns, hide=not no_hide, probe=True)
     if code != 0:
@@ -610,6 +618,12 @@ def hermetic_run(repo: Path, out: Path, named: Path, max_named: int, root: Path 
     except (OSError, ValueError, KeyError) as exc:
         _say(f"cannot read the run report: {exc}")
         return 2
+    if no_hide:
+        if probe_passed:
+            _say("NEGATIVE CONTROL DID NOT FIRE: the probe passed although nothing was hidden")
+            return 2
+        _say("OK: nothing hidden and the probe failed, as the negative control requires")
+        return 1
     if not hermetic:
         _say(f"NOT HERMETIC: {report.get('hermetic_reason') or 'unknown reason'} (probe passed: {probe_passed})")
         return 1
@@ -624,7 +638,7 @@ def hermetic_run(repo: Path, out: Path, named: Path, max_named: int, root: Path 
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser =argparse.ArgumentParser(prog="gate_speedup_control.py", description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(prog="gate_speedup_control.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     selftest = sub.add_parser("slots-selftest", help="three fake runs against a private slot directory")
     selftest.add_argument("--limiter", choices=LIMITERS, default="slots")

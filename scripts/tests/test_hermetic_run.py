@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-import hermetic_run
+from lib import hermetic_run
 
 RUNNER = Path(hermetic_run.__file__).resolve()
 GIT_ENV = {
@@ -132,8 +132,71 @@ def test_the_exit_status_is_the_commands():
     assert hermetic([], py("raise SystemExit(7)")).returncode == 7
 
 
-def test_a_missing_command_is_exit_2():
-    assert hermetic([], ["/nonexistent/command"]).returncode == 2
+def test_a_runner_failure_is_exit_125_not_pytests_own_exit_2():
+    assert hermetic([], ["/nonexistent/command"]).returncode == hermetic_run.RUNNER_FAILED_EXIT == 125
+    assert hermetic(["--objects", "/nonexistent:/nonexistent"], py("print(1)")).returncode == 125
+
+
+def test_a_command_exiting_2_keeps_its_own_status():
+    assert hermetic([], py("raise SystemExit(2)")).returncode == 2
+
+
+class FakeVfs:
+    def __init__(self, f_flag: int):
+        self.f_flag = f_flag
+
+
+def _record_mounts(monkeypatch, *, fail_on_remount: bool, f_flag: int = os.ST_RELATIME):
+    calls: list[tuple[str, str, int]] = []
+
+    def fake(source, target, flags, fstype=None):
+        calls.append((source, target, flags))
+        if fail_on_remount and flags & hermetic_run._MS_REMOUNT:
+            raise hermetic_run.NamespaceError("mount none -> t: Operation not permitted")
+
+    monkeypatch.setattr(hermetic_run, "_mount", fake)
+    monkeypatch.setattr(hermetic_run.os, "statvfs", lambda path: FakeVfs(f_flag))
+    return calls
+
+
+def test_a_refused_read_only_remount_is_an_error_not_a_writable_bind(tmp_path, monkeypatch):
+    _record_mounts(monkeypatch, fail_on_remount=True)
+    (tmp_path / "s").mkdir()
+    (tmp_path / "d").mkdir()
+    with pytest.raises(hermetic_run.NamespaceError):
+        hermetic_run.bind_readonly(str(tmp_path / "s"), str(tmp_path / "d"))
+
+
+def test_the_remount_carries_the_flags_the_source_mount_locked(tmp_path, monkeypatch):
+    locked = os.ST_NOSUID | os.ST_NODEV | os.ST_NOEXEC | os.ST_RELATIME
+    calls = _record_mounts(monkeypatch, fail_on_remount=False, f_flag=locked)
+    (tmp_path / "s").mkdir()
+    (tmp_path / "d").mkdir()
+    hermetic_run.bind_readonly(str(tmp_path / "s"), str(tmp_path / "d"))
+    remount_flags = calls[-1][2]
+    for wanted in (hermetic_run._MS_RDONLY, hermetic_run._MS_REMOUNT, hermetic_run._MS_BIND, hermetic_run._MS_NOSUID,
+                   hermetic_run._MS_NODEV, hermetic_run._MS_NOEXEC):
+        assert remount_flags & wanted, wanted
+    assert not remount_flags & hermetic_run._MS_STRICTATIME
+
+
+def test_an_unlocked_source_mount_is_remounted_with_only_the_read_only_flags(tmp_path, monkeypatch):
+    calls = _record_mounts(monkeypatch, fail_on_remount=False, f_flag=os.ST_RELATIME)
+    (tmp_path / "s").mkdir()
+    (tmp_path / "d").mkdir()
+    hermetic_run.bind_readonly(str(tmp_path / "s"), str(tmp_path / "d"))
+    assert calls[-1][2] == hermetic_run._MS_BIND | hermetic_run._MS_REMOUNT | hermetic_run._MS_RDONLY
+
+
+def test_the_objects_mount_cannot_be_written(tmp_path):
+    source, mount = tmp_path / "objects", tmp_path / "mount"
+    source.mkdir()
+    mount.mkdir()
+    (source / "pack").write_text("x\n")
+    code = "import os, sys; print(sorted(os.listdir(sys.argv[1]))); open(sys.argv[1] + '/new', 'w')"
+    proc = hermetic(["--objects", f"{source}:{mount}"], py(code, str(mount)))
+    assert "['pack']" in proc.stdout and proc.returncode != 0, proc.stderr
+    assert not (source / "new").exists()
 
 
 def _shared_clone(tmp_path: Path) -> tuple[Path, Path, Path]:
