@@ -13,12 +13,23 @@ from pathlib import Path
 import pytest
 
 import gate_speedup_control as control
+from lib import config_root
 from lib import suite_gate as gate
 
 SHA = "a" * 40
 GIT_ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@localhost",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@localhost",
            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+
+
+@pytest.fixture(autouse=True)
+def _private_slots(tmp_path_factory, monkeypatch):
+    """The runner's worker slots come from a directory of this test, never the machine's or an enclosing run's."""
+    from lib import test_slots
+
+    monkeypatch.setenv(test_slots.DIR_ENV, str(tmp_path_factory.mktemp("slots")))
+    monkeypatch.delenv(test_slots.HELD_ENV, raising=False)
+    monkeypatch.delenv(gate.XDIST_WORKERS_ENV, raising=False)
 
 
 @pytest.fixture
@@ -78,7 +89,7 @@ def test_the_source_work_tree_git_directory_checkout_and_agent_homes_are_hidden(
     home = os.path.expanduser("~")
     assert os.path.realpath(source) in hidden and str(source / ".git") in hidden
     assert "/agent/home" in hidden
-    assert os.path.join(home, ".claude-agent") in hidden and os.path.join(home, ".claude") in hidden
+    assert os.path.join(home, ".claude-agent") in hidden and str(config_root.harness_config_root()) in hidden
     assert str(Path(home) / ".local") not in hidden, "the user site holds pytest and xdist"
 
 

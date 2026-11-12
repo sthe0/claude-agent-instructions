@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Protocol, Sequence
 
+from . import config_root
 from . import landing_gate as shared
 from . import test_slots
 from .landing_gate import ADMITTED, NOT_REQUIRED, REFUSED, Decision, GateError, PrePushResult, defuse, one_line, short
@@ -650,7 +651,7 @@ def hidden_paths(repo: Path) -> list[str]:
     if os.path.basename(common) == ".git":
         paths.append(os.path.dirname(common))
     paths += [os.environ[name] for name in ("CLAUDE_AGENT_HOME", "CLAUDE_CONFIG_DIR") if os.environ.get(name)]
-    paths += [os.path.join(home, ".claude-agent"), os.path.join(home, ".claude")]
+    paths += [os.path.join(home, ".claude-agent"), str(config_root.harness_config_root())]
     return list(dict.fromkeys(paths))
 
 

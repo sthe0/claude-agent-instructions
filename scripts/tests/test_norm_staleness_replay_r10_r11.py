@@ -24,6 +24,14 @@ from agentctl.dispatch import RunResult
 from agentctl.plan import load_plan
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "norm_staleness_replay"
+RECORDED_REPO_ROOT = "/home/the0/claude-agent-instructions"
+THIS_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+
+
+def _fixture_text(name):
+    """The recorded plan, with the checkout it was written in swapped for this one, so the paths
+    its controls name resolve here and not in a checkout that may be absent or hidden."""
+    return (FIX / name).read_text().replace(RECORDED_REPO_ROOT, THIS_REPO_ROOT)
 SID = "replay"
 STALE_SET = {
     "unit:base": "stale:unit",
@@ -141,7 +149,7 @@ def _approved_r10(store, tmp_path):
     """The r10 plan walked in full, its order elements covered by stage 6, approved and
     accepted -- the state the real session was in when r11 was written. Returns the plan path."""
     plan = tmp_path / "plan.toml"
-    plan.write_text((FIX / "r10.toml").read_text())
+    plan.write_text(_fixture_text("r10.toml"))
     cli.cmd_start(ns(session=SID, task="replay", goal="g", done_criterion="dc",
                      criterion_type="measurable", recursion_depth=0), store=store)
     cli.cmd_classify(ns(session=SID, chat=False, changed_lines=200, files=5, wall_clock_min=60,
@@ -180,7 +188,7 @@ def _replan_onto(store, plan, monkeypatch):
 
 
 def _edited_to(plan, fixture):
-    plan.write_text((FIX / fixture).read_text())
+    plan.write_text(_fixture_text(fixture))
 
 
 def test_the_replan_stales_exactly_the_base_unit_stage_six_unit_and_the_base_six_pair(
