@@ -210,3 +210,99 @@ def test_more_unfinished_ids_than_the_reruns_take_is_unavailable(world, monkeypa
     runner = ReportRunner({cand: KILLED, world.base: CLEAN})
     out = world.run(runner)
     assert out.record["status"] == gate.UNAVAILABLE and runner.reruns() == []
+
+
+# ── a rerun proves a pass only by reporting it; a failure it reported is never dropped ──
+
+class RerunScript(ReportRunner):
+    """Full runs as ReportRunner; each rerun round is ``rounds[n]``, a callable(root, sha, select) -> SuiteRun."""
+
+    def __init__(self, full, rounds):
+        super().__init__(full)
+        self.rounds = list(rounds)
+
+    def __call__(self, repo, sha, root, *, select, timeout_s):
+        if not select:
+            return super().__call__(repo, sha, root, select=select, timeout_s=timeout_s)
+        self.calls.append((sha, tuple(select)))
+        return self.rounds[sum(1 for _, picked in self.calls if picked) - 1](root, sha, tuple(select))
+
+
+def passes(root, sha, select):
+    return report_run(root, sha, collected=select, finished=select)
+
+
+def omits(*ids):
+    return lambda root, sha, select: report_run(
+        root, sha, collected=[i for i in select if i not in ids], finished=[i for i in select if i not in ids])
+
+
+def fails(*ids):
+    return lambda root, sha, select: report_run(
+        root, sha, collected=select, finished=[i for i in select if i not in ids], failed=ids, exit_code=1)
+
+
+def times_out_after_failing(*ids):
+    return lambda root, sha, select: report_run(
+        root, sha, collected=select, failed=ids, exit_code=-9, timed_out=True)
+
+
+def test_an_id_the_rerun_never_reports_is_unavailable_not_a_pass(world):
+    cand = world.code_commit()
+    out = world.run(RerunScript({cand: KILLED, world.base: CLEAN}, [omits(T3), passes]))
+    assert out.record["status"] == gate.UNAVAILABLE and "did not report" in out.record["unavailable_reason"]
+    assert out.record["new_failures"] == [] and out.record["unconfirmed"] == []
+    assert flake_list.read_entries(flake_list.journal_path(world.common)) == []
+
+
+def test_a_rerun_with_no_report_is_unavailable_not_a_pass(world):
+    cand = world.code_commit()
+    out = world.run(RerunScript({cand: KILLED, world.base: CLEAN},
+                                [lambda root, sha, select: ok_run(sha, ()), passes]))
+    assert out.record["status"] == gate.UNAVAILABLE and "did not report" in out.record["unavailable_reason"]
+
+
+def test_a_failure_of_the_first_round_stands_when_the_second_round_times_out(world):
+    cand = world.code_commit()
+    timed_out = lambda root, sha, select: gate.SuiteRun(-9, (), sha, timed_out=True)  # noqa: E731
+    out = world.run(RerunScript({cand: KILLED, world.base: CLEAN}, [fails(T3), timed_out]))
+    assert out.record["status"] == gate.FAIL and out.record["new_failures"] == [T3]
+    assert not out.decision.admitted and "pytest did not finish" in out.record["unavailable_reason"]
+
+
+def test_a_failure_a_cut_short_round_reported_stands(world):
+    cand = world.code_commit()
+    out = world.run(RerunScript({cand: KILLED, world.base: CLEAN}, [times_out_after_failing(T2), passes]))
+    assert out.record["status"] == gate.FAIL and out.record["new_failures"] == [T2]
+    assert not out.decision.admitted
+
+
+def test_a_failure_of_the_first_round_stands_when_the_tip_cannot_be_re_read(world):
+    cand = world.code_commit()
+
+    def broken():
+        raise shared.GateError("fetch failed")
+
+    out = world.run(RerunScript({cand: KILLED, world.base: CLEAN}, [fails(T3), passes]), tip_reader=broken)
+    assert out.record["status"] == gate.FAIL and out.record["new_failures"] == [T3]
+    assert "re-read" in out.record["unavailable_reason"] and not out.decision.admitted
+
+
+def test_a_failure_of_the_first_round_stands_when_the_tip_moved(world):
+    cand = world.code_commit()
+    out = world.run(RerunScript({cand: KILLED, world.base: CLEAN}, [fails(T3), passes]), tip_reader=lambda: "f" * 40)
+    assert out.record["status"] == gate.FAIL and out.record["new_failures"] == [T3]
+
+
+def test_the_sandboxed_pytest_never_sees_the_operators_journal_path(tmp_path):
+    env = gate.suite_env(tmp_path, "/ub", tmp_path / "f", [],
+                         base_env={"PATH": "/bin", flake_list.JOURNAL_ENV: "/live/journal.jsonl"})
+    assert flake_list.JOURNAL_ENV not in env
+
+
+def test_a_session_that_breaks_after_every_test_ran_is_unavailable_when_the_tip_has_a_failure(world):
+    cand = world.code_commit()
+    broken_session = dict(collected=[T1, T2], finished=[T1], failed=[T2], exit_code=3)
+    tip_run = dict(collected=[T1, T2], finished=[T1], failed=[T2], exit_code=1)
+    out = world.run(ReportRunner({cand: broken_session, world.base: tip_run}))
+    assert out.record["status"] == gate.UNAVAILABLE and "pytest exited 3" in out.record["unavailable_reason"]

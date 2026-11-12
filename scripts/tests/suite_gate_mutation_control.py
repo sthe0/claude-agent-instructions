@@ -175,6 +175,35 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids("test_join_refuses_a_second_set_that_misses_a_non_passing_id",
              "test_join_refuses_a_second_set_that_covers_a_passing_id", module=ADDITIVE_TESTS),
     ),
+    "suite-rerun-must-report-every-selected-id": Mutant(
+        LIB,
+        "        if unreported:",
+        "        if False:",
+        _ids("test_an_id_the_rerun_never_reports_is_unavailable_not_a_pass",
+             "test_a_rerun_with_no_report_is_unavailable_not_a_pass", module=ADDITIVE_TESTS),
+    ),
+    "suite-failure-survives-an-unavailable-round": Mutant(
+        LIB,
+        "                confirmed = sorted(reruns.known_failed & set(execution.new))\n"
+        "            elif reruns is not None:",
+        "            elif reruns is not None:",
+        _ids("test_a_failure_of_the_first_round_stands_when_the_second_round_times_out",
+             "test_a_failure_a_cut_short_round_reported_stands", module=ADDITIVE_TESTS),
+    ),
+    "suite-failure-survives-a-tip-that-cannot-be-re-read": Mutant(
+        LIB,
+        "                            reruns = dataclasses.replace(\n"
+        '                                reruns, reason=f"cannot re-read the remote tip after the reruns: {exc}")',
+        '                            reruns = Reruns(reason=f"cannot re-read the remote tip after the reruns: {exc}")',
+        _ids("test_a_failure_of_the_first_round_stands_when_the_tip_cannot_be_re_read", module=ADDITIVE_TESTS),
+    ),
+    "suite-session-break-after-every-test-is-unavailable": Mutant(
+        LIB,
+        "RUNNER_FAILED_EXIT and run.hermetic) or not unfinished:",
+        "RUNNER_FAILED_EXIT and run.hermetic) or not (failed or unfinished):",
+        _ids("test_a_session_that_breaks_after_every_test_ran_is_unavailable_when_the_tip_has_a_failure",
+             module=ADDITIVE_TESTS),
+    ),
     "suite-report-without-collection-is-unavailable": Mutant(
         LIB,
         "    if not report.collected_ids(lines):",
@@ -219,7 +248,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "suite-env-scrub": Mutant(
         LIB,
-        '        if name in scrub or name.startswith("AGENTCTL_") or name in ("PYTEST_ADDOPTS", "PYTHONPATH"):',
+        '        if (name in scrub or name.startswith("AGENTCTL_")\n'
+        '                or name in ("PYTEST_ADDOPTS", "PYTHONPATH", flake_list.JOURNAL_ENV)):',
         "        if False:",
         _ids(
             "test_suite_env_drops_scrubbed_agent_and_pytest_names",

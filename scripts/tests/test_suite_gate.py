@@ -97,10 +97,21 @@ class FakeRunner:
         if select:
             pool = ids if self.rerun_fail is None else tuple(i for i in ids if i in self.rerun_fail)
             ids = tuple(i for i in select if i in pool)
+            return rerun_run(root, sha, select, ids)
         return ok_run(sha, ids)
 
     def shas(self):
         return [c.sha for c in self.calls]
+
+
+def rerun_run(root, sha, select, failed=()):
+    """A rerun of ``select`` that reports every selected id, ``failed`` of them failed, the rest passed."""
+    path = Path(root) / gate.REPORT_NAME
+    lines = [{"kind": "collected", "nodeid": i} for i in select]
+    lines += [{"kind": "report", "nodeid": i, "when": "call", "outcome": "failed" if i in failed else "passed"}
+              for i in select]
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    return gate.SuiteRun(1 if failed else 0, tuple(failed), sha, log_tail="log line\n", report_path=str(path))
 
 
 def ok_run(sha, ids=(), **kwargs):
@@ -501,7 +512,7 @@ def test_a_failure_of_the_second_rerun_alone_confirms_it(world):
         def __call__(self, repo, sha, root, *, select, timeout_s):
             run = super().__call__(repo, sha, root, select=select, timeout_s=timeout_s)
             if select and len([c for c in self.calls if c.select]) == 1:
-                return ok_run(sha)
+                return rerun_run(root, sha, select)
             return run
 
     out = world.run(SecondRoundFails({cand: (FAILED_A,), world.base: ()}))
@@ -1586,7 +1597,7 @@ def test_the_suite_library_uses_the_shared_layer_and_not_the_smoke_gate():
 def test_the_catalogue_control_is_green_and_every_anchor_matches_once():
     import suite_gate_mutation_control as control
 
-    assert len(control.CATALOGUE) == 44
+    assert len(control.CATALOGUE) == 48
     for name, mutant in control.CATALOGUE.items():
         source = (control.SCRIPTS_DIR.parent / mutant.relpath).read_text(encoding="utf-8")
         assert source.count(mutant.anchor) == 1, name

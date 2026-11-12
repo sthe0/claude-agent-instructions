@@ -318,9 +318,23 @@ def observe(run: SuiteRun, expected_sha: str) -> Observation:
         reason = classify(run, expected_sha)[1]
         if reason:
             return Observation(reason=reason)
-    elif (run.pytest_exit == hermetic_run.RUNNER_FAILED_EXIT and run.hermetic) or not (failed or unfinished):
+    elif (run.pytest_exit == hermetic_run.RUNNER_FAILED_EXIT and run.hermetic) or not unfinished:
+        # An exit other than 0 or 1 is taken as a run cut short only when a collected test never finished;
+        # a session that broke after every test ran must not pass on the failures it did report.
         return Observation(reason=classify(run, expected_sha)[1])
     return Observation(failed, unfinished, passed)
+
+
+def reported_failures(run: SuiteRun) -> frozenset[str]:
+    """The ids a run reported failed, even when the run as a whole proves nothing (cut short, timed out)."""
+    ids = set(run.failures)
+    if run.report_path:
+        try:
+            ids |= {i for i, o in _test_report().outcomes(_test_report().read_lines(run.report_path)).items()
+                    if o == "failed"}
+        except OSError:
+            pass
+    return frozenset(ids)
 
 
 class JoinRefused(ValueError):
@@ -329,7 +343,10 @@ class JoinRefused(ValueError):
 
 @dataclass(frozen=True)
 class PartialSet:
-    """The ids a stage of one verdict covered and the ones it saw pass, bound to (candidate, tip)."""
+    """The ids a stage of one verdict covered and the ones that need no further word, bound to (candidate, tip).
+
+    ``passing`` holds the ids the stage saw pass and, in the full run's set, the ids that already fail on
+    the tip's baseline (they are not this candidate's failures)."""
     candidate_sha: str
     tip_sha: str
     covered: frozenset[str]
@@ -626,7 +643,8 @@ def suite_env(root: Path, userbase: str, failures_file: Path, scrub: Sequence[st
     """The environment of the sandboxed pytest: scrubbed, rooted in the sandbox, same user site."""
     env = dict(base_env if base_env is not None else shared.clean_env())
     for name in list(env):
-        if name in scrub or name.startswith("AGENTCTL_") or name in ("PYTEST_ADDOPTS", "PYTHONPATH"):
+        if (name in scrub or name.startswith("AGENTCTL_")
+                or name in ("PYTEST_ADDOPTS", "PYTHONPATH", flake_list.JOURNAL_ENV)):
             del env[name]
     home = root / "home"
     env.update(
@@ -999,20 +1017,39 @@ def _baseline(repo: Path, tip: str, common_dir: Path, runner: Runner, timeout_s:
 
 @dataclass(frozen=True)
 class Reruns:
-    """Two serial reruns of the new ids: the ids each round did not pass, or why the reruns prove nothing."""
+    """Serial reruns of the new ids: the ids each finished round saw fail or not finish, and, when a round
+    proved nothing, why (``reason``) and the ids that round still reported failed (``cut_failed``).
+
+    A failure a rerun reported stays a failure whatever happened to a later round, so ``known_failed``
+    is what the verdict confirms even when ``reason`` is set."""
     failed_rounds: tuple[frozenset[str], ...] = ()
     reason: str = ""
+    cut_failed: frozenset[str] = frozenset()
+
+    @property
+    def known_failed(self) -> frozenset[str]:
+        return frozenset().union(self.cut_failed, *self.failed_rounds)
 
 
 def _rerun(repo: Path, candidate: str, root: Path, new: Sequence[str], runner: Runner,
            timeout_s: int) -> Reruns:
-    """Each round is one fresh serial pytest process holding every new id, in the candidate's sandbox."""
-    rounds = []
-    for _ in range(RERUN_ROUNDS):
-        seen = observe(runner(repo, candidate, root, select=tuple(new), timeout_s=timeout_s), candidate)
+    """Each round is one fresh serial pytest process holding every new id, in the candidate's sandbox.
+
+    An id counts as passed only when the round's report shows it passing; an id the round never reported
+    (deselected, not collected, no report) proves nothing, so the round makes the reruns unavailable."""
+    selected = frozenset(new)
+    rounds: list[frozenset[str]] = []
+    for number in range(1, RERUN_ROUNDS + 1):
+        run = runner(repo, candidate, root, select=tuple(new), timeout_s=timeout_s)
+        seen = observe(run, candidate)
         if seen.reason:
-            return Reruns(reason=f"rerun of {len(new)} new failure(s) unavailable: {seen.reason}")
-        rounds.append(frozenset(seen.failed) | frozenset(seen.unfinished))
+            return Reruns(tuple(rounds), f"rerun of {len(new)} new failure(s) unavailable: {seen.reason}",
+                          reported_failures(run) & selected)
+        rounds.append((frozenset(seen.failed) | frozenset(seen.unfinished)) & selected)
+        unreported = selected - seen.passed - rounds[-1]
+        if unreported:
+            return Reruns(tuple(rounds), f"rerun round {number} did not report {len(unreported)} of the "
+                          f"{len(new)} selected test(s), e.g. {one_line(sorted(unreported)[0], 120)}")
     return Reruns(tuple(rounds))
 
 
@@ -1075,7 +1112,8 @@ def _execute(repo: Path, candidate_sha: str, tip: str, common_dir: Path, run: Ru
                         try:
                             rerun_tip = tip_reader()
                         except GateError as exc:
-                            reruns = Reruns(reason=f"cannot re-read the remote tip after the reruns: {exc}")
+                            reruns = dataclasses.replace(
+                                reruns, reason=f"cannot re-read the remote tip after the reruns: {exc}")
         return Execution(root, candidate_run, seen.failed, seen.unfinished, reason, baseline, baseline_cache,
                          first, tuple(new), reruns, rerun_tip, kept)
     finally:
@@ -1101,6 +1139,7 @@ def _judge(execution: Execution) -> Verdict:
             reruns = execution.reruns
             if reruns is not None and reruns.reason:
                 reason = reruns.reason
+                confirmed = sorted(reruns.known_failed & set(execution.new))
             elif reruns is not None:
                 second = PartialSet(execution.first.candidate_sha, execution.rerun_tip, frozenset(execution.new),
                                     passing_every_rerun(execution.new, reruns.failed_rounds))
@@ -1108,6 +1147,7 @@ def _judge(execution: Execution) -> Verdict:
                     joined = join_partial_sets(execution.first, second)
                 except JoinRefused as exc:
                     reason = f"the reruns cannot be joined to the full run: {exc}"
+                    confirmed = sorted(reruns.known_failed & set(execution.new))
                 else:
                     confirmed = sorted(joined.covered - joined.passing)
                     unconfirmed = sorted(set(execution.new) - set(confirmed))

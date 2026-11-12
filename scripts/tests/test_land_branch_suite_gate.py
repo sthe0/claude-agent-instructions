@@ -379,7 +379,8 @@ def journal(tmp_path, monkeypatch):
 
 def journaled(path, entry_id="e1", test=FLAKY_TEST):
     land_branch.flake_list.append_entries(path, [
-        {"id": entry_id, "test": test, "candidate": "c" * 40, "tip": "b" * 40, "at": "2026-11-01T00:00:00Z"}])
+        {"id": entry_id, "test": test, "candidate": f"{entry_id:c<40}", "tip": "b" * 40,
+         "at": "2026-11-01T00:00:00Z"}])
 
 
 def test_a_pending_journal_lands_as_one_fold_commit_on_the_branch_tip(world, capsys, journal):
@@ -394,6 +395,28 @@ def test_a_pending_journal_lands_as_one_fold_commit_on_the_branch_tip(world, cap
     assert land_branch.flake_list.parse_list(
         git(world.remote, "show", f"main:{land_branch.flake_list.LIST_PATH}"))[FLAKY_TEST]["count"] == 1
     assert runner.shas == [landed] and "folded 1 flaky-test journal entry" in out
+
+
+def test_a_docs_only_landing_is_not_folded_and_stays_exempt(world, capsys, journal):
+    sha = feature(world, {"docs/note.md": "a note\n"})
+    journaled(journal)
+    runner = CleanRunner()
+    code, out, err = land(world, capsys, suite_runner=runner)
+    assert code == 0, err
+    assert remote_main(world) == sha and runner.shas == [] and "folded" not in out
+    assert len(land_branch.flake_list.read_entries(journal)) == 1
+
+
+def test_a_fold_that_fails_prints_a_warning_naming_the_error(world, capsys, journal, monkeypatch):
+    def broken(*_args):
+        raise RuntimeError("journal is on fire")
+
+    monkeypatch.setattr(land_branch.flake_list, "fold", broken)
+    sha = feature(world, CODE)
+    code, out, err = land(world, capsys, suite_runner=CleanRunner())
+    assert code == 0, err
+    assert "WARNING: flaky journal not folded (RuntimeError: journal is on fire)" in out
+    assert remote_main(world) == sha
 
 
 def test_the_fold_does_not_move_the_branch_ref(world, capsys, journal):

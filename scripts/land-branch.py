@@ -88,8 +88,9 @@ to opt out (e.g. a release branch cut from the landed tip must outlive it).
       tests` (trailer `Flake-Entries:`) on top of the branch tip. The suite
       gate, the smoke gate, the push (`<fold sha>:<trunk>`), the local trunk
       move and the landing record all use that commit; the branch ref is not
-      moved. A journal that cannot be folded is reported and never holds a
-      landing.
+      moved. A landing that needs no suite (memory/docs-only) is not folded.
+      A journal that cannot be folded is reported with a WARNING line and never
+      holds a landing.
       --suite-waiver REASON admits an UNAVAILABLE suite run (never a FAIL), with
       the reason recorded; --suite-timeout bounds each suite run (default:
       config.md suite-gate-timeout-s). The pre-push hook re-checks the same
@@ -336,19 +337,23 @@ def _smoke_gate(repo_root, assessment: Assessment, tip, timeout_s, waiver, runne
     return None, _admitted_line(sha, outcome.record, "ran", outcome.record_path)
 
 
-def _fold_flaky_journal(repo_root, assessment: Assessment):
+def _fold_flaky_journal(repo_root, assessment: Assessment, tip):
     """Count the machine-local flaky journal into scripts/tests/flaky.toml as one commit on the candidate.
 
     Returns (assessment, line): the assessment whose ``branch_sha`` is that commit (the branch ref is
     not moved; the commit is what the gates judge and the push lands), or the unchanged one when
-    nothing is pending. A journal that cannot be folded never holds a landing."""
+    nothing is pending or the landing needs no suite (a memory/docs-only landing stays exempt: the fold
+    would add a file the exemption does not cover). A journal that cannot be folded never holds a landing."""
     remote, trunk = assessment.remote, assessment.trunk
     try:
+        if suite_gate.landing_scope(repo_root, tip, assessment.branch_sha)[0] != suite_gate.REQUIRED:
+            return assessment, None
         journal = flake_list.journal_path(gate.git_common_dir(repo_root))
         flake_list.drop_landed(repo_root, journal, f"{remote}/{trunk}")
         folded = flake_list.fold(repo_root, journal, assessment.branch_sha, suite_gate.GIT_IDENTITY)
     except Exception as exc:  # noqa: BLE001 — the fold is bookkeeping; the gates still judge the candidate
-        return assessment, f"[land-branch] flaky journal not folded: {gate.one_line(exc, 300)}"
+        return assessment, (f"[land-branch] WARNING: flaky journal not folded ({type(exc).__name__}: "
+                            f"{gate.one_line(exc, 300)}); the landing goes on without it")
     if folded is None:
         return assessment, None
     lines = [f"[land-branch] folded {len(folded.entry_ids)} flaky-test journal entr"
@@ -524,7 +529,7 @@ def _do_land(repo_root, assessment: Assessment, smoke_timeout=gate.DEFAULT_TIMEO
 
     refusal, remote_tip = _fetch_tip(repo_root, assessment)
     if refusal is None:
-        assessment, fold_line = _fold_flaky_journal(repo_root, assessment)
+        assessment, fold_line = _fold_flaky_journal(repo_root, assessment, remote_tip)
         sha = assessment.branch_sha
         if fold_line:
             print(fold_line)

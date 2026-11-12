@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,7 @@ def world(tmp_path, monkeypatch):
 
 
 def entry(test, at, entry_id):
-    return {"id": entry_id, "test": test, "candidate": "c" * 40, "tip": "b" * 40, "at": at}
+    return {"id": entry_id, "test": test, "candidate": f"{entry_id:c<40}", "tip": "b" * 40, "at": at}
 
 
 def listed(world, sha):
@@ -170,3 +171,48 @@ def test_an_entry_the_trunk_does_not_carry_stays_in_the_journal(world, tmp_path)
     flake_list.fold(world.work, journal, world.base, gate.GIT_IDENTITY)
     assert flake_list.drop_landed(world.work, journal, "origin/main") == 0
     assert [e["id"] for e in flake_list.read_entries(journal)] == ["e1"]
+
+
+# ── reproducible fold, deduplicated journal, torn lines, leftovers ────────
+
+def test_the_same_journal_on_the_same_tip_gives_the_same_fold_commit(world, tmp_path):
+    journal = tmp_path / "j.jsonl"
+    flake_list.append_entries(journal, [entry(TEST_B, "2026-11-01T00:00:01Z", "e2"),
+                                        entry(TEST_A, "2026-11-01T00:00:00Z", "e1")])
+    first = flake_list.fold(world.work, journal, world.base, gate.GIT_IDENTITY)
+    time.sleep(1.1)
+    second = flake_list.fold(world.work, journal, world.base, gate.GIT_IDENTITY)
+    assert first.sha == second.sha
+
+
+def test_one_test_of_one_candidate_and_tip_is_journaled_once(tmp_path):
+    journal = tmp_path / "j.jsonl"
+    flake_list.append_entries(journal, [flake_list.new_entry(TEST_A, "c" * 40, "b" * 40, "2026-11-01T00:00:00Z")])
+    flake_list.append_entries(journal, [flake_list.new_entry(TEST_A, "c" * 40, "b" * 40, "2026-11-01T01:00:00Z"),
+                                        flake_list.new_entry(TEST_A, "d" * 40, "b" * 40, "2026-11-01T02:00:00Z"),
+                                        flake_list.new_entry(TEST_B, "c" * 40, "b" * 40, "2026-11-01T02:00:00Z")])
+    assert [(e["test"], e["candidate"]) for e in flake_list.read_entries(journal)] == [
+        (TEST_A, "c" * 40), (TEST_A, "d" * 40), (TEST_B, "c" * 40)]
+
+
+def test_an_append_after_a_torn_line_does_not_glue_onto_it(tmp_path):
+    journal = tmp_path / "j.jsonl"
+    flake_list.append_entries(journal, [entry(TEST_A, "2026-11-01T00:00:00Z", "e1")])
+    with open(journal, "a", encoding="utf-8") as fh:
+        fh.write('{"id": "torn", "te')
+    flake_list.append_entries(journal, [entry(TEST_B, "2026-11-02T00:00:00Z", "e2")])
+    assert [e["id"] for e in flake_list.read_entries(journal)] == ["e1", "e2"]
+
+
+def test_a_failed_rewrite_leaves_no_temporary_file(world, tmp_path, monkeypatch):
+    journal = tmp_path / "j.jsonl"
+    flake_list.append_entries(journal, [entry(TEST_A, "2026-11-01T00:00:00Z", "e1")])
+    land_fold(world, flake_list.fold(world.work, journal, world.base, gate.GIT_IDENTITY))
+
+    def broken(*_args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(flake_list.os, "replace", broken)
+    with pytest.raises(OSError):
+        flake_list.drop_landed(world.work, journal, "origin/main")
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".tmp-")] == []

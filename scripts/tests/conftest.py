@@ -255,6 +255,14 @@ def _isolate_telemetry(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_flaky_journal(tmp_path_factory, monkeypatch):
+    """A suite-gate run that sees an unconfirmed failure appends to the flaky journal; no test may
+    append to the operator's journal, whether the default one or one SUITE_GATE_FLAKY_JOURNAL names."""
+    journal_dir = tmp_path_factory.mktemp("flaky-journal")
+    monkeypatch.setenv("SUITE_GATE_FLAKY_JOURNAL", str(journal_dir / "flaky-pending.jsonl"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_delivery_channel(monkeypatch):
     """No test may run a delivery-channel command configured in the real
     ~/.claude-agent. The config-root environment stays real (many tests depend on

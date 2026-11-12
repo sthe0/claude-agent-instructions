@@ -85,13 +85,34 @@ def read_entries(journal: Path) -> list[dict]:
         return []
 
 
+def _ends_with_newline(journal: Path) -> bool:
+    try:
+        with open(journal, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() == 0:
+                return True
+            fh.seek(-1, os.SEEK_END)
+            return fh.read(1) == b"\n"
+    except FileNotFoundError:
+        return True
+
+
 def append_entries(journal: Path, entries: Iterable[dict]) -> None:
-    lines = "".join(json.dumps(entry, sort_keys=True) + "\n" for entry in entries)
-    if not lines:
-        return
+    """Append entries; one of a (test, candidate, tip) the journal already holds is not added again, so
+    ``count`` measures flakes, not reruns of the same candidate. A torn last line is not glued onto."""
     with _locked(journal):
+        known = {(e["test"], e.get("candidate"), e.get("tip")) for e in read_entries(journal)}
+        fresh = []
+        for entry in entries:
+            key = (entry["test"], entry.get("candidate"), entry.get("tip"))
+            if key not in known:
+                known.add(key)
+                fresh.append(entry)
+        if not fresh:
+            return
+        lead = "" if _ends_with_newline(journal) else "\n"
         with open(journal, "a", encoding="utf-8") as fh:
-            fh.write(lines)
+            fh.write(lead + "".join(json.dumps(entry, sort_keys=True) + "\n" for entry in fresh))
             fh.flush()
             os.fsync(fh.fileno())
 
@@ -152,9 +173,14 @@ def drop_landed(repo: str | Path, journal: Path, trunk_ref: str) -> int:
         if len(kept) == len(entries):
             return 0
         fd, tmp = tempfile.mkstemp(dir=journal.parent, prefix=".tmp-", suffix=".jsonl")
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write("".join(json.dumps(entry, sort_keys=True) + "\n" for entry in kept))
-        os.replace(tmp, journal)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write("".join(json.dumps(entry, sort_keys=True) + "\n" for entry in kept))
+            os.replace(tmp, journal)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+            raise
     return len(entries) - len(kept)
 
 
@@ -184,7 +210,10 @@ def _git_with(repo: str | Path, env: Mapping[str, str], *args: str, stdin: str |
 
 def _write_commit(repo: str | Path, parent: str, text: str, entry_ids: Sequence[str],
                   identity: Mapping[str, str]) -> str:
-    plain = {**shared.clean_env(), **identity}
+    # Dates pinned to the parent's committer date so the same journal on the same tip gives the same sha,
+    # and the suite and smoke records stored for that sha serve a retried landing.
+    date = _git_with(repo, shared.clean_env(), "show", "-s", "--format=%cI", parent)
+    plain = {**shared.clean_env(), **identity, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
     blob = _git_with(repo, plain, "hash-object", "-w", "--stdin", stdin=text)
     with tempfile.TemporaryDirectory(prefix="flake-fold-") as scratch:
         env = {**plain, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
@@ -201,10 +230,11 @@ def fold(repo: str | Path, journal: Path, branch_sha: str, identity: Mapping[str
     Nothing is moved: the caller decides what to do with the commit. ``None`` when nothing is pending.
     """
     carried = carried_ids(repo, branch_sha)
-    pending = [entry for entry in read_entries(journal) if entry["id"] not in carried]
+    pending = sorted((entry for entry in read_entries(journal) if entry["id"] not in carried),
+                     key=lambda entry: (entry["at"], entry["id"]))
     if not pending:
         return None
     table = merge_entries(parse_list(_list_text_at(repo, branch_sha)), pending)
-    ids = tuple(entry["id"] for entry in pending)
+    ids = tuple(sorted(entry["id"] for entry in pending))
     sha = _write_commit(repo, branch_sha, render_list(table), ids, identity)
     return Fold(sha, ids, table)

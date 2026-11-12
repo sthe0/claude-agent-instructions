@@ -888,9 +888,9 @@ def verdict_scenario(repo: Path, case_name: str, sabotage: str | None, out: Path
     nonce = f"{os.getpid()}-{case_name}"
     work = Path(f"/tmp/cls-control-{nonce}")
     journal = Path(f"/tmp/cls-control-{os.getpid()}-journal.jsonl")
-    live = Path(gate.shared.git_common_dir(repo)) / flake_list.JOURNAL_RELATIVE
-    live_before = journal_state(live)
     saved_env = os.environ.get(flake_list.JOURNAL_ENV)
+    live = Path(saved_env) if saved_env else Path(gate.shared.git_common_dir(repo)) / flake_list.JOURNAL_RELATIVE
+    live_before = journal_state(live)
     saved_rule = gate.passing_every_rerun
     os.environ[flake_list.JOURNAL_ENV] = str(journal)
     if sabotage == "single-rerun":
