@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Stub of `systemctl --user` for the tests of install-reaper-timer.sh; knows nothing of that script.
+# Answers come from the test's environment:
+#   REAPER_TIMER_STUB_STATE        directory for the call log and the enabled flag (required)
+#   REAPER_TIMER_STUB_MANAGER      running (default) | degraded | none (no user manager)
+#   REAPER_TIMER_STUB_RESULT       Result of the started service: success (default) | failed
+#   REAPER_TIMER_STUB_INVOCATION   id of that run (default: 32 hex digits); `show` reports an empty
+#                                  InvocationID after the run, as systemd 255 does for a finished oneshot
+#   REAPER_TIMER_STUB_OBS_FILE     when set, copied to $REAPER_TIMER_STUB_OBS_DIR/<InvocationID>.json on start
+set -u
+state="${REAPER_TIMER_STUB_STATE:?}"
+mkdir -p "$state"
+printf '%s\n' "$*" >> "$state/calls.log"
+[[ "${1:-}" == "--user" ]] && shift
+verb="${1:-}"
+shift || true
+invocation="${REAPER_TIMER_STUB_INVOCATION:-0123456789abcdef0123456789abcdef}"
+case "$verb" in
+  is-system-running)
+    manager="${REAPER_TIMER_STUB_MANAGER:-running}"
+    if [[ "$manager" == none ]]; then
+      echo "Failed to connect to bus: No medium found" >&2
+      exit 1
+    fi
+    echo "$manager"
+    [[ "$manager" == running ]]
+    ;;
+  daemon-reload) ;;
+  enable) touch "$state/enabled" ;;
+  disable) rm -f "$state/enabled" ;;
+  is-enabled)
+    if [[ -e "$state/enabled" ]]; then echo enabled; else echo disabled; exit 1; fi
+    ;;
+  is-active)
+    if [[ -e "$state/enabled" ]]; then echo active; else echo inactive; exit 3; fi
+    ;;
+  start)
+    if [[ -n "${REAPER_TIMER_STUB_OBS_FILE:-}" && -n "${REAPER_TIMER_STUB_OBS_DIR:-}" ]]; then
+      mkdir -p "$REAPER_TIMER_STUB_OBS_DIR"
+      cp "$REAPER_TIMER_STUB_OBS_FILE" "$REAPER_TIMER_STUB_OBS_DIR/$invocation.json"
+    fi
+    ;;
+  show)
+    result="${REAPER_TIMER_STUB_RESULT:-success}"
+    echo "Result=$result"
+    if [[ "$result" == success ]]; then echo "ExecMainStatus=0"; else echo "ExecMainStatus=1"; fi
+    echo "InvocationID="
+    ;;
+  *) echo "stub systemctl: unhandled verb: $verb" >&2; exit 2 ;;
+esac

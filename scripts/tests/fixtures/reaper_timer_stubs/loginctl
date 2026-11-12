@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Stub of `loginctl show-user NAME -p Linger --value` for the tests of install-reaper-timer.sh:
+# prints $REAPER_TIMER_STUB_LINGER (default yes).
+echo "${REAPER_TIMER_STUB_LINGER:-yes}"

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Stub of `journalctl --user` for the tests of install-reaper-timer.sh, modelled on systemd 255:
+# the unit's own lines carry _SYSTEMD_INVOCATION_ID (and _SYSTEMD_USER_UNIT); the manager's Starting/Finished
+# lines carry USER_INVOCATION_ID. Logs the call under $REAPER_TIMER_STUB_STATE when set. Answers by query:
+#   -u UNIT ... -o export          export entries for the run ids: own lines, and the manager's lines
+#   _SYSTEMD_INVOCATION_ID=<id>    the runner's lines ($REAPER_TIMER_STUB_JOURNAL) when <id> is a run id
+#   USER_INVOCATION_ID=<id>        only the manager's two lines
+# Environment:
+#   REAPER_TIMER_STUB_INVOCATION        the run id (default: 32 hex digits)
+#   REAPER_TIMER_STUB_JOURNAL_IDS       comma-separated run ids instead of the one above; empty: no run in the journal
+#   REAPER_TIMER_STUB_JOURNAL_OWN       0: the unit's own lines are absent, only the manager's remain
+#   REAPER_TIMER_STUB_JOURNAL_LAG       number of export queries answered with nothing before the run shows up
+#   REAPER_TIMER_STUB_JOURNAL           the runner's lines for a run id
+if [[ -n "${REAPER_TIMER_STUB_STATE:-}" ]]; then
+  mkdir -p "$REAPER_TIMER_STUB_STATE"
+  printf 'journalctl %s\n' "$*" >> "$REAPER_TIMER_STUB_STATE/calls.log"
+fi
+default="${REAPER_TIMER_STUB_INVOCATION:-0123456789abcdef0123456789abcdef}"
+ids="${REAPER_TIMER_STUB_JOURNAL_IDS-$default}"
+IFS=, read -ra id_list <<<"$ids"
+unit="" query="" export_mode=0
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[i]}" in
+    -u) unit="${args[i + 1]}" ;;
+    -o) [[ "${args[i + 1]}" == export ]] && export_mode=1 ;;
+    _SYSTEMD_INVOCATION_ID=*|USER_INVOCATION_ID=*) query="${args[i]}" ;;
+  esac
+done
+is_run_id() {
+  local candidate
+  for candidate in "${id_list[@]}"; do [[ "$candidate" == "$1" ]] && return 0; done
+  return 1
+}
+if (( export_mode )); then
+  lag="${REAPER_TIMER_STUB_JOURNAL_LAG:-0}"
+  seen=0
+  [[ -f "${REAPER_TIMER_STUB_STATE:-/nonexistent}/journal-lag-seen" ]] && seen="$(<"$REAPER_TIMER_STUB_STATE/journal-lag-seen")"
+  if (( seen < lag )); then
+    echo $((seen + 1)) > "$REAPER_TIMER_STUB_STATE/journal-lag-seen"
+    exit 0
+  fi
+  for id in "${id_list[@]}"; do
+    [[ -n "$id" ]] || continue
+    printf 'MESSAGE=Starting %s\nUSER_INVOCATION_ID=%s\nUSER_UNIT=%s\n\n' "$unit" "$id" "$unit"
+    if [[ "${REAPER_TIMER_STUB_JOURNAL_OWN:-1}" == 1 ]]; then
+      printf 'MESSAGE=reaper: pass done\n_SYSTEMD_INVOCATION_ID=%s\n_SYSTEMD_USER_UNIT=%s\n\n' "$id" "$unit"
+    fi
+    printf 'MESSAGE=Finished %s\nUSER_INVOCATION_ID=%s\nUSER_UNIT=%s\n\n' "$unit" "$id" "$unit"
+  done
+  exit 0
+fi
+case "$query" in
+  _SYSTEMD_INVOCATION_ID=*)
+    if is_run_id "${query#*=}" && [[ -n "${REAPER_TIMER_STUB_JOURNAL:-}" ]]; then printf '%s\n' "$REAPER_TIMER_STUB_JOURNAL"; fi
+    ;;
+  USER_INVOCATION_ID=*)
+    if is_run_id "${query#*=}"; then printf 'Starting agent-reaper-pass.service\nFinished agent-reaper-pass.service\n'; fi
+    ;;
+esac
+exit 0

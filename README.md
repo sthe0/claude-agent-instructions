@@ -58,6 +58,10 @@ Nothing to copy. Open Claude Code anywhere and send it the repo URL:
 
 A stock Claude fetches this README, **checks the Requirements above first**, runs the Setup steps (clone, `setup-symlinks.sh`, `doctor.sh`), and reports when it is green — showing what it will run before changing anything, calling out the user↔Core switch explicitly, and finishing by telling you how to start your first task (below). Works in any language you write in.
 
+<!-- reaper-timer-question -->
+Setup also offers the disk-guard timer (a systemd user timer that runs the pressure reaper every minute). When Claude runs setup without a terminal, nothing is installed silently: Claude puts the question "Install the disk-guard timer? [Y/n]" to the user, with installing as the default, and on a yes runs `install-reaper-timer.sh --tmpdir "$TMPDIR"` from the canonical checkout so the units run landed code (or reruns setup with `--reaper-timer=yes`; `--reaper-timer=no` records a decline). The question installs only the timer.
+<!-- /reaper-timer-question -->
+
 ### Equivalent steps
 
 Prefer a manual run over the bootstrap prompt? Full command sequence (clone, `setup-symlinks.sh`, `doctor.sh`), auth-per-root mechanics, and push-rights notes: [docs/operations/setup.md](docs/operations/setup.md).
