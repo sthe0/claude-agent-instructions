@@ -185,7 +185,8 @@ def test_the_real_exceptions_file_parses_and_every_entry_has_a_reason():
 
 # ── shuffle-pair, with the whole-suite runs faked ─────────────────────────
 
-def fake_run_tree(tmp_path, *, hermetic=True, staggered=False, bad_outcome=False, seen=None):
+def fake_run_tree(tmp_path, *, hermetic=True, staggered=False, bad_outcome=False, seen=None,
+                  collected=True, pytest_exit=0):
     """A stand-in for gate.run_tree: writes a per-test report and returns the SuiteRun it describes."""
     def run_tree(repo, sha, extra_pytest_args, junit_path, slots=None, *, timeout_s):
         if seen is not None:
@@ -194,11 +195,11 @@ def fake_run_tree(tmp_path, *, hermetic=True, staggered=False, bad_outcome=False
         report = tmp_path / f"{seed or 'plain'}.tests.jsonl"
         ok = "failed" if (bad_outcome and seed == "2") else "passed"
         lines = [line("collected", "t::a"), line("collected", "t::b"),
-                 line("report", "t::a", "call", "passed"), line("report", "t::b", "call", ok)]
+                 line("report", "t::a", "call", "passed"), line("report", "t::b", "call", ok)] if collected else []
         report.write_text("".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8")
         start = {None: 1_000_000.0, "1": 2_000_000.0, "2": 2_100_000.0 if staggered else 2_000_000.0}[seed]
         return gate.SuiteRun(
-            0, build_ok=True, hermetic=hermetic, hermetic_reason="" if hermetic else "no namespaces",
+            pytest_exit, build_ok=True, hermetic=hermetic, hermetic_reason="" if hermetic else "no namespaces",
             slots_held=4, slots_source=test_slots.ACQUIRED, duration_s=3000.0,
             slots_acquired_at=gate.iso_instant(start), timeout_started_at=gate.iso_instant(start),
             report_path=str(report), junit_path=str(junit_path))
@@ -207,6 +208,8 @@ def fake_run_tree(tmp_path, *, hermetic=True, staggered=False, bad_outcome=False
 
 @pytest.fixture
 def pair(tmp_path, monkeypatch):
+    # shuffle_pair pops the held-slots variable from os.environ; delenv restores it for later tests.
+    monkeypatch.delenv(test_slots.HELD_ENV, raising=False)
     monkeypatch.setattr(control, "_git", lambda repo, *args: "" if args[0] == "status" else "a" * 40)
 
     def run(**fake):
@@ -237,7 +240,37 @@ def test_shuffle_pair_exits_1_on_an_unlisted_difference(pair):
     assert pair(bad_outcome=True) == 1
 
 
+def test_a_difference_is_exit_1_even_when_the_shuffled_runs_did_not_overlap(pair):
+    assert pair(staggered=True, bad_outcome=True) == 1
+
+
+def test_runs_that_collected_nothing_are_exit_3_not_a_pass(pair, capsys):
+    assert pair(collected=False) == 3
+    assert "UNUSABLE" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("code", [2, 3, 4, 5])
+def test_a_pytest_exit_other_than_0_or_1_is_exit_3(pair, code):
+    assert pair(pytest_exit=code) == 3
+
+
+def test_a_git_failure_is_exit_3_not_1(tmp_path, monkeypatch):
+    monkeypatch.delenv(test_slots.HELD_ENV, raising=False)
+
+    def broken_git(repo, *args):
+        raise SystemExit("git rev-parse HEAD failed: not a repository")
+    monkeypatch.setattr(control, "_git", broken_git)
+    assert control.main(["shuffle-pair", "--seeds", "1,2", "--out", str(tmp_path / "p.json"),
+                         "-C", str(tmp_path)]) == 3
+
+
+@pytest.mark.parametrize("argv", [["shuffle-pair", "--seeds", "1,2"], ["compare", "--no-such-flag"]])
+def test_a_usage_error_is_exit_3_not_2(argv):
+    assert control.main(argv) == 3
+
+
 def launch(tmp_path, monkeypatch, runs, *, sha="a" * 40, seen=None):
+    monkeypatch.delenv(test_slots.HELD_ENV, raising=False)
     monkeypatch.setattr(control, "_git", lambda repo, *args: "" if args[0] == "status" else sha)
     monkeypatch.setattr(gate, "run_tree", fake_run_tree(tmp_path, seen=seen))
     return control.main(["shuffle-pair", "--seeds", "1,2", "--out", str(tmp_path / "pair.json"), "--runs", runs,
@@ -273,6 +306,7 @@ def test_a_full_launch_ignores_earlier_records(tmp_path, monkeypatch):
 
 
 def test_a_run_that_did_not_complete_is_exit_3(tmp_path, monkeypatch):
+    monkeypatch.delenv(test_slots.HELD_ENV, raising=False)
     monkeypatch.setattr(control, "_git", lambda repo, *args: "" if args[0] == "status" else "a" * 40)
     monkeypatch.setattr(gate, "run_tree", lambda *a, **k: gate.SuiteRun(None, timed_out=True))
     assert control.main(["shuffle-pair", "--seeds", "1,2", "--out", str(tmp_path / "p.json"),

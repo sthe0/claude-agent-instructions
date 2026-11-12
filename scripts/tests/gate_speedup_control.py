@@ -709,10 +709,26 @@ def overlap(first: dict, second: dict) -> tuple[float, float]:
     return seconds, (seconds / shorter if shorter > 0 else 0.0)
 
 
+def _unusable_runs(runs: list[dict]) -> str:
+    """Why these whole-suite runs cannot be compared (empty when they can): a run that collected
+    nothing, runs that collected different numbers of tests, or a pytest exit other than 0 or 1."""
+    collected = {run["name"]: run.get("collected") for run in runs}
+    if any(not isinstance(count, int) or count <= 0 for count in collected.values()):
+        return f"collected counts {collected}"
+    if len(set(collected.values())) != 1:
+        return f"the runs collected different numbers of tests {collected}"
+    exits = {run["name"]: run.get("pytest_exit") for run in runs}
+    if any(code not in (0, 1) for code in exits.values()):
+        return f"pytest exits {exits} (only 0 or 1 means the suite ran)"
+    return ""
+
+
 def judge(report: dict, exceptions_path: Path, *, strict: bool) -> int:
     """The verdict of a shuffle-pair report: 0 equal apart from listed exceptions, 1 an unlisted
     difference, 2 an entry without a reason, 3 unusable input. With ``strict`` (the run's own verdict)
-    also 6 a run was not hermetic and 5 the two shuffled runs did not overlap."""
+    also 6 a run was not hermetic, 3 a run that collected nothing, a different number of tests or did
+    not finish with pytest exit 0/1, and 5 the two shuffled runs did not overlap (only when no unlisted
+    id differs: a difference is exit 1 regardless)."""
     try:
         runs = report["runs"]
         names = [run["name"] for run in runs]
@@ -736,20 +752,30 @@ def judge(report: dict, exceptions_path: Path, *, strict: bool) -> int:
         if outside:
             _say(f"NOT HERMETIC: {' '.join(outside)} ran outside isolation, so the comparison proves nothing")
             return EXIT_NOT_HERMETIC
+        unusable = _unusable_runs(runs)
+        if unusable:
+            _say(f"UNUSABLE: {unusable}: the comparison would prove nothing")
+            return EXIT_ERROR
     unlisted = {i: seen for i, seen in differing.items() if i not in listed}
     for i, seen in list(unlisted.items())[:20]:
         _say(f"DIFFERS: {i}: {', '.join(f'{name}={outcome}' for name, outcome in seen.items())}")
     if len(unlisted) > 20:
         _say(f"... and {len(unlisted) - 20} more")
+    # A difference is a real ordering failure whether or not the shuffled runs overlapped, so it wins
+    # over "inconclusive"; NO OVERLAP only withholds a pass.
+    if unlisted:
+        _say(f"FAIL: {len(unlisted)} test(s) differ and are not listed in {exceptions_path.name}")
+        return EXIT_DIFFERENT
     if strict and len(shuffled) == 2:
-        seconds, share = overlap(*shuffled)
+        try:
+            seconds, share = overlap(*shuffled)
+        except (KeyError, TypeError) as exc:
+            _say(f"cannot read the shuffled runs' times: {exc!r}")
+            return EXIT_ERROR
         if share < MIN_OVERLAP_FRACTION:
             _say(f"NO OVERLAP: the shuffled runs ran together for {seconds:.0f} s, {share:.0%} of the shorter "
                  f"(need {MIN_OVERLAP_FRACTION:.0%}): inconclusive")
             return EXIT_NO_OVERLAP
-    if unlisted:
-        _say(f"FAIL: {len(unlisted)} test(s) differ and are not listed in {exceptions_path.name}")
-        return EXIT_DIFFERENT
     used = sorted(set(differing) & set(listed))
     _say(f"OK: {len(runs)} runs, {len(differing)} differing test(s), all listed" + (f": {' '.join(used)}" if used else ""))
     return EXIT_EQUAL
@@ -866,6 +892,17 @@ def shuffle_pair(repo: Path, seeds: list[int], out: Path, exceptions_path: Path,
     return judge(report, exceptions_path, strict=True)
 
 
+def _isolation_command(args: argparse.Namespace) -> int:
+    if args.command == "compare":
+        return compare(args.report, args.exceptions)
+    try:
+        seeds = [int(part) for part in args.seeds.split(",")]
+    except ValueError:
+        _say(f"--seeds takes two integers, got {args.seeds!r}")
+        return EXIT_ERROR
+    return shuffle_pair(args.repo.resolve(), seeds, args.out, args.exceptions, args.timeout_s, args.runs)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gate_speedup_control.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -919,7 +956,24 @@ def main(argv: list[str] | None = None) -> int:
     fake.add_argument("--want", type=int, required=True)
     fake.add_argument("--hold-s", type=float, required=True)
     fake.add_argument("--limiter", choices=LIMITERS, required=True)
-    args = parser.parse_args(argv)
+    words = sys.argv[1:] if argv is None else argv
+    isolation = bool(words) and words[0] in ("shuffle-pair", "compare")
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        # argparse exits 2 on a usage error, which shuffle-pair and compare reserve for a reasonless entry.
+        if isolation and exc.code not in (0, None):
+            return EXIT_ERROR
+        raise
+    if isolation:
+        try:
+            return _isolation_command(args)
+        except SystemExit as exc:  # _git and the sandbox helpers stop with SystemExit(<message>), exit 1
+            _say(f"error: {exc}")
+            return EXIT_ERROR
+        except Exception as exc:  # noqa: BLE001 — every other failure is exit 3, never 1 "differs"
+            _say(f"error: {exc!r}")
+            return EXIT_ERROR
     if args.command == "slots-selftest":
         return slots_selftest(args.limiter)
     if args.command == "concurrent-gates":
@@ -930,15 +984,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "hermetic-run":
         return hermetic_run(args.repo.resolve(), args.out, args.named, args.max_named, args.root, args.timeout_s,
                             args.reruns, args.no_hide, args.probe_only)
-    if args.command == "shuffle-pair":
-        try:
-            seeds = [int(part) for part in args.seeds.split(",")]
-        except ValueError:
-            _say(f"--seeds takes two integers, got {args.seeds!r}")
-            return EXIT_ERROR
-        return shuffle_pair(args.repo.resolve(), seeds, args.out, args.exceptions, args.timeout_s, args.runs)
-    if args.command == "compare":
-        return compare(args.report, args.exceptions)
     if args.command == "verify-named":
         return verify_named(args.report, args.named, args.max_named)
     return _fake_run(args)
