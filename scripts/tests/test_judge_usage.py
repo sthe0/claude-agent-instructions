@@ -474,9 +474,11 @@ def test_suite_cannot_reach_the_production_ledger():
 def test_subprocess_runner_sets_timed_out_on_a_real_timeout(monkeypatch, tmp_path):
     path = _use_ledger(monkeypatch, tmp_path)
     judge_ledger.set_current_judge("outage_escalation")
-    result = advisor.subprocess_runner(
-        [sys.executable, "-c", "import time; time.sleep(30)"], timeout=1
-    )
+    slow_claude = tmp_path / "bin" / "claude"
+    slow_claude.parent.mkdir()
+    slow_claude.write_text("#!/bin/sh\nexec sleep 30\n")
+    slow_claude.chmod(0o755)
+    result = advisor.subprocess_runner([str(slow_claude)], timeout=1)
     # The discriminator every hook branches on, produced by the production
     # TimeoutExpired path rather than by a test double asserting its own input.
     assert result.timed_out is True
