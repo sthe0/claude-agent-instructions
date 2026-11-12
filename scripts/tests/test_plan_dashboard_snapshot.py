@@ -14,6 +14,7 @@ reader written from it alone.
 """
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import os
@@ -1116,5 +1117,73 @@ def test_a_changed_state_file_outside_the_window_is_applied_by_the_live_check(ro
     assert str(stale) not in recorded_states(restart_window(root, tmp_path))
     rewrite(stale, stale.read_text(encoding="utf-8") + " ", mtime_ns=os.stat(stale).st_mtime_ns)
     CTIME_TICKS[os.stat(stale).st_ino] += ONE_HOUR_NS                 # its ctime on the dashboard's clock
+    read_window(root)
+    assert str(stale) in store.observation()[0]
+
+
+# --- a transcript of a task the dashboard does not show the task from, and a source rewritten in place ------
+
+def read_as_the_app_does(root) -> dict:
+    """What a refresh reads of the transcripts: through each task's binding, as the app reads them."""
+    snapshot = model.collect(root.state_root, now=NOW, include_all=True, cost_log=root.cost_log)
+    attention.collect([task["session_id"] for task in snapshot["tasks"]], None, root.transcripts_root)
+    return snapshot
+
+
+def restart_from_an_app_read(root, tmp_path) -> Path:
+    path = tmp_path / "cache" / store.CACHE_DIRNAME / store.FILE_NAME
+    tui.write_snapshot(path, SELECTION, tui.snapshot_section(read_as_the_app_does(root), EMPTY_MARKS, {}, NOW))
+    attention.clear_cache()
+    model.clear_cache()
+    assert tui.restore_snapshot(path, SELECTION) is not None
+    return path
+
+
+def grow(path: Path) -> None:
+    rewrite(path, path.read_text(encoding="utf-8") + "\n", mtime_ns=os.stat(path).st_mtime_ns)
+
+
+def test_a_same_named_transcript_of_a_task_is_applied_by_the_live_check_when_the_task_shows_another(root, tmp_path):
+    own = write_transcript(root.transcripts_root, ALPHA, [usage_row("o1", at(minutes=40), 1)])
+    set_mtime(own, at(minutes=40))
+    [bound] = root.transcripts_root.glob(f"*/{HARNESS}.jsonl")
+    assert os.stat(bound).st_mtime_ns > os.stat(own).st_mtime_ns
+    restart_from_an_app_read(root, tmp_path)
+    grow(own)
+    read_as_the_app_does(root)
+    changed, kinds, driven = store.observation()
+    assert str(own) in changed
+    assert store.applied_by_task([str(own)], kinds, driven, [ALPHA, BETA]) == {ALPHA: [str(own)], BETA: []}
+
+
+def test_the_harness_counts_a_changed_transcript_of_a_shown_task_from_a_snapshot_the_dashboard_wrote(root, tmp_path):
+    import plan_dashboard_harness as harness
+
+    path = restart_from_an_app_read(root, tmp_path)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    [bound] = root.transcripts_root.glob(f"*/{HARNESS}.jsonl")
+    grow(bound)
+    taken_when_no_state_file_is_in_the_window = (NOW + dt.timedelta(days=10)).isoformat()
+    copy = {"file": str(path), "taken_at": taken_when_no_state_file_is_in_the_window, "sources": document["sources"]}
+
+    def counted() -> list[str]:
+        return [item["path"] for item in harness.contract_changes(copy, harness.live_sources())
+                if item["kind"] == "transcript"]
+
+    assert counted() == [str(bound)]
+    for section in document["sections"].values():
+        for task in section["snapshot"]["tasks"]:
+            del task["session_id"]
+    path.write_text(json.dumps(document), encoding="utf-8")
+    assert counted() == []
+
+
+def test_an_out_of_window_state_file_rewritten_in_place_is_applied_by_the_live_check(root, tmp_path):
+    stale = root.state_root / f"{STALE}.json"
+    assert str(stale) not in recorded_states(restart_window(root, tmp_path))
+    marker = store.directory_marker(root.state_root)
+    rewrite(stale, stale.read_text(encoding="utf-8") + " ", mtime_ns=os.stat(stale).st_mtime_ns)
+    CTIME_TICKS[os.stat(stale).st_ino] += ONE_HOUR_NS
+    assert store.directory_marker(root.state_root) == marker
     read_window(root)
     assert str(stale) in store.observation()[0]

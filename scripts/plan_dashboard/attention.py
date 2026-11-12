@@ -288,13 +288,20 @@ def find_transcript(harness_session: str, locator, transcripts_root, transcripts
     path = locate.transcript_path(locator, harness_session)
     if path is not None:
         return path
+    return _newest(transcript_matches(harness_session, transcripts_root, transcripts))
+
+
+def transcript_matches(harness_session: str, transcripts_root, transcripts=None) -> list[Path]:
+    """Every transcript file named for ``harness_session`` under the roots."""
     name = config_root.sanitize_session_id(harness_session)
     if transcripts is not None:
-        matches = transcripts.get(name, [])
-    elif transcripts_root is not None:
-        matches = sorted(Path(transcripts_root).glob(f"*/{name}.jsonl"))
-    else:
-        matches = config_root.iter_transcripts(f"*/{name}.jsonl")
+        return list(transcripts.get(name, []))
+    if transcripts_root is not None:
+        return sorted(Path(transcripts_root).glob(f"*/{name}.jsonl"))
+    return list(config_root.iter_transcripts(f"*/{name}.jsonl"))
+
+
+def _newest(matches) -> Path | None:
     best = None
     for match in matches:
         try:
@@ -306,6 +313,18 @@ def find_transcript(harness_session: str, locator, transcripts_root, transcripts
     return best[1] if best else None
 
 
+def note_candidate_transcripts(candidates, locator, transcripts_root, transcripts=None) -> None:
+    """Record the identity of every transcript of every session that may be a task's own, not only the one the
+    task is shown from: the contract maps a transcript to its same-named task and to the tasks its session drives."""
+    for candidate in candidates:
+        located = locate.transcript_path(locator, candidate)
+        for path in {*([located] if located else []), *transcript_matches(candidate, transcripts_root, transcripts)}:
+            try:
+                snapshot.OBSERVED.note("transcript", path, os.stat(path))
+            except OSError:
+                continue
+
+
 def bind_session(engine_session: str, locator, transcripts_root, index=None,
                  transcripts=None) -> tuple[str | None, Path | None, list[str]]:
     """``(harness session, its transcript, every session recorded as driving the task)``; ``index`` is a
@@ -314,7 +333,9 @@ def bind_session(engine_session: str, locator, transcripts_root, index=None,
         index = snapshot.harness_index()
     bound = list(index.get(config_root.sanitize_session_id(engine_session), [])) if engine_session else []
     best = None
-    for candidate in dict.fromkeys([engine_session, *bound]):
+    candidates = list(dict.fromkeys([engine_session, *bound]))
+    note_candidate_transcripts(candidates, locator, transcripts_root, transcripts)
+    for candidate in candidates:
         path = find_transcript(candidate, locator, transcripts_root, transcripts)
         if path is None:
             continue

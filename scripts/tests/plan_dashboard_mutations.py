@@ -14,7 +14,9 @@ locator's family, killed by ``test_plan_dashboard_attention.py``.
 
 SNAPSHOT_MUTATIONS is the snapshot's and the identity-keyed caches' family, killed by
 ``test_plan_dashboard_snapshot.py``; the two rows that target ``tui_app`` (``mark-confirmed-from-snapshot``,
-``overlay-waits-on-order-read``) are killed by the pilot file.
+``overlay-waits-on-order-read``) are killed by the pilot file. ``same-named-transcript-dropped`` (a task's
+other transcripts are not recorded) and ``unrecorded-source-stat-skipped`` (the live check stats no unrecorded
+source in a directory whose marker is unchanged) are killed by the snapshot tests.
 
 ``test_plan_dashboard_mutation_catalogue.py`` runs every MUTATIONS row in a subprocess and asserts
 the model tests go red, every other TUI_MUTATIONS row likewise against the console tests, and the
@@ -1050,7 +1052,18 @@ def _marker_taken_as_recorded(original):
     return mutated
 
 
+def _unrecorded_source_never_statted(original):
+    def mutated(reference, path, kind, ident, live_marker=None):
+        recorded = (getattr(reference, "unrecorded", None) or {}).get(kind)
+        if path not in reference and recorded and live_marker == recorded[2]:
+            return True
+        return original(reference, path, kind, ident, live_marker)
+    return mutated
+
+
 SNAPSHOT_MUTATIONS = {
+    "same-named-transcript-dropped": (ATTENTION, "note_candidate_transcripts", lambda _original: lambda *args, **kwargs: None),
+    "unrecorded-source-stat-skipped": (SNAPSHOT, "_unchanged", _unrecorded_source_never_statted),
     "snapshot-checksum-ignored": (SNAPSHOT, "load", _checksum_unchecked),
     "cache-same-size-rewrite-missed": (SNAPSHOT, "settled", _settled_at_once),
     "unread-cost-zero": (MODEL, "_spend", _unread_ledger_is_empty),

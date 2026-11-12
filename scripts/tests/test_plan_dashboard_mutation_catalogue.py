@@ -42,7 +42,8 @@ SNAPSHOT_NAMES = (
     "binding-scan-uncached", "binding-cache-never-invalidated", "source-state-cached-forever",
     "source-binding-cached-forever", "source-transcript-cached-forever", "source-ledger-cached-forever",
     "code-version-identity-ignored", "code-version-new-module-missed", "code-version-always-parsed",
-    "snapshot-records-every-source", "snapshot-directory-marker-ignored")
+    "snapshot-records-every-source", "snapshot-directory-marker-ignored", "same-named-transcript-dropped",
+    "unrecorded-source-stat-skipped")
 SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-read")
 SNAPSHOT_STDLIB_NAMES = tuple(name for name in SNAPSHOT_NAMES if name not in SNAPSHOT_PILOT_NAMES)
 HARNESS_TESTS = TESTS / "test_plan_dashboard_harness.py"
