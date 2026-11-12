@@ -237,6 +237,41 @@ def test_shuffle_pair_exits_1_on_an_unlisted_difference(pair):
     assert pair(bad_outcome=True) == 1
 
 
+def launch(tmp_path, monkeypatch, runs, *, sha="a" * 40, seen=None):
+    monkeypatch.setattr(control, "_git", lambda repo, *args: "" if args[0] == "status" else sha)
+    monkeypatch.setattr(gate, "run_tree", fake_run_tree(tmp_path, seen=seen))
+    return control.main(["shuffle-pair", "--seeds", "1,2", "--out", str(tmp_path / "pair.json"), "--runs", runs,
+                         "--exceptions", str(REAL_EXCEPTIONS), "-C", str(tmp_path)])
+
+
+def test_the_runs_split_across_two_launches_are_judged_by_the_second(tmp_path, monkeypatch):
+    first, second = [], []
+    assert launch(tmp_path, monkeypatch, "unshuffled", seen=first) == 4
+    assert first == [([], test_slots.configured().per_run)]
+    assert not (tmp_path / "pair.json").exists()
+    assert launch(tmp_path, monkeypatch, "shuffled", seen=second) == 0
+    assert sorted(a for a, _ in second) == [["--core-shuffle-seed=1"], ["--core-shuffle-seed=2"]]
+    assert [r["name"] for r in json.loads((tmp_path / "pair.json").read_text())["runs"]] == [
+        "unshuffled", "seed1", "seed2"]
+
+
+def test_a_launch_finding_no_record_of_the_other_runs_is_partial_exit_4(tmp_path, monkeypatch):
+    assert launch(tmp_path, monkeypatch, "shuffled") == 4
+
+
+def test_records_of_another_commit_are_not_judged_together(tmp_path, monkeypatch, capsys):
+    assert launch(tmp_path, monkeypatch, "unshuffled", sha="a" * 40) == 4
+    assert launch(tmp_path, monkeypatch, "shuffled", sha="b" * 40) == 4
+    assert "is of commit aaaaaaaaaaaa" in capsys.readouterr().out
+
+
+def test_a_full_launch_ignores_earlier_records(tmp_path, monkeypatch):
+    assert launch(tmp_path, monkeypatch, "unshuffled") == 4
+    seen = []
+    assert launch(tmp_path, monkeypatch, "all", seen=seen) == 0
+    assert len(seen) == 3
+
+
 def test_a_run_that_did_not_complete_is_exit_3(tmp_path, monkeypatch):
     monkeypatch.setattr(control, "_git", lambda repo, *args: "" if args[0] == "status" else "a" * 40)
     monkeypatch.setattr(gate, "run_tree", lambda *a, **k: gate.SuiteRun(None, timed_out=True))

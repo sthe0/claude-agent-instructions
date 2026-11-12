@@ -56,7 +56,7 @@ two checks show the limiter holds and the record carries the cost, on real proce
       not fire) or was not collected (no evidence); ``--probe-only``
       collects only the probe (minutes instead of the full run).
 
-  gate_speedup_control.py shuffle-pair --seeds A,B --out PATH [--exceptions TOML] [-C REPO] [--timeout-s N]
+  gate_speedup_control.py shuffle-pair --seeds A,B --out PATH [--runs all|unshuffled|shuffled] [--exceptions TOML] [-C REPO] [--timeout-s N]
       Isolation judged by outcomes. Three whole-suite runs of REPO's committed tip, each in the hermetic
       runner under the slot limiter (at most test-slots-per-run slots each): unshuffled, then seed A and
       seed B (``--core-shuffle-seed``) started together. Per-test outcomes come from each run's per-test
@@ -65,7 +65,10 @@ two checks show the limiter holds and the record carries the cost, on real proce
       scripts/tests/isolation_exceptions.toml, each entry with a reason); 1 an unlisted id differs; 2 an
       exceptions entry has no reason; 5 the shuffled runs overlapped for under half of the shorter one
       (inconclusive, never a pass; time queued for slots does not count); 6 a run was not hermetic;
-      3 any other error. About 2 h on an idle machine.
+      3 any other error. About 2 h on an idle machine. When a caller cannot hold one process that long,
+      ``--runs unshuffled`` (about 30 min) and ``--runs shuffled`` (about 90 min) each save their records
+      beside PATH (``<stem>.<run>.record.json``); the second launch to find all three records of the same
+      commit judges them, the first exits 4 (recorded, not judged yet).
 
   gate_speedup_control.py compare --report PATH [--exceptions TOML]
       The same comparison on a saved pair report: 0, 1, 2 and 3 as above (it never judges overlap or
@@ -671,6 +674,8 @@ SEED_OPTION = "--core-shuffle-seed"
 UNSHUFFLED = "unshuffled"
 MIN_OVERLAP_FRACTION = 0.5
 EXIT_EQUAL, EXIT_DIFFERENT, EXIT_REASONLESS, EXIT_ERROR, EXIT_NO_OVERLAP, EXIT_NOT_HERMETIC = 0, 1, 2, 3, 5, 6
+EXIT_PARTIAL = 4
+RUNS_ALL, RUNS_UNSHUFFLED, RUNS_SHUFFLED = "all", "unshuffled", "shuffled"
 
 
 class InputError(Exception):
@@ -782,9 +787,32 @@ def _timed_run(name: str, seed: int | None, repo: Path, sha: str, junit: Path, s
         into[name] = {"error": str(exc)}
 
 
-def shuffle_pair(repo: Path, seeds: list[int], out: Path, exceptions_path: Path, timeout_s: int) -> int:
+def _record_path(out: Path, name: str) -> Path:
+    return out.with_name(f"{out.stem}.{name}.record.json")
+
+
+def _recorded_run(out: Path, name: str, seed: int | None, sha: str) -> dict | str:
+    """The record an earlier ``--runs`` launch saved for ``name``, or why it cannot be used."""
+    path = _record_path(out, name)
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return f"{name}: no record yet ({path.name})"
+    except (OSError, ValueError) as exc:
+        return f"{name}: cannot read {path.name}: {exc}"
+    if record.get("commit") != sha or record.get("seed") != seed:
+        return f"{name}: {path.name} is of commit {str(record.get('commit'))[:12]} seed {record.get('seed')}, not {sha[:12]} seed {seed}"
+    return record
+
+
+def shuffle_pair(repo: Path, seeds: list[int], out: Path, exceptions_path: Path, timeout_s: int,
+                 runs: str = RUNS_ALL) -> int:
     """Three whole-suite runs of the committed tip in the hermetic runner: unshuffled, then one per seed,
-    the shuffled ones started together. The exit code is the verdict ``judge`` gives the recorded runs."""
+    the shuffled ones started together. The exit code is the verdict ``judge`` gives the recorded runs.
+
+    ``runs`` limits one launch to the unshuffled run or to the two shuffled ones (each launch must fit
+    the caller's own time limit); every run's record is saved beside ``out``, and the verdict comes from
+    the launch that finds all three records of this commit, EXIT_PARTIAL from one that does not."""
     free_gb = shutil.disk_usage("/").free / 2**30
     if free_gb < MIN_FREE_GB:
         _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
@@ -800,6 +828,7 @@ def shuffle_pair(repo: Path, seeds: list[int], out: Path, exceptions_path: Path,
     slots = test_slots.configured().per_run
     records: dict[str, dict] = {}
     plan = [(UNSHUFFLED, None)] + [(f"seed{seed}", seed) for seed in seeds]
+    todo = [(name, seed) for name, seed in plan if runs == RUNS_ALL or (seed is None) == (runs == RUNS_UNSHUFFLED)]
 
     def start(name: str, seed: int | None) -> threading.Thread:
         junit = out.with_name(f"{out.stem}.{name}.junit.xml")
@@ -807,19 +836,30 @@ def shuffle_pair(repo: Path, seeds: list[int], out: Path, exceptions_path: Path,
         thread.start()
         return thread
 
-    _say(f"commit {sha[:12]}: unshuffled run, then {' and '.join(n for n, _ in plan[1:])} together")
-    start(*plan[0]).join()
-    for thread in [start(name, seed) for name, seed in plan[1:]]:
+    _say(f"commit {sha[:12]}: running {' and '.join(name for name, _ in todo)}"
+         + (" (the shuffled ones together)" if len(todo) > 1 and todo[0][1] is not None else ""))
+    if any(seed is None for _, seed in todo):
+        start(UNSHUFFLED, None).join()
+    for thread in [start(name, seed) for name, seed in todo if seed is not None]:
         thread.join()
     failed = {name: rec["error"] for name, rec in records.items() if "error" in rec}
     if failed:
         for name, message in failed.items():
             _say(f"{name}: {message}")
         return EXIT_ERROR
-    runs = [records[name] for name, _ in plan]
-    report = {"schema": SHUFFLE_SCHEMA, "commit": sha, "runs": runs}
+    for name, _ in todo:
+        _record_path(out, name).write_text(json.dumps({**records[name], "commit": sha}) + "\n", encoding="utf-8")
+    for name, seed in plan:
+        if name not in records:
+            earlier = _recorded_run(out, name, seed, sha)
+            if isinstance(earlier, str):
+                _say(f"recorded {' '.join(n for n, _ in todo)}; not judged yet: {earlier}")
+                return EXIT_PARTIAL
+            records[name] = earlier
+    runs_done = [records[name] for name, _ in plan]
+    report = {"schema": SHUFFLE_SCHEMA, "commit": sha, "runs": runs_done}
     out.write_text(json.dumps(report) + "\n", encoding="utf-8")
-    for run in runs:
+    for run in runs_done:
         _say(f"{run['name']}: {run['collected']} collected, "
              f"{sum(o == 'failed' for o in run['outcomes'].values())} failed, pytest exit {run['pytest_exit']}, "
              f"{run['duration_s']} s, slots {run['slots_held']}, hermetic {run['hermetic']}")
@@ -863,6 +903,8 @@ def main(argv: list[str] | None = None) -> int:
     pair.add_argument("--seeds", required=True, help="two different integers, e.g. 1,2")
     pair.add_argument("--out", required=True, type=Path)
     pair.add_argument("--exceptions", type=Path, default=EXCEPTIONS_PATH)
+    pair.add_argument("--runs", choices=[RUNS_ALL, RUNS_UNSHUFFLED, RUNS_SHUFFLED], default=RUNS_ALL,
+                      help="run only the unshuffled run or only the two shuffled ones (see the module docstring)")
     pair.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
     pair.add_argument("--timeout-s", type=int, default=gate.DEFAULT_TIMEOUT_S)
     cmp_ = sub.add_parser("compare", help="judge a shuffle-pair report against the isolation exceptions")
@@ -894,7 +936,7 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             _say(f"--seeds takes two integers, got {args.seeds!r}")
             return EXIT_ERROR
-        return shuffle_pair(args.repo.resolve(), seeds, args.out, args.exceptions, args.timeout_s)
+        return shuffle_pair(args.repo.resolve(), seeds, args.out, args.exceptions, args.timeout_s, args.runs)
     if args.command == "compare":
         return compare(args.report, args.exceptions)
     if args.command == "verify-named":
