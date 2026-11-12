@@ -101,6 +101,7 @@ class Canon:
         shutil.copy(SCRIPTS_DIR / "lib" / "landing_gate.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "suite_gate.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "config_root.py", scripts / "lib")
+        shutil.copy(SCRIPTS_DIR / "lib" / "hermetic_run.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "test_slots.py", scripts / "lib")
         (scripts / "lib" / "__init__.py").write_text("")
         (scripts / "README.md").write_text(SCRIPTS_REGION)
