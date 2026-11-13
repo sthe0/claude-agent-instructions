@@ -31,7 +31,7 @@ class Fake:
     """An in-memory reaper that records scans and removals."""
 
     def __init__(self, name, verdicts=(), *, throttle=24.0, scan_exc=None, remove_exc=None,
-                 remove_result=None, summary_line=None, upkeep_lines=None, upkeep_exc=None):
+                 remove_result=None, summary_line=None, upkeep_lines=None, upkeep_exc=None, session_sources=None):
         self.name = name
         self.verdicts = list(verdicts)
         self.scans = 0
@@ -57,6 +57,8 @@ class Fake:
             return remove_result
 
         module.scan, module.remove = scan, remove
+        if session_sources is not None:
+            module.SESSION_SOURCES = session_sources
         if summary_line is not None:
             module.summary = lambda verdicts: summary_line
         if upkeep_lines is not None or upkeep_exc is not None:
@@ -608,6 +610,193 @@ def test_hook_script_lists_the_builtin_reaper(hermetic):
         [sys.executable, str(script), "--list"], capture_output=True, text=True, check=True, env=os.environ.copy(),
     )
     assert any(line.startswith("git-worktrees builtin ") for line in out.stdout.splitlines())
+
+
+# ── session gate ──────────────────────────────────────────────────────────
+
+GATE_SOURCES = frozenset({"startup", "clear"})
+GATE_LINE = "gated notice"
+
+
+def session_start(hermetic, monkeypatch, fakes, *, payload, depth=None, entrypoint="cli", argv=()):
+    """One ``runner.main`` pass as the SessionStart hook runs it: ``payload`` is the text on stdin
+    (None: a terminal), ``depth`` AGENT_RECURSION_DEPTH, ``entrypoint`` CLAUDE_CODE_ENTRYPOINT."""
+    stdin = io.StringIO(payload if payload is not None else "")
+    if payload is None:
+        stdin.isatty = lambda: True
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.delenv("AGENT_RECURSION_DEPTH", raising=False)
+    if depth is not None:
+        monkeypatch.setenv("AGENT_RECURSION_DEPTH", depth)
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", entrypoint)
+    assert runner.main(list(argv), discover=lambda project, warn: [f.reaper for f in fakes]) == 0
+
+
+def gated_stamp(hermetic, name="g"):
+    return hermetic / "home" / ".local" / "state" / "claude-reaper" / f"{name}.stamp"
+
+
+def source_payload(source):
+    return json.dumps({"session_id": "s1", "cwd": "/w", "hook_event_name": "SessionStart", "source": source})
+
+
+@pytest.mark.parametrize("source", ["startup", "clear", "compact", "resume"])
+@pytest.mark.parametrize("depth", ["0", "1", None])
+@pytest.mark.parametrize("entrypoint", ["cli", "sdk-cli"])
+def test_a_gated_reaper_is_due_only_in_a_fresh_interactive_top_level_start(
+    hermetic, monkeypatch, capsys, source, depth, entrypoint,
+):
+    gated = Fake("g", [], summary_line=GATE_LINE, session_sources=GATE_SOURCES)
+    other = Fake("u", [], summary_line="ungated notice")
+    shown = source in GATE_SOURCES and depth in (None, "0") and entrypoint == "cli"
+    session_start(hermetic, monkeypatch, [gated, other], payload=source_payload(source), depth=depth, entrypoint=entrypoint)
+    out = capsys.readouterr().out.splitlines()
+    assert (GATE_LINE in out) is shown
+    assert "ungated notice" in out
+    assert gated_stamp(hermetic).is_file() is shown
+    assert gated_stamp(hermetic, "u").is_file()
+    assert gated.dues == [shown]
+
+
+@pytest.mark.parametrize("payload", [None, "", "not json", "[]", '{"cwd": "/w"}', '{"source": 3}'])
+def test_a_gated_reaper_is_never_due_without_a_usable_payload(hermetic, monkeypatch, capsys, payload):
+    gated = Fake("g", [], summary_line=GATE_LINE, session_sources=GATE_SOURCES)
+    other = Fake("u", [])
+    session_start(hermetic, monkeypatch, [gated, other], payload=payload)
+    assert GATE_LINE not in capsys.readouterr().out
+    assert not gated_stamp(hermetic).exists()
+    assert gated.dues == [False]
+
+
+def test_a_second_fresh_start_inside_the_throttle_prints_nothing(hermetic, monkeypatch, capsys):
+    gated = Fake("g", [], summary_line=GATE_LINE, session_sources=GATE_SOURCES)
+    session_start(hermetic, monkeypatch, [gated], payload=source_payload("startup"))
+    assert capsys.readouterr().out.splitlines() == [GATE_LINE]
+    session_start(hermetic, monkeypatch, [gated], payload=source_payload("clear"))
+    assert capsys.readouterr().out == ""
+    assert gated.scans == 1
+
+
+def test_a_start_that_shows_nothing_does_not_spend_the_throttle_of_a_later_fresh_start(hermetic, monkeypatch, capsys):
+    gated = Fake("g", [], summary_line=GATE_LINE, session_sources=GATE_SOURCES)
+    session_start(hermetic, monkeypatch, [gated], payload=source_payload("compact"))
+    session_start(hermetic, monkeypatch, [gated], payload=source_payload("startup"), depth="1")
+    assert capsys.readouterr().out == ""
+    session_start(hermetic, monkeypatch, [gated], payload=source_payload("startup"))
+    assert capsys.readouterr().out.splitlines() == [GATE_LINE]
+
+
+def test_a_reaper_without_session_sources_runs_on_any_start_as_before(hermetic, monkeypatch, capsys):
+    plain = Fake("g", [], summary_line=GATE_LINE)
+    session_start(hermetic, monkeypatch, [plain], payload=source_payload("compact"), depth="1", entrypoint="sdk-cli")
+    assert capsys.readouterr().out.splitlines() == [GATE_LINE]
+    assert gated_stamp(hermetic).is_file()
+
+
+@pytest.mark.parametrize("argv", [["--force-run"], ["--dry-run"], ["--only", "g"]])
+def test_manual_modes_ignore_the_gate(hermetic, monkeypatch, capsys, argv):
+    gated = Fake("g", [], summary_line=GATE_LINE, session_sources=GATE_SOURCES)
+    session_start(hermetic, monkeypatch, [gated], payload=source_payload("compact"), depth="1", entrypoint="sdk-cli", argv=argv)
+    assert gated.dues == [True]
+    assert GATE_LINE in capsys.readouterr().out
+    assert not gated_stamp(hermetic).exists()
+
+
+def test_a_start_with_no_gated_reaper_does_not_read_stdin(hermetic, monkeypatch):
+    reads = []
+
+    class Counting(io.StringIO):
+        def read(self, *args):
+            reads.append(1)
+            return super().read(*args)
+
+    monkeypatch.setattr(sys, "stdin", Counting("{}"))
+    plain = Fake("g", [])
+    assert runner.main([], discover=lambda project, warn: [plain.reaper]) == 0
+    assert reads == []
+
+
+def test_a_start_where_every_gated_reaper_is_inside_its_throttle_does_not_read_stdin(hermetic, monkeypatch, capsys):
+    gated = Fake("g", [], summary_line=GATE_LINE, session_sources=GATE_SOURCES)
+    session_start(hermetic, monkeypatch, [gated], payload=source_payload("startup"))
+    assert capsys.readouterr().out.splitlines() == [GATE_LINE]
+
+    reads = []
+
+    class Counting(io.StringIO):
+        def read(self, *args):
+            reads.append(1)
+            return super().read(*args)
+
+    monkeypatch.setattr(sys, "stdin", Counting(source_payload("clear")))
+    assert runner.main([], discover=lambda project, warn: [gated.reaper]) == 0
+    assert gated.scans == 1 and reads == []
+
+
+def test_a_gated_reaper_past_its_throttle_makes_the_start_read_stdin(hermetic, monkeypatch):
+    reads = []
+
+    class Counting(io.StringIO):
+        def read(self, *args):
+            reads.append(1)
+            return super().read(*args)
+
+    monkeypatch.setattr(sys, "stdin", Counting(source_payload("startup")))
+    gated = Fake("g", [], summary_line=GATE_LINE, session_sources=GATE_SOURCES)
+    assert runner.main([], discover=lambda project, warn: [gated.reaper]) == 0
+    assert reads
+
+
+def test_a_reaper_with_a_malformed_session_sources_is_skipped_at_default_discovery(hermetic, monkeypatch, capsys):
+    plugins = hermetic / "plugins" / "reapers"
+    write_reaper(plugins, "bad.py", "bad", 'SESSION_SOURCES = {"startup"}\n')
+    write_reaper(plugins, "empty.py", "empty", "SESSION_SOURCES = frozenset()\n")
+    write_reaper(plugins, "good.py", "good", 'SESSION_SOURCES = frozenset({"startup"})\n')
+    assert runner.main(["--list"]) == 0
+    captured = capsys.readouterr()
+    assert [line.split()[0] for line in captured.out.splitlines() if "/plugins/" in line] == ["good"]
+    assert "bad.py" in captured.err and "empty.py" in captured.err and "SESSION_SOURCES" in captured.err
+
+
+def test_session_of_reads_source_depth_and_entrypoint():
+    top = {"CLAUDE_CODE_ENTRYPOINT": "cli"}
+    assert runner.session_of({"source": "startup"}, top) == ("startup", True, True)
+    assert runner.session_of({"source": "startup"}, {**top, "AGENT_RECURSION_DEPTH": "0"}) == ("startup", True, True)
+    assert runner.session_of({"source": "startup"}, {**top, "AGENT_RECURSION_DEPTH": "2"}) == ("startup", False, True)
+    assert runner.session_of({"source": "startup"}, {"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}) == ("startup", True, False)
+    assert runner.session_of({"source": "startup"}, {}) == ("startup", True, False)
+    assert runner.session_of({"source": ""}, top) is None
+    assert runner.session_of(None, top) is None
+
+
+def test_read_session_payload_takes_one_json_object_and_nothing_else():
+    assert runner.read_session_payload(io.StringIO('{"source": "startup"}')) == {"source": "startup"}
+    assert runner.read_session_payload(io.StringIO("[1]")) is None
+    assert runner.read_session_payload(io.StringIO("")) is None
+    assert runner.read_session_payload(io.StringIO('{"pad": "' + "x" * runner.SESSION_PAYLOAD_MAX_BYTES + '"}')) is None
+    assert runner.read_session_payload(None) is None
+
+
+def test_read_session_payload_does_not_wait_for_a_pipe_the_writer_keeps_open(monkeypatch):
+    read_end, write_end = os.pipe()
+    try:
+        os.write(write_end, b'{"source": "startup"}')
+        with os.fdopen(os.dup(read_end), "r") as stream:
+            assert runner.read_session_payload(stream) == {"source": "startup"}
+    finally:
+        os.close(read_end)
+        os.close(write_end)
+
+
+def test_read_session_payload_gives_up_on_a_pipe_that_stays_silent(monkeypatch):
+    monkeypatch.setattr(runner, "SESSION_PAYLOAD_WAIT_S", 0.2)
+    read_end, write_end = os.pipe()
+    try:
+        with os.fdopen(os.dup(read_end), "r") as stream:
+            assert runner.read_session_payload(stream) is None
+    finally:
+        os.close(read_end)
+        os.close(write_end)
 
 
 # ── upkeep mode ───────────────────────────────────────────────────────────

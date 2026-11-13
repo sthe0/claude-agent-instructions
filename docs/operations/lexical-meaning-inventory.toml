@@ -3046,6 +3046,18 @@ ground = "STATE_FILE_NAME.fullmatch selects agentctl state files from a director
 hits = 1
 reviewed_by = "coordinator"
 
+[sites."scripts/reaper/liveness.py::<module>::re.compile"]
+class = "structural"
+ground = "STATE_FILE_NAME fixes the file-name syntax of an engine session state file (<id>.json) for the holder query."
+hits = 1
+reviewed_by = "coordinator"
+
+[sites."scripts/reaper/liveness.py::read_engine_tasks::pattern.fullmatch"]
+class = "structural"
+ground = "STATE_FILE_NAME.fullmatch selects engine state files from a directory listing by file-name syntax before they are parsed for unresolved tasks."
+hits = 1
+reviewed_by = "coordinator"
+
 [sites."scripts/reaper/builtin/pytest_basetemp.py::<module>::re.compile"]
 class = "structural"
 ground = "NUMBERED_DIR fixes the directory-name syntax of a numbered pytest run directory (pytest-<n>)."
