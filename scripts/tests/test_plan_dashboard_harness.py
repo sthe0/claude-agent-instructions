@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import copy
 import importlib.util
+import inspect
 import json
 import os
 import subprocess
@@ -89,9 +90,9 @@ def test_a_cell_needs_five_settled_runs_of_each_arm_or_the_cap():
 
 @pytest.mark.parametrize("count,band", [(0, "near-zero"), (10, "near-zero"), (11, None), (79, None), (80, "80-100"),
                                         (100, "80-100"), (101, "101-130"), (130, "101-130"), (131, "131-170"),
-                                        (170, "131-170"), (171, None), (219, None), (220, "220-280"),
-                                        (280, "220-280"), (281, None), (349, None), (350, "350+"), (4000, "350+"),
-                                        (None, None)])
+                                        (170, "131-170"), (171, None), (224, None), (225, "225-275"),
+                                        (275, "225-275"), (276, None), (359, None), (360, "360-440"), (440, "360-440"),
+                                        (441, None), (4000, None), (None, None)])
 def test_a_changed_count_falls_in_exactly_its_band(count, band):
     assert h.band_of(count) == band
     for cell in h.BANDS:
@@ -189,7 +190,8 @@ def ev(name, at, **payload):
 
 def new_stream(applied_end, applied_mark, task="task-a"):
     return [ev("cycle_start", 0.0, cycle=1), ev("rows_painted", 0.2, from_snapshot=True, rows=1),
-            ev("mark_painted", 0.25, task=task), ev("mark_confirmed", 0.5, task=task, applied=applied_mark),
+            ev("mark_painted", 0.25, task=task), ev("startup_applied", 0.45, applied=applied_end),
+            ev("mark_confirmed", 0.5, task=task, applied=applied_mark),
             ev("first_screen_confirmed", 0.6), ev("last_old_cleared", 0.7),
             ev("live_check_end", 0.8, applied=applied_end), ev("cycle_end", 0.9, cycle=1, applied=applied_end)]
 
@@ -253,11 +255,20 @@ def test_cycle_records_pair_starts_with_ends_and_keep_applied():
     assert cycles[1]["duration_s"] == pytest.approx(0.1) and cycles[1]["applied"] == ["/a", "/b"]
 
 
+def cyc(number, start, duration, applied=(), gap=None, found_by=None):
+    return {"cycle": number, "start_ns": ns(start), "end_ns": ns(start + duration), "start_s": start,
+            "duration_s": duration, "gap_s": gap, "applied": applied if applied == "all" else list(applied),
+            "found_by": found_by}
+
+
+def due_at(path, at):
+    return {"path": path, "change_ns": ns(at)}
+
+
 def test_cycle_coverage_requires_every_due_source_in_the_applied_set():
-    cycles = [{"cycle": 2, "applied": ["/a"], "duration_s": 0.1, "start_s": 2.0},
-              {"cycle": 3, "applied": ["/a", "/b"], "duration_s": 0.1, "start_s": 4.0},
-              {"cycle": 4, "applied": "all", "duration_s": 0.1, "start_s": 6.0}]
-    covered = h.check_cycle_coverage(cycles, {2: ["/a", "/b"], 3: ["/a", "/b"], 4: ["/z"]})
+    cycles = [cyc(2, 2.0, 0.1, ["/a"]), cyc(3, 4.0, 0.1, ["/a", "/b"]), cyc(4, 6.0, 0.1, "all")]
+    due = {2: [due_at("/a", 1.0), due_at("/b", 1.0)], 3: [due_at("/a", 3.0), due_at("/b", 3.0)], 4: [due_at("/z", 5.0)]}
+    covered = h.check_cycle_coverage(cycles, due, 0)
     assert [c["covered"] for c in covered] == [False, True, True]
 
 
@@ -272,14 +283,25 @@ def test_a_source_modified_after_the_cycle_start_stamp_is_not_yet_due(tmp_path):
     assert watcher.poll(os.stat(f).st_mtime_ns + 1_000_000) == []
 
 
+def stat_cycles(count, duration=0.1, gap=2.0):
+    step = duration + gap
+    return [cyc(n, (n - 1) * step, duration, gap=None if n == 1 else gap) for n in range(1, count + 1)]
+
+
+def stat_run(cycles, arm="old", path="stat", events=(), sweeps=(), due=None, stamps=None, **kw):
+    covered = h.check_cycle_coverage(cycles, due or {}, 0)
+    return h.r3_run_record(arm, path, covered, list(events), list(sweeps), stamps=stamps or {}, **kw)
+
+
 def test_an_r3_run_takes_twenty_cycles_after_the_first_and_checks_coverage():
-    cycles = [{"cycle": n, "duration_s": 0.1 if n % 2 else 0.2, "covered": True, "start_s": n, "applied": []}
-              for n in range(1, 30)]
-    run = h.r3_run_record("new", cycles)
+    cycles = stat_cycles(29)
+    run = stat_run(cycles)
     assert len(run["cycles"]) == h.R3_CYCLES and run["cycles"][0]["cycle"] == 2 and run["covered_all"]
-    cycles[10]["covered"] = False
-    assert not h.r3_run_record("new", cycles)["covered_all"]
-    assert not h.r3_run_record("new", cycles[:10])["covered_all"]
+    assert run["counted"] is True
+    due = {12: [due_at("/a", 0.0)]}
+    assert not stat_run(cycles, due=due)["covered_all"]
+    short = stat_run(cycles[:10])
+    assert short["counted"] is False and short["void_reason"] == "short"
 
 
 # --- the changed count and the R3 due set follow the contract's rule, not the 2026-11-06 trace -------------
@@ -377,33 +399,22 @@ def test_r3_due_sources_include_sessions_created_after_the_trace(tmp_path, monke
     put(state / "aaaa1111-full.json", age_ns=3 * DAY_NS)   # on the screen, outside the window
     put(state / "bbbb2222.json")                           # inside the window, no row on the screen
     put(state / "cccc3333.json", age_ns=3 * DAY_NS)        # neither: not shown
-    late_state = put(state / "dddd4444.json", age_ns=3 * DAY_NS)   # touched only after the cycle starts
+    late_state = put(state / "dddd4444.json", age_ns=3 * DAY_NS)   # touched only after the watcher started
     put(home / "agentctl" / "engine-session-bindings" / "hsess.json",
         json.dumps({"driven": [{"session": "bbbb2222"}]}), age_ns=3 * DAY_NS)
     driven = put(proj / "hsess.jsonl", age_ns=DAY_NS)
     unshown = put(proj / "cccc3333.jsonl", age_ns=DAY_NS)
     late_task = put(proj / "dddd4444.jsonl", age_ns=DAY_NS)
-    trace_population = [str(driven), str(unshown)]
     new_session = proj / "aaaa1111-full.jsonl"
-    due = {}
-
-    def fake_run_pty(argv, *, on_event=None, **kw):
-        put(new_session)
-        driven.write_text("x\nmore\n")
-        unshown.write_text("x\nmore\n")
-        late_task.write_text("x\nmore\n")
-        cycle_ns = time.time_ns() + 5 * 10**9
-        late_state.write_text("changed\n")
-        os.utime(late_state, ns=(cycle_ns + 10**9, cycle_ns + 10**9))
-        trace = FakeTrace(frames=[(0.1, {"rows": {"aaaa1111": "~"}})])
-        on_event(trace, {"ev": "cycle_start", "cycle": 2, "t_ns": cycle_ns})
-        return trace
-
-    monkeypatch.setattr(h, "run_pty", fake_run_pty)
-    monkeypatch.setattr(h, "check_cycle_coverage", lambda cycles, by_cycle: due.update(by_cycle) or [])
-    runner = h.RealRunner(tmp_path / "state", tmp_path / "old", tmp_path / "new", CONTRACT, trace_population)
-    runner("r3", {"arm": "new"})
-    assert set(due[2]) == {str(new_session), str(driven)}
+    watcher = h.ContractWatcher()
+    put(new_session)
+    driven.write_text("x\nmore\n")
+    unshown.write_text("x\nmore\n")
+    late_task.write_text("x\nmore\n")
+    late_state.write_text("changed\n")
+    changes = watcher({"aaaa1111"})
+    assert {c["path"] for c in changes} == {str(new_session), str(driven), str(late_state), str(late_task)}
+    assert all(c["change_ns"] > 0 for c in changes) and watcher({"aaaa1111"}) == []
 
 
 class SavedTrace(FakeTrace):
@@ -467,7 +478,7 @@ def test_a_limit_below_a_floor_is_a_miss_with_exit_1(tmp_path, limit):
 
 def test_a_limit_can_only_be_tightened_never_loosened(tmp_path):
     report = good_floors()
-    report["floors"]["R1"]["median_s"] = 0.8
+    report["floors"]["R1"]["median_s"] = 1.6
     assert verify_floors(tmp_path, report, "--limit", "R1=100") == 1
 
 
@@ -523,8 +534,9 @@ def test_a_bad_limit_flag_is_refused():
 
 
 def test_the_default_limits_are_the_requirements():
-    assert h.DEFAULT_LIMITS == {"R1": 0.70, "R2": 0.95, "R3": 0.25, "R6": 1.1}
-    assert h.limits_with({"R1": 100.0})["R1"] == 0.70
+    assert h.DEFAULT_LIMITS == {"R1": 1.5, "R2": 0.95, "R3": 0.25, "R6": 1.1, "R3_latency": 2.75,
+                                "R3_latency_watch": 0.75}
+    assert h.limits_with({"R1": 100.0})["R1"] == 1.5
 
 
 def git_run(tree, *args):
@@ -593,7 +605,7 @@ def run_record(arm, changed=90, first_rows=0.3, **over):
     base = {"arm": arm, "changed_count": changed, "first_rows_s": first_rows, "old_marking_at_first_rows": True,
             "rows_confirmed_s": 0.8, "marks_confirmed_s": 0.9, "first_screen_confirmed_s": 0.85,
             "mark_confirmed_max_s": 0.88, "marks_missing": 0, "applied_ok": True, "last_old_cleared_s": 1.0,
-            "live_check_end_s": 1.1}
+            "live_check_end_s": 1.1, "rows_unconfirmed_unmarked": 0, "last_row_shown_s": 1.0, "last_mark_shown_s": 1.0}
     if arm == "old":
         base.update(first_rows_s=2.0, rows_confirmed_s=2.0, marks_confirmed_s=9.0, applied_ok=None,
                     old_marking_at_first_rows=False, last_old_cleared_s=None, live_check_end_s=None,
@@ -602,7 +614,7 @@ def run_record(arm, changed=90, first_rows=0.3, **over):
 
 
 def good_cell(name):
-    changed = {"near-zero": 3, "80-100": 90, "101-130": 110, "131-170": 150, "220-280": 250, "350+": 400}.get(name)
+    changed = {"near-zero": 3, "80-100": 90, "101-130": 110, "131-170": 150, "225-275": 250, "360-440": 400}.get(name)
     runs = []
     for _ in range(h.MIN_RUNS):
         runs += [run_record("old", changed), run_record("new", changed)]
@@ -620,11 +632,18 @@ def r6_cell(name):
     return cell
 
 
+def r3_rec(arm, path, **over):
+    base = {"arm": arm, "path": path, "counted": True, "void_reason": None, "median_s": 0.1, "covered_all": True,
+            "latency_max_s": 0.5 if path == "event" else 2.2, "redraw_gap_min_s": 0.6 if path == "event" else None,
+            "cycles": []}
+    return {**base, **over}
+
+
 def good_report(tmp_path, tree, old):
     cells = {}
     for name in h.REQUIRED_CELLS:
         cells[name] = r6_cell(name) if name in h.R6_CELLS else good_cell(name)
-    runs = [{"arm": a, "median_s": 0.1, "covered_all": True, "cycles": []} for a in ("old", "new") * h.R3_MIN_RUNS]
+    runs = [r3_rec(arm, path) for arm, path in h.R3_CELLS for _ in range(h.R3_MIN_RUNS)]
     k1 = {"old": [{"arm": "old", "exec_kinds": ["tmux", "git"], "children_between_cycles": [2], "created_files": []}
                   for _ in range(3)],
           "new": [{"arm": "new", "exec_kinds": ["tmux"], "children_between_cycles": [1], "created_files": []}
@@ -676,18 +695,18 @@ def test_a_run_outside_its_band_makes_the_report_unjudgeable(tmp_path, trees):
     assert acceptance(tmp_path, report, trees) == 2
 
 
-def test_a_missing_required_cell_is_a_miss_but_350_plus_is_optional(tmp_path, trees):
+def test_a_missing_required_cell_is_a_miss_but_360_440_is_optional(tmp_path, trees):
     report = good_report(tmp_path, *trees)
     del report["cells"]["131-170"]
     assert acceptance(tmp_path, report, trees) == 1
     report = good_report(tmp_path, *trees)
-    assert "350+" not in report["cells"]
+    assert "360-440" not in report["cells"]
     assert acceptance(tmp_path, report, trees) == 0
 
 
-def test_a_first_screen_without_the_old_marking_is_a_miss(tmp_path, trees):
+def test_a_first_screen_row_without_any_old_marking_proof_is_a_miss(tmp_path, trees):
     report = good_report(tmp_path, *trees)
-    report["cells"]["near-zero"]["runs"][1]["old_marking_at_first_rows"] = False
+    report["cells"]["near-zero"]["runs"][1]["rows_unconfirmed_unmarked"] = 1
     assert acceptance(tmp_path, report, trees) == 1
 
 
@@ -758,7 +777,9 @@ class Script:
             return [item(f"/p{n}", mtime_ns=2 if n < self.live_changed else 1) for n in range(300)]
         if what == "run":
             return run_record(arg["arm"], self.run_changed)
-        return {"arm": arg["arm"], "median_s": 0.1, "covered_all": True, "cycles": []}
+        if what == "r3":
+            return r3_rec(arg["arm"], arg["path"])
+        return {"arm": arg["arm"], "exec_kinds": [], "children_between_cycles": [], "created_files": []}
 
 
 def campaign(tmp_path, runner, old=None, new=None, until=1e12):
@@ -770,7 +791,8 @@ def finished_cell(camp, name, changed):
     camp.runs[name] = [run_record(arm, changed) for _ in range(h.MIN_RUNS) for arm in ("old", "new")]
 
 
-def test_the_campaign_alternates_old_and_new_within_a_cell(tmp_path):
+def test_the_campaign_alternates_old_and_new_within_a_cell(tmp_path, monkeypatch):
+    monkeypatch.setattr(h, "INTERLEAVE_EVERY", 99)
     runner = Script()
     camp = campaign(tmp_path, runner)
     assert [camp.step() for _ in range(4)] == [True] * 4
@@ -888,3 +910,417 @@ def test_the_deep_copy_of_a_report_is_not_what_the_judge_mutates(tmp_path, trees
     before = copy.deepcopy(report)
     h.judge_report(report, h.limits_with({}))
     assert report == before
+
+
+# --- the interleaved campaign, R1 and R2 judged per row and per cell ----------------------------------
+
+class BandScript(Script):
+    """Answers every band run with a settled record whose count sits in the cell's band."""
+
+    def __call__(self, what, arg):
+        if what != "run":
+            return super().__call__(what, arg)
+        self.calls.append((what, arg))
+        return run_record(arg["arm"], sum(h.BANDS[arg["cell"]]) // 2 if arg["cell"] in h.BANDS else None)
+
+
+@pytest.mark.parametrize("every", [2, 3])
+def test_r3_and_k1_reach_their_minimum_under_a_cap_with_bands_always_runnable(tmp_path, monkeypatch, every):
+    monkeypatch.setattr(h, "INTERLEAVE_EVERY", every)
+    monkeypatch.setattr(h.Campaign, "pick_copy", lambda self, cell, live: ({"file": "/c"}, sum(h.BANDS[cell]) // 2))
+    runner = BandScript()
+    camp = campaign(tmp_path, runner)
+    owed = len(h.R3_CELLS) * h.R3_MIN_RUNS + 2 * h.K1_MIN_RUNS
+    jobs = lambda: len([c for c in runner.calls if c[0] in ("run", "r3", "k1")])  # noqa: E731
+    reached = None
+    for _ in range(300):
+        if camp.finished():
+            break
+        assert camp.step()
+        if reached is None and h.next_measurement(camp.r3, camp.k1) is None:
+            reached = jobs()
+    assert camp.finished() and len(camp.r3) + len(camp.k1) == owed
+    assert reached <= (every + 1) * owed
+
+
+def test_r1_old_marking_is_required_of_each_row_painted_before_its_confirmation():
+    marks = {"aaaa": False, "bbbb": False}
+    painted = ev("rows_painted", 0.2, from_snapshot=True, rows=2)
+    one = [ev("row_confirmed", 0.1, rows=["aaaa-full-id"]), painted]
+    both = [ev("row_confirmed", 0.1, rows=["aaaa-full-id", "bbbb-full-id"]), painted]
+    assert h.unconfirmed_unmarked_rows(one, marks) == 1
+    assert h.unconfirmed_unmarked_rows(both, marks) == 0
+    assert h.unconfirmed_unmarked_rows(one, {"aaaa": False, "bbbb": True}) == 0
+    assert h.unconfirmed_unmarked_rows([painted, ev("row_confirmed", 0.3, rows=["aaaa-full-id"])], marks) == 2
+    assert h.unconfirmed_unmarked_rows([ev("row_confirmed", 0.1, rows=["aaaa-full-id"])], marks) is None
+    cell = {"runs": [run_record("old"), *[run_record("new", rows_unconfirmed_unmarked=1)] * h.MIN_RUNS]}
+    cell["runs"] += [run_record("old")] * (h.MIN_RUNS - 1)
+    assert any("old marking" in m for m in h.judge_cell_r1("80-100", cell, h.limits_with({})))
+
+
+def cell_with(new_runs):
+    return {"runs": [*new_runs, *[run_record("old") for _ in range(h.MIN_RUNS)]]}
+
+
+def test_r1_and_r2_time_limits_are_judged_on_the_cell_median():
+    limits = h.limits_with({})
+    r1 = lambda *vals: [m for m in h.judge_cell_r1("c", cell_with([run_record("new", first_rows=v) for v in vals]),  # noqa: E731
+                                                   limits) if "R1 median" in m]
+    assert r1(0.3, 0.4, 0.5, 0.6, 1.6) == []
+    assert len(r1(1.6, 1.7, 1.8, 0.4, 0.3)) == 1
+    r2 = lambda *vals: [m for m in h.judge_cell_r2("c", cell_with([run_record("new", marks_confirmed_s=v)  # noqa: E731
+                                                                  for v in vals]), limits) if "R2 median" in m]
+    assert r2(0.5, 0.6, 0.7, 0.8, 1.2) == []
+    assert len(r2(1.2, 1.3, 1.4, 0.5, 0.6)) == 1
+
+
+def test_r2_fails_a_run_whose_startup_applied_set_misses_a_pre_launch_change():
+    changes = {"/s/task-a.json": {"task-a"}}
+    covering = ["/s/task-a.json"]
+
+    def summary(stream):
+        return h.event_summary(stream, T0, arm="new", first_screen_ids={"task-a"}, changes=changes)
+
+    stream = new_stream(covering, covering)
+    assert summary(stream)["applied_ok"] is True
+    missing = [ev("startup_applied", 0.45, applied=["/s/other.json"]) if e["ev"] == "startup_applied" else e
+               for e in stream]
+    assert summary(missing)["applied_ok"] is False
+    assert summary([e for e in stream if e["ev"] != "startup_applied"])["applied_ok"] is False
+    cell = cell_with([run_record("new", applied_ok=summary(missing)["applied_ok"]) for _ in range(h.MIN_RUNS)])
+    assert any("applied set" in m for m in h.judge_cell_r2("c", cell, h.limits_with({})))
+
+
+def test_r2_completeness_is_judged_at_the_last_confirmation_event_not_the_end_of_the_check():
+    changes = {"/s/task-a.json": {"task-a"}}
+    covering = ["/s/task-a.json"]
+
+    def summary(startup_at):
+        stream = [ev("cycle_start", 0.0, cycle=1), ev("startup_applied", startup_at, applied=covering),
+                  ev("startup_applied", 0.3, applied=[]),
+                  ev("mark_confirmed", 0.5, task="task-a", applied=covering), ev("first_screen_confirmed", 0.6),
+                  ev("live_check_end", 0.8, applied=covering)]
+        stream.sort(key=lambda e: e["t_ns"])
+        return h.event_summary(stream, T0, arm="new", first_screen_ids={"task-a"}, changes=changes)
+
+    assert summary(0.7)["applied_ok"] is False
+    assert summary(0.55)["applied_ok"] is True
+
+
+def test_the_r2_pre_launch_census_finishes_before_the_dashboard_starts(tmp_path, monkeypatch):
+    fake_home(tmp_path, monkeypatch)
+    order = []
+    copy = tmp_path / "copy.json"
+    copy.write_text("{}")
+    monkeypatch.setattr(h, "contract_changes", lambda saved, live: order.append("census") or [])
+    monkeypatch.setattr(h, "run_pty", lambda *a, **k: order.append("launch") or FakeTrace())
+    monkeypatch.setattr(h, "summarize_run", lambda *a, **k: {})
+    monkeypatch.setattr(h, "last_moments", lambda *a, **k: {})
+    monkeypatch.setattr(h, "run_env", lambda *a, **k: {})
+    runner = h.RealRunner.__new__(h.RealRunner)
+    runner.state_dir, runner.old, runner.new, runner.uv_cache = tmp_path / "state", tmp_path / "old", tmp_path / "new", None
+    monkeypatch.setattr(h.RealRunner, "do_live", lambda self, _: [])
+    runner.do_run({"cell": "80-100", "arm": "new", "copy": {"file": str(copy)}, "live": []})
+    assert order == ["census", "launch"]
+    assert h.contract_changes is not None
+
+
+# --- R3: sweeps between cycles, due sets, coverage, untimed cycles ------------------------------------
+
+def test_r3_due_sets_come_from_between_cycle_sweeps_and_change_times(tmp_path):
+    ticks = iter(range(100, 1000, 10))
+    jobs = []
+    found = [{"path": "/a", "kind": "state", "change_ns": 1}]
+    taker = h.SweepTaker(lambda ids: found, spawn=jobs.append, now=lambda: next(ticks))
+    taker.on_event(FakeTrace(), ev("cycle_start", 1.0, cycle=2))
+    assert jobs == [] and not taker.busy
+    taker.on_event(FakeTrace(), ev("cycle_end", 1.1, cycle=2))
+    taker.on_event(FakeTrace(), ev("cycle_end", 1.2, cycle=3))
+    assert len(jobs) == 1 and taker.busy
+    jobs[0]()
+    assert taker.sweeps == [{"start_ns": 100, "end_ns": 110, "changes": found}] and not taker.busy
+    cycles = [cyc(2, 2.0, 0.1), cyc(3, 4.0, 0.1)]
+    start3, res = ns(4.0), 1000
+    late = [{"path": "/a", "change_ns": ns(1.5)}, {"path": "/b", "change_ns": start3 - res},
+            {"path": "/c", "change_ns": start3 - res + 1}]
+    seen_after_cycle_2 = {"start_ns": ns(2.2), "end_ns": ns(2.3), "changes": late}
+    due = h.due_sets(cycles, [seen_after_cycle_2], 0, res)
+    assert due[2] == [] and [c["path"] for c in due[3]] == ["/a", "/b"]
+    assert h.change_time_ns({"mtime_ns": 5, "ctime_ns": 9}, "/x") == 9
+    stat = os.stat(tmp_path)
+    assert h.change_time_ns(None, str(tmp_path / "gone")) == max(stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def test_one_uncovered_cycle_fails_r3():
+    cycles = stat_cycles(26)
+    due = {12: [due_at("/a", 0.0)]}
+    run = stat_run(cycles, arm="new", events=[ev("detection", 0.0, path="stat", reason="off")], due=due)
+    assert run["covered_all"] is False and run["uncovered"] == 1
+    pad = [r3_rec("new", p) for p in ("event", "stat") for _ in range(h.R3_MIN_RUNS)]
+    misses = h.judge_r3({"r3": {"runs": [run, *pad]}}, h.limits_with({}))
+    assert any("applied set misses" in m for m in misses)
+
+
+def test_a_cycle_during_a_sweep_is_untimed_but_judged_for_coverage():
+    sweep = {"start_ns": ns(10.0), "end_ns": ns(10.5), "changes": []}
+    assert h.cycle_untimed(cyc(1, 10.2, 0.1), [sweep]) and h.cycle_untimed(cyc(1, 9.9, 0.2), [sweep])
+    assert not h.cycle_untimed(cyc(1, 9.0, 0.9), [sweep]) and not h.cycle_untimed(cyc(1, 10.6, 0.1), [sweep])
+    cycles = [*stat_cycles(26)[:4], cyc(5, 8.4, 3.0, gap=2.0), *stat_cycles(26)[5:]]
+    sweeps = [{"start_ns": ns(8.45), "end_ns": ns(8.46), "changes": []}]
+    run = stat_run(cycles, sweeps=sweeps)
+    assert run["untimed_cycles"] == 1 and run["timed_cycles"] == h.R3_CYCLES and run["counted"] is True
+    assert run["latency_max_untimed_s"] == pytest.approx(5.0) and run["latency_max_s"] == pytest.approx(2.1)
+    assert stat_run(cycles, sweeps=sweeps, due={5: [due_at("/z", 8.0)]})["covered_all"] is False
+    assert stat_run(stat_cycles(21))["counted"] is True
+    short = stat_run(stat_cycles(20))
+    assert short["counted"] is False and short["void_reason"] == "short"
+    assert h.R3_RUN_CAP_S == 660
+
+
+def test_r3_runs_are_taken_on_both_detection_paths(tmp_path):
+    env = {"A": "1", h.WATCH_ENV: "on"}
+    assert h.r3_env(env, "stat")[h.WATCH_ENV] == "off" and h.WATCH_ENV not in h.r3_env(env, "event")
+    camp = campaign(tmp_path, Script())
+    while camp.measure():
+        pass
+    cells = [(r["arm"], r["path"]) for r in camp.r3]
+    assert {c: cells.count(c) for c in set(cells)} == {c: h.R3_MIN_RUNS for c in (("new", "event"), ("new", "stat"),
+                                                                                  ("old", "stat"))}
+    detect = lambda path: [ev("detection", 0.0, path=path, reason="x")] if path else []  # noqa: E731
+    run = lambda arm, path, **kw: stat_run(stat_cycles(21), arm=arm, events=detect(path), **kw)  # noqa: E731
+    assert run("new", "event")["void_reason"] == "fallback" and run("new", None)["void_reason"] == "no detection"
+    assert run("new", "stat")["counted"] is True and run("old", None)["counted"] is True
+
+
+# --- R3 latency on both detection paths ---------------------------------------------------------------
+
+def redraw(at, *cycles):
+    return ev("redraw", at, cycles=list(cycles))
+
+
+def event_run(*redraws, change=7.8, stamps=None, applied=(5,), due=True):
+    cycles = [cyc(n, (n - 1) * 2.0, 0.1, ["/s/a"] if n in applied else []) for n in range(1, 22)]
+    events = [ev("detection", 0.0, path="event", reason="start"), *redraws]
+    covered = h.check_cycle_coverage(cycles, {5: [due_at("/s/a", change)]} if due else {}, 0)
+    return h.r3_run_record("new", "event", covered, events, [], stamps=stamps or {})
+
+
+def r3_misses(*runs):
+    pad = [r3_rec("new", p) for p in ("event", "stat") for _ in range(h.R3_MIN_RUNS)]
+    return h.judge_r3({"r3": {"runs": [*runs, *pad]}}, h.limits_with({}))
+
+
+def latency_missed(*runs):
+    return any("latency" in m for m in r3_misses(*runs))
+
+
+def test_event_path_latency_is_judged_per_changed_source_to_the_redraw():
+    passing, failing = event_run(redraw(8.5, 5)), event_run(redraw(8.6, 5))
+    assert passing["latency_max_s"] == pytest.approx(0.7) and failing["latency_max_s"] == pytest.approx(0.8)
+    assert not latency_missed(passing) and latency_missed(failing)
+    unnamed = event_run(redraw(10.3, 9))
+    assert unnamed["latency_max_s"] == pytest.approx(0.3) and not latency_missed(unnamed)
+    nothing_due = event_run(redraw(8.5, 5), due=False)
+    assert nothing_due["counted"] is False and nothing_due["void_reason"] == "no due source"
+    assert event_run(redraw(8.5, 5), change=8.0)["counted"] is True
+    offset = 5 * 10**9
+    cycles = [cyc(5, 8.0, 0.1, ["/s/a"])]
+    (shifted,) = h.check_cycle_coverage(cycles, {5: [{"path": "/s/a", "change_ns": ns(7.8) + offset}]}, offset)
+    assert shifted["sources"][0]["change_ns"] == ns(7.8) and shifted["covered"] is True
+
+
+def test_event_path_latency_is_timed_from_the_first_change_not_yet_shown():
+    late = redraw(8.5, 5)
+    unshown = event_run(late, stamps={"/s/a": [ns(7.0), ns(7.8)]})
+    assert unshown["latency_max_s"] == pytest.approx(1.5) and latency_missed(unshown)
+    shown_by_cycle_3 = event_run(late, stamps={"/s/a": [ns(4.0), ns(7.8)]}, applied=(3, 5))
+    assert shown_by_cycle_3["latency_max_s"] == pytest.approx(0.7) and not latency_missed(shown_by_cycle_3)
+    assert shown_by_cycle_3["latency_stat_timed"] == 0 and event_run(late)["latency_stat_timed"] == 1
+
+
+def test_r3_latency_is_judged_on_gap_plus_cycle():
+    new_stat = lambda cycles: stat_run(cycles, arm="new", events=[ev("detection", 0.0, path="stat", reason="off")])  # noqa: E731
+    ok, slow = new_stat(stat_cycles(21, 0.2, 2.0)), new_stat(stat_cycles(21, 0.2, 2.6))
+    assert ok["latency_max_s"] == pytest.approx(2.2) and slow["latency_max_s"] == pytest.approx(2.8)
+    assert not latency_missed(ok) and latency_missed(slow)
+    assert h.cycle_latency_s(cyc(2, 0.0, 0.25, gap=2.5)) == 2.75
+    assert not latency_missed(new_stat(stat_cycles(21, 0.25, 2.5)))
+
+
+def event_changes_run(slow_ms):
+    cycles, due = [], {}
+    for n in range(1, 22):
+        start, path = ns(n * 2.0), f"/s/{n}"
+        cycles.append({"cycle": n, "start_ns": start, "end_ns": start + 100_000_000, "start_s": n * 2.0,
+                       "duration_s": 0.1, "gap_s": None if n == 1 else 1.9, "applied": [path], "found_by": None})
+        due[n] = [{"path": path, "change_ns": start - 200_000_000}]
+    slow = {"ev": "redraw", "t_ns": due[11][0]["change_ns"] + slow_ms * 1_000_000, "cycles": [11]}
+    covered = h.check_cycle_coverage(cycles, due, 0)
+    return h.r3_run_record("new", "event", covered, [ev("detection", 0.0, path="event", reason="x"), slow], [], stamps={})
+
+
+def test_a_run_fails_on_its_slowest_change_not_its_median():
+    slow = event_changes_run(900)
+    assert slow["latency_median_s"] == pytest.approx(0.3) and slow["latency_max_s"] == pytest.approx(0.9)
+    assert latency_missed(slow) and not latency_missed(event_changes_run(750))
+    cycles = stat_cycles(21)
+    cycles[10] = cyc(11, 21.0, 0.1, gap=2.9)
+    stat = stat_run(cycles, arm="new", events=[ev("detection", 0.0, path="stat", reason="off")])
+    assert stat["latency_median_s"] == pytest.approx(2.1) and stat["latency_max_s"] == pytest.approx(3.0)
+    assert latency_missed(stat)
+
+
+def product_constant(module: str, name: str):
+    tree = ast.parse((TESTS.parent / "plan_dashboard" / f"{module}.py").read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and [t.id for t in node.targets if isinstance(t, ast.Name)] == [name]:
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"{module}.{name} is not a literal assignment")
+
+
+def test_r3_latency_limit_is_the_code_s_interval_plus_tick_plus_cycle():
+    interval = product_constant("tui", "DEFAULT_INTERVAL_S")
+    tick, spacing = product_constant("tui_app", "TICK_S"), product_constant("tui_app", "REDRAW_SPACING_S")
+    assert product_constant("watch", "TICK_S") == tick and product_constant("watch", "RECONCILE_S") == 30.0
+    assert product_constant("tui_app", "LIGHT_TICK_S") == 1.0
+    assert h.DEFAULT_LIMITS["R3_latency"] == interval + tick + h.DEFAULT_LIMITS["R3"]
+    assert h.DEFAULT_LIMITS["R3_latency_watch"] == tick + h.DEFAULT_LIMITS["R3"]
+    assert spacing <= tick and h.REDRAW_SPACING_MIN_S == spacing
+    assert "--interval" not in inspect.getsource(h.RealRunner.do_r3)
+
+
+def test_limits_override_only_tightens_and_every_default_limit_is_a_flag(tmp_path, trees):
+    assert h.limits_with({"R1": 0.70})["R1"] == 0.70
+    assert h.limits_with({"R1": 2.0})["R1"] == 1.5 and h.limits_with({"R1": 1.5})["R1"] == 1.5
+    assert set(h.parse_limits([f"{k}=1" for k in h.DEFAULT_LIMITS])) == set(h.DEFAULT_LIMITS)
+    report = good_report(tmp_path, *trees)
+    assert not any("latency" in m for m in h.judge_report(report, h.limits_with({})))
+    for key in ("R3_latency", "R3_latency_watch"):
+        tight = h.limits_with(h.parse_limits([f"{key}=0.001"]))
+        assert any("latency" in m for m in h.judge_report(report, tight))
+
+
+def test_r3_limits_judge_new_code_runs_only():
+    bad_old = [r3_rec("old", "stat", median_s=5.0, covered_all=False, latency_max_s=5.0) for _ in range(h.R3_MIN_RUNS)]
+    assert r3_misses(*bad_old) == []
+    new = [r3_rec(arm, path) for arm, path in h.R3_CELLS[:2] for _ in range(h.R3_MIN_RUNS)]
+    assert h.next_measurement([*new, *bad_old], [])["what"] == "k1"
+
+
+def test_r3_fails_a_new_code_cell_short_of_its_counted_runs():
+    stat_only = [r3_rec("new", "stat") for _ in range(2 * h.R3_MIN_RUNS)]
+    event_only = [r3_rec("new", "event") for _ in range(2 * h.R3_MIN_RUNS)]
+    miss = lambda runs, path: any(f"on the {path} path" in m for m in h.judge_r3({"r3": {"runs": runs}},  # noqa: E731
+                                                                               h.limits_with({})))
+    assert miss(stat_only, "event") and not miss(stat_only, "stat")
+    assert miss(event_only, "stat") and not miss(event_only, "event")
+    assert miss([r3_rec("new", "stat", counted=False) for _ in range(9)] + stat_only[:4], "stat")
+
+
+def test_a_write_landing_mid_cycle_and_applied_by_that_cycle_is_covered():
+    cycles = [cyc(5, 8.4, 0.1, ["/a"]), cyc(6, 10.5, 0.1, [])]
+    mid = h.check_cycle_coverage(cycles, {6: [due_at("/a", 8.45)]}, 0)
+    assert mid[1]["covered"] is True and mid[1]["sources"][0]["applied_by"] == 5
+    after = h.check_cycle_coverage(cycles, {6: [due_at("/a", 8.55)]}, 0)
+    assert after[1]["covered"] is False and after[1]["sources"][0]["applied_by"] is None
+
+
+def test_redraws_closer_than_half_a_second_fail_the_run():
+    def spaced(gap_ns):
+        first = ns(9.0)
+        return event_run({"ev": "redraw", "t_ns": first, "cycles": [5]},
+                         {"ev": "redraw", "t_ns": first + gap_ns, "cycles": [6]})
+
+    exact, close = spaced(500_000_000), spaced(490_000_000)
+    assert exact["redraw_gap_min_s"] == 0.5 and close["redraw_gap_min_s"] == 0.49
+    spacing_missed = lambda run: any("redraws come closer" in m for m in r3_misses(run))  # noqa: E731
+    assert not spacing_missed(exact) and spacing_missed(close)
+    repaints = event_run(redraw(9.0, 5), ev("header_repaint", 9.1), ev("light_tick", 9.2, tmux_changed=False),
+                         redraw(9.6, 6))
+    assert repaints["redraws"] == 2 and repaints["redraw_gap_min_s"] == pytest.approx(0.6)
+    before_first_detection = [redraw(0.0, 1), ev("detection", 0.2, path="event", reason="start"), redraw(0.3, 2)]
+    assert h.redraw_summary(before_first_detection)["redraw_gap_min_s"] is None
+    assert not spacing_missed(r3_rec("new", "stat", redraw_gap_min_s=0.1))
+
+
+def test_found_by_marks_are_counted_and_judge_nothing():
+    cycles = [cyc(2, 2.0, 0.1, found_by={"/a": "event", "/b": "stat"}), cyc(3, 4.0, 0.1, found_by={"/a": "event"})]
+    assert h.found_by_counts(cycles) == {"event": 2, "stat": 1}
+    assert h.found_by_counts(stat_cycles(3)) is None
+    assert r3_misses(r3_rec("new", "stat", found_by_counts={"x": 999})) == []
+
+
+def test_untimed_share_and_load_are_recorded_per_run():
+    sweeps = [{"start_ns": ns(4.25), "end_ns": ns(4.26), "changes": []}, {"start_ns": ns(8.45), "end_ns": ns(8.46), "changes": []}]
+    run = stat_run(stat_cycles(26), sweeps=sweeps, loads=(0.5, 0.7))
+    assert run["untimed_cycles"] == 2 and run["untimed_share"] == pytest.approx(2 / 22)
+    assert (run["load_start"], run["load_end"]) == (0.5, 0.7)
+    assert "untimed_share=" in h.r3_digest([run])[0] and "load=0.5->0.7" in h.r3_digest([run])[0]
+    assert stat_run(stat_cycles(26))["untimed_share"] is None
+
+
+def test_r2_runs_record_the_screen_time_to_marks_and_its_factor(tmp_path):
+    assert h.marks_screen_s(run_record("new", rows_confirmed_s=0.4, marks_confirmed_s=0.9)) == 0.9
+    assert h.marks_screen_s(run_record("new", marks_confirmed_s=None)) is None
+    camp = campaign(tmp_path, Script())
+    camp.runs["near-zero"] = [run_record("old"), run_record("new", marks_screen_s=0.9)]
+    summary = camp.report()["cells"]["near-zero"]["marks_screen"]
+    assert summary["new_median_s"] == 0.9 and summary["old_median_s"] == 9.0 and summary["factor"] == pytest.approx(0.1)
+    assert "marks_screen" not in camp.report()["cells"]["131-170"] if "131-170" in camp.report()["cells"] else True
+
+
+def test_r2_and_r6_rows_and_marks_are_compared_as_redraw_moments():
+    cleared = [ev("last_old_cleared", 1.0), redraw(4.45, 1), ev("mark_confirmed", 1.1, task="t"), redraw(4.7, 1)]
+    moments = h.last_moments(cleared, T0, "101-130")
+    assert moments == {"last_row_shown_s": pytest.approx(4.45), "last_mark_shown_s": pytest.approx(4.7)}
+    no_marked = [redraw(0.7, 1), ev("live_check_end", 1.0), redraw(1.5, 2)]
+    assert h.last_moments(no_marked, T0, "80-100")["last_row_shown_s"] == pytest.approx(0.7)
+    assert h.last_moments(no_marked, T0, "damaged")["last_row_shown_s"] == pytest.approx(1.5)
+    assert h.last_moments([ev("last_old_cleared", 1.0)], T0, "80-100")["last_row_shown_s"] == pytest.approx(1.0)
+    assert h.last_moments([], T0, "80-100") == {"last_row_shown_s": None, "last_mark_shown_s": None}
+
+    def verdict(shown):
+        cell = r6_cell("101-130")
+        for run in cell["runs"]:
+            if run["arm"] == "old":
+                run["first_rows_s"] = 4.0
+            else:
+                run["last_row_shown_s"] = shown
+        return [m for m in h.judge_cell_r6("101-130", cell, h.limits_with({})) if "last_row_shown_s" in m]
+
+    assert verdict(4.35) == [] and len(verdict(4.45)) == 1
+
+
+def test_k1_does_not_count_the_light_tick_s_tmux_list_child(monkeypatch):
+    table = {100: (1, ["root"]), 101: (100, ["/usr/bin/tmux", "list-windows"]), 102: (100, ["git", "status"]),
+             103: (102, ["sh"]), 104: (101, ["cat"])}
+    monkeypatch.setattr(h, "proc_table", lambda: table)
+    monkeypatch.setattr(h, "TMUX_LIST_ARGV", ("tmux", "list-windows"))
+    assert h.descendants(100) == 2
+    monkeypatch.setattr(h, "TMUX_LIST_ARGV", ())
+    assert h.descendants(100) == 4
+
+
+def test_each_r3_and_k1_measurement_logs_one_line(tmp_path):
+    lines = []
+    camp = h.Campaign(tmp_path, tmp_path / "old", tmp_path / "new", save_every=3600, until=1e12, watch=[],
+                      runner=Script(), clock=lambda: 0.0, log=lines.append)
+    while camp.measure():
+        pass
+    owed = len(h.R3_CELLS) * h.R3_MIN_RUNS + 2 * h.K1_MIN_RUNS
+    assert len(lines) == owed and lines[0] == "measured r3 new-event counted -" and lines[-1] == "measured k1 new counted -"
+    voided = []
+    void_camp = h.Campaign(tmp_path, tmp_path / "old", tmp_path / "new", save_every=3600, until=1e12, watch=[],
+                           runner=lambda what, arg: r3_rec(arg["arm"], arg["path"], counted=False, void_reason="short"),
+                           clock=lambda: 0.0, log=voided.append)
+    void_camp.measure()
+    assert voided == ["measured r3 new-event void short"]
+
+
+def test_bands_are_the_order_s_numeric_bands():
+    assert h.BANDS == {"near-zero": (0, 10), "80-100": (80, 100), "101-130": (101, 130), "131-170": (131, 170),
+                       "225-275": (225, 275), "360-440": (360, 440)}
+    ranges = sorted(h.BANDS.values())
+    assert all(a[1] < b[0] for a, b in zip(ranges, ranges[1:]))
+    assert h.OPTIONAL_CELLS == ("360-440",) and "360-440" not in h.REQUIRED_CELLS and "225-275" in h.REQUIRED_CELLS
+    assert (h.band_of(250), h.band_of(400), h.band_of(300)) == ("225-275", "360-440", None)

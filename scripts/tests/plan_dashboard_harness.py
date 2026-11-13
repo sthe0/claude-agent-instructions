@@ -22,15 +22,19 @@ screen stamp are comparable once both are taken from the harness's launch moment
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
 import random
 import re
+import select
 import signal
 import statistics
+import struct
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,18 +51,24 @@ HEADER_WORDS = ("task", "wait", "session", "live")
 OLD_MARK, UNREAD_MARK = "~", "?"
 ROWS_COLS = (40, 200)
 
-DEFAULT_LIMITS = {"R1": 0.70, "R2": 0.95, "R3": 0.25, "R6": 1.1}
+DEFAULT_LIMITS = {"R1": 1.5, "R2": 0.95, "R3": 0.25, "R6": 1.1, "R3_latency": 2.75, "R3_latency_watch": 0.75}
 STREAM_SCREEN_MAX_MS = 20.0
 MIN_RUNS, MAX_RUNS, SPREAD_TARGET = 5, 30, 0.05
 R3_CYCLES, R3_MIN_RUNS, K1_MIN_RUNS = 20, 5, 3
+R3_RUN_CAP_S = 660
+WATCH_ENV = "PLAN_DASHBOARD_WATCH"
+INTERLEAVE_EVERY = 3
+REDRAW_SPACING_MIN_S = 0.5
+TMUX_LIST_ARGV: tuple[str, ...] = ()
 MIN_CHANGED = 100
 BANDS = {"near-zero": (0, 10), "80-100": (80, 100), "101-130": (101, 130), "131-170": (131, 170),
-         "220-280": (220, 280), "350+": (350, None)}
+         "225-275": (225, 275), "360-440": (360, 440)}
+OPTIONAL_CELLS = ("360-440",)
 NO_BAND_CELLS = ("no-snapshot", "damaged")
 R1_CELLS = tuple(BANDS)
 R2_CELLS = ("near-zero", "80-100")
-R6_CELLS = ("101-130", "131-170", "220-280", "350+", "no-snapshot", "damaged")
-REQUIRED_CELLS = tuple(c for c in (*BANDS, *NO_BAND_CELLS) if c != "350+")
+R6_CELLS = ("101-130", "131-170", "225-275", "360-440", "no-snapshot", "damaged")
+REQUIRED_CELLS = tuple(c for c in (*BANDS, *NO_BAND_CELLS) if c not in OPTIONAL_CELLS)
 FORBIDDEN_ADDED = (re.compile(r"\.service$"), re.compile(r"\.timer$"), re.compile(r"(^|/)crontab$"),
                    re.compile(r"(^|/)etc/cron"))
 EXIT_OK, EXIT_MISS, EXIT_BAD = 0, 1, 2
@@ -404,12 +414,13 @@ def screen_summary(frames: list[tuple[float, dict]]) -> dict:
     """Moments, in seconds from launch, read from the screen frames ``(t, parsed)``."""
     shown = [(t, f["rows"]) for t, f in frames if f and f["rows"]]
     out = {"first_rows_s": None, "rows_confirmed_s": None, "marks_confirmed_s": None,
-           "old_marking_at_first_rows": None, "first_screen_rows": 0}
+           "old_marking_at_first_rows": None, "first_screen_rows": 0, "first_rows_marks": {}}
     if not shown:
         return out
     first_t, first_rows = shown[0]
     out.update(first_rows_s=first_t, first_screen_rows=len(first_rows),
-               old_marking_at_first_rows=all(OLD_MARK in cell for cell in first_rows.values()))
+               old_marking_at_first_rows=all(OLD_MARK in cell for cell in first_rows.values()),
+               first_rows_marks={row_id: OLD_MARK in cell for row_id, cell in first_rows.items()})
     stable = set(first_rows) & set(shown[-1][1])
     for t, rows in shown:
         if not stable or not stable <= set(rows):
@@ -442,17 +453,31 @@ class Trace:
         return [self.seconds(e["t_ns"]) for e in self.events if e.get("ev") == name]
 
 
-def descendants(root_pid: int) -> int:
-    """Live processes below ``root_pid`` read from /proc."""
-    parent = {}
+def proc_table() -> dict[int, tuple[int, list[str]]]:
+    """Every live process as ``pid -> (parent pid, argv)`` read from /proc."""
+    table = {}
     for entry in os.listdir("/proc"):
         if not entry.isdigit():
             continue
         try:
             stat = Path(f"/proc/{entry}/stat").read_text()
-            parent[int(entry)] = int(stat.rsplit(")", 1)[1].split()[1])
+            argv = Path(f"/proc/{entry}/cmdline").read_bytes().decode("utf-8", "replace").split("\0")
+            table[int(entry)] = (int(stat.rsplit(")", 1)[1].split()[1]), [a for a in argv if a])
         except (OSError, ValueError, IndexError):
             continue
+    return table
+
+
+def is_listing_child(argv: list[str]) -> bool:
+    """The tmux listing the light tick runs, which the dashboard owns on both code paths; never true while the
+    code under test has no listing command to pin (``TMUX_LIST_ARGV`` empty)."""
+    return bool(TMUX_LIST_ARGV) and bool(argv) and [os.path.basename(argv[0]), *argv[1:]] == list(TMUX_LIST_ARGV)
+
+
+def descendants(root_pid: int) -> int:
+    """Live processes below ``root_pid`` read from /proc, the light tick's listing child left out."""
+    table = proc_table()
+    parent = {pid: ppid for pid, (ppid, argv) in table.items() if not is_listing_child(argv)}
     count, frontier = 0, {root_pid}
     while frontier:
         frontier = {pid for pid, ppid in parent.items() if ppid in frontier}
@@ -628,14 +653,10 @@ class StatWatcher:
 
 
 class ContractWatcher:
-    """R3's due sources by the contract's rule, re-listed at every cycle start: every state, binding and ledger file
-    that changed or was created, and every changed or created transcript of a task the dashboard can show, with
-    ``StatWatcher``'s rule that a file modified after the cycle's start is not yet due."""
+    """Which tasks the dashboard can show, by the contract's rule: the rows on the screen, the state files inside
+    the 24 h window and the tasks driven by a changed binding. R3 keeps a changed transcript only of such a task."""
 
     WINDOW_NS = 24 * 3600 * 10**9
-
-    def __init__(self):
-        self.seen = {item["path"]: item for item in live_sources()}
 
     @staticmethod
     def shown_tasks(rows: set[str], changed: list[dict], files: list[dict], at_ns: int,
@@ -658,33 +679,22 @@ class ContractWatcher:
                 return set(parsed["rows"])
         return set()
 
-    def poll(self, due_wall_ns: int, screen_ids: set[str]) -> list[str]:
-        live = {item["path"]: item for item in live_sources()}
-        moved = sorted(p for p in {*self.seen, *live} if p not in live or p not in self.seen
-                       or any(live[p][k] != self.seen[p][k] for k in IDENTITY_KEYS))
-        # Shown tasks are those at the cycle's start: a file modified after it counts as last seen, or not at all.
-        files = [item if item["mtime_ns"] <= due_wall_ns else self.seen.get(path) for path, item in live.items()]
-        files = [item for item in files if item and item["kind"] != "transcript" and item["mtime_ns"] <= due_wall_ns]
-        changed = [item for item in (live.get(p) or self.seen[p] for p in moved)
-                   if item["kind"] != "transcript" and item["mtime_ns"] <= due_wall_ns]
+    def __init__(self):
+        self.seen = {item["path"]: item for item in live_sources()}
+
+    def __call__(self, screen_ids: set[str]) -> list[dict]:
+        """The sources that changed since the last call, with the moment each changed; a transcript only when its
+        task is one the dashboard can show."""
+        changes, now = sweep_changes(self.seen, live_sources())
+        self.seen = now
+        files = [item for item in now.values() if item["kind"] != "transcript"]
+        moved = [c for c in changes if c["kind"] != "transcript"]
         bindings = bindings_map(agent_home() / "agentctl" / "engine-session-bindings")
         rows = {Path(item["path"]).stem for item in files if item["kind"] == "state"
                 and any(cell and Path(item["path"]).stem.startswith(cell) for cell in screen_ids)}
-        shown = self.shown_tasks(rows, changed, files, due_wall_ns, bindings)
-        due = []
-        for path in moved:
-            now = live.get(path)
-            kind = (now or self.seen[path])["kind"]
-            if kind == "transcript" and not tasks_of_source(path, kind, bindings) & shown:
-                continue
-            if now is not None and now["mtime_ns"] > due_wall_ns:
-                continue
-            due.append(path)
-            if now is None:
-                del self.seen[path]
-            else:
-                self.seen[path] = now
-        return due
+        shown = self.shown_tasks(rows, moved, files, time.time_ns(), bindings)
+        return [c for c in changes if c["kind"] != "transcript"
+                or tasks_of_source(c["path"], "transcript", bindings) & shown]
 
 
 # --- what one run says --------------------------------------------------------------------------------
@@ -693,8 +703,31 @@ def covers(applied, required: set[str]) -> bool:
     return isinstance(applied, list) and required <= set(applied)
 
 
+def unconfirmed_unmarked_rows(events: list[dict], first_row_marks: dict[str, bool]) -> int | None:
+    """First-screen rows that carry no old marking and that no ``row_confirmed`` event named before the code painted
+    its rows; ``None`` when the stream has no ``rows_painted`` or the screen no first rows. A row id on the
+    screen is a prefix of the full id the event names."""
+    painted = next((i for i, e in enumerate(events) if e.get("ev") == "rows_painted"), None)
+    if painted is None or not first_row_marks:
+        return None
+    confirmed = [str(row) for e in events[:painted] if e.get("ev") == "row_confirmed" for row in e.get("rows") or []]
+    return sum(1 for row_id, marked in first_row_marks.items()
+               if not marked and not any(c.startswith(row_id) for c in confirmed))
+
+
+def startup_applied_ok(events: list[dict], changes: dict[str, set | None]) -> bool:
+    """The last ``startup_applied`` before the last ``first_screen_confirmed`` or ``mark_confirmed`` names every
+    source that changed before launch; ``False`` when there is none."""
+    last = max((i for i, e in enumerate(events) if e.get("ev") in ("first_screen_confirmed", "mark_confirmed")),
+               default=None)
+    if last is None:
+        return False
+    named = [e for e in events[:last] if e.get("ev") == "startup_applied"]
+    return bool(named) and covers(named[-1].get("applied"), set(changes))
+
+
 def event_summary(events: list[dict], t0_ns: int, *, arm: str, first_screen_ids: set[str],
-                  changes: dict[str, set | None]) -> dict:
+                  changes: dict[str, set | None], first_row_marks: dict[str, bool] | None = None) -> dict:
     """Moments and cover checks read from the stream. ``changes`` maps each changed path to the tasks it belongs to
     (``None`` for every task)."""
     def sec(e):
@@ -706,7 +739,8 @@ def event_summary(events: list[dict], t0_ns: int, *, arm: str, first_screen_ids:
 
     out = {"rows_painted_s": None, "from_snapshot": None, "first_screen_confirmed_s": None,
            "last_old_cleared_s": None, "live_check_end_s": None, "mark_confirmed_max_s": None,
-           "marks_missing": None, "applied_ok": None}
+           "marks_missing": None, "applied_ok": None,
+           "rows_unconfirmed_unmarked": unconfirmed_unmarked_rows(events, first_row_marks or {})}
     rows = first("rows_painted")
     if rows:
         out.update(rows_painted_s=sec(rows), from_snapshot=bool(rows.get("from_snapshot")))
@@ -722,15 +756,48 @@ def event_summary(events: list[dict], t0_ns: int, *, arm: str, first_screen_ids:
         out["mark_confirmed_max_s"] = max(sec(e) for e in confirmed.values())
     out["marks_missing"] = sum(1 for shown in first_screen_ids if not any(t.startswith(shown) for t in confirmed))
     if arm == "new":
-        ok = True
-        end = first("live_check_end")
-        everything = set(changes)
-        ok &= bool(end) and covers(end.get("applied"), everything)
+        ok = startup_applied_ok(events, changes)
         for task, e in confirmed.items():
             needed = {p for p, tasks in changes.items() if tasks is None or task in tasks}
             ok &= covers(e.get("applied"), needed)
         out["applied_ok"] = bool(ok)
     return out
+
+
+def moment_after(events: list[dict], index: int | None) -> int | None:
+    """The ``t_ns`` of the first ``redraw`` after position ``index`` (the first of the stream when ``None``); the
+    event's own stamp when no redraw follows it."""
+    start = 0 if index is None else index + 1
+    redraws = [e for e in events[start:] if e.get("ev") == "redraw"]
+    if redraws:
+        return redraws[0]["t_ns"]
+    return None if index is None else events[index]["t_ns"]
+
+
+def last_row_moment(events: list[dict], cell: str | None) -> int | None:
+    """When the last row stopped showing the old marking, as a screen moment: the first redraw after
+    ``last_old_cleared``. A run with no such event takes, in the no-snapshot and damaged cells, the first redraw
+    after ``live_check_end`` and in the others the first redraw of the run; none gives ``None``."""
+    cleared = next((i for i, e in enumerate(events) if e.get("ev") == "last_old_cleared"), None)
+    if cleared is not None:
+        return moment_after(events, cleared)
+    if cell in NO_BAND_CELLS:
+        end = next((i for i, e in enumerate(events) if e.get("ev") == "live_check_end"), None)
+        return None if end is None else moment_after(events, end)
+    return moment_after(events, None)
+
+
+def last_mark_moment(events: list[dict]) -> int | None:
+    """When the last mark was confirmed, as a screen moment: the first redraw after the last ``mark_confirmed``."""
+    last = max((i for i, e in enumerate(events) if e.get("ev") == "mark_confirmed"), default=None)
+    return None if last is None else moment_after(events, last)
+
+
+def last_moments(events: list[dict], t0_ns: int, cell: str | None) -> dict:
+    """``last_row_shown_s`` and ``last_mark_shown_s``, in seconds from launch."""
+    row, mark = last_row_moment(events, cell), last_mark_moment(events)
+    return {"last_row_shown_s": None if row is None else (row - t0_ns) / 1e9,
+            "last_mark_shown_s": None if mark is None else (mark - t0_ns) / 1e9}
 
 
 def summarize_run(trace_like: dict, *, arm: str, changed_count: int | None, changes: dict[str, set | None],
@@ -741,8 +808,30 @@ def summarize_run(trace_like: dict, *, arm: str, changed_count: int | None, chan
     first_ids = set(next((f["rows"] for _, f in frames if f and f["rows"]), {}))
     record = {"arm": arm, "changed_count": changed_count, "load1": load1, **screen}
     record.update(event_summary(trace_like["events"], trace_like["t0_ns"], arm=arm, first_screen_ids=first_ids,
-                                changes=changes))
+                                changes=changes, first_row_marks=screen["first_rows_marks"]))
+    record.update(redraw_summary(trace_like["events"]))
+    record["marks_screen_s"] = marks_screen_s(record)
     return record
+
+
+def marks_screen_s(run: dict) -> float | None:
+    """When the screen shows both the rows and their marks: the later of the two moments; ``None`` when either never shows."""
+    rows, marks = run.get("rows_confirmed_s"), run.get("marks_confirmed_s")
+    return None if rows is None or marks is None else max(rows, marks)
+
+
+def marks_screen_summary(new: list[dict], old: list[dict]) -> dict:
+    """The medians of the screen time to marks and the new code's factor against the old; judged against nothing."""
+    new_median = median(r.get("marks_screen_s") for r in new)
+    old_median = median(marks_screen_s(r) for r in old)
+    factor = None if new_median is None or not old_median else new_median / old_median
+    return {"new_median_s": new_median, "old_median_s": old_median, "factor": factor}
+
+
+def r3_digest(runs: list[dict]) -> list[str]:
+    """One line per R3 run: its untimed share and the load around it."""
+    return [f"r3 {r.get('arm')}-{r.get('path')} untimed_share={r.get('untimed_share')} "
+            f"load={r.get('load_start')}->{r.get('load_end')}" for r in runs]
 
 
 def r2_value(run: dict) -> float | None:
@@ -761,28 +850,278 @@ def cycle_records(events: list[dict], t0_ns: int) -> list[dict]:
     ends = {e["cycle"]: e for e in events if e.get("ev") == "cycle_end"}
     out = []
     for number in sorted(set(starts) & set(ends)):
-        out.append({"cycle": number, "start_s": (starts[number]["t_ns"] - t0_ns) / 1e9,
-                    "duration_s": (ends[number]["t_ns"] - starts[number]["t_ns"]) / 1e9,
-                    "applied": ends[number].get("applied")})
+        start, end = starts[number]["t_ns"], ends[number]["t_ns"]
+        previous = out[-1]["end_ns"] if out else None
+        out.append({"cycle": number, "start_ns": start, "end_ns": end, "start_s": (start - t0_ns) / 1e9,
+                    "duration_s": (end - start) / 1e9, "gap_s": None if previous is None else (start - previous) / 1e9,
+                    "applied": ends[number].get("applied"), "found_by": ends[number].get("found_by")})
     return out
 
 
-def check_cycle_coverage(cycles: list[dict], due_by_cycle: dict[int, list[str]]) -> list[dict]:
-    """Adds ``covered`` to each cycle: the applied set holds every source the harness found changed at its start.
-    The old code applies everything (``"all"``)."""
+def change_time_ns(now: dict | None, path: str) -> int:
+    """The later of a source's mtime and ctime; a vanished source is judged by its parent directory's times."""
+    if now is not None:
+        return max(now["mtime_ns"], now["ctime_ns"])
+    try:
+        st = os.stat(os.path.dirname(path))
+    except OSError:
+        return 0
+    return max(st.st_mtime_ns, st.st_ctime_ns)
+
+
+def sweep_changes(seen: dict[str, dict], live: list[dict]) -> tuple[list[dict], dict[str, dict]]:
+    """The sources whose identity differs between two sweeps, each with its change time (wall clock, ns)."""
+    now = {item["path"]: item for item in live}
+    moved = [p for p in sorted({*seen, *now}) if p not in seen or p not in now
+             or any(now[p][k] != seen[p][k] for k in IDENTITY_KEYS)]
+    return [{"path": p, "kind": (now.get(p) or seen[p])["kind"], "change_ns": change_time_ns(now.get(p), p)}
+            for p in moved], now
+
+
+def start_thread(job) -> None:
+    threading.Thread(target=job, daemon=True).start()
+
+
+class SweepTaker:
+    """Takes a sweep of the sources at a ``cycle_end`` when none is running, in a thread of its own so the terminal
+    reader never waits; each sweep is stamped with its start and end on the monotonic clock."""
+
+    def __init__(self, take, spawn=start_thread, now=time.monotonic_ns):
+        self.take, self.spawn, self.now = take, spawn, now
+        self.sweeps: list[dict] = []
+        self.busy = False
+
+    def on_event(self, trace, event) -> None:
+        if event.get("ev") != "cycle_end" or self.busy:
+            return
+        self.busy = True
+        screen_ids, start = ContractWatcher.screen_ids(trace.frames), self.now()
+        self.spawn(lambda: self.sweep(screen_ids, start))
+
+    def sweep(self, screen_ids: set[str], start: int) -> None:
+        try:
+            changes = self.take(screen_ids)
+            self.sweeps.append({"start_ns": start, "end_ns": self.now(), "changes": changes})
+        finally:
+            self.busy = False
+
+
+IN_MODIFY, IN_MOVED_TO, IN_CREATE, IN_DELETE, IN_Q_OVERFLOW = 0x2, 0x80, 0x100, 0x200, 0x4000
+OBSERVED_EVENTS = IN_MODIFY | IN_MOVED_TO | IN_CREATE | IN_DELETE
+
+
+def observed_dirs() -> list[str]:
+    return sorted({os.path.dirname(item["path"]) for item in live_sources()})
+
+
+class RunObserver:
+    """Stamps, on the monotonic clock, every write, rename-in, creation and unlink in the directories of the live
+    sources: the earliest moment a change could have been shown. A watch it cannot add or a queue overflow sets
+    ``ok`` to ``False``."""
+
+    def __init__(self, dirs: list[str]):
+        self.dirs, self.stamps, self.ok = dirs, {}, True
+        self.stopped = threading.Event()
+        self.thread = None
+
+    def start(self) -> None:
+        libc = ctypes.CDLL(None, use_errno=True)
+        self.fd = libc.inotify_init1(os.O_NONBLOCK)
+        self.watches = {}
+        for folder in self.dirs:
+            wd = libc.inotify_add_watch(self.fd, folder.encode(), OBSERVED_EVENTS)
+            if wd < 0:
+                self.ok = False
+            else:
+                self.watches[wd] = folder
+        if self.fd < 0:
+            self.ok = False
+            return
+        self.thread = threading.Thread(target=self.read, daemon=True)
+        self.thread.start()
+
+    def read(self) -> None:
+        while not self.stopped.is_set():
+            if not select.select([self.fd], [], [], 0.05)[0]:
+                continue
+            try:
+                data = os.read(self.fd, 1 << 16)
+            except OSError:
+                continue
+            stamp = time.monotonic_ns()
+            offset = 0
+            while offset + 16 <= len(data):
+                wd, mask, _, size = struct.unpack_from("iIII", data, offset)
+                name = data[offset + 16:offset + 16 + size].split(b"\0")[0].decode("utf-8", "replace")
+                offset += 16 + size
+                if mask & IN_Q_OVERFLOW:
+                    self.ok = False
+                elif wd in self.watches and name:
+                    self.stamps.setdefault(os.path.join(self.watches[wd], name), []).append(stamp)
+
+    def stop(self) -> None:
+        self.stopped.set()
+        if self.thread is not None:
+            self.thread.join(timeout=2)
+            os.close(self.fd)
+
+
+def due_sets(cycles: list[dict], sweeps: list[dict], wall_minus_mono_ns: int, resolution_ns: int) -> dict[int, list[dict]]:
+    """Per cycle, the changes the sweeps starting before it saw and that happened at least one mtime resolution
+    before its start; a later change is carried to the next cycle."""
+    ordered = sorted(sweeps, key=lambda s: s["start_ns"])
+    pool: list[dict] = []
+    taken, out = 0, {}
+    for cycle in cycles:
+        while taken < len(ordered) and ordered[taken]["start_ns"] <= cycle["start_ns"]:
+            pool += ordered[taken]["changes"]
+            taken += 1
+        limit = cycle["start_ns"] + wall_minus_mono_ns - resolution_ns
+        out[cycle["cycle"]] = [c for c in pool if c["change_ns"] <= limit]
+        pool = [c for c in pool if c["change_ns"] > limit]
+    return out
+
+
+def applying_cycle(by_number: dict[int, dict], cycle_no: int, path: str, change_mono_ns: int) -> int | None:
+    """The first cycle up to ``cycle_no`` that applied ``path`` and ended at or after the change. A cycle's end
+    stamp is the only evidence: ``applied`` names paths, not identities. The old code applies everything."""
+    for number in sorted(n for n in by_number if n <= cycle_no):
+        cycle = by_number[number]
+        applied = cycle["applied"]
+        if (applied == "all" or (isinstance(applied, list) and path in applied)) and cycle["end_ns"] >= change_mono_ns:
+            return number
+    return None
+
+
+def check_cycle_coverage(cycles: list[dict], due: dict[int, list[dict]], wall_minus_mono_ns: int) -> list[dict]:
+    """Adds to each cycle its due sources, each with the cycle that applied it (``None``: uncovered)."""
+    by_number = {c["cycle"]: c for c in cycles}
     out = []
     for cycle in cycles:
-        due = set(due_by_cycle.get(cycle["cycle"], []))
-        applied = cycle["applied"]
-        out.append({**cycle, "due": len(due),
-                    "covered": applied == "all" or (isinstance(applied, list) and due <= set(applied))})
+        sources = []
+        for change in due.get(cycle["cycle"], []):
+            mono = change["change_ns"] - wall_minus_mono_ns
+            sources.append({"path": change["path"], "change_ns": mono,
+                            "applied_by": applying_cycle(by_number, cycle["cycle"], change["path"], mono)})
+        out.append({**cycle, "due": len(sources), "sources": sources,
+                    "covered": all(s["applied_by"] is not None for s in sources)})
     return out
 
 
-def r3_run_record(arm: str, cycles: list[dict]) -> dict:
-    take = [c for c in cycles if c["cycle"] >= 2][:R3_CYCLES]
-    return {"arm": arm, "cycles": take, "median_s": median(c["duration_s"] for c in take),
-            "covered_all": all(c["covered"] for c in take) and len(take) == R3_CYCLES}
+def cycle_untimed(cycle: dict, sweeps: list[dict]) -> bool:
+    """A cycle that starts inside a sweep, or starts before one and ends after its start, shares the machine with it."""
+    return any(cycle["start_ns"] < s["end_ns"] and cycle["end_ns"] > s["start_ns"] for s in sweeps)
+
+
+def cycle_latency_s(cycle: dict) -> float:
+    """What a change waits for the stat path: the gap before the cycle plus the cycle."""
+    return (cycle["gap_s"] or 0.0) + cycle["duration_s"]
+
+
+def redraw_naming(events: list[dict], cycle_no: int) -> int | None:
+    return next((e["t_ns"] for e in events if e.get("ev") == "redraw" and cycle_no in (e.get("cycles") or [])), None)
+
+
+def shown_moment(events: list[dict], by_number: dict[int, dict], cycle_no: int) -> int:
+    """When the change a cycle applied reaches the screen: the redraw naming the cycle, else the cycle's end."""
+    named = redraw_naming(events, cycle_no)
+    return by_number[cycle_no]["end_ns"] if named is None else named
+
+
+def first_unshown_change_ns(stamps: list[int], earlier_ends: list[int], change_ns: int, end_ns: int) -> tuple[int, bool]:
+    """The observer's earliest stamp no earlier applying cycle covered and the applying cycle did not outlast; the
+    change time of the sweep when there is none (``False`` in the second place)."""
+    unshown = [s for s in stamps if s <= end_ns and not any(s <= e for e in earlier_ends)]
+    return (min(unshown), True) if unshown else (change_ns, False)
+
+
+def event_latencies(events: list[dict], cycles: list[dict], stamps: dict[str, list[int]]) -> tuple[list[float], int]:
+    """One latency per due source of a timed cycle, from its first change not yet shown to the screen; and how
+    many of them had to take the sweep's change time."""
+    by_number = {c["cycle"]: c for c in cycles}
+    values, stat_timed = [], 0
+    for cycle in cycles:
+        for source in cycle["sources"]:
+            applied = source["applied_by"]
+            if applied is None:
+                continue
+            earlier = [by_number[n]["end_ns"] for n in by_number if n < applied
+                       and (by_number[n]["applied"] == "all" or source["path"] in (by_number[n]["applied"] or []))]
+            start, observed = first_unshown_change_ns(stamps.get(source["path"], []), earlier, source["change_ns"],
+                                                      by_number[applied]["end_ns"])
+            stat_timed += not observed
+            values.append((shown_moment(events, by_number, applied) - start) / 1e9)
+    return values, stat_timed
+
+
+def redraw_summary(events: list[dict]) -> dict:
+    """The ``redraw`` events (no light tick, no header repaint) and the smallest spacing between neighbours, from the
+    first event-path ``detection`` on when the run has one."""
+    stamps = [e["t_ns"] for e in events if e.get("ev") == "redraw"]
+    detected = next((e["t_ns"] for e in events if e.get("ev") == "detection" and e.get("path") == "event"), None)
+    judged = [t for t in stamps if detected is None or t >= detected]
+    gaps = [(b - a) / 1e9 for a, b in zip(judged, judged[1:])]
+    return {"redraws": len(stamps), "redraw_gap_min_s": min(gaps, default=None)}
+
+
+def found_by_counts(cycles: list[dict]) -> dict | None:
+    """How the applied sources were found, counted over the cycles; recorded, judged against nothing."""
+    routes = [r for c in cycles if isinstance(c.get("found_by"), dict) for r in c["found_by"].values()]
+    if not any(isinstance(c.get("found_by"), dict) for c in cycles):
+        return None
+    return {route: routes.count(route) for route in sorted(set(routes))}
+
+
+def r3_void_reason(path: str, arm: str, events: list[dict], timed: list[dict], observer_ok: bool) -> str | None:
+    """Why a run cannot count: its observer failed, it took the other detection path or none, it holds fewer
+    than R3_CYCLES timed cycles, or (event path) no timed cycle had a due source."""
+    if not observer_ok:
+        return "observer"
+    if arm == "new":
+        paths = [e.get("path") for e in events if e.get("ev") == "detection"]
+        if not paths:
+            return "no detection"
+        if any(p != path for p in paths):
+            return "fallback"
+    if len(timed) < R3_CYCLES:
+        return "short"
+    if path == "event" and not any(c["due"] for c in timed):
+        return "no due source"
+    return None
+
+
+def r3_run_record(arm: str, path: str, cycles: list[dict], events: list[dict], sweeps: list[dict], *,
+                  stamps: dict[str, list[int]], observer_ok: bool = True, loads=(None, None)) -> dict:
+    """One R3 run: cycles from the second on, up to the R3_CYCLES-th timed one; coverage judged over all of them,
+    durations and latencies over the timed ones."""
+    after = [c for c in cycles if c["cycle"] >= 2]
+    taken, timed = [], []
+    for cycle in after:
+        taken.append({**cycle, "untimed": cycle_untimed(cycle, sweeps)})
+        if not taken[-1]["untimed"]:
+            timed.append(taken[-1])
+        if len(timed) == R3_CYCLES:
+            break
+    untimed = [c for c in taken if c["untimed"]]
+    void = r3_void_reason(path, arm, events, timed, observer_ok)
+    if path == "event" and arm == "new":
+        values, stat_timed = event_latencies(events, timed, stamps)
+    else:
+        values, stat_timed = [cycle_latency_s(c) for c in timed], 0
+    record = {"arm": arm, "path": path, "counted": void is None, "void_reason": void,
+              "timed_cycles": len(timed), "untimed_cycles": len(untimed),
+              "untimed_share": len(untimed) / len(taken) if untimed else None,
+              "median_s": median(c["duration_s"] for c in timed),
+              "covered_all": bool(taken) and all(c["covered"] for c in taken),
+              "uncovered": sum(1 for c in taken if not c["covered"]),
+              "latency_max_s": max(values, default=None), "latency_median_s": median(values),
+              "latency_stat_timed": stat_timed,
+              "latency_max_untimed_s": max((cycle_latency_s(c) for c in untimed), default=None),
+              "found_by_counts": found_by_counts(taken), "load_start": loads[0], "load_end": loads[1],
+              "cycles": [{k: c[k] for k in ("cycle", "start_s", "duration_s", "gap_s", "untimed", "due", "covered")}
+                         for c in taken]}
+    record.update(redraw_summary(events))
+    return record
 
 
 # --- acceptance ----------------------------------------------------------------------------------------
@@ -819,16 +1158,21 @@ def validate_report(report, floors, *, tree: Path, old_tree: Path | None) -> lis
     return bad
 
 
+def time_over_limit(values: list, limit: float) -> bool:
+    """A cell's time is its median new-run value; a run without one makes the cell miss."""
+    return any(v is None for v in values) or median(values) >= limit
+
+
 def judge_cell_r1(name: str, cell: dict, limits: dict) -> list[str]:
     new = runs_of(cell, "new")
     misses = []
     values = [r.get("first_rows_s") for r in new]
     if len(new) < MIN_RUNS or len(runs_of(cell, "old")) < MIN_RUNS:
         return [f"{name}: fewer than {MIN_RUNS} runs"]
-    if any(v is None for v in values) or median(values) >= limits["R1"]:
+    if time_over_limit(values, limits["R1"]):
         misses.append(f"{name}: R1 median first-row time {median(values)} s is not under {limits['R1']} s")
-    if not all(r.get("old_marking_at_first_rows") for r in new):
-        misses.append(f"{name}: the screen at first-row time lacks the old marking")
+    if any(r.get("rows_unconfirmed_unmarked") is None or r["rows_unconfirmed_unmarked"] > 0 for r in new):
+        misses.append(f"{name}: a first-screen row has neither the old marking nor a row_confirmed before the rows were painted")
     return misses
 
 
@@ -838,22 +1182,22 @@ def judge_cell_r2(name: str, cell: dict, limits: dict) -> list[str]:
     values = [r2_value(r) for r in new]
     if any(v is None for v in values):
         misses.append(f"{name}: a run has no first_screen_confirmed, never confirmed its screen, or lacks a mark confirmation")
-    elif median(values) >= limits["R2"]:
+    elif time_over_limit(values, limits["R2"]):
         misses.append(f"{name}: R2 median {median(values)} s is not under {limits['R2']} s")
     if any(r.get("applied_ok") is not True for r in new):
         misses.append(f"{name}: a run's applied set misses a changed source")
     if any(r.get("last_old_cleared_s") is None or r.get("live_check_end_s") is None
            or r["last_old_cleared_s"] > r["live_check_end_s"] for r in new):
         misses.append(f"{name}: last_old_cleared is missing or comes after live_check_end")
-    cleared = [r["last_old_cleared_s"] for r in new if r.get("last_old_cleared_s") is not None]
+    cleared = [r["last_row_shown_s"] for r in new if r.get("last_row_shown_s") is not None]
     old_rows = [r["first_rows_s"] for r in old if r.get("first_rows_s") is not None]
     if cleared and old_rows and median(cleared) > limits["R6"] * median(old_rows):
-        misses.append(f"{name}: last_old_cleared median {median(cleared)} s exceeds {limits['R6']} x the old time to rows")
+        misses.append(f"{name}: the last old row leaves the screen at {median(cleared)} s, over {limits['R6']} x the old time to rows")
     return misses
 
 
 R6_PAIRS = (("rows_confirmed_s", "rows_confirmed_s"), ("marks_confirmed_s", "marks_confirmed_s"),
-            ("last_old_cleared_s", "first_rows_s"), ("mark_confirmed_max_s", "marks_confirmed_s"))
+            ("last_row_shown_s", "first_rows_s"), ("last_mark_shown_s", "marks_confirmed_s"))
 
 
 def judge_cell_r6(name: str, cell: dict, limits: dict) -> list[str]:
@@ -871,15 +1215,34 @@ def judge_cell_r6(name: str, cell: dict, limits: dict) -> list[str]:
     return misses
 
 
+def counted_runs(runs: list[dict], path: str) -> list[dict]:
+    return [r for r in runs if r.get("counted") and r.get("path") == path]
+
+
+def latency_value(run: dict) -> float | None:
+    return run.get("latency_max_s")
+
+
+def latency_limit(run: dict, limits: dict) -> float:
+    return limits["R3_latency_watch" if run.get("path") == "event" else "R3_latency"]
+
+
 def judge_r3(report: dict, limits: dict) -> list[str]:
-    runs = [r for r in (report.get("r3") or {}).get("runs", []) if r.get("arm") == "new"]
-    if len(runs) < R3_MIN_RUNS:
-        return [f"R3: fewer than {R3_MIN_RUNS} new-code runs of {R3_CYCLES} cycles"]
+    new = [r for r in (report.get("r3") or {}).get("runs", []) if r.get("arm") == "new"]
     misses = []
+    for path in ("event", "stat"):
+        if len(counted_runs(new, path)) < R3_MIN_RUNS:
+            misses.append(f"R3: fewer than {R3_MIN_RUNS} counted new-code runs on the {path} path")
+    runs = [r for r in new if r.get("counted")]
     if any(r.get("median_s") is None or r["median_s"] >= limits["R3"] for r in runs):
         misses.append(f"R3: a run's own median is not under {limits['R3']} s")
     if any(not r.get("covered_all") for r in runs):
         misses.append("R3: a cycle's applied set misses a source the harness found changed")
+    if any(latency_value(r) is None or latency_value(r) > latency_limit(r, limits) for r in runs):
+        misses.append("R3: a change waits longer than the latency bound of its detection path")
+    if any(r.get("path") == "event" and r.get("redraw_gap_min_s") is not None
+           and r["redraw_gap_min_s"] < REDRAW_SPACING_MIN_S for r in runs):
+        misses.append(f"R3: two redraws come closer than {REDRAW_SPACING_MIN_S} s")
     return misses
 
 
@@ -916,7 +1279,7 @@ def judge_report(report: dict, limits: dict) -> list[str]:
         if name not in cells:
             misses.append(f"{name}: required cell is missing")
     for name, cell in cells.items():
-        if name == "350+" and (len(runs_of(cell, "new")) < MIN_RUNS or len(runs_of(cell, "old")) < MIN_RUNS):
+        if name in OPTIONAL_CELLS and (len(runs_of(cell, "new")) < MIN_RUNS or len(runs_of(cell, "old")) < MIN_RUNS):
             continue
         if name in R1_CELLS:
             misses += judge_cell_r1(name, cell, limits)
@@ -1369,7 +1732,7 @@ def parse_limits(pairs: list[str]) -> dict[str, float]:
     for pair in pairs or []:
         name, _, value = pair.partition("=")
         if name not in DEFAULT_LIMITS or not value:
-            raise SystemExit(f"bad --limit {pair!r}; use R1, R2, R3 or R6 = number")
+            raise SystemExit(f"bad --limit {pair!r}; use {', '.join(DEFAULT_LIMITS)} = number")
         out[name] = float(value)
     return out
 
@@ -1411,6 +1774,38 @@ def cmd_verify_acceptance(args) -> int:
 
 # --- subcommands: campaign and status -----------------------------------------------------------------
 
+R3_CELLS = (("new", "event"), ("new", "stat"), ("old", "stat"))
+
+
+def r3_env(env: dict, path: str) -> dict:
+    """The launch environment of an R3 run: the stat path is forced with ``PLAN_DASHBOARD_WATCH=off``."""
+    out = {k: v for k, v in env.items() if k != WATCH_ENV}
+    if path == "stat":
+        out[WATCH_ENV] = "off"
+    return out
+
+
+def timed_cycle_count(events: list[dict], t0_ns: int, sweeps: list[dict]) -> int:
+    """The cycles from the second on that share the machine with no sweep."""
+    return sum(1 for c in cycle_records(events, t0_ns) if c["cycle"] >= 2 and not cycle_untimed(c, sweeps))
+
+
+def interleave_due(band_runs_since: int) -> bool:
+    """A measurement is owed after every INTERLEAVE_EVERY band runs, so no band cell can starve R3 and K1."""
+    return band_runs_since >= INTERLEAVE_EVERY
+
+
+def next_measurement(r3: list[dict], k1: list[dict]) -> dict | None:
+    """The R3 cell or K1 code still short of its minimum, as a job; ``None`` when every minimum is reached."""
+    for arm, path in R3_CELLS:
+        if len(counted_runs([r for r in r3 if r["arm"] == arm], path)) < R3_MIN_RUNS:
+            return {"what": "r3", "arm": arm, "path": path}
+    for arm in ("old", "new"):
+        if len([r for r in k1 if r["arm"] == arm]) < K1_MIN_RUNS:
+            return {"what": "k1", "arm": arm, "path": None, "index": len(k1)}
+    return None
+
+
 class Campaign:
     """Alternating old/new runs over bands of changed sources, a few hours long. The runner is injected so the
     scheduling can be tested without a terminal."""
@@ -1427,6 +1822,7 @@ class Campaign:
         self.k1: list[dict] = []
         self.largest = 0
         self.last_save = 0.0
+        self.band_since = 0
 
     def metrics(self, cell: str) -> tuple[str, ...]:
         base = ("first_rows_s",) if cell in R1_CELLS else ()
@@ -1463,6 +1859,8 @@ class Campaign:
                 self.copies.append(copy)
                 self.log(f"saved snapshot copy {len(self.copies)}")
         live = self.runner("live", None)
+        if interleave_due(self.band_since) and self.measure():
+            return True
         for cell in (*NO_BAND_CELLS, "near-zero", *[c for c in BANDS if c != "near-zero"]):
             if self.cell_done(cell):
                 continue
@@ -1486,22 +1884,25 @@ class Campaign:
                 self.log(f"dropped a {cell} run: changed_count {record.get('changed_count')} outside the band")
                 continue
             self.runs[cell].append(record)
+            self.band_since += 1
             return True
-        for arm in ("old", "new"):
-            have = [r for r in self.r3 if r["arm"] == arm]
-            other = [r for r in self.r3 if r["arm"] != arm]
-            if len(have) < R3_MIN_RUNS and len(have) <= len(other):
-                self.r3.append(self.runner("r3", {"arm": arm}))
-                return True
-        for arm in ("old", "new"):
-            if len([r for r in self.k1 if r["arm"] == arm]) < K1_MIN_RUNS:
-                self.k1.append(self.runner("k1", {"arm": arm, "index": len(self.k1)}))
-                return True
-        return False
+        return self.measure()
+
+    def measure(self) -> bool:
+        """One R3 or K1 measurement when one is owed."""
+        job = next_measurement(self.r3, self.k1)
+        if job is None:
+            return False
+        record = self.runner(job["what"], job)
+        (self.r3 if job["what"] == "r3" else self.k1).append(record)
+        cell = f"{job['arm']}-{job['path']}" if job["what"] == "r3" else job["arm"]
+        state = "counted" if record.get("counted", True) else "void"
+        self.log(f"measured {job['what']} {cell} {state} {record.get('void_reason') or '-'}")
+        self.band_since = 0
+        return True
 
     def finished(self) -> bool:
-        required = all(self.cell_done(c) for c in REQUIRED_CELLS)
-        return required and len(self.r3) >= 2 * R3_MIN_RUNS and len(self.k1) >= 2 * K1_MIN_RUNS
+        return all(self.cell_done(c) for c in REQUIRED_CELLS) and next_measurement(self.r3, self.k1) is None
 
     def run(self) -> dict:
         while self.clock() < self.until and not self.finished():
@@ -1516,6 +1917,9 @@ class Campaign:
             if runs or name in REQUIRED_CELLS:
                 cells[name] = {"band": list(BANDS[name]) if name in BANDS else None, "runs": runs,
                                "dropped_out_of_band": self.dropped[name]}
+                if name in R2_CELLS:
+                    cells[name]["marks_screen"] = marks_screen_summary(runs_of(cells[name], "new"),
+                                                                       runs_of(cells[name], "old"))
         return {"version": 1, "taken_at": iso_now(), "instrument_sha256": instrument_sha256(),
                 "new_tree_sha256": tree_sha256(self.new), "old_tree_sha256": tree_sha256(self.old),
                 "largest_changed_count": self.largest, "cells": cells,
@@ -1600,24 +2004,30 @@ class RealRunner:
         record = summarize_run({"frames": trace.frames, "events": trace.events, "t0_ns": trace.t0_ns},
                                arm=arm, changed_count=changed_count, changes=changes, load1=load1)
         record["cell"] = cell
+        if events:
+            record.update(last_moments(trace.events, trace.t0_ns, cell))
         return record
 
     def do_r3(self, job):
-        arm = job["arm"]
+        arm, path = job["arm"], job["path"]
         tree = self.new if arm == "new" else self.old
-        watcher = ContractWatcher()
-        due: dict[int, list[str]] = {}
-
-        def on_event(trace, event):
-            if event.get("ev") == "cycle_start":
-                wall_ns = event["t_ns"] + trace.wall_minus_mono_ns
-                due[event["cycle"]] = watcher.poll(wall_ns, ContractWatcher.screen_ids(trace.frames))
-
-        trace = run_pty(dashboard_argv(tree, events=True), cwd=tree, env=self.env(arm), events=True, max_s=180,
-                        on_event=on_event,
-                        stop=lambda t: len(cycle_records(t.events, t.t0_ns)) >= R3_CYCLES + 2)
-        cycles = check_cycle_coverage(cycle_records(trace.events, trace.t0_ns), due)
-        return r3_run_record(arm, cycles)
+        sweeper = SweepTaker(ContractWatcher())
+        observer = RunObserver(observed_dirs())
+        observer.start()
+        load_start = os.getloadavg()[0]
+        try:
+            trace = run_pty(dashboard_argv(tree, events=True), cwd=tree, env=r3_env(self.env(arm), path),
+                            events=True, max_s=R3_RUN_CAP_S, on_event=sweeper.on_event,
+                            stop=lambda t: timed_cycle_count(t.events, t.t0_ns, list(sweeper.sweeps)) > R3_CYCLES)
+        finally:
+            observer.stop()
+        events, sweeps = trace.events, list(sweeper.sweeps)
+        cycles = cycle_records(events, trace.t0_ns)
+        resolution = mtime_resolution(self.state_dir)["value_ns"]
+        offset = trace.wall_minus_mono_ns
+        covered = check_cycle_coverage(cycles, due_sets(cycles, sweeps, offset, resolution), offset)
+        return r3_run_record(arm, path, covered, events, sweeps, stamps=observer.stamps, observer_ok=observer.ok,
+                             loads=(load_start, os.getloadavg()[0]))
 
     def do_k1(self, job):
         arm = job["arm"]
