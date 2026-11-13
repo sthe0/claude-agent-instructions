@@ -419,7 +419,8 @@ def _resolve_suite_gate(argv: list[str], venue_real: str):
     `run` fetches the remote tip and writes the record, baseline and logs under the git common
     dir; `waive` rewrites a record there; `check` without `--remote-sha` fetches (a tracking-ref
     write in the common dir). `show`, `pre-push` and `check` with an explicit `--remote-sha` read
-    local state only. The suite runs in a throwaway sandbox under the temp dir and makes no
+    local state only. The suite runs in a throwaway sandbox under the temp dir (a run also removes the
+    sandboxes of dead gate runs there, by their owner locks) and makes no
     external call, so no service resource is named. A subcommand or flag outside this grammar
     leaves the command unresolved."""
     from .tool_contracts import Resolution  # deferred: see module docstring

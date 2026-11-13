@@ -931,9 +931,8 @@ def run_tree(repo: Path, sha: str, extra_pytest_args: Sequence[str], junit_path:
     and per-test report copied beside ``junit_path`` (the report keyed by node id, ``<stem>.tests.jsonl``).
     The sandbox is removed after; the returned run names the copies.
     """
-    common_dir = Path(_common_dir(repo))
-    gate_retention.sweep_dead_sandboxes(common_dir, sandbox_parent, SANDBOX_PREFIX)
-    with gate_retention.sandbox(common_dir, sandbox_parent, SANDBOX_PREFIX) as root:
+    gate_retention.sweep_dead_sandboxes(sandbox_parent, SANDBOX_PREFIX)
+    with gate_retention.sandbox(sandbox_parent, SANDBOX_PREFIX) as root:
         run = default_runner(repo, sha, root, select=(), timeout_s=timeout_s,
                              extra_pytest_args=extra_pytest_args, slots=slots)
         junit_path.parent.mkdir(parents=True, exist_ok=True)
@@ -985,7 +984,7 @@ def _baseline(repo: Path, tip: str, common_dir: Path, runner: Runner, timeout_s:
         if usable_baseline(cached, tip):
             gate_retention.touch(shared.record_path(common_dir, BASELINE_DIR, tip))
             return cached, "hit"
-        with gate_retention.sandbox(common_dir, sandbox_parent, SANDBOX_PREFIX) as root:
+        with gate_retention.sandbox(sandbox_parent, SANDBOX_PREFIX) as root:
             run = runner(repo, tip, root, select=(), timeout_s=timeout_s)
             ids, reason = classify(run, tip)
             kept = keep_run_files(run, common_dir, BASELINE_DIR, tip)
@@ -1082,8 +1081,8 @@ def _execute(repo: Path, candidate_sha: str, tip: str, common_dir: Path, run: Ru
              now: Callable[[], str], sandbox_parent: str | Path,
              tip_reader: Callable[[], str] | None = None) -> Execution:
     """Run the candidate, then the tip's baseline and the reruns of its new failures when they are needed."""
-    gate_retention.sweep_dead_sandboxes(common_dir, sandbox_parent, SANDBOX_PREFIX)
-    with gate_retention.sandbox(common_dir, sandbox_parent, SANDBOX_PREFIX) as root:
+    gate_retention.sweep_dead_sandboxes(sandbox_parent, SANDBOX_PREFIX)
+    with gate_retention.sandbox(sandbox_parent, SANDBOX_PREFIX) as root:
         candidate_run = run(repo, candidate_sha, root, select=(), timeout_s=limit)
         seen = observe(candidate_run, candidate_sha)
         reason = seen.reason

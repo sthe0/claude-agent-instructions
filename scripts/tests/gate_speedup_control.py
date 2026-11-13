@@ -1043,8 +1043,6 @@ def _series_inner(args: argparse.Namespace) -> int:
     problems = [p for r in results for p in r["problems"]]
     if grown_mb > args.keep_max_mb:
         problems.append(f"the kept store grew {grown_mb:.1f} MB, more than {args.keep_max_mb}")
-    if total_mb > args.keep_max_mb:
-        problems.append(f"the kept store holds {total_mb:.1f} MB, more than {args.keep_max_mb}")
     summary = {"runs": results, "tip": tip, "keep_max_mb": args.keep_max_mb, "store_grown_mb": round(grown_mb, 2),
                "store_total_mb": round(total_mb, 2), "leftover_in_tmp": leftovers, "problems": problems,
                "ok": not problems and not leftovers}

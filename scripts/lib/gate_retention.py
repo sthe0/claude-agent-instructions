@@ -11,24 +11,29 @@ because ``instruction-sandbox.sh`` accepts only an empty root.) A run, before it
 sandbox, removes every sandbox of the gate's own naming whose owner file it can lock; it never judges by
 age, and never removes a sandbox whose lock is held. A sandbox without an owner file (made by the code
 before this module, or by another tool) is never removed: a concurrent session still on the old gate
-has live sandboxes without one. Creation is serialised against sweeping by a shared ``flock`` on
-``<git common dir>/suite-gate/sandbox-sweep.lock`` (outside the swept directory, so a clean run leaves
-nothing there): a creator holds it from before it makes the directory until it holds the owner lock,
-a sweeper holds it exclusively, so a sweeper never sees an owner file whose lock is not yet taken.
-Accepted residual: a creator killed between making the directory and creating its owner file leaves an
-ownerless directory.
+has live sandboxes without one. The owner file is created under a temporary name, locked, and only then
+renamed to ``<sandbox>.owner``, so an owner file a sweeper can see is always already locked, whichever
+repository's run sweeps (the temp directory is shared by all repositories). Accepted residual: a creator
+killed between making the directory and the rename leaves an ownerless directory.
+
+A removal that fails (a read-only entry is retried writable) keeps the owner file, unlocked, so the next
+sweep retries, and warns.
 
 Failing runs keep their evidence (log, JUnit XML, failure list, the sandbox's core tree without its
 tmp/) under ``<common dir>/suite-gate/evidence/<candidate>/`` before the sandbox goes.
 
 Retention. After a run, ``enforce`` keeps ``suite-gate-failure-evidence-runs`` newest failing runs'
 evidence and evicts the least recently used of everything else evictable (the tip baselines, older
-evidence, and every store registered with ``register_store``) until the kept store is at most
-``suite-gate-keep-max-mb``. The bound wins: the newest failing runs' evidence goes last, oldest first,
-and only when nothing else is left and the total still exceeds the bound. Candidate records are never
-evicted, and neither is the baseline of the tip or candidate being decided; evicting any other baseline
-only forces its recomputation. Last use is the newest mtime among an entry's files (a baseline cache hit
-touches its record).
+evidence, the files kept per candidate run, and every store registered with ``register_store``) until
+the kept store is at most ``suite-gate-keep-max-mb``. The bound wins: the newest failing runs' evidence
+goes last, oldest first, and only when nothing else is left and the total still exceeds the bound. The
+files of the candidate and of the tip being decided (record, log, JUnit XML, per-test report) are never
+evicted; any other run's are, and evicting another baseline only forces its recomputation. A group of
+files is evicted only while holding its ``.lock`` exclusively (a run holding it keeps its files) and
+only if no file of it is newer than when it was listed; lock files themselves are never unlinked, since
+unlinking one lets two runs hold "the" lock on different inodes. A store still over the bound when
+nothing evictable is left says so on stderr. Last use is the newest mtime among an entry's files (a
+baseline cache hit touches its record). Partial evidence copies of dead processes are removed.
 
 ``SUITE_GATE_KEEP_SANDBOX=1`` leaves the sandbox of that run in place (for inspection, and for the
 negative control of the disk series); the next run's sweep removes it, its lock being free by then.
@@ -47,7 +52,6 @@ from pathlib import Path
 from typing import Callable, Collection, Iterator
 
 STORE_DIR = "suite-gate"
-SWEEP_LOCK = f"{STORE_DIR}/sandbox-sweep.lock"
 RETENTION_LOCK = f"{STORE_DIR}/retention.lock"
 EVIDENCE_DIR = f"{STORE_DIR}/evidence"
 BASELINE_DIR = f"{STORE_DIR}/baseline"
@@ -102,68 +106,98 @@ def owner_path(root: Path) -> Path:
     return root.with_name(root.name + OWNER_SUFFIX)
 
 
+def _make_writable(function: Callable, path: str, _error: object) -> None:
+    """rmtree's error handler: a read-only directory blocks unlinking its children; retry once writable."""
+    for target in (os.path.dirname(path), path):
+        with contextlib.suppress(OSError):
+            mode = os.lstat(target).st_mode
+            if stat.S_ISDIR(mode):
+                os.chmod(target, mode | 0o700)
+    with contextlib.suppress(OSError):
+        function(path)
+
+
+def _remove_tree(root: Path) -> None:
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(root, onexc=_make_writable)
+    else:
+        shutil.rmtree(root, onerror=_make_writable)
+
+
+def _remove_sandbox(root: Path, owner: Path) -> bool:
+    """Remove ``root`` and then its owner file; a root that stays keeps the owner file (and says so)."""
+    if root.is_dir() and not root.is_symlink():
+        _remove_tree(root)
+        if root.exists():
+            print(f"suite-gate: cannot remove the sandbox {root}; the next run retries", file=sys.stderr)
+            return False
+    owner.unlink(missing_ok=True)
+    return True
+
+
 @contextlib.contextmanager
-def sandbox(common_dir: str | Path, parent: str | Path, prefix: str) -> Iterator[Path]:
+def sandbox(parent: str | Path, prefix: str) -> Iterator[Path]:
     """A fresh sandbox directory under ``parent`` whose owner lock is held until the block ends.
 
     On exit the directory and its owner file are removed, unless ``SUITE_GATE_KEEP_SANDBOX`` is set."""
-    with _locked(Path(common_dir) / SWEEP_LOCK, fcntl.LOCK_SH):
-        root = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
-        owner = owner_path(root)
-        try:
-            fd = os.open(owner, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        except OSError:
-            root.rmdir()
-            raise
-        fcntl.flock(fd, fcntl.LOCK_EX)
+    root = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+    owner = owner_path(root)
+    pending = owner.with_name(owner.name + ".creating")
+    fd = -1
     try:
+        fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
         os.write(fd, f"{os.getpid()}\n".encode())
+        os.rename(pending, owner)
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        pending.unlink(missing_ok=True)
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+    try:
         yield root
     finally:
         try:
             if not os.environ.get(KEEP_ENV):
-                shutil.rmtree(root, ignore_errors=True)
-                owner.unlink(missing_ok=True)
+                _remove_sandbox(root, owner)
         finally:
             os.close(fd)
 
 
-def sweep_dead_sandboxes(common_dir: str | Path, parent: str | Path, prefix: str) -> list[str]:
+def sweep_dead_sandboxes(parent: str | Path, prefix: str) -> list[str]:
     """Remove every sandbox under ``parent`` that has an owner file of this user whose lock is free.
 
     Returns the removed sandbox names. A sandbox without an owner file, or with a held lock, stays."""
     removed: list[str] = []
     uid = os.getuid()
-    with _locked(Path(common_dir) / SWEEP_LOCK, fcntl.LOCK_EX):
+    try:
+        entries = sorted(os.scandir(parent), key=lambda e: e.name)
+    except OSError:
+        return removed
+    for entry in entries:
+        name = entry.name
+        if not (name.startswith(prefix) and name.endswith(OWNER_SUFFIX)):
+            continue
+        if len(name) == len(prefix) + len(OWNER_SUFFIX):
+            continue
         try:
-            entries = sorted(os.scandir(parent), key=lambda e: e.name)
+            info = entry.stat(follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != uid:
+                continue
+            fd = os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW)
         except OSError:
-            return removed
-        for entry in entries:
-            name = entry.name
-            if not (name.startswith(prefix) and name.endswith(OWNER_SUFFIX)):
-                continue
-            if len(name) == len(prefix) + len(OWNER_SUFFIX):
-                continue
+            continue
+        try:
             try:
-                info = entry.stat(follow_symlinks=False)
-                if not stat.S_ISREG(info.st_mode) or info.st_uid != uid:
-                    continue
-                fd = os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW)
-            except OSError:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
                 continue
-            try:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    continue
-                root = Path(parent) / name[: -len(OWNER_SUFFIX)]
-                if root.is_dir() and not root.is_symlink():
-                    shutil.rmtree(root, ignore_errors=True)
-                os.unlink(entry.path)
+            root = Path(parent) / name[: -len(OWNER_SUFFIX)]
+            if _remove_sandbox(root, Path(entry.path)):
                 removed.append(root.name)
-            finally:
-                os.close(fd)
+        finally:
+            os.close(fd)
     return removed
 
 
@@ -185,7 +219,8 @@ def keep_failure_evidence(common_dir: str | Path, candidate_sha: str, *, log_tai
         if junit_path and Path(junit_path).is_file():
             shutil.copyfile(junit_path, partial / "junit.xml")
         if core_tree.is_dir():
-            shutil.copytree(core_tree, partial / "core", symlinks=True, ignore_dangling_symlinks=True)
+            shutil.copytree(core_tree, partial / "core", symlinks=True, ignore_dangling_symlinks=True,
+                            ignore=lambda directory, names: ["tmp"] if Path(directory) == core_tree and "tmp" in names else [])
         shutil.rmtree(target, ignore_errors=True)
         partial.rename(target)
     except OSError as exc:
@@ -224,7 +259,7 @@ class Entry:
     size: int
     last_used: float
     protected: bool
-    evict: Callable[[], None]
+    evict: Callable[[], bool | None]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -232,6 +267,7 @@ class Retained:
     before_mb: float
     after_mb: float
     evicted: tuple[str, ...]
+    over_bound: bool = False
 
 
 def tree_bytes(path: Path) -> int:
@@ -274,41 +310,85 @@ def touch(path: str | Path) -> None:
         os.utime(path)
 
 
-def _baseline_entries(common_dir: Path, protect: Collection[str]) -> list[Entry]:
-    directory = common_dir / BASELINE_DIR
+def _evict_group(lock: Path, files: list[Path], listed_at: float) -> bool:
+    """Remove ``files`` (never the lock itself) while holding ``lock``; False when it was not safe.
+
+    Not safe: a run holds the lock (it is building or reading these files), or a file is newer than when
+    the group was listed (a run finished since). The lock file stays, so every run keeps locking the one
+    inode."""
+    try:
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        if any(_newest_mtime(file) > listed_at for file in files):
+            return False
+        for file in files:
+            _remove_path(file)
+        return True
+    finally:
+        os.close(fd)
+
+
+def _sha_groups(directory: Path) -> dict[str, list[Path]]:
+    """The files of ``directory`` named ``<40-hex sha>.<suffix>``, grouped by sha."""
     groups: dict[str, list[Path]] = {}
     try:
         for child in os.scandir(directory):
-            if not child.name.startswith("."):
-                groups.setdefault(child.name.split(".", 1)[0], []).append(Path(child.path))
+            sha, dot, _ = child.name.partition(".")
+            if dot and _is_sha(sha):
+                groups.setdefault(sha, []).append(Path(child.path))
     except OSError:
-        return []
-    entries = []
-    for sha, files in groups.items():
-        def evict(files=files) -> None:
-            for file in files:
-                file.unlink(missing_ok=True)
+        return {}
+    return groups
 
-        entries.append(Entry("baseline", sha, sum(tree_bytes(f) for f in files),
-                             max(_newest_mtime(f) for f in files), sha in protect or _lock_busy(files), evict))
+
+def _is_sha(text: str) -> bool:
+    return len(text) == 40 and all(c in "0123456789abcdef" for c in text)
+
+
+def _group_entries(kind: str, directory: Path, protect: Collection[str]) -> list[Entry]:
+    entries = []
+    for sha, files in _sha_groups(directory).items():
+        lock = directory / f"{sha}.lock"
+        data = [file for file in files if file != lock]
+        if not data:
+            continue
+        last_used = max(_newest_mtime(file) for file in data)
+
+        def evict(lock=lock, data=data, last_used=last_used) -> bool:
+            return _evict_group(lock, data, last_used)
+
+        entries.append(Entry(kind, sha, sum(tree_bytes(file) for file in data), last_used, sha in protect, evict))
     return entries
 
 
-def _lock_busy(files: list[Path]) -> bool:
-    """Whether a run holds the baseline's ``.lock`` (it is being built or read)."""
-    for file in files:
-        if file.suffix == ".lock":
-            try:
-                fd = os.open(file, os.O_RDONLY)
-            except OSError:
-                return False
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return True
-            finally:
-                os.close(fd)
-    return False
+def _remove_dead_partial_evidence(common_dir: Path) -> None:
+    """Remove ``.tmp-<candidate>-<pid>`` copies whose writer is gone (it was killed mid-copy)."""
+    directory = common_dir / EVIDENCE_DIR
+    try:
+        children = list(os.scandir(directory))
+    except OSError:
+        return
+    for child in children:
+        if child.name.startswith(EVIDENCE_TMP_PREFIX):
+            pid = child.name.rsplit("-", 1)[-1]
+            if pid.isdigit() and not _process_alive(int(pid)):
+                _remove_path(Path(child.path))
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _directory_entries(kind: str, directory: Path, evict: Callable[[Path], None], skip_prefix: str = "",
@@ -328,30 +408,34 @@ def _remove_path(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def enforce(common_dir: str | Path, *, max_mb: int | None = None, runs: int | None = None,
+def enforce(common_dir: str | Path, *, max_mb: float | None = None, runs: int | None = None,
             protect: Collection[str] = ()) -> Retained:
     """Bring the kept store to at most ``max_mb`` MB by the order in the module docstring.
 
-    ``protect`` names commits (the candidate and the tip being decided) whose baselines are never evicted.
-    Only evictable entries count toward what can be freed; a total still over the bound after
-    everything evictable is gone is reported, not hidden."""
+    ``protect`` names commits (the candidate and the tip being decided) whose baseline and run files are
+    never evicted. Only evictable entries count toward what can be freed; a total still over the bound
+    after everything evictable is gone is reported on stderr and in ``over_bound``, not hidden."""
+    if max_mb is not None and max_mb <= 0:
+        raise ValueError(f"the kept-store bound must be positive, got {max_mb}")
     common_dir = Path(common_dir)
     limit = (max_mb if max_mb is not None else keep_max_mb()) * MB
     keep_runs = runs if runs is not None else evidence_runs()
+    store_dir = common_dir / STORE_DIR
     with _locked(common_dir / RETENTION_LOCK, fcntl.LOCK_EX):
-        stores = list(_STORES.values())
-        outside = []
-        for store in stores:
-            path = store.path(common_dir) if callable(store.path) else store.path
-            outside.append((store, Path(path)))
-        entries = _baseline_entries(common_dir, set(protect))
+        _remove_dead_partial_evidence(common_dir)
+        entries = _group_entries("baseline", common_dir / BASELINE_DIR, set(protect))
+        entries += _group_entries("run", store_dir, set(protect))
         evidence = sorted(_directory_entries("evidence", common_dir / EVIDENCE_DIR, _remove_path,
                                              EVIDENCE_TMP_PREFIX, deep=False), key=_by_last_use)
         newest = {e.name for e in evidence[max(0, len(evidence) - keep_runs):]} if keep_runs > 0 else set()
         entries += [dataclasses.replace(e, protected=e.name in newest) for e in evidence]
-        total = tree_bytes(common_dir / STORE_DIR)
-        for store, path in outside:
-            if not _inside(path, common_dir / STORE_DIR):
+        total = tree_bytes(store_dir)
+        own = {(store_dir / sub).resolve() for sub in ("", "baseline", "evidence")}
+        for store in list(_STORES.values()):
+            path = Path(store.path(common_dir) if callable(store.path) else store.path)
+            if path.resolve() in own:
+                continue
+            if not _inside(path, store_dir):
                 total += tree_bytes(path)
             entries += _directory_entries(store.name, path, store.evict)
         before = total
@@ -361,10 +445,16 @@ def enforce(common_dir: str | Path, *, max_mb: int | None = None, runs: int | No
         for entry in sorted(evictable, key=_by_last_use) + sorted(newest_failing, key=_by_last_use):
             if total <= limit:
                 break
-            entry.evict()
+            if entry.evict() is False:
+                continue
             total -= entry.size
             evicted.append(f"{entry.kind}:{entry.name}")
-    return Retained(before / MB, max(total, 0) / MB, tuple(evicted))
+    over = total > limit
+    if over:
+        print(f"suite-gate: the kept store holds {total / MB:.0f} MB, over the bound of {limit / MB:g} MB, "
+              "with nothing left to evict (the files of the candidate and the tip, runs in progress)",
+              file=sys.stderr)
+    return Retained(before / MB, max(total, 0) / MB, tuple(evicted), over)
 
 
 def _by_last_use(entry: Entry) -> float:

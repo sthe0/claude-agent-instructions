@@ -13,7 +13,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -28,13 +27,14 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 REPO_DIR = SCRIPTS_DIR.parent
 PREFIX = "instruction-sandbox."
 MB = retention.MB
+TINY = 0.01
 NEW_FAILURE = "scripts/tests/test_y.py::test_one"
 
 HOLDER = """\
 import sys, time
 from lib import gate_retention
 
-with gate_retention.sandbox(sys.argv[1], sys.argv[2], sys.argv[3]) as root:
+with gate_retention.sandbox(sys.argv[1], sys.argv[2]) as root:
     print(root, flush=True)
     time.sleep(600)
 """
@@ -55,11 +55,11 @@ def parent(tmp_path):
 
 
 @pytest.fixture
-def holder(tmp_path, common, parent):
+def holder(tmp_path, parent):
     """Start a process that holds a sandbox; yields (process, sandbox root). Kills the process afterwards."""
     script = tmp_path / "holder.py"
     script.write_text(HOLDER, encoding="utf-8")
-    proc = subprocess.Popen([sys.executable, str(script), str(common), str(parent), PREFIX],
+    proc = subprocess.Popen([sys.executable, str(script), str(parent), PREFIX],
                             stdout=subprocess.PIPE, text=True, env={**os.environ, "PYTHONPATH": str(SCRIPTS_DIR)})
     root = Path(proc.stdout.readline().strip())
     yield proc, root
@@ -69,89 +69,114 @@ def holder(tmp_path, common, parent):
 
 # ── sandboxes: owner lock, sweep ──────────────────────────────────────────
 
-def test_a_sandbox_is_removed_with_its_owner_file_when_the_block_ends(common, parent):
-    with retention.sandbox(common, parent, PREFIX) as root:
+def test_a_sandbox_is_removed_with_its_owner_file_when_the_block_ends(parent):
+    with retention.sandbox(parent, PREFIX) as root:
         assert root.is_dir() and retention.owner_path(root).is_file()
         assert root.name.startswith(PREFIX)
     assert list(parent.iterdir()) == []
 
 
-def test_a_sandbox_is_kept_when_the_keep_variable_is_set(common, parent, monkeypatch):
+def test_a_sandbox_is_kept_when_the_keep_variable_is_set(parent, monkeypatch):
     monkeypatch.setenv(retention.KEEP_ENV, "1")
-    with retention.sandbox(common, parent, PREFIX) as root:
+    with retention.sandbox(parent, PREFIX) as root:
         pass
     assert root.is_dir() and retention.owner_path(root).is_file()
 
 
-def test_the_sandbox_is_removed_when_the_block_raises(common, parent):
+def test_the_sandbox_is_removed_when_the_block_raises(parent):
     with pytest.raises(RuntimeError):
-        with retention.sandbox(common, parent, PREFIX):
+        with retention.sandbox(parent, PREFIX):
             raise RuntimeError("boom")
     assert list(parent.iterdir()) == []
 
 
-def test_a_killed_runs_sandbox_is_removed_by_the_next_sweep(holder, common, parent):
+def test_a_killed_runs_sandbox_is_removed_by_the_next_sweep(holder, parent):
     proc, root = holder
     (root / "clone").mkdir()
     proc.send_signal(signal.SIGKILL)
     proc.wait()
     assert root.is_dir()
-    assert retention.sweep_dead_sandboxes(common, parent, PREFIX) == [root.name]
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == [root.name]
     assert list(parent.iterdir()) == []
 
 
-def test_a_live_sandbox_is_kept_by_the_sweep(holder, common, parent):
+def test_a_live_sandbox_is_kept_by_the_sweep(holder, parent):
     _, root = holder
-    assert retention.sweep_dead_sandboxes(common, parent, PREFIX) == []
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
     assert root.is_dir() and retention.owner_path(root).is_file()
 
 
-def test_a_sandbox_being_created_is_kept_by_a_racing_sweep(common, parent):
-    """The creator holds the sweep lock shared from before mkdtemp until it holds the owner lock."""
-    created, swept = threading.Event(), []
+def test_a_sandbox_being_created_is_kept_by_a_racing_sweep(parent, monkeypatch):
+    """A sweep from any repository's run, at the moment the creator takes the owner lock, finds no owner file."""
+    swept: list[list[str]] = []
+    real_flock = fcntl.flock
 
-    def sweeper():
-        created.wait()
-        swept.extend(retention.sweep_dead_sandboxes(common, parent, PREFIX))
+    def flock_after_a_sweep(target, operation):
+        if isinstance(target, int) and operation == fcntl.LOCK_EX:
+            swept.append(retention.sweep_dead_sandboxes(parent, PREFIX))
+        return real_flock(target, operation)
 
-    thread = threading.Thread(target=sweeper)
-    thread.start()
-    with retention._locked(common / retention.SWEEP_LOCK, fcntl.LOCK_SH):
-        root = Path(os.path.join(parent, PREFIX + "creating"))
-        root.mkdir()
-        owner = retention.owner_path(root)
-        owner.write_text("", encoding="utf-8")
-        created.set()
-        thread.join(timeout=0.5)
-        fd = os.open(owner, os.O_RDONLY)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-    try:
-        thread.join(timeout=10)
-        assert not thread.is_alive()
-        assert swept == []
-        assert root.is_dir() and owner.is_file()
-    finally:
-        os.close(fd)
+    monkeypatch.setattr(retention.fcntl, "flock", flock_after_a_sweep)
+    with retention.sandbox(parent, PREFIX) as root:
+        assert swept == [[]]
+        assert root.is_dir() and retention.owner_path(root).is_file()
+        assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
 
 
-def test_a_sandbox_without_an_owner_file_is_never_removed(common, parent):
+def test_a_failure_while_creating_the_owner_leaves_nothing_and_leaks_no_descriptor(parent, monkeypatch):
+    def refuse(target, operation):
+        raise OSError("no locks here")
+
+    before = len(os.listdir("/proc/self/fd"))
+    monkeypatch.setattr(retention.fcntl, "flock", refuse)
+    with pytest.raises(OSError):
+        with retention.sandbox(parent, PREFIX):
+            pass
+    assert list(parent.iterdir()) == []
+    assert len(os.listdir("/proc/self/fd")) == before
+
+
+def test_a_sandbox_without_an_owner_file_is_never_removed(parent):
     stray = parent / f"{PREFIX}old-gate"
     stray.mkdir()
     other = parent / "someone-elses"
     other.mkdir()
     (parent / f"{PREFIX}x.owner").write_text("", encoding="utf-8")
     (parent / "other.owner").write_text("", encoding="utf-8")
-    assert retention.sweep_dead_sandboxes(common, parent, PREFIX) == [f"{PREFIX}x"]
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == [f"{PREFIX}x"]
     assert stray.is_dir() and other.is_dir() and (parent / "other.owner").is_file()
 
 
-def test_an_owner_symlink_is_not_followed(common, parent, tmp_path):
+def test_an_owner_symlink_is_not_followed(parent, tmp_path):
     target = tmp_path / "precious"
     target.mkdir()
     (parent / f"{PREFIX}link").symlink_to(target)
     (parent / f"{PREFIX}link.owner").symlink_to(tmp_path / "nowhere")
-    assert retention.sweep_dead_sandboxes(common, parent, PREFIX) == []
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
     assert target.is_dir()
+
+
+def test_a_read_only_directory_does_not_make_a_sandbox_a_leftover(parent):
+    root = parent / f"{PREFIX}ro"
+    (root / "objects" / "ab").mkdir(parents=True)
+    (root / "objects" / "ab" / "obj").write_text("x", encoding="utf-8")
+    (root / "objects" / "ab").chmod(0o500)
+    retention.owner_path(root).write_text("", encoding="utf-8")
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == [root.name]
+    assert list(parent.iterdir()) == []
+
+
+def test_a_sandbox_that_cannot_be_removed_keeps_its_owner_file_unlocked_for_the_next_sweep(parent, monkeypatch, capsys):
+    monkeypatch.setattr(retention, "_remove_tree", lambda root: None)
+    with retention.sandbox(parent, PREFIX) as root:
+        pass
+    owner = retention.owner_path(root)
+    assert root.is_dir() and owner.is_file()
+    assert "cannot remove the sandbox" in capsys.readouterr().err
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    monkeypatch.undo()
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == [root.name]
+    assert list(parent.iterdir()) == []
 
 
 # ── the kept store: least recently used, bounded ──────────────────────────
@@ -181,11 +206,35 @@ def test_the_least_recently_used_baseline_goes_first(common):
 
 def test_a_baseline_is_evicted_whole(common):
     base = common / retention.BASELINE_DIR
-    for suffix in (".json", ".lock", ".junit.xml", ".tests.jsonl", ".log"):
+    for suffix in (".json", ".junit.xml", ".tests.jsonl", ".log"):
         put(base / f"{sha(1)}{suffix}", mb=0.25, age=500)
+    (base / f"{sha(1)}.lock").write_text("", encoding="utf-8")
     put(base / f"{sha(2)}.json", mb=2, age=10)
     retention.enforce(common, max_mb=3, runs=3)
-    assert sorted(p.name for p in base.iterdir()) == [f"{sha(2)}.json"]
+    assert sorted(p.name for p in base.iterdir()) == [f"{sha(1)}.lock", f"{sha(2)}.json"]
+
+
+def test_an_evicted_groups_lock_file_stays_so_runs_keep_locking_one_inode(common):
+    base = common / retention.BASELINE_DIR
+    lock = base / f"{sha(1)}.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("", encoding="utf-8")
+    inode = lock.stat().st_ino
+    put(base / f"{sha(1)}.json", age=500)
+    put(base / f"{sha(2)}.json", age=10)
+    assert retention.enforce(common, max_mb=1.5, runs=3).evicted == (f"baseline:{sha(1)}",)
+    assert lock.stat().st_ino == inode
+
+
+def test_a_group_that_a_run_rewrote_after_it_was_listed_is_not_evicted(tmp_path):
+    lock = tmp_path / f"{sha(1)}.lock"
+    data = put(tmp_path / f"{sha(1)}.json", age=500)
+    listed_at = time.time() - 500
+    os.utime(data)
+    assert retention._evict_group(lock, [data], listed_at) is False
+    assert data.is_file()
+    assert retention._evict_group(lock, [data], time.time() + 5) is True
+    assert not data.exists() and lock.is_file()
 
 
 def test_a_baseline_cache_hit_counts_as_use(common):
@@ -202,12 +251,63 @@ def test_touching_a_missing_file_is_not_an_error(common):
     retention.touch(common / "absent.json")
 
 
-def test_candidate_records_are_never_evicted(common):
-    record = put(common / retention.STORE_DIR / f"{sha(9)}.json", age=10_000)
-    put(common / retention.BASELINE_DIR / f"{sha(1)}.json", age=100)
-    retention.enforce(common, max_mb=0, runs=3)
-    assert record.is_file()
-    assert not (common / retention.BASELINE_DIR / f"{sha(1)}.json").exists()
+RUN_SUFFIXES = (".json", ".log", ".junit.xml", ".tests.jsonl")
+
+
+def run_files(common: Path, n: int, age: float, mb: float = 1) -> list[Path]:
+    """The files one candidate run keeps at the top of the store."""
+    return [put(common / retention.STORE_DIR / f"{sha(n)}{suffix}", mb=mb / len(RUN_SUFFIXES), age=age)
+            for suffix in RUN_SUFFIXES]
+
+
+def test_old_candidate_run_files_are_evicted_least_recently_used(common):
+    files = {n: run_files(common, n, age) for n, age in ((1, 300), (2, 200), (3, 100))}
+    result = retention.enforce(common, max_mb=2.5, runs=3)
+    assert result.evicted == (f"run:{sha(1)}",)
+    assert not any(f.exists() for f in files[1]) and all(f.is_file() for f in files[2] + files[3])
+    assert result.after_mb <= 2.5 and not result.over_bound
+
+
+def test_the_candidate_and_tip_run_files_are_never_evicted(common):
+    candidate = run_files(common, 9, age=10_000)
+    tip = run_files(common, 8, age=9_000)
+    other = run_files(common, 1, age=100)
+    put(common / retention.BASELINE_DIR / f"{sha(2)}.json", age=100)
+    result = retention.enforce(common, max_mb=TINY, runs=3, protect=(sha(9), sha(8)))
+    assert all(f.is_file() for f in candidate + tip)
+    assert not any(f.exists() for f in other)
+    assert set(result.evicted) == {f"run:{sha(1)}", f"baseline:{sha(2)}"}
+
+
+def test_a_candidate_run_in_progress_keeps_its_files(common):
+    lock = common / retention.STORE_DIR / f"{sha(1)}.lock"
+    kept = run_files(common, 1, age=900)
+    lock.write_text("", encoding="utf-8")
+    with open(lock) as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        result = retention.enforce(common, max_mb=TINY, runs=3)
+    assert all(f.is_file() for f in kept) and result.evicted == () and result.over_bound
+
+
+def test_a_store_still_over_the_bound_says_so(common, capsys):
+    run_files(common, 9, age=10, mb=2)
+    result = retention.enforce(common, max_mb=1, runs=3, protect=(sha(9),))
+    assert result.over_bound and result.evicted == ()
+    assert "over the bound of 1 MB" in capsys.readouterr().err
+
+
+def test_a_store_within_the_bound_stays_quiet(common, capsys):
+    run_files(common, 9, age=10)
+    assert not retention.enforce(common, max_mb=10, runs=3).over_bound
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("bound", [0, -1])
+def test_a_non_positive_bound_is_refused_not_taken_as_evict_everything(common, bound):
+    kept = run_files(common, 1, age=10)
+    with pytest.raises(ValueError):
+        retention.enforce(common, max_mb=bound, runs=3)
+    assert all(f.is_file() for f in kept)
 
 
 def test_the_tip_and_candidate_baselines_are_never_evicted(common):
@@ -216,7 +316,7 @@ def test_the_tip_and_candidate_baselines_are_never_evicted(common):
     tip_junit = put(base / f"{sha(1)}.junit.xml", age=900)
     candidate = put(base / f"{sha(2)}.json", age=800)
     other = put(base / f"{sha(3)}.json", age=10)
-    result = retention.enforce(common, max_mb=0, runs=3, protect=(sha(1), sha(2)))
+    result = retention.enforce(common, max_mb=TINY, runs=3, protect=(sha(1), sha(2)))
     assert tip.is_file() and tip_junit.is_file() and candidate.is_file()
     assert not other.exists()
     assert result.evicted == (f"baseline:{sha(3)}",)
@@ -229,7 +329,7 @@ def test_a_baseline_being_built_is_kept(common):
     other = put(base / f"{sha(2)}.json", age=10)
     with open(lock) as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        retention.enforce(common, max_mb=0, runs=3)
+        retention.enforce(common, max_mb=TINY, runs=3)
     assert kept.is_file() and not other.exists()
 
 
@@ -261,11 +361,26 @@ def test_evidence_goes_after_everything_else_is_gone(common):
     assert result.evicted == (f"baseline:{sha(1)}",) and not base.exists() and kept.is_dir()
 
 
-def test_a_partial_evidence_copy_is_left_alone(common):
-    partial = common / retention.EVIDENCE_DIR / f"{retention.EVIDENCE_TMP_PREFIX}{sha(1)}-1"
-    put(partial / "log.txt")
-    retention.enforce(common, max_mb=0, runs=3)
+def partial_copy(common: Path, n: int, pid: int) -> Path:
+    path = common / retention.EVIDENCE_DIR / f"{retention.EVIDENCE_TMP_PREFIX}{sha(n)}-{pid}"
+    put(path / "log.txt")
+    return path
+
+
+def test_a_partial_evidence_copy_of_a_live_run_is_left_alone(common):
+    partial = partial_copy(common, 1, os.getpid())
+    retention.enforce(common, max_mb=TINY, runs=3)
     assert partial.is_dir()
+
+
+def test_a_partial_evidence_copy_of_a_dead_run_is_removed(common):
+    done = subprocess.Popen([sys.executable, "-c", "pass"])
+    done.wait()
+    partial = partial_copy(common, 1, done.pid)
+    live = partial_copy(common, 2, os.getpid())
+    result = retention.enforce(common, max_mb=100, runs=3)
+    assert not partial.exists() and live.is_dir()
+    assert result.before_mb < 1.5 and result.evicted == ()
 
 
 def test_a_registered_store_is_trimmed_least_recently_used_first(common, tmp_path):
@@ -286,10 +401,21 @@ def test_a_registered_store_given_as_a_function_of_the_common_dir(common):
     retention.register_store("lazy", lambda c: c / "lazy-store", lambda child: child.unlink())
     try:
         put(common / "lazy-store" / "x", age=1)
-        result = retention.enforce(common, max_mb=0, runs=3)
+        result = retention.enforce(common, max_mb=TINY, runs=3)
     finally:
         retention.unregister_store("lazy")
     assert result.evicted == ("lazy:x",)
+
+
+@pytest.mark.parametrize("own", [retention.STORE_DIR, retention.BASELINE_DIR, retention.EVIDENCE_DIR])
+def test_a_store_registered_on_the_gates_own_directories_is_not_listed_twice(common, own):
+    kept = put(common / retention.BASELINE_DIR / f"{sha(1)}.json", age=100)
+    retention.register_store("dup", lambda c: c / own, shutil.rmtree)
+    try:
+        result = retention.enforce(common, max_mb=TINY, runs=3)
+    finally:
+        retention.unregister_store("dup")
+    assert result.evicted == (f"baseline:{sha(1)}",) and not kept.exists()
 
 
 def test_a_store_within_the_bound_loses_nothing(common):
@@ -306,6 +432,9 @@ def test_failure_evidence_holds_the_log_the_failures_the_junit_and_the_core_tree
     core = tmp_path / "core"
     (core / "scripts").mkdir(parents=True)
     (core / "scripts" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (core / "tmp").mkdir()
+    (core / "tmp" / "scratch").write_text("big", encoding="utf-8")
+    (core / "scripts" / "tmp").mkdir()
     junit = tmp_path / "junit.xml"
     junit.write_text("<testsuite/>", encoding="utf-8")
     target = retention.keep_failure_evidence(common, sha(1), log_tail="tail\n", junit_path=str(junit),
@@ -315,6 +444,7 @@ def test_failure_evidence_holds_the_log_the_failures_the_junit_and_the_core_tree
     assert (target / "failures.txt").read_text(encoding="utf-8") == "a::t\nb::t\n"
     assert (target / "junit.xml").read_text(encoding="utf-8") == "<testsuite/>"
     assert (target / "core" / "scripts" / "a.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert not (target / "core" / "tmp").exists() and (target / "core" / "scripts" / "tmp").is_dir()
     assert [p.name for p in target.parent.iterdir()] == [sha(1)]
 
 
