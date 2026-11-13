@@ -991,6 +991,20 @@ def _series_commits(repo: Path, runs: list[str], nonce: str) -> tuple[str, list[
     return tip, candidates
 
 
+OVER_BOUND_REPORT = "over the bound"
+
+
+def bound_problem(total_mb: float, bound_mb: float, last_run_reported_over_bound: bool) -> str | None:
+    """The kept store must end at most at the bound, unless the last run's own retention pass said it could
+    free nothing more (the files it protects: the candidate, the tip, runs younger than the gate timeout)."""
+    if total_mb <= bound_mb:
+        return None
+    if last_run_reported_over_bound:
+        return None
+    return (f"the kept store holds {total_mb:.1f} MB after the series, over the bound of {bound_mb} MB, "
+            "and the last run's retention pass did not say it had nothing left to evict")
+
+
 def _series_run(repo: Path, sha: str, tip: str, kind: str, leak: bool, common: Path, tmp: Path) -> dict:
     env = gate_env(os.environ)
     if leak:
@@ -1010,6 +1024,7 @@ def _series_run(repo: Path, sha: str, tip: str, kind: str, leak: bool, common: P
     if kind == "pass" and evidence.exists():
         problems.append(f"pass run {sha[:12]}: evidence kept at {evidence}")
     return {"run": kind, "candidate": sha, "exit": proc.returncode, "status": record.get("status"),
+            "over_bound_reported": OVER_BOUND_REPORT in proc.stderr,
             "record": record_file, "evidence": evidence.is_dir(), "store_growth_mb": round(
                 (gate_retention.tree_bytes(store) - before) / gate_retention.MB, 2),
             "tmp_after": _listing(tmp), "problems": problems}
@@ -1043,6 +1058,9 @@ def _series_inner(args: argparse.Namespace) -> int:
     problems = [p for r in results for p in r["problems"]]
     if grown_mb > args.keep_max_mb:
         problems.append(f"the kept store grew {grown_mb:.1f} MB, more than {args.keep_max_mb}")
+    over = bound_problem(total_mb, args.keep_max_mb, bool(results and results[-1]["over_bound_reported"]))
+    if over:
+        problems.append(over)
     summary = {"runs": results, "tip": tip, "keep_max_mb": args.keep_max_mb, "store_grown_mb": round(grown_mb, 2),
                "store_total_mb": round(total_mb, 2), "leftover_in_tmp": leftovers, "problems": problems,
                "ok": not problems and not leftovers}

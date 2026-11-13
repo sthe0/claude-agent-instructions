@@ -166,6 +166,92 @@ def test_a_read_only_directory_does_not_make_a_sandbox_a_leftover(parent):
     assert list(parent.iterdir()) == []
 
 
+def seal(root: Path) -> Path:
+    """Put a ``chmod 000`` directory with content inside ``root``; returns it."""
+    locked = root / "a" / "locked"
+    (locked / "inner").mkdir(parents=True)
+    (locked / "inner" / "f").write_text("x", encoding="utf-8")
+    locked.chmod(0o000)
+    return locked
+
+
+def test_an_unopenable_directory_neither_crashes_the_block_exit_nor_stays(parent):
+    with retention.sandbox(parent, PREFIX) as root:
+        seal(root)
+    assert list(parent.iterdir()) == []
+
+
+def test_an_unopenable_directory_does_not_wedge_the_sweep(parent):
+    root = parent / f"{PREFIX}sealed"
+    root.mkdir()
+    seal(root)
+    retention.owner_path(root).write_text("", encoding="utf-8")
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == [root.name]
+    assert list(parent.iterdir()) == []
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+
+
+def test_the_removal_handler_never_raises(tmp_path):
+    retention._make_writable(os.open, str(tmp_path / "nowhere" / "x"), OSError("boom"))
+    retention._make_writable(os.unlink, str(tmp_path / "nowhere" / "x"), OSError("boom"))
+
+
+def pending_of(root: Path) -> Path:
+    return retention.owner_path(root).with_name(retention.owner_path(root).name + retention.PENDING_SUFFIX)
+
+
+def test_a_dead_creators_pending_file_and_directory_are_swept_once_old(parent):
+    root = parent / f"{PREFIX}half"
+    root.mkdir()
+    pending_of(root).write_text("", encoding="utf-8")
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    assert root.is_dir()
+    later = time.time() + 3600
+    assert retention.sweep_dead_sandboxes(parent, PREFIX, now=later) == [root.name]
+    assert list(parent.iterdir()) == []
+
+
+def test_a_pending_file_whose_creator_still_holds_its_lock_is_not_swept(parent):
+    root = parent / f"{PREFIX}half"
+    root.mkdir()
+    with open(pending_of(root), "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        assert retention.sweep_dead_sandboxes(parent, PREFIX, now=time.time() + 3600) == []
+    assert root.is_dir() and pending_of(root).is_file()
+
+
+def age(path: Path, seconds: float) -> None:
+    stamp = time.time() - seconds
+    os.utime(path, (stamp, stamp))
+
+
+def test_an_old_ownerless_sandbox_of_this_user_is_swept_a_young_one_is_not(parent):
+    old, young = parent / f"{PREFIX}old", parent / f"{PREFIX}young"
+    foreign = parent / "other-tool"
+    for path in (old, young, foreign):
+        (path / "clone").mkdir(parents=True)
+    for path in (old, foreign):
+        age(path, 9000)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX, ownerless_after_s=7200) == [old.name]
+    assert not old.exists() and young.is_dir() and foreign.is_dir()
+
+
+def test_an_old_sandbox_with_a_live_owner_lock_is_never_swept_as_ownerless(holder, parent):
+    _, root = holder
+    age(root, 9000)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX, ownerless_after_s=7200) == []
+    assert root.is_dir()
+
+
+def test_the_ownerless_age_defaults_to_the_gate_timeout(parent):
+    old = parent / f"{PREFIX}old"
+    old.mkdir()
+    age(old, retention.DEFAULT_TIMEOUT_S - 600)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    age(old, retention.DEFAULT_TIMEOUT_S + 600)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == [old.name]
+
+
 def test_a_sandbox_that_cannot_be_removed_keeps_its_owner_file_unlocked_for_the_next_sweep(parent, monkeypatch, capsys):
     monkeypatch.setattr(retention, "_remove_tree", lambda root: None)
     with retention.sandbox(parent, PREFIX) as root:
@@ -228,6 +314,7 @@ def test_an_evicted_groups_lock_file_stays_so_runs_keep_locking_one_inode(common
 
 def test_a_group_that_a_run_rewrote_after_it_was_listed_is_not_evicted(tmp_path):
     lock = tmp_path / f"{sha(1)}.lock"
+    lock.write_text("", encoding="utf-8")
     data = put(tmp_path / f"{sha(1)}.json", age=500)
     listed_at = time.time() - 500
     os.utime(data)
@@ -262,7 +349,7 @@ def run_files(common: Path, n: int, age: float, mb: float = 1) -> list[Path]:
 
 def test_old_candidate_run_files_are_evicted_least_recently_used(common):
     files = {n: run_files(common, n, age) for n, age in ((1, 300), (2, 200), (3, 100))}
-    result = retention.enforce(common, max_mb=2.5, runs=3)
+    result = retention.enforce(common, max_mb=2.5, runs=3, recent_s=60)
     assert result.evicted == (f"run:{sha(1)}",)
     assert not any(f.exists() for f in files[1]) and all(f.is_file() for f in files[2] + files[3])
     assert result.after_mb <= 2.5 and not result.over_bound
@@ -273,10 +360,34 @@ def test_the_candidate_and_tip_run_files_are_never_evicted(common):
     tip = run_files(common, 8, age=9_000)
     other = run_files(common, 1, age=100)
     put(common / retention.BASELINE_DIR / f"{sha(2)}.json", age=100)
-    result = retention.enforce(common, max_mb=TINY, runs=3, protect=(sha(9), sha(8)))
+    result = retention.enforce(common, max_mb=TINY, runs=3, protect=(sha(9), sha(8)), recent_s=60)
     assert all(f.is_file() for f in candidate + tip)
     assert not any(f.exists() for f in other)
     assert set(result.evicted) == {f"run:{sha(1)}", f"baseline:{sha(2)}"}
+
+
+def test_another_sessions_recent_run_record_is_kept_older_ones_go(common):
+    recent = run_files(common, 1, age=100)
+    old = run_files(common, 2, age=retention.DEFAULT_TIMEOUT_S + 600)
+    result = retention.enforce(common, max_mb=TINY, runs=3)
+    assert all(f.is_file() for f in recent) and not any(f.exists() for f in old)
+    assert result.evicted == (f"run:{sha(2)}",) and result.over_bound
+
+
+def test_a_recent_run_record_is_kept_before_the_newest_failing_evidence_is_touched(common):
+    recent = run_files(common, 1, age=100)
+    evidence = put(common / retention.EVIDENCE_DIR / sha(3) / "log.txt", mb=1, age=200)
+    result = retention.enforce(common, max_mb=1.2, runs=3)
+    assert all(f.is_file() for f in recent) and evidence.parent.exists() is False
+    assert result.evicted == (f"evidence:{sha(3)}",)
+
+
+def test_evicting_a_group_without_a_lock_file_creates_none(common):
+    base = common / retention.BASELINE_DIR
+    put(base / f"{sha(1)}.json", age=500)
+    put(base / f"{sha(2)}.json", age=10)
+    assert retention.enforce(common, max_mb=1.5, runs=3).evicted == (f"baseline:{sha(1)}",)
+    assert not (base / f"{sha(1)}.lock").exists()
 
 
 def test_a_candidate_run_in_progress_keeps_its_files(common):
@@ -285,7 +396,7 @@ def test_a_candidate_run_in_progress_keeps_its_files(common):
     lock.write_text("", encoding="utf-8")
     with open(lock) as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        result = retention.enforce(common, max_mb=TINY, runs=3)
+        result = retention.enforce(common, max_mb=TINY, runs=3, recent_s=60)
     assert all(f.is_file() for f in kept) and result.evicted == () and result.over_bound
 
 
@@ -371,6 +482,14 @@ def test_a_partial_evidence_copy_of_a_live_run_is_left_alone(common):
     partial = partial_copy(common, 1, os.getpid())
     retention.enforce(common, max_mb=TINY, runs=3)
     assert partial.is_dir()
+
+
+def test_a_partial_evidence_copy_older_than_the_gate_timeout_is_removed_whatever_its_pid_says(common):
+    partial = partial_copy(common, 1, os.getpid())
+    for path in (partial / "log.txt", partial):
+        age(path, retention.DEFAULT_TIMEOUT_S + 600)
+    retention.enforce(common, max_mb=100, runs=3)
+    assert not partial.exists()
 
 
 def test_a_partial_evidence_copy_of_a_dead_run_is_removed(common):
@@ -520,6 +639,12 @@ def test_disk_series_builds_every_gate_command_through_cap_run():
     assert command[3] == str(SCRIPTS_DIR / "suite-gate.py") and command[4] == "run"
     assert command[command.index("--ref") + 1] == "c" * 40
     assert command[command.index("--remote-sha") + 1] == "t" * 40
+
+
+def test_disk_series_fails_a_store_over_the_bound_unless_the_gate_said_it_had_nothing_to_evict():
+    assert control.bound_problem(100, 2048, False) is None
+    assert control.bound_problem(3000, 2048, True) is None
+    assert "over the bound of 2048 MB" in control.bound_problem(3000, 2048, False)
 
 
 def test_disk_series_runs_only_known_kinds(tmp_path, capsys):
