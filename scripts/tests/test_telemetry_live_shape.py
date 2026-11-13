@@ -436,6 +436,166 @@ def test_snapshot_take_fails_on_oserror(world, monkeypatch, tmp_path):
     assert telemetry_cli.main(["snapshot-sources", "--out", str(tmp_path / "snap-b")]) == 1
 
 
+def landing_at(world, moment: datetime) -> Path:
+    path = world.tmp / "landed.json"
+    path.write_text(json.dumps({"landed_at": moment.isoformat()}), encoding="utf-8")
+    return path
+
+
+def test_snapshot_since_landing_takes_only_sources_written_after(world):
+    import telemetry as telemetry_cli
+    made = sources(world)
+    landed = datetime.now(timezone.utc) - timedelta(hours=1)
+    old = (landed - timedelta(hours=1)).timestamp()
+    for path in (world.judge, made["state"]):
+        os.utime(path, (old, old))
+    out = world.tmp / "since"
+    args = ["snapshot-sources", "--out", str(out), "--since-landing", str(landing_at(world, landed))]
+    assert telemetry_cli.main(args) == 0
+    files = {f["live"]: f for f in manifest(out)}
+    assert str(world.gate) in files and str(made["transcript"]) in files
+    assert str(world.judge) not in files and str(made["state"]) not in files
+    assert files[str(world.gate)]["size"] == world.gate.stat().st_size
+
+
+def test_snapshot_check_space_refuses_before_copy(world, monkeypatch, capsys):
+    import telemetry as telemetry_cli
+    sources(world)
+    store.open_record().close()
+    cut = sum(path.stat().st_size for _, path in snapshot._sources() if path.exists())
+    need = cut + 2 * config_root.telemetry_db().stat().st_size
+    copies = []
+    monkeypatch.setattr(snapshot, "_copy_prefix", lambda *a: copies.append(a))
+    monkeypatch.setattr(snapshot.shutil, "copyfile", lambda *a: copies.append(a))
+    monkeypatch.setattr(snapshot.shutil, "disk_usage", lambda path: snapshot.shutil._ntuple_diskusage(
+        need * 4, need * 3 + 1, need - 1))
+    out = world.tmp / "nospace"
+    assert telemetry_cli.main(["snapshot-sources", "--out", str(out), "--check-space"]) == 4
+    printed = json.loads(capsys.readouterr().out)
+    assert printed == {"reason": "insufficient_space", "free": need - 1, "needed": need}
+    assert copies == [] and not out.exists()
+
+
+# --- check-reconcile: a scratch import of a snapshot against the live record ----------------------
+
+def scratch_import(world, monkeypatch, out: Path) -> Path:
+    live_db, live_spool = os.environ["AGENTCTL_TELEMETRY_DB"], os.environ["AGENTCTL_TELEMETRY_SPOOL"]
+    scratch = world.tmp / "scratch" / "r.sqlite"
+    scratch.parent.mkdir(exist_ok=True)
+    monkeypatch.setenv("AGENTCTL_TELEMETRY_DB", str(scratch))
+    monkeypatch.setenv("AGENTCTL_TELEMETRY_SPOOL", str(scratch.parent / "spool"))
+    try:
+        assert world.run(replay_all_spools=True, sources=out)["rows_added"] > 0
+    finally:
+        monkeypatch.setenv("AGENTCTL_TELEMETRY_DB", live_db)
+        monkeypatch.setenv("AGENTCTL_TELEMETRY_SPOOL", live_spool)
+    return scratch
+
+
+def mutate(db: Path, sql: str, *args) -> int:
+    import sqlite3
+    conn = sqlite3.connect(str(db))
+    try:
+        with conn:
+            return conn.execute(sql, args).rowcount
+    finally:
+        conn.close()
+
+
+def reconcile_run(scratch: Path, out: Path) -> "tuple[int, dict]":
+    from lib.telemetry import reconcile
+    return reconcile.check(scratch, out)
+
+
+def imported_live(world, monkeypatch) -> "tuple[dict, Path, Path]":
+    made = sources(world)
+    assert world.run(replay_all_spools=True)["rows_added"] > 0
+    out = take(world)
+    return made, out, scratch_import(world, monkeypatch, out)
+
+
+def test_check_reconcile_passes_on_matching_record(world, monkeypatch, capsys):
+    import telemetry as telemetry_cli
+    _, out, scratch = imported_live(world, monkeypatch)
+    code, result = reconcile_run(scratch, out)
+    assert code == 0 and result["reconciled"], result
+    assert all(result["kinds"][kind]["checked"] > 0 for kind in ("ledger", "state", "transcript"))
+    assert result["offset_free_kinds"] == []
+    assert telemetry_cli.main(["check-reconcile", "--scratch", str(scratch), "--sources", str(out)]) == 0
+    assert json.loads(capsys.readouterr().out)["offset_free_kinds"] == []
+
+
+@pytest.mark.parametrize("where", ["kind = 'gate'", "kind = 'command' AND session_id = 'R'"],
+                         ids=["ledger", "engine-state-of-session-with-other-rows"])
+def test_check_reconcile_fails_on_missing_live_row(world, monkeypatch, where):
+    _, out, scratch = imported_live(world, monkeypatch)
+    assert world.count("events", "session_id = 'R' AND kind <> 'command'") > 0
+    deleted = mutate(config_root.telemetry_db(), f"DELETE FROM events WHERE event_id = "
+                                                 f"(SELECT event_id FROM events WHERE {where} LIMIT 1)")
+    assert deleted == 1
+    code, result = reconcile_run(scratch, out)
+    assert code == 1 and not result["reconciled"]
+    assert sum(k["missing"] for k in result["kinds"].values()) == 1
+
+
+def test_check_reconcile_fails_on_source_kind_with_zero_checked_rows(world, monkeypatch):
+    sources(world)
+    store.open_record().close()
+    out = take(world)
+    scratch = scratch_import(world, monkeypatch, out)
+    code, result = reconcile_run(scratch, out)
+    assert code == 1
+    assert "ledger" in result["unchecked_kinds"] and result["kinds"]["ledger"]["checked"] == 0
+    assert result["kinds"]["ledger"]["counted"]["beyond_live_offset"] > 0
+
+
+def test_check_reconcile_counts_live_rows_missing_from_scratch(world, monkeypatch):
+    _, out, scratch = imported_live(world, monkeypatch)
+    assert mutate(scratch, "DELETE FROM events WHERE event_id = "
+                           "(SELECT event_id FROM events WHERE kind = 'gate' LIMIT 1)") == 1
+    code, result = reconcile_run(scratch, out)
+    assert code == 0, result
+    assert result["kinds"]["ledger"]["counted"]["live_not_in_scratch"] == 1
+
+
+def test_check_reconcile_engine_state_superseded_rows_counted(world, monkeypatch):
+    sources(world)
+    assert world.run(replay_all_spools=True)["rows_added"] > 0
+    world.state("R", [{"ts": at(1), "event": "start", "note": "rewritten"}, {"ts": at(4), "event": "plan"}])
+    world.run(replay_all_spools=True)
+    out = take(world)
+    scratch = scratch_import(world, monkeypatch, out)
+    code, result = reconcile_run(scratch, out)
+    assert code == 0, result
+    assert result["kinds"]["state"]["counted"]["superseded_engine_state"] == 1
+
+
+def test_check_reconcile_counts_generation_changed(world, monkeypatch):
+    sources(world)
+    assert world.run(replay_all_spools=True)["rows_added"] > 0
+    world.gate.write_bytes(b"")
+    world.add(world.gate, world.gate_line("R", "rotated", seconds=7))
+    out = take(world)
+    scratch = scratch_import(world, monkeypatch, out)
+    code, result = reconcile_run(scratch, out)
+    assert result["kinds"]["ledger"]["counted"]["generation_changed"] == 1
+    assert code == 0, result
+
+
+def test_check_reconcile_live_session_history_not_required(world, monkeypatch):
+    sources(world)
+    assert world.run(replay_all_spools=True)["rows_added"] > 0
+    world.state("L", [{"ts": at(2), "event": "start"}, {"ts": at(3), "event": "plan"}])
+    world.live_event("L", "command", "cli:plan")
+    assert live.spool_or_end_marker_exists("L")
+    assert world.count("events", "session_id = 'L'") == 0
+    out = take(world)
+    scratch = scratch_import(world, monkeypatch, out)
+    code, result = reconcile_run(scratch, out)
+    assert code == 0, result
+    assert result["kinds"]["state"]["counted"]["live_session_history"] == 2
+
+
 # --- judge losses named per host id ------------------------------------------------------------
 
 def test_judge_losses_named_per_host_id(world, monkeypatch):

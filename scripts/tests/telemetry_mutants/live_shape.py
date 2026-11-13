@@ -1,7 +1,8 @@
 """Mutants of the record's fit to live source shapes: time readers and empty imported times, the
 one act-key function, the session a report run is charged to, judge usage in the ledger and its
 coverage check, the import from a frozen source snapshot (lib/telemetry/snapshot.py), and the
-command row of a verb interrupted after its state save, and check-events' named known losses.
+command row of a verb interrupted after its state save, check-events' named known losses, and
+check-reconcile's comparison of a scratch import with the live record.
 
 Each mutant is `{name, file, anchor, replacement, tests}`: `anchor` occurs exactly once in
 `file` (a path under the repo root), `replacement` keeps the module importable, `tests` are
@@ -16,6 +17,7 @@ _RECORDER = "scripts/lib/telemetry/recorder.py"
 _TOKENS = "scripts/lib/telemetry/tokens.py"
 _LEDGER = "scripts/lib/judge_ledger.py"
 _CLI = "scripts/agentctl/cli.py"
+_RECONCILE = "scripts/lib/telemetry/reconcile.py"
 _T = "scripts/tests/test_telemetry_live_shape.py::"
 _KNOWN_LOSS_INPUTS = _T + "test_known_loss_requires_cause_and_matching_history_act"
 _ONE_FUNCTION = _T + "test_act_key_normalization_is_one_function_used_by_recorder_importer_report"
@@ -205,4 +207,16 @@ MUTANTS = [
     {"name": "known_loss_entry_excuses_many", "file": _REPORT,
      "anchor": "            unused.remove(loss)\n", "replacement": "            pass\n",
      "tests": [_T + "test_known_loss_entry_excuses_one_act"]},
+    # check-reconcile: a scratch import of a snapshot against the live record
+    {"name": "check_reconcile_passes_missing_row", "file": _RECONCILE,
+     "anchor": "    failed = unchecked or any(kind.missing for kind in kinds.values())\n",
+     "replacement": "    failed = unchecked\n",
+     "tests": [_T + "test_check_reconcile_fails_on_missing_live_row"]},
+    {"name": "check_reconcile_passes_empty_kind", "file": _RECONCILE,
+     "anchor": "if kind.checked == 0 and name not in OFFSET_FREE_KINDS]",
+     "replacement": "if False]",
+     "tests": [_T + "test_check_reconcile_fails_on_source_kind_with_zero_checked_rows"]},
+    {"name": "check_reconcile_requires_live_session_history", "file": _RECONCILE,
+     "anchor": "            elif live_session:\n", "replacement": "            elif False:\n",
+     "tests": [_T + "test_check_reconcile_live_session_history_not_required"]},
 ]

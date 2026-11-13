@@ -8,6 +8,10 @@ live path it came from. While a snapshot is active (`import --sources DIR`), the
 token collector list sources from the manifest and open the copies, but name every row, offset
 and back-reference by the live path, so a later live import of the same lines adds nothing.
 
+`take(since_s=…)` copies only the sources written since a landing, and `check_space` refuses
+before any copy unless the free space also covers twice the live record; reconcile.py compares an
+import of such a slice with the live record.
+
 Spools are not part of a snapshot: an import run on a scratch record points
 AGENTCTL_TELEMETRY_SPOOL at a scratch directory of its own.
 """
@@ -56,22 +60,42 @@ def _copy_prefix(source: Path, target: Path, size: int) -> None:
             remaining -= len(chunk)
 
 
-def take(out_dir) -> dict:
+class InsufficientSpace(SnapshotError):
+    def __init__(self, free: int, need: int, where) -> None:
+        super().__init__(f"insufficient_space: {need} bytes needed on {where}, {free} free")
+        self.free, self.need = free, need
+
+
+def take(out_dir, since_s: "float | None" = None, check_space: bool = False) -> dict:
     """Copy every import source into `out_dir` (which must not exist yet) and write its manifest.
-    Raises SnapshotError when the filesystem lacks room for the copies."""
+
+    `since_s`: only the sources last written at or after this epoch time, each still cut at the
+    size it had when measured. `check_space`: refuse before any copy (InsufficientSpace) unless
+    the free bytes cover the copies plus twice the live record, room for a scratch record an
+    import of the copies builds. Raises SnapshotError when the filesystem lacks room."""
+    from lib import config_root
     out = Path(out_dir)
     if out.exists():
         raise SnapshotError(f"{out} already exists")
     measured, skipped = [], []
     for kind, path in _sources():
         try:
-            measured.append((kind, path, path.stat().st_size))
+            stat = path.stat()
         except FileNotFoundError:
             continue
         except OSError as err:
             skipped.append({"live": str(path), "error": repr(err)})
-    need = sum(size for _, _, size in measured) + FREE_SPACE_MARGIN_BYTES
+        else:
+            if since_s is None or stat.st_mtime >= since_s:
+                measured.append((kind, path, stat.st_size))
+    cut = sum(size for _, _, size in measured)
     free = shutil.disk_usage(out.parent).free
+    if check_space:
+        record = config_root.telemetry_db()
+        need = cut + 2 * (record.stat().st_size if record.exists() else 0)
+        if free < need:
+            raise InsufficientSpace(free, need, out.parent)
+    need = cut + FREE_SPACE_MARGIN_BYTES
     if free < need:
         raise SnapshotError(f"{need} bytes needed on {out.parent}, {free} free")
     (out / "files").mkdir(parents=True)

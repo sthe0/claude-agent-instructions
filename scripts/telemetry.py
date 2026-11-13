@@ -3,7 +3,8 @@
     telemetry.py sync [--session <id>] [--stale] [--budget SECONDS]
     telemetry.py emit-precommit --started <epoch seconds> --exit <code>
     telemetry.py import [--transcripts] [--all] [--max-rss-mib N] [--stats-json FILE] [--sources DIR]
-    telemetry.py snapshot-sources --out DIR
+    telemetry.py snapshot-sources --out DIR [--since-landing F] [--check-space]
+    telemetry.py check-reconcile --scratch DB --sources DIR
     telemetry.py rebuild [--transcripts]
     telemetry.py prune [--retention-days N]
     telemetry.py check-profile-unchanged --reference F --premises P --transcripts-snapshot T
@@ -39,7 +40,13 @@ a failed batch) or its peak RSS passed `--max-rss-mib`. `snapshot-sources --out 
 import source once (append-only files cut at their size, after a free-space check) with a manifest
 of the live path of each copy, and exits 1 when a source could not be read or copied (listed under
 `skipped` in the manifest); `import --sources DIR` then reads only those copies, naming rows by
-the live paths (lib/telemetry/snapshot.py), so two imports read one fixed input. `rebuild` moves a corrupt record aside and
+the live paths (lib/telemetry/snapshot.py), so two imports read one fixed input. With
+`--since-landing F` only the sources written at or after F's landed_at are copied; with
+`--check-space` the run exits 4 (reason insufficient_space, the free and needed bytes) before any
+copy unless the free bytes cover the copies plus twice the live record. `check-reconcile` compares
+the scratch record DB an import of DIR built with the live record, opened read-only, per source
+kind (lib/telemetry/reconcile.py), and exits 1 on a row the live record lacks below its importer
+offset or a kind with no checked row, 2 on unreadable input. `rebuild` moves a corrupt record aside and
 builds a new one with the same origin id from the spools and the sources; `prune` deletes the sync
 and decision rows older than `telemetry-prune-retention-days` (config.md) or `--retention-days`.
 `check-profile-unchanged` recomputes the time-profile aggregate from stage 1's frozen inputs and
@@ -136,14 +143,34 @@ def _import(args) -> int:
 
 
 def _snapshot_sources(args) -> int:
-    from lib.telemetry import snapshot
+    from lib.telemetry import snapshot, phases
     try:
-        result = snapshot.take(args.out)
-    except (OSError, snapshot.SnapshotError) as err:
+        since = None
+        if args.since_landing:
+            landed_ms = phases._ms(_read_json_file(args.since_landing, "landed_at"))
+            if landed_ms is None:
+                raise ValueError(f"{args.since_landing}: landed_at is not a time")
+            since = landed_ms / 1000
+        result = snapshot.take(args.out, since_s=since, check_space=args.check_space)
+    except snapshot.InsufficientSpace as err:
+        print(json.dumps({"reason": "insufficient_space", "free": err.free, "needed": err.need}, sort_keys=True))
+        return 4
+    except (OSError, ValueError, KeyError, snapshot.SnapshotError) as err:
         print(f"snapshot-sources: {err}", file=sys.stderr)
         return 2
     print(json.dumps(result, sort_keys=True))
     return 1 if result["skipped"] else 0
+
+
+def _check_reconcile(args) -> int:
+    from lib.telemetry import reconcile
+    try:
+        code, result = reconcile.check(args.scratch, args.sources)
+    except reconcile.ReconcileInputError as err:
+        print(f"check-reconcile: {err}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, sort_keys=True))
+    return code
 
 
 def _align_causes(args) -> int:
@@ -297,6 +324,13 @@ def main(argv=None) -> int:
     imp.add_argument("--sources", default=None, help="read the sources of this snapshot-sources directory only")
     snap = sub.add_parser("snapshot-sources", help="copy every import source once, for an import on a fixed input")
     snap.add_argument("--out", required=True, help="the directory to create")
+    snap.add_argument("--since-landing", default=None,
+                      help="landing record (JSON with landed_at): only sources written at or after it")
+    snap.add_argument("--check-space", action="store_true",
+                      help="exit 4 before any copy unless free bytes cover the copies plus twice the record")
+    rec = sub.add_parser("check-reconcile", help="check a scratch import of a snapshot against the live record")
+    rec.add_argument("--scratch", required=True, help="the scratch record an import --sources DIR built")
+    rec.add_argument("--sources", required=True, help="the snapshot-sources directory it imported")
     rebuild_cmd = sub.add_parser("rebuild", help="rebuild a corrupt record from the spools and the sources")
     rebuild_cmd.add_argument("--transcripts", action="store_true")
     prune_cmd = sub.add_parser("prune", help="delete sync and decision rows past the retention window")
@@ -357,6 +391,8 @@ def main(argv=None) -> int:
         return _import(args)
     if args.command == "snapshot-sources":
         return _snapshot_sources(args)
+    if args.command == "check-reconcile":
+        return _check_reconcile(args)
     if args.command == "rebuild":
         from lib.telemetry import importer
         report = importer.rebuild(args.transcripts)
