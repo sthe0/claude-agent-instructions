@@ -1472,6 +1472,7 @@ SCRIPT_MODULE_MUTATIONS = {
     "redraw-spacing-from-first-paint": (HARNESS, "redraw_summary", _redraw_spacing_from_first_paint),
     "r3-cell-counts-pooled": (HARNESS, "counted_runs", _counted_runs_ignore_the_path),
     "r3-latency-from-last-write": (HARNESS, "first_unshown_change_ns", _latency_from_the_last_write),
+    "save-exit-wait-short": (HARNESS, "SAVE_EXIT_WAIT_S", lambda _original: 6.0),
 }
 
 

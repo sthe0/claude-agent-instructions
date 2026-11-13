@@ -443,6 +443,26 @@ def test_a_save_records_the_harness_census_as_the_copy_sources(tmp_path, monkeyp
     assert copy_["sources"] == census
 
 
+def test_a_save_waits_for_the_app_exit_as_long_as_the_hang_guard(tmp_path, monkeypatch):
+    """After SIGTERM a save run reads until the app exits, bounded by its own hang guard, not a shorter wait:
+    the app writes its snapshot on exit, and a short fixed wait kills a write slowed by machine load."""
+    fake_home(tmp_path, monkeypatch)
+    runner = h.RealRunner(tmp_path / "state", tmp_path / "old", tmp_path / "new", CONTRACT, [])
+    calls = []
+
+    def save_run(*_args, **kwargs):
+        calls.append(kwargs)
+        runner.snapshot_path("new").parent.mkdir(parents=True, exist_ok=True)
+        runner.snapshot_path("new").write_text(json.dumps({"version": 1, "sources": [], "sections": {}}))
+        return SavedTrace()
+
+    monkeypatch.setattr(h, "run_pty", save_run)
+    assert runner("save", None) is not None
+    (call,) = calls
+    assert call["terminate"] is True
+    assert call.get("term_wait_s", 6.0) >= call["max_s"]
+
+
 # --- floors and acceptance: exit codes on fake reports -------------------------------------------------
 
 def good_floors():

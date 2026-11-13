@@ -92,6 +92,7 @@ HARNESS_MUTATIONS = (
     "redraw-spacing-from-first-paint",
     "r3-cell-counts-pooled",
     "r3-latency-from-last-write",
+    "save-exit-wait-short",
 )
 SCRIPT_MODULE_TESTS = {**dict.fromkeys(HARNESS_MUTATIONS, HARNESS_TESTS),
                        "launcher-imports-every-subcommand": TUI_TESTS}

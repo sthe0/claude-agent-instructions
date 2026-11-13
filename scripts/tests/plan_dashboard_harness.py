@@ -59,6 +59,9 @@ R3_RUN_CAP_S = 660
 WATCH_ENV = "PLAN_DASHBOARD_WATCH"
 INTERLEAVE_EVERY = 3
 REDRAW_SPACING_MIN_S = 0.5
+# A save run is untimed and the app writes its snapshot on exit, so after SIGTERM it waits as long as its hang guard:
+# a shorter fixed wait killed a snapshot write slowed by machine load.
+SAVE_EXIT_WAIT_S = 60.0
 TMUX_LIST_ARGV: tuple[str, ...] = ()
 MIN_CHANGED = 100
 BANDS = {"near-zero": (0, 10), "80-100": (80, 100), "101-130": (101, 130), "131-170": (131, 170),
@@ -1965,7 +1968,7 @@ class RealRunner:
         snapshot.unlink(missing_ok=True)
         sources = self.do_live(None)
         trace = run_pty(dashboard_argv(self.new, events=True), cwd=self.new, env=self.env("new"), events=True,
-                        max_s=60, terminate=True,
+                        max_s=60, terminate=True, term_wait_s=SAVE_EXIT_WAIT_S,
                         stop=lambda t: bool(t.event_times("live_check_end")))
         if not trace.event_times("snapshot_written") or not snapshot.exists():
             self.log_failure("save run emitted no snapshot_written")
