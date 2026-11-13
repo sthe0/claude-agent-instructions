@@ -8,6 +8,7 @@ per-test report, the way pytest does; the real pytest is exercised by
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -314,7 +315,7 @@ def test_a_failure_of_the_first_round_stands_when_the_tip_moved(world):
 
 def test_the_sandboxed_pytest_never_sees_the_operators_journal_path(tmp_path):
     env = gate.suite_env(tmp_path, "/ub", tmp_path / "f", [],
-                         base_env={"PATH": "/bin", flake_list.JOURNAL_ENV: "/live/journal.jsonl"})
+                         base_env={"PATH": os.environ["PATH"], flake_list.JOURNAL_ENV: "/live/journal.jsonl"})
     assert flake_list.JOURNAL_ENV not in env
 
 
