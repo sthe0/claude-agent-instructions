@@ -88,7 +88,7 @@ from reaper import liveness, registry
 from reaper.contract import KEEP, REMOVE, ReapContext, RemovalRefused, Verdict, session_sources_problem
 from session_scope import registry as scope_registry
 
-THROTTLED_SENTINEL = "throttled: within window"
+THROTTLED_SENTINEL = "nothing due: within the throttle window or outside a gated reaper's session"
 UPKEEP_LOCK_WAIT_S = 120.0
 UPKEEP_LOCK_POLL_S = 0.25
 PRESSURE_THRESHOLD_KEY = "reaper-pressure-free-percent"
@@ -199,6 +199,11 @@ def _read_stamp(directory: Path, name: str) -> "float | None":
         return float(_stamp_path(directory, name).read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
+
+
+def _throttle_elapsed(reaper: "registry.Reaper", stamps: Path, now: float) -> bool:
+    prev = _read_stamp(stamps, reaper.name)
+    return prev is None or (now - prev) >= reaper.throttle_hours * 3600.0
 
 
 def _write_stamp(directory: Path, name: str, now: float) -> None:
@@ -469,7 +474,7 @@ def execute_pass(
         due = {
             r.name for r in selected
             if session_admits(getattr(r.module, "SESSION_SOURCES", None), ctx.session)
-            and ((prev := _read_stamp(stamps, r.name)) is None or (now - prev) >= r.throttle_hours * 3600.0)
+            and _throttle_elapsed(r, stamps, now)
         }
     if not due:
         print(THROTTLED_SENTINEL, file=err)
@@ -722,12 +727,16 @@ def _discover_default(project_dir: Path, warn: "Callable[[str], None]") -> "list
     return usable
 
 
+def _one_field(text: str) -> str:
+    return text.replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+
 def _holders_report(paths: "list[str]", ctx: ReapContext, out: TextIO) -> int:
     """Print ``<path>\\t<free|held|unknown>\\t<detail>`` per path; exit 0 all free, 4 any unknown, else 3 any held."""
     answers = liveness.path_holders(paths, ctx)
     for path in paths:
         answer = answers[path]
-        print(f"{path}\t{answer.status}\t{answer.report()}", file=out)
+        print(f"{_one_field(path)}\t{answer.status}\t{_one_field(answer.report())}", file=out)
     statuses = {answer.status for answer in answers.values()}
     if liveness.UNKNOWN_STATUS in statuses:
         return HOLDERS_EXIT_UNKNOWN
@@ -848,7 +857,9 @@ def main(
         if args.on_pressure:
             _run_on_pressure(reapers, ctx, skipped, observe)
             return 0
-        if not manual and any(hasattr(r.module, "SESSION_SOURCES") for r in reapers):
+        if not manual and any(
+            hasattr(r.module, "SESSION_SOURCES") and _throttle_elapsed(r, stamp_dir(), now) for r in reapers
+        ):
             ctx = dataclasses.replace(ctx, session=session_of(read_session_payload(sys.stdin), os.environ))
         execute_pass(
             reapers, ctx,

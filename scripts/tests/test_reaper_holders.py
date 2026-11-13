@@ -192,9 +192,53 @@ def test_the_filesystem_root_is_never_answered_free(tmp_path):
     assert ask(tmp_path, ["/"])["/"].status == liveness.UNKNOWN_STATUS
 
 
-# ── the queried path is only compared as a string ────────────────────────
+# ── a symlinked spelling of a held path is still held ────────────────────
 
-def test_nothing_at_or_under_a_queried_path_is_stat_ed_resolved_or_walked(tmp_path, planted, monkeypatch):
+@pytest.fixture
+def linked(tmp_path, planted):
+    work, sibling = planted
+    link = tmp_path / "link"
+    link.symlink_to(work)
+    return work, sibling, link
+
+
+def test_a_queried_symlink_to_a_held_directory_is_held_by_a_scope_record(tmp_path, linked):
+    work, _, link = linked
+    record = ScopeRecord(session_id="s1", heartbeat_ts=NOW, cwd=str(work / "inner"))
+    assert ask(tmp_path, [link], records=[record])[str(link)].kind == liveness.KIND_SCOPE
+
+
+def test_a_scope_record_spelled_through_a_symlink_holds_the_real_path(tmp_path, linked):
+    work, _, link = linked
+    record = ScopeRecord(session_id="s1", heartbeat_ts=NOW, cwd=str(link / "inner"))
+    assert ask(tmp_path, [work], records=[record])[str(work)].kind == liveness.KIND_SCOPE
+
+
+@pytest.mark.parametrize("spelled_through_link", [False, True])
+def test_an_engine_task_holds_a_path_across_a_symlinked_spelling(tmp_path, linked, spelled_through_link):
+    work, _, link = linked
+    store = tmp_path / "state"
+    write_state(store, "sess-a", "EXECUTING", delivery_worktree=str(link if spelled_through_link else work))
+    queried = work if spelled_through_link else link
+    assert ask(tmp_path, [queried], state_dir=store)[str(queried)].kind == liveness.KIND_ENGINE
+
+
+def test_a_process_holding_the_real_path_holds_a_queried_symlink_to_it(tmp_path, linked):
+    work, _, link = linked
+    sweep = liveness.HolderSweep()
+    sweep.held["cwd"] = [str(work / "inner")]
+    assert ask(tmp_path, [link], sweep=sweep)[str(link)].kind == liveness.KIND_PROCESS
+
+
+def test_a_symlink_to_a_free_directory_is_free(tmp_path, linked):
+    _, sibling, link = linked
+    record = ScopeRecord(session_id="s1", heartbeat_ts=NOW, cwd=str(sibling))
+    assert ask(tmp_path, [link], records=[record])[str(link)].status == liveness.FREE_STATUS
+
+
+# ── nothing under a queried path is touched ──────────────────────────────
+
+def test_nothing_under_a_queried_path_is_stat_ed_resolved_or_walked(tmp_path, planted, monkeypatch):
     work, sibling = planted
     queried = [str(work), str(sibling)]
     seen = []
@@ -208,7 +252,7 @@ def test_nothing_at_or_under_a_queried_path_is_stat_ed_resolved_or_walked(tmp_pa
                 text = os.fsdecode(os.fspath(first))
             except TypeError:
                 text = ""
-            if any(text == q or text.startswith(q + os.sep) for q in queried):
+            if any(text.startswith(q + os.sep) for q in queried):
                 seen.append((name, text))
             return real(*args, **kwargs)
 
@@ -220,8 +264,8 @@ def test_nothing_at_or_under_a_queried_path_is_stat_ed_resolved_or_walked(tmp_pa
         watch(os.path, name)
 
     store = tmp_path / "state"
-    write_state(store, "sess-a", "EXECUTING", delivery_worktree=str(work))
-    record = ScopeRecord(session_id="s1", heartbeat_ts=NOW, cwd=str(work))
+    write_state(store, "sess-a", "EXECUTING", delivery_worktree=str(work / "inner"))
+    record = ScopeRecord(session_id="s1", heartbeat_ts=NOW, cwd=str(work / "inner"))
     ask(tmp_path, queried, records=[record], state_dir=store)
     ask(tmp_path, queried, state_dir=store)
     assert seen == []
@@ -270,7 +314,16 @@ def test_holders_exits_four_when_any_path_is_unknown_even_if_another_is_held(cli
     assert [line.split("\t")[1] for line in lines] == ["held", "unknown"]
 
 
-@pytest.mark.parametrize("other", [["--dry-run"], ["--force-run"], ["--only", "a"], ["--list"], ["--upkeep-only"], ["--on-pressure"], ["--no-wait"]])
+def test_holders_keeps_one_line_and_three_fields_when_a_detail_carries_a_tab_or_newline(cli, planted, capsys):
+    work, _ = planted
+    write_state(config_root.agentctl_state_dir(), "sess-a", "EXECUTING", task_id="two\twords\nsecond line", delivery_worktree=str(work))
+    code, lines = holders_cli(capsys, work)
+    assert code == 3 and len(lines) == 1
+    assert lines[0].split("\t")[:2] == [str(work), "held"] and len(lines[0].split("\t")) == 3
+    assert "two\\twords\\nsecond line" in lines[0]
+
+
+@pytest.mark.parametrize("other", [["--dry-run"],["--force-run"], ["--only", "a"], ["--list"], ["--upkeep-only"], ["--on-pressure"], ["--no-wait"]])
 def test_holders_combines_with_no_other_flag(cli, other):
     with pytest.raises(SystemExit) as raised:
         runner.main(["--holders", "/some/path", *other], discover=lambda project, warn: [])

@@ -138,7 +138,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_GIT, "test_symlinked_temp_root_matches_the_resolved_worktree_path"),
     ),
     "realpath-owner": Mutant(
-        CONTRACT, "_at_or_inside(real, os.path.realpath(held))", "_at_or_inside(real, held)",
+        CONTRACT, "_at_or_inside(wanted, resolve(held))", "_at_or_inside(wanted, held)",
         _ids(T_GIT, "test_owner_record_spelled_through_a_symlink_still_owns_the_worktree"),
     ),
     "landed-check": Mutant(
@@ -765,14 +765,18 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "holders-scope-ignored": Mutant(
         LIVENESS,
-        "        record = owning_record(wanted, ctx.scope_records, ctx.now, ctx.heartbeat_ttl_hours, _lexical)\n",
+        "        record = next(\n"
+        "            (found for spelling in spellings\n"
+        "             if (found := owning_record(spelling, ctx.scope_records, ctx.now, ctx.heartbeat_ttl_hours, resolve_outside))),\n"
+        "            None,\n"
+        "        )\n",
         "        record = None\n",
         _ids(T_HOLDERS, "test_a_live_scope_record_inside_the_path_holds_it_and_a_sibling_stays_free",
              "test_a_scope_record_with_a_repo_root_at_the_path_holds_it"),
     ),
     "holders-engine-ignored": Mutant(
         LIVENESS,
-        "        task = next((t for t in tasks if any(_inside(wanted, root) for root in t.roots)), None)\n",
+        "        task = next((t for t in tasks if any(_inside(s, resolve_outside(root)) for s in spellings for root in t.roots)), None)\n",
         "        task = None\n",
         _ids(T_HOLDERS, "test_an_unresolved_engine_task_holds_the_path_and_names_session_and_task[repo_root]",
              "test_an_unresolved_engine_task_holds_the_path_and_names_session_and_task[delivery_worktree]",
@@ -783,7 +787,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_HOLDERS, "test_a_resolved_engine_task_holds_nothing"),
     ),
     "holders-process-ignored": Mutant(
-        LIVENESS, "        process = sweep.holder_of(wanted)\n", "        process = None\n",
+        LIVENESS, "        process = next((kind for s in spellings if (kind := sweep.holder_of(s))), None)\n", "        process = None\n",
         _ids(T_HOLDERS, "test_a_process_with_its_cwd_inside_the_path_holds_it",
              "test_a_held_path_is_held_even_when_the_sweep_was_incomplete"),
     ),
@@ -799,7 +803,30 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "holders-realpath": Mutant(
         LIVENESS, "    return os.path.normpath(os.path.abspath(path))\n", "    return os.path.realpath(path)\n",
-        _ids(T_HOLDERS, "test_nothing_at_or_under_a_queried_path_is_stat_ed_resolved_or_walked"),
+        _ids(T_HOLDERS, "test_nothing_under_a_queried_path_is_stat_ed_resolved_or_walked"),
+    ),
+    "holders-symlink-queried": Mutant(
+        LIVENESS, "        spellings = [wanted] if real == wanted else [wanted, real]\n", "        spellings = [wanted]\n",
+        _ids(T_HOLDERS, "test_a_queried_symlink_to_a_held_directory_is_held_by_a_scope_record",
+             "test_an_engine_task_holds_a_path_across_a_symlinked_spelling[False]",
+             "test_a_process_holding_the_real_path_holds_a_queried_symlink_to_it"),
+    ),
+    "holders-symlink-holder": Mutant(
+        LIVENESS, "        return root if any(_inside(path, root) for path in queried) else resolve(root)\n", "        return root\n",
+        _ids(T_HOLDERS, "test_a_scope_record_spelled_through_a_symlink_holds_the_real_path",
+             "test_an_engine_task_holds_a_path_across_a_symlinked_spelling[True]"),
+    ),
+    "holders-resolve-inside": Mutant(
+        LIVENESS, "        return root if any(_inside(path, root) for path in queried) else resolve(root)\n", "        return resolve(root)\n",
+        _ids(T_HOLDERS, "test_nothing_under_a_queried_path_is_stat_ed_resolved_or_walked"),
+    ),
+    "holders-detail-unescaped": Mutant(
+        RUNNER, "_one_field(answer.report())", "answer.report()",
+        _ids(T_HOLDERS, "test_holders_keeps_one_line_and_three_fields_when_a_detail_carries_a_tab_or_newline"),
+    ),
+    "session-payload-read-always": Mutant(
+        RUNNER, " and _throttle_elapsed(r, stamp_dir(), now) for r in reapers\n", " for r in reapers\n",
+        _ids(T_RUNNER, "test_a_start_where_every_gated_reaper_is_inside_its_throttle_does_not_read_stdin"),
     ),
 }
 

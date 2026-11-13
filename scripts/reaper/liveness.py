@@ -52,6 +52,7 @@ from __future__ import annotations
 import bisect
 import dataclasses
 import errno
+import functools
 import json
 import os
 import re
@@ -119,7 +120,10 @@ class HolderSweep:
     incomplete: "str | None" = None
 
     def holder_of(self, real: str) -> "str | None":
-        """The kind of the first hold at or inside ``real`` (a resolved absolute path), else None."""
+        """The kind of the first hold at or inside ``real``, else None.
+
+        The held paths are spelled as ``/proc`` reports them (symlink-free), so ``real`` must be too:
+        a caller with a symlinked spelling resolves it first."""
         prefix = real + os.sep
         for kind in HOLDER_KINDS:
             paths = self.held[kind]
@@ -581,9 +585,11 @@ def path_holders(
     A path is ``held`` when any source holds it (the first in the order above names it). Otherwise it is
     ``unknown`` when a source could not be read in full — a scope registry that failed to load, an engine
     store that could not be read, an incomplete process sweep — and ``free`` only when all three were read.
-    The paths are compared as normalized absolute strings; nothing is stat-ed, resolved or walked under a
-    queried path, so a symlinked spelling of a held path is not recognized. ``sweep`` and ``state_dir``
-    let a caller (a test) supply the process sweep and the engine store directory.
+    A queried path is matched by its normalized absolute spelling and by its symlink-resolved one (the
+    path itself is resolved, nothing under it is listed or walked). A holder's recorded path is resolved
+    too, except one that lexically sits inside any queried path: that one already matches, and resolving
+    it would stat inside a queried tree (a dead mount must not hang the query). ``sweep`` and
+    ``state_dir`` let a caller (a test) supply the process sweep and the engine store directory.
     """
     sweep = sweep_holders() if sweep is None else sweep
     tasks, engine_error = read_engine_tasks(state_dir)
@@ -595,14 +601,26 @@ def path_holders(
         ) if why
     ]
     answers: "dict[str, HolderAnswer]" = {}
+    queried = [_lexical(raw) for raw in paths]
+    resolve = functools.lru_cache(maxsize=None)(os.path.realpath)
+
+    def resolve_outside(root: str) -> str:
+        return root if any(_inside(path, root) for path in queried) else resolve(root)
+
     for raw in paths:
         wanted = _lexical(raw)
         if wanted == os.sep:
             answers[raw] = HolderAnswer(UNKNOWN_STATUS, detail="the filesystem root is not a queryable path")
             continue
-        record = owning_record(wanted, ctx.scope_records, ctx.now, ctx.heartbeat_ttl_hours, _lexical)
-        task = next((t for t in tasks if any(_inside(wanted, root) for root in t.roots)), None)
-        process = sweep.holder_of(wanted)
+        real = resolve(wanted)
+        spellings = [wanted] if real == wanted else [wanted, real]
+        record = next(
+            (found for spelling in spellings
+             if (found := owning_record(spelling, ctx.scope_records, ctx.now, ctx.heartbeat_ttl_hours, resolve_outside))),
+            None,
+        )
+        task = next((t for t in tasks if any(_inside(s, resolve_outside(root)) for s in spellings for root in t.roots)), None)
+        process = next((kind for s in spellings if (kind := sweep.holder_of(s))), None)
         if record is not None:
             answers[raw] = HolderAnswer(HELD_STATUS, KIND_SCOPE, f"session={record.session_id} cwd={record.cwd or record.repo_root}")
         elif task is not None:

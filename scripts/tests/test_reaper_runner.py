@@ -703,13 +703,48 @@ def test_manual_modes_ignore_the_gate(hermetic, monkeypatch, capsys, argv):
 
 
 def test_a_start_with_no_gated_reaper_does_not_read_stdin(hermetic, monkeypatch):
-    class Unreadable(io.StringIO):
-        def read(self, *args):
-            raise AssertionError("stdin was read")
+    reads = []
 
-    monkeypatch.setattr(sys, "stdin", Unreadable("{}"))
+    class Counting(io.StringIO):
+        def read(self, *args):
+            reads.append(1)
+            return super().read(*args)
+
+    monkeypatch.setattr(sys, "stdin", Counting("{}"))
     plain = Fake("g", [])
     assert runner.main([], discover=lambda project, warn: [plain.reaper]) == 0
+    assert reads == []
+
+
+def test_a_start_where_every_gated_reaper_is_inside_its_throttle_does_not_read_stdin(hermetic, monkeypatch, capsys):
+    gated = Fake("g", [], summary_line=GATE_LINE, session_sources=GATE_SOURCES)
+    session_start(hermetic, monkeypatch, [gated], payload=source_payload("startup"))
+    assert capsys.readouterr().out.splitlines() == [GATE_LINE]
+
+    reads = []
+
+    class Counting(io.StringIO):
+        def read(self, *args):
+            reads.append(1)
+            return super().read(*args)
+
+    monkeypatch.setattr(sys, "stdin", Counting(source_payload("clear")))
+    assert runner.main([], discover=lambda project, warn: [gated.reaper]) == 0
+    assert gated.scans == 1 and reads == []
+
+
+def test_a_gated_reaper_past_its_throttle_makes_the_start_read_stdin(hermetic, monkeypatch):
+    reads = []
+
+    class Counting(io.StringIO):
+        def read(self, *args):
+            reads.append(1)
+            return super().read(*args)
+
+    monkeypatch.setattr(sys, "stdin", Counting(source_payload("startup")))
+    gated = Fake("g", [], summary_line=GATE_LINE, session_sources=GATE_SOURCES)
+    assert runner.main([], discover=lambda project, warn: [gated.reaper]) == 0
+    assert reads
 
 
 def test_a_reaper_with_a_malformed_session_sources_is_skipped_at_default_discovery(hermetic, monkeypatch, capsys):
