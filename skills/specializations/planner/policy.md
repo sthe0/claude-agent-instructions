@@ -60,6 +60,10 @@ The trigger is **not** "this stage's own check is unmechanized". Concrete exampl
 
 Budgeting a round must not legitimize one that a cheaper discriminator would have removed. [[2026-08-05-deferring-ask-gate-and-the-binding-timeout-layer]] § Self-critique carries the paired obligation: three rounds each justified by a genuine blocker were still an effort signal, and two of them would have collapsed into one had the runtime axis been exercised **before** the first review. Budget the round; spend the cheapest discriminator first anyway.
 
+## PR plans end at merge
+
+To achieve a PR task that the user can accept without a replan per review round: when the plan delivers a PR that other people review, (1) the done criterion and a `[[final_check]]` require the PR **merged** (decided from VCS / the code-review host, not from the record), and the resolution ask comes only after the merge; (2) the last stage is "drive the PR to merge", whose criterion is "merged, and every reviewer comment closed by a fix or a reply", and whose procedure is one **review round** repeated as needed — collect the new comments → fix them, with tests (differential against a reference when porting) → independent re-review of the delta → show the replies to the user → post them on the user's answer → re-request review. A new round is execution inside that stage, not a replan; replan only when a comment changes what is built or how it is verified. Budget two to three rounds in the stage's cost note (§ Cost and resource assessment). *(Difficulty: plan `de582-v9-jev` ended at "PR created" while the user accepts on merge; the first human review round on PR A cost a full replan — three difficulty records, four engine refusals, a fresh plan review and re-approval — user correction 2026-11-12.)*
+
 ## Verify-final check shape
 
 *Difficulty removed:* each whole-suite check re-runs at `verify-final` after any commit, so a plan with several of them multiplies the slowest step of the gate, and a docs-only commit still costs the full suite.
