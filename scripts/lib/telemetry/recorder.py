@@ -22,8 +22,10 @@ Everything here is fail-open and a no-op under AGENTCTL_TELEMETRY=off.
 """
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -45,6 +47,20 @@ OPENING_VERBS = ("start", "reset")
 SYNC_BEFORE_SAVE_ENV = "AGENTCTL_TEST_SYNC_BEFORE_SAVE"
 SYNC_AFTER_SAVE_ENV = "AGENTCTL_TEST_SYNC_AFTER_SAVE"
 SYNC_AFTER_ROW_ENV = "AGENTCTL_TEST_SYNC_AFTER_ROW"
+SYNC_BEFORE_FLAG_ENV = "AGENTCTL_TEST_SYNC_BEFORE_FLAG"
+
+INTERRUPTS = (signal.SIGTERM, signal.SIGINT)
+
+
+@contextlib.contextmanager
+def interrupts_blocked():
+    """Run the body with SIGTERM and SIGINT held back, so a signal lands before or after it and
+    never between two steps that must stay together."""
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, INTERRUPTS)
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
 @dataclass
@@ -220,8 +236,10 @@ def _finish(ctx: Context, args, state_store, directive) -> None:
     fields = _command_fields(ctx, outcome, node_after)
     if verb == "classify" and state is not None:
         fields["weight_class"] = state.weight_class
-    live.emit_event(session, "command", live.act_key(verb), fields)
-    ctx.row_emitted = True
+    with interrupts_blocked():
+        live.emit_event(session, "command", live.act_key(verb), fields)
+        sync_point(SYNC_BEFORE_FLAG_ENV, state_store)
+        ctx.row_emitted = True
     sync_point(SYNC_AFTER_ROW_ENV, state_store)
     if ctx.node_before != node_after and ctx.node_before is not None:
         live.emit_event(session, "transition", live.act_key(verb), {

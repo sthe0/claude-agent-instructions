@@ -19,6 +19,7 @@ _LEDGER = "scripts/lib/judge_ledger.py"
 _CLI = "scripts/agentctl/cli.py"
 _RECONCILE = "scripts/lib/telemetry/reconcile.py"
 _T = "scripts/tests/test_telemetry_live_shape.py::"
+_BOUND = _T + "test_check_reconcile_state_history_bound_is_last_complete_import_of_this_origin"
 _KNOWN_LOSS_INPUTS = _T + "test_known_loss_requires_cause_and_matching_history_act"
 _ONE_FUNCTION = _T + "test_act_key_normalization_is_one_function_used_by_recorder_importer_report"
 
@@ -180,8 +181,12 @@ MUTANTS = [
      "replacement": '            (lambda *args: None)(recording, store, "interrupted",',
      "tests": [_T + "test_command_row_written_when_interrupted_after_state_save"]},
     {"name": "command_row_written_twice_on_interrupt", "file": _RECORDER,
-     "anchor": "    ctx.row_emitted = True\n    sync_point(", "replacement": "    sync_point(",
+     "anchor": "        ctx.row_emitted = True\n    sync_point(", "replacement": "        pass\n    sync_point(",
      "tests": [_T + "test_interrupt_inside_finish_after_row_writes_no_second_row"]},
+    {"name": "command_row_flag_set_with_interrupts_open", "file": _RECORDER,
+     "anchor": '    with interrupts_blocked():\n        live.emit_event(session, "command", live.act_key(verb), fields)',
+     "replacement": '    if True:\n        live.emit_event(session, "command", live.act_key(verb), fields)',
+     "tests": [_T + "test_interrupt_between_row_append_and_its_flag_writes_no_second_row"]},
     {"name": "interrupt_exits_zero", "file": _CLI,
      "anchor": "        return 128 + stop.signum\n", "replacement": "        return 0\n",
      "tests": [_T + "test_command_row_written_when_interrupted_after_state_save"]},
@@ -223,4 +228,34 @@ MUTANTS = [
      "anchor": "            elif records.after_last_live_import(scratch_id):\n",
      "replacement": "            elif False:\n",
      "tests": [_T + "test_check_reconcile_state_history_after_last_live_import_counted"]},
+    {"name": "check_reconcile_bound_counts_incomplete_run", "file": _RECONCILE,
+     "anchor": "\"AND provenance = 'live' AND json_extract(fields, '$.complete') = 1\")",
+     "replacement": "\"AND provenance = 'live'\")",
+     "tests": [_BOUND]},
+    {"name": "check_reconcile_bound_is_earliest_run", "file": _RECONCILE,
+     "anchor": "self._last_live_import = max((end for end in ends if end is not None), default=None)",
+     "replacement": "self._last_live_import = min((end for end in ends if end is not None), default=None)",
+     "tests": [_BOUND]},
+    {"name": "check_reconcile_bound_is_run_start", "file": _RECONCILE,
+     "anchor": "\"SELECT time, json_extract(fields, '$.origin') FROM events",
+     "replacement": ("\"SELECT strftime('%Y-%m-%dT%H:%M:%S+00:00', time, '-' || json_extract(fields, '$.duration_s') "
+                     "|| ' seconds'), json_extract(fields, '$.origin') FROM events"),
+     "tests": [_BOUND]},
+    {"name": "check_reconcile_bound_takes_any_origin", "file": _RECONCILE,
+     "anchor": "if origin == self.live_origin or (origin is None and not merged)]",
+     "replacement": "if True]", "tests": [_BOUND]},
+    {"name": "check_reconcile_bound_takes_originless_run_after_merge", "file": _RECONCILE,
+     "anchor": "if origin == self.live_origin or (origin is None and not merged)]",
+     "replacement": "if origin == self.live_origin or origin is None]", "tests": [_BOUND]},
+    {"name": "check_reconcile_bound_drops_originless_run", "file": _RECONCILE,
+     "anchor": "if origin == self.live_origin or (origin is None and not merged)]",
+     "replacement": "if origin == self.live_origin]", "tests": [_BOUND]},
+    {"name": "import_run_event_without_origin", "file": _IMPORTER,
+     "anchor": ', "origin": run.origin}}], BATCH_DEADLINE_S)', "replacement": "}}], BATCH_DEADLINE_S)",
+     "tests": [_T + "test_import_run_event_carries_record_origin"]},
+    {"name": "check_reconcile_scratch_may_be_live", "file": _RECONCILE,
+     "anchor": "    if records.scratch_origin == records.live_origin:\n",
+     "replacement": "    if False:\n",
+     "tests": [_T + "test_check_reconcile_refuses_scratch_that_is_the_live_file",
+               _T + "test_check_reconcile_refuses_scratch_that_is_a_copy_of_the_live_record"]},
 ]

@@ -938,7 +938,7 @@ def _emit_run_event(run: _Run, started: float) -> None:
         "provenance": "live", "time": emit.now_iso(),
         "fields": {"source_key": SELF_SOURCE_KEY, "rows_added": stats.rows_added, "errors": stats.errors,
                    "malformed_lines": stats.malformed_lines, "complete": stats.complete,
-                   "duration_s": round(_clock() - started, 3)}}], BATCH_DEADLINE_S)
+                   "duration_s": round(_clock() - started, 3), "origin": run.origin}}], BATCH_DEADLINE_S)
 
 
 def _collect_tokens(run: _Run) -> None:

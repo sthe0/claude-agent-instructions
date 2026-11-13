@@ -376,7 +376,7 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     return p
 
 
-_INTERRUPTS = (signal.SIGTERM, signal.SIGINT)
+_INTERRUPTS = recorder.INTERRUPTS
 
 
 class Interrupted(BaseException):
@@ -414,12 +414,9 @@ def _track_saves(store) -> dict:
 
     def tracked(*args, **kwargs):
         recorder.sync_point(recorder.SYNC_BEFORE_SAVE_ENV, store)
-        blocked = signal.pthread_sigmask(signal.SIG_BLOCK, _INTERRUPTS)
-        try:
+        with recorder.interrupts_blocked():
             result = save(*args, **kwargs)
             saves["saved"] = True
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
         recorder.sync_point(recorder.SYNC_AFTER_SAVE_ENV, store)
         return result
 
@@ -458,10 +455,6 @@ def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
             recorder.record_cut_short(recording, store, "interrupted",
                                       {"signal": stop.signum, "exit": 128 + stop.signum})
         return 128 + stop.signum
-    except BaseException as exc:
-        if saves["saved"]:
-            recorder.record_cut_short(recording, store, "error", {"error": type(exc).__name__})
-        raise
     finally:
         _restore_handlers(previous_handlers)
     if harness and session and session != harness and not _is_followed_by_gate(harness, session):

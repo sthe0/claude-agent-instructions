@@ -16,8 +16,9 @@ check opens the live record read-only and compares the two per source kind of th
   copy's size that scratch lacks are `live_not_in_scratch`.
 - state: every scratch history row of a state file must be live under its live-origin id, except
   the history of a session live in the live record (a live-provenance row, a spool or an end
-  marker), `live_session_history`, and history timed after the end of the last complete live
-  import (an engine state file has no importer offset), `after_last_live_import`; live history
+  marker), `live_session_history`, and history timed after the end of the last complete
+  `import.run` of the live record's own origin (an engine state file has no importer offset),
+  `after_last_live_import`, the bound printed as `last_complete_live_import`; live history
   rows of the session that the current file no longer yields are `superseded_engine_state`.
 
 The other consumers and tables (contours, sessions, causes, losses, judge_usage) are listed as
@@ -41,10 +42,6 @@ _UNREAD = object()
 
 class ReconcileInputError(Exception):
     pass
-
-
-def _origin(conn) -> str:
-    return store._read_origin(conn)
 
 
 def _present(conn, table: str, column: str, ids: list) -> set:
@@ -107,7 +104,7 @@ class _Kind:
 class _Records:
     def __init__(self, scratch, live_conn) -> None:
         self.scratch, self.live = scratch, live_conn
-        self.scratch_origin, self.live_origin = _origin(scratch), _origin(live_conn)
+        self.scratch_origin, self.live_origin = store._read_origin(scratch), store._read_origin(live_conn)
         self._live_sessions = None
         self._last_live_import = _UNREAD
 
@@ -117,15 +114,24 @@ class _Records:
                 "SELECT DISTINCT session_id FROM events WHERE provenance = 'live'")}
         return session in self._live_sessions or live.spool_or_end_marker_exists(session)
 
-    def after_last_live_import(self, scratch_id: str) -> bool:
+    def last_complete_live_import(self):
+        """The end time of the latest complete `import.run` this record's own origin wrote; a run
+        without an origin field (written before the field existed) counts only while the record
+        has merged nothing, since after a merge it may be another machine's."""
         if self._last_live_import is _UNREAD:
-            ends = [sync.parse_time(r[0]) for r in self.live.execute(
-                "SELECT time FROM events WHERE kind = 'import.run' AND provenance = 'live' "
-                "AND json_extract(fields, '$.complete') = 1")]
+            merged = self.live.execute("SELECT 1 FROM merge_state LIMIT 1").fetchone() is not None
+            ends = [sync.parse_time(time) for time, origin in self.live.execute(
+                "SELECT time, json_extract(fields, '$.origin') FROM events WHERE kind = 'import.run' "
+                "AND provenance = 'live' AND json_extract(fields, '$.complete') = 1")
+                if origin == self.live_origin or (origin is None and not merged)]
             self._last_live_import = max((end for end in ends if end is not None), default=None)
+        return self._last_live_import
+
+    def after_last_live_import(self, scratch_id: str) -> bool:
+        bound = self.last_complete_live_import()
         row = self.scratch.execute("SELECT time FROM events WHERE event_id = ?", (scratch_id,)).fetchone()
         moment = sync.parse_time(row[0]) if row else None
-        return self._last_live_import is not None and moment is not None and moment > self._last_live_import
+        return bound is not None and moment is not None and moment > bound
 
 
 def _held_by_live_row(records: _Records, live_id: str, scratch_id: str) -> bool:
@@ -245,7 +251,12 @@ def _reconcile_state(records: _Records, frozen: snapshot.Snapshot, kind: _Kind) 
 
 
 def check(scratch_path, sources_dir) -> "tuple[int, dict]":
-    """(exit code, report) of reconciling the scratch record built from `sources_dir`."""
+    """(exit code, report) of reconciling the scratch record built from `sources_dir`.
+
+    The live side is the record `config_root.telemetry_db()` names, so the scratch overrides
+    (AGENTCTL_TELEMETRY_DB, AGENTCTL_TELEMETRY_SPOOL) must be unset for this run; a scratch record
+    that is the live one (the same file, or a copy: both carry the live origin) is refused
+    (ReconcileInputError)."""
     try:
         frozen = snapshot.Snapshot(sources_dir)
         scratch = store.open_record_readonly(scratch_path)
@@ -253,12 +264,18 @@ def check(scratch_path, sources_dir) -> "tuple[int, dict]":
         records = _Records(scratch, live_conn)
     except (OSError, ValueError, KeyError, TypeError, store.sqlite3.Error) as err:
         raise ReconcileInputError(str(err)) from err
+    if records.scratch_origin == records.live_origin:
+        scratch.close()
+        live_conn.close()
+        raise ReconcileInputError("the scratch record is the live record: unset AGENTCTL_TELEMETRY_DB "
+                                  "for this run so the live side is the real record")
     try:
         kinds = {name: _Kind() for name in sorted({e["kind"] for e in frozen.files.values()})}
         readers = {snapshot.LEDGER: _reconcile_ledger, snapshot.TRANSCRIPT: _reconcile_transcripts,
                    snapshot.STATE: _reconcile_state}
         for name, kind in kinds.items():
             readers[name](records, frozen, kind)
+        bound = records.last_complete_live_import()
     finally:
         scratch.close()
         live_conn.close()
@@ -268,5 +285,6 @@ def check(scratch_path, sources_dir) -> "tuple[int, dict]":
               "offset_free_kinds": list(OFFSET_FREE_KINDS), "unchecked_kinds": unchecked,
               "not_reconciled": list(NOT_RECONCILED), "live_offset_read": "import_offsets.byte_offset of the "
               "live record per (live source path, copy generation, consumer events | tokens)",
+              "last_complete_live_import": bound.isoformat() if bound is not None else None,
               "reconciled": not failed}
     return (1 if failed else 0), report

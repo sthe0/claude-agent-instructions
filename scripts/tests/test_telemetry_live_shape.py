@@ -610,6 +610,94 @@ def test_check_reconcile_state_history_after_last_live_import_counted(world, mon
     assert result["kinds"]["state"]["counted"]["after_last_live_import"] == 2
 
 
+RUN_BASE = datetime(2026, 11, 1, tzinfo=timezone.utc)
+
+
+def run_time(minutes: float) -> str:
+    return (RUN_BASE + timedelta(minutes=minutes)).isoformat()
+
+
+def set_import_runs(runs) -> None:
+    """Replace the live record's `import.run` rows by `runs`, each (minutes after RUN_BASE, complete,
+    duration_s, origin) where origin "own" is the live record's and None leaves the field out."""
+    mutate(config_root.telemetry_db(), "DELETE FROM events WHERE kind = 'import.run'")
+    own = store.origin_id()
+    for index, (minutes, complete, duration, origin) in enumerate(runs):
+        fields = {"complete": complete, "duration_s": duration, "rows_added": 0}
+        if origin is not None:
+            fields["origin"] = own if origin == "own" else origin
+        assert store.insert_rows("events", [{
+            "event_id": f"run-{index}", "session_id": importer.SELF_SESSION, "kind": "import.run",
+            "source_key": importer.SELF_SOURCE_KEY, "provenance": "live", "time": run_time(minutes),
+            "fields": fields}])["inserted"] == 1
+
+
+def reconcile_state_history_against_runs(world, monkeypatch, runs, entry_minutes, merged=False):
+    """Two state-history rows of a session the live record never saw, timed `entry_minutes`, and
+    the live record's import runs set to `runs` after the scratch import."""
+    sources(world)
+    assert world.run(replay_all_spools=True)["rows_added"] > 0
+    world.state("N", [{"ts": run_time(m), "event": event} for m, event in zip(entry_minutes, ("start", "plan"))])
+    out = take(world)
+    scratch = scratch_import(world, monkeypatch, out)
+    set_import_runs(runs)
+    if merged:
+        mutate(config_root.telemetry_db(), "INSERT INTO merge_state (origin, taken_at) VALUES (?, ?)",
+               "elsewhere", run_time(0))
+    return reconcile_run(scratch, out)
+
+
+@pytest.mark.parametrize("runs, merged, entries, missing, forgiven, bound", [
+    ([(10, True, 1, "own"), (30, False, 1, "own")], False, (20, 21), 0, 2, 10),
+    ([(10, True, 1, "own"), (30, True, 1, "own")], False, (20, 21), 2, 0, 30),
+    ([(30, True, 1200, "own")], False, (20, 21), 2, 0, 30),
+    ([(10, True, 1, "own"), (30, True, 1, "elsewhere")], False, (20, 21), 0, 2, 10),
+    ([(10, True, 1, "own"), (30, True, 1, None)], True, (20, 21), 0, 2, 10),
+    ([(30, True, 1, None)], False, (20, 40), 1, 1, 30),
+], ids=["incomplete-later-run-leaves-bound", "earlier-complete-run-below-bound", "bound-is-run-end-not-start",
+        "other-origin-run-ignored", "originless-run-ignored-after-merge", "originless-run-counts-without-merge"])
+def test_check_reconcile_state_history_bound_is_last_complete_import_of_this_origin(
+        world, monkeypatch, runs, merged, entries, missing, forgiven, bound):
+    code, result = reconcile_state_history_against_runs(world, monkeypatch, runs, entries, merged)
+    state = result["kinds"]["state"]
+    assert (state["missing"], state["counted"].get("after_last_live_import", 0)) == (missing, forgiven), result
+    assert code == (1 if missing else 0)
+    assert result["last_complete_live_import"] == run_time(bound)
+
+
+def test_import_run_event_carries_record_origin(world):
+    sources(world)
+    assert world.run(replay_all_spools=True)["rows_added"] > 0
+    origins = [json.loads(r[0]).get("origin") for r in query("SELECT fields FROM events WHERE kind = 'import.run'")]
+    assert origins == [store.origin_id()]
+
+
+def test_check_reconcile_refuses_scratch_that_is_the_live_file(world, monkeypatch, capsys):
+    import telemetry as telemetry_cli
+    from lib.telemetry import reconcile
+    _, out, _ = imported_live(world, monkeypatch)
+    live_file = config_root.telemetry_db()
+    with pytest.raises(reconcile.ReconcileInputError):
+        reconcile.check(live_file, out)
+    assert telemetry_cli.main(["check-reconcile", "--scratch", str(live_file), "--sources", str(out)]) == 2
+    assert "live record" in capsys.readouterr().err
+
+
+def test_check_reconcile_refuses_scratch_that_is_a_copy_of_the_live_record(world, monkeypatch, tmp_path):
+    import sqlite3
+    from lib.telemetry import reconcile
+    _, out, _ = imported_live(world, monkeypatch)
+    copy = tmp_path / "copy.sqlite"
+    source, target = sqlite3.connect(str(config_root.telemetry_db())), sqlite3.connect(str(copy))
+    try:
+        source.backup(target)
+    finally:
+        source.close()
+        target.close()
+    with pytest.raises(reconcile.ReconcileInputError):
+        reconcile.check(copy, out)
+
+
 # --- judge losses named per host id ------------------------------------------------------------
 
 def test_judge_losses_named_per_host_id(world, monkeypatch):
@@ -1015,9 +1103,11 @@ def _open_writer_when_reader_waits(fifo: Path, proc) -> int:
     raise AssertionError(f"the CLI never reached the sync point (rc={proc.poll()})")
 
 
-def interrupt_start_at(tmp_path, sync_env: str):
-    """Run `start` in a subprocess, deliver SIGTERM while it waits at the sync point `sync_env`,
-    and release the point only after the process ended, so the signal is the only way past it."""
+def interrupt_start_at(tmp_path, sync_env: str, signals_held: bool = False):
+    """Run `start` in a subprocess and deliver SIGTERM while it waits at the sync point `sync_env`.
+    The point is released only after the process ended, so the signal is the only way past it;
+    at a point inside a region that holds signals back, the signal cannot get the process past
+    it, so the point is released right after the signal is sent."""
     from test_decision_log_isolation import CLI, isolated_home_env
     fifo = tmp_path / "sync.fifo"
     os.mkfifo(fifo)
@@ -1031,9 +1121,13 @@ def interrupt_start_at(tmp_path, sync_env: str):
     writer = _open_writer_when_reader_waits(fifo, proc)
     try:
         proc.send_signal(signal.SIGTERM)
+        if signals_held:
+            os.close(writer)
+            writer = None
         out, err = proc.communicate(timeout=60)
     finally:
-        os.close(writer)
+        if writer is not None:
+            os.close(writer)
     return proc.returncode, out, err
 
 
@@ -1056,6 +1150,31 @@ def test_interrupt_inside_finish_after_row_writes_no_second_row(tmp_path):
     rows = command_rows(INTERRUPTED_SESSION)
     assert rc == 143, err
     assert [(r["command"], r["outcome"]) for r in rows] == [("start", "ok")], rows
+
+
+def test_interrupt_between_row_append_and_its_flag_writes_no_second_row(tmp_path):
+    rc, _, err = interrupt_start_at(tmp_path, recorder.SYNC_BEFORE_FLAG_ENV, signals_held=True)
+    rows = command_rows(INTERRUPTED_SESSION)
+    assert rc == 143, err
+    assert [(r["command"], r["outcome"]) for r in rows] == [("start", "ok")], rows
+
+
+def test_verb_leaving_through_system_exit_zero_after_save_writes_no_error_row(tmp_path, monkeypatch):
+    from agentctl import cli
+    real = cli.COMMANDS["start"]
+
+    def saves_then_exits(args, store):
+        real(args, store=store)
+        raise SystemExit(0)
+
+    monkeypatch.setitem(cli.COMMANDS, "start", saves_then_exits)
+    monkeypatch.setattr(recorder, "maybe_sweep", lambda session: False)
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["--state-root", str(tmp_path / "state"), "start", "--session", INTERRUPTED_SESSION,
+                  "--task", "t", "--goal", "g", "--done-criterion", "d", "--criterion-type", "measurable"])
+    assert stop.value.code == 0
+    assert (tmp_path / "state" / f"{INTERRUPTED_SESSION}.json").exists()
+    assert "error" not in [r["outcome"] for r in command_rows(INTERRUPTED_SESSION)]
 
 
 def test_interrupt_not_swallowed_as_error_directive(tmp_path):
