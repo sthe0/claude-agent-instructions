@@ -161,7 +161,11 @@ def _remove_sandbox(root: Path, owner: Path) -> bool:
         if root.exists():
             print(f"suite-gate: cannot remove the sandbox {root}; the next run retries", file=sys.stderr)
             return False
-    owner.unlink(missing_ok=True)
+    try:
+        owner.unlink(missing_ok=True)
+    except Exception as exc:
+        print(f"suite-gate: cannot remove the owner file {owner}: {exc!r}; the next run retries", file=sys.stderr)
+        return False
     return True
 
 

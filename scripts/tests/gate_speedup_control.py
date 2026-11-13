@@ -1003,9 +1003,9 @@ def bound_problem(total_mb: float, bound_mb: float, protected_mb: float | None) 
     if protected_mb is None:
         return (f"the kept store holds {total_mb:.1f} MB after the series, over the bound of {bound_mb} MB, "
                 "and the last run's retention pass did not report it")
-    if total_mb - protected_mb > bound_mb + PROTECTED_SLACK_MB:
+    if total_mb - protected_mb > PROTECTED_SLACK_MB:
         return (f"the kept store holds {total_mb:.1f} MB after the series, of which only {protected_mb:.1f} MB "
-                f"is protected: more than the bound of {bound_mb} MB stayed that retention could have evicted")
+                f"is protected: more than {PROTECTED_SLACK_MB} MB of it stayed that retention could have evicted")
     return None
 
 

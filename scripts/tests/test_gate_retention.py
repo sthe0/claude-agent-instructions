@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -156,6 +157,101 @@ def test_an_owner_symlink_is_not_followed(parent, tmp_path):
     (parent / f"{PREFIX}link.owner").symlink_to(tmp_path / "nowhere")
     assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
     assert target.is_dir()
+
+
+def sandbox_with_marker(parent: Path, name: str = f"{PREFIX}guarded") -> tuple[Path, Path]:
+    root = parent / name
+    root.mkdir()
+    marker = retention.owner_path(root)
+    marker.write_text("", encoding="utf-8")
+    return root, marker
+
+
+def test_another_users_marker_is_not_swept(parent, monkeypatch):
+    root, marker = sandbox_with_marker(parent)
+    monkeypatch.setattr(retention.os, "getuid", lambda: os.stat(marker).st_uid + 1)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    assert root.is_dir() and marker.is_file()
+
+
+@pytest.fixture
+def within_seconds():
+    """Fail instead of hanging when the code under test blocks."""
+    def expired(*_):
+        raise TimeoutError("the call blocked")
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.alarm(10)
+    yield
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, previous)
+
+
+def test_a_marker_that_is_a_fifo_is_left_alone_without_blocking(parent, within_seconds):
+    root = parent / f"{PREFIX}fifo"
+    root.mkdir()
+    marker = retention.owner_path(root)
+    os.mkfifo(marker)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    assert root.is_dir() and marker.exists()
+
+
+def test_a_marker_that_is_a_directory_is_left_alone(parent):
+    root = parent / f"{PREFIX}dir"
+    root.mkdir()
+    marker = retention.owner_path(root)
+    marker.mkdir()
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    assert root.is_dir() and marker.is_dir()
+
+
+def test_a_marker_replaced_after_it_was_opened_is_not_swept(parent, monkeypatch):
+    root, marker = sandbox_with_marker(parent)
+    real_stat = os.stat
+
+    def replaced(path, *args, **kwargs):
+        found = real_stat(path, *args, **kwargs)
+        if str(path) == str(marker):
+            return types.SimpleNamespace(st_ino=found.st_ino + 1)
+        return found
+
+    with monkeypatch.context() as patch:
+        patch.setattr(retention.os, "stat", replaced)
+        swept = retention.sweep_dead_sandboxes(parent, PREFIX)
+    assert swept == []
+    assert root.is_dir() and marker.is_file()
+
+
+@pytest.mark.parametrize("suffix, age_s", [(retention.OWNER_SUFFIX, 0),
+                                           (retention.OWNER_SUFFIX + retention.PENDING_SUFFIX, 3600)])
+def test_a_marker_named_only_by_the_prefix_does_not_sweep_a_directory_named_by_it(parent, suffix, age_s):
+    nameless = parent / PREFIX
+    nameless.mkdir()
+    marker = parent / f"{PREFIX}{suffix}"
+    marker.write_text("", encoding="utf-8")
+    assert retention.sweep_dead_sandboxes(parent, PREFIX, now=time.time() + age_s) == []
+    assert nameless.is_dir() and marker.is_file()
+
+
+def test_an_unexpected_error_while_removing_the_owner_file_escapes_neither_the_block_exit_nor_the_sweep(
+        parent, monkeypatch, capsys):
+    def broken(self, missing_ok=False):
+        raise RuntimeError("unlink broke")
+
+    root, marker = sandbox_with_marker(parent)
+    monkeypatch.setattr(Path, "unlink", broken)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    with retention.sandbox(parent, PREFIX):
+        pass
+    assert "unlink broke" in capsys.readouterr().err
+
+
+def test_a_failing_retention_pass_never_escapes_the_run(common, monkeypatch, capsys):
+    def broken(*args, **kwargs):
+        raise RuntimeError("evict broke")
+
+    monkeypatch.setattr(retention, "enforce", broken)
+    gate._retain(common, "a" * 40, "b" * 40)
+    assert "evict broke" in capsys.readouterr().err
 
 
 def test_a_read_only_directory_does_not_make_a_sandbox_a_leftover(parent):
@@ -680,7 +776,10 @@ def test_disk_series_builds_every_gate_command_through_cap_run():
 def test_disk_series_excuses_a_store_over_the_bound_only_by_the_protected_size_the_gate_reported():
     assert control.bound_problem(100, 2048, None) is None
     assert control.bound_problem(3000, 2048, 3000) is None
-    assert control.bound_problem(3000, 2048, 1000) is None
+    assert control.bound_problem(3000, 2048, 2999.5) is None
+    assert control.bound_problem(3000, 2048, 2999) is None
+    assert "only 2998.5 MB is protected" in control.bound_problem(3000, 2048, 2998.5)
+    assert "only 1000.0 MB is protected" in control.bound_problem(3000, 2048, 1000)
     assert "did not report it" in control.bound_problem(3000, 2048, None)
     assert "only 500.0 MB is protected" in control.bound_problem(3000, 2048, 500)
 
@@ -699,7 +798,15 @@ def test_the_series_summary_fails_an_over_bound_store_the_last_run_did_not_repor
     over = summarise([series_result()], total_mb=3000)
     assert not over["ok"] and any("over the bound" in p for p in over["problems"])
     assert not summarise([series_result(protected_mb_reported=100)], total_mb=3000)["ok"]
-    assert summarise([series_result(protected_mb_reported=2900)], total_mb=3000)["ok"]
+    assert not summarise([series_result(protected_mb_reported=2900)], total_mb=3000)["ok"]
+    assert summarise([series_result(protected_mb_reported=2999.5)], total_mb=3000)["ok"]
+
+
+def test_the_series_summary_judges_the_last_run_only():
+    unreported_then_reported = [series_result(), series_result(protected_mb_reported=2999.5)]
+    assert summarise(unreported_then_reported, total_mb=3000)["ok"]
+    reported_then_unreported = [series_result(protected_mb_reported=2999.5), series_result()]
+    assert not summarise(reported_then_unreported, total_mb=3000)["ok"]
 
 
 def test_the_series_summary_collects_run_problems_growth_and_leftovers():
@@ -723,6 +830,20 @@ def test_the_protected_size_excludes_what_could_have_been_evicted(common):
     result = retention.enforce(common, max_mb=1, runs=3, protect=(sha(9),))
     assert result.evicted == (f"baseline:{sha(2)}",)
     assert result.after_mb - result.protected_mb <= 1
+
+
+def test_the_protected_size_counts_neither_what_is_merely_unevictable_nor_the_newest_failing_evidence(common, capsys):
+    run_files(common, 9, age=10, mb=2)
+    busy = run_files(common, 1, age=900, mb=3)
+    (common / retention.STORE_DIR / f"{sha(1)}.lock").write_text("", encoding="utf-8")
+    evidence(common, 5, age=5)
+    with open(common / retention.STORE_DIR / f"{sha(1)}.lock") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        result = retention.enforce(common, max_mb=1, runs=3, protect=(sha(9),), recent_s=60)
+    assert all(f.is_file() for f in busy) and result.over_bound
+    assert 1.9 < result.protected_mb < 2.1
+    reported = retention.reported_protected_mb(capsys.readouterr().err)
+    assert reported is not None and 1.9 < reported < 2.1
 
 
 def test_disk_series_runs_only_known_kinds(tmp_path, capsys):

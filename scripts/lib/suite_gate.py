@@ -1249,8 +1249,8 @@ def _retain(common_dir: Path, candidate_sha: str, tip: str) -> None:
     """Best effort: a store that cannot be trimmed costs disk, never a verdict."""
     try:
         gate_retention.enforce(common_dir, protect=(candidate_sha, tip))
-    except OSError as exc:
-        print(f"suite-gate: cannot enforce the kept-store bound: {exc}", file=sys.stderr)
+    except Exception as exc:
+        print(f"suite-gate: cannot enforce the kept-store bound: {exc!r}", file=sys.stderr)
 
 
 def _journal_unconfirmed(common_dir: Path, ids: Sequence[str], candidate_sha: str, tip: str, at: str) -> None:
