@@ -1,7 +1,7 @@
 """Mutants of the record's fit to live source shapes: time readers and empty imported times, the
 one act-key function, the session a report run is charged to, judge usage in the ledger and its
 coverage check, the import from a frozen source snapshot (lib/telemetry/snapshot.py), and the
-command row of a verb interrupted after its state save.
+command row of a verb interrupted after its state save, and check-events' named known losses.
 
 Each mutant is `{name, file, anchor, replacement, tests}`: `anchor` occurs exactly once in
 `file` (a path under the repo root), `replacement` keeps the module importable, `tests` are
@@ -17,6 +17,7 @@ _TOKENS = "scripts/lib/telemetry/tokens.py"
 _LEDGER = "scripts/lib/judge_ledger.py"
 _CLI = "scripts/agentctl/cli.py"
 _T = "scripts/tests/test_telemetry_live_shape.py::"
+_KNOWN_LOSS_INPUTS = _T + "test_known_loss_requires_cause_and_matching_history_act"
 _ONE_FUNCTION = _T + "test_act_key_normalization_is_one_function_used_by_recorder_importer_report"
 
 MUTANTS = [
@@ -185,4 +186,23 @@ MUTANTS = [
     {"name": "interrupt_subclasses_exception", "file": _CLI,
      "anchor": "class Interrupted(BaseException):", "replacement": "class Interrupted(Exception):",
      "tests": [_T + "test_interrupt_not_swallowed_as_error_directive"]},
+    # check-events: a named known loss
+    {"name": "known_loss_ts_window_ignored", "file": _REPORT,
+     "anchor": 'and ms is not None and abs(loss["time_ms"] - ms) <= slack), None)',
+     "replacement": "and ms is not None), None)",
+     "tests": [_KNOWN_LOSS_INPUTS]},
+    {"name": "known_loss_empty_cause_accepted", "file": _REPORT,
+     "anchor": "        if not isinstance(cause, str) or not cause.strip():\n",
+     "replacement": "        if not isinstance(cause, str):\n",
+     "tests": [_KNOWN_LOSS_INPUTS]},
+    {"name": "known_loss_unmatched_entry_accepted", "file": _REPORT,
+     "anchor": '            raise KnownLossError(f"known loss matches no history act of the task: {loss}")\n',
+     "replacement": "            pass\n",
+     "tests": [_KNOWN_LOSS_INPUTS]},
+    {"name": "known_loss_bound_ignored", "file": _REPORT,
+     "anchor": "        if ms >= bound_ms:\n", "replacement": "        if False:\n",
+     "tests": [_T + "test_known_loss_refused_at_or_after_bound"]},
+    {"name": "known_loss_entry_excuses_many", "file": _REPORT,
+     "anchor": "            unused.remove(loss)\n", "replacement": "            pass\n",
+     "tests": [_T + "test_known_loss_entry_excuses_one_act"]},
 ]

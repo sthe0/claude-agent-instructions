@@ -526,6 +526,89 @@ def test_check_events_names_zero_live_session_acts_before_the_emitter(world, win
     assert [a["time_ms"] for a in result["excused"]] == ([] if named else [importer.moment_ms(at(10))])
 
 
+# --- check-events: a named known loss -----------------------------------------------------------
+
+LOST_AT = 40
+
+
+def known_loss(seconds=LOST_AT, **override) -> dict:
+    return {"session": "s-t1", "act": "cli:record-result", "ts": at(seconds), "cause": "killed after the save",
+            **override}
+
+
+def check_with_known_losses(world, tmp_path, capsys, entries, *bound, extra_acts=()):
+    """check-events over a task whose act at LOST_AT (and each of `extra_acts`) has no live row,
+    with `entries` as the known-loss file; returns the exit code and the printed result."""
+    import telemetry as telemetry_cli
+    history = [{"event": "record_result", "ts": at(s)} for s in (10, LOST_AT, *extra_acts)]
+    acts_task(world, history, [(10.5, "cli:record-result")])
+    path = tmp_path / "known-losses.json"
+    path.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+    capsys.readouterr()
+    rc = telemetry_cli.main(["check-events", "--task", "t1", "--known-losses", str(path), *bound])
+    out = capsys.readouterr().out
+    return rc, json.loads(out) if rc in (0, 1) else None
+
+
+@pytest.mark.parametrize("bound_kind", ["until", "landing"])
+def test_check_events_accepts_named_known_loss(world, tmp_path, capsys, bound_kind):
+    landing = tmp_path / "landing.json"
+    landing.write_text(json.dumps({"landed_at": at(100)}), encoding="utf-8")
+    bound = (["--known-losses-until", at(100)] if bound_kind == "until"
+             else ["--known-losses-until-landing", str(landing)])
+    rc, result = check_with_known_losses(world, tmp_path, capsys, [known_loss(LOST_AT + 1.5)], *bound)
+    assert rc == 0, result
+    assert result["missing"] == []
+    assert [(a["time_ms"], a["loss"]) for a in result["known_losses"]] == [
+        (importer.moment_ms(at(LOST_AT)), "known_loss:killed after the save")]
+
+
+@pytest.mark.parametrize("entry", [
+    {k: v for k, v in known_loss().items() if k != "cause"}, known_loss(cause=""), known_loss(cause="  "),
+    known_loss(session="s-other"), known_loss(act="cli:replan"), known_loss(LOST_AT + 5)],
+    ids=["no-cause", "empty-cause", "blank-cause", "other-session", "other-act", "ts-outside-slack"])
+def test_known_loss_requires_cause_and_matching_history_act(world, tmp_path, capsys, entry):
+    rc, _ = check_with_known_losses(world, tmp_path, capsys, [entry], "--known-losses-until", at(100))
+    assert rc == 2
+
+
+@pytest.mark.parametrize("bound", [LOST_AT, LOST_AT - 10])
+def test_known_loss_refused_at_or_after_bound(world, tmp_path, capsys, bound):
+    rc, _ = check_with_known_losses(world, tmp_path, capsys, [known_loss()], "--known-losses-until", at(bound))
+    assert rc == 2
+
+
+def test_known_loss_entry_excuses_one_act(world, tmp_path, capsys):
+    rc, result = check_with_known_losses(world, tmp_path, capsys, [known_loss()], "--known-losses-until", at(100),
+                                         extra_acts=(LOST_AT + 0.5,))
+    assert rc == 1
+    assert len(result["known_losses"]) == 1 and len(result["missing"]) == 1
+
+
+@pytest.mark.parametrize("missing", ["known-losses", "landing"])
+def test_known_losses_missing_file_refused(world, tmp_path, missing):
+    import telemetry as telemetry_cli
+    acts_task(world, [{"event": "record_result", "ts": at(10)}], [(10.5, "cli:record-result")])
+    known = tmp_path / "known-losses.json"
+    landing = tmp_path / "landing.json"
+    if missing == "landing":
+        known.write_text(json.dumps({"entries": [known_loss(10)]}), encoding="utf-8")
+    else:
+        landing.write_text(json.dumps({"landed_at": at(100)}), encoding="utf-8")
+    argv = ["check-events", "--task", "t1", "--known-losses", str(known), "--known-losses-until-landing", str(landing)]
+    assert telemetry_cli.main(argv) == 2
+
+
+@pytest.mark.parametrize("given", ["losses-only", "bound-only"])
+def test_known_losses_without_bound_refused(world, tmp_path, given):
+    import telemetry as telemetry_cli
+    acts_task(world, [{"event": "record_result", "ts": at(10)}], [(10.5, "cli:record-result")])
+    known = tmp_path / "known-losses.json"
+    known.write_text(json.dumps({"entries": [known_loss(10)]}), encoding="utf-8")
+    argv = (["--known-losses", str(known)] if given == "losses-only" else ["--known-losses-until", at(100)])
+    assert telemetry_cli.main(["check-events", "--task", "t1", *argv]) == 2
+
+
 # --- check-latency: named losses, each proven from the record -----------------------------------
 
 def late_session(session, seconds, provenance="live", earliest=None) -> None:

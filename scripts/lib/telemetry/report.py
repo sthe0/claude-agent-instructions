@@ -461,15 +461,53 @@ def task_sessions_of(conn, task_id: str) -> list:
     return sorted({s for key in keys for s in task_session_ids(conn, key)})
 
 
-def check_events(conn, task_id: str, window: "dict | None" = None, command_keys: "frozenset | None" = None) -> dict:
+class KnownLossError(ValueError):
+    """A known-loss file that cannot excuse anything as written: the check refuses it."""
+
+
+def read_known_losses(entries, bound_ms: "int | None") -> list:
+    """The entries of a known-loss file, each naming one act (session, act key, ts) lost for a
+    stated cause before `bound_ms`. Every entry must hold all four, and its ts must fall before the
+    bound, so the file names only losses that happened before the fix that closed them."""
+    if bound_ms is None:
+        raise KnownLossError("known losses need a bound (--known-losses-until or --known-losses-until-landing)")
+    if not isinstance(entries, list):
+        raise KnownLossError("known losses: `entries` is not a list")
+    losses = []
+    for entry in entries:
+        entry = entry if isinstance(entry, dict) else {}
+        cause = entry.get("cause")
+        ms = phases._ms(entry.get("ts"))
+        if not isinstance(cause, str) or not cause.strip():
+            raise KnownLossError(f"known loss without a cause: {entry}")
+        if not entry.get("session") or not entry.get("act") or ms is None:
+            raise KnownLossError(f"known loss without session, act or ts: {entry}")
+        if ms >= bound_ms:
+            raise KnownLossError(f"known loss at or after the bound: {entry}")
+        losses.append({"session": entry["session"], "act": live.normalized_source_key(entry["act"]),
+                       "time_ms": ms, "cause": cause.strip()})
+    return losses
+
+
+def _known_loss_for(losses: list, session: str, source_key: str, ms) -> "dict | None":
+    slack = EVENT_MATCH_SLACK_S * 1000.0
+    return next((loss for loss in losses if loss["session"] == session and loss["act"] == source_key
+                 and ms is not None and abs(loss["time_ms"] - ms) <= slack), None)
+
+
+def check_events(conn, task_id: str, window: "dict | None" = None, command_keys: "frozenset | None" = None,
+                 known_losses: "list | None" = None) -> dict:
     """Each engine act of the task's sessions matched to one live event row of the same source key
     and session, recorded at the act or within its command's duration after it; both sides read
     their keys through live.normalized_source_key, so a row stored in either spelling matches. An
     act before the first live event of a session that has live events is a counted loss
     (lost_before_first_live); an unmatched act inside `window` ({from, to}) is an excused loss; an
     act before `window` of a session with no live event was made before any emitter existed, so
-    it is a loss named under lost_before_emitter; any other unmatched act fails, every later act
-    of a session with no live event among them."""
+    it is a loss named under lost_before_emitter; an unmatched act that one entry of
+    `known_losses` (read_known_losses) names by session, act key and a ts within the match slack is
+    the counted loss known_loss:<cause>, each entry excusing one act, and an entry naming no act of
+    the task is refused; any other unmatched act fails, every later act of a session with no live
+    event among them."""
     keys = [_task_key(r) for r in conn.execute("SELECT origin, task_id, epoch FROM tasks WHERE task_id = ?", (task_id,))]
     task_sessions = sorted({s for key in keys for s in task_session_ids(conn, key)})
     pool: dict = {}
@@ -485,9 +523,14 @@ def check_events(conn, task_id: str, window: "dict | None" = None, command_keys:
                 (ms, (duration if isinstance(duration, (int, float)) else 0.0) * 1000.0))
     bounds = (phases._ms(window.get("from")), phases._ms(window.get("to"))) if window else None
     slack = EVENT_MATCH_SLACK_S * 1000.0
-    missing, excused, lost, before_emitter, matched = [], [], [], [], 0
-    for session, source_key, ms in sorted(_engine_acts(task_sessions, command_keys), key=lambda a: a[2] or 0):
-        source_key = live.normalized_source_key(source_key)
+    missing, excused, lost, before_emitter, known, matched = [], [], [], [], [], 0
+    acts = [(session, live.normalized_source_key(source_key), ms) for session, source_key, ms
+            in sorted(_engine_acts(task_sessions, command_keys), key=lambda a: a[2] or 0)]
+    unused = list(known_losses or ())
+    for loss in unused:
+        if not any(_known_loss_for([loss], *act) for act in acts):
+            raise KnownLossError(f"known loss matches no history act of the task: {loss}")
+    for session, source_key, ms in acts:
         candidates = pool.get((session, source_key), [])
         hit = next((c for c in candidates if ms is not None and c[0] is not None
                     and c[0] - c[1] - slack <= ms <= c[0] + slack), None)
@@ -503,11 +546,14 @@ def check_events(conn, task_id: str, window: "dict | None" = None, command_keys:
             excused.append(act)
         elif start is None and bounds and ms is not None and bounds[0] is not None and ms < bounds[0]:
             before_emitter.append(act)
+        elif (loss := _known_loss_for(unused, session, source_key, ms)) is not None:
+            unused.remove(loss)
+            known.append({**act, "loss": "known_loss:" + loss["cause"]})
         else:
             missing.append(act)
     return {"ok": not missing and bool(keys), "task_id": task_id, "sessions": task_sessions, "matched": matched,
             "missing": missing, "excused": excused, "lost_before_first_live": len(lost),
-            "lost_before_emitter": before_emitter}
+            "lost_before_emitter": before_emitter, "known_losses": known}
 
 
 # --- check-latency: each ended session reaches the record within the bound -------------------

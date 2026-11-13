@@ -11,6 +11,7 @@
     telemetry.py check-causes --imported --expect N
     telemetry.py check-tokens (--task <id> [--require-spawn] [--require-compaction] | --imported-coverage)
     telemetry.py check-events --task <id> [--unrecorded-window F]
+        [--known-losses K (--known-losses-until TS | --known-losses-until-landing F2)]
     telemetry.py check-latency --max-seconds S --since-landing F
         [--sync-outage-from TS (--sync-outage-until-landing F2 | --sync-outage-until TS2)] [--pre-fix-late P]
     telemetry.py export --out F [--with-text]
@@ -58,6 +59,11 @@ Both exit 2 on a usage error.
 `check-events --task <id>` matches every engine-history command and gate evaluation of the task's
 sessions to its live event row and exits 1 on an unmatched act; an act inside the
 `unrecorded_window {from, to}` of `--unrecorded-window F` is listed as an excused loss instead.
+An act named by one entry {session, act, ts, cause} of `--known-losses K` (same session, same act
+key, ts within 2 s; one act per entry) is the counted loss known_loss:<cause>. K needs a bound,
+`--known-losses-until TS` or `--known-losses-until-landing F` (its landed_at), and the run exits 2
+on a missing file, an entry without a cause, an entry at or after the bound, or an entry that
+names no act of the task.
 `check-latency` classifies each non-synthetic session that ended after F's `landed_at` by the
 latency rule (sync.latency_marks): on_time, late, waiting, in_flight or sync_deferred; it exits 1
 on a late session or when no session of that population has reached the record. A session leaves
@@ -197,6 +203,18 @@ def _read_json_file(path: str, key: "str | None"):
     return data if key is None else data[key]
 
 
+def _known_losses(args) -> "list | None":
+    from lib.telemetry import phases, report
+    bound = args.known_losses_until
+    if args.known_losses_until_landing:
+        bound = _read_json_file(args.known_losses_until_landing, "landed_at")
+    if args.known_losses is None:
+        if bound is not None:
+            raise ValueError("--known-losses-until* given without --known-losses")
+        return None
+    return report.read_known_losses(_read_json_file(args.known_losses, "entries"), phases._ms(bound))
+
+
 def _check_record(args) -> int:
     """check-events / check-latency over the record (lib/telemetry/report.py)."""
     from datetime import datetime, timezone
@@ -212,6 +230,7 @@ def _check_record(args) -> int:
         entries = _read_json_file(args.pre_fix_late, "entries") if latency and args.pre_fix_late else None
         outage_from = telemetry_sync.parse_time(args.sync_outage_from) if latency else None
         outage_until = telemetry_sync.parse_time(args.sync_outage_until) if latency else None
+        known_losses = None if latency else _known_losses(args)
     except (OSError, ValueError, KeyError, TypeError) as err:
         report.emit_usage(args.command)
         print(f"{args.command}: {err}", file=sys.stderr)
@@ -224,14 +243,14 @@ def _check_record(args) -> int:
     try:
         report.emit_usage(args.command, conn, getattr(args, "task", None))
         if args.command == "check-events":
-            result = report.check_events(conn, args.task, window)
+            result = report.check_events(conn, args.task, window, known_losses=known_losses)
         else:
             if outage_from is not None and landing is not None:
                 outage_until = report.outage_end_from_landing(conn, landing if isinstance(landing, dict) else {})
             outage = (outage_from, outage_until) if outage_from is not None else None
             result = report.check_latency(conn, args.max_seconds, landed_at, datetime.now(timezone.utc),
                                           outage, entries if isinstance(entries, list) else None)
-    except report.LatencyInputError as err:
+    except (report.LatencyInputError, report.KnownLossError) as err:
         print(f"{args.command}: {err}", file=sys.stderr)
         return 2
     finally:
@@ -303,6 +322,12 @@ def main(argv=None) -> int:
     evt = sub.add_parser("check-events", help="check that every engine act of a task has its event row")
     evt.add_argument("--task", required=True)
     evt.add_argument("--unrecorded-window", default=None, help="JSON file with unrecorded_window {from, to}")
+    evt.add_argument("--known-losses", default=None,
+                     help="JSON file with entries [{session, act, ts, cause}] of acts lost before the bound")
+    bound = evt.add_mutually_exclusive_group()
+    bound.add_argument("--known-losses-until", default=None, help="ISO time every known loss precedes")
+    bound.add_argument("--known-losses-until-landing", default=None,
+                       help="landing record (JSON with landed_at) every known loss precedes")
     lat = sub.add_parser("check-latency", help="check that ended sessions reach the record within the bound")
     lat.add_argument("--max-seconds", type=float, required=True)
     lat.add_argument("--since-landing", required=True, help="landing record (JSON with landed_at)")
