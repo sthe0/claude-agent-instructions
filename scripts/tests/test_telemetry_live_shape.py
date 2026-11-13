@@ -596,6 +596,20 @@ def test_check_reconcile_live_session_history_not_required(world, monkeypatch):
     assert result["kinds"]["state"]["counted"]["live_session_history"] == 2
 
 
+def test_check_reconcile_state_history_after_last_live_import_counted(world, monkeypatch):
+    sources(world)
+    assert world.run(replay_all_spools=True)["rows_added"] > 0
+    later = datetime.now(timezone.utc) + timedelta(minutes=5)
+    world.state("N", [{"ts": later.isoformat(), "event": "start"},
+                      {"ts": (later + timedelta(seconds=1)).isoformat(), "event": "plan"}])
+    assert not live.spool_or_end_marker_exists("N")
+    out = take(world)
+    scratch = scratch_import(world, monkeypatch, out)
+    code, result = reconcile_run(scratch, out)
+    assert code == 0, result
+    assert result["kinds"]["state"]["counted"]["after_last_live_import"] == 2
+
+
 # --- judge losses named per host id ------------------------------------------------------------
 
 def test_judge_losses_named_per_host_id(world, monkeypatch):

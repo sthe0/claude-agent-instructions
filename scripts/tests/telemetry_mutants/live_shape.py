@@ -219,4 +219,8 @@ MUTANTS = [
     {"name": "check_reconcile_requires_live_session_history", "file": _RECONCILE,
      "anchor": "            elif live_session:\n", "replacement": "            elif False:\n",
      "tests": [_T + "test_check_reconcile_live_session_history_not_required"]},
+    {"name": "check_reconcile_fails_state_after_last_live_import", "file": _RECONCILE,
+     "anchor": "            elif records.after_last_live_import(scratch_id):\n",
+     "replacement": "            elif False:\n",
+     "tests": [_T + "test_check_reconcile_state_history_after_last_live_import_counted"]},
 ]

@@ -16,8 +16,9 @@ check opens the live record read-only and compares the two per source kind of th
   copy's size that scratch lacks are `live_not_in_scratch`.
 - state: every scratch history row of a state file must be live under its live-origin id, except
   the history of a session live in the live record (a live-provenance row, a spool or an end
-  marker), `live_session_history`; live history rows of the session that the current file no
-  longer yields are `superseded_engine_state`.
+  marker), `live_session_history`, and history timed after the end of the last complete live
+  import (an engine state file has no importer offset), `after_last_live_import`; live history
+  rows of the session that the current file no longer yields are `superseded_engine_state`.
 
 The other consumers and tables (contours, sessions, causes, losses, judge_usage) are listed as
 not_reconciled. A manifest kind with zero checked rows fails unless it is in OFFSET_FREE_KINDS,
@@ -30,11 +31,12 @@ import json
 from pathlib import Path
 
 from lib import config_root
-from lib.telemetry import importer, live, snapshot, store, tokens
+from lib.telemetry import importer, live, snapshot, store, sync, tokens
 
 OFFSET_FREE_KINDS: "tuple[str, ...]" = ()
 NOT_RECONCILED = ("contours", "sessions", "causes", "losses", "judge_usage")
 BATCH = 500
+_UNREAD = object()
 
 
 class ReconcileInputError(Exception):
@@ -107,12 +109,23 @@ class _Records:
         self.scratch, self.live = scratch, live_conn
         self.scratch_origin, self.live_origin = _origin(scratch), _origin(live_conn)
         self._live_sessions = None
+        self._last_live_import = _UNREAD
 
     def session_is_live(self, session: str) -> bool:
         if self._live_sessions is None:
             self._live_sessions = {r[0] for r in self.live.execute(
                 "SELECT DISTINCT session_id FROM events WHERE provenance = 'live'")}
         return session in self._live_sessions or live.spool_or_end_marker_exists(session)
+
+    def after_last_live_import(self, scratch_id: str) -> bool:
+        if self._last_live_import is _UNREAD:
+            ends = [sync.parse_time(r[0]) for r in self.live.execute(
+                "SELECT time FROM events WHERE kind = 'import.run' AND provenance = 'live' "
+                "AND json_extract(fields, '$.complete') = 1")]
+            self._last_live_import = max((end for end in ends if end is not None), default=None)
+        row = self.scratch.execute("SELECT time FROM events WHERE event_id = ?", (scratch_id,)).fetchone()
+        moment = sync.parse_time(row[0]) if row else None
+        return self._last_live_import is not None and moment is not None and moment > self._last_live_import
 
 
 def _held_by_live_row(records: _Records, live_id: str, scratch_id: str) -> bool:
@@ -220,6 +233,8 @@ def _reconcile_state(records: _Records, frozen: snapshot.Snapshot, kind: _Kind) 
                 kind.checked += 1
             elif live_session:
                 kind.count("live_session_history")
+            elif records.after_last_live_import(scratch_id):
+                kind.count("after_last_live_import")
             else:
                 kind.checked += 1
                 kind.miss({"state": str(path), "session": session, "live_id": live_id})
