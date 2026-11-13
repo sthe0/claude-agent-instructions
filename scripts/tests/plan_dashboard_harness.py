@@ -917,7 +917,8 @@ def observed_dirs() -> list[str]:
 class RunObserver:
     """Stamps, on the monotonic clock, every write, rename-in, creation and unlink in the directories of the live
     sources: the earliest moment a change could have been shown. A watch it cannot add or a queue overflow sets
-    ``ok`` to ``False``."""
+    ``ok`` to ``False``. It is its own inotify reader so the instrument stays independent of the code under test;
+    an attribute-only change gets no stamp, and the latency then starts at the sweep's change time."""
 
     def __init__(self, dirs: list[str]):
         self.dirs, self.stamps, self.ok = dirs, {}, True
@@ -928,15 +929,15 @@ class RunObserver:
         libc = ctypes.CDLL(None, use_errno=True)
         self.fd = libc.inotify_init1(os.O_NONBLOCK)
         self.watches = {}
+        if self.fd < 0:
+            self.ok = False
+            return
         for folder in self.dirs:
             wd = libc.inotify_add_watch(self.fd, folder.encode(), OBSERVED_EVENTS)
             if wd < 0:
                 self.ok = False
             else:
                 self.watches[wd] = folder
-        if self.fd < 0:
-            self.ok = False
-            return
         self.thread = threading.Thread(target=self.read, daemon=True)
         self.thread.start()
 
@@ -962,7 +963,7 @@ class RunObserver:
     def stop(self) -> None:
         self.stopped.set()
         if self.thread is not None:
-            self.thread.join(timeout=2)
+            self.thread.join()
             os.close(self.fd)
 
 
@@ -1035,12 +1036,13 @@ def first_unshown_change_ns(stamps: list[int], earlier_ends: list[int], change_n
     return (min(unshown), True) if unshown else (change_ns, False)
 
 
-def event_latencies(events: list[dict], cycles: list[dict], stamps: dict[str, list[int]]) -> tuple[list[float], int]:
+def event_latencies(events: list[dict], timed: list[dict], stamps: dict[str, list[int]],
+                    every_cycle: list[dict]) -> tuple[list[float], int]:
     """One latency per due source of a timed cycle, from its first change not yet shown to the screen; and how
-    many of them had to take the sweep's change time."""
-    by_number = {c["cycle"]: c for c in cycles}
+    many of them had to take the sweep's change time. The applying cycle may be one that is not timed."""
+    by_number = {c["cycle"]: c for c in every_cycle}
     values, stat_timed = [], 0
-    for cycle in cycles:
+    for cycle in timed:
         for source in cycle["sources"]:
             applied = source["applied_by"]
             if applied is None:
@@ -1105,7 +1107,7 @@ def r3_run_record(arm: str, path: str, cycles: list[dict], events: list[dict], s
     untimed = [c for c in taken if c["untimed"]]
     void = r3_void_reason(path, arm, events, timed, observer_ok)
     if path == "event" and arm == "new":
-        values, stat_timed = event_latencies(events, timed, stamps)
+        values, stat_timed = event_latencies(events, timed, stamps, cycles)
     else:
         values, stat_timed = [cycle_latency_s(c) for c in timed], 0
     record = {"arm": arm, "path": path, "counted": void is None, "void_reason": void,
@@ -1990,7 +1992,6 @@ class RealRunner:
             snapshot.write_bytes(b'{"version": 1, "body_sha256": "x", "sections": {"all": [')
         elif copy is not None:
             snapshot.write_bytes(Path(copy["file"]).read_bytes())
-            live_now = self.do_live(None)
             changed = contract_changes(copy, live_sources())
             changed_count = len(changed)
             changes = changed_map(changed, bindings_map(agent_home() / "agentctl" / "engine-session-bindings"))

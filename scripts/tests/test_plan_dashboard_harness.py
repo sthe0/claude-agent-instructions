@@ -1019,10 +1019,8 @@ def test_the_r2_pre_launch_census_finishes_before_the_dashboard_starts(tmp_path,
     monkeypatch.setattr(h, "run_env", lambda *a, **k: {})
     runner = h.RealRunner.__new__(h.RealRunner)
     runner.state_dir, runner.old, runner.new, runner.uv_cache = tmp_path / "state", tmp_path / "old", tmp_path / "new", None
-    monkeypatch.setattr(h.RealRunner, "do_live", lambda self, _: [])
     runner.do_run({"cell": "80-100", "arm": "new", "copy": {"file": str(copy)}, "live": []})
     assert order == ["census", "launch"]
-    assert h.contract_changes is not None
 
 
 # --- R3: sweeps between cycles, due sets, coverage, untimed cycles ------------------------------------
@@ -1136,6 +1134,60 @@ def test_event_path_latency_is_timed_from_the_first_change_not_yet_shown():
     shown_by_cycle_3 = event_run(late, stamps={"/s/a": [ns(4.0), ns(7.8)]}, applied=(3, 5))
     assert shown_by_cycle_3["latency_max_s"] == pytest.approx(0.7) and not latency_missed(shown_by_cycle_3)
     assert shown_by_cycle_3["latency_stat_timed"] == 0 and event_run(late)["latency_stat_timed"] == 1
+
+
+def sweep_at(start, end):
+    return {"start_ns": ns(start), "end_ns": ns(end)}
+
+
+def event_run_with_applier(applier, due_in, change, redraw_at, *, stamps=None, sweeps=(), also_applied=()):
+    cycles = [cyc(n, (n - 1) * 2.0, 0.1, ["/s/a"] if n in (applier, *also_applied) else []) for n in range(1, 24)]
+    if applier == 1:
+        cycles[0] = cyc(1, 0.0, 1.0, ["/s/a"])
+    events = [ev("detection", 0.0, path="event", reason="start"), redraw(redraw_at, applier)]
+    covered = h.check_cycle_coverage(cycles, {due_in: [due_at("/s/a", change)]}, 0)
+    return h.r3_run_record("new", "event", covered, events, list(sweeps), stamps=stamps or {})
+
+
+def test_event_latency_is_timed_when_the_applying_cycle_is_the_first_or_an_untimed_one():
+    first = event_run_with_applier(1, 2, 0.5, 1.3)
+    assert first["counted"] is True and first["latency_max_s"] == pytest.approx(0.8)
+    untimed = event_run_with_applier(4, 6, 6.05, 6.4, sweeps=[sweep_at(5.9, 6.05)])
+    assert untimed["untimed_cycles"] == 1 and untimed["latency_max_s"] == pytest.approx(0.35)
+    covered_earlier = event_run_with_applier(6, 6, 8.5, 10.4, stamps={"/s/a": [ns(6.05), ns(8.5)]},
+                                             sweeps=[sweep_at(5.9, 6.05)], also_applied=(4,))
+    assert covered_earlier["latency_max_s"] == pytest.approx(1.9)
+
+
+def test_the_run_observer_stamps_writes_renames_and_unlinks_but_not_reads(tmp_path):
+    existing = tmp_path / "read.json"
+    existing.write_text("1")
+    observer = h.RunObserver([str(tmp_path)])
+    observer.start()
+    try:
+        assert observer.ok is True
+        existing.read_text()
+        os.stat(existing)
+        (tmp_path / "w.json").write_text("2")
+        (tmp_path / "tmp.json").write_text("3")
+        os.rename(tmp_path / "tmp.json", tmp_path / "moved.json")
+        os.unlink(tmp_path / "w.json")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and str(tmp_path / "moved.json") not in observer.stamps:
+            time.sleep(0.02)
+    finally:
+        observer.stop()
+    assert str(existing) not in observer.stamps
+    assert str(tmp_path / "w.json") in observer.stamps and str(tmp_path / "moved.json") in observer.stamps
+    assert observer.ok is True
+
+
+def test_a_run_observer_with_a_directory_it_cannot_watch_is_not_ok(tmp_path):
+    observer = h.RunObserver([str(tmp_path / "missing")])
+    observer.start()
+    observer.stop()
+    assert observer.ok is False
+    assert h.r3_void_reason("event", "new", [ev("detection", 0.0, path="event")], [], observer.ok) == "observer"
 
 
 def test_r3_latency_is_judged_on_gap_plus_cycle():
@@ -1266,7 +1318,8 @@ def test_r2_runs_record_the_screen_time_to_marks_and_its_factor(tmp_path):
     camp.runs["near-zero"] = [run_record("old"), run_record("new", marks_screen_s=0.9)]
     summary = camp.report()["cells"]["near-zero"]["marks_screen"]
     assert summary["new_median_s"] == 0.9 and summary["old_median_s"] == 9.0 and summary["factor"] == pytest.approx(0.1)
-    assert "marks_screen" not in camp.report()["cells"]["131-170"] if "131-170" in camp.report()["cells"] else True
+    camp.runs["131-170"] = [run_record("old"), run_record("new", marks_screen_s=0.9)]
+    assert "marks_screen" not in camp.report()["cells"]["131-170"]
 
 
 def test_r2_and_r6_rows_and_marks_are_compared_as_redraw_moments():

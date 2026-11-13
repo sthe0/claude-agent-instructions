@@ -62,7 +62,38 @@ WATCH_PILOT_NAMES = tuple(name for name, (module, _, _) in mutations.WATCH_MUTAT
                           if module == mutations.TUI_APP)
 WATCH_STDLIB_NAMES = tuple(name for name in WATCH_NAMES if name not in WATCH_PILOT_NAMES)
 HARNESS_TESTS = TESTS / "test_plan_dashboard_harness.py"
-SCRIPT_MODULE_TESTS = {"harness-save-records-app-sources": HARNESS_TESTS,
+HARNESS_MUTATIONS = (
+    "harness-save-records-app-sources",
+    "campaign-r3-k1-only-when-bands-blocked",
+    "r1-old-marking-always-required",
+    "r1-old-marking-per-run",
+    "r1-r2-time-judged-per-run",
+    "r2-startup-applied-unchecked",
+    "r2-applied-judged-at-end-of-check",
+    "r2-census-after-launch",
+    "r3-sweep-at-cycle-start",
+    "r3-due-by-sweep-order",
+    "r3-uncovered-cycle-tolerated",
+    "r3-latency-ignores-interval",
+    "bands-old-reading",
+    "r3-overlap-cycle-timed",
+    "r3-watch-path-not-forced",
+    "r3-fallback-run-counted",
+    "r3-watch-latency-ignored",
+    "r3-latency-judged-by-median",
+    "r3-no-due-source-run-judged",
+    "redraw-spacing-unjudged",
+    "redraw-counts-header-repaint",
+    "r3-coverage-only-in-assigned-cycle",
+    "r6-internal-event-moment-compared",
+    "r2-no-marked-rows-fallback-dropped",
+    "k1-light-tick-child-counted",
+    "r3-cycle-end-fallback-dropped",
+    "redraw-spacing-from-first-paint",
+    "r3-cell-counts-pooled",
+    "r3-latency-from-last-write",
+)
+SCRIPT_MODULE_TESTS = {**dict.fromkeys(HARNESS_MUTATIONS, HARNESS_TESTS),
                        "launcher-imports-every-subcommand": TUI_TESTS}
 REQUIRED = os.environ.get("PLAN_DASHBOARD_REQUIRE_TEXTUAL") == "1"
 

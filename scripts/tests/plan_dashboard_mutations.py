@@ -1265,12 +1265,213 @@ def _save_records_the_copy_sources(original):
     return Mutated
 
 
+def _row_painted_index(events):
+    return next((i for i, e in enumerate(events) if e.get("ev") == "rows_painted"), None)
+
+
+def _old_marking_ignores_confirmations(original):
+    def mutated(events, first_row_marks):
+        if original(events, first_row_marks) is None:
+            return None
+        return sum(1 for marked in first_row_marks.values() if not marked)
+    return mutated
+
+
+def _old_marking_per_run(original):
+    def mutated(events, first_row_marks):
+        value = original(events, first_row_marks)
+        painted = _row_painted_index(events)
+        if value is not None and any(e.get("ev") == "row_confirmed" for e in events[:painted]):
+            return 0
+        return value
+    return mutated
+
+
+def _time_judged_per_run(original):
+    def mutated(values, limit):
+        return any(v is None or v >= limit for v in values)
+    return mutated
+
+
+def _startup_applied_from_the_end_of_the_check(original):
+    covers = original.__globals__["covers"]
+
+    def mutated(events, changes):
+        ends = [e for e in events if e.get("ev") == "live_check_end"]
+        return bool(ends) and covers(ends[-1].get("applied"), set(changes))
+    return mutated
+
+
+def _startup_applied_judged_at_the_end(original):
+    covers = original.__globals__["covers"]
+
+    def mutated(events, changes):
+        named = [e for e in events if e.get("ev") == "startup_applied"]
+        return bool(named) and covers(named[-1].get("applied"), set(changes))
+    return mutated
+
+
+def _census_after_launch(original):
+    module = sys.modules[original.__module__]
+
+    class Mutated(original):
+        def do_run(self, job):
+            real = module.contract_changes
+            module.contract_changes = lambda copy, live: []
+            try:
+                record = super().do_run(job)
+            finally:
+                module.contract_changes = real
+            if job["copy"] is not None:
+                real(job["copy"], module.live_sources())
+            return record
+    return Mutated
+
+
+def _sweep_at_cycle_start(original):
+    class Mutated(original):
+        def on_event(self, trace, event):
+            if event.get("ev") == "cycle_start":
+                super().on_event(trace, {**event, "ev": "cycle_end"})
+    return Mutated
+
+
+def _due_by_sweep_order(original):
+    def mutated(cycles, sweeps, wall_minus_mono_ns, resolution_ns):
+        flat = [{**s, "changes": [{**c, "change_ns": 0} for c in s["changes"]]} for s in sweeps]
+        return original(cycles, flat, wall_minus_mono_ns, resolution_ns)
+    return mutated
+
+
+def _uncovered_cycle_tolerated(original):
+    def mutated(*args, **kwargs):
+        record = original(*args, **kwargs)
+        record.update(covered_all=True, uncovered=0)
+        return record
+    return mutated
+
+
+def _cycle_latency_is_the_duration(original):
+    return lambda cycle: cycle["duration_s"]
+
+
+def _bands_before_the_order(original):
+    kept = {name: band for name, band in original.items() if name not in ("225-275", "360-440")}
+    return {**kept, "220-280": (220, 280), "350+": (350, None)}
+
+
+def _env_unchanged(original):
+    return lambda env, path: dict(env)
+
+
+def _void_reason_without_detection_checks(original):
+    return lambda path, arm, events, timed, observer_ok: original(path, "old", events, timed, observer_ok)
+
+
+def _void_reason_keeps_runs_without_due_source(original):
+    def mutated(*args, **kwargs):
+        reason = original(*args, **kwargs)
+        return None if reason == "no due source" else reason
+    return mutated
+
+
+def _latency_limit_ignores_the_path(original):
+    return lambda run, limits: limits["R3_latency"]
+
+
+def _latency_value_is_the_median(original):
+    return lambda run: run.get("latency_median_s")
+
+
+def _redraw_gap_unjudged(original):
+    def mutated(events):
+        out = original(events)
+        out["redraw_gap_min_s"] = None
+        return out
+    return mutated
+
+
+def _redraw_counts_header_repaint(original):
+    return lambda events: original([{**e, "ev": "redraw"} if e.get("ev") == "header_repaint" else e for e in events])
+
+
+def _redraw_spacing_from_first_paint(original):
+    return lambda events: original([e for e in events if e.get("ev") != "detection"])
+
+
+def _applying_cycle_is_the_assigned_one(original):
+    def mutated(by_number, cycle_no, path, change_mono_ns):
+        only = {cycle_no: by_number[cycle_no]} if cycle_no in by_number else {}
+        return original(only, cycle_no, path, change_mono_ns)
+    return mutated
+
+
+def _row_moment_is_the_internal_event(original):
+    def mutated(events, cell):
+        cleared = next((e for e in events if e.get("ev") == "last_old_cleared"), None)
+        return original(events, cell) if cleared is None else cleared["t_ns"]
+    return mutated
+
+
+def _row_moment_without_fallbacks(original):
+    def mutated(events, cell):
+        return original(events, cell) if any(e.get("ev") == "last_old_cleared" for e in events) else None
+    return mutated
+
+
+def _shown_at_a_later_redraw(original):
+    def mutated(events, by_number, cycle_no):
+        end = by_number[cycle_no]["end_ns"]
+        named = next((e["t_ns"] for e in events if e.get("ev") == "redraw" and cycle_no in (e.get("cycles") or [])), None)
+        if named is not None:
+            return named
+        return min((e["t_ns"] for e in events if e.get("ev") == "redraw" and e["t_ns"] >= end), default=end)
+    return mutated
+
+
+def _counted_runs_ignore_the_path(original):
+    return lambda runs, path: [r for r in runs if r.get("counted")]
+
+
+def _latency_from_the_last_write(original):
+    return lambda stamps, earlier_ends, change_ns, end_ns: (change_ns, False)
+
+
 LAUNCHER = "plan_dashboard_cli"
+HARNESS = "plan_dashboard_harness"
 FILE_MODULES = {LAUNCHER: Path(__file__).resolve().parents[1] / "plan-dashboard.py",
-                "plan_dashboard_harness": Path(__file__).resolve().parent / "plan_dashboard_harness.py"}
+                HARNESS: Path(__file__).resolve().parent / "plan_dashboard_harness.py"}
 SCRIPT_MODULE_MUTATIONS = {
-    "harness-save-records-app-sources": ("plan_dashboard_harness", "RealRunner", _save_records_the_copy_sources),
+    "harness-save-records-app-sources": (HARNESS, "RealRunner", _save_records_the_copy_sources),
     "launcher-imports-every-subcommand": (LAUNCHER, "command_of", _always(None)),
+    "campaign-r3-k1-only-when-bands-blocked": (HARNESS, "interleave_due", _always(False)),
+    "r1-old-marking-always-required": (HARNESS, "unconfirmed_unmarked_rows", _old_marking_ignores_confirmations),
+    "r1-old-marking-per-run": (HARNESS, "unconfirmed_unmarked_rows", _old_marking_per_run),
+    "r1-r2-time-judged-per-run": (HARNESS, "time_over_limit", _time_judged_per_run),
+    "r2-startup-applied-unchecked": (HARNESS, "startup_applied_ok", _startup_applied_from_the_end_of_the_check),
+    "r2-applied-judged-at-end-of-check": (HARNESS, "startup_applied_ok", _startup_applied_judged_at_the_end),
+    "r2-census-after-launch": (HARNESS, "RealRunner", _census_after_launch),
+    "r3-sweep-at-cycle-start": (HARNESS, "SweepTaker", _sweep_at_cycle_start),
+    "r3-due-by-sweep-order": (HARNESS, "due_sets", _due_by_sweep_order),
+    "r3-uncovered-cycle-tolerated": (HARNESS, "r3_run_record", _uncovered_cycle_tolerated),
+    "r3-latency-ignores-interval": (HARNESS, "cycle_latency_s", _cycle_latency_is_the_duration),
+    "bands-old-reading": (HARNESS, "BANDS", _bands_before_the_order),
+    "r3-overlap-cycle-timed": (HARNESS, "cycle_untimed", _always(False)),
+    "r3-watch-path-not-forced": (HARNESS, "r3_env", _env_unchanged),
+    "r3-fallback-run-counted": (HARNESS, "r3_void_reason", _void_reason_without_detection_checks),
+    "r3-watch-latency-ignored": (HARNESS, "latency_limit", _latency_limit_ignores_the_path),
+    "r3-latency-judged-by-median": (HARNESS, "latency_value", _latency_value_is_the_median),
+    "r3-no-due-source-run-judged": (HARNESS, "r3_void_reason", _void_reason_keeps_runs_without_due_source),
+    "redraw-spacing-unjudged": (HARNESS, "redraw_summary", _redraw_gap_unjudged),
+    "redraw-counts-header-repaint": (HARNESS, "redraw_summary", _redraw_counts_header_repaint),
+    "r3-coverage-only-in-assigned-cycle": (HARNESS, "applying_cycle", _applying_cycle_is_the_assigned_one),
+    "r6-internal-event-moment-compared": (HARNESS, "last_row_moment", _row_moment_is_the_internal_event),
+    "r2-no-marked-rows-fallback-dropped": (HARNESS, "last_row_moment", _row_moment_without_fallbacks),
+    "k1-light-tick-child-counted": (HARNESS, "is_listing_child", _always(False)),
+    "r3-cycle-end-fallback-dropped": (HARNESS, "shown_moment", _shown_at_a_later_redraw),
+    "redraw-spacing-from-first-paint": (HARNESS, "redraw_summary", _redraw_spacing_from_first_paint),
+    "r3-cell-counts-pooled": (HARNESS, "counted_runs", _counted_runs_ignore_the_path),
+    "r3-latency-from-last-write": (HARNESS, "first_unshown_change_ns", _latency_from_the_last_write),
 }
 
 
