@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 import re
+import select
 import signal
 import subprocess
 import sys
@@ -34,9 +35,9 @@ from plan_dashboard import attention, events, locate, model, tui  # noqa: E402
 from plan_dashboard import snapshot as snapshot_store  # noqa: E402
 from plan_dashboard import tui_app  # noqa: E402
 from plan_dashboard.tui_app import CHAT_LOADING, DashboardApp  # noqa: E402
-from plan_dashboard_fixtures import build_fixture_root, read_only_guard  # noqa: E402
+from plan_dashboard_fixtures import build_fixture_root, read_only_guard, write_transcript  # noqa: E402
 from plan_dashboard_support import (  # noqa: E402,F401
-    ALPHA, BETA, NOW, STALE, at, console_root, event, isolated_home, iso, make_state,
+    ALPHA, BETA, HARNESS, NOW, STALE, at, console_root, event, isolated_home, iso, make_state, usage_row,
 )
 
 SIZE = (150, 40)
@@ -1662,7 +1663,8 @@ def test_a_start_from_a_snapshot_shows_old_rows_and_confirms_each_task_after_its
             assert table_cells(app, row_of(app, ALPHA))["wait"] == "~Q"
             assert table_cells(app, row_of(app, BETA))["wait"] == "~…"
             assert table_cells(app, row_of(app, ALPHA))["node"] == "EXECUTING"
-            assert [e["ev"] for e in got if e["ev"] != "cycle_start"] == ["rows_painted"]
+            assert [e["ev"] for e in got if e["ev"] != "cycle_start"] == ["redraw", "rows_painted"]
+            assert next(e for e in got if e["ev"] == "redraw")["cycles"] == []
             painted = next(e for e in got if e["ev"] == "rows_painted")
             assert painted["from_snapshot"] is True and painted["rows"] == len(table_ids(app))
         finally:
@@ -2288,3 +2290,464 @@ def test_startup_applied_is_named_once_at_every_kind_of_start_ahead_of_the_marks
         assert names.index("startup_applied") < names.index("mark_painted")
         assert names.index("startup_applied") < names.index("mark_confirmed")
     assert start != "snapshot" or applied
+
+
+# --- the event path: changes learned from inotify, the redraw spacing, the light tick -------------
+
+class OneShot:
+    def __init__(self, timers, delay, callback):
+        self.timers, self.delay, self.callback = timers, delay, callback
+
+    def stop(self):
+        if self in self.timers.once:
+            self.timers.once.remove(self)
+
+    def fire(self):
+        self.stop()
+        self.callback()
+
+
+class Timers:
+    """The app's interval and one-shot timers, held for a test to fire by hand against the injected clock."""
+
+    def __init__(self):
+        self.intervals, self.once = [], []
+
+    def every(self, app, seconds, callback):
+        self.intervals.append((seconds, callback))
+
+    def schedule(self, app, delay, callback):
+        timer = OneShot(self, delay, callback)
+        self.once.append(timer)
+        return timer
+
+    def callback(self, seconds):
+        return next(callback for found, callback in self.intervals if found == seconds)
+
+
+@pytest.fixture
+def timers(monkeypatch):
+    held = Timers()
+    monkeypatch.setattr(tui_app, "every", held.every)
+    monkeypatch.setattr(tui_app, "schedule", held.schedule)
+    try:
+        tui_app.watch.Inotify().close()
+    except tui_app.watch.Unavailable as exc:
+        if os.environ.get("PLAN_DASHBOARD_REQUIRE_INOTIFY") == "1":
+            pytest.fail(f"PLAN_DASHBOARD_REQUIRE_INOTIFY=1 but inotify is not usable here: {exc.reason}")
+        pytest.skip(f"inotify is not usable here: {exc.reason}")
+    return held
+
+
+class Fleet:
+    """A dashboard on the event path under the injected clock; ``tick`` is the 0.5 s tick, ``light`` the 1 s one."""
+
+    def __init__(self, app, pilot, clock, timers, stream):
+        self.app, self.pilot, self.clock, self.timers, self.stream = app, pilot, clock, timers, stream
+
+    async def tick(self, seconds=tui_app.TICK_S):
+        self.clock.advance(seconds)
+        self.timers.callback(tui_app.TICK_S)()
+        await settle(self.app, self.pilot)
+
+    def light(self, seconds=0.0):
+        self.clock.advance(seconds)
+        self.timers.callback(tui_app.LIGHT_TICK_S)()
+
+    async def settled(self):
+        await settle(self.app, self.pilot)
+
+    def events(self):
+        return drain(self.stream)
+
+    def named(self):
+        ready, _, _ = select.select([self.app.watcher.inotify.fd], [], [], 5.0)
+        assert ready, "no inotify event within 5 s"
+
+
+def run_fleet(scenario, root, timers, stream, path="event", clock=None, **options):
+    clock = clock or Clock()
+
+    async def inside(app, pilot):
+        assert app.path == path
+        drain(stream)
+        await scenario(Fleet(app, pilot, clock, timers, stream))
+
+    return run(inside, root, clock=clock, watching=path == "event", **options)
+
+
+def listing_locator(path, calls=None):
+    """A locator whose window listing is the JSON file at ``path``; ``calls`` counts the reads of it."""
+    def sessions():
+        if calls is not None:
+            calls.append(1)
+        return json.loads(path.read_text(encoding="utf-8"))
+    return SimpleNamespace(NAME="fake", LISTING_FILE=path, sessions=sessions, permission_wait=lambda harness: False)
+
+
+def box_locator(box, calls=None):
+    """A locator with no listing file of its own: its window listing is ``box["name"]``, so changing it writes nothing
+    a watch can see."""
+    def sessions():
+        if calls is not None:
+            calls.append(1)
+        return [{"harness_session": ASK_SESSION, "cwd": "/work/ask", "name": box["name"]}]
+    return SimpleNamespace(NAME="fake", sessions=sessions, permission_wait=lambda harness: False)
+
+
+def write_listing(root, name):
+    path = root.home / "listing" / "events.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps([{"harness_session": ASK_SESSION, "cwd": "/work/ask", "name": name}]), encoding="utf-8")
+    return path
+
+
+def widen_the_read_set(root, projects=40):
+    for number in range(projects):
+        directory = root.transcripts_root / f"-extra-{number:03d}"
+        directory.mkdir()
+        (directory / f"extra-{number:03d}.jsonl").write_text("", encoding="utf-8")
+
+
+def edit_goal(root, sid, goal):
+    path = root.state_root / f"{sid}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["goal"] = goal
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def screen_text(app):
+    return "|".join(str(cell) for index in range(len(table_ids(app))) for cell in table_cells(app, index).values())
+
+
+def data_text(app):
+    """The table's text without the ages, which move with the clock on either path."""
+    return re.sub(r"\d+[hm]\d\d[ms]? ago", "AGO", screen_text(app))
+
+
+def cycle_starts(got):
+    return [e for e in got if e["ev"] == "cycle_start"]
+
+
+def test_an_idle_dashboard_starts_no_cycle_but_the_reconcile_mode_one_and_does_not_redraw(
+        tmp_path, monkeypatch, timers, stream):
+    root = console_root(tmp_path)
+    collects = count_collects(monkeypatch)
+
+    async def scenario(fleet):
+        before, got = len(collects), []
+        for _ in range(int(tui_app.RECONCILE_S / tui_app.TICK_S) - 1):
+            await fleet.tick()
+        got += fleet.events()
+        assert len(collects) == before
+        assert not [e for e in got if e["ev"] in ("cycle_start", "redraw")]
+        await fleet.tick(1.0)
+        got += fleet.events()
+        assert [e["mode"] for e in cycle_starts(got)] == ["reconcile"] and len(collects) == before + 1
+        assert not [e for e in got if e["ev"] == "redraw"]
+        assert any(e["ev"] == "sweep_slice" for e in got)
+
+    run_fleet(scenario, root, timers, stream)
+
+
+def test_a_change_starts_a_cycle_at_the_next_tick_and_reaches_the_screen(tmp_path, monkeypatch, timers, stream):
+    root = console_root(tmp_path)
+    collects = count_collects(monkeypatch)
+
+    async def scenario(fleet):
+        before = len(collects)
+        edit_goal(root, ALPHA, "A goal changed on disk")
+        fleet.named()
+        assert len(collects) == before and not fleet.events()
+        assert "A goal changed on disk" not in screen_text(fleet.app)
+        await fleet.tick()
+        got = fleet.events()
+        assert len(collects) == before + 1
+        assert [(e["mode"]) for e in cycle_starts(got)] == ["event"]
+        assert "A goal changed on disk" in screen_text(fleet.app)
+        redraws = [e for e in got if e["ev"] == "redraw"]
+        assert [e["cycles"] for e in redraws] == [[cycle_starts(got)[0]["cycle"]]]
+        ended = next(e for e in got if e["ev"] == "cycle_end")
+        assert ended["found_by"][str(root.state_root / f"{ALPHA}.json")] == "event"
+        names = [e["ev"] for e in got]
+        assert names.index("cycle_start") < names.index("cycle_end") <= names.index("redraw")
+
+    run_fleet(scenario, root, timers, stream)
+
+
+def test_two_redraws_are_never_less_than_half_a_second_apart(tmp_path, timers, stream):
+    root = console_root(tmp_path)
+
+    async def scenario(fleet):
+        app = fleet.app
+        edit_goal(root, ALPHA, "first change")
+        fleet.named()
+        await fleet.tick(1.0)
+        first = app.last_redraw
+        assert [e["ev"] for e in fleet.events() if e["ev"] == "redraw"] == ["redraw"] and app.hold is None
+        fleet.clock.advance(0.2)
+        edit_goal(root, ALPHA, "second change")
+        fleet.named()
+        await fleet.tick(0.0)
+        assert not [e for e in fleet.events() if e["ev"] == "redraw"]
+        assert "second change" not in screen_text(app) and len(fleet.timers.once) == 1
+        timer = fleet.timers.once[0]
+        assert abs(timer.delay - (first + tui_app.REDRAW_SPACING_S - app.mono())) < 1e-3
+        edit_goal(root, ALPHA, "third change")
+        fleet.named()
+        await fleet.tick(0.1)
+        assert len(fleet.timers.once) == 1 and not [e for e in fleet.events() if e["ev"] == "redraw"]
+        fleet.clock.advance(app.hold_due - app.mono())
+        timer.fire()
+        await fleet.settled()
+        redraws = [e for e in fleet.events() if e["ev"] == "redraw"]
+        assert len(redraws) == 1 and len(redraws[0]["cycles"]) == 2
+        assert "third change" in screen_text(app)
+        assert abs(app.last_redraw - first - tui_app.REDRAW_SPACING_S) < 1e-3
+
+    run_fleet(scenario, root, timers, stream)
+
+
+UNBOUND = "unbound-harness"
+
+
+def change_source(root, kind):
+    if kind == "state":
+        edit_goal(root, ALPHA, "A goal changed on disk")
+    elif kind == "binding":
+        (root.home / "agentctl" / "engine-session-bindings" / f"{UNBOUND}.json").write_text(
+            json.dumps({"driven": [{"session": ALPHA, "ts": "2026-10-01T00:00:00+00:00"}]}), encoding="utf-8")
+    elif kind == "transcript":
+        write_transcript(root.transcripts_root, HARNESS, [usage_row("m1", at(minutes=25), 1),
+                                                         usage_row("m2", at(minutes=24), 3)])
+    elif kind == "ledger":
+        with root.cost_log.open("a", encoding="utf-8") as ledger:
+            ledger.write(json.dumps({"spawner_session": ALPHA, "stage_index": 1, "ts": iso(at(minutes=24)),
+                                     "cost_usd": 2.0}) + "\n")
+    else:
+        write_listing(root, "Renamed")
+
+
+@pytest.mark.parametrize("path", ["event", "stat"])
+@pytest.mark.parametrize("kind", ["state", "binding", "transcript", "ledger", "locator_listing"])
+def test_every_source_kind_change_appears_on_the_next_refresh_on_both_paths(tmp_path, timers, stream, kind, path):
+    root = attention_root(tmp_path)
+    locator = listing_locator(write_listing(root, "Asker"))
+    write_transcript(root.transcripts_root, UNBOUND, [usage_row("m1", at(minutes=25), 1), usage_row("m2", at(minutes=24), 3)])
+
+    async def scenario(fleet):
+        before = data_text(fleet.app)
+        change_source(root, kind)
+        if path == "event":
+            fleet.named()
+        await fleet.tick(0.5 if path == "event" else 2.5)
+        assert data_text(fleet.app) != before
+
+    run_fleet(scenario, root, timers, stream, path=path, locator=locator, **({"interval": 2.0} if path == "stat" else {}))
+
+
+def test_the_light_tick_reads_no_source_file(tmp_path, monkeypatch, timers, stream):
+    root = attention_root(tmp_path)
+    calls, reads = [], []
+    locator = listing_locator(write_listing(root, "Asker"), calls)
+
+    def spy(module, name):
+        real = getattr(module, name)
+
+        def seen(path, *args, **kwargs):
+            if str(path).startswith(str(root.home)):
+                reads.append((name, str(path)))
+            return real(path, *args, **kwargs)
+
+        monkeypatch.setattr(module, name, seen)
+
+    async def scenario(fleet):
+        for module, name in ((os, "stat"), (os, "lstat"), (os, "scandir"), (os, "listdir"), (__import__("builtins"), "open")):
+            spy(module, name)
+        before = len(calls)
+        for _ in range(10):
+            fleet.light(1.0)
+        assert reads == []
+        assert len(calls) == before + 10
+        assert [e["ev"] for e in fleet.events()].count("light_tick") == 10
+
+    run_fleet(scenario, root, timers, stream, locator=locator)
+
+
+def test_a_tmux_change_found_by_the_light_tick_is_applied_by_the_next_ticks_cycle(tmp_path, timers, stream):
+    root = attention_root(tmp_path)
+    calls, box = [], {"name": "Asker"}
+
+    async def scenario(fleet):
+        app = fleet.app
+        box["name"] = "Renamed one"
+        before = len(calls)
+        fleet.light(0.45)
+        got = fleet.events()
+        assert [(e["ev"], e.get("tmux_changed")) for e in got] == [("light_tick", True)]
+        assert len(calls) == before + 1 and "Renamed one" not in screen_text(app)
+        edit_goal(root, ALPHA, "an event named change")
+        fleet.named()
+        await fleet.tick(0.05)
+        got = fleet.events()
+        starts = cycle_starts(got)
+        assert [e["cycles"] for e in got if e["ev"] == "redraw"] == [[starts[0]["cycle"]]]
+        assert app.hold is None and abs(app.last_redraw - app.mono()) < 1e-3
+        assert "Renamed one" in screen_text(app) and "an event named change" in screen_text(app)
+        box["name"] = "Renamed two"
+        before = len(calls)
+        fleet.light(0.0)
+        assert [e["ev"] for e in fleet.events()] == ["light_tick"] and len(calls) == before + 1
+        await fleet.tick(0.5)
+        got = fleet.events()
+        starts = cycle_starts(got)
+        assert len(starts) == 1 and len(calls) == before + 1
+        assert [e["cycles"] for e in got if e["ev"] == "redraw"] == [[starts[0]["cycle"]]]
+        assert "Renamed two" in screen_text(app)
+
+    run_fleet(scenario, root, timers, stream, locator=box_locator(box, calls))
+
+
+def test_an_idle_light_tick_repaints_only_the_header(tmp_path, monkeypatch, timers, stream):
+    root = attention_root(tmp_path)
+    collects = count_collects(monkeypatch)
+    locator = listing_locator(write_listing(root, "Asker"))
+
+    async def scenario(fleet):
+        app = fleet.app
+        before, redrawn = len(collects), app.last_redraw
+        fleet.light(3 * 3600.0)
+        assert [e["ev"] for e in fleet.events()] == ["header_repaint", "light_tick"]
+        fleet.light(0.0)
+        assert [e["ev"] for e in fleet.events()] == ["light_tick"]
+        tui_app.redraw_site(app)
+        await fleet.settled()
+        assert not fleet.events() and len(collects) == before and app.last_redraw == redrawn
+
+    run_fleet(scenario, root, timers, stream, locator=locator)
+
+
+def test_the_light_tick_yields_to_a_pending_event_cycle(tmp_path, monkeypatch, timers, stream):
+    root = attention_root(tmp_path)
+    calls = []
+    locator = box_locator({"name": "Asker"}, calls)
+
+    async def scenario(fleet):
+        app = fleet.app
+        before = len(calls)
+        fleet.light(0.0)
+        assert len(calls) == before + 1 and [e["ev"] for e in fleet.events()] == ["light_tick"]
+        edit_goal(root, ALPHA, "a change the cycle must show")
+        fleet.named()
+        fleet.light(60.0)
+        assert len(calls) == before + 1 and not fleet.events() and app.owed_poll and app.owed_header
+        await fleet.tick(0.05)
+        assert len(calls) == before + 2
+        assert "a change the cycle must show" in screen_text(app)
+        assert not app.owed_header
+        fleet.events()
+        os.utime(root.state_root / f"{ALPHA}.json")
+        fleet.named()
+        fleet.light(60.0)
+        assert not fleet.events() and len(calls) == before + 2
+        await fleet.tick(0.5)
+        got = fleet.events()
+        assert len(calls) == before + 3 and "header_repaint" in [e["ev"] for e in got]
+        assert not [e for e in got if e["ev"] == "redraw"]
+        release, held = hold(monkeypatch, model, "collect")
+        try:
+            edit_goal(root, ALPHA, "a change behind a slow read")
+            fleet.named()
+            fleet.clock.advance(0.5)
+            fleet.timers.callback(tui_app.TICK_S)()
+            assert await until(fleet.pilot, lambda: held)
+            fleet.events()
+            polls = len(calls)
+            fleet.light(1.0)
+            assert len(calls) == polls and not fleet.events()
+        finally:
+            release.set()
+        await fleet.settled()
+        polls = len(calls)
+        fleet.light(1.0)
+        assert len(calls) == polls + 1 and [e["ev"] for e in fleet.events()][-1:] == ["light_tick"]
+
+    run_fleet(scenario, root, timers, stream, locator=locator)
+
+
+def test_a_sweep_never_delays_an_event_cycle_or_its_redraw(tmp_path, monkeypatch, timers, stream):
+    root = console_root(tmp_path)
+    widen_the_read_set(root)
+    cost, late, slices = 0.01, [0.0], []
+    real_differs, real_collect, real_slice = snapshot_store.KEPT.differs, model.collect, tui_app.watch.sweep_slice
+    clock = Clock()
+
+    def costly(item):
+        clock.advance(cost)
+        return real_differs(item)
+
+    def slow_collect(*args, **kwargs):
+        clock.advance(late[0])
+        return real_collect(*args, **kwargs)
+
+    def recording(sweep, allowance, budget_s, mono, deadline=None):
+        slices.append((allowance, budget_s, deadline))
+        return real_slice(sweep, allowance, budget_s, mono, deadline)
+
+    monkeypatch.setattr(snapshot_store.KEPT, "differs", costly)
+    monkeypatch.setattr(model, "collect", slow_collect)
+    monkeypatch.setattr(tui_app.watch, "sweep_slice", recording)
+
+    async def scenario(fleet):
+        app = fleet.app
+        assert fleet.clock is clock and app.sweep.one_off
+        edit_goal(root, ALPHA, "r1")
+        fleet.named()
+        await fleet.tick(1.0)
+        got = fleet.events()
+        names = [e["ev"] for e in got]
+        assert names.index("cycle_start") < names.index("redraw") < names.index("sweep_slice")
+        first = app.last_redraw
+        edit_goal(root, ALPHA, "r2")
+        fleet.named()
+        await fleet.tick(first + 0.48 - app.mono())
+        got = fleet.events()
+        assert not [e for e in got if e["ev"] == "redraw"] and app.hold is not None
+        allowance, budget, deadline = slices[-1]
+        assert (allowance, budget, deadline) == (None, tui_app.SLICE_BUDGET_S, app.hold_due)
+        last = next(e for e in reversed(got) if e["ev"] == "sweep_slice")
+        assert 0 < last["entries"] * cost <= (app.hold_due - app.tick_at) + cost
+        fleet.clock.advance(app.hold_due - app.mono())
+        fleet.timers.once[0].fire()
+        await fleet.settled()
+        assert [e["ev"] for e in fleet.events()].count("redraw") == 1
+        assert abs(app.last_redraw - first - tui_app.REDRAW_SPACING_S) < 1e-3
+        for _ in range(400):
+            if not app.sweep.one_off:
+                break
+            await fleet.tick()
+            for entry in [e for e in fleet.events() if e["ev"] == "sweep_slice"]:
+                assert entry["entries"] * cost <= tui_app.SLICE_BUDGET_S + cost
+        assert not app.sweep.one_off
+        for _ in range(3):
+            await fleet.tick()
+        per_tick = tui_app.slice_entries(app.sweep.size())
+        rolling = [e for e in fleet.events() if e["ev"] == "sweep_slice"]
+        assert rolling and all(e["entries"] <= per_tick for e in rolling)
+        late[0] = 0.3
+        owed = app.owed
+        for number in range(20):
+            edit_goal(root, ALPHA, f"late {number}")
+            fleet.named()
+            await fleet.tick()
+        assert not [e for e in fleet.events() if e["ev"] == "sweep_slice"]
+        assert app.owed == owed + 20 * per_tick
+        late[0] = 0.0
+        edit_goal(root, ALPHA, "in time again")
+        fleet.named()
+        await fleet.tick()
+        caught_up = next(e for e in fleet.events() if e["ev"] == "sweep_slice")
+        assert per_tick < caught_up["entries"] and caught_up["entries"] * cost <= tui_app.SLICE_BUDGET_S + cost
+        assert app.owed == 0
+
+    run_fleet(scenario, root, timers, stream, clock=clock)

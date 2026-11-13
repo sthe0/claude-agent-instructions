@@ -343,7 +343,7 @@ def test_with_a_root_given_nothing_outside_it_is_looked_up_or_opened(tmp_path, m
     opened = []
     real_open = open
     monkeypatch.setattr(attention, "open", lambda file, *a, **k: opened.append(str(file)) or real_open(file, *a, **k), raising=False)
-    monkeypatch.setattr(config_root, "iter_transcripts", lambda pattern: [outside])
+    monkeypatch.setattr(config_root, "projects_roots", lambda: [outside.parent.parent])
     assert attention.find_transcript(ALPHA, None, root.transcripts_root) is None
     assert overlay(root) == {"waiting": None, "harness_session": None, "since": None}
     assert opened == []

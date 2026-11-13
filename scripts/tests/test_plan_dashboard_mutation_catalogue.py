@@ -51,6 +51,16 @@ SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-
                         "startup-applied-last-read-only", "startup-applied-at-check-end",
                         "startup-applied-needs-old-rows")
 SNAPSHOT_STDLIB_NAMES = tuple(name for name in SNAPSHOT_NAMES if name not in SNAPSHOT_PILOT_NAMES)
+WATCH_TESTS = TESTS / "test_plan_dashboard_watch.py"
+WATCH_NAMES = (
+    "overflow-not-swept", "new-dir-not-watched", "pattern-dirs-not-watched", "reconcile-sweep-dropped",
+    "redraw-at-idle", "watch-failure-not-fallen-back", "event-cycle-reads-all", "redraw-not-spaced",
+    "light-tick-reads-sources", "light-tick-skips-tmux", "light-tick-owns-redraw", "light-tick-ignores-pending-event",
+    "sweep-not-sliced", "skipped-slice-share-lost", "held-redraw-waits-for-next-tick", "owed-header-repaint-dropped",
+    "owed-tmux-poll-dropped", "cycle-start-after-read", "detection-at-path-choice")
+WATCH_PILOT_NAMES = tuple(name for name, (module, _, _) in mutations.WATCH_MUTATIONS.items()
+                          if module == mutations.TUI_APP)
+WATCH_STDLIB_NAMES = tuple(name for name in WATCH_NAMES if name not in WATCH_PILOT_NAMES)
 HARNESS_TESTS = TESTS / "test_plan_dashboard_harness.py"
 SCRIPT_MODULE_TESTS = {"harness-save-records-app-sources": HARNESS_TESTS,
                        "launcher-imports-every-subcommand": TUI_TESTS}
@@ -212,6 +222,36 @@ def test_a_snapshot_mutation_turns_a_snapshot_test_red(name, snapshot_results):
 @pytest.mark.parametrize("name", SNAPSHOT_PILOT_NAMES)
 def test_a_snapshot_mutation_turns_a_pilot_test_red(name, snapshot_pilot_results):
     assert_red(name, snapshot_pilot_results[name], "pilot tests")
+
+
+@pytest.fixture(scope="module")
+def watch_results():
+    return run_all(WATCH_TESTS, list(WATCH_STDLIB_NAMES))
+
+
+@pytest.fixture(scope="module")
+def watch_pilot_results():
+    if not (REQUIRED or pilot_interpreter_has_textual()):
+        pytest.skip("textual is not importable here; run this file under the uv command of docs/components/plan-dashboard.md")
+    return run_all(PILOT_TESTS, list(WATCH_PILOT_NAMES))
+
+
+def test_the_watch_family_is_the_registered_one():
+    assert set(WATCH_NAMES) == set(mutations.WATCH_MUTATIONS) and len(set(WATCH_NAMES)) == len(WATCH_NAMES)
+
+
+def test_the_watch_tests_are_green_with_no_mutation(watch_results):
+    assert_green(watch_results[""])
+
+
+@pytest.mark.parametrize("name", WATCH_STDLIB_NAMES)
+def test_a_watch_mutation_turns_a_watch_test_red(name, watch_results):
+    assert_red(name, watch_results[name], "watch tests")
+
+
+@pytest.mark.parametrize("name", WATCH_PILOT_NAMES)
+def test_a_watch_mutation_turns_a_pilot_test_red(name, watch_pilot_results):
+    assert_red(name, watch_pilot_results[name], "pilot tests")
 
 
 @pytest.fixture(scope="module")

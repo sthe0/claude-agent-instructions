@@ -30,6 +30,7 @@ the version in full (``code_check_report`` says which, for the event stream).
 """
 from __future__ import annotations
 
+import fnmatch
 import functools
 import hashlib
 import json
@@ -144,17 +145,16 @@ def scan(root, suffix: str) -> dict[str, tuple[str, os.stat_result]]:
     """``{stem: (path, stat)}`` of the regular files named ``*<suffix>`` in ``root``, from one directory pass."""
     found = {}
     try:
-        with os.scandir(root) as listing:
-            for entry in listing:
-                check_stop()
-                if not entry.name.endswith(suffix):
-                    continue
-                try:
-                    st = entry.stat()
-                except OSError:
-                    continue
-                if stat_module.S_ISREG(st.st_mode):
-                    found[entry.name[: -len(suffix)]] = (entry.path, st)
+        for entry in KEPT.scandir(root):
+            check_stop()
+            if not entry.name.endswith(suffix):
+                continue
+            try:
+                st = entry.stat()
+            except OSError:
+                continue
+            if stat_module.S_ISREG(st.st_mode):
+                found[entry.name[: -len(suffix)]] = (entry.path, st)
     except OSError:
         pass
     return found
@@ -163,7 +163,7 @@ def scan(root, suffix: str) -> dict[str, tuple[str, os.stat_result]]:
 def directory_marker(path) -> list[int] | None:
     """``[dev, ino, mtime_ns, ctime_ns]`` of a directory: a file created, removed or renamed in it moves them."""
     try:
-        st = os.stat(path)
+        st = KEPT.stat(path)
     except OSError:
         return None
     return [st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns]
@@ -243,7 +243,7 @@ class Observed:
 
     def ledger(self, path) -> None:
         try:
-            st = os.stat(path)
+            st = KEPT.stat(path)
         except OSError:
             self.scanned("ledger", {})
             return
@@ -304,6 +304,160 @@ class Observed:
 
 OBSERVED = Observed()
 STATES = IdentityCache("state")
+FOUND_BY_STAT = "stat"
+
+
+class KeptEntry:
+    """A directory entry answered from the kept view: ``name``, ``path``, ``is_dir`` and ``stat``."""
+
+    __slots__ = ("name", "path", "_is_dir", "_view")
+
+    def __init__(self, name: str, path: str, is_dir: bool, view: "KeptView"):
+        self.name, self.path, self._is_dir, self._view = name, path, is_dir, view
+
+    def is_dir(self, follow_symlinks: bool = True) -> bool:
+        return self._is_dir
+
+    def stat(self):
+        return self._view.stat(self.path)
+
+
+class KeptView:
+    """What the event path knows of the file system without asking it again.
+
+    Every ``stat`` and every directory listing a reader makes goes through here and is kept. While
+    ``trusting``, a path under a watched root (``covers``) is answered from memory until an event, an unsettled
+    stat or a sweep marks it dirty; then it is asked again. With nothing trusted every call is a live one, so
+    the stat path behaves as before. ``found`` says which route marked each path, for ``cycle_end``."""
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self.reset()
+
+    def reset(self) -> None:
+        with self._lock:
+            self.trusting = False
+            self.covers = None
+            self.stats: dict[str, os.stat_result | None] = {}
+            self.listings: dict[str, list[tuple[str, bool]]] = {}
+            self.dirty: dict[str, int] = {}
+            self.relist: dict[str, int] = {}
+            self.marks = 0
+            self.found: dict[str, str] = {}
+
+    def trust(self, covers) -> None:
+        with self._lock:
+            self.covers, self.trusting = covers, True
+
+    def distrust(self) -> None:
+        with self._lock:
+            self.trusting = False
+
+    def _kept(self, key: str) -> bool:
+        return self.trusting and (self.covers is None or self.covers(key))
+
+    def mark(self, paths=(), directories=(), by: str = "event") -> None:
+        """Ask again about ``paths`` and about the names in ``directories`` at the next read of each."""
+        with self._lock:
+            for key in (*map(str, paths), *map(str, directories)):
+                self.marks += 1
+                self.dirty[key] = self.marks
+                self.found.setdefault(key, by)
+            for key in map(str, directories):
+                self.relist[key] = self.marks
+
+    def take_found(self) -> dict[str, str]:
+        with self._lock:
+            found, self.found = self.found, {}
+            return found
+
+    def stat(self, path):
+        key = str(path)
+        with self._lock:
+            seen = self.dirty.get(key)
+            if self._kept(key) and key in self.stats and seen is None:
+                kept = self.stats[key]
+                if kept is None:
+                    raise FileNotFoundError(2, "absent when last looked", key)
+                return kept
+        try:
+            st = os.stat(key)
+        except FileNotFoundError:
+            self._keep(key, None, seen)
+            raise
+        self._keep(key, st, seen)
+        return st
+
+    def _keep(self, key: str, st, seen) -> None:
+        with self._lock:
+            self.stats[key] = st
+            if self.dirty.get(key) == seen:
+                self.dirty.pop(key, None)
+            if st is not None and not settled(st):
+                self.marks += 1
+                self.dirty[key] = self.marks
+                self.found.setdefault(key, FOUND_BY_STAT)
+
+    def scandir(self, root) -> list[KeptEntry]:
+        key = str(root)
+        with self._lock:
+            seen = self.relist.get(key)
+            kept = self.listings.get(key) if self._kept(key) and seen is None else None
+        if kept is None:
+            with os.scandir(key) as listing:
+                kept = [(entry.name, entry.is_dir()) for entry in listing]
+            with self._lock:
+                self.listings[key] = kept
+                if self.relist.get(key) == seen:
+                    self.relist.pop(key, None)
+        return [KeptEntry(name, os.path.join(key, name), is_dir, self) for name, is_dir in kept]
+
+    def glob(self, root, pattern: str) -> list[Path]:
+        """``Path(root).glob(pattern)`` for a pattern of ``*`` segments and literal or ``*``-suffixed names,
+        sorted, from the kept listings."""
+        level = [str(root)]
+        parts = pattern.split("/")
+        for index, part in enumerate(parts):
+            last = index == len(parts) - 1
+            matched = []
+            for directory in level:
+                try:
+                    entries = self.scandir(directory)
+                except OSError:
+                    continue
+                matched += [entry.path for entry in entries
+                            if fnmatch.fnmatchcase(entry.name, part) and (last or entry.is_dir())]
+            level = matched
+        return sorted(Path(path) for path in level)
+
+    def sweep_items(self) -> list[tuple[str, str]]:
+        """Everything kept, as ``(kind, path)`` with kind ``stat`` or ``dir``, in a fixed order: the ring a
+        reconciliation walks."""
+        with self._lock:
+            return sorted([("stat", key) for key in self.stats if self._kept(key)]
+                          + [("dir", key) for key in self.listings if self._kept(key)], key=lambda i: (i[1], i[0]))
+
+    def differs(self, item: tuple[str, str]) -> bool:
+        """Whether the file system no longer holds what the kept view has for ``item`` (one live stat or
+        listing). A difference is only reported; the path is marked by the caller."""
+        kind, key = item
+        with self._lock:
+            kept = self.stats.get(key) if kind == "stat" else self.listings.get(key)
+            if key in (self.dirty if kind == "stat" else self.relist):
+                return False
+        try:
+            if kind == "stat":
+                live = os.stat(key)
+                return kept is None or identity_of(live) != identity_of(kept)
+            with os.scandir(key) as listing:
+                return sorted((e.name, e.is_dir()) for e in listing) != sorted(kept or ())
+        except FileNotFoundError:
+            return kept is not None if kind == "stat" else True
+        except OSError:
+            return True
+
+
+KEPT = KeptView()
 
 
 def listed(kind: str, root, suffix: str) -> dict[str, tuple[str, os.stat_result]]:
@@ -509,14 +663,13 @@ class TranscriptListing:
     def _subdirs(root) -> dict[str, tuple]:
         found = {}
         try:
-            with os.scandir(root) as listing:
-                for entry in listing:
-                    try:
-                        st = entry.stat()
-                    except OSError:
-                        continue
-                    if stat_module.S_ISDIR(st.st_mode):
-                        found[entry.name] = (entry.path, st)
+            for entry in KEPT.scandir(root):
+                try:
+                    st = entry.stat()
+                except OSError:
+                    continue
+                if stat_module.S_ISDIR(st.st_mode):
+                    found[entry.name] = (entry.path, st)
         except OSError:
             pass
         return found
@@ -524,9 +677,8 @@ class TranscriptListing:
     @staticmethod
     def _names(directory) -> list[Path]:
         try:
-            with os.scandir(directory) as listing:
-                return [Path(entry.path) for entry in sorted(listing, key=lambda e: e.name)
-                        if entry.name.endswith(".jsonl") and not entry.is_dir()]
+            return [Path(entry.path) for entry in sorted(KEPT.scandir(directory), key=lambda e: e.name)
+                    if entry.name.endswith(".jsonl") and not entry.is_dir()]
         except OSError:
             return []
 
@@ -537,11 +689,17 @@ class TranscriptListing:
 TRANSCRIPTS = TranscriptListing()
 
 
+def iter_transcripts(pattern: str = "*/*.jsonl") -> list[Path]:
+    """``config_root.iter_transcripts`` from the kept listings."""
+    return sorted(path for root in config_root.projects_roots() for path in KEPT.glob(root, pattern))
+
+
 def transcript_roots(transcripts_root) -> list[Path]:
     return [Path(transcripts_root)] if transcripts_root is not None else config_root.projects_roots()
 
 
 def reset() -> None:
+    KEPT.reset()
     OBSERVED.reset()
     STATES.clear()
     BINDINGS.clear()

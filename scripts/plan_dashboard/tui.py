@@ -567,7 +567,7 @@ class Order:
 
 def _mtime(path) -> float | None:
     try:
-        return path.stat().st_mtime if path is not None else None
+        return snapshot_store.KEPT.stat(path).st_mtime if path is not None else None
     except OSError:
         return None
 

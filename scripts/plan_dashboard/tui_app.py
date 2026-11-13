@@ -14,9 +14,11 @@ import asyncio
 import dataclasses
 import datetime as dt
 import importlib.util
+import os
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -29,10 +31,16 @@ from textual.binding import Binding  # noqa: E402
 from textual.containers import VerticalScroll  # noqa: E402
 from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane, Tree  # noqa: E402
 
-from plan_dashboard import events, locate, model, tui  # noqa: E402
+from plan_dashboard import events, locate, model, tui, watch  # noqa: E402
 from plan_dashboard import snapshot as snapshot_store  # noqa: E402
 
 TICK_S = 0.5
+REDRAW_SPACING_S = 0.5
+RECONCILE_S = watch.RECONCILE_S
+LIGHT_TICK_S = 1.0
+SLICE_BUDGET_S = 0.05
+SLICE_LATEST_S = 0.25
+SPACING_EPSILON_S = 1e-3
 KEPT_CYCLES = 4
 CHAT_LOADING = "loading chat…"
 TREE_LOADING = "loading…"
@@ -48,10 +56,368 @@ def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+def mono_of(clock):
+    """Seconds on ``clock``, for the places that measure a span: the app's own monotonic time in a run, the
+    injected clock in a test."""
+    return time.monotonic if clock is utc_now else lambda: clock().timestamp()
+
+
+def slice_entries(count: int) -> int:
+    return watch.slice_entries(count, TICK_S)
+
+
+def every(app: "DashboardApp", seconds: float, callback) -> None:
+    app.set_interval(seconds, callback)
+
+
+def schedule(app: "DashboardApp", delay: float, callback):
+    return app.set_timer(delay, callback)
+
+
 def note(app: "DashboardApp", ev: str, **payload) -> None:
-    """Stamp ``ev`` when the screen next repaints, so the stream and the screen agree to within a frame."""
-    if events.enabled():
-        app.call_after_refresh(lambda: events.emit(ev, **payload))
+    """Stamp ``ev`` when the screen next repaints, so the stream and the screen agree to within a frame. While
+    a landing is parked, its stamps wait for the redraw that shows it."""
+    if not events.enabled():
+        return
+    if app.parking is not None:
+        app.parking.append((ev, payload))
+        return
+    app.call_after_refresh(lambda: events.emit(ev, **payload))
+
+
+class Listing:
+    """The window listing every read of a cycle shares. A cycle that polls reads the locator once; a cycle that
+    does not answers from the listing last polled (by the light tick, or an earlier cycle). Every other hook of
+    the locator passes through."""
+
+    def __init__(self, locator):
+        self.real = locator
+        self.stored = None
+        self.applied = None
+        self.polled = False
+        self.refresh = True
+        self.lock = threading.Lock()
+
+    def __getattr__(self, name):
+        hook = getattr(self.real, name)
+        return self.listed if name == "sessions" else hook
+
+    def begin(self, refresh: bool) -> None:
+        with self.lock:
+            if refresh or not self.polled:
+                self.refresh = True
+            else:
+                self.applied = self.stored
+
+    def listed(self):
+        with self.lock:
+            if self.refresh or not self.polled:
+                self.stored, self.polled, self.refresh = locate._call(self.real, "sessions"), True, False
+            self.applied = self.stored
+            return self.stored
+
+    def poll(self):
+        """The first poll, taken as the run leaves the stat path (where no cycle read the listing through here),
+        is the baseline the next ones are compared with."""
+        with self.lock:
+            self.stored, self.polled = locate._call(self.real, "sessions"), True
+            if self.applied is None:
+                self.applied = self.stored
+            return self.stored
+
+    def changed(self) -> bool:
+        with self.lock:
+            return self.polled and self.stored != self.applied
+
+
+def poll_listing(app: "DashboardApp"):
+    return app.listing.poll()
+
+
+def reader(app: "DashboardApp"):
+    """What the reads of a cycle ask for the window listing: on the event path the shared listing, otherwise the
+    locator itself."""
+    return app.listing if app.path == "event" and app.listing is not None else app.locator
+
+
+def screen_of(app: "DashboardApp", snapshot: dict, now: dt.datetime) -> tuple[list[dict], str]:
+    """The rows and header of ``snapshot`` as they read at ``now``, with the marks as last read."""
+    marks = shown_marks(app)
+    return (tui.overview_rows(snapshot, now, marks, app.activity, app.old_ids),
+            tui.overview_header(snapshot, now, marks, counted_marks(app), header_old(app, snapshot)))
+
+
+def data_key(app: "DashboardApp", rows: list[dict], head: str) -> tuple:
+    return tuple((row["session_id"], tuple(row["cells"]), row["style"]) for row in rows), head, app.view.include_all
+
+
+def shown_differs(app: "DashboardApp") -> bool:
+    """Whether the newest data would read differently from the screen, the time left out: both are laid out at
+    the moment the screen's own data was."""
+    rows, head = screen_of(app, app.snapshot, app.key_now)
+    return data_key(app, rows, head) != app.shown_key
+
+
+def redraw_wait(app: "DashboardApp", now: float) -> float:
+    """Seconds until the spacing allows another repaint of data."""
+    if app.last_redraw is None:
+        return 0.0
+    wait = app.last_redraw + REDRAW_SPACING_S - now
+    return wait if wait > SPACING_EPSILON_S else 0.0
+
+
+def hold_delay(app: "DashboardApp", wait: float) -> float:
+    return wait
+
+
+def request_redraw(app: "DashboardApp", cycles: list[int]) -> None:
+    """Repaint the screen with the newest data now, or, within the spacing of the last repaint, at the moment
+    the spacing ends (one timer of the app's own loop, carrying the newest data)."""
+    app.held_cycles.extend(number for number in cycles if number not in app.held_cycles)
+    wait = redraw_wait(app, app.mono())
+    if wait <= 0:
+        redraw_site(app)
+    elif app.hold is None:
+        app.hold_due = app.mono() + wait
+        app.hold = schedule(app, hold_delay(app, wait), lambda: fire_held(app))
+
+
+def fire_held(app: "DashboardApp") -> None:
+    app.hold = app.hold_due = None
+    redraw_site(app)
+
+
+def redraw_site(app: "DashboardApp") -> None:
+    """The one place the screen is repainted from data on the event path: only when the data differs from what
+    the screen shows; the repaint carries the clock and the ages too."""
+    if app.hold is not None:
+        app.hold.stop()
+        app.hold = app.hold_due = None
+    cycles, app.held_cycles = app.held_cycles, []
+    if app.snapshot is not None and shown_differs(app):
+        show_table(app, app.snapshot, app.read_at, app.snapshot_all, app.clock())
+        app.last_redraw, app.owed_header = app.mono(), False
+        note(app, "redraw", cycles=cycles)
+    parked, app.parked = app.parked, []
+    for ev, payload in parked:
+        note(app, ev, **payload)
+
+
+def paint(app: "DashboardApp", snapshot: dict, issued_all: bool) -> None:
+    """The repaint a landed read asks for: at once while the start-up reads or the stat path run; on the event
+    path the open cycle's redraw carries it, and a read that lands after its cycle ended asks for one."""
+    cycle = cycle_of(app, snapshot)
+    if not app.spaced:
+        if cycle is not None:
+            app.landed.add(cycle)
+        show_table(app, snapshot, app.read_at, issued_all)
+    elif cycle not in app.open_cycles:
+        request_redraw(app, [] if cycle is None else [cycle])
+
+
+def finish_cycle(app: "DashboardApp", cycle: int) -> None:
+    """The cycle's last read has landed: its redraw, the header repaint a yielded light tick owes, then the
+    tick's slice of the sweep."""
+    app.open_cycles.discard(cycle)
+    start_watching(app)
+    if app.spaced:
+        request_redraw(app, [cycle])
+        pay_owed_header(app)
+    elif cycle in app.landed:
+        app.landed.discard(cycle)
+        note(app, "redraw", cycles=[cycle])
+    if app.slice_due:
+        app.slice_due = False
+        run_tick_slice(app)
+
+
+def pay_owed_header(app: "DashboardApp") -> None:
+    if app.owed_header:
+        app.owed_header = False
+        repaint_header(app)
+
+
+def repaint_header(app: "DashboardApp") -> bool:
+    """Bring the clock and the ages to the current time and nothing else: no read, no data, no redraw spacing."""
+    if app.snapshot is None or app.key_now is None:
+        return False
+    rows, head = screen_of(app, app.snapshot, app.clock())
+    table, changed = app.query_one(DataTable), False
+    present = {key.value for key in table.rows}
+    for row in rows:
+        if row["session_id"] not in present:
+            continue
+        for column, cell in zip(tui.OVERVIEW_COLUMNS, row_cells(row)):
+            if table.get_cell(row["session_id"], column).plain != cell.plain:
+                table.update_cell(row["session_id"], column, cell)
+                changed = True
+    if head != app.shown_head:
+        app.query_one("#overview-head", Static).update(Text(head))
+        app.shown_head, changed = head, True
+    if changed:
+        events.emit("header_repaint")
+    return changed
+
+
+def yields(app: "DashboardApp") -> bool:
+    """Whether the light tick leaves its work to the tick that starts the cycle: events waiting in the
+    descriptor, a cycle in flight or pending, or a data redraw held by the spacing."""
+    return (app.watcher.pending() or bool(app.open_cycles) or app.named or app.tmux_pending
+            or app.hold is not None)
+
+
+def poll_tmux(app: "DashboardApp") -> bool:
+    """Poll the window listing once; a change is kept for the next tick's cycle to apply."""
+    if app.listing is None:
+        return False
+    poll_listing(app)
+    app.tmux_pending = app.listing.changed()
+    return app.tmux_pending
+
+
+def light_tick(app: "DashboardApp") -> None:
+    if not app.started or app.path != "event":
+        return
+    if yields(app):
+        app.owed_poll = app.owed_header = True
+        return
+    repaint_header(app)
+    changed = poll_tmux(app)
+    app.owed_poll = app.owed_header = False
+    events.emit("light_tick", tmux_changed=changed)
+
+
+def owes_poll(app: "DashboardApp") -> bool:
+    return app.owed_poll
+
+
+def cycle_mode(app: "DashboardApp") -> str | None:
+    """The mode of the cycle this tick starts, None when nothing asks for one."""
+    if app.watcher.pending() or app.named or app.tmux_pending:
+        return "event"
+    if app.mono() - app.last_reconcile >= RECONCILE_S:
+        return "reconcile"
+    return None
+
+
+def begin_cycle(app: "DashboardApp", cycle: int, mode: str, refresh: bool) -> None:
+    """Say the cycle starts and, on the event path, take the events waiting; say what the cycle reads of the
+    window listing."""
+    if app.listing is not None:
+        app.listing.begin(refresh or mode != "event" or owes_poll(app))
+    if mode == "reconcile":
+        app.last_reconcile = app.mono()
+    app.owed_poll = app.tmux_pending = app.named = False
+
+    def stamp() -> None:
+        events.emit("cycle_start", cycle=cycle, mode=mode)
+
+    if app.path != "event":
+        stamp()
+        return
+    found = watch.begin_cycle(app.watcher, snapshot_store.KEPT, stamp)
+    if watch.needs_sweep(found):
+        start_full_check(app)
+
+
+def start_full_check(app: "DashboardApp") -> None:
+    """After an overflow or a lost watch: watch again what lost its watch, then check every entry of the read set
+    from the next tick on."""
+    try:
+        app.watcher.restore()
+    except watch.Unavailable as exc:
+        fall_back(app, exc.reason)
+        return
+    app.sweep.begin_one_off()
+
+
+def fall_back(app: "DashboardApp", reason: str) -> None:
+    """Leave the event path: every read is a live one again, and the stat path times the cycles."""
+    app.path, app.spaced = "stat", False
+    snapshot_store.KEPT.distrust()
+    app.watcher.close()
+    events.emit("detection", path="stat", reason=reason)
+
+
+def slice_limits(app: "DashboardApp", entries: int) -> tuple[int | None, float, float | None]:
+    """What one slice may take: the entries (the one-off check takes what fits the budget), the budget and the
+    moment a held redraw is due."""
+    allowance = None if app.sweep.one_off else entries + app.owed
+    return allowance, SLICE_BUDGET_S, app.hold_due
+
+
+def run_tick_slice(app: "DashboardApp") -> None:
+    """A slice of the sweep at the end of a tick, after the tick's cycle: none when that cycle ended late, and the
+    share not checked is owed to the next slice that runs."""
+    entries = slice_entries(app.sweep.size())
+    if app.mono() - app.tick_at > SLICE_LATEST_S:
+        app.owed += entries
+        return
+    allowance, budget, deadline = slice_limits(app, entries)
+    result = watch.sweep_slice(app.sweep, allowance, budget, app.mono, deadline)
+    if result.entries == 0 and result.truncated:
+        app.owed += entries
+        return
+    app.owed = 0
+    if result.found:
+        app.named = True
+    note(app, "sweep_slice", entries=result.entries, found=result.found, truncated=result.truncated)
+
+
+def event_tick(app: "DashboardApp") -> None:
+    app.tick_at = app.mono()
+    mode = cycle_mode(app)
+    if mode is not None and not read_in_flight(app, "collect"):
+        app.slice_due = True
+        app.reload(mode=mode)
+    elif read_in_flight(app, "collect") or app.open_cycles:
+        app.owed += slice_entries(app.sweep.size())
+    else:
+        run_tick_slice(app)
+
+
+def found_by(app: "DashboardApp", applied) -> dict[str, str]:
+    """How each source the cycle applied was found: an event (or an unsettled stat), a slice of the sweep, or the
+    stat path."""
+    found = snapshot_store.KEPT.take_found()
+    default = "event" if app.path == "event" else "stat"
+    routes = {}
+    for source in applied:
+        route = found.get(source) or found.get(os.path.dirname(source)) or default
+        routes[source] = "event" if route == "stat" and default == "event" else route
+    return routes
+
+
+def start_watching(app: "DashboardApp") -> None:
+    """Add the watches once the start-up live check has ended; when they cannot all be added, the run stays on
+    the stat path."""
+    if app.watching is None or app.watch_started:
+        return
+    app.watch_started = True
+    sources = watch.sources_for(app.state_root, config_root_bindings(), snapshot_store.transcript_roots(
+        app.transcripts_root), app.cost_log, getattr(app.locator, "LISTING_FILE", None))
+    app.run_worker(watched(app, sources), group="watch")
+
+
+def config_root_bindings() -> Path:
+    return snapshot_store.BINDINGS.directory()
+
+
+async def watched(app: "DashboardApp", sources) -> None:
+    def choose():
+        found = watch.choose_path(sources, events.emit, app.watching)
+        if found is not None and app.listing is not None:
+            app.listing.poll()
+        return found
+
+    watcher = await in_daemon_thread(choose)
+    if watcher is None:
+        return
+    app.watcher, app.path, app.spaced = watcher, "event", True
+    snapshot_store.KEPT.trust(watcher.covers)
+    app.last_redraw = app.last_reconcile = app.mono()
+    app.sweep.begin_one_off()
+    every(app, LIGHT_TICK_S, lambda: light_tick(app))
 
 
 def cycle_of(app: "DashboardApp", snapshot: dict) -> int | None:
@@ -134,6 +500,10 @@ def refresh_if_due(app: "DashboardApp") -> None:
         return
     if tui.due(app.clock(), app.last_collect, app.interval) and not read_in_flight(app, "collect"):
         app.reload()
+    refresh_views(app)
+
+
+def refresh_views(app: "DashboardApp") -> None:
     if app.view.tab == "detail" and tui.due(app.clock(), app.last_detail_read, app.interval) \
             and not read_in_flight(app, "detail"):
         start_detail_read(app)
@@ -168,7 +538,7 @@ def attempt(read) -> tuple[dict | None, Exception | None]:
 def read_overlay(app: "DashboardApp", snapshot: dict) -> tuple[dict | None, Exception | None]:
     """The attention overlay of the live set, None when its read fails, with the error: the Tasks table
     does not depend on it, so a failure here must not blank it."""
-    return attempt(lambda: tui.read_attention(tui.live_snapshot(snapshot, app.sessions), app.locator,
+    return attempt(lambda: tui.read_attention(tui.live_snapshot(snapshot, app.sessions), reader(app),
                                               app.transcripts_root))
 
 
@@ -328,9 +698,13 @@ async def read_overlay_for(app: "DashboardApp", snapshot: dict, issued_all: bool
     overlay, error, sessions, seen = await in_daemon_thread(read)
     app.session_activity = sessions
     app.activity.update(sessions)
+    app.parking = [] if app.spaced else None
     overlay_ready(app, overlay, error, issued_all, seen)
+    parked, app.parking = app.parking, None
+    app.parked.extend(parked or ())
     if (cycle := cycle_of(app, snapshot)) is not None:
-        note(app, "cycle_end", cycle=cycle, applied=seen[0])
+        note(app, "cycle_end", cycle=cycle, applied=seen[0], found_by=found_by(app, seen[0]))
+        finish_cycle(app, cycle)
 
 
 def overlay_ready(app: "DashboardApp", overlay: dict | None, error: Exception | None, issued_all: bool,
@@ -342,7 +716,7 @@ def overlay_ready(app: "DashboardApp", overlay: dict | None, error: Exception | 
         app.overlay = overlay
         app.old_ids = app.old_ids - confirmed_by(app, overlay)
     if app.snapshot is not None:
-        show_table(app, app.snapshot, app.read_at, issued_all)
+        paint(app, app.snapshot, issued_all)
     if overlay is not None:
         note_marks(app, overlay, seen)
         if not app.live_check_ended:
@@ -433,7 +807,7 @@ def order_ready(app: "DashboardApp", snapshot: dict, order, error: Exception | N
         if not app.cursor_chosen:
             app.view = tui.unanchored(app.view)
         note_read(app, "order", None)
-        show_table(app, snapshot, app.read_at, issued_all)
+        paint(app, snapshot, issued_all)
     elif title_is_current(app, issued_all):
         show_read_error(app, "order", error)
     start_marks_read(app)
@@ -467,7 +841,7 @@ def start_marks_read(app: "DashboardApp") -> None:
 
 
 def read_marks_of(app: "DashboardApp", ids: list[str], order) -> dict:
-    return tui.read_marks(ids, order, app.locator, app.transcripts_root)
+    return tui.read_marks(ids, order, reader(app), app.transcripts_root)
 
 
 async def read_marks_for(app: "DashboardApp", ids: list[str], order) -> None:
@@ -506,13 +880,15 @@ def show_marks(app: "DashboardApp", ids) -> None:
                 table.update_cell(row["session_id"], column, cell)
 
 
-def show_table(app: "DashboardApp", snapshot: dict, now: dt.datetime, issued_all: bool) -> None:
+def show_table(app: "DashboardApp", snapshot: dict, now: dt.datetime, issued_all: bool,
+               shown_now: dt.datetime | None = None) -> None:
     """Rows, header and sub-title of ``snapshot`` with the marks as last read, sorted by the activity as
-    last read: the table waits for neither."""
-    marks = shown_marks(app)
-    rows = tui.overview_rows(snapshot, now, marks, app.activity, app.old_ids)
-    app.query_one("#overview-head", Static).update(Text(tui.overview_header(
-        snapshot, now, marks, counted_marks(app), header_old(app, snapshot))))
+    last read: the table waits for neither. The rows and header read as of ``shown_now`` (``now`` when not
+    given)."""
+    at = shown_now or now
+    rows, head = screen_of(app, snapshot, at)
+    app.query_one("#overview-head", Static).update(Text(head))
+    app.shown_key, app.key_now, app.shown_head = data_key(app, rows, head), at, head
     ids = tuple(row["session_id"] for row in rows)
     app.view = tui.reconcile(app.view, ids, (row["session_id"] for row in rows if row["kind"] == "session"))
     table = app.query_one(DataTable)
@@ -524,6 +900,9 @@ def show_table(app: "DashboardApp", snapshot: dict, now: dt.datetime, issued_all
     if title_is_current(app, issued_all):
         app.sub_title = f"{mode_title(app.view.include_all, len(ids))}, read {now:%H:%M:%S}{read_failure_suffix(app)}"
     note_rows_confirmed(app)
+    if not app.painted:
+        app.painted = True
+        note(app, "redraw", cycles=[])
 
 
 def paint_stored(app: "DashboardApp", section: dict) -> None:
@@ -688,10 +1067,41 @@ class DashboardApp(App):
         Binding(key, f"chat_key('{key}')", priority=True, show=False) for key in sorted(tui.CHAT_KEYS)]
 
     def __init__(self, *, state_root, cost_log, transcripts_root=None, window_hours=24.0, include_all=False,
-                 sessions=(), interval=tui.DEFAULT_INTERVAL_S, clock=utc_now, locator=None, snapshot_path=None):
+                 sessions=(), interval=tui.DEFAULT_INTERVAL_S, clock=utc_now, locator=None, snapshot_path=None,
+                 watching=None, mono=None):
         """``snapshot_path`` names the snapshot file the start paints from and the exit writes; None keeps
-        the dashboard from reading or writing any."""
+        the dashboard from reading or writing any. ``watching`` None keeps the stat path and says nothing of
+        it; True learns of changes from inotify when it can be set up, False stays on the stat path and
+        says why. ``mono`` is the monotonic clock behind the redraw spacing and the slices."""
         super().__init__()
+        self.watching = watching
+        self.mono = mono or mono_of(clock)
+        self.path = "stat"
+        self.spaced = False
+        self.watcher: watch.Watcher | None = None
+        self.sweep = watch.Sweep(snapshot_store.KEPT)
+        self.listing = Listing(locator) if locator is not None else None
+        self.shown_key: tuple | None = None
+        self.shown_head: str | None = None
+        self.key_now: dt.datetime | None = None
+        self.painted = False
+        self.last_redraw: float | None = None
+        self.last_reconcile = 0.0
+        self.hold = None
+        self.hold_due: float | None = None
+        self.held_cycles: list[int] = []
+        self.open_cycles: set[int] = set()
+        self.landed: set[int] = set()
+        self.parking: list | None = None
+        self.parked: list = []
+        self.tick_at = 0.0
+        self.slice_due = False
+        self.owed = 0
+        self.owed_poll = False
+        self.owed_header = False
+        self.tmux_pending = False
+        self.named = False
+        self.watch_started = False
         self.snapshot_path = snapshot_path
         self.replaced_signals: dict = {}
         self.started = snapshot_path is None
@@ -765,7 +1175,7 @@ class DashboardApp(App):
         else:
             self.install_sigterm()
             self.run_worker(self._start(), group="start")
-        self.set_interval(max(min(self.interval, TICK_S), 0.05), self._tick)
+        every(self, max(min(self.interval, TICK_S), 0.05), self._tick)
 
     def install_sigterm(self) -> None:
         """SIGTERM, SIGHUP and SIGINT end the app like the quit key, so the snapshot is written on the way out.
@@ -814,16 +1224,22 @@ class DashboardApp(App):
         return path
 
     def _tick(self) -> None:
-        refresh_if_due(self)
+        if self.path == "event":
+            if self.started:
+                event_tick(self)
+                refresh_views(self)
+        else:
+            refresh_if_due(self)
 
-    def reload(self, force: bool = False) -> None:
+    def reload(self, force: bool = False, mode: str | None = None) -> None:
         if self._loading:
             self._again = self._again or force
             return
         self._loading = True
         self.last_collect = self.clock()
         self.cycle += 1
-        events.emit("cycle_start", cycle=self.cycle)
+        self.open_cycles.add(self.cycle)
+        begin_cycle(self, self.cycle, mode or ("event" if self.path == "event" else "stat"), force)
         self.run_worker(self._load(self.cycle), group="collect")
 
     async def _load(self, cycle: int) -> None:
@@ -831,20 +1247,23 @@ class DashboardApp(App):
         try:
             snapshot = await in_daemon_thread(lambda: model.collect(
                 self.state_root, now=now, window_hours=self.window_hours, include_all=include_all,
-                sessions=self.sessions, cost_log=self.cost_log, windowed=tui.attention.windowed_engines(self.locator)))
+                sessions=self.sessions, cost_log=self.cost_log, windowed=tui.attention.windowed_engines(reader(self))))
         except Exception as exc:
             self._failed(exc)
             return
         self.snapshot, self.read_at, self.snapshot_all = snapshot, now, include_all
         self.cycles = [*self.cycles[-(KEPT_CYCLES - 1):], (snapshot, cycle)]
-        show_table(self, snapshot, now, include_all)
+        paint(self, snapshot, include_all)
         if not self.rows_noted:
             self.rows_noted = True
             code_check = snapshot_store.code_check_report() if self.snapshot_path is not None else {}
             note(self, "rows_painted", from_snapshot=False, rows=len(snapshot["tasks"]), **code_check)
         self._finish_load()
         start_order_read(self, snapshot, include_all)
+        busy = read_in_flight(self, "overlay")
         start_overlay_read(self, snapshot, include_all)
+        if busy:
+            finish_cycle(self, cycle)
 
     def _finish_load(self) -> None:
         self._loading = False
@@ -854,6 +1273,11 @@ class DashboardApp(App):
 
     def _failed(self, exc: Exception) -> None:
         self.sub_title = f"read failed: {exc}"
+        self.open_cycles.discard(self.cycle)
+        start_watching(self)
+        if self.slice_due:
+            self.slice_due = False
+            run_tick_slice(self)
         self._finish_load()
 
     def action_key(self, key: str) -> None:
@@ -935,7 +1359,8 @@ def main(argv=None) -> int:
     app = DashboardApp(state_root=args.state_root, cost_log=args.cost_log, transcripts_root=args.transcripts_root,
                        window_hours=args.window_hours, include_all=args.include_all, sessions=args.sessions,
                        interval=args.interval, locator=locate.select_or_none(args.plugin_dir, args.locator),
-                       snapshot_path=snapshot_store.default_path())
+                       snapshot_path=snapshot_store.default_path(),
+                       watching=os.environ.get("PLAN_DASHBOARD_WATCH") != "off")
     run_app(app)
     return 0
 

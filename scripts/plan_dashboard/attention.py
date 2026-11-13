@@ -232,7 +232,7 @@ def read_tail(path) -> Tail | None:
     readers of other transcripts never wait on this one's I/O."""
     path = Path(path)
     try:
-        stat = os.stat(path)
+        stat = snapshot.KEPT.stat(path)
     except OSError:
         return None
     key = str(path)
@@ -297,15 +297,15 @@ def transcript_matches(harness_session: str, transcripts_root, transcripts=None)
     if transcripts is not None:
         return list(transcripts.get(name, []))
     if transcripts_root is not None:
-        return sorted(Path(transcripts_root).glob(f"*/{name}.jsonl"))
-    return list(config_root.iter_transcripts(f"*/{name}.jsonl"))
+        return snapshot.KEPT.glob(transcripts_root, f"*/{name}.jsonl")
+    return snapshot.iter_transcripts(f"*/{name}.jsonl")
 
 
 def _newest(matches) -> Path | None:
     best = None
     for match in matches:
         try:
-            mtime = match.stat().st_mtime
+            mtime = snapshot.KEPT.stat(match).st_mtime
         except OSError:
             continue
         if best is None or mtime >= best[0]:
@@ -320,7 +320,7 @@ def note_candidate_transcripts(candidates, locator, transcripts_root, transcript
         located = locate.transcript_path(locator, candidate)
         for path in {*([located] if located else []), *transcript_matches(candidate, transcripts_root, transcripts)}:
             try:
-                snapshot.OBSERVED.note("transcript", path, os.stat(path))
+                snapshot.OBSERVED.note("transcript", path, snapshot.KEPT.stat(path))
             except OSError:
                 continue
 
@@ -340,7 +340,7 @@ def bind_session(engine_session: str, locator, transcripts_root, index=None,
         if path is None:
             continue
         try:
-            key = (path.stat().st_mtime, candidate)
+            key = (snapshot.KEPT.stat(path).st_mtime, candidate)
         except OSError:
             continue
         if best is None or key > best[0]:
@@ -372,7 +372,7 @@ def permission_needed(tail: Tail | None) -> bool:
 def _mark_key(harness_session: str | None, path: Path) -> tuple[tuple, bool] | None:
     """``((identity, session), settled)`` of the transcript; a mark under an unsettled key is not kept."""
     try:
-        stat = os.stat(path)
+        stat = snapshot.KEPT.stat(path)
     except OSError:
         return None
     snapshot.OBSERVED.note("transcript", str(path), stat)

@@ -23,6 +23,9 @@ are killed by the pilot file too. ``same-named-transcript-dropped`` (a task's
 other transcripts are not recorded) and ``unrecorded-source-stat-skipped`` (the live check stats no unrecorded
 source in a directory whose marker is unchanged) are killed by the snapshot tests.
 
+WATCH_MUTATIONS is the change detection's family (the inotify watcher, the sweep, the redraw spacing and the
+light tick), killed by ``test_plan_dashboard_watch.py`` and the pilot file.
+
 ``test_plan_dashboard_mutation_catalogue.py`` runs every MUTATIONS row in a subprocess and asserts
 the model tests go red, every other TUI_MUTATIONS row likewise against the console tests, and the
 ``tui_app`` row against the pilot file where textual is importable; to add a mutation, add a row
@@ -1136,6 +1139,122 @@ SNAPSHOT_MUTATIONS = {
 }
 
 
+WATCH = "plan_dashboard.watch"
+
+
+def _watch():
+    return importlib.import_module(WATCH)
+
+
+def _directories_holding_a_source_only(original):
+    def mutated(source):
+        return [directory for directory in original(source)
+                if any(source.accepts(path) for path in _files_under(directory))]
+    return mutated
+
+
+def _files_under(directory):
+    try:
+        return [Path(entry.path) for entry in os.scandir(directory) if entry.is_file(follow_symlinks=False)]
+    except OSError:
+        return []
+
+
+def _watch_failure_ignored(original):
+    def mutated(sources):
+        try:
+            return original(sources)
+        except _watch().Unavailable:
+            return _watch().Watcher(sources)
+    return mutated
+
+
+def _event_cycle_reads_every_kept_entry(original):
+    def mutated(watcher, kept):
+        found = original(watcher, kept)
+        kept.mark(list(kept.stats), list(kept.listings), by="event")
+        return found
+    return mutated
+
+
+def _cycle_starts_after_the_read(original):
+    def mutated(watcher, kept, stamp):
+        found = _watch().intake(watcher, kept)
+        stamp()
+        return found
+    return mutated
+
+
+def _detection_before_the_watches(original):
+    def mutated(sources, emit, enabled=True):
+        emit("detection", path="event", reason="every watch is in")
+        return original(sources, lambda *args, **kwargs: None, enabled)
+    return mutated
+
+
+def _rolling_sweep_dropped(original):
+    def mutated(sweep, allowance, budget_s, mono, deadline=None):
+        if not sweep.one_off:
+            return _watch().SliceResult()
+        return original(sweep, allowance, budget_s, mono, deadline)
+    return mutated
+
+
+def _light_tick_reads_a_source_directory(original):
+    def mutated(app):
+        original(app)
+        os.stat(app.watcher.sources[0].root)
+    return mutated
+
+
+def _light_tick_repaints_data(original):
+    def mutated(app):
+        original(app)
+        if app.tmux_pending:
+            app.shown_key = None
+            importlib.import_module(TUI_APP).redraw_site(app)
+    return mutated
+
+
+def _slice_without_the_owed_share(original):
+    def mutated(app, entries):
+        owed, app.owed = app.owed, 0
+        try:
+            return original(app, entries)
+        finally:
+            app.owed = owed
+    return mutated
+
+
+def _held_redraw_one_tick_late(original):
+    def mutated(app, wait):
+        return wait + importlib.import_module(TUI_APP).TICK_S
+    return mutated
+
+
+WATCH_MUTATIONS = {
+    "overflow-not-swept": (WATCH, "needs_sweep", _always(False)),
+    "new-dir-not-watched": (WATCH, "adopt", lambda _original: lambda *args, **kwargs: None),
+    "pattern-dirs-not-watched": (WATCH, "directories_to_watch", _directories_holding_a_source_only),
+    "reconcile-sweep-dropped": (WATCH, "sweep_slice", _rolling_sweep_dropped),
+    "watch-failure-not-fallen-back": (WATCH, "start", _watch_failure_ignored),
+    "event-cycle-reads-all": (WATCH, "intake", _event_cycle_reads_every_kept_entry),
+    "cycle-start-after-read": (WATCH, "begin_cycle", _cycle_starts_after_the_read),
+    "detection-at-path-choice": (WATCH, "choose_path", _detection_before_the_watches),
+    "redraw-at-idle": (TUI_APP, "shown_differs", _always(True)),
+    "redraw-not-spaced": (TUI_APP, "redraw_wait", lambda _original: lambda app, now: 0.0),
+    "held-redraw-waits-for-next-tick": (TUI_APP, "hold_delay", _held_redraw_one_tick_late),
+    "light-tick-reads-sources": (TUI_APP, "light_tick", _light_tick_reads_a_source_directory),
+    "light-tick-skips-tmux": (TUI_APP, "poll_tmux", _always(False)),
+    "light-tick-owns-redraw": (TUI_APP, "light_tick", _light_tick_repaints_data),
+    "light-tick-ignores-pending-event": (TUI_APP, "yields", _always(False)),
+    "sweep-not-sliced": (TUI_APP, "slice_limits", lambda _original: lambda app, entries: (app.sweep.size(), importlib.import_module(TUI_APP).SLICE_BUDGET_S, None)),
+    "skipped-slice-share-lost": (TUI_APP, "slice_limits", _slice_without_the_owed_share),
+    "owed-header-repaint-dropped": (TUI_APP, "pay_owed_header", lambda _original: lambda app: None),
+    "owed-tmux-poll-dropped": (TUI_APP, "owes_poll", _always(False)),
+}
+
+
 def _save_records_the_copy_sources(original):
     class Mutated(original):
         def do_save(self, arg):
@@ -1171,7 +1290,7 @@ def install(name: str) -> None:
     """Apply the mutation ``name`` in this process (``pytest.UsageError`` for an unknown one)."""
     global applied
     known = {**MUTATIONS, **TUI_MUTATIONS, **WEB_MUTATIONS, **WEB_PAGE_MUTATIONS, **PUBLISH_MUTATIONS,
-             **ATTENTION_MUTATIONS, **SNAPSHOT_MUTATIONS, **SCRIPT_MODULE_MUTATIONS}
+             **ATTENTION_MUTATIONS, **SNAPSHOT_MUTATIONS, **WATCH_MUTATIONS, **SCRIPT_MODULE_MUTATIONS}
     if name not in known:
         raise pytest.UsageError(f"{ENV}={name!r} is not a known mutation; known: {sorted(known)}")
     module_name, attr, wrapper = known[name]

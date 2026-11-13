@@ -124,7 +124,7 @@ def _stat_ledger(path: Path):
     """``(stat, None)``; ``(None, True)`` for an absent ledger (nothing was ever spent); ``(None, False)`` for
     one that exists but cannot be examined (its figures are unknown)."""
     try:
-        return path.stat(), None
+        return snapshot.KEPT.stat(path), None
     except FileNotFoundError:
         return None, True
     except OSError:
@@ -291,7 +291,7 @@ def _read_transcript(path: Path) -> list:
 
     Caller holds CACHE_LOCK: the offset, the seen set and the rows move together."""
     try:
-        st = os.stat(path)
+        st = snapshot.KEPT.stat(path)
     except OSError:
         return []
     key = str(path)
@@ -351,9 +351,9 @@ def _transcript_paths(session_id: str, transcripts_root, *, linked_child: bool =
     found: dict[str, Path] = {}
     for name in dict.fromkeys(names):
         if transcripts_root is not None:
-            matches = sorted(Path(transcripts_root).glob(f"*/{name}.jsonl"))
+            matches = snapshot.KEPT.glob(transcripts_root, f"*/{name}.jsonl")
         else:
-            matches = config_root.iter_transcripts(f"*/{name}.jsonl")
+            matches = snapshot.iter_transcripts(f"*/{name}.jsonl")
         for match in matches:
             found.setdefault(str(match.resolve()), match)
     return list(found.values())
@@ -677,7 +677,7 @@ def _is_sidecar(stem: str, entry: dict) -> bool:
 
 def _mtime(path: Path) -> dt.datetime | None:
     try:
-        return dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc)
+        return dt.datetime.fromtimestamp(snapshot.KEPT.stat(path).st_mtime, dt.timezone.utc)
     except OSError:
         return None
 
@@ -793,11 +793,11 @@ def child_index(state_root, *, since: float | None = None) -> dict[str, list[dic
     state file is created after its parent starts and later saves only raise its mtime."""
     floor = None if since is None else since - 60
     index: dict[str, list[dict]] = {}
-    paths = sorted(Path(state_root).glob("*.json"))
+    paths = snapshot.KEPT.glob(state_root, "*.json")
     _prune_children(Path(state_root), set(paths))
     for path in paths:
         try:
-            st = path.stat()
+            st = snapshot.KEPT.stat(path)
         except OSError:
             continue
         key = snapshot.identity_of(st)
