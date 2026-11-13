@@ -53,7 +53,6 @@ import contextlib
 import dataclasses
 import fcntl
 import os
-import re
 import shutil
 import stat
 import sys
@@ -535,13 +534,19 @@ def enforce(common_dir: str | Path, *, max_mb: float | None = None, runs: int | 
     return Retained(before / MB, max(total, 0) / MB, tuple(evicted), over, protected / MB)
 
 
-PROTECTED_REPORT = re.compile(r"([0-9]+(?:\.[0-9]+)?) MB of it protected")
+PROTECTED_REPORT = " MB of it protected"
 
 
 def reported_protected_mb(stderr: str) -> float | None:
-    """The protected size an over-the-bound ``enforce`` printed, or None when it printed none."""
-    found = PROTECTED_REPORT.findall(stderr)
-    return float(found[-1]) if found else None
+    """The protected size the last over-the-bound ``enforce`` printed, or None when it printed none."""
+    head, found, _ = stderr.rpartition(PROTECTED_REPORT)
+    words = head.split()
+    if not found or not words:
+        return None
+    try:
+        return float(words[-1])
+    except ValueError:
+        return None
 
 
 def _by_last_use(entry: Entry) -> float:
