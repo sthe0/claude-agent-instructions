@@ -85,7 +85,13 @@ class _Kind:
     def __init__(self) -> None:
         self.checked = 0
         self.counted = {}
-        self.missing = []
+        self.missing = 0
+        self.first_missing = None
+
+    def miss(self, row: dict) -> None:
+        self.missing += 1
+        if self.first_missing is None:
+            self.first_missing = row
 
     def count(self, name: str, n: int = 1) -> None:
         if n:
@@ -93,7 +99,7 @@ class _Kind:
 
     def report(self) -> dict:
         return {"checked": self.checked, "counted": dict(sorted(self.counted.items())),
-                "missing": len(self.missing), "first_missing": self.missing[0] if self.missing else None}
+                "missing": self.missing, "first_missing": self.first_missing}
 
 
 class _Records:
@@ -126,27 +132,43 @@ def _reconcile_ledger(records: _Records, frozen: snapshot.Snapshot, kind: _Kind)
         if generation is None:
             continue
         offset, other_generation = _live_offset(records.live, unit.path, generation, unit.consumer)
-        lines = [(position, store.imported_row_id(unit.path, position, sha, records.scratch_origin),
-                  store.imported_row_id(unit.path, position, sha, records.live_origin))
-                 for position, sha in _complete_lines(copy)]
-        in_scratch = _present(records.scratch, "events", "event_id", [s for _, s, _ in lines])
-        if other_generation:
-            kind.count("generation_changed", sum(1 for _, s, _ in lines if s in in_scratch))
+        for chunk in _batches(_complete_lines(copy)):
+            _reconcile_lines(records, unit.path, chunk, offset, other_generation, kind)
+
+
+def _batches(items):
+    batch = []
+    for item in items:
+        batch.append(item)
+        if len(batch) == BATCH:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def _reconcile_lines(records: _Records, source: str, chunk: list, offset: int, other_generation: bool,
+                     kind: _Kind) -> None:
+    lines = [(position, store.imported_row_id(source, position, sha, records.scratch_origin),
+              store.imported_row_id(source, position, sha, records.live_origin)) for position, sha in chunk]
+    in_scratch = _present(records.scratch, "events", "event_id", [s for _, s, _ in lines])
+    if other_generation:
+        kind.count("generation_changed", sum(1 for _, s, _ in lines if s in in_scratch))
+        return
+    below = [line for line in lines if line[0] < offset]
+    in_live = _present(records.live, "events", "event_id", [l for _, _, l in below])
+    kind.count("beyond_live_offset", sum(1 for p, s, _ in lines if p >= offset and s in in_scratch))
+    for position, scratch_id, live_id in below:
+        if scratch_id not in in_scratch:
+            kind.count("live_not_in_scratch", int(live_id in in_live))
             continue
-        below = [line for line in lines if line[0] < offset]
-        in_live = _present(records.live, "events", "event_id", [l for _, _, l in below])
-        kind.count("beyond_live_offset", sum(1 for p, s, _ in lines if p >= offset and s in in_scratch))
-        for position, scratch_id, live_id in below:
-            if scratch_id not in in_scratch:
-                kind.count("live_not_in_scratch", int(live_id in in_live))
-                continue
-            kind.checked += 1
-            if live_id in in_live:
-                continue
-            if _held_by_live_row(records, live_id, scratch_id):
-                kind.count("held_by_live_row")
-            else:
-                kind.missing.append({"source": unit.path, "offset": position, "live_id": live_id})
+        kind.checked += 1
+        if live_id in in_live:
+            continue
+        if _held_by_live_row(records, live_id, scratch_id):
+            kind.count("held_by_live_row")
+        else:
+            kind.miss({"source": source, "offset": position, "live_id": live_id})
 
 
 def _reconcile_transcripts(records: _Records, frozen: snapshot.Snapshot, kind: _Kind) -> None:
@@ -166,7 +188,9 @@ def _reconcile_transcripts(records: _Records, frozen: snapshot.Snapshot, kind: _
         kind.count("beyond_live_offset", len(scratch_rows) - len(below))
         in_live = _present(records.live, "token_usage", "message_id", below)
         kind.checked += len(below)
-        kind.missing.extend({"transcript": source, "message_id": m} for m in below if m not in in_live)
+        for message_id in below:
+            if message_id not in in_live:
+                kind.miss({"transcript": source, "message_id": message_id})
         cut = min(offset, copy.stat().st_size)
         live_ids = [r[0] for r in records.live.execute(
             "SELECT message_id FROM token_usage WHERE transcript = ? AND byte_offset < ?", (source, cut))]
@@ -198,7 +222,7 @@ def _reconcile_state(records: _Records, frozen: snapshot.Snapshot, kind: _Kind) 
                 kind.count("live_session_history")
             else:
                 kind.checked += 1
-                kind.missing.append({"state": str(path), "session": session, "live_id": live_id})
+                kind.miss({"state": str(path), "session": session, "live_id": live_id})
         history_rows = {r[0] for r in records.live.execute(
             "SELECT event_id FROM events WHERE session_id = ? AND provenance = 'imported' AND kind = 'command'",
             (session,))}
