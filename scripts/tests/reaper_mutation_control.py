@@ -805,6 +805,10 @@ CATALOGUE: "dict[str, Mutant]" = {
         LIVENESS, "    return os.path.normpath(os.path.abspath(path))\n", "    return os.path.realpath(path)\n",
         _ids(T_HOLDERS, "test_nothing_under_a_queried_path_is_stat_ed_resolved_or_walked"),
     ),
+    "holders-zombie-unknown": Mutant(
+        LIVENESS, "        if facts.state in _RELEASED_STATES:\n", "        if False:\n",
+        _ids(T_HOLDERS, "test_zombie_with_unreadable_entries_holds_nothing"),
+    ),
     "holders-symlink-queried": Mutant(
         LIVENESS, "        spellings = [wanted] if real == wanted else [wanted, real]\n", "        spellings = [wanted]\n",
         _ids(T_HOLDERS, "test_a_queried_symlink_to_a_held_directory_is_held_by_a_scope_record",

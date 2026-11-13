@@ -192,6 +192,38 @@ def test_the_filesystem_root_is_never_answered_free(tmp_path):
     assert ask(tmp_path, ["/"])["/"].status == liveness.UNKNOWN_STATUS
 
 
+# ── a process that exited holds nothing; a live one that cannot be read is unknown ──
+
+def swept_unreadable_process(tmp_path, state: str) -> liveness.HolderSweep:
+    proc = tmp_path / "proc"
+    entry = proc / "77"
+    (entry / "fd").mkdir(parents=True)
+    me = os.getuid()
+    (entry / "status").write_text(
+        f"Name:\tx\nState:\t{state}\nPPid:\t1\nUid:\t{me}\t{me}\t{me}\t{me}\n", encoding="utf-8",
+    )
+    (entry / "cmdline").write_text("", encoding="utf-8")
+
+    def denied(path):
+        raise PermissionError(13, "Permission denied", path)
+
+    return liveness.sweep_holders(str(proc), readlink_fn=denied)
+
+
+def test_zombie_with_unreadable_entries_holds_nothing(tmp_path, planted):
+    work, _ = planted
+    sweep = swept_unreadable_process(tmp_path, "Z (zombie)")
+    assert (sweep.incomplete, sweep.zombies_skipped) == (None, 1)
+    assert ask(tmp_path, [work], sweep=sweep)[str(work)].status == liveness.FREE_STATUS
+
+
+def test_live_process_with_unreadable_fd_gives_unknown(tmp_path, planted):
+    work, _ = planted
+    sweep = swept_unreadable_process(tmp_path, "S (sleeping)")
+    assert sweep.incomplete and sweep.zombies_skipped == 0
+    assert ask(tmp_path, [work], sweep=sweep)[str(work)].status == liveness.UNKNOWN_STATUS
+
+
 # ── a symlinked spelling of a held path is still held ────────────────────
 
 @pytest.fixture

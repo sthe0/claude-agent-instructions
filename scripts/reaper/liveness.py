@@ -117,6 +117,7 @@ class HolderSweep:
     held: "dict[str, list[str]]" = dataclasses.field(default_factory=lambda: {k: [] for k in HOLDER_KINDS})
     foreign_skipped: int = 0
     helpers_skipped: int = 0
+    zombies_skipped: int = 0
     incomplete: "str | None" = None
 
     def holder_of(self, real: str) -> "str | None":
@@ -196,20 +197,26 @@ def _read_text(path: str) -> str:
         return handle.read()
 
 
+_RELEASED_STATES = frozenset("ZX")
+
+
 @dataclasses.dataclass(frozen=True)
 class StatusFacts:
-    """What the sweep needs from a ``/proc/<pid>/status`` text: the four uids, ``Name`` and ``PPid``."""
+    """What the sweep needs from a ``/proc/<pid>/status`` text: the four uids, ``Name``, ``PPid`` and ``State``."""
 
     uids: "frozenset[int] | None"
     name: "str | None"
     ppid: "int | None"
+    state: "str | None" = None
 
 
 def _parse_status(text: str) -> StatusFacts:
-    uids = name = ppid = None
+    uids = name = ppid = state = None
     for line in text.splitlines():
         key, _, rest = line.partition(":")
-        if key == "Uid" and uids is None:
+        if key == "State" and state is None:
+            state = rest.strip()[:1] or None
+        elif key == "Uid" and uids is None:
             try:
                 uids = frozenset(int(field) for field in rest.split())
             except ValueError:
@@ -221,7 +228,7 @@ def _parse_status(text: str) -> StatusFacts:
                 ppid = int(rest.strip())
             except ValueError:
                 ppid = None
-    return StatusFacts(uids, name, ppid)
+    return StatusFacts(uids, name, ppid, state)
 
 
 def _argv0(cmdline: str) -> "tuple[str, str] | None":
@@ -306,7 +313,8 @@ def sweep_holders(
     directory or status is gone holds nothing; a link, fd or map entry that vanished while the
     process is still listed (a zombie, an exiting process) skips only that entry. A same-uid process
     with an unreadable link is skipped and counted only when it is a known helper, else the sweep
-    is incomplete.
+    is incomplete. A same-uid process in state ``Z`` or ``X`` (exited, not yet reaped) has released
+    its cwd, fds and mappings, so it is skipped before any read and counted in ``zombies_skipped``.
     """
     uid = os.getuid() if uid is None else uid
     sweep = HolderSweep()
@@ -336,6 +344,9 @@ def sweep_holders(
             continue
         if uid not in facts.uids:
             sweep.foreign_skipped += 1
+            continue
+        if facts.state in _RELEASED_STATES:
+            sweep.zombies_skipped += 1
             continue
         failures: Failures = []
         for kind in ("cwd", "exe"):
