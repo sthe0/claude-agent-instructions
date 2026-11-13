@@ -53,7 +53,9 @@ LIVENESS = "reaper/liveness.py"
 TEMP_RESIDUE = "reaper/builtin/temp_residue.py"
 T_LIVENESS = "tests/test_reaper_liveness.py"
 T_RESIDUE = "tests/test_reaper_temp_residue.py"
+T_HOLDERS = "tests/test_reaper_holders.py"
 
+GATE_MATRIX = "test_a_gated_reaper_is_due_only_in_a_fresh_interactive_top_level_start"
 PLANTED_HOLDERS = "test_each_holder_kind_in_a_planted_proc_root_is_found_under_its_own_kind"
 
 KILLED, SURVIVED, ANCHOR_MISS, COLLECT_ERROR, BAD_ID, CRASH = 1, 0, 3, 4, 5, 6
@@ -106,12 +108,26 @@ CATALOGUE: "dict[str, Mutant]" = {
     "removal-log-before-remove": Mutant(
         RUNNER,
         '            _append_removal_log(log_path, now, reaper, verdict, provenance)\n'
+        '            logged = True\n'
         '            if reaper.module.remove(verdict.path, ctx) is False:\n'
         '                raise RuntimeError("remove() returned False")\n',
         '            if reaper.module.remove(verdict.path, ctx) is False:\n'
         '                raise RuntimeError("remove() returned False")\n'
-        '            _append_removal_log(log_path, now, reaper, verdict, provenance)\n',
+        '            _append_removal_log(log_path, now, reaper, verdict, provenance)\n'
+        '            logged = True\n',
         _ids(T_RUNNER, "test_removal_is_logged_before_remove_runs"),
+    ),
+    "removal-outcome-logged": Mutant(
+        RUNNER,
+        "        _append_outcome_log(log_path, now, reaper, verdict, provenance, OUTCOME_REMOVED, verdict.reason, err)\n",
+        "",
+        _ids(T_RUNNER, "test_each_attempt_is_followed_by_its_outcome_row"),
+    ),
+    "removal-refused-not-an-error": Mutant(
+        RUNNER,
+        "        except RemovalRefused as exc:\n",
+        "        except KeyboardInterrupt as exc:\n",
+        _ids(T_RUNNER, "test_a_refused_removal_is_kept_with_its_reason_and_is_not_an_error"),
     ),
     "realpath": Mutant(
         RUNNER, "joined.setdefault(os.path.realpath(verdict.path), [])", "joined.setdefault(verdict.path, [])",
@@ -122,7 +138,7 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_GIT, "test_symlinked_temp_root_matches_the_resolved_worktree_path"),
     ),
     "realpath-owner": Mutant(
-        CONTRACT, "_at_or_inside(real, os.path.realpath(held))", "_at_or_inside(real, held)",
+        CONTRACT, "_at_or_inside(wanted, resolve(held))", "_at_or_inside(wanted, held)",
         _ids(T_GIT, "test_owner_record_spelled_through_a_symlink_still_owns_the_worktree"),
     ),
     "landed-check": Mutant(
@@ -349,6 +365,13 @@ CATALOGUE: "dict[str, Mutant]" = {
         HOOK_BACKUP, "        spawn_pressure()\n", "        pass\n",
         _ids(T_HOOK, "test_it_starts_the_pressure_check_detached_beside_the_upkeep",
              "test_the_pressure_check_starts_for_a_stop_payload"),
+    ),
+    "unit-trigger-without-marker": Mutant(
+        RUNNER, "    if unit and invocation:\n        return unit, invocation\n",
+        '    if invocation:\n        return unit or "", invocation\n',
+        _ids(T_RUNNER,
+             "test_an_inherited_invocation_id_without_the_unit_marker_is_not_a_unit_pass",
+             "test_an_inherited_invocation_id_without_the_unit_marker_writes_no_observation"),
     ),
     "residue-idle-floor": Mutant(
         LIVENESS, "if idle < floor_s:", "if idle < 0:",
@@ -643,7 +666,7 @@ CATALOGUE: "dict[str, Mutant]" = {
     ),
     "residue-refused-removal-reason": Mutant(
         RUNNER, "elif verdict.path in failed_paths:", "elif False:",
-        _ids(T_RUNNER, "test_a_removal_that_was_refused_is_snapshotted_as_refused_with_its_remove_reason",
+        _ids(T_RUNNER, "test_a_removal_that_returned_false_is_snapshotted_as_failed_with_its_remove_reason",
              "test_a_removal_that_raised_is_snapshotted_as_failed"),
     ),
     "residue-symlink": Mutant(
@@ -664,12 +687,15 @@ CATALOGUE: "dict[str, Mutant]" = {
         _ids(T_RESIDUE, "test_without_opt_in_a_live_pass_keeps_what_it_would_remove_and_says_why"),
     ),
     "residue-opt-in-remove": Mutant(
-        TEMP_RESIDUE, "    if not opt_in.enabled(NAME):\n        return False\n", "",
+        TEMP_RESIDUE,
+        "    if not opt_in.enabled(NAME):\n"
+        "        raise RemovalRefused(f\"{OPT_IN_OFF}: {NAME} is not true in the machine's reaper opt-in file\")\n",
+        "",
         _ids(T_RESIDUE, "test_remove_refuses_without_opt_in_even_for_a_dead_candidate"),
     ),
     "residue-remove-rejudge": Mutant(
         TEMP_RESIDUE,
-        "    if _judge(candidate, source, ctx, liveness.sweep_holders(), _mounts()).action != REMOVE:",
+        "    if judgment.action != REMOVE:",
         "    if False:",
         _ids(T_RESIDUE, "test_remove_judges_again_and_refuses_what_became_held_or_fresh"),
     ),
@@ -711,6 +737,100 @@ CATALOGUE: "dict[str, Mutant]" = {
         "    try:\n        spawn_upkeep()\n    except Exception:\n        pass\n"
         "    try:\n        if \"Stop\" in raw:\n            spawn_pressure()\n",
         _ids(T_HOOK, "test_the_pressure_check_starts_for_a_session_start_payload"),
+    ),
+    "session-gate-ignored": Mutant(
+        RUNNER, '            if session_admits(getattr(r.module, "SESSION_SOURCES", None), ctx.session)\n', "            if True\n",
+        _ids(T_RUNNER, GATE_MATRIX + "[cli-0-compact]", GATE_MATRIX + "[sdk-cli-0-startup]", GATE_MATRIX + "[cli-1-startup]",
+             "test_a_gated_reaper_is_never_due_without_a_usable_payload[None]"),
+    ),
+    "session-gate-stamps": Mutant(
+        RUNNER, "        for name in due - failed_removals:\n", "        for name in {r.name for r in selected} - failed_removals:\n",
+        _ids(T_RUNNER, GATE_MATRIX + "[cli-0-compact]", GATE_MATRIX + "[sdk-cli-0-startup]",
+             "test_a_gated_reaper_is_never_due_without_a_usable_payload[None]"),
+    ),
+    "session-gate-child": Mutant(
+        RUNNER, "session[0] in sources and session[1] and session[2]", "session[0] in sources and session[2]",
+        _ids(T_RUNNER, GATE_MATRIX + "[cli-1-startup]"),
+    ),
+    "session-gate-noninteractive": Mutant(
+        RUNNER, "session[0] in sources and session[1] and session[2]", "session[0] in sources and session[1]",
+        _ids(T_RUNNER, GATE_MATRIX + "[sdk-cli-0-startup]"),
+    ),
+    "session-gate-manual": Mutant(
+        RUNNER,
+        "    elif dry_run or force_run:\n        due = {r.name for r in selected}\n",
+        "    elif dry_run or force_run:\n"
+        '        due = {r.name for r in selected if session_admits(getattr(r.module, "SESSION_SOURCES", None), ctx.session)}\n',
+        _ids(T_RUNNER, "test_manual_modes_ignore_the_gate[argv0]", "test_manual_modes_ignore_the_gate[argv1]"),
+    ),
+    "holders-scope-ignored": Mutant(
+        LIVENESS,
+        "        record = next(\n"
+        "            (found for spelling in spellings\n"
+        "             if (found := owning_record(spelling, ctx.scope_records, ctx.now, ctx.heartbeat_ttl_hours, resolve_outside))),\n"
+        "            None,\n"
+        "        )\n",
+        "        record = None\n",
+        _ids(T_HOLDERS, "test_a_live_scope_record_inside_the_path_holds_it_and_a_sibling_stays_free",
+             "test_a_scope_record_with_a_repo_root_at_the_path_holds_it"),
+    ),
+    "holders-engine-ignored": Mutant(
+        LIVENESS,
+        "        task = next((t for t in tasks if any(_inside(s, resolve_outside(root)) for s in spellings for root in t.roots)), None)\n",
+        "        task = None\n",
+        _ids(T_HOLDERS, "test_an_unresolved_engine_task_holds_the_path_and_names_session_and_task[repo_root]",
+             "test_an_unresolved_engine_task_holds_the_path_and_names_session_and_task[delivery_worktree]",
+             "test_holders_exits_three_when_a_path_is_held_and_names_who"),
+    ),
+    "holders-engine-resolved-held": Mutant(
+        LIVENESS, "        if node == RESOLVED_NODE:\n            continue\n", "        if False:\n            continue\n",
+        _ids(T_HOLDERS, "test_a_resolved_engine_task_holds_nothing"),
+    ),
+    "holders-process-ignored": Mutant(
+        LIVENESS, "        process = next((kind for s in spellings if (kind := sweep.holder_of(s))), None)\n", "        process = None\n",
+        _ids(T_HOLDERS, "test_a_process_with_its_cwd_inside_the_path_holds_it",
+             "test_a_held_path_is_held_even_when_the_sweep_was_incomplete"),
+    ),
+    "holders-unknown-as-free": Mutant(
+        LIVENESS, "        elif unreadable:\n", "        elif False:\n",
+        _ids(T_HOLDERS, "test_an_incomplete_process_sweep_gives_unknown", "test_an_unreadable_scope_registry_gives_unknown",
+             "test_an_engine_store_that_is_not_a_directory_gives_unknown",
+             "test_holders_exits_four_when_any_path_is_unknown_even_if_another_is_held"),
+    ),
+    "holders-empty-state-unknown": Mutant(
+        LIVENESS, "            if not text:\n                continue\n", "            if False:\n                continue\n",
+        _ids(T_HOLDERS, "test_a_zero_byte_engine_state_records_nothing_and_does_not_make_the_answer_unknown"),
+    ),
+    "holders-realpath": Mutant(
+        LIVENESS, "    return os.path.normpath(os.path.abspath(path))\n", "    return os.path.realpath(path)\n",
+        _ids(T_HOLDERS, "test_nothing_under_a_queried_path_is_stat_ed_resolved_or_walked"),
+    ),
+    "holders-zombie-unknown": Mutant(
+        LIVENESS, "        if facts.state in _RELEASED_STATES:\n", "        if False:\n",
+        _ids(T_HOLDERS, "test_zombie_with_unreadable_entries_holds_nothing"),
+    ),
+    "holders-symlink-queried": Mutant(
+        LIVENESS, "        spellings = [wanted] if real == wanted else [wanted, real]\n", "        spellings = [wanted]\n",
+        _ids(T_HOLDERS, "test_a_queried_symlink_to_a_held_directory_is_held_by_a_scope_record",
+             "test_an_engine_task_holds_a_path_across_a_symlinked_spelling[False]",
+             "test_a_process_holding_the_real_path_holds_a_queried_symlink_to_it"),
+    ),
+    "holders-symlink-holder": Mutant(
+        LIVENESS, "        return root if any(_inside(path, root) for path in queried) else resolve(root)\n", "        return root\n",
+        _ids(T_HOLDERS, "test_a_scope_record_spelled_through_a_symlink_holds_the_real_path",
+             "test_an_engine_task_holds_a_path_across_a_symlinked_spelling[True]"),
+    ),
+    "holders-resolve-inside": Mutant(
+        LIVENESS, "        return root if any(_inside(path, root) for path in queried) else resolve(root)\n", "        return resolve(root)\n",
+        _ids(T_HOLDERS, "test_nothing_under_a_queried_path_is_stat_ed_resolved_or_walked"),
+    ),
+    "holders-detail-unescaped": Mutant(
+        RUNNER, "_one_field(answer.report())", "answer.report()",
+        _ids(T_HOLDERS, "test_holders_keeps_one_line_and_three_fields_when_a_detail_carries_a_tab_or_newline"),
+    ),
+    "session-payload-read-always": Mutant(
+        RUNNER, " and _throttle_elapsed(r, stamp_dir(), now) for r in reapers\n", " for r in reapers\n",
+        _ids(T_RUNNER, "test_a_start_where_every_gated_reaper_is_inside_its_throttle_does_not_read_stdin"),
     ),
 }
 

@@ -138,7 +138,8 @@ def check_inline_paths(file_path: Path, lines: list[str]) -> list[tuple[int, str
             ref = match.group(1)
             if any(c in PATTERN_CHARS for c in ref):
                 continue  # glob pattern or placeholder, not a literal path
-            path_only = strip_anchor(ref)
+            # A pytest node id (`scripts/tests/test_x.py::test_y`) refers to its file.
+            path_only = strip_anchor(ref).split("::", 1)[0]
             # Inline-code refs are repo-root-relative by convention.
             resolved = (REPO_ROOT / path_only).resolve()
             if not resolved.exists():

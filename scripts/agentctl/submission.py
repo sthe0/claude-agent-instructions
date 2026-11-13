@@ -59,7 +59,7 @@ from __future__ import annotations
 import os
 import re
 
-from . import exempt_paths, grant_shadow
+from . import conditions_securing, exempt_paths, grant_shadow
 from . import grants as _grants
 from .conditions import judge_restatement, restatement_prefilter
 from .plan import _declared_absolute_venue, _remote_head_for, venue_declaration_blockers
@@ -1185,8 +1185,12 @@ def submission_violations(
     judge_runner=None,
     judge_enabled: bool = True,
     frozen_edge_stages: frozenset[int] = frozenset(),
+    conditions_securing_required: bool = False,
 ) -> list[str]:
     """Every submission-grade violation in `doc`, as author-readable strings. [] == clean.
+
+    `conditions_securing_required` arms the securing-mark check on every stage's `conditions`
+    (conditions_securing.py); the session decides it once, at its first accepted submission.
 
     Returns rather than raises: the approve seam must answer with a Directive (see the
     module docstring), and returning the full list lets one round trip show everything.
@@ -1240,6 +1244,7 @@ def submission_violations(
     out.extend(_resource_request_violations(doc))
     out.extend(_landed_delivery_venue_violations(doc))
     out.extend(_landing_declaration_violations(doc))
+    stage_deps = {s.index: list(s.depends_on or ()) for s in doc.stages}
     for stage in doc.stages:
         # Supplies are already built by the time a PlanDoc exists, so the "supplied by an
         # earlier stage" alternative is decidable here — evaluating the knowledge
@@ -1262,6 +1267,9 @@ def submission_violations(
         restatement = _conditions_restatement(stage, judge_runner, judge_enabled)
         if restatement:
             out.append(restatement)
+        if conditions_securing_required:
+            out.extend(conditions_securing.securing_problems(
+                stage, conditions_securing.ancestors(stage.index, stage_deps)))
         collapse = _procedure_collapse(stage, judge_runner, judge_enabled)
         if collapse:
             out.append(collapse)
@@ -1444,6 +1452,7 @@ def validate_submission(
     session_weight_class: str | None = None,
     judge_runner=None,
     judge_enabled: bool = True,
+    conditions_securing_required: bool = False,
 ) -> list[str]:
     """Raise PlanError on the first submission-grade violation; otherwise RETURN the advice.
 
@@ -1469,6 +1478,7 @@ def validate_submission(
         session_weight_class=session_weight_class,
         judge_runner=judge_runner,
         judge_enabled=judge_enabled,
+        conditions_securing_required=conditions_securing_required,
     )
     if problems:
         raise PlanError(problems[0])

@@ -8,7 +8,7 @@ grounded_in: [regularity:a-stage-bundling-several-independent-units-of-work-cost
 grounding_judged: dd9002e4c8cbda8c8f327bd84170743b887ce41999eaa1694d344cf0dedb7887
 grounding_override: The judge cannot verify the given regularities effort-divergence-trigger and agentctl-acceptance-judge-gate, which are system facts read from code; the rule rests on them, so they stay as grounds.
 created: 2026-08-25
-last_verified: 2026-09-30
+last_verified: 2026-11-12
 ---
 
 # Plan cost_tier underestimates a multi-slice stage
@@ -113,6 +113,36 @@ of work; it has no rung for "several units bolted together," and treating a
 bundle as if a bigger label could cover it just defers the discovery of the
 mismatch to a live dispatch's `INCOMPLETE:` return instead of catching it on
 paper.
+
+## Third observed case: a live-run stage priced small, its window also absorbing planning of an abandoned variant
+
+Observed 2026-11-12 (a ticket porting a retrieval prototype into a worker,
+plan r25, stage 51 "one-session live run of PR 2 at its restacked head"): the stage was tiered `"small"` (10
+active minutes) though it is exactly the first risk class above — a live
+run against a real harness, gated by a measurable verify plus an
+acceptance-judge pass, plus judge scripts that each run for more than
+100 s. It fired `wall_clock` at 146 vs 35 min. Two contributors, one new:
+
+1. **Mispricing (repeat of risk class 1).** The live run itself was 2
+   attempts; the cost was the checks around it (a dry run refused on a
+   missing config env, a judge-script bug — a module constant reused
+   under the same name, shadowing the one the docs check read — found and
+   fixed mid-stage, the slow judges re-run) and the acceptance judge
+   bouncing the first observation for not naming each expected check.
+2. **Planning billed to an executing stage (new).** While stage 51 was
+   ACTIVE, three draft replans (r26–r28) for an alternative data source
+   were authored and put through three thinker review rounds; the user
+   then chose the original local source and the drafts were dropped. The
+   effort window is per stage, so the whole planning loop was billed to a
+   `"small"` execution stage.
+
+**Guidance (adds to the above):** a live-run stage gets `"large"` even
+when the run itself is one session — price the verification around it,
+not the run. When an executing stage turns into re-planning (drafting and
+reviewing alternative plan versions), ask the user to choose the variant
+**before** drafting (one `AskUserQuestion` would have avoided r26–r28
+here), or move the stage to diagnosing, so the planning loop is not
+silently billed to the stage's tier.
 
 ## See also
 

@@ -8,13 +8,43 @@ from __future__ import annotations
 import json
 import os
 import re
+import atexit
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 INSTALLER = SCRIPTS / "install-reaper-timer.sh"
+
+MUTANT_ENV = "REAPER_TIMER_MUTANT"
+MUTANT_ANCHOR = 'invocation="$ids"'
+MUTANT_REPLACEMENT = 'invocation="$("$SYSTEMCTL" --user show -p InvocationID agent-reaper-pass.service | sed -n "s/^InvocationID=//p")"'
+
+
+def _mutated_installer(scripts: Path) -> Path:
+    """A copy of the installer whose --check reads the invocation id from `systemctl show` again; the
+    copy sits in a scripts/ directory whose other entries link to the real ones, so REPO resolves."""
+    text = INSTALLER.read_text()
+    if text.count(MUTANT_ANCHOR) != 1:
+        pytest.exit(f"mutant {os.environ[MUTANT_ENV]}: anchor must match exactly once, found {text.count(MUTANT_ANCHOR)}", returncode=3)
+    root = Path(tempfile.mkdtemp(prefix="reaper-timer-mutant-"))
+    atexit.register(shutil.rmtree, root, True)
+    (root / "scripts").mkdir()
+    for entry in scripts.iterdir():
+        if entry.name != INSTALLER.name:
+            (root / "scripts" / entry.name).symlink_to(entry)
+    copy = root / "scripts" / INSTALLER.name
+    copy.write_text(text.replace(MUTANT_ANCHOR, MUTANT_REPLACEMENT))
+    return copy
+
+
+if os.environ.get(MUTANT_ENV) == "invocation-from-show":
+    INSTALLER = _mutated_installer(SCRIPTS)
+elif os.environ.get(MUTANT_ENV):
+    pytest.exit(f"unknown {MUTANT_ENV} value {os.environ[MUTANT_ENV]!r}", returncode=3)
 HOOK = SCRIPTS / "hook-reaper.py"
 STUBS = Path(__file__).resolve().parent / "fixtures" / "reaper_timer_stubs"
 UNSET_LINE = "UnsetEnvironment=SSH_AUTH_SOCK SSH_AGENT_PID GIT_ASKPASS SSH_ASKPASS"
@@ -49,6 +79,7 @@ def _env(box, extra=None, drop=()):
         "REAPER_TIMER_STUB_OBS_DIR": str(box["agent"] / "reaper" / "unit-pass"),
         "CLAUDE_CONFIG_DIR": str(box["agent"]),
         "TMPDIR": str(box["tmp"]),
+        "JOURNAL_WAIT_S": "1",
     }
     env.update(extra or {})
     for name in drop:
@@ -77,7 +108,7 @@ def env_value(text, key):
 
 def good_observation(box, **changes):
     seen = {
-        "invocation_id": INVOCATION, "tmpdir": str(box["tmp"]), "agent_home": str(box["agent"]),
+        "invocation_id": INVOCATION, "unit": "agent-reaper-pass.service", "tmpdir": str(box["tmp"]), "agent_home": str(box["agent"]),
         "credentials_present": {name: False for name in CREDENTIALS}, "reapers_run": 3, "errors": 0,
     }
     seen.update(changes)
@@ -186,6 +217,21 @@ def test_a_path_a_unit_cannot_carry_is_refused(box):
     assert res.returncode == 2 and not box["units"].exists()
 
 
+def test_every_service_unit_names_itself_in_agent_reaper_unit(box):
+    assert run(box, "--tmpdir", str(box["tmp"])).returncode == 0
+    for name in UNIT_NAMES[1:]:
+        assert env_value(unit(box, name), "AGENT_REAPER_UNIT") == "%n"
+
+
+def test_reinstall_rewrites_the_units_and_reloads_the_manager(box):
+    run(box, "--tmpdir", str(box["tmp"]))
+    path = box["units"] / "agent-reaper-pass.service"
+    path.write_text("[Service]\nEnvironment=OLD=1\n")
+    assert run(box, "--tmpdir", str(box["tmp"])).returncode == 0
+    assert env_value(path.read_text(), "AGENT_REAPER_UNIT") == "%n" and "OLD=1" not in path.read_text()
+    assert calls(box).count("--user daemon-reload") == 2
+
+
 def test_reinstall_is_idempotent(box):
     run(box, "--tmpdir", str(box["tmp"]))
     first = {n: unit(box, n) for n in UNIT_NAMES}
@@ -283,6 +329,50 @@ def test_check_fails_on_a_runner_error_line_in_the_journal(box):
     res = check(box, extra={"REAPER_TIMER_STUB_JOURNAL": "reaper: runner error: OSError: boom"})
     assert failed_clause(res) == "journal"
     assert "OSError: boom" in res.stderr
+
+
+def test_check_takes_invocation_from_journal_when_show_is_empty(box):
+    res = check(box)
+    assert res.returncode == 0, res.stderr
+    assert f"InvocationID {INVOCATION}" in res.stdout
+    assert any(line.startswith("journalctl --user -u agent-reaper-pass.service --since @") and line.endswith("-o export")
+               for line in calls(box))
+
+
+def test_check_reads_the_runners_lines_by_the_systemd_invocation_id(box):
+    check(box)
+    assert any(f"_SYSTEMD_INVOCATION_ID={INVOCATION}" in line for line in calls(box))
+
+
+def test_check_falls_back_to_the_managers_invocation_id(box):
+    assert check(box, extra={"REAPER_TIMER_STUB_JOURNAL_OWN": "0"}).returncode == 0
+
+
+def test_check_passes_when_the_id_appears_after_one_retry(box):
+    res = check(box, extra={"REAPER_TIMER_STUB_JOURNAL_LAG": "1"})
+    assert res.returncode == 0, res.stderr
+    assert sum("-o export" in line for line in calls(box)) == 2
+
+
+def test_check_fails_on_invocation_when_the_journal_has_no_id(box):
+    res = check(box, extra={"REAPER_TIMER_STUB_JOURNAL_IDS": ""})
+    assert failed_clause(res) == "invocation"
+
+
+def test_check_fails_on_invocation_when_the_journal_has_two_ids(box):
+    res = check(box, extra={"REAPER_TIMER_STUB_JOURNAL_IDS": f"{INVOCATION},ffffffffffffffffffffffffffffffff"})
+    assert failed_clause(res) == "invocation" and "several" in res.stderr
+
+
+def test_check_fails_when_the_observation_names_another_unit(box):
+    res = check(box, good_observation(box, unit="agent-reaper-only@temp-residue.service"))
+    assert failed_clause(res) == "observation" and "unit" in res.stderr
+
+
+def test_check_fails_when_the_observation_has_no_unit(box):
+    observation = good_observation(box)
+    del observation["unit"]
+    assert failed_clause(check(box, observation)) == "observation"
 
 
 def test_check_fails_without_an_observation_file_for_the_invocation(box):

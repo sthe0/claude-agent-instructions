@@ -56,6 +56,12 @@ def _load_spawn_specialist():
 
 MOD = _load_spawn_specialist()
 
+
+@pytest.fixture(autouse=True)
+def _private_cost_log(tmp_path, monkeypatch):
+    monkeypatch.setattr(MOD, "COST_LOG", tmp_path / "costs.jsonl")
+
+
 TWO_STAGE_TOML = """
 [meta]
 task_id = "demo"
@@ -1283,22 +1289,3 @@ def test_verify_command_keyword_selection_is_non_vacuous_term_by_term():
         )
     print(f"\nverify-command keyword coverage: {counts}")
 
-
-# --- non-portable, non-asserted real-plan measurement -----------------------
-
-
-def test_real_plan_measurement_smd_act_defects_8():
-    """Informational only: measures assemble_prompt's whole-plan size against
-    the actual plan that hit the incident this stage fixes, IF that plan file
-    is present on this machine. Never asserts pass/fail on the measurement
-    itself — only skips cleanly when the file is absent (a different
-    machine/session), since the file is outside this repo's tree."""
-    real_plan = Path.home() / ".claude-agent" / "plans" / "smd-act-defects-8.toml"
-    if not real_plan.exists():
-        pytest.skip("smd-act-defects-8.toml not present on this machine")
-    doc = load_plan(str(real_plan))
-    stage13 = next((s for s in doc.stages if s.index == 13), None)
-    if stage13 is None:
-        pytest.skip("stage 13 not present in smd-act-defects-8.toml")
-    brief = render_stage_brief(doc, 13)
-    print(f"\nstage-13 brief: {len(brief)} chars vs whole-plan {real_plan.stat().st_size} chars")

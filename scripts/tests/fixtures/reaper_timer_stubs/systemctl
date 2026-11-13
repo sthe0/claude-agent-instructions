@@ -4,7 +4,8 @@
 #   REAPER_TIMER_STUB_STATE        directory for the call log and the enabled flag (required)
 #   REAPER_TIMER_STUB_MANAGER      running (default) | degraded | none (no user manager)
 #   REAPER_TIMER_STUB_RESULT       Result of the started service: success (default) | failed
-#   REAPER_TIMER_STUB_INVOCATION   InvocationID of that start (default: 32 hex digits)
+#   REAPER_TIMER_STUB_INVOCATION   id of that run (default: 32 hex digits); `show` reports an empty
+#                                  InvocationID after the run, as systemd 255 does for a finished oneshot
 #   REAPER_TIMER_STUB_OBS_FILE     when set, copied to $REAPER_TIMER_STUB_OBS_DIR/<InvocationID>.json on start
 set -u
 state="${REAPER_TIMER_STUB_STATE:?}"
@@ -43,7 +44,7 @@ case "$verb" in
     result="${REAPER_TIMER_STUB_RESULT:-success}"
     echo "Result=$result"
     if [[ "$result" == success ]]; then echo "ExecMainStatus=0"; else echo "ExecMainStatus=1"; fi
-    echo "InvocationID=$invocation"
+    echo "InvocationID="
     ;;
   *) echo "stub systemctl: unhandled verb: $verb" >&2; exit 2 ;;
 esac

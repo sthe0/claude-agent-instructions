@@ -1,0 +1,7 @@
+{
+  "collected": 120,
+  "collection_errors": [
+    "scripts/tests/test_r11_fixture_unimportable.py"
+  ],
+  "failing": []
+}

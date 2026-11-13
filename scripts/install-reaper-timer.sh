@@ -17,9 +17,10 @@
 # Exit: 0 ok; 1 failed install or `check failed: <clause>`; 2 usage; 3 --status: not installed;
 #       4 no systemd user manager.
 #
-# Every unit carries the same frozen TMPDIR and agent home (CLAUDE_CONFIG_DIR and CLAUDE_AGENT_HOME) and
-# UnsetEnvironment of the ssh-agent and askpass variables; no removal logic lives in a unit.
-# Env seams (tests): SYSTEMD_USER_DIR, SYSTEMCTL_BIN, LOGINCTL_BIN, JOURNALCTL_BIN.
+# Every unit carries the same frozen TMPDIR and agent home (CLAUDE_CONFIG_DIR and CLAUDE_AGENT_HOME),
+# AGENT_REAPER_UNIT=%n (the runner's proof that a pass was started by a unit; INVOCATION_ID alone is inherited
+# by every descendant of a systemd-started process) and UnsetEnvironment of the ssh-agent and askpass variables; no removal logic lives in a unit.
+# Env seams (tests): SYSTEMD_USER_DIR, SYSTEMCTL_BIN, LOGINCTL_BIN, JOURNALCTL_BIN, JOURNAL_WAIT_S (--check journal wait, default 5).
 set -euo pipefail
 [[ "$(uname -s)" == "Linux" ]] || { echo 'reaper timer units: Linux only' >&2; exit 1; }
 
@@ -73,6 +74,20 @@ require_manager() {
   esac
 }
 
+JOURNAL_IDS_PY='
+import sys
+
+unit = sys.argv[1]
+own, manager = set(), set()
+for block in sys.stdin.read().split("\n\n"):
+    fields = dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+    if fields.get("_SYSTEMD_USER_UNIT") == unit and fields.get("_SYSTEMD_INVOCATION_ID"):
+        own.add(fields["_SYSTEMD_INVOCATION_ID"])
+    if fields.get("USER_INVOCATION_ID"):
+        manager.add(fields["USER_INVOCATION_ID"])
+print("\n".join(sorted(own or manager)))
+'
+
 real() { python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
 
 unit_value() {
@@ -124,17 +139,32 @@ if [[ "$MODE" == check ]]; then
     echo "warning: this shell's TMPDIR ($TMPDIR) differs from the frozen $frozen_tmp" >&2
   fi
 
+  started_at="$(date +%s)"
   started=0
   "$SYSTEMCTL" --user start --wait agent-reaper-pass.service || started=$?
-  shown="$("$SYSTEMCTL" --user show -p Result -p ExecMainStatus -p InvocationID agent-reaper-pass.service)"
+  shown="$("$SYSTEMCTL" --user show -p Result -p ExecMainStatus agent-reaper-pass.service)"
   result="$(sed -n 's/^Result=//p' <<<"$shown")"
   status="$(sed -n 's/^ExecMainStatus=//p' <<<"$shown")"
-  invocation="$(sed -n 's/^InvocationID=//p' <<<"$shown")"
   [[ "$result" == success && "$status" == 0 ]] || fail_check result "Result=${result:-?} ExecMainStatus=${status:-?}"
   (( started == 0 )) || fail_check start "systemctl start --wait exited $started although Result=success"
-  [[ -n "$invocation" ]] || fail_check observation "systemd reported no InvocationID"
 
-  journal="$("$JOURNALCTL" --user "USER_INVOCATION_ID=$invocation" --no-pager -o cat 2>/dev/null || true)"
+  # systemd clears InvocationID of a finished oneshot, so the run's id is read from the unit's journal,
+  # which can lag behind `start --wait`.
+  ids=""
+  waited=0
+  while :; do
+    ids="$("$JOURNALCTL" --user -u agent-reaper-pass.service --since "@$started_at" --no-pager -o export 2>/dev/null \
+      | python3 -c "$JOURNAL_IDS_PY" agent-reaper-pass.service || true)"
+    [[ -z "$ids" ]] || break
+    (( waited < ${JOURNAL_WAIT_S:-5} * 2 )) || break
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  [[ -n "$ids" ]] || fail_check invocation "the journal of agent-reaper-pass.service names no invocation id since the start"
+  (( $(wc -l <<<"$ids") == 1 )) || fail_check invocation "the journal names several invocation ids: $(tr '\n' ' ' <<<"$ids")"
+  invocation="$ids"
+
+  journal="$("$JOURNALCTL" --user "_SYSTEMD_INVOCATION_ID=$invocation" --no-pager -o cat 2>/dev/null || true)"
   error_line="$(grep -m 1 'reaper: runner error' <<<"$journal" || true)"
   [[ -z "$error_line" ]] || fail_check journal "$error_line"
 
@@ -153,6 +183,7 @@ creds = seen.get("credentials_present") or {}
 present = sorted(name for name, flag in creds.items() if flag)
 for clause, bad, detail in (
     ("observation", seen.get("invocation_id") != invocation, f"invocation_id {seen.get('invocation_id')!r}"),
+    ("observation", seen.get("unit") != "agent-reaper-pass.service", f"unit {seen.get('unit')!r}"),
     ("tmpdir", seen.get("tmpdir") != tmp, f"observed {seen.get('tmpdir')!r}, frozen {tmp!r}"),
     ("agent_home", seen.get("agent_home") != home, f"observed {seen.get('agent_home')!r}, frozen {home!r}"),
     ("credentials", bool(present) or not creds, f"present: {', '.join(present) or 'flags missing'}"),
@@ -189,7 +220,8 @@ safe_path "repository" "$REPO"
 PYTHON="$(command -v python3)"
 (( DRY )) || require_manager
 
-ENV_BLOCK="Environment=TMPDIR=$FROZEN_TMP
+ENV_BLOCK="Environment=AGENT_REAPER_UNIT=%n
+Environment=TMPDIR=$FROZEN_TMP
 Environment=CLAUDE_CONFIG_DIR=$FROZEN_HOME
 Environment=CLAUDE_AGENT_HOME=$FROZEN_HOME
 $UNSET_LINE"

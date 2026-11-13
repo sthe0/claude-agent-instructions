@@ -24,7 +24,57 @@ two checks show the limiter holds and the record carries the cost, on real proce
       path on a few files and the check takes minutes; the commits are never landed, so a
       reduced record can never admit a real landing.
 
-Exit 2 on a usage or environment error (not enough free disk, git failure).
+  gate_speedup_control.py sandbox-run --out PATH [-C REPO] [--select PATH ...] [--root DIR] [--timeout-s N]
+                                      [--reruns N]
+      Run the committed tip of REPO once, the way the gate does (a private clone in a sandbox
+      with a fake HOME and a scrubbed environment), and write PATH: the collected count, the
+      collection errors and every failing id (an error counts as failing). Exit 0 when the run
+      completed and the report was written, whatever the test outcomes; 2 when it could not run.
+      ``--select`` runs only the named test paths, serially; ``--root`` reuses and keeps a sandbox.
+      ``--reruns N`` then reruns every failing id N times, serially, in the same sandbox: an id
+      that fails any rerun goes to ``confirmed``, one that passes them all to ``rerun_passed``.
+      The whole suite takes about 40 minutes.
+
+  gate_speedup_control.py verify-named --report PATH --named DOC [--max-named N]
+      Compare a sandbox-run report with the document that names the known failures (default at
+      most 20 ids): 0 every failing id is named and DOC names at most N; 1 a failing id is not
+      named; 3 DOC names more than N ids; 4 the run did not finish (fewer than 15000 collected,
+      or a collection error); 2 an input could not be read. When the report has ``confirmed``,
+      only those ids must be named; the ids that passed on rerun are printed.
+
+  gate_speedup_control.py hermetic-run --out PATH --named DOC [--max-named N] [-C REPO] [--root DIR]
+                                       [--reruns N] [--no-hide] [--probe-only]
+      One sandbox-run inside the hermetic runner (scripts/lib/hermetic_run.py: the source work tree,
+      its git directory, the canonical checkout and the agent homes hidden, no network; the rest of
+      the home stays visible) with a probe test planted in the sandbox that asserts the hidden
+      source work tree reads as empty, then verify-named.
+      0: the report says ``hermetic: true``, the probe passed and every failure is named; 1: the run
+      was not hermetic, or the probe failed, or a failure is not named, or verify-named refuses the
+      run (incomplete) or the document (too many ids); 2: the probe was not collected, or any other
+      error. ``--no-hide`` hides nothing and the exit rests on the probe alone: 1 when it ran and
+      failed on the visible tree (the negative control fired), 2 when it passed (the control did
+      not fire) or was not collected (no evidence); ``--probe-only``
+      collects only the probe (minutes instead of the full run).
+
+  gate_speedup_control.py shuffle-pair --seeds A,B --out PATH [--runs all|unshuffled|shuffled] [--exceptions TOML] [-C REPO] [--timeout-s N]
+      Isolation judged by outcomes. Three whole-suite runs of REPO's committed tip, each in the hermetic
+      runner under the slot limiter (at most test-slots-per-run slots each): unshuffled, then seed A and
+      seed B (``--core-shuffle-seed``) started together. Per-test outcomes come from each run's per-test
+      report; PATH gets all three (the JUnit XML and report of each beside it). The exit code is the
+      verdict: 0 outcomes equal apart from the ids in the exceptions file (default
+      scripts/tests/isolation_exceptions.toml, each entry with a reason); 1 an unlisted id differs; 2 an
+      exceptions entry has no reason; 5 the shuffled runs overlapped for under half of the shorter one
+      (inconclusive, never a pass; time queued for slots does not count); 6 a run was not hermetic;
+      3 any other error. About 2 h on an idle machine. When a caller cannot hold one process that long,
+      ``--runs unshuffled`` (about 30 min) and ``--runs shuffled`` (about 90 min) each save their records
+      beside PATH (``<stem>.<run>.record.json``); the second launch to find all three records of the same
+      commit judges them, the first exits 4 (recorded, not judged yet).
+
+  gate_speedup_control.py compare --report PATH [--exceptions TOML]
+      The same comparison on a saved pair report: 0, 1, 2 and 3 as above (it never judges overlap or
+      hermeticity; shuffle-pair does, for the runs it makes).
+
+Elsewhere exit 2 is a usage or environment error (not enough free disk, git failure).
 """
 from __future__ import annotations
 
@@ -35,6 +85,7 @@ import fcntl
 import json
 import os
 import queue
+import re
 import shutil
 import signal
 import site
@@ -43,6 +94,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -419,6 +471,438 @@ def concurrent_gates(repo: Path, runs: int, out: Path, keep: list[str] | None = 
     return 0 if ok else 1
 
 
+# ── sandbox-run, verify-named ─────────────────────────────────────────────
+
+def _rerun_failing(repo: Path, sha: str, work: Path, failing: list[str], reruns: int,
+                   timeout_s: int, hide: bool = True) -> tuple[list[str], list[str]]:
+    """Rerun the failing ids ``reruns`` times, serially, in the sandbox ``work``.
+
+    An id that fails any rerun is confirmed; one that passes every rerun passed on rerun. An id
+    without ``::`` (a file that did not collect) is not a test that can pass alone: always confirmed.
+    A rerun that does not complete confirms every id still under test."""
+    confirmed = [i for i in failing if "::" not in i]
+    candidates = [i for i in failing if "::" in i]
+    for _ in range(reruns):
+        if not candidates:
+            break
+        run = gate.default_runner(repo, sha, work, select=candidates, timeout_s=timeout_s, hide=hide)
+        if not run.build_ok or run.timed_out or run.pytest_exit is None:
+            _say(f"a rerun did not complete; {len(candidates)} ids stay confirmed")
+            failed_again = set(candidates)
+        else:
+            failed_again = set(run.failures)
+        confirmed += [i for i in candidates if i in failed_again]
+        candidates = [i for i in candidates if i not in failed_again]
+    return confirmed, candidates
+
+
+PROBE_FILE = "scripts/tests/test_hermetic_probe.py"
+PROBE_ID = f"{PROBE_FILE}::test_the_source_work_tree_is_hidden"
+
+
+def _probe_source(source_tree: Path) -> str:
+    return (
+        '"""Planted by gate_speedup_control.py hermetic-run: inside a hermetic run the source work tree is empty."""\n'
+        "import os\n\n\n"
+        "def test_the_source_work_tree_is_hidden():\n"
+        f"    assert os.listdir({str(source_tree)!r}) == []\n")
+
+
+def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, timeout_s: int,
+                reruns: int = 0, hide: bool = True, probe: bool = False) -> int:
+    """One gate-shaped run of the committed tip of ``repo``; the report names every failing id,
+    and with ``reruns`` which of them failed again (``confirmed``) and which passed (``rerun_passed``).
+
+    The report says whether the run was hermetic (``hide`` off or no namespaces: it was not). With
+    ``probe`` a test asserting that the source work tree reads as empty is planted in the sandbox;
+    whether pytest collected it is ``probe_collected``, its outcome ``probe_passed``, and its id is
+    not among ``failing``."""
+    free_gb = shutil.disk_usage("/").free / 2**30
+    if free_gb < MIN_FREE_GB:
+        _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
+        return 2
+    sha = _git(repo, "rev-parse", "HEAD")
+    if _git(repo, "status", "--porcelain", "--untracked-files=no"):
+        _say("warning: tracked files are modified; the sandbox runs the committed tip only")
+    os.environ.pop(test_slots.HELD_ENV, None)
+    own_root = root is None
+    work = Path(tempfile.mkdtemp(prefix=gate.SANDBOX_PREFIX, dir=gate.SANDBOX_PARENT)) if own_root else root
+    try:
+        if probe:
+            failed_build = gate.build_sandbox(repo, sha, work)
+            if failed_build is not None:
+                _say(f"the sandbox did not build: {failed_build.detail}")
+                return 2
+            (work / "core" / PROBE_FILE).write_text(_probe_source(repo.resolve()), encoding="utf-8")
+        run = gate.default_runner(repo, sha, work, select=select, timeout_s=timeout_s, hide=hide)
+        if not run.build_ok or run.timed_out or run.pytest_exit is None:
+            _say(f"the run did not complete: {'timed out' if run.timed_out else run.detail or 'no pytest exit'}")
+            return 2
+        if run.hermetic and run.pytest_exit == gate.hermetic_run.RUNNER_FAILED_EXIT:
+            _say(f"the hermetic runner failed before pytest ran: {gate.one_line(run.log_tail[-300:], 300)}")
+            return 2
+        stem = out.with_suffix("")
+        lines = _test_report.read_lines(run.report_path) if run.report_path else []
+        collected = _test_report.collected_ids(lines)
+        collected_set = set(collected)
+        report = {
+            "commit": sha, "select": select, "pytest_exit": run.pytest_exit,
+            "duration_s": round(run.duration_s, 1), "collected": len(collected),
+            "collection_errors": [i for i in run.failures if "::" not in i and i not in collected_set],
+            "failing": [i for i in run.failures if i != PROBE_ID],
+            "hermetic": run.hermetic, "hermetic_reason": run.hermetic_reason,
+        }
+        if probe:
+            report["probe_collected"] = PROBE_ID in collected_set
+            report["probe_passed"] = report["probe_collected"] and PROBE_ID not in run.failures
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # Copied before any rerun: a rerun in the same sandbox overwrites these files.
+        for src, suffix in ((run.junit_path, ".junit.xml"), (run.report_path, ".tests.jsonl")):
+            if src:
+                shutil.copyfile(src, stem.with_name(stem.name + suffix))
+        if reruns:
+            report["confirmed"], report["rerun_passed"] = _rerun_failing(
+                repo, sha, work, report["failing"], reruns, timeout_s, hide)
+        out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        confirmed = f", {len(report['confirmed'])} confirmed by {reruns} reruns" if reruns else ""
+        _say(f"{report['collected']} collected, {len(report['failing'])} failing{confirmed}, "
+             f"pytest exit {run.pytest_exit}, {report['duration_s']} s; report {out}")
+        return 0
+    except (gate.GateError, OSError) as exc:
+        _say(f"sandbox-run failed: {exc}")
+        return 2
+    finally:
+        if own_root:
+            gate.remove_sandbox(work, gate.SANDBOX_PARENT)
+
+
+MIN_COLLECTED = 15000
+DEFAULT_MAX_NAMED = 20
+NAMED_SPAN = re.compile(r"`([\w./-]+\.py::[^`\n]+)`")
+
+
+def named_ids(text: str) -> set[str]:
+    """The test ids a document names: its backtick-delimited spans of the form ``path/to/test.py::name``.
+
+    A span, not a word, so a parametrized id with spaces is one id; an id in prose is not named."""
+    return {span.strip() for span in NAMED_SPAN.findall(text)}
+
+
+def verify_named(report_path: Path, named_path: Path, max_named: int) -> int:
+    """0: every failing id is named and at most ``max_named`` ids are; 1: one is not named; 3: too many
+    named; 4: the report is of a run that did not finish; 2: unreadable input."""
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        text = named_path.read_text(encoding="utf-8")
+        failing, collected = list(report["failing"]), int(report["collected"])
+        collection_errors = list(report.get("collection_errors") or [])
+        rerun_passed = list(report.get("rerun_passed") or [])
+        if "confirmed" in report:
+            failing = list(report["confirmed"])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _say(f"cannot read the inputs: {exc}")
+        return 2
+    if collected < MIN_COLLECTED or collection_errors:
+        _say(f"INCOMPLETE: {collected} tests collected (need {MIN_COLLECTED}), "
+             f"{len(collection_errors)} collection errors {' '.join(collection_errors[:3])}")
+        return 4
+    if rerun_passed:
+        _say(f"passed on rerun, not required to be named: {' '.join(rerun_passed)}")
+    named = named_ids(text)
+    unnamed = [i for i in failing if i not in named]
+    if unnamed:
+        _say(f"UNNAMED: {len(unnamed)} failing ids not named in {named_path.name}, first: {' '.join(unnamed[:5])}")
+        return 1
+    if len(named) > max_named:
+        _say(f"TOO MANY NAMED: {named_path.name} names {len(named)} ids, at most {max_named} are accepted")
+        return 3
+    _say(f"OK: {len(failing)} failing, all named; {len(named)} ids named (at most {max_named})")
+    return 0
+
+
+def hermetic_run(repo: Path, out: Path, named: Path, max_named: int, root: Path | None, timeout_s: int,
+                 reruns: int, no_hide: bool, probe_only: bool) -> int:
+    """One run in the hermetic runner with the probe planted, judged against the documented failures.
+
+    0: the report says ``hermetic: true``, the probe passed and every failure is named; 1: the run was
+    not hermetic, or the probe failed, or a failure is not named (or the named document or the run
+    do not meet verify-named's bounds); 2: the probe was not collected (pytest never ran it), or any
+    other error.
+
+    With ``no_hide`` nothing is hidden, so the verdict rests on the probe alone: 1 when it ran and
+    failed (it saw the visible tree), 2 when it passed (the negative control did not fire) or was not
+    collected (there is no evidence either way)."""
+    select = [PROBE_FILE] if probe_only else []
+    code = sandbox_run(repo, out, select, root, timeout_s, reruns, hide=not no_hide, probe=True)
+    if code != 0:
+        return 2
+    try:
+        report = json.loads(out.read_text(encoding="utf-8"))
+        hermetic, probe_passed = bool(report["hermetic"]), bool(report["probe_passed"])
+        probe_collected = bool(report["probe_collected"])
+    except (OSError, ValueError, KeyError) as exc:
+        _say(f"cannot read the run report: {exc}")
+        return 2
+    if not probe_collected:
+        _say(f"PROBE NOT COLLECTED: {PROBE_ID} never ran (pytest exit {report.get('pytest_exit')}), "
+             "so the run proves nothing about hiding")
+        return 2
+    if no_hide:
+        if probe_passed:
+            _say("NEGATIVE CONTROL DID NOT FIRE: the probe passed although nothing was hidden")
+            return 2
+        _say("OK: nothing hidden and the probe failed, as the negative control requires")
+        return 1
+    if not hermetic:
+        _say(f"NOT HERMETIC: {report.get('hermetic_reason') or 'unknown reason'} (probe passed: {probe_passed})")
+        return 1
+    if not probe_passed:
+        _say(f"PROBE FAILED: {PROBE_ID} saw the source work tree")
+        return 1
+    if probe_only:
+        _say("OK: hermetic, probe passed")
+        return 0
+    verdict = verify_named(out, named, max_named)
+    return {0: 0, 2: 2}.get(verdict, 1)
+
+
+# ── shuffle-pair, compare: isolation judged by outcomes ───────────────────
+
+SHUFFLE_SCHEMA = "shuffle-pair/v1"
+EXCEPTIONS_PATH = SCRIPTS_DIR / "tests" / "isolation_exceptions.toml"
+SEED_OPTION = "--core-shuffle-seed"
+UNSHUFFLED = "unshuffled"
+MIN_OVERLAP_FRACTION = 0.5
+EXIT_EQUAL, EXIT_DIFFERENT, EXIT_REASONLESS, EXIT_ERROR, EXIT_NO_OVERLAP, EXIT_NOT_HERMETIC = 0, 1, 2, 3, 5, 6
+EXIT_PARTIAL = 4
+RUNS_ALL, RUNS_UNSHUFFLED, RUNS_SHUFFLED = "all", "unshuffled", "shuffled"
+
+
+class InputError(Exception):
+    """A report or an exceptions file that cannot be used (exit 3)."""
+
+
+def load_exceptions(path: Path) -> tuple[dict[str, str], list[str]]:
+    """(id -> reason for every ``[[exception]]`` entry, the ids whose reason is empty)."""
+    try:
+        entries = tomllib.loads(path.read_text(encoding="utf-8")).get("exception", [])
+        ids = [str(entry["id"]) for entry in entries]
+        reasons = [str(entry.get("reason", "")).strip() for entry in entries]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise InputError(f"cannot read the exceptions {path}: {exc}") from exc
+    return dict(zip(ids, reasons)), [i for i, reason in zip(ids, reasons) if not reason]
+
+
+def differing_ids(runs: list[dict]) -> dict[str, dict[str, str]]:
+    """Every test id whose outcome is not the same in all runs: id -> run name -> outcome (``absent`` when not collected)."""
+    ids = {i for run in runs for i in run["outcomes"]}
+    table = {i: {run["name"]: run["outcomes"].get(i, "absent") for run in runs} for i in ids}
+    return {i: seen for i, seen in sorted(table.items()) if len(set(seen.values())) > 1}
+
+
+def overlap(first: dict, second: dict) -> tuple[float, float]:
+    """(seconds both runs were running after their slots were held, the share of the shorter run that is)."""
+    start = max(first["running_from"], second["running_from"])
+    end = min(first["running_to"], second["running_to"])
+    shorter = min(first["running_to"] - first["running_from"], second["running_to"] - second["running_from"])
+    seconds = max(0.0, end - start)
+    return seconds, (seconds / shorter if shorter > 0 else 0.0)
+
+
+def _unusable_runs(runs: list[dict]) -> str:
+    """Why these whole-suite runs cannot be compared (empty when they can): a run that collected
+    nothing, runs that collected different numbers of tests, or a pytest exit other than 0 or 1."""
+    collected = {run["name"]: run.get("collected") for run in runs}
+    if any(not isinstance(count, int) or count <= 0 for count in collected.values()):
+        return f"collected counts {collected}"
+    if len(set(collected.values())) != 1:
+        return f"the runs collected different numbers of tests {collected}"
+    exits = {run["name"]: run.get("pytest_exit") for run in runs}
+    if any(code not in (0, 1) for code in exits.values()):
+        return f"pytest exits {exits} (only 0 or 1 means the suite ran)"
+    return ""
+
+
+def judge(report: dict, exceptions_path: Path, *, strict: bool) -> int:
+    """The verdict of a shuffle-pair report: 0 equal apart from listed exceptions, 1 an unlisted
+    difference, 2 an entry without a reason, 3 unusable input. With ``strict`` (the run's own verdict)
+    also 6 a run was not hermetic, 3 a run that collected nothing, a different number of tests or did
+    not finish with pytest exit 0/1, and 5 the two shuffled runs did not overlap (only when no unlisted
+    id differs: a difference is exit 1 regardless)."""
+    try:
+        runs = report["runs"]
+        names = [run["name"] for run in runs]
+        listed, reasonless = load_exceptions(exceptions_path)
+        differing = differing_ids(runs)
+        shuffled = [run for run in runs if run.get("seed") is not None]
+    except InputError as exc:
+        _say(str(exc))
+        return EXIT_ERROR
+    except (KeyError, TypeError, AttributeError) as exc:
+        _say(f"cannot read the pair report: {exc!r}")
+        return EXIT_ERROR
+    if len(runs) < 2 or len(set(names)) != len(names):
+        _say(f"the report has {len(runs)} runs named {names}: need at least two, distinctly named")
+        return EXIT_ERROR
+    if reasonless:
+        _say(f"REASONLESS: {len(reasonless)} exception(s) without a reason: {' '.join(reasonless[:5])}")
+        return EXIT_REASONLESS
+    if strict:
+        outside = [run["name"] for run in runs if not run.get("hermetic")]
+        if outside:
+            _say(f"NOT HERMETIC: {' '.join(outside)} ran outside isolation, so the comparison proves nothing")
+            return EXIT_NOT_HERMETIC
+        unusable = _unusable_runs(runs)
+        if unusable:
+            _say(f"UNUSABLE: {unusable}: the comparison would prove nothing")
+            return EXIT_ERROR
+    unlisted = {i: seen for i, seen in differing.items() if i not in listed}
+    for i, seen in list(unlisted.items())[:20]:
+        _say(f"DIFFERS: {i}: {', '.join(f'{name}={outcome}' for name, outcome in seen.items())}")
+    if len(unlisted) > 20:
+        _say(f"... and {len(unlisted) - 20} more")
+    # A difference is a real ordering failure whether or not the shuffled runs overlapped, so it wins
+    # over "inconclusive"; NO OVERLAP only withholds a pass.
+    if unlisted:
+        _say(f"FAIL: {len(unlisted)} test(s) differ and are not listed in {exceptions_path.name}")
+        return EXIT_DIFFERENT
+    if strict and len(shuffled) == 2:
+        try:
+            seconds, share = overlap(*shuffled)
+        except (KeyError, TypeError) as exc:
+            _say(f"cannot read the shuffled runs' times: {exc!r}")
+            return EXIT_ERROR
+        if share < MIN_OVERLAP_FRACTION:
+            _say(f"NO OVERLAP: the shuffled runs ran together for {seconds:.0f} s, {share:.0%} of the shorter "
+                 f"(need {MIN_OVERLAP_FRACTION:.0%}): inconclusive")
+            return EXIT_NO_OVERLAP
+    used = sorted(set(differing) & set(listed))
+    _say(f"OK: {len(runs)} runs, {len(differing)} differing test(s), all listed" + (f": {' '.join(used)}" if used else ""))
+    return EXIT_EQUAL
+
+
+def compare(report_path: Path, exceptions_path: Path) -> int:
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _say(f"cannot read the pair report {report_path}: {exc}")
+        return EXIT_ERROR
+    return judge(report, exceptions_path, strict=False)
+
+
+def _timed_run(name: str, seed: int | None, repo: Path, sha: str, junit: Path, slots: int, timeout_s: int,
+               into: dict) -> None:
+    """One whole-suite run through ``suite_gate.run_tree``; its record (or its failure) goes into ``into[name]``."""
+    args = [] if seed is None else [f"{SEED_OPTION}={seed}"]
+    try:
+        run = gate.run_tree(repo, sha, args, junit, slots, timeout_s=timeout_s)
+        if not run.build_ok or run.timed_out or run.pytest_exit is None or not run.report_path:
+            raise gate.GateError(f"the run did not complete: {'timed out' if run.timed_out else run.detail or 'no report'}")
+        if run.hermetic and run.pytest_exit == gate.hermetic_run.RUNNER_FAILED_EXIT:
+            raise gate.GateError(f"the hermetic runner failed before pytest ran: {gate.one_line(run.log_tail[-300:], 300)}")
+        lines = _test_report.read_lines(run.report_path)
+        started = (instant(run.slots_acquired_at) if run.slots_source == test_slots.ACQUIRED else None) \
+            or instant(run.timeout_started_at)
+        into[name] = {
+            "name": name, "seed": seed, "pytest_exit": run.pytest_exit, "hermetic": run.hermetic,
+            "hermetic_reason": run.hermetic_reason, "slots_held": run.slots_held, "slot_wait_s": run.slot_wait_s,
+            "running_from": started, "running_to": instant(run.timeout_started_at) + run.duration_s,
+            "duration_s": round(run.duration_s, 1), "junit_xml": run.junit_path, "tests_jsonl": run.report_path,
+            "collected": len(_test_report.collected_ids(lines)), "outcomes": _test_report.outcomes(lines)}
+    except (gate.GateError, OSError) as exc:
+        into[name] = {"error": str(exc)}
+
+
+def _run_record_file(out: Path, name: str) -> Path:
+    return out.with_name(f"{out.stem}.{name}.record.json")
+
+
+def _recorded_run(out: Path, name: str, seed: int | None, sha: str) -> dict | str:
+    """The record an earlier ``--runs`` launch saved for ``name``, or why it cannot be used."""
+    path = _run_record_file(out, name)
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return f"{name}: no record yet ({path.name})"
+    except (OSError, ValueError) as exc:
+        return f"{name}: cannot read {path.name}: {exc}"
+    if record.get("commit") != sha or record.get("seed") != seed:
+        return f"{name}: {path.name} is of commit {str(record.get('commit'))[:12]} seed {record.get('seed')}, not {sha[:12]} seed {seed}"
+    return record
+
+
+def shuffle_pair(repo: Path, seeds: list[int], out: Path, exceptions_path: Path, timeout_s: int,
+                 runs: str = RUNS_ALL) -> int:
+    """Three whole-suite runs of the committed tip in the hermetic runner: unshuffled, then one per seed,
+    the shuffled ones started together. The exit code is the verdict ``judge`` gives the recorded runs.
+
+    ``runs`` limits one launch to the unshuffled run or to the two shuffled ones (each launch must fit
+    the caller's own time limit); every run's record is saved beside ``out``, and the verdict comes from
+    the launch that finds all three records of this commit, EXIT_PARTIAL from one that does not."""
+    free_gb = shutil.disk_usage("/").free / 2**30
+    if free_gb < MIN_FREE_GB:
+        _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
+        return EXIT_ERROR
+    if len(seeds) != 2 or seeds[0] == seeds[1]:
+        _say(f"need two different seeds, got {seeds}")
+        return EXIT_ERROR
+    sha = _git(repo, "rev-parse", "HEAD")
+    if _git(repo, "status", "--porcelain", "--untracked-files=no"):
+        _say("warning: tracked files are modified; the runs use the committed tip only")
+    os.environ.pop(test_slots.HELD_ENV, None)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    slots = test_slots.configured().per_run
+    records: dict[str, dict] = {}
+    plan = [(UNSHUFFLED, None)] + [(f"seed{seed}", seed) for seed in seeds]
+    todo = [(name, seed) for name, seed in plan if runs == RUNS_ALL or (seed is None) == (runs == RUNS_UNSHUFFLED)]
+
+    def start(name: str, seed: int | None) -> threading.Thread:
+        junit = out.with_name(f"{out.stem}.{name}.junit.xml")
+        thread = threading.Thread(target=_timed_run, args=(name, seed, repo, sha, junit, slots, timeout_s, records))
+        thread.start()
+        return thread
+
+    _say(f"commit {sha[:12]}: running {' and '.join(name for name, _ in todo)}"
+         + (" (the shuffled ones together)" if len(todo) > 1 and todo[0][1] is not None else ""))
+    if any(seed is None for _, seed in todo):
+        start(UNSHUFFLED, None).join()
+    for thread in [start(name, seed) for name, seed in todo if seed is not None]:
+        thread.join()
+    failed = {name: rec["error"] for name, rec in records.items() if "error" in rec}
+    if failed:
+        for name, message in failed.items():
+            _say(f"{name}: {message}")
+        return EXIT_ERROR
+    for name, _ in todo:
+        _run_record_file(out, name).write_text(json.dumps({**records[name], "commit": sha}) + "\n", encoding="utf-8")
+    for name, seed in plan:
+        if name not in records:
+            earlier = _recorded_run(out, name, seed, sha)
+            if isinstance(earlier, str):
+                _say(f"recorded {' '.join(n for n, _ in todo)}; not judged yet: {earlier}")
+                return EXIT_PARTIAL
+            records[name] = earlier
+    runs_done = [records[name] for name, _ in plan]
+    report = {"schema": SHUFFLE_SCHEMA, "commit": sha, "runs": runs_done}
+    out.write_text(json.dumps(report) + "\n", encoding="utf-8")
+    for run in runs_done:
+        _say(f"{run['name']}: {run['collected']} collected, "
+             f"{sum(o == 'failed' for o in run['outcomes'].values())} failed, pytest exit {run['pytest_exit']}, "
+             f"{run['duration_s']} s, slots {run['slots_held']}, hermetic {run['hermetic']}")
+    return judge(report, exceptions_path, strict=True)
+
+
+def _isolation_command(args: argparse.Namespace) -> int:
+    if args.command == "compare":
+        return compare(args.report, args.exceptions)
+    try:
+        seeds = [int(part) for part in args.seeds.split(",")]
+    except ValueError:
+        _say(f"--seeds takes two integers, got {args.seeds!r}")
+        return EXIT_ERROR
+    return shuffle_pair(args.repo.resolve(), seeds, args.out, args.exceptions, args.timeout_s, args.runs)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gate_speedup_control.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -430,16 +914,78 @@ def main(argv: list[str] | None = None) -> int:
     gates.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
     gates.add_argument("--tests", nargs="+", default=None, metavar="PATH",
                        help="keep only these test files (repo-relative) in the throwaway candidates")
+    sandboxed = sub.add_parser("sandbox-run", help="one gate-shaped run of the committed tip; writes a report")
+    sandboxed.add_argument("--out", required=True, type=Path)
+    sandboxed.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    sandboxed.add_argument("--select", nargs="+", default=[], metavar="PATH",
+                           help="run only these test paths (serial, no slots); default: the whole suite")
+    sandboxed.add_argument("--root", type=Path, default=None,
+                           help="an existing sandbox to reuse and keep; default: a fresh one, removed after")
+    sandboxed.add_argument("--timeout-s", type=int, default=gate.DEFAULT_TIMEOUT_S)
+    sandboxed.add_argument("--reruns", type=int, default=0,
+                           help="rerun each failing id this many times, serially; failing any rerun confirms it")
+    sandboxed.add_argument("--no-hide", action="store_true",
+                           help="run without hiding anything (the run is not hermetic)")
+    hermetic = sub.add_parser("hermetic-run", help="a full run in the hermetic runner with a planted probe")
+    hermetic.add_argument("--out", required=True, type=Path)
+    hermetic.add_argument("--named", required=True, type=Path)
+    hermetic.add_argument("--max-named", type=int, default=DEFAULT_MAX_NAMED)
+    hermetic.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    hermetic.add_argument("--root", type=Path, default=None)
+    hermetic.add_argument("--timeout-s", type=int, default=gate.DEFAULT_TIMEOUT_S)
+    hermetic.add_argument("--reruns", type=int, default=2)
+    hermetic.add_argument("--no-hide", action="store_true", help="hide nothing: the probe must fail (negative control)")
+    hermetic.add_argument("--probe-only", action="store_true", help="collect only the planted probe test")
+    pair = sub.add_parser("shuffle-pair", help="three whole-suite runs (unshuffled, two seeds together); judges them")
+    pair.add_argument("--seeds", required=True, help="two different integers, e.g. 1,2")
+    pair.add_argument("--out", required=True, type=Path)
+    pair.add_argument("--exceptions", type=Path, default=EXCEPTIONS_PATH)
+    pair.add_argument("--runs", choices=[RUNS_ALL, RUNS_UNSHUFFLED, RUNS_SHUFFLED], default=RUNS_ALL,
+                      help="run only the unshuffled run or only the two shuffled ones (see the module docstring)")
+    pair.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    pair.add_argument("--timeout-s", type=int, default=gate.DEFAULT_TIMEOUT_S)
+    cmp_ = sub.add_parser("compare", help="judge a shuffle-pair report against the isolation exceptions")
+    cmp_.add_argument("--report", required=True, type=Path)
+    cmp_.add_argument("--exceptions", type=Path, default=EXCEPTIONS_PATH)
+    named = sub.add_parser("verify-named", help="check a sandbox-run report against the documented failures")
+    named.add_argument("--report", required=True, type=Path)
+    named.add_argument("--named", required=True, type=Path)
+    named.add_argument("--max-named", type=int, default=DEFAULT_MAX_NAMED)
     fake = sub.add_parser("_fake-run")
     fake.add_argument("--dir", required=True)
     fake.add_argument("--want", type=int, required=True)
     fake.add_argument("--hold-s", type=float, required=True)
     fake.add_argument("--limiter", choices=LIMITERS, required=True)
-    args = parser.parse_args(argv)
+    words = sys.argv[1:] if argv is None else argv
+    isolation = bool(words) and words[0] in ("shuffle-pair", "compare")
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        # argparse exits 2 on a usage error, which shuffle-pair and compare reserve for a reasonless entry.
+        if isolation and exc.code not in (0, None):
+            return EXIT_ERROR
+        raise
+    if isolation:
+        try:
+            return _isolation_command(args)
+        except SystemExit as exc:  # _git and the sandbox helpers stop with SystemExit(<message>), exit 1
+            _say(f"error: {exc}")
+            return EXIT_ERROR
+        except Exception as exc:  # noqa: BLE001 — every other failure is exit 3, never 1 "differs"
+            _say(f"error: {exc!r}")
+            return EXIT_ERROR
     if args.command == "slots-selftest":
         return slots_selftest(args.limiter)
     if args.command == "concurrent-gates":
         return concurrent_gates(args.repo.resolve(), args.runs, args.out, args.tests)
+    if args.command == "sandbox-run":
+        return sandbox_run(args.repo.resolve(), args.out, args.select, args.root, args.timeout_s, args.reruns,
+                           hide=not args.no_hide)
+    if args.command == "hermetic-run":
+        return hermetic_run(args.repo.resolve(), args.out, args.named, args.max_named, args.root, args.timeout_s,
+                            args.reruns, args.no_hide, args.probe_only)
+    if args.command == "verify-named":
+        return verify_named(args.report, args.named, args.max_named)
     return _fake_run(args)
 
 

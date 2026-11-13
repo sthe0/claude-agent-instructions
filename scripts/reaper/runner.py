@@ -18,9 +18,12 @@ One pass:
      when a scan raises, when a reaper module was skipped at discovery (its KEEP vetoes
      are missing), or when a session-scope record could not be read (an owner may be
      missing). A removal
-     is logged to ``<config root>/reaper/removed.jsonl`` BEFORE it is attempted; a
-     remove() exception keeps the path and leaves that reaper's stamp where it was.
-  5. Every removal row carries ``trigger`` (``unit`` when INVOCATION_ID is set, else ``pressure``,
+     is logged to ``<config root>/reaper/removed.jsonl`` BEFORE it is attempted, and its outcome
+     row (``outcome``: ``removed``, ``refused`` or ``failed``, with ``detail``) after; an attempt
+     row with no outcome row means the pass died mid-removal. ``RemovalRefused`` from remove()
+     keeps the path with its reason and is not an error; any other remove() exception keeps the
+     path and leaves that reaper's stamp where it was.
+  5. Every removal row carries ``trigger`` (``unit`` when a reaper unit started the pass, else ``pressure``,
      ``manual`` or ``hook``) and, under systemd, ``invocation_id``. After a live pass each due
      reaper's keeps replace the snapshot ``<config root>/reaper/kept/<NAME>.json`` (a snapshot,
      because a timer re-judges the same items every pass): pass time, trigger, the reaper's own
@@ -29,12 +32,21 @@ One pass:
      ``removal-failed`` and ``blocked`` set here) and ``detail`` the full text. A dry run prints
      each selected reaper's ``summary`` after its verdict lines, then the lines of its optional
      ``dry_run_notes(verdicts)`` to stderr.
-  6. Under systemd (INVOCATION_ID set) every non-dry pass mode also writes the observation
+  6. When a reaper unit started the pass (``unit_run``: AGENT_REAPER_UNIT, which only the units set,
+     and INVOCATION_ID) every non-dry pass mode also writes the observation
      ``<config root>/reaper/unit-pass/<INVOCATION_ID>.json`` (``write_unit_observation``; the newest
-     50 kept): invocation_id, tmpdir and agent_home as seen (resolved), ``credentials_present``
+     50 kept): invocation_id, unit, tmpdir and agent_home as seen (resolved), ``credentials_present``
      for SSH_AUTH_SOCK / SSH_AGENT_PID / GIT_ASKPASS / SSH_ASKPASS, ``reapers_run`` (scans that
      completed) and ``errors``. ``scripts/install-reaper-timer.sh --check`` judges a unit run by it.
   7. SessionStart mode (no flag) always exits 0.
+  8. A reaper with ``SESSION_SOURCES`` (a session gate) is due in a SessionStart pass only for a fresh
+     interactive top-level start of one of those sources, read from the hook payload on stdin
+     (``ctx.session``); otherwise it scans with ``ctx.due`` false, prints nothing and keeps its stamp.
+     Manual modes ignore the gate.
+
+``--holders PATH...`` is a read-only query, combined with no other flag: it prints
+a tab-separated ``<path> <free|held|unknown> <detail>`` line per path (``liveness.path_holders``) and exits 0 when every
+path is free, 3 when one is held, 4 when one is unknown. It runs no reaper and writes nothing.
 
 ``--upkeep-only`` is a different mode: it skips scan/remove and the throttle stamps and
 calls only each reaper's optional ``upkeep(ctx)``, one reaper at a time with its errors
@@ -62,6 +74,7 @@ import fcntl
 import json
 import os
 import re
+import select
 import sys
 import tempfile
 import time
@@ -71,17 +84,82 @@ from typing import Callable, Iterator, Sequence, TextIO
 
 from agentctl import config as agentctl_config
 from lib import config_root
-from reaper import registry
-from reaper.contract import KEEP, REMOVE, ReapContext, Verdict
+from reaper import liveness, registry
+from reaper.contract import KEEP, REMOVE, ReapContext, RemovalRefused, Verdict, session_sources_problem
 from session_scope import registry as scope_registry
 
-THROTTLED_SENTINEL = "throttled: within window"
+THROTTLED_SENTINEL = "nothing due: within the throttle window or outside a gated reaper's session"
 UPKEEP_LOCK_WAIT_S = 120.0
 UPKEEP_LOCK_POLL_S = 0.25
 PRESSURE_THRESHOLD_KEY = "reaper-pressure-free-percent"
 # Minimum minutes between two pressured passes of one reaper; the hook fires at every turn end,
 # and a pass that frees nothing must not repeat that often.
 PRESSURE_COOLDOWN_MIN = 10.0
+# The SessionStart payload is a few hundred bytes; a longer one, or one that does not arrive in time, is no payload.
+SESSION_PAYLOAD_MAX_BYTES = 65536
+SESSION_PAYLOAD_WAIT_S = 2.0
+# Values of CLAUDE_CODE_ENTRYPOINT that mean a person is at the terminal; a headless run carries another one.
+INTERACTIVE_ENTRYPOINTS = frozenset({"cli"})
+HOLDERS_EXIT_HELD = 3
+HOLDERS_EXIT_UNKNOWN = 4
+
+
+def read_session_payload(stream: "TextIO | None") -> "dict[str, object] | None":
+    """The SessionStart hook's JSON object from ``stream``, else None.
+
+    None when there is no stream, it is a terminal, nothing readable arrives within
+    ``SESSION_PAYLOAD_WAIT_S``, more than ``SESSION_PAYLOAD_MAX_BYTES`` arrive, or the text is not
+    one JSON object. A pipe the writer keeps open is not waited on once the object is complete."""
+    if stream is None or stream.isatty():
+        return None
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        text = stream.read(SESSION_PAYLOAD_MAX_BYTES + 1)
+    else:
+        buf = b""
+        deadline = time.monotonic() + SESSION_PAYLOAD_WAIT_S
+        while len(buf) <= SESSION_PAYLOAD_MAX_BYTES:
+            try:
+                ready = select.select([fd], [], [], max(0.0, deadline - time.monotonic()))[0]
+                chunk = os.read(fd, 4096) if ready else b""
+            except OSError:
+                return None
+            if not chunk:
+                break
+            buf += chunk
+            try:
+                json.loads(buf)
+                break
+            except ValueError:
+                continue
+        text = buf.decode("utf-8", errors="replace")
+    if len(text) > SESSION_PAYLOAD_MAX_BYTES:
+        return None
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def session_of(payload: "dict[str, object] | None", environ: "dict[str, str] | os._Environ[str]") -> "tuple[str, bool, bool] | None":
+    """``(source, top_level, interactive)`` for a payload that names a string ``source``, else None.
+
+    ``top_level`` holds when AGENT_RECURSION_DEPTH is unset or ``0`` (a spawned specialist has a
+    higher depth); ``interactive`` when CLAUDE_CODE_ENTRYPOINT is in ``INTERACTIVE_ENTRYPOINTS``."""
+    source = payload.get("source") if payload else None
+    if not isinstance(source, str) or not source:
+        return None
+    top_level = environ.get("AGENT_RECURSION_DEPTH") in (None, "0")
+    return source, top_level, environ.get("CLAUDE_CODE_ENTRYPOINT") in INTERACTIVE_ENTRYPOINTS
+
+
+def session_admits(sources: "frozenset[str] | None", session: "tuple[str, bool, bool] | None") -> bool:
+    """False when a reaper gates on ``sources`` and ``session`` is not a fresh interactive top-level start of one."""
+    if sources is None:
+        return True
+    return session is not None and session[0] in sources and session[1] and session[2]
 
 
 def stamp_dir() -> Path:
@@ -123,6 +201,11 @@ def _read_stamp(directory: Path, name: str) -> "float | None":
         return None
 
 
+def _throttle_elapsed(reaper: "registry.Reaper", stamps: Path, now: float) -> bool:
+    prev = _read_stamp(stamps, reaper.name)
+    return prev is None or (now - prev) >= reaper.throttle_hours * 3600.0
+
+
 def _write_stamp(directory: Path, name: str, now: float) -> None:
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -147,12 +230,23 @@ def _normalize(raw: object) -> "list[Verdict]":
     return verdicts
 
 
-def _provenance(*, pressured: bool, manual: bool) -> "dict[str, str]":
-    """How this pass was started: ``unit`` under systemd (INVOCATION_ID set, which is also
-    recorded as ``invocation_id``), else ``pressure``, ``manual`` or the SessionStart ``hook``."""
+def unit_run() -> "tuple[str, str] | None":
+    """``(unit name, invocation id)`` when a reaper unit started this process, else None. Only a unit sets
+    AGENT_REAPER_UNIT; INVOCATION_ID alone is inherited by every descendant of a systemd-started process
+    (a session under a systemd-started tmux) and proves only ancestry."""
+    unit = os.environ.get("AGENT_REAPER_UNIT")
     invocation = os.environ.get("INVOCATION_ID")
-    if invocation:
-        return {"trigger": "unit", "invocation_id": invocation}
+    if unit and invocation:
+        return unit, invocation
+    return None
+
+
+def _provenance(*, pressured: bool, manual: bool) -> "dict[str, str]":
+    """How this pass was started: ``unit`` when a reaper unit started it (``unit_run``; its invocation id is
+    also recorded as ``invocation_id``), else ``pressure``, ``manual`` or the SessionStart ``hook``."""
+    started = unit_run()
+    if started:
+        return {"trigger": "unit", "invocation_id": started[1]}
     return {"trigger": "pressure" if pressured else "manual" if manual else "hook"}
 
 
@@ -168,9 +262,31 @@ def _append_removal_log(
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+OUTCOME_REMOVED = "removed"
+OUTCOME_REFUSED = "refused"
+OUTCOME_FAILED = "failed"
+
+
+def _append_outcome_log(
+    log_path: Path, now: float, reaper: registry.Reaper, verdict: Verdict, provenance: "dict[str, str]",
+    outcome: str, detail: str, err: TextIO,
+) -> None:
+    """Append the attempt's outcome row; best effort, since the attempt row is already written."""
+    record = {
+        "ts": _iso(now), "reaper": reaper.name, "layer": reaper.layer, "path": verdict.path,
+        "outcome": outcome, "detail": detail, **provenance,
+    }
+    try:
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        print(f"reaper {reaper.name}: could not log the outcome for {verdict.path}: {exc}", file=err)
+
+
 REASON_TAG = "reason="
 UNCLASSIFIED = "unclassified"
 REMOVAL_FAILED = "removal-failed"
+REMOVAL_REFUSED = "removal-refused"
 BLOCKED = "blocked"
 
 
@@ -357,7 +473,8 @@ def execute_pass(
     else:
         due = {
             r.name for r in selected
-            if (prev := _read_stamp(stamps, r.name)) is None or (now - prev) >= r.throttle_hours * 3600.0
+            if session_admits(getattr(r.module, "SESSION_SOURCES", None), ctx.session)
+            and _throttle_elapsed(r, stamps, now)
         }
     if not due:
         print(THROTTLED_SENTINEL, file=err)
@@ -415,6 +532,7 @@ def execute_pass(
     removed = 0
     failed_removals: "set[str]" = set()
     failed_paths: "set[str]" = set()
+    refused_paths: "dict[str, str]" = {}
     removed_paths: "set[str]" = set()
     for real, entries in joined.items():
         if blocker(real) is not None:
@@ -426,15 +544,27 @@ def execute_pass(
         if executor is None:
             continue
         reaper, verdict = executor
+        logged = False
         try:
             _append_removal_log(log_path, now, reaper, verdict, provenance)
+            logged = True
             if reaper.module.remove(verdict.path, ctx) is False:
                 raise RuntimeError("remove() returned False")
+        except RemovalRefused as exc:
+            refused_paths[verdict.path] = str(exc)
+            _append_outcome_log(log_path, now, reaper, verdict, provenance, OUTCOME_REFUSED, str(exc), err)
+            print(f"reaper {reaper.name}: refused to remove {verdict.path}: {exc}", file=err)
+            continue
         except Exception as exc:
             failed_removals.add(reaper.name)
             failed_paths.add(verdict.path)
+            if logged:
+                _append_outcome_log(
+                    log_path, now, reaper, verdict, provenance, OUTCOME_FAILED, f"{type(exc).__name__}: {exc}", err,
+                )
             print(f"reaper {reaper.name}: FAILED to remove {verdict.path}: {type(exc).__name__}: {exc}", file=err)
             continue
+        _append_outcome_log(log_path, now, reaper, verdict, provenance, OUTCOME_REMOVED, verdict.reason, err)
         removed += 1
         removed_paths.add(verdict.path)
         print(f"reaper {reaper.name}: removed {verdict.path} ({verdict.reason})", file=err)
@@ -452,7 +582,9 @@ def execute_pass(
                 if verdict.action == KEEP:
                     keeps.append((verdict.path, _slug(verdict), verdict.reason, verdict.size))
                 elif verdict.path in failed_paths:
-                    keeps.append((verdict.path, REMOVAL_FAILED, f"removal refused or failed: {verdict.reason}", verdict.size))
+                    keeps.append((verdict.path, REMOVAL_FAILED, f"removal failed: {verdict.reason}", verdict.size))
+                elif verdict.path in refused_paths:
+                    keeps.append((verdict.path, REMOVAL_REFUSED, refused_paths[verdict.path], verdict.size))
                 elif verdict.path not in removed_paths:
                     why = blocker(os.path.realpath(verdict.path))
                     keeps.append((verdict.path, BLOCKED if why else UNCLASSIFIED, why or verdict.reason, verdict.size))
@@ -584,7 +716,31 @@ def _list(reapers: "list[registry.Reaper]", out: TextIO) -> None:
 
 
 def _discover_default(project_dir: Path, warn: "Callable[[str], None]") -> "list[registry.Reaper]":
-    return registry.discover(project_dir, warn=warn)
+    """Discovered reapers minus those whose ``SESSION_SOURCES`` is malformed, each skipped with one warning."""
+    usable = []
+    for reaper in registry.discover(project_dir, warn=warn):
+        problem = session_sources_problem(reaper.module)
+        if problem:
+            warn(f"reaper: skipped {reaper.file}: {problem}")
+        else:
+            usable.append(reaper)
+    return usable
+
+
+def _one_field(text: str) -> str:
+    return text.replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+
+def _holders_report(paths: "list[str]", ctx: ReapContext, out: TextIO) -> int:
+    """Print ``<path>\\t<free|held|unknown>\\t<detail>`` per path; exit 0 all free, 4 any unknown, else 3 any held."""
+    answers = liveness.path_holders(paths, ctx)
+    for path in paths:
+        answer = answers[path]
+        print(f"{_one_field(path)}\t{answer.status}\t{_one_field(answer.report())}", file=out)
+    statuses = {answer.status for answer in answers.values()}
+    if liveness.UNKNOWN_STATUS in statuses:
+        return HOLDERS_EXIT_UNKNOWN
+    return HOLDERS_EXIT_HELD if liveness.HELD_STATUS in statuses else 0
 
 
 UNIT_PASS_KEEP = 50
@@ -596,14 +752,16 @@ def unit_pass_dir() -> Path:
 
 
 def write_unit_observation(observe: "dict[str, int]", err: TextIO) -> None:
-    """Under systemd (INVOCATION_ID set) record what this run saw, for ``install-reaper-timer.sh
-    --check``: temp root, agent home, which credential variables are present, reapers whose scan
+    """When a reaper unit started this pass (``unit_run``) record what it saw, for ``install-reaper-timer.sh
+    --check``: unit name, temp root, agent home, which credential variables are present, reapers whose scan
     ran, errors. Atomic; the newest ``UNIT_PASS_KEEP`` files stay. Best effort."""
-    invocation = os.environ.get("INVOCATION_ID")
-    if not invocation or not re.fullmatch(r"[A-Za-z0-9]+", invocation):
+    started = unit_run()
+    if not started or not re.fullmatch(r"[A-Za-z0-9]+", started[1]):
         return
+    unit, invocation = started
     record = {
         "invocation_id": invocation,
+        "unit": unit,
         "tmpdir": os.path.realpath(tempfile.gettempdir()),
         "agent_home": os.path.realpath(config_root.agent_home()),
         "credentials_present": {name: name in os.environ for name in CREDENTIAL_VARS},
@@ -659,18 +817,24 @@ def main(
     parser.add_argument("--upkeep-only", action="store_true", help="run only each reaper's upkeep (e.g. the branch backup push), under a lock")
     parser.add_argument("--no-wait", action="store_true", help="with --upkeep-only: exit 0 at once if another upkeep run holds the lock")
     parser.add_argument("--on-pressure", action="store_true", help="run the reapers whose pressure paths are short of free space (config.md row reaper-pressure-free-percent), under a no-wait lock")
+    parser.add_argument("--holders", nargs="+", metavar="PATH", help="print who holds each path (free, held or unknown) and exit 0 if all free, 3 if any held, 4 if any unknown; changes nothing")
     args = parser.parse_args(argv)
+    if args.holders and (args.dry_run or args.force_run or args.only or args.list or args.upkeep_only or args.no_wait or args.on_pressure):
+        parser.error("--holders combines with no other flag")
     if args.no_wait and not args.upkeep_only:
         parser.error("--no-wait needs --upkeep-only")
     if args.on_pressure and (args.upkeep_only or args.only or args.force_run):
         parser.error("--on-pressure combines only with --dry-run")
-    fail_open = not (args.dry_run or args.force_run or args.only or args.list) or args.upkeep_only
+    fail_open = not (args.dry_run or args.force_run or args.only or args.list or args.holders) or args.upkeep_only
     observe = {"reapers_run": 0, "errors": 0}
-    records_pass = not (args.list or args.upkeep_only or args.dry_run)
+    records_pass = not (args.list or args.upkeep_only or args.dry_run or args.holders)
+    manual = bool(args.dry_run or args.force_run or args.only or args.on_pressure)
 
     try:
         now = time.time()
         ctx = build_context(now=now, dry_run=args.dry_run)
+        if args.holders:
+            return _holders_report(args.holders, ctx, sys.stdout)
         skipped: "list[str]" = []
 
         def warn(line: str) -> None:
@@ -693,6 +857,10 @@ def main(
         if args.on_pressure:
             _run_on_pressure(reapers, ctx, skipped, observe)
             return 0
+        if not manual and any(
+            hasattr(r.module, "SESSION_SOURCES") and _throttle_elapsed(r, stamp_dir(), now) for r in reapers
+        ):
+            ctx = dataclasses.replace(ctx, session=session_of(read_session_payload(sys.stdin), os.environ))
         execute_pass(
             reapers, ctx,
             dry_run=args.dry_run, force_run=args.force_run, only=args.only,

@@ -22,7 +22,9 @@ git error are refusals, never admissions.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import fcntl
+import functools
 import importlib.util
 import os
 import re
@@ -39,6 +41,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Protocol, Sequence
 
+from . import config_root
+from . import hermetic_run
 from . import landing_gate as shared
 from . import test_slots
 from .landing_gate import ADMITTED, NOT_REQUIRED, REFUSED, Decision, GateError, PrePushResult, defuse, one_line, short
@@ -51,6 +55,10 @@ GATE_SCRIPT = "scripts/suite-gate.py"
 DEFAULT_REMOTE = "origin"
 DEFAULT_TRUNK = "main"
 SANDBOX_SCRIPT = "instruction-sandbox.sh"
+HERMETIC_SCRIPT = Path(__file__).resolve().parent / "hermetic_run.py"
+SOURCE_OBJECTS_DIR = "source-objects"
+NOT_HERMETIC = "NOT HERMETIC"
+ALTERNATES = Path("core/.git/objects/info/alternates")
 SANDBOX_PARENT = "/tmp"
 SANDBOX_PREFIX = "instruction-sandbox."
 
@@ -117,8 +125,11 @@ GIT_IDENTITY = {
 
 
 def admission_line(candidate_sha: str) -> str:
-    """The one line the hook prints on admitting a push through a suite record."""
-    return f"pre-push: suite gate admitted {candidate_sha}"
+    """The one line the hook prints on admitting a push through a suite record, exactly as printed.
+
+    Hook output is defused, so a sha containing ``403`` is printed broken (``4·03``); returning the
+    defused form keeps every comparison with the printed line true for any sha."""
+    return defuse(f"pre-push: suite gate admitted {candidate_sha}")
 
 
 # ── configuration ─────────────────────────────────────────────────────────
@@ -197,6 +208,8 @@ class SuiteRun:
     pytest_argv: tuple[str, ...] = ()
     junit_path: str = ""
     report_path: str = ""
+    hermetic: bool = False
+    hermetic_reason: str = ""
 
 
 class Runner(Protocol):
@@ -226,6 +239,11 @@ def classify(run: SuiteRun, expected_sha: str) -> tuple[tuple[str, ...], str]:
         if not ids:
             return (), "pytest exited 1 but the recorder saw no failed test"
         return ids, ""
+    if run.pytest_exit == hermetic_run.RUNNER_FAILED_EXIT and run.hermetic:
+        last_line = run.log_tail.strip().splitlines()[-1:] or [""]
+        return (), (f"the hermetic runner failed before pytest ran (exit {run.pytest_exit}; "
+                    "cap-run's own timeout exits the same code when it fails itself)"
+                    f"{': ' + one_line(last_line[0], 200) if last_line[0] else ''}")
     return (), f"pytest exited {run.pytest_exit}{_detail(run)}"
 
 
@@ -338,6 +356,8 @@ def cost_fields(run: SuiteRun) -> dict:
         "slots_acquired_at": run.slots_acquired_at,
         "timeout_started_at": run.timeout_started_at,
         "pytest_argv": list(run.pytest_argv),
+        "hermetic": run.hermetic,
+        "hermetic_reason": run.hermetic_reason,
     }
 
 
@@ -386,6 +406,23 @@ def _scope_decision(repo: str | Path, tip: str, candidate_sha: str) -> LandingDe
     return None
 
 
+def not_hermetic_notice(record: object) -> str:
+    """``NOT HERMETIC: <reason>`` for a record whose run could see the live repository, else empty.
+
+    A record without the field predates the hermetic runner and says nothing. The default runner
+    always records why a run was not hermetic; a stub runner that records no reason says nothing."""
+    if not isinstance(record, dict) or record.get("hermetic") is not False or not record.get("hermetic_reason"):
+        return ""
+    return defuse(f"{NOT_HERMETIC}: {one_line(record['hermetic_reason'], 200)}")
+
+
+def _record_decision(admitted: bool, reason: str, path: Path, record: object) -> LandingDecision:
+    """The decision on a suite record; a record of a run that was not hermetic says so on the line."""
+    decision = _decision(admitted, ADMITTED if admitted else REFUSED, reason, path)
+    notice = not_hermetic_notice(record)
+    return dataclasses.replace(decision, line=f"{decision.line} [{notice}]") if notice else decision
+
+
 def landing_decision(repo: str | Path, candidate_sha: str, tip: str,
                      common_dir: str | Path | None = None,
                      record_file: str | Path | None = None) -> LandingDecision:
@@ -402,7 +439,7 @@ def landing_decision(repo: str | Path, candidate_sha: str, tip: str,
     except GateError as exc:
         return _decision(False, REFUSED, f"cannot decide: {exc}")
     ok, reason = record_admits(record, candidate_sha, tip)
-    return _decision(ok, ADMITTED if ok else REFUSED, reason, path)
+    return _record_decision(ok, reason, path, record)
 
 
 def suite_status(repo: str | Path, candidate_sha: str, tip: str) -> str:
@@ -535,14 +572,16 @@ def slot_holder_extra_tasks(limits: test_slots.Limits, per_run_extra: int | None
     return extra * max(1, -(-limits.total // limits.per_run))
 
 
-def pytest_argv(root: Path, select: Sequence[str], timeout_s: int, extra_tasks: int | None = None) -> list[str]:
+def pytest_argv(root: Path, select: Sequence[str], timeout_s: int, extra_tasks: int | None = None,
+                wrapper: Sequence[str] = (), extra_args: Sequence[str] = ()) -> list[str]:
     cap_run = Path(__file__).resolve().parents[1] / "cap-run.sh"
     headroom = [] if extra_tasks is None else ["--extra-tasks", str(extra_tasks)]
     return [
         str(cap_run), *headroom, "--timeout", str(timeout_s + KILL_GRACE_S + CAP_RUN_SLACK_S), "--",
-        sys.executable, "-m", "pytest", *(select or ["scripts/tests"]),
+        *wrapper, sys.executable, "-m", "pytest", *(select or ["scripts/tests"]),
         "-q", "--continue-on-collection-errors", "--rootdir", str(root / "core"),
         "-p", PLUGIN_MODULE, "-p", "no:cacheprovider", "--junitxml", str(root / JUNIT_NAME),
+        *extra_args,
     ]
 
 
@@ -593,15 +632,17 @@ class DiskPeak:
         self._sample()
 
 
-def _hold_slots(xdist_ok: bool, select: Sequence[str]) -> tuple[test_slots.Holder | None, int | None]:
+def _hold_slots(xdist_ok: bool, select: Sequence[str],
+                slots: int | None = None) -> tuple[test_slots.Holder | None, int | None]:
     """Worker slots for a full parallel run (waiting in the machine-wide queue) and its cap-run.sh headroom.
 
     A serial run takes no slots, and a run without slots of its own keeps cap-run.sh's default headroom.
+    ``slots`` replaces the default of one per CPU; the limiter still caps a run at its per-run share.
     """
     if select or not xdist_ok:
         return None, None
     limits = test_slots.configured()
-    want = os.cpu_count() or 1
+    want = slots or os.cpu_count() or 1
     holder = test_slots.acquire(
         want, limits=limits,
         on_wait=lambda holders: print(test_slots.describe_wait(want, limits, holders), file=sys.stderr, flush=True))
@@ -615,27 +656,110 @@ def read_failures(path: Path) -> tuple[str, ...]:
         return ()
 
 
-def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], timeout_s: int) -> SuiteRun:
-    """Build the sandbox of ``sha`` under ``root`` (once), then run pytest in it."""
+@functools.cache
+def hermetic_unavailable() -> str:
+    """Empty string when the hermetic runner can enter its namespaces here, else why not."""
+    proc = subprocess.run([sys.executable, str(HERMETIC_SCRIPT), "--check"], capture_output=True, text=True)
+    if proc.returncode == 0:
+        return ""
+    return one_line(proc.stderr.strip() or f"hermetic_run.py --check exited {proc.returncode}", 160)
+
+
+def _common_dir(repo: Path) -> str:
+    proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                          capture_output=True, text=True, env=shared.clean_env())
+    common = proc.stdout.strip() if proc.returncode == 0 else ""
+    if not common:
+        raise GateError(f"cannot find the git directory of {repo}")
+    return common
+
+
+def hidden_paths(repo: Path) -> list[str]:
+    """What a test must not read: the source work tree, its git directory and checkout, the agent homes.
+
+    The literal ``~/.claude`` and ``~/.claude-agent`` are listed beside the configured root: under the
+    agent launcher the configured root is ``~/.claude-agent`` alone. The rest of the home stays visible."""
+    common = _common_dir(repo)
+    home = os.path.expanduser("~")
+    paths = [os.path.realpath(repo), common]
+    if os.path.basename(common) == ".git":
+        paths.append(os.path.dirname(common))
+    paths += [os.environ[name] for name in ("CLAUDE_AGENT_HOME", "CLAUDE_CONFIG_DIR") if os.environ.get(name)]
+    paths += [os.path.join(home, ".claude-agent"), os.path.join(home, ".claude"), str(config_root.harness_config_root())]
+    return list(dict.fromkeys(paths))
+
+
+def point_alternates(root: Path, objects_dir: Path) -> None:
+    """The sandbox clone reads the source's objects through ``objects_dir`` (a --shared clone's alternates)."""
+    if (root / ALTERNATES).is_file():
+        (root / ALTERNATES).write_text(f"{objects_dir}\n", encoding="utf-8")
+
+
+def hermetic_wrapper(repo: Path, root: Path) -> list[str]:
+    """The argv prefix that runs a command with the live repository and agent homes hidden, network cut.
+
+    The clone keeps reading the source's objects: only that directory is bound into the sandbox
+    (read-only), where the clone's alternates point; the source's refs and work tree stay hidden."""
+    objects = Path(_common_dir(repo)) / "objects"
+    mount = root / SOURCE_OBJECTS_DIR
+    mount.mkdir(exist_ok=True)
+    point_alternates(root, mount)
+    wrapper = [sys.executable, str(HERMETIC_SCRIPT), "--objects", f"{objects}:{mount}"]
+    for path in hidden_paths(repo):
+        wrapper += ["--hide", path]
+    return [*wrapper, "--"]
+
+
+def build_sandbox(repo: Path, sha: str, root: Path) -> SuiteRun | None:
+    """Build the sandbox of ``sha`` under ``root`` once; the failed run, or None when it is there."""
+    if (root / "sandbox.env").exists():
+        return None
+    scripts = Path(__file__).resolve().parents[1]
+    started = time.monotonic()
+    code, out, timed_out = run_group(
+        [str(scripts / SANDBOX_SCRIPT), "--source", str(repo), "--core-ref", sha, "--root", str(root)],
+        cwd=None, env=shared.clean_env(), timeout_s=BUILD_TIMEOUT_S,
+    )
+    if code == 0 and not timed_out:
+        return None
+    return SuiteRun(None, build_ok=False, xdist_ok=importlib.util.find_spec("xdist") is not None,
+                    build_s=time.monotonic() - started,
+                    detail="timed out" if timed_out else f"exit {code}: {one_line(out[-400:], 240)}")
+
+
+def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], timeout_s: int,
+                   hide: bool = True, extra_pytest_args: Sequence[str] = (),
+                   slots: int | None = None) -> SuiteRun:
+    """Build the sandbox of ``sha`` under ``root`` (once), then run pytest in it.
+
+    ``extra_pytest_args`` end pytest's argv (the gate passes none); ``slots`` is the worker slots a
+    full run asks for (default one per CPU, capped by the limiter).
+
+    ``hide`` runs pytest with the live repository and agent homes hidden and no network; where the
+    namespaces are unavailable (or ``hide`` is off) it runs without, and the run says so."""
     scripts = Path(__file__).resolve().parents[1]
     userbase = site.getuserbase()
     xdist_ok = importlib.util.find_spec("xdist") is not None
     started = time.monotonic()
-    build_s = 0.0
-    if not (root / "sandbox.env").exists():
-        code, out, timed_out = run_group(
-            [str(scripts / SANDBOX_SCRIPT), "--source", str(repo), "--core-ref", sha, "--root", str(root)],
-            cwd=None, env=shared.clean_env(), timeout_s=BUILD_TIMEOUT_S,
-        )
-        build_s = time.monotonic() - started
-        if code != 0 or timed_out:
-            return SuiteRun(None, build_ok=False, xdist_ok=xdist_ok, build_s=build_s,
-                            detail="timed out" if timed_out else f"exit {code}: {one_line(out[-400:], 240)}")
+    failed_build = build_sandbox(repo, sha, root)
+    if failed_build is not None:
+        return failed_build
+    build_s = time.monotonic() - started
+    hermetic_reason = "" if hide else "hiding was switched off"
+    if hide:
+        hermetic_reason = hermetic_unavailable()
     proc = subprocess.run(
         ["git", "-C", str(root / "core"), "rev-parse", "HEAD"], capture_output=True, text=True,
         env=shared.clean_env(),
     )
     core_sha = proc.stdout.strip() if proc.returncode == 0 else ""
+    wrapper: list[str] = []
+    if hermetic_reason:
+        print(f"{NOT_HERMETIC}: {hermetic_reason}", file=sys.stderr, flush=True)
+        if (root / ALTERNATES).is_file():
+            point_alternates(root, Path(_common_dir(repo)) / "objects")
+    else:
+        wrapper = hermetic_wrapper(repo, root)
     (root / "plugin").mkdir(exist_ok=True)
     (root / "plugin" / f"{PLUGIN_MODULE}.py").write_text(PLUGIN_SOURCE, encoding="utf-8")
     (root / "tmp").mkdir(exist_ok=True)
@@ -646,12 +770,12 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
     env = suite_env(root, userbase, failures_file, sandbox_scrub_names(scripts / SANDBOX_SCRIPT))
     env[REPORT_ENV] = str(report)
     try:
-        holder, extra_tasks = _hold_slots(xdist_ok, select)
+        holder, extra_tasks = _hold_slots(xdist_ok, select, slots)
     except test_slots.SlotWaitExpired as exc:
         return SuiteRun(None, (), core_sha, build_s=build_s, xdist_ok=xdist_ok, slots_unavailable=str(exc),
                         slot_wait_s=exc.waited_s)
     try:
-        argv = pytest_argv(root, select, timeout_s, extra_tasks)
+        argv = pytest_argv(root, select, timeout_s, extra_tasks, wrapper, extra_pytest_args)
         if holder is not None:
             env[XDIST_WORKERS_ENV] = env[test_slots.HELD_ENV] = str(holder.count)
         cpu_before = _children_cpu_s()
@@ -676,9 +800,38 @@ def default_runner(repo: Path, sha: str, root: Path, *, select: Sequence[str], t
         slots_acquired_at=iso_instant(holder.acquired_at) if holder else "",
         timeout_started_at=iso_instant(timeout_started),
         pytest_argv=tuple(argv),
+        hermetic=not hermetic_reason,
+        hermetic_reason=hermetic_reason,
         junit_path=str(junit) if junit.is_file() else "",
         report_path=str(report) if report.is_file() else "",
     )
+
+
+def run_tree(repo: Path, sha: str, extra_pytest_args: Sequence[str], junit_path: Path, slots: int | None = None,
+             *, timeout_s: int = DEFAULT_TIMEOUT_S, sandbox_parent: str | Path = SANDBOX_PARENT) -> SuiteRun:
+    """One whole-suite run of ``sha`` in its own sandbox, hermetic and under the limiter, outside the gate's record.
+
+    The isolation check runs the same tree several times and compares outcomes; this is the way it
+    asks for a run: ``default_runner`` (hide set, objects rebinding, namespaces, slot queue) with
+    ``extra_pytest_args`` on pytest's argv and at most ``slots`` worker slots, and the run's JUnit XML
+    and per-test report copied beside ``junit_path`` (the report keyed by node id, ``<stem>.tests.jsonl``).
+    The sandbox is removed after; the returned run names the copies.
+    """
+    root = _new_root(sandbox_parent)
+    try:
+        run = default_runner(repo, sha, root, select=(), timeout_s=timeout_s,
+                             extra_pytest_args=extra_pytest_args, slots=slots)
+        junit_path.parent.mkdir(parents=True, exist_ok=True)
+        report_copy = junit_path.with_name(junit_path.stem + ".tests.jsonl")
+        kept = {}
+        for field, src, dst in (("junit_path", run.junit_path, junit_path),
+                                ("report_path", run.report_path, report_copy)):
+            if src:
+                shutil.copyfile(src, dst)
+                kept[field] = str(dst)
+        return dataclasses.replace(run, **kept)
+    finally:
+        remove_sandbox(root, sandbox_parent)
 
 
 # ── run: candidate, baseline, rerun, record ───────────────────────────────
@@ -879,7 +1032,7 @@ def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner 
             stored = candidate_record(common_dir, candidate_sha)
             if stored is not None and record_admits(stored, candidate_sha, tip)[0]:
                 path = shared.record_path(common_dir, RECORD_DIR, candidate_sha)
-                return SuiteOutcome(stored, path, _decision(True, ADMITTED, admission_summary(stored), path))
+                return SuiteOutcome(stored, path, _record_decision(True, admission_summary(stored), path, stored))
         execution = _execute(repo, candidate_sha, tip, common_dir, run, limit, now, sandbox_parent)
     verdict = _judge(execution)
     record = _build_record(execution, verdict, candidate_sha, tip, now,
@@ -888,7 +1041,7 @@ def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner 
         record["waiver"] = {"reason": shared.normalize_reason(waiver), "at": now()}
     path = shared.write_record(common_dir, RECORD_DIR, candidate_sha, record)
     ok, why = record_admits(record, candidate_sha, tip)
-    return SuiteOutcome(record, path, _decision(ok, ADMITTED if ok else REFUSED, why, path))
+    return SuiteOutcome(record, path, _record_decision(ok, why, path, record))
 
 
 def waive_record(repo: str | Path, sha: str, reason: str,

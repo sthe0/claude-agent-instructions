@@ -45,6 +45,12 @@ def _private_slots(tmp_path_factory, monkeypatch):
     monkeypatch.delenv(gate.XDIST_WORKERS_ENV, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_hermetic_runner(monkeypatch):
+    """These tests stub pytest's process; the hermetic wrapper has its own tests (test_suite_gate_hermetic.py)."""
+    monkeypatch.setattr(gate, "hermetic_unavailable", lambda: "off in these tests")
+
+
 def git(repo, *args, check=True):
     proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
     if check and proc.returncode != 0:
@@ -883,6 +889,12 @@ def test_pre_push_admits_a_recorded_candidate(world):
     world.store(make_record(cand, world.base))
     result = gate.prepush_decision([push_line(cand, world.base)], world.work)
     assert result.allowed and gate.admission_line(cand) in result.messages
+
+
+def test_the_admission_line_is_the_printed_form_even_for_a_sha_holding_403():
+    cursed = "a" * 10 + "403" + "b" * 27
+    line = gate.admission_line(cursed)
+    assert PUSH_RIGHTS.search(line) is None and gate.defuse(line) == line
 
 
 def test_pre_push_prints_the_waiver_in_effect(world):

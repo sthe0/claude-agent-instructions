@@ -1,0 +1,8 @@
+# Tests whose outcome differs between the runs of `gate_speedup_control.py shuffle-pair` (one
+# unshuffled, two shuffled with different seeds and running together) and that could not be fixed at
+# their shared state. A listed id is not compared; every entry needs a reason, and an entry without one
+# makes `compare` and `shuffle-pair` exit 2. A differing test is fixed in preference to being listed.
+#
+#   [[exception]]
+#   id = "scripts/tests/test_x.py::test_y"
+#   reason = "why the outcome depends on order or on a neighbour, and why the cause is not fixed here"

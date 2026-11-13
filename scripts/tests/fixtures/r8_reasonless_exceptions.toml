@@ -1,0 +1,6 @@
+[[exception]]
+id = "scripts/tests/test_r8_fixture.py::test_listed_with_a_reason"
+reason = "a stand-in entry that has a reason"
+
+[[exception]]
+id = "scripts/tests/test_r8_fixture.py::test_listed_without_one"

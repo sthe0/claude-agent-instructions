@@ -18,6 +18,8 @@ and the project's .claude/reapers. Contract, flags and layers: docs/operations/r
   --no-wait    with --upkeep-only: exit 0 at once if another upkeep run holds the lock.
   --on-pressure  run the reapers whose pressure paths are short of free space; started
                detached by hook-branch-backup.py.
+  --holders PATH...  read-only: print `<path> <free|held|unknown> <detail>` (tab-separated) per
+               path; exit 0 all free, 3 any held, 4 any unknown. Combines with no other flag.
 """
 from __future__ import annotations
 

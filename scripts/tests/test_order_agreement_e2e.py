@@ -68,6 +68,8 @@ def env(root, tmp_path):
         **base, "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(root),
         "CLAUDE_CODE_SESSION_ID": HARNESS, "CLAUDE_PUBLISHED_TEXT_GATE": "0",
         "AGENTCTL_EDIT_LEDGER": str(tmp_path / "edit-log.jsonl"),
+        # These plans predate the securing marks; this file tests order agreement, not them.
+        "AGENTCTL_CONDITIONS_SECURING": "0",
         "PATH": _judge_path(os.environ.get("PATH", "")),
     }
 
