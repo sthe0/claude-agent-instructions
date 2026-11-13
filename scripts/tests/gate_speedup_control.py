@@ -90,6 +90,17 @@ two checks show the limiter holds and the record carries the cost, on real proce
       1 any other error. ``--sabotage single-rerun`` counts a test unconfirmed when any one rerun passes,
       so ``first-rerun-fail`` must then exit 4.
 
+  gate_speedup_control.py disk-series [--runs pass,fail] [--keep-max-mb N] [--leak] --out PATH [-C REPO]
+      What a gate run leaves behind. Throwaway candidates on a one-test tip (``pass``: a planted test that
+      passes; ``fail``: one that fails) run through ``suite-gate.py run`` under ``scripts/cap-run.sh``, in a
+      process whose /tmp is a private directory (a mount namespace; the slot directory is bound into it, so
+      the worker-slot limit stays shared). Checks that every run ends as planted, that a failing run keeps
+      its evidence and a passing one does not, that the kept store (<git common dir>/suite-gate) grew by at
+      most N MB (default: config.md suite-gate-keep-max-mb) and holds at most N, and that /tmp is empty.
+      PATH gets the figures per run and the names left in /tmp. Exit 0 every check holds; 3 only something
+      is left in /tmp; 1 any other check fails; 2 an environment error. ``--leak`` makes the last run keep
+      its sandbox (SUITE_GATE_KEEP_SANDBOX=1), so the check must exit 3 and name the sandbox.
+
 Elsewhere exit 2 is a usage or environment error (not enough free disk, git failure).
 """
 from __future__ import annotations
@@ -124,6 +135,8 @@ for _path in (SCRIPTS_DIR, SCRIPTS_DIR / "tests"):
 
 import _test_report  # noqa: E402
 from lib import flake_list  # noqa: E402
+from lib import gate_retention  # noqa: E402
+from lib import hermetic_run as hermetic_mod  # noqa: E402
 from lib import suite_gate as gate  # noqa: E402
 from lib import test_slots  # noqa: E402
 
@@ -948,6 +961,135 @@ def verdict_scenario(repo: Path, case_name: str, sabotage: str | None, out: Path
     return 0 if not problems else EXIT_VERDICT_MISMATCH
 
 
+# ── disk-series: what a gate run leaves behind ────────────────────────────
+
+SERIES_RUNS = ("pass", "fail")
+SERIES_TIMEOUT_S = 3600
+EXIT_SERIES_FAILED, EXIT_SERIES_ENVIRONMENT, EXIT_SERIES_LEAK = 1, 2, 3
+SERIES_PLANTED = {"pass": "def test_planted():\n    assert True\n", "fail": "def test_planted():\n    assert False\n"}
+SERIES_STATUS = {"pass": "PASS", "fail": "FAIL"}
+
+
+def series_command(repo: Path, sha: str, tip: str, timeout_s: int = SERIES_TIMEOUT_S) -> list[str]:
+    """One gate run of a ``disk-series`` step, started the way every fan-out trial is: under cap-run.sh."""
+    return [str(SCRIPTS_DIR / "cap-run.sh"), "--", sys.executable, str(SCRIPTS_DIR / "suite-gate.py"), "run",
+            "-C", str(repo), "--ref", sha, "--remote-sha", tip, "--timeout", str(timeout_s)]
+
+
+def _listing(directory: Path) -> list[str]:
+    return sorted(entry.name for entry in directory.iterdir())
+
+
+def _series_commits(repo: Path, runs: list[str], nonce: str) -> tuple[str, list[str]]:
+    """A tip holding one anchor test and one candidate per run adding a planted test."""
+    anchor = {ANCHOR_FILE: "def test_anchor():\n    assert True\n"}
+    tip = _commit(repo, reduced_tree(repo, anchor), "HEAD", f"cls-control tip {nonce}")
+    candidates = []
+    for n, kind in enumerate(runs, 1):
+        files = {**anchor, f"{PLANTED_DIR}/test_planted.py": SERIES_PLANTED[kind]}
+        candidates.append(_commit(repo, reduced_tree(repo, files), tip, f"cls-control {kind} {n} {nonce}"))
+    return tip, candidates
+
+
+def _series_run(repo: Path, sha: str, tip: str, kind: str, leak: bool, common: Path, tmp: Path) -> dict:
+    env = gate_env(os.environ)
+    if leak:
+        env[gate_retention.KEEP_ENV] = "1"
+    store = common / gate_retention.STORE_DIR
+    before = gate_retention.tree_bytes(store)
+    proc = subprocess.run(series_command(repo, sha, tip), capture_output=True, text=True, env=env)
+    record_file = _record_path(proc.stdout)
+    record = json.loads(Path(record_file).read_text(encoding="utf-8")) if record_file else {}
+    evidence = common / gate_retention.EVIDENCE_DIR / sha
+    problems = []
+    if record.get("status") != SERIES_STATUS[kind]:
+        problems.append(f"{kind} run {sha[:12]}: status {record.get('status')!r}, planted {SERIES_STATUS[kind]!r} "
+                        f"(exit {proc.returncode}; {proc.stdout.strip()[-200:]})")
+    if kind == "fail" and not (evidence / "log.txt").is_file():
+        problems.append(f"fail run {sha[:12]}: no evidence kept at {evidence}")
+    if kind == "pass" and evidence.exists():
+        problems.append(f"pass run {sha[:12]}: evidence kept at {evidence}")
+    return {"run": kind, "candidate": sha, "exit": proc.returncode, "status": record.get("status"),
+            "record": record_file, "evidence": evidence.is_dir(), "store_growth_mb": round(
+                (gate_retention.tree_bytes(store) - before) / gate_retention.MB, 2),
+            "tmp_after": _listing(tmp), "problems": problems}
+
+
+def _series_inner(args: argparse.Namespace) -> int:
+    """Runs inside a private mount namespace with its own /tmp (see ``disk_series``)."""
+    scratch = Path(args.scratch)
+    hermetic_mod.enter_namespaces()
+    slots = scratch / "slots"
+    hermetic_mod._mount(args.slots, str(slots), hermetic_mod._MS_BIND | hermetic_mod._MS_REC)
+    os.environ[test_slots.DIR_ENV] = str(slots)
+    tmp = scratch / "tmp"
+    hermetic_mod._mount(str(tmp), "/tmp", hermetic_mod._MS_BIND | hermetic_mod._MS_REC)
+    os.chmod("/tmp", 0o1777)
+    repo = args.repo
+    common = Path(gate.shared.git_common_dir(repo))
+    store = common / gate_retention.STORE_DIR
+    store_before = gate_retention.tree_bytes(store)
+    runs = args.runs.split(",")
+    tip, candidates = _series_commits(repo, runs, f"{os.getpid()}-disk")
+    _say(f"tip {tip[:12]}; candidates {' '.join(c[:12] for c in candidates)}")
+    results = []
+    for n, (kind, sha) in enumerate(zip(runs, candidates)):
+        results.append(_series_run(repo, sha, tip, kind, args.leak and n == len(runs) - 1, common,
+                                  Path("/tmp")))
+        _say(f"{kind}: {results[-1]['status']}, store grew {results[-1]['store_growth_mb']} MB")
+    leftovers = _listing(Path("/tmp"))
+    grown_mb = (gate_retention.tree_bytes(store) - store_before) / gate_retention.MB
+    total_mb = gate_retention.tree_bytes(store) / gate_retention.MB
+    problems = [p for r in results for p in r["problems"]]
+    if grown_mb > args.keep_max_mb:
+        problems.append(f"the kept store grew {grown_mb:.1f} MB, more than {args.keep_max_mb}")
+    if total_mb > args.keep_max_mb:
+        problems.append(f"the kept store holds {total_mb:.1f} MB, more than {args.keep_max_mb}")
+    summary = {"runs": results, "tip": tip, "keep_max_mb": args.keep_max_mb, "store_grown_mb": round(grown_mb, 2),
+               "store_total_mb": round(total_mb, 2), "leftover_in_tmp": leftovers, "problems": problems,
+               "ok": not problems and not leftovers}
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    for problem in problems:
+        _say(f"MISMATCH: {problem}")
+    if leftovers:
+        _say(f"LEFTOVER in /tmp: {' '.join(leftovers)}")
+    _say(f"store grew {grown_mb:.1f} MB, holds {total_mb:.1f} MB; summary {args.out}")
+    _say("OK" if summary["ok"] else "FAIL")
+    if problems:
+        return EXIT_SERIES_FAILED
+    return EXIT_SERIES_LEAK if leftovers else 0
+
+
+def disk_series(repo: Path, runs: list[str], keep_max_mb: int, leak: bool, out: Path) -> int:
+    """Gate runs in a process whose /tmp is a private directory; they must leave it empty.
+
+    Two processes: this one makes the scratch directory and removes it afterwards; the inner one
+    (``_disk-series-inner``) enters the namespace and does the runs. Removal happens here, outside the
+    namespace, where nothing of the scratch directory is mounted, so it cannot reach the real slot
+    directory the inner process bound into it. Exit 0 every run ended as planted, left no kept-store
+    growth beyond the bound and left /tmp empty; 3 only a leftover in /tmp; 1 any other mismatch; 2 an
+    environment error."""
+    free_gb = shutil.disk_usage("/").free / 2**30
+    if free_gb < MIN_FREE_GB:
+        _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
+        return EXIT_SERIES_ENVIRONMENT
+    out.parent.mkdir(parents=True, exist_ok=True)
+    slots = test_slots.configured().directory
+    Path(slots).mkdir(mode=0o700, parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix="disk-series-", dir=out.parent))
+    try:
+        (scratch / "tmp").mkdir()
+        (scratch / "slots").mkdir()
+        proc = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "_disk-series-inner", "--scratch", str(scratch),
+             "--slots", str(slots), "--runs", ",".join(runs), "--keep-max-mb", str(keep_max_mb), "--out", str(out),
+             "-C", str(repo), *(["--leak"] if leak else [])], env=gate_env(os.environ))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    return proc.returncode
+
+
 # ── shuffle-pair, compare: isolation judged by outcomes ───────────────────
 
 SHUFFLE_SCHEMA = "shuffle-pair/v1"
@@ -1235,6 +1377,21 @@ def main(argv: list[str] | None = None) -> int:
                          help="the gate counts a test unconfirmed when any one rerun passes (must exit 4)")
     verdict.add_argument("--out", required=True, type=Path)
     verdict.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    series = sub.add_parser("disk-series", help="gate runs in a private /tmp: it must end empty, the store bounded")
+    series.add_argument("--runs", default="pass,fail", help="comma-separated, each of: " + ", ".join(SERIES_RUNS))
+    series.add_argument("--keep-max-mb", type=int, default=gate_retention.keep_max_mb())
+    series.add_argument("--leak", action="store_true",
+                        help="the last run keeps its sandbox: the check must exit 3 (negative control)")
+    series.add_argument("--out", required=True, type=Path)
+    series.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    inner = sub.add_parser("_disk-series-inner")
+    inner.add_argument("--scratch", required=True)
+    inner.add_argument("--slots", required=True)
+    inner.add_argument("--runs", required=True)
+    inner.add_argument("--keep-max-mb", type=int, required=True)
+    inner.add_argument("--leak", action="store_true")
+    inner.add_argument("--out", required=True, type=Path)
+    inner.add_argument("-C", dest="repo", type=Path, required=True)
     named = sub.add_parser("verify-named", help="check a sandbox-run report against the documented failures")
     named.add_argument("--report", required=True, type=Path)
     named.add_argument("--named", required=True, type=Path)
@@ -1274,6 +1431,18 @@ def main(argv: list[str] | None = None) -> int:
                             args.reruns, args.no_hide, args.probe_only)
     if args.command == "verify-named":
         return verify_named(args.report, args.named, args.max_named)
+    if args.command in ("disk-series", "_disk-series-inner"):
+        runs = args.runs.split(",")
+        if not runs or any(kind not in SERIES_RUNS for kind in runs):
+            _say(f"--runs takes a comma-separated list of {', '.join(SERIES_RUNS)}, got {args.runs!r}")
+            return EXIT_SERIES_ENVIRONMENT
+        try:
+            if args.command == "disk-series":
+                return disk_series(args.repo.resolve(), runs, args.keep_max_mb, args.leak, args.out)
+            return _series_inner(args)
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 — anything but a mismatch or a leak is exit 2
+            _say(f"error: {exc!r}" if not isinstance(exc, SystemExit) else f"error: {exc}")
+            return EXIT_SERIES_ENVIRONMENT
     if args.command == "verdict-scenario":
         try:
             return verdict_scenario(args.repo.resolve(), args.case, args.sabotage, args.out)

@@ -37,7 +37,6 @@ import signal
 import site
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -46,6 +45,7 @@ from typing import Callable, Iterable, Protocol, Sequence
 
 from . import config_root
 from . import flake_list
+from . import gate_retention
 from . import hermetic_run
 from . import landing_gate as shared
 from . import test_slots
@@ -931,8 +931,9 @@ def run_tree(repo: Path, sha: str, extra_pytest_args: Sequence[str], junit_path:
     and per-test report copied beside ``junit_path`` (the report keyed by node id, ``<stem>.tests.jsonl``).
     The sandbox is removed after; the returned run names the copies.
     """
-    root = _new_root(sandbox_parent)
-    try:
+    common_dir = Path(_common_dir(repo))
+    gate_retention.sweep_dead_sandboxes(common_dir, sandbox_parent, SANDBOX_PREFIX)
+    with gate_retention.sandbox(common_dir, sandbox_parent, SANDBOX_PREFIX) as root:
         run = default_runner(repo, sha, root, select=(), timeout_s=timeout_s,
                              extra_pytest_args=extra_pytest_args, slots=slots)
         junit_path.parent.mkdir(parents=True, exist_ok=True)
@@ -944,8 +945,6 @@ def run_tree(repo: Path, sha: str, extra_pytest_args: Sequence[str], junit_path:
                 shutil.copyfile(src, dst)
                 kept[field] = str(dst)
         return dataclasses.replace(run, **kept)
-    finally:
-        remove_sandbox(root, sandbox_parent)
 
 
 # ── run: candidate, baseline, rerun, record ───────────────────────────────
@@ -978,19 +977,15 @@ class SuiteOutcome:
     decision: LandingDecision
 
 
-def _new_root(sandbox_parent: str | Path) -> Path:
-    return Path(tempfile.mkdtemp(prefix=SANDBOX_PREFIX, dir=sandbox_parent))
-
-
 def _baseline(repo: Path, tip: str, common_dir: Path, runner: Runner, timeout_s: int,
               clock: Callable[[], str], sandbox_parent: str | Path) -> tuple[dict, str]:
     """(baseline record, cache state: hit | built). Built only from the tip's own tree."""
     with _exclusive(shared.record_path(common_dir, BASELINE_DIR, tip).with_suffix(".lock")):
         cached = baseline_record(common_dir, tip)
         if usable_baseline(cached, tip):
+            gate_retention.touch(shared.record_path(common_dir, BASELINE_DIR, tip))
             return cached, "hit"
-        root = _new_root(sandbox_parent)
-        try:
+        with gate_retention.sandbox(common_dir, sandbox_parent, SANDBOX_PREFIX) as root:
             run = runner(repo, tip, root, select=(), timeout_s=timeout_s)
             ids, reason = classify(run, tip)
             kept = keep_run_files(run, common_dir, BASELINE_DIR, tip)
@@ -1012,8 +1007,6 @@ def _baseline(repo: Path, tip: str, common_dir: Path, runner: Runner, timeout_s:
             }
             shared.write_record(common_dir, BASELINE_DIR, tip, record)
             return record, "built"
-        finally:
-            remove_sandbox(root, sandbox_parent)
 
 
 @dataclass(frozen=True)
@@ -1089,8 +1082,8 @@ def _execute(repo: Path, candidate_sha: str, tip: str, common_dir: Path, run: Ru
              now: Callable[[], str], sandbox_parent: str | Path,
              tip_reader: Callable[[], str] | None = None) -> Execution:
     """Run the candidate, then the tip's baseline and the reruns of its new failures when they are needed."""
-    root = _new_root(sandbox_parent)
-    try:
+    gate_retention.sweep_dead_sandboxes(common_dir, sandbox_parent, SANDBOX_PREFIX)
+    with gate_retention.sandbox(common_dir, sandbox_parent, SANDBOX_PREFIX) as root:
         candidate_run = run(repo, candidate_sha, root, select=(), timeout_s=limit)
         seen = observe(candidate_run, candidate_sha)
         reason = seen.reason
@@ -1115,10 +1108,21 @@ def _execute(repo: Path, candidate_sha: str, tip: str, common_dir: Path, run: Ru
                         except GateError as exc:
                             reruns = dataclasses.replace(
                                 reruns, reason=f"cannot re-read the remote tip after the reruns: {exc}")
-        return Execution(root, candidate_run, seen.failed, seen.unfinished, reason, baseline, baseline_cache,
-                         first, tuple(new), reruns, rerun_tip, kept)
-    finally:
-        remove_sandbox(root, sandbox_parent)
+        execution = Execution(root, candidate_run, seen.failed, seen.unfinished, reason, baseline,
+                              baseline_cache, first, tuple(new), reruns, rerun_tip, kept)
+        _keep_failure_evidence(common_dir, candidate_sha, execution)
+        return execution
+
+
+def _keep_failure_evidence(common_dir: Path, candidate_sha: str, execution: Execution) -> None:
+    """A run that will not pass keeps its evidence before its sandbox goes."""
+    verdict = _judge(execution)
+    if not verdict.reason and not verdict.new_failures:
+        return
+    run = execution.candidate_run
+    gate_retention.keep_failure_evidence(
+        common_dir, candidate_sha, log_tail=run.log_tail, junit_path=run.junit_path,
+        failures=(*execution.candidate_ids, *execution.unfinished), core_tree=execution.root / "core")
 
 
 def _judge(execution: Execution) -> Verdict:
@@ -1237,8 +1241,17 @@ def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner 
     if waiver is not None and record["status"] == UNAVAILABLE:
         record["waiver"] = {"reason": shared.normalize_reason(waiver), "at": now()}
     path = shared.write_record(common_dir, RECORD_DIR, candidate_sha, record)
+    _retain(common_dir, candidate_sha, tip)
     ok, why = record_admits(record, candidate_sha, tip)
     return SuiteOutcome(record, path, _record_decision(ok, why, path, record))
+
+
+def _retain(common_dir: Path, candidate_sha: str, tip: str) -> None:
+    """Best effort: a store that cannot be trimmed costs disk, never a verdict."""
+    try:
+        gate_retention.enforce(common_dir, protect=(candidate_sha, tip))
+    except OSError as exc:
+        print(f"suite-gate: cannot enforce the kept-store bound: {exc}", file=sys.stderr)
 
 
 def _journal_unconfirmed(common_dir: Path, ids: Sequence[str], candidate_sha: str, tip: str, at: str) -> None:
