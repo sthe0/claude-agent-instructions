@@ -1,6 +1,7 @@
 """Mutants of the record's fit to live source shapes: time readers and empty imported times, the
 one act-key function, the session a report run is charged to, judge usage in the ledger and its
-coverage check, and the import from a frozen source snapshot (lib/telemetry/snapshot.py).
+coverage check, the import from a frozen source snapshot (lib/telemetry/snapshot.py), and the
+command row of a verb interrupted after its state save.
 
 Each mutant is `{name, file, anchor, replacement, tests}`: `anchor` occurs exactly once in
 `file` (a path under the repo root), `replacement` keeps the module importable, `tests` are
@@ -14,6 +15,7 @@ _REPORT = "scripts/lib/telemetry/report.py"
 _RECORDER = "scripts/lib/telemetry/recorder.py"
 _TOKENS = "scripts/lib/telemetry/tokens.py"
 _LEDGER = "scripts/lib/judge_ledger.py"
+_CLI = "scripts/agentctl/cli.py"
 _T = "scripts/tests/test_telemetry_live_shape.py::"
 _ONE_FUNCTION = _T + "test_act_key_normalization_is_one_function_used_by_recorder_importer_report"
 
@@ -169,4 +171,18 @@ MUTANTS = [
     {"name": "pre_fix_cause_deferred_sync_not_retried_within_bound", "file": _SYNC,
      "anchor": "BUDGET_S = LATENCY_S - COMMIT_MARGIN_S\n", "replacement": "BUDGET_S = 120.0\n",
      "tests": [_T + "test_deferred_sync_retried_within_latency_bound"]},
+    # the command row of a verb interrupted after its state save
+    {"name": "command_row_lost_on_interrupt", "file": _CLI,
+     "anchor": '            recorder.record_cut_short(recording, store, "interrupted",',
+     "replacement": '            (lambda *args: None)(recording, store, "interrupted",',
+     "tests": [_T + "test_command_row_written_when_interrupted_after_state_save"]},
+    {"name": "command_row_written_twice_on_interrupt", "file": _RECORDER,
+     "anchor": "    ctx.row_emitted = True\n    sync_point(", "replacement": "    sync_point(",
+     "tests": [_T + "test_interrupt_inside_finish_after_row_writes_no_second_row"]},
+    {"name": "interrupt_exits_zero", "file": _CLI,
+     "anchor": "        return 128 + stop.signum\n", "replacement": "        return 0\n",
+     "tests": [_T + "test_command_row_written_when_interrupted_after_state_save"]},
+    {"name": "interrupt_subclasses_exception", "file": _CLI,
+     "anchor": "class Interrupted(BaseException):", "replacement": "class Interrupted(Exception):",
+     "tests": [_T + "test_interrupt_not_swallowed_as_error_directive"]},
 ]

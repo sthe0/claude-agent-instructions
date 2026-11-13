@@ -7,8 +7,11 @@ from __future__ import annotations
 import builtins
 import io
 import json
+import os
+import signal
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -738,6 +741,78 @@ def test_isolation_tests_write_no_live_engine_state(monkeypatch, tmp_path):
     leaked = [p for p in live_root.rglob("*") if p.is_file() and nonce in p.read_text(errors="replace") + p.name]
     assert leaked == []
     assert [p for p in (tmp_path / "home").rglob("*") if nonce in p.name]
+
+
+# --- the command row of a verb interrupted after its state save ---------------------------------
+
+INTERRUPTED_SESSION = "s-int"
+
+
+def _open_writer_when_reader_waits(fifo: Path, proc) -> int:
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and proc.poll() is None:
+        try:
+            return os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError:
+            time.sleep(0.02)
+    raise AssertionError(f"the CLI never reached the sync point (rc={proc.poll()})")
+
+
+def interrupt_start_at(tmp_path, sync_env: str):
+    """Run `start` in a subprocess, deliver SIGTERM while it waits at the sync point `sync_env`,
+    and release the point only after the process ended, so the signal is the only way past it."""
+    from test_decision_log_isolation import CLI, isolated_home_env
+    fifo = tmp_path / "sync.fifo"
+    os.mkfifo(fifo)
+    env = {**isolated_home_env(tmp_path / "home"), sync_env: str(fifo)}
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
+    proc = subprocess.Popen(
+        [sys.executable, str(CLI), "--state-root", str(tmp_path / "state"), "start",
+         "--session", INTERRUPTED_SESSION, "--task", "t", "--goal", "g", "--done-criterion", "d",
+         "--criterion-type", "measurable"],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    writer = _open_writer_when_reader_waits(fifo, proc)
+    try:
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=60)
+    finally:
+        os.close(writer)
+    return proc.returncode, out, err
+
+
+def command_rows(session: str) -> list:
+    store.open_record().close()
+    spooled = [r["fields"] for r in spool_events(session) if r["kind"] == "command"]
+    return spooled + [r["fields"] for r in events(session, kind="command")]
+
+
+def test_command_row_written_when_interrupted_after_state_save(tmp_path):
+    rc, _, err = interrupt_start_at(tmp_path, recorder.SYNC_AFTER_SAVE_ENV)
+    rows = command_rows(INTERRUPTED_SESSION)
+    assert rc == 143, err
+    assert (tmp_path / "state" / f"{INTERRUPTED_SESSION}.json").exists()
+    assert [(r["command"], r["outcome"], r["exit"]) for r in rows] == [("start", "interrupted", 143)], rows
+
+
+def test_interrupt_inside_finish_after_row_writes_no_second_row(tmp_path):
+    rc, _, err = interrupt_start_at(tmp_path, recorder.SYNC_AFTER_ROW_ENV)
+    rows = command_rows(INTERRUPTED_SESSION)
+    assert rc == 143, err
+    assert [(r["command"], r["outcome"]) for r in rows] == [("start", "ok")], rows
+
+
+def test_interrupt_not_swallowed_as_error_directive(tmp_path):
+    rc, out, err = interrupt_start_at(tmp_path, recorder.SYNC_AFTER_SAVE_ENV)
+    assert rc not in (0, 1), err
+    assert '"error"' not in out
+    assert [r["outcome"] for r in command_rows(INTERRUPTED_SESSION)] == ["interrupted"]
+
+
+def test_interrupt_before_state_save_writes_no_row(tmp_path):
+    rc, _, err = interrupt_start_at(tmp_path, recorder.SYNC_BEFORE_SAVE_ENV)
+    assert rc == 143, err
+    assert not (tmp_path / "state" / f"{INTERRUPTED_SESSION}.json").exists()
+    assert command_rows(INTERRUPTED_SESSION) == []
 
 
 # --- class C: a deferred sync keeps retrying within the bound -----------------------------------

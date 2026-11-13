@@ -14,6 +14,10 @@ same engine session carries on under it and every later event names it in `task_
 to another task, or to the same task without `--continue-epoch` while the epoch is unresolved,
 abandons the old epoch; an epoch that reached RESOLVED is never reopened.
 
+A verb cut short by SIGTERM or SIGINT after it saved its state still gets its command row
+(`record_cut_short`, outcome `interrupted`, from `cli.main`), once and without the replay; a
+SIGKILL or an OOM kill after the save still loses it.
+
 Everything here is fail-open and a no-op under AGENTCTL_TELEMETRY=off.
 """
 from __future__ import annotations
@@ -22,6 +26,7 @@ import fcntl
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +42,11 @@ RESOLVED = "RESOLVED"
 OPENING_VERBS = ("start", "reset")
 
 
+SYNC_BEFORE_SAVE_ENV = "AGENTCTL_TEST_SYNC_BEFORE_SAVE"
+SYNC_AFTER_SAVE_ENV = "AGENTCTL_TEST_SYNC_AFTER_SAVE"
+SYNC_AFTER_ROW_ENV = "AGENTCTL_TEST_SYNC_AFTER_ROW"
+
+
 @dataclass
 class Context:
     verb: str
@@ -44,6 +54,30 @@ class Context:
     started: float
     recorder_base: float
     node_before: "str | None"
+    row_emitted: bool = False
+
+
+def _under_tmp(path) -> bool:
+    if path is None:
+        return False
+    try:
+        return Path(path).resolve().is_relative_to(Path(tempfile.gettempdir()).resolve())
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def sync_point(env: str, state_store) -> None:
+    """Block on the FIFO named by `env` until its writer closes it, so a test can deliver a signal
+    at this exact point of a verb. Honoured only while both the record and the state root are
+    temporary, so no live run can be made to wait here."""
+    fifo = os.environ.get(env)
+    if not fifo or not (_under_tmp(config_root.telemetry_db()) and _under_tmp(getattr(state_store, "root", None))):
+        return
+    try:
+        with open(fifo, "rb") as reader:
+            reader.read()
+    except OSError:
+        pass
 
 
 def _node_of(state_store, session: str) -> "str | None":
@@ -151,6 +185,27 @@ def finish(ctx: "Context | None", args, state_store, directive) -> None:
         pass
 
 
+def _command_fields(ctx: Context, outcome: str, node_after) -> dict:
+    return {
+        "command": ctx.verb, "outcome": outcome, "node_before": ctx.node_before, "node_after": node_after,
+        "duration_s": round(time.perf_counter() - ctx.started, 6),
+        "recorder_s": round(live.recorder_total() - ctx.recorder_base, 6),
+    }
+
+
+def record_cut_short(ctx: "Context | None", state_store, outcome: str, extra: dict) -> None:
+    """The command row of a verb cut short after it saved its state, unless `finish` already wrote
+    it. No replay and no sweep: the row waits in the spool for the next one. Never raises."""
+    if ctx is None or ctx.row_emitted:
+        return
+    try:
+        fields = {**_command_fields(ctx, outcome, _node_of(state_store, ctx.session)), **extra}
+        live.emit_event(ctx.session, "command", live.act_key(ctx.verb), fields)
+        ctx.row_emitted = True
+    except Exception:
+        pass
+
+
 def _finish(ctx: Context, args, state_store, directive) -> None:
     verb, session = ctx.verb, ctx.session
     node_after = directive.node
@@ -162,14 +217,12 @@ def _finish(ctx: Context, args, state_store, directive) -> None:
     if node_after == RESOLVED:
         _record_resolution(session)
     outcome = "error" if directive.action == "error" else ("ok" if directive.ok else "refused")
-    fields = {
-        "command": verb, "outcome": outcome, "node_before": ctx.node_before, "node_after": node_after,
-        "duration_s": round(time.perf_counter() - ctx.started, 6),
-        "recorder_s": round(live.recorder_total() - ctx.recorder_base, 6),
-    }
+    fields = _command_fields(ctx, outcome, node_after)
     if verb == "classify" and state is not None:
         fields["weight_class"] = state.weight_class
     live.emit_event(session, "command", live.act_key(verb), fields)
+    ctx.row_emitted = True
+    sync_point(SYNC_AFTER_ROW_ENV, state_store)
     if ctx.node_before != node_after and ctx.node_before is not None:
         live.emit_event(session, "transition", live.act_key(verb), {
             "command": verb, "from": ctx.node_before, "to": node_after})

@@ -13,8 +13,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
 import tempfile
+import threading
 from pathlib import Path
 # Re-exported: read as agentctl.cli.<name> by tests.
 from lib import hook_telemetry
@@ -374,6 +376,57 @@ def build_parser(allow_abbrev: bool = True) -> argparse.ArgumentParser:
     return p
 
 
+_INTERRUPTS = (signal.SIGTERM, signal.SIGINT)
+
+
+class Interrupted(BaseException):
+    """A SIGTERM or SIGINT delivered to the verb. Not an Exception, so the verb's own error
+    handling never turns it into an `error` directive."""
+
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _raise_interrupted(signum, frame):
+    for sig in _INTERRUPTS:
+        signal.signal(sig, signal.SIG_IGN)
+    raise Interrupted(signum)
+
+
+def _install_interrupt_handlers() -> dict:
+    if threading.current_thread() is not threading.main_thread():
+        return {}
+    return {sig: signal.signal(sig, _raise_interrupted) for sig in _INTERRUPTS}
+
+
+def _restore_handlers(previous: dict) -> None:
+    for sig, handler in previous.items():
+        signal.signal(sig, handler)
+
+
+def _track_saves(store) -> dict:
+    """Wrap `store.save` so the returned flag turns true exactly when a state save completed: the
+    save and the flag run with the interrupt signals blocked, so a signal lands before or after
+    both."""
+    saves = {"saved": False}
+    save = store.save
+
+    def tracked(*args, **kwargs):
+        recorder.sync_point(recorder.SYNC_BEFORE_SAVE_ENV, store)
+        blocked = signal.pthread_sigmask(signal.SIG_BLOCK, _INTERRUPTS)
+        try:
+            result = save(*args, **kwargs)
+            saves["saved"] = True
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+        recorder.sync_point(recorder.SYNC_AFTER_SAVE_ENV, store)
+        return result
+
+    store.save = tracked
+    return saves
+
+
 def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
     harness = os.environ.get("CLAUDE_CODE_SESSION_ID")
     raw = _inject_default_session(
@@ -388,14 +441,29 @@ def main(argv: list[str] | None = None, *, allow_abbrev: bool = True) -> int:
         else FileStateStore(Path(args.state_root) if args.state_root else None)
     )
     fn = COMMANDS[args.command]
-    recording = recorder.begin(args.command, session, store)
+    previous_handlers = _install_interrupt_handlers()
+    saves = _track_saves(store)
+    recording = None
     try:
-        directive = fn(args, store=store)
-    except Exception as exc:  # surface as a failed directive, not a traceback
-        directive = Directive(False, "(error)", "error", str(exc))
-    else:
-        _fire_plugins(args, store, directive)
-    recorder.finish(recording, args, store, directive)
+        recording = recorder.begin(args.command, session, store)
+        try:
+            directive = fn(args, store=store)
+        except Exception as exc:  # surface as a failed directive, not a traceback
+            directive = Directive(False, "(error)", "error", str(exc))
+        else:
+            _fire_plugins(args, store, directive)
+        recorder.finish(recording, args, store, directive)
+    except Interrupted as stop:
+        if saves["saved"]:
+            recorder.record_cut_short(recording, store, "interrupted",
+                                      {"signal": stop.signum, "exit": 128 + stop.signum})
+        return 128 + stop.signum
+    except BaseException as exc:
+        if saves["saved"]:
+            recorder.record_cut_short(recording, store, "error", {"error": type(exc).__name__})
+        raise
+    finally:
+        _restore_handlers(previous_handlers)
     if harness and session and session != harness and not _is_followed_by_gate(harness, session):
         print(
             f"agentctl: warning: --session {session!r} differs from "
