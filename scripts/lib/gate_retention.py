@@ -9,18 +9,20 @@ on which its creator holds an ``flock`` for the sandbox's whole life; the kernel
 holder dies, however it dies, so a free lock means a dead owner. (The owner file sits beside the root
 because ``instruction-sandbox.sh`` accepts only an empty root.) A run, before it builds its own
 sandbox, removes every sandbox of the gate's own naming whose owner file it can lock; it never judges by
-age, and never removes a sandbox whose lock is held. A sandbox without an owner file (made by the code
-before this module, or by another tool) is removed only when old, as below. The owner file is created under a temporary name, locked, and only then
-renamed to ``<sandbox>.owner``, so an owner file a sweeper can see is always already locked, whichever
-repository's run sweeps (the temp directory is shared by all repositories). Accepted residual: a creator
-killed between making the directory and the rename leaves a ``.owner.creating`` file (and, if it died
-before that, nothing but the directory): the sweep removes a ``.creating`` file whose lock is free and
-that is older than a minute, with its directory. A directory with neither file, of this user, older than
-``suite-gate-timeout-s`` (a gate run lives no longer) is a leftover of the code before this module and is
-removed too; a younger one may belong to a session still on the old gate.
+age, and never removes a sandbox whose lock is held. A directory with no owner file is never removed, old
+or not: it is a sandbox of the code before this module, of ``instruction-sandbox.sh`` (same parent, same
+prefix, no owner file), or of a run still waiting for its worker slots, and any of them may be live;
+those belong to ``scripts/reaper/builtin/temp_residue.py``, which proves death before it removes. The
+owner file is created under a temporary name, locked, and only then renamed to ``<sandbox>.owner``, so an
+owner file a sweeper can see is always already locked, whichever repository's run sweeps (the temp
+directory is shared by all repositories). Accepted residual: a creator killed between making the
+directory and the rename leaves a ``.owner.creating`` file (and, if it died before that, nothing but the
+directory, which stays): the sweep removes a ``.creating`` file whose lock is free and that is older than
+a minute, with its directory.
 
 A removal that fails (a read-only or ``chmod 000`` directory is opened up and retried) keeps the owner
-file, unlocked, so the next sweep retries, and warns.
+file, unlocked, so the next sweep retries, and warns. Nested ``chmod 000`` directories converge one sweep
+per nesting level, since the retry inside one removal runs once (``retry=False``).
 
 Failing runs keep their evidence (log, JUnit XML, failure list, the sandbox's core tree without its
 tmp/) under ``<common dir>/suite-gate/evidence/<candidate>/`` before the sandbox goes.
@@ -37,7 +39,9 @@ files is evicted only while holding its ``.lock`` exclusively (a run holding it 
 only if no file of it is newer than when it was listed; lock files themselves are never unlinked, since
 unlinking one lets two runs hold "the" lock on different inodes. A store still over the bound when
 nothing evictable is left says so on stderr. Last use is the newest mtime among an entry's files (a
-baseline cache hit touches its record). Partial evidence copies of dead processes, or older than
+baseline cache hit touches its record). A store over the bound reports how much of it is protected
+(``Retained.protected_mb``, and ``N MB of it protected`` on stderr, read back by ``reported_protected_mb``),
+so a check can tell "nothing evictable was left" from "eviction skipped something". Partial evidence copies of dead processes, or older than
 ``suite-gate-timeout-s``, are removed.
 
 ``SUITE_GATE_KEEP_SANDBOX=1`` leaves the sandbox of that run in place (for inspection, and for the
@@ -49,6 +53,7 @@ import contextlib
 import dataclasses
 import fcntl
 import os
+import re
 import shutil
 import stat
 import sys
@@ -211,33 +216,18 @@ def _sweep_one(entry: os.DirEntry, root: Path) -> bool:
         os.close(fd)
 
 
-def _ownerless_root_is_stale(entry: os.DirEntry, names: Collection[str], limit_s: float, now: float) -> bool:
-    if entry.name + OWNER_SUFFIX in names or entry.name + OWNER_SUFFIX + PENDING_SUFFIX in names:
-        return False
-    try:
-        info = entry.stat(follow_symlinks=False)
-    except OSError:
-        return False
-    return stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and now - info.st_mtime > limit_s
-
-
-def sweep_dead_sandboxes(parent: str | Path, prefix: str, *, ownerless_after_s: float | None = None,
-                         now: float | None = None) -> list[str]:
+def sweep_dead_sandboxes(parent: str | Path, prefix: str, *, now: float | None = None) -> list[str]:
     """Remove the dead sandboxes of this user under ``parent``; returns their names.
 
-    Dead means: an owner file whose lock is free; a ``.owner.creating`` file whose lock is free and that is
-    older than ``PENDING_MIN_AGE_S`` (its creator died before the rename); or, for the sandboxes of the code
-    before the owner file, a directory with neither file whose mtime is older than ``ownerless_after_s``
-    (default ``suite-gate-timeout-s``: a gate run lives at most that long). A held lock, a sandbox with an
-    owner file the sweeper cannot lock, and another user's files stay."""
+    Dead means: an owner file whose lock is free; or a ``.owner.creating`` file whose lock is free and that
+    is older than ``PENDING_MIN_AGE_S`` (its creator died before the rename). A held lock, a sandbox with
+    an owner file the sweeper cannot lock, a directory without either file, and another user's files stay."""
     removed: list[str] = []
-    limit_s = ownerless_after_s if ownerless_after_s is not None else _configured(TIMEOUT_KEY, DEFAULT_TIMEOUT_S, None)
     clock = time.time() if now is None else now
     try:
         entries = sorted(os.scandir(parent), key=lambda e: e.name)
     except OSError:
         return removed
-    names = {e.name for e in entries}
     for entry in entries:
         name = entry.name
         if not name.startswith(prefix):
@@ -250,9 +240,7 @@ def sweep_dead_sandboxes(parent: str | Path, prefix: str, *, ownerless_after_s: 
             dead = (len(stem) > len(prefix) and _old_enough(entry, PENDING_MIN_AGE_S, clock)
                     and _sweep_one(entry, Path(parent) / stem))
         else:
-            stem = name
-            dead = (_ownerless_root_is_stale(entry, names, limit_s, clock)
-                    and _remove_sandbox(Path(entry.path), Path(entry.path + OWNER_SUFFIX)))
+            continue
         if dead:
             removed.append(stem)
     return removed
@@ -332,6 +320,7 @@ class Retained:
     after_mb: float
     evicted: tuple[str, ...]
     over_bound: bool = False
+    protected_mb: float = 0.0
 
 
 def tree_bytes(path: Path) -> int:
@@ -363,7 +352,11 @@ def _newest_mtime(path: Path) -> float:
     except OSError:
         return 0.0
     if path.is_dir() and not path.is_symlink():
-        for child in os.scandir(path):
+        try:
+            children = list(os.scandir(path))
+        except OSError:
+            return newest
+        for child in children:
             newest = max(newest, _newest_mtime(Path(child.path)))
     return newest
 
@@ -530,11 +523,21 @@ def enforce(common_dir: str | Path, *, max_mb: float | None = None, runs: int | 
             total -= entry.size
             evicted.append(f"{entry.kind}:{entry.name}")
     over = total > limit
+    protected = sum(e.size for e in entries if e.protected and e not in newest_failing)
     if over:
         print(f"suite-gate: the kept store holds {total / MB:.0f} MB, over the bound of {limit / MB:g} MB, "
-              "with nothing left to evict (the files of the candidate and the tip, runs in progress)",
-              file=sys.stderr)
-    return Retained(before / MB, max(total, 0) / MB, tuple(evicted), over)
+              f"{protected / MB:.1f} MB of it protected, with nothing left to evict "
+              "(the files of the candidate and the tip, runs in progress)", file=sys.stderr)
+    return Retained(before / MB, max(total, 0) / MB, tuple(evicted), over, protected / MB)
+
+
+PROTECTED_REPORT = re.compile(r"([0-9]+(?:\.[0-9]+)?) MB of it protected")
+
+
+def reported_protected_mb(stderr: str) -> float | None:
+    """The protected size an over-the-bound ``enforce`` printed, or None when it printed none."""
+    found = PROTECTED_REPORT.findall(stderr)
+    return float(found[-1]) if found else None
 
 
 def _by_last_use(entry: Entry) -> float:

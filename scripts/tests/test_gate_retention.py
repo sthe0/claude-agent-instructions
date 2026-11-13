@@ -136,9 +136,11 @@ def test_a_failure_while_creating_the_owner_leaves_nothing_and_leaks_no_descript
     assert len(os.listdir("/proc/self/fd")) == before
 
 
-def test_a_sandbox_without_an_owner_file_is_never_removed(parent):
+def test_only_a_sandbox_with_a_free_owner_file_is_removed(parent):
     stray = parent / f"{PREFIX}old-gate"
     stray.mkdir()
+    stamp = time.time() - 30 * 86400
+    os.utime(stray, (stamp, stamp))
     other = parent / "someone-elses"
     other.mkdir()
     (parent / f"{PREFIX}x.owner").write_text("", encoding="utf-8")
@@ -191,6 +193,50 @@ def test_an_unopenable_directory_does_not_wedge_the_sweep(parent):
     assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
 
 
+def refuse_the_inner_retry(monkeypatch):
+    original = retention._remove_tree
+
+    def remove(root, retry=True):
+        if not retry:
+            raise TypeError("not an OSError")
+        original(root, retry)
+
+    monkeypatch.setattr(retention, "_remove_tree", remove)
+
+
+def test_an_unexpected_error_while_opening_a_directory_up_does_not_escape_the_block_exit(parent, monkeypatch):
+    refuse_the_inner_retry(monkeypatch)
+    with retention.sandbox(parent, PREFIX) as root:
+        locked = seal(root)
+    locked.chmod(0o700)
+    shutil.rmtree(root, ignore_errors=True)
+    retention.owner_path(root).unlink(missing_ok=True)
+
+
+def test_an_unexpected_error_while_opening_a_directory_up_does_not_escape_the_sweep(parent, monkeypatch):
+    refuse_the_inner_retry(monkeypatch)
+    root = parent / f"{PREFIX}sealed"
+    root.mkdir()
+    locked = seal(root)
+    retention.owner_path(root).write_text("", encoding="utf-8")
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    locked.chmod(0o700)
+
+
+def test_the_newest_mtime_survives_a_directory_that_vanishes_while_it_is_read(tmp_path, monkeypatch):
+    kept = tmp_path / "copy"
+    (kept / "inner").mkdir(parents=True)
+    real = os.scandir
+
+    def vanishing(path):
+        if Path(path) == kept:
+            raise FileNotFoundError(path)
+        return real(path)
+
+    monkeypatch.setattr(retention.os, "scandir", vanishing)
+    assert retention._newest_mtime(kept) == os.lstat(kept).st_mtime
+
+
 def test_the_removal_handler_never_raises(tmp_path):
     retention._make_writable(os.open, str(tmp_path / "nowhere" / "x"), OSError("boom"))
     retention._make_writable(os.unlink, str(tmp_path / "nowhere" / "x"), OSError("boom"))
@@ -225,31 +271,19 @@ def age(path: Path, seconds: float) -> None:
     os.utime(path, (stamp, stamp))
 
 
-def test_an_old_ownerless_sandbox_of_this_user_is_swept_a_young_one_is_not(parent):
-    old, young = parent / f"{PREFIX}old", parent / f"{PREFIX}young"
-    foreign = parent / "other-tool"
-    for path in (old, young, foreign):
-        (path / "clone").mkdir(parents=True)
-    for path in (old, foreign):
-        age(path, 9000)
-    assert retention.sweep_dead_sandboxes(parent, PREFIX, ownerless_after_s=7200) == [old.name]
-    assert not old.exists() and young.is_dir() and foreign.is_dir()
+def test_an_old_ownerless_directory_is_left_alone_however_old(parent):
+    standalone = parent / f"{PREFIX}AbC123"
+    (standalone / "core" / ".git").mkdir(parents=True)
+    age(standalone, 30 * 86400)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX, now=time.time() + 30 * 86400) == []
+    assert (standalone / "core" / ".git").is_dir()
 
 
-def test_an_old_sandbox_with_a_live_owner_lock_is_never_swept_as_ownerless(holder, parent):
+def test_an_old_sandbox_with_a_live_owner_lock_is_never_swept(holder, parent):
     _, root = holder
     age(root, 9000)
-    assert retention.sweep_dead_sandboxes(parent, PREFIX, ownerless_after_s=7200) == []
-    assert root.is_dir()
-
-
-def test_the_ownerless_age_defaults_to_the_gate_timeout(parent):
-    old = parent / f"{PREFIX}old"
-    old.mkdir()
-    age(old, retention.DEFAULT_TIMEOUT_S - 600)
     assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
-    age(old, retention.DEFAULT_TIMEOUT_S + 600)
-    assert retention.sweep_dead_sandboxes(parent, PREFIX) == [old.name]
+    assert root.is_dir()
 
 
 def test_a_sandbox_that_cannot_be_removed_keeps_its_owner_file_unlocked_for_the_next_sweep(parent, monkeypatch, capsys):
@@ -613,9 +647,11 @@ def test_the_gate_removes_a_dead_runs_sandbox_before_it_starts(world):
     assert list(world.sandbox.iterdir()) == []
 
 
-def test_the_gate_leaves_an_ownerless_sandbox_alone(world):
+def test_the_gate_leaves_an_old_ownerless_sandbox_alone(world):
     stray = world.sandbox / f"{gate.SANDBOX_PREFIX}old-gate"
     stray.mkdir()
+    stamp = time.time() - 30 * 86400
+    os.utime(stray, (stamp, stamp))
     candidate = world.code_commit()
     world.run(FakeRunner({candidate: ()}))
     assert stray.is_dir()
@@ -641,10 +677,52 @@ def test_disk_series_builds_every_gate_command_through_cap_run():
     assert command[command.index("--remote-sha") + 1] == "t" * 40
 
 
-def test_disk_series_fails_a_store_over_the_bound_unless_the_gate_said_it_had_nothing_to_evict():
-    assert control.bound_problem(100, 2048, False) is None
-    assert control.bound_problem(3000, 2048, True) is None
-    assert "over the bound of 2048 MB" in control.bound_problem(3000, 2048, False)
+def test_disk_series_excuses_a_store_over_the_bound_only_by_the_protected_size_the_gate_reported():
+    assert control.bound_problem(100, 2048, None) is None
+    assert control.bound_problem(3000, 2048, 3000) is None
+    assert control.bound_problem(3000, 2048, 1000) is None
+    assert "did not report it" in control.bound_problem(3000, 2048, None)
+    assert "only 500.0 MB is protected" in control.bound_problem(3000, 2048, 500)
+
+
+def series_result(protected_mb_reported=None, problems=()):
+    return {"run": "pass", "problems": list(problems), "protected_mb_reported": protected_mb_reported}
+
+
+def summarise(results, total_mb=100, grown_mb=1, leftovers=()):
+    return control.series_summary(results, tip="t" * 40, keep_max_mb=2048, store_grown_mb=grown_mb,
+                                  store_total_mb=total_mb, leftovers=list(leftovers))
+
+
+def test_the_series_summary_fails_an_over_bound_store_the_last_run_did_not_report():
+    assert summarise([series_result()])["ok"]
+    over = summarise([series_result()], total_mb=3000)
+    assert not over["ok"] and any("over the bound" in p for p in over["problems"])
+    assert not summarise([series_result(protected_mb_reported=100)], total_mb=3000)["ok"]
+    assert summarise([series_result(protected_mb_reported=2900)], total_mb=3000)["ok"]
+
+
+def test_the_series_summary_collects_run_problems_growth_and_leftovers():
+    assert summarise([series_result(problems=["boom"])])["problems"] == ["boom"]
+    assert not summarise([series_result()], grown_mb=3000)["ok"]
+    assert not summarise([series_result()], leftovers=["x"])["ok"]
+
+
+def test_an_over_bound_pass_reports_the_protected_size_in_its_message_and_result(common, capsys):
+    run_files(common, 9, age=10, mb=2)
+    result = retention.enforce(common, max_mb=1, runs=3, protect=(sha(9),))
+    assert 1.9 < result.protected_mb < 2.1
+    reported = retention.reported_protected_mb(capsys.readouterr().err)
+    assert reported is not None and abs(reported - result.protected_mb) < 0.1
+    assert retention.reported_protected_mb("nothing to see") is None
+
+
+def test_the_protected_size_excludes_what_could_have_been_evicted(common):
+    run_files(common, 9, age=10, mb=2)
+    put(common / retention.BASELINE_DIR / f"{sha(2)}.json", mb=1, age=500)
+    result = retention.enforce(common, max_mb=1, runs=3, protect=(sha(9),))
+    assert result.evicted == (f"baseline:{sha(2)}",)
+    assert result.after_mb - result.protected_mb <= 1
 
 
 def test_disk_series_runs_only_known_kinds(tmp_path, capsys):

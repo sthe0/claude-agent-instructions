@@ -991,18 +991,36 @@ def _series_commits(repo: Path, runs: list[str], nonce: str) -> tuple[str, list[
     return tip, candidates
 
 
-OVER_BOUND_REPORT = "over the bound"
+PROTECTED_SLACK_MB = 1.0  # lock files and directory blocks that are neither protected nor evictable
 
 
-def bound_problem(total_mb: float, bound_mb: float, last_run_reported_over_bound: bool) -> str | None:
-    """The kept store must end at most at the bound, unless the last run's own retention pass said it could
-    free nothing more (the files it protects: the candidate, the tip, runs younger than the gate timeout)."""
+def bound_problem(total_mb: float, bound_mb: float, protected_mb: float | None) -> str | None:
+    """The kept store must end at most at the bound, unless what exceeds it is protected (the candidate,
+    the tip, runs younger than the gate timeout). ``protected_mb`` is what the last run's retention pass
+    reported as protected when it ended over the bound, None when it reported nothing."""
     if total_mb <= bound_mb:
         return None
-    if last_run_reported_over_bound:
-        return None
-    return (f"the kept store holds {total_mb:.1f} MB after the series, over the bound of {bound_mb} MB, "
-            "and the last run's retention pass did not say it had nothing left to evict")
+    if protected_mb is None:
+        return (f"the kept store holds {total_mb:.1f} MB after the series, over the bound of {bound_mb} MB, "
+                "and the last run's retention pass did not report it")
+    if total_mb - protected_mb > bound_mb + PROTECTED_SLACK_MB:
+        return (f"the kept store holds {total_mb:.1f} MB after the series, of which only {protected_mb:.1f} MB "
+                f"is protected: more than the bound of {bound_mb} MB stayed that retention could have evicted")
+    return None
+
+
+def series_summary(results: list[dict], *, tip: str, keep_max_mb: int, store_grown_mb: float, store_total_mb: float,
+                   leftovers: list[str]) -> dict:
+    """What the series reports: the run results, every problem found, and ``ok``."""
+    problems = [p for r in results for p in r["problems"]]
+    if store_grown_mb > keep_max_mb:
+        problems.append(f"the kept store grew {store_grown_mb:.1f} MB, more than {keep_max_mb}")
+    over = bound_problem(store_total_mb, keep_max_mb, results[-1]["protected_mb_reported"] if results else None)
+    if over:
+        problems.append(over)
+    return {"runs": results, "tip": tip, "keep_max_mb": keep_max_mb, "store_grown_mb": round(store_grown_mb, 2),
+            "store_total_mb": round(store_total_mb, 2), "leftover_in_tmp": leftovers, "problems": problems,
+            "ok": not problems and not leftovers}
 
 
 def _series_run(repo: Path, sha: str, tip: str, kind: str, leak: bool, common: Path, tmp: Path) -> dict:
@@ -1024,7 +1042,7 @@ def _series_run(repo: Path, sha: str, tip: str, kind: str, leak: bool, common: P
     if kind == "pass" and evidence.exists():
         problems.append(f"pass run {sha[:12]}: evidence kept at {evidence}")
     return {"run": kind, "candidate": sha, "exit": proc.returncode, "status": record.get("status"),
-            "over_bound_reported": OVER_BOUND_REPORT in proc.stderr,
+            "protected_mb_reported": gate_retention.reported_protected_mb(proc.stderr),
             "record": record_file, "evidence": evidence.is_dir(), "store_growth_mb": round(
                 (gate_retention.tree_bytes(store) - before) / gate_retention.MB, 2),
             "tmp_after": _listing(tmp), "problems": problems}
@@ -1055,15 +1073,9 @@ def _series_inner(args: argparse.Namespace) -> int:
     leftovers = _listing(Path("/tmp"))
     grown_mb = (gate_retention.tree_bytes(store) - store_before) / gate_retention.MB
     total_mb = gate_retention.tree_bytes(store) / gate_retention.MB
-    problems = [p for r in results for p in r["problems"]]
-    if grown_mb > args.keep_max_mb:
-        problems.append(f"the kept store grew {grown_mb:.1f} MB, more than {args.keep_max_mb}")
-    over = bound_problem(total_mb, args.keep_max_mb, bool(results and results[-1]["over_bound_reported"]))
-    if over:
-        problems.append(over)
-    summary = {"runs": results, "tip": tip, "keep_max_mb": args.keep_max_mb, "store_grown_mb": round(grown_mb, 2),
-               "store_total_mb": round(total_mb, 2), "leftover_in_tmp": leftovers, "problems": problems,
-               "ok": not problems and not leftovers}
+    summary = series_summary(results, tip=tip, keep_max_mb=args.keep_max_mb, store_grown_mb=grown_mb,
+                             store_total_mb=total_mb, leftovers=leftovers)
+    problems = summary["problems"]
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     for problem in problems:
