@@ -164,6 +164,81 @@ PLANTED = {
         "from pathlib import Path\n\n\ndef test_it():\n"
         "    out = Path(__file__).parent / 'c21_out.txt'\n    out.write_text('x')\n    assert out.read_text() == 'x'\n"
     ),
+    # p1: reads made while a test module is imported (collection time)
+    "p1data/value.txt": "v",
+    "p1data/cases.json": "[1, 2]",
+    "test_p1_modread.py": (
+        "from pathlib import Path\n\nTEXT = (Path(__file__).parent / 'p1data' / 'value.txt').read_text()\n\n\n"
+        "def test_it():\n    assert TEXT\n"
+    ),
+    "test_p1_param.py": (
+        "import json\nfrom pathlib import Path\n\nimport pytest\n\n"
+        "CASES = json.loads((Path(__file__).parent / 'p1data' / 'cases.json').read_text())\n\n\n"
+        "@pytest.mark.parametrize('n', CASES)\ndef test_it(n):\n    assert n\n"
+    ),
+    # p2: a module loaded by path at module level reads a data file
+    "p2_loaded.py": "from pathlib import Path\n\nTEXT = Path(__file__).with_suffix('.txt').read_text()\n",
+    "p2_loaded.txt": "t",
+    "test_p2_loaded.py": (
+        "import importlib.util\nfrom pathlib import Path\n\n"
+        "spec = importlib.util.spec_from_file_location('p2_loaded', Path(__file__).parent / 'p2_loaded.py')\n"
+        "mod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\n\n\n"
+        "def test_it():\n    assert mod.TEXT\n"
+    ),
+    # p3: a module lists a directory when it is imported; the import happens inside two tests
+    "p3_plugins/a.txt": "a",
+    "p3_reg.py": "import os\nfrom pathlib import Path\n\nNAMES = sorted(os.listdir(Path(__file__).parent / 'p3_plugins'))\n",
+    "test_p3_lazy.py": (
+        "def test_first():\n    import p3_reg\n    assert p3_reg.NAMES == ['a.txt']\n\n\n"
+        "def test_second():\n    import p3_reg\n    assert p3_reg.NAMES == ['a.txt']\n"
+    ),
+    # p4: import candidates that were passed over or missed
+    "test_p4_optional.py": (
+        "try:\n    import p4_opt\nexcept ImportError:\n    p4_opt = None\n\n\ndef test_it():\n    assert p4_opt is None\n"
+    ),
+    "p4s/p4_shadow.py": "VALUE = 1\n",
+    "p4s/test_p4_shadow.py": "import p4_shadow\n\n\ndef test_it():\n    assert p4_shadow.VALUE == 1\n",
+    # p5: Python children the tracer cannot see
+    "p5_script.py": "print('isolated')\n",
+    "test_p5_isolated.py": (
+        "import subprocess\nimport sys\nfrom pathlib import Path\n\n\ndef test_it():\n"
+        "    script = Path(__file__).parent / 'p5_script.py'\n"
+        "    subprocess.run([sys.executable, '-I', str(script)], cwd=str(script.parent), capture_output=True, check=True)\n"
+    ),
+    "test_p5_log_identity.py": (
+        "import shlex\nimport subprocess\nimport sys\n\n\ndef test_it(tmp_path):\n"
+        "    subprocess.run([sys.executable, '-c', 'import os; os._exit(0)'], cwd=str(tmp_path), check=True)\n"
+        "    subprocess.run(['bash', '-c', shlex.quote(sys.executable) + ' -c pass; :'], cwd=str(tmp_path), check=True)\n"
+    ),
+    # p6: a multiprocessing spawn child
+    "p6_worker.py": "def noop():\n    pass\n",
+    "test_p6_spawn.py": (
+        "import multiprocessing\n\nimport p6_worker\n\n\ndef test_it():\n"
+        "    proc = multiprocessing.get_context('spawn').Process(target=p6_worker.noop)\n"
+        "    proc.start()\n    proc.join()\n    assert proc.exitcode == 0\n"
+    ),
+    # p7: a non-Python child learns the repository only through its environment
+    "test_p7_env_child.py": (
+        "import os\nimport subprocess\nfrom pathlib import Path\n\n\ndef test_it():\n"
+        "    env = {'PATH': os.environ.get('PATH', ''), 'CORE_DIR': str(Path(__file__).parent)}\n"
+        "    subprocess.run(['bash', '-c', 'true'], cwd='/', env=env, check=True)\n"
+    ),
+    # p8: a name that merely contains an ignored directory name
+    "data/my__pycache__notes.txt": "n",
+    "test_p8_name.py": (
+        "from pathlib import Path\n\n\ndef test_it():\n"
+        "    assert (Path(__file__).parent / 'data' / 'my__pycache__notes.txt').read_text() == 'n'\n"
+    ),
+    # p9: a module-scoped fixture requested only through getfixturevalue
+    "p9/p9.txt": "d",
+    "p9/conftest.py": (
+        "from pathlib import Path\n\nimport pytest\n\n\n@pytest.fixture(scope='module')\n"
+        "def p9_data():\n    return (Path(__file__).parent / 'p9.txt').read_text()\n"
+    ),
+    "p9/test_p9.py": (
+        "def test_first(request):\n    assert request.getfixturevalue('p9_data') == 'd'\n\n\n"
+        "def test_second(request):\n    assert request.getfixturevalue('p9_data') == 'd'\n"
+    ),
 }
 
 
@@ -207,11 +282,15 @@ def traced(tmp_path_factory):
     return {"root": root, "records": dep_tracer.load_records(record_dir)}
 
 
+def _is_import_candidate(rel: str, digest: str) -> bool:
+    return digest == "absent" and (rel.endswith(".py") or "." not in rel.rsplit("/", 1)[-1])
+
+
 def assert_record(traced, nodeid, files, *, reasons=(), probes=None, listings=None):
     record = traced["records"][nodeid]
     assert sorted(record["files"]) == sorted(files)
     assert record["always_rerun"] == sorted(reasons)
-    assert record["probes"] == (probes or {})
+    assert {k: v for k, v in record["probes"].items() if not _is_import_candidate(k, v)} == (probes or {})
     assert record["listings"] == (listings or {})
     for rel, digest in record["files"].items():
         assert digest == sha((traced["root"] / rel).read_bytes())
@@ -313,6 +392,106 @@ def test_a_file_the_test_wrote_before_reading_is_not_a_dependency(traced):
     assert_record(traced, "test_c21_write.py::test_it", {"conftest.py", "test_c21_write.py"})
 
 
+def test_a_read_at_test_module_import_belongs_to_the_modules_tests(traced):
+    assert_record(traced, "test_p1_modread.py::test_it", {"conftest.py", "test_p1_modread.py", "p1data/value.txt"})
+
+
+def test_data_that_parametrizes_a_test_is_a_dependency_of_its_cases(traced):
+    for case in (1, 2):
+        assert_record(traced, f"test_p1_param.py::test_it[{case}]",
+                      {"conftest.py", "test_p1_param.py", "p1data/cases.json"})
+
+
+def test_a_module_loaded_by_path_at_import_time_carries_its_reads(traced):
+    assert_record(traced, "test_p2_loaded.py::test_it", {"conftest.py", "test_p2_loaded.py", "p2_loaded.py", "p2_loaded.txt"})
+
+
+@pytest.mark.parametrize("name", ["test_first", "test_second"])
+def test_a_listing_made_by_a_module_while_it_is_imported_is_recorded(traced, name):
+    assert_record(traced, f"test_p3_lazy.py::{name}", {"conftest.py", "test_p3_lazy.py", "p3_reg.py"},
+                  listings={"p3_plugins": sha(b"a.txt")})
+
+
+def test_an_import_that_found_nothing_records_every_candidate_as_absent(traced):
+    probes = traced["records"]["test_p4_optional.py::test_it"]["probes"]
+    for candidate in ("p4_opt/__init__.py", "p4_opt.py", "p4_opt"):
+        assert probes[candidate] == "absent", candidate
+
+
+def test_an_import_resolved_after_a_miss_records_the_earlier_candidates(traced):
+    record = traced["records"]["p4s/test_p4_shadow.py::test_it"]
+    assert "p4s/p4_shadow.py" in record["files"]
+    assert record["probes"]["p4_shadow.py"] == "absent"
+    assert record["probes"]["p4s/p4_shadow/__init__.py"] == "absent"
+
+
+def test_isolated_python_child_forces_rerun(traced):
+    assert_record(traced, "test_p5_isolated.py::test_it", {"conftest.py", "test_p5_isolated.py"}, reasons=["child-env-dropped"])
+
+
+def test_an_unrelated_child_log_does_not_stand_in_for_a_missing_one(traced):
+    assert_record(traced, "test_p5_log_identity.py::test_it", {"conftest.py", "test_p5_log_identity.py"},
+                  reasons=["child-log-missing"])
+
+
+def test_multiprocessing_spawn_forces_rerun(traced):
+    record = traced["records"]["test_p6_spawn.py::test_it"]
+    assert record["always_rerun"] == ["mp-spawn"]
+    assert "p6_worker.py" in record["files"]
+
+
+def test_repository_path_passed_to_a_child_only_through_its_environment_forces_rerun(traced):
+    assert_record(traced, "test_p7_env_child.py::test_it", {"conftest.py", "test_p7_env_child.py"},
+                  reasons=["non-python-subprocess"])
+
+
+def test_a_file_whose_name_contains_an_ignored_directory_name_is_recorded(traced):
+    assert_record(traced, "test_p8_name.py::test_it",
+                  {"conftest.py", "test_p8_name.py", "data/my__pycache__notes.txt"})
+
+
+@pytest.mark.parametrize("name", ["test_first", "test_second"])
+def test_a_scoped_fixture_requested_by_getfixturevalue_belongs_to_its_users(traced, name):
+    assert_record(traced, f"p9/test_p9.py::{name}", {"conftest.py", "p9/conftest.py", "p9/test_p9.py", "p9/p9.txt"})
+
+
+BOOM = {
+    "conftest.py": (
+        "import pytest\n\nimport dep_tracer\n\n"
+        "_closure = dep_tracer.import_closure\n_activate = dep_tracer.activate\n_armed = {'begin': False, 'end': False}\n\n\n"
+        "def _boom_closure(*args, **kwargs):\n"
+        "    if _armed['end']:\n        raise RuntimeError('boom')\n    return _closure(*args, **kwargs)\n\n\n"
+        "def _boom_activate(cur):\n"
+        "    if _armed['begin'] and cur is not None:\n        _armed['begin'] = False\n        raise RuntimeError('boom')\n"
+        "    return _activate(cur)\n\n\n"
+        "dep_tracer.import_closure = _boom_closure\ndep_tracer.activate = _boom_activate\n\n\n"
+        "@pytest.hookimpl(tryfirst=True, wrapper=True)\n"
+        "def pytest_runtest_protocol(item, nextitem):\n"
+        "    _armed['begin'] = item.name == 'test_boom_begin'\n    _armed['end'] = item.name == 'test_boom_end'\n"
+        "    return (yield)\n"
+    ),
+    "test_boom.py": (
+        "import os\n\n\n"
+        "def test_boom_begin():\n    assert 'dep_tracer_site' not in os.environ.get('PYTHONPATH', '')\n\n\n"
+        "def test_boom_end():\n    pass\n\n\n"
+        "def test_plain():\n    assert 'dep_tracer_site' in os.environ.get('PYTHONPATH', '')\n"
+    ),
+}
+
+
+def test_a_tracer_failure_is_a_rerun_record_not_an_internal_error(tmp_path):
+    root = _make_repo((tmp_path / "repo").resolve(), BOOM)
+    record_dir = tmp_path / "records"
+    run = _pytest(root, record_dir, ".")
+    assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-2000:]
+    assert "INTERNALERROR" not in run.stdout + run.stderr
+    records = dep_tracer.load_records(record_dir)
+    assert records["test_boom.py::test_boom_begin"]["always_rerun"] == ["tracer-error"]
+    assert records["test_boom.py::test_boom_end"] == {"files": {}, "listings": {}, "probes": {}, "always_rerun": ["tracer-error"]}
+    assert records["test_boom.py::test_plain"]["always_rerun"] == []
+    assert "test_boom.py" in records["test_boom.py::test_plain"]["files"]
+
+
 def test_tracer_off_by_default(tmp_path):
     root = _make_repo((tmp_path / "repo").resolve(), {"test_x.py": "def test_it():\n    pass\n"})
     record_dir = tmp_path / "records"
@@ -354,6 +533,17 @@ def test_outcomes_equal_with_and_without_tracer(tmp_path):
 
 def test_requires_python_312():
     assert sys.version_info >= (3, 12), "dep_tracer needs Python 3.12 (sys.monitoring)"
+
+
+def test_the_tool_id_is_not_one_that_cpython_tools_claim():
+    monitoring = sys.monitoring
+    assert dep_tracer.TOOL_ID not in (
+        monitoring.DEBUGGER_ID, monitoring.COVERAGE_ID, monitoring.PROFILER_ID, monitoring.OPTIMIZER_ID)
+
+
+def test_without_sys_monitoring_the_tracer_is_unavailable_not_broken(monkeypatch):
+    monkeypatch.delattr(sys, "monitoring")
+    assert dep_tracer._start_monitoring() is False
 
 
 def test_a_taken_monitoring_tool_id_makes_the_tracer_unavailable(monkeypatch):
@@ -400,7 +590,7 @@ def test_import_closure_follows_relative_function_level_and_literal_dynamic_impo
         "lit.py": "",
         "other.py": "",
     })
-    files, reasons = dep_tracer.import_closure([str(tmp_path / "pkg/a.py")], search=(str(tmp_path),))
+    files, reasons, _ = dep_tracer.import_closure([str(tmp_path / "pkg/a.py")], search=(str(tmp_path),))
     assert {Path(f).relative_to(tmp_path).as_posix() for f in files} == {
         "pkg/a.py", "pkg/__init__.py", "pkg/b.py", "pkg/c.py", "d.py", "lit.py"}
     assert reasons == set()
@@ -408,8 +598,22 @@ def test_import_closure_follows_relative_function_level_and_literal_dynamic_impo
 
 def test_import_closure_flags_computed_names_and_unparsable_files(tmp_path):
     _make_repo(tmp_path, {"a.py": "__import__(name)\n", "bad.py": "def (:\n"})
-    _, reasons = dep_tracer.import_closure([str(tmp_path / "a.py"), str(tmp_path / "bad.py")], search=(str(tmp_path),))
+    _, reasons, _ = dep_tracer.import_closure(
+        [str(tmp_path / "a.py"), str(tmp_path / "bad.py")], search=(str(tmp_path),))
     assert reasons == {"dynamic-import", "unanalysable-source"}
+
+
+def test_import_closure_reports_missed_candidates_but_not_standard_library_names(tmp_path):
+    _make_repo(tmp_path, {"a.py": "import os\nimport nowhere\n"})
+    _, _, probed = dep_tracer.import_closure([str(tmp_path / "a.py")], search=(str(tmp_path),))
+    assert {Path(p).relative_to(tmp_path).as_posix() for p in probed} == {"nowhere/__init__.py", "nowhere.py", "nowhere"}
+
+
+def test_import_closure_follows_the_extra_edges_it_is_given(tmp_path):
+    _make_repo(tmp_path, {"a.py": "", "loaded.py": ""})
+    a, loaded = str(tmp_path / "a.py"), str(tmp_path / "loaded.py")
+    files, _, _ = dep_tracer.import_closure([a], search=(str(tmp_path),), extra=lambda p: [loaded] if p == a else [])
+    assert files == {a, loaded}
 
 
 def test_load_records_rejects_an_unknown_line_kind(tmp_path):
