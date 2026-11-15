@@ -53,9 +53,10 @@ What is observed, per test (setup, call and teardown together)
       repository first on ``PATH`` counts as a repository file the child runs.
     Only paths inside the repository are recorded, repository-relative; ``__pycache__``,
     ``.pytest_cache`` (as path components), ``*.pyc`` and the pytest base temp directory are
-    dropped. Reads during the setup of a session-, package-, module- or class-scoped fixture go to
-    a set kept per fixture that every test using the fixture depends on, including a fixture
-    requested only through ``request.getfixturevalue``. Interpreter and plugin versions are not
+    dropped. Direct reads during the setup of a session-, package-, module- or class-scoped fixture
+    go to a set kept per fixture that every test using the fixture depends on, including a fixture
+    requested only through ``request.getfixturevalue`` (a read made through a helper also goes to
+    that helper's file, see below). Interpreter and plugin versions are not
     recorded here; the suite gate puts them in the key.
 
 Import-time work belongs to the file whose top-level code did it
@@ -131,8 +132,12 @@ Accepted residuals: reads made inside C extensions other than sqlite3 (mmap, dbm
     that a function-scoped fixture then hands to a test through a shared global (a module-scoped
     ``warm`` fixture fills a global, a function-scoped ``getter`` returns it, the test requests only
     ``getter``) stays with ``warm``'s users, so that test carries no record of the file; it passes
-    only when it runs after a user of ``warm``, which is a test-order dependence. A hook that fails
-    outside any test marks every later record of that process ``tracer-error``.
+    only when it runs after a user of ``warm``, which is a test-order dependence; the same holds for
+    a global that a test reads directly. A repository pytest plugin loaded with ``-p`` or
+    ``pytest_plugins`` (not imported statically) whose hook caches a read lands in
+    ``_by_caller[plugin]``, which no test's closure carries; no such plugin exists under
+    ``scripts/`` today, and the gate's own ``result_reuse_plugin`` reads only outside tests. A hook
+    that fails outside any test marks every later record of that process ``tracer-error``.
 """
 from __future__ import annotations
 
@@ -269,11 +274,11 @@ def _owners(frame):
     """Owners of an event raised below ``frame``.
 
     Returns (nearest repository file, innermost repository file whose top level is running,
-    repository frames seen). The walk goes outward from
-    ``frame`` and stops at a pytest or pluggy frame, so work they do themselves (collecting
-    directories, rewriting a test module) has no owner. One repository
-    frame on the stack means the event was raised by a function that pytest called itself (a
-    test, a fixture, a hook); more than one means repository code called repository code.
+    repository frames seen). The walk goes outward from ``frame`` and stops at a pytest or pluggy
+    frame, so work they do themselves (collecting directories, rewriting a test module) has no
+    owner. One repository frame on the stack means the event was raised by a function that pytest
+    called itself (a test, a fixture, a hook); more than one means repository code called
+    repository code.
     """
     nearest = None
     seen = 0
