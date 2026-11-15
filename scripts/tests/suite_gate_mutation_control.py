@@ -249,7 +249,8 @@ CATALOGUE: "dict[str, Mutant]" = {
     "suite-env-scrub": Mutant(
         LIB,
         '        if (name in scrub or name.startswith("AGENTCTL_")\n'
-        '                or name in ("PYTEST_ADDOPTS", "PYTHONPATH", flake_list.JOURNAL_ENV)):',
+        '                or name in ("PYTEST_ADDOPTS", "PYTHONPATH", flake_list.JOURNAL_ENV, EXTRA_PYTHONPATH_ENV,\n'
+        '                            result_store.STORE_ENV)):',
         "        if False:",
         _ids(
             "test_suite_env_drops_scrubbed_agent_and_pytest_names",

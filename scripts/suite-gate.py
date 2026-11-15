@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Pre-land suite gate: run the full test suite in an isolated root, subtract the tip's baseline, check a landing.
 
-  suite-gate.py run [--ref HEAD] [--remote-sha SHA] [--timeout S] [--waiver REASON] [-C DIR]
-      Fetch the remote tip (unless --remote-sha names it), build the sandbox of the candidate commit
+  suite-gate.py run [--ref HEAD] [--remote-sha SHA] [--timeout S] [--waiver REASON] [--no-reuse] [-C DIR]
+      Tests whose stored pass still holds are not run again: the dependency tracer records what each
+      test read, and a pass is reused when the content of all of it and the environment (interpreter,
+      installed distributions, git) are unchanged (scripts/lib/result_store.py; store under
+      <git common dir>/suite-gate/results, or the file CORE_RESULT_STORE names). The record lists every
+      collected test with its source, ran or reused. --no-reuse runs every test, untraced, and stores
+      nothing. Fetch the remote tip (unless --remote-sha names it), build the sandbox of the candidate commit
       and run the whole suite in it. A failure the tip's own run also has does not count; a failure
       absent from it, and every test the run collected but never finished, is rerun in two fresh
       serial runs and counts when it fails in either; a test that passes both no longer holds the
@@ -83,6 +88,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     decision = gate.evaluate_landing(
         repo, candidate, _tip(args, repo), timeout_s=args.timeout, waiver=args.waiver, reuse=False,
         runner=args.runner, clock=args.clock, sandbox_parent=args.sandbox_parent, tip_reader=tip_reader,
+        reuse_results=not args.no_reuse,
     )
     if decision.record_path is not None:
         _print_record(shared.read_record(decision.record_path))
@@ -148,6 +154,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help=f"seconds per suite run (default: config.md {gate.CONFIG_KEY})")
     run.add_argument("--waiver", metavar="REASON", default=None,
                      help="admit an UNAVAILABLE run, recording REASON")
+    run.add_argument("--no-reuse", action="store_true",
+                     help="run every test, untraced: no stored pass is reused and none is stored")
     run.set_defaults(func=cmd_run)
 
     check = sub.add_parser("check", help="would landing --sha be admitted?")
