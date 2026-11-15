@@ -316,6 +316,16 @@ PLANTED = {
         "from deco import needs\n\n\n@needs\ndef test_first():\n    pass\n\n\n"
         "@needs\ndef test_second():\n    pass\n"
     ),
+    # s6: a decorator defined in the test file whose wrapper body caches a read in a module global
+    "ind.txt": "t",
+    "test_s6_infile_deco.py": (
+        "import functools\nfrom pathlib import Path\n\n_C = {}\n\n\ndef needs(func):\n"
+        "    @functools.wraps(func)\n    def wrapper(*args, **kwargs):\n        if 'd' not in _C:\n"
+        "            _C['d'] = (Path(__file__).parent / 'ind.txt').read_text()\n"
+        "        return func(*args, **kwargs)\n    return wrapper\n\n\n"
+        "@needs\ndef test_first():\n    pass\n\n\n"
+        "@needs\ndef test_second():\n    pass\n"
+    ),
     # s5: methods of a test class using a function-scoped fixture of the test module that caches its read
     "s5data.txt": "t",
     "test_s5_class.py": (
@@ -598,6 +608,12 @@ def test_a_read_cached_by_a_fixture_of_the_test_module_reaches_every_test_using_
 def test_a_read_cached_by_a_decorator_in_another_file_reaches_every_decorated_test(traced, name):
     assert_record(traced, f"test_s4_decorated.py::{name}", {
         "conftest.py", "test_s4_decorated.py", "deco.py", "deco.txt"})
+
+
+@pytest.mark.parametrize("name", ["test_first", "test_second"])
+def test_a_read_cached_by_a_decorator_in_the_test_file_reaches_every_decorated_test(traced, name):
+    assert_record(traced, f"test_s6_infile_deco.py::{name}", {
+        "conftest.py", "test_s6_infile_deco.py", "ind.txt"})
 
 
 @pytest.mark.parametrize("name", ["test_first", "test_second"])

@@ -270,8 +270,9 @@ def _owners(frame):
     """Owners of an event raised below ``frame``.
 
     Returns (nearest repository file, innermost repository file whose top level is running,
-    repository frames seen, code of the nearest repository frame). The walk goes outward from ``frame`` and stops at a pytest or pluggy frame, so work they do
-    themselves (collecting directories, rewriting a test module) has no owner. One repository
+    repository frames seen, code of the nearest repository frame). The walk goes outward from
+    ``frame`` and stops at a pytest or pluggy frame, so work they do themselves (collecting
+    directories, rewriting a test module) has no owner. One repository
     frame on the stack means the event was raised by a function that pytest called itself (a
     test, a fixture, a hook); more than one means repository code called repository code.
     """
@@ -295,26 +296,20 @@ def _owners(frame):
     return nearest, None, seen, nearest_code
 
 
-def _function_codes(func, test_file) -> frozenset:
-    """Code objects of a test function that live in its own file, following ``__wrapped__``.
+def _function_codes(func) -> frozenset:
+    """The code object of a test body: the innermost function of the ``__wrapped__`` chain.
 
-    A decorated test body counts; a wrapper defined in another file does not, so a value that
-    wrapper caches reaches every test it decorates.
+    A wrapper (a decorator's inner function, wherever it is defined) is not test code, so a value
+    it caches reaches every test it decorates.
     """
-    own = _repo_abs(test_file)
-    own = own[0] if own else os.fspath(test_file)
-    codes = set()
     for _ in range(16):
         func = getattr(func, "__func__", func)
-        code = getattr(func, "__code__", None)
-        if code is not None:
-            found = _repo_abs(code.co_filename) if code.co_filename[:1] != "<" else None
-            if (found[0] if found else code.co_filename) == own:
-                codes.add(code)
-        func = getattr(func, "__wrapped__", None)
-        if func is None:
+        inner = getattr(func, "__wrapped__", None)
+        if inner is None:
             break
-    return frozenset(codes)
+        func = inner
+    code = getattr(func, "__code__", None)
+    return frozenset([code]) if code is not None else frozenset()
 
 
 def _targets(frame) -> list[DepSet]:
@@ -323,11 +318,11 @@ def _targets(frame) -> list[DepSet]:
     The running scope's own set, always. Beside it, in the traced process: while a repository file's
     top level runs, that file's import-time set; between tests, the nearest repository file's
     import-time set; during a test, the nearest file's ``_by_caller`` set when repository code
-    called repository code, or when a conftest or hook function or a fixture or helper of the test
-    module (any frame that is not the running test function's own code) raised the event, because a
-    value cached by that code (``lru_cache``, a module global) is used by later tests without
-    reading its source again, and they reach that file through their closure. A scoped fixture's
-    direct read is the exception: it stays with the fixture's own set.
+    called repository code, or when the nearest repository frame is not the running test body's own
+    code (a conftest or hook function, a fixture or helper of the test module, a decorator's
+    wrapper), because a value cached by that code (``lru_cache``, a module global) is used by later
+    tests without reading its source again, and they reach that file through their closure. A
+    scoped fixture's direct read is the exception: it stays with the fixture's own set.
     """
     cur = _current
     if cur is None and not _idle_sink:
@@ -1166,8 +1161,8 @@ def _make_plugin():
             if not self.traces:
                 return (yield)
             global _test_codes
-            _test_codes = _function_codes(getattr(item, "function", None), str(item.path))
             try:
+                _test_codes = _function_codes(getattr(item, "function", None))
                 self._begin()
             except Exception:
                 self._end_scope()
