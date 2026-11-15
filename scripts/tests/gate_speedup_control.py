@@ -1594,7 +1594,11 @@ def reuse_scenario(repo: Path, out: Path, *, mutate: bool, disk_max_mb: float, c
                 if kind == result_store.FILE:
                     dependents.setdefault(path, set()).add(test_id)
         if NAMED_TEST not in deps:
-            raise SystemExit(f"{NAMED_TEST} has no stored pass to start from (unstored: always-rerun or failed)")
+            why = ("always-rerun" if NAMED_TEST in state["always_rerun"] else
+                   "failed" if NAMED_TEST in state["failed"] else
+                   "not collected" if NAMED_TEST not in state["ids"] else "no row matches its key")
+            raise SystemExit(f"{NAMED_TEST} has no stored pass to start from ({why}; {len(state['hits'])} of "
+                             f"{len(state['ids'])} collected ids have one, {len(state['always_rerun'])} are always-rerun)")
         if NAMED_TEST not in dependents.get(NAMED_SCRIPT, ()):
             raise SystemExit(f"the stored dependencies of {NAMED_TEST} do not list {NAMED_SCRIPT}")
         lib = next((p for p in LIB_CANDIDATES if dependents.get(p)), None)
