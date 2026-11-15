@@ -53,6 +53,8 @@ Keys and values for the coordination machinery; edit values here, refer to them 
 | `fanout-cap-extra-tasks` | `512` | Extra threads/processes a fan-out trial under `scripts/cap-run.sh` may add to the user's task count. |
 | `fanout-cap-timeout-s` | `3600` | Wall-clock limit in seconds for one capped fan-out trial. |
 | `suite-gate-timeout-s` | `7200` | Wall-clock limit in seconds for one full-suite run of the pre-land suite gate (the candidate's, or the tip baseline's), counted from when its worker slots are held. |
+| `suite-gate-keep-max-mb` | `2048` | Size in MB the suite gate's kept store (baselines, failing runs' evidence, registered stores) is trimmed to after each run, least recently used first. |
+| `suite-gate-failure-evidence-runs` | `3` | Newest failing gate runs whose evidence (log, JUnit XML, failure list, core tree) is evicted last, oldest first, and only when nothing else is left and the store still exceeds `suite-gate-keep-max-mb`. |
 | `test-slots-total` | `8` | Machine-wide pytest-xdist worker slots shared by every parallel test run (`scripts/lib/test_slots.py`); a run waits in a queue when they are taken. |
 | `test-slots-per-run` | `4` | Most worker slots one parallel test run takes; an explicit `-n` above it is capped. |
 | `test-slots-dir` | `/tmp/core-test-slots-<uid>` | Fixed per-user directory of the slot lock files; never derived from HOME or TMPDIR. |

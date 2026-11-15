@@ -804,6 +804,10 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "dependency PASSED; approve refuses declining a stage something live depends on, so "
         "a dependency of a runnable stage is never SKIPPED"
     ),
+    ("lib/suite_gate.py", "observe"): (
+        "reads one pytest test's outcome in the per-test report, not a plan stage's: a test "
+        "that passed on a rerun is evidence the rerun cleared it, a skipped one is not"
+    ),
     ("agentctl/cli_approval.py", "_refresh_caches_from_plan_path"): (
         "asks whether THIS stage's earlier PASS survives an edit of its own definition; a "
         "SKIPPED stage has no pass to invalidate and is reset by _apply_refined_stage_fields"

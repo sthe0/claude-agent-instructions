@@ -214,7 +214,12 @@ def _agent_fire_ack_refusal(
     if last.get("scale") != effort.SCALE_REPLANS:
         return "an open spend/wall-clock fire is owed to the user, not the agent", None
     if decision != "revise":
-        return f"decision {decision!r} on a fire is the user's; the agent may only revise", None
+        return (f"decision {decision!r} on a fire is the user's; the agent may only revise. "
+                "A replans-scale fire spends no approved money or time, so do not ask the user: "
+                "acknowledge with --decision revise --by agent, change an operative field of the "
+                "plan (means/method/procedure/verify) that removes the critique's difference, get "
+                "the scoped review, then replan (at the replan ceiling with "
+                "--renegotiation-decision continue --renegotiated-by agent)"), None
     def load_doc():
         try:
             return load_plan(state.plan_path, strict=False)

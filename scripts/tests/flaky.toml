@@ -1,0 +1,6 @@
+# Tests that failed on a full suite run and then passed on both reruns of the pre-land suite gate.
+# Written only by the landing fold (scripts/lib/flake_list.py), never by hand or by the gate.
+# count: times the gate saw the test flake; first_seen / last_seen: UTC instants of the journal entries.
+# A listed test is treated like any other by the gate; each entry is a task to fix the test at its cause.
+
+[flaky]

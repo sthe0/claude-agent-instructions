@@ -1,0 +1,879 @@
+"""The suite gate's leftovers: sandboxes removed by their owner or the next run, a bounded kept store.
+
+Difficulty removed: every gate run left its sandbox clone in /tmp (a killed run's for good) and kept
+records, baselines and logs without limit. These tests pin the owner lock and the sweep, the evidence
+of a failing run, and the least-recently-used trim; ``gate_speedup_control.py disk-series`` shows the
+same on real gate runs in a private /tmp.
+"""
+from __future__ import annotations
+
+import fcntl
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import types
+from pathlib import Path
+
+import pytest
+
+import gate_speedup_control as control
+from lib import gate_retention as retention
+from lib import suite_gate as gate
+from test_suite_gate import FakeRunner, build_world
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+REPO_DIR = SCRIPTS_DIR.parent
+PREFIX = "instruction-sandbox."
+MB = retention.MB
+TINY = 0.01
+NEW_FAILURE = "scripts/tests/test_y.py::test_one"
+
+HOLDER = """\
+import sys, time
+from lib import gate_retention
+
+with gate_retention.sandbox(sys.argv[1], sys.argv[2]) as root:
+    print(root, flush=True)
+    time.sleep(600)
+"""
+
+
+@pytest.fixture
+def common(tmp_path):
+    path = tmp_path / "common"
+    path.mkdir()
+    return path
+
+
+@pytest.fixture
+def parent(tmp_path):
+    path = tmp_path / "tmp"
+    path.mkdir()
+    return path
+
+
+@pytest.fixture
+def holder(tmp_path, parent):
+    """Start a process that holds a sandbox; yields (process, sandbox root). Kills the process afterwards."""
+    script = tmp_path / "holder.py"
+    script.write_text(HOLDER, encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(script), str(parent), PREFIX],
+                            stdout=subprocess.PIPE, text=True, env={**os.environ, "PYTHONPATH": str(SCRIPTS_DIR)})
+    root = Path(proc.stdout.readline().strip())
+    yield proc, root
+    proc.kill()
+    proc.wait()
+
+
+# ── sandboxes: owner lock, sweep ──────────────────────────────────────────
+
+def test_a_sandbox_is_removed_with_its_owner_file_when_the_block_ends(parent):
+    with retention.sandbox(parent, PREFIX) as root:
+        assert root.is_dir() and retention.owner_path(root).is_file()
+        assert root.name.startswith(PREFIX)
+    assert list(parent.iterdir()) == []
+
+
+def test_a_sandbox_is_kept_when_the_keep_variable_is_set(parent, monkeypatch):
+    monkeypatch.setenv(retention.KEEP_ENV, "1")
+    with retention.sandbox(parent, PREFIX) as root:
+        pass
+    assert root.is_dir() and retention.owner_path(root).is_file()
+
+
+def test_the_sandbox_is_removed_when_the_block_raises(parent):
+    with pytest.raises(RuntimeError):
+        with retention.sandbox(parent, PREFIX):
+            raise RuntimeError("boom")
+    assert list(parent.iterdir()) == []
+
+
+def test_a_killed_runs_sandbox_is_removed_by_the_next_sweep(holder, parent):
+    proc, root = holder
+    (root / "clone").mkdir()
+    proc.send_signal(signal.SIGKILL)
+    proc.wait()
+    assert root.is_dir()
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == [root.name]
+    assert list(parent.iterdir()) == []
+
+
+def test_a_live_sandbox_is_kept_by_the_sweep(holder, parent):
+    _, root = holder
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    assert root.is_dir() and retention.owner_path(root).is_file()
+
+
+def test_a_sandbox_being_created_is_kept_by_a_racing_sweep(parent, monkeypatch):
+    """A sweep from any repository's run, at the moment the creator takes the owner lock, finds no owner file."""
+    swept: list[list[str]] = []
+    real_flock = fcntl.flock
+
+    def flock_after_a_sweep(target, operation):
+        if isinstance(target, int) and operation == fcntl.LOCK_EX:
+            swept.append(retention.sweep_dead_sandboxes(parent, PREFIX))
+        return real_flock(target, operation)
+
+    monkeypatch.setattr(retention.fcntl, "flock", flock_after_a_sweep)
+    with retention.sandbox(parent, PREFIX) as root:
+        assert swept == [[]]
+        assert root.is_dir() and retention.owner_path(root).is_file()
+        assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+
+
+def test_a_failure_while_creating_the_owner_leaves_nothing_and_leaks_no_descriptor(parent, monkeypatch):
+    def refuse(target, operation):
+        raise OSError("no locks here")
+
+    before = len(os.listdir("/proc/self/fd"))
+    monkeypatch.setattr(retention.fcntl, "flock", refuse)
+    with pytest.raises(OSError):
+        with retention.sandbox(parent, PREFIX):
+            pass
+    assert list(parent.iterdir()) == []
+    assert len(os.listdir("/proc/self/fd")) == before
+
+
+def test_only_a_sandbox_with_a_free_owner_file_is_removed(parent):
+    stray = parent / f"{PREFIX}old-gate"
+    stray.mkdir()
+    stamp = time.time() - 30 * 86400
+    os.utime(stray, (stamp, stamp))
+    other = parent / "someone-elses"
+    other.mkdir()
+    (parent / f"{PREFIX}x.owner").write_text("", encoding="utf-8")
+    (parent / "other.owner").write_text("", encoding="utf-8")
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == [f"{PREFIX}x"]
+    assert stray.is_dir() and other.is_dir() and (parent / "other.owner").is_file()
+
+
+def test_an_owner_symlink_is_not_followed(parent, tmp_path):
+    target = tmp_path / "precious"
+    target.mkdir()
+    (parent / f"{PREFIX}link").symlink_to(target)
+    (parent / f"{PREFIX}link.owner").symlink_to(tmp_path / "nowhere")
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    assert target.is_dir()
+
+
+def sandbox_with_marker(parent: Path, name: str = f"{PREFIX}guarded") -> tuple[Path, Path]:
+    root = parent / name
+    root.mkdir()
+    marker = retention.owner_path(root)
+    marker.write_text("", encoding="utf-8")
+    return root, marker
+
+
+def test_another_users_marker_is_not_swept(parent, monkeypatch):
+    root, marker = sandbox_with_marker(parent)
+    monkeypatch.setattr(retention.os, "getuid", lambda: os.stat(marker).st_uid + 1)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    assert root.is_dir() and marker.is_file()
+
+
+@pytest.fixture
+def within_seconds():
+    """Fail instead of hanging when the code under test blocks."""
+    def expired(*_):
+        raise TimeoutError("the call blocked")
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.alarm(10)
+    yield
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, previous)
+
+
+def test_a_marker_that_is_a_fifo_is_left_alone_without_blocking(parent, within_seconds):
+    root = parent / f"{PREFIX}fifo"
+    root.mkdir()
+    marker = retention.owner_path(root)
+    os.mkfifo(marker)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    assert root.is_dir() and marker.exists()
+
+
+def test_a_marker_that_is_a_directory_is_left_alone(parent):
+    root = parent / f"{PREFIX}dir"
+    root.mkdir()
+    marker = retention.owner_path(root)
+    marker.mkdir()
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    assert root.is_dir() and marker.is_dir()
+
+
+def test_a_marker_replaced_after_it_was_opened_is_not_swept(parent, monkeypatch):
+    root, marker = sandbox_with_marker(parent)
+    real_stat = os.stat
+
+    def replaced(path, *args, **kwargs):
+        found = real_stat(path, *args, **kwargs)
+        if str(path) == str(marker):
+            return types.SimpleNamespace(st_ino=found.st_ino + 1)
+        return found
+
+    with monkeypatch.context() as patch:
+        patch.setattr(retention.os, "stat", replaced)
+        swept = retention.sweep_dead_sandboxes(parent, PREFIX)
+    assert swept == []
+    assert root.is_dir() and marker.is_file()
+
+
+@pytest.mark.parametrize("suffix, age_s", [(retention.OWNER_SUFFIX, 0),
+                                           (retention.OWNER_SUFFIX + retention.PENDING_SUFFIX, 3600)])
+def test_a_marker_named_only_by_the_prefix_does_not_sweep_a_directory_named_by_it(parent, suffix, age_s):
+    nameless = parent / PREFIX
+    nameless.mkdir()
+    marker = parent / f"{PREFIX}{suffix}"
+    marker.write_text("", encoding="utf-8")
+    assert retention.sweep_dead_sandboxes(parent, PREFIX, now=time.time() + age_s) == []
+    assert nameless.is_dir() and marker.is_file()
+
+
+def test_an_unexpected_error_while_removing_the_owner_file_escapes_neither_the_block_exit_nor_the_sweep(
+        parent, monkeypatch, capsys):
+    def broken(self, missing_ok=False):
+        raise RuntimeError("unlink broke")
+
+    root, marker = sandbox_with_marker(parent)
+    monkeypatch.setattr(Path, "unlink", broken)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    with retention.sandbox(parent, PREFIX):
+        pass
+    assert "unlink broke" in capsys.readouterr().err
+
+
+def test_a_failing_retention_pass_never_escapes_the_run(common, monkeypatch, capsys):
+    def broken(*args, **kwargs):
+        raise RuntimeError("evict broke")
+
+    monkeypatch.setattr(retention, "enforce", broken)
+    gate._retain(common, "a" * 40, "b" * 40)
+    assert "evict broke" in capsys.readouterr().err
+
+
+def test_a_read_only_directory_does_not_make_a_sandbox_a_leftover(parent):
+    root = parent / f"{PREFIX}ro"
+    (root / "objects" / "ab").mkdir(parents=True)
+    (root / "objects" / "ab" / "obj").write_text("x", encoding="utf-8")
+    (root / "objects" / "ab").chmod(0o500)
+    retention.owner_path(root).write_text("", encoding="utf-8")
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == [root.name]
+    assert list(parent.iterdir()) == []
+
+
+def seal(root: Path) -> Path:
+    """Put a ``chmod 000`` directory with content inside ``root``; returns it."""
+    locked = root / "a" / "locked"
+    (locked / "inner").mkdir(parents=True)
+    (locked / "inner" / "f").write_text("x", encoding="utf-8")
+    locked.chmod(0o000)
+    return locked
+
+
+def test_an_unopenable_directory_neither_crashes_the_block_exit_nor_stays(parent):
+    with retention.sandbox(parent, PREFIX) as root:
+        seal(root)
+    assert list(parent.iterdir()) == []
+
+
+def test_an_unopenable_directory_does_not_wedge_the_sweep(parent):
+    root = parent / f"{PREFIX}sealed"
+    root.mkdir()
+    seal(root)
+    retention.owner_path(root).write_text("", encoding="utf-8")
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == [root.name]
+    assert list(parent.iterdir()) == []
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+
+
+def refuse_the_inner_retry(monkeypatch):
+    original = retention._remove_tree
+
+    def remove(root, retry=True):
+        if not retry:
+            raise TypeError("not an OSError")
+        original(root, retry)
+
+    monkeypatch.setattr(retention, "_remove_tree", remove)
+
+
+def test_an_unexpected_error_while_opening_a_directory_up_does_not_escape_the_block_exit(parent, monkeypatch):
+    refuse_the_inner_retry(monkeypatch)
+    with retention.sandbox(parent, PREFIX) as root:
+        locked = seal(root)
+    locked.chmod(0o700)
+    shutil.rmtree(root, ignore_errors=True)
+    retention.owner_path(root).unlink(missing_ok=True)
+
+
+def test_an_unexpected_error_while_opening_a_directory_up_does_not_escape_the_sweep(parent, monkeypatch):
+    refuse_the_inner_retry(monkeypatch)
+    root = parent / f"{PREFIX}sealed"
+    root.mkdir()
+    locked = seal(root)
+    retention.owner_path(root).write_text("", encoding="utf-8")
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    locked.chmod(0o700)
+
+
+def test_the_newest_mtime_survives_a_directory_that_vanishes_while_it_is_read(tmp_path, monkeypatch):
+    kept = tmp_path / "copy"
+    (kept / "inner").mkdir(parents=True)
+    real = os.scandir
+
+    def vanishing(path):
+        if Path(path) == kept:
+            raise FileNotFoundError(path)
+        return real(path)
+
+    monkeypatch.setattr(retention.os, "scandir", vanishing)
+    assert retention._newest_mtime(kept) == os.lstat(kept).st_mtime
+
+
+def test_the_removal_handler_never_raises(tmp_path):
+    retention._make_writable(os.open, str(tmp_path / "nowhere" / "x"), OSError("boom"))
+    retention._make_writable(os.unlink, str(tmp_path / "nowhere" / "x"), OSError("boom"))
+
+
+def pending_of(root: Path) -> Path:
+    return retention.owner_path(root).with_name(retention.owner_path(root).name + retention.PENDING_SUFFIX)
+
+
+def test_a_dead_creators_pending_file_and_directory_are_swept_once_old(parent):
+    root = parent / f"{PREFIX}half"
+    root.mkdir()
+    pending_of(root).write_text("", encoding="utf-8")
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    assert root.is_dir()
+    later = time.time() + 3600
+    assert retention.sweep_dead_sandboxes(parent, PREFIX, now=later) == [root.name]
+    assert list(parent.iterdir()) == []
+
+
+def test_a_pending_file_whose_creator_still_holds_its_lock_is_not_swept(parent):
+    root = parent / f"{PREFIX}half"
+    root.mkdir()
+    with open(pending_of(root), "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        assert retention.sweep_dead_sandboxes(parent, PREFIX, now=time.time() + 3600) == []
+    assert root.is_dir() and pending_of(root).is_file()
+
+
+def age(path: Path, seconds: float) -> None:
+    stamp = time.time() - seconds
+    os.utime(path, (stamp, stamp))
+
+
+def test_an_old_ownerless_directory_is_left_alone_however_old(parent):
+    standalone = parent / f"{PREFIX}AbC123"
+    (standalone / "core" / ".git").mkdir(parents=True)
+    age(standalone, 30 * 86400)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX, now=time.time() + 30 * 86400) == []
+    assert (standalone / "core" / ".git").is_dir()
+
+
+def test_an_old_sandbox_with_a_live_owner_lock_is_never_swept(holder, parent):
+    _, root = holder
+    age(root, 9000)
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    assert root.is_dir()
+
+
+def test_a_sandbox_that_cannot_be_removed_keeps_its_owner_file_unlocked_for_the_next_sweep(parent, monkeypatch, capsys):
+    monkeypatch.setattr(retention, "_remove_tree", lambda root: None)
+    with retention.sandbox(parent, PREFIX) as root:
+        pass
+    owner = retention.owner_path(root)
+    assert root.is_dir() and owner.is_file()
+    assert "cannot remove the sandbox" in capsys.readouterr().err
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == []
+    monkeypatch.undo()
+    assert retention.sweep_dead_sandboxes(parent, PREFIX) == [root.name]
+    assert list(parent.iterdir()) == []
+
+
+# ── the kept store: least recently used, bounded ──────────────────────────
+
+def put(path: Path, mb: float = 1, age: float = 0) -> Path:
+    """A file of ``mb`` MB whose mtime is ``age`` seconds ago; a larger age is less recently used."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(os.urandom(int(mb * MB)))
+    stamp = time.time() - age
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def sha(n: int) -> str:
+    return f"{n:040x}"
+
+
+def test_the_least_recently_used_baseline_goes_first(common):
+    for n, age in ((1, 300), (2, 200), (3, 100)):
+        put(common / retention.BASELINE_DIR / f"{sha(n)}.json", age=age)
+    result = retention.enforce(common, max_mb=3, runs=3)
+    assert result.evicted == (f"baseline:{sha(1)}",)
+    assert not (common / retention.BASELINE_DIR / f"{sha(1)}.json").exists()
+    assert (common / retention.BASELINE_DIR / f"{sha(2)}.json").exists()
+    assert result.after_mb <= 3 < result.before_mb
+
+
+def test_a_baseline_is_evicted_whole(common):
+    base = common / retention.BASELINE_DIR
+    for suffix in (".json", ".junit.xml", ".tests.jsonl", ".log"):
+        put(base / f"{sha(1)}{suffix}", mb=0.25, age=500)
+    (base / f"{sha(1)}.lock").write_text("", encoding="utf-8")
+    put(base / f"{sha(2)}.json", mb=2, age=10)
+    retention.enforce(common, max_mb=3, runs=3)
+    assert sorted(p.name for p in base.iterdir()) == [f"{sha(1)}.lock", f"{sha(2)}.json"]
+
+
+def test_an_evicted_groups_lock_file_stays_so_runs_keep_locking_one_inode(common):
+    base = common / retention.BASELINE_DIR
+    lock = base / f"{sha(1)}.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("", encoding="utf-8")
+    inode = lock.stat().st_ino
+    put(base / f"{sha(1)}.json", age=500)
+    put(base / f"{sha(2)}.json", age=10)
+    assert retention.enforce(common, max_mb=1.5, runs=3).evicted == (f"baseline:{sha(1)}",)
+    assert lock.stat().st_ino == inode
+
+
+def test_a_group_that_a_run_rewrote_after_it_was_listed_is_not_evicted(tmp_path):
+    lock = tmp_path / f"{sha(1)}.lock"
+    lock.write_text("", encoding="utf-8")
+    data = put(tmp_path / f"{sha(1)}.json", age=500)
+    listed_at = time.time() - 500
+    os.utime(data)
+    assert retention._evict_group(lock, [data], listed_at) is False
+    assert data.is_file()
+    assert retention._evict_group(lock, [data], time.time() + 5) is True
+    assert not data.exists() and lock.is_file()
+
+
+def test_a_baseline_cache_hit_counts_as_use(common):
+    base = common / retention.BASELINE_DIR
+    older = put(base / f"{sha(1)}.json", age=500)
+    put(base / f"{sha(2)}.json", age=100)
+    put(base / f"{sha(3)}.json", age=300)
+    retention.touch(older)
+    result = retention.enforce(common, max_mb=3, runs=3)
+    assert result.evicted == (f"baseline:{sha(3)}",)
+
+
+def test_touching_a_missing_file_is_not_an_error(common):
+    retention.touch(common / "absent.json")
+
+
+RUN_SUFFIXES = (".json", ".log", ".junit.xml", ".tests.jsonl")
+
+
+def run_files(common: Path, n: int, age: float, mb: float = 1) -> list[Path]:
+    """The files one candidate run keeps at the top of the store."""
+    return [put(common / retention.STORE_DIR / f"{sha(n)}{suffix}", mb=mb / len(RUN_SUFFIXES), age=age)
+            for suffix in RUN_SUFFIXES]
+
+
+def test_old_candidate_run_files_are_evicted_least_recently_used(common):
+    files = {n: run_files(common, n, age) for n, age in ((1, 300), (2, 200), (3, 100))}
+    result = retention.enforce(common, max_mb=2.5, runs=3, recent_s=60)
+    assert result.evicted == (f"run:{sha(1)}",)
+    assert not any(f.exists() for f in files[1]) and all(f.is_file() for f in files[2] + files[3])
+    assert result.after_mb <= 2.5 and not result.over_bound
+
+
+def test_the_candidate_and_tip_run_files_are_never_evicted(common):
+    candidate = run_files(common, 9, age=10_000)
+    tip = run_files(common, 8, age=9_000)
+    other = run_files(common, 1, age=100)
+    put(common / retention.BASELINE_DIR / f"{sha(2)}.json", age=100)
+    result = retention.enforce(common, max_mb=TINY, runs=3, protect=(sha(9), sha(8)), recent_s=60)
+    assert all(f.is_file() for f in candidate + tip)
+    assert not any(f.exists() for f in other)
+    assert set(result.evicted) == {f"run:{sha(1)}", f"baseline:{sha(2)}"}
+
+
+def test_another_sessions_recent_run_record_is_kept_older_ones_go(common):
+    recent = run_files(common, 1, age=100)
+    old = run_files(common, 2, age=retention.DEFAULT_TIMEOUT_S + 600)
+    result = retention.enforce(common, max_mb=TINY, runs=3)
+    assert all(f.is_file() for f in recent) and not any(f.exists() for f in old)
+    assert result.evicted == (f"run:{sha(2)}",) and result.over_bound
+
+
+def test_a_recent_run_record_is_kept_before_the_newest_failing_evidence_is_touched(common):
+    recent = run_files(common, 1, age=100)
+    evidence = put(common / retention.EVIDENCE_DIR / sha(3) / "log.txt", mb=1, age=200)
+    result = retention.enforce(common, max_mb=1.2, runs=3)
+    assert all(f.is_file() for f in recent) and evidence.parent.exists() is False
+    assert result.evicted == (f"evidence:{sha(3)}",)
+
+
+def test_evicting_a_group_without_a_lock_file_creates_none(common):
+    base = common / retention.BASELINE_DIR
+    put(base / f"{sha(1)}.json", age=500)
+    put(base / f"{sha(2)}.json", age=10)
+    assert retention.enforce(common, max_mb=1.5, runs=3).evicted == (f"baseline:{sha(1)}",)
+    assert not (base / f"{sha(1)}.lock").exists()
+
+
+def test_a_candidate_run_in_progress_keeps_its_files(common):
+    lock = common / retention.STORE_DIR / f"{sha(1)}.lock"
+    kept = run_files(common, 1, age=900)
+    lock.write_text("", encoding="utf-8")
+    with open(lock) as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        result = retention.enforce(common, max_mb=TINY, runs=3, recent_s=60)
+    assert all(f.is_file() for f in kept) and result.evicted == () and result.over_bound
+
+
+def test_a_store_still_over_the_bound_says_so(common, capsys):
+    run_files(common, 9, age=10, mb=2)
+    result = retention.enforce(common, max_mb=1, runs=3, protect=(sha(9),))
+    assert result.over_bound and result.evicted == ()
+    assert "over the bound of 1 MB" in capsys.readouterr().err
+
+
+def test_a_store_within_the_bound_stays_quiet(common, capsys):
+    run_files(common, 9, age=10)
+    assert not retention.enforce(common, max_mb=10, runs=3).over_bound
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("bound", [0, -1])
+def test_a_non_positive_bound_is_refused_not_taken_as_evict_everything(common, bound):
+    kept = run_files(common, 1, age=10)
+    with pytest.raises(ValueError):
+        retention.enforce(common, max_mb=bound, runs=3)
+    assert all(f.is_file() for f in kept)
+
+
+def test_the_tip_and_candidate_baselines_are_never_evicted(common):
+    base = common / retention.BASELINE_DIR
+    tip = put(base / f"{sha(1)}.json", age=900)
+    tip_junit = put(base / f"{sha(1)}.junit.xml", age=900)
+    candidate = put(base / f"{sha(2)}.json", age=800)
+    other = put(base / f"{sha(3)}.json", age=10)
+    result = retention.enforce(common, max_mb=TINY, runs=3, protect=(sha(1), sha(2)))
+    assert tip.is_file() and tip_junit.is_file() and candidate.is_file()
+    assert not other.exists()
+    assert result.evicted == (f"baseline:{sha(3)}",)
+
+
+def test_a_baseline_being_built_is_kept(common):
+    base = common / retention.BASELINE_DIR
+    lock = put(base / f"{sha(1)}.lock", mb=0.01, age=900)
+    kept = put(base / f"{sha(1)}.json", age=900)
+    other = put(base / f"{sha(2)}.json", age=10)
+    with open(lock) as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        retention.enforce(common, max_mb=TINY, runs=3)
+    assert kept.is_file() and not other.exists()
+
+
+def evidence(common: Path, n: int, age: float) -> Path:
+    path = common / retention.EVIDENCE_DIR / sha(n)
+    put(path / "log.txt", age=age)
+    os.utime(path, (time.time() - age,) * 2)
+    return path
+
+
+def test_the_last_failing_runs_evidence_survives_while_it_fits(common):
+    entries = [evidence(common, n, age=1000 - 100 * n) for n in range(1, 6)]
+    result = retention.enforce(common, max_mb=4, runs=3)
+    assert result.evicted == (f"evidence:{sha(1)}", f"evidence:{sha(2)}")
+    assert [e.exists() for e in entries] == [False, False, True, True, True]
+
+
+def test_the_newest_evidence_is_evicted_oldest_first_when_it_alone_exceeds_the_bound(common):
+    entries = [evidence(common, n, age=1000 - 100 * n) for n in range(1, 6)]
+    result = retention.enforce(common, max_mb=2, runs=3)
+    assert result.evicted == tuple(f"evidence:{sha(n)}" for n in (1, 2, 3, 4))
+    assert [e.exists() for e in entries] == [False, False, False, False, True]
+
+
+def test_evidence_goes_after_everything_else_is_gone(common):
+    base = put(common / retention.BASELINE_DIR / f"{sha(1)}.json", age=10)
+    kept = evidence(common, 2, age=5000)
+    result = retention.enforce(common, max_mb=2, runs=3)
+    assert result.evicted == (f"baseline:{sha(1)}",) and not base.exists() and kept.is_dir()
+
+
+def partial_copy(common: Path, n: int, pid: int) -> Path:
+    path = common / retention.EVIDENCE_DIR / f"{retention.EVIDENCE_TMP_PREFIX}{sha(n)}-{pid}"
+    put(path / "log.txt")
+    return path
+
+
+def test_a_partial_evidence_copy_of_a_live_run_is_left_alone(common):
+    partial = partial_copy(common, 1, os.getpid())
+    retention.enforce(common, max_mb=TINY, runs=3)
+    assert partial.is_dir()
+
+
+def test_a_partial_evidence_copy_older_than_the_gate_timeout_is_removed_whatever_its_pid_says(common):
+    partial = partial_copy(common, 1, os.getpid())
+    for path in (partial / "log.txt", partial):
+        age(path, retention.DEFAULT_TIMEOUT_S + 600)
+    retention.enforce(common, max_mb=100, runs=3)
+    assert not partial.exists()
+
+
+def test_a_partial_evidence_copy_of_a_dead_run_is_removed(common):
+    done = subprocess.Popen([sys.executable, "-c", "pass"])
+    done.wait()
+    partial = partial_copy(common, 1, done.pid)
+    live = partial_copy(common, 2, os.getpid())
+    result = retention.enforce(common, max_mb=100, runs=3)
+    assert not partial.exists() and live.is_dir()
+    assert result.before_mb < 1.5 and result.evicted == ()
+
+
+def test_a_registered_store_is_trimmed_least_recently_used_first(common, tmp_path):
+    store = tmp_path / "other-store"
+    for name, age in (("a", 300), ("b", 200), ("c", 100)):
+        put(store / name / "data", age=age)
+        os.utime(store / name, (time.time() - age,) * 2)
+    retention.register_store("probe", store, shutil.rmtree)
+    try:
+        result = retention.enforce(common, max_mb=3, runs=3)
+    finally:
+        retention.unregister_store("probe")
+    assert result.evicted == ("probe:a",)
+    assert sorted(p.name for p in store.iterdir()) == ["b", "c"]
+
+
+def test_a_registered_store_given_as_a_function_of_the_common_dir(common):
+    retention.register_store("lazy", lambda c: c / "lazy-store", lambda child: child.unlink())
+    try:
+        put(common / "lazy-store" / "x", age=1)
+        result = retention.enforce(common, max_mb=TINY, runs=3)
+    finally:
+        retention.unregister_store("lazy")
+    assert result.evicted == ("lazy:x",)
+
+
+@pytest.mark.parametrize("own", [retention.STORE_DIR, retention.BASELINE_DIR, retention.EVIDENCE_DIR])
+def test_a_store_registered_on_the_gates_own_directories_is_not_listed_twice(common, own):
+    kept = put(common / retention.BASELINE_DIR / f"{sha(1)}.json", age=100)
+    retention.register_store("dup", lambda c: c / own, shutil.rmtree)
+    try:
+        result = retention.enforce(common, max_mb=TINY, runs=3)
+    finally:
+        retention.unregister_store("dup")
+    assert result.evicted == (f"baseline:{sha(1)}",) and not kept.exists()
+
+
+def test_a_store_within_the_bound_loses_nothing(common):
+    put(common / retention.BASELINE_DIR / f"{sha(1)}.json")
+    assert retention.enforce(common, max_mb=10, runs=3).evicted == ()
+
+
+def test_an_empty_store_is_fine(common):
+    result = retention.enforce(common, max_mb=1, runs=3)
+    assert result.evicted == () and result.before_mb < 0.1
+
+
+def test_failure_evidence_holds_the_log_the_failures_the_junit_and_the_core_tree(common, tmp_path):
+    core = tmp_path / "core"
+    (core / "scripts").mkdir(parents=True)
+    (core / "scripts" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (core / "tmp").mkdir()
+    (core / "tmp" / "scratch").write_text("big", encoding="utf-8")
+    (core / "scripts" / "tmp").mkdir()
+    junit = tmp_path / "junit.xml"
+    junit.write_text("<testsuite/>", encoding="utf-8")
+    target = retention.keep_failure_evidence(common, sha(1), log_tail="tail\n", junit_path=str(junit),
+                                             failures=["b::t", "a::t"], core_tree=core)
+    assert target == common / retention.EVIDENCE_DIR / sha(1)
+    assert (target / "log.txt").read_text(encoding="utf-8") == "tail\n"
+    assert (target / "failures.txt").read_text(encoding="utf-8") == "a::t\nb::t\n"
+    assert (target / "junit.xml").read_text(encoding="utf-8") == "<testsuite/>"
+    assert (target / "core" / "scripts" / "a.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert not (target / "core" / "tmp").exists() and (target / "core" / "scripts" / "tmp").is_dir()
+    assert [p.name for p in target.parent.iterdir()] == [sha(1)]
+
+
+def test_failure_evidence_that_cannot_be_written_costs_the_evidence_not_the_run(common, tmp_path, capsys):
+    (common / "suite-gate").write_text("a file where the directory should be", encoding="utf-8")
+    result = retention.keep_failure_evidence(common, sha(1), log_tail="x", junit_path="", failures=[],
+                                             core_tree=tmp_path / "core")
+    assert result is None and "cannot keep the evidence" in capsys.readouterr().err
+
+
+# ── through the gate ──────────────────────────────────────────────────────
+
+@pytest.fixture
+def world(tmp_path, monkeypatch):
+    monkeypatch.setattr(gate, "hermetic_unavailable", lambda: "off in these tests")
+    return build_world(tmp_path, monkeypatch)
+
+
+def evidence_dir(world, sha_):
+    return world.common / retention.EVIDENCE_DIR / sha_
+
+
+def test_a_clean_pass_leaves_the_sandbox_parent_empty_and_no_evidence(world):
+    candidate = world.code_commit()
+    outcome = world.run(FakeRunner({candidate: ()}))
+    assert outcome.record["status"] == gate.PASS
+    assert list(world.sandbox.iterdir()) == []
+    assert not evidence_dir(world, candidate).exists()
+
+
+def test_a_failing_run_keeps_its_evidence_and_leaves_the_sandbox_parent_empty(world):
+    candidate = world.code_commit()
+    outcome = world.run(FakeRunner({candidate: (NEW_FAILURE,), world.base: ()}))
+    assert outcome.record["status"] == gate.FAIL
+    assert list(world.sandbox.iterdir()) == []
+    kept = evidence_dir(world, candidate)
+    assert (kept / "log.txt").is_file()
+    assert (kept / "failures.txt").read_text(encoding="utf-8") == NEW_FAILURE + "\n"
+
+
+def test_the_gate_removes_a_dead_runs_sandbox_before_it_starts(world):
+    dead = world.sandbox / f"{gate.SANDBOX_PREFIX}dead"
+    dead.mkdir()
+    retention.owner_path(dead).write_text("", encoding="utf-8")
+    candidate = world.code_commit()
+    world.run(FakeRunner({candidate: ()}))
+    assert list(world.sandbox.iterdir()) == []
+
+
+def test_the_gate_leaves_an_old_ownerless_sandbox_alone(world):
+    stray = world.sandbox / f"{gate.SANDBOX_PREFIX}old-gate"
+    stray.mkdir()
+    stamp = time.time() - 30 * 86400
+    os.utime(stray, (stamp, stamp))
+    candidate = world.code_commit()
+    world.run(FakeRunner({candidate: ()}))
+    assert stray.is_dir()
+
+
+def test_a_run_trims_the_store_but_not_its_own_record_or_the_tips_baseline(world, monkeypatch):
+    monkeypatch.setattr(retention, "keep_max_mb", lambda config_path=None: 1)
+    old = put(world.common / retention.BASELINE_DIR / f"{sha(7)}.json", mb=3, age=100_000)
+    candidate = world.code_commit()
+    world.run(FakeRunner({candidate: (NEW_FAILURE,), world.base: ()}))
+    assert not old.exists()
+    assert world.stored(candidate) is not None
+    assert (world.common / retention.BASELINE_DIR / f"{world.base}.json").is_file()
+
+
+# ── the disk-series control ───────────────────────────────────────────────
+
+def test_disk_series_builds_every_gate_command_through_cap_run():
+    command = control.series_command(Path("/repo"), "c" * 40, "t" * 40)
+    assert command[:2] == [str(SCRIPTS_DIR / "cap-run.sh"), "--"]
+    assert command[3] == str(SCRIPTS_DIR / "suite-gate.py") and command[4] == "run"
+    assert command[command.index("--ref") + 1] == "c" * 40
+    assert command[command.index("--remote-sha") + 1] == "t" * 40
+
+
+def test_disk_series_excuses_a_store_over_the_bound_only_by_the_protected_size_the_gate_reported():
+    assert control.bound_problem(100, 2048, None) is None
+    assert control.bound_problem(3000, 2048, 3000) is None
+    assert control.bound_problem(3000, 2048, 2999.5) is None
+    assert control.bound_problem(3000, 2048, 2999) is None
+    assert "only 2998.5 MB is protected" in control.bound_problem(3000, 2048, 2998.5)
+    assert "only 1000.0 MB is protected" in control.bound_problem(3000, 2048, 1000)
+    assert "did not report it" in control.bound_problem(3000, 2048, None)
+    assert "only 500.0 MB is protected" in control.bound_problem(3000, 2048, 500)
+
+
+def series_result(protected_mb_reported=None, problems=()):
+    return {"run": "pass", "problems": list(problems), "protected_mb_reported": protected_mb_reported}
+
+
+def summarise(results, total_mb=100, grown_mb=1, leftovers=()):
+    return control.series_summary(results, tip="t" * 40, keep_max_mb=2048, store_grown_mb=grown_mb,
+                                  store_total_mb=total_mb, leftovers=list(leftovers))
+
+
+def test_the_series_summary_fails_an_over_bound_store_the_last_run_did_not_report():
+    assert summarise([series_result()])["ok"]
+    over = summarise([series_result()], total_mb=3000)
+    assert not over["ok"] and any("over the bound" in p for p in over["problems"])
+    assert not summarise([series_result(protected_mb_reported=100)], total_mb=3000)["ok"]
+    assert not summarise([series_result(protected_mb_reported=2900)], total_mb=3000)["ok"]
+    assert summarise([series_result(protected_mb_reported=2999.5)], total_mb=3000)["ok"]
+
+
+def test_the_series_summary_judges_the_last_run_only():
+    unreported_then_reported = [series_result(), series_result(protected_mb_reported=2999.5)]
+    assert summarise(unreported_then_reported, total_mb=3000)["ok"]
+    reported_then_unreported = [series_result(protected_mb_reported=2999.5), series_result()]
+    assert not summarise(reported_then_unreported, total_mb=3000)["ok"]
+
+
+def test_the_series_summary_collects_run_problems_growth_and_leftovers():
+    assert summarise([series_result(problems=["boom"])])["problems"] == ["boom"]
+    assert not summarise([series_result()], grown_mb=3000)["ok"]
+    assert not summarise([series_result()], leftovers=["x"])["ok"]
+
+
+def test_an_over_bound_pass_reports_the_protected_size_in_its_message_and_result(common, capsys):
+    run_files(common, 9, age=10, mb=2)
+    result = retention.enforce(common, max_mb=1, runs=3, protect=(sha(9),))
+    assert 1.9 < result.protected_mb < 2.1
+    reported = retention.reported_protected_mb(capsys.readouterr().err)
+    assert reported is not None and abs(reported - result.protected_mb) < 0.1
+    assert retention.reported_protected_mb("nothing to see") is None
+
+
+def test_the_protected_size_excludes_what_could_have_been_evicted(common):
+    run_files(common, 9, age=10, mb=2)
+    put(common / retention.BASELINE_DIR / f"{sha(2)}.json", mb=1, age=500)
+    result = retention.enforce(common, max_mb=1, runs=3, protect=(sha(9),))
+    assert result.evicted == (f"baseline:{sha(2)}",)
+    assert result.after_mb - result.protected_mb <= 1
+
+
+def test_the_protected_size_counts_neither_what_is_merely_unevictable_nor_the_newest_failing_evidence(common, capsys):
+    run_files(common, 9, age=10, mb=2)
+    busy = run_files(common, 1, age=900, mb=3)
+    (common / retention.STORE_DIR / f"{sha(1)}.lock").write_text("", encoding="utf-8")
+    evidence(common, 5, age=5)
+    with open(common / retention.STORE_DIR / f"{sha(1)}.lock") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        result = retention.enforce(common, max_mb=1, runs=3, protect=(sha(9),), recent_s=60)
+    assert all(f.is_file() for f in busy) and result.over_bound
+    assert 1.9 < result.protected_mb < 2.1
+    reported = retention.reported_protected_mb(capsys.readouterr().err)
+    assert reported is not None and 1.9 < reported < 2.1
+
+
+def test_disk_series_runs_only_known_kinds(tmp_path, capsys):
+    assert control.main(["disk-series", "--runs", "pass,oops", "--out", str(tmp_path / "o.json")]) == 2
+    assert "oops" in capsys.readouterr().out
+
+
+# ── configuration ─────────────────────────────────────────────────────────
+
+def config_rows():
+    from agentctl.config import parse_config_md
+
+    return parse_config_md(REPO_DIR / "config.md")
+
+
+def test_the_defaults_equal_the_config_rows():
+    rows = config_rows()
+    assert int(rows[retention.KEEP_MAX_KEY]) == retention.DEFAULT_KEEP_MAX_MB == 2048
+    assert int(rows[retention.EVIDENCE_RUNS_KEY]) == retention.DEFAULT_EVIDENCE_RUNS == 3
+    assert retention.keep_max_mb() == 2048 and retention.evidence_runs() == 3
+
+
+def test_each_config_row_has_a_rationale_row():
+    text = (REPO_DIR / "docs" / "operations" / "config-rationale.md").read_text(encoding="utf-8")
+    assert f"| `{retention.KEEP_MAX_KEY}` | `2048` |" in text
+    assert f"| `{retention.EVIDENCE_RUNS_KEY}` | `3` |" in text
+
+
+@pytest.mark.parametrize("value", ["abc", "0", "-5", " "])
+def test_a_bad_row_falls_back_to_the_default(tmp_path, value):
+    config = tmp_path / "config.md"
+    config.write_text(f"| `{retention.KEEP_MAX_KEY}` | `{value}` | meaning |\n", encoding="utf-8")
+    assert retention.keep_max_mb(config) == retention.DEFAULT_KEEP_MAX_MB

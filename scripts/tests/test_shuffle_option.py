@@ -323,6 +323,7 @@ def test_overlap_counts_only_the_time_both_runs_ran():
 def test_run_tree_passes_the_arguments_and_slots_down_and_keeps_the_copies(tmp_path, monkeypatch):
     sandbox = tmp_path / "sandboxes"
     sandbox.mkdir()
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     seen = {}
 
     def default_runner(repo, sha, root, **kwargs):

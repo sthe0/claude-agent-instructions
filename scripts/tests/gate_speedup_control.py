@@ -74,6 +74,33 @@ two checks show the limiter holds and the record carries the cost, on real proce
       The same comparison on a saved pair report: 0, 1, 2 and 3 as above (it never judges overlap or
       hermeticity; shuffle-pair does, for the runs it makes).
 
+  gate_speedup_control.py verdict-scenario --case additive|unfinished|flake-list|confirmed|first-rerun-fail|
+                                                  listed-confirmed [--sabotage single-rerun] --out PATH [-C REPO]
+      The additive verdict on planted tests, through the real gate (in-process ``run_suite``, the default
+      runner on two slots, a private flaky journal). Each case is a throwaway commit pair: a tip whose
+      scripts/tests holds only an anchor test, and a candidate adding planted tests that fail on their
+      first run (``additive``: one fails, one kills its xdist worker; ``unfinished``: one SIGKILLs the
+      whole pytest; ``flake-list``: an unlisted and a listed one) or on a chosen rerun round
+      (``confirmed``: round 2; ``first-rerun-fail``: round 1; ``listed-confirmed``: round 2, listed in
+      flaky.toml). A failure that passes both reruns must leave the verdict PASS with the id unconfirmed
+      and journaled; one failing a rerun must make it FAIL with the id confirmed. ``flake-list`` also
+      checks that ``suite-gate.py check`` admits the record, the worktree stays clean and a fold adds the
+      unlisted id and raises the listed id's count. PATH gets expected against observed per planted id.
+      Exit 0 every expectation holds; 4 a verdict or classification differs, or the live journal changed;
+      1 any other error. ``--sabotage single-rerun`` counts a test unconfirmed when any one rerun passes,
+      so ``first-rerun-fail`` must then exit 4.
+
+  gate_speedup_control.py disk-series [--runs pass,fail] [--keep-max-mb N] [--leak] --out PATH [-C REPO]
+      What a gate run leaves behind. Throwaway candidates on a one-test tip (``pass``: a planted test that
+      passes; ``fail``: one that fails) run through ``suite-gate.py run`` under ``scripts/cap-run.sh``, in a
+      process whose /tmp is a private directory (a mount namespace; the slot directory is bound into it, so
+      the worker-slot limit stays shared). Checks that every run ends as planted, that a failing run keeps
+      its evidence and a passing one does not, that the kept store (<git common dir>/suite-gate) grew by at
+      most N MB (default: config.md suite-gate-keep-max-mb) and holds at most N, and that /tmp is empty.
+      PATH gets the figures per run and the names left in /tmp. Exit 0 every check holds; 3 only something
+      is left in /tmp; 1 any other check fails; 2 an environment error. ``--leak`` makes the last run keep
+      its sandbox (SUITE_GATE_KEEP_SANDBOX=1), so the check must exit 3 and name the sandbox.
+
 Elsewhere exit 2 is a usage or environment error (not enough free disk, git failure).
 """
 from __future__ import annotations
@@ -82,6 +109,7 @@ import argparse
 import collections
 import datetime
 import fcntl
+import hashlib
 import json
 import os
 import queue
@@ -96,6 +124,7 @@ import threading
 import time
 import tomllib
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
@@ -105,6 +134,9 @@ for _path in (SCRIPTS_DIR, SCRIPTS_DIR / "tests"):
         sys.path.append(str(_path))
 
 import _test_report  # noqa: E402
+from lib import flake_list  # noqa: E402
+from lib import gate_retention  # noqa: E402
+from lib import hermetic_run as hermetic_mod  # noqa: E402
 from lib import suite_gate as gate  # noqa: E402
 from lib import test_slots  # noqa: E402
 
@@ -275,11 +307,8 @@ def instant(text: str) -> float | None:
 
 
 def reached_verdict(record: dict) -> bool:
-    """PASS or FAIL; UNAVAILABLE only when it is a flaky rerun, never a timeout or a broken run."""
-    if record.get("status") in (gate.PASS, gate.FAIL):
-        return True
-    return record.get("status") == gate.UNAVAILABLE and "did not fail again on rerun" in str(
-        record.get("unavailable_reason"))
+    """PASS or FAIL; UNAVAILABLE is a timeout or a broken run, never a verdict."""
+    return record.get("status") in (gate.PASS, gate.FAIL)
 
 
 def check_record(record: dict, *, per_run: int, collect_ids: list[str]) -> list[str]:
@@ -666,6 +695,429 @@ def hermetic_run(repo: Path, out: Path, named: Path, max_named: int, root: Path 
     return {0: 0, 2: 2}.get(verdict, 1)
 
 
+# ── verdict-scenario: the additive verdict on planted tests ───────────────
+
+EXIT_VERDICT_MISMATCH, EXIT_VERDICT_ERROR = 4, 1
+PLANTED_DIR = "scripts/tests/_planted"
+ANCHOR_FILE = "scripts/tests/test_cls_anchor.py"
+LISTED_COUNT = 2
+LISTED_SEEN = ("2026-10-01T00:00:00Z", "2026-10-02T00:00:00Z")
+PLANTED_HELPERS = '''\
+import os
+import signal
+from pathlib import Path
+
+
+def count_call(name):
+    """How many times this test has been called in the sandbox so far (the marker outlives a rerun)."""
+    marker = Path(os.environ["TMPDIR"]) / f"planted-{name}.count"
+    calls = int(marker.read_text()) + 1 if marker.exists() else 1
+    marker.write_text(str(calls))
+    return calls
+'''
+PLANTED_BODIES = {
+    "fails_once": "    assert count_call('fails_once') != 1\n",
+    "worker_dies": ("    if count_call('worker_dies') == 1 and os.environ.get('PYTEST_XDIST_WORKER'):\n"
+                    "        os._exit(1)\n"),
+    "kills_the_run": ("    if count_call('kills_the_run') == 1:\n"
+                      "        victim = os.getppid() if os.environ.get('PYTEST_XDIST_WORKER') else os.getpid()\n"
+                      "        os.kill(victim, signal.SIGKILL)\n"),
+    "flaky_unlisted": "    assert count_call('flaky_unlisted') != 1\n",
+    "flaky_listed": "    assert count_call('flaky_listed') != 1\n",
+    "fails_twice": "    assert count_call('fails_twice') not in (1, 3)\n",
+    "fails_first_rerun": "    assert count_call('fails_first_rerun') not in (1, 2)\n",
+}
+VERDICT_CASES = ("additive", "unfinished", "flake-list", "confirmed", "first-rerun-fail", "listed-confirmed")
+SABOTAGES = ("single-rerun",)
+
+
+@dataclass(frozen=True)
+class Planted:
+    """One planted test and what the gate must make of it: how the full run left it, the rerun
+    rounds it fails, and whether it ends confirmed or unconfirmed."""
+    name: str
+    first_run: str
+    result: str
+    failed_rounds: tuple[int, ...] = ()
+    listed: bool = False
+
+
+@dataclass(frozen=True)
+class VerdictCase:
+    verdict: str
+    planted: tuple[Planted, ...]
+
+
+VERDICT_SCENARIOS = {
+    "additive": VerdictCase(gate.PASS, (Planted("fails_once", "failed", "unconfirmed"),
+                                        Planted("worker_dies", "failed", "unconfirmed"))),
+    "unfinished": VerdictCase(gate.PASS, (Planted("kills_the_run", "unfinished", "unconfirmed"),)),
+    "flake-list": VerdictCase(gate.PASS, (Planted("flaky_unlisted", "failed", "unconfirmed"),
+                                          Planted("flaky_listed", "failed", "unconfirmed", listed=True))),
+    "confirmed": VerdictCase(gate.FAIL, (Planted("fails_twice", "failed", "confirmed", (2,)),)),
+    "first-rerun-fail": VerdictCase(gate.FAIL, (Planted("fails_first_rerun", "failed", "confirmed", (1,)),)),
+    "listed-confirmed": VerdictCase(gate.FAIL, (Planted("fails_twice", "failed", "confirmed", (2,), listed=True),)),
+}
+
+
+def planted_id(name: str) -> str:
+    return f"{PLANTED_DIR}/test_planted.py::test_{name}"
+
+
+def planted_source(case: VerdictCase) -> str:
+    bodies = "".join(f"\n\ndef test_{p.name}():\n{PLANTED_BODIES[p.name]}" for p in case.planted)
+    return PLANTED_HELPERS + bodies
+
+
+def listed_table(case: VerdictCase) -> dict[str, dict]:
+    return {planted_id(p.name): {"count": LISTED_COUNT, "first_seen": LISTED_SEEN[0], "last_seen": LISTED_SEEN[1]}
+            for p in case.planted if p.listed}
+
+
+def sabotaged_passing_every_rerun(new, failed_rounds):
+    """The single-rerun mutant: a test counts as unconfirmed when any one rerun passed it."""
+    failed_every_round = set(new)
+    for failed in failed_rounds:
+        failed_every_round &= failed
+    return frozenset(new) - frozenset(failed_every_round)
+
+
+def judge_scenario(case: VerdictCase, record: dict, journal_tests: list[str]) -> tuple[dict, list[str]]:
+    """Per planted test what the record says against what it must say, and every disagreement."""
+    problems = []
+    if record.get("status") != case.verdict:
+        problems.append(f"verdict {record.get('status')} != expected {case.verdict} "
+                        f"({record.get('unavailable_reason') or 'no reason'})")
+    detail = record.get("reruns") or {}
+    seen = {}
+    for p in case.planted:
+        node = planted_id(p.name)
+        observed = detail.get(node) or {}
+        seen[node] = {"expected": {"first_run": p.first_run, "result": p.result,
+                                  "failed_rounds": list(p.failed_rounds)}, "observed": observed}
+        if (observed.get("first_run"), observed.get("result"), observed.get("failed_rounds")) != (
+                p.first_run, p.result, list(p.failed_rounds)):
+            problems.append(f"{node}: observed {observed or 'no rerun detail'}, expected "
+                            f"{p.first_run}/{p.result}/{list(p.failed_rounds)}")
+        confirmed = node in (record.get("new_failures") or [])
+        journaled = node in journal_tests
+        if confirmed != (p.result == "confirmed") or journaled != (p.result == "unconfirmed"):
+            problems.append(f"{node}: confirmed={confirmed} journaled={journaled} contradict {p.result}")
+    return seen, problems
+
+
+def _index_tree(repo: Path, steps: list[tuple[list[str], str | None]]) -> str:
+    """The tree a sequence of git index commands leaves in a private index file (the repository's own
+    index and working tree are never touched); the last step must be ``write-tree``."""
+    with tempfile.TemporaryDirectory(prefix="cls-control-index-") as scratch:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        for args, stdin in steps:
+            proc = subprocess.run(["git", "-C", str(repo), *args], input=stdin, capture_output=True, text=True,
+                                  env=env)
+            if proc.returncode != 0:
+                raise SystemExit(f"git {args[0]} for a throwaway tree failed: {proc.stderr.strip()}")
+    return proc.stdout.strip()
+
+
+def reduced_tree(repo: Path, files: dict[str, str]) -> str:
+    """HEAD's tree without any ``test_*.py`` under scripts/tests, plus ``files`` (path -> text)."""
+    tracked = _git(repo, "ls-tree", "-r", "--name-only", "HEAD", "--", "scripts/tests").splitlines()
+    drop = [p for p in tracked if p.rsplit("/", 1)[-1].startswith("test_") and p.endswith(".py")]
+    steps: list[tuple[list[str], str | None]] = [(["read-tree", "HEAD"], None)]
+    if drop:
+        steps.append((["rm", "-q", "--cached", "--", *drop], None))
+    for path, text in sorted(files.items()):
+        blob = _git_stdin(repo, ["hash-object", "-w", "--stdin"], text)
+        steps.append((["update-index", "--add", "--cacheinfo", f"100644,{blob},{path}"], None))
+    steps.append((["write-tree"], None))
+    return _index_tree(repo, steps)
+
+
+def _git_stdin(repo: Path, args: list[str], text: str) -> str:
+    proc = subprocess.run(["git", "-C", str(repo), *args], input=text, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise SystemExit(f"git {args[0]} failed: {proc.stderr.strip()}")
+    return proc.stdout.strip()
+
+
+def _commit(repo: Path, tree: str, parent: str, message: str) -> str:
+    proc = subprocess.run(["git", "-C", str(repo), "commit-tree", tree, "-p", parent, "-m", message],
+                          capture_output=True, text=True, env={**os.environ, **gate.GIT_IDENTITY})
+    if proc.returncode != 0:
+        raise SystemExit(f"git commit-tree failed: {proc.stderr.strip()}")
+    return proc.stdout.strip()
+
+
+def journal_state(path: Path) -> dict:
+    """Presence, size and sha256 of a journal file; absent is a state of its own."""
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return {"present": False}
+    return {"present": True, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def flake_list_checks(repo: Path, work: Path, candidate: str, tip: str, case: VerdictCase,
+                      journal: Path, nonce: str) -> tuple[dict, list[str]]:
+    """What a flake-list run leaves behind: an admitting record, a clean worktree, and a fold that
+    adds the unlisted id and raises the listed id's count."""
+    problems, found = [], {}
+    check = subprocess.run([sys.executable, str(SCRIPTS_DIR / "suite-gate.py"), "check", "-C", str(work),
+                            "--sha", candidate, "--remote-sha", tip],
+                           capture_output=True, text=True, env=gate_env(os.environ))
+    found["check_exit"], found["check_line"] = check.returncode, check.stdout.strip()[-200:]
+    if check.returncode != 0:
+        problems.append(f"suite-gate.py check refused the record: {check.stdout.strip()[-200:]}")
+    dirty = _git(work, "status", "--porcelain")
+    found["worktree_porcelain"] = dirty
+    if dirty:
+        problems.append(f"the run left the worktree dirty: {dirty[:200]}")
+    branch = f"cls-control-fold-{nonce}"
+    _git(repo, "branch", branch, candidate)
+    try:
+        folded = flake_list.fold(repo, journal, _git(repo, "rev-parse", branch), gate.GIT_IDENTITY)
+    finally:
+        _git(repo, "branch", "-D", branch)
+    if folded is None:
+        problems.append("the fold found nothing pending")
+        return found, problems
+    found["fold"] = {node: fields["count"] for node, fields in folded.table.items()}
+    for p in case.planted:
+        node = planted_id(p.name)
+        expected = LISTED_COUNT + 1 if p.listed else 1
+        if folded.table.get(node, {}).get("count") != expected:
+            problems.append(f"fold: {node} count {folded.table.get(node, {}).get('count')} != {expected}")
+    return found, problems
+
+
+def verdict_scenario(repo: Path, case_name: str, sabotage: str | None, out: Path) -> int:
+    """Run one planted-test case through the real gate; 0 every expectation holds, 4 a verdict or
+    classification disagrees (or the live journal changed), 1 any other error."""
+    free_gb = shutil.disk_usage("/").free / 2**30
+    if free_gb < MIN_FREE_GB:
+        _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
+        return EXIT_VERDICT_ERROR
+    case = VERDICT_SCENARIOS[case_name]
+    nonce = f"{os.getpid()}-{case_name}"
+    work = Path(f"/tmp/cls-control-{nonce}")
+    journal = Path(f"/tmp/cls-control-{os.getpid()}-journal.jsonl")
+    saved_env = os.environ.get(flake_list.JOURNAL_ENV)
+    live = Path(saved_env) if saved_env else Path(gate.shared.git_common_dir(repo)) / flake_list.JOURNAL_RELATIVE
+    live_before = journal_state(live)
+    saved_rule = gate.passing_every_rerun
+    os.environ[flake_list.JOURNAL_ENV] = str(journal)
+    if sabotage == "single-rerun":
+        gate.passing_every_rerun = sabotaged_passing_every_rerun
+    added = False
+    try:
+        anchor = {ANCHOR_FILE: "def test_anchor():\n    assert True\n"}
+        tip = _commit(repo, reduced_tree(repo, anchor), "HEAD", f"cls-control tip {nonce}")
+        files = {**anchor, f"{PLANTED_DIR}/test_planted.py": planted_source(case)}
+        table = listed_table(case)
+        if table:
+            files[flake_list.LIST_PATH] = flake_list.render_list(table)
+        candidate = _commit(repo, reduced_tree(repo, files), tip, f"cls-control candidate {nonce}")
+        _say(f"{case_name}: tip {tip[:12]}, candidate {candidate[:12]}")
+        _git(repo, "worktree", "add", "--detach", str(work), candidate)
+        added = True
+
+        def runner(r, sha, root, *, select, timeout_s):
+            return gate.default_runner(r, sha, root, select=select, timeout_s=timeout_s, slots=2)
+
+        outcome = gate.run_suite(work, candidate, tip, runner=runner, tip_reader=lambda: tip)
+        record = outcome.record
+        entries = flake_list.read_entries(journal)
+        seen, problems = judge_scenario(case, record, [e["test"] for e in entries])
+        extra: dict = {}
+        if case_name == "flake-list":
+            extra, more = flake_list_checks(repo, work, candidate, tip, case, journal, nonce)
+            problems += more
+    finally:
+        gate.passing_every_rerun = saved_rule
+        if saved_env is None:
+            os.environ.pop(flake_list.JOURNAL_ENV, None)
+        else:
+            os.environ[flake_list.JOURNAL_ENV] = saved_env
+        if added:
+            subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(work)],
+                           capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(repo), "worktree", "prune"], capture_output=True, text=True)
+        for leftover in (journal, journal.with_name(journal.name + ".lock")):
+            leftover.unlink(missing_ok=True)
+    live_after = journal_state(live)
+    if live_before != live_after:
+        problems.append(f"the live journal {live} changed: {live_before} -> {live_after}")
+    summary = {"case": case_name, "sabotage": sabotage, "expected_verdict": case.verdict,
+               "observed_verdict": record.get("status"), "candidate": candidate, "tip": tip,
+               "unavailable_reason": record.get("unavailable_reason"), "planted": seen,
+               "journal_entries": len(entries), "live_journal": {"before": live_before, "after": live_after},
+               "record": str(outcome.record_path), "extra": extra, "problems": problems, "ok": not problems}
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    for problem in problems:
+        _say(f"MISMATCH: {problem}")
+    _say(f"{case_name}: expected {case.verdict}, observed {record.get('status')}; summary {out}")
+    _say("OK" if not problems else "FAIL")
+    return 0 if not problems else EXIT_VERDICT_MISMATCH
+
+
+# ── disk-series: what a gate run leaves behind ────────────────────────────
+
+SERIES_RUNS = ("pass", "fail")
+SERIES_TIMEOUT_S = 3600
+EXIT_SERIES_FAILED, EXIT_SERIES_ENVIRONMENT, EXIT_SERIES_LEAK = 1, 2, 3
+SERIES_PLANTED = {"pass": "def test_planted():\n    assert True\n", "fail": "def test_planted():\n    assert False\n"}
+SERIES_STATUS = {"pass": "PASS", "fail": "FAIL"}
+
+
+def series_command(repo: Path, sha: str, tip: str, timeout_s: int = SERIES_TIMEOUT_S) -> list[str]:
+    """One gate run of a ``disk-series`` step, started the way every fan-out trial is: under cap-run.sh."""
+    return [str(SCRIPTS_DIR / "cap-run.sh"), "--", sys.executable, str(SCRIPTS_DIR / "suite-gate.py"), "run",
+            "-C", str(repo), "--ref", sha, "--remote-sha", tip, "--timeout", str(timeout_s)]
+
+
+def _listing(directory: Path) -> list[str]:
+    return sorted(entry.name for entry in directory.iterdir())
+
+
+def _series_commits(repo: Path, runs: list[str], nonce: str) -> tuple[str, list[str]]:
+    """A tip holding one anchor test and one candidate per run adding a planted test."""
+    anchor = {ANCHOR_FILE: "def test_anchor():\n    assert True\n"}
+    tip = _commit(repo, reduced_tree(repo, anchor), "HEAD", f"cls-control tip {nonce}")
+    candidates = []
+    for n, kind in enumerate(runs, 1):
+        files = {**anchor, f"{PLANTED_DIR}/test_planted.py": SERIES_PLANTED[kind]}
+        candidates.append(_commit(repo, reduced_tree(repo, files), tip, f"cls-control {kind} {n} {nonce}"))
+    return tip, candidates
+
+
+PROTECTED_SLACK_MB = 1.0  # lock files and directory blocks that are neither protected nor evictable
+
+
+def bound_problem(total_mb: float, bound_mb: float, protected_mb: float | None) -> str | None:
+    """The kept store must end at most at the bound, unless what exceeds it is protected (the candidate,
+    the tip, runs younger than the gate timeout). ``protected_mb`` is what the last run's retention pass
+    reported as protected when it ended over the bound, None when it reported nothing."""
+    if total_mb <= bound_mb:
+        return None
+    if protected_mb is None:
+        return (f"the kept store holds {total_mb:.1f} MB after the series, over the bound of {bound_mb} MB, "
+                "and the last run's retention pass did not report it")
+    if total_mb - protected_mb > PROTECTED_SLACK_MB:
+        return (f"the kept store holds {total_mb:.1f} MB after the series, of which only {protected_mb:.1f} MB "
+                f"is protected: more than {PROTECTED_SLACK_MB} MB of it stayed that retention could have evicted")
+    return None
+
+
+def series_summary(results: list[dict], *, tip: str, keep_max_mb: int, store_grown_mb: float, store_total_mb: float,
+                   leftovers: list[str]) -> dict:
+    """What the series reports: the run results, every problem found, and ``ok``."""
+    problems = [p for r in results for p in r["problems"]]
+    if store_grown_mb > keep_max_mb:
+        problems.append(f"the kept store grew {store_grown_mb:.1f} MB, more than {keep_max_mb}")
+    over = bound_problem(store_total_mb, keep_max_mb, results[-1]["protected_mb_reported"] if results else None)
+    if over:
+        problems.append(over)
+    return {"runs": results, "tip": tip, "keep_max_mb": keep_max_mb, "store_grown_mb": round(store_grown_mb, 2),
+            "store_total_mb": round(store_total_mb, 2), "leftover_in_tmp": leftovers, "problems": problems,
+            "ok": not problems and not leftovers}
+
+
+def _series_run(repo: Path, sha: str, tip: str, kind: str, leak: bool, common: Path, tmp: Path) -> dict:
+    env = gate_env(os.environ)
+    if leak:
+        env[gate_retention.KEEP_ENV] = "1"
+    store = common / gate_retention.STORE_DIR
+    before = gate_retention.tree_bytes(store)
+    proc = subprocess.run(series_command(repo, sha, tip), capture_output=True, text=True, env=env)
+    record_file = _record_path(proc.stdout)
+    record = json.loads(Path(record_file).read_text(encoding="utf-8")) if record_file else {}
+    evidence = common / gate_retention.EVIDENCE_DIR / sha
+    problems = []
+    if record.get("status") != SERIES_STATUS[kind]:
+        problems.append(f"{kind} run {sha[:12]}: status {record.get('status')!r}, planted {SERIES_STATUS[kind]!r} "
+                        f"(exit {proc.returncode}; {proc.stdout.strip()[-200:]})")
+    if kind == "fail" and not (evidence / "log.txt").is_file():
+        problems.append(f"fail run {sha[:12]}: no evidence kept at {evidence}")
+    if kind == "pass" and evidence.exists():
+        problems.append(f"pass run {sha[:12]}: evidence kept at {evidence}")
+    return {"run": kind, "candidate": sha, "exit": proc.returncode, "status": record.get("status"),
+            "protected_mb_reported": gate_retention.reported_protected_mb(proc.stderr),
+            "record": record_file, "evidence": evidence.is_dir(), "store_growth_mb": round(
+                (gate_retention.tree_bytes(store) - before) / gate_retention.MB, 2),
+            "tmp_after": _listing(tmp), "problems": problems}
+
+
+def _series_inner(args: argparse.Namespace) -> int:
+    """Runs inside a private mount namespace with its own /tmp (see ``disk_series``)."""
+    scratch = Path(args.scratch)
+    hermetic_mod.enter_namespaces()
+    slots = scratch / "slots"
+    hermetic_mod._mount(args.slots, str(slots), hermetic_mod._MS_BIND | hermetic_mod._MS_REC)
+    os.environ[test_slots.DIR_ENV] = str(slots)
+    tmp = scratch / "tmp"
+    hermetic_mod._mount(str(tmp), "/tmp", hermetic_mod._MS_BIND | hermetic_mod._MS_REC)
+    os.chmod("/tmp", 0o1777)
+    repo = args.repo
+    common = Path(gate.shared.git_common_dir(repo))
+    store = common / gate_retention.STORE_DIR
+    store_before = gate_retention.tree_bytes(store)
+    runs = args.runs.split(",")
+    tip, candidates = _series_commits(repo, runs, f"{os.getpid()}-disk")
+    _say(f"tip {tip[:12]}; candidates {' '.join(c[:12] for c in candidates)}")
+    results = []
+    for n, (kind, sha) in enumerate(zip(runs, candidates)):
+        results.append(_series_run(repo, sha, tip, kind, args.leak and n == len(runs) - 1, common,
+                                  Path("/tmp")))
+        _say(f"{kind}: {results[-1]['status']}, store grew {results[-1]['store_growth_mb']} MB")
+    leftovers = _listing(Path("/tmp"))
+    grown_mb = (gate_retention.tree_bytes(store) - store_before) / gate_retention.MB
+    total_mb = gate_retention.tree_bytes(store) / gate_retention.MB
+    summary = series_summary(results, tip=tip, keep_max_mb=args.keep_max_mb, store_grown_mb=grown_mb,
+                             store_total_mb=total_mb, leftovers=leftovers)
+    problems = summary["problems"]
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    for problem in problems:
+        _say(f"MISMATCH: {problem}")
+    if leftovers:
+        _say(f"LEFTOVER in /tmp: {' '.join(leftovers)}")
+    _say(f"store grew {grown_mb:.1f} MB, holds {total_mb:.1f} MB; summary {args.out}")
+    _say("OK" if summary["ok"] else "FAIL")
+    if problems:
+        return EXIT_SERIES_FAILED
+    return EXIT_SERIES_LEAK if leftovers else 0
+
+
+def disk_series(repo: Path, runs: list[str], keep_max_mb: int, leak: bool, out: Path) -> int:
+    """Gate runs in a process whose /tmp is a private directory; they must leave it empty.
+
+    Two processes: this one makes the scratch directory and removes it afterwards; the inner one
+    (``_disk-series-inner``) enters the namespace and does the runs. Removal happens here, outside the
+    namespace, where nothing of the scratch directory is mounted, so it cannot reach the real slot
+    directory the inner process bound into it. Exit 0 every run ended as planted, left no kept-store
+    growth beyond the bound and left /tmp empty; 3 only a leftover in /tmp; 1 any other mismatch; 2 an
+    environment error."""
+    free_gb = shutil.disk_usage("/").free / 2**30
+    if free_gb < MIN_FREE_GB:
+        _say(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
+        return EXIT_SERIES_ENVIRONMENT
+    out.parent.mkdir(parents=True, exist_ok=True)
+    slots = test_slots.configured().directory
+    Path(slots).mkdir(mode=0o700, parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix="disk-series-", dir=out.parent))
+    try:
+        (scratch / "tmp").mkdir()
+        (scratch / "slots").mkdir()
+        proc = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "_disk-series-inner", "--scratch", str(scratch),
+             "--slots", str(slots), "--runs", ",".join(runs), "--keep-max-mb", str(keep_max_mb), "--out", str(out),
+             "-C", str(repo), *(["--leak"] if leak else [])], env=gate_env(os.environ))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    return proc.returncode
+
+
 # ── shuffle-pair, compare: isolation judged by outcomes ───────────────────
 
 SHUFFLE_SCHEMA = "shuffle-pair/v1"
@@ -947,6 +1399,27 @@ def main(argv: list[str] | None = None) -> int:
     cmp_ = sub.add_parser("compare", help="judge a shuffle-pair report against the isolation exceptions")
     cmp_.add_argument("--report", required=True, type=Path)
     cmp_.add_argument("--exceptions", type=Path, default=EXCEPTIONS_PATH)
+    verdict = sub.add_parser("verdict-scenario", help="planted tests through the real gate: additive verdict")
+    verdict.add_argument("--case", required=True, choices=VERDICT_CASES)
+    verdict.add_argument("--sabotage", choices=SABOTAGES, default=None,
+                         help="the gate counts a test unconfirmed when any one rerun passes (must exit 4)")
+    verdict.add_argument("--out", required=True, type=Path)
+    verdict.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    series = sub.add_parser("disk-series", help="gate runs in a private /tmp: it must end empty, the store bounded")
+    series.add_argument("--runs", default="pass,fail", help="comma-separated, each of: " + ", ".join(SERIES_RUNS))
+    series.add_argument("--keep-max-mb", type=int, default=gate_retention.keep_max_mb())
+    series.add_argument("--leak", action="store_true",
+                        help="the last run keeps its sandbox: the check must exit 3 (negative control)")
+    series.add_argument("--out", required=True, type=Path)
+    series.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    inner = sub.add_parser("_disk-series-inner")
+    inner.add_argument("--scratch", required=True)
+    inner.add_argument("--slots", required=True)
+    inner.add_argument("--runs", required=True)
+    inner.add_argument("--keep-max-mb", type=int, required=True)
+    inner.add_argument("--leak", action="store_true")
+    inner.add_argument("--out", required=True, type=Path)
+    inner.add_argument("-C", dest="repo", type=Path, required=True)
     named = sub.add_parser("verify-named", help="check a sandbox-run report against the documented failures")
     named.add_argument("--report", required=True, type=Path)
     named.add_argument("--named", required=True, type=Path)
@@ -986,6 +1459,24 @@ def main(argv: list[str] | None = None) -> int:
                             args.reruns, args.no_hide, args.probe_only)
     if args.command == "verify-named":
         return verify_named(args.report, args.named, args.max_named)
+    if args.command in ("disk-series", "_disk-series-inner"):
+        runs = args.runs.split(",")
+        if not runs or any(kind not in SERIES_RUNS for kind in runs):
+            _say(f"--runs takes a comma-separated list of {', '.join(SERIES_RUNS)}, got {args.runs!r}")
+            return EXIT_SERIES_ENVIRONMENT
+        try:
+            if args.command == "disk-series":
+                return disk_series(args.repo.resolve(), runs, args.keep_max_mb, args.leak, args.out)
+            return _series_inner(args)
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 — anything but a mismatch or a leak is exit 2
+            _say(f"error: {exc!r}" if not isinstance(exc, SystemExit) else f"error: {exc}")
+            return EXIT_SERIES_ENVIRONMENT
+    if args.command == "verdict-scenario":
+        try:
+            return verdict_scenario(args.repo.resolve(), args.case, args.sabotage, args.out)
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 — anything but a verdict mismatch is exit 1
+            _say(f"error: {exc!r}" if not isinstance(exc, SystemExit) else f"error: {exc}")
+            return EXIT_VERDICT_ERROR
     return _fake_run(args)
 
 
