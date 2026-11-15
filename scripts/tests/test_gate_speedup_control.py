@@ -517,8 +517,10 @@ K3_BAD = json.loads((TESTS_DIR / "fixtures" / "k3_bad_outcomes.json").read_text(
 
 
 def good_outcomes() -> dict:
-    return json.loads(json.dumps(K3_BAD[0]["outcomes"] | {"regression": {
-        "verdict": "FAIL", "reused": 15000, "failed_rounds": [1, 2]}}))
+    """The first bad outcome with its one defect (a regression that passed) put right."""
+    outcomes = json.loads(json.dumps(K3_BAD[0]["outcomes"]))
+    outcomes["regression"]["verdict"] = "FAIL"
+    return outcomes
 
 
 def test_the_judgement_accepts_a_good_outcome():

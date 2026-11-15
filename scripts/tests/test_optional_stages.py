@@ -808,6 +808,10 @@ ALLOWED_SINGLE_STAGE_SITES: "dict[tuple[str, str], str]" = {
         "reads one pytest test's outcome in the per-test report, not a plan stage's: a test "
         "that passed on a rerun is evidence the rerun cleared it, a skipped one is not"
     ),
+    ("lib/suite_gate.py", "settle_reuse"): (
+        "reads one pytest test's outcome in the per-test report, not a plan stage's: only a "
+        "test that passed is stored for reuse"
+    ),
     ("agentctl/cli_approval.py", "_refresh_caches_from_plan_path"): (
         "asks whether THIS stage's earlier PASS survives an edit of its own definition; a "
         "SKIPPED stage has no pass to invalidate and is reset by _apply_refined_stage_fields"

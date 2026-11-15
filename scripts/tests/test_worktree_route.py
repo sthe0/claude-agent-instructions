@@ -83,6 +83,7 @@ class Canon:
         shutil.copy(SCRIPTS_DIR / "lib" / "instruction_smoke_gate.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "landing_gate.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "suite_gate.py", scripts / "lib")
+        shutil.copy(SCRIPTS_DIR / "lib" / "result_store.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "flake_list.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "gate_retention.py", scripts / "lib")
         shutil.copy(SCRIPTS_DIR / "lib" / "config_root.py", scripts / "lib")
