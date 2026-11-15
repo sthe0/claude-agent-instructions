@@ -184,6 +184,7 @@ __doc__ = __doc__.replace("<reason-codes>", "\n".join(f"    * ``{code}``: {text}
 
 ABSENT = "absent"
 _IGNORED_PARTS = ("__pycache__", ".pytest_cache")
+_GIT_INDEX = ".git/index"  # git rewrites it on every status, so its bytes differ between two clean clones of one commit
 _PATH_FINDER_FILE = "<frozen importlib._bootstrap_external>"
 
 
@@ -363,7 +364,7 @@ def _repo_abs(path):
             return s, "."
         if s.startswith(prefix):
             rel = s[len(prefix):]
-            if rel.endswith(".pyc") or any(part in _IGNORED_PARTS for part in rel.split("/")):
+            if rel.endswith(".pyc") or rel == _GIT_INDEX or any(part in _IGNORED_PARTS for part in rel.split("/")):
                 return None
             if _ignore_prefixes and any(s.startswith(p) for p in _ignore_prefixes):
                 return None

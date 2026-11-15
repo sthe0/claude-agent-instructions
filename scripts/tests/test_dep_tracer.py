@@ -930,3 +930,20 @@ def test_a_session_hook_git_call_reaches_every_test_unless_it_runs_untraced(tmp_
     run = _pytest(root, tmp_path / "records", ".")
     assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-2000:]
     assert dep_tracer.load_records(tmp_path / "records")["test_x.py::test_it"]["always_rerun"] == reasons
+
+
+READS_GIT_FILES = (
+    "from pathlib import Path\n\n\n"
+    "def test_it():\n"
+    "    for name in ('index', 'HEAD'):\n"
+    "        (Path(__file__).parent / '.git' / name).read_bytes()\n"
+)
+
+
+def test_the_git_index_is_no_dependency_but_other_git_files_are(tmp_path):
+    root = _make_repo((tmp_path / "repo").resolve(),
+                      {".git/index": "x", ".git/HEAD": "ref: main\n", "test_x.py": READS_GIT_FILES})
+    run = _pytest(root, tmp_path / "records", "test_x.py")
+    assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-2000:]
+    files = dep_tracer.load_records(tmp_path / "records")["test_x.py::test_it"]["files"]
+    assert ".git/HEAD" in files and ".git/index" not in files
