@@ -91,7 +91,8 @@ def take(out_dir, since_s: "float | None" = None, check_space: bool = False) -> 
     cut = sum(size for _, _, size in measured)
     free = shutil.disk_usage(out.parent).free
     if check_space:
-        record = config_root.telemetry_db()
+        from lib.telemetry import store
+        record = store.record_path()
         need = cut + 2 * (record.stat().st_size if record.exists() else 0)
         if free < need:
             raise InsufficientSpace(free, need, out.parent)

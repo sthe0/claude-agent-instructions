@@ -33,7 +33,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from lib import config_root
 from lib.telemetry import emit, live, store
 
 SWEEP_LOCK = ".sweep.lock"
@@ -87,7 +86,7 @@ def sync_point(env: str, state_store) -> None:
     at this exact point of a verb. Honoured only while both the record and the state root are
     temporary, so no live run can be made to wait here."""
     fifo = os.environ.get(env)
-    if not fifo or not (_under_tmp(config_root.telemetry_db()) and _under_tmp(getattr(state_store, "root", None))):
+    if not fifo or not (_under_tmp(store.record_path()) and _under_tmp(getattr(state_store, "root", None))):
         return
     try:
         with open(fifo, "rb") as reader:

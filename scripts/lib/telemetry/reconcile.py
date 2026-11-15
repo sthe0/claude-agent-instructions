@@ -31,7 +31,6 @@ import hashlib
 import json
 from pathlib import Path
 
-from lib import config_root
 from lib.telemetry import importer, live, snapshot, store, sync, tokens
 
 OFFSET_FREE_KINDS: "tuple[str, ...]" = ()
@@ -253,14 +252,14 @@ def _reconcile_state(records: _Records, frozen: snapshot.Snapshot, kind: _Kind) 
 def check(scratch_path, sources_dir) -> "tuple[int, dict]":
     """(exit code, report) of reconciling the scratch record built from `sources_dir`.
 
-    The live side is the record `config_root.telemetry_db()` names, so the scratch overrides
+    The live side is the record `store.record_path()` names, so the scratch overrides
     (AGENTCTL_TELEMETRY_DB, AGENTCTL_TELEMETRY_SPOOL) must be unset for this run; a scratch record
     that is the live one (the same file, or a copy: both carry the live origin) is refused
     (ReconcileInputError)."""
     try:
         frozen = snapshot.Snapshot(sources_dir)
         scratch = store.open_record_readonly(scratch_path)
-        live_conn = store.open_record_readonly(config_root.telemetry_db())
+        live_conn = store.open_record_readonly(store.record_path())
         records = _Records(scratch, live_conn)
     except (OSError, ValueError, KeyError, TypeError, store.sqlite3.Error) as err:
         raise ReconcileInputError(str(err)) from err

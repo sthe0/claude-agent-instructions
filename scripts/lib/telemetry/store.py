@@ -584,6 +584,11 @@ def open_record_readonly(path, timeout_s: float = 5.0, immutable: bool = False) 
                            timeout=timeout_s, isolation_level=None)
 
 
+def record_path() -> Path:
+    """The live record's path; the one place outside the config module that resolves it."""
+    return config_root.telemetry_db()
+
+
 def record_exists() -> bool:
     return config_root.telemetry_db().exists()
 
