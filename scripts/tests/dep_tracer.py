@@ -72,19 +72,21 @@ Import-time work belongs to the file whose top-level code did it
 
 Values cached in the process: attribution to the nearest repository file on the stack
     A value filled during one test (``lru_cache``, a module global, a module loaded by path and
-    kept) reaches later tests without a second read. So when a read, listing or probe happens
-    during a test and its nearest repository frame is not the running test function's own code
-    (repository code called by other repository code, a conftest fixture or hook that pytest called,
-    or a fixture or helper defined in the test module), the event also goes to a set kept for that
-    nearest file (``_by_caller``). A module body that starts during a test is recorded as a code
-    edge from the file that loaded it, including when the loader is itself a module body. Every
-    test whose closure holds the file then carries these sets. An event raised directly by the
-    running test function stays with that test's own set, and so does a direct read by a session-,
-    package-, module- or class-scoped fixture (which has its own set, carried by its users only).
-    The sets hold files, listings, probes and code edges, never reasons (a cached subprocess
-    result is a residual below).
-    Over-recording is the accepted cost: a later test of the same code carries data it did not read
-    itself.
+    kept) reaches later tests without a second read. Which function cached it cannot be told
+    reliably (a decorator without ``functools.wraps`` is collected by pytest as the test itself),
+    so no code is singled out as "the test's own": when a read, listing or probe happens during a
+    test, the event also goes to a set kept for the nearest repository file on the stack
+    (``_by_caller``), whoever the caller is (a test body, a fixture, a helper, a decorator wrapper,
+    a conftest hook, repository code called by repository code). A module body that starts during a
+    test is recorded as a code edge from the file that loaded it, including when the loader is
+    itself a module body. Every test whose closure holds the file then carries these sets. The one
+    exception is a direct read by a session-, package-, module- or class-scoped fixture, which
+    stays in that fixture's own set, carried by its users only. The sets hold files, listings,
+    probes and code edges, never reasons (a cached subprocess result is a residual below).
+    Cost: attribution is per file, not per test. A data file read by one test is carried by every
+    test of that test's file, so editing it reruns all of them; a test file's own reads are shared
+    the same way. Over-recording is the accepted price for never reusing a pass whose cached input
+    changed.
 
 Always-rerun reason codes (``REASON_CODES``): whenever tracing is incomplete the record carries
     the codes below and the test is rerun whatever else matches. A non-Python child started
@@ -129,9 +131,7 @@ Accepted residuals: reads made inside C extensions other than sqlite3 (mmap, dbm
     that a function-scoped fixture then hands to a test through a shared global (a module-scoped
     ``warm`` fixture fills a global, a function-scoped ``getter`` returns it, the test requests only
     ``getter``) stays with ``warm``'s users, so that test carries no record of the file; it passes
-    only when it runs after a user of ``warm``, which is a test-order dependence. A test body that
-    caches its own direct read in a module global is the same case: a later test that only uses the
-    global carries no record of the file, and passes only when it runs after the reader. A hook that fails
+    only when it runs after a user of ``warm``, which is a test-order dependence. A hook that fails
     outside any test marks every later record of that process ``tracer-error``.
 """
 from __future__ import annotations
@@ -213,7 +213,6 @@ class _Local(threading.local):
 
 _tl = _Local()
 _current: DepSet | None = None
-_test_codes: frozenset = frozenset()
 _import_time: dict[str, DepSet] = {}
 _by_caller: dict[str, DepSet] = {}
 _idle_errors = [False]
@@ -270,14 +269,13 @@ def _owners(frame):
     """Owners of an event raised below ``frame``.
 
     Returns (nearest repository file, innermost repository file whose top level is running,
-    repository frames seen, code of the nearest repository frame). The walk goes outward from
+    repository frames seen). The walk goes outward from
     ``frame`` and stops at a pytest or pluggy frame, so work they do themselves (collecting
     directories, rewriting a test module) has no owner. One repository
     frame on the stack means the event was raised by a function that pytest called itself (a
     test, a fixture, a hook); more than one means repository code called repository code.
     """
     nearest = None
-    nearest_code = None
     seen = 0
     while frame is not None:
         name = frame.f_code.co_filename
@@ -289,27 +287,10 @@ def _owners(frame):
                 seen += 1
                 if nearest is None:
                     nearest = found[0]
-                    nearest_code = frame.f_code
                 if frame.f_code.co_name == "<module>":
-                    return nearest, found[0], seen, nearest_code
+                    return nearest, found[0], seen
         frame = frame.f_back
-    return nearest, None, seen, nearest_code
-
-
-def _function_codes(func) -> frozenset:
-    """The code object of a test body: the innermost function of the ``__wrapped__`` chain.
-
-    A wrapper (a decorator's inner function, wherever it is defined) is not test code, so a value
-    it caches reaches every test it decorates.
-    """
-    for _ in range(16):
-        func = getattr(func, "__func__", func)
-        inner = getattr(func, "__wrapped__", None)
-        if inner is None:
-            break
-        func = inner
-    code = getattr(func, "__code__", None)
-    return frozenset([code]) if code is not None else frozenset()
+    return nearest, None, seen
 
 
 def _targets(frame) -> list[DepSet]:
@@ -317,12 +298,11 @@ def _targets(frame) -> list[DepSet]:
 
     The running scope's own set, always. Beside it, in the traced process: while a repository file's
     top level runs, that file's import-time set; between tests, the nearest repository file's
-    import-time set; during a test, the nearest file's ``_by_caller`` set when repository code
-    called repository code, or when the nearest repository frame is not the running test body's own
-    code (a conftest or hook function, a fixture or helper of the test module, a decorator's
-    wrapper), because a value cached by that code (``lru_cache``, a module global) is used by later
-    tests without reading its source again, and they reach that file through their closure. A
-    scoped fixture's direct read is the exception: it stays with the fixture's own set.
+    import-time set; during a test, the nearest repository file's ``_by_caller`` set, whoever the
+    caller is (a test body, a fixture, a decorator's wrapper, a helper, a conftest hook), because a
+    value cached by that code (``lru_cache``, a module global) is used by later tests without
+    reading its source again, and they reach that file through their closure. A scoped fixture's
+    direct read is the exception: it stays with the fixture's own set.
     """
     cur = _current
     if cur is None and not _idle_sink:
@@ -330,14 +310,14 @@ def _targets(frame) -> list[DepSet]:
     out = [cur] if cur is not None else []
     if not _idle_sink:
         return out
-    nearest, body, seen, nearest_code = _owners(frame)
+    nearest, body, seen = _owners(frame)
     if cur is None:
         owner = body or nearest
         if owner is not None:
             out.append(_import_time.setdefault(owner, DepSet()))
     elif body is not None:
         out.append(_import_time.setdefault(body, DepSet()))
-    elif nearest is not None and (seen > 1 or (nearest_code not in _test_codes and not cur.scoped)):
+    elif nearest is not None and (seen > 1 or not cur.scoped):
         out.append(_by_caller.setdefault(nearest, DepSet()))
     return out
 
@@ -690,14 +670,14 @@ def _on_py_start(code, offset):
             cur.code.add(os.path.join(os.getcwd(), name))
         if _idle_sink and code.co_name == "<module>" and name.startswith(_root_slash):
             try:
-                nearest, body, seen, _ = _owners(sys._getframe(1).f_back)
+                nearest, body, seen = _owners(sys._getframe(1).f_back)
                 if nearest is not None and nearest != name and (seen > 1 or body is not None):
                     _by_caller.setdefault(nearest, DepSet()).code.add(name)
             except Exception:
                 _note_error()
     elif _idle_sink and name.startswith(_root_slash):
         executing = sys._getframe(1)
-        nearest, _, _, _ = _owners(executing.f_back)
+        nearest, _, _ = _owners(executing.f_back)
         if nearest is not None and nearest != name:
             _import_time.setdefault(nearest, DepSet()).code.add(name)
     return _DISABLE
@@ -943,7 +923,7 @@ def _edges(path: str, search: tuple[str, ...]):
 
 
 def _extra_code(path: str):
-    """Repository files that ``path`` executed outside a test body: at import, or called by its code."""
+    """Repository files that ``path`` executed at import, or that its code called."""
     out: set[str] = set()
     for sets in (_import_time, _by_caller):
         if path in sets:
@@ -1160,9 +1140,7 @@ def _make_plugin():
         def pytest_runtest_protocol(self, item, nextitem):
             if not self.traces:
                 return (yield)
-            global _test_codes
             try:
-                _test_codes = _function_codes(getattr(item, "function", None))
                 self._begin()
             except Exception:
                 self._end_scope()

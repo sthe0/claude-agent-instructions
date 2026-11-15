@@ -326,6 +326,34 @@ PLANTED = {
         "@needs\ndef test_first():\n    pass\n\n\n"
         "@needs\ndef test_second():\n    pass\n"
     ),
+    # s7, s8: a decorator without functools.wraps, so pytest collects its wrapper as the test itself
+    "bare.txt": "t",
+    "bare_deco.py": (
+        "from pathlib import Path\n\n_C = {}\n\n\ndef needs(func):\n"
+        "    def wrapper():\n        if 'd' not in _C:\n"
+        "            _C['d'] = (Path(__file__).parent / 'bare.txt').read_text()\n"
+        "        return func()\n    return wrapper\n"
+    ),
+    "test_s7_bare_deco_other_file.py": (
+        "from bare_deco import needs\n\n\n@needs\ndef test_first():\n    pass\n\n\n"
+        "@needs\ndef test_second():\n    pass\n"
+    ),
+    "bare_in.txt": "t",
+    "test_s8_bare_deco_in_file.py": (
+        "from pathlib import Path\n\n_C = {}\n\n\ndef needs(func):\n"
+        "    def wrapper():\n        if 'd' not in _C:\n"
+        "            _C['d'] = (Path(__file__).parent / 'bare_in.txt').read_text()\n"
+        "        return func()\n    return wrapper\n\n\n"
+        "@needs\ndef test_first():\n    pass\n\n\n"
+        "@needs\ndef test_second():\n    pass\n"
+    ),
+    # s9: a test body caches its own direct read in a module global that a sibling test then uses
+    "own.txt": "t",
+    "test_s9_own_read.py": (
+        "from pathlib import Path\n\n_C = {}\n\n\ndef test_first():\n"
+        "    _C['d'] = (Path(__file__).parent / 'own.txt').read_text()\n\n\n"
+        "def test_second():\n    assert _C.get('d', 't') == 't'\n"
+    ),
     # s5: methods of a test class using a function-scoped fixture of the test module that caches its read
     "s5data.txt": "t",
     "test_s5_class.py": (
@@ -614,6 +642,24 @@ def test_a_read_cached_by_a_decorator_in_another_file_reaches_every_decorated_te
 def test_a_read_cached_by_a_decorator_in_the_test_file_reaches_every_decorated_test(traced, name):
     assert_record(traced, f"test_s6_infile_deco.py::{name}", {
         "conftest.py", "test_s6_infile_deco.py", "ind.txt"})
+
+
+@pytest.mark.parametrize("name", ["test_first", "test_second"])
+def test_a_read_cached_by_a_bare_decorator_in_another_file_reaches_every_decorated_test(traced, name):
+    assert_record(traced, f"test_s7_bare_deco_other_file.py::{name}", {
+        "conftest.py", "test_s7_bare_deco_other_file.py", "bare_deco.py", "bare.txt"})
+
+
+@pytest.mark.parametrize("name", ["test_first", "test_second"])
+def test_a_read_cached_by_a_bare_decorator_in_the_test_file_reaches_every_decorated_test(traced, name):
+    assert_record(traced, f"test_s8_bare_deco_in_file.py::{name}", {
+        "conftest.py", "test_s8_bare_deco_in_file.py", "bare_in.txt"})
+
+
+@pytest.mark.parametrize("name", ["test_first", "test_second"])
+def test_a_test_bodys_direct_read_reaches_every_test_of_its_file(traced, name):
+    assert_record(traced, f"test_s9_own_read.py::{name}", {
+        "conftest.py", "test_s9_own_read.py", "own.txt"})
 
 
 @pytest.mark.parametrize("name", ["test_first", "test_second"])
