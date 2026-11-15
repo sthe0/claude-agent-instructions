@@ -265,6 +265,36 @@ PLANTED = {
         "import q2_loader\n\n\ndef test_first():\n    assert q2_loader.text() == 't'\n\n\n"
         "def test_second():\n    assert q2_loader.text() == 't'\n"
     ),
+    # s1: a module loaded by path whose own top level loads another module by path
+    "s1_inner.txt": "t",
+    "s1_inner.py": "from pathlib import Path\n\nTEXT = Path(__file__).with_suffix('.txt').read_text()\n",
+    "s1_mid.py": (
+        "import importlib.util\nfrom pathlib import Path\n\n"
+        "_spec = importlib.util.spec_from_file_location('s1_inner', Path(__file__).parent / 's1_inner.py')\n"
+        "inner = importlib.util.module_from_spec(_spec)\n_spec.loader.exec_module(inner)\n"
+    ),
+    "s1_loader.py": (
+        "import functools\nimport importlib.util\nfrom pathlib import Path\n\n\n@functools.lru_cache(maxsize=None)\n"
+        "def mid():\n"
+        "    spec = importlib.util.spec_from_file_location('s1_mid', Path(__file__).parent / 's1_mid.py')\n"
+        "    mod = importlib.util.module_from_spec(spec)\n    spec.loader.exec_module(mod)\n    return mod\n\n\n"
+        "def text():\n    return mid().inner.TEXT\n"
+    ),
+    "test_s1_loader.py": (
+        "import s1_loader\n\n\ndef test_first():\n    assert s1_loader.text() == 't'\n\n\n"
+        "def test_second():\n    assert s1_loader.text() == 't'\n"
+    ),
+    # s2: a conftest fixture caches its own read
+    "s2/s2data.txt": "t",
+    "s2/conftest.py": (
+        "from pathlib import Path\n\nimport pytest\n\n_CACHE = {}\n\n\n@pytest.fixture\n"
+        "def s2_data():\n    if 'd' not in _CACHE:\n"
+        "        _CACHE['d'] = (Path(__file__).parent / 's2data.txt').read_text()\n    return _CACHE['d']\n"
+    ),
+    "s2/test_s2.py": (
+        "def test_first(s2_data):\n    assert s2_data == 't'\n\n\n"
+        "def test_second(s2_data):\n    assert s2_data == 't'\n"
+    ),
     # q3: a non-Python child found on PATH inside the repository
     "stubs/q3tool": "#!/bin/sh\nexit 0\n",
     "test_q3_path_stub.py": (
@@ -514,6 +544,18 @@ def test_a_value_cached_during_an_earlier_test_still_carries_its_data_file(trace
 def test_a_module_loaded_by_path_and_kept_by_a_cached_loader_carries_its_reads(traced, name):
     assert_record(traced, f"test_q2_loader.py::{name}", {
         "conftest.py", "test_q2_loader.py", "q2_loader.py", "q2_loaded.py", "q2_loaded.txt"})
+
+
+@pytest.mark.parametrize("name", ["test_first", "test_second"])
+def test_a_module_loaded_by_path_from_a_module_body_keeps_its_link_for_later_tests(traced, name):
+    assert_record(traced, f"test_s1_loader.py::{name}", {
+        "conftest.py", "test_s1_loader.py", "s1_loader.py", "s1_mid.py", "s1_inner.py", "s1_inner.txt"})
+
+
+@pytest.mark.parametrize("name", ["test_first", "test_second"])
+def test_a_read_cached_by_a_conftest_fixture_reaches_every_test_using_it(traced, name):
+    assert_record(traced, f"s2/test_s2.py::{name}", {
+        "conftest.py", "s2/conftest.py", "s2/test_s2.py", "s2/s2data.txt"})
 
 
 def test_a_stub_found_on_path_inside_the_repository_forces_rerun(traced):

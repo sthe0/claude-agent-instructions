@@ -70,16 +70,20 @@ Import-time work belongs to the file whose top-level code did it
     outside the repository, with no repository frame above it on the stack, has no owner and is
     dropped.
 
-Values cached in the process belong to the code that cached them
+Values cached in the process: attribution to the nearest repository file on the stack
     A value filled during one test (``lru_cache``, a module global, a module loaded by path and
-    kept) reaches later tests without a second read. So when repository code called by other
-    repository code reads, lists or probes during a test, the event also goes to a set kept for the
-    nearest repository file on the stack (``_by_caller``), and a module body that starts during a
-    test is recorded as a code edge from that file; every test whose closure holds the file then
-    carries them. An event raised by a function pytest itself called (the test, a fixture, a hook)
-    stays with that test only. These sets hold files, listings, probes and code edges, never reasons
-    (a cached subprocess result is a residual below). Over-recording is the accepted cost: a later
-    test of the same code carries data it did not read itself.
+    kept) reaches later tests without a second read. So when a read, listing or probe happens
+    during a test and its nearest repository frame is not the running test's own module (repository
+    code called by other repository code, or a conftest fixture or hook that pytest called), the
+    event also goes to a set kept for that nearest file (``_by_caller``). A module body that starts
+    during a test is recorded as a code edge from the file that loaded it, including when the loader
+    is itself a module body. Every test whose closure holds the file then carries these sets. An
+    event raised by the test module's own functions, or by a session-, package-, module- or
+    class-scoped fixture (which has its own set, carried by its users only), stays with its own
+    set. The sets hold files,
+    listings, probes and code edges, never reasons (a cached subprocess result is a residual below).
+    Over-recording is the accepted cost: a later test of the same code carries data it did not read
+    itself.
 
 Always-rerun reason codes (``REASON_CODES``): whenever tracing is incomplete the record carries
     the codes below and the test is rerun whatever else matches. A non-Python child started
@@ -116,7 +120,11 @@ Accepted residuals: reads made inside C extensions other than sqlite3 (mmap, dbm
     their imports; the files themselves are dependencies
     of every test below, the data they read at import is not), a subprocess result cached by
     repository code (its reasons stay with the test that ran it), a ``fork`` made at import time,
-    and a repository file that shadows a standard-library module are not seen. A hook that fails
+    and a repository file that shadows a standard-library module are not seen. A read a cached
+    loader makes directly inside a thread-pool worker (the worker's stack holds no repository
+    caller) stays with the first test, and a stub found on ``PATH`` behind a wrapper or a compound
+    command (``timeout 5 stub``, ``env X=1 stub``, ``bash -c "cd d && stub"``) is not resolved; only
+    a bare program name and the first word of a ``-c`` command are. A hook that fails
     outside any test marks every later record of that process ``tracer-error``.
 """
 from __future__ import annotations
@@ -179,6 +187,7 @@ class DepSet:
         self.reasons: set[str] = set()
         self.expected_children = 0
         self.fork0 = 0
+        self.scoped = False
 
     def merge(self, other: "DepSet", *, code: bool = True, reasons: bool = True) -> None:
         if code:
@@ -197,6 +206,7 @@ class _Local(threading.local):
 
 _tl = _Local()
 _current: DepSet | None = None
+_own_file: str | None = None
 _import_time: dict[str, DepSet] = {}
 _by_caller: dict[str, DepSet] = {}
 _idle_errors = [False]
@@ -297,7 +307,7 @@ def _targets(frame) -> list[DepSet]:
             out.append(_import_time.setdefault(owner, DepSet()))
     elif body is not None:
         out.append(_import_time.setdefault(body, DepSet()))
-    elif nearest is not None and seen > 1:
+    elif nearest is not None and (seen > 1 or (nearest != _own_file and not cur.scoped)):
         out.append(_by_caller.setdefault(nearest, DepSet()))
     return out
 
@@ -650,8 +660,8 @@ def _on_py_start(code, offset):
             cur.code.add(os.path.join(os.getcwd(), name))
         if _idle_sink and code.co_name == "<module>" and name.startswith(_root_slash):
             try:
-                nearest, _, seen = _owners(sys._getframe(1).f_back)
-                if nearest is not None and nearest != name and seen > 1:
+                nearest, body, seen = _owners(sys._getframe(1).f_back)
+                if nearest is not None and nearest != name and (seen > 1 or body is not None):
                     _by_caller.setdefault(nearest, DepSet()).code.add(name)
             except Exception:
                 _note_error()
@@ -1120,6 +1130,8 @@ def _make_plugin():
         def pytest_runtest_protocol(self, item, nextitem):
             if not self.traces:
                 return (yield)
+            global _own_file
+            _own_file = str(item.path)
             try:
                 self._begin()
             except Exception:
@@ -1142,6 +1154,7 @@ def _make_plugin():
             if not self.traces or fixturedef.scope == "function" or _current is None:
                 return (yield)
             scoped = self.fixture_sets.setdefault(fixturedef, DepSet())
+            scoped.scoped = True
             outer = deactivate()
             activate(scoped)
             try:
