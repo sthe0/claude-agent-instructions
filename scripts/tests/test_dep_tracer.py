@@ -239,7 +239,54 @@ PLANTED = {
         "def test_first(request):\n    assert request.getfixturevalue('p9_data') == 'd'\n\n\n"
         "def test_second(request):\n    assert request.getfixturevalue('p9_data') == 'd'\n"
     ),
+    # q1: a value cached by repository code while one test runs is used by the later tests
+    "q1data/table.txt": "t",
+    "q1_cache.py": (
+        "import functools\nfrom pathlib import Path\n\n\n@functools.lru_cache(maxsize=None)\n"
+        "def _table():\n    return (Path(__file__).parent / 'q1data' / 'table.txt').read_text()\n\n\n"
+        "def lookup():\n    return _table()\n"
+    ),
+    "test_q1_cache.py": (
+        "import q1_cache\n\n\ndef test_first():\n    assert q1_cache.lookup() == 't'\n\n\n"
+        "def test_second():\n    assert q1_cache.lookup() == 't'\n"
+    ),
+    "test_q1b_cache.py": "import q1_cache\n\n\ndef test_other_file():\n    assert q1_cache.lookup() == 't'\n",
+    # q2: a module loaded by path and kept by a cached loader
+    "q2_loaded.txt": "t",
+    "q2_loaded.py": "from pathlib import Path\n\nTEXT = Path(__file__).with_suffix('.txt').read_text()\n",
+    "q2_loader.py": (
+        "import functools\nimport importlib.util\nfrom pathlib import Path\n\n\n@functools.lru_cache(maxsize=None)\n"
+        "def load():\n"
+        "    spec = importlib.util.spec_from_file_location('q2_loaded', Path(__file__).parent / 'q2_loaded.py')\n"
+        "    mod = importlib.util.module_from_spec(spec)\n    spec.loader.exec_module(mod)\n    return mod\n\n\n"
+        "def text():\n    return load().TEXT\n"
+    ),
+    "test_q2_loader.py": (
+        "import q2_loader\n\n\ndef test_first():\n    assert q2_loader.text() == 't'\n\n\n"
+        "def test_second():\n    assert q2_loader.text() == 't'\n"
+    ),
+    # q3: a non-Python child found on PATH inside the repository
+    "stubs/q3tool": "#!/bin/sh\nexit 0\n",
+    "test_q3_path_stub.py": (
+        "import os\nimport subprocess\nfrom pathlib import Path\n\n\ndef test_popen(tmp_path, monkeypatch):\n"
+        "    monkeypatch.setenv('PATH', str(Path(__file__).parent / 'stubs') + os.pathsep + os.environ['PATH'])\n"
+        "    subprocess.run(['q3tool'], cwd=tmp_path, check=True)\n\n\n"
+        "def test_system(tmp_path, monkeypatch):\n"
+        "    monkeypatch.setenv('PATH', str(Path(__file__).parent / 'stubs') + os.pathsep + os.environ['PATH'])\n"
+        "    monkeypatch.chdir(tmp_path)\n    assert os.system('q3tool') == 0\n"
+    ),
+    # q4: a Python process outside the test's process chain loses a child
+    "test_q4_unlinked_parent.py": (
+        "import shlex\nimport subprocess\nimport sys\n\n\ndef test_it(tmp_path):\n"
+        "    gen = tmp_path / 'gen.py'\n"
+        "    gen.write_text('import os, subprocess, sys\\n'\n"
+        "                   'subprocess.run([sys.executable, \"-c\", \"import os; os._exit(0)\"], check=True)\\n')\n"
+        "    subprocess.run(['bash', '-c', shlex.quote(sys.executable) + ' ' + shlex.quote(str(gen))],\n"
+        "                   cwd=str(tmp_path), check=True)\n"
+    ),
 }
+
+EXECUTABLE = ("stubs/q3tool",)
 
 
 def sha(data: bytes) -> str:
@@ -251,6 +298,8 @@ def _make_repo(root: Path, files: dict[str, str]) -> Path:
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
+        if rel in EXECUTABLE:
+            path.chmod(0o755)
     return root
 
 
@@ -455,6 +504,33 @@ def test_a_scoped_fixture_requested_by_getfixturevalue_belongs_to_its_users(trac
     assert_record(traced, f"p9/test_p9.py::{name}", {"conftest.py", "p9/conftest.py", "p9/test_p9.py", "p9/p9.txt"})
 
 
+@pytest.mark.parametrize("nodeid", [
+    "test_q1_cache.py::test_first", "test_q1_cache.py::test_second", "test_q1b_cache.py::test_other_file"])
+def test_a_value_cached_during_an_earlier_test_still_carries_its_data_file(traced, nodeid):
+    assert_record(traced, nodeid, {"conftest.py", nodeid.split("::")[0], "q1_cache.py", "q1data/table.txt"})
+
+
+@pytest.mark.parametrize("name", ["test_first", "test_second"])
+def test_a_module_loaded_by_path_and_kept_by_a_cached_loader_carries_its_reads(traced, name):
+    assert_record(traced, f"test_q2_loader.py::{name}", {
+        "conftest.py", "test_q2_loader.py", "q2_loader.py", "q2_loaded.py", "q2_loaded.txt"})
+
+
+def test_a_stub_found_on_path_inside_the_repository_forces_rerun(traced):
+    assert_record(traced, "test_q3_path_stub.py::test_popen", {"conftest.py", "test_q3_path_stub.py"},
+                  reasons=["non-python-subprocess"])
+
+
+def test_os_system_resolving_a_stub_on_path_inside_the_repository_forces_rerun(traced):
+    assert_record(traced, "test_q3_path_stub.py::test_system", {"conftest.py", "test_q3_path_stub.py"},
+                  reasons=["untraced-exec"])
+
+
+def test_a_child_that_lost_its_own_child_is_flagged_though_no_chain_links_it_to_the_test(traced):
+    assert_record(traced, "test_q4_unlinked_parent.py::test_it", {"conftest.py", "test_q4_unlinked_parent.py"},
+                  reasons=["child-log-missing"])
+
+
 BOOM = {
     "conftest.py": (
         "import pytest\n\nimport dep_tracer\n\n"
@@ -490,6 +566,36 @@ def test_a_tracer_failure_is_a_rerun_record_not_an_internal_error(tmp_path):
     assert records["test_boom.py::test_boom_end"] == {"files": {}, "listings": {}, "probes": {}, "always_rerun": ["tracer-error"]}
     assert records["test_boom.py::test_plain"]["always_rerun"] == []
     assert "test_boom.py" in records["test_boom.py::test_plain"]["files"]
+
+
+OWNER_LOOKUP_FAILS_IN_A_TEST = {
+    "test_owner.py": (
+        "import dep_tracer\n\n\ndef _fail(*args, **kwargs):\n    raise RuntimeError('boom')\n\n\n"
+        "def test_it():\n    real = dep_tracer._owners\n    dep_tracer._owners = _fail\n"
+        "    try:\n        open(__file__).read()\n    finally:\n        dep_tracer._owners = real\n"
+    ),
+}
+
+OWNER_LOOKUP_FAILS_OUTSIDE_A_TEST = {
+    "conftest.py": (
+        "import os\n\nimport dep_tracer\n\n\ndef _fail(*args, **kwargs):\n    raise RuntimeError('boom')\n\n\n"
+        "def pytest_collection_modifyitems(config, items):\n"
+        "    real = dep_tracer._owners\n    dep_tracer._owners = _fail\n"
+        "    try:\n        os.stat(__file__)\n    finally:\n        dep_tracer._owners = real\n"
+    ),
+    "test_plain.py": "def test_it():\n    pass\n",
+}
+
+
+@pytest.mark.parametrize("files, nodeid", [
+    (OWNER_LOOKUP_FAILS_IN_A_TEST, "test_owner.py::test_it"),
+    (OWNER_LOOKUP_FAILS_OUTSIDE_A_TEST, "test_plain.py::test_it"),
+])
+def test_a_failed_owner_lookup_is_a_rerun_record_not_a_silent_drop(tmp_path, files, nodeid):
+    root = _make_repo((tmp_path / "repo").resolve(), files)
+    run = _pytest(root, tmp_path / "records", ".")
+    assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-2000:]
+    assert dep_tracer.load_records(tmp_path / "records")[nodeid]["always_rerun"] == ["tracer-error"]
 
 
 def test_tracer_off_by_default(tmp_path):
@@ -601,6 +707,36 @@ def test_import_closure_flags_computed_names_and_unparsable_files(tmp_path):
     _, reasons, _ = dep_tracer.import_closure(
         [str(tmp_path / "a.py"), str(tmp_path / "bad.py")], search=(str(tmp_path),))
     assert reasons == {"dynamic-import", "unanalysable-source"}
+
+
+@pytest.mark.parametrize("source", [
+    "from importlib import import_module as imp\nimp(name)\n",
+    "import importlib as il\nil.import_module(name)\n",
+    "import importlib\ngetattr(importlib, attr)(name)\n",
+    "import importlib.util\nimportlib.util.find_spec(name)\n",
+    "from importlib.util import find_spec as fs\nfs(name)\n",
+    "import importlib\nloader = importlib.import_module\n",
+    "import builtins\ngetattr(builtins, '__import__')('x')\n",
+], ids=["aliased-function", "aliased-module", "getattr", "find-spec", "aliased-find-spec", "reference", "builtins-getattr"])
+def test_import_closure_flags_aliased_and_attribute_access_dynamic_imports(tmp_path, source):
+    _make_repo(tmp_path, {"a.py": source})
+    _, reasons, _ = dep_tracer.import_closure([str(tmp_path / "a.py")], search=(str(tmp_path),))
+    assert reasons == {"dynamic-import"}
+
+
+def test_import_closure_follows_an_aliased_literal_import_and_ignores_unrelated_find_spec_and_getattr(tmp_path):
+    _make_repo(tmp_path, {
+        "a.py": (
+            "from importlib import import_module as imp\nimport importlib\n\nimp('lit')\n"
+            "importlib.util.find_spec('lit2')\ngetattr(importlib, 'util')\n\n\n"
+            "class Finder:\n    def find_spec(self, name):\n        return name\n\n\nFinder().find_spec(object)\n"
+            "getattr(Finder, 'find_spec')\n"
+        ),
+        "lit.py": "", "lit2.py": "",
+    })
+    files, reasons, _ = dep_tracer.import_closure([str(tmp_path / "a.py")], search=(str(tmp_path),))
+    assert {Path(f).name for f in files} == {"a.py", "lit.py", "lit2.py"}
+    assert reasons == set()
 
 
 def test_import_closure_reports_missed_candidates_but_not_standard_library_names(tmp_path):

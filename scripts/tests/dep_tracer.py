@@ -23,8 +23,11 @@ What is observed, per test (setup, call and teardown together)
     * the import closure of every executed file, the test module and its conftest chain, built
       statically from each file's AST (every Import and ImportFrom anywhere in the file; the
       ``import`` audit event is not used because it fires once per session, so a module another
-      importer already loaded would lose its edge). A ``importlib.import_module`` or ``__import__``
-      call with a string literal adds that edge, one with a computed name marks the test
+      importer already loaded would lose its edge). A call of ``importlib.import_module``,
+      ``importlib.util.find_spec`` or ``__import__`` (also under an alias bound by ``from importlib
+      import import_module as imp`` or ``import importlib as il``) with a string literal adds that
+      edge; one with a computed name, a reference to such a function that is not called on the spot
+      (``f = importlib.import_module``) or a ``getattr`` on ``importlib`` marks the test
       ``dynamic-import``. The search for each imported name records the candidate paths it passed
       over, or all of them when nothing was found, as ``absent`` probes (names of the standard
       library that no repository file provides are left out), so a new or shadowing module changes
@@ -41,8 +44,13 @@ What is observed, per test (setup, call and teardown together)
       a regular file its content hash exactly like a read, a symlink ``symlink:<target>``;
     * the same for every Python child: a child inherits ``PYTHONPATH`` with
       ``dep_tracer_site/sitecustomize.py`` first and ``CORE_DEP_TRACER_CHILD_DIR``, and writes a
-      log there at exit that the parent merges. A log counts for a spawn only when its parent
-      process is the test process or an already counted child (the log names its pid and ppid).
+      log there at exit that the parent merges. A log counts for a spawn only when it names the
+      spawning process as its parent (the log names its pid and ppid); every process, linked to the
+      test process or not, is held to the Python children it started, so a descendant that wrote no
+      log (killed, ``os._exit``) is ``child-log-missing`` wherever it sits in the tree;
+    * a child found on ``PATH``: a bare program name (and the first word of a shell ``-c`` command)
+      is resolved with ``shutil.which`` against the child's own ``PATH``, so a stub of the
+      repository first on ``PATH`` counts as a repository file the child runs.
     Only paths inside the repository are recorded, repository-relative; ``__pycache__``,
     ``.pytest_cache`` (as path components), ``*.pyc`` and the pytest base temp directory are
     dropped. Reads during the setup of a session-, package-, module- or class-scoped fixture go to
@@ -61,6 +69,17 @@ Import-time work belongs to the file whose top-level code did it
     which is what links a module loaded by path). Work done by pytest, pluggy or other code
     outside the repository, with no repository frame above it on the stack, has no owner and is
     dropped.
+
+Values cached in the process belong to the code that cached them
+    A value filled during one test (``lru_cache``, a module global, a module loaded by path and
+    kept) reaches later tests without a second read. So when repository code called by other
+    repository code reads, lists or probes during a test, the event also goes to a set kept for the
+    nearest repository file on the stack (``_by_caller``), and a module body that starts during a
+    test is recorded as a code edge from that file; every test whose closure holds the file then
+    carries them. An event raised by a function pytest itself called (the test, a fixture, a hook)
+    stays with that test only. These sets hold files, listings, probes and code edges, never reasons
+    (a cached subprocess result is a residual below). Over-recording is the accepted cost: a later
+    test of the same code carries data it did not read itself.
 
 Always-rerun reason codes (``REASON_CODES``): whenever tracing is incomplete the record carries
     the codes below and the test is rerun whatever else matches. A non-Python child started
@@ -90,10 +109,15 @@ Record format
 Accepted residuals: reads made inside C extensions other than sqlite3 (mmap, dbm), a teardown
     of a session fixture that runs after the last test, a non-Python child started through a
     path the tracer cannot connect to the repository (a command that builds the repository path at
-    run time), top-level reads of the conftest files that are imported before the plugin is
-    registered (the conftest file itself is a dependency of every test below it, the data it reads
-    at import is not), a ``fork`` made at import time, and a repository file that shadows a
-    standard-library module are not seen.
+    run time), top-level reads of everything imported before the plugin is registered and before
+    ``pytest_configure`` installs the hooks (the root conftest's own top level and the modules it
+    imports at that point: ``model_cli_path``, ``agentctl.store``, ``lib.host_llm``,
+    ``judge_ledger``, ``_core_shuffle``, ``_test_report``, ``_xdist_auto``, ``slow_selection`` and
+    their imports; the files themselves are dependencies
+    of every test below, the data they read at import is not), a subprocess result cached by
+    repository code (its reasons stay with the test that ran it), a ``fork`` made at import time,
+    and a repository file that shadows a standard-library module are not seen. A hook that fails
+    outside any test marks every later record of that process ``tracer-error``.
 """
 from __future__ import annotations
 
@@ -108,6 +132,7 @@ import shutil
 import stat as _stat
 import sys
 import threading
+from collections import Counter
 from pathlib import Path
 
 ENABLE_ENV = "CORE_DEP_TRACER"
@@ -155,14 +180,15 @@ class DepSet:
         self.expected_children = 0
         self.fork0 = 0
 
-    def merge(self, other: "DepSet", *, code: bool = True) -> None:
+    def merge(self, other: "DepSet", *, code: bool = True, reasons: bool = True) -> None:
         if code:
             self.code |= other.code
             self.expected_children += other.expected_children
         for mine, theirs in ((self.files, other.files), (self.listings, other.listings), (self.probes, other.probes)):
             for key, value in theirs.items():
                 mine.setdefault(key, value)
-        self.reasons |= other.reasons
+        if reasons:
+            self.reasons |= other.reasons
 
 
 class _Local(threading.local):
@@ -172,6 +198,8 @@ class _Local(threading.local):
 _tl = _Local()
 _current: DepSet | None = None
 _import_time: dict[str, DepSet] = {}
+_by_caller: dict[str, DepSet] = {}
+_idle_errors = [False]
 _idle_sink = False
 _machinery_dirs: tuple[str, ...] = ()
 _roots: tuple[str, ...] = ()
@@ -222,12 +250,15 @@ def set_machinery_dirs(dirs) -> None:
 
 
 def _owners(frame):
-    """(nearest repository file, innermost repository file whose top level is running) on the stack.
+    """(nearest repository file, innermost repository file whose top level is running, repository frames seen).
 
     The walk goes outward from ``frame`` and stops at a pytest or pluggy frame, so work they do
-    themselves (collecting directories, rewriting a test module) has no owner.
+    themselves (collecting directories, rewriting a test module) has no owner. One repository
+    frame on the stack means the event was raised by a function that pytest called itself (a
+    test, a fixture, a hook); more than one means repository code called repository code.
     """
     nearest = None
+    seen = 0
     while frame is not None:
         name = frame.f_code.co_filename
         if _machinery_dirs and name.startswith(_machinery_dirs):
@@ -235,25 +266,49 @@ def _owners(frame):
         if name[:1] != "<":
             found = _repo_abs(name)
             if found is not None:
+                seen += 1
                 if nearest is None:
                     nearest = found[0]
                 if frame.f_code.co_name == "<module>":
-                    return nearest, found[0]
+                    return nearest, found[0], seen
         frame = frame.f_back
-    return nearest, None
+    return nearest, None, seen
 
 
 def _targets(frame) -> list[DepSet]:
-    """The sets an event raised below ``frame`` is recorded in: the running test's, and its owner's import-time set."""
+    """The sets an event raised below ``frame`` is recorded in.
+
+    The running scope's own set, always. Beside it, in the traced process: while a repository file's
+    top level runs, that file's import-time set; between tests, the nearest repository file's
+    import-time set; during a test, when repository code called repository code, the nearest file's
+    ``_by_caller`` set, because a value cached by that code (``lru_cache``, a module global) is used by
+    later tests without reading its source again, and they reach that file through their closure.
+    """
     cur = _current
     if cur is None and not _idle_sink:
         return []
-    nearest, body = _owners(frame)
     out = [cur] if cur is not None else []
-    owner = body if cur is not None else (body or nearest)
-    if owner is not None:
-        out.append(_import_time.setdefault(owner, DepSet()))
+    if not _idle_sink:
+        return out
+    nearest, body, seen = _owners(frame)
+    if cur is None:
+        owner = body or nearest
+        if owner is not None:
+            out.append(_import_time.setdefault(owner, DepSet()))
+    elif body is not None:
+        out.append(_import_time.setdefault(body, DepSet()))
+    elif nearest is not None and seen > 1:
+        out.append(_by_caller.setdefault(nearest, DepSet()))
     return out
+
+
+def _note_error() -> None:
+    """A hook failed and its event is lost: the running test is rerun; outside a test every later record is."""
+    cur = _current
+    if cur is not None:
+        cur.reasons.add("tracer-error")
+    elif _idle_sink:
+        _idle_errors[0] = True
 
 
 def _repo_abs(path):
@@ -370,9 +425,33 @@ def _is_python(executable: str) -> bool:
         return False
 
 
-def _touches_repo(tokens, cwd) -> bool:
+def _command_names(tokens) -> list[str]:
+    """Words a shell or exec would look up on PATH: the program, and the first word of a ``-c`` command."""
+    names = []
+    for i, token in enumerate(tokens[:64]):
+        if i == 0 or tokens[i - 1] == "-c":
+            words = token.split(None, 1)
+            if words and "/" not in words[0] and not words[0].startswith("-"):
+                names.append(words[0])
+    return names
+
+
+def _path_hits_repo(tokens, path_env) -> bool:
+    for name in _command_names(tokens):
+        try:
+            hit = shutil.which(name, path=path_env)
+        except Exception:
+            hit = None
+        if hit and _repo_abs(hit) is not None:
+            return True
+    return False
+
+
+def _touches_repo(tokens, cwd, path_env=None) -> bool:
     base = os.fsdecode(cwd) if cwd is not None else os.getcwd()
     if _repo_abs(base) is not None:
+        return True
+    if _path_hits_repo(tokens, os.environ.get("PATH", os.defpath) if path_env is None else path_env):
         return True
     for token in tokens[:64]:
         if any(root in token for root in _roots):
@@ -423,6 +502,13 @@ def _env_names_repo(env) -> bool:
     return False
 
 
+def _exec_path(env) -> str:
+    """The PATH a child started with ``env`` searches (the default path when ``env`` has none)."""
+    if env is None:
+        return os.environ.get("PATH", os.defpath)
+    return _env_get(env, "PATH") or os.defpath
+
+
 def _note_spawn(cur: DepSet, executable, argv, cwd, env) -> None:
     exe = os.fsdecode(executable) if executable is not None else ""
     tokens = [os.fsdecode(a) for a in argv] if argv is not None and not isinstance(argv, (str, bytes)) else [os.fsdecode(argv)]
@@ -436,7 +522,8 @@ def _note_spawn(cur: DepSet, executable, argv, cwd, env) -> None:
             cur.expected_children += 1
         else:
             cur.reasons.add("child-env-dropped")
-    elif _touches_repo(tokens, cwd) or _env_names_repo(env):
+    elif _touches_repo([exe, *tokens] if tokens and exe != tokens[0] else tokens, cwd, _exec_path(env)) \
+            or _env_names_repo(env):
         cur.reasons.add("git-repo" if os.path.basename(exe) == "git" else "non-python-subprocess")
 
 
@@ -526,7 +613,7 @@ def _audit(event, args):
             except Exception:
                 target.reasons.add("tracer-error")
     except Exception:
-        pass
+        _note_error()
     finally:
         _tl.busy = False
 
@@ -543,8 +630,7 @@ def _probing(real, follow):
                             target.probes[found[1]] = probe_digest(
                                 found[0], follow and kwargs.get("follow_symlinks", True))
             except Exception:
-                if _current is not None:
-                    _current.reasons.add("tracer-error")
+                _note_error()
             finally:
                 _tl.busy = False
         return real(path, *args, **kwargs)
@@ -562,9 +648,16 @@ def _on_py_start(code, offset):
             cur.code.add(name)
         elif name and name[0] != "/" and name[0] != "<":
             cur.code.add(os.path.join(os.getcwd(), name))
+        if _idle_sink and code.co_name == "<module>" and name.startswith(_root_slash):
+            try:
+                nearest, _, seen = _owners(sys._getframe(1).f_back)
+                if nearest is not None and nearest != name and seen > 1:
+                    _by_caller.setdefault(nearest, DepSet()).code.add(name)
+            except Exception:
+                _note_error()
     elif _idle_sink and name.startswith(_root_slash):
         executing = sys._getframe(1)
-        nearest, _ = _owners(executing.f_back)
+        nearest, _, _ = _owners(executing.f_back)
         if nearest is not None and nearest != name:
             _import_time.setdefault(nearest, DepSet()).code.add(name)
     return _DISABLE
@@ -656,6 +749,43 @@ _parsed: dict[tuple[str, str], tuple[tuple, bool]] = {}
 _resolved: dict[tuple, tuple[tuple[str, ...], tuple[str, ...]]] = {}
 
 
+_IMPORT_FUNCTIONS = ("import_module", "__import__", "find_spec")
+_IMPORT_MODULES = ("importlib", "builtins")
+
+
+def _root_name(node):
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _import_function_names(nodes):
+    """(bare names bound to an import function, names bound to ``importlib`` or ``builtins`` or a submodule) in a file."""
+    funcs = {"__import__"}
+    modules = set(_IMPORT_MODULES)
+    for node in nodes:
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] in _IMPORT_MODULES:
+            for alias in node.names:
+                bound = alias.asname or alias.name
+                (funcs if alias.name in _IMPORT_FUNCTIONS else modules).add(bound)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname and alias.name.split(".")[0] in _IMPORT_MODULES:
+                    modules.add(alias.asname)
+    return funcs, modules
+
+
+def _is_import_function(node, funcs, modules) -> bool:
+    """True for a reference to ``import_module``, ``__import__`` or ``importlib``'s ``find_spec`` (any alias)."""
+    if isinstance(node, ast.Name):
+        return node.id in funcs
+    if isinstance(node, ast.Attribute):
+        if node.attr in ("import_module", "__import__"):
+            return True
+        return node.attr == "find_spec" and _root_name(node.value) in modules
+    return False
+
+
 def _parse_imports(path: str, digest: str):
     """Import statements of a file as ((level, module, names), ...), and whether the file has a computed import."""
     key = (path, digest)
@@ -671,20 +801,31 @@ def _parse_imports(path: str, digest: str):
         result = ((), None)
         _parsed[key] = result
         return result
-    for node in ast.walk(tree):
+    nodes = list(ast.walk(tree))
+    funcs, modules = _import_function_names(nodes)
+    called = {id(n.func) for n in nodes if isinstance(n, ast.Call)}
+    for node in nodes:
         if isinstance(node, ast.Import):
             imports.extend((0, alias.name, ()) for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             imports.append((node.level, node.module or "", tuple(a.name for a in node.names if a.name != "*")))
         elif isinstance(node, ast.Call):
             func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
-            if name in ("import_module", "__import__"):
+            if isinstance(func, ast.Name) and func.id == "getattr" and node.args \
+                    and _root_name(node.args[0]) in modules:
+                wanted = node.args[1] if len(node.args) > 1 else None
+                if not (isinstance(wanted, ast.Constant) and isinstance(wanted.value, str)
+                        and wanted.value not in _IMPORT_FUNCTIONS):
+                    dynamic = True
+            elif _is_import_function(func, funcs, modules):
                 arg = node.args[0] if node.args else next((k.value for k in node.keywords if k.arg == "name"), None)
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and not arg.value.startswith("."):
                     imports.append((0, arg.value, ()))
                 else:
                     dynamic = True
+        elif isinstance(node, (ast.Attribute, ast.Name)) and id(node) not in called \
+                and _is_import_function(node, funcs, modules):
+            dynamic = True
     result = (tuple(imports), dynamic)
     _parsed[key] = result
     return result
@@ -759,6 +900,15 @@ def _edges(path: str, search: tuple[str, ...]):
             out.extend(files)
             probed.extend(misses)
     return tuple(out), tuple(probed), ("dynamic-import" if dynamic else None)
+
+
+def _extra_code(path: str):
+    """Repository files that ``path`` executed outside a test body: at import, or called by its code."""
+    out: set[str] = set()
+    for sets in (_import_time, _by_caller):
+        if path in sets:
+            out |= sets[path].code
+    return out
 
 
 def search_dirs() -> tuple[str, ...]:
@@ -885,10 +1035,12 @@ def start_child() -> None:
 
 
 def _read_child_logs(child_dir: str, root_abs: str, into: DepSet, own_pid: int) -> int:
-    """Merge the child logs of one test into ``into``; return how many of them descend from ``own_pid``.
+    """Merge the child logs of one test into ``into``; return how many of them are children of ``own_pid``.
 
-    A log whose parent chain does not reach the test process (a Python started through a shell,
-    say) still contributes its reads but cannot stand in for a counted child that wrote none.
+    Every log, whether or not its chain reaches the test process (a Python started through a shell
+    is not linked), contributes its reads and is held to its own count: fewer logs naming it as
+    their parent than Python children it started is ``child-log-missing``. A log whose parent is
+    another process cannot stand in for a counted child that wrote none.
     """
     try:
         names = os.listdir(child_dir)
@@ -907,20 +1059,14 @@ def _read_child_logs(child_dir: str, root_abs: str, into: DepSet, own_pid: int) 
             parsed.append((int(data["pid"]), int(data["ppid"]), part))
         except (OSError, KeyError, TypeError, ValueError):
             into.reasons.add("child-log-missing")
-    linked = {own_pid}
-    grew = True
-    while grew:
-        grew = False
-        for pid, ppid, _ in parsed:
-            if ppid in linked and pid not in linked:
-                linked.add(pid)
-                grew = True
+    kids = Counter(ppid for _, ppid, _ in parsed)
     for pid, _, part in parsed:
-        if pid not in linked:
-            part.expected_children = 0
+        if part.expected_children > kids[pid]:
+            into.reasons.add("child-log-missing")
+        part.expected_children = 0
         into.merge(part)
     shutil.rmtree(child_dir, ignore_errors=True)
-    return sum(1 for pid, _, _ in parsed if pid in linked)
+    return kids[own_pid]
 
 
 # --- the pytest plugin ---------------------------------------------------------------------
@@ -1074,15 +1220,18 @@ def _make_plugin():
             logs = _read_child_logs(self.child_dir, self.root, merged, os.getpid())
             if logs < merged.expected_children:
                 merged.reasons.add("child-log-missing")
+            if _idle_errors[0]:
+                merged.reasons.add("tracer-error")
             merged.code.update(self._static_roots(item))
             located = (_repo_abs(c) for c in merged.code)
             code_files = {found[0] for found in located if found is not None and found[1] != "."}
-            closure, reasons, absent = import_closure(
-                code_files, extra=lambda path: _import_time[path].code if path in _import_time else ())
+            closure, reasons, absent = import_closure(code_files, extra=_extra_code)
             merged.reasons |= reasons
             for path in closure:
                 if path in _import_time:
                     merged.merge(_import_time[path], code=False)
+                if path in _by_caller:
+                    merged.merge(_by_caller[path], code=False, reasons=False)
             for path in absent:
                 found = _repo_abs(path)
                 if found is not None:
