@@ -908,3 +908,25 @@ def test_load_records_rejects_an_unknown_line_kind(tmp_path):
     (tmp_path / "main.jsonl").write_text('{"kind": "bogus"}\n')
     with pytest.raises(ValueError, match="unknown record kind"):
         dep_tracer.load_records(tmp_path)
+
+
+SESSION_HOOK_GIT = (
+    "import subprocess\n\n\n"
+    "def pytest_collection_modifyitems(config, items):\n"
+    "    subprocess.run(['git', '--version'], capture_output=True)\n"
+)
+SESSION_HOOK_GIT_UNTRACED = (
+    "import subprocess\n\nimport dep_tracer\n\n\n"
+    "def pytest_collection_modifyitems(config, items):\n"
+    "    with dep_tracer.untraced():\n"
+    "        subprocess.run(['git', '--version'], capture_output=True)\n"
+)
+
+
+@pytest.mark.parametrize(("conftest", "reasons"), [(SESSION_HOOK_GIT, ["git-repo"]), (SESSION_HOOK_GIT_UNTRACED, [])],
+                         ids=["traced", "untraced"])
+def test_a_session_hook_git_call_reaches_every_test_unless_it_runs_untraced(tmp_path, conftest, reasons):
+    root = _make_repo((tmp_path / "repo").resolve(), {"conftest.py": conftest, "test_x.py": "def test_it():\n    pass\n"})
+    run = _pytest(root, tmp_path / "records", ".")
+    assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-2000:]
+    assert dep_tracer.load_records(tmp_path / "records")["test_x.py::test_it"]["always_rerun"] == reasons

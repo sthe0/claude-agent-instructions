@@ -247,6 +247,12 @@ class _quiet:
         _tl.busy = self.was
 
 
+untraced = _quiet
+"""``with dep_tracer.untraced():`` hides what its body does from the tracer: for work a session
+hook does that only decides which tests run (``slow_selection``'s git diff) and checks nothing, which
+otherwise lands in the import-time set of a file in every test's closure."""
+
+
 def enabled() -> bool:
     return os.environ.get(ENABLE_ENV) == "1" and not os.environ.get(CHILD_DIR_ENV)
 
