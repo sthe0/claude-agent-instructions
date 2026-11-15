@@ -29,6 +29,7 @@ import dataclasses
 import fcntl
 import functools
 import importlib.util
+import json
 import os
 import re
 import resource
@@ -905,11 +906,15 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
             lines = _test_report().read_lines(run.report_path)
             outcome = _test_report().outcomes(lines)
             ran = [i for i in _test_report().collected_ids(lines) if i in records]
-            always = sum(1 for i in ran if records[i]["always_rerun"])
+            always_ids = [i for i in ran if records[i]["always_rerun"]]
+            always = len(always_ids)
             passing = {i: result_store.deps_of(records[i]) for i in ran
                        if outcome.get(i) == "passed" and i not in run.failures and not records[i]["always_rerun"]}
             with result_store.ResultStore(plan.store) as store:
                 stored = store.put(sha, plan.environment, passing)
+                store.set_meta(result_store.ALWAYS_RERUN_META, json.dumps(sorted(always_ids)))
+                store.set_meta(result_store.FAILED_META, json.dumps(
+                    sorted(i for i in ran if outcome.get(i) != "passed" or i in run.failures)))
                 store.trim()
         except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
             note = f"results of the run were not stored: {one_line(exc, 200)}"
@@ -1047,7 +1052,7 @@ def run_tree(repo: Path, sha: str, extra_pytest_args: Sequence[str], junit_path:
     gate_retention.sweep_dead_sandboxes(sandbox_parent, SANDBOX_PREFIX)
     with gate_retention.sandbox(sandbox_parent, SANDBOX_PREFIX) as root:
         run = default_runner(repo, sha, root, select=(), timeout_s=timeout_s,
-                             extra_pytest_args=extra_pytest_args, slots=slots)
+                             extra_pytest_args=extra_pytest_args, slots=slots, reuse_results=False)
         junit_path.parent.mkdir(parents=True, exist_ok=True)
         report_copy = junit_path.with_name(junit_path.stem + ".tests.jsonl")
         kept = {}

@@ -1,0 +1,65 @@
+{
+  "about": "Six recorded outcomes of gate_speedup_control.py k3-negative that a correct store never produces; `expect` is the problem code judge_k3 must give each. Each differs from a good outcome in one place.",
+  "bad": [
+    {
+      "name": "a regression that passed",
+      "expect": "regression-passed",
+      "outcomes": {
+        "regression": {"verdict": "PASS", "reused": 15000, "failed_rounds": [1, 2]},
+        "partial_sets": {"moved_tip_join": "refused", "moved_tip_status": "UNAVAILABLE", "moved_tip_check_exit": 1, "cross_candidate_join": "refused", "same_binding_join": "joined"},
+        "flake_listed": {"verdict": "FAIL"},
+        "key_coverage": {"tree_wide_source": "ran", "narrow_source": "reused", "dist_runs": {"none": {"reused": 0, "ran": 2}, "1.0": {"reused": 0, "ran": 2}, "1.0-again": {"reused": 2, "ran": 0}, "1.1": {"reused": 0, "ran": 2}}, "interpreter_keys": ["key-a", "key-b"]}
+      }
+    },
+    {
+      "name": "parts of different tips combined into PASS",
+      "expect": "partial-sets-combined",
+      "outcomes": {
+        "regression": {"verdict": "FAIL", "reused": 15000, "failed_rounds": [1, 2]},
+        "partial_sets": {"moved_tip_join": "joined", "moved_tip_status": "PASS", "moved_tip_check_exit": 0, "cross_candidate_join": "refused", "same_binding_join": "joined"},
+        "flake_listed": {"verdict": "FAIL"},
+        "key_coverage": {"tree_wide_source": "ran", "narrow_source": "reused", "dist_runs": {"none": {"reused": 0, "ran": 2}, "1.0": {"reused": 0, "ran": 2}, "1.0-again": {"reused": 2, "ran": 0}, "1.1": {"reused": 0, "ran": 2}}, "interpreter_keys": ["key-a", "key-b"]}
+      }
+    },
+    {
+      "name": "a listed reproducible failure that gave PASS",
+      "expect": "listed-failure-passed",
+      "outcomes": {
+        "regression": {"verdict": "FAIL", "reused": 15000, "failed_rounds": [1, 2]},
+        "partial_sets": {"moved_tip_join": "refused", "moved_tip_status": "UNAVAILABLE", "moved_tip_check_exit": 1, "cross_candidate_join": "refused", "same_binding_join": "joined"},
+        "flake_listed": {"verdict": "PASS"},
+        "key_coverage": {"tree_wide_source": "ran", "narrow_source": "reused", "dist_runs": {"none": {"reused": 0, "ran": 2}, "1.0": {"reused": 0, "ran": 2}, "1.0-again": {"reused": 2, "ran": 0}, "1.1": {"reused": 0, "ran": 2}}, "interpreter_keys": ["key-a", "key-b"]}
+      }
+    },
+    {
+      "name": "the tree-wide test marked reused",
+      "expect": "tree-wide-reused",
+      "outcomes": {
+        "regression": {"verdict": "FAIL", "reused": 15000, "failed_rounds": [1, 2]},
+        "partial_sets": {"moved_tip_join": "refused", "moved_tip_status": "UNAVAILABLE", "moved_tip_check_exit": 1, "cross_candidate_join": "refused", "same_binding_join": "joined"},
+        "flake_listed": {"verdict": "FAIL"},
+        "key_coverage": {"tree_wide_source": "reused", "narrow_source": "reused", "dist_runs": {"none": {"reused": 0, "ran": 2}, "1.0": {"reused": 0, "ran": 2}, "1.0-again": {"reused": 2, "ran": 0}, "1.1": {"reused": 0, "ran": 2}}, "interpreter_keys": ["key-a", "key-b"]}
+      }
+    },
+    {
+      "name": "a dist-version change with a result still reused",
+      "expect": "dist-version-reused",
+      "outcomes": {
+        "regression": {"verdict": "FAIL", "reused": 15000, "failed_rounds": [1, 2]},
+        "partial_sets": {"moved_tip_join": "refused", "moved_tip_status": "UNAVAILABLE", "moved_tip_check_exit": 1, "cross_candidate_join": "refused", "same_binding_join": "joined"},
+        "flake_listed": {"verdict": "FAIL"},
+        "key_coverage": {"tree_wide_source": "ran", "narrow_source": "reused", "dist_runs": {"none": {"reused": 0, "ran": 2}, "1.0": {"reused": 0, "ran": 2}, "1.0-again": {"reused": 2, "ran": 0}, "1.1": {"reused": 1, "ran": 1}}, "interpreter_keys": ["key-a", "key-b"]}
+      }
+    },
+    {
+      "name": "equal interpreter keys across an interpreter change",
+      "expect": "interpreter-keys-equal",
+      "outcomes": {
+        "regression": {"verdict": "FAIL", "reused": 15000, "failed_rounds": [1, 2]},
+        "partial_sets": {"moved_tip_join": "refused", "moved_tip_status": "UNAVAILABLE", "moved_tip_check_exit": 1, "cross_candidate_join": "refused", "same_binding_join": "joined"},
+        "flake_listed": {"verdict": "FAIL"},
+        "key_coverage": {"tree_wide_source": "ran", "narrow_source": "reused", "dist_runs": {"none": {"reused": 0, "ran": 2}, "1.0": {"reused": 0, "ran": 2}, "1.0-again": {"reused": 2, "ran": 0}, "1.1": {"reused": 0, "ran": 2}}, "interpreter_keys": ["key-a", "key-a"]}
+      }
+    }
+  ]
+}

@@ -101,12 +101,42 @@ two checks show the limiter holds and the record carries the cost, on real proce
       is left in /tmp; 1 any other check fails; 2 an environment error. ``--leak`` makes the last run keep
       its sandbox (SUITE_GATE_KEEP_SANDBOX=1), so the check must exit 3 and name the sandbox.
 
+  gate_speedup_control.py reuse-scenario --out PATH --disk-max-mb N [--cpu-max-s N] [--wall-max-s N]
+                                         [--mutate-unrecorded] [-C REPO]
+      The content-keyed result store on real gate runs. A private copy of the live store
+      (CORE_RESULT_STORE; nothing live is written), a throwaway tip with HEAD's tree and candidates on it,
+      each in a detached worktree under /tmp/cls-control-<pid>-reuse (removed after). The store is warmed
+      by one full run of the unmodified tree when some collected test has no stored pass and is not one
+      the last run could not store. Then three files every stored run read are edited (a nonce comment
+      each): a lib module, a script one named test runs only as a subprocess, and a data file. Asserts:
+      every test whose stored dependencies include a touched file ran, the named test among them; every
+      other test with a stored pass was reused; the verdict is PASS; peak disk over warm-up plus candidate
+      is at most ``--disk-max-mb``; every collected id is in the record's ``test_sources``. cpu_s and
+      wall of the candidate run are reported, and asserted only when ``--cpu-max-s`` / ``--wall-max-s``
+      is given. PATH gets the figures, the always-rerun set size and ``failed_assertions``. Exit 0 all
+      hold, 1 one fails, 2 an error. ``--mutate-unrecorded`` rewrites the named test's stored row as if
+      the tracer had never seen the script, so it must exit 1 with ``failed_assertions`` equal to
+      ``["named-subprocess-reused"]``. About an hour on a cold store, minutes on a warm one.
+
+  gate_speedup_control.py k3-negative (--out PATH | --judge-only FILE) [-C REPO]
+      Four ways the result store could let a regression through, on throwaway candidates against a
+      private store copy, each touching only planted tests: a planted failing test must give FAIL with
+      reused results and two reruns; the partial sets of a run at a moved tip (a throwaway bare remote)
+      and of two candidates must not join while a run's own pair does, and ``suite-gate.py check`` must
+      refuse the moved-tip record; a failing test listed in flaky.toml must still give FAIL; a tree-wide
+      planted test must run after an unrelated file appears while a narrow one is reused, a dummy
+      distribution (``core-control-dummy`` 1.0, then 1.1, on the run's PYTHONPATH) must leave nothing
+      reused, and two interpreter versions must give different keys. ``--judge-only FILE`` applies the
+      judgement alone to a recorded-outcomes file (``fixtures/k3_bad_outcomes.json`` holds six bad ones).
+      Exit 0 every case is refused as it must be, 1 one is not, 2 an error.
+
 Elsewhere exit 2 is a usage or environment error (not enough free disk, git failure).
 """
 from __future__ import annotations
 
 import argparse
 import collections
+import contextlib
 import datetime
 import fcntl
 import hashlib
@@ -126,6 +156,7 @@ import tomllib
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
+from unittest import mock
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 REPO_DIR = SCRIPTS_DIR.parent
@@ -137,6 +168,7 @@ import _test_report  # noqa: E402
 from lib import flake_list  # noqa: E402
 from lib import gate_retention  # noqa: E402
 from lib import hermetic_run as hermetic_mod  # noqa: E402
+from lib import result_store  # noqa: E402
 from lib import suite_gate as gate  # noqa: E402
 from lib import test_slots  # noqa: E402
 
@@ -382,8 +414,22 @@ def _git(repo: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
-def collect_only_ids(repo: Path, sha: str) -> list[str]:
-    """The node ids ``pytest --collect-only -q`` prints for ``sha``, in a sandbox like the gate's."""
+def _collected_ids(proc: subprocess.CompletedProcess) -> list[str]:
+    ids = []
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            break
+        if "::" in line:
+            ids.append(line)
+    if not ids:
+        raise SystemExit(f"--collect-only printed no ids (exit {proc.returncode}): {proc.stdout[-400:]}")
+    return ids
+
+
+def collect_only_ids(repo: Path, sha: str, inspect=None) -> list[str]:
+    """The node ids ``pytest --collect-only -q`` prints for ``sha``, in a sandbox like the gate's.
+
+    ``inspect(root, env, ids)``, when given, is called while the sandbox still exists."""
     root = Path(tempfile.mkdtemp(prefix=gate.SANDBOX_PREFIX, dir=gate.SANDBOX_PARENT))
     try:
         build = subprocess.run(
@@ -398,16 +444,11 @@ def collect_only_ids(repo: Path, sha: str) -> list[str]:
             [sys.executable, "-m", "pytest", "scripts/tests", "--collect-only", "-q", "-p", "no:xdist",
              "-p", "no:cacheprovider", "--continue-on-collection-errors", "--rootdir", str(root / "core")],
             cwd=root / "core", env=env, capture_output=True, text=True, timeout=1800)
+        ids = _collected_ids(proc)
+        if inspect is not None:
+            inspect(root, env, ids)
     finally:
         gate.remove_sandbox(root, gate.SANDBOX_PARENT)
-    ids = []
-    for line in proc.stdout.splitlines():
-        if not line.strip():
-            break
-        if "::" in line:
-            ids.append(line)
-    if not ids:
-        raise SystemExit(f"--collect-only printed no ids (exit {proc.returncode}): {proc.stdout[-400:]}")
     return ids
 
 
@@ -468,7 +509,7 @@ def concurrent_gates(repo: Path, runs: int, out: Path, keep: list[str] | None = 
         for sha, log in zip(candidates, logs):
             procs.append(subprocess.Popen(
                 [sys.executable, str(SCRIPTS_DIR / "suite-gate.py"), "run", "-C", str(repo), "--ref", sha,
-                 "--remote-sha", tip],
+                 "--remote-sha", tip, "--no-reuse"],
                 stdout=log.open("w", encoding="utf-8"), stderr=subprocess.STDOUT, env=env))
         exits = [proc.wait() for proc in procs]
     collect_ids = collect_only_ids(repo, candidates[0])
@@ -563,7 +604,8 @@ def sandbox_run(repo: Path, out: Path, select: list[str], root: Path | None, tim
                 _say(f"the sandbox did not build: {failed_build.detail}")
                 return 2
             (work / "core" / PROBE_FILE).write_text(_probe_source(repo.resolve()), encoding="utf-8")
-        run = gate.default_runner(repo, sha, work, select=select, timeout_s=timeout_s, hide=hide)
+        run = gate.default_runner(repo, sha, work, select=select, timeout_s=timeout_s, hide=hide,
+                                  reuse_results=False)
         if not run.build_ok or run.timed_out or run.pytest_exit is None:
             _say(f"the run did not complete: {'timed out' if run.timed_out else run.detail or 'no pytest exit'}")
             return 2
@@ -819,10 +861,11 @@ def _index_tree(repo: Path, steps: list[tuple[list[str], str | None]]) -> str:
     return proc.stdout.strip()
 
 
-def reduced_tree(repo: Path, files: dict[str, str]) -> str:
-    """HEAD's tree without any ``test_*.py`` under scripts/tests, plus ``files`` (path -> text)."""
-    tracked = _git(repo, "ls-tree", "-r", "--name-only", "HEAD", "--", "scripts/tests").splitlines()
-    drop = [p for p in tracked if p.rsplit("/", 1)[-1].startswith("test_") and p.endswith(".py")]
+def _tree_with(repo: Path, files: dict[str, str], *, keep_tests: bool) -> str:
+    drop: list[str] = []
+    if not keep_tests:
+        tracked = _git(repo, "ls-tree", "-r", "--name-only", "HEAD", "--", "scripts/tests").splitlines()
+        drop = [p for p in tracked if p.rsplit("/", 1)[-1].startswith("test_") and p.endswith(".py")]
     steps: list[tuple[list[str], str | None]] = [(["read-tree", "HEAD"], None)]
     if drop:
         steps.append((["rm", "-q", "--cached", "--", *drop], None))
@@ -831,6 +874,16 @@ def reduced_tree(repo: Path, files: dict[str, str]) -> str:
         steps.append((["update-index", "--add", "--cacheinfo", f"100644,{blob},{path}"], None))
     steps.append((["write-tree"], None))
     return _index_tree(repo, steps)
+
+
+def reduced_tree(repo: Path, files: dict[str, str]) -> str:
+    """HEAD's tree without any ``test_*.py`` under scripts/tests, plus ``files`` (path -> text)."""
+    return _tree_with(repo, files, keep_tests=False)
+
+
+def edited_tree(repo: Path, files: dict[str, str]) -> str:
+    """HEAD's tree with every test kept, ``files`` (path -> text) added or replaced."""
+    return _tree_with(repo, files, keep_tests=True)
 
 
 def _git_stdin(repo: Path, args: list[str], text: str) -> str:
@@ -922,7 +975,8 @@ def verdict_scenario(repo: Path, case_name: str, sabotage: str | None, out: Path
         added = True
 
         def runner(r, sha, root, *, select, timeout_s):
-            return gate.default_runner(r, sha, root, select=select, timeout_s=timeout_s, slots=2)
+            return gate.default_runner(r, sha, root, select=select, timeout_s=timeout_s, slots=2,
+                                       reuse_results=False)
 
         outcome = gate.run_suite(work, candidate, tip, runner=runner, tip_reader=lambda: tip)
         record = outcome.record
@@ -973,7 +1027,7 @@ SERIES_STATUS = {"pass": "PASS", "fail": "FAIL"}
 def series_command(repo: Path, sha: str, tip: str, timeout_s: int = SERIES_TIMEOUT_S) -> list[str]:
     """One gate run of a ``disk-series`` step, started the way every fan-out trial is: under cap-run.sh."""
     return [str(SCRIPTS_DIR / "cap-run.sh"), "--", sys.executable, str(SCRIPTS_DIR / "suite-gate.py"), "run",
-            "-C", str(repo), "--ref", sha, "--remote-sha", tip, "--timeout", str(timeout_s)]
+            "-C", str(repo), "--ref", sha, "--remote-sha", tip, "--timeout", str(timeout_s), "--no-reuse"]
 
 
 def _listing(directory: Path) -> list[str]:
@@ -1355,6 +1409,438 @@ def _isolation_command(args: argparse.Namespace) -> int:
     return shuffle_pair(args.repo.resolve(), seeds, args.out, args.exceptions, args.timeout_s, args.runs)
 
 
+# ── reuse-scenario, k3-negative: the result store on real gate runs ───────
+
+EXIT_REUSE_MISMATCH, EXIT_REUSE_ERROR = 1, 2
+NAMED_TEST = "scripts/tests/test_check_org_neutral.py::test_without_commit_msg_mode_the_whole_file_is_scanned"
+NAMED_SCRIPT = "scripts/check-org-neutral.py"
+LIB_CANDIDATES = ("scripts/lib/argv_text.py", "scripts/lib/shell_tokens.py", "scripts/lib/bm25f.py")
+DATA_CANDIDATES = ("scripts/canon_writers.toml", "scripts/external-sources.toml")
+NAMED_ASSERTION = "named-subprocess-reused"
+DISTRIBUTION = "core-control-dummy"
+K3_DIR = f"{PLANTED_DIR}/test_k3"
+K3_REGRESSION = "def test_regression():\n    assert False\n"
+K3_WIDE = f"{K3_DIR}_wide.py::test_walks_the_tree"
+K3_NARROW = f"{K3_DIR}_narrow.py::test_reads_one_file"
+K3_WIDE_SOURCE = '''\
+import os
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_walks_the_tree():
+    files = 0
+    for _directory, names, found in os.walk(ROOT):
+        names[:] = [name for name in names if name != ".git"]
+        files += len(found)
+    assert files > 0
+'''
+K3_NARROW_SOURCE = '''\
+from pathlib import Path
+
+
+def test_reads_one_file():
+    assert Path(__file__).with_name("k3_narrow_data.txt").read_text() == "narrow\\n"
+'''
+K3_NARROW_DATA = "narrow\n"
+K3_ANCHOR = "def test_anchor():\n    assert True\n"
+
+
+class Experiment:
+    """A private result store, flake journal, worktree and bare remote under ``/tmp/cls-control-<pid>-<tag>``.
+
+    While it is open ``CORE_RESULT_STORE`` and the flaky journal variable name the private files, so a
+    gate run of this process reads and writes nothing of the live store or journal. Every commit is an
+    unreferenced object; leaving removes the directory (a literal path built from the pid and the tag).
+    """
+
+    def __init__(self, repo: Path, tag: str):
+        self.repo = repo
+        self.base = Path(f"/tmp/cls-control-{os.getpid()}-{tag}")
+        self.store = self.base / "results.sqlite"
+        self.work = self.base / "work"
+        self.remote = self.base / "remote.git"
+        self.journal = self.base / "journal.jsonl"
+        self.tip = ""
+        self.head_tree = ""
+        self._saved: dict[str, str | None] = {}
+        self._worktree = False
+
+    def __enter__(self) -> "Experiment":
+        free_gb = shutil.disk_usage("/").free / 2**30
+        if free_gb < MIN_FREE_GB:
+            raise SystemExit(f"only {free_gb:.1f} GB free on /; need {MIN_FREE_GB}")
+        live = result_store.store_path(Path(gate.shared.git_common_dir(self.repo)))
+        self.base.mkdir(parents=True)
+        result_store.copy_store(live, self.store)
+        for name, value in ((result_store.STORE_ENV, self.store), (flake_list.JOURNAL_ENV, self.journal)):
+            self._saved[name] = os.environ.get(name)
+            os.environ[name] = str(value)
+        self.head_tree = _git(self.repo, "rev-parse", "HEAD^{tree}")
+        self.tip = _commit(self.repo, self.head_tree, "HEAD", f"cls-control tip {self.base.name}")
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        for name, value in self._saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        if self._worktree:
+            subprocess.run(["git", "-C", str(self.repo), "worktree", "remove", "--force", str(self.work)],
+                           capture_output=True, text=True)
+        subprocess.run(["git", "-C", str(self.repo), "worktree", "prune"], capture_output=True, text=True)
+        if self.base.name.startswith("cls-control-"):
+            shutil.rmtree(self.base, ignore_errors=True)
+
+    def candidate(self, tree: str, label: str) -> str:
+        """A commit of ``tree`` on top of the tip; the first one also becomes the detached worktree."""
+        sha = _commit(self.repo, tree, self.tip, f"cls-control {label} {self.base.name}")
+        if not self._worktree:
+            _git(self.repo, "worktree", "add", "--detach", str(self.work), sha)
+            self._worktree = True
+        return sha
+
+    def run(self, sha: str, tip_reader=None) -> tuple[dict, float]:
+        """The real gate (default runner, reuse on) on ``sha``; its record and the wall seconds it took."""
+        started = time.monotonic()
+        outcome = gate.run_suite(self.work, sha, self.tip, tip_reader=tip_reader or (lambda: self.tip))
+        return outcome.record, time.monotonic() - started
+
+    def preview(self, sha: str) -> dict:
+        """What the private store holds for the tree of ``sha``: collected ids, hits, the deps behind each hit,
+        and the ids the last settled run could not store."""
+        found: dict = {}
+
+        def inspect(root: Path, env: dict, ids: list[str]) -> None:
+            environment = result_store.current_environment(env=env)
+            with result_store.ResultStore(self.store) as store:
+                hits = store.lookup(ids, environment, result_store.tree_resolver(root / "core"))
+                found["deps"] = {i: row["deps"] for i in hits for row in store.rows_of(i)
+                                 if row["key"] == hits[i].key}
+                found["always_rerun"] = json.loads(store.get_meta(result_store.ALWAYS_RERUN_META) or "[]")
+                found["failed"] = json.loads(store.get_meta(result_store.FAILED_META) or "[]")
+            found["environment"], found["hits"] = environment, hits
+
+        found["ids"] = collect_only_ids(self.repo, sha, inspect)
+        return found
+
+    def prepare(self) -> dict:
+        """The preview of the unmodified tree, after one warm-up full run when some id that could be
+        stored has no hit."""
+        warm = self.candidate(self.head_tree, "warm")
+        state = self.preview(warm)
+        warm_record, warm_wall = None, 0.0
+        if needs_warm_up(state):
+            _say(f"warm-up: {len(state['ids']) - len(state['hits'])} of {len(state['ids'])} ids have no stored pass")
+            warm_record, warm_wall = self.run(warm)
+            state = self.preview(warm)
+        return {**state, "warm_sha": warm, "warm_record": warm_record, "warm_wall_s": warm_wall}
+
+
+def needs_warm_up(state: dict) -> bool:
+    """True when some collected id has no hit and is not one the last settled run could not store."""
+    unstorable = set(state["always_rerun"]) | set(state["failed"])
+    return any(i not in state["hits"] and i not in unstorable for i in state["ids"])
+
+
+def _head_text(repo: Path, path: str) -> str:
+    proc = subprocess.run(["git", "-C", str(repo), "show", f"HEAD:{path}"], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise SystemExit(f"git show HEAD:{path} failed: {proc.stderr.strip()}")
+    return proc.stdout
+
+
+def with_nonce_comment(text: str, nonce: str) -> str:
+    return text + ("" if text.endswith("\n") else "\n") + f"# {nonce}\n"
+
+
+def reuse_assertions(record: dict, *, named: str, touched_ids: set[str], hit_ids: set[str], collected: list[str],
+                     disk_mb: float, disk_max_mb: float, cpu_max_s: float | None = None,
+                     wall_max_s: float | None = None, wall_s: float = 0.0) -> dict[str, list[str]]:
+    """Per assertion the offending ids or figures; an empty list holds.
+
+    The named test is judged by its own assertion alone, so a store that misses its script's change
+    fails exactly ``named-subprocess-reused``."""
+    sources = record.get("test_sources") or {}
+    found = {
+        "touched-dependents-ran": [i for i in sorted(touched_ids - {named}) if sources.get(i) != "ran"],
+        NAMED_ASSERTION: [] if sources.get(named) == "ran" else [named],
+        "others-reused": [i for i in sorted(hit_ids - touched_ids - {named}) if sources.get(i) != "reused"],
+        "verdict-pass": [] if record.get("status") == gate.PASS else [str(record.get("status"))],
+        "disk-bound": [] if disk_mb <= disk_max_mb else [f"{disk_mb} MB > {disk_max_mb} MB"],
+        "record-lists-every-id": [i for i in collected if i not in sources],
+    }
+    cpu_s = record.get("cpu_s") or 0.0
+    if cpu_max_s is not None:
+        found["cpu-bound"] = [] if cpu_s <= cpu_max_s else [f"{cpu_s} s > {cpu_max_s} s"]
+    if wall_max_s is not None:
+        found["wall-bound"] = [] if wall_s <= wall_max_s else [f"{wall_s} s > {wall_max_s} s"]
+    return found
+
+
+def reuse_scenario(repo: Path, out: Path, *, mutate: bool, disk_max_mb: float, cpu_max_s: float | None,
+                   wall_max_s: float | None) -> int:
+    """Edit three files the stored runs read (a lib module, a script only a subprocess runs, a data
+    file) and check which tests the gate runs; 0 every assertion holds, 1 one fails, 2 an error."""
+    nonce = f"{os.getpid()}-{int(time.time())}"
+    with Experiment(repo, "reuse") as exp:
+        state = exp.prepare()
+        deps = state["deps"]
+        dependents: dict[str, set[str]] = {}
+        for test_id, dep_list in deps.items():
+            for kind, path, _digest in dep_list:
+                if kind == result_store.FILE:
+                    dependents.setdefault(path, set()).add(test_id)
+        if NAMED_TEST not in deps:
+            raise SystemExit(f"{NAMED_TEST} has no stored pass to start from (unstored: always-rerun or failed)")
+        if NAMED_TEST not in dependents.get(NAMED_SCRIPT, ()):
+            raise SystemExit(f"the stored dependencies of {NAMED_TEST} do not list {NAMED_SCRIPT}")
+        lib = next((p for p in LIB_CANDIDATES if dependents.get(p)), None)
+        data = next((p for p in DATA_CANDIDATES if dependents.get(p)), None)
+        if lib is None or data is None:
+            raise SystemExit(f"no stored test depends on any of {LIB_CANDIDATES if lib is None else DATA_CANDIDATES}")
+        touched = [NAMED_SCRIPT, lib, data]
+        candidate = exp.candidate(edited_tree(repo, {p: with_nonce_comment(_head_text(repo, p), nonce)
+                                                     for p in touched}), "reuse")
+        touched_ids = set().union(*(dependents[p] for p in touched))
+        if mutate:
+            with result_store.ResultStore(exp.store) as store:
+                store.replace_deps(NAMED_TEST, [d for d in deps[NAMED_TEST] if d[1] != NAMED_SCRIPT],
+                                   state["environment"])
+        record, wall_s = exp.run(candidate)
+    warm_record = state["warm_record"] or {}
+    disk_mb = max(warm_record.get("peak_disk_mb") or 0.0, record.get("peak_disk_mb") or 0.0)
+    found = reuse_assertions(record, named=NAMED_TEST, touched_ids=touched_ids, hit_ids=set(state["hits"]),
+                             collected=state["ids"], disk_mb=disk_mb, disk_max_mb=disk_max_mb,
+                             cpu_max_s=cpu_max_s, wall_max_s=wall_max_s, wall_s=wall_s)
+    failed = [name for name, offenders in found.items() if offenders]
+    unstored = [i for i in state["ids"] if i not in state["hits"]]
+    summary = {
+        "mutate_unrecorded": mutate, "tip": exp.tip, "candidate": candidate, "touched": touched, "named_test": NAMED_TEST,
+        "warmed": state["warm_record"] is not None, "warm_wall_s": state["warm_wall_s"],
+        "collected": len(state["ids"]), "with_stored_pass": len(state["hits"]), "touched_dependents": len(touched_ids),
+        "always_rerun_set": len(state["always_rerun"]), "failed_in_warm_up": len(state["failed"]),
+        "without_stored_pass": len(unstored),
+        "results": record.get("results"), "status": record.get("status"),
+        "cpu_s": record.get("cpu_s"), "duration_s": record.get("duration_s"), "wall_s": wall_s,
+        "peak_disk_mb": disk_mb, "record_sha": candidate,
+        "assertions": {name: offenders[:10] for name, offenders in found.items()},
+        "failed_assertions": failed, "ok": not failed,
+    }
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    for name in failed:
+        _say(f"ASSERTION FAILED: {name}: {found[name][:3]}")
+    _say(f"{record.get('status')}: {summary['results']}; cpu_s={summary['cpu_s']} wall_s={wall_s:.0f} "
+         f"disk={disk_mb}MB; summary {out}")
+    _say("OK" if not failed else "FAIL")
+    return 0 if not failed else EXIT_REUSE_MISMATCH
+
+
+@contextlib.contextmanager
+def joins_spied():
+    """The (first, second) sets of every ``join_partial_sets`` call of the gate, and how each ended."""
+    seen: list[dict] = []
+    original = gate.join_partial_sets
+
+    def spy(first, second):
+        try:
+            joined = original(first, second)
+        except gate.JoinRefused as exc:
+            seen.append({"first": first, "second": second, "result": "refused", "why": str(exc)})
+            raise
+        seen.append({"first": first, "second": second, "result": "joined", "why": ""})
+        return joined
+
+    gate.join_partial_sets = spy
+    try:
+        yield seen
+    finally:
+        gate.join_partial_sets = original
+
+
+def join_result(first, second) -> str:
+    try:
+        gate.join_partial_sets(first, second)
+    except gate.JoinRefused:
+        return "refused"
+    return "joined"
+
+
+def dummy_distribution(directory: Path, version: str) -> str:
+    """A directory with a ``core-control-dummy`` distribution of ``version``, for the gate run's PYTHONPATH."""
+    info = directory / f"core_control_dummy-{version}.dist-info"
+    info.mkdir(parents=True)
+    (info / "METADATA").write_text(
+        f"Metadata-Version: 2.1\nName: {DISTRIBUTION}\nVersion: {version}\n", encoding="utf-8")
+    return str(directory)
+
+
+def interpreter_keys() -> list[str]:
+    """The key of one test under two ``sys.version_info`` values; they must differ."""
+    fingerprint = {"dists": [["pytest", "8.0"]], "git": "git version 2.43.0"}
+    keys = []
+    for version in ((3, 11, 0, "final", 0), (3, 12, 0, "final", 0)):
+        with mock.patch.object(sys, "version_info", version):
+            keys.append(result_store.compute_key("t::x", [], result_store.current_environment(fingerprint)))
+    return keys
+
+
+def _results_of(record: dict) -> dict:
+    results = record.get("results") or {}
+    return {"reused": results.get("reused", 0), "ran": results.get("ran", 0)}
+
+
+def _with_extra_path(exp: Experiment, sha: str, directory: str | None) -> dict:
+    saved = os.environ.get(gate.EXTRA_PYTHONPATH_ENV)
+    if directory is None:
+        os.environ.pop(gate.EXTRA_PYTHONPATH_ENV, None)
+    else:
+        os.environ[gate.EXTRA_PYTHONPATH_ENV] = directory
+    try:
+        return exp.run(sha)[0]
+    finally:
+        if saved is None:
+            os.environ.pop(gate.EXTRA_PYTHONPATH_ENV, None)
+        else:
+            os.environ[gate.EXTRA_PYTHONPATH_ENV] = saved
+
+
+def _k3_regression_and_partial_sets(exp: Experiment, repo: Path) -> tuple[dict, dict, dict]:
+    """Candidates A and B each plant one always-failing test. A runs twice (the tip stable, then moved)
+    and B once; the sets each run joined are judged against each other."""
+    def planted(name: str) -> str:
+        return exp.candidate(edited_tree(repo, {f"{K3_DIR}_{name}.py": K3_REGRESSION}), f"k3-{name}")
+
+    def moved_tip() -> str:
+        moved = _commit(repo, exp.head_tree, exp.tip, f"cls-control moved tip {exp.base.name}")
+        if not exp.remote.exists():
+            _git(repo, "init", "--bare", "--quiet", str(exp.remote))
+            (exp.remote / "objects" / "info" / "alternates").write_text(
+                f"{gate.shared.git_common_dir(repo)}/objects\n", encoding="utf-8")
+        _git(repo, "--git-dir", str(exp.remote), "update-ref", "refs/heads/main", moved)
+        return _git(repo, "ls-remote", str(exp.remote), "refs/heads/main").split()[0]
+
+    a, b = planted("a"), planted("b")
+    with joins_spied() as seen:
+        stable, _ = exp.run(a)
+        moved, _ = exp.run(a, tip_reader=moved_tip)
+        other, _ = exp.run(b)
+    a_stable, a_moved, b_other = seen
+    rerun = (stable.get("reruns") or {}).get(f"{K3_DIR}_a.py::test_regression") or {}
+    regression = {"verdict": stable.get("status"), "reused": (stable.get("results") or {}).get("reused", 0),
+                  "failed_rounds": rerun.get("failed_rounds"), "rerun_result": rerun.get("result")}
+    check = subprocess.run([sys.executable, str(SCRIPTS_DIR / "suite-gate.py"), "check", "-C", str(exp.work),
+                            "--sha", a, "--remote-sha", a_moved["second"].tip_sha],
+                           capture_output=True, text=True, env=gate_env(os.environ))
+    partial = {"moved_tip_join": a_moved["result"], "moved_tip_status": moved.get("status"),
+               "moved_tip_check_exit": check.returncode, "moved_tip_check": check.stdout.strip()[-200:],
+               "cross_candidate_join": join_result(a_stable["first"], b_other["second"]),
+               "same_binding_join": a_stable["result"], "other_candidate_status": other.get("status")}
+    listed_id = f"{K3_DIR}_listed.py::test_regression"
+    table = {path: dict(fields) for path, fields in
+             flake_list.parse_list(_head_text(repo, flake_list.LIST_PATH)).items()}
+    table[listed_id] = {"count": LISTED_COUNT, "first_seen": LISTED_SEEN[0], "last_seen": LISTED_SEEN[1]}
+    listed = exp.candidate(edited_tree(repo, {f"{K3_DIR}_listed.py": K3_REGRESSION,
+                                              flake_list.LIST_PATH: flake_list.render_list(table)}), "k3-listed")
+    listed_record, _ = exp.run(listed)
+    return regression, partial, {"verdict": listed_record.get("status"),
+                                 "confirmed": listed_id in (listed_record.get("new_failures") or [])}
+
+
+def _k3_key_coverage(exp: Experiment, repo: Path) -> dict:
+    planted = {f"{K3_DIR}_wide.py": K3_WIDE_SOURCE, f"{K3_DIR}_narrow.py": K3_NARROW_SOURCE,
+               f"{PLANTED_DIR}/k3_narrow_data.txt": K3_NARROW_DATA}
+    first = exp.candidate(edited_tree(repo, planted), "k3-wide-narrow")
+    exp.run(first)
+    second = exp.candidate(edited_tree(repo, {**planted, "docs/cls-control-unrelated.md": "unrelated\n"}),
+                           "k3-unrelated-file")
+    sources = exp.run(second)[0].get("test_sources") or {}
+    tiny = exp.candidate(reduced_tree(repo, {ANCHOR_FILE: K3_ANCHOR, f"{K3_DIR}_narrow.py": K3_NARROW_SOURCE,
+                                             f"{PLANTED_DIR}/k3_narrow_data.txt": K3_NARROW_DATA}), "k3-dist")
+    dists = {"1.0": dummy_distribution(exp.base / "dist-1.0", "1.0"),
+             "1.1": dummy_distribution(exp.base / "dist-1.1", "1.1")}
+    runs = {"none": _with_extra_path(exp, tiny, None), "1.0": _with_extra_path(exp, tiny, dists["1.0"]),
+            "1.0-again": _with_extra_path(exp, tiny, dists["1.0"]), "1.1": _with_extra_path(exp, tiny, dists["1.1"])}
+    return {"tree_wide_source": sources.get(K3_WIDE), "narrow_source": sources.get(K3_NARROW),
+            "dist_runs": {name: _results_of(record) for name, record in runs.items()},
+            "interpreter_keys": interpreter_keys()}
+
+
+def judge_k3(outcomes: dict) -> list[str]:
+    """The problem codes of one set of k3-negative outcomes; empty when each bad case was refused."""
+    problems: list[str] = []
+
+    def section(name: str) -> dict | None:
+        found = outcomes.get(name)
+        if not isinstance(found, dict):
+            problems.append(f"missing-{name.replace('_', '-')}")
+            return None
+        return found
+
+    regression = section("regression")
+    if regression is not None:
+        if regression.get("verdict") != gate.FAIL:
+            problems.append("regression-passed")
+        elif not regression.get("reused") or regression.get("failed_rounds") != [1, 2]:
+            problems.append("regression-not-exercised")
+    partial = section("partial_sets")
+    if partial is not None:
+        if (partial.get("moved_tip_join") != "refused" or partial.get("cross_candidate_join") != "refused"
+                or partial.get("moved_tip_status") == gate.PASS or partial.get("moved_tip_check_exit") == 0):
+            problems.append("partial-sets-combined")
+        if partial.get("same_binding_join") != "joined":
+            problems.append("same-binding-refused")
+    listed = section("flake_listed")
+    if listed is not None and listed.get("verdict") != gate.FAIL:
+        problems.append("listed-failure-passed")
+    coverage = section("key_coverage")
+    if coverage is not None:
+        if coverage.get("tree_wide_source") != "ran":
+            problems.append("tree-wide-reused")
+        if coverage.get("narrow_source") != "reused":
+            problems.append("narrow-not-reused")
+        dist = coverage.get("dist_runs") or {}
+        if any((dist.get(name) or {}).get("reused") != 0 for name in ("1.0", "1.1")):
+            problems.append("dist-version-reused")
+        if not (dist.get("1.0-again") or {}).get("reused"):
+            problems.append("dist-control-inert")
+        keys = coverage.get("interpreter_keys") or []
+        if len(keys) != 2 or keys[0] == keys[1]:
+            problems.append("interpreter-keys-equal")
+    return problems
+
+
+def judge_only(path: Path) -> int:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    problems = judge_k3(document.get("outcomes", document))
+    for problem in problems:
+        _say(f"REFUSED: {problem}")
+    _say("OK" if not problems else "FAIL")
+    return 0 if not problems else EXIT_REUSE_MISMATCH
+
+
+def k3_negative(repo: Path, out: Path) -> int:
+    """The result store against the four ways it could let a regression through, on real gate runs; 0 every
+    bad case is refused, 1 one is not, 2 an error."""
+    with Experiment(repo, "k3") as exp:
+        exp.prepare()
+        regression, partial, listed = _k3_regression_and_partial_sets(exp, repo)
+        coverage = _k3_key_coverage(exp, repo)
+    outcomes = {"regression": regression, "partial_sets": partial, "flake_listed": listed, "key_coverage": coverage}
+    problems = judge_k3(outcomes)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"outcomes": outcomes, "problems": problems, "ok": not problems}, indent=2) + "\n",
+                   encoding="utf-8")
+    for problem in problems:
+        _say(f"PROBLEM: {problem}")
+    _say(f"summary {out}")
+    _say("OK" if not problems else "FAIL")
+    return 0 if not problems else EXIT_REUSE_MISMATCH
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gate_speedup_control.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1405,6 +1891,19 @@ def main(argv: list[str] | None = None) -> int:
                          help="the gate counts a test unconfirmed when any one rerun passes (must exit 4)")
     verdict.add_argument("--out", required=True, type=Path)
     verdict.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    reuse = sub.add_parser("reuse-scenario", help="edit three files the stored runs read; only their tests run")
+    reuse.add_argument("--out", required=True, type=Path)
+    reuse.add_argument("--disk-max-mb", type=float, required=True)
+    reuse.add_argument("--cpu-max-s", type=float, default=None)
+    reuse.add_argument("--wall-max-s", type=float, default=None)
+    reuse.add_argument("--mutate-unrecorded", action="store_true",
+                       help="the store never saw the script's read: the control must fail named-subprocess-reused")
+    reuse.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    k3 = sub.add_parser("k3-negative", help="the four ways the result store could let a regression through")
+    k3.add_argument("--out", type=Path, default=None)
+    k3.add_argument("--judge-only", type=Path, default=None, metavar="FILE",
+                    help="judge a recorded-outcomes file; run nothing")
+    k3.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
     series = sub.add_parser("disk-series", help="gate runs in a private /tmp: it must end empty, the store bounded")
     series.add_argument("--runs", default="pass,fail", help="comma-separated, each of: " + ", ".join(SERIES_RUNS))
     series.add_argument("--keep-max-mb", type=int, default=gate_retention.keep_max_mb())
@@ -1477,6 +1976,24 @@ def main(argv: list[str] | None = None) -> int:
         except (SystemExit, Exception) as exc:  # noqa: BLE001 — anything but a verdict mismatch is exit 1
             _say(f"error: {exc!r}" if not isinstance(exc, SystemExit) else f"error: {exc}")
             return EXIT_VERDICT_ERROR
+    if args.command == "reuse-scenario":
+        try:
+            return reuse_scenario(args.repo.resolve(), args.out, mutate=args.mutate_unrecorded,
+                                  disk_max_mb=args.disk_max_mb, cpu_max_s=args.cpu_max_s, wall_max_s=args.wall_max_s)
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 — anything but an assertion mismatch is exit 2
+            _say(f"error: {exc!r}" if not isinstance(exc, SystemExit) else f"error: {exc}")
+            return EXIT_REUSE_ERROR
+    if args.command == "k3-negative":
+        try:
+            if args.judge_only is not None:
+                return judge_only(args.judge_only)
+            if args.out is None:
+                _say("k3-negative needs --out (or --judge-only FILE)")
+                return EXIT_REUSE_ERROR
+            return k3_negative(args.repo.resolve(), args.out)
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 — anything but a refused case is exit 2
+            _say(f"error: {exc!r}" if not isinstance(exc, SystemExit) else f"error: {exc}")
+            return EXIT_REUSE_ERROR
     return _fake_run(args)
 
 

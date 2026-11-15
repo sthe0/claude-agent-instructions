@@ -509,3 +509,179 @@ def test_a_journal_state_tells_absent_from_present_and_changed(tmp_path):
     first = control.journal_state(path)
     path.write_text("b\n", encoding="utf-8")
     assert first["present"] and first != control.journal_state(path)
+
+
+# ── reuse-scenario and k3-negative: the judgements and helpers ────────────
+
+K3_BAD = json.loads((TESTS_DIR / "fixtures" / "k3_bad_outcomes.json").read_text(encoding="utf-8"))["bad"]
+
+
+def good_outcomes() -> dict:
+    return json.loads(json.dumps(K3_BAD[0]["outcomes"] | {"regression": {
+        "verdict": "FAIL", "reused": 15000, "failed_rounds": [1, 2]}}))
+
+
+def test_the_judgement_accepts_a_good_outcome():
+    assert control.judge_k3(good_outcomes()) == []
+
+
+@pytest.mark.parametrize("bad", K3_BAD, ids=[b["expect"] for b in K3_BAD])
+def test_the_judgement_refuses_each_recorded_bad_outcome_with_its_own_code(bad):
+    assert control.judge_k3(bad["outcomes"]) == [bad["expect"]]
+
+
+def test_there_are_six_bad_outcomes_with_six_different_codes():
+    assert len({b["expect"] for b in K3_BAD}) == len(K3_BAD) == 6
+
+
+def test_a_missing_case_is_refused_not_skipped():
+    outcomes = good_outcomes()
+    del outcomes["partial_sets"]
+    assert control.judge_k3(outcomes) == ["missing-partial-sets"]
+
+
+@pytest.mark.parametrize("change,code", [
+    (("regression", "reused", 0), "regression-not-exercised"),
+    (("regression", "failed_rounds", [1]), "regression-not-exercised"),
+    (("partial_sets", "cross_candidate_join", "joined"), "partial-sets-combined"),
+    (("partial_sets", "moved_tip_check_exit", 0), "partial-sets-combined"),
+    (("partial_sets", "same_binding_join", "refused"), "same-binding-refused"),
+    (("key_coverage", "narrow_source", "ran"), "narrow-not-reused"),
+])
+def test_each_positive_expectation_of_a_good_outcome_is_judged_too(change, code):
+    outcomes = good_outcomes()
+    section, field, value = change
+    outcomes[section][field] = value
+    assert control.judge_k3(outcomes) == [code]
+
+
+def test_a_dist_control_that_reused_nothing_the_second_time_is_inert():
+    outcomes = good_outcomes()
+    outcomes["key_coverage"]["dist_runs"]["1.0-again"]["reused"] = 0
+    assert control.judge_k3(outcomes) == ["dist-control-inert"]
+
+
+def test_judge_only_exits_zero_for_a_good_outcome_and_one_for_a_bad_one(tmp_path):
+    good, bad = tmp_path / "good.json", tmp_path / "bad.json"
+    good.write_text(json.dumps({"outcomes": good_outcomes()}), encoding="utf-8")
+    bad.write_text(json.dumps(K3_BAD[0]["outcomes"]), encoding="utf-8")
+    assert control.main(["k3-negative", "--judge-only", str(good)]) == 0
+    assert control.main(["k3-negative", "--judge-only", str(bad)]) == 1
+
+
+def test_k3_negative_without_out_or_judge_only_is_a_usage_error():
+    assert control.main(["k3-negative"]) == control.EXIT_REUSE_ERROR
+
+
+def assertion_inputs(**overrides):
+    ids = [f"t::{n}" for n in range(6)]
+    touched, named = {ids[0], ids[1]}, ids[0]
+    record = {"status": "PASS", "cpu_s": 10.0,
+              "test_sources": {ids[0]: "ran", ids[1]: "ran", **{i: "reused" for i in ids[2:]}}}
+    inputs = {"named": named, "touched_ids": touched, "hit_ids": set(ids), "collected": ids,
+              "disk_mb": 5.0, "disk_max_mb": 10.0}
+    return record, inputs | overrides
+
+
+def failed(found):
+    return [name for name, offenders in found.items() if offenders]
+
+
+def test_reuse_assertions_hold_when_dependents_ran_and_the_rest_were_reused():
+    record, inputs = assertion_inputs()
+    assert failed(control.reuse_assertions(record, **inputs)) == []
+
+
+def test_a_store_that_never_saw_the_script_fails_only_the_named_assertion():
+    record, inputs = assertion_inputs()
+    record["test_sources"]["t::0"] = "reused"
+    assert failed(control.reuse_assertions(record, **inputs)) == [control.NAMED_ASSERTION]
+
+
+def test_a_reused_dependent_a_rerun_bystander_and_a_bad_verdict_are_each_named():
+    record, inputs = assertion_inputs()
+    record["test_sources"]["t::1"] = "reused"
+    record["test_sources"]["t::4"] = "ran"
+    record["status"] = "FAIL"
+    assert failed(control.reuse_assertions(record, **inputs)) == [
+        "touched-dependents-ran", "others-reused", "verdict-pass"]
+
+
+def test_the_disk_bound_and_the_optional_cpu_and_wall_bounds_are_assertions():
+    record, inputs = assertion_inputs(disk_mb=11.0)
+    assert failed(control.reuse_assertions(record, **inputs)) == ["disk-bound"]
+    record, inputs = assertion_inputs()
+    found = control.reuse_assertions(record, **inputs, cpu_max_s=5.0, wall_max_s=1.0, wall_s=2.0)
+    assert failed(found) == ["cpu-bound", "wall-bound"]
+    assert "cpu-bound" not in control.reuse_assertions(record, **inputs)
+
+
+def test_an_id_the_record_does_not_list_fails_the_every_id_assertion():
+    record, inputs = assertion_inputs()
+    del record["test_sources"]["t::5"]
+    assert failed(control.reuse_assertions(record, **inputs)) == ["others-reused", "record-lists-every-id"]
+
+
+def test_the_warm_up_is_needed_only_for_a_missing_id_the_store_could_hold():
+    state = {"ids": ["a", "b", "c"], "hits": {"a": 1}, "always_rerun": ["b"], "failed": ["c"]}
+    assert not control.needs_warm_up(state)
+    assert control.needs_warm_up({**state, "failed": []})
+
+
+def test_a_nonce_comment_ends_the_file_after_a_newline():
+    assert control.with_nonce_comment("x = 1\n", "n1") == "x = 1\n# n1\n"
+    assert control.with_nonce_comment("x = 1", "n1") == "x = 1\n# n1\n"
+
+
+def test_the_dummy_distribution_is_one_installed_distribution_of_the_given_version(tmp_path):
+    directory = control.dummy_distribution(tmp_path / "d", "1.1")
+    proc = subprocess.run([sys.executable, "-P", "-c",
+                           "from importlib.metadata import version; print(version('core-control-dummy'))"],
+                          env={**os.environ, "PYTHONPATH": directory}, capture_output=True, text=True)
+    assert proc.stdout.strip() == "1.1"
+
+
+def test_two_interpreter_versions_give_two_keys():
+    first, second = control.interpreter_keys()
+    assert first != second
+
+
+def test_spied_joins_record_each_pair_and_restore_the_gate_function():
+    original = gate.join_partial_sets
+    ids = frozenset({"t::a"})
+    one = gate.PartialSet("c" * 40, "a" * 40, ids, frozenset())
+    other_tip = gate.PartialSet("c" * 40, "b" * 40, ids, frozenset())
+    with control.joins_spied() as seen:
+        with pytest.raises(gate.JoinRefused):
+            gate.join_partial_sets(one, other_tip)
+        gate.join_partial_sets(one, gate.PartialSet("c" * 40, "a" * 40, ids, ids))
+    assert [s["result"] for s in seen] == ["refused", "joined"]
+    assert gate.join_partial_sets is original
+    assert control.join_result(one, other_tip) == "refused"
+
+
+def test_edited_tree_keeps_the_test_files_that_reduced_tree_drops(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "scripts" / "tests").mkdir(parents=True)
+    (repo / "scripts" / "tests" / "test_x.py").write_text("def test_x():\n    pass\n")
+    (repo / "scripts" / "tests" / "helper.py").write_text("H = 1\n")
+    (repo / "a.txt").write_text("a\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "i"],
+                   check=True)
+
+    def names(tree):
+        return control._git(repo, "ls-tree", "-r", "--name-only", tree).splitlines()
+
+    kept = names(control.edited_tree(repo, {"a.txt": "b\n", "new.txt": "n\n"}))
+    assert "scripts/tests/test_x.py" in kept and "new.txt" in kept
+    reduced = control.reduced_tree(repo, {"new.txt": "n\n"})
+    assert "scripts/tests/test_x.py" not in names(reduced) and "scripts/tests/helper.py" in names(reduced)
+    changed = control.edited_tree(repo, {"a.txt": "b\n"})
+    assert control._git(repo, "show", f"{changed}:a.txt") == "b"
+
+
+def test_the_planted_k3_sources_compile():
+    for source in (control.K3_REGRESSION, control.K3_WIDE_SOURCE, control.K3_NARROW_SOURCE, control.K3_ANCHOR):
+        compile(source, "test_planted.py", "exec")

@@ -61,6 +61,7 @@ BUSY_TIMEOUT_S = 60
 FILE, LISTING, PROBE = "file", "listing", "probe"
 KINDS = (FILE, LISTING, PROBE)
 SOURCE_RAN, SOURCE_REUSED = "ran", "reused"
+ALWAYS_RERUN_META, FAILED_META = "always_rerun", "failed"  # ids the last settled full run could not store, by reason
 
 Dep = tuple[str, str, str]  # (kind, repository-relative path, digest)
 
@@ -280,6 +281,13 @@ class ResultStore:
             self._db.execute("COMMIT")
             gate_retention.touch(self.path)
         return hits
+
+    def set_meta(self, name: str, value: str) -> None:
+        self._db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (name, value))
+
+    def get_meta(self, name: str) -> str | None:
+        row = self._db.execute("SELECT value FROM meta WHERE name=?", (name,)).fetchone()
+        return row[0] if row else None
 
     def count(self) -> int:
         return self._db.execute("SELECT COUNT(*) FROM result").fetchone()[0]

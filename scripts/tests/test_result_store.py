@@ -118,12 +118,12 @@ def test_dependency_order_does_not_matter(tree):
 def test_at_most_three_rows_per_test_and_the_older_row_still_matches(store, tree):
     original = deps_in(tree)
     for n in range(4):
-        (tree / "data.txt").write_text(f"{n}\n")
+        (tree / "data.txt").write_text("x" * (n + 1) + "\n")  # sizes differ: the digest cache keys on (mtime, size)
         resolve = rs.tree_resolver(tree)
         store.put(CAND, environment(), {T1: [*original, (rs.FILE, "data.txt", resolve(rs.FILE, "data.txt"))]},
                   now=100 + n)
     assert len(store.rows_of(T1)) == rs.ROWS_PER_TEST
-    (tree / "data.txt").write_text("2\n")
+    (tree / "data.txt").write_text("xxx\n")
     assert T1 in hits(store, tree)
 
 
@@ -204,7 +204,17 @@ def test_a_failure_and_an_always_rerun_test_are_never_stored(tmp_path):
     settled = gate.settle_reuse(plan, CAND, finished_run(tmp_path, ids, failed={"t::fail"}))
     with rs.ResultStore(plan.store) as opened:
         assert opened.test_ids() == ["t::pass"]
+        assert json.loads(opened.get_meta(rs.ALWAYS_RERUN_META)) == ["t::git"]
+        assert json.loads(opened.get_meta(rs.FAILED_META)) == ["t::fail"]
     assert settled.stored_results == 1 and settled.always_rerun_tests == 1 and settled.reuse_active
+
+
+def test_meta_round_trips_and_a_missing_name_is_none(tmp_path):
+    with rs.ResultStore(tmp_path / "m.sqlite") as opened:
+        assert opened.get_meta("nothing") is None
+        opened.set_meta("name", "one")
+        opened.set_meta("name", "two")
+        assert opened.get_meta("name") == "two"
 
 
 def test_a_run_that_did_not_finish_stores_nothing(tmp_path):
