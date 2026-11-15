@@ -15,6 +15,10 @@ candidate; the gate gives it only tests the report shows passing in a full run, 
 marked always-rerun (an incompletely traced test). A FAIL is therefore never stored. A test with no
 stored pass, or whose recomputed key matches no stored row, always runs.
 
+A row keeps its dependency list as ``[path id, digest id]`` pairs: a path and a digest are stored once
+in their own tables, however many rows name them (stored inline, the lists of one full run were
+~700 MB, over the store's bound, and the bound's trim then dropped two thirds of the passes).
+
 Lookup. ``lookup`` recomputes, for each wanted test, the key of every stored row (at most
 ``ROWS_PER_TEST``, newest first) from the dependency list of that row and the *current* contents under
 the candidate's sandbox, and reports a hit when it equals the stored key. Equal keys mean identical
@@ -56,7 +60,7 @@ STORE_ENTRY = "store"
 DB_NAME = "results.sqlite"
 ROWS_PER_TEST = 3
 MAX_STORE_BYTES = 512 * 1024 * 1024
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BUSY_TIMEOUT_S = 60
 FILE, LISTING, PROBE = "file", "listing", "probe"
 KINDS = (FILE, LISTING, PROBE)
@@ -80,6 +84,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS coord (
     id INTEGER PRIMARY KEY, kind TEXT NOT NULL, path TEXT NOT NULL, UNIQUE (kind, path));
+CREATE TABLE IF NOT EXISTS digest (id INTEGER PRIMARY KEY, value TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS result (
     id INTEGER PRIMARY KEY,
     test_id TEXT NOT NULL,
@@ -190,10 +195,24 @@ class ResultStore:
         self._db = sqlite3.connect(self.path, timeout=BUSY_TIMEOUT_S, isolation_level=None)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
+        self._drop_other_schema()
         self._db.executescript(_SCHEMA)
         self._db.execute("INSERT OR IGNORE INTO meta VALUES ('schema', ?)", (str(SCHEMA_VERSION),))
         self._coord_by_pair: dict[tuple[str, str], int] = {}
         self._pair_by_coord: dict[int, tuple[str, str]] = {}
+        self._digest_by_value: dict[str, int] = {}
+        self._value_by_digest: dict[int, str] = {}
+
+    def _drop_other_schema(self) -> None:
+        """A database of another schema version holds results in a layout this code cannot read: it starts empty."""
+        if self._db.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone() is None:
+            return
+        row = self._db.execute("SELECT value FROM meta WHERE name='schema'").fetchone()
+        if row is not None and row[0] == str(SCHEMA_VERSION):
+            return
+        for table in ("result", "coord", "digest", "meta"):
+            self._db.execute(f"DROP TABLE IF EXISTS {table}")
+        self._db.execute("VACUUM")
 
     def close(self) -> None:
         self._db.close()
@@ -204,15 +223,21 @@ class ResultStore:
     def __exit__(self, *exc) -> None:
         self.close()
 
-    def _coord_ids(self, deps: Sequence[Dep]) -> list[int]:
+    def _interned(self, deps: Sequence[Dep]) -> list[list[int]]:
+        """Each dependency as ``[coordinate id, digest id]``: a path and a digest are kept once, however many rows name them."""
         ids = []
-        for kind, path, _digest in deps:
-            found = self._coord_by_pair.get((kind, path))
-            if found is None:
+        for kind, path, digest in deps:
+            coord = self._coord_by_pair.get((kind, path))
+            if coord is None:
                 self._db.execute("INSERT OR IGNORE INTO coord (kind, path) VALUES (?, ?)", (kind, path))
-                found = self._db.execute("SELECT id FROM coord WHERE kind=? AND path=?", (kind, path)).fetchone()[0]
-                self._coord_by_pair[(kind, path)] = found
-            ids.append(found)
+                coord = self._db.execute("SELECT id FROM coord WHERE kind=? AND path=?", (kind, path)).fetchone()[0]
+                self._coord_by_pair[(kind, path)] = coord
+            value = self._digest_by_value.get(digest)
+            if value is None:
+                self._db.execute("INSERT OR IGNORE INTO digest (value) VALUES (?)", (digest,))
+                value = self._db.execute("SELECT id FROM digest WHERE value=?", (digest,)).fetchone()[0]
+                self._digest_by_value[digest] = value
+            ids.append([coord, value])
         return ids
 
     def put(self, candidate_sha: str, environment: Environment,
@@ -225,9 +250,7 @@ class ResultStore:
             for test_id, deps in results.items():
                 ordered = sorted(deps)
                 key = compute_key(test_id, ordered, environment)
-                blob = zlib.compress(json.dumps(
-                    [[coord, digest] for coord, (_k, _p, digest) in zip(self._coord_ids(ordered), ordered)],
-                    separators=(",", ":")).encode())
+                blob = zlib.compress(json.dumps(self._interned(ordered), separators=(",", ":")).encode())
                 self._db.execute(
                     "INSERT INTO result (test_id, key, env, deps, candidate, stored_at, last_used) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (test_id, key) DO UPDATE SET "
@@ -255,8 +278,10 @@ class ResultStore:
             if coord not in self._pair_by_coord:
                 self._pair_by_coord.update(
                     {row[0]: (row[1], row[2]) for row in self._db.execute("SELECT id, kind, path FROM coord")})
+            if digest not in self._value_by_digest:
+                self._value_by_digest.update(row for row in self._db.execute("SELECT id, value FROM digest"))
             kind, path = self._pair_by_coord[coord]
-            found.append((kind, path, digest))
+            found.append((kind, path, self._value_by_digest[digest]))
         return found
 
     def lookup(self, test_ids: Iterable[str], environment: Environment,

@@ -165,6 +165,23 @@ def test_copy_store_gives_the_same_rows(store, tree, tmp_path):
         assert T1 in hits(copy, tree)
 
 
+def test_rows_naming_the_same_files_share_their_paths_and_digests(store):
+    shared = [(rs.FILE, f"lib/m{n}.py", f"{n:064x}") for n in range(400)]
+    for n in range(50):
+        store.put(CAND, environment(), {f"t{n}": shared})
+    assert store.rows_of("t7")[0]["deps"] == sorted(shared)
+    assert len(store._db.execute("SELECT 1 FROM digest").fetchall()) == 400
+    assert max(len(blob) for (blob,) in store._db.execute("SELECT deps FROM result")) < 2000
+
+
+def test_a_database_of_another_schema_version_is_opened_empty(store, tree):
+    store.put(CAND, environment(), {T1: deps_in(tree)})
+    store.set_meta("schema", str(rs.SCHEMA_VERSION - 1))
+    with rs.ResultStore(store.path) as reopened:
+        assert reopened.count() == 0
+        assert reopened.get_meta("schema") == str(rs.SCHEMA_VERSION)
+
+
 def test_fingerprint_sees_a_distribution_on_the_given_pythonpath(tmp_path):
     dist = tmp_path / "site" / "core_control_dummy-1.0.dist-info"
     dist.mkdir(parents=True)
