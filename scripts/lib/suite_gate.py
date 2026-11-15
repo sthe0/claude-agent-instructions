@@ -24,6 +24,7 @@ git error are refusals, never admissions.
 """
 from __future__ import annotations
 
+import collections
 import contextlib
 import dataclasses
 import fcntl
@@ -74,6 +75,7 @@ DEFAULT_TIMEOUT_S = 7200  # config.md: suite-gate-timeout-s (a test keeps the tw
 BUILD_TIMEOUT_S = 600
 KILL_GRACE_S = 10
 LOG_TAIL_LINES = 400
+NO_TESTS_COLLECTED_EXIT = 5
 CAP_RUN_SLACK_S = 30
 CAP_RUN_EXTRA_KEY = "fanout-cap-extra-tasks"
 CAP_RUN_EXTRA_TASKS = 512  # config.md: fanout-cap-extra-tasks
@@ -230,6 +232,8 @@ class SuiteRun:
     reused: Mapping[str, str] = dataclasses.field(default_factory=dict)  # id -> candidate sha of the stored pass
     stored_results: int = 0
     always_rerun_tests: int = 0
+    always_rerun_reasons: Mapping[str, int] = dataclasses.field(default_factory=dict)
+    ran_tests: tuple[str, ...] = ()  # read from the report while the sandbox still exists
     store_note: str = ""
 
 
@@ -324,6 +328,8 @@ def observe(run: SuiteRun, expected_sha: str) -> Observation:
         return Observation(reason=f"the per-test report is unreadable: {one_line(str(exc), 160)}")
     report = _test_report()
     if not report.collected_ids(lines):
+        if run.reused and run.pytest_exit == 0 and not run.failures:
+            return Observation()  # every test was left out as reused: nothing ran, nothing failed
         return Observation(reason="the run died before collection finished (its report has no collected test)")
     outcome = report.outcomes(lines)
     failed = tuple(sorted({*run.failures, *(i for i, o in outcome.items() if o == "failed")}))
@@ -899,7 +905,7 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
     left_out = {i for part in plan.out_prefix.parent.glob(f"{plan.out_prefix.name}.*")
                 for i in part.read_text(encoding="utf-8").splitlines() if i}
     reused = {i: plan.hits[i].candidate_sha for i in sorted(left_out) if i in plan.hits}
-    stored, always, note = 0, 0, ""
+    stored, always, note, reasons = 0, 0, "", collections.Counter()
     if not run.timed_out and run.pytest_exit in (0, 1) and run.sandbox_core_sha == sha and run.report_path:
         try:
             records = _dep_tracer_records(plan.tracer_dir)
@@ -908,6 +914,8 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
             ran = [i for i in _test_report().collected_ids(lines) if i in records]
             always_ids = [i for i in ran if records[i]["always_rerun"]]
             always = len(always_ids)
+            for i in always_ids:
+                reasons.update(records[i]["always_rerun"])
             passing = {i: result_store.deps_of(records[i]) for i in ran
                        if outcome.get(i) == "passed" and i not in run.failures and not records[i]["always_rerun"]}
             with result_store.ResultStore(plan.store) as store:
@@ -918,8 +926,13 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
                 store.trim()
         except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
             note = f"results of the run were not stored: {one_line(exc, 200)}"
-    return dataclasses.replace(run, reuse_active=True, reused=reused, stored_results=stored,
-                               always_rerun_tests=always, store_note=note)
+    ran_tests = ran_ids(run)
+    exit_code = run.pytest_exit
+    if exit_code == NO_TESTS_COLLECTED_EXIT and reused and not ran_tests and not run.timed_out:
+        exit_code = 0  # every collected test was left out as reused, which pytest reports as "no tests"
+    return dataclasses.replace(run, pytest_exit=exit_code, reuse_active=True, reused=reused,
+                               stored_results=stored, always_rerun_tests=always,
+                               always_rerun_reasons=dict(reasons), ran_tests=ran_tests, store_note=note)
 
 
 def _dep_tracer_records(directory: Path) -> dict[str, dict]:
@@ -938,11 +951,11 @@ def ran_ids(run: SuiteRun) -> tuple[str, ...]:
 
 def reuse_fields(run: SuiteRun) -> dict:
     """The record's account of reuse: counts, and for every collected id its source, ran or reused."""
-    ran = ran_ids(run)
+    ran = run.ran_tests
     return {
         "results": {"reuse": run.reuse_active, "ran": len(ran), "reused": len(run.reused),
                     "stored": run.stored_results, "always_rerun": run.always_rerun_tests,
-                    "note": run.store_note},
+                    "always_rerun_reasons": dict(run.always_rerun_reasons), "note": run.store_note},
         "test_sources": {**{i: "ran" for i in ran}, **{i: "reused" for i in run.reused}},
         "reused_from": dict(run.reused),
     }

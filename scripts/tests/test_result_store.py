@@ -239,12 +239,33 @@ def test_only_ids_the_plugin_left_out_count_as_reused(tmp_path):
 
 
 def test_record_lists_every_collected_id_with_its_source(tmp_path):
-    run = gate.SuiteRun(0, (), CAND, report_path=str(finished_run(tmp_path, ["t::a", "t::b"]).report_path),
-                        reuse_active=True, reused={"t::c": "e" * 40})
-    fields = gate.reuse_fields(run)
+    traced(tmp_path / "trace", ["t::a", "t::b"])
+    plan = plan_in(tmp_path, {"t::c": rs.Hit("e" * 40, "k")})
+    (tmp_path / "out.1").write_text("t::c\n")
+    run = finished_run(tmp_path, ["t::a", "t::b"], exit_code=0)
+    settled = gate.settle_reuse(plan, CAND, run)
+    Path(run.report_path).unlink()
+    fields = gate.reuse_fields(settled)
     assert fields["test_sources"] == {"t::a": "ran", "t::b": "ran", "t::c": "reused"}
     assert fields["reused_from"] == {"t::c": "e" * 40}
     assert fields["results"]["ran"] == 2 and fields["results"]["reused"] == 1
+    assert fields["results"]["always_rerun_reasons"] == {}
+
+
+def test_a_run_that_left_every_test_out_as_reused_is_a_pass_not_no_tests(tmp_path):
+    traced(tmp_path / "trace", [])
+    plan = plan_in(tmp_path, {"t::c": rs.Hit("e" * 40, "k")})
+    (tmp_path / "out.1").write_text("t::c\n")
+    settled = gate.settle_reuse(plan, CAND, finished_run(tmp_path, [], exit_code=5))
+    assert settled.pytest_exit == 0
+    assert gate.observe(settled, CAND) == gate.Observation()
+
+
+def test_a_run_that_collected_nothing_and_left_nothing_out_proves_nothing(tmp_path):
+    traced(tmp_path / "trace", [])
+    settled = gate.settle_reuse(plan_in(tmp_path), CAND, finished_run(tmp_path, [], exit_code=5))
+    assert settled.pytest_exit == 5
+    assert gate.observe(settled, CAND).reason
 
 
 def test_suite_env_forwards_only_the_opt_in_extra_pythonpath(tmp_path):
