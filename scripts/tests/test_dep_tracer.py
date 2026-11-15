@@ -304,6 +304,27 @@ PLANTED = {
         "def test_first(s3_data):\n    assert s3_data == 't'\n\n\n"
         "def test_second(s3_data):\n    assert s3_data == 't'\n"
     ),
+    # s4: a decorator defined in another file whose wrapper body caches a read in a module global
+    "deco.txt": "t",
+    "deco.py": (
+        "import functools\nfrom pathlib import Path\n\n_C = {}\n\n\ndef needs(func):\n"
+        "    @functools.wraps(func)\n    def wrapper(*args, **kwargs):\n        if 'd' not in _C:\n"
+        "            _C['d'] = (Path(__file__).parent / 'deco.txt').read_text()\n"
+        "        return func(*args, **kwargs)\n    return wrapper\n"
+    ),
+    "test_s4_decorated.py": (
+        "from deco import needs\n\n\n@needs\ndef test_first():\n    pass\n\n\n"
+        "@needs\ndef test_second():\n    pass\n"
+    ),
+    # s5: methods of a test class using a function-scoped fixture of the test module that caches its read
+    "s5data.txt": "t",
+    "test_s5_class.py": (
+        "from pathlib import Path\n\nimport pytest\n\n_CACHE = {}\n\n\n@pytest.fixture\n"
+        "def s5_data():\n    if 'd' not in _CACHE:\n"
+        "        _CACHE['d'] = (Path(__file__).parent / 's5data.txt').read_text()\n    return _CACHE['d']\n\n\n"
+        "class TestS5:\n    def test_first(self, s5_data):\n        assert s5_data == 't'\n\n"
+        "    def test_second(self, s5_data):\n        assert s5_data == 't'\n"
+    ),
     # q3: a non-Python child found on PATH inside the repository
     "stubs/q3tool": "#!/bin/sh\nexit 0\n",
     "test_q3_path_stub.py": (
@@ -571,6 +592,18 @@ def test_a_read_cached_by_a_conftest_fixture_reaches_every_test_using_it(traced,
 def test_a_read_cached_by_a_fixture_of_the_test_module_reaches_every_test_using_it(traced, name):
     assert_record(traced, f"test_s3_module_fixture.py::{name}", {
         "conftest.py", "test_s3_module_fixture.py", "s3data.txt"})
+
+
+@pytest.mark.parametrize("name", ["test_first", "test_second"])
+def test_a_read_cached_by_a_decorator_in_another_file_reaches_every_decorated_test(traced, name):
+    assert_record(traced, f"test_s4_decorated.py::{name}", {
+        "conftest.py", "test_s4_decorated.py", "deco.py", "deco.txt"})
+
+
+@pytest.mark.parametrize("name", ["test_first", "test_second"])
+def test_a_read_cached_by_a_module_fixture_reaches_every_method_of_a_test_class(traced, name):
+    assert_record(traced, f"test_s5_class.py::TestS5::{name}", {
+        "conftest.py", "test_s5_class.py", "s5data.txt"})
 
 
 def test_a_stub_found_on_path_inside_the_repository_forces_rerun(traced):

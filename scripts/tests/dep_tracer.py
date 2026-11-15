@@ -129,7 +129,9 @@ Accepted residuals: reads made inside C extensions other than sqlite3 (mmap, dbm
     that a function-scoped fixture then hands to a test through a shared global (a module-scoped
     ``warm`` fixture fills a global, a function-scoped ``getter`` returns it, the test requests only
     ``getter``) stays with ``warm``'s users, so that test carries no record of the file; it passes
-    only when it runs after a user of ``warm``, which is a test-order dependence. A hook that fails
+    only when it runs after a user of ``warm``, which is a test-order dependence. A test body that
+    caches its own direct read in a module global is the same case: a later test that only uses the
+    global carries no record of the file, and passes only when it runs after the reader. A hook that fails
     outside any test marks every later record of that process ``tracer-error``.
 """
 from __future__ import annotations
@@ -265,9 +267,10 @@ def set_machinery_dirs(dirs) -> None:
 
 
 def _owners(frame):
-    """(nearest repository file, innermost repository file whose top level is running, repository frames seen, code of the nearest repository frame).
+    """Owners of an event raised below ``frame``.
 
-    The walk goes outward from ``frame`` and stops at a pytest or pluggy frame, so work they do
+    Returns (nearest repository file, innermost repository file whose top level is running,
+    repository frames seen, code of the nearest repository frame). The walk goes outward from ``frame`` and stops at a pytest or pluggy frame, so work they do
     themselves (collecting directories, rewriting a test module) has no owner. One repository
     frame on the stack means the event was raised by a function that pytest called itself (a
     test, a fixture, a hook); more than one means repository code called repository code.
@@ -292,14 +295,22 @@ def _owners(frame):
     return nearest, None, seen, nearest_code
 
 
-def _function_codes(func) -> frozenset:
-    """Code objects of a test function, following ``__wrapped__`` so a decorated test body counts."""
+def _function_codes(func, test_file) -> frozenset:
+    """Code objects of a test function that live in its own file, following ``__wrapped__``.
+
+    A decorated test body counts; a wrapper defined in another file does not, so a value that
+    wrapper caches reaches every test it decorates.
+    """
+    own = _repo_abs(test_file)
+    own = own[0] if own else os.fspath(test_file)
     codes = set()
     for _ in range(16):
         func = getattr(func, "__func__", func)
         code = getattr(func, "__code__", None)
         if code is not None:
-            codes.add(code)
+            found = _repo_abs(code.co_filename) if code.co_filename[:1] != "<" else None
+            if (found[0] if found else code.co_filename) == own:
+                codes.add(code)
         func = getattr(func, "__wrapped__", None)
         if func is None:
             break
@@ -1155,7 +1166,7 @@ def _make_plugin():
             if not self.traces:
                 return (yield)
             global _test_codes
-            _test_codes = _function_codes(getattr(item, "function", None))
+            _test_codes = _function_codes(getattr(item, "function", None), str(item.path))
             try:
                 self._begin()
             except Exception:
