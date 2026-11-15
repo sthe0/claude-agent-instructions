@@ -295,6 +295,15 @@ PLANTED = {
         "def test_first(s2_data):\n    assert s2_data == 't'\n\n\n"
         "def test_second(s2_data):\n    assert s2_data == 't'\n"
     ),
+    # s3: a function-scoped fixture defined in the test module caches its own read in a module global
+    "s3data.txt": "t",
+    "test_s3_module_fixture.py": (
+        "from pathlib import Path\n\nimport pytest\n\n_CACHE = {}\n\n\n@pytest.fixture\n"
+        "def s3_data():\n    if 'd' not in _CACHE:\n"
+        "        _CACHE['d'] = (Path(__file__).parent / 's3data.txt').read_text()\n    return _CACHE['d']\n\n\n"
+        "def test_first(s3_data):\n    assert s3_data == 't'\n\n\n"
+        "def test_second(s3_data):\n    assert s3_data == 't'\n"
+    ),
     # q3: a non-Python child found on PATH inside the repository
     "stubs/q3tool": "#!/bin/sh\nexit 0\n",
     "test_q3_path_stub.py": (
@@ -556,6 +565,12 @@ def test_a_module_loaded_by_path_from_a_module_body_keeps_its_link_for_later_tes
 def test_a_read_cached_by_a_conftest_fixture_reaches_every_test_using_it(traced, name):
     assert_record(traced, f"s2/test_s2.py::{name}", {
         "conftest.py", "s2/conftest.py", "s2/test_s2.py", "s2/s2data.txt"})
+
+
+@pytest.mark.parametrize("name", ["test_first", "test_second"])
+def test_a_read_cached_by_a_fixture_of_the_test_module_reaches_every_test_using_it(traced, name):
+    assert_record(traced, f"test_s3_module_fixture.py::{name}", {
+        "conftest.py", "test_s3_module_fixture.py", "s3data.txt"})
 
 
 def test_a_stub_found_on_path_inside_the_repository_forces_rerun(traced):
