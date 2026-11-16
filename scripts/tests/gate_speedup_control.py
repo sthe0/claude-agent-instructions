@@ -949,13 +949,29 @@ CONTROL_ENTRY_RE = re.compile(r"^cls-control-(\d+)-")
 
 
 def _pid_alive(pid: int) -> bool:
+    """True when ``pid`` may be a live process; a number no process can have counts as not alive."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
+    except (OverflowError, ValueError):
+        return False
     return True
+
+
+def _own_dead_entry(entry: Path) -> bool:
+    """An entry of this user under a ``cls-control-<pid>-`` name whose pid is not alive."""
+    match = CONTROL_ENTRY_RE.match(entry.name)
+    if match is None:
+        return False
+    try:
+        if entry.lstat().st_uid != os.getuid():
+            return False
+    except OSError:
+        return False
+    return not _pid_alive(int(match.group(1)))
 
 
 def sweep_dead_control_dirs(repo: Path, tmp: Path = Path("/tmp")) -> list[str]:
@@ -965,9 +981,12 @@ def sweep_dead_control_dirs(repo: Path, tmp: Path = Path("/tmp")) -> list[str]:
     directories clean up through their own ``TemporaryDirectory``), are left alone. A registered worktree
     is removed through git first so that its metadata in the repository goes with it."""
     removed = []
-    for entry in sorted(tmp.glob("cls-control-*")):
-        match = CONTROL_ENTRY_RE.match(entry.name)
-        if match is None or _pid_alive(int(match.group(1))):
+    try:
+        entries = sorted(tmp.glob("cls-control-*"))
+    except OSError:
+        return []
+    for entry in entries:
+        if not _own_dead_entry(entry):
             continue
         if entry.is_dir() and not entry.is_symlink():
             for tree in (entry / "work", entry):

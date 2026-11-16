@@ -637,6 +637,7 @@ def run_group(argv: Sequence[str], *, cwd: str | Path | None, env: dict[str, str
         )
     except OSError as exc:
         raise GateError(f"cannot run {Path(argv[0]).name}: {exc}") from exc
+    previous = _exit_on_sigterm()
     try:
         out, _ = proc.communicate(timeout=timeout_s)
         return proc.returncode, out or "", False
@@ -648,6 +649,30 @@ def run_group(argv: Sequence[str], *, cwd: str | Path | None, env: dict[str, str
             _signal_group(proc, signal.SIGKILL)
             out, _ = proc.communicate()
         return proc.returncode, out or "", True
+    except BaseException:
+        _signal_group(proc, signal.SIGTERM)
+        try:
+            proc.wait(timeout=grace_s)
+        except subprocess.TimeoutExpired:
+            pass
+        _signal_group(proc, signal.SIGKILL)
+        proc.wait()
+        raise
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
+
+
+def _exit_on_sigterm():
+    """Make SIGTERM raise ``SystemExit`` while a run waits on its group, so the group is not orphaned.
+
+    Returns the handler to restore, or None where handlers cannot be set (not the main thread)."""
+    if threading.current_thread() is not threading.main_thread():
+        return None
+
+    def handler(signum, _frame):
+        raise SystemExit(128 + signum)
+    return signal.signal(signal.SIGTERM, handler)
 
 
 def sandbox_scrub_names(script: str | Path) -> list[str]:

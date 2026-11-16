@@ -787,6 +787,69 @@ def test_a_run_killed_with_sigterm_leaves_no_directory_worktree_or_registration(
         _remove_control_dir(base)
 
 
+SCENARIO_RUN = """\
+import sys, time
+sys.path.insert(0, {tests!r})
+import gate_speedup_control as control
+{hold}
+sys.exit(control.main({argv!r}))
+"""
+HOLD_IN_THE_GATE = """\
+def hold(*_args, **_kw):
+    print("held", flush=True)
+    time.sleep(120)
+control.gate.run_suite = hold"""
+HOLD_IN_PREPARE = """\
+def hold(self):
+    print("held", flush=True)
+    time.sleep(120)
+control.Experiment.prepare = hold"""
+
+
+@pytest.mark.parametrize("command, hold", [
+    (["verdict-scenario", "--case", "additive"], HOLD_IN_THE_GATE),
+    (["reuse-scenario", "--disk-max-mb", "1"], HOLD_IN_PREPARE),
+])
+def test_a_scenario_killed_with_sigterm_leaves_nothing_under_tmp_and_no_worktree(small_repo, tmp_path, command, hold):
+    argv = [*command, "--out", str(tmp_path / "out.json"), "-C", str(small_repo)]
+    proc = subprocess.Popen([sys.executable, "-c", SCENARIO_RUN.format(tests=str(TESTS_DIR), hold=hold, argv=argv)],
+                            stdout=subprocess.PIPE, text=True)
+    mine = f"cls-control-{proc.pid}-*"
+    try:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            line = proc.stdout.readline()
+            if line.strip() == "held" or not line:
+                break
+        assert list(Path("/tmp").glob(mine))
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=60)
+        assert not list(Path("/tmp").glob(mine))
+        assert "cls-control-" not in _worktrees(small_repo)
+    finally:
+        proc.kill()
+        proc.wait()
+        for leftover in Path("/tmp").glob(mine):
+            _remove_control_dir(leftover)
+
+
+def test_the_sweep_skips_what_it_cannot_judge_and_never_crashes(small_repo, tmp_path):
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    huge = scratch / f"cls-control-{10 ** 30}-reuse"
+    huge.mkdir()
+    foreign = scratch / "cls-control-999999-reuse"
+    foreign.mkdir()
+    real_getuid = os.getuid
+    try:
+        os.getuid = lambda: real_getuid() + 1
+        assert control.sweep_dead_control_dirs(small_repo, scratch) == []
+    finally:
+        os.getuid = real_getuid
+    assert huge.exists() and foreign.exists()
+    assert control.sweep_dead_control_dirs(small_repo, tmp_path / "missing") == []
+
+
 def test_the_sweep_removes_the_entries_of_dead_pids_only(small_repo, tmp_path):
     dead = subprocess.Popen([sys.executable, "-c", "pass"])
     dead.wait()

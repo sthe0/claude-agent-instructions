@@ -1025,6 +1025,39 @@ def test_run_group_escalates_to_kill_when_term_is_ignored():
     assert timed_out and rc == -signal.SIGKILL and time.monotonic() - started < 20
 
 
+RUN_GROUP_UNDER_SIGTERM = """\
+import os, sys
+sys.path.insert(0, {scripts!r})
+from lib import suite_gate as gate
+gate.run_group(["sh", "-c", "sleep 300 & echo $! > " + {pidfile!r} + "; wait"], cwd=None,
+               env=dict(os.environ), timeout_s=600, grace_s=2)
+"""
+
+
+def test_run_group_kills_the_whole_group_when_the_gate_gets_sigterm(tmp_path):
+    pidfile = tmp_path / "grandchild.pid"
+    proc = subprocess.Popen([sys.executable, "-c", RUN_GROUP_UNDER_SIGTERM.format(
+        scripts=str(SCRIPTS_DIR), pidfile=str(pidfile))])
+    try:
+        deadline = time.monotonic() + 30
+        while not (pidfile.exists() and pidfile.read_text().strip()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        grandchild = int(pidfile.read_text())
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=30) == 128 + signal.SIGTERM
+        deadline = time.monotonic() + 10
+        alive = True
+        while alive and time.monotonic() < deadline:
+            try:
+                os.kill(grandchild, 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                alive = False
+        assert not alive
+    finally:
+        proc.kill()
+
+
 def test_run_group_reports_a_missing_binary_as_a_gate_error(tmp_path):
     with pytest.raises(shared.GateError):
         gate.run_group([str(tmp_path / "nope")], cwd=None, env=dict(os.environ), timeout_s=5)
