@@ -405,7 +405,8 @@ def _env(record_dir: Path, root: Path, enabled: bool = True) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items()
            if k not in (dep_tracer.CHILD_DIR_ENV, "PYTEST_XDIST_WORKER", "PYTEST_XDIST_WORKER_COUNT",
                         "PYTEST_ADDOPTS", "PYTEST_CURRENT_TEST", dep_tracer.ENABLE_ENV)}
-    env["PYTHONPATH"] = os.pathsep.join([str(TESTS_DIR)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+    inherited = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p and p != dep_tracer.SITE_DIR]
+    env["PYTHONPATH"] = os.pathsep.join([str(TESTS_DIR), *inherited])
     env[dep_tracer.DIR_ENV] = str(record_dir)
     env[dep_tracer.ROOT_ENV] = str(root)
     if enabled:

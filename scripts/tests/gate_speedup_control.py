@@ -871,7 +871,9 @@ def _tree_with(repo: Path, files: dict[str, str], *, keep_tests: bool) -> str:
         steps.append((["rm", "-q", "--cached", "--", *drop], None))
     for path, text in sorted(files.items()):
         blob = _git_stdin(repo, ["hash-object", "-w", "--stdin"], text)
-        steps.append((["update-index", "--add", "--cacheinfo", f"100644,{blob},{path}"], None))
+        listed = _git(repo, "ls-tree", "HEAD", "--", path).split()
+        mode = listed[0] if listed else "100644"
+        steps.append((["update-index", "--add", "--cacheinfo", f"{mode},{blob},{path}"], None))
     steps.append((["write-tree"], None))
     return _index_tree(repo, steps)
 
@@ -1601,8 +1603,8 @@ def reuse_scenario(repo: Path, out: Path, *, mutate: bool, disk_max_mb: float, c
                              f"{len(state['ids'])} collected ids have one, {len(state['always_rerun'])} are always-rerun)")
         if NAMED_TEST not in dependents.get(NAMED_SCRIPT, ()):
             raise SystemExit(f"the stored dependencies of {NAMED_TEST} do not list {NAMED_SCRIPT}")
-        lib = next((p for p in LIB_CANDIDATES if dependents.get(p)), None)
-        data = next((p for p in DATA_CANDIDATES if dependents.get(p)), None)
+        lib = min((p for p in LIB_CANDIDATES if dependents.get(p)), key=lambda p: len(dependents[p]), default=None)
+        data = min((p for p in DATA_CANDIDATES if dependents.get(p)), key=lambda p: len(dependents[p]), default=None)
         if lib is None or data is None:
             raise SystemExit(f"no stored test depends on any of {LIB_CANDIDATES if lib is None else DATA_CANDIDATES}")
         touched = [NAMED_SCRIPT, lib, data]

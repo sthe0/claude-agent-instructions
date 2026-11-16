@@ -684,6 +684,21 @@ def test_edited_tree_keeps_the_test_files_that_reduced_tree_drops(tmp_path):
     assert control._git(repo, "show", f"{changed}:a.txt") == "b"
 
 
+def test_an_edited_tree_keeps_the_executable_bit_of_an_edited_file(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "run.sh").write_text("echo a\n")
+    (repo / "run.sh").chmod(0o755)
+    (repo / "data.txt").write_text("a\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "i"],
+                   check=True)
+    tree = control.edited_tree(repo, {"run.sh": "echo b\n", "data.txt": "b\n", "new.txt": "n\n"})
+    modes = {line.split()[-1]: line.split()[0] for line in control._git(repo, "ls-tree", tree).splitlines()}
+    assert modes == {"run.sh": "100755", "data.txt": "100644", "new.txt": "100644"}
+
+
 def test_the_planted_k3_sources_compile():
     for source in (control.K3_REGRESSION, control.K3_WIDE_SOURCE, control.K3_NARROW_SOURCE, control.K3_ANCHOR):
         compile(source, "test_planted.py", "exec")
