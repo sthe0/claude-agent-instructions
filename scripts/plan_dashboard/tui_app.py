@@ -219,6 +219,8 @@ def finish_cycle(app: "DashboardApp", cycle: int) -> None:
     """The cycle's last read has landed: its redraw, the header repaint a yielded light tick owes, then the
     tick's slice of the sweep."""
     app.open_cycles.discard(cycle)
+    if app.path == "stat":
+        snapshot_store.KEPT.end_stat_cycle()
     start_watching(app)
     if app.spaced:
         request_redraw(app, [cycle])
@@ -314,6 +316,7 @@ def begin_cycle(app: "DashboardApp", cycle: int, mode: str, refresh: bool) -> No
 
     if app.path != "event":
         stamp()
+        snapshot_store.KEPT.begin_stat_cycle()
         return
     found = watch.begin_cycle(app.watcher, snapshot_store.KEPT, stamp)
     if watch.needs_sweep(found):
@@ -1274,6 +1277,8 @@ class DashboardApp(App):
     def _failed(self, exc: Exception) -> None:
         self.sub_title = f"read failed: {exc}"
         self.open_cycles.discard(self.cycle)
+        if self.path == "stat":
+            snapshot_store.KEPT.end_stat_cycle()
         start_watching(self)
         if self.slice_due:
             self.slice_due = False

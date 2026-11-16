@@ -45,7 +45,8 @@ SNAPSHOT_NAMES = (
     "snapshot-records-every-source", "snapshot-directory-marker-ignored", "same-named-transcript-dropped",
     "unrecorded-source-stat-skipped", "order-read-piles-up", "child-warm-piles-up", "skipped-order-read-not-made-up",
     "row-confirmed-skipped", "startup-applied-last-read-only", "startup-applied-at-check-end",
-    "startup-applied-needs-old-rows")
+    "startup-applied-needs-old-rows", "stat-cycle-memo-off", "stat-dir-time-key-off", "stat-dir-key-after-listing",
+    "stat-dir-unsettled-key-stored")
 SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-read", "order-read-piles-up",
                         "child-warm-piles-up", "skipped-order-read-not-made-up", "row-confirmed-skipped",
                         "startup-applied-last-read-only", "startup-applied-at-check-end",

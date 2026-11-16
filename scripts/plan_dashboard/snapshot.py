@@ -141,11 +141,11 @@ class IdentityCache:
             self._items.clear()
 
 
-def scan(root, suffix: str) -> dict[str, tuple[str, os.stat_result]]:
+def scan(root, suffix: str, by_directory_time: bool = False) -> dict[str, tuple[str, os.stat_result]]:
     """``{stem: (path, stat)}`` of the regular files named ``*<suffix>`` in ``root``, from one directory pass."""
     found = {}
     try:
-        for entry in KEPT.scandir(root):
+        for entry in KEPT.scandir(root, by_directory_time):
             check_stop()
             if not entry.name.endswith(suffix):
                 continue
@@ -307,6 +307,57 @@ STATES = IdentityCache("state")
 FOUND_BY_STAT = "stat"
 
 
+def directory_key(root, stat=os.stat) -> tuple | None:
+    """What a directory's own times say of its names: ``(dev, ino, mtime_ns, ctime_ns)``, or None when it cannot
+    be statted. A name created, renamed or replaced in it moves the times; a file rewritten in place does not."""
+    try:
+        st = stat(root)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def reusable_key(key) -> bool:
+    """Whether a listing taken under ``key`` may be kept: the directory last changed a step before the key was
+    read, so a later change in the same clock tick cannot leave the key as it is."""
+    return key is not None and now_ns() - max(key[-2:]) >= MTIME_STEP_NS
+
+
+def read_directory(root) -> list[tuple[str, bool]]:
+    with os.scandir(root) as listing:
+        return [(entry.name, entry.is_dir()) for entry in listing]
+
+
+def listing_under_key(root, stat=os.stat) -> tuple[tuple | None, list[tuple[str, bool]]]:
+    """``(key, names)``, the key read before the listing: a change made after it moves the key the next call
+    reads, and one made before it is in the listing."""
+    key = directory_key(root, stat)
+    return key, read_directory(root)
+
+
+class CycleMemo:
+    """What one stat-path cycle has read: the stat of each path (None for an absent one), the listing of each
+    directory, and the time-keyed directories whose key this cycle has confirmed."""
+
+    def __init__(self):
+        self.stats: dict[str, os.stat_result | None] = {}
+        self.listings: dict[str, list[tuple[str, bool]]] = {}
+        self.confirmed: set[str] = set()
+
+
+class TimedListing:
+    """A listing kept across cycles under the directory ``key`` read before it, and the settled stats read
+    while that key held."""
+
+    def __init__(self, key: tuple, names: list[tuple[str, bool]]):
+        self.key, self.names = key, names
+        self.stats: dict[str, os.stat_result] = {}
+
+
+def new_cycle_memo() -> CycleMemo | None:
+    return CycleMemo()
+
+
 class KeptEntry:
     """A directory entry answered from the kept view: ``name``, ``path``, ``is_dir`` and ``stat``."""
 
@@ -344,6 +395,24 @@ class KeptView:
             self.relist: dict[str, int] = {}
             self.marks = 0
             self.found: dict[str, str] = {}
+            self.memo: CycleMemo | None = None
+            self.generation = 0
+            self.timed: dict[str, TimedListing] = {}
+
+    def begin_stat_cycle(self) -> None:
+        """A stat-path cycle starts: each path is stat'd and each directory listed once until it ends. What an
+        earlier cycle memoized is dropped, and a read still going from it stores nothing."""
+        with self._lock:
+            self.generation += 1
+            self.memo = new_cycle_memo()
+
+    def end_stat_cycle(self) -> None:
+        with self._lock:
+            self.generation += 1
+            self.memo = None
+
+    def _memo(self) -> CycleMemo | None:
+        return None if self.trusting else self.memo
 
     def trust(self, covers) -> None:
         with self._lock:
@@ -380,13 +449,46 @@ class KeptView:
                 if kept is None:
                     raise FileNotFoundError(2, "absent when last looked", key)
                 return kept
+            memo, generation = self._memo(), self.generation
+            if memo is not None:
+                known = self._memoized_stat(memo, key)
+                if known is not MISS:
+                    if known is None:
+                        raise FileNotFoundError(2, "absent when last looked this cycle", key)
+                    return known
         try:
             st = os.stat(key)
         except FileNotFoundError:
             self._keep(key, None, seen)
+            self._memorize(key, None, generation)
             raise
         self._keep(key, st, seen)
+        self._memorize(key, st, generation)
         return st
+
+    def _memoized_stat(self, memo: CycleMemo, key: str):
+        """This cycle's stat of ``key``, else the settled one kept under the key of a directory this cycle
+        confirmed, else MISS."""
+        if key in memo.stats:
+            return memo.stats[key]
+        directory = os.path.dirname(key)
+        entry = self.timed.get(directory) if directory in memo.confirmed else None
+        carried = entry.stats.get(key) if entry is not None else None
+        if carried is not None:
+            memo.stats[key] = carried
+            return carried
+        return MISS
+
+    def _memorize(self, key: str, st, generation: int) -> None:
+        with self._lock:
+            memo = self._memo()
+            if memo is None or self.generation != generation:
+                return
+            memo.stats[key] = st
+            directory = os.path.dirname(key)
+            kept = self.timed.get(directory) if directory in memo.confirmed else None
+            if st is not None and kept is not None and settled(st):
+                kept.stats[key] = st
 
     def _keep(self, key: str, st, seen) -> None:
         with self._lock:
@@ -398,19 +500,54 @@ class KeptView:
                 self.dirty[key] = self.marks
                 self.found.setdefault(key, FOUND_BY_STAT)
 
-    def scandir(self, root) -> list[KeptEntry]:
+    def scandir(self, root, by_directory_time: bool = False) -> list[KeptEntry]:
+        """The entries of ``root``. On the stat path a directory is listed once per cycle; with
+        ``by_directory_time`` — for a directory whose names are only created, renamed or replaced — its listing
+        and its settled stats are also kept across cycles for as long as ``directory_key`` is the same."""
         key = str(root)
         with self._lock:
             seen = self.relist.get(key)
             kept = self.listings.get(key) if self._kept(key) and seen is None else None
+            memo, generation = (self._memo(), self.generation) if kept is None else (None, 0)
+            if memo is not None:
+                kept = memo.listings.get(key)
         if kept is None:
-            with os.scandir(key) as listing:
-                kept = [(entry.name, entry.is_dir()) for entry in listing]
+            kept = self._list(key, by_directory_time, memo, generation)
             with self._lock:
                 self.listings[key] = kept
                 if self.relist.get(key) == seen:
                     self.relist.pop(key, None)
         return [KeptEntry(name, os.path.join(key, name), is_dir, self) for name, is_dir in kept]
+
+    def _list(self, key: str, by_directory_time: bool, memo: CycleMemo | None, generation: int):
+        if memo is None or not by_directory_time:
+            names = read_directory(key)
+        else:
+            with self._lock:
+                entry = self.timed.get(key)
+            live = directory_key(key, self.stat)
+            if entry is not None and live == entry.key and reusable_key(live):
+                names = entry.names
+                with self._lock:
+                    if self.generation == generation:
+                        memo.confirmed.add(key)
+            else:
+                names = self._list_under_key(key, memo, generation)
+        with self._lock:
+            if memo is not None and self.generation == generation:
+                memo.listings[key] = names
+        return names
+
+    def _list_under_key(self, key: str, memo: CycleMemo, generation: int):
+        listing_key, names = listing_under_key(key, self.stat)
+        with self._lock:
+            if self.generation == generation:
+                if reusable_key(listing_key):
+                    self.timed[key] = TimedListing(listing_key, names)
+                    memo.confirmed.add(key)
+                else:
+                    self.timed.pop(key, None)
+        return names
 
     def glob(self, root, pattern: str) -> list[Path]:
         """``Path(root).glob(pattern)`` for a pattern of ``*`` segments and literal or ``*``-suffixed names,
@@ -460,12 +597,12 @@ class KeptView:
 KEPT = KeptView()
 
 
-def listed(kind: str, root, suffix: str) -> dict[str, tuple[str, os.stat_result]]:
+def listed(kind: str, root, suffix: str, by_directory_time: bool = False) -> dict[str, tuple[str, os.stat_result]]:
     """``scan(root, suffix)``, recorded in ``OBSERVED`` as every identity of ``kind``, with the directory's
     marker taken before the pass."""
     read_ns = now_ns()
     marker = directory_marker(root)
-    found = scan(root, suffix)
+    found = scan(root, suffix, by_directory_time)
     directory = None if marker is None else {"path": str(root), "marker": marker, "taken_ns": read_ns}
     OBSERVED.scanned(kind, {path: (st, read_ns) for path, st in found.values()}, directory)
     return found
@@ -500,7 +637,7 @@ class BindingScan:
         and each harness session's engine sessions in drive order. Under a presumption a file it holds for is
         not read and drives none, and the index is a ``PresumedIndex``."""
         presumption = self.presumption
-        found = listed("binding", self.directory(), ".json")
+        found = listed("binding", self.directory(), ".json", by_directory_time=True)
         driven, marker = {}, OBSERVED.marker("binding")
         for stem, (path, st) in sorted(found.items()):
             if (presumption is not None and path not in presumption[1]

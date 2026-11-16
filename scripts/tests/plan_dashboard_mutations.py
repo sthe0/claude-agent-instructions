@@ -1108,7 +1108,30 @@ def _unrecorded_source_never_statted(original):
     return mutated
 
 
+def _directory_key_without_times(original):
+    def mutated(root, stat=os.stat):
+        key = original(root, stat)
+        return key and key[:2] + (0, 0)
+    return mutated
+
+
+def _key_read_after_the_listing(original):
+    def mutated(root, stat=os.stat):
+        snapshot = importlib.import_module(SNAPSHOT)
+        names = snapshot.read_directory(root)
+        return snapshot.directory_key(root), names
+    return mutated
+
+
+def _unsettled_key_is_reusable(original):
+    return lambda key: key is not None
+
+
 SNAPSHOT_MUTATIONS = {
+    "stat-cycle-memo-off": (SNAPSHOT, "new_cycle_memo", _always(None)),
+    "stat-dir-time-key-off": (SNAPSHOT, "directory_key", _directory_key_without_times),
+    "stat-dir-key-after-listing": (SNAPSHOT, "listing_under_key", _key_read_after_the_listing),
+    "stat-dir-unsettled-key-stored": (SNAPSHOT, "reusable_key", _unsettled_key_is_reusable),
     "same-named-transcript-dropped": (ATTENTION, "note_candidate_transcripts", lambda _original: lambda *args, **kwargs: None),
     "unrecorded-source-stat-skipped": (SNAPSHOT, "_unchanged", _unrecorded_source_never_statted),
     "snapshot-checksum-ignored": (SNAPSHOT, "load", _checksum_unchecked),

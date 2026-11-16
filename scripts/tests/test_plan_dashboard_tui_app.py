@@ -2546,6 +2546,25 @@ def test_every_source_kind_change_appears_on_the_next_refresh_on_both_paths(tmp_
     run_fleet(scenario, root, timers, stream, path=path, locator=locator, **({"interval": 2.0} if path == "stat" else {}))
 
 
+@pytest.mark.parametrize("path", ["event", "stat"])
+def test_begin_stat_cycle_is_called_only_on_the_stat_path(tmp_path, monkeypatch, timers, stream, path):
+    root = attention_root(tmp_path)
+    calls = []
+    for name in ("begin_stat_cycle", "end_stat_cycle"):
+        real = getattr(snapshot_store.KEPT, name)
+        monkeypatch.setattr(snapshot_store.KEPT, name, lambda name=name, real=real: (calls.append(name), real())[1])
+
+    async def scenario(fleet):
+        calls.clear()
+        change_source(root, "state")
+        if path == "event":
+            fleet.named()
+        await fleet.tick(0.5 if path == "event" else 2.5)
+        assert calls == ([] if path == "event" else ["begin_stat_cycle", "end_stat_cycle"])
+
+    run_fleet(scenario, root, timers, stream, path=path, **({"interval": 2.0} if path == "stat" else {}))
+
+
 def test_the_light_tick_reads_no_source_file(tmp_path, monkeypatch, timers, stream):
     root = attention_root(tmp_path)
     calls, reads = [], []

@@ -20,6 +20,8 @@ import json
 import os
 import subprocess
 import sys
+import time
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1187,3 +1189,148 @@ def test_an_out_of_window_state_file_rewritten_in_place_is_applied_by_the_live_c
     assert store.directory_marker(root.state_root) == marker
     read_window(root)
     assert str(stale) in store.observation()[0]
+
+
+# --- a stat-path cycle reads each directory once and each path once ---------------------------------------
+
+FAR_FUTURE_NS = 36_000 * 1_000_000_000
+
+
+@pytest.fixture
+def settled_clock(monkeypatch):
+    """A clock far past every file's last change: every directory key and every stat is settled."""
+    monkeypatch.setattr(store, "now_ns", lambda: time.time_ns() + FAR_FUTURE_NS)
+
+
+def count_reads(monkeypatch):
+    """``(listings, stats)``: the paths ``os.scandir`` and ``os.stat`` are asked for from now on."""
+    listings, stats = [], []
+    real_scandir, real_stat = os.scandir, os.stat
+    monkeypatch.setattr(os, "scandir", lambda path, *a, **k: (listings.append(str(path)), real_scandir(path, *a, **k))[1])
+    monkeypatch.setattr(os, "stat", lambda path, *a, **k: (stats.append(str(path)), real_stat(path, *a, **k))[1])
+    return listings, stats
+
+
+def stat_cycle(view, directory, by_directory_time=True):
+    """One stat-path cycle that lists ``directory`` and stats each entry: ``{name: (is_dir, stat)}``."""
+    view.begin_stat_cycle()
+    try:
+        return {entry.name: (entry.is_dir(), entry.stat()) for entry in view.scandir(directory, by_directory_time)}
+    finally:
+        view.end_stat_cycle()
+
+
+def move_directory_key(directory):
+    """Touch the directory until its mtime or ctime moves, whatever the file system's tick."""
+    scratch = Path(directory) / ".scratch"
+
+    def times():
+        seen = os.stat(directory)
+        return seen.st_mtime_ns, seen.st_ctime_ns
+
+    start = times()
+    while times() == start:
+        scratch.write_text("x", encoding="utf-8")
+        scratch.unlink()
+
+
+def test_a_stat_path_cycle_reads_one_listing_and_one_stat_per_path(root, monkeypatch):
+    store.reset()
+    listings, stats = count_reads(monkeypatch)
+    store.KEPT.begin_stat_cycle()
+    model.collect(root.state_root, now=NOW, include_all=True, cost_log=root.cost_log)
+    attention.transcript_index(root.transcripts_root)
+    store.harness_index()
+    model.child_index(root.state_root)
+    store.KEPT.end_stat_cycle()
+    mine = (str(root.home), str(root.state_root), str(root.transcripts_root))
+    ours = lambda paths: [path for path in paths if path.startswith(mine)]  # noqa: E731
+    assert ours(listings) and ours(stats)
+    assert [path for path, n in Counter(ours(listings)).items() if n > 1] == []
+    assert [path for path, n in Counter(ours(stats)).items() if n > 1] == []
+    store.reset()
+
+
+def test_an_unchanged_directory_is_listed_once_over_several_stat_cycles(tmp_path, settled_clock, monkeypatch):
+    directory = tmp_path / "bindings"
+    directory.mkdir()
+    files = sorted(str(directory / f"{number}.json") for number in range(5))
+    for path in files:
+        Path(path).write_text("{}", encoding="utf-8")
+    listings, stats = count_reads(monkeypatch)
+    view = store.KeptView()
+    first = stat_cycle(view, directory)
+    for _ in range(3):
+        assert stat_cycle(view, directory) == first
+    assert listings.count(str(directory)) == 1
+    assert sorted(path for path in stats if path.endswith(".json")) == files
+
+
+def test_a_replace_over_an_existing_name_is_seen_by_the_next_stat_cycle(tmp_path, settled_clock):
+    directory, aside = tmp_path / "bindings", tmp_path / "aside"
+    directory.mkdir()
+    aside.mkdir()
+    (directory / "a.json").write_text("{}", encoding="utf-8")
+    view = store.KeptView()
+    before = stat_cycle(view, directory)
+    assert before["a.json"][0] is False
+    (tmp_path / "link").symlink_to(aside)
+    os.replace(tmp_path / "link", directory / "a.json")
+    move_directory_key(directory)
+    after = stat_cycle(view, directory)
+    assert after["a.json"][0] is True and after["a.json"][1].st_ino != before["a.json"][1].st_ino
+
+
+def test_a_change_between_the_key_stat_and_the_listing_is_seen_by_the_next_cycle(tmp_path, settled_clock, monkeypatch):
+    directory = tmp_path / "bindings"
+    directory.mkdir()
+    (directory / "a.json").write_text("{}", encoding="utf-8")
+    real, done = store.read_directory, []
+
+    def listing_then_a_creation(root):
+        names = real(root)
+        if not done:
+            done.append(1)
+            (directory / "b.json").write_text("{}", encoding="utf-8")
+            move_directory_key(root)
+        return names
+
+    monkeypatch.setattr(store, "read_directory", listing_then_a_creation)
+    view = store.KeptView()
+    assert set(stat_cycle(view, directory)) == {"a.json"}
+    assert set(stat_cycle(view, directory)) == {"a.json", "b.json"}
+
+
+def test_a_listing_under_an_unsettled_key_is_not_reused(tmp_path, monkeypatch):
+    directory = tmp_path / "bindings"
+    directory.mkdir()
+    (directory / "a.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(store, "now_ns", lambda: stamp(directory) + store.MTIME_STEP_NS - 1)
+    listings, _ = count_reads(monkeypatch)
+    view = store.KeptView()
+    stat_cycle(view, directory)
+    stat_cycle(view, directory)
+    assert listings.count(str(directory)) == 2
+
+
+def test_an_in_place_rewrite_in_a_memo_only_directory_is_seen(tmp_path, settled_clock):
+    directory = tmp_path / "states"
+    directory.mkdir()
+    path = directory / "a.json"
+    path.write_text("{}", encoding="utf-8")
+    view = store.KeptView()
+    assert stat_cycle(view, directory, by_directory_time=False)["a.json"][1].st_size == 2
+    path.write_text("{ }  ", encoding="utf-8")
+    assert stat_cycle(view, directory, by_directory_time=False)["a.json"][1].st_size == 5
+
+
+def test_a_stat_is_not_kept_past_the_cycle_that_made_it(tmp_path, settled_clock):
+    path = tmp_path / "a.json"
+    path.write_text("{}", encoding="utf-8")
+    view = store.KeptView()
+    view.begin_stat_cycle()
+    assert view.stat(path).st_size == 2
+    path.write_text("{ }  ", encoding="utf-8")
+    assert view.stat(path).st_size == 2
+    view.end_stat_cycle()
+    assert view.stat(path).st_size == 5
