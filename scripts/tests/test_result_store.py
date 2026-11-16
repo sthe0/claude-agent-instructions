@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 
 import pytest
@@ -95,6 +96,17 @@ def test_changed_interpreter_changes_the_key(monkeypatch, tree):
     here = rs.compute_key(T1, deps, environment())
     monkeypatch.setattr(sys, "version_info", (3, 11, 0, "final", 0))
     assert rs.compute_key(T1, deps, environment()) != here
+
+
+def test_a_chmod_with_unchanged_content_changes_the_key_and_the_hit_goes(store, tree):
+    (tree / "lib" / "a.py").chmod(0o755)
+    deps = deps_in(tree)
+    key = rs.compute_key(T1, deps, environment())
+    store.put(CAND, environment(), {T1: deps})
+    assert T1 in hits(store, tree)
+    (tree / "lib" / "a.py").chmod(0o644)
+    assert rs.compute_key(T1, deps_in(tree), environment()) != key
+    assert hits(store, tree) == {}
 
 
 def test_changed_distribution_version_changes_the_key_and_the_hit_goes(store, tree):
@@ -200,13 +212,13 @@ def traced(path, ids, always=()):
     (path / "main.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
 
 
-def finished_run(tmp_path, collected, failed=(), exit_code=1):
+def finished_run(tmp_path, collected, failed=(), exit_code=1, hermetic=True):
     lines = [{"kind": "collected", "nodeid": i} for i in collected]
     lines += [{"kind": "report", "nodeid": i, "when": "call", "outcome": "failed" if i in failed else "passed"}
               for i in collected]
     report = tmp_path / "tests.jsonl"
     report.write_text("".join(json.dumps(line) + "\n" for line in lines))
-    return gate.SuiteRun(exit_code, tuple(failed), CAND, report_path=str(report))
+    return gate.SuiteRun(exit_code, tuple(failed), CAND, report_path=str(report), hermetic=hermetic)
 
 
 def plan_in(tmp_path, hits_=None):
@@ -239,6 +251,37 @@ def test_a_run_that_did_not_finish_stores_nothing(tmp_path):
     plan = plan_in(tmp_path)
     run = finished_run(tmp_path, ["t::pass"], exit_code=-9)
     assert gate.settle_reuse(plan, CAND, run).stored_results == 0
+
+
+def test_a_run_that_was_not_hermetic_stores_nothing_and_says_so(tmp_path):
+    traced(tmp_path / "trace", ["t::pass"])
+    plan = plan_in(tmp_path)
+    settled = gate.settle_reuse(plan, CAND, finished_run(tmp_path, ["t::pass"], exit_code=0, hermetic=False))
+    assert settled.stored_results == 0 and "not hermetic" in settled.store_note
+    assert not plan.store.exists()
+
+
+@pytest.mark.parametrize("error", [zlib.error("bad blob"), KeyError(7), json.JSONDecodeError("x", "", 0)])
+def test_a_store_that_fails_on_lookup_costs_the_reuse_not_the_run(monkeypatch, tmp_path, error):
+    def failing_lookup(self, ids, environment, resolve):
+        raise error
+
+    monkeypatch.setattr(rs.ResultStore, "lookup", failing_lookup)
+    monkeypatch.setattr(gate, "_common_dir", lambda repo: str(tmp_path / "git"))
+    plan, note = gate.plan_reuse(tmp_path, tmp_path / "sandbox", {}, tmp_path)
+    assert plan is None and "every test runs" in note and type(error).__name__ in note
+
+
+@pytest.mark.parametrize("error", [zlib.error("bad blob"), KeyError(7)])
+def test_a_store_that_fails_on_put_leaves_the_verdict_and_a_note(monkeypatch, tmp_path, error):
+    def failing_put(self, sha, environment, passing):
+        raise error
+
+    monkeypatch.setattr(rs.ResultStore, "put", failing_put)
+    traced(tmp_path / "trace", ["t::pass"])
+    settled = gate.settle_reuse(plan_in(tmp_path), CAND, finished_run(tmp_path, ["t::pass"], exit_code=0))
+    assert settled.pytest_exit == 0 and settled.stored_results == 0
+    assert "not stored" in settled.store_note and type(error).__name__ in settled.store_note
 
 
 def test_a_run_of_another_commit_stores_nothing(tmp_path):

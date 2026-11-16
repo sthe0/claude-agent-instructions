@@ -37,7 +37,6 @@ import resource
 import shutil
 import signal
 import site
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -886,8 +885,8 @@ def plan_reuse(repo: Path, root: Path, env: dict[str, str], scripts: Path) -> tu
         environment = result_store.current_environment(env=env)
         with result_store.ResultStore(path) as store:
             hits = store.lookup(store.test_ids(), environment, result_store.tree_resolver(root / "core"))
-    except (GateError, OSError, RuntimeError, ValueError, subprocess.SubprocessError, sqlite3.Error) as exc:
-        return None, f"result store unavailable, every test runs: {one_line(exc, 200)}"
+    except Exception as exc:  # a corrupt or dangling row (zlib.error, KeyError) must cost the reuse, never the verdict
+        return None, f"result store unavailable, every test runs: {one_line(f'{type(exc).__name__}: {exc}', 200)}"
     shutil.copyfile(scripts / "tests" / f"{REUSE_PLUGIN_MODULE}.py", root / "plugin" / f"{REUSE_PLUGIN_MODULE}.py")
     for stale in out_prefix.parent.glob(f"{REUSE_OUT_NAME}.*"):
         stale.unlink(missing_ok=True)
@@ -900,13 +899,14 @@ def plan_reuse(repo: Path, root: Path, env: dict[str, str], scripts: Path) -> tu
 def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
     """After a full run: name the tests that were left out, and store the passes that were traced completely.
 
-    Only a run that finished (pytest exit 0 or 1) in the sandbox of ``sha`` stores anything, and only
+    Only a hermetic run that finished (pytest exit 0 or 1) in the sandbox of ``sha`` stores anything (a
+    run that could see the live repository, home or network may pass for reasons a hermetic one lacks), and only
     tests its report shows passing that the tracer recorded with no always-rerun reason."""
     left_out = {i for part in plan.out_prefix.parent.glob(f"{plan.out_prefix.name}.*")
                 for i in part.read_text(encoding="utf-8").splitlines() if i}
     reused = {i: plan.hits[i].candidate_sha for i in sorted(left_out) if i in plan.hits}
     stored, always, note, reasons = 0, 0, "", collections.Counter()
-    if not run.timed_out and run.pytest_exit in (0, 1) and run.sandbox_core_sha == sha and run.report_path:
+    if run.hermetic and not run.timed_out and run.pytest_exit in (0, 1) and run.sandbox_core_sha == sha and run.report_path:
         try:
             records = _dep_tracer_records(plan.tracer_dir)
             lines = _test_report().read_lines(run.report_path)
@@ -924,8 +924,10 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
                 store.set_meta(result_store.FAILED_META, json.dumps(
                     sorted(i for i in ran if outcome.get(i) != "passed" or i in run.failures)))
                 store.trim()
-        except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
-            note = f"results of the run were not stored: {one_line(exc, 200)}"
+        except Exception as exc:
+            note = f"results of the run were not stored: {one_line(f'{type(exc).__name__}: {exc}', 200)}"
+    elif not run.hermetic and not run.timed_out:
+        note = "results of the run were not stored: the run was not hermetic"
     ran_tests = ran_ids(run)
     exit_code = run.pytest_exit
     if exit_code == NO_TESTS_COLLECTED_EXIT and reused and not ran_tests and not run.timed_out:
