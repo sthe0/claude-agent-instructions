@@ -662,6 +662,13 @@ def test_spied_joins_record_each_pair_and_restore_the_gate_function():
     assert control.join_result(one, other_tip) == "refused"
 
 
+def test_a_run_that_joined_several_sets_is_judged_by_its_last_and_none_is_an_error():
+    seen = [{"result": "joined", "n": 1}, {"result": "refused", "n": 2}]
+    assert control._last_join(seen, "A")["n"] == 2
+    with pytest.raises(SystemExit, match="joined no partial sets"):
+        control._last_join([], "A")
+
+
 def test_edited_tree_keeps_the_test_files_that_reduced_tree_drops(tmp_path):
     repo = tmp_path / "repo"
     (repo / "scripts" / "tests").mkdir(parents=True)

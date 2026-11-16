@@ -1714,11 +1714,23 @@ def _with_extra_path(exp: Experiment, sha: str, directory: str | None) -> dict:
             os.environ[gate.EXTRA_PYTHONPATH_ENV] = saved
 
 
+def _k3_small_tree(repo: Path, extra: dict[str, str] | None = None) -> str:
+    """A small candidate: the anchor and the narrow planted test, plus ``extra`` (path -> text)."""
+    return reduced_tree(repo, {ANCHOR_FILE: K3_ANCHOR, f"{K3_DIR}_narrow.py": K3_NARROW_SOURCE,
+                               f"{PLANTED_DIR}/k3_narrow_data.txt": K3_NARROW_DATA, **(extra or {})})
+
+
+def _last_join(joins: list[dict], run: str) -> dict:
+    if not joins:
+        raise SystemExit(f"the gate run of {run} joined no partial sets; the control cannot judge it")
+    return joins[-1]
+
+
 def _k3_regression_and_partial_sets(exp: Experiment, repo: Path) -> tuple[dict, dict, dict]:
-    """Candidates A and B each plant one always-failing test. A runs twice (the tip stable, then moved)
-    and B once; the sets each run joined are judged against each other."""
+    """Candidates A and B each plant one always-failing test beside tests the store already holds. A runs
+    twice (the tip stable, then moved) and B once; the sets each run joined are judged against each other."""
     def planted(name: str) -> str:
-        return exp.candidate(edited_tree(repo, {f"{K3_DIR}_{name}.py": K3_REGRESSION}), f"k3-{name}")
+        return exp.candidate(_k3_small_tree(repo, {f"{K3_DIR}_{name}.py": K3_REGRESSION}), f"k3-{name}")
 
     def moved_tip() -> str:
         moved = _commit(repo, exp.head_tree, exp.tip, f"cls-control moved tip {exp.base.name}")
@@ -1729,12 +1741,17 @@ def _k3_regression_and_partial_sets(exp: Experiment, repo: Path) -> tuple[dict, 
         _git(repo, "--git-dir", str(exp.remote), "update-ref", "refs/heads/main", moved)
         return _git(repo, "ls-remote", str(exp.remote), "refs/heads/main").split()[0]
 
+    def run_joined(sha: str, label: str, **kwargs) -> tuple[dict, dict]:
+        with joins_spied() as seen:
+            record = exp.run(sha, **kwargs)[0]
+        return record, _last_join(seen, label)
+
+    prime = exp.candidate(_k3_small_tree(repo), "k3-prime")
+    exp.run(prime)
     a, b = planted("a"), planted("b")
-    with joins_spied() as seen:
-        stable, _ = exp.run(a)
-        moved, _ = exp.run(a, tip_reader=moved_tip)
-        other, _ = exp.run(b)
-    a_stable, a_moved, b_other = seen
+    stable, a_stable = run_joined(a, "A")
+    moved, a_moved = run_joined(a, "A at a moved tip", tip_reader=moved_tip)
+    other, b_other = run_joined(b, "B")
     rerun = (stable.get("reruns") or {}).get(f"{K3_DIR}_a.py::test_regression") or {}
     regression = {"verdict": stable.get("status"), "reused": (stable.get("results") or {}).get("reused", 0),
                   "failed_rounds": rerun.get("failed_rounds"), "rerun_result": rerun.get("result")}
@@ -1749,23 +1766,21 @@ def _k3_regression_and_partial_sets(exp: Experiment, repo: Path) -> tuple[dict, 
     table = {path: dict(fields) for path, fields in
              flake_list.parse_list(_head_text(repo, flake_list.LIST_PATH)).items()}
     table[listed_id] = {"count": LISTED_COUNT, "first_seen": LISTED_SEEN[0], "last_seen": LISTED_SEEN[1]}
-    listed = exp.candidate(edited_tree(repo, {f"{K3_DIR}_listed.py": K3_REGRESSION,
-                                              flake_list.LIST_PATH: flake_list.render_list(table)}), "k3-listed")
+    listed = exp.candidate(_k3_small_tree(repo, {f"{K3_DIR}_listed.py": K3_REGRESSION,
+                                                 flake_list.LIST_PATH: flake_list.render_list(table)}), "k3-listed")
     listed_record, _ = exp.run(listed)
     return regression, partial, {"verdict": listed_record.get("status"),
                                  "confirmed": listed_id in (listed_record.get("new_failures") or [])}
 
 
 def _k3_key_coverage(exp: Experiment, repo: Path) -> dict:
-    planted = {f"{K3_DIR}_wide.py": K3_WIDE_SOURCE, f"{K3_DIR}_narrow.py": K3_NARROW_SOURCE,
-               f"{PLANTED_DIR}/k3_narrow_data.txt": K3_NARROW_DATA}
-    first = exp.candidate(edited_tree(repo, planted), "k3-wide-narrow")
+    planted = {f"{K3_DIR}_wide.py": K3_WIDE_SOURCE}
+    first = exp.candidate(_k3_small_tree(repo, planted), "k3-wide-narrow")
     exp.run(first)
-    second = exp.candidate(edited_tree(repo, {**planted, "docs/cls-control-unrelated.md": "unrelated\n"}),
+    second = exp.candidate(_k3_small_tree(repo, {**planted, "docs/cls-control-unrelated.md": "unrelated\n"}),
                            "k3-unrelated-file")
     sources = exp.run(second)[0].get("test_sources") or {}
-    tiny = exp.candidate(reduced_tree(repo, {ANCHOR_FILE: K3_ANCHOR, f"{K3_DIR}_narrow.py": K3_NARROW_SOURCE,
-                                             f"{PLANTED_DIR}/k3_narrow_data.txt": K3_NARROW_DATA}), "k3-dist")
+    tiny = exp.candidate(_k3_small_tree(repo), "k3-dist")
     dists = {"1.0": dummy_distribution(exp.base / "dist-1.0", "1.0"),
              "1.1": dummy_distribution(exp.base / "dist-1.1", "1.1")}
     runs = {"none": _with_extra_path(exp, tiny, None), "1.0": _with_extra_path(exp, tiny, dists["1.0"]),
@@ -1832,7 +1847,6 @@ def k3_negative(repo: Path, out: Path) -> int:
     """The result store against the four ways it could let a regression through, on real gate runs; 0 every
     bad case is refused, 1 one is not, 2 an error."""
     with Experiment(repo, "k3") as exp:
-        exp.prepare()
         regression, partial, listed = _k3_regression_and_partial_sets(exp, repo)
         coverage = _k3_key_coverage(exp, repo)
     outcomes = {"regression": regression, "partial_sets": partial, "flake_listed": listed, "key_coverage": coverage}
