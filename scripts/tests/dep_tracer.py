@@ -373,7 +373,8 @@ def _repo_abs(path):
 
 
 def file_digest(path: str) -> str:
-    """Content digest of a file read: ``sha256:<hex>``, or ``absent`` / ``dir`` / ``other`` / ``unreadable``."""
+    """Digest of a file read: ``sha256:<hex>:<permission bits in octal>`` (a chmod alone changes it), or
+    ``absent`` / ``dir`` / ``other`` / ``unreadable``."""
     try:
         st = _real_stat(path)
     except OSError:
@@ -382,7 +383,8 @@ def file_digest(path: str) -> str:
         return "dir"
     if not _stat.S_ISREG(st.st_mode):
         return "other"
-    sig = (st.st_mtime_ns, st.st_size, st.st_ino)
+    mode = st.st_mode & 0o777
+    sig = (st.st_mtime_ns, st.st_size, st.st_ino, mode)
     hit = _digests.get(path)
     if hit is not None and hit[0] == sig:
         return hit[1]
@@ -393,7 +395,7 @@ def file_digest(path: str) -> str:
                 digest.update(chunk)
     except OSError:
         return "unreadable"
-    value = "sha256:" + digest.hexdigest()
+    value = f"sha256:{digest.hexdigest()}:{mode:o}"
     _digests[path] = (sig, value)
     return value
 

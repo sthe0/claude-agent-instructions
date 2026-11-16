@@ -391,6 +391,11 @@ def sha(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+def fsha(path: Path) -> str:
+    """The digest the tracer records for a file: content hash and permission bits."""
+    return f"{sha(path.read_bytes())}:{path.stat().st_mode & 0o777:o}"
+
+
 def _make_repo(root: Path, files: dict[str, str]) -> Path:
     for rel, content in files.items():
         path = root / rel
@@ -441,7 +446,7 @@ def assert_record(traced, nodeid, files, *, reasons=(), probes=None, listings=No
     assert {k: v for k, v in record["probes"].items() if not _is_import_candidate(k, v)} == (probes or {})
     assert record["listings"] == (listings or {})
     for rel, digest in record["files"].items():
-        assert digest == sha((traced["root"] / rel).read_bytes())
+        assert digest == fsha(traced["root"] / rel)
 
 
 def test_imported_module_is_recorded(traced):
@@ -495,7 +500,7 @@ def test_import_chain_reaches_the_second_level(traced):
 
 def test_existence_probe_records_present_state_as_content(traced):
     assert_record(traced, "test_c14a_present.py::test_it", {"conftest.py", "test_c14a_present.py"},
-                  probes={"c14_present.txt": sha(b"data")})
+                  probes={"c14_present.txt": fsha(traced["root"] / "c14_present.txt")})
 
 
 def test_existence_probe_records_absent_state(traced):
@@ -508,7 +513,7 @@ def test_directory_probe_records_dir(traced):
 
 
 def test_size_probe_records_the_content_hash(traced):
-    assert_record(traced, "test_c15_size.py::test_it", {"conftest.py", "test_c15_size.py"}, probes={"c15.bin": sha(b"1234")})
+    assert_record(traced, "test_c15_size.py::test_it", {"conftest.py", "test_c15_size.py"}, probes={"c15.bin": fsha(traced["root"] / "c15.bin")})
 
 
 def test_sqlite_inside_the_repository_forces_rerun(traced):
@@ -828,7 +833,7 @@ def test_digests_of_file_listing_and_probe(tmp_path):
     (tmp_path / "f.txt").write_bytes(b"abc")
     (tmp_path / "__pycache__").mkdir()
     (tmp_path / "g.txt").write_text("g")
-    assert dep_tracer.file_digest(str(tmp_path / "f.txt")) == sha(b"abc")
+    assert dep_tracer.file_digest(str(tmp_path / "f.txt")) == fsha(tmp_path / "f.txt")
     assert dep_tracer.file_digest(str(tmp_path / "none")) == "absent"
     assert dep_tracer.file_digest(str(tmp_path)) == "dir"
     assert dep_tracer.listing_digest(str(tmp_path)) == sha(b"f.txt\ng.txt")
@@ -836,7 +841,19 @@ def test_digests_of_file_listing_and_probe(tmp_path):
     assert dep_tracer.probe_digest(str(tmp_path)) == "dir"
     (tmp_path / "ln").symlink_to("f.txt")
     assert dep_tracer.probe_digest(str(tmp_path / "ln"), follow=False) == "symlink:f.txt"
-    assert dep_tracer.probe_digest(str(tmp_path / "ln")) == sha(b"abc")
+    assert dep_tracer.probe_digest(str(tmp_path / "ln")) == fsha(tmp_path / "f.txt")
+
+
+def test_a_chmod_alone_changes_the_file_and_probe_digests(tmp_path):
+    target = tmp_path / "hook"
+    target.write_bytes(b"#!/bin/sh\n")
+    target.chmod(0o755)
+    before_file, before_probe = dep_tracer.file_digest(str(target)), dep_tracer.probe_digest(str(target))
+    target.chmod(0o644)
+    assert dep_tracer.file_digest(str(target)) != before_file
+    assert dep_tracer.probe_digest(str(target)) != before_probe
+    target.chmod(0o755)
+    assert dep_tracer.file_digest(str(target)) == before_file
 
 
 def test_import_closure_follows_relative_function_level_and_literal_dynamic_imports(tmp_path):
