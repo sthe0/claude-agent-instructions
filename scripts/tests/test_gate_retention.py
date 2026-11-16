@@ -667,6 +667,50 @@ def test_a_store_registered_on_the_gates_own_directories_is_not_listed_twice(com
     assert result.evicted == (f"baseline:{sha(1)}",) and not kept.exists()
 
 
+def test_a_registered_stale_hook_runs_first_and_spares_the_entry_when_it_frees_enough(common, tmp_path):
+    store = tmp_path / "stale-store"
+    data = put(store / "a" / "data", age=100)
+    calls = []
+
+    def stale(path):
+        calls.append(path)
+        data.write_bytes(b"")
+
+    retention.register_store("stale-probe", store, shutil.rmtree, stale=stale)
+    try:
+        result = retention.enforce(common, max_mb=0.5, runs=3)
+    finally:
+        retention.unregister_store("stale-probe")
+    assert calls == [store] and result.evicted == () and (store / "a").is_dir()
+
+
+def test_a_stale_hook_is_not_called_while_the_store_is_within_its_bound(common, tmp_path):
+    store = tmp_path / "stale-store"
+    put(store / "a" / "data", age=100)
+    calls = []
+    retention.register_store("stale-probe", store, shutil.rmtree, stale=calls.append)
+    try:
+        retention.enforce(common, max_mb=100, runs=3)
+    finally:
+        retention.unregister_store("stale-probe")
+    assert calls == []
+
+
+def test_a_stale_hook_that_raises_costs_nothing_but_the_hook(common, tmp_path, capsys):
+    store = tmp_path / "stale-store"
+    put(store / "a" / "data", age=100)
+
+    def broken(path):
+        raise RuntimeError("boom")
+
+    retention.register_store("stale-probe", store, shutil.rmtree, stale=broken)
+    try:
+        result = retention.enforce(common, max_mb=TINY, runs=3)
+    finally:
+        retention.unregister_store("stale-probe")
+    assert result.evicted == ("stale-probe:a",) and "boom" in capsys.readouterr().err
+
+
 def test_a_store_within_the_bound_loses_nothing(common):
     put(common / retention.BASELINE_DIR / f"{sha(1)}.json")
     assert retention.enforce(common, max_mb=10, runs=3).evicted == ()

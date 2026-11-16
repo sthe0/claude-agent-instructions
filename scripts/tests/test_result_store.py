@@ -263,7 +263,7 @@ def test_a_run_that_was_not_hermetic_stores_nothing_and_says_so(tmp_path):
 
 @pytest.mark.parametrize("error", [zlib.error("bad blob"), KeyError(7), json.JSONDecodeError("x", "", 0)])
 def test_a_store_that_fails_on_lookup_costs_the_reuse_not_the_run(monkeypatch, tmp_path, error):
-    def failing_lookup(self, ids, environment, resolve):
+    def failing_lookup(self, ids, environment, resolve, *rest):
         raise error
 
     monkeypatch.setattr(rs.ResultStore, "lookup", failing_lookup)
@@ -274,7 +274,7 @@ def test_a_store_that_fails_on_lookup_costs_the_reuse_not_the_run(monkeypatch, t
 
 @pytest.mark.parametrize("error", [zlib.error("bad blob"), KeyError(7)])
 def test_a_store_that_fails_on_put_leaves_the_verdict_and_a_note(monkeypatch, tmp_path, error):
-    def failing_put(self, sha, environment, passing):
+    def failing_put(self, sha, environment, passing, **rest):
         raise error
 
     monkeypatch.setattr(rs.ResultStore, "put", failing_put)

@@ -41,10 +41,12 @@ import subprocess
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol, Sequence
 
+from . import catalogue_key
 from . import config_root
 from . import flake_list
 from . import gate_retention
@@ -234,6 +236,8 @@ class SuiteRun:
     always_rerun_reasons: Mapping[str, int] = dataclasses.field(default_factory=dict)
     ran_tests: tuple[str, ...] = ()  # read from the report while the sandbox still exists
     store_note: str = ""
+    catalogue_reused_s: Mapping[str, float] = dataclasses.field(default_factory=dict)  # reused catalogue id -> test-seconds it took
+    catalogue_ran: tuple[str, ...] = ()  # registered catalogue tests this run ran
 
 
 class Runner(Protocol):
@@ -896,6 +900,7 @@ class ReusePlan:
     tracer_dir: Path
     out_prefix: Path
     hits: Mapping[str, result_store.Hit]
+    registry: catalogue_key.Registry = catalogue_key.Registry()
 
 
 def plan_reuse(repo: Path, root: Path, env: dict[str, str], scripts: Path) -> tuple[ReusePlan | None, str]:
@@ -908,8 +913,10 @@ def plan_reuse(repo: Path, root: Path, env: dict[str, str], scripts: Path) -> tu
     try:
         path = result_store.store_path(Path(_common_dir(repo)))
         environment = result_store.current_environment(env=env)
+        registry = catalogue_key.load(root / "core")
         with result_store.ResultStore(path) as store:
-            hits = store.lookup(store.test_ids(), environment, result_store.tree_resolver(root / "core"))
+            hits = store.lookup(store.test_ids(), environment, result_store.tree_resolver(root / "core"),
+                                registry, catalogue_key.max_age_s())
     except Exception as exc:  # a corrupt or dangling row (zlib.error, KeyError) must cost the reuse, never the verdict
         return None, f"result store unavailable, every test runs: {one_line(f'{type(exc).__name__}: {exc}', 200)}"
     shutil.copyfile(scripts / "tests" / f"{REUSE_PLUGIN_MODULE}.py", root / "plugin" / f"{REUSE_PLUGIN_MODULE}.py")
@@ -918,7 +925,7 @@ def plan_reuse(repo: Path, root: Path, env: dict[str, str], scripts: Path) -> tu
     (root / REUSE_IDS_NAME).write_text("".join(f"{i}\n" for i in sorted(hits)), encoding="utf-8")
     env.update({TRACER_ENV: "1", TRACER_DIR_ENV: str(tracer_dir),
                 "CORE_RESULT_REUSE_IDS": str(root / REUSE_IDS_NAME), "CORE_RESULT_REUSE_OUT": str(out_prefix)})
-    return ReusePlan(path, environment, tracer_dir, out_prefix, hits), ""
+    return ReusePlan(path, environment, tracer_dir, out_prefix, hits, registry), ""
 
 
 def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
@@ -944,7 +951,8 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
             passing = {i: result_store.deps_of(records[i]) for i in ran
                        if outcome.get(i) == "passed" and i not in run.failures and not records[i]["always_rerun"]}
             with result_store.ResultStore(plan.store) as store:
-                stored = store.put(sha, plan.environment, passing)
+                stored = store.put(sha, plan.environment, passing, registry=plan.registry,
+                                   durations=junit_durations(run.junit_path, passing))
                 store.set_meta(result_store.ALWAYS_RERUN_META, json.dumps(sorted(always_ids)))
                 store.set_meta(result_store.FAILED_META, json.dumps(
                     sorted(i for i in ran if outcome.get(i) != "passed" or i in run.failures)))
@@ -959,7 +967,31 @@ def settle_reuse(plan: ReusePlan, sha: str, run: SuiteRun) -> SuiteRun:
         exit_code = 0  # every collected test was left out as reused, which pytest reports as "no tests"
     return dataclasses.replace(run, pytest_exit=exit_code, reuse_active=True, reused=reused,
                                stored_results=stored, always_rerun_tests=always,
-                               always_rerun_reasons=dict(reasons), ran_tests=ran_tests, store_note=note)
+                               always_rerun_reasons=dict(reasons), ran_tests=ran_tests, store_note=note,
+                               catalogue_reused_s={i: plan.hits[i].duration_s for i in reused
+                                                   if plan.registry.find(i) is not None},
+                               catalogue_ran=tuple(i for i in ran_tests if plan.registry.find(i) is not None))
+
+
+def junit_durations(junit_path: str, ids: Iterable[str]) -> dict[str, float]:
+    """Seconds each of ``ids`` took, from the run's junit XML (classname is the dotted file and classes, name the last id part)."""
+    if not junit_path:
+        return {}
+    try:
+        cases = ET.parse(junit_path).getroot().iter("testcase")
+        spent = collections.Counter()
+        for case in cases:
+            spent[(case.get("classname", ""), case.get("name", ""))] += float(case.get("time") or 0)
+    except (OSError, ET.ParseError, ValueError):
+        return {}
+    found = {}
+    for test_id in ids:
+        path, *rest = test_id.split("::")
+        if rest:
+            classname = ".".join([path.removesuffix(".py").replace("/", "."), *rest[:-1]])
+            if (classname, rest[-1]) in spent:
+                found[test_id] = spent[(classname, rest[-1])]
+    return found
 
 
 def _dep_tracer_records(directory: Path) -> dict[str, dict]:
@@ -982,7 +1014,8 @@ def reuse_fields(run: SuiteRun) -> dict:
     return {
         "results": {"reuse": run.reuse_active, "ran": len(ran), "reused": len(run.reused),
                     "stored": run.stored_results, "always_rerun": run.always_rerun_tests,
-                    "always_rerun_reasons": dict(run.always_rerun_reasons), "note": run.store_note},
+                    "always_rerun_reasons": dict(run.always_rerun_reasons), "note": run.store_note,
+                    "catalogue_reused_s": dict(run.catalogue_reused_s), "catalogue_ran": list(run.catalogue_ran)},
         "test_sources": {**{i: "ran" for i in ran}, **{i: "reused" for i in run.reused}},
         "reused_from": dict(run.reused),
     }
@@ -1375,6 +1408,9 @@ def run_suite(repo: str | Path, candidate_sha: str, tip: str, *, runner: Runner 
     re-reads the remote tip after the reruns; a tip that moved makes the verdict UNAVAILABLE. Unconfirmed
     ids are appended to the flaky journal (``flake_list.journal_path``); the tree is never written.
     """
+    refusal = catalogue_key.control_refusal(os.environ, bool(os.environ.get(result_store.STORE_ENV)))
+    if refusal:
+        raise GateError(refusal, refused=True)
     repo = Path(repo)
     run = runner or (default_runner if reuse_results else functools.partial(default_runner, reuse_results=False))
     limit = timeout_s or configured_timeout_s()

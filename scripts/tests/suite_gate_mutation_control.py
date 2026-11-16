@@ -559,6 +559,16 @@ def run_control() -> int:
         return 0
 
 
+def rewritten_files() -> "list[str]":
+    """Repository-relative files the catalogue rewrites."""
+    return sorted({m.relpath for m in CATALOGUE.values()})
+
+
+def named_tests() -> "list[str]":
+    """Repository-relative ids of the tests that must kill a mutant."""
+    return sorted({f"scripts/{i}" for m in CATALOGUE.values() for i in m.ids})
+
+
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     group = parser.add_mutually_exclusive_group(required=True)

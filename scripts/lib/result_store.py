@@ -52,6 +52,7 @@ import zlib
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Sequence
 
+from . import catalogue_key
 from . import gate_retention
 
 STORE_ENV = "CORE_RESULT_STORE"
@@ -60,7 +61,7 @@ STORE_ENTRY = "store"
 DB_NAME = "results.sqlite"
 ROWS_PER_TEST = 3
 MAX_STORE_BYTES = 512 * 1024 * 1024
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 BUSY_TIMEOUT_S = 60
 FILE, LISTING, PROBE = "file", "listing", "probe"
 KINDS = (FILE, LISTING, PROBE)
@@ -94,6 +95,8 @@ CREATE TABLE IF NOT EXISTS result (
     candidate TEXT NOT NULL,
     stored_at REAL NOT NULL,
     last_used REAL NOT NULL,
+    duration_s REAL NOT NULL DEFAULT 0,
+    catalogue INTEGER NOT NULL DEFAULT 0,
     UNIQUE (test_id, key));
 CREATE INDEX IF NOT EXISTS result_by_test ON result (test_id, stored_at);
 CREATE INDEX IF NOT EXISTS result_by_use ON result (last_used);
@@ -116,6 +119,7 @@ class Environment:
 class Hit:
     candidate_sha: str
     key: str
+    duration_s: float = 0.0
 
 
 def _sha(parts) -> str:
@@ -240,22 +244,53 @@ class ResultStore:
             ids.append([coord, value])
         return ids
 
+    def _newest_deps(self, test_id: str) -> list[Dep] | None:
+        rows = self._db.execute(
+            "SELECT deps FROM result WHERE test_id=? ORDER BY stored_at DESC, id DESC LIMIT 1", (test_id,)).fetchone()
+        return self.stored_deps(rows[0]) if rows else None
+
+    def _named_deps(self, subject: catalogue_key.Subject, batch: Mapping[str, Sequence[Dep]] | None = None
+                    ) -> dict[str, Sequence[Dep]]:
+        """The dependencies of the tests ``subject`` names: this run's where it has them, else the newest stored."""
+        found: dict[str, Sequence[Dep]] = {}
+        for test_id in subject.named:
+            deps = batch[test_id] if batch is not None and test_id in batch else self._newest_deps(test_id)
+            if deps is not None:
+                found[test_id] = deps
+        return found
+
     def put(self, candidate_sha: str, environment: Environment,
-            results: Mapping[str, Sequence[Dep]], now: float | None = None) -> int:
-        """Store the passes of one run; returns how many rows were written. The caller filters (PASS only)."""
+            results: Mapping[str, Sequence[Dep]], now: float | None = None,
+            registry: catalogue_key.Registry | None = None,
+            durations: Mapping[str, float] | None = None) -> int:
+        """Store the passes of one run; returns how many rows were written. The caller filters (PASS only).
+
+        A test of a registered catalogue is keyed on its narrowed dependencies (``catalogue_key``) and written
+        after the other tests of the batch; one whose named tests have no known dependencies is not stored.
+        ``candidate_sha`` must name the committed tree the run was made in: a catalogue row stands for it."""
         stamp = time.time() if now is None else now
         written = 0
+        subjects = {i: registry.find(i) for i in results} if registry is not None else {}
+        order = sorted(results, key=lambda i: subjects.get(i) is not None)
         self._db.execute("BEGIN IMMEDIATE")
         try:
-            for test_id, deps in results.items():
-                ordered = sorted(deps)
-                key = compute_key(test_id, ordered, environment)
+            for test_id in order:
+                ordered = sorted(results[test_id])
+                subject = subjects.get(test_id)
+                keyed = ordered
+                if subject is not None:
+                    keyed = registry.narrow(subject, ordered, self._named_deps(subject, results))
+                    if keyed is None:
+                        continue
+                key = compute_key(test_id, keyed, environment)
                 blob = zlib.compress(json.dumps(self._interned(ordered), separators=(",", ":")).encode())
                 self._db.execute(
-                    "INSERT INTO result (test_id, key, env, deps, candidate, stored_at, last_used) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (test_id, key) DO UPDATE SET "
-                    "candidate=excluded.candidate, stored_at=excluded.stored_at, last_used=excluded.last_used",
-                    (test_id, key, environment.digest, blob, candidate_sha, stamp, stamp))
+                    "INSERT INTO result (test_id, key, env, deps, candidate, stored_at, last_used, duration_s, catalogue) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (test_id, key) DO UPDATE SET "
+                    "candidate=excluded.candidate, stored_at=excluded.stored_at, last_used=excluded.last_used, "
+                    "duration_s=excluded.duration_s",
+                    (test_id, key, environment.digest, blob, candidate_sha, stamp, stamp,
+                     float((durations or {}).get(test_id, 0.0)), int(subject is not None)))
                 written += 1
                 self._db.execute(
                     "DELETE FROM result WHERE test_id=? AND id NOT IN "
@@ -267,10 +302,10 @@ class ResultStore:
             raise
         return written
 
-    def _rows(self, test_id: str) -> list[tuple[str, str, bytes]]:
+    def _rows(self, test_id: str) -> list[tuple[str, str, bytes, float, float]]:
         return self._db.execute(
-            "SELECT key, candidate, deps FROM result WHERE test_id=? ORDER BY stored_at DESC, id DESC LIMIT ?",
-            (test_id, ROWS_PER_TEST)).fetchall()
+            "SELECT key, candidate, deps, stored_at, duration_s FROM result WHERE test_id=? "
+            "ORDER BY stored_at DESC, id DESC LIMIT ?", (test_id, ROWS_PER_TEST)).fetchall()
 
     def stored_deps(self, blob: bytes) -> list[Dep]:
         found = []
@@ -285,19 +320,33 @@ class ResultStore:
         return found
 
     def lookup(self, test_ids: Iterable[str], environment: Environment,
-               resolve: Callable[[str, str], str]) -> dict[str, Hit]:
-        """The tests whose stored row still has its key: the stored dependencies at their current digests."""
+               resolve: Callable[[str, str], str], registry: catalogue_key.Registry | None = None,
+               max_catalogue_age_s: float | None = None, now: float | None = None) -> dict[str, Hit]:
+        """The tests whose stored row still has its key: the stored dependencies at their current digests.
+
+        A registered catalogue is looked up by its narrowed key, and only from a row stored at most
+        ``max_catalogue_age_s`` ago; a hit changes ``last_used`` and never the pass time."""
         hits: dict[str, Hit] = {}
         current: dict[tuple[str, str], str] = {}
+        asked = time.time() if now is None else now
         for test_id in test_ids:
-            for key, candidate, blob in self._rows(test_id):
+            subject = registry.find(test_id) if registry is not None else None
+            named = self._named_deps(subject) if subject is not None else {}
+            for key, candidate, blob, stored_at, duration in self._rows(test_id):
+                if subject is not None and max_catalogue_age_s is not None and asked - stored_at > max_catalogue_age_s:
+                    continue
+                stored = self.stored_deps(blob)
+                if subject is not None:
+                    stored = registry.narrow(subject, stored, named)
+                    if stored is None:
+                        break
                 nowdeps = []
-                for kind, path, _old in self.stored_deps(blob):
+                for kind, path, _old in stored:
                     if (kind, path) not in current:
                         current[(kind, path)] = resolve(kind, path)
                     nowdeps.append((kind, path, current[(kind, path)]))
                 if compute_key(test_id, nowdeps, environment) == key:
-                    hits[test_id] = Hit(candidate, key)
+                    hits[test_id] = Hit(candidate, key, duration)
                     break
         if hits:
             self._db.execute("BEGIN IMMEDIATE")
@@ -321,8 +370,18 @@ class ResultStore:
         return [row[0] for row in self._db.execute("SELECT DISTINCT test_id FROM result ORDER BY test_id")]
 
     def rows_of(self, test_id: str) -> list[dict]:
-        return [{"key": key, "candidate": candidate, "deps": self.stored_deps(blob)}
-                for key, candidate, blob in self._rows(test_id)]
+        return [{"key": key, "candidate": candidate, "deps": self.stored_deps(blob),
+                 "stored_at": stored_at, "duration_s": duration}
+                for key, candidate, blob, stored_at, duration in self._rows(test_id)]
+
+    def drop_stale_catalogue_rows(self, max_age_s: float, now: float | None = None) -> int:
+        """Delete the catalogue rows stored more than ``max_age_s`` ago (lookup would never reuse them); the count."""
+        cutoff = (time.time() if now is None else now) - max_age_s
+        cursor = self._db.execute("DELETE FROM result WHERE catalogue=1 AND stored_at < ?", (cutoff,))
+        if cursor.rowcount:
+            self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            self._db.execute("VACUUM")
+        return cursor.rowcount
 
     def replace_deps(self, test_id: str, deps: Sequence[Dep], environment: Environment) -> None:
         """Rewrite the newest row of ``test_id`` to stand for ``deps`` (a control forges what a blind tracer stored)."""
@@ -367,8 +426,16 @@ def evict(child: Path) -> None:
     shutil.rmtree(child, ignore_errors=True)
 
 
+def drop_stale(directory: Path) -> None:
+    """``gate_retention`` hook, called before any whole entry is evicted: the catalogue passes too old to reuse go first."""
+    database = Path(directory) / STORE_ENTRY / DB_NAME
+    if database.is_file():
+        with ResultStore(database) as store:
+            store.drop_stale_catalogue_rows(catalogue_key.max_age_s())
+
+
 def register() -> None:
-    gate_retention.register_store("results", results_dir, evict)
+    gate_retention.register_store("results", results_dir, evict, stale=drop_stale)
 
 
 register()

@@ -1183,6 +1183,17 @@ def run_control() -> int:
         return 0 if all(s == "passed" for s in description.split(",")) else CONTROL_RED
 
 
+def rewritten_files() -> "list[str]":
+    """Repository-relative files the catalogue rewrites (the module an anchor sits in)."""
+    return sorted({f"scripts/{anchor_target(SCRIPTS_DIR, m.relpath, m.anchor).relative_to(SCRIPTS_DIR).as_posix()}"
+                   for m in CATALOGUE.values()})
+
+
+def named_tests() -> "list[str]":
+    """Repository-relative ids of the tests that must kill a mutant."""
+    return sorted({f"scripts/{i}" for m in CATALOGUE.values() for i in m.ids})
+
+
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     group = parser.add_mutually_exclusive_group(required=True)

@@ -59,7 +59,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Collection, Iterator
+from typing import Callable, Collection, Iterator, Sequence
 
 STORE_DIR = "suite-gate"
 RETENTION_LOCK = f"{STORE_DIR}/retention.lock"
@@ -290,17 +290,21 @@ def keep_failure_evidence(common_dir: str | Path, candidate_sha: str, *, log_tai
 @dataclasses.dataclass(frozen=True)
 class Store:
     """A kept store registered for eviction: ``path`` (or ``path(common_dir)``) is a directory whose direct
-    children are its entries; ``evict(child)`` removes one."""
+    children are its entries; ``evict(child)`` removes one. ``stale(path)``, when given, drops what is
+    already worthless inside the entries (a result too old to reuse); ``enforce`` calls it before it evicts
+    any whole entry, and only while the kept store is over its bound."""
     name: str
     path: Path | Callable[[Path], Path]
     evict: Callable[[Path], None]
+    stale: Callable[[Path], None] | None = None
 
 
 _STORES: dict[str, Store] = {}
 
 
-def register_store(name: str, path: Path | Callable[[Path], Path], evict: Callable[[Path], None]) -> None:
-    _STORES[name] = Store(name, path, evict)
+def register_store(name: str, path: Path | Callable[[Path], Path], evict: Callable[[Path], None],
+                   stale: Callable[[Path], None] | None = None) -> None:
+    _STORES[name] = Store(name, path, evict, stale)
 
 
 def unregister_store(name: str) -> None:
@@ -481,6 +485,23 @@ def _remove_path(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
+def _drop_stale(registered: Sequence[tuple[Store, Path]]) -> int:
+    """Run each registered store's ``stale`` hook; the bytes it freed. A hook that fails frees nothing."""
+    freed = 0
+    for store, path in registered:
+        if store.stale is None:
+            continue
+        before = tree_bytes(path)
+        try:
+            store.stale(path)
+        except Exception as exc:
+            print(f"suite-gate: dropping the stale entries of {store.name} failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            continue
+        freed += max(0, before - tree_bytes(path))
+    return freed
+
+
 def enforce(common_dir: str | Path, *, max_mb: float | None = None, runs: int | None = None,
             protect: Collection[str] = (), recent_s: float | None = None) -> Retained:
     """Bring the kept store to at most ``max_mb`` MB by the order in the module docstring.
@@ -507,14 +528,19 @@ def enforce(common_dir: str | Path, *, max_mb: float | None = None, runs: int | 
         entries += [dataclasses.replace(e, protected=e.name in newest) for e in evidence]
         total = tree_bytes(store_dir)
         own = {(store_dir / sub).resolve() for sub in ("", "baseline", "evidence")}
+        registered = []
         for store in list(_STORES.values()):
             path = Path(store.path(common_dir) if callable(store.path) else store.path)
             if path.resolve() in own:
                 continue
             if not _inside(path, store_dir):
                 total += tree_bytes(path)
-            entries += _directory_entries(store.name, path, store.evict)
+            registered.append((store, path))
         before = total
+        if total > limit:
+            total -= _drop_stale(registered)
+        for store, path in registered:
+            entries += _directory_entries(store.name, path, store.evict)
         newest_failing = [e for e in entries if e.kind == "evidence" and e.protected]
         evictable = [e for e in entries if not e.protected]
         evicted: list[str] = []
