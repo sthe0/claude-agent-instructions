@@ -926,14 +926,20 @@ def test_the_mutation_scenario_restores_the_key_exclusion_when_it_stops_early(mo
             pass
 
         def __enter__(self):
-            assert os.environ[control.catalogue_key.EXCLUDE_ENV]
+            assert control.catalogue_key.EXCLUDE_ENV not in os.environ
             raise RuntimeError("stop")
 
         def __exit__(self, *_exc):
             pass
 
-    monkeypatch.delenv(control.catalogue_key.EXCLUDE_ENV, raising=False)
+    monkeypatch.setenv(control.catalogue_key.EXCLUDE_ENV, "scripts/kept.py")
     monkeypatch.setattr(control, "Experiment", Failing)
     with pytest.raises(RuntimeError):
+        control.mutation_scenario(control.REPO_DIR, Path("/nonexistent/out.json"), drop_from_key=True,
+                                  warm_store=Path("/nonexistent/warm.sqlite"))
+    assert os.environ[control.catalogue_key.EXCLUDE_ENV] == "scripts/kept.py"
+
+
+def test_the_mutation_drop_control_refuses_to_start_without_a_warm_store():
+    with pytest.raises(SystemExit, match="warm-store"):
         control.mutation_scenario(control.REPO_DIR, Path("/nonexistent/out.json"), drop_from_key=True)
-    assert control.catalogue_key.EXCLUDE_ENV not in os.environ
