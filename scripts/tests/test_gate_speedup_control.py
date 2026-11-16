@@ -887,3 +887,53 @@ def test_the_sweep_unregisters_the_worktree_of_a_dead_run(small_repo, tmp_path):
     assert str(work) in _worktrees(small_repo)
     control.sweep_dead_control_dirs(small_repo, scratch)
     assert not work.parent.exists() and str(work) not in _worktrees(small_repo)
+
+
+def mutation_outcomes(**changes) -> dict:
+    names = ["mandate", "rx", "reaper"]
+    base = {"subjects": names, "unstored": [], "a": {"rerun": [], "reused_s": 3000.0}, "b": {"rerun": ["mandate"]},
+            "c": {"rerun": names}, "d": {"subject": "rx", "rerun": ["rx"]},
+            "e": {"subject": "reaper", "rerun": ["reaper"]}, "f": {"missed": []}}
+    return {**base, **changes}
+
+
+def test_every_case_holding_fails_none():
+    assert control.judge_mutation(mutation_outcomes()) == []
+
+
+@pytest.mark.parametrize("case, change", [
+    ("a", {"a": {"rerun": ["rx"], "reused_s": 3000.0}}),
+    ("a", {"a": {"rerun": [], "reused_s": 100.0}}),
+    ("a", {"unstored": ["reaper"]}),
+    ("b", {"b": {"rerun": []}}),
+    ("b", {"b": {"rerun": ["mandate", "rx"]}}),
+    ("c", {"c": {"rerun": ["mandate"]}}),
+    ("d", {"d": {"subject": "rx", "rerun": []}}),
+    ("e", {"e": {"subject": "reaper", "rerun": ["mandate"]}}),
+    ("f", {"f": {"missed": ["rx"]}}),
+])
+def test_a_case_that_does_not_hold_is_named_alone(case, change):
+    assert control.judge_mutation(mutation_outcomes(**change)) == [case]
+
+
+def test_a_catalogue_that_dropped_a_rewritten_file_from_its_key_fails_case_b_alone():
+    assert control.judge_mutation(mutation_outcomes(b={"rerun": []})) == ["b"]
+
+
+def test_the_mutation_scenario_restores_the_key_exclusion_when_it_stops_early(monkeypatch):
+    class Failing:
+        def __init__(self, *_a):
+            pass
+
+        def __enter__(self):
+            assert os.environ[control.catalogue_key.EXCLUDE_ENV]
+            raise RuntimeError("stop")
+
+        def __exit__(self, *_exc):
+            pass
+
+    monkeypatch.delenv(control.catalogue_key.EXCLUDE_ENV, raising=False)
+    monkeypatch.setattr(control, "Experiment", Failing)
+    with pytest.raises(RuntimeError):
+        control.mutation_scenario(control.REPO_DIR, Path("/nonexistent/out.json"), drop_from_key=True)
+    assert control.catalogue_key.EXCLUDE_ENV not in os.environ

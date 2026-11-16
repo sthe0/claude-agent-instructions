@@ -165,6 +165,7 @@ for _path in (SCRIPTS_DIR, SCRIPTS_DIR / "tests"):
         sys.path.append(str(_path))
 
 import _test_report  # noqa: E402
+from lib import catalogue_key  # noqa: E402
 from lib import flake_list  # noqa: E402
 from lib import gate_retention  # noqa: E402
 from lib import hermetic_run as hermetic_mod  # noqa: E402
@@ -1588,15 +1589,18 @@ class Experiment:
         outcome = gate.run_suite(self.work, sha, self.tip, tip_reader=tip_reader or (lambda: self.tip))
         return outcome.record, time.monotonic() - started
 
-    def preview(self, sha: str) -> dict:
-        """What the private store holds for the tree of ``sha``: collected ids, hits, the deps behind each hit,
-        and the ids the last settled run could not store."""
+    def preview(self, sha: str, now: float | None = None) -> dict:
+        """What the private store holds for the tree of ``sha``: collected ids, hits (as the gate's lookup finds
+        them, catalogues by their narrowed key and age bound), the deps behind each hit, and the ids the last
+        settled run could not store. ``now`` moves the clock of the age bound."""
         found: dict = {}
 
         def inspect(root: Path, env: dict, ids: list[str]) -> None:
             environment = result_store.current_environment(env=env)
             with result_store.ResultStore(self.store) as store:
-                hits = store.lookup(ids, environment, result_store.tree_resolver(root / "core"))
+                found["registry"] = catalogue_key.load(root / "core")
+                hits = store.lookup(ids, environment, result_store.tree_resolver(root / "core"),
+                                    found["registry"], catalogue_key.max_age_s(), now)
                 found["deps"] = {i: row["deps"] for i in hits for row in store.rows_of(i)
                                  if row["key"] == hits[i].key}
                 found["always_rerun"] = json.loads(store.get_meta(result_store.ALWAYS_RERUN_META) or "[]")
@@ -1946,6 +1950,147 @@ def k3_negative(repo: Path, out: Path) -> int:
     return 0 if not problems else EXIT_REUSE_MISMATCH
 
 
+MUTATION_MIN_REUSED_S = 2500.0
+MUTATION_ONLY = "mandate"
+EDITABLE_SUFFIXES = (".py", ".toml")
+
+
+def judge_mutation(outcomes: dict, min_reused_s: float = MUTATION_MIN_REUSED_S) -> list[str]:
+    """The cases (a-f) that failed, judged on what the lookups of the edited trees found.
+
+    a: an edit outside every narrowed set reuses every catalogue, ``min_reused_s`` test-seconds at least;
+    b: an edit of a file only the mandate set holds reruns that catalogue alone;
+    c: a pass older than the bound reruns every catalogue;
+    d, e: an edit of an import-closure file / of a file a named test reads reruns its catalogue;
+    f: a planted narrowing of every set is reported by the registry's own check."""
+    subjects, unstored = set(outcomes["subjects"]), set(outcomes["unstored"])
+    failed = []
+    if (unstored or outcomes["a"]["rerun"] or outcomes["a"]["reused_s"] < min_reused_s):
+        failed.append("a")
+    if set(outcomes["b"]["rerun"]) - unstored != {MUTATION_ONLY}:
+        failed.append("b")
+    if not (subjects - unstored) <= set(outcomes["c"]["rerun"]):
+        failed.append("c")
+    for case in ("d", "e"):
+        if outcomes[case]["subject"] not in outcomes[case]["rerun"]:
+            failed.append(case)
+    if outcomes["f"]["missed"]:
+        failed.append("f")
+    return failed
+
+
+def _reruns(registry, ids: list[str], hits: dict) -> list[str]:
+    """Registered catalogues with a collected test that has no hit."""
+    return sorted({s.name for i in ids if (s := registry.find(i)) is not None and i not in hits})
+
+
+def _catalogue_edit_files(repo: Path, registry, deps: dict, rewritten_by_name: dict,
+                          modules: dict[str, str], b_file: str) -> dict[str, tuple[str, str]]:
+    """The file each case edits, and the catalogue it is aimed at: ``{"a"|"b"|"d"|"e": (path, name)}``.
+
+    Every choice is read from the registry and the stored dependencies, never named here."""
+    subjects = {s.name: s for s in registry.subjects}
+    named_reads = {name: {p for i in s.named for _k, p, _d in deps.get(i, [])} for name, s in subjects.items()}
+    allowed = {name: set(s.paths) | named_reads[name] for name, s in subjects.items()}
+    union = set().union(*allowed.values())
+
+    def editable(path: str) -> bool:
+        return path.startswith("scripts/") and path.endswith(EDITABLE_SUFFIXES) and (repo / path).is_file()
+
+    dependents = dependents_by_path(deps)
+    outside = sorted((p for p in dependents if editable(p) and p not in union), key=lambda p: (len(dependents[p]), p))
+    picked: dict[str, tuple[str, str]] = {}
+    if editable(b_file) and not any(b_file in allowed[n] for n in subjects if n != MUTATION_ONLY):
+        picked["b"] = (b_file, MUTATION_ONLY)
+    if outside:
+        picked["a"] = (outside[0], "")
+    taken = {path for path, _name in picked.values()}
+    for name, s in sorted(subjects.items()):
+        in_suite = {t.partition("::")[0] for t in s.tests}
+        closure = sorted(p for p in catalogue_key.import_closure(repo, modules[name]) - {modules[name]}
+                         if editable(p) and p not in taken and p not in rewritten_by_name[name] and p not in in_suite)
+        reads = sorted(p for p in named_reads[name] - s.paths if editable(p) and p not in taken)
+        if closure and "d" not in picked:
+            picked["d"] = (closure[0], name)
+        if reads and "e" not in picked:
+            picked["e"] = (reads[0], name)
+    return picked
+
+
+def mutation_scenario(repo: Path, out: Path, *, drop_from_key: bool) -> int:
+    """Edit files in, around and outside the narrowed sets of the registered mutation catalogues and read off
+    from the private store which catalogues the gate would reuse; 0 every case holds, 1 some case fails
+    (named in ``failed_cases``), 2 an error."""
+    nonce = f"{os.getpid()}-{int(time.time())}"
+    head_registry = catalogue_key.load(repo, {})
+    if not head_registry.subjects:
+        raise SystemExit("no registered catalogue could be resolved")
+    modules = {e["name"]: e["module"]
+               for e in tomllib.loads((repo / catalogue_key.REGISTRY_PATH).read_text())["catalogue"]}
+    declared = {s.name: catalogue_key._declared(repo, modules[s.name]) for s in head_registry.subjects}
+    rewritten_by_name = {name: reported[0] for name, reported in declared.items() if reported}
+    if MUTATION_ONLY not in rewritten_by_name:
+        raise SystemExit(f"catalogue {MUTATION_ONLY} is not registered or cannot be resolved")
+    mandate_only = sorted(p for p in rewritten_by_name[MUTATION_ONLY]
+                          if not any(p in s.paths for s in head_registry.subjects if s.name != MUTATION_ONLY))
+    if not mandate_only:
+        raise SystemExit(f"every file {MUTATION_ONLY} rewrites is also in another catalogue's set")
+    saved = os.environ.get(catalogue_key.EXCLUDE_ENV)
+    if drop_from_key:
+        os.environ[catalogue_key.EXCLUDE_ENV] = mandate_only[0]
+    try:
+        with Experiment(repo, "mutation") as exp:
+            state = exp.prepare()
+            registry = state["registry"]
+            subjects = [s.name for s in registry.subjects]
+            base_ids = [i for i in state["ids"] if registry.find(i) is not None]
+            unstored = _reruns(registry, state["ids"], state["hits"])
+            picks = _catalogue_edit_files(repo, registry, state["deps"], rewritten_by_name, modules,
+                                           mandate_only[0])
+            missing = [case for case in "abde" if case not in picks]
+            if missing:
+                raise SystemExit(f"no file to edit for case(s) {missing}: {picks}")
+            _say(f"edits: { {case: path for case, (path, _n) in picks.items()} }; unstored catalogues: {unstored}")
+            observed: dict[str, dict] = {}
+            for case, (path, name) in sorted(picks.items()):
+                sha = exp.candidate(edited_tree(repo, {path: with_nonce_comment(_head_text(repo, path), nonce)}),
+                                    f"mutation-{case}")
+                found = exp.preview(sha)
+                observed[case] = {"path": path, "subject": name, "rerun": _reruns(registry, found["ids"], found["hits"]),
+                                  "reused_s": sum(found["hits"][i].duration_s for i in found["ids"]
+                                                  if registry.find(i) is not None and i in found["hits"])}
+            aged = exp.preview(state["warm_sha"], now=time.time() + catalogue_key.max_age_s() + 3600)
+            observed["c"] = {"rerun": _reruns(registry, aged["ids"], aged["hits"])}
+    finally:
+        if saved is None:
+            os.environ.pop(catalogue_key.EXCLUDE_ENV, None)
+        else:
+            os.environ[catalogue_key.EXCLUDE_ENV] = saved
+    own = catalogue_key.load(repo, {})
+    missed = []
+    for subject in own.subjects:
+        victim = rewritten_by_name[subject.name][0]
+        narrowed = catalogue_key.Subject(subject.name, subject.tests, subject.paths - {victim}, subject.named)
+        if subject.uncovered(rewritten_by_name[subject.name]) or narrowed.uncovered(rewritten_by_name[subject.name]) != [victim]:
+            missed.append(subject.name)
+    observed["f"] = {"missed": missed}
+    outcomes = {"subjects": subjects, "unstored": unstored, **observed}
+    failed = judge_mutation(outcomes)
+    summary = {"drop_from_key": drop_from_key, "excluded": mandate_only[0] if drop_from_key else "",
+               "tip": exp.tip, "warmed": state["warm_record"] is not None, "warm_wall_s": state["warm_wall_s"],
+               "collected": len(state["ids"]), "catalogue_ids": len(base_ids),
+               "catalogue_reused_s_at_base": sum(state["hits"][i].duration_s for i in base_ids if i in state["hits"]),
+               "always_rerun_set": len(state["always_rerun"]), "outcomes": outcomes,
+               "failed_cases": failed, "ok": not failed}
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    for case in failed:
+        _say(f"CASE FAILED: {case}: {outcomes[case]}")
+    _say(f"summary {out}")
+    _say("OK" if not failed else "FAIL")
+    return 0 if not failed else EXIT_REUSE_MISMATCH
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gate_speedup_control.py", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2004,6 +2149,12 @@ def main(argv: list[str] | None = None) -> int:
     reuse.add_argument("--mutate-unrecorded", action="store_true",
                        help="the store never saw the script's read: the control must fail named-subprocess-reused")
     reuse.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
+    mutation = sub.add_parser("mutation-scenario",
+                              help="edit files in and outside the mutation catalogues' sets; only the right ones rerun")
+    mutation.add_argument("--out", required=True, type=Path)
+    mutation.add_argument("--drop-from-key", action="store_true",
+                          help="the mandate catalogue's rewritten file is left out of every key: case b must fail")
+    mutation.add_argument("-C", dest="repo", type=Path, default=REPO_DIR)
     k3 = sub.add_parser("k3-negative", help="the four ways the result store could let a regression through")
     k3.add_argument("--out", type=Path, default=None)
     k3.add_argument("--judge-only", type=Path, default=None, metavar="FILE",
@@ -2088,6 +2239,13 @@ def main(argv: list[str] | None = None) -> int:
             return reuse_scenario(args.repo.resolve(), args.out, mutate=args.mutate_unrecorded,
                                   disk_max_mb=args.disk_max_mb, cpu_max_s=args.cpu_max_s, wall_max_s=args.wall_max_s)
         except (SystemExit, Exception) as exc:  # noqa: BLE001 — anything but an assertion mismatch is exit 2
+            _say(f"error: {exc!r}" if not isinstance(exc, SystemExit) else f"error: {exc}")
+            return EXIT_REUSE_ERROR
+    if args.command == "mutation-scenario":
+        try:
+            begin_control_run(args.repo.resolve())
+            return mutation_scenario(args.repo.resolve(), args.out, drop_from_key=args.drop_from_key)
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 — anything but a failed case is exit 2
             _say(f"error: {exc!r}" if not isinstance(exc, SystemExit) else f"error: {exc}")
             return EXIT_REUSE_ERROR
     if args.command == "k3-negative":
