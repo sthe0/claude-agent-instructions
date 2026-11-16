@@ -2413,7 +2413,9 @@ def edit_goal(root, sid, goal):
     path = root.state_root / f"{sid}.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     data["goal"] = goal
-    path.write_text(json.dumps(data), encoding="utf-8")
+    scratch = path.with_name(path.name + ".tmp")
+    scratch.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(scratch, path)
 
 
 def screen_text(app):

@@ -228,6 +228,17 @@ class Observed:
             if directory is not None:
                 self.directories[kind] = directory
 
+    def capture(self, kind: str) -> tuple[dict, dict | None]:
+        with _LOCK:
+            return dict(self.current[kind]), self.directories.get(kind)
+
+    def replay(self, kind: str, captured: tuple[dict, dict | None]) -> None:
+        current, directory = captured
+        with _LOCK:
+            self.current[kind] = dict(current)
+            if directory is not None:
+                self.directories[kind] = directory
+
     def marker(self, kind: str) -> list[int] | None:
         """The marker of the directory of ``kind`` as of its last listing."""
         return (self.directories.get(kind) or {}).get("marker")
@@ -321,6 +332,41 @@ def reusable_key(key) -> bool:
     """Whether a listing taken under ``key`` may be kept: the directory last changed a step before the key was
     read, so a later change in the same clock tick cannot leave the key as it is."""
     return key is not None and now_ns() - max(key[-2:]) >= MTIME_STEP_NS
+
+
+def stat_cycle_generation() -> int | None:
+    """The generation of the stat-path cycle now open, or None on the event path and between cycles."""
+    with KEPT._lock:
+        return KEPT.generation if KEPT._memo() is not None else None
+
+
+def result_key(root) -> tuple | None:
+    """``(dev, ino, mtime_ns, ctime_ns, size)`` of a directory whose entries are only created, renamed or
+    replaced: a result read from it stays right for as long as the key is the one read before the read."""
+    try:
+        st = KEPT.stat(root)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+
+
+def settled_key(key) -> bool:
+    return key is not None and now_ns() - max(key[2], key[3]) >= MTIME_STEP_NS
+
+
+class KeptResult:
+    """A reader's whole result for one directory, kept under the ``key`` read before the read and the
+    ``held`` condition it was made under; ``observed`` is what it fed ``OBSERVED``."""
+
+    __slots__ = ("key", "held", "value", "observed")
+
+    def __init__(self, key: tuple, held, value, observed=None):
+        self.key, self.held, self.value, self.observed = key, held, value, observed
+
+
+def replay_observation(kind: str, observed) -> None:
+    """Feed ``OBSERVED`` what the pass that made a kept result fed it."""
+    OBSERVED.replay(kind, observed)
 
 
 def read_directory(root) -> list[tuple[str, bool]]:
@@ -616,13 +662,35 @@ def fingerprint(items) -> int:
     return hash(tuple(items))
 
 
+def binding_key(directory) -> tuple | None:
+    return result_key(directory)
+
+
+def binding_reusable(kept: KeptResult | None, key, presumption) -> bool:
+    """Whether the kept binding index is what a pass would make now: the directory's key is the one it was
+    read under, and so is the presumption (the very object, as a presumed index answers by its cover)."""
+    return kept is not None and key is not None and kept.key == key and kept.held is presumption
+
+
+def shared_this_cycle(shared, generation: int, presumption):
+    """The binding result this stat-path cycle already made under ``presumption``, else None."""
+    if shared is not None and shared[0] == generation and shared[1] is presumption:
+        return shared[2]
+    return None
+
+
 class BindingScan:
-    """``engine_session_binding.harness_index`` over the binding files, each read once per identity."""
+    """``engine_session_binding.harness_index`` over the binding files, each read once per identity. On the
+    stat path one pass serves every reader of a cycle, and the result outlives the cycle while the bindings
+    directory's key is unchanged."""
 
     def __init__(self):
         self.files = IdentityCache("binding")
         self.memo: tuple | None = None
         self.presumption: tuple[frozenset[str], Recorded] | None = None
+        self.kept: KeptResult | None = None
+        self.cycle: tuple | None = None
+        self._lock = threading.RLock()
 
     def directory(self) -> Path:
         return config_root.agentctl_dir() / engine_session_binding.BINDINGS_DIRNAME
@@ -636,7 +704,28 @@ class BindingScan:
         """``(harness_index, driven)``: the harness sessions bound to each engine session in file-name order,
         and each harness session's engine sessions in drive order. Under a presumption a file it holds for is
         not read and drives none, and the index is a ``PresumedIndex``."""
-        presumption = self.presumption
+        with self._lock:
+            presumption = self.presumption
+            generation = stat_cycle_generation()
+            if generation is None:
+                return self._pass(presumption)
+            shared = shared_this_cycle(self.cycle, generation, presumption)
+            if shared is not None:
+                return shared
+            key = binding_key(self.directory())
+            settled_at_key = settled_key(key)
+            kept = self.kept
+            if binding_reusable(kept, key, presumption):
+                replay_observation("binding", kept.observed)
+                result = kept.value
+            else:
+                result = self._pass(presumption)
+                if settled_at_key and not OBSERVED.unsettled("binding"):
+                    self.kept = KeptResult(key, presumption, result, OBSERVED.capture("binding"))
+            self.cycle = (generation, presumption, result)
+            return result
+
+    def _pass(self, presumption) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
         found = listed("binding", self.directory(), ".json", by_directory_time=True)
         driven, marker = {}, OBSERVED.marker("binding")
         for stem, (path, st) in sorted(found.items()):
@@ -665,9 +754,11 @@ class BindingScan:
         return memo[2] if memo is not None else {}
 
     def clear(self) -> None:
-        self.files.clear()
-        self.memo = None
-        self.presumption = None
+        with self._lock:
+            self.files.clear()
+            self.memo = None
+            self.presumption = None
+            self.kept = self.cycle = None
 
 
 class PresumedIndex(dict):

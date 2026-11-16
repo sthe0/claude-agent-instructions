@@ -46,7 +46,10 @@ SNAPSHOT_NAMES = (
     "unrecorded-source-stat-skipped", "order-read-piles-up", "child-warm-piles-up", "skipped-order-read-not-made-up",
     "row-confirmed-skipped", "startup-applied-last-read-only", "startup-applied-at-check-end",
     "startup-applied-needs-old-rows", "stat-cycle-memo-off", "stat-dir-time-key-off", "stat-dir-key-after-listing",
-    "stat-dir-unsettled-key-stored")
+    "stat-dir-unsettled-key-stored", "binding-index-reuse-off", "binding-pass-per-reader",
+    "binding-key-ignores-times", "binding-reuse-ignores-presumption", "state-listing-reuse-off",
+    "state-key-ignores-times", "state-window-kept", "child-index-reuse-off", "child-index-ignores-floor",
+    "reuse-skips-observed")
 SNAPSHOT_PILOT_NAMES = ("mark-confirmed-from-snapshot", "overlay-waits-on-order-read", "order-read-piles-up",
                         "child-warm-piles-up", "skipped-order-read-not-made-up", "row-confirmed-skipped",
                         "startup-applied-last-read-only", "startup-applied-at-check-end",

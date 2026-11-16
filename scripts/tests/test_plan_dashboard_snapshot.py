@@ -14,6 +14,7 @@ reader written from it alone.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -30,7 +31,7 @@ import pytest
 from plan_dashboard import attention, model, snapshot as store, tui
 from plan_dashboard_fixtures import set_mtime, write_transcript
 from plan_dashboard_support import (  # noqa: F401
-    ALPHA, BETA, HARNESS, NOW, ONE_HOUR_NS, STALE, at, console_root, isolated_home, iso, usage_row,
+    ALPHA, BETA, HARNESS, NOW, ONE_HOUR_NS, STALE, at, console_root, isolated_home, iso, make_state, usage_row,
 )
 
 TESTS = Path(__file__).resolve().parent
@@ -1334,3 +1335,174 @@ def test_a_stat_is_not_kept_past_the_cycle_that_made_it(tmp_path, settled_clock)
     assert view.stat(path).st_size == 2
     view.end_stat_cycle()
     assert view.stat(path).st_size == 5
+
+
+@contextlib.contextmanager
+def a_stat_cycle():
+    store.KEPT.begin_stat_cycle()
+    try:
+        yield
+    finally:
+        store.KEPT.end_stat_cycle()
+
+
+def count_passes(monkeypatch) -> list[str]:
+    """The kind of every full directory pass ``snapshot.listed`` makes from now on."""
+    kinds, real = [], store.listed
+    monkeypatch.setattr(store, "listed", lambda kind, *a, **k: (kinds.append(kind), real(kind, *a, **k))[1])
+    return kinds
+
+
+def count_globs(monkeypatch) -> list[str]:
+    roots, real = [], store.KEPT.glob
+    monkeypatch.setattr(store.KEPT, "glob", lambda root, pattern: (roots.append(str(root)), real(root, pattern))[1])
+    return roots
+
+
+def replace_whole_file(path: Path, text: str) -> None:
+    """What ``store.save`` and ``record_drive`` do: write a temporary name, rename it over ``path``."""
+    scratch = path.with_name(path.name + ".tmp9")
+    scratch.write_text(text, encoding="utf-8")
+    os.replace(scratch, path)
+    move_directory_key(path.parent)
+
+
+def collect_in_a_stat_cycle(root, now=NOW):
+    with a_stat_cycle():
+        return model.collect(root.state_root, now=now, include_all=True, cost_log=root.cost_log)
+
+
+def linked_child(session: str, parent: str = ALPHA) -> str:
+    return make_state(session, parent_link={"parent_session": parent, "stage_index": 1}).to_json()
+
+
+def test_an_unchanged_bindings_directory_is_not_walked_again(root, settled_clock, monkeypatch):
+    store.reset()
+    passes = count_passes(monkeypatch)
+    results = []
+    for _ in range(3):
+        with a_stat_cycle():
+            results.append(store.BINDINGS.read())
+    assert passes.count("binding") == 1
+    assert results[0][0] and results[2] == results[0]
+
+
+def test_a_replaced_binding_is_seen_by_the_next_stat_cycle(root, settled_clock):
+    store.reset()
+    with a_stat_cycle():
+        before = store.BINDINGS.read()[0]
+    assert before.get(ALPHA) == [HARNESS]
+    replace_whole_file(bindings_dir(root) / f"{HARNESS}.json",
+                       json.dumps({"driven": [{"session": "gamma-engine", "ts": "2026-10-22T11:00:00"}]}))
+    with a_stat_cycle():
+        after = store.BINDINGS.read()[0]
+    assert after.get("gamma-engine") == [HARNESS] and ALPHA not in after
+
+
+def test_one_binding_pass_per_stat_cycle(root, monkeypatch):
+    monkeypatch.setattr(store, "MTIME_STEP_NS", 10 ** 30)
+    store.reset()
+    passes = count_passes(monkeypatch)
+    with a_stat_cycle():
+        store.BINDINGS.read()
+        store.harness_index()
+        store.harness_sessions_driving(ALPHA)
+        store.BINDINGS.read()
+    assert passes.count("binding") == 1
+    with a_stat_cycle():
+        store.harness_index()
+    assert passes.count("binding") == 2
+
+
+def test_a_presumed_lookup_outside_the_cover_reads_in_full(root, settled_clock):
+    store.reset()
+    store.BINDINGS.presume({BETA}, store.Recorded({}))
+    with a_stat_cycle():
+        index = store.harness_index()
+        assert isinstance(index, store.PresumedIndex)
+        assert index.get(ALPHA) == [HARNESS]
+        assert store.BINDINGS.presumption is None
+    with a_stat_cycle():
+        assert type(store.BINDINGS.read()[0]) is dict
+
+
+def test_an_unchanged_state_directory_is_not_listed_again(root, settled_clock, monkeypatch):
+    store.reset()
+    passes = count_passes(monkeypatch)
+    results = [collect_in_a_stat_cycle(root) for _ in range(3)]
+    assert passes.count("state") == 1
+    assert results[0]["tasks"] and results[2]["tasks"] == results[0]["tasks"]
+
+
+def test_a_replaced_state_file_is_seen_by_the_next_stat_cycle(root, settled_clock):
+    store.reset()
+    goals = lambda snapshot: {task["session_id"]: task["goal"] for task in snapshot["tasks"]}  # noqa: E731
+    assert goals(collect_in_a_stat_cycle(root))[ALPHA] == "Build the thing [with brackets]"
+    replace_whole_file(root.state_root / f"{ALPHA}.json", make_state(ALPHA, goal="Changed goal").to_json())
+    assert goals(collect_in_a_stat_cycle(root))[ALPHA] == "Changed goal"
+
+
+def test_the_window_moves_with_now_over_a_kept_listing(root, settled_clock, monkeypatch):
+    store.reset()
+    for session, age in ((ALPHA, 1), (BETA, 23), (STALE, 48)):
+        set_mtime(root.state_root / f"{session}.json", NOW - dt.timedelta(hours=age))
+    passes = count_passes(monkeypatch)
+    paths = {session: str(root.state_root / f"{session}.json") for session in (ALPHA, BETA, STALE)}
+    for now, loaded in ((NOW, {ALPHA, BETA}), (NOW + dt.timedelta(hours=2), {ALPHA})):
+        with a_stat_cycle():
+            model.collect(root.state_root, now=now, cost_log=root.cost_log)
+        assert {s for s, path in paths.items() if path in store.OBSERVED.loaded} == loaded
+    assert passes.count("state") == 1
+
+
+def test_an_unchanged_state_directory_is_not_indexed_for_children_again(root, settled_clock, monkeypatch):
+    replace_whole_file(root.state_root / "child-one.json", linked_child("child-one"))
+    store.reset()
+    globs = count_globs(monkeypatch)
+    results = []
+    for _ in range(3):
+        with a_stat_cycle():
+            results.append(model.child_index(root.state_root))
+    assert [child["session_id"] for child in results[0][ALPHA]] == ["child-one"]
+    assert results[1] == results[0] and results[2] == results[0]
+    assert globs.count(str(root.state_root)) == 1
+
+
+def test_a_new_linked_child_is_seen_by_the_next_stat_cycle(root, settled_clock):
+    replace_whole_file(root.state_root / "child-one.json", linked_child("child-one"))
+    store.reset()
+    with a_stat_cycle():
+        assert [c["session_id"] for c in model.child_index(root.state_root)[ALPHA]] == ["child-one"]
+    replace_whole_file(root.state_root / "child-two.json", linked_child("child-two"))
+    with a_stat_cycle():
+        assert sorted(c["session_id"] for c in model.child_index(root.state_root)[ALPHA]) == ["child-one", "child-two"]
+
+
+def test_a_changed_since_rebuilds_the_child_index(root, settled_clock, monkeypatch):
+    path = root.state_root / "child-one.json"
+    replace_whole_file(path, linked_child("child-one"))
+    set_mtime(path, NOW - dt.timedelta(hours=5))
+    store.reset()
+    globs = count_globs(monkeypatch)
+    with a_stat_cycle():
+        assert model.child_index(root.state_root, since=(NOW - dt.timedelta(hours=5)).timestamp())
+    model._CHILDREN.clear()
+    with a_stat_cycle():
+        assert model.child_index(root.state_root, since=NOW.timestamp()) == {}
+    assert globs.count(str(root.state_root)) == 2
+
+
+def test_a_reused_stat_cycle_records_the_same_sources(root, settled_clock):
+    store.reset()
+    store.OBSERVED.reset()
+
+    def one_cycle():
+        with a_stat_cycle():
+            model.collect(root.state_root, now=NOW, include_all=True, cost_log=root.cost_log)
+            store.BINDINGS.read()
+        return store.OBSERVED.sources()
+
+    full = one_cycle()
+    store.OBSERVED.reset()
+    assert {item["kind"] for item in full} >= {"state", "binding"}
+    assert one_cycle() == full

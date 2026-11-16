@@ -1127,7 +1127,46 @@ def _unsettled_key_is_reusable(original):
     return lambda key: key is not None
 
 
+def _key_without_times(original):
+    def mutated(*args, **kwargs):
+        key = original(*args, **kwargs)
+        return key and key[:2] + (0, 0) + key[4:]
+    return mutated
+
+
+def _reuse_ignores_presumption(original):
+    def mutated(kept, key, presumption):
+        return original(kept, key, kept and kept.held)
+    return mutated
+
+
+def _reuse_ignores_floor(original):
+    def mutated(kept, key, floor):
+        return original(kept, key, kept and kept.held)
+    return mutated
+
+
+def _window_kept(original):
+    memo = {}
+
+    def mutated(stem, *args, **kwargs):
+        if stem not in memo:
+            memo[stem] = original(stem, *args, **kwargs)
+        return memo[stem]
+    return mutated
+
+
 SNAPSHOT_MUTATIONS = {
+    "binding-index-reuse-off": (SNAPSHOT, "binding_reusable", _always(False)),
+    "binding-pass-per-reader": (SNAPSHOT, "shared_this_cycle", _always(None)),
+    "binding-key-ignores-times": (SNAPSHOT, "binding_key", _key_without_times),
+    "binding-reuse-ignores-presumption": (SNAPSHOT, "binding_reusable", _reuse_ignores_presumption),
+    "state-listing-reuse-off": (MODEL, "state_reusable", _always(False)),
+    "state-key-ignores-times": (MODEL, "state_key", _key_without_times),
+    "state-window-kept": (MODEL, "within_window", _window_kept),
+    "child-index-reuse-off": (MODEL, "child_reusable", _always(False)),
+    "child-index-ignores-floor": (MODEL, "child_reusable", _reuse_ignores_floor),
+    "reuse-skips-observed": (SNAPSHOT, "replay_observation", _always(None)),
     "stat-cycle-memo-off": (SNAPSHOT, "new_cycle_memo", _always(None)),
     "stat-dir-time-key-off": (SNAPSHOT, "directory_key", _directory_key_without_times),
     "stat-dir-key-after-listing": (SNAPSHOT, "listing_under_key", _key_read_after_the_listing),

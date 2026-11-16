@@ -39,6 +39,8 @@ _LEDGER: dict = {}
 _SUMS: dict = {}
 _TRANSCRIPTS: dict = {}
 _CHILDREN: dict = {}
+_STATE_KEPT: dict = {}
+_CHILD_KEPT: dict = {}
 
 
 class UnknownSession(KeyError):
@@ -51,6 +53,8 @@ def clear_cache() -> None:
         _SUMS.clear()
         _TRANSCRIPTS.clear()
         _CHILDREN.clear()
+        _STATE_KEPT.clear()
+        _CHILD_KEPT.clear()
     snapshot.STATES.clear()
 
 
@@ -713,6 +717,46 @@ def _qualifies_alone(state, row: dict, windowed) -> bool:
     return row["liveness"] == "active"
 
 
+def state_key(root: Path) -> tuple | None:
+    return snapshot.result_key(root)
+
+
+def state_reusable(kept, key) -> bool:
+    return kept is not None and key is not None and kept.key == key
+
+
+def within_window(stem, moment, now, window, include_all, pinned) -> bool:
+    """Whether a state file is read for the window ending at ``now``. ``now`` moves each cycle, so this is
+    never kept with the directory listing."""
+    return include_all or stem in pinned or now - moment <= window
+
+
+def _list_states(root: Path) -> dict:
+    listing = dict(sorted(snapshot.listed("state", root, ".json").items()))
+    snapshot.STATES.prune({path for path, _ in listing.values()})
+    return {stem: (path, st, dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc))
+            for stem, (path, st) in listing.items()}
+
+
+def _state_listing(root: Path) -> dict:
+    """stem → (path, stat, mtime) of the state files. On the stat path the listing outlives the cycle while
+    the directory's key is unchanged; a reuse replays what the listing observed."""
+    if snapshot.stat_cycle_generation() is None:
+        return _list_states(root)
+    key = state_key(root)
+    ok = snapshot.settled_key(key)
+    with CACHE_LOCK:
+        kept = _STATE_KEPT.get(str(root))
+    if state_reusable(kept, key):
+        snapshot.replay_observation("state", kept.observed)
+        return kept.value
+    mtimes = _list_states(root)
+    if ok and not snapshot.OBSERVED.unsettled("state"):
+        with CACHE_LOCK:
+            _STATE_KEPT[str(root)] = snapshot.KeptResult(key, None, mtimes, snapshot.OBSERVED.capture("state"))
+    return mtimes
+
+
 def collect(state_root, *, now: dt.datetime, window_hours=24, include_all=False, sessions=None,
             cost_log=None, windowed=None) -> dict:
     """``windowed`` names the task each open window shows (``attention.windowed_engines``); each is
@@ -720,12 +764,9 @@ def collect(state_root, *, now: dt.datetime, window_hours=24, include_all=False,
     root = Path(state_root)
     window = dt.timedelta(hours=window_hours)
     pinned = {config_root.sanitize_session_id(s) for s in (*(sessions or ()), *(windowed or ()))}
-    listing = dict(sorted(snapshot.listed("state", root, ".json").items()))
-    snapshot.STATES.prune({path for path, _ in listing.values()})
-    mtimes = {stem: (path, st, dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc))
-              for stem, (path, st) in listing.items()}
+    mtimes = _state_listing(root)
     queue = [stem for stem, (_, _, moment) in mtimes.items()
-             if include_all or stem in pinned or now - moment <= window]
+             if within_window(stem, moment, now, window, include_all, pinned)]
     loaded: dict = {}
     while queue:
         stem = queue.pop()
@@ -791,7 +832,37 @@ def child_index(state_root, *, since: float | None = None) -> dict[str, list[dic
     mtime and size, so a call re-reads only changed or new files. With ``since`` (epoch
     seconds) an uncached file older than ``since`` minus a minute is skipped: a linked child's
     state file is created after its parent starts and later saves only raise its mtime."""
-    floor = None if since is None else since - 60
+    floor = child_floor(since)
+    if snapshot.stat_cycle_generation() is None:
+        return _child_pass(state_root, floor)
+    key = snapshot.result_key(state_root)
+    ok = snapshot.settled_key(key)
+    with CACHE_LOCK:
+        kept = _CHILD_KEPT.get(str(state_root))
+    if child_reusable(kept, key, floor):
+        return _copy_index(kept.value)
+    index = _child_pass(state_root, floor)
+    if ok:
+        with CACHE_LOCK:
+            _CHILD_KEPT[str(state_root)] = snapshot.KeptResult(key, floor, _copy_index(index))
+    return index
+
+
+def child_floor(since: float | None) -> float | None:
+    return None if since is None else since - 60
+
+
+def child_reusable(kept, key, floor) -> bool:
+    """The kept index is what a pass would make: same directory key, same floor (the floor decides which
+    uncached files a pass skips)."""
+    return kept is not None and key is not None and kept.key == key and kept.held == floor
+
+
+def _copy_index(index: dict) -> dict:
+    return {parent: [dict(child) for child in children] for parent, children in index.items()}
+
+
+def _child_pass(state_root, floor: float | None) -> dict[str, list[dict]]:
     index: dict[str, list[dict]] = {}
     paths = snapshot.KEPT.glob(state_root, "*.json")
     _prune_children(Path(state_root), set(paths))
