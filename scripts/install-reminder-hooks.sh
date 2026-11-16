@@ -136,6 +136,8 @@ DESIRED = [
     # Hard gate: deny a recursive rm that (worst-case, with any empty $VAR) targets
     # /, $HOME, ~/.claude, or the instruction repo — the agent's own memory/config.
     ("PreToolUse",       "Bash",  "hook-guard-destructive-rm.py",    5),
+    # Hard gate: deny a `pgrep -f` wait-loop — the waiter matches its own command line and never exits.
+    ("PreToolUse",       "Bash",  "hook-guard-pgrep-wait.py",        5),
     # Hard gate: deny a recursive rm issued by a SUBAGENT (spawned/forked), against
     # any target, regardless of path — a subagent must never self-authorize a
     # destructive delete outside the coordination spine, even having answered its

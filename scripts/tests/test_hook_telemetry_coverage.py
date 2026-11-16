@@ -23,8 +23,8 @@ def registered_entries() -> list[tuple[str, str]]:
     return ENTRY_RE.findall(INSTALLER.read_text(encoding="utf-8"))
 
 
-def test_the_installer_registers_the_44_entries():
-    assert len(registered_entries()) == 44
+def test_the_installer_registers_the_45_entries():
+    assert len(registered_entries()) == 45
 
 
 @pytest.mark.parametrize("event,command", registered_entries(),

@@ -3,7 +3,7 @@ name: spawning-specialists
 description: Full mechanics of spawning a specialist via claude -p — spawn template inputs, budget tiers, file-access scope (--workdir, stage-grant provenance, write add_dir shape, symlink/launch-surface residuals), recursion cap, monitoring a running spawn, after-spawn checks, bypassPermissions discipline, return markers.
 type: reference
 created: 2026-06-04
-last_verified: 2026-09-26
+last_verified: 2026-11-17
 ---
 
 # Spawning specialists
@@ -78,6 +78,8 @@ On refuse — **do not retry**. Stop, summarize for the user (original task, cur
 ## Monitoring a running spawn
 
 `spawn-specialist.py` prints `transcript=<path>` to stderr within ~10s — the freshest jsonl under `~/.claude/projects/<sanitized-cwd>/` that didn't exist before the spawn. Tail that file periodically (~5 min cadence for `developer` spawns) to catch divergence: wrong `cwd`, writes/commits outside the assigned mount, off-scope work (e.g. running someone else's smoke test). **Kill early** — one rescoped re-spawn is cheaper than waiting for a runaway to exhaust its cap.
+
+A spawn whose completion the root must wait for is launched directly with Bash `run_in_background: true` (the `spawn-specialist.py` command itself), not as `nohup … &` plus a hand-rolled waiter; the completion notification then arrives on exit, and a `pgrep -f` wait-loop is denied by `hook-guard-pgrep-wait.py`.
 
 **Kill the whole subtree, not the wrapper pid.** A `claude -p` spawn forks children (the model process, tool subprocesses); a bare `kill <pid>` signals only the wrapper and **orphans those children**, which keep running and burning budget. Reap the group: `python3 scripts/kill-tree.py <pid>` (sends SIGTERM to the process group, waits a grace period, then SIGKILL; equivalent to `kill -- -<pgid>`). A spawn launched via `spawn-specialist.py` is already a session/group leader (`proc_tree.launch_supervised`), so its pid *is* its pgid. **Caveat:** the intentionally-detached `nohup … &` pollers from [long-job-monitoring.md](long-job-monitoring.md) are *designed* to survive the session — never reap them this way; kill only the specialist spawn you mean to stop.
 

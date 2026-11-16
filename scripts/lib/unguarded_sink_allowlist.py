@@ -116,4 +116,11 @@ KNOWN_UNGUARDED_HARD_SINKS = {
         "anywhere in the call chain — confirmed by reading decide() and "
         "_rm_recursive_targets at source.",
     ),
+    "4962acedd222e0ab": (
+        "scripts/hook-guard-pgrep-wait.py", "main",
+        "structural: decide() uses no regex at all; the deny rests on shlex "
+        "tokens only (a while/until keyword and a pgrep call carrying an -f/"
+        "--full flag before the next separator) — command syntax, never "
+        "natural-language meaning; the sink is reached via lib.hook_telemetry.",
+    ),
 }

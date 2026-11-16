@@ -126,6 +126,10 @@ GATE_BEARING_HOOKS: "tuple[tuple[str, str], ...]" = (
     ("hook-guard-destructive-rm.py",
      "denies a recursive rm that could target $HOME, either config root, or "
      "the instruction repo"),
+    ("hook-guard-pgrep-wait.py",
+     "denies a shell wait-loop whose condition is pgrep -f (the waiter matches "
+     "its own command line and never exits); absent, the session goes silent "
+     "waiting on a job that already finished"),
     ("hook-scope-conflict.py",
      "denies an edit to a path another LIVE session holds — cross-session "
      "isolation stops being enforced"),
